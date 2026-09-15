@@ -8,14 +8,13 @@ $fixture = Join-Path $root 'fixture.exe'
 # A real standalone Windows executable that supports --version.
 Copy-Item (Get-Command curl.exe).Source $fixture
 $checksum = (Get-FileHash $fixture -Algorithm SHA256).Hash
-$script:badChecksum = $false
-$script:failDownload = $false
+$fixtureState = @{ BadChecksum = $false; FailDownload = $false }
 function Invoke-RestMethod { param($Uri, $Headers) return @{ tag_name = 'v9.8.7' } }
 function Invoke-WebRequest {
     param([switch]$UseBasicParsing, $Uri, $Headers, $OutFile)
-    if ($script:failDownload) { throw 'Simulated download failure' }
+    if ($fixtureState.FailDownload) { throw 'Simulated download failure' }
     if ($Uri.EndsWith('/SHA256SUMS')) {
-        $hash = if ($script:badChecksum) { '0' * 64 } else { $checksum }
+        $hash = if ($fixtureState.BadChecksum) { '0' * 64 } else { $checksum }
         Set-Content -LiteralPath $OutFile -Value "$hash  submilli-x86_64-pc-windows-msvc.exe" -Encoding ascii
     } else {
         Copy-Item -LiteralPath $fixture -Destination $OutFile
@@ -34,12 +33,12 @@ try {
     & $installer -InstallDir $destination
     & $installer -Version v9.8.7 -InstallDir $destination
     if ((Get-FileHash (Join-Path $destination 'submilli.exe')).Hash -ne $checksum) { throw 'Installed bytes differ' }
-    $script:badChecksum = $true
+    $fixtureState.BadChecksum = $true
     Assert-InstallFails
-    $script:badChecksum = $false
-    $script:failDownload = $true
+    $fixtureState.BadChecksum = $false
+    $fixtureState.FailDownload = $true
     Assert-InstallFails
-    $script:failDownload = $false
+    $fixtureState.FailDownload = $false
     Assert-InstallFails -Version '../main'
     Write-Host 'Windows install, upgrade, checksum, download-failure, and invalid-version checks passed.'
 } finally {
