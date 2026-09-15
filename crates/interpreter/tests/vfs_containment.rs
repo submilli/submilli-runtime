@@ -19,7 +19,7 @@
 //!     pkgs/a/abs     -> <abs>/pkgs/b               absolute, resolves inside — still refused
 //!     pkgs/b/lib.txt            "SIBLING"
 //!     store/x/dep.txt           "STORE-DEP"
-//!     esc_abs      -> /                            absolute, outside
+//!     esc_abs      -> <abs>/outside                absolute, outside
 //!     esc_rel      -> ../outside                   relative, outside
 //!     deep/dir/link -> ../../../outside            relative, outside, from depth
 //! ```
@@ -105,7 +105,11 @@ fn seed() -> Seeded {
     link(Path::new("../b"), &root.join("pkgs/a/sibling"), true);
     link(Path::new("../../store/x"), &root.join("pkgs/a/dep"), true);
     link(&abs_root.join("pkgs/b"), &root.join("pkgs/a/abs"), true);
-    link(&filesystem_root(base.path()), &root.join("esc_abs"), true);
+    link(
+        &std::fs::canonicalize(&outside).expect("canonicalize outside"),
+        &root.join("esc_abs"),
+        true,
+    );
     link(Path::new("../outside"), &root.join("esc_rel"), true);
     link(
         Path::new("../../../outside"),
@@ -164,9 +168,30 @@ fn read_through_absolute_escaping_link_refuses() {
     assert_refused(
         &s,
         r#"import { readText } from "submilli:fs";
-           function main(): void { readText("/esc_abs/inside.txt"); }"#,
-        "readText through a link to the filesystem root",
+           function main(): void { readText("/esc_abs/secret.txt"); }"#,
+        "readText through an absolute link outside the VFS",
     );
+}
+
+#[test]
+fn read_through_filesystem_root_link_refuses() {
+    let s = seed();
+    link(
+        &filesystem_root(s.base.path()),
+        &s.root().join("drive_root"),
+        true,
+    );
+    let src = r#"import { readText } from "submilli:fs";
+                 function main(): void { readText("/drive_root/inside.txt"); }"#;
+    #[cfg(not(windows))]
+    assert_refused(&s, src, "readText through the filesystem root");
+    #[cfg(windows)]
+    {
+        // cap-primitives rejects trailing separators in Windows symlink targets
+        // before resolving them. A drive root has that syntax; it must still refuse.
+        let err = run_on(&s.root(), src).expect_err("drive-root link must refuse");
+        assert!(format!("{err:#}").contains("os error 123"), "{err:#}");
+    }
 }
 
 #[test]
@@ -431,6 +456,21 @@ fn lexical_parent_escape_keeps_its_existing_error() {
 #[test]
 fn stat_and_remove_work_on_an_escaping_link_without_traversing_it() {
     let s = seed();
+    link(
+        Path::new("../outside/secret.txt"),
+        &s.root().join("esc_file"),
+        false,
+    );
+    link(
+        Path::new("../missing"),
+        &s.root().join("dangling_dir"),
+        true,
+    );
+    link(
+        Path::new("../missing.txt"),
+        &s.root().join("dangling_file"),
+        false,
+    );
     assert_ok(
         &s,
         r#"import { stat, Stat } from "submilli:fs";
@@ -444,14 +484,21 @@ fn stat_and_remove_work_on_an_escaping_link_without_traversing_it() {
     );
     assert_ok(
         &s,
-        r#"import { remove, exists } from "submilli:fs";
-           function main(): void { remove("/esc_rel", false); }"#,
+        r#"import { remove } from "submilli:fs";
+           function main(): void {
+             remove("/esc_rel", false);
+             remove("/esc_file", false);
+             remove("/dangling_dir", false);
+             remove("/dangling_file", false);
+           }"#,
         "remove of an escaping link",
     );
-    assert!(
-        s.root().join("esc_rel").symlink_metadata().is_err(),
-        "the link itself must be gone",
-    );
+    for name in ["esc_rel", "esc_file", "dangling_dir", "dangling_file"] {
+        assert!(
+            s.root().join(name).symlink_metadata().is_err(),
+            "the link itself must be gone: {name}",
+        );
+    }
     assert!(
         s.outside().join("secret.txt").exists(),
         "removing the link must not touch what it pointed at",
@@ -465,13 +512,16 @@ fn stat_and_remove_work_on_an_escaping_link_without_traversing_it() {
 #[test]
 fn a_writer_whose_parent_is_swapped_for_an_escaping_link_refuses_at_close() {
     let s = seed();
-    // The swap must leave the writer's temp file intact — deleting the directory would
-    // fail the close with a plain ENOENT before containment is ever consulted, which is
-    // indistinguishable from the pre-fix behaviour. Moving it aside keeps the rename's
-    // source path traversing the escaping link that took its place.
-    let src = r#"import { writer, mkdir, move, FileWriter } from "submilli:fs";
+    std::fs::create_dir_all(s.root().join("a")).expect("mkdir a");
+    #[cfg(not(windows))]
+    std::fs::create_dir(s.root().join("a/b")).expect("mkdir b");
+    #[cfg(windows)]
+    // Windows cannot rename a directory containing an open file. Swapping a
+    // directory symlink exercises the same deferred-path attack while leaving
+    // the open temp file in its original directory.
+    link(Path::new("../dir"), &s.root().join("a/b"), true);
+    let src = r#"import { writer, move, FileWriter } from "submilli:fs";
                  function main(): void {
-                   mkdir("/a/b", true);
                    const w: FileWriter = writer("/a/b/out.txt");
                    w.writeLine("payload");
                    move("/a/b", "/a/b_real");
@@ -481,8 +531,8 @@ fn a_writer_whose_parent_is_swapped_for_an_escaping_link_refuses_at_close() {
     let err = run_on(&s.root(), src).expect_err("the commit must refuse");
     let msg = format!("{err:#}");
     assert!(
-        msg.contains(ESCAPE_DIAGNOSTIC),
-        "the commit must refuse as an escape, not merely fail: {msg}",
+        msg.contains("fs.writer.close") && msg.contains(ESCAPE_DIAGNOSTIC),
+        "close must refuse as an escape after the parent swap succeeded: {msg}",
     );
     assert!(
         !s.outside().join("out.txt").exists(),

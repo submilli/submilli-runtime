@@ -13,7 +13,6 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-#[cfg(windows)]
 use cap_fs_ext::DirExt;
 use cap_std::fs::{Dir, File, Metadata, OpenOptions, ReadDir};
 
@@ -343,7 +342,9 @@ impl LinkPath {
     }
 
     pub fn remove_file(&self) -> Result<(), ContainError> {
-        Ok(self.parent.remove_file(&self.name)?)
+        // Windows directory symlinks require directory removal; the extension
+        // inspects the link without following it and retains its handle while deleting.
+        Ok(self.parent.remove_file_or_symlink(&self.name)?)
     }
 
     pub fn remove_dir(&self) -> Result<(), ContainError> {
