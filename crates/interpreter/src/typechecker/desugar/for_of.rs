@@ -354,7 +354,7 @@ fn lower_iterator_like(
     );
 
     let narrow_path = ReferencePath::root(BindingId::Local {
-        name: r_narrow_ident.name.clone(),
+        name: r_ident.name.clone(),
         decl_scope: ScopeId(0),
     });
     let cast_info = CastInfo {
@@ -365,9 +365,9 @@ fn lower_iterator_like(
     let narrow_source = ctx.local_ref(r_ident.clone(), result_ty.clone());
 
     let r_narrow_ref = ctx.ta.push_expr(TypedExpr {
-        kind: TypedExprKind::LocalRef {
-            ident: r_narrow_ident.clone(),
-            boxed: false,
+        kind: TypedExprKind::LocalNarrowRef {
+            binding: r_narrow_ident.clone(),
+            path: narrow_path.clone(),
         },
         span,
         ty: yield_alias_ty.clone(),
@@ -505,10 +505,14 @@ fn synthesize_close_finally(
     });
 
     let narrow_source = ctx.local_ref(close_ident.clone(), close_opt_ty.clone());
+    let narrow_path = ReferencePath::root(BindingId::Local {
+        name: close_ident.name.clone(),
+        decl_scope: ScopeId(0),
+    });
     let close_narrow_ref = ctx.ta.push_expr(TypedExpr {
-        kind: TypedExprKind::LocalRef {
-            ident: close_narrow_ident.clone(),
-            boxed: false,
+        kind: TypedExprKind::LocalNarrowRef {
+            binding: close_narrow_ident.clone(),
+            path: narrow_path.clone(),
         },
         span,
         ty: close_fn_ty.clone(),
@@ -523,10 +527,6 @@ fn synthesize_close_finally(
     });
     let call_stmt = ctx.push_stmt(TypedStmtKind::Expr(call_expr), span);
     let narrow_body = ctx.push_stmt(TypedStmtKind::Block(vec![call_stmt]), span);
-    let narrow_path = ReferencePath::root(BindingId::Local {
-        name: close_narrow_ident.name.clone(),
-        decl_scope: ScopeId(0),
-    });
     let cast_info = CastInfo {
         from_ty: close_opt_ty.clone(),
         to_ty: close_fn_ty,

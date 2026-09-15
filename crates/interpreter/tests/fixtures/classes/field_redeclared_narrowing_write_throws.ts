@@ -264,21 +264,18 @@ function main(): void {
   // against its own type, not just the declaration's. Testing only the
   // declaration would let the `null` this write leaves pass and then trap in the
   // cast, which is the uncatchable failure the guard exists to replace.
-  // The loop is the mechanism, not decoration: the back edge puts the write
-  // before the read in execution order while the guard above still covers it in
-  // source order. That is also why this case cannot use `threw` — the closure
-  // would not see the narrowing.
+  // Calls preserve field guards; a mutation through a call can therefore make
+  // the live chain read violate the narrowed type. Direct loop writes instead
+  // invalidate the narrowing before typing the next iteration.
   const narrowed = new PC();
   let caughtNarrowed = false;
   if (narrowed.v !== null) {
-    for (let i = 0; i < 2; i = i + 1) {
-      try {
-        const got = narrowed?.v;
-        console.log(got === null ? "null" : "dog");
-      } catch (e) {
-        caughtNarrowed = e instanceof TypeError;
-      }
-      narrowed.v = null;
+    clearNarrowed(narrowed);
+    try {
+      const got = narrowed?.v;
+      console.log(got === null ? "null" : "dog");
+    } catch (e) {
+      caughtNarrowed = e instanceof TypeError;
     }
   }
   assert(caughtNarrowed, "a chain reading at the narrowed type is guarded too");
@@ -373,3 +370,5 @@ function main(): void {
     "a `readonly` inherited declaration leaves no post-construction write",
   );
 }
+
+function clearNarrowed(value: PC): void { value.v = null; }

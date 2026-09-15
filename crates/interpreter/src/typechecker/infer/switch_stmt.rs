@@ -28,7 +28,7 @@ impl Inferer<'_> {
         default: Option<SwitchDefault>,
         switch_span: Span,
     ) -> TypedStmtKind {
-        let _ = switch_span; // span lives on the enclosing TypedStmt
+        let (entry_env, _) = self.snapshot_active_narrowings(0);
         let disc_source_span = self.ast.expr(discriminant).span;
         let (typed_disc, disc_ty) = self.infer_expr(discriminant, None);
         // A `void` discriminant has nothing to compare against, and an empty
@@ -161,10 +161,12 @@ impl Inferer<'_> {
         if !frame.breaks.is_empty() {
             any_arm_reachable_exit = true;
         }
-        self.fold_exits_into_outer(None, frame.breaks, switch_span);
+        self.merge_assigned_into_outer(all_assigned, switch_span);
+        let natural =
+            (typed_default.is_none() && !matches!(residual, Type::Never)).then_some(entry_env);
+        self.fold_exits_into_outer(natural, frame.breaks, switch_span);
 
         self.reachable = any_arm_reachable_exit;
-        self.merge_assigned_into_outer(all_assigned, switch_span);
 
         TypedStmtKind::Switch {
             discriminant: typed_disc,

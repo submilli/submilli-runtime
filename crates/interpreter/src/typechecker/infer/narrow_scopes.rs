@@ -35,6 +35,7 @@ fn field_member_ty(fields: &BTreeMap<String, ObjectField>, field_name: &str) -> 
 /// narrowed outside reads as its declared type inside.
 pub(in crate::typechecker) struct SuspendedNarrowing {
     narrow_scopes: Vec<narrowing::NarrowEnv>,
+    clause_write_scopes: Vec<std::collections::BTreeSet<narrowing::ReferencePath>>,
     assigned_scopes: Vec<std::collections::BTreeSet<narrowing::ReferencePath>>,
     tombstone_scopes:
         Vec<std::collections::BTreeMap<narrowing::ReferencePath, narrowing::InvalidationReason>>,
@@ -63,6 +64,7 @@ impl<'a> Inferer<'a> {
         self.suspended_narrow_scopes.push(SuspendedNarrowing {
             narrow_scopes: std::mem::take(&mut self.narrow_scopes),
             assigned_scopes: std::mem::take(&mut self.assigned_scopes),
+            clause_write_scopes: std::mem::take(&mut self.clause_write_scopes),
             tombstone_scopes: std::mem::take(&mut self.tombstone_scopes),
             pending_materializations: std::mem::take(&mut self.pending_post_if_materializations),
         });
@@ -108,6 +110,7 @@ impl<'a> Inferer<'a> {
         };
         self.narrow_scopes = saved.narrow_scopes;
         self.assigned_scopes = saved.assigned_scopes;
+        self.clause_write_scopes = saved.clause_write_scopes;
         self.tombstone_scopes = saved.tombstone_scopes;
         self.pending_post_if_materializations = saved.pending_materializations;
     }
@@ -320,28 +323,10 @@ impl<'a> Inferer<'a> {
     }
 
     pub(super) fn push_narrow_frame(&mut self, env: narrowing::NarrowEnv) {
-        // Pre-clear tombstones in the outer frame for any path the
-        // new env narrows — `lookup_tombstone` walks inner-out, so an
-        // outer tombstone could shadow a freshly-installed narrowing.
-        if let Some(top_tombstones) = self.tombstone_scopes.last_mut() {
-            for path in env.keys() {
-                top_tombstones.remove(path);
-            }
-        }
         self.narrow_scopes.push(env);
         self.assigned_scopes.push(std::collections::BTreeSet::new());
         self.tombstone_scopes
             .push(std::collections::BTreeMap::new());
-    }
-
-    /// Empties the top frame's narrowings, keeping its `assigned` set. The
-    /// `try` statement's own frame outlives each of its clauses, so a clause's
-    /// narrowings have to go the moment the clause ends — one clause's exit
-    /// state is not the state the next one, or the code after, begins in.
-    pub(super) fn discard_clause_narrowings(&mut self) {
-        if let Some(frame) = self.narrow_scopes.last_mut() {
-            frame.clear();
-        }
     }
 
     pub(super) fn pop_narrow_frame(&mut self) {
@@ -389,6 +374,9 @@ impl<'a> Inferer<'a> {
         let mut env = narrowing::NarrowEnv::new();
         let mut assigned = std::collections::BTreeSet::new();
         for frame_idx in base_depth..self.narrow_scopes.len() {
+            if let Some(tombs) = self.tombstone_scopes.get(frame_idx) {
+                env.retain(|path, _| !tombs.keys().any(|written| written.is_prefix_of(path)));
+            }
             for (path, view) in &self.narrow_scopes[frame_idx] {
                 env.insert(path.clone(), view.clone());
             }
@@ -401,11 +389,9 @@ impl<'a> Inferer<'a> {
         (env, assigned)
     }
 
-    /// Passes empty assigned sets to `union_envs` so snapshot assignment-
-    /// narrowings survive the join instead of being dropped by union_envs's
-    /// post-union assigned-purge. `natural_exit_env = None` means the loop
-    /// never falls through; post-state is the join of breaks only, or nothing
-    /// if breaks is also empty.
+    /// Join complete reachable exit snapshots and invalidate their writes.
+    /// Returns whether any exit exists, independently of the final body's
+    /// reachability (a loop can execute zero iterations).
     pub(super) fn fold_exits_into_outer(
         &mut self,
         natural_exit_env: Option<narrowing::NarrowEnv>,
@@ -414,7 +400,7 @@ impl<'a> Inferer<'a> {
             std::collections::BTreeSet<narrowing::ReferencePath>,
         )>,
         anchor_span: Span,
-    ) {
+    ) -> bool {
         let mut all_assigned: std::collections::BTreeSet<narrowing::ReferencePath> =
             std::collections::BTreeSet::new();
         for (_, b_assigned) in &breaks {
@@ -427,7 +413,7 @@ impl<'a> Inferer<'a> {
             exits.push(natural);
         }
         let post_env = match exits.len() {
-            0 => return,
+            0 => return false,
             1 => exits.pop().expect("len == 1"),
             _ => exits
                 .into_iter()
@@ -445,6 +431,7 @@ impl<'a> Inferer<'a> {
         if !post_env.is_empty() {
             self.install_joined_narrowings(post_env, anchor_span);
         }
+        true
     }
 
     /// Intentionally name-keyed and conservative — over-refusal is sound; under-refusal isn't.
@@ -465,6 +452,7 @@ impl<'a> Inferer<'a> {
         narrowed_ty: Type,
         span: Span,
     ) {
+        self.invalidate_for_reassignment(path.clone(), span);
         // The assignment still commits; only the narrowing is dropped.
         if self.path_root_is_captured_mutator(&path) {
             return;
@@ -489,9 +477,6 @@ impl<'a> Inferer<'a> {
         };
         if let Some(top_narrowings) = self.narrow_scopes.last_mut() {
             top_narrowings.insert(path.clone(), view);
-        }
-        if let Some(top_tombs) = self.tombstone_scopes.last_mut() {
-            top_tombs.remove(&path);
         }
         self.last_write_spans.insert(path.clone(), span);
         if let Some(top_assigned) = self.assigned_scopes.last_mut() {
@@ -536,6 +521,9 @@ impl<'a> Inferer<'a> {
         path: narrowing::ReferencePath,
         reason: narrowing::InvalidationReason,
     ) {
+        for writes in &mut self.clause_write_scopes {
+            writes.insert(path.clone());
+        }
         if let Some(span) = reason.span() {
             self.last_write_spans.insert(path.clone(), span);
         }
@@ -547,8 +535,7 @@ impl<'a> Inferer<'a> {
 
     /// The drop without the record, for callers that must not claim the path was
     /// assigned *here*: a loop back edge (the write was on the previous iteration)
-    /// and [`Self::invalidate_assignments_at_every_depth`], which merges the set
-    /// itself.
+    /// rather than on the current path.
     ///
     /// Drops from the current frame and tombstones there. It does not reach into
     /// enclosing frames: a narrowing an outer frame installed stays installed, and
@@ -580,24 +567,6 @@ impl<'a> Inferer<'a> {
                 tombs.insert(dropped_path, reason.clone());
             }
         }
-    }
-
-    /// [`Self::merge_assigned_into_outer`] plus the deep drop: the writes reach
-    /// past the nearest frame, so a guard any number of regions out is dead.
-    /// Only for writes on a path *every* exit takes — a branch's writes must not
-    /// use this, since the other branch didn't make them.
-    pub(super) fn invalidate_assignments_at_every_depth(
-        &mut self,
-        assigned: std::collections::BTreeSet<narrowing::ReferencePath>,
-        write_span: Span,
-    ) {
-        for path in &assigned {
-            self.drop_narrowings_under(
-                path,
-                narrowing::InvalidationReason::Write { span: write_span },
-            );
-        }
-        self.merge_assigned_into_outer(assigned, write_span);
     }
 
     /// Lifts an inner region's writes into the frame it exited into: drops the
@@ -896,6 +865,11 @@ impl<'a> Inferer<'a> {
         let mut field_path_mats: Vec<(narrowing::ReferencePath, narrowing::NarrowedView)> =
             Vec::new();
         for (path, view) in joined_narrowings {
+            if self.lookup_narrowed_view(&path).is_some_and(|active| {
+                active.binding == view.binding && active.narrowed_ty == view.narrowed_ty
+            }) {
+                continue;
+            }
             // A branch/loop exit can carry a path rooted at a binding declared
             // *inside* the body it left (`while (true) { const p = …; if (p ===
             // null) continue; break; }`). Installing it would rebind the view

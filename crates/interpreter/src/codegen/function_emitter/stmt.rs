@@ -286,14 +286,15 @@ pub fn emit_statement(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: StmtI
             body,
             ..
         } => {
-            // The inferer rewrites in-region references to `LocalRef { ident: binding }`;
-            // the shadow local is what the name lookup finds. Codegen never inspects `path`.
+            // Region snapshots follow the same lifetime as assignment snapshots.
             emitter.push_scope();
             let shadow_val = ctx.symbols.value_type(&cast_info.to_ty);
-            let shadow = emitter.define_local(binding, shadow_val);
+            let shadow = emitter.add_anonymous_local(shadow_val);
             emit_expr(emitter, ctx, *source);
             cast::emit_narrowing_cast(emitter, ctx, cast_info);
             emitter.instruction(Instruction::LocalSet(shadow));
+            emitter.install_narrow_shadow(&binding.name, shadow, shadow_val);
+            emitter.register_narrow_source(&binding.name, *source);
             emit_statement(emitter, ctx, *body);
             emitter.pop_scope();
         }

@@ -157,24 +157,30 @@ impl Inferer<'_> {
                 let (typed_cond, cond_ty) = self.infer_expr(condition, None);
                 let cond_span = self.ast.expr(condition).span;
                 self.check_condition_ty(&cond_ty, cond_span);
-                let (true_env, false_env) = self.predicate_envs(typed_cond);
+                let (true_env, _) = self.predicate_envs(typed_cond);
                 let body_span = self.ast.stmt(body).span;
                 let body_scope_floor = self.scopes.next_scope_id();
+                let (loop_entry, _) = self.snapshot_active_narrowings(0);
+                let entry_reachable = self.reachable;
                 self.push_pending_join_frame(narrowing::PendingJoinKind::Loop);
                 let outcome = self.run_loop_body_with_fixed_point(
                     body,
                     true_env,
                     body_span,
                     body_scope_floor,
+                    None,
                 );
                 let frame = self.pop_pending_join_frame();
-                self.merge_assigned_into_outer(outcome.assigned, span);
+                let (typed_cond, _) = self.infer_expr(condition, None);
+                let (_, false_env) = self.predicate_envs(typed_cond);
+                self.merge_assigned_into_outer(outcome.assigned.clone(), span);
                 let natural = if cond_is_static_true(self, typed_cond) {
                     None
                 } else {
-                    Some(false_env)
+                    Some(loop_exit_env(&loop_entry, &outcome, false_env))
                 };
-                self.fold_exits_into_outer(natural, frame.breaks, body_span);
+                let has_exit = self.fold_exits_into_outer(natural, frame.breaks, body_span);
+                self.reachable = entry_reachable && has_exit;
                 TypedStmtKind::While {
                     condition: typed_cond,
                     body: outcome.body,
@@ -194,7 +200,7 @@ impl Inferer<'_> {
                     self.check_condition_ty(&ty, cond_span);
                     id
                 });
-                let (true_env, false_env) = match typed_cond {
+                let (true_env, _) = match typed_cond {
                     Some(c) => self.predicate_envs(c),
                     None => (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new()),
                 };
@@ -202,23 +208,32 @@ impl Inferer<'_> {
                 // Init-scope bindings persist across iterations, so the floor
                 // sits above them — only body-internal scopes are per-iteration.
                 let body_scope_floor = self.scopes.next_scope_id();
+                let (loop_entry, _) = self.snapshot_active_narrowings(0);
+                let entry_reachable = self.reachable;
                 self.push_pending_join_frame(narrowing::PendingJoinKind::Loop);
                 let outcome = self.run_loop_body_with_fixed_point(
                     body,
                     true_env,
                     body_span,
                     body_scope_floor,
+                    update,
                 );
                 let frame = self.pop_pending_join_frame();
-                self.merge_assigned_into_outer(outcome.assigned, span);
-                let typed_update =
-                    self.infer_update_on_back_edge(update, &outcome.back_edge, body_span);
+                let typed_update = outcome.update;
+                let typed_cond = condition.map(|c| self.infer_expr(c, None).0);
+                let false_env = typed_cond
+                    .map(|c| self.predicate_envs(c).1)
+                    .unwrap_or_default();
+                self.merge_assigned_into_outer(outcome.assigned.clone(), span);
                 // `for (;;)` or literal-true condition has no natural exit.
                 let natural = match typed_cond {
-                    Some(c) if !cond_is_static_true(self, c) => Some(false_env),
+                    Some(c) if !cond_is_static_true(self, c) => {
+                        Some(loop_exit_env(&loop_entry, &outcome, false_env))
+                    }
                     _ => None,
                 };
-                self.fold_exits_into_outer(natural, frame.breaks, body_span);
+                let has_exit = self.fold_exits_into_outer(natural, frame.breaks, body_span);
+                self.reachable = entry_reachable && has_exit;
                 self.scopes.pop();
                 // The init scope is popped after the fold, so anything the fold
                 // installed that is rooted in it is now unreadable.
@@ -293,21 +308,29 @@ impl Inferer<'_> {
                     name.span,
                 );
                 let body_span = self.ast.stmt(body).span;
+                let (loop_entry, _) = self.snapshot_active_narrowings(0);
+                let entry_reachable = self.reachable;
                 self.push_pending_join_frame(narrowing::PendingJoinKind::Loop);
                 let outcome = self.run_loop_body_with_fixed_point(
                     body,
                     narrowing::NarrowEnv::new(),
                     body_span,
                     body_scope_floor,
+                    None,
                 );
                 let frame = self.pop_pending_join_frame();
-                self.merge_assigned_into_outer(outcome.assigned, span);
+                self.merge_assigned_into_outer(outcome.assigned.clone(), span);
                 // Natural exit always reachable — for-of terminates immediately on empty iterable.
-                self.fold_exits_into_outer(
-                    Some(narrowing::NarrowEnv::new()),
+                let has_exit = self.fold_exits_into_outer(
+                    Some(loop_exit_env(
+                        &loop_entry,
+                        &outcome,
+                        narrowing::NarrowEnv::new(),
+                    )),
                     frame.breaks,
                     body_span,
                 );
+                self.reachable = entry_reachable && has_exit;
                 self.scopes.pop();
                 TypedStmtKind::ForOf {
                     binding_kind,
@@ -322,25 +345,31 @@ impl Inferer<'_> {
                 // Condition runs after the body, so no entry narrowing for the body.
                 let body_span = self.ast.stmt(body).span;
                 let body_scope_floor = self.scopes.next_scope_id();
+                let entry_reachable = self.reachable;
                 self.push_pending_join_frame(narrowing::PendingJoinKind::Loop);
                 let outcome = self.run_loop_body_with_fixed_point(
                     body,
                     narrowing::NarrowEnv::new(),
                     body_span,
                     body_scope_floor,
+                    None,
                 );
                 let frame = self.pop_pending_join_frame();
-                self.merge_assigned_into_outer(outcome.assigned, span);
+                self.merge_assigned_into_outer(outcome.assigned.clone(), span);
                 let (typed_cond, cond_ty) = self.infer_expr(condition, None);
                 let cond_span = self.ast.expr(condition).span;
                 self.check_condition_ty(&cond_ty, cond_span);
                 let (_, cond_false_env) = self.predicate_envs(typed_cond);
-                let natural = if cond_is_static_true(self, typed_cond) {
+                let natural = if !outcome.reaches_back_edge || cond_is_static_true(self, typed_cond)
+                {
                     None
                 } else {
-                    Some(cond_false_env)
+                    let mut post = outcome.back_edge.clone();
+                    post.extend(cond_false_env);
+                    Some(post)
                 };
-                self.fold_exits_into_outer(natural, frame.breaks, body_span);
+                let has_exit = self.fold_exits_into_outer(natural, frame.breaks, body_span);
+                self.reachable = entry_reachable && has_exit;
                 TypedStmtKind::DoWhile {
                     body: outcome.body,
                     condition: typed_cond,
@@ -354,9 +383,13 @@ impl Inferer<'_> {
             StmtKind::Break => {
                 if self.loop_depth == 0 && self.switch_depth == 0 {
                     self.error(span, "`break` outside of a loop or `switch`".to_string());
-                } else if let Some(target_idx) = self.pending_joins.iter().rposition(|_| true) {
+                } else if self.reachable
+                    && let Some(target_idx) = self.pending_joins.iter().rposition(|_| true)
+                {
                     let base = self.pending_joins[target_idx].narrow_depth;
-                    let snap = self.snapshot_active_narrowings(base);
+                    let (env, _) = self.snapshot_active_narrowings(0);
+                    let (_, assigned) = self.snapshot_active_narrowings(base);
+                    let snap = (env, assigned);
                     self.pending_joins[target_idx].breaks.push(snap);
                 }
                 self.reachable = false;
@@ -367,13 +400,16 @@ impl Inferer<'_> {
                     self.error(span, "`continue` outside of a loop".to_string());
                 } else {
                     // `continue` is transparent to switch — skip to the innermost Loop frame.
-                    if let Some(target_idx) = self
-                        .pending_joins
-                        .iter()
-                        .rposition(|f| matches!(f.kind, narrowing::PendingJoinKind::Loop))
+                    if self.reachable
+                        && let Some(target_idx) = self
+                            .pending_joins
+                            .iter()
+                            .rposition(|f| matches!(f.kind, narrowing::PendingJoinKind::Loop))
                     {
                         let base = self.pending_joins[target_idx].narrow_depth;
-                        let snap = self.snapshot_active_narrowings(base);
+                        let (env, _) = self.snapshot_active_narrowings(0);
+                        let (_, assigned) = self.snapshot_active_narrowings(base);
+                        let snap = (env, assigned);
                         self.pending_joins[target_idx].continues.push(snap);
                     }
                 }
@@ -500,124 +536,7 @@ impl Inferer<'_> {
                 body,
                 catches,
                 finally,
-            } => {
-                let entry_reachable = self.reachable;
-                // One frame for the whole statement: it collects what each
-                // clause assigns, which merges outward at the end, while
-                // `infer_isolated_clause` drops each clause's *narrowings* as
-                // that clause ends.
-                self.push_narrow_frame(narrowing::NarrowEnv::new());
-                let typed_body = self
-                    .infer_isolated_clause(body, entry_reachable)
-                    .expect("try body is a Block, never a type-only decl");
-
-                let error_class = Type::prelude_error_class();
-                let mut typed_catches = Vec::with_capacity(catches.len());
-                // Valid prior arms for the shadow check: (class, display name, anchor span).
-                // Arms with an erroneous annotation stay out on both sides to
-                // avoid cascading unreachable-arm diagnostics.
-                let mut prior: Vec<(crate::MangledName, String, Span)> = Vec::new();
-                for clause in catches {
-                    // `Error` or any class on its `extends` chain. A subclass
-                    // annotation makes the clause a filter: codegen tests the
-                    // caught error's nominal identity (vtable brand chain) and
-                    // tries the next arm — or re-raises — on mismatch.
-                    let mut annotation_valid = true;
-                    let clause_ty = if let Some(annotation) = &clause.ty {
-                        // The filter is the same nominal brand walk `instanceof`
-                        // uses, so a generic error class is spelled bare and
-                        // binds at erased args; explicit ones would claim a
-                        // check the runtime never makes.
-                        let ty = self.resolve_runtime_class_test(annotation);
-                        let is_error_class = matches!(ty.peel(), Type::ClassRef { .. })
-                            && assignable(&ty, &error_class, self.resolver());
-                        if is_error_class {
-                            ty
-                        } else if matches!(ty, Type::Error) {
-                            annotation_valid = false;
-                            ty
-                        } else {
-                            self.error_with_help(
-                                annotation.span,
-                                format!(
-                                    "a `catch` binding must be `Error` or a class extending `Error`; got `{ty}`"
-                                ),
-                                vec![
-                                    "remove the annotation (or use `: Error`) to catch every thrown error; a subclass annotation catches only that error type and re-raises the rest"
-                                        .to_string(),
-                                ],
-                            );
-                            annotation_valid = false;
-                            error_class.clone()
-                        }
-                    } else {
-                        error_class.clone()
-                    };
-
-                    let anchor = clause.ty.as_ref().map_or(clause.binding.span, |a| a.span);
-                    if annotation_valid
-                        && let Type::ClassRef { mangled, name, .. } = clause_ty.peel()
-                    {
-                        let shadowing = prior
-                            .iter()
-                            .find(|(p, _, _)| self.resolver().is_subclass(mangled, p));
-                        if let Some((prev_mangled, prev_name, prev_span)) = shadowing {
-                            if prev_mangled == mangled {
-                                self.error_with_help_and_notes(
-                                    anchor,
-                                    format!("duplicate `catch` clause for `{name}`"),
-                                    vec![],
-                                    vec![(*prev_span, "previously caught here".to_string())],
-                                );
-                            } else {
-                                self.error_with_help_and_notes(
-                                    anchor,
-                                    format!(
-                                        "unreachable `catch` clause: `{name}` extends `{prev_name}`, which an earlier clause already catches"
-                                    ),
-                                    vec![
-                                        "reorder the clauses so the more specific error class comes first"
-                                            .to_string(),
-                                    ],
-                                    vec![(*prev_span, format!("`{prev_name}` caught here"))],
-                                );
-                            }
-                        } else {
-                            prior.push((mangled.clone(), name.clone(), anchor));
-                        }
-                    }
-
-                    self.scopes.push();
-                    self.scopes.insert(
-                        clause.binding.name.clone(),
-                        clause_ty.clone(),
-                        true,
-                        clause.binding.span,
-                    );
-                    let typed_catch_body = self.infer_isolated_clause(clause.body, entry_reachable);
-                    self.scopes.pop();
-                    if let Some(body) = typed_catch_body {
-                        typed_catches.push(crate::TypedCatchClause {
-                            binding: clause.binding.clone(),
-                            ty: clause_ty,
-                            body,
-                            boxed: false,
-                            span: clause.span,
-                        });
-                    }
-                }
-
-                let typed_finally =
-                    finally.and_then(|f| self.infer_isolated_clause(f, entry_reachable));
-                let (_narrowings, assigned) = self.pop_narrow_frame_capture();
-                self.merge_assigned_into_outer(assigned, span);
-
-                TypedStmtKind::Try {
-                    body: typed_body,
-                    catches: typed_catches,
-                    finally: typed_finally,
-                }
-            }
+            } => self.infer_try(body, catches, finally, span),
             StmtKind::LetPattern { .. }
             | StmtKind::ConstPattern { .. }
             | StmtKind::ForOfPattern { .. } => {
@@ -666,6 +585,167 @@ impl Inferer<'_> {
             kind: typed_kind,
             span,
         }))
+    }
+
+    fn infer_try(
+        &mut self,
+        body: StmtId,
+        catches: Vec<crate::CatchClause>,
+        finally: Option<StmtId>,
+        span: Span,
+    ) -> TypedStmtKind {
+        let entry_reachable = self.reachable;
+        let pending_start = self.pending_exit_counts();
+        let body_outcome = self.infer_isolated_clause(body, entry_reachable, &Default::default());
+        let typed_body = body_outcome.body.expect("try body is a block");
+        let mut exits = body_outcome.exit.into_iter().collect::<Vec<_>>();
+        let body_assigned = body_outcome.all_writes;
+        let mut all_assigned = body_assigned.clone();
+
+        let mut typed_catches = Vec::with_capacity(catches.len());
+        // Valid prior arms for the shadow check: (class, display name, anchor span).
+        // Arms with an erroneous annotation stay out on both sides to
+        // avoid cascading unreachable-arm diagnostics.
+        let mut prior: Vec<(crate::MangledName, String, Span)> = Vec::new();
+        for clause in catches {
+            let clause_ty = self.infer_catch_type(&clause, &mut prior);
+            self.scopes.push();
+            self.scopes.insert(
+                clause.binding.name.clone(),
+                clause_ty.clone(),
+                true,
+                clause.binding.span,
+            );
+            let outcome = self.infer_isolated_clause(clause.body, entry_reachable, &body_assigned);
+            exits.extend(outcome.exit);
+            all_assigned.extend(outcome.all_writes);
+            self.scopes.pop();
+            if let Some(body) = outcome.body {
+                typed_catches.push(crate::TypedCatchClause {
+                    binding: clause.binding.clone(),
+                    ty: clause_ty,
+                    body,
+                    boxed: false,
+                    span: clause.span,
+                });
+            }
+        }
+
+        let mut post = join_reachable_envs(None, exits);
+        let typed_finally = finally.and_then(|f| {
+            let pending_end = self.pending_exit_counts();
+            let outcome = self.infer_isolated_clause(f, entry_reachable, &all_assigned);
+            self.apply_finally_to_pending(&pending_start, &pending_end, &outcome);
+            apply_finally_to_exit(&mut post, &outcome);
+            all_assigned.extend(outcome.all_writes);
+            outcome.body
+        });
+        self.reachable = entry_reachable && post.is_some();
+        self.merge_assigned_into_outer(all_assigned, span);
+        if let Some(post) = post {
+            self.install_joined_narrowings(post, span);
+        }
+
+        TypedStmtKind::Try {
+            body: typed_body,
+            catches: typed_catches,
+            finally: typed_finally,
+        }
+    }
+
+    fn infer_catch_type(
+        &mut self,
+        clause: &crate::CatchClause,
+        prior: &mut Vec<(crate::MangledName, String, Span)>,
+    ) -> Type {
+        let error_class = Type::prelude_error_class();
+        // `Error` or any class on its `extends` chain. A subclass
+        // annotation makes the clause a filter: codegen tests the
+        // caught error's nominal identity (vtable brand chain) and
+        // tries the next arm — or re-raises — on mismatch.
+        let mut annotation_valid = true;
+        let clause_ty = if let Some(annotation) = &clause.ty {
+            // The filter is the same nominal brand walk `instanceof`
+            // uses, so a generic error class is spelled bare and
+            // binds at erased args; explicit ones would claim a
+            // check the runtime never makes.
+            let ty = self.resolve_runtime_class_test(annotation);
+            let is_error_class = matches!(ty.peel(), Type::ClassRef { .. })
+                && assignable(&ty, &error_class, self.resolver());
+            if is_error_class {
+                ty
+            } else if matches!(ty, Type::Error) {
+                annotation_valid = false;
+                ty
+            } else {
+                self.error_with_help(
+                    annotation.span,
+                    format!(
+                        "a `catch` binding must be `Error` or a class extending `Error`; got `{ty}`"
+                    ),
+                    vec![
+                        "remove the annotation (or use `: Error`) to catch every thrown error; a subclass annotation catches only that error type and re-raises the rest"
+                            .to_string(),
+                    ],
+                );
+                annotation_valid = false;
+                error_class.clone()
+            }
+        } else {
+            error_class.clone()
+        };
+
+        let anchor = clause.ty.as_ref().map_or(clause.binding.span, |a| a.span);
+        if annotation_valid && let Type::ClassRef { mangled, name, .. } = clause_ty.peel() {
+            let shadowing = prior
+                .iter()
+                .find(|(p, _, _)| self.resolver().is_subclass(mangled, p));
+            if let Some((prev_mangled, prev_name, prev_span)) = shadowing {
+                if prev_mangled == mangled {
+                    self.error_with_help_and_notes(
+                        anchor,
+                        format!("duplicate `catch` clause for `{name}`"),
+                        vec![],
+                        vec![(*prev_span, "previously caught here".to_string())],
+                    );
+                } else {
+                    self.error_with_help_and_notes(
+                        anchor,
+                        format!(
+                            "unreachable `catch` clause: `{name}` extends `{prev_name}`, which an earlier clause already catches"
+                        ),
+                        vec![
+                            "reorder the clauses so the more specific error class comes first"
+                                .to_string(),
+                        ],
+                        vec![(*prev_span, format!("`{prev_name}` caught here"))],
+                    );
+                }
+            } else {
+                prior.push((mangled.clone(), name.clone(), anchor));
+            }
+        }
+
+        clause_ty
+    }
+
+    fn pending_exit_counts(&self) -> Vec<(usize, usize)> {
+        self.pending_joins
+            .iter()
+            .map(|frame| (frame.breaks.len(), frame.continues.len()))
+            .collect()
+    }
+
+    fn apply_finally_to_pending(
+        &mut self,
+        starts: &[(usize, usize)],
+        ends: &[(usize, usize)],
+        outcome: &ClauseOutcome,
+    ) {
+        for ((frame, start), end) in self.pending_joins.iter_mut().zip(starts).zip(ends) {
+            apply_finally_to_transfers(&mut frame.breaks, start.0..end.0, outcome);
+            apply_finally_to_transfers(&mut frame.continues, start.1..end.1, outcome);
+        }
     }
 
     /// Drain `pending_post_if_materializations` after each stmt, wrapping the tail in
@@ -1092,7 +1172,20 @@ impl Inferer<'_> {
             placeholder(self, target_ty.as_ref())
         };
         if let Some(path) = target_path {
-            self.invalidate_for_write(path, name.span);
+            let preserved = self.lookup_narrowed_view(&path).cloned().filter(|view| {
+                let TypedStmtKind::AssignField { value, .. } = &result else {
+                    return false;
+                };
+                assignable(
+                    &self.typed_ast.expr(*value).ty,
+                    &view.narrowed_ty,
+                    self.resolver(),
+                )
+            });
+            self.invalidate_for_write(path.clone(), name.span);
+            if let Some(view) = preserved {
+                self.install_joined_narrowings([(path, view)].into_iter().collect(), name.span);
+            }
         }
         result
     }
@@ -1801,38 +1894,73 @@ pub(super) fn compound_arith_result(op: BinOp, lt: &Type, rt: &Type) -> Option<T
     }
 }
 
-/// The subset of `env` a block hands to the code that follows it: depth-0 paths
-/// the block assigned. Their views read the binding's own slot with a cast at
-/// use (`install_assignment_narrowing`), so they stay emittable once the block's
-/// narrow regions have closed — unlike a guard narrowing, whose `#narrow_N`
-/// shadow dies with the region that defined it.
+/// Views established by writes on a normal exit. Root views rebind to storage;
+/// field views are rematerialized in the receiving scope.
 fn assignment_narrowings(
     env: &narrowing::NarrowEnv,
     assigned: &std::collections::BTreeSet<narrowing::ReferencePath>,
 ) -> narrowing::NarrowEnv {
     env.iter()
-        .filter(|(path, _)| path.chain.is_empty() && assigned.contains(*path))
+        .filter(|(path, _)| assigned.contains(*path))
         .map(|(path, view)| (path.clone(), view.clone()))
         .collect()
 }
 
-/// What a loop body left behind. `back_edge` is the state where the body's own
-/// flow rejoins the loop top — the environment a `for` update clause runs in.
-pub(super) struct LoopBodyOutcome {
-    pub body: StmtId,
-    pub assigned: std::collections::BTreeSet<narrowing::ReferencePath>,
-    pub back_edge: narrowing::NarrowEnv,
+struct ClauseOutcome {
+    all_writes: std::collections::BTreeSet<narrowing::ReferencePath>,
+    body: Option<StmtId>,
+    exit: Option<narrowing::NarrowEnv>,
+    assigned: std::collections::BTreeSet<narrowing::ReferencePath>,
 }
 
-/// The back edge joins every path that reaches the loop top again: the natural
-/// body end (when reachable) and each `continue`. As in `fold_exits_into_outer`,
-/// the union runs with empty assigned sets so assignment narrowings survive the
-/// join.
-fn join_back_edge(
+fn apply_finally_to_exit(post: &mut Option<narrowing::NarrowEnv>, outcome: &ClauseOutcome) {
+    match (&outcome.exit, post.as_mut()) {
+        (Some(final_post), Some(post)) => {
+            post.retain(|path, _| !outcome.all_writes.iter().any(|p| p.is_prefix_of(path)));
+            post.extend(assignment_narrowings(final_post, &outcome.assigned));
+        }
+        (None, _) => *post = None,
+        _ => {}
+    }
+}
+
+fn apply_finally_to_transfers(
+    transfers: &mut Vec<(
+        narrowing::NarrowEnv,
+        std::collections::BTreeSet<narrowing::ReferencePath>,
+    )>,
+    range: std::ops::Range<usize>,
+    outcome: &ClauseOutcome,
+) {
+    if outcome.exit.is_none() {
+        transfers.drain(range);
+        return;
+    }
+    for (env, assigned) in &mut transfers[range] {
+        let mut post = Some(std::mem::take(env));
+        apply_finally_to_exit(&mut post, outcome);
+        *env = post.unwrap_or_default();
+        assigned.extend(outcome.all_writes.iter().cloned());
+    }
+}
+
+/// The typed body/update and the state returning to the condition. For a
+/// classic `for`, `back_edge` includes the update's effects.
+pub(super) struct LoopBodyOutcome {
+    pub body: StmtId,
+    pub update: Option<StmtId>,
+    pub assigned: std::collections::BTreeSet<narrowing::ReferencePath>,
+    pub back_edge: narrowing::NarrowEnv,
+    pub reaches_back_edge: bool,
+}
+
+/// Join complete snapshots from reachable paths. Their tombstones have already
+/// removed invalidated views, so the union needs no additional write filtering.
+fn join_reachable_envs(
     natural: Option<narrowing::NarrowEnv>,
-    continues: Vec<narrowing::NarrowEnv>,
+    exits: Vec<narrowing::NarrowEnv>,
 ) -> Option<narrowing::NarrowEnv> {
-    natural.into_iter().chain(continues).reduce(|a, b| {
+    natural.into_iter().chain(exits).reduce(|a, b| {
         narrowing::union_envs(
             a,
             std::collections::BTreeSet::new(),
@@ -1843,6 +1971,26 @@ fn join_back_edge(
     })
 }
 
+fn loop_exit_env(
+    entry: &narrowing::NarrowEnv,
+    outcome: &LoopBodyOutcome,
+    condition_false: narrowing::NarrowEnv,
+) -> narrowing::NarrowEnv {
+    let mut post = if outcome.reaches_back_edge {
+        narrowing::union_envs(
+            entry.clone(),
+            Default::default(),
+            outcome.back_edge.clone(),
+            outcome.assigned.clone(),
+        )
+        .0
+    } else {
+        entry.clone()
+    };
+    post.extend(condition_false);
+    post
+}
+
 fn cond_is_static_true(_inferer: &Inferer<'_>, expr_id: ExprId) -> bool {
     matches!(
         _inferer.typed_ast.expr(expr_id).kind,
@@ -1851,19 +1999,16 @@ fn cond_is_static_true(_inferer: &Inferer<'_>, expr_id: ExprId) -> bool {
 }
 
 impl Inferer<'_> {
-    /// Two-pass fixed-point for loop body narrowing.
-    ///
-    /// Walk with `entry_env`, then compute the entry state the *second*
-    /// iteration would see. If it matches, the first walk stands; otherwise roll
-    /// back and re-walk under it. Two passes suffice: narrowing only widens
-    /// here, and the height of the lattice on one path is the declared type's
-    /// member count (docs/narrowing.md § Loops).
+    /// Retype while a back edge falsifies an enclosing view. The set of outer
+    /// views strictly shrinks, so retries terminate; condition guards are
+    /// reinstalled for each body pass because they are tested every iteration.
     pub(super) fn run_loop_body_with_fixed_point(
         &mut self,
         body: StmtId,
         entry_env: narrowing::NarrowEnv,
         body_span: Span,
         body_scope_floor: narrowing::ScopeId,
+        update: Option<StmtId>,
     ) -> LoopBodyOutcome {
         let diag_len = self.diagnostics.len();
         let mats_len = self.pending_post_if_materializations.len();
@@ -1873,88 +2018,68 @@ impl Inferer<'_> {
             .map_or((0, 0), |f| (f.breaks.len(), f.continues.len()));
         let entry_reachable = self.reachable;
 
-        let pass_1 = self.run_body_pass(body, &entry_env, body_span, continues_len);
-        if !self.drop_narrowings_the_body_falsifies(
-            &entry_env,
-            &pass_1.back_edge,
-            body_scope_floor,
-            body_span,
-        ) {
-            return pass_1;
+        loop {
+            let outcome = self.run_body_pass(body, &entry_env, body_span, continues_len, update);
+            if !self.drop_narrowings_the_body_falsifies(&outcome, body_scope_floor, body_span) {
+                return outcome;
+            }
+            // Discard speculative diagnostics and exits before retyping under
+            // the widened state. Each retry removes at least one outer view.
+            self.diagnostics.truncate(diag_len);
+            self.pending_post_if_materializations.truncate(mats_len);
+            if let Some(frame) = self.pending_joins.last_mut() {
+                frame.breaks.truncate(breaks_len);
+                frame.continues.truncate(continues_len);
+            }
+            self.reachable = entry_reachable;
         }
-        // Iteration 1's typed AST nodes become dead weight; codegen skips
-        // unreferenced nodes. Its diagnostics and exits must not survive — they
-        // were derived from an enclosing narrowing the body turns out to break.
-        self.diagnostics.truncate(diag_len);
-        self.pending_post_if_materializations.truncate(mats_len);
-        if let Some(frame) = self.pending_joins.last_mut() {
-            frame.breaks.truncate(breaks_len);
-            frame.continues.truncate(continues_len);
-        }
-        self.reachable = entry_reachable;
-        self.run_body_pass(body, &entry_env, body_span, continues_len)
     }
 
-    /// One `try` clause — body, a `catch`, or `finally`. Nothing it narrows
-    /// survives it: an exception can leave the body at any statement, so "the
-    /// block ran to its end" — the premise block-exit propagation rests on — is
-    /// exactly what a `try` does not guarantee, and a `catch`'s exit state says
-    /// nothing about the path where the body completed. Reachability resets too,
-    /// since a later clause can re-establish control flow the last one ended.
-    fn infer_isolated_clause(&mut self, clause: StmtId, entry_reachable: bool) -> Option<StmtId> {
-        let typed = self.infer_stmt(clause);
-        self.discard_clause_narrowings();
-        self.reachable = entry_reachable;
-        typed
-    }
-
-    /// Types a `for` update clause where it actually runs: on the back edge,
-    /// after the body, with the condition having held — not on the loop-exit
-    /// environment `fold_exits_into_outer` installs. Its own narrowings are
-    /// dropped (the condition re-runs before anything else observes the loop
-    /// variable), but its *writes* invalidate at every depth: every path out of
-    /// the loop runs the update, so a guard from outside it is dead after one —
-    /// `if (cur !== null) { for (;; cur = null) {} cur.value }`.
-    fn infer_update_on_back_edge(
+    /// Infer a clause from its possible entry state. An exception may occur
+    /// before or after any write in an earlier clause, so those writes kill
+    /// incoming guards; only normal completion contributes an exit.
+    fn infer_isolated_clause(
         &mut self,
-        update: Option<StmtId>,
-        back_edge: &narrowing::NarrowEnv,
-        body_span: Span,
-    ) -> Option<StmtId> {
-        let span = update.map_or(body_span, |u| self.ast.stmt(u).span);
-        self.push_rebound_root_frame(back_edge);
-        let typed = update.and_then(|u| self.infer_stmt(u));
-        let (_narrowings, assigned) = self.pop_narrow_frame_capture();
-        self.invalidate_assignments_at_every_depth(assigned, span);
-        typed
+        clause: StmtId,
+        entry_reachable: bool,
+        uncertain_writes: &std::collections::BTreeSet<narrowing::ReferencePath>,
+    ) -> ClauseOutcome {
+        self.push_narrow_frame(narrowing::NarrowEnv::new());
+        let span = self.ast.stmt(clause).span;
+        for path in uncertain_writes {
+            self.drop_narrowings_under(path, narrowing::InvalidationReason::Write { span });
+        }
+        self.reachable = entry_reachable;
+        self.clause_write_scopes.push(Default::default());
+        let body = self.infer_stmt(clause);
+        let all_writes = self
+            .clause_write_scopes
+            .pop()
+            .expect("clause write collector");
+        let exit = self.reachable.then(|| self.snapshot_active_narrowings(0).0);
+        let (_, assigned) = self.pop_narrow_frame_capture();
+        self.reachable = entry_reachable;
+        ClauseOutcome {
+            body,
+            exit,
+            assigned,
+            all_writes,
+        }
     }
 
-    /// Drops the enclosing narrowings the body turns out to break, and reports
-    /// whether it dropped any — the signal to walk the body again.
-    ///
-    /// This is what the second pass is *for*. Iteration 1 reads a path through a
-    /// narrowing established outside the loop; if the body then widens that path
-    /// (`if (s !== null) { while (c) { s.length; s = null; } }`), the claim is
-    /// false on every iteration after the first — and, since the body may have
-    /// run, after the loop too. The engine has no way to say "narrowed to
-    /// something wider": a `NarrowedView` is a claim plus the slot that holds
-    /// it, and there is no slot for a widened claim. Dropping the view is the
-    /// available answer, and the honest one — the body reads at the declared
-    /// type on the second walk, exactly as it would with no guard at all.
-    ///
-    /// A path the loop *condition* constrains is left alone: the condition
-    /// re-tests every iteration, entry included, so its view survives whatever
-    /// the body does (`while (s !== null) { s = null; }`). So are bindings
-    /// declared at or inside the loop's own scopes — they are rebound every
-    /// iteration and don't exist at loop entry.
+    /// Invalidate outer views widened or killed on a reachable back edge.
+    /// Bindings declared within the body are recreated on each iteration.
     fn drop_narrowings_the_body_falsifies(
         &mut self,
-        entry_env: &narrowing::NarrowEnv,
-        back_edge: &narrowing::NarrowEnv,
+        outcome: &LoopBodyOutcome,
         body_scope_floor: narrowing::ScopeId,
         body_span: Span,
     ) -> bool {
-        let falsified: Vec<narrowing::ReferencePath> = back_edge
+        if !outcome.reaches_back_edge {
+            return false;
+        }
+        let (active, _) = self.snapshot_active_narrowings(0);
+        let falsified: Vec<_> = active
             .iter()
             .filter(|(path, view)| {
                 let outlives_loop = match &path.root {
@@ -1963,13 +2088,12 @@ impl Inferer<'_> {
                     }
                     narrowing::BindingId::Global(_) | narrowing::BindingId::This => true,
                 };
-                if !outlives_loop || entry_env.contains_key(*path) {
-                    return false;
-                }
-                self.lookup_narrowed_view(path).is_some_and(|active| {
-                    Type::union(vec![active.narrowed_ty.clone(), view.narrowed_ty.clone()])
-                        != active.narrowed_ty
-                })
+                outlives_loop
+                    && outcome.assigned.iter().any(|p| p.is_prefix_of(path))
+                    && outcome.back_edge.get(*path).is_none_or(|post| {
+                        Type::union(vec![view.narrowed_ty.clone(), post.narrowed_ty.clone()])
+                            != view.narrowed_ty
+                    })
             })
             .map(|(path, _)| path.clone())
             .collect();
@@ -1990,6 +2114,7 @@ impl Inferer<'_> {
         entry_env: &narrowing::NarrowEnv,
         body_span: Span,
         continues_base: usize,
+        update: Option<StmtId>,
     ) -> LoopBodyOutcome {
         self.push_narrow_frame(entry_env.clone());
         self.loop_depth += 1;
@@ -1998,27 +2123,72 @@ impl Inferer<'_> {
             .expect("loop body is a Block, never a type-only decl");
         self.loop_depth -= 1;
         let body_end_reachable = self.reachable;
-        let (body_post, assigned) = self.pop_narrow_frame_capture();
-        let continues = self.continue_envs_since(continues_base);
+        let (body_post, _) = self.snapshot_active_narrowings(0);
+        let (_, mut assigned) = self.pop_narrow_frame_capture();
+        let (continues, continued_assignments) = self.continue_exits_since(continues_base);
+        assigned.extend(continued_assignments);
+        let mut back_edge = join_reachable_envs(body_end_reachable.then_some(body_post), continues);
+        let typed_update = update.and_then(|update| {
+            self.push_narrow_frame(narrowing::NarrowEnv::new());
+            for path in &assigned {
+                self.drop_narrowings_under(
+                    path,
+                    narrowing::InvalidationReason::Write { span: body_span },
+                );
+            }
+            self.push_rebound_root_frame(
+                back_edge.as_ref().unwrap_or(&narrowing::NarrowEnv::new()),
+            );
+            let typed = self.infer_stmt(update);
+            let mut post = self.snapshot_active_narrowings(0).0;
+            let (_, update_assigned) = self.pop_narrow_frame_capture();
+            self.pop_narrow_frame();
+            if let Some(before_update) = &back_edge {
+                // Rebinding the update's root reads must not discard field
+                // facts established by the body when the update leaves them alone.
+                post.extend(
+                    before_update
+                        .iter()
+                        .filter(|(path, _)| {
+                            !update_assigned
+                                .iter()
+                                .any(|written| written.is_prefix_of(path))
+                        })
+                        .map(|(path, view)| (path.clone(), view.clone())),
+                );
+                back_edge = Some(post);
+            }
+            assigned.extend(update_assigned);
+            typed
+        });
         LoopBodyOutcome {
+            update: typed_update,
+            reaches_back_edge: back_edge.is_some(),
             body: self.wrap_narrow_regions(typed_body, entry_env, body_span),
             assigned,
-            back_edge: join_back_edge(body_end_reachable.then_some(body_post), continues)
-                .unwrap_or_default(),
+            back_edge: back_edge.unwrap_or_default(),
         }
     }
 
-    fn continue_envs_since(&self, base_len: usize) -> Vec<narrowing::NarrowEnv> {
-        self.pending_joins
-            .last()
-            .map(|f| {
-                f.continues[base_len..]
-                    .iter()
-                    .map(|(env, _)| env.clone())
-                    .collect()
-            })
-            .unwrap_or_default()
+    fn continue_exits_since(
+        &self,
+        base_len: usize,
+    ) -> (
+        Vec<narrowing::NarrowEnv>,
+        std::collections::BTreeSet<narrowing::ReferencePath>,
+    ) {
+        let Some(frame) = self.pending_joins.last() else {
+            return Default::default();
+        };
+        let exits = &frame.continues[base_len..];
+        let envs = exits.iter().map(|(env, _)| env.clone()).collect();
+        let assigned = exits
+            .iter()
+            .flat_map(|(_, assigned)| assigned.iter().cloned())
+            .collect();
+        (envs, assigned)
     }
+
     /// Shared for-of source classification: what element type a `for-of` (or a
     /// synthesized iteration like `Array.from`) sees, and which desugar strategy
     /// applies. `None` means the type is not iterable.

@@ -20,7 +20,7 @@ use crate::codegen::bounds::{emit_checked_index, stash_index_operand};
 use crate::codegen::function_emitter::FunctionEmitter;
 use crate::codegen::function_emitter::cast;
 use crate::codegen::symbol_table::{MethodSlotAbi, is_erased, may_hold_null};
-use crate::typechecker::infer::narrowing::{BindingId, ReferencePath};
+use crate::typechecker::infer::narrowing::{BindingId, ReferencePath, cast_info_for};
 use crate::{BinOp, ExprId, Ident, Intrinsic, Type, TypedExprKind, UnOp};
 use wasm_encoder::{BlockType, HeapType, Ieee64, Instruction, RefType, ValType};
 
@@ -1194,6 +1194,12 @@ fn emit_local_narrow_ref(
     narrowed_ty: &Type,
 ) {
     let Some((slot, slot_ty)) = emitter.narrowed_read_slot(&binding.name) else {
+        if let Some(source) = emitter.narrow_source(&binding.name) {
+            emit_expr(emitter, ctx, source);
+            let cast_info = cast_info_for(ctx.ta.expr(source).ty.clone(), narrowed_ty.clone());
+            cast::emit_narrowing_cast(emitter, ctx, &cast_info);
+            return;
+        }
         // A global has no local slot of its own, so once the scope holding its
         // shadow closes there is nothing named `binding` left. Read the live
         // global and cast — the same cast-at-use the local path falls back to

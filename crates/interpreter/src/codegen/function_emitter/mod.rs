@@ -96,6 +96,7 @@ struct Binding {
 #[derive(Default)]
 struct Scope {
     bindings: BTreeMap<String, Binding>,
+    narrow_sources: BTreeMap<String, crate::ExprId>,
 }
 
 impl Scope {
@@ -294,6 +295,21 @@ impl<'a> FunctionEmitter<'a> {
         if let Some(scope) = self.scopes.last_mut() {
             scope.set_shadow(name.to_string(), index, ty);
         }
+    }
+
+    /// A region snapshot may be discarded at a branch; retain its source so a
+    /// later narrowed read can load the current value and cast it at use.
+    pub fn register_narrow_source(&mut self, name: &str, source: crate::ExprId) {
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.narrow_sources.insert(name.to_string(), source);
+        }
+    }
+
+    pub fn narrow_source(&self, name: &str) -> Option<crate::ExprId> {
+        self.scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.narrow_sources.get(name).copied())
     }
 
     /// Drop every shadow of `name` visible from here — a write to the storage

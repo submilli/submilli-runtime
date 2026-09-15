@@ -66,6 +66,7 @@ pub fn infer<'a>(
         scopes: Scopes::default(),
         narrow_scopes: Vec::new(),
         assigned_scopes: Vec::new(),
+        clause_write_scopes: Vec::new(),
         tombstone_scopes: Vec::new(),
         last_write_spans: std::collections::BTreeMap::new(),
         suspended_narrow_scopes: Vec::new(),
@@ -195,6 +196,7 @@ pub fn infer_package<'a>(
         scopes: Scopes::default(),
         narrow_scopes: Vec::new(),
         assigned_scopes: Vec::new(),
+        clause_write_scopes: Vec::new(),
         tombstone_scopes: Vec::new(),
         last_write_spans: std::collections::BTreeMap::new(),
         suspended_narrow_scopes: Vec::new(),
@@ -358,7 +360,9 @@ pub(super) struct Inferer<'a> {
     /// Bindings reassigned inside closures; narrowings on these paths are dropped (a closure could invalidate the narrowing between check and use).
     pub(super) captured_mutators: std::collections::BTreeSet<String>,
     pub(super) reachable: bool,
-    /// Branch-join drops the other branch's narrowing for any path assigned here.
+    /// All clause writes, including terminating branches, for exceptional entry.
+    pub(super) clause_write_scopes: Vec<std::collections::BTreeSet<narrowing::ReferencePath>>,
+    /// Writes carried by normal flow and used when joining branch exits.
     pub(super) assigned_scopes: Vec<std::collections::BTreeSet<narrowing::ReferencePath>>,
     pub(super) tombstone_scopes:
         Vec<std::collections::BTreeMap<narrowing::ReferencePath, narrowing::InvalidationReason>>,
@@ -482,6 +486,7 @@ impl<'a> Inferer<'a> {
         self.scopes = Scopes::default();
         self.narrow_scopes.clear();
         self.assigned_scopes.clear();
+        self.clause_write_scopes.clear();
         self.tombstone_scopes.clear();
         self.last_write_spans.clear();
         self.suspended_narrow_scopes.clear();
