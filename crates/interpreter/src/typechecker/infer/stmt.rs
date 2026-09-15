@@ -912,7 +912,7 @@ impl Inferer<'_> {
     /// [`Self::renarrow_local_after_write`], and deliberately the same rule, so
     /// `if (g !== null) { g = 5; g.toString() }` behaves the way the local
     /// spelling does.
-    fn renarrow_global_after_write(
+    pub(super) fn renarrow_global_after_write(
         &mut self,
         ident: &Ident,
         mangled: &crate::MangledName,

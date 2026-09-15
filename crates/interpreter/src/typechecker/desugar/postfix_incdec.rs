@@ -1,6 +1,6 @@
-//! Lowers statement-position `x++`/`x--` to assignment; expression-position stays as
-//! `PostfixUnary` for codegen. Receiver/index ExprIds are shared between the read and
-//! write halves — non-pure receivers like `getObj().f++` would double-evaluate.
+//! Lowers statement-position field/index postfix to assignment. Binding postfix
+//! stays as `PostfixUnary` so codegen retains both the declared storage type and
+//! the narrowed numeric result type.
 
 use crate::{
     BinOp, PostfixOp, PostfixTarget, StmtId, Type, TypedExpr, TypedExprKind, TypedStmtKind,
@@ -14,6 +14,10 @@ pub(super) fn run(ctx: &mut DesugarCtx) {
         let id = StmtId(i as u32);
         if let TypedStmtKind::Expr(eid) = ctx.ta.stmt(id).kind
             && let TypedExprKind::PostfixUnary { op, target } = ctx.ta.expr(eid).kind.clone()
+            && !matches!(
+                target,
+                PostfixTarget::Local { .. } | PostfixTarget::Global { .. }
+            )
         {
             lower(ctx, id, op, target);
         }
@@ -29,66 +33,8 @@ fn lower(ctx: &mut DesugarCtx, stmt_id: StmtId, op: PostfixOp, target: PostfixTa
         PostfixOp::NonNullAssert => unreachable!("non-null assertion is not PostfixUnary"),
     };
     let new_kind = match target {
-        PostfixTarget::Local {
-            ident,
-            boxed,
-            target_ty,
-        } => {
-            let lhs = ctx.ta.push_expr(TypedExpr {
-                kind: TypedExprKind::LocalRef {
-                    ident: ident.clone(),
-                    boxed,
-                },
-                span,
-                ty: target_ty.clone(),
-            });
-            let (rhs, bin_ty) = one_rhs_and_binary_ty(ctx, &target_ty);
-            let value = ctx.ta.push_expr(TypedExpr {
-                kind: TypedExprKind::Binary {
-                    op: bin_op,
-                    lhs,
-                    rhs,
-                },
-                span,
-                ty: bin_ty,
-            });
-            TypedStmtKind::AssignLocal {
-                ident,
-                target_ty,
-                value,
-                boxed,
-                narrowed_shadow_ty: None,
-            }
-        }
-        PostfixTarget::Global {
-            name,
-            mangled,
-            target_ty,
-        } => {
-            let lhs = ctx.ta.push_expr(TypedExpr {
-                kind: TypedExprKind::GlobalRef {
-                    mangled: mangled.clone(),
-                    name: name.clone(),
-                },
-                span,
-                ty: target_ty.clone(),
-            });
-            let (rhs, bin_ty) = one_rhs_and_binary_ty(ctx, &target_ty);
-            let value = ctx.ta.push_expr(TypedExpr {
-                kind: TypedExprKind::Binary {
-                    op: bin_op,
-                    lhs,
-                    rhs,
-                },
-                span,
-                ty: bin_ty,
-            });
-            TypedStmtKind::AssignGlobal {
-                ident: name,
-                mangled,
-                target_ty,
-                value,
-            }
+        PostfixTarget::Local { .. } | PostfixTarget::Global { .. } => {
+            unreachable!("binding postfix stays an expression to preserve its narrowed read type")
         }
         PostfixTarget::Field {
             receiver,

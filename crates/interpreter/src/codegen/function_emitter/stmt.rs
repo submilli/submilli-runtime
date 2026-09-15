@@ -944,7 +944,14 @@ fn emit_case_comparison(
     disc_ty: &Type,
     value: &TypedSwitchValue,
 ) {
-    let disc_val = ctx.symbols.value_type(disc_ty);
+    let disc_val = switch_disc_local_type(ctx, disc_ty);
+    if let Some(case_ty) = switch_case_primitive_type(value)
+        && matches!(disc_val, ValType::Ref(_))
+        && disc_val != ctx.symbols.value_type(&case_ty)
+    {
+        emit_boxed_case_comparison(emitter, ctx, disc_local, &case_ty, value);
+        return;
+    }
     match value {
         TypedSwitchValue::Null { .. } => {
             // case null: accepted only when discriminant can hold null (nullable ref)
@@ -974,6 +981,52 @@ fn emit_case_comparison(
                 emit_string_compare(emitter, ctx, disc_local, disc_val, s);
             }
         },
+    }
+}
+
+/// A union discriminant may carry a different primitive kind or null. Test
+/// its boxed shape before unboxing; a nonmatching kind simply skips this case.
+fn emit_boxed_case_comparison(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    disc_local: u32,
+    case_ty: &Type,
+    value: &TypedSwitchValue,
+) {
+    let heap_index = match case_ty {
+        Type::Number => ctx.symbols.boxed_number_type_idx(),
+        Type::Boolean => ctx.symbols.boxed_boolean_type_idx(),
+        Type::String => ctx.symbols.string_type_idx(),
+        _ => unreachable!("switch case primitive classified above"),
+    }
+    .expect("primitive types registered before switch emission");
+    emitter.instruction(Instruction::LocalGet(disc_local));
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(heap_index)));
+    emitter.emit_if(BlockType::Result(ValType::I32));
+    emitter.instruction(Instruction::LocalGet(disc_local));
+    cast::emit_cast_to(emitter, ctx, case_ty);
+    let unboxed = emitter.add_anonymous_local(ctx.symbols.value_type(case_ty));
+    emitter.instruction(Instruction::LocalSet(unboxed));
+    emit_case_comparison(emitter, ctx, unboxed, case_ty, value);
+    emitter.emit_else();
+    emitter.instruction(Instruction::I32Const(0));
+    emitter.emit_end();
+}
+
+fn switch_case_primitive_type(value: &TypedSwitchValue) -> Option<Type> {
+    match value {
+        TypedSwitchValue::Number { .. }
+        | TypedSwitchValue::Enum {
+            value: EnumVariantPayload::Number(_),
+            ..
+        } => Some(Type::Number),
+        TypedSwitchValue::String { .. }
+        | TypedSwitchValue::Enum {
+            value: EnumVariantPayload::String(_),
+            ..
+        } => Some(Type::String),
+        TypedSwitchValue::Boolean { .. } => Some(Type::Boolean),
+        TypedSwitchValue::Null { .. } => None,
     }
 }
 

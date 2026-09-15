@@ -1101,8 +1101,10 @@ impl Inferer<'_> {
                 // hint propagation when either operand is the
                 // `null` literal so the RHS's `Null` type doesn't
                 // get reshaped against the LHS's narrowed view.
-                let rhs_is_null_literal = matches!(&self.ast.expr(rhs).kind, crate::ExprKind::Null);
-                let rhs_hint = if matches!(lt, Type::Error) || rhs_is_null_literal {
+                let either_is_null_literal =
+                    matches!(&self.ast.expr(lhs).kind, crate::ExprKind::Null)
+                        || matches!(&self.ast.expr(rhs).kind, crate::ExprKind::Null);
+                let rhs_hint = if matches!(lt, Type::Error) || either_is_null_literal {
                     None
                 } else {
                     Some(lt)
@@ -5599,15 +5601,21 @@ impl Inferer<'_> {
                     notes: vec![(entry.decl_span, "declared as `const` here".to_string())],
                 });
             }
+            let path = narrowing::ReferencePath::root(narrowing::BindingId::Local {
+                name: target.name.clone(),
+                decl_scope: entry.decl_scope,
+            });
+            let operand_ty = self
+                .lookup_narrowed_view(&path)
+                .map_or_else(|| entry.ty.clone(), |view| view.narrowed_ty.clone());
             if !matches!(
-                entry.ty.peel(),
+                operand_ty.peel(),
                 Type::Number | Type::NumberLiteral(_) | Type::BigInt | Type::Error
             ) {
                 self.error(
                     target.span,
                     format!(
-                        "postfix `{}` expects `number` or `bigint`, found `{}`",
-                        op_symbol, entry.ty,
+                        "postfix `{op_symbol}` expects `number` or `bigint`, found `{operand_ty}`",
                     ),
                 );
             }
@@ -5616,7 +5624,7 @@ impl Inferer<'_> {
             // operands (so `1n + 1n: bigint` round-trips), otherwise
             // widened `Number` (so a `NumberLiteral`/literal-union
             // slot like `1 | 2 | 3` doesn't restrict the result).
-            let result_ty = postfix_result_ty(&entry.ty);
+            let result_ty = postfix_result_ty(&operand_ty);
             // For non-error declared types that aren't assignable from
             // the result, mirror `infer_assign`'s rejection.
             if !matches!(entry.ty, Type::Error)
@@ -5869,19 +5877,24 @@ impl Inferer<'_> {
         ty: Type,
         span: Span,
     ) -> (TypedExprKind, Type) {
+        let path = narrowing::ReferencePath::root(narrowing::BindingId::Global(mangled.clone()));
+        let operand_ty = self
+            .lookup_narrowed_view(&path)
+            .map_or_else(|| ty.clone(), |view| view.narrowed_ty.clone());
         if !matches!(
-            ty.peel(),
+            operand_ty.peel(),
             Type::Number | Type::NumberLiteral(_) | Type::BigInt | Type::Error
         ) {
             self.error(
                 name.span,
-                format!("postfix `{op_symbol}` expects `number` or `bigint`, found `{ty}`",),
+                format!("postfix `{op_symbol}` expects `number` or `bigint`, found `{operand_ty}`",),
             );
         }
-        let result_ty = postfix_result_ty(&ty);
+        let result_ty = postfix_result_ty(&operand_ty);
         if !matches!(ty, Type::Error) && !assignable(&result_ty, &ty, self.resolver()) {
             self.error(span, format!("expected `{ty}`, got `{result_ty}`"));
         }
+        self.renarrow_global_after_write(&name, &mangled, &ty, result_ty.clone());
         (
             TypedExprKind::PostfixUnary {
                 op,

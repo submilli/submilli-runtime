@@ -277,6 +277,10 @@ impl<'a> Inferer<'a> {
             return (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new());
         }
         let path_ty = path_expr.ty.clone();
+        // Never introduce a null alternative that the operand cannot hold.
+        // Keep the non-null fact even when already proven: loop rechecking
+        // needs it after invalidating the enclosing guard at a back edge.
+        let can_be_null = super::assignable(&Type::Null, &path_ty, self.resolver());
         let path_span = path_expr.span;
         let fallback_kind = path_expr.kind.clone();
 
@@ -296,16 +300,18 @@ impl<'a> Inferer<'a> {
             span: path_span,
             ty: path_ty.clone(),
         });
-        eq_env.insert(
-            path.clone(),
-            narrowing::NarrowedView {
-                narrowed_ty: Type::Null,
-                facts: narrowing::TypeFacts::EQ_NULL,
-                excluded_literals: std::collections::BTreeSet::new(),
-                binding: self.mint_narrow_binding(path_span),
-                source: source_eq,
-            },
-        );
+        if can_be_null {
+            eq_env.insert(
+                path.clone(),
+                narrowing::NarrowedView {
+                    narrowed_ty: Type::Null,
+                    facts: narrowing::TypeFacts::EQ_NULL,
+                    excluded_literals: std::collections::BTreeSet::new(),
+                    binding: self.mint_narrow_binding(path_span),
+                    source: source_eq,
+                },
+            );
+        }
         neq_env.insert(
             path,
             narrowing::NarrowedView {

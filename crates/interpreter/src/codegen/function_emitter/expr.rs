@@ -19,7 +19,7 @@ use crate::codegen::CodegenCtx;
 use crate::codegen::bounds::{emit_checked_index, stash_index_operand};
 use crate::codegen::function_emitter::FunctionEmitter;
 use crate::codegen::function_emitter::cast;
-use crate::codegen::symbol_table::{MethodSlotAbi, is_erased, may_hold_null};
+use crate::codegen::symbol_table::{MethodSlotAbi, may_hold_null};
 use crate::typechecker::infer::narrowing::{BindingId, ReferencePath, cast_info_for};
 use crate::{BinOp, ExprId, Ident, Intrinsic, Type, TypedExprKind, UnOp};
 use wasm_encoder::{BlockType, HeapType, Ieee64, Instruction, RefType, ValType};
@@ -1147,7 +1147,7 @@ pub fn emit_expr(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) {
             emit_chain_parts(emitter, ctx, parts, 0, &base_ty, &result_ty);
         }
         TypedExprKind::PostfixUnary { op, target } => {
-            emit_postfix_unary(emitter, ctx, *op, target);
+            emit_postfix_unary(emitter, ctx, *op, target, &expr.ty);
         }
         TypedExprKind::NonNullAssert { value } => {
             crate::codegen::cast_check::emit_non_null_assert(emitter, ctx, *value, &expr.ty);
@@ -1255,18 +1255,15 @@ fn unbox_if_boxed(
     payload
 }
 
-/// lower an expression-position `x++` / `x--` to the
-/// let-expression pattern `(tmp = x, x = x + 1, tmp)` — i.e. produces
-/// the original value as the expression's result *after* the
-/// increment commits. Statement-position uses were already rewritten
-/// to an `Assign*` statement by `desugar/postfix_incdec`; this path
-/// only fires for sub-expression uses (`let y = x++`, `arr[i++]`,
-/// `f(x++)`, etc.).
+/// Read the original value, write its increment/decrement, and return the
+/// original. Binding operands are read at the narrowed result type but written
+/// back through their declared slot, including nullable and captured bindings.
 fn emit_postfix_unary(
     emitter: &mut FunctionEmitter<'_>,
     ctx: &CodegenCtx<'_>,
     op: crate::PostfixOp,
     target: &crate::PostfixTarget,
+    result_ty: &Type,
 ) {
     let delta_op = match op {
         crate::PostfixOp::Inc => Instruction::F64Add,
@@ -1283,57 +1280,37 @@ fn emit_postfix_unary(
             let slot = emitter
                 .write_slot(&ident.name)
                 .expect("Inferer guarantees the binding exists");
-            let is_bigint = matches!(target_ty.peel(), Type::BigInt);
-            if *boxed {
-                // local.get $box; struct.get $box 0 → [orig]
-                // local.tee $tmp                    → [orig] (saved)
-                // local.get $box; local.get $tmp; <±1>; struct.set
-                // local.get $tmp                    → [orig]
-                let box_idx = ctx
-                    .symbols
+            let old = emitter.add_anonymous_local(ctx.symbols.value_type(result_ty));
+            let box_idx = boxed.then(|| {
+                ctx.symbols
                     .box_type_idx(target_ty)
-                    .expect("box type registered for postfix operand");
-                // The cell holds `slot_value_type`, so reading it into a
-                // `value_type` local is sound only while the two agree — which
-                // the typechecker's `number`/`bigint`-only targets guarantee.
-                debug_assert!(
-                    !is_erased(target_ty),
-                    "postfix target `{target_ty:?}` is erased; the boxed read needs emit_unerase"
-                );
-                let tmp = emitter.add_anonymous_local(ctx.symbols.value_type(target_ty));
-                emitter.instruction(Instruction::LocalGet(slot));
+                    .expect("box type registered for postfix operand")
+            });
+            emitter.instruction(Instruction::LocalGet(slot));
+            if let Some(box_idx) = box_idx {
                 emitter.instruction(Instruction::StructGet {
                     struct_type_index: box_idx,
                     field_index: 0,
                 });
-                emitter.instruction(Instruction::LocalTee(tmp));
-                emitter.instruction(Instruction::Drop);
+            }
+            let cast_info = cast_info_for(target_ty.clone(), result_ty.clone());
+            cast::emit_narrowing_cast(emitter, ctx, &cast_info);
+            emitter.instruction(Instruction::LocalSet(old));
+            if box_idx.is_some() {
                 emitter.instruction(Instruction::LocalGet(slot));
-                emitter.instruction(Instruction::LocalGet(tmp));
-                if is_bigint {
-                    emit_bigint_pm_one(emitter, ctx, op);
-                } else {
-                    emitter.instruction(Instruction::F64Const(Ieee64::from(1.0)));
-                    emitter.instruction(delta_op.clone());
-                }
+            }
+            emitter.instruction(Instruction::LocalGet(old));
+            emit_postfix_delta(emitter, ctx, op, result_ty);
+            cast::emit_coerce_to_slot(emitter, ctx, result_ty, target_ty);
+            if let Some(box_idx) = box_idx {
                 emitter.instruction(Instruction::StructSet {
                     struct_type_index: box_idx,
                     field_index: 0,
                 });
-                emitter.instruction(Instruction::LocalGet(tmp));
             } else {
-                // local.get $x; local.get $x; <±1>; local.set $x
-                // → leaves the original on the stack.
-                emitter.instruction(Instruction::LocalGet(slot));
-                emitter.instruction(Instruction::LocalGet(slot));
-                if is_bigint {
-                    emit_bigint_pm_one(emitter, ctx, op);
-                } else {
-                    emitter.instruction(Instruction::F64Const(Ieee64::from(1.0)));
-                    emitter.instruction(delta_op);
-                }
                 emitter.instruction(Instruction::LocalSet(slot));
             }
+            emitter.instruction(Instruction::LocalGet(old));
         }
         crate::PostfixTarget::Global {
             mangled, target_ty, ..
@@ -1342,16 +1319,23 @@ fn emit_postfix_unary(
                 .symbols
                 .global_idx(mangled)
                 .expect("Inferer guarantees the binding exists");
-            let is_bigint = matches!(target_ty.peel(), Type::BigInt);
+            let old = emitter.add_anonymous_local(ctx.symbols.value_type(result_ty));
             emitter.instruction(Instruction::GlobalGet(idx));
-            emitter.instruction(Instruction::GlobalGet(idx));
-            if is_bigint {
-                emit_bigint_pm_one(emitter, ctx, op);
-            } else {
-                emitter.instruction(Instruction::F64Const(Ieee64::from(1.0)));
-                emitter.instruction(delta_op);
+            // Reference globals start as null before module initialization.
+            if let ValType::Ref(RefType {
+                nullable: false, ..
+            }) = ctx.symbols.value_type(target_ty)
+            {
+                emitter.instruction(Instruction::RefAsNonNull);
             }
+            let cast_info = cast_info_for(target_ty.clone(), result_ty.clone());
+            cast::emit_narrowing_cast(emitter, ctx, &cast_info);
+            emitter.instruction(Instruction::LocalSet(old));
+            emitter.instruction(Instruction::LocalGet(old));
+            emit_postfix_delta(emitter, ctx, op, result_ty);
+            cast::emit_coerce_to_slot(emitter, ctx, result_ty, target_ty);
             emitter.instruction(Instruction::GlobalSet(idx));
+            emitter.instruction(Instruction::LocalGet(old));
         }
         crate::PostfixTarget::Field {
             receiver,
@@ -1447,6 +1431,24 @@ fn emit_postfix_unary(
             //   stack: [orig]
         }
     }
+}
+
+fn emit_postfix_delta(
+    emitter: &mut FunctionEmitter<'_>,
+    ctx: &CodegenCtx<'_>,
+    op: crate::PostfixOp,
+    ty: &Type,
+) {
+    if matches!(ty.peel(), Type::BigInt) {
+        emit_bigint_pm_one(emitter, ctx, op);
+        return;
+    }
+    emitter.instruction(Instruction::F64Const(Ieee64::from(1.0)));
+    emitter.instruction(match op {
+        crate::PostfixOp::Inc => Instruction::F64Add,
+        crate::PostfixOp::Dec => Instruction::F64Sub,
+        crate::PostfixOp::NonNullAssert => unreachable!("non-null assertion is not PostfixUnary"),
+    });
 }
 
 /// `receiver.field++` on a class instance, leaving the *old* value on the stack.

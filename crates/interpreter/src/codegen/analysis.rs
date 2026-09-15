@@ -673,17 +673,15 @@ impl CodegenAnalysis {
                 self.note_chain_parts(ta, *base, parts);
             }
             TypedExprKind::PostfixUnary { target, .. } => match target {
-                PostfixTarget::Local { target_ty, .. } => {
-                    self.note_postfix_target(target_ty);
+                PostfixTarget::Local { .. } => {
+                    self.note_postfix_target(&expr.ty);
                 }
-                PostfixTarget::Global {
-                    mangled, target_ty, ..
-                } => {
+                PostfixTarget::Global { mangled, .. } => {
                     self.dependency_usage.note_value(mangled.clone());
-                    self.note_postfix_target(target_ty);
+                    self.note_postfix_target(&expr.ty);
                 }
-                PostfixTarget::Field { target_ty, .. } => {
-                    self.note_postfix_target(target_ty);
+                PostfixTarget::Field { .. } => {
+                    self.note_postfix_target(&expr.ty);
                 }
                 PostfixTarget::Index { elem_ty, .. } => {
                     self.note_postfix_target(elem_ty);
