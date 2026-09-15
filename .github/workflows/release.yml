@@ -1,12 +1,12 @@
-name: Release candidate
+name: Release
 
-# Build and validate candidate artifacts. Publication is configured separately.
 on:
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "Candidate version (e.g. v0.1.4-rc.1)"
-        required: true
+  release:
+    types: [published]
+
+concurrency:
+  group: release-${{ github.event.release.id }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -28,8 +28,7 @@ jobs:
           - target: x86_64-apple-darwin
             os: macos-latest
           # Linux builds are static musl via cargo-zigbuild so the binaries run
-          # on any distro regardless of its glibc version. Our deps are pure
-          # Rust (rustls, no OpenSSL/C), so static linking is clean.
+          # without depending on the host distro's glibc version.
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             zig: true
@@ -64,34 +63,33 @@ jobs:
         shell: bash
         run: |
           if [ "${{ matrix.zig }}" = "true" ]; then
-            cargo zigbuild --release --target ${{ matrix.target }} \
+            cargo zigbuild --locked --release --target ${{ matrix.target }} \
               --bin submilli --bin submilli-server
           else
-            cargo build --release --target ${{ matrix.target }} \
+            cargo build --locked --release --target ${{ matrix.target }} \
               --bin submilli --bin submilli-server
           fi
 
-      - name: Package
+      - name: Stage executables
         shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
-          VERSION="${{ inputs.tag || github.ref_name }}"
-          DIST="submilli-${VERSION}-${{ matrix.target }}"
-          BIN_DIR="target/${{ matrix.target }}/release"
-          mkdir -p "$DIST"
-          if [[ "${{ matrix.target }}" == *windows* ]]; then
-            cp "$BIN_DIR/submilli.exe" "$BIN_DIR/submilli-server.exe" "$DIST"/
-            7z a "${DIST}.zip" "$DIST" >/dev/null
-            echo "ASSET=${DIST}.zip" >> "$GITHUB_ENV"
-          else
-            cp "$BIN_DIR/submilli" "$BIN_DIR/submilli-server" "$DIST"/
-            tar -czf "${DIST}.tar.gz" "$DIST"
-            echo "ASSET=${DIST}.tar.gz" >> "$GITHUB_ENV"
+          mkdir -p artifacts
+          EXT=""
+          if [[ "$TARGET" == *windows* ]]; then
+            EXT=".exe"
           fi
+          for BIN in submilli submilli-server; do
+            cp "target/$TARGET/release/$BIN$EXT" "artifacts/$BIN-$TARGET$EXT"
+          done
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.target }}
-          path: ${{ env.ASSET }}
+          name: binaries-${{ matrix.target }}
+          path: artifacts/*
+          if-no-files-found: error
+          compression-level: 0
 
   docker:
     name: Validate container image
@@ -103,40 +101,32 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          pattern: "*-linux-musl"
+          pattern: "binaries-*-linux-musl"
           path: artifacts
           merge-multiple: true
 
-      # The image copies `dist/$TARGETARCH/`, using Docker's arch names rather
-      # than the Rust target triples the tarballs are named for. Each tarball
-      # carries a top-level `submilli-<version>-<target>/` directory.
+      # Actions artifact downloads do not preserve executable permissions.
       - name: Lay out binaries by Docker architecture
         run: |
-          VERSION="${{ inputs.tag || github.ref_name }}"
           mkdir -p dist/amd64 dist/arm64
-          tar -xzf "artifacts/submilli-${VERSION}-x86_64-unknown-linux-musl.tar.gz" \
-            -C dist/amd64 --strip-components=1
-          tar -xzf "artifacts/submilli-${VERSION}-aarch64-unknown-linux-musl.tar.gz" \
-            -C dist/arm64 --strip-components=1
+          for BIN in submilli submilli-server; do
+            install -m 755 "artifacts/$BIN-x86_64-unknown-linux-musl" "dist/amd64/$BIN"
+            install -m 755 "artifacts/$BIN-aarch64-unknown-linux-musl" "dist/arm64/$BIN"
+          done
 
-      # `latest=auto` is what keeps a prerelease tag such as v0.1.0-rc.1 from
-      # claiming `latest`. The explicit `value:` feeds the same
-      # `inputs.tag || github.ref_name` expression the tarball steps use, so a
-      # workflow_dispatch test release tags correctly despite having no tag ref.
       - uses: docker/metadata-action@v5
         id: meta
         with:
           images: ghcr.io/${{ github.repository_owner }}/submilli
           flavor: latest=auto
           tags: |
-            type=semver,pattern={{version}},value=${{ inputs.tag || github.ref_name }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.tag || github.ref_name }}
+            type=semver,pattern={{version}},value=${{ github.event.release.tag_name }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ github.event.release.tag_name }}
 
       - uses: docker/setup-buildx-action@v3
 
-      # Three builds, not one, and the ordering is the gate: nothing is pushed
-      # until the candidate has been run. They share the builder's layer cache,
-      # and the image is a file copy, so the second and third are near-free.
+      # Validate the runnable amd64 image and both platform layouts before
+      # attaching executable assets to the release. Images are not pushed here.
       #
       # `context: .` is not the default — the action would otherwise use the Git
       # context, which cannot see the untracked `dist/` this job just created.
@@ -161,9 +151,7 @@ jobs:
             VERSION=${{ steps.meta.outputs.version }}
             REVISION=${{ github.sha }}
 
-      # arm64 is verified from this tarball rather than from the registry:
-      # `imagetools inspect` resolves a *published* reference, so it could only
-      # confirm a defect that had already shipped under `latest`.
+      # Verify both architectures from an OCI image archive before publication.
       - name: Export both platforms for structural checks
         uses: docker/build-push-action@v6
         with:
@@ -186,3 +174,33 @@ jobs:
       # release rather than shipping an image that cannot reach anything.
       - name: Conformance
         run: scripts/docker-conformance.sh submilli-candidate:smoke
+
+  publish:
+    name: Attach release executables
+    needs: [build, docker]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binaries-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Upload standalone CLI executables
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          assets=(
+            artifacts/submilli-x86_64-unknown-linux-musl
+            artifacts/submilli-x86_64-pc-windows-msvc.exe
+            artifacts/submilli-x86_64-apple-darwin
+            artifacts/submilli-aarch64-apple-darwin
+          )
+          for asset in "${assets[@]}"; do
+            test -s "$asset"
+          done
+          gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
