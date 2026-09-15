@@ -1,0 +1,27 @@
+name: Installers
+
+on:
+  push:
+    branches: [main]
+    paths: ['install.sh', 'install.ps1', 'scripts/tests/test_install*', '.github/workflows/installers.yml']
+  pull_request:
+    paths: ['install.sh', 'install.ps1', 'scripts/tests/test_install*', '.github/workflows/installers.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  unix:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/tests/test_install.py
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - shell: pwsh
+        run: ./scripts/tests/test_install.ps1

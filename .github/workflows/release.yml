@@ -231,30 +231,39 @@ jobs:
             REVISION=${{ needs.prepare.outputs.commit }}
 
   publish:
-    name: Attach release executables
-    needs: [build, docker]
+    name: Attach release executables and installers
+    needs: [prepare, build, docker]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+
       - uses: actions/download-artifact@v4
         with:
           pattern: binaries-*
           path: artifacts
           merge-multiple: true
 
-      - name: Upload standalone CLI executables
+      - name: Upload executables, installers, and checksums
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          cp install.sh install.ps1 artifacts/
+          cd artifacts
           assets=(
-            artifacts/submilli-x86_64-unknown-linux-musl
-            artifacts/submilli-x86_64-pc-windows-msvc.exe
-            artifacts/submilli-x86_64-apple-darwin
-            artifacts/submilli-aarch64-apple-darwin
+            submilli-x86_64-unknown-linux-musl
+            submilli-x86_64-pc-windows-msvc.exe
+            submilli-x86_64-apple-darwin
+            submilli-aarch64-apple-darwin
+            install.sh
+            install.ps1
           )
           for asset in "${assets[@]}"; do
             test -s "$asset"
           done
-          gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
+          sha256sum "${assets[@]}" > SHA256SUMS
+          gh release upload "$RELEASE_TAG" "${assets[@]}" SHA256SUMS --clobber
