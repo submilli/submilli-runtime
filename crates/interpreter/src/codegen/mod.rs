@@ -6,6 +6,7 @@ pub mod bounds;
 pub mod box_types;
 pub mod cast_check;
 pub mod classes;
+mod closure_coercions;
 pub mod closures;
 pub mod dependency_usage;
 pub mod dwarf;
@@ -831,18 +832,17 @@ fn codegen_inner(
         });
     }
 
-    // Allocated before closure body indices so method indices stay stable regardless of closure count.
-    //
-    // Deliberately narrower than the closure-*type* sources above: the vtable is
-    // read only where a closure is built (`struct.new`), which is these three.
-    // A module that merely names a closure shape calls through it and never
-    // constructs one.
-    let closure_methods =
-        if closure_metas.is_empty() && adapter_metas.is_empty() && class_member_sigs.is_empty() {
-            None
-        } else {
-            Some(closures::allocate_methods(&mut next_func_idx))
-        };
+    // Coercions can construct closures even when this module has no literals.
+    let needs_closure_coercions = !mentioned_closure_sigs.is_empty();
+    let closure_methods = if closure_metas.is_empty()
+        && adapter_metas.is_empty()
+        && class_member_sigs.is_empty()
+        && !needs_closure_coercions
+    {
+        None
+    } else {
+        Some(closures::allocate_methods(&mut next_func_idx))
+    };
 
     for meta in &closure_metas {
         let func_idx = next_func_idx;
@@ -855,6 +855,12 @@ fn codegen_inner(
         next_func_idx += 1;
         symbols.record_adapter_func_idx(meta.mangled.clone(), func_idx);
     }
+
+    let closure_coercion_targets = if closure_methods.is_some() {
+        closure_coercions::allocate(&mut symbols, &mut next_func_idx)
+    } else {
+        Vec::new()
+    };
 
     // Allocated after user functions; vtable globals reference these via ref.func.
     let mut user_subtypes_alloc: Vec<user_subtypes::UserSubtype> = Vec::new();
@@ -948,6 +954,7 @@ fn codegen_inner(
             .expect("closures::emit_func_and_struct_types registered the adapter signature");
         functions.function(sig_idx);
     }
+    closure_coercions::emit_entries(&closure_coercion_targets, &mut functions, &symbols);
     user_subtypes::emit_method_function_entries(&mut functions, &user_subtypes_alloc, intrinsics);
     class_plan.emit_function_entries(&mut functions, &symbols, intrinsics);
     for &sig_idx in &cast_validator_sigs {
@@ -1173,6 +1180,11 @@ fn codegen_inner(
             .expect("adapter func index allocated");
         declared.push(idx);
     }
+    declared.extend(
+        closure_coercion_targets
+            .iter()
+            .map(|&sig| symbols.closure_coercion(sig).expect("coercion allocated")),
+    );
     declared.extend(class_plan.declared_funcs(&symbols));
     if !declared.is_empty() {
         let mut elements = wasm_encoder::ElementSection::new();
@@ -1242,6 +1254,7 @@ fn codegen_inner(
     }
 
     function_adapters::emit_bodies(&adapter_metas, &mut code, &ctx);
+    closure_coercions::emit_bodies(&closure_coercion_targets, &mut code, &ctx);
 
     user_subtypes::emit_method_bodies(
         &mut code,

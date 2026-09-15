@@ -32,6 +32,7 @@ mod type_diff;
 mod type_namespace;
 mod type_predicate;
 mod type_registry;
+mod void_type_arguments;
 
 use std::collections::{BTreeMap, BTreeSet};
 

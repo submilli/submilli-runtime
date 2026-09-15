@@ -741,6 +741,7 @@ impl CodegenAnalysis {
     ) {
         self.dependency_usage
             .note_member(crate::mangle::extend(iface, &name.name));
+        self.extra_field_names.push(name.name.clone());
         self.note_shape_dispatch(receiver_ty, arity, ret);
     }
 

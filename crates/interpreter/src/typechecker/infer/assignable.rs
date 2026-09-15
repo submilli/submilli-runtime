@@ -589,7 +589,8 @@ fn assignable_rec(
                     .iter()
                     .zip(pe.iter())
                     .all(|(a, e)| assignable_rec(e, a, types, seen))
-                && assignable_rec(ra, re, types, seen)
+                && ((ra.is_void() && matches!(re.peel(), Type::TypeVar(_)))
+                    || assignable_rec(ra, re, types, seen))
         }
         // `readonly` is shallow (TS-faithful): it gates direct writes, not
         // assignability. Object width subtyping stays covariant per field.

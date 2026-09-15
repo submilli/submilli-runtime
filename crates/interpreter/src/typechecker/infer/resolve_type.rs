@@ -17,6 +17,7 @@ use super::reserved::{is_reserved_object_field, override_field_signature};
 /// looks. The two axes are the whole difference between its two wrappers.
 #[derive(Clone, Copy)]
 struct ValuelessScan {
+    include_void: bool,
     /// Refuse `never` as well as `void`. `never` has no values either, but it
     /// is *absorbed* rather than represented — `string | never` collapses to
     /// `string`, and an erased slot typed `never` is simply never written — so
@@ -60,7 +61,7 @@ impl std::fmt::Display for ValuePosition {
 fn valueless_within<'t>(ty: &'t Type, rule: ValuelessScan) -> Option<&'t Type> {
     let recur = |t: &'t Type| valueless_within(t, rule);
     match ty.peel() {
-        t @ Type::Void => Some(t),
+        t @ Type::Void if rule.include_void => Some(t),
         t @ Type::Never if rule.include_never => Some(t),
         Type::Union(members) => members.iter().find_map(recur),
         Type::Array(elem) => recur(elem),
@@ -81,6 +82,7 @@ pub(super) fn void_within_value_position(ty: &Type) -> Option<&Type> {
     valueless_within(
         ty,
         ValuelessScan {
+            include_void: true,
             include_never: false,
             follow_type_args: false,
         },
@@ -89,10 +91,11 @@ pub(super) fn void_within_value_position(ty: &Type) -> Option<&Type> {
 
 /// The first `void`/`never` anywhere inside `ty`, which cannot occupy a value
 /// slot and so cannot be erased into one as a type argument.
-pub(super) fn valueless_within_type_argument(ty: &Type) -> Option<&Type> {
+pub(super) fn valueless_within_type_argument(ty: &Type, include_void: bool) -> Option<&Type> {
     valueless_within(
         ty,
         ValuelessScan {
+            include_void,
             include_never: true,
             follow_type_args: true,
         },
@@ -273,9 +276,11 @@ impl<'a> Inferer<'a> {
         }
         let resolved_args: Vec<Type> = args.iter().map(|a| self.resolve_type(a)).collect();
         for (annot, resolved) in args.iter().zip(&resolved_args) {
-            // Nested as well as bare: a type argument is erased into a value
-            // slot, and `void` has no value representation anywhere inside it.
-            if let Some(offender) = valueless_within_type_argument(resolved) {
+            // The argument itself needs a value slot, but an interface or
+            // callback inside it may legitimately have void returns.
+            if let Some(offender) =
+                super::void_type_arguments::invalid_argument(resolved, false, self.resolver())
+            {
                 self.error(
                     annot.span,
                     format!(
@@ -368,6 +373,23 @@ impl<'a> Inferer<'a> {
     }
 
     pub(super) fn resolve_type(&mut self, annot: &TypeAnnotation) -> Type {
+        let resolved = self.resolve_type_inner(annot);
+        if matches!(
+            resolved.peel(),
+            Type::InterfaceRef { .. } | Type::AliasRef { .. }
+        ) && let Some(position) =
+            super::void_type_arguments::invalid_position(&resolved, false, self.resolver())
+        {
+            self.error(
+                annot.span,
+                format!("type argument containing `void` requires {position} — use a value type"),
+            );
+            return Type::Error;
+        }
+        resolved
+    }
+
+    fn resolve_type_inner(&mut self, annot: &TypeAnnotation) -> Type {
         match &annot.kind {
             TypeAnnotationKind::Name { name_span, args } => {
                 let text = &self.source[name_span.start as usize..name_span.end as usize];

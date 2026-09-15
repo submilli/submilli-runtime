@@ -452,6 +452,18 @@ impl<'a> Unifier<'a> {
             }
             // Union param against a single (non-union) arg: try each member.
             (Type::Union(pa), _) => {
+                // Bottom fits every arm. Give an unbound variable a chance to
+                // infer from it before accepting an unrelated concrete arm.
+                if matches!(arg_ty, Type::Never) && self.subtype_widening {
+                    let snap = self.snapshot();
+                    if self
+                        .without_subtype_widening(|u| u.unify(param_ty, arg_ty))
+                        .is_ok()
+                    {
+                        return Ok(());
+                    }
+                    self.restore(snap);
+                }
                 for m in pa {
                     let snap = self.snapshot();
                     if self.unify(m, arg_ty).is_ok() {
@@ -479,7 +491,9 @@ impl<'a> Unifier<'a> {
             // language we are a subset of rather than tightening past it.
             (Type::Unknown, _) => Ok(()),
             _ => {
-                if param_ty == arg_ty {
+                if param_ty == arg_ty
+                    || (matches!(arg_ty, Type::Never) && self.accepts_as_subtype(arg_ty, param_ty))
+                {
                     Ok(())
                 } else {
                     Err(UnifyError::Mismatch {

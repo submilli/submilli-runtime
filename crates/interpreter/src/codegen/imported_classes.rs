@@ -462,7 +462,11 @@ fn reconstruct_one(
             continue;
         }
         let mut params: Vec<ValType> = vec![ref_to(intrinsics.object)];
-        params.extend(param_tys.iter().map(|t| symbols.slot_value_type(t)));
+        params.extend(
+            param_tys
+                .iter()
+                .map(|_| symbols.value_type(&crate::Type::Unknown)),
+        );
         let results = symbols.slot_wasm_result(ret);
         let abi = MethodSlotAbi {
             params: params[1..].to_vec(),

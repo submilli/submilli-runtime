@@ -377,31 +377,65 @@ fn return_erases_to_object_slot(ret: &Type) -> bool {
 }
 
 impl Inferer<'_> {
-    /// Resolve one explicit type argument, rejecting `void`/`never`.
-    ///
-    /// A type argument is erased into a value slot, and neither has a value
-    /// representation — codegen would reach `emit_cast_to for Void`. The class
-    /// path rejects the same shapes in [`Inferer::resolve_class_reference`];
-    /// this is the call-site counterpart for generic functions and methods.
-    ///
-    /// TODO: this refuses more than it has to. A parameter the signature only
-    /// ever puts in return position can legitimately take `void` — deciding
-    /// that needs a per-parameter position analysis the repo doesn't have yet,
-    /// and until it does a blanket refusal beats the codegen panic.
-    fn resolve_call_type_argument(&mut self, annot: &TypeAnnotation, subject: &str) -> Type {
+    fn resolve_call_type_argument(
+        &mut self,
+        annot: &TypeAnnotation,
+        subject: &str,
+        allow_void: bool,
+    ) -> Type {
         let resolved = self.resolve_type(annot);
-        if let Some(offender) = super::resolve_type::valueless_within_type_argument(&resolved) {
+        if let Some(offender) =
+            super::void_type_arguments::invalid_argument(&resolved, allow_void, self.resolver())
+        {
             let offender = offender.clone();
             self.error(
                 annot.span,
                 format!(
-                    "`{offender}` cannot be used as a type argument to {subject} — \
-                     use a value type"
+                    "`{offender}` cannot be used as a type argument to {subject} — use a value type"
                 ),
             );
             return Type::Error;
         }
         resolved
+    }
+
+    fn type_parameter_allows_void(&self, name: &str, params: &[crate::Param], ret: &Type) -> bool {
+        let sub = crate::typechecker::type_param_substitution::TypeParamSubstitution::from_pairs(
+            &[name.to_string()],
+            &[Type::Void],
+        );
+        params.iter().all(|p| {
+            super::void_type_arguments::invalid_position(&sub.apply(&p.ty), false, self.resolver())
+                .is_none()
+        }) && super::void_type_arguments::invalid_position(&sub.apply(ret), true, self.resolver())
+            .is_none()
+    }
+
+    fn check_inferred_void_arguments(
+        &mut self,
+        params: &[crate::Param],
+        ret: &Type,
+        sub: &crate::typechecker::type_param_substitution::TypeParamSubstitution,
+        span: Span,
+    ) {
+        let invalid = params
+            .iter()
+            .find_map(|p| {
+                super::void_type_arguments::invalid_position(
+                    &sub.apply(&p.ty),
+                    false,
+                    self.resolver(),
+                )
+            })
+            .or_else(|| {
+                super::void_type_arguments::invalid_position(&sub.apply(ret), true, self.resolver())
+            });
+        if let Some(position) = invalid {
+            self.error(
+                span,
+                format!("type argument containing `void` requires {position} — use a value type"),
+            );
+        }
     }
 
     /// Structural retry for unification: when a direct param/arg unify fails
@@ -625,7 +659,11 @@ impl Inferer<'_> {
             }
             let subject = format!("method `{}`", name.name);
             for (gname, annot) in sig.generics.iter().zip(targs.iter()) {
-                let resolved = self.resolve_call_type_argument(annot, &subject);
+                let resolved = self.resolve_call_type_argument(
+                    annot,
+                    &subject,
+                    self.type_parameter_allows_void(gname, &sig.params, &sig.ret),
+                );
                 sub.insert(gname.clone(), resolved);
             }
         }
@@ -787,6 +825,7 @@ impl Inferer<'_> {
             );
         }
 
+        self.check_inferred_void_arguments(&sig.params, &sig.ret, &sub, span);
         let result_ty = sub.apply(&sig.ret);
 
         // TypeVar params/return need box/cast at the Wasm boundary; composite types use plain MethodCall.
@@ -924,7 +963,12 @@ impl Inferer<'_> {
             }
             let subject = callee.subject(&callee_ident.name, &generics);
             for (name, annot) in generics.iter().zip(targs.iter()) {
-                let resolved = self.resolve_call_type_argument(annot, &subject);
+                let resolved = self.resolve_call_type_argument(
+                    annot,
+                    &subject,
+                    callee == GenericCallee::Function
+                        && self.type_parameter_allows_void(name, &params, &ret),
+                );
                 sub.insert(name.clone(), resolved);
             }
         }
@@ -1071,6 +1115,7 @@ impl Inferer<'_> {
             );
         }
 
+        self.check_inferred_void_arguments(&params, &ret, &sub, span);
         let result_ty = sub.apply(&ret);
 
         let generic_args: Vec<crate::GenericArgument> = typed_args

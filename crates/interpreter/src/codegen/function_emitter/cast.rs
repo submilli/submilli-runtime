@@ -212,6 +212,9 @@ pub fn emit_coerce_to_wasm_slot(
         emitter.instruction(Instruction::Unreachable);
         return;
     }
+    if crate::codegen::closure_coercions::emit_coercion(emitter, ctx, source_ty, target_val) {
+        return;
+    }
     match (&source_val, &target_val) {
         // Primitive into a boxed slot.
         (ValType::F64 | ValType::I32, ValType::Ref(_)) => emit_box(emitter, ctx, source_ty),
@@ -588,12 +591,11 @@ pub fn emit_cast_to(emitter: &mut FunctionEmitter<'_>, ctx: &CodegenCtx<'_>, ty:
             // Unknown's (ref null $Object) lowering — see value_type.
         }
         Type::Function { .. } => {
-            let sig = crate::codegen::closures::classify(ty);
-            let idx = ctx
-                .symbols
-                .closure_struct_type_idx(sig)
-                .unwrap_or_else(|| panic!("Closure struct for {ty:?} not registered"));
-            emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(idx)));
+            crate::codegen::closure_coercions::emit_erased_cast(
+                emitter,
+                ctx,
+                crate::codegen::closures::classify(ty),
+            );
         }
         Type::Null => {
             // Null lowers to (ref null $Object) — already a subtype of any nullable ref.

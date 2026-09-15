@@ -284,8 +284,8 @@ pub fn emit_expr(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) {
             // synthesized `ArrayLiteral` filling the rest slot,
             // marked `is_generic: false` (the array's outer type is
             // concrete). No call-site branching is needed here.
-            let (wasm_idx, target_params) = match ctx.symbols.top_level_fn(mangled) {
-                Some(target) => (target.wasm_idx, target.params.clone()),
+            let (wasm_idx, target_params, target_return) = match ctx.symbols.top_level_fn(mangled) {
+                Some(target) => (target.wasm_idx, target.params.clone(), target.ret.clone()),
                 None => panic!(
                     "GenericCall references unknown top-level fn `{}`",
                     mangled.as_str(),
@@ -307,7 +307,13 @@ pub fn emit_expr(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) {
             }
             emitter.instruction(Instruction::Call(wasm_idx));
             if let Some(ty) = return_cast {
-                crate::codegen::function_emitter::cast::emit_cast_to(emitter, ctx, ty);
+                if ty.is_void() {
+                    emitter.instruction(Instruction::Drop);
+                } else {
+                    cast::emit_cast_to(emitter, ctx, ty);
+                }
+            } else if !expr.ty.is_void() {
+                cast::emit_coerce_to_slot(emitter, ctx, &target_return, &expr.ty);
             }
         }
         TypedExprKind::IntrinsicCall { kind, args } => {
@@ -1589,7 +1595,9 @@ fn emit_chain_parts(
         let non_null_ty =
             super::super::super::typechecker::infer::narrowing::strip_null(receiver_ty);
         let non_null_val = ctx.symbols.value_type(&non_null_ty);
-        if let ValType::Ref(RefType { heap_type, .. }) = non_null_val {
+        if let ValType::Ref(RefType { heap_type, .. }) = non_null_val
+            && !matches!(non_null_ty.peel(), Type::Function { .. })
+        {
             emitter.instruction(Instruction::RefCastNonNull(heap_type));
         } else {
             cast::emit_cast_to(emitter, ctx, &non_null_ty);
@@ -3454,9 +3462,11 @@ fn emit_interface_method_via_shape_with_receiver_on_stack(
     // 3. Cast to the matching closure struct type. closure
     // ABI: every Function-typed value stored in an `$Object` slot is
     // a `(ref $closure_<sig>)`.
-    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
-        closure_struct_idx,
-    )));
+    crate::codegen::closure_coercions::emit_erased_cast(
+        emitter,
+        ctx,
+        crate::codegen::closures::ClosureSig::of(args.len(), call_ret_ty),
+    );
     emitter.instruction(Instruction::LocalTee(closure_local));
 
     // 4. Push the closure env (slot 2) as the implicit first arg.
@@ -3642,6 +3652,10 @@ fn emit_slot_return_cast(
     call_ret_ty: &Type,
     abi: Option<&MethodSlotAbi>,
 ) {
+    if matches!(call_ret_ty.peel(), Type::Never) {
+        emitter.instruction(Instruction::Unreachable);
+        return;
+    }
     if call_ret_ty.is_void() {
         return;
     }

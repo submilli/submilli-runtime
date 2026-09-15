@@ -79,6 +79,8 @@ pub struct SymbolTable {
     struct_supertype: BTreeMap<u32, u32>,
     closure_func_type_idx: BTreeMap<ClosureSig, u32>,
     closure_struct_type_idx: BTreeMap<ClosureSig, u32>,
+    closure_coercions: BTreeMap<ClosureSig, u32>,
+    closure_coercion_vtable_type: Option<u32>,
     env_type_idx: BTreeMap<ExprId, u32>,
     closure_func_idx: BTreeMap<ExprId, u32>,
     closure_vtable_global_idx: Option<u32>,
@@ -387,6 +389,27 @@ impl SymbolTable {
 
     pub fn closure_func_type_idx(&self, sig: ClosureSig) -> Option<u32> {
         self.closure_func_type_idx.get(&sig).copied()
+    }
+
+    pub fn record_closure_coercion_vtable_type(&mut self, index: u32) {
+        self.closure_coercion_vtable_type = Some(index);
+    }
+
+    pub fn closure_coercion_vtable_type(&self) -> u32 {
+        self.closure_coercion_vtable_type
+            .expect("closure coercion vtable declared")
+    }
+
+    pub fn closure_signatures(&self) -> impl Iterator<Item = ClosureSig> + '_ {
+        self.closure_struct_type_idx.keys().copied()
+    }
+
+    pub fn record_closure_coercion(&mut self, target: ClosureSig, index: u32) {
+        self.closure_coercions.insert(target, index);
+    }
+
+    pub fn closure_coercion(&self, target: ClosureSig) -> Option<u32> {
+        self.closure_coercions.get(&target).copied()
     }
 
     pub fn closure_struct_type_idx(&self, sig: ClosureSig) -> Option<u32> {

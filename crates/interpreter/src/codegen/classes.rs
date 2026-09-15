@@ -49,9 +49,8 @@ struct MethodSlot {
     owner: MangledName,
     sig_idx: u32,
     /// Declared parameter/return types of the body backing this slot (the
-    /// *owner's*). Needed to pick the closure struct for the slot's payload
-    /// adapter, and to box/unbox in an adapter this module has to emit for an
-    /// imported owner.
+    /// *owner's*). Needed to pick the closure signature for the slot's payload
+    /// adapter; its body uses the recorded ABI for physical representations.
     param_tys: Vec<crate::Type>,
     ret_ty: crate::Type,
     /// A generic method has no adapter and never enters the instance payload.
@@ -466,7 +465,14 @@ impl ClassPlan {
                     .find(|m| m.name == slot.name)
                     .expect("originating slot is declared on this class");
                 let mut params: Vec<ValType> = vec![ref_to(intrinsics.object)];
-                params.extend(method.params.iter().map(|p| symbols.slot_value_type(&p.ty)));
+                // Overrides may widen parameters beyond the ancestor's representation.
+                // Every method argument therefore crosses a nullable boxed slot.
+                params.extend(
+                    method
+                        .params
+                        .iter()
+                        .map(|_| symbols.value_type(&crate::Type::Unknown)),
+                );
                 let results = symbols.slot_wasm_result(&method.return_type);
                 let abi = MethodSlotAbi {
                     params: params[1..].to_vec(),
@@ -881,9 +887,8 @@ impl ClassPlan {
         }
     }
 
-    /// Closure-ABI adapter for one vtable slot: unbox the erased args, call the
-    /// body backing the slot (self-first, concrete params), box the concrete
-    /// return. `env` (slot 0) is the receiver — cast it to `(ref $Object)` for
+    /// Closure-ABI adapter for one vtable slot: forward the boxed args, call the
+    /// body backing the slot (self-first), and box a primitive slot return. `env` (slot 0) is the receiver — cast it to `(ref $Object)` for
     /// the body's self param, which is why one adapter serves every subclass.
     /// Mirrors [`function_adapters::emit_bodies`].
     ///
@@ -940,9 +945,8 @@ impl ClassPlan {
             .expect("method body func allocated or imported");
 
         // self = env, cast to the method body's `(ref $Object)` self param.
-        // The callee's physical sig is the slot's, so args are unboxed only
-        // where the slot is concrete, and an erased return already carries the
-        // boxed value the closure ABI wants.
+        // The callee's physical signature is the slot's. Arguments are boxed;
+        // reference results already carry the value the closure ABI wants.
         let abi = ctx
             .symbols
             .class_method_abi(&class.mangled, &slot.name)
@@ -959,8 +963,15 @@ impl ClassPlan {
             }
         }
         emitter.instruction(Instruction::Call(method_func));
-        if !slot.ret_ty.is_void() && abi.ret != Some(object_ref_null) {
-            cast::emit_box(&mut emitter, ctx, &slot.ret_ty);
+        match abi.ret {
+            Some(ValType::F64) => cast::emit_box(&mut emitter, ctx, &crate::Type::Number),
+            Some(ValType::I32) => cast::emit_box(&mut emitter, ctx, &crate::Type::Boolean),
+            // A never-returning override can inherit a void slot. Its closure
+            // convention has a result, but the inherited call cannot return.
+            None if matches!(slot.ret_ty.peel(), crate::Type::Never) => {
+                emitter.instruction(Instruction::Unreachable);
+            }
+            _ => {}
         }
         emitter.build()
     }

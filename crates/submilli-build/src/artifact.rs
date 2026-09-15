@@ -22,7 +22,9 @@ use crate::CapabilitySchema;
 // type variables uniformly, so a v4 module's method signatures no longer match
 // what a consumer reconstructs. Both the declaration and the wasm are
 // incompatible, hence the gate rather than a migration.
-pub const ARTIFACT_SCHEMA_VERSION: u32 = 5;
+// v6: every class-method parameter uses a nullable boxed slot to support
+// contravariant overrides. Older method signatures cannot link to new consumers.
+pub const ARTIFACT_SCHEMA_VERSION: u32 = 6;
 
 const WASM_FILE: &str = "pkg.wasm";
 const CAPABILITIES_FILE: &str = "capabilities.yaml";

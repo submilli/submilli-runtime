@@ -2563,9 +2563,9 @@ impl Inferer<'_> {
                 // inferred ones arrive here, and a `void` argument has no value
                 // representation to erase into.
                 if let Type::ClassRef { args: solved, .. } = ty.peel()
-                    && let Some(offender) = solved
-                        .iter()
-                        .find_map(super::resolve_type::valueless_within_type_argument)
+                    && let Some(offender) = solved.iter().find_map(|arg| {
+                        super::void_type_arguments::invalid_argument(arg, false, self.resolver())
+                    })
                 {
                     let offender = offender.clone();
                     self.error_with_help(
@@ -5330,7 +5330,7 @@ impl Inferer<'_> {
                 // generic — same logic as the param contravariance
                 // check above. The closure's annotation is the truth;
                 // the call site's unify binds the var.
-                if !assignable(&t, hr, self.resolver()) {
+                if !type_contains_type_var(hr) && !assignable(&t, hr, self.resolver()) {
                     self.error(ann.span, format!("return type: expected `{hr}`, got `{t}`"));
                 }
                 annotated_ret = Some(t.clone());
@@ -5341,6 +5341,7 @@ impl Inferer<'_> {
                 annotated_ret = Some(t.clone());
                 Some(t)
             }
+            (None, Some((_, hr))) if matches!(hr.peel(), Type::TypeVar(_)) => None,
             (None, Some((_, hr))) => Some(hr.clone()),
             (None, None) => None,
         };

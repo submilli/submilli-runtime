@@ -1,0 +1,3 @@
+@test/base base -
+@test/child child @test/base
+main app @test/base,@test/child root

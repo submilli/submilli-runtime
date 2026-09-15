@@ -388,7 +388,17 @@ pub fn emit_func_and_struct_types<I>(
     let intrinsics = symbols
         .intrinsic_type_indices()
         .expect("intrinsics declared by codegen entry");
+    let signatures = signatures.into_iter().flat_map(|sig| {
+        [
+            sig,
+            ClosureSig {
+                is_void: !sig.is_void,
+                ..sig
+            },
+        ]
+    });
     let assigned = emit_arity_closures(signatures, types, intrinsics, next_type_idx);
+    super::closure_coercions::emit_vtable_type(types, symbols, next_type_idx);
     for (sig, (fn_idx, struct_idx)) in assigned {
         symbols.record_closure_func_type(sig, fn_idx);
         symbols.record_closure_struct_type(sig, struct_idx);
@@ -651,12 +661,7 @@ pub fn emit_method_bodies(
     to_json.instruction(&wasm_encoder::Instruction::End);
     code.function(&to_json);
 
-    let mut equals = wasm_encoder::Function::new(std::iter::empty());
-    equals.instruction(&wasm_encoder::Instruction::LocalGet(0));
-    equals.instruction(&wasm_encoder::Instruction::LocalGet(1));
-    equals.instruction(&wasm_encoder::Instruction::RefEq);
-    equals.instruction(&wasm_encoder::Instruction::End);
-    code.function(&equals);
+    code.function(&super::closure_coercions::emit_equals(symbols));
 
     let mut hash = wasm_encoder::Function::new(std::iter::empty());
     hash.instruction(&wasm_encoder::Instruction::I32Const(0));
