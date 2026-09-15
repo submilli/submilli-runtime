@@ -5,6 +5,8 @@ import starlight from "@astrojs/starlight";
 export default defineConfig({
   site: "https://submilli.ai",
   base: "/docs",
+  // Match the URL prefix on static hosts that publish dist/ at the domain root.
+  outDir: "./dist/docs",
   integrations: [
     starlight({
       title: "Submilli",

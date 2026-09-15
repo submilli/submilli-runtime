@@ -19,7 +19,7 @@ Open the preview URL with `/docs/` appended (normally
 `http://localhost:4321/docs/`). For live editing, run
 `npm --prefix docs-site run dev`.
 
-`npm run build` produces the static website in `docs-site/dist/`, including
+`npm run build` produces the static website in `docs-site/dist/docs/`, including
 HTML, styles, scripts, and the search index. The preparation script creates an
 ignored TypeScript configuration stub if the runtime package tooling has not
 been initialized; it never replaces an existing generated configuration.
@@ -33,12 +33,23 @@ directories are relative to this application because the book lives outside it.
 
 ## Hosting
 
-The build targets `https://submilli.ai/docs/`. Publish the **contents** of `dist/`
-at that URL prefix, including `_astro/`, `pagefind/`, and the favicon. Route
-`/docs` to `/docs/`. The marketing website continues to serve `/` and `/blog/`.
-For a shared static deployment, place this output in the marketing output's
-`docs/` directory; for separate origins, route `/docs/*` to this site's output
-with the prefix stripped. Neither source repository needs to build the other.
+The build targets `https://submilli.ai/docs/`. Astro writes directly to
+`dist/docs/`, so publishing `dist/` at a domain root serves the book and all
+its assets under `/docs/`. No copy step or prefix-stripping rewrite is needed.
+The marketing website continues to serve `/` and `/blog/`.
+
+### Render
+
+- Service type: Static Site, repository `submilli/submilli-public`, branch `main`.
+- Root Directory: leave empty (the build also reads the sibling `docs/` folder).
+- Build Command: `npm --prefix docs-site ci && npm --prefix docs-site run build`.
+- Publish Directory: `docs-site/dist`.
+- Environment: `NODE_VERSION=22`.
+- Remove the former `/docs` redirect and `/docs/*` rewrite from the docs service.
+- Open `https://YOUR-DOCS-SERVICE.onrender.com/docs/` after deploying.
+
+To keep the public URL on the marketing domain, its static service can rewrite
+`/docs/*` to `https://YOUR-DOCS-SERVICE.onrender.com/docs/*`, preserving the prefix.
 
 The `Documentation` workflow checks and builds the site and uploads a
 `documentation-site` artifact. It does not deploy. Connect the docs output to
