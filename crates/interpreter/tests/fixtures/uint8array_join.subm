@@ -1,0 +1,18 @@
+function main(): void {
+  let empty: Uint8Array = Uint8Array.alloc(0);
+  assert(empty.join(",") === "", "empty array joins to empty string");
+  assert(empty.join("anything") === "", "empty stays empty regardless of separator");
+
+  let one: Uint8Array = Uint8Array.new([7]);
+  assert(one.join(",") === "7", "single element has no separator");
+  assert(one.join(" -- ") === "7", "single element ignores separator");
+
+  let three: Uint8Array = Uint8Array.new([1, 2, 3]);
+  assert(three.join(",") === "1,2,3", "comma");
+  assert(three.join() === "1,2,3", "separator defaults to comma");
+  assert(three.join("") === "123", "empty separator concatenates");
+  assert(three.join(" - ") === "1 - 2 - 3", "multi-char separator");
+
+  let bytes: Uint8Array = Uint8Array.new([0, 255, 128]);
+  assert(bytes.join("/") === "0/255/128", "boundary values format unsigned");
+}

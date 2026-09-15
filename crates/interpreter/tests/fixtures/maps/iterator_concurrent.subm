@@ -1,0 +1,31 @@
+function main(): void {
+  const m = new Map<string, number>();
+  m.set("a", 1);
+  m.set("b", 2);
+  m.set("c", 3);
+
+  const it1 = m.iterator();
+  const it2 = m.iterator();
+
+  const r1a = it1.next();
+  assert(!r1a.done, "it1 yields once");
+
+  const r2a = it2.next();
+  assert(!r2a.done, "it2 yields once independently");
+
+  let it1_visits: number = 1;
+  while (true) {
+    const r = it1.next();
+    if (r.done) { break; }
+    it1_visits = it1_visits + 1;
+  }
+  assert(it1_visits === 3, "it1 walks all entries");
+
+  let it2_visits: number = 1;
+  while (true) {
+    const r = it2.next();
+    if (r.done) { break; }
+    it2_visits = it2_visits + 1;
+  }
+  assert(it2_visits === 3, "it2 walks all entries independently");
+}

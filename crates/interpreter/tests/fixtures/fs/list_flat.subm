@@ -1,0 +1,18 @@
+import { mkdir, writeText, list, DirEntry } from "submilli:fs";
+
+function main(): void {
+  mkdir("/d", false);
+  writeText("/d/a.txt", "a");
+  writeText("/d/b.txt", "b");
+  mkdir("/d/sub", false);
+
+  let count: number = 0;
+  let totalNameChars: number = 0;
+  for (const entry of list("/d", false)) {
+    count = count + 1;
+    totalNameChars = totalNameChars + entry.name.length;
+  }
+
+  assert(count === 3, "flat list yields 3 children");
+  assert(totalNameChars === 13, "names accessed correctly");
+}

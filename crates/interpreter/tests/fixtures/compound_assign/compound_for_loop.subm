@@ -1,0 +1,22 @@
+function main(): void {
+  let sum: number = 0;
+  for (let i: number = 0; i < 10; i += 2) {
+    sum += i;
+  }
+  assert(sum === 20, "for-update += sums even numbers");
+
+  let count: number = 0;
+  for (let i: number = 1; i < 32; i *= 2) {
+    count += 1;
+  }
+  assert(count === 5, "for-update *= iterates 5 times");
+
+  const state = { k: 0 };
+  let n: number = 0;
+  for (let i: number = 0; i < 4; state.k += 1) {
+    n += 1;
+    i += 1;
+  }
+  assert(state.k === 4, "field += in for-update fires 4 times");
+  assert(n === 4, "body ran 4 times");
+}

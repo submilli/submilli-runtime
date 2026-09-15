@@ -1,0 +1,14 @@
+# A package that depends on a package in *another* GitHub repo, exercising
+# build-time GitHub-dependency resolution (SUB-626). `submilli build` fetches
+# @submilli/greet from github.com/submilli/test-packages at the pinned commit,
+# installs it into the store, writes submilli.lock, and compiles this package
+# against it. Its transitive dep (greet has none) would be pulled in the same way.
+
+[dependencies]
+"@submilli/greet" = { github = "github.com/submilli/test-packages", rev = "09fc925af1d7bdb16c26b123fa3b0b7ff6620eb2" }
+
+[[package]]
+name = "@demo/greeter"
+version = "0.1.0"
+description = "Consumes @submilli/greet from a pinned GitHub dependency."
+dependencies = ["@submilli/greet"]

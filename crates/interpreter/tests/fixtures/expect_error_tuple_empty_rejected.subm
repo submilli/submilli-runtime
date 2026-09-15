@@ -1,0 +1,4 @@
+// expect-error: tuple types must have at least one element
+function main(): void {
+  let t: [] = null;
+}

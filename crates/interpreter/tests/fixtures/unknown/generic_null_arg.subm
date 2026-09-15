@@ -1,0 +1,10 @@
+// erased-generic ABI must not trap when T = Null
+
+function id<T>(x: T): T {
+  return x;
+}
+
+function main(): void {
+  const result = id(null);
+  assert(result === null, "id(null) === null");
+}

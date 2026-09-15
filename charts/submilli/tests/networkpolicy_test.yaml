@@ -1,0 +1,215 @@
+suite: networkpolicy and ingress
+templates:
+  - networkpolicy.yaml
+  - ingress.yaml
+  - service.yaml
+  - service-headless.yaml
+tests:
+  - it: is on by default
+    template: networkpolicy.yaml
+    asserts:
+      # Unusual for a chart, and deliberate: the server's HTTP API is entirely
+      # unauthenticated, so without this every pod in every namespace can
+      # execute code on it.
+      - hasDocuments:
+          count: 1
+
+  - it: scopes itself to this release's pod, never the whole namespace
+    template: networkpolicy.yaml
+    asserts:
+      # An empty podSelector selects *every pod in the namespace*. A default-deny
+      # policy written that way severs ingress to every co-resident workload the
+      # moment this chart is installed into a shared namespace — silently, and
+      # invisibly to CI, which installs into a namespace containing only this
+      # release.
+      - equal:
+          path: spec.podSelector.matchLabels["app.kubernetes.io/name"]
+          value: submilli
+      - equal:
+          path: spec.podSelector.matchLabels["app.kubernetes.io/instance"]
+          value: RELEASE-NAME
+      # Must stay identical to the StatefulSet's selectorLabels, so it must not
+      # pick up the mutable labels either.
+      - notExists:
+          path: spec.podSelector.matchLabels["app.kubernetes.io/version"]
+      - notExists:
+          path: spec.podSelector.matchLabels["helm.sh/chart"]
+
+  - it: restricts ingress only, leaving egress alone
+    template: networkpolicy.yaml
+    asserts:
+      # Egress is deliberately unrestricted here: the server already blocks
+      # loopback, RFC1918, and link-local at DNS-resolution time in-process. A
+      # Kubernetes egress policy would be a real additional layer but needs its
+      # own design pass — a DNS-plus-allowlist that is slightly wrong breaks
+      # every outbound call the product exists to make.
+      - equal:
+          path: spec.policyTypes
+          value: [Ingress]
+
+  - it: opens exactly one hole by default, for the chart's own tests
+    template: networkpolicy.yaml
+    asserts:
+      - lengthEqual:
+          path: spec.ingress
+          count: 1
+      # Narrow on purpose: a pod must carry both this release's instance label
+      # and the test component label, in this namespace. This single label is
+      # the seam — test-api carries it and test-networkpolicy deliberately does
+      # not.
+      - equal:
+          path: spec.ingress[0].from[0].podSelector.matchLabels["app.kubernetes.io/component"]
+          value: test
+      - equal:
+          path: spec.ingress[0].from[0].podSelector.matchLabels["app.kubernetes.io/instance"]
+          value: RELEASE-NAME
+      - equal:
+          path: spec.ingress[0].ports[0].port
+          value: 8128
+
+  - it: closes even that hole when asked
+    template: networkpolicy.yaml
+    set:
+      networkPolicy.allowHelmTests: false
+    asserts:
+      # `helm test` then fails, which is the honest trade rather than a silent
+      # one.
+      - lengthEqual:
+          path: spec.ingress
+          count: 0
+
+  - it: renders an operator allowlist as its own rule, not merged into the test rule
+    template: networkpolicy.yaml
+    set:
+      networkPolicy.allowFrom:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: agents
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: my-agent
+    asserts:
+      # Two separate `ingress` entries, so the test allowlist and the operator
+      # allowlist are ORed rather than one being folded into the other.
+      - lengthEqual:
+          path: spec.ingress
+          count: 2
+      # Selector semantics: two selectors in the SAME list item is AND. Getting
+      # this backwards produces an accidentally-open policy that looks correct,
+      # so the pairing is asserted rather than assumed.
+      - equal:
+          path: spec.ingress[1].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
+          value: agents
+      - equal:
+          path: spec.ingress[1].from[0].podSelector.matchLabels["app.kubernetes.io/name"]
+          value: my-agent
+      - lengthEqual:
+          path: spec.ingress[1].from
+          count: 1
+
+  - it: renders the port on an operator allowlist rule
+    template: networkpolicy.yaml
+    set:
+      networkPolicy.allowFrom:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: my-agent
+    asserts:
+      # Regression guard. `with` rebinds the dot to the allowFrom list, so a
+      # relative `.Values.server.port` here resolved against a []interface{} and
+      # the entire chart failed to render — for exactly the operators using this
+      # feature, and only for them, which is why lint and the default-path
+      # cluster runs all missed it.
+      - equal:
+          path: spec.ingress[1].ports[0].port
+          value: 8128
+      - equal:
+          path: spec.ingress[1].ports[0].protocol
+          value: TCP
+
+  - it: renders no policy when disabled
+    template: networkpolicy.yaml
+    set:
+      networkPolicy.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: publishes nothing to the internet by default
+    template: ingress.yaml
+    asserts:
+      # An Ingress publishes arbitrary code execution to whatever can reach it.
+      - hasDocuments:
+          count: 0
+
+  - it: renders an Ingress only when explicitly enabled
+    template: ingress.yaml
+    set:
+      ingress:
+        enabled: true
+        className: nginx
+        hosts:
+          - host: submilli.example.com
+            paths:
+              - path: /
+                pathType: Prefix
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.ingressClassName
+          value: nginx
+      - equal:
+          path: spec.rules[0].host
+          value: submilli.example.com
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.port.number
+          value: 8128
+
+  - it: publishes a headless Service to govern the StatefulSet
+    template: service-headless.yaml
+    asserts:
+      # `clusterIP: None` is the whole point: it is what makes the name resolve
+      # to the pod rather than to a virtual IP kube-proxy load-balances.
+      - equal:
+          path: spec.clusterIP
+          value: None
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-submilli-headless
+      # Must match the StatefulSet's selectorLabels, or it governs nothing.
+      - equal:
+          path: spec.selector["app.kubernetes.io/name"]
+          value: submilli
+      - equal:
+          path: spec.selector["app.kubernetes.io/instance"]
+          value: RELEASE-NAME
+      # Resolving a pod that has not passed readiness would hand callers a server
+      # still replaying its blueprint seed.
+      - notExists:
+          path: spec.publishNotReadyAddresses
+
+  - it: keeps the client-facing Service routable, not headless
+    template: service.yaml
+    asserts:
+      # The two Services have different jobs. If this one ever became headless,
+      # clients would start resolving straight to a pod and lose the only
+      # indirection there is.
+      - notExists:
+          path: spec.clusterIP
+      - equal:
+          path: spec.type
+          value: ClusterIP
+
+  - it: keeps the headless Service name inside the DNS label limit
+    template: service-headless.yaml
+    set:
+      fullnameOverride: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    asserts:
+      # `submilli.fullname` truncates to 63, so appending the suffix after that
+      # yields 72 — an invalid DNS label the API server rejects at install. The
+      # StatefulSet's serviceName and both test hooks derive from the same
+      # helper, so all four break together if this regresses.
+      - equal:
+          path: metadata.name
+          value: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-headless

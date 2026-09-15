@@ -1,0 +1,14 @@
+---
+source: crates/interpreter/tests/diagnostic_snapshots.rs
+expression: "render_inside_main(\"  let o = { a: 1 };\\n  let k = \\\"a\\\";\\n  let r = o[k];\")"
+---
+error: objects can only be indexed by a string literal
+ --> test.subm:4:11
+  |
+3 |   let k = "a";
+4 |   let r = o[k];
+  |           ^^^^
+5 | }
+  |
+help: use `obj["fieldName"]` for a known field, or `Map<string, V>` if you need dynamic string keys
+---

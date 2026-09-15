@@ -1,0 +1,47 @@
+// ECMA-262 §25.5 conformance + divergence vectors for `JSON`. The divergences
+// are deliberate (spec.md §1.6): canonical sorted keys (RFC 8785 style) and
+// type-directed `parse` that throws instead of returning unknown.
+
+interface User {
+  id: number;
+  name: string;
+  active: boolean;
+  tags: string[];
+  nick?: string;
+}
+
+function main(): void {
+  assert(JSON.stringify(1.5) === "1.5", "number");
+  assert(JSON.stringify("a\"b") === "\"a\\\"b\"", "string escaping");
+  assert(JSON.stringify(true) === "true", "boolean");
+  assert(JSON.stringify([1, 2]) === "[1,2]", "array");
+  assert(JSON.stringify(0 / 0) === "null", "NaN serializes as null");
+  assert(JSON.stringify(Infinity) === "null", "Infinity serializes as null");
+
+  // Divergence: keys come out sorted regardless of construction order.
+  assert(JSON.stringify({ b: 1, a: 2 }) === "{\"a\":2,\"b\":1}", "canonical key order");
+
+  const u = JSON.parse("{\"id\":1,\"name\":\"ada\",\"active\":true,\"tags\":[\"x\"]}") as User;
+  assert(u.id === 1 && u.name === "ada" && u.active, "typed parse");
+  assert(u.tags.length === 1 && u.tags[0] === "x", "nested array parses");
+  assert(u.nick === null, "omitted optional field reads as null");
+
+  // Lenient field policy: extras are dropped.
+  const v = JSON.parse("{\"id\":2,\"name\":\"b\",\"active\":false,\"tags\":[],\"extra\":9}") as User;
+  assert(v.id === 2, "extra fields are ignored");
+
+  // Divergence: parse is type-directed and throws on mismatch.
+  let threw: boolean = false;
+  try {
+    const bad = JSON.parse("{\"id\":\"one\",\"name\":\"x\",\"active\":true,\"tags\":[]}") as User;
+    assert(bad.id === bad.id, "unreachable");
+  } catch (e: Error) {
+    threw = true;
+  }
+  assert(threw, "type mismatch throws instead of yielding unknown");
+
+  // Round-trip: stringify(parse(s)) is stable on canonical input.
+  const s = "{\"active\":true,\"id\":3,\"name\":\"c\",\"tags\":[]}";
+  const w = JSON.parse(s) as User;
+  assert(JSON.stringify(w) === s, "canonical round-trip is stable");
+}

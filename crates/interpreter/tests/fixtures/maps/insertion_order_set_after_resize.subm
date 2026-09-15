@@ -1,0 +1,30 @@
+function main(): void {
+  const s = new Set<number>();
+  let i: number = 0;
+  while (i < 100) {
+    s.add(i);
+    i = i + 1;
+  }
+  assert(s.size === 100, "size = 100");
+
+  let expected: number = 0;
+  for (const v of s) {
+    assert(v === expected, "for-of yields elements in insertion order");
+    expected = expected + 1;
+  }
+  assert(expected === 100, "for-of visited 100 entries");
+
+  let vs: number[] = [];
+
+  for (const __vs of s.values()) {
+
+    vs.push(__vs);
+
+  }
+  assert(vs.length === 100, "values() length 100");
+  i = 0;
+  while (i < 100) {
+    assert(vs[i] === i, "values()[i] === i");
+    i = i + 1;
+  }
+}

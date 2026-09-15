@@ -1,0 +1,11 @@
+# Companion to conformance.yaml. A blueprint carries exactly one VFS mode, so
+# proving the ephemeral root works takes a second one.
+#
+# In the image that root is not on the state volume — it defaults to the system
+# temp dir, which compose backs with a tmpfs. Under a read-only root filesystem a
+# write that landed anywhere else would fail outright, so a successful write here
+# is the proof that it went to the tmpfs.
+
+name: conformance-ephemeral
+vfs: ephemeral
+default: allow

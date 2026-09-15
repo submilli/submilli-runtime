@@ -1,0 +1,26 @@
+// Uses `kind: string` instead of literal kinds ("circle"/"rect"): literal-subtype Wasm
+// structs don't widen cleanly into `$ObjectShape` (pre-existing bug, unrelated to aliases).
+// Tighten to literal kinds once that bug is fixed.
+
+type Circle = { kind: string; radius: number };
+type Rectangle = { kind: string; width: number; height: number };
+type Shape = Circle | Rectangle;
+
+function makeCircle(radius: number): Circle {
+  return { kind: "circle", radius: radius };
+}
+
+function makeRectangle(width: number, height: number): Rectangle {
+  return { kind: "rect", width: width, height: height };
+}
+
+function kindOf(s: Shape): string {
+  return s.kind;
+}
+
+function main(): void {
+  const c: Shape = makeCircle(2);
+  const r: Shape = makeRectangle(3, 4);
+  assert(kindOf(c) === "circle", "circle's kind is `circle`");
+  assert(kindOf(r) === "rect", "rectangle's kind is `rect`");
+}

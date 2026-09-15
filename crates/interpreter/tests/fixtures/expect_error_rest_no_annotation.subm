@@ -1,0 +1,3 @@
+// expect-error: rest parameter requires a type annotation
+function f(...xs): void {}
+function main(): void {}

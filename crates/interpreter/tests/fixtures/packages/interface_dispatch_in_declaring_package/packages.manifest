@@ -1,0 +1,8 @@
+# The package that declares an interface also dispatches on it, while the
+# implementation lives in the consumer. Codegen builds the dispatch closure's
+# sig from the call site (arity + return type), and nothing in this package
+# names that shape: an `InterfaceRef` walk sees type arguments only, and a
+# `void` return contributes no type at all.
+# name       dir   deps       root
+@test/lib    lib   -
+main         app   @test/lib  root

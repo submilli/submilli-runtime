@@ -1,0 +1,10 @@
+function has_chars(x: string | null): boolean {
+  return !!(x && x.length > 0);
+}
+
+function main(): void {
+  assert(has_chars("hello"), "non-empty string is truthy");
+  assert(!has_chars(""), "empty string short-circuits to false (JS truthiness)");
+  assert(!has_chars(null), "null short-circuits to false on the first operand");
+  assert(has_chars("a"), "single char");
+}

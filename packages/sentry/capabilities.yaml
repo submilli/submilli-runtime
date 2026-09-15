@@ -1,0 +1,60 @@
+namespace: submilli
+provides:
+- name: sentry.io/issueEvents.get
+  description: Retrieve one issue event. eventId may be an event ID, latest, oldest, or recommended.
+  fields:
+    issue:
+      type: string
+    organization:
+      type: string
+    project:
+      type: string
+- name: sentry.io/issueEvents.list
+  description: List events belonging to an issue identified by numeric ID or short ID.
+  fields:
+    issue:
+      type: string
+    organization:
+      type: string
+    project:
+      type: string
+- name: sentry.io/issues.get
+  description: Retrieve an issue by numeric ID or short ID; null when absent.
+  fields:
+    issue:
+      type: string
+    organization:
+      type: string
+    project:
+      type: string
+- name: sentry.io/issues.list
+  description: List issues in an organization. Omitting query keeps Sentry's unresolved default; query "" lists all.
+  fields:
+    organization:
+      type: string
+    projects:
+      type: string[]
+- name: sentry.io/issues.update
+  description: Apply a core triage update to an issue.
+  fields:
+    issue:
+      type: string
+    organization:
+      type: string
+    project:
+      type: string
+- name: sentry.io/organizations.list
+  description: List organizations visible to the token.
+  fields: {}
+- name: sentry.io/projects.list
+  description: List projects in an organization.
+  fields:
+    organization:
+      type: string
+requires:
+- capability: http.get
+  filter: host == "sentry.io" and method == "GET"
+- capability: http.put
+  filter: host == "sentry.io" and method == "PUT"
+- capability: secrets.get
+  filter: name == "SENTRY_AUTH_TOKEN"

@@ -1,0 +1,6 @@
+# A closure-typed member mentioning the class's type parameter. The consumer has
+# to know the closure's rec-group type to reconstruct the method slot, even
+# though every closure value is built in the producing package.
+# name        dir  deps       root
+@test/lib     lib  -
+main          app  @test/lib  root

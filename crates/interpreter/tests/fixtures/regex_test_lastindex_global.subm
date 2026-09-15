@@ -1,0 +1,19 @@
+function main(): void {
+  const re: RegExp = new RegExp("abc", "g");
+  assert(re.lastIndex === 0, "fresh");
+  assert(re.test("abcabcabc"), "first match");
+  assert(re.lastIndex === 3, "advanced past first match");
+  assert(re.test("abcabcabc"), "second match");
+  assert(re.lastIndex === 6, "advanced past second match");
+  assert(re.test("abcabcabc"), "third match");
+  assert(re.lastIndex === 9, "advanced to end");
+  assert(!re.test("abcabcabc"), "no match past end");
+  assert(re.lastIndex === 0, "reset to 0 after no-match");
+
+  const ng: RegExp = new RegExp("xyz", "");
+  assert(ng.lastIndex === 0, "fresh ng");
+  assert(ng.test("xyzxyz"), "first ng match");
+  assert(ng.lastIndex === 0, "ng lastIndex unchanged");
+  assert(ng.test("xyzxyz"), "second ng match — same starting point");
+  assert(ng.lastIndex === 0, "ng lastIndex still unchanged");
+}

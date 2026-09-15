@@ -1,0 +1,7 @@
+# An accessor-backed property crossing a package boundary: the library declares
+# the interface and does the reads/writes, but only the consumer ever sees an
+# accessor implementation. The library's module must still emit the accessor
+# branch — "no `get area` in this module" is not "no accessor in the program".
+# name           dir  deps           root
+@test/shape      lib  -
+main             app  @test/shape    root

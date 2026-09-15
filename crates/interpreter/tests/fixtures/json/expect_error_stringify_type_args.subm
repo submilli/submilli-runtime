@@ -1,0 +1,5 @@
+// expect-error: `JSON.stringify` does not take type arguments
+
+function main(): void {
+  console.log(JSON.stringify<number>(42));
+}

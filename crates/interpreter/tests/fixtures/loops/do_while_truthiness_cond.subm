@@ -1,0 +1,9 @@
+function main(): void {
+  let runs: number = 0;
+  let n: number = 3;
+  do {
+    runs = runs + 1;
+    n = n - 1;
+  } while (n);
+  assert(runs === 3, "do-while runs until n reaches falsy 0");
+}

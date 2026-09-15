@@ -1,0 +1,37 @@
+function main(): void {
+  const o = { b: 1, a: "two", c: true };
+
+  const keys: string[] = Object.keys(o);
+  assert(keys.length === 3, "every field is a key");
+  assert(keys[0] === "a" && keys[1] === "b" && keys[2] === "c", "keys come in canonical sorted order");
+
+  const values = Object.values(o);
+  assert(values.length === 3, "every field has a value");
+  assert((values[0] as string) === "two", "values align with sorted keys");
+  assert((values[1] as number) === 1, "number value survives the erasure");
+  assert(values[2] as boolean, "boolean value survives the erasure");
+
+  const entries = Object.entries(o);
+  assert(entries.length === 3, "every field has an entry");
+  assert(entries[0][0] === "a", "entry pairs key with value");
+  assert((entries[0][1] as string) === "two", "entry carries the value");
+  assert(entries[2][0] === "c", "later entries too");
+
+  assert(Object.hasOwn(o, "a"), "declared field is own");
+  assert(!Object.hasOwn(o, "missing"), "undeclared field is not");
+
+  const empty = {};
+  assert(Object.keys(empty).length === 0, "empty object has no keys");
+
+  const boxed: unknown = 5;
+  assert(Object.keys(boxed).length === 0, "non-object values have no keys");
+
+  let threw: boolean = false;
+  try {
+    const n: unknown = null;
+    Object.keys(n);
+  } catch (e: Error) {
+    threw = true;
+  }
+  assert(threw, "null receiver throws a catchable Error");
+}

@@ -1,0 +1,6 @@
+// expect-error: cannot call value of type `unknown`
+
+function main(): void {
+  const f: unknown = 1;
+  const r = f();
+}

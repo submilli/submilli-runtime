@@ -1,0 +1,18 @@
+function take_42(n: 42): 42 {
+  return n;
+}
+
+function widen(n: 42): number {
+  return n;
+}
+
+function main(): void {
+  const literal: 42 = 42;
+  assert(literal === 42, "literal-typed const carries the value");
+
+  const echoed: 42 = take_42(42);
+  assert(echoed === 42, "literal-typed param and return round-trip");
+
+  const widened: number = widen(42);
+  assert(widened === 42, "literal flows to base primitive");
+}

@@ -1,0 +1,8 @@
+---
+source: crates/interpreter/src/typechecker/infer/format_definition.rs
+expression: out
+---
+{
+  name: string;
+  x: number;
+}

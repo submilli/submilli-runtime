@@ -1,0 +1,3 @@
+// expect-error: rest parameter `xs` type must be an array
+function f(...xs: number): void {}
+function main(): void {}

@@ -1,0 +1,15 @@
+// Canary for `widen_literals` at closure-env / box keying boundaries.
+
+function main(): void {
+  let direction: "north" = "north";
+  const read = (): string => {
+    return direction;
+  };
+  assert(read() === "north", "closure-captured literal-typed let reads back");
+
+  let count: 42 = 42;
+  const read_num = (): number => {
+    return count;
+  };
+  assert(read_num() === 42, "closure-captured literal-typed number reads back");
+}

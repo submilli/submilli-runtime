@@ -1,0 +1,9361 @@
+//! Expression inference — `infer_expr` and its many subroutines (binary,
+//! unary, call, intrinsic call, coercion, toString/array.join, object
+//! / array literals, field / index access, arrow). Includes the
+//! `unify_returns` helper used by arrow-with-block bodies and the
+//! `to_string_intrinsic_for` dispatcher used by both
+//! `.toString()` and `String(x)` paths.
+
+use std::collections::BTreeSet;
+
+use crate::{
+    ArrowBody, BinOp, ChainPart, ClosureBody, Diagnostic, ExprId, ExprKind, Ident, Intrinsic,
+    MangledName, MethodSig, ParamDecl, Severity, Span, Type, TypeAnnotation, TypedChainPart,
+    TypedExpr, TypedExprKind, TypedParam, UnOp, ValueKind, ValueSymbol,
+};
+
+use super::assignable::TypeResolver;
+use super::format_signature::SignatureKind;
+use super::namespace_symbol;
+use super::reserved::{is_reserved_object_field, override_field_signature, reserved_field_message};
+use super::resolve_type::ValuePosition;
+use super::stmt::StaticWrite;
+use crate::did_you_mean;
+
+use super::type_aliases::alias_ref_body;
+use super::{Inferer, assignable, narrowing};
+
+pub(super) struct StaticCallTarget<'a> {
+    package: &'a str,
+    symbol: &'a str,
+    mangled: crate::MangledName,
+}
+
+/// How [`Inferer::bind_param_call_args`] names the callee in its arity
+/// diagnostic and which signature shape it lifts into the `help:` block.
+#[derive(Clone, Copy)]
+enum CallLift<'a> {
+    /// A named callee — `http.get`, `Cls.make`, a top-level function.
+    Function { name: &'a str },
+    /// An unnamed function-typed callee (a closure held in a field or
+    /// local); lifts the anonymous `(T, U) => R` form.
+    Anon,
+    /// A method, lifted against the receiver it resolved on so interface
+    /// generics render substituted.
+    Method {
+        receiver_ty: &'a Type,
+        name: &'a str,
+        sig: &'a MethodSig,
+    },
+}
+
+/// A method resolved by a `Field` step of an optional chain, carried to the
+/// `Call` step that follows it. The step's own type is a `Type::Function`,
+/// which drops parameter names, defaults, and the rest slot's element type
+/// — everything argument binding needs — so the signature travels alongside.
+struct ChainMethod {
+    /// The receiver the method resolved against, for the arity lift.
+    receiver_ty: Type,
+    /// The declaration as written, for the arity lift.
+    sig: MethodSig,
+    /// `sig.params` with the receiver's interface generics substituted.
+    params: Vec<crate::Param>,
+    /// The member name — `MethodSig` doesn't carry one.
+    name: String,
+    /// Where the method was named, so a reference that never gets its `Call`
+    /// is reported at the member rather than at the whole chain.
+    span: Span,
+}
+
+/// What a `Field` step of an optional chain resolved to.
+struct ChainField {
+    ty: Type,
+    /// `Some` when the step lifts to `InterfaceProperty` — the mangled name
+    /// of the interface or class that owns the member.
+    iface: Option<crate::MangledName>,
+    /// `Some` when `ty` is a *method*'s function type rather than a
+    /// function-typed property's.
+    method: Option<ChainMethod>,
+}
+
+impl ChainField {
+    fn plain(ty: Type) -> Self {
+        Self {
+            ty,
+            iface: None,
+            method: None,
+        }
+    }
+
+    fn property(ty: Type, iface: crate::MangledName) -> Self {
+        Self {
+            ty,
+            iface: Some(iface),
+            method: None,
+        }
+    }
+}
+
+/// True if `expected` is `Type::StringLiteral` or a union containing
+/// at least one `Type::StringLiteral` member. Used by `infer_expr`'s
+/// `ExprKind::String` arm to decide whether to narrow the inferred
+/// type to the specific literal value or widen to `Type::String`.
+/// Peels through aliases so `type Status = "a" | "b"` and a plain
+/// `"a" | "b"` hint behave identically
+fn expects_string_literal(expected: Option<&Type>) -> bool {
+    match expected.map(crate::types::Type::peel) {
+        Some(Type::StringLiteral(_)) => true,
+        Some(Type::Union(ms)) => ms
+            .iter()
+            .any(|m| matches!(m.peel(), Type::StringLiteral(_))),
+        _ => false,
+    }
+}
+
+/// Mirror of `expects_string_literal` for number literals.
+fn expects_number_literal(expected: Option<&Type>) -> bool {
+    match expected.map(crate::types::Type::peel) {
+        Some(Type::NumberLiteral(_)) => true,
+        Some(Type::Union(ms)) => ms
+            .iter()
+            .any(|m| matches!(m.peel(), Type::NumberLiteral(_))),
+        _ => false,
+    }
+}
+
+/// Whether an object literal providing exactly `lit_names` could only be
+/// constructing the variant whose fields are `fields`: every required field
+/// is present and no provided field is foreign to the variant.
+fn variant_matches(
+    fields: &std::collections::BTreeMap<String, crate::ObjectField>,
+    lit_names: &std::collections::BTreeSet<&str>,
+) -> bool {
+    let required_satisfied = fields
+        .iter()
+        .all(|(name, field)| field.optional || lit_names.contains(name.as_str()));
+    let no_excess = lit_names.iter().all(|name| fields.contains_key(*name));
+    required_satisfied && no_excess
+}
+
+fn valid_fields_help(fields: &std::collections::BTreeMap<String, crate::ObjectField>) -> String {
+    let rendered = fields
+        .keys()
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("valid fields: {rendered}")
+}
+
+fn excess_field_fix_help(
+    field_name: &str,
+    fields: &std::collections::BTreeMap<String, crate::ObjectField>,
+) -> String {
+    let candidates = fields.keys().map(String::as_str);
+    if let Some(suggestion) = did_you_mean::closest_match(field_name, candidates) {
+        format!("remove `{field_name}` or rename it to `{suggestion}`")
+    } else {
+        format!("remove `{field_name}` or rename it to a valid field")
+    }
+}
+
+/// post-increment/-decrement result type for a slot of
+/// `operand_ty`. Bigint operands round-trip as `bigint`; everything
+/// else (`Number`, `NumberLiteral`, and the typechecker-fallthrough
+/// `Error`) widens to `Number` — a narrowed slot like `1 | 2 | 3`
+/// doesn't constrain the post-add value.
+/// Array methods that mutate the receiver. Rejected on tuple-typed receivers,
+/// which are fixed-length and read-only — mutation would break their arity and
+/// per-position types.
+fn is_mutating_array_method(name: &str) -> bool {
+    matches!(
+        name,
+        "push"
+            | "pop"
+            | "shift"
+            | "unshift"
+            | "splice"
+            | "reverse"
+            | "sort"
+            | "fill"
+            | "copyWithin"
+    )
+}
+
+/// Whether `null` is one of the values `ty` can hold. `unknown` counts: it may
+/// be null and nothing about it is known until it is narrowed, and a recursion
+/// back-edge counts once resolved — see [`alias_ref_body`] for why the name
+/// alone cannot answer.
+pub(super) fn type_admits_null(ty: &Type, types: TypeResolver<'_>) -> bool {
+    fn walk(ty: &Type, types: TypeResolver<'_>, open: &mut BTreeSet<MangledName>) -> bool {
+        match ty.peel() {
+            Type::Null | Type::Unknown => true,
+            Type::Union(members) => members.iter().any(|m| walk(m, types, open)),
+            // Cycle guard: an alias already on this path adds nothing new, and
+            // following it again would not terminate.
+            Type::AliasRef {
+                mangled,
+                name,
+                args,
+                ..
+            } => {
+                if !open.insert(mangled.clone()) {
+                    return false;
+                }
+                let body = alias_ref_body(mangled, name, args, types);
+                let admits = walk(&body, types, open);
+                open.remove(mangled);
+                admits
+            }
+            _ => false,
+        }
+    }
+    walk(ty, types, &mut BTreeSet::new())
+}
+
+/// What to tell someone who wrote `?.` on a namespace when there is no fix to
+/// spell: an index step has none, since index signatures are out of scope and
+/// `Number[…]` would not compile either.
+const NAMESPACE_DROP_HELP: &str = "drop the `?` — a namespace is never null";
+
+/// The first chain step spelled without its `?` and as the source wrote it, for
+/// the namespace rejection's fix line. Naming both sides makes the help a
+/// literal find/replace, which stays exact on a chain that continues past the
+/// first step. `None` when no rewrite is legal — see [`NAMESPACE_DROP_HELP`].
+fn namespace_fix_forms(written: &str, first: &ChainPart) -> Option<(String, String)> {
+    match first {
+        ChainPart::Field { name, .. } => Some((
+            format!("{written}.{}", name.name),
+            format!("{written}?.{}", name.name),
+        )),
+        ChainPart::Call { .. } => Some((format!("{written}(…)"), format!("{written}?.(…)"))),
+        ChainPart::Index { .. } => None,
+        // The rejection runs only when the first step is optional, and `!`
+        // never is.
+        ChainPart::NonNull { .. } => unreachable!("`!` is never an optional step"),
+    }
+}
+
+/// How a chain step is spelled in a diagnostic, so a message reads as the
+/// operation the source actually wrote. `optional_form` is the same step
+/// rewritten with `?.`, which is the fix for a nullable receiver.
+struct ChainStepPhrasing {
+    action: String,
+    optional_form: String,
+    span: Span,
+}
+
+fn chain_step_phrasing(part: &ChainPart) -> ChainStepPhrasing {
+    let (action, optional_form, span) = match part {
+        ChainPart::Field { name, span, .. } => (
+            format!("read `{}` on", name.name),
+            format!("?.{}", name.name),
+            *span,
+        ),
+        ChainPart::Index { span, .. } => ("index into".to_string(), "?.[…]".to_string(), *span),
+        ChainPart::Call { span, .. } => ("call".to_string(), "?.()".to_string(), *span),
+        // Every rejection site runs after the `NonNull` step is handled, so a
+        // `!` never needs phrasing.
+        ChainPart::NonNull { .. } => {
+            unreachable!("`!` steps are handled before any receiver rejection")
+        }
+    };
+    ChainStepPhrasing {
+        action,
+        optional_form,
+        span,
+    }
+}
+
+fn postfix_result_ty(operand_ty: &Type) -> Type {
+    if matches!(operand_ty.peel(), Type::BigInt) {
+        Type::BigInt
+    } else {
+        Type::Number
+    }
+}
+
+/// The one `Array`/`Tuple` member of a union hint, when it has exactly one. An array
+/// literal can be none of a union's other members, so that member pins its shape —
+/// `[number, number] | null` is still a tuple hint, and `new Map<string, number>([["x",
+/// 7]])` reaches its literal through the constructor's `entries: [K, V][] | Iterable<[K,
+/// V]> | …`. Peels aliases, at the union and at each member.
+fn sole_array_like_member(hint: &Type) -> Option<&Type> {
+    let Type::Union(members) = hint.peel() else {
+        return None;
+    };
+    let mut array_like = members
+        .iter()
+        .map(Type::peel)
+        .filter(|m| matches!(m, Type::Array(_) | Type::Tuple(_)));
+    match (array_like.next(), array_like.next()) {
+        (Some(sole), None) => Some(sole),
+        _ => None,
+    }
+}
+
+/// The element type `...src` contributes to an array literal, or `None` when `src` is
+/// not spreadable. A tuple spreads as the union of its positions — it is an array at
+/// runtime and routes to `Array` for member dispatch (`Type::interface_routing`).
+fn spread_element_type(peeled_source: &Type) -> Option<Type> {
+    match peeled_source {
+        Type::Array(elem) => Some((**elem).clone()),
+        Type::Tuple(elements) => Some(Type::union(elements.clone())),
+        _ => None,
+    }
+}
+
+/// Does `ty` carry an unresolved `TypeVar` anywhere in its structure? Used to spot
+/// a generic receiver (e.g. `new Map()` with no resolvable element types) whose
+/// parameters must be pinned by the enclosing call — from its arguments or its
+/// expected type — rather than at the receiver in isolation.
+fn type_contains_type_var(ty: &Type) -> bool {
+    match ty {
+        Type::TypeVar(_) => true,
+        Type::Array(elem) => type_contains_type_var(elem),
+        Type::Tuple(elems) => elems.iter().any(type_contains_type_var),
+        Type::Function { params, ret, .. } => {
+            params.iter().any(type_contains_type_var) || type_contains_type_var(ret)
+        }
+        Type::Object { fields } => fields.values().any(|f| type_contains_type_var(&f.ty)),
+        Type::InterfaceRef { args, .. }
+        | Type::ClassRef { args, .. }
+        | Type::AliasRef { args, .. } => args.iter().any(type_contains_type_var),
+        Type::Alias {
+            args, ty: inner, ..
+        } => args.iter().any(type_contains_type_var) || type_contains_type_var(inner),
+        Type::Union(members) => members.iter().any(type_contains_type_var),
+        _ => false,
+    }
+}
+
+/// Replace a class type's fully-undetermined arguments with bare type
+/// variables, which `assignable` treats as wildcards. Used only to ask whether
+/// *some* instantiation could relate.
+fn wildcard_undetermined_args(ty: &Type) -> Type {
+    match ty.peel() {
+        Type::ClassRef {
+            mangled,
+            package,
+            name,
+            args,
+        } if !args.is_empty() && args.iter().all(|a| matches!(a, Type::Unknown)) => {
+            Type::ClassRef {
+                mangled: mangled.clone(),
+                package: package.clone(),
+                name: name.clone(),
+                args: args
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| Type::TypeVar(format!("?{i}")))
+                    .collect(),
+            }
+        }
+        other => other.clone(),
+    }
+}
+
+/// A type's union members, or the type itself — the set a runtime class test
+/// has to consider one at a time.
+fn class_members(ty: &Type) -> Vec<Type> {
+    match ty.peel() {
+        Type::Union(members) => members.clone(),
+        other => vec![other.clone()],
+    }
+}
+
+impl Inferer<'_> {
+    // --------------------------------------------------------------------
+    // Expression inference
+    // --------------------------------------------------------------------
+
+    pub(super) fn infer_expr(
+        &mut self,
+        expr_id: ExprId,
+        expected: Option<&Type>,
+    ) -> (ExprId, Type) {
+        // A hint is read structurally — an object literal takes its per-field
+        // hints from the expected type's fields — and `peel` stops at a
+        // recursion back-edge, which carries no body to read. Rehydrating first
+        // is what lets the hint reach the second level of a recursive shape.
+        let rehydrated_hint = expected.and_then(|want| {
+            super::type_aliases::type_has_alias_ref(want).then(|| self.rehydrate_alias_refs(want))
+        });
+        let expected = rehydrated_hint.as_ref().or(expected);
+        let expr = self.ast.expr(expr_id).clone();
+        let span = expr.span;
+        let (kind, ty) = match expr.kind {
+            // narrow primitive literals to their literal type
+            // when the expected hint (directly or as a member of an
+            // expected union) calls for it. Without the hint, widen
+            // to the base primitive — `let x = "hi"` stays
+            // `x: string`, not `x: "hi"`.
+            ExprKind::Number(v) => {
+                let ty = if expects_number_literal(expected) {
+                    let canonical = if v == 0.0 { 0.0 } else { v };
+                    Type::NumberLiteral(crate::types::LiteralF64(canonical))
+                } else {
+                    Type::Number
+                };
+                (TypedExprKind::Number(v), ty)
+            }
+            // bigint literal — always widens to `Type::BigInt`
+            // (no `Type::BigIntLiteral` narrowing variant in v1).
+            ExprKind::BigInt(digits) => (TypedExprKind::BigInt(digits), Type::BigInt),
+            ExprKind::String(s) => {
+                let ty = if expects_string_literal(expected) {
+                    Type::StringLiteral(s.clone())
+                } else {
+                    Type::String
+                };
+                (TypedExprKind::String(s), ty)
+            }
+            ExprKind::Boolean(b) => (TypedExprKind::Boolean(b), Type::Boolean),
+            ExprKind::Null => (TypedExprKind::Null, Type::Null),
+            ExprKind::Identifier(ident) => self.resolve_ident(ident, span),
+            ExprKind::Binary { op, lhs, rhs } => self.infer_binary(op, lhs, rhs, expected, span),
+            ExprKind::Unary { op, operand } => self.infer_unary(op, operand),
+            ExprKind::Call {
+                callee,
+                type_args,
+                args,
+            } => self.infer_call(callee, type_args, args, expected, span),
+            ExprKind::Paren(inner) => return self.infer_expr(inner, expected),
+            ExprKind::ObjectLiteral { members } => {
+                self.infer_object_literal(members, expected, span)
+            }
+            ExprKind::ArrayLiteral { elements } => {
+                self.infer_array_literal(elements, expected, span)
+            }
+            ExprKind::FieldAccess { receiver, name } => {
+                self.infer_field_access(receiver, name, span)
+            }
+            ExprKind::IndexAccess { receiver, index } => {
+                self.infer_index_access(receiver, index, span, expr_id)
+            }
+            ExprKind::Arrow {
+                params,
+                return_type,
+                type_predicate,
+                body,
+            } => self.infer_arrow(params, return_type, type_predicate, body, expected, span),
+            ExprKind::Typeof { operand: _ } => {
+                // Reaching `Typeof` here means it didn't get folded by
+                // `try_typeof_fold` in `infer_binary` — i.e. it's used
+                // outside the narrowing-guard shape. Spec §921 rejects
+                // `typeof` as a value-producing expression.
+                self.error_with_help(
+                    span,
+                    "`typeof` is only valid in the narrowing-guard form \
+                     `typeof x === \"T\"`"
+                        .into(),
+                    vec![
+                        "use `x is T` directly — `is` is the canonical \
+                         narrowing predicate"
+                            .into(),
+                    ],
+                );
+                (TypedExprKind::Null, Type::Error)
+            }
+            ExprKind::New {
+                callee,
+                type_args,
+                args,
+            } => self.infer_new(callee, type_args, args, expected, span),
+            ExprKind::TemplateLiteral { parts, exprs } => {
+                self.lower_template_literal(parts, exprs, span)
+            }
+            ExprKind::Ternary { cond, then_, else_ } => {
+                self.infer_ternary(cond, then_, else_, expected, span)
+            }
+            ExprKind::OptionalChain { base, parts } => {
+                self.infer_optional_chain(base, parts, expected, span)
+            }
+            ExprKind::PostfixUnary { op, operand } => self.infer_postfix_unary(op, operand, span),
+            ExprKind::As { expr: inner, ty } => self.infer_as(inner, ty, span),
+            ExprKind::InstanceOf { value, ty } => self.infer_instanceof(value, ty, span),
+            ExprKind::Regex { source, flags } => self.infer_regex(source, flags, span),
+            ExprKind::This => {
+                if let Some(ty) = &self.current_class {
+                    // In a subclass constructor, `this` before `super(...)` reads
+                    // uninitialized parent fields — flag it for the super call.
+                    if self.in_constructor && self.current_super.is_some() && !self.super_seen {
+                        self.this_before_super = true;
+                    }
+                    (TypedExprKind::This, ty.clone())
+                } else if let Some((class, member)) = self.current_static.clone() {
+                    self.error_with_help(
+                        span,
+                        "`this` is not available in a static member".to_string(),
+                        vec![format!(
+                            "`{class}.{member}` runs without an instance; take the instance as \
+                             a parameter, or make it an instance method. To use another static, \
+                             qualify it: `{class}.<member>`"
+                        )],
+                    );
+                    (TypedExprKind::Null, Type::Error)
+                } else {
+                    self.error(
+                        span,
+                        "`this` is only valid inside a class method or constructor body"
+                            .to_string(),
+                    );
+                    (TypedExprKind::Null, Type::Error)
+                }
+            }
+            ExprKind::Super => {
+                self.error_with_help(
+                    span,
+                    "`super` is only valid as `super(...)` or `super.method(...)`".to_string(),
+                    vec![
+                        "call the parent constructor with `super(...)`, or a parent method with `super.method(...)`"
+                            .to_string(),
+                    ],
+                );
+                (TypedExprKind::Null, Type::Error)
+            }
+        };
+        // an expression's type must be free of bare recursion
+        // back-edges — codegen lowers `AliasRef` to the universal
+        // `$Object`, but the equivalent inline alias-to-object peels to
+        // the narrower `$ObjectShape`, and the two can't share a slot.
+        // Rehydrate any `AliasRef` (read out of a recursive alias's body
+        // via field / index / call) back to the inline `Alias` form.
+        let ty = self.rehydrate_alias_refs(&ty);
+        // `assignable` treats `TypeVar` (signature form) as a
+        // wildcard, so hints flowing through generic call sites
+        // (`(T) => U` shaped) don't fire false errors here. Real
+        // binding / conflict-detection happens at the call site via
+        // `TypeParamSubstitution::unify`. `GenericParam` (body form)
+        // is strict, so `let n: number = x` (where x is GP) does
+        // reject as expected.
+        if let Some(want) = expected
+            && !assignable(&ty, want, self.resolver())
+        {
+            let has_structural_diff = super::type_diff::format_type_diff(want, &ty).is_some();
+            let mut help = super::type_diff::type_mismatch_help(want, &ty);
+            // No structural diff to show (e.g. `number` vs an interface): lift
+            // the expected interface's shape so the fix is visible in-place. Keyed
+            // on the structural half alone — a lossy-rendering note is not a
+            // description of the shape, so it must not stand in for one.
+            if !has_structural_diff && matches!(want.peel(), Type::InterfaceRef { .. }) {
+                help.push(self.format_definition(want));
+            }
+            // A value that reads at its declared type where a guard should have
+            // narrowed it lands here (a `return`/assignment mismatch rather
+            // than a field access), so explain the refused narrowing too.
+            if let Some((narrow_help, _)) = self.narrowing_refusal_hint(&kind, &ty, want) {
+                help.extend(narrow_help);
+            }
+            self.error_with_help(span, format!("expected `{want}`, got `{ty}`"), help);
+        }
+        let id = self.typed_ast.push_expr(TypedExpr {
+            kind,
+            span,
+            ty: ty.clone(),
+        });
+        (id, ty)
+    }
+
+    fn resolve_ident(&mut self, ident: Ident, span: Span) -> (TypedExprKind, Type) {
+        if let Some(entry) = self.scopes.get(&ident.name) {
+            // Plan 75.8: consult the active narrow-scope stack. If
+            // this binding has been narrowed in an enclosing branch,
+            // return a `LocalRef` pointing at the shadow's synthetic
+            // binding (`#narrow_<N>`) with the narrowed type. The
+            // shadow lives in codegen's local-name map; this rewrite
+            // is how in-region references find it.
+            let path = super::narrowing::ReferencePath::root(super::narrowing::BindingId::Local {
+                name: ident.name.clone(),
+                decl_scope: entry.decl_scope,
+            });
+            if let Some(view) = self.lookup_narrowed_view(&path) {
+                let binding = view.binding.clone();
+                let narrowed_ty = view.narrowed_ty.clone();
+                return (TypedExprKind::LocalNarrowRef { binding, path }, narrowed_ty);
+            }
+            return (
+                TypedExprKind::LocalRef {
+                    ident: ident.clone(),
+                    boxed: false,
+                },
+                entry.ty.clone(),
+            );
+        }
+        // `JSON` is a compiler-intrinsic namespace
+        // recognised only as the head of a member call
+        // (`JSON.stringify(x)` / `JSON.parse(s)`). Bare `JSON` and
+        // partial `JSON.stringify` / `JSON.parse` references fall here
+        // because the member-access expression infers its receiver via
+        // `infer_expr` first.
+        if ident.name == "JSON" {
+            self.error_with_help(
+                span,
+                "`JSON` is a compiler intrinsic, not a value".to_string(),
+                vec![
+                    "call it directly: `JSON.stringify(x)` or \
+                     `JSON.parse(s)` — `JSON` itself cannot be \
+                     referenced or assigned"
+                        .to_string(),
+                ],
+            );
+            return (
+                TypedExprKind::LocalRef {
+                    ident,
+                    boxed: false,
+                },
+                Type::Error,
+            );
+        }
+        if let Some(entry) = self.top_symbols.get(&ident.name) {
+            let mangled = entry.mangled_name.clone();
+            // Plan 75.8: globals narrow too (TS-compatible — TS
+            // narrows non-exported module-level lets and all consts).
+            // When narrowing is active, rewrite to `LocalRef` against
+            // the synthetic shadow binding — same mechanism as for
+            // locals.
+            let global_path = super::narrowing::ReferencePath::root(
+                super::narrowing::BindingId::Global(mangled.clone()),
+            );
+            if let Some(view) = self.lookup_narrowed_view(&global_path) {
+                let binding = view.binding.clone();
+                let narrowed_ty = view.narrowed_ty.clone();
+                return (
+                    TypedExprKind::LocalNarrowRef {
+                        binding,
+                        path: global_path,
+                    },
+                    narrowed_ty,
+                );
+            }
+            // Reject generic functions used as first-class values —
+            // `let f = identity` and friends. Rationale: a generic
+            // function's "type as a value" needs `Type::Function` to
+            // carry its own generics list, which is out of scope for
+            // v1. The call form `identity(42)` is recognised
+            // separately in `infer_call`, before this branch.
+            if let ValueKind::Function { generics, .. } = &entry.kind
+                && !generics.is_empty()
+            {
+                self.error(
+                    span,
+                    format!(
+                        "cannot bind generic function `{}` to a value; \
+                         call it directly instead",
+                        ident.name,
+                    ),
+                );
+                return (
+                    TypedExprKind::FunctionRef {
+                        mangled,
+                        name: ident.clone(),
+                    },
+                    Type::Error,
+                );
+            }
+            let (kind, ty) = match &entry.kind {
+                ValueKind::Function {
+                    params,
+                    ret,
+                    type_predicate,
+                    ..
+                } => (
+                    TypedExprKind::FunctionRef {
+                        mangled,
+                        name: ident,
+                    },
+                    Type::Function {
+                        params: params.iter().map(|p| p.ty.clone()).collect(),
+                        ret: Box::new(ret.clone()),
+                        predicate: type_predicate.clone().map(Box::new),
+                        // lift the rest flag from the resolved
+                        // signature so a function-as-value reference
+                        // (`const f = sum;`) carries the variadic shape
+                        // through to its callers.
+                        has_rest: params.last().is_some_and(|p| p.rest),
+                    },
+                ),
+                ValueKind::Let { ty, .. } | ValueKind::Const { ty, .. } => (
+                    TypedExprKind::GlobalRef {
+                        mangled,
+                        name: ident,
+                    },
+                    ty.clone(),
+                ),
+            };
+            return (kind, ty);
+        }
+        // namespace symbol (`Math`, `Temporal`, …) — sourced
+        // from any loaded `PackageDeclaration` — used as a bare value, e.g.
+        // `let x = Math;`. Same shape as the namespace-not-
+        // a-value error, with a help block pointing at member-access.
+        if self.namespace_symbols.contains_key(&ident.name) {
+            return self.reject_bare_namespace_symbol(ident, span);
+        }
+
+        // namespace import used as a bare value. The
+        // binding resolves but a namespace isn't a first-class
+        // runtime object — point at the named-import alternative
+        // so an LLM can apply the fix in one edit.
+        if self.namespace_bindings.contains_key(&ident.name) {
+            self.error_with_help(
+                span,
+                format!("namespace `{}` cannot be used as a value", ident.name,),
+                vec![
+                    "access a member via `<name>.<export>(…)`, or use a \
+                     named import: `import { <export> } from \"<pkg>\";`"
+                        .to_string(),
+                ],
+            );
+            return (
+                TypedExprKind::LocalRef {
+                    ident,
+                    boxed: false,
+                },
+                Type::Error,
+            );
+        }
+        // Enum types used as a bare value (without `.Variant`) get
+        // a tailored diagnostic: the name resolves in type-space
+        // but is not a first-class value. The common LLM misuse is
+        // forgetting to qualify; point at the right syntax.
+        if let Some(sym) = self.lookup_named_type(&ident.name) {
+            let variant_names: Option<Vec<String>> = match &sym.kind {
+                crate::TypeKind::NumberEnum { variants, .. } => Some(
+                    variants
+                        .iter()
+                        .map(|(v, _)| format!("`{}.{}`", ident.name, v))
+                        .collect(),
+                ),
+                crate::TypeKind::StringEnum { variants, .. } => Some(
+                    variants
+                        .iter()
+                        .map(|(v, _)| format!("`{}.{}`", ident.name, v))
+                        .collect(),
+                ),
+                _ => None,
+            };
+            if let Some(variant_list) = variant_names {
+                let help = if variant_list.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![format!("variants: {}", variant_list.join(", "))]
+                };
+                self.error_with_help(
+                    span,
+                    format!(
+                        "`{}` is an enum type, not a value; use `{}.<variant>`",
+                        ident.name, ident.name,
+                    ),
+                    help,
+                );
+                return (
+                    TypedExprKind::LocalRef {
+                        ident,
+                        boxed: false,
+                    },
+                    Type::Error,
+                );
+            }
+            // Class names are not first-class values either — only `new C(…)`
+            // and static member access give them expression meaning.
+            if matches!(sym.kind, crate::TypeKind::Class { .. }) {
+                let mangled = sym.mangled_name.clone();
+                let statics = self.class_static_names(&mangled);
+                let mut help = vec![format!(
+                    "construct an instance with `new {}(…)`",
+                    ident.name,
+                )];
+                if !statics.is_empty() {
+                    help.push(format!(
+                        "or access a static member: {}",
+                        statics
+                            .iter()
+                            .map(|s| format!("`{}.{s}`", ident.name))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ));
+                }
+                self.error_with_help(
+                    span,
+                    format!("`{}` is a class, not a value", ident.name),
+                    help,
+                );
+                return (
+                    TypedExprKind::LocalRef {
+                        ident,
+                        boxed: false,
+                    },
+                    Type::Error,
+                );
+            }
+        }
+        // `WeakMap` / `WeakSet` are intentionally out of scope.
+        // Point at `Map` / `Set` — these are the constructor names a
+        // user would reach for when calling `new WeakMap()`.
+        if ident.name == "WeakMap" {
+            self.error_with_help(
+                span,
+                "`WeakMap` is not supported".to_string(),
+                vec![
+                    "use `Map<K, V>` instead — Submilli has no weak references, so `WeakMap` would behave identically to `Map`".to_string(),
+                ],
+            );
+            return (
+                TypedExprKind::LocalRef {
+                    ident,
+                    boxed: false,
+                },
+                Type::Error,
+            );
+        }
+        if ident.name == "WeakSet" {
+            self.error_with_help(
+                span,
+                "`WeakSet` is not supported".to_string(),
+                vec![
+                    "use `Set<T>` instead — Submilli has no weak references, so `WeakSet` would behave identically to `Set`".to_string(),
+                ],
+            );
+            return (
+                TypedExprKind::LocalRef {
+                    ident,
+                    boxed: false,
+                },
+                Type::Error,
+            );
+        }
+        // legacy `Date` is intentionally out of scope. One branch
+        // covers `new Date(...)`, `Date.now()`, `Date.parse(...)`,
+        // `Date.UTC(...)` — they all hit identifier resolution on `Date`
+        // first, before any constructor / member-access dispatch.
+        if ident.name == "Date" {
+            self.error_with_help(
+                span,
+                "`Date` is not supported".to_string(),
+                vec![
+                    "use `Temporal.Now.instant()` for wall-clock time, or `Temporal.ZonedDateTime` / `Temporal.Instant` for time values. `Date` is intentionally out of scope — see Temporal for a correct, immutable, timezone-aware time API.".to_string(),
+                ],
+            );
+            return (
+                TypedExprKind::LocalRef {
+                    ident,
+                    boxed: false,
+                },
+                Type::Error,
+            );
+        }
+        let help: Vec<String> = self
+            .closest_local_or_global(&ident.name)
+            .map(|s| vec![format!("did you mean `{}`?", s)])
+            .unwrap_or_default();
+        self.error_with_help(
+            span,
+            format!("unresolved identifier `{}`", ident.name),
+            help,
+        );
+        // Placeholder for unresolved names. `Type::Error` already suppresses
+        // downstream cascades, so the variant choice doesn't propagate.
+        (
+            TypedExprKind::LocalRef {
+                ident,
+                boxed: false,
+            },
+            Type::Error,
+        )
+    }
+
+    fn infer_binary(
+        &mut self,
+        op: BinOp,
+        lhs: ExprId,
+        rhs: ExprId,
+        expected: Option<&Type>,
+        span: Span,
+    ) -> (TypedExprKind, Type) {
+        // human-readable operator symbol for diagnostics.
+        // Inline-defined so the helper stays scoped to this method.
+        fn op_symbol(op: BinOp) -> &'static str {
+            match op {
+                BinOp::Add => "+",
+                BinOp::Sub => "-",
+                BinOp::Mul => "*",
+                BinOp::Div => "/",
+                BinOp::Rem => "%",
+                BinOp::Pow => "**",
+                BinOp::Lt => "<",
+                BinOp::Gt => ">",
+                BinOp::Le => "<=",
+                BinOp::Ge => ">=",
+                BinOp::Eq => "===",
+                BinOp::NotEq => "!==",
+                BinOp::And => "&&",
+                BinOp::Or => "||",
+                BinOp::In => "in",
+                BinOp::NullishCoalesce => "??",
+            }
+        }
+        fn mixed_string_number_add_help(lt: &Type, rt: &Type) -> Option<&'static str> {
+            let left_is_string = matches!(lt.peel(), Type::String | Type::StringLiteral(_));
+            let right_is_string = matches!(rt.peel(), Type::String | Type::StringLiteral(_));
+            let left_is_number = matches!(lt.peel(), Type::Number | Type::NumberLiteral(_));
+            let right_is_number = matches!(rt.peel(), Type::Number | Type::NumberLiteral(_));
+
+            match (
+                left_is_string,
+                right_is_string,
+                left_is_number,
+                right_is_number,
+            ) {
+                (true, false, false, true) => Some(
+                    "`+` does not coerce; wrap the number with `String(...)` before concatenating",
+                ),
+                (false, true, true, false) => Some(
+                    "`+` does not coerce; convert the string with `Number(...)`, `parseInt(...)`, or `parseFloat(...)` before adding",
+                ),
+                _ => None,
+            }
+        }
+        // `??` is lifted out of the generic Binary arm into
+        // its own typed-AST node so codegen and the type-result rule
+        // (`union(strip_null(lhs), rhs)`) can be specialised cleanly.
+        if matches!(op, BinOp::NullishCoalesce) {
+            return self.infer_nullish_coalesce(lhs, rhs, span);
+        }
+        match op {
+            BinOp::Add => {
+                // No hint propagation: `+` is overloaded on `number`/`string`,
+                // and either operand alone determines the result. Pushing the
+                // outer hint into operands would let the boundary check fire
+                // on a mistyped operand and then the operator-level rule would
+                // fire again — duplicate diagnostic.
+                let (typed_lhs, lt) = self.infer_expr(lhs, None);
+                let (typed_rhs, rt) = self.infer_expr(rhs, None);
+                // arithmetic/concat is structural — peel
+                // aliases so `type ID = number; let x: ID = 1; x + x`
+                // typechecks against the (Number, Number) arm.
+                let result_ty = match (lt.peel(), rt.peel()) {
+                    (Type::Error, _) | (_, Type::Error) => Type::Error,
+                    // `+` on un-narrowed `unknown` is rejected.
+                    (Type::Unknown, _) | (_, Type::Unknown) => {
+                        self.error_with_help(
+                            span,
+                            "cannot apply `+` to `unknown`".to_string(),
+                            vec![
+                                "narrow first with `typeof x === \"number\"` \
+                                 or `typeof x === \"string\"` before adding"
+                                    .to_string(),
+                            ],
+                        );
+                        Type::Error
+                    }
+                    _ => {
+                        if let Some(ty) = plus_result(&lt, &rt) {
+                            ty
+                        } else {
+                            let message = format!("`+` not defined for `{lt}` and `{rt}`");
+                            let help = mixed_string_number_add_help(&lt, &rt)
+                                .map(|h| vec![h.to_string()])
+                                .unwrap_or_default();
+                            let culprit = self.nullable_binary_culprit(
+                                (typed_lhs, &lt),
+                                (typed_rhs, &rt),
+                                |l, r| plus_result(l, r).is_some(),
+                            );
+                            self.error_with_narrowing_hint(span, message, help, culprit);
+                            Type::Error
+                        }
+                    }
+                };
+                (
+                    TypedExprKind::Binary {
+                        op,
+                        lhs: typed_lhs,
+                        rhs: typed_rhs,
+                    },
+                    result_ty,
+                )
+            }
+            BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem | BinOp::Pow => {
+                // arithmetic accepts `number × number`
+                // or `bigint × bigint`. Mixed `number ↔ bigint` falls
+                // through to the catch-all "not defined for" error.
+                // `**` uses the same type rules; the bigint-pow host
+                // function additionally traps at runtime if the
+                // exponent is negative or doesn't fit in u32 (a
+                // semantic constraint, not a static one).
+                // Inferred without a forced hint so a literal lhs
+                // picks its own widened type and the rhs gets the
+                // lhs type as a hint.
+                let (typed_lhs, lt) = self.infer_expr(lhs, None);
+                let rhs_hint = match lt.peel() {
+                    Type::Number | Type::NumberLiteral(_) => Some(Type::Number),
+                    Type::BigInt => Some(Type::BigInt),
+                    _ => None,
+                };
+                let (typed_rhs, rt) = self.infer_expr(rhs, rhs_hint.as_ref());
+                let result_ty = match (lt.peel(), rt.peel()) {
+                    (Type::Error, _) | (_, Type::Error) => Type::Error,
+                    (Type::Unknown, _) | (_, Type::Unknown) => {
+                        self.error_with_help(
+                            span,
+                            format!("cannot apply `{}` to `unknown`", op_symbol(op)),
+                            vec![
+                                "narrow first with `typeof x === \"number\"` \
+                                 before doing arithmetic"
+                                    .to_string(),
+                            ],
+                        );
+                        Type::Error
+                    }
+                    _ => {
+                        if let Some(ty) = arithmetic_result(&lt, &rt) {
+                            ty
+                        } else {
+                            let culprit = self.nullable_binary_culprit(
+                                (typed_lhs, &lt),
+                                (typed_rhs, &rt),
+                                |l, r| arithmetic_result(l, r).is_some(),
+                            );
+                            self.error_with_narrowing_hint(
+                                span,
+                                format!("`{}` not defined for `{lt}` and `{rt}`", op_symbol(op)),
+                                Vec::new(),
+                                culprit,
+                            );
+                            Type::Error
+                        }
+                    }
+                };
+                (
+                    TypedExprKind::Binary {
+                        op,
+                        lhs: typed_lhs,
+                        rhs: typed_rhs,
+                    },
+                    result_ty,
+                )
+            }
+            BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
+                // ordering accepts `number × number`, `bigint × bigint`, or
+                // `string × string` (lexicographic). Inferred without a forced
+                // hint so the rhs takes the lhs type as a hint (mirroring
+                // `===` / `!==`). Strings keep `None` as the rhs hint so a
+                // mixed `string < number` doesn't also emit "expected string".
+                let (typed_lhs, lt) = self.infer_expr(lhs, None);
+                let rhs_hint = match lt.peel() {
+                    Type::Number | Type::NumberLiteral(_) => Some(Type::Number),
+                    Type::BigInt => Some(Type::BigInt),
+                    _ => None,
+                };
+                let (typed_rhs, rt) = self.infer_expr(rhs, rhs_hint.as_ref());
+                if matches!(lt.peel(), Type::Unknown) || matches!(rt.peel(), Type::Unknown) {
+                    // ordering comparisons on un-narrowed
+                    // `unknown` are rejected. Same rationale as the
+                    // arithmetic arm.
+                    self.error_with_help(
+                        span,
+                        format!("cannot apply `{}` to `unknown`", op_symbol(op)),
+                        vec![
+                            "narrow first with `typeof x === \"number\"` \
+                             before comparing"
+                                .to_string(),
+                        ],
+                    );
+                } else if !matches!((lt.peel(), rt.peel()), (Type::Error, _) | (_, Type::Error))
+                    && !ordering_accepts(&lt, &rt)
+                {
+                    let culprit = self.nullable_binary_culprit(
+                        (typed_lhs, &lt),
+                        (typed_rhs, &rt),
+                        ordering_accepts,
+                    );
+                    self.error_with_narrowing_hint(
+                        span,
+                        format!("`{}` not defined for `{lt}` and `{rt}`", op_symbol(op)),
+                        Vec::new(),
+                        culprit,
+                    );
+                }
+                (
+                    TypedExprKind::Binary {
+                        op,
+                        lhs: typed_lhs,
+                        rhs: typed_rhs,
+                    },
+                    Type::Boolean,
+                )
+            }
+            BinOp::Eq | BinOp::NotEq => {
+                // forgiveness: rewrite `typeof x === "T"` and
+                // `typeof x !== "T"` (plus the swapped sides) to
+                // `Is` / `!Is`. Falls through if no `typeof` operand.
+                if let Some(folded) = self.try_typeof_fold(op, lhs, rhs, span) {
+                    return folded;
+                }
+                let (typed_lhs, lt) = self.infer_expr(lhs, None);
+                let lhs_void = lt.carries_void().then(|| lt.clone());
+                // Plan 75.10 PR 2: `x === null` / `null === x` is
+                // always permissible — even when the LHS has been
+                // narrowed (or assigned) to a non-nullable type.
+                // The comparison just becomes statically false at
+                // that point; it's not a type error. Suppress
+                // hint propagation when either operand is the
+                // `null` literal so the RHS's `Null` type doesn't
+                // get reshaped against the LHS's narrowed view.
+                let rhs_is_null_literal = matches!(&self.ast.expr(rhs).kind, crate::ExprKind::Null);
+                let rhs_hint = if matches!(lt, Type::Error) || rhs_is_null_literal {
+                    None
+                } else {
+                    Some(lt)
+                };
+                let (typed_rhs, rt) = self.infer_expr(rhs, rhs_hint.as_ref());
+                // `void` has no runtime value to compare, and the comparison
+                // otherwise typechecks clean and panics in codegen.
+                let rhs_void = rt.carries_void().then(|| rt.clone());
+                for (operand, void_ty) in [(lhs, lhs_void), (rhs, rhs_void)] {
+                    if let Some(void_ty) = void_ty {
+                        let operand_span = self.ast.expr(operand).span;
+                        self.error_non_comparable_type(
+                            operand_span,
+                            &void_ty,
+                            super::diagnostics::ComparisonPosition::EqualityOperand,
+                        );
+                    }
+                }
+                (
+                    TypedExprKind::Binary {
+                        op,
+                        lhs: typed_lhs,
+                        rhs: typed_rhs,
+                    },
+                    Type::Boolean,
+                )
+            }
+            BinOp::And | BinOp::Or => {
+                // JS value-returning logicals. The RHS is inferred
+                // under the LHS predicate's narrowing — true-env
+                // for `&&`, false-env for `||` — and wrapped in
+                // `TypedExprKind::Narrowed` so codegen materializes
+                // the shadow local for in-region references. Result
+                // type is TS-style: the branch that keeps the LHS
+                // contributes only the values that can short-circuit
+                // there (`falsy_part` for `&&`, `truthy_part` for `||`).
+                let (typed_lhs, lhs_ty) = self.infer_expr(lhs, None);
+                let mut condition_error = false;
+                if matches!(lhs_ty.peel(), Type::Unknown) {
+                    // `&&`/`||` on un-narrowed `unknown`
+                    // rejected with a "narrow first" hint instead of
+                    // the generic "expected boolean" mismatch.
+                    condition_error = true;
+                    let lhs_span = self.ast.expr(lhs).span;
+                    self.error_with_help(
+                        lhs_span,
+                        "cannot use `unknown` in a boolean context".to_string(),
+                        vec![
+                            "narrow first with `typeof x === \"…\"`, \
+                             `x === null`, or `Array.isArray(x)` before \
+                             using as a condition"
+                                .to_string(),
+                        ],
+                    );
+                } else if !super::narrowing::condition_compatible(&lhs_ty) {
+                    condition_error = true;
+                    let lhs_span = self.ast.expr(lhs).span;
+                    self.error_non_condition_type(lhs_span, &lhs_ty);
+                }
+                let (true_env, false_env) = self.predicate_envs(typed_lhs);
+                let rhs_env = match op {
+                    BinOp::And => true_env,
+                    BinOp::Or => false_env,
+                    _ => unreachable!("matched And | Or above"),
+                };
+                self.push_narrow_frame(rhs_env.clone());
+                let (typed_rhs, rhs_ty) = self.infer_expr(rhs, expected);
+                self.pop_narrow_frame();
+                if matches!(rhs_ty.peel(), Type::Void | Type::Never) {
+                    condition_error = true;
+                    let rhs_span = self.ast.expr(rhs).span;
+                    self.error_non_condition_type(rhs_span, &rhs_ty);
+                }
+                let rhs_span = self.ast.expr(rhs).span;
+                let wrapped_rhs = self.wrap_narrow_exprs(typed_rhs, &rhs_env, rhs_span);
+                let lhs_kept = match op {
+                    BinOp::And => super::narrowing::falsy_part(&lhs_ty),
+                    BinOp::Or => super::narrowing::truthy_part(&lhs_ty),
+                    _ => unreachable!("matched And | Or above"),
+                };
+                let result_ty = if condition_error {
+                    Type::Error
+                } else {
+                    Type::union(vec![lhs_kept, rhs_ty])
+                };
+                (
+                    TypedExprKind::Binary {
+                        op,
+                        lhs: typed_lhs,
+                        rhs: wrapped_rhs,
+                    },
+                    result_ty,
+                )
+            }
+            BinOp::In => self.infer_in_operator(lhs, rhs, span),
+            // Lifted earlier in this function — the early-return at
+            // the top of `infer_binary` keeps `NullishCoalesce` out of
+            // this match.
+            BinOp::NullishCoalesce => unreachable!("NullishCoalesce handled by early return"),
+        }
+    }
+
+    /// `"field" in obj`. LHS must be a string literal; RHS
+    /// receiver must be `unknown`, an `Object`, or a union of objects.
+    /// Result is `boolean`. The narrowing-engine side is driven from
+    /// `predicate_envs_in_operator` — this method only enforces the
+    /// type-level shape.
+    fn infer_in_operator(&mut self, lhs: ExprId, rhs: ExprId, span: Span) -> (TypedExprKind, Type) {
+        let lhs_span = self.ast.expr(lhs).span;
+        let (typed_lhs, _lhs_ty) = self.infer_expr(lhs, None);
+        let lhs_kind = self.typed_ast.expr(typed_lhs).kind.clone();
+        let lhs_is_string_literal = matches!(lhs_kind, TypedExprKind::String(_));
+        if !lhs_is_string_literal {
+            self.error_with_help(
+                lhs_span,
+                "`in` operator requires a string literal on the left".to_string(),
+                vec![
+                    "write `\"<name>\" in <expr>` — dynamic key lookup is \
+                     not supported"
+                        .to_string(),
+                ],
+            );
+        }
+        let (typed_rhs, rhs_ty) = self.infer_expr(rhs, None);
+        let receiver_ok = match rhs_ty.peel() {
+            Type::Unknown | Type::Object { .. } | Type::Error => true,
+            // A union discriminated by field presence is the reason `in` exists;
+            // its members are as often named (interfaces, classes) as inline.
+            Type::Union(members) => members.iter().all(Self::is_field_bearing),
+            _ => false,
+        };
+        if !receiver_ok {
+            let help = vec![self.format_definition(&rhs_ty)];
+            self.error_with_help(
+                span,
+                format!("`in` operator receiver must be an object (or `unknown`), got `{rhs_ty}`",),
+                help,
+            );
+        }
+        (
+            TypedExprKind::Binary {
+                op: BinOp::In,
+                lhs: typed_lhs,
+                rhs: typed_rhs,
+            },
+            Type::Boolean,
+        )
+    }
+
+    fn infer_unary(&mut self, op: UnOp, operand: ExprId) -> (TypedExprKind, Type) {
+        let (operand_id, result_ty) = match op {
+            UnOp::Not => {
+                let (id, operand_ty) = self.infer_expr(operand, None);
+                if matches!(operand_ty.peel(), Type::Unknown) {
+                    // `!x` on un-narrowed `unknown` rejected
+                    // with a "narrow first" hint.
+                    let operand_span = self.ast.expr(operand).span;
+                    self.error_with_help(
+                        operand_span,
+                        "cannot use `unknown` in a boolean context".to_string(),
+                        vec![
+                            "narrow first with `typeof x === \"…\"`, \
+                             `x === null`, or `Array.isArray(x)` before \
+                             using as a condition"
+                                .to_string(),
+                        ],
+                    );
+                } else if !super::narrowing::condition_compatible(&operand_ty) {
+                    let operand_span = self.ast.expr(operand).span;
+                    self.error_non_condition_type(operand_span, &operand_ty);
+                }
+                (id, Type::Boolean)
+            }
+            UnOp::Neg | UnOp::Pos => {
+                // No forced hint — the operand picks its own widened type and
+                // the result mirrors it.
+                let (id, operand_ty) = self.infer_expr(operand, None);
+                let operand_span = self.ast.expr(operand).span;
+                let peeled = operand_ty.peel();
+                if matches!(peeled, Type::Unknown) {
+                    self.error_with_help(
+                        operand_span,
+                        "cannot apply unary arithmetic to `unknown`".to_string(),
+                        vec![
+                            "narrow first with `typeof x === \"number\"` \
+                             before doing arithmetic"
+                                .to_string(),
+                        ],
+                    );
+                    (id, Type::Number)
+                } else if let Some(ty) = unary_arith_result(op, peeled) {
+                    (id, ty)
+                } else {
+                    let symbol = if matches!(op, UnOp::Neg) { "-" } else { "+" };
+                    let mut help = Vec::new();
+                    if peeled.contains_string() {
+                        help.push(
+                            "convert first: `Number(s)` parses the text (`NaN` if it \
+                             isn't a number), and `-Number(s)` negates the result"
+                                .to_string(),
+                        );
+                    }
+                    let culprit = self.nullable_culprit(&[(id, &operand_ty)], |t| {
+                        unary_arith_result(op, t).is_some()
+                    });
+                    self.error_with_narrowing_hint(
+                        operand_span,
+                        format!("unary `{symbol}` not defined for `{operand_ty}`"),
+                        help,
+                        culprit,
+                    );
+                    (id, Type::Error)
+                }
+            }
+        };
+        (
+            TypedExprKind::Unary {
+                op,
+                operand: operand_id,
+            },
+            result_ty,
+        )
+    }
+
+    /// Detect `typeof X === "T"` / `typeof X !== "T"` (and the
+    /// swapped-sides form) and rewrite to `Is` / `!Is`. Returns
+    /// `None` if neither operand is a `typeof` expression, in which
+    /// case the caller falls through to the normal equality path.
+    fn try_typeof_fold(
+        &mut self,
+        op: BinOp,
+        lhs: ExprId,
+        rhs: ExprId,
+        span: Span,
+    ) -> Option<(TypedExprKind, Type)> {
+        // Peek the *surface* AST — we want to detect `Typeof` before
+        // it's inferred (inferring it would emit the "not a value"
+        // error from the bare-typeof arm).
+        let (operand_id, tag, tag_span) = if let ExprKind::Typeof { operand } =
+            &self.ast.expr(lhs).kind
+            && let ExprKind::String(s) = &self.ast.expr(rhs).kind
+        {
+            (*operand, s.clone(), self.ast.expr(rhs).span)
+        } else if let ExprKind::Typeof { operand } = &self.ast.expr(rhs).kind
+            && let ExprKind::String(s) = &self.ast.expr(lhs).kind
+        {
+            (*operand, s.clone(), self.ast.expr(lhs).span)
+        } else {
+            return None;
+        };
+        let (typed_operand, operand_ty) = self.infer_expr(operand_id, None);
+        // all five literal-string `typeof` tags lower
+        // through `fold_typeof_tag` → a `TypedExprKind::TypeofTag`
+        // node (or a folded `Boolean(true/false)` constant when the
+        // operand's type makes the answer static). Previously
+        // primitive tags went through `TypedExprKind::Is`; that
+        // intermediate is gone with the `is` expression removal.
+        let inner_kind = match tag.as_str() {
+            "number" => {
+                self.fold_typeof_tag(typed_operand, &operand_ty, crate::TypeofTagKind::Number)
+            }
+            "string" => {
+                self.fold_typeof_tag(typed_operand, &operand_ty, crate::TypeofTagKind::String)
+            }
+            "boolean" => {
+                self.fold_typeof_tag(typed_operand, &operand_ty, crate::TypeofTagKind::Boolean)
+            }
+            "object" => {
+                self.fold_typeof_tag(typed_operand, &operand_ty, crate::TypeofTagKind::Object)
+            }
+            "function" => {
+                self.fold_typeof_tag(typed_operand, &operand_ty, crate::TypeofTagKind::Function)
+            }
+            _ => {
+                self.error_with_help(
+                    tag_span,
+                    format!(
+                        "`typeof x === \"{tag}\"` is not a valid narrowing \
+                         guard",
+                    ),
+                    vec![
+                        "supported tags are \"number\", \"string\", \
+                         \"boolean\", \"object\", \"function\""
+                            .into(),
+                    ],
+                );
+                // Push a placeholder TypeofTag with an arbitrary
+                // tag; type-checked Error already propagated.
+                TypedExprKind::TypeofTag {
+                    value: typed_operand,
+                    tag: crate::TypeofTagKind::Object,
+                }
+            }
+        };
+        match op {
+            BinOp::Eq => Some((inner_kind, Type::Boolean)),
+            BinOp::NotEq => {
+                // Wrap in `Unary { Not, … }` — push the inner first
+                // so the Unary can reference its ExprId.
+                let inner_id = self.typed_ast.push_expr(TypedExpr {
+                    kind: inner_kind,
+                    span,
+                    ty: Type::Boolean,
+                });
+                Some((
+                    TypedExprKind::Unary {
+                        op: UnOp::Not,
+                        operand: inner_id,
+                    },
+                    Type::Boolean,
+                ))
+            }
+            _ => unreachable!("try_typeof_fold called with non-eq op"),
+        }
+    }
+
+    /// Static-fold a `typeof x === "object"` / `"function"` predicate
+    /// when the operand's type is fully concrete and the answer is
+    /// determinable at compile time. Otherwise emit the runtime
+    /// `TypeofTag` node.
+    ///
+    /// - If the operand transitively contains a `Type::TypeVar` /
+    ///   `Type::GenericParam`, or is `unknown`, the runtime
+    ///   classification could go either way — emit `TypeofTag` so
+    ///   codegen runs the test.
+    /// - If `intersect_with(operand_ty, facts)` covers every union
+    ///   member (or the single non-union operand matches), the
+    ///   predicate is statically true → `Boolean(true)`.
+    /// - If the intersection is empty (no member satisfies the
+    ///   tag's facts), the predicate is statically false →
+    ///   `Boolean(false)`.
+    /// - Otherwise (some members match, some don't), emit
+    ///   `TypeofTag` for the runtime disjunction.
+    fn fold_typeof_tag(
+        &mut self,
+        value_id: ExprId,
+        operand_ty: &Type,
+        tag: crate::TypeofTagKind,
+    ) -> TypedExprKind {
+        use super::narrowing::{TypeFacts, has_erased_member, intersect_with};
+        let runtime_test = TypedExprKind::TypeofTag {
+            value: value_id,
+            tag,
+        };
+        if has_erased_member(operand_ty) {
+            return runtime_test;
+        }
+        // `unknown` says nothing about the runtime shape, so no tag is
+        // statically decidable. `intersect_with` hands `unknown` back for the
+        // tags it can't assert a type for (`"object"`, `"function"`), which the
+        // equality test below would otherwise read as "every member matched"
+        // and fold to `true` — for *both* of them, on every value.
+        if matches!(operand_ty.peel(), Type::Unknown) {
+            return runtime_test;
+        }
+        let facts = match tag {
+            crate::TypeofTagKind::Number => TypeFacts::IS_NUMBER,
+            crate::TypeofTagKind::String => TypeFacts::IS_STRING,
+            crate::TypeofTagKind::Boolean => TypeFacts::IS_BOOLEAN,
+            crate::TypeofTagKind::Object => TypeFacts::IS_OBJECT,
+            crate::TypeofTagKind::Function => TypeFacts::IS_FUNCTION,
+        };
+        let intersected = intersect_with(operand_ty, facts);
+        if matches!(intersected, Type::Error) {
+            return self.constant_keeping_effects(value_id, false);
+        }
+        if &intersected == operand_ty {
+            return self.constant_keeping_effects(value_id, true);
+        }
+        runtime_test
+    }
+
+    /// The predicate's answer is `answer`, but `operand` still has to run.
+    /// An operand that can't have side effects folds flat, so the overwhelmingly
+    /// common `typeof localVar === "…"` keeps producing a plain literal.
+    fn constant_keeping_effects(&mut self, operand: ExprId, answer: bool) -> TypedExprKind {
+        if self.typed_ast.is_effect_free(operand) {
+            return TypedExprKind::Boolean(answer);
+        }
+        let span = self.typed_ast.expr(operand).span;
+        let result = self.typed_ast.push_expr(TypedExpr {
+            kind: TypedExprKind::Boolean(answer),
+            span,
+            ty: Type::Boolean,
+        });
+        TypedExprKind::EffectThen {
+            effect: operand,
+            result,
+        }
+    }
+
+    /// Type the arguments of a call that has already been rejected, discarding
+    /// the results.
+    ///
+    /// The call itself produces no node, but an argument is an expression in its
+    /// own right: an unresolved name or a bad nested call in one is a second
+    /// real problem, and skipping the walk would hide it until the first is
+    /// fixed.
+    fn walk_rejected_call_args(&mut self, args: &[ExprId]) {
+        for arg in args {
+            let _ = self.infer_expr(*arg, None);
+        }
+    }
+
+    fn infer_call(
+        &mut self,
+        callee: ExprId,
+        type_args: Option<Vec<crate::TypeAnnotation>>,
+        args: Vec<ExprId>,
+        expected: Option<&Type>,
+        span: Span,
+    ) -> (TypedExprKind, Type) {
+        let callee_kind = self.ast.expr(callee).kind.clone();
+
+        // Intrinsic dispatch — when the callee is a bare identifier
+        // matching a reserved intrinsic name, we skip the normal
+        // callee-as-expression path and produce a dedicated
+        // `IntrinsicCall` node. Reserved names are rejected during
+        // signature binding, so an intrinsic identifier never
+        // resolves to a user binding.
+        if let ExprKind::Identifier(ident) = &callee_kind
+            && let Some(intrinsic) = Intrinsic::from_name(&ident.name)
+        {
+            return self.infer_intrinsic_call(intrinsic, args, span);
+        }
+
+        // `super(...)` delegates to the parent constructor.
+        if matches!(callee_kind, ExprKind::Super) {
+            return self.infer_super_call(args, span);
+        }
+
+        // `super.method(...)` — direct call of the parent's method body.
+        if let ExprKind::FieldAccess { receiver, name } = &callee_kind
+            && matches!(self.ast.expr(*receiver).kind, ExprKind::Super)
+        {
+            return self.infer_super_method_call(name.clone(), args, span);
+        }
+
+        // `JSON.stringify(...)` intrinsic dispatch. `JSON`
+        // is recognised only at the head of a member call — bare
+        // references and partial `JSON.stringify` references take
+        // the `resolve_ident` path and error there. Must run before
+        // the namespace dispatch so the `JSON` identifier
+        // never resolves as a user-imported namespace.
+        if let ExprKind::FieldAccess { receiver, name } = &callee_kind
+            && let ExprKind::Identifier(recv_ident) = &self.ast.expr(*receiver).kind.clone()
+            && recv_ident.name == "JSON"
+        {
+            return self.infer_json_namespace_call(name, args, type_args, expected, span);
+        }
+
+        // `BigInt.fromString(s)` — namespace-headed intrinsic
+        // (same recognition pattern as `JSON.stringify`). Bare
+        // `BigInt` is reserved by `is_reserved_call_name`, so the
+        // resolve_ident path produces a focused diagnostic.
+        if let ExprKind::FieldAccess { receiver, name } = &callee_kind
+            && let ExprKind::Identifier(recv_ident) = &self.ast.expr(*receiver).kind.clone()
+            && recv_ident.name == "BigInt"
+        {
+            return self.infer_bigint_namespace_call(name, args, span);
+        }
+
+        // namespace-symbol dispatch — `Math.floor(x)`,
+        // `Temporal.Now.instant()`, `Temporal.Instant.from(iso)`,
+        // and any future dotted access through a `PackageDeclaration`-
+        // declared namespace. Must run before the user-
+        // import-namespace path so a user can't shadow these names
+        // with an `import`. The chain extractor walks the
+        // FieldAccess chain rooted at the callee; the
+        // `namespace_symbols` map gates the dispatch.
+        if let ExprKind::FieldAccess { .. } = &callee_kind
+            && let Some((root, segments)) = namespace_symbol::extract_chain(self.ast, callee)
+            && !segments.is_empty()
+            && self.namespace_symbols.contains_key(&root.name)
+        {
+            return self
+                .infer_namespace_symbol_call(root, segments, type_args, args, expected, span);
+        }
+
+        // namespace member dispatch — `<ns>.<member>(args)`
+        // where `<ns>` was bound by `import <ns> from "<pkg>";`.
+        // Resolves against the bound package's value table; emits
+        // a static `Call { mangled }` matching what a named import
+        // would produce. Must run *before* the
+        // type-the-receiver-as-expression path so the namespace
+        // identifier never reaches `resolve_ident` (which would
+        // reject it as "namespace cannot be used as a value").
+        if let ExprKind::FieldAccess { receiver, name } = &callee_kind
+            && let ExprKind::Identifier(recv_ident) = &self.ast.expr(*receiver).kind.clone()
+            && let Some(ns) = self.namespace_bindings.get(&recv_ident.name)
+        {
+            let package_name = ns.members.package_name().to_string();
+            let namespace_value = ns.members.value(&name.name).cloned();
+            if let Some(sym) = namespace_value {
+                return self.infer_namespace_call(
+                    package_name,
+                    sym,
+                    recv_ident,
+                    name,
+                    type_args,
+                    args,
+                    expected,
+                    span,
+                );
+            }
+            let exports = ns.members.exports_help();
+            self.error_with_help(
+                name.span,
+                format!("package `{package_name}` does not export `{}`", name.name),
+                exports,
+            );
+            return (
+                TypedExprKind::Call {
+                    mangled: crate::mangle::host(&package_name, &name.name),
+                    args: Vec::new(),
+                    type_predicate: None,
+                },
+                Type::Error,
+            );
+        }
+
+        // static member dispatch — `ClassName.member(args)`. The receiver is
+        // peeked before being typed (a bare class name is not a value); a value
+        // binding of the same name shadows the class, TS-style.
+        if let ExprKind::FieldAccess { receiver, name } = &callee_kind
+            && let ExprKind::Identifier(recv_ident) = &self.ast.expr(*receiver).kind.clone()
+            && self.scopes.get(&recv_ident.name).is_none()
+            && !self.top_symbols.contains_key(&recv_ident.name)
+        {
+            let class_target = self.lookup_named_type(&recv_ident.name).and_then(|sym| {
+                matches!(sym.kind, crate::TypeKind::Class { .. }).then(|| sym.mangled_name.clone())
+            });
+            if let Some(class_mangled) = class_target {
+                return self.infer_class_static_call(
+                    recv_ident.name.clone(),
+                    class_mangled,
+                    name.clone(),
+                    type_args,
+                    args,
+                    expected,
+                    span,
+                );
+            }
+        }
+
+        // `ns.Class.member(args)` — statics are not reachable through a
+        // namespace import (symmetric with `new ns.Class(...)`); name the
+        // direct-import fix.
+        if let ExprKind::FieldAccess { receiver, name } = &callee_kind
+            && let ExprKind::FieldAccess {
+                receiver: inner_recv,
+                name: type_name,
+            } = &self.ast.expr(*receiver).kind.clone()
+            && let ExprKind::Identifier(ns_ident) = &self.ast.expr(*inner_recv).kind.clone()
+            && let Some(ns) = self.namespace_bindings.get(&ns_ident.name)
+            && matches!(
+                ns.members.type_symbol(&type_name.name).map(|s| &s.kind),
+                Some(crate::TypeKind::Class { .. }),
+            )
+        {
+            let package_name = ns.members.package_name().to_string();
+            self.error_with_help(
+                name.span,
+                "static members are not accessible through a namespace import".to_string(),
+                vec![format!(
+                    "import the class directly: `import {{ {} }} from \"{package_name}\"; \
+                     {}.{}(…)`",
+                    type_name.name, type_name.name, name.name,
+                )],
+            );
+            self.walk_rejected_call_args(&args);
+            return (TypedExprKind::Null, Type::Error);
+        }
+
+        // method dispatch — `recv.method(args)` resolves
+        // through `find_method` against the prelude's interface
+        // declarations (and user-declared interfaces, when any
+        // value of an InterfaceRef type ends up as a receiver).
+        // Replaces the per-method special-case dispatch arms
+        // (infer_to_string_call, infer_array_join_call,
+        // console.log special case).
+        if let ExprKind::FieldAccess { receiver, name } = &callee_kind {
+            let diags_before = self.diagnostics.len();
+            let (mut typed_receiver, mut recv_ty) = self.infer_expr(*receiver, None);
+            // `r.json()` on an http `Response` has no host backing, so the
+            // typechecker lowers it to `JSON.parse(r.body)`. This must run before `find_method`: the `json`
+            // method is declared on `Response` only for the LLM-facing type surface and
+            // must never be dispatched as a real (importless) interface method.
+            if name.name == "json"
+                && matches!(&recv_ty, Type::InterfaceRef { name: iface, .. } if iface == "Response")
+            {
+                return self.infer_response_json_call(
+                    typed_receiver,
+                    &recv_ty,
+                    type_args,
+                    args,
+                    expected,
+                    span,
+                );
+            }
+            // A generic receiver inferred in isolation can't resolve its own type
+            // parameters and reports a premature "cannot infer" error — e.g.
+            // `new Map()` in `new Map().set(k, v)`. The enclosing call resolves
+            // those parameters: from the call arguments (`set(k, v)` binds K, V)
+            // and/or, for builder methods that return the receiver's own type,
+            // from the call's expected type. Drop the premature diagnostic; genuine
+            // ambiguity resurfaces where the value is used. Only the "cannot infer"
+            // entries are removed, so any real error in the receiver survives.
+            if type_contains_type_var(&recv_ty)
+                && let Some((sig, interface_bindings, _, _)) =
+                    self.find_method(&recv_ty, &name.name)
+            {
+                use crate::typechecker::type_param_substitution::TypeParamSubstitution;
+                let deferred: Vec<_> = self
+                    .diagnostics
+                    .split_off(diags_before)
+                    .into_iter()
+                    .filter(|d| !d.message.starts_with("cannot infer type parameter"))
+                    .collect();
+                self.diagnostics.extend(deferred);
+                // When the expected type pins the receiver's parameters through the
+                // method's return type, re-infer with the implied type so the
+                // receiver node carries fully resolved generics.
+                if let Some(want) = expected {
+                    let mut probe = TypeParamSubstitution::new();
+                    for (k, v) in &interface_bindings {
+                        probe.insert(k.clone(), v.clone());
+                    }
+                    let _ = probe.unify(&sig.ret, want, self.resolver());
+                    let desired = probe.apply(&recv_ty);
+                    if desired != recv_ty && !type_contains_type_var(&desired) {
+                        let reinferred = self.infer_expr(*receiver, Some(&desired));
+                        typed_receiver = reinferred.0;
+                        recv_ty = reinferred.1;
+                    }
+                }
+            }
+            if matches!(recv_ty.peel(), Type::Tuple(_)) && is_mutating_array_method(&name.name) {
+                self.error_with_help(
+                    name.span,
+                    format!("cannot call `{}` on tuple `{}`", name.name, recv_ty),
+                    vec![
+                        "tuples are fixed-length and read-only; assign to an array-typed binding first to mutate"
+                            .to_string(),
+                    ],
+                );
+                return (TypedExprKind::Null, Type::Error);
+            }
+            if let Some((sig, interface_bindings, iface_mangled, _dispatch)) =
+                self.find_method(&recv_ty, &name.name)
+            {
+                // `flat` un-nests `depth` array levels — a return type the
+                // generic machinery can't express. Validate the literal depth
+                // and override the resolved return type before dispatch.
+                let mut sig = sig;
+                if name.name == "flat" && matches!(recv_ty.peel(), Type::Array(_)) {
+                    sig.ret = self.array_flat_return_type(&recv_ty, &args);
+                }
+                // Anything with substitution work — interface generics
+                // (`Array<T>`), method generics (`map<U>`), or both —
+                // goes through the unified pipeline. Only the no-
+                // generics-anywhere case (e.g. `console.log`,
+                // `(42).toString()`) takes the trivial path.
+                if interface_bindings.is_empty() && sig.generics.is_empty() {
+                    return self.infer_method_call(
+                        typed_receiver,
+                        iface_mangled,
+                        name.clone(),
+                        sig,
+                        type_args,
+                        args,
+                        span,
+                    );
+                }
+                return self.infer_generic_method_call(
+                    typed_receiver,
+                    iface_mangled,
+                    name.clone(),
+                    sig,
+                    interface_bindings,
+                    type_args,
+                    args,
+                    expected,
+                    span,
+                );
+            }
+            if matches!(recv_ty.peel(), Type::InterfaceRef { .. })
+                && self
+                    .lookup_interface_property(&recv_ty, &name.name)
+                    .is_none()
+            {
+                let help = self.interface_member_miss_help(&recv_ty, &name.name);
+                self.error_with_help(
+                    name.span,
+                    format!("no method `{}` on `{}`", name.name, recv_ty),
+                    help,
+                );
+                return (TypedExprKind::Null, Type::Error);
+            }
+            // Special-case: `null.toString()` (or `(maybeNullable)
+            // .toString()`) gets the narrow-first diagnostic
+            // instead of the generic "no method" message — null is
+            // a real type in the language and the right fix is
+            // narrowing, not pretending toString doesn't exist.
+            // Mirrors the old `to_string_intrinsic_for` behavior.
+            if matches!(recv_ty, Type::Null) && name.name == "toString" {
+                let recv_span = self.typed_ast.expr(typed_receiver).span;
+                let help = self.nullable_string_fix_help(
+                    recv_span,
+                    super::diagnostics::NullableStringContext::ToStringCall,
+                );
+                self.error_with_help(
+                    name.span,
+                    "cannot call `.toString()` on a `null` value; \
+                     narrow to a non-null type first"
+                        .to_string(),
+                    help,
+                );
+                // Diagnostic placeholder — the iface isn't real here
+                // (Null has no interface). Codegen never sees this
+                // node because the diagnostic blocks compilation.
+                return (
+                    TypedExprKind::MethodCall {
+                        receiver: typed_receiver,
+                        iface: crate::mangle::prelude("Null"),
+                        name: name.clone(),
+                        args: Vec::new(),
+                        type_predicate: None,
+                    },
+                    Type::String,
+                );
+            }
+            // A receiver that already reported has nothing left to dispatch on,
+            // and the fall-through below re-infers the whole callee — which
+            // re-infers this receiver and reports the identical diagnostic a
+            // second time.
+            if matches!(recv_ty, Type::Error) {
+                self.walk_rejected_call_args(&args);
+                return (TypedExprKind::Null, Type::Error);
+            }
+            // Fall through: receiver type may carry a method-typed
+            // field one day (function-typed object fields when those
+            // land), or this is a real "no method" diagnostic. The
+            // legacy field-access-then-call path below handles it.
+        }
+
+        // Generic dispatch — when the callee is a bare identifier
+        // resolving to a generic top-level function, route to the
+        // explicit-args + bidirectional + arg-walk pipeline.
+        // Non-generic functions and explicit-type-arg-on-non-generic
+        // calls fall through to the regular path below; the latter
+        // produces a "type arguments not allowed on a non-generic
+        // function" diagnostic so the user gets a clear error.
+        if let ExprKind::Identifier(ident) = &callee_kind
+            && let Some(entry) = self.top_symbols.get(&ident.name)
+            && let ValueKind::Function {
+                generics,
+                params,
+                ret,
+                type_predicate,
+                ..
+            } = &entry.kind
+            && !generics.is_empty()
+        {
+            return self.infer_generic_call(
+                ident.clone(),
+                generics.clone(),
+                params.clone(),
+                ret.clone(),
+                entry.mangled_name.clone(),
+                type_predicate.clone(),
+                type_args,
+                args,
+                expected,
+                span,
+                super::generic::GenericCallee::Function,
+            );
+        }
+
+        if let Some(targs) = &type_args {
+            self.error(
+                span,
+                format!(
+                    "type arguments are only valid on generic functions; got {} argument(s)",
+                    targs.len(),
+                ),
+            );
+        }
+
+        let (typed_callee, callee_ty) = self.infer_expr(callee, None);
+        // call-signature dispatch — when the callee types
+        // as an `InterfaceRef` declaring `@call`, route through the
+        // same method-call pipeline as `find_method(_, "new")` for
+        // `new` Receiver is `typed_callee` (the
+        // already-evaluated callee expression); the sentinel name
+        // `@call` resolves against the interface's `methods` map.
+        // On a miss we fall through to the existing "cannot call
+        // value of type X" diagnostic below.
+        if matches!(callee_ty.peel(), Type::InterfaceRef { .. })
+            && let Some((sig, interface_bindings, iface_mangled, _dispatch)) =
+                self.find_method(&callee_ty, "@call")
+        {
+            let call_name = Ident {
+                name: "@call".to_string(),
+                span,
+            };
+            return if interface_bindings.is_empty() && sig.generics.is_empty() {
+                self.infer_method_call(
+                    typed_callee,
+                    iface_mangled,
+                    call_name,
+                    sig,
+                    type_args,
+                    args,
+                    span,
+                )
+            } else {
+                self.infer_generic_method_call(
+                    typed_callee,
+                    iface_mangled,
+                    call_name,
+                    sig,
+                    interface_bindings,
+                    type_args,
+                    args,
+                    expected,
+                    span,
+                )
+            };
+        }
+        // also lift `has_rest` from the function type so a
+        // call through a function-typed value (arrow stored in a
+        // `const`, callback param) honors the variadic signature
+        // shape. Top-level named functions go through `named_params`
+        // below; this path covers everything else.
+        let callee_has_rest = matches!(callee_ty.peel(), Type::Function { has_rest: true, .. },);
+        let (param_types, ret_ty) = match callee_ty.peel() {
+            Type::Function { params, ret, .. } => (Some(params.clone()), (**ret).clone()),
+            Type::Error => (None, Type::Error),
+            // calling an un-narrowed `unknown` value is
+            // rejected — the user must narrow via `typeof x ===
+            // "function"` (or any of the other predicates) first.
+            // The "narrow first" wording mirrors the field/index
+            // rejection diagnostics introduced for `Type::Unknown`.
+            Type::Unknown => {
+                self.error_with_help(
+                    span,
+                    "cannot call value of type `unknown`".to_string(),
+                    vec![
+                        "narrow first with `typeof x === \"function\"` or a \
+                         user-defined type guard before calling"
+                            .to_string(),
+                    ],
+                );
+                (None, Type::Error)
+            }
+            _ => {
+                let help = self.definition_help(&callee_ty);
+                let culprit = self.nullable_culprit(&[(typed_callee, &callee_ty)], |t| {
+                    matches!(t.peel(), Type::Function { .. })
+                });
+                self.error_with_narrowing_hint(
+                    span,
+                    format!("cannot call value of type `{callee_ty}`"),
+                    help,
+                    culprit,
+                );
+                (None, Type::Error)
+            }
+        };
+
+        // if the callee is a top-level non-generic
+        // identifier, fetch the full `Vec<Param>` so we can see
+        // per-parameter defaults. `Type::Function` is structural and
+        // doesn't carry defaults, so calls *through* a function-typed
+        // value (variable, callback param) require all args — only
+        // bare-identifier static calls participate in default
+        // fill-in.
+        let named_params: Option<Vec<crate::Param>> =
+            if let ExprKind::Identifier(ident) = &callee_kind {
+                self.top_symbols
+                    .get(&ident.name)
+                    .and_then(|entry| match &entry.kind {
+                        ValueKind::Function {
+                            params, generics, ..
+                        } if generics.is_empty() => Some(params.clone()),
+                        _ => None,
+                    })
+            } else {
+                None
+            };
+        // variadic shape — `has_rest` lifts the max-args cap
+        // and `fixed_count` is the number of leading non-rest params.
+        // For named top-level callees we use the resolved `Param`
+        // list (which carries defaults too); for any other
+        // function-typed callable (arrow stored in a `const`, etc.)
+        // we read the rest flag off the lifted `Type::Function`.
+        let has_rest = named_params
+            .as_ref()
+            .is_some_and(|ps| ps.last().is_some_and(|p| p.rest))
+            || (named_params.is_none() && callee_has_rest);
+        let fixed_count = if let Some(ps) = &named_params {
+            ps.iter().take_while(|p| !p.rest).count()
+        } else if callee_has_rest {
+            param_types
+                .as_ref()
+                .map_or(0, |t| t.len().saturating_sub(1))
+        } else {
+            param_types.as_ref().map_or(0, std::vec::Vec::len)
+        };
+        let (min_args, max_args) = match (&named_params, &param_types) {
+            (Some(ps), _) => {
+                let max = if has_rest { usize::MAX } else { ps.len() };
+                let min = ps
+                    .iter()
+                    .take_while(|p| !p.rest && p.default.is_none())
+                    .count();
+                (min, max)
+            }
+            (None, Some(ts)) => {
+                if callee_has_rest {
+                    // Trailing rest in the function type: callsite
+                    // accepts `(ts.len() - 1)+` args.
+                    (ts.len().saturating_sub(1), usize::MAX)
+                } else {
+                    (ts.len(), ts.len())
+                }
+            }
+            (None, None) => (0, 0),
+        };
+
+        // `parseInt(s)` is sugar for `parseInt(s, 10)`. The host fn
+        // is registered as arity-2 (string, number) without a
+        // default for now (cleanup deferred to a follow-up); the
+        // typechecker accepts the arity-1 form and synthesises a
+        // `Number(10)` typed expression below so codegen always sees
+        // a uniform 2-arg call. Gate by identifier name — the
+        // duplicate-name guard ensures `parseInt` only ever refers
+        // to the imported host fn.
+        let arity1_parse_int = matches!(
+            &callee_kind,
+            ExprKind::Identifier(ident) if ident.name == "parseInt",
+        ) && args.len() == 1
+            && param_types.as_ref().is_some_and(|p| p.len() == 2);
+
+        let arity_ok = param_types.is_some() && args.len() >= min_args && args.len() <= max_args;
+
+        if let Some(ref params) = param_types
+            && !arity_ok
+            && !arity1_parse_int
+        {
+            // When the callee is a bare identifier resolving to a
+            // top-level non-generic function, lift the `Function` form
+            // (with names from `ValueKind::Function`) instead of the
+            // anonymous form. Anything else — closures, function-typed
+            // values, fields — falls back to `Anon` since no names
+            // exist at that callable.
+            let lift_function: Option<(String, Vec<crate::Param>)> =
+                if let ExprKind::Identifier(ident) = &callee_kind {
+                    named_params
+                        .as_ref()
+                        .map(|ps| (ident.name.clone(), ps.clone()))
+                } else {
+                    None
+                };
+            let lift_doc = lift_function
+                .as_ref()
+                .and_then(|(n, _)| self.lookup_function_doc(n));
+            let help = match &lift_function {
+                Some((name, sig_params)) => self.format_signature(SignatureKind::Function {
+                    name,
+                    generics: &[],
+                    params: sig_params,
+                    ret: &ret_ty,
+                    doc: lift_doc.as_ref(),
+                }),
+                None => self.format_signature(SignatureKind::Anon {
+                    params,
+                    ret: &ret_ty,
+                    has_rest,
+                }),
+            };
+            let msg = if has_rest {
+                format!("expected {}+ argument(s), got {}", min_args, args.len(),)
+            } else if min_args == max_args {
+                format!("expected {} argument(s), got {}", max_args, args.len())
+            } else {
+                format!(
+                    "expected {}-{} argument(s), got {}",
+                    min_args,
+                    max_args,
+                    args.len(),
+                )
+            };
+            self.error_with_help(span, msg, vec![help]);
+        }
+
+        // trailing args after `fixed_count` are bound to the
+        // rest element type. Use it as the per-arg hint so e.g.
+        // `sum(1, 2)` against `(...n: number[])` hints each arg as
+        // `number`.
+        let rest_elem_ty: Option<Type> = if has_rest {
+            param_types
+                .as_ref()
+                .and_then(|tys| tys.get(fixed_count))
+                .and_then(|t| match t {
+                    Type::Array(elem) => Some((**elem).clone()),
+                    _ => None,
+                })
+        } else {
+            None
+        };
+        let extra = usize::from(arity1_parse_int)
+            + named_params
+                .as_ref()
+                .map_or(0, |ps| ps.len().saturating_sub(args.len()));
+        let mut typed_args = Vec::with_capacity(args.len() + extra);
+        for (i, &arg_id) in args.iter().enumerate() {
+            let hint = if i < fixed_count {
+                param_types.as_ref().and_then(|p| p.get(i)).cloned()
+            } else {
+                rest_elem_ty.clone()
+            };
+            let (typed_id, _) = self.infer_expr(arg_id, hint.as_ref());
+            typed_args.push(typed_id);
+        }
+        if arity1_parse_int {
+            let radix_id = self.typed_ast.push_expr(TypedExpr {
+                kind: TypedExprKind::Number(10.0),
+                span,
+                ty: Type::Number,
+            });
+            typed_args.push(radix_id);
+        }
+        if arity_ok && let Some(ps) = &named_params {
+            self.fill_omitted_defaults(ps, args.len(), span, &mut typed_args);
+        }
+        if arity_ok && let Some(elem_ty) = rest_elem_ty {
+            self.pack_rest_tail(fixed_count, elem_ty, span, &mut typed_args);
+        }
+
+        // Static dispatch when the callee is a bare top-level
+        // identifier — emit a `Call` with the resolved mangled name
+        // so codegen can lower to a direct `call $idx`. Anything else
+        // (closure value, field access, etc.) goes through
+        // `CallClosure`, which dispatches via `call_ref`.
+        let kind = if let ExprKind::Identifier(ident) = &callee_kind
+            && let Some(entry) = self.top_symbols.get(&ident.name)
+        {
+            let mangled = entry.mangled_name.clone();
+            let package = entry.package_name.clone();
+            let symbol = entry.symbol_name.clone();
+            // a direct call to a guard function carries the
+            // resolved predicate to its `TypedExprKind::Call` so
+            // `predicate_envs` can narrow without re-looking-up the
+            // symbol.
+            let type_predicate = match &entry.kind {
+                ValueKind::Function { type_predicate, .. } => type_predicate.clone().map(Box::new),
+                _ => None,
+            };
+            let target = StaticCallTarget {
+                package: &package,
+                symbol: &symbol,
+                mangled,
+            };
+            return self.static_call_expr(target, typed_args, type_predicate, &ret_ty, span);
+        } else {
+            TypedExprKind::CallClosure {
+                callee: typed_callee,
+                args: typed_args,
+            }
+        };
+        (kind, ret_ty)
+    }
+
+    /// Computes `flat`'s return type by un-nesting `depth` array levels from the
+    /// receiver's element type. `depth` must be a non-negative integer literal
+    /// (default `1`) so the result type is statically known; anything else is a
+    /// compile error and the depth falls back to `1`.
+    fn array_flat_return_type(&mut self, recv_ty: &Type, args: &[ExprId]) -> Type {
+        let elem = match recv_ty.peel() {
+            Type::Array(inner) => (**inner).clone(),
+            _ => return Type::Error,
+        };
+        let depth = match args.first() {
+            None => 1usize,
+            Some(arg) => {
+                let arg_expr = self.ast.expr(*arg);
+                match &arg_expr.kind {
+                    ExprKind::Number(v) if v.is_finite() && *v >= 0.0 && v.fract() == 0.0 => {
+                        *v as usize
+                    }
+                    _ => {
+                        let arg_span = arg_expr.span;
+                        self.error_with_help(
+                            arg_span,
+                            "`flat`'s depth must be a non-negative integer literal".to_string(),
+                            vec![
+                                "pass a literal like `.flat()` or `.flat(2)`, or chain `.flat().flat()` for deeper flattening"
+                                    .to_string(),
+                            ],
+                        );
+                        1
+                    }
+                }
+            }
+        };
+        let mut result_elem = elem;
+        for _ in 0..depth {
+            match result_elem.peel() {
+                Type::Array(inner) => result_elem = (**inner).clone(),
+                _ => break,
+            }
+        }
+        Type::Array(Box::new(result_elem))
+    }
+
+    /// Typecheck a method call where neither the interface nor the
+    /// method declares any generic parameters. No substitution work
+    /// is needed — the sig's params + return type are already
+    /// concrete. Just an arity check and a per-arg infer with the
+    /// declared param types as hints.
+    ///
+    /// Anything with substitution work (interface generics like
+    /// `Array<T>`, method generics like `map<U>`, or both) routes
+    /// to [`infer_generic_method_call`](super::generic) instead.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn infer_method_call(
+        &mut self,
+        typed_receiver: ExprId,
+        iface_mangled: crate::MangledName,
+        name: Ident,
+        sig: MethodSig,
+        type_args: Option<Vec<TypeAnnotation>>,
+        args: Vec<ExprId>,
+        span: Span,
+    ) -> (TypedExprKind, Type) {
+        debug_assert!(
+            sig.generics.is_empty(),
+            "infer_method_call requires sig with no method generics; \
+             interface bindings handled at the call-site dispatch",
+        );
+        let receiver_ty = self.typed_ast.expr(typed_receiver).ty.clone();
+        if let Some(targs) = &type_args {
+            let help = self.format_signature(SignatureKind::Method {
+                receiver_ty: &receiver_ty,
+                name: &name.name,
+                sig: &sig,
+            });
+            self.error_with_help(
+                span,
+                format!(
+                    "method `{}` is not generic; got {} type argument(s)",
+                    name.name,
+                    targs.len(),
+                ),
+                vec![help],
+            );
+        }
+        // `typed_args` comes back 1:1 with `sig.params` — omitted
+        // defaulted slots synthesized, a variadic tail packed into one
+        // array — which is what codegen's fixed-arity wrapper call needs.
+        let typed_args = self.bind_param_call_args(
+            &sig.params,
+            &sig.ret,
+            CallLift::Method {
+                receiver_ty: &receiver_ty,
+                name: &name.name,
+                sig: &sig,
+            },
+            &args,
+            span,
+        );
+        // non-generic guard methods (e.g.
+        // `Array.isArray(value: unknown): value is unknown[]`)
+        // land here. The sig is already concrete — no substitution
+        // needed — so the declared predicate carries directly onto
+        // the typed node.
+        let type_predicate = sig.predicate.map(Box::new);
+        // a non-generic sig with an `(ref null $Object)`-
+        // shaped param (`TypeVar` / `Unknown` / a `Union(...)` whose
+        // members don't share one value-type) needs the same boxing
+        // that the `Type::TypeVar` path gets — primitives must be
+        // boxed into `$BoxedNumber` / `$BoxedBoolean` before they
+        // enter the wrapper. Detect the shape here and emit
+        // `GenericMethodCall` with `is_generic: true` for those slots
+        // so the codegen at
+        // `function_emitter::expr::emit_method_call_with_receiver_on_stack`
+        // boxes them. `Union` is conservative — even when every
+        // member is already an `$Object` subtype, `emit_box` is a
+        // no-op so the extra flag is harmless.
+        let needs_box = |t: &Type| -> bool {
+            matches!(t.peel(), Type::TypeVar(_) | Type::Unknown | Type::Union(_))
+        };
+        let any_object_shaped = sig.params.iter().any(|p| needs_box(&p.ty));
+        let return_is_object_shaped = needs_box(&sig.ret);
+        if any_object_shaped || return_is_object_shaped {
+            let generic_args: Vec<crate::GenericArgument> = typed_args
+                .into_iter()
+                .zip(sig.params.iter())
+                .map(|(expr, p)| crate::GenericArgument {
+                    expr,
+                    is_generic: needs_box(&p.ty),
+                })
+                .collect();
+            let return_cast = if return_is_object_shaped {
+                Some(sig.ret.clone())
+            } else {
+                None
+            };
+            return (
+                TypedExprKind::GenericMethodCall {
+                    receiver: typed_receiver,
+                    iface: iface_mangled,
+                    name,
+                    args: generic_args,
+                    return_cast,
+                    type_predicate,
+                },
+                sig.ret,
+            );
+        }
+        (
+            TypedExprKind::MethodCall {
+                receiver: typed_receiver,
+                iface: iface_mangled,
+                name,
+                args: typed_args,
+                type_predicate,
+            },
+            sig.ret,
+        )
+    }
+
+    /// build a synthesized typed expression for an omitted
+    /// argument from its parameter's resolved [`crate::DefaultValue`].
+    /// Used at every call site that takes advantage of a defaulted
+    /// parameter — defaults are re-emitted per call (matching JS / TS
+    /// semantics, and so a `GlobalConst` default re-reads the const
+    /// on every call rather than caching the value).
+    ///
+    /// `span` is the surrounding call's span — the same anchor the
+    /// surrounding `Call`/`MethodCall` carries — so DWARF + diagnostic
+    /// mapping point at the call site, not at the original parameter
+    /// declaration.
+    pub(super) fn synthesize_default_arg(
+        &mut self,
+        default: &crate::DefaultValue,
+        param_ty: &Type,
+        span: Span,
+    ) -> ExprId {
+        // The primitive arms (`Number`/`String`/`Boolean`) carry the literal's
+        // own type, not the parameter's. The call-boundary coercion boxes an
+        // argument by comparing its typed-AST type against the parameter slot;
+        // typing a bare `f64`/`i32` literal as the wider slot (`unknown`, a
+        // union, `T | null`) reads as "already a ref" and skips the box, so the
+        // callee sees a primitive in a ref slot. The remaining arms already
+        // synthesize a reference value, so they keep the parameter's type.
+        let (kind, ty) = match default {
+            crate::DefaultValue::Number(n) => (TypedExprKind::Number(*n), Type::Number),
+            crate::DefaultValue::String(s) => (TypedExprKind::String(s.clone()), Type::String),
+            crate::DefaultValue::Boolean(b) => (TypedExprKind::Boolean(*b), Type::Boolean),
+            crate::DefaultValue::Null => (TypedExprKind::Null, Type::Null),
+            crate::DefaultValue::EmptyArray => {
+                let element_ty = match param_ty {
+                    Type::Array(t) => (**t).clone(),
+                    _ => Type::Error,
+                };
+                (
+                    TypedExprKind::ArrayLiteral {
+                        elements: Vec::<crate::TypedArrayElement>::new(),
+                        element_ty,
+                    },
+                    param_ty.clone(),
+                )
+            }
+            crate::DefaultValue::EmptyObject => (
+                TypedExprKind::ObjectLiteral {
+                    spread_sources: Vec::new(),
+                    fields: Vec::new(),
+                },
+                param_ty.clone(),
+            ),
+            crate::DefaultValue::GlobalConst(_) => {
+                // Rejected at signature time — should be unreachable.
+                // Mint a `Null` placeholder so downstream emission
+                // stays well-formed even if signature validation is
+                // ever bypassed.
+                (TypedExprKind::Null, Type::Error)
+            }
+            crate::DefaultValue::EnumVariant {
+                enum_mangled,
+                variant,
+                value,
+            } => {
+                let variant_ident = Ident {
+                    name: variant.clone(),
+                    span,
+                };
+                match value {
+                    crate::EnumVariantValue::Number(n) => (
+                        TypedExprKind::NumberEnumMember {
+                            enum_mangled: enum_mangled.clone(),
+                            variant: variant_ident,
+                            value: *n,
+                        },
+                        param_ty.clone(),
+                    ),
+                    crate::EnumVariantValue::String(s) => (
+                        TypedExprKind::StringEnumMember {
+                            enum_mangled: enum_mangled.clone(),
+                            variant: variant_ident,
+                            value: s.clone(),
+                        },
+                        param_ty.clone(),
+                    ),
+                }
+            }
+        };
+        self.typed_ast.push_expr(TypedExpr { kind, span, ty })
+    }
+
+    /// Append an argument for each fixed slot past `supplied` that the call
+    /// left out. Must run before [`Self::pack_rest_tail`], so
+    /// `typed_args[..fixed_count]` is a clean fixed partition and
+    /// `[fixed_count..]` is the tail.
+    ///
+    /// A slot whose default is `None` had its declared default rejected at
+    /// signature time — already reported — and still gets a placeholder, so
+    /// the surviving defaults keep their own slots instead of sliding left.
+    pub(super) fn fill_omitted_defaults(
+        &mut self,
+        params: &[crate::Param],
+        supplied: usize,
+        span: Span,
+        typed_args: &mut Vec<ExprId>,
+    ) {
+        let fixed_count = params.iter().take_while(|p| !p.rest).count();
+        if supplied >= fixed_count {
+            return;
+        }
+        for p in &params[supplied..fixed_count] {
+            let id = match &p.default {
+                Some(default) => self.synthesize_default_arg(default, &p.ty, span),
+                None => self.typed_ast.push_expr(TypedExpr {
+                    kind: TypedExprKind::Null,
+                    span,
+                    ty: Type::Error,
+                }),
+            };
+            typed_args.push(id);
+        }
+    }
+
+    /// Collapse the trailing arguments past `fixed_count` into the single
+    /// array that fills a variadic signature's rest slot, so `typed_args`
+    /// lines up 1:1 with the parameter list and codegen emits variadic and
+    /// fixed-arity calls identically. An empty tail packs an empty array.
+    pub(super) fn pack_rest_tail(
+        &mut self,
+        fixed_count: usize,
+        element_ty: Type,
+        span: Span,
+        typed_args: &mut Vec<ExprId>,
+    ) {
+        // The actual per-arg types ride through as elements; `element_ty`
+        // carries the rest's declared element type for downstream consumers
+        // (e.g. `PackageDeclaration::from_typed_ast`).
+        let elements: Vec<crate::TypedArrayElement> = if typed_args.len() > fixed_count {
+            typed_args
+                .drain(fixed_count..)
+                .map(crate::TypedArrayElement::Value)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let array_id = self.typed_ast.push_expr(TypedExpr {
+            kind: TypedExprKind::ArrayLiteral {
+                elements,
+                element_ty: element_ty.clone(),
+            },
+            span,
+            ty: Type::Array(Box::new(element_ty)),
+        });
+        typed_args.push(array_id);
+    }
+
+    /// `new Foo(args)` typechecks as `Foo.new(args)`. The
+    /// callee must be a value typed `InterfaceRef("FooConstructor")`
+    /// whose interface declares a `new` method under `Dispatch::Static`.
+    /// We synthesize the equivalent of a method-call lookup via
+    /// `find_method(callee_ty, "new")` and reuse the existing
+    /// `infer_method_call` / `infer_generic_method_call` pipelines so
+    /// `new` lowers to a `TypedExprKind::MethodCall` — codegen never
+    /// sees a separate `New` node.
+    ///
+    /// The bare `Foo.new(args)` form keeps working through the
+    /// FieldAccess-callee path in `infer_call` (forgiveness rule).
+    fn infer_new(
+        &mut self,
+        callee: ExprId,
+        type_args: Option<Vec<TypeAnnotation>>,
+        args: Vec<ExprId>,
+        expected: Option<&Type>,
+        span: Span,
+    ) -> (TypedExprKind, Type) {
+        // `new ClassName(args)` — the callee names a class type. Construct an
+        // instance: check the constructor args, result is the class instance
+        // type. (Codegen of `new` is SUB-483; this is typecheck-only.)
+        if let ExprKind::Identifier(ident) = &self.ast.expr(callee).kind.clone()
+            && let Some((class_mangled, ctor_params, class_generics)) = self
+                .lookup_named_type(&ident.name)
+                .and_then(|s| match &s.kind {
+                    crate::TypeKind::Class {
+                        constructor,
+                        generics,
+                        ..
+                    } => Some((
+                        s.mangled_name.clone(),
+                        constructor.clone(),
+                        generics.clone(),
+                    )),
+                    _ => None,
+                })
+        {
+            let package = self.type_package(&ident.name);
+            let ctor_mangled = crate::mangle::extend(&class_mangled, "constructor");
+            // Generic class: the constructor is a receiver-less generic call —
+            // explicit type args, expected-type seeding, and inference from the
+            // ctor arguments all ride the shared generic-call core, lowering to
+            // `GenericCall` on `<Class>#constructor`.
+            if !class_generics.is_empty() {
+                let ret = Type::class_ref(
+                    package,
+                    ident.name.clone(),
+                    class_mangled,
+                    class_generics
+                        .iter()
+                        .map(|g| Type::TypeVar(g.clone()))
+                        .collect(),
+                );
+                let (kind, ty) = self.infer_generic_call(
+                    ident.clone(),
+                    class_generics,
+                    ctor_params,
+                    ret,
+                    ctor_mangled,
+                    None,
+                    type_args,
+                    args,
+                    expected,
+                    span,
+                    super::generic::GenericCallee::Constructor,
+                );
+                // Written type arguments are screened in `resolve_type`;
+                // inferred ones arrive here, and a `void` argument has no value
+                // representation to erase into.
+                if let Type::ClassRef { args: solved, .. } = ty.peel()
+                    && let Some(offender) = solved
+                        .iter()
+                        .find_map(super::resolve_type::valueless_within_type_argument)
+                {
+                    let offender = offender.clone();
+                    self.error_with_help(
+                        span,
+                        format!(
+                            "cannot infer a type argument of `{offender}` for class `{}`",
+                            ident.name
+                        ),
+                        vec![format!(
+                            "`{offender}` carries no value — pass an argument with a value \
+                             type, or give an explicit type argument: `new {}<…>(…)`",
+                            ident.name
+                        )],
+                    );
+                    return (kind, Type::Error);
+                }
+                return (kind, ty);
+            }
+            let class_ty = Type::class_ref(package, ident.name.clone(), class_mangled, Vec::new());
+            if type_args.is_some() {
+                self.error(
+                    span,
+                    format!(
+                        "class `{}` is not generic; remove the type arguments",
+                        ident.name
+                    ),
+                );
+            }
+            let typed_args = self.bind_ctor_call_args(
+                &ctor_params,
+                &args,
+                span,
+                &format!("constructor of `{}`", ident.name),
+            );
+            // `new Foo(args)` lowers to a call of the synthesized constructor
+            // function (codegen emits it; same-package only in SUB-483).
+            return (
+                TypedExprKind::Call {
+                    mangled: ctor_mangled,
+                    args: typed_args,
+                    type_predicate: None,
+                },
+                class_ty,
+            );
+        }
+        let (typed_callee, callee_ty) = self.infer_expr(callee, None);
+        if matches!(callee_ty, Type::Error) {
+            return (TypedExprKind::Null, Type::Error);
+        }
+        let new_name = Ident {
+            name: "new".to_string(),
+            span,
+        };
+        let Some((sig, interface_bindings, iface_mangled, _dispatch)) =
+            self.find_method(&callee_ty, "new")
+        else {
+            // Probe for a constructor by convention: if `<Type>` is
+            // also bound as a top-level value (the prelude registers
+            // `Uint8Array` / `TextEncoder` / etc. this way), point at
+            // it — the LLM probably wanted `new <Type>(...)` rather
+            // than `new <instance>(...)`.
+            let mut help: Vec<String> = Vec::new();
+            if let Some((_, _, iface_name, _)) = callee_ty.interface_routing()
+                && let Some(entry) = self.top_symbols.get(iface_name)
+                && let crate::ValueKind::Const {
+                    ty:
+                        Type::InterfaceRef {
+                            name: ctor_iface, ..
+                        },
+                    ..
+                } = &entry.kind
+                && self
+                    .lookup_named_type(ctor_iface)
+                    .and_then(|s| match &s.kind {
+                        crate::TypeKind::Interface { methods, .. } => Some(methods),
+                        _ => None,
+                    })
+                    .is_some_and(|methods| methods.contains_key("new"))
+            {
+                help.push(format!(
+                    "did you mean `new {iface_name}(...)`? `{iface_name}` (the constructor) declares a `new` method, but `{iface_name}` instances don't.",
+                ));
+            }
+            help.push(self.format_definition(&callee_ty));
+            self.error_with_help(
+                span,
+                format!("`new` expects a constructor; `{callee_ty}` declares no `new` method",),
+                help,
+            );
+            return (TypedExprKind::Null, Type::Error);
+        };
+        // `new foo(args)` lowers to the same MethodCall as
+        // `foo.new(args)` — the dispatch mode (Static vs Direct)
+        // only changes whether the receiver is pushed or dropped at
+        // the call site, and that decision lives in
+        // `emit_method_call`. No reason to gate `new` on Static
+        // dispatch: a Direct `new` method on an instance interface
+        // is just an instance method whose name happens to be `new`,
+        // and the prefix form is a perfectly valid alias for the
+        // dotted form.
+        if interface_bindings.is_empty() && sig.generics.is_empty() {
+            self.infer_method_call(
+                typed_callee,
+                iface_mangled,
+                new_name,
+                sig,
+                type_args,
+                args,
+                span,
+            )
+        } else {
+            self.infer_generic_method_call(
+                typed_callee,
+                iface_mangled,
+                new_name,
+                sig,
+                interface_bindings,
+                type_args,
+                args,
+                expected,
+                span,
+            )
+        }
+    }
+
+    /// Build a statically-dispatched call node. A function from an `@mcp/<server>`
+    /// package (recognized by the package's `mcp_server` flag, looked up via the
+    /// resolved mangled name) becomes a [`TypedExprKind::McpCall`]; everything else
+    /// is a plain [`TypedExprKind::Call`]. Routing every call/import form
+    /// (`ns.tool()`, named-import `tool()`, namespace-symbol calls) through here is
+    /// what keeps MCP recognition syntax-independent — and out of codegen.
+    pub(super) fn static_call_expr(
+        &mut self,
+        target: StaticCallTarget<'_>,
+        args: Vec<ExprId>,
+        type_predicate: Option<Box<crate::TypePredicate>>,
+        ret: &Type,
+        span: Span,
+    ) -> (TypedExprKind, Type) {
+        if let Some(server) = self
+            .packages_by_name
+            .get(target.package)
+            .and_then(|defs| defs.mcp_server.clone())
+        {
+            let mcp_call = TypedExprKind::McpCall {
+                server,
+                tool: target.symbol.to_string(),
+                args: args.clone(),
+            };
+            if matches!(ret.peel(), Type::Unknown) {
+                return (mcp_call, Type::Unknown);
+            }
+
+            return match self.checked_cast_around(mcp_call, ret, span) {
+                Ok(checked) => checked,
+                Err(reason) => {
+                    self.error_with_help(
+                        span,
+                        format!(
+                            "@mcp/{} return type `{ret}` is not runtime-verifiable: {reason}",
+                            target.symbol
+                        ),
+                        vec![
+                            "declare the tool return as `unknown`, or use a return schema whose \
+                             generated type is supported by `as` validation"
+                                .to_string(),
+                        ],
+                    );
+                    (TypedExprKind::Null, Type::Error)
+                }
+            };
+        }
+        (
+            TypedExprKind::Call {
+                mangled: target.mangled,
+                args,
+                type_predicate,
+            },
+            ret.clone(),
+        )
+    }
+
+    /// Rewrite `session.get<T>(key)` into a runtime-checked cast.
+    ///
+    /// `get` is declared generic so callers can name the shape they expect, but
+    /// the ordinary generic lowering would satisfy that `T` with `return_cast`,
+    /// a Wasm representation cast that tests nothing — stored data of the wrong
+    /// shape would arrive statically typed as `T` and never be verified. So the
+    /// call node is pushed typed `unknown` and wrapped in a `Cast` carrying the
+    /// reduced check shape, exactly as an MCP call with a known return type is
+    /// (see [`Self::static_call_expr`]). Codegen then emits the same structural
+    /// test `x as T` gets, and a mismatch throws a catchable `TypeError`.
+    ///
+    /// Call only for a [`crate::stdlib::session::declaration::is_checked_get`]
+    /// mangled name; `call` is the `GenericCall` node the ordinary path would
+    /// have returned. `type_args_written` separates an explicit `get<unknown>`
+    /// from a bare `get(key)`, whose `T` defaulted to `unknown` and keeps its
+    /// pre-generic unchecked-read meaning.
+    pub(super) fn checked_session_get(
+        &mut self,
+        call: TypedExprKind,
+        result_ty: &Type,
+        type_args_written: bool,
+        span: Span,
+    ) -> (TypedExprKind, Type) {
+        // An `unknown` target admits every value, and the cast machinery treats
+        // it as a no-op widen that emits no test at all. As the *default* that
+        // is the honest reading of `get(key)` — an unchecked read. Written out,
+        // it asks for a check that cannot exist, so only that form is an error.
+        if matches!(result_ty.peel(), Type::Unknown) && !type_args_written {
+            return (call, result_ty.clone());
+        }
+        if matches!(result_ty.peel(), Type::Unknown) {
+            self.error_with_help(
+                span,
+                "`session.get<unknown>` would not verify anything: `unknown` admits \
+                 every value, so no runtime check is possible"
+                    .to_string(),
+                vec![
+                    "name the shape you expect — `session.get<Progress>(key)` — or drop \
+                     the type argument and narrow the result yourself with a \
+                     runtime-checked `as`: `session.get(key) as Progress`. Use \
+                     `session.get<Progress | null>(key)` when the key may be absent."
+                        .to_string(),
+                ],
+            );
+            return (TypedExprKind::Null, Type::Error);
+        }
+
+        match self.checked_cast_around(call, result_ty, span) {
+            Ok(checked) => checked,
+            Err(reason) => {
+                self.error_with_help(
+                    span,
+                    format!("`session.get<{result_ty}>` cannot be verified at runtime: {reason}"),
+                    vec![format!(
+                        "`session.get` checks the stored value against its type argument, so \
+                         that argument must be one the runtime can test: an object, array, \
+                         tuple, union, or primitive shape, optionally `| null`. Call it at a \
+                         concrete type instead of `{result_ty}` — `session.get<Progress>(key)` \
+                         — or drop the type argument and narrow the result yourself with a \
+                         runtime-checked `as`."
+                    )],
+                );
+                (TypedExprKind::Null, Type::Error)
+            }
+        }
+    }
+
+    /// Wrap `call` in the runtime-checked cast that verifies its result is
+    /// really a `target_ty`. The call node is pushed typed `unknown` — so
+    /// nothing downstream believes its static type before the check runs — and
+    /// the `Cast` around it carries the interface-reduced shape codegen walks,
+    /// giving the same structural test `x as T` gets.
+    ///
+    /// This is the soundness-critical construction behind every "the host
+    /// handed us data, prove it matches" call — an MCP tool with a declared
+    /// return type and `session.get<T>` — so both go through here rather than
+    /// building the `Cast` themselves. `Err` carries the reason `target_ty`
+    /// cannot be verified; the caller words its own diagnostic around it.
+    fn checked_cast_around(
+        &mut self,
+        call: TypedExprKind,
+        target_ty: &Type,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), &'static str> {
+        let shape = self.reduce_interfaces_to_shapes(target_ty, &mut Vec::new());
+        if let Some(reason) =
+            unsupported_cast_target_reason(&shape, self.resolver(), &mut Vec::new())
+        {
+            return Err(reason);
+        }
+        let value = self.typed_ast.push_expr(TypedExpr {
+            kind: call,
+            span,
+            ty: Type::Unknown,
+        });
+        Ok((
+            TypedExprKind::Cast {
+                value,
+                target_ty: target_ty.clone(),
+                check: Some(Box::new(shape)),
+            },
+            target_ty.clone(),
+        ))
+    }
+
+    /// dispatch a `<ns>.<member>(args)` call where `<ns>` is
+    /// a namespace-imported package. Lifts the member's
+    /// package-export mangled name into a static call (or `McpCall` for
+    /// `@mcp/<server>` packages). Argument binding — arity, optional/
+    /// default fill-in, rest packing, and generic inference — mirrors the
+    /// bare-identifier static-call path (generic calls literally route
+    /// through `infer_generic_call`) so `ns.fn(...)` and the named-import
+    /// `fn(...)` form bind identically (spec §2.4).
+    #[allow(clippy::too_many_arguments)]
+    fn infer_namespace_call(
+        &mut self,
+        package_name: String,
+        sym: ValueSymbol,
+        recv_ident: &Ident,
+        member: &Ident,
+        type_args: Option<Vec<crate::TypeAnnotation>>,
+        args: Vec<ExprId>,
+        expected: Option<&Type>,
+        span: Span,
+    ) -> (TypedExprKind, Type) {
+        let ValueKind::Function {
+            generics,
+            params,
+            ret,
+            type_predicate,
+            ..
+        } = &sym.kind
+        else {
+            self.error(
+                span,
+                format!("`{}.{}` is not callable", recv_ident.name, member.name,),
+            );
+            return (
+                TypedExprKind::Call {
+                    mangled: sym.mangled_name.clone(),
+                    args: Vec::new(),
+                    type_predicate: None,
+                },
+                Type::Error,
+            );
+        };
+        let display = format!("{}.{}", recv_ident.name, member.name);
+        // Generic functions take the same explicit-args + bidirectional +
+        // arg-walk pipeline as bare-identifier generic calls, threaded with
+        // the package-export mangled name.
+        if !generics.is_empty() {
+            let callee_ident = Ident {
+                name: display,
+                span: member.span,
+            };
+            return self.infer_generic_call(
+                callee_ident,
+                generics.clone(),
+                params.clone(),
+                ret.clone(),
+                sym.mangled_name.clone(),
+                type_predicate.clone(),
+                type_args,
+                args,
+                expected,
+                span,
+                super::generic::GenericCallee::Function,
+            );
+        }
+        if let Some(targs) = &type_args {
+            self.error(
+                span,
+                format!(
+                    "type arguments are only valid on generic functions; got {} argument(s)",
+                    targs.len(),
+                ),
+            );
+        }
+        let typed_args = self.bind_param_call_args(
+            params,
+            ret,
+            CallLift::Function { name: &display },
+            &args,
+            span,
+        );
+        let type_predicate = type_predicate.clone().map(Box::new);
+        let target = StaticCallTarget {
+            package: &package_name,
+            symbol: &member.name,
+            mangled: sym.mangled_name.clone(),
+        };
+        self.static_call_expr(target, typed_args, type_predicate, ret, span)
+    }
+
+    /// `ClassName.member(args)` — dispatch a static method as a direct `Call`
+    /// on the defining class's `Class#static#name` key (inheritance is resolved
+    /// here, so `B.f()` calls `A#static#f`), call a function-typed static field
+    /// through `CallClosure`, or diagnose the miss.
+    #[allow(clippy::too_many_arguments)]
+    fn infer_class_static_call(
+        &mut self,
+        class_name: String,
+        class_mangled: crate::MangledName,
+        member: Ident,
+        type_args: Option<Vec<crate::TypeAnnotation>>,
+        args: Vec<ExprId>,
+        expected: Option<&Type>,
+        span: Span,
+    ) -> (TypedExprKind, Type) {
+        use super::classes::StaticResolution;
+        let display = format!("{class_name}.{}", member.name);
+        match self.class_static_in_chain(&class_mangled, &member.name) {
+            Some((StaticResolution::Method(sig, vis), owner)) => {
+                self.check_static_privacy(vis, &owner, &class_name, &member);
+                let mangled = crate::mangle::static_member(&owner, &member.name);
+                if !sig.generics.is_empty() {
+                    let callee_ident = Ident {
+                        name: display,
+                        span: member.span,
+                    };
+                    return self.infer_generic_call(
+                        callee_ident,
+                        sig.generics.clone(),
+                        sig.params.clone(),
+                        sig.ret.clone(),
+                        mangled,
+                        sig.predicate.clone(),
+                        type_args,
+                        args,
+                        expected,
+                        span,
+                        super::generic::GenericCallee::Function,
+                    );
+                }
+                if let Some(targs) = &type_args {
+                    self.error(
+                        span,
+                        format!(
+                            "type arguments are only valid on generic functions; got {} \
+                             argument(s)",
+                            targs.len(),
+                        ),
+                    );
+                }
+                let typed_args = self.bind_param_call_args(
+                    &sig.params,
+                    &sig.ret,
+                    CallLift::Function { name: &display },
+                    &args,
+                    span,
+                );
+                (
+                    TypedExprKind::Call {
+                        mangled,
+                        args: typed_args,
+                        type_predicate: sig.predicate.clone().map(Box::new),
+                    },
+                    sig.ret.clone(),
+                )
+            }
+            Some((StaticResolution::Field(field), owner)) => {
+                self.check_static_privacy(field.visibility, &owner, &class_name, &member);
+                let mangled = crate::mangle::static_member(&owner, &member.name);
+                let Type::Function {
+                    params,
+                    ret,
+                    has_rest,
+                    ..
+                } = field.ty.peel().clone()
+                else {
+                    self.error(span, format!("`{display}` is not callable"));
+                    self.walk_rejected_call_args(&args);
+                    return (TypedExprKind::Null, Type::Error);
+                };
+                let callee = self.typed_ast.push_expr(TypedExpr {
+                    kind: TypedExprKind::GlobalRef {
+                        mangled,
+                        name: member.clone(),
+                    },
+                    span: member.span,
+                    ty: field.ty.clone(),
+                });
+                let typed_args = self.bind_fn_type_call_args(
+                    &params,
+                    &ret,
+                    has_rest,
+                    CallLift::Function { name: &display },
+                    &args,
+                    span,
+                );
+                (
+                    TypedExprKind::CallClosure {
+                        callee,
+                        args: typed_args,
+                    },
+                    (*ret).clone(),
+                )
+            }
+            None => {
+                self.report_missing_static(&class_name, &class_mangled, &member);
+                self.walk_rejected_call_args(&args);
+                (TypedExprKind::Null, Type::Error)
+            }
+        }
+    }
+
+    /// `ClassName.member` in non-call position: a static field reads the backing
+    /// module global; a non-generic static method becomes a `FunctionRef` value.
+    fn infer_class_static_access(
+        &mut self,
+        class_name: String,
+        class_mangled: crate::MangledName,
+        member: Ident,
+        span: Span,
+    ) -> (TypedExprKind, Type) {
+        use super::classes::StaticResolution;
+        match self.class_static_in_chain(&class_mangled, &member.name) {
+            Some((StaticResolution::Method(sig, vis), owner)) => {
+                self.check_static_privacy(vis, &owner, &class_name, &member);
+                if !sig.generics.is_empty() {
+                    self.error(
+                        span,
+                        format!(
+                            "cannot bind generic function `{class_name}.{}` to a value; \
+                             call it directly instead",
+                            member.name,
+                        ),
+                    );
+                    return (TypedExprKind::Null, Type::Error);
+                }
+                let mangled = crate::mangle::static_member(&owner, &member.name);
+                let ty = Type::Function {
+                    params: sig.params.iter().map(|p| p.ty.clone()).collect(),
+                    ret: Box::new(sig.ret.clone()),
+                    predicate: None,
+                    has_rest: sig.params.last().is_some_and(|p| p.rest),
+                };
+                (
+                    TypedExprKind::FunctionRef {
+                        mangled,
+                        name: member,
+                    },
+                    ty,
+                )
+            }
+            Some((StaticResolution::Field(field), owner)) => {
+                self.check_static_privacy(field.visibility, &owner, &class_name, &member);
+                let mangled = crate::mangle::static_member(&owner, &member.name);
+                (
+                    TypedExprKind::GlobalRef {
+                        mangled,
+                        name: member,
+                    },
+                    field.ty,
+                )
+            }
+            None => {
+                self.report_missing_static(&class_name, &class_mangled, &member);
+                (TypedExprKind::Null, Type::Error)
+            }
+        }
+    }
+
+    pub(super) fn check_static_privacy(
+        &mut self,
+        vis: crate::Visibility,
+        owner: &crate::MangledName,
+        class_name: &str,
+        member: &Ident,
+    ) {
+        if vis == crate::Visibility::Private && !self.local_class_mangles.contains(owner) {
+            self.error_with_help(
+                member.span,
+                format!(
+                    "static member `{}` of class `{class_name}` is private",
+                    member.name,
+                ),
+                vec![
+                    "private statics are visible only in the module that declares the class"
+                        .to_string(),
+                ],
+            );
+        }
+    }
+
+    pub(super) fn report_missing_static(
+        &mut self,
+        class_name: &str,
+        class_mangled: &crate::MangledName,
+        member: &Ident,
+    ) {
+        // An unresolvable parent could have declared this static.
+        if self.inherits_unresolved_parent(class_mangled) {
+            return;
+        }
+        if self.class_instance_member_in_chain(class_mangled, &member.name) {
+            self.error_with_help(
+                member.span,
+                format!(
+                    "`{}` is an instance member of `{class_name}`, not a static",
+                    member.name,
+                ),
+                vec![format!(
+                    "access it through an instance: `new {class_name}(…).{}` — or declare \
+                     it `static`",
+                    member.name,
+                )],
+            );
+            return;
+        }
+        let statics = self.class_static_names(class_mangled);
+        let mut help: Vec<String> =
+            did_you_mean::closest_match(&member.name, statics.iter().map(String::as_str))
+                .map(|s| vec![format!("did you mean `{class_name}.{s}`?")])
+                .unwrap_or_default();
+        let package = self.type_package(class_name);
+        help.push(self.format_definition(&Type::class_ref(
+            package,
+            class_name.to_string(),
+            class_mangled.clone(),
+            Vec::new(),
+        )));
+        self.error_with_help(
+            member.span,
+            format!(
+                "class `{class_name}` has no static member `{}`",
+                member.name
+            ),
+            help,
+        );
+    }
+
+    /// Bind call arguments to a resolved (non-generic) parameter list —
+    /// the one place argument binding happens for every non-generic
+    /// callee shape. Emits an arity diagnostic with a signature lift on
+    /// mismatch, infers each arg against its parameter type (which is
+    /// what type-checks it; the rest tail is hinted by the element
+    /// type), synthesizes defaults for omitted optional/defaulted
+    /// trailing params, and packs the rest tail into a single array so
+    /// the returned `Vec<ExprId>` lines up 1:1 with the resolved
+    /// signature.
+    fn bind_param_call_args(
+        &mut self,
+        params: &[crate::Param],
+        ret: &Type,
+        lift: CallLift<'_>,
+        args: &[ExprId],
+        span: Span,
+    ) -> Vec<ExprId> {
+        let has_rest = params.last().is_some_and(|p| p.rest);
+        let fixed_count = params.iter().take_while(|p| !p.rest).count();
+        let max_args = if has_rest { usize::MAX } else { params.len() };
+        let min_args = params
+            .iter()
+            .take_while(|p| !p.rest && p.default.is_none())
+            .count();
+        let arity_ok = args.len() >= min_args && args.len() <= max_args;
+        if !arity_ok {
+            let help = match lift {
+                CallLift::Function { name } => self.format_signature(SignatureKind::Function {
+                    name,
+                    generics: &[],
+                    params,
+                    ret,
+                    doc: None,
+                }),
+                CallLift::Anon => {
+                    let tys: Vec<Type> = params.iter().map(|p| p.ty.clone()).collect();
+                    self.format_signature(SignatureKind::Anon {
+                        params: &tys,
+                        ret,
+                        has_rest: params.last().is_some_and(|p| p.rest),
+                    })
+                }
+                CallLift::Method {
+                    receiver_ty,
+                    name,
+                    sig,
+                } => self.format_signature(SignatureKind::Method {
+                    receiver_ty,
+                    name,
+                    sig,
+                }),
+            };
+            let subject = match lift {
+                CallLift::Function { .. } | CallLift::Anon => "expected".to_string(),
+                CallLift::Method { name, .. } => format!("method `{name}` expects"),
+            };
+            let msg = if has_rest {
+                format!("{subject} {}+ argument(s), got {}", min_args, args.len())
+            } else if min_args == max_args {
+                format!("{subject} {} argument(s), got {}", max_args, args.len())
+            } else {
+                format!(
+                    "{subject} {}-{} argument(s), got {}",
+                    min_args,
+                    max_args,
+                    args.len(),
+                )
+            };
+            self.error_with_help(span, msg, vec![help]);
+        }
+
+        let rest_elem_ty: Option<Type> = if has_rest {
+            params.get(fixed_count).and_then(|p| match &p.ty {
+                Type::Array(elem) => Some((**elem).clone()),
+                _ => None,
+            })
+        } else {
+            None
+        };
+
+        let mut typed_args: Vec<ExprId> = Vec::with_capacity(args.len().max(params.len()));
+        for (i, &arg_id) in args.iter().enumerate() {
+            let hint = if i < fixed_count {
+                params.get(i).map(|p| p.ty.clone())
+            } else {
+                rest_elem_ty.clone()
+            };
+            let (typed_id, _) = self.infer_expr(arg_id, hint.as_ref());
+            typed_args.push(typed_id);
+        }
+
+        if arity_ok {
+            self.fill_omitted_defaults(params, args.len(), span, &mut typed_args);
+        }
+        if arity_ok && let Some(elem_ty) = rest_elem_ty {
+            self.pack_rest_tail(fixed_count, elem_ty, span, &mut typed_args);
+        }
+        typed_args
+    }
+
+    /// [`Self::bind_param_call_args`] for a callee known only by its
+    /// structural [`Type::Function`]. That form carries no parameter names
+    /// and no defaults, so the synthesized list is positional and every
+    /// slot is required; only the trailing `has_rest` flag survives.
+    fn bind_fn_type_call_args(
+        &mut self,
+        param_types: &[Type],
+        ret: &Type,
+        has_rest: bool,
+        lift: CallLift<'_>,
+        args: &[ExprId],
+        span: Span,
+    ) -> Vec<ExprId> {
+        let mut params: Vec<crate::Param> = param_types
+            .iter()
+            .enumerate()
+            .map(|(i, ty)| crate::Param::new(format!("arg{i}"), ty.clone()))
+            .collect();
+        if has_rest && let Some(last) = params.last_mut() {
+            last.rest = true;
+        }
+        self.bind_param_call_args(&params, ret, lift, args, span)
+    }
+
+    /// `BigInt.<member>(args)` resolution. Today only
+    /// `fromString` is supported; everything else surfaces a focused
+    /// "supported forms" help block.
+    fn infer_bigint_namespace_call(
+        &mut self,
+        name: &crate::Ident,
+        args: Vec<ExprId>,
+        span: Span,
+    ) -> (TypedExprKind, Type) {
+        match name.name.as_str() {
+            "fromString" => {
+                if args.len() != 1 {
+                    self.error(
+                        span,
+                        format!(
+                            "`BigInt.fromString(s)` takes 1 argument, got {}",
+                            args.len(),
+                        ),
+                    );
+                }
+                let typed_args: Vec<ExprId> = args
+                    .iter()
+                    .map(|&id| self.infer_expr(id, Some(&Type::String)).0)
+                    .collect();
+                let arg_ty = typed_args
+                    .first()
+                    .map_or(Type::Error, |&id| self.typed_ast.expr(id).ty.clone());
+                if !matches!(
+                    arg_ty.peel(),
+                    Type::String | Type::StringLiteral(_) | Type::Error
+                ) {
+                    self.error(
+                        span,
+                        format!("`BigInt.fromString(s)`: expected `string`, got `{arg_ty}`",),
+                    );
+                }
+                (
+                    TypedExprKind::IntrinsicCall {
+                        kind: Intrinsic::BigIntFromString,
+                        args: typed_args,
+                    },
+                    Type::BigInt,
+                )
+            }
+            other => {
+                self.error_with_help(
+                    name.span,
+                    format!("`BigInt` has no method `{other}`"),
+                    vec![
+                        "the supported forms are `BigInt(n)` (number → bigint) \
+                         and `BigInt.fromString(s)` (decimal string → bigint)"
+                            .to_string(),
+                    ],
+                );
+                for &arg in &args {
+                    let _ = self.infer_expr(arg, None);
+                }
+                (
+                    TypedExprKind::IntrinsicCall {
+                        kind: Intrinsic::BigIntFromString,
+                        args: Vec::new(),
+                    },
+                    Type::Error,
+                )
+            }
+        }
+    }
+
+    /// `JSON.<member>(args)` resolution. Today: `stringify`
+    /// and `parse` Any other member errors out. Receives
+    /// both the call's `type_args` (used only by `parse` — Form 3 /
+    /// the Form-2 `as T` shortcut both surface as a
+    /// single-element type argument list) and the `expected` hint
+    /// (Form 1 / annotation-driven).
+    fn infer_json_namespace_call(
+        &mut self,
+        name: &crate::Ident,
+        args: Vec<ExprId>,
+        type_args: Option<Vec<crate::TypeAnnotation>>,
+        expected: Option<&Type>,
+        span: Span,
+    ) -> (TypedExprKind, Type) {
+        match name.name.as_str() {
+            "stringify" => self.infer_json_stringify_call(args, type_args, span),
+            "parse" => self.infer_json_parse_call(args, type_args, expected, span),
+            _ => {
+                self.error_with_help(
+                    name.span,
+                    format!("`JSON` has no method `{}`", name.name),
+                    vec![
+                        "the supported forms are `JSON.stringify(x)` and \
+                         `JSON.parse(s)`"
+                            .to_string(),
+                    ],
+                );
+                // Best-effort recovery: still typecheck args so
+                // unrelated errors in them surface.
+                for &arg in &args {
+                    let _ = self.infer_expr(arg, None);
+                }
+                (
+                    TypedExprKind::IntrinsicCall {
+                        kind: Intrinsic::JsonStringify,
+                        args: Vec::new(),
+                    },
+                    Type::Error,
+                )
+            }
+        }
+    }
+
+    /// `JSON.stringify(x, null?, space?)`. Arg can be any non-`void` type;
+    /// type arguments are rejected (stringify is non-generic at the
+    /// source level — the value's static type already drives codegen
+    /// dispatch).
+    fn infer_json_stringify_call(
+        &mut self,
+        args: Vec<ExprId>,
+        type_args: Option<Vec<crate::TypeAnnotation>>,
+        span: Span,
+    ) -> (TypedExprKind, Type) {
+        if let Some(targs) = &type_args {
+            // Span over the whole call — we don't keep the `<...>`
+            // span separately on `Call`, but anchoring on the call
+            // span surfaces the diagnostic at the right line.
+            let _ = targs;
+            self.error_with_help(
+                span,
+                "`JSON.stringify` does not take type arguments".to_string(),
+                vec![
+                    "remove the `<...>` — the value's static type \
+                     already drives dispatch"
+                        .to_string(),
+                ],
+            );
+            // Continue typechecking as if the type args weren't
+            // there so unrelated errors still surface.
+        }
+        if args.is_empty() || args.len() > 3 {
+            let help = self.format_signature(SignatureKind::Intrinsic {
+                kind: Intrinsic::JsonStringify,
+            });
+            self.error_with_help(
+                span,
+                format!(
+                    "`JSON.stringify(...)` takes 1 to 3 arguments, got {}",
+                    args.len()
+                ),
+                vec![help],
+            );
+            for &arg in &args {
+                let _ = self.infer_expr(arg, None);
+            }
+            return (
+                TypedExprKind::IntrinsicCall {
+                    kind: Intrinsic::JsonStringify,
+                    args: Vec::new(),
+                },
+                Type::String,
+            );
+        }
+        let (typed_arg, arg_ty) = self.infer_expr(args[0], None);
+        let mut typed_args = vec![typed_arg];
+
+        if let Some(&replacer) = args.get(1) {
+            let (typed_replacer, replacer_ty) = self.infer_expr(replacer, Some(&Type::Null));
+            if !matches!(replacer_ty.peel(), Type::Null | Type::Error) {
+                self.error_with_help(
+                    self.ast.expr(replacer).span,
+                    "`JSON.stringify` only accepts `null` as its replacer argument".to_string(),
+                    vec![
+                        "use `JSON.stringify(value, null, space)`; replacer functions are not supported"
+                            .to_string(),
+                    ],
+                );
+            }
+            typed_args.push(typed_replacer);
+        }
+
+        if let Some(&space) = args.get(2) {
+            let (typed_space, space_ty) = self.infer_expr(space, None);
+            if !matches!(
+                space_ty.peel(),
+                Type::Number
+                    | Type::NumberLiteral(_)
+                    | Type::String
+                    | Type::StringLiteral(_)
+                    | Type::Null
+                    | Type::Error
+            ) {
+                self.error_with_help(
+                    self.ast.expr(space).span,
+                    "`JSON.stringify` space argument must be `number`, `string`, or `null`"
+                        .to_string(),
+                    vec![
+                        "use a number of spaces or an indent string, for example `JSON.stringify(value, null, 2)`"
+                            .to_string(),
+                    ],
+                );
+            }
+            typed_args.push(typed_space);
+        }
+
+        // `void` is the only rejected arg type — a `void`-typed
+        // expression has no value to serialize. `carries_void` rather than
+        // `is_void`: `f() ?? 1` has no more of a value than bare `f()` does.
+        if arg_ty.carries_void() {
+            self.error(
+                self.ast.expr(args[0]).span,
+                "`JSON.stringify(x)` requires a non-`void` argument".to_string(),
+            );
+        }
+        (
+            TypedExprKind::IntrinsicCall {
+                kind: Intrinsic::JsonStringify,
+                args: typed_args,
+            },
+            Type::String,
+        )
+    }
+
+    /// `JSON.parse(s)` parses JSON into `unknown`. Use `JSON.parse(s) as T`
+    /// for runtime validation against a concrete target type.
+    fn infer_json_parse_call(
+        &mut self,
+        args: Vec<ExprId>,
+        type_args: Option<Vec<crate::TypeAnnotation>>,
+        _expected: Option<&Type>,
+        span: Span,
+    ) -> (TypedExprKind, Type) {
+        // Arity first — we want the same arity diagnostic regardless of
+        // whether the target resolves.
+        if args.len() != 1 {
+            let help = self.format_signature(SignatureKind::Intrinsic {
+                kind: Intrinsic::JsonParse,
+            });
+            self.error_with_help(
+                span,
+                format!("`JSON.parse(...)` takes 1 argument, got {}", args.len()),
+                vec![help],
+            );
+            for &arg in &args {
+                let _ = self.infer_expr(arg, None);
+            }
+            return (
+                TypedExprKind::IntrinsicCall {
+                    kind: Intrinsic::JsonParse,
+                    args: Vec::new(),
+                },
+                Type::Error,
+            );
+        }
+
+        // Arg must be a `string`. Pass `Some(&Type::String)` as the
+        // hint so string-literal arguments widen correctly, then
+        // verify the resolved type is actually a string.
+        let (typed_arg, arg_ty) = self.infer_expr(args[0], Some(&Type::String));
+        if !matches!(
+            arg_ty.peel(),
+            Type::String | Type::StringLiteral(_) | Type::Error
+        ) {
+            self.error_with_help(
+                self.ast.expr(args[0]).span,
+                format!("`JSON.parse(s)` expects a `string` argument, got `{arg_ty}`",),
+                vec![
+                    "wrap the value with `String(x)` if you have a non-\
+                     string source"
+                        .to_string(),
+                ],
+            );
+        }
+
+        if let Some(targs) = &type_args {
+            self.error_with_help(
+                span,
+                format!(
+                    "`JSON.parse` does not take type arguments, got {}",
+                    targs.len()
+                ),
+                vec!["parse first, then validate with `as`: `JSON.parse(s) as User`".to_string()],
+            );
+        }
+
+        (
+            TypedExprKind::IntrinsicCall {
+                kind: Intrinsic::JsonParse,
+                args: vec![typed_arg],
+            },
+            Type::Unknown,
+        )
+    }
+
+    fn infer_response_json_call(
+        &mut self,
+        typed_receiver: ExprId,
+        recv_ty: &Type,
+        type_args: Option<Vec<crate::TypeAnnotation>>,
+        args: Vec<ExprId>,
+        _expected: Option<&Type>,
+        span: Span,
+    ) -> (TypedExprKind, Type) {
+        // `r.json()` takes no value arguments — the body is the implicit source.
+        if !args.is_empty() {
+            self.error_with_help(
+                span,
+                format!("`r.json()` takes no value arguments, got {}", args.len()),
+                vec![
+                    "the response body is parsed automatically; validate the \
+                     result with `as`, for example `r.json() as User`"
+                        .to_string(),
+                ],
+            );
+            for &arg in &args {
+                let _ = self.infer_expr(arg, None);
+            }
+        }
+        if let Some(targs) = &type_args {
+            self.error_with_help(
+                span,
+                format!("`r.json` does not take type arguments, got {}", targs.len()),
+                vec!["parse first, then validate with `as`: `r.json() as User`".to_string()],
+            );
+        }
+
+        // Synthesize the `r.body` argument — a `string` property on `Response`.
+        let Some((body_prop, _bindings, iface_mangled, _dispatch)) =
+            self.find_property(recv_ty, "body")
+        else {
+            // `Response` always declares `body`; unreachable in practice.
+            return (
+                TypedExprKind::IntrinsicCall {
+                    kind: Intrinsic::JsonParse,
+                    args: Vec::new(),
+                },
+                Type::Error,
+            );
+        };
+        let body = self.typed_ast.push_expr(TypedExpr {
+            kind: TypedExprKind::InterfacePropertyAccess {
+                receiver: typed_receiver,
+                iface: iface_mangled,
+                name: Ident {
+                    name: "body".to_string(),
+                    span,
+                },
+            },
+            span,
+            ty: body_prop.ty,
+        });
+
+        (
+            TypedExprKind::IntrinsicCall {
+                kind: Intrinsic::JsonParse,
+                args: vec![body],
+            },
+            Type::Unknown,
+        )
+    }
+
+    /// Walk a `JSON.parse` target type and reject forbidden shapes.
+    /// Infer an intrinsic call. The intrinsic's signature is fixed
+    /// (see [`Intrinsic::params`] / [`Intrinsic::ret`]); we typecheck
+    /// args against that signature with the same hint plumbing as a
+    /// regular call.
+    fn infer_intrinsic_call(
+        &mut self,
+        intrinsic: Intrinsic,
+        args: Vec<ExprId>,
+        span: Span,
+    ) -> (TypedExprKind, Type) {
+        let params = intrinsic.params();
+        let omitted_have_defaults =
+            args.len() < params.len() && params[args.len()..].iter().all(|p| p.default.is_some());
+        if args.len() != params.len() && !omitted_have_defaults {
+            let help = self.format_signature(SignatureKind::Intrinsic { kind: intrinsic });
+            self.error_with_help(
+                span,
+                format!("expected {} argument(s), got {}", params.len(), args.len()),
+                vec![help],
+            );
+        }
+        let mut typed_args = Vec::with_capacity(params.len());
+        for (i, &arg_id) in args.iter().enumerate() {
+            let hint = params.get(i).map(|p| &p.ty);
+            let (typed_id, _) = self.infer_expr(arg_id, hint);
+            typed_args.push(typed_id);
+        }
+        if omitted_have_defaults {
+            self.fill_omitted_defaults(&params, args.len(), span, &mut typed_args);
+        }
+        (
+            TypedExprKind::IntrinsicCall {
+                kind: intrinsic,
+                args: typed_args,
+            },
+            intrinsic.ret(),
+        )
+    }
+
+    /// lower a `` `parts[0]${exprs[0]}parts[1]${exprs[1]}…parts[N]` ``
+    /// template literal to a `+`-concatenated chain of string literals
+    /// and `<expr>.toString()` method calls. Mirrors the precedent set
+    /// by the `String(x)` coercion call — interpolation
+    /// slots already typed `string` pass through unchanged, others are
+    /// wrapped in a synthesised `MethodCall { name: "toString" }` whose
+    /// `iface` is resolved via [`Self::find_method`].
+    ///
+    /// Empty string parts are elided so `` `${x}` `` lowers to plain
+    /// `x.toString()` rather than `"" + x.toString() + ""`. The result
+    /// always has type `string` (or `Type::Error` if any interpolation
+    /// failed to lower).
+    fn lower_template_literal(
+        &mut self,
+        parts: Vec<String>,
+        exprs: Vec<ExprId>,
+        span: Span,
+    ) -> (TypedExprKind, Type) {
+        debug_assert_eq!(parts.len(), exprs.len() + 1);
+
+        // Type each interpolation and (when needed) wrap in toString.
+        // We track any propagated `Type::Error` separately so the
+        // whole template's type degrades cleanly without poisoning the
+        // surrounding inference.
+        let mut had_error = false;
+        let typed_interps: Vec<ExprId> = exprs
+            .into_iter()
+            .map(|expr_id| {
+                let (typed_id, ty) = self.infer_expr(expr_id, None);
+                if matches!(ty, Type::Error) {
+                    had_error = true;
+                }
+                let interp_span = self.typed_ast.expr(typed_id).span;
+                self.wrap_interpolation_in_to_string(typed_id, &ty, interp_span)
+            })
+            .collect();
+
+        // Assemble the operand list: alternating non-empty string
+        // parts and the typed interpolations. Empty parts are elided.
+        let mut operands: Vec<ExprId> = Vec::with_capacity(parts.len() + typed_interps.len());
+        for (i, part) in parts.iter().enumerate() {
+            if !part.is_empty() {
+                let lit_id = self.typed_ast.push_expr(TypedExpr {
+                    kind: TypedExprKind::String(part.clone()),
+                    span,
+                    ty: Type::String,
+                });
+                operands.push(lit_id);
+            }
+            if i < typed_interps.len() {
+                operands.push(typed_interps[i]);
+            }
+        }
+
+        let result_ty = if had_error { Type::Error } else { Type::String };
+
+        // Single-operand case (e.g. `` `${x}` ``): the lone
+        // interpolation *is* the result. Return its kind+type so the
+        // outer `infer_expr` push re-uses the existing node's span /
+        // ty rather than synthesising an extra wrapper.
+        if operands.len() == 1 {
+            let single = self.typed_ast.expr(operands[0]).clone();
+            return (single.kind, single.ty);
+        }
+
+        // Defensive: the parser guarantees `exprs.len() >= 1` (the
+        // no-substitution case lowers to a plain string in the
+        // parser), so the only path here with `operands.is_empty()`
+        // is `` `${x}` `` with `x: Error` and head/tail both empty —
+        // even then the toString wrap pushes a placeholder. Treat as
+        // an empty string just in case.
+        if operands.is_empty() {
+            return (TypedExprKind::String(String::new()), Type::String);
+        }
+
+        // Left-fold the operands into a Binary(Add) chain. Push every
+        // intermediate node into the typed arena except the final
+        // outermost Binary — return its kind so the caller's push
+        // wraps it once at the top.
+        let mut acc = operands[0];
+        let last_idx = operands.len() - 1;
+        for &next in &operands[1..last_idx] {
+            acc = self.typed_ast.push_expr(TypedExpr {
+                kind: TypedExprKind::Binary {
+                    op: BinOp::Add,
+                    lhs: acc,
+                    rhs: next,
+                },
+                span,
+                ty: result_ty.clone(),
+            });
+        }
+        (
+            TypedExprKind::Binary {
+                op: BinOp::Add,
+                lhs: acc,
+                rhs: operands[last_idx],
+            },
+            result_ty,
+        )
+    }
+
+    /// Wrap an already-typed interpolation expression in a
+    /// `MethodCall { name: "toString" }` unless its type is already
+    /// `Type::String`. Uses the exact valid-types allowlist /
+    /// diagnostic shape as the `String(x)` coercion call, so `String(x)` and
+    /// `${x}` route through the same dispatch path at codegen time.
+    ///
+    /// The allowlist is shared with the nullable-narrowing hint below: the hint may
+    /// only claim narrowing is the fix when the non-null form is a receiver this
+    /// accepts, or it advises a guard that leaves the same error behind.
+    fn wrap_interpolation_in_to_string(
+        &mut self,
+        expr_id: ExprId,
+        ty: &Type,
+        span: Span,
+    ) -> ExprId {
+        let peeled = ty.peel();
+        if matches!(peeled, Type::String | Type::StringLiteral(_)) {
+            return expr_id;
+        }
+        let method_name = crate::Ident {
+            name: "toString".to_string(),
+            span,
+        };
+        if !has_to_string(peeled) {
+            let nullable = matches!(peeled, Type::Null)
+                || matches!(
+                    peeled,
+                    Type::Union(members)
+                        if members.iter().any(|m| matches!(m.peel(), Type::Null))
+                );
+            if nullable {
+                let help = self.nullable_string_fix_help(
+                    span,
+                    super::diagnostics::NullableStringContext::Interpolation,
+                );
+                // "narrow first" is the standing advice here, so a reader who
+                // already wrote the guard needs to be told why it didn't reach —
+                // otherwise the help tells them to do what they just did.
+                // `null` is the whole problem here — the non-null form always has a
+                // `toString`, or the outer allowlist would have rejected it too.
+                let culprit = self.nullable_culprit(&[(expr_id, ty)], |t| has_to_string(t.peel()));
+                self.error_with_narrowing_hint(
+                    span,
+                    format!(
+                        "template-literal interpolation: receiver `{ty}` \
+                         may be `null`; narrow to a non-null type first"
+                    ),
+                    help,
+                    culprit,
+                );
+            } else {
+                self.error(
+                    span,
+                    format!(
+                        "template-literal interpolation: `.toString()` \
+                         not supported on `{ty}`"
+                    ),
+                );
+            }
+            return self.typed_ast.push_expr(TypedExpr {
+                kind: TypedExprKind::MethodCall {
+                    receiver: expr_id,
+                    iface: crate::mangle::prelude("Null"),
+                    name: method_name,
+                    args: Vec::new(),
+                    type_predicate: None,
+                },
+                span,
+                ty: Type::Error,
+            });
+        }
+        let resolved = self.find_method(ty, "toString");
+        let iface_mangled = resolved.as_ref().map_or_else(
+            || crate::mangle::prelude("Object"),
+            |(_, _, iface, _)| iface.clone(),
+        );
+        // Fill defaulted params (Number/BigInt `toString(radix = 10)`) the
+        // same way a spelled-out call site would — the import is arity-N.
+        let args = resolved.map_or_else(Vec::new, |(sig, _, _, _)| {
+            sig.params
+                .iter()
+                .filter_map(|p| p.default.as_ref().map(|d| (d.clone(), p.ty.clone())))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|(default, param_ty)| self.synthesize_default_arg(&default, &param_ty, span))
+                .collect()
+        });
+        self.typed_ast.push_expr(TypedExpr {
+            kind: TypedExprKind::MethodCall {
+                receiver: expr_id,
+                iface: iface_mangled,
+                name: method_name,
+                args,
+                type_predicate: None,
+            },
+            span,
+            ty: if matches!(ty, Type::Error) {
+                Type::Error
+            } else {
+                Type::String
+            },
+        })
+    }
+
+    /// Pick the union variant an object literal is constructing, so its
+    /// fields get per-variant hints instead of being inferred hint-free —
+    /// which widens literal-typed fields (`kind: "circle"` → `string`) so the
+    /// literal matches no variant.
+    ///
+    /// Field values aren't inferred yet, so the discriminant tag is read
+    /// straight from the AST and matched against the union's discriminant
+    /// table; failing that, the unique variant whose fields the literal
+    /// exactly satisfies wins. `None` (defer to the caller's single-shape
+    /// scan) for spreads, ambiguity, or no match.
+    fn select_union_variant<'a>(
+        &self,
+        members: &'a [Type],
+        literal: &[crate::ObjectLiteralMember],
+    ) -> Option<&'a Type> {
+        if literal
+            .iter()
+            .any(|m| matches!(m, crate::ObjectLiteralMember::Spread { .. }))
+        {
+            return None;
+        }
+
+        if let Some((key, table)) = self.union_discriminant_with_nominals(members) {
+            let tag_value = literal.iter().find_map(|m| match m {
+                crate::ObjectLiteralMember::Field(f) if f.name.name == key => {
+                    match &self.ast.expr(f.value).kind {
+                        crate::ExprKind::String(s) => {
+                            Some(narrowing::LiteralValue::String(s.clone()))
+                        }
+                        crate::ExprKind::Number(n) => {
+                            // Mirror the number-literal inference's -0.0 → 0.0.
+                            let canonical = if *n == 0.0 { 0.0 } else { *n };
+                            Some(narrowing::LiteralValue::Number(crate::types::LiteralF64(
+                                canonical,
+                            )))
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            });
+            if let Some(value) = tag_value
+                && let Some(idx) = table.get(&value)
+            {
+                return members.get(idx.0 as usize);
+            }
+        }
+
+        let lit_names: std::collections::BTreeSet<&str> = literal
+            .iter()
+            .filter_map(|m| match m {
+                crate::ObjectLiteralMember::Field(f) => Some(f.name.name.as_str()),
+                crate::ObjectLiteralMember::Spread { .. } => None,
+            })
+            .collect();
+
+        let mut selected: Option<&Type> = None;
+        for member in members {
+            let matched = match member.peel() {
+                Type::Object { fields } => variant_matches(fields, &lit_names),
+                Type::InterfaceRef {
+                    mangled,
+                    name,
+                    args,
+                    ..
+                } => self
+                    .structural_form(mangled, name, args)
+                    .is_some_and(|fields| variant_matches(&fields, &lit_names)),
+                _ => false,
+            };
+            if matched {
+                if selected.is_some() {
+                    return None;
+                }
+                selected = Some(member);
+            }
+        }
+        selected
+    }
+
+    fn infer_object_literal(
+        &mut self,
+        members: Vec<crate::ObjectLiteralMember>,
+        expected: Option<&Type>,
+        span: Span,
+    ) -> (TypedExprKind, Type) {
+        // Pull `expected` apart at the *Object* shape if it has one,
+        // so each field gets a hint matching its declared type.
+        // peel the hint so a `type Point = { x: number }`
+        // expected propagates field hints just like the inline form.
+        //
+        // when `expected` peels to an `InterfaceRef`, lower
+        // the interface declaration into a structural Object shape
+        // (methods as function-typed fields + properties as their
+        // declared type, with interface-level generics substituted
+        // from the receiver args) and use that as the hint source.
+        // The literal then returns the `InterfaceRef` type, so the
+        // outer assignability check passes trivially. The per-field
+        // type check we'd lose by skipping the outer Object→Object
+        // arm is re-emitted explicitly here.
+        let peeled = expected.map(crate::types::Type::peel);
+        // when the expected type is `T | null` (or some
+        // wider union with exactly one non-null variant that's an
+        // Object or InterfaceRef), peel the union too. This lets an
+        // object literal flow into a nullable-options-bag param
+        // (`http.download(url, path, { overwrite: true })` against
+        // `options: DownloadOptions | null`) the same way it flows
+        // into a non-nullable interface param.
+        let peeled = match peeled {
+            Some(Type::Union(union_members)) => {
+                if let Some(variant) = self.select_union_variant(union_members, &members) {
+                    Some(variant.peel())
+                } else {
+                    let mut shape_match: Option<&Type> = None;
+                    for m in union_members {
+                        let mp = m.peel();
+                        if matches!(mp, Type::Null) {
+                            continue;
+                        }
+                        if matches!(mp, Type::InterfaceRef { .. } | Type::Object { .. }) {
+                            if shape_match.is_some() {
+                                // More than one shape-bearing variant —
+                                // ambiguous, fall back to the no-hint path.
+                                shape_match = None;
+                                break;
+                            }
+                            shape_match = Some(mp);
+                        }
+                    }
+                    shape_match.or(peeled)
+                }
+            }
+            other => other,
+        };
+        let interface_target: Option<(crate::Package, String, crate::MangledName, Vec<Type>)> =
+            match peeled {
+                Some(Type::InterfaceRef {
+                    mangled,
+                    package,
+                    name,
+                    args,
+                }) => Some((package.clone(), name.clone(), mangled.clone(), args.clone())),
+                _ => None,
+            };
+        let expected_fields: Option<std::collections::BTreeMap<String, crate::ObjectField>> =
+            match (peeled, &interface_target) {
+                (Some(Type::Object { fields }), _) => Some(fields.clone()),
+                (_, Some((_iface_package, iface_name, iface_mangled, iface_args))) => {
+                    self.structural_form(iface_mangled, iface_name, iface_args)
+                }
+                _ => None,
+            };
+        if let Some(want) = expected_fields.as_ref()
+            && !want.is_empty()
+        {
+            for member in &members {
+                if let crate::ObjectLiteralMember::Field(field) = member
+                    && !want.contains_key(&field.name.name)
+                {
+                    self.error_with_help(
+                        field.name.span,
+                        format!(
+                            "object literal has unknown field `{}` for the target type",
+                            field.name.name,
+                        ),
+                        vec![
+                            valid_fields_help(want),
+                            excess_field_fix_help(&field.name.name, want),
+                        ],
+                    );
+                }
+            }
+        }
+
+        // walk members in source order, applying last-writer-wins
+        // for both literal-position fields and spread sources. `merged`
+        // tracks the resolved field shape + origin per output field. A
+        // spread source is registered once in `spread_sources` and reused
+        // by every `Spread` origin that reads from it.
+        let mut spread_sources: Vec<ExprId> = Vec::new();
+        let mut merged: std::collections::BTreeMap<
+            String,
+            (crate::ObjectField, crate::TypedObjectFieldSource),
+        > = std::collections::BTreeMap::new();
+
+        for member in members {
+            match member {
+                crate::ObjectLiteralMember::Field(field) => {
+                    if is_reserved_object_field(&field.name.name) {
+                        self.error(field.name.span, reserved_field_message(&field.name.name));
+                        // Continue inferring the value so cascading
+                        // errors surface; drop the field from `merged`
+                        // below to keep the typed shape consistent.
+                    }
+                    // a field whose name matches an
+                    // override slot (`toString`) prefers its own
+                    // required signature as the inference hint — so
+                    // an arrow-literal value infers against
+                    // `() => string`. If the surrounding hint also
+                    // names the field, the override signature still
+                    // wins (the override is invariant, the surrounding
+                    // hint can only restate it).
+                    let override_sig = override_field_signature(&field.name.name);
+                    let hint: Option<Type> = override_sig.clone().or_else(|| {
+                        expected_fields
+                            .as_ref()
+                            .and_then(|m| m.get(&field.name.name))
+                            .map(|f| f.ty.clone())
+                    });
+                    let errors_before = self.error_count();
+                    let (typed_value, value_ty) = self.infer_expr(field.value, hint.as_ref());
+                    let value_span = self.ast.expr(field.value).span;
+                    // A hinted slot already reported the mismatch against its
+                    // hint; screening again gives one mistake two errors.
+                    let already_errored = self.error_count() > errors_before;
+                    if !already_errored
+                        && self.reject_void_value(&value_ty, value_span, ValuePosition::FieldValue)
+                    {
+                        // Record the field at `Error` rather than dropping it —
+                        // a missing field cascades into every later use of the
+                        // object's shape — and skip the per-field checks below,
+                        // which would refuse the same `void` a second time.
+                        if !is_reserved_object_field(&field.name.name) {
+                            merged.insert(
+                                field.name.name.clone(),
+                                (
+                                    crate::ObjectField::required(Type::Error),
+                                    crate::TypedObjectFieldSource::Literal(typed_value),
+                                ),
+                            );
+                        }
+                        continue;
+                    }
+                    // when the surrounding hint is an
+                    // InterfaceRef, the outer assignability check
+                    // returns the interface trivially below — do
+                    // the per-field check inline.
+                    if interface_target.is_some()
+                        && let Some(expected_field) = expected_fields
+                            .as_ref()
+                            .and_then(|m| m.get(&field.name.name))
+                        && !assignable(&value_ty, &expected_field.ty, self.resolver())
+                    {
+                        self.error(
+                            self.ast.expr(field.value).span,
+                            format!(
+                                "field `{}`: expected `{}`, got `{}`",
+                                field.name.name, expected_field.ty, value_ty,
+                            ),
+                        );
+                    }
+                    // validate override-field signature.
+                    // `toString` must be `() => string`; anything else
+                    // is rejected with a clear "must have type" error.
+                    let override_ok = if let Some(expected) = &override_sig {
+                        if assignable(&value_ty, expected, self.resolver()) {
+                            true
+                        } else {
+                            self.error(
+                                field.name.span,
+                                format!(
+                                    "field `{}` must have type `{}` (got `{}`)",
+                                    field.name.name, expected, value_ty,
+                                ),
+                            );
+                            false
+                        }
+                    } else {
+                        true
+                    };
+                    if !is_reserved_object_field(&field.name.name) && override_ok {
+                        // when the value is a function /
+                        // closure literal, the field's *static* type
+                        // is the override signature — not whatever
+                        // narrower literal-return shape the inferer
+                        // produced. Keeping the override shape makes
+                        // the codegen field-slot lookup deterministic.
+                        let field_ty = override_sig.unwrap_or(value_ty);
+                        merged.insert(
+                            field.name.name.clone(),
+                            (
+                                crate::ObjectField::required(field_ty),
+                                crate::TypedObjectFieldSource::Literal(typed_value),
+                            ),
+                        );
+                    }
+                }
+                crate::ObjectLiteralMember::Spread {
+                    value,
+                    span: spread_span,
+                } => {
+                    let (typed_source, source_ty) = self.infer_expr(value, None);
+                    // peel through aliases. Only structural
+                    // `Type::Object` sources are accepted in v1 —
+                    // `InterfaceRef` (nominal interfaces) and every
+                    // other type get rejected with a typed diagnostic.
+                    let peeled_source = source_ty.peel().clone();
+                    match peeled_source {
+                        Type::Object {
+                            fields: source_fields,
+                        } => {
+                            let source_index = spread_sources.len();
+                            spread_sources.push(typed_source);
+                            let source_ty_for_origin = Type::Object {
+                                fields: source_fields.clone(),
+                            };
+                            for (name, field) in source_fields {
+                                merged.insert(
+                                    name.clone(),
+                                    (
+                                        field,
+                                        crate::TypedObjectFieldSource::Spread {
+                                            source_index,
+                                            field_name: name,
+                                            source_ty: source_ty_for_origin.clone(),
+                                        },
+                                    ),
+                                );
+                            }
+                        }
+                        Type::InterfaceRef { name, .. } => {
+                            self.error(
+                                spread_span,
+                                format!(
+                                    "cannot spread interface `{name}` into an object literal — only structural object types are accepted",
+                                ),
+                            );
+                        }
+                        Type::Error => {
+                            // Inner inference already produced a
+                            // diagnostic; don't pile a second one on.
+                        }
+                        other => {
+                            self.error(
+                                spread_span,
+                                format!("cannot spread `{other}` into an object literal",),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // If we had an expected shape, surface missing required fields.
+        // Fresh object literal excess fields were reported above; values that
+        // flow through a binding still use ordinary structural width subtyping.
+        //
+        // missing optional fields are accepted; codegen fills
+        // the slot with `ref.null` at construction.
+        if let Some(want) = expected_fields.as_ref() {
+            let missing: Vec<&String> = want
+                .iter()
+                .filter(|(name, field)| !field.optional && !merged.contains_key(*name))
+                .map(|(name, _)| name)
+                .collect();
+            if !missing.is_empty() {
+                let list = missing
+                    .iter()
+                    .map(|n| format!("`{n}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let noun = if missing.len() == 1 {
+                    "field"
+                } else {
+                    "fields"
+                };
+                match &interface_target {
+                    Some((package, name, mangled, args)) => {
+                        let ty = Type::interface_ref(
+                            package.clone(),
+                            name.clone(),
+                            mangled.clone(),
+                            args.clone(),
+                        );
+                        self.error_with_help(
+                            span,
+                            format!(
+                                "object literal is missing required {noun} {list} of type `{name}`"
+                            ),
+                            vec![self.format_definition(&ty)],
+                        );
+                    }
+                    None => self.error(
+                        span,
+                        format!("object literal is missing required {noun} {list}"),
+                    ),
+                }
+            }
+        }
+
+        // when an expected shape declares optional fields,
+        // splice them into the literal's resulting type. The runtime
+        // arity and payload slot indices follow
+        // `expr.ty`, so the type must include every declared optional
+        // field that codegen will null-fill into the constructed struct.
+        if let Some(want) = expected_fields.as_ref() {
+            for (name, want_field) in want {
+                if let Some((existing_field, _)) = merged.get_mut(name) {
+                    existing_field.optional = want_field.optional;
+                } else if want_field.optional {
+                    // Optional field declared but not provided —
+                    // codegen will fill it with `ref.null`. We don't
+                    // have a source for the value, so synthesize a
+                    // `Literal` origin pointing at a fresh `Null`
+                    // typed expression. The lowering produces a
+                    // `ref.null $Object` in codegen (
+                    // null-fill rule), matching the original
+                    // behavior of the non-spread path.
+                    let null_id = self.typed_ast.push_expr(TypedExpr {
+                        kind: TypedExprKind::Null,
+                        span,
+                        ty: Type::Null,
+                    });
+                    merged.insert(
+                        name.clone(),
+                        (
+                            want_field.clone(),
+                            crate::TypedObjectFieldSource::Literal(null_id),
+                        ),
+                    );
+                }
+            }
+        }
+
+        // Build the output: BTreeMap iteration order is canonical, so
+        // both the result `Type::Object` and the parallel
+        // `TypedObjectFieldOrigin` list end up in the same order.
+        let mut field_origins: Vec<crate::TypedObjectFieldOrigin> =
+            Vec::with_capacity(merged.len());
+        let mut resolved: std::collections::BTreeMap<String, crate::ObjectField> =
+            std::collections::BTreeMap::new();
+        for (name, (field, source)) in merged {
+            field_origins.push(crate::TypedObjectFieldOrigin {
+                name: Ident {
+                    name: name.clone(),
+                    span,
+                },
+                source,
+                optional: field.optional,
+                ty: field.ty.clone(),
+            });
+            resolved.insert(name, field);
+        }
+
+        // when the expected type was an `InterfaceRef`, the
+        // literal's inferred type is the interface — assignability at
+        // the surrounding slot is trivial, and the per-field checks
+        // already fired above. Codegen and the shape collector derive
+        // the structural Object shape from the typed origin list.
+        if let Some((iface_package, iface_name, iface_mangled, iface_args)) = interface_target {
+            return (
+                TypedExprKind::ObjectLiteral {
+                    spread_sources,
+                    fields: field_origins,
+                },
+                Type::interface_ref(iface_package, iface_name, iface_mangled, iface_args),
+            );
+        }
+        (
+            TypedExprKind::ObjectLiteral {
+                spread_sources,
+                fields: field_origins,
+            },
+            Type::Object { fields: resolved },
+        )
+    }
+
+    fn infer_array_literal(
+        &mut self,
+        elements: Vec<crate::ArrayLiteralElement>,
+        expected: Option<&Type>,
+        span: Span,
+    ) -> (TypedExprKind, Type) {
+        // a tuple-typed hint forks the literal into tuple-literal
+        // inference. Tuple-ness is hint-driven — without an annotation the
+        // literal still infers as `Type::Array`, matching pre-tuple behavior.
+        //
+        // spread inside a tuple-typed literal is not supported.
+        // The original tuple path expects one expression per slot. If any
+        // spread is present, fall through to the array-literal path and
+        // let the assignability check produce the diagnostic (tuple ≠
+        // array). Future work could splice spreads into the tuple slot
+        // walk; out of scope here.
+        let has_spread = elements
+            .iter()
+            .any(|e| matches!(e, crate::ArrayLiteralElement::Spread { .. }));
+        // Peel first: a tuple reached through an alias (`type Pair = [A, B]`,
+        // including a generic one) is still a tuple hint, and dropping to the
+        // array path below would infer `A[]` and fail the assignability check.
+        let expected = expected
+            .map(Type::peel)
+            .map(|hint| sole_array_like_member(hint).unwrap_or(hint));
+        if let Some(Type::Tuple(expected_elems)) = expected
+            && !has_spread
+        {
+            let plain: Vec<ExprId> = elements
+                .into_iter()
+                .map(|e| match e {
+                    crate::ArrayLiteralElement::Value(id) => id,
+                    crate::ArrayLiteralElement::Spread { .. } => unreachable!(),
+                })
+                .collect();
+            return self.infer_tuple_literal(plain, expected_elems.clone(), span);
+        }
+
+        let expected_elem: Option<&Type> = match expected {
+            Some(Type::Array(elem)) => Some(elem.as_ref()),
+            _ => None,
+        };
+
+        if elements.is_empty() {
+            // Empty `[]` requires an expected hint to know the element
+            // type. Without one, we can't pick a concrete `Type::Array(T)`.
+            let elem_ty = if let Some(t) = expected_elem {
+                t.clone()
+            } else {
+                self.error(
+                    span,
+                    "cannot infer element type of empty array; add a `: T[]` annotation".into(),
+                );
+                Type::Error
+            };
+            return (
+                TypedExprKind::ArrayLiteral {
+                    elements: Vec::new(),
+                    element_ty: elem_ty.clone(),
+                },
+                Type::Array(Box::new(elem_ty)),
+            );
+        }
+
+        // walk elements in source order. The first resolved
+        // element (Value or Spread source) seeds the running element
+        // type unless an expected concrete hint pins it. For Spread,
+        // the source must peel to `Type::Array(T)` and `T`
+        // participates in unification.
+        //
+        // The hint informs assignability, but a concrete inferred
+        // type takes precedence over an unbound generic-param hint
+        // (`TypeVar` / `GenericParam`) — otherwise the array would
+        // report its type as `T[]` and lose the concrete-element
+        // information a generic call site needs to bind `T`.
+        let hint_pins_element_ty = matches!(
+            expected_elem,
+            Some(t) if !type_contains_type_var(t)
+        );
+        let mut typed_elements: Vec<crate::TypedArrayElement> = Vec::with_capacity(elements.len());
+        let mut element_ty: Option<Type> = if hint_pins_element_ty {
+            expected_elem.cloned()
+        } else {
+            None
+        };
+        for el in elements {
+            match el {
+                crate::ArrayLiteralElement::Value(elem_id) => {
+                    let elem_span = self.ast.expr(elem_id).span;
+                    let hint = element_ty.as_ref().or(expected_elem);
+                    let errors_before = self.error_count();
+                    let (typed_id, elem_ty) = self.infer_expr(elem_id, hint);
+                    // See the object-literal screen: a hinted element has
+                    // already been reported against its hint.
+                    let already_errored = self.error_count() > errors_before;
+                    if !already_errored
+                        && self.reject_void_value(&elem_ty, elem_span, ValuePosition::ArrayElement)
+                    {
+                        typed_elements.push(crate::TypedArrayElement::Value(typed_id));
+                        continue;
+                    }
+                    match &element_ty {
+                        None => {
+                            // First resolved value seeds the running
+                            // element type. Hint did not pin it (None
+                            // or unbound generic param).
+                            element_ty = Some(elem_ty);
+                        }
+                        Some(running) => {
+                            if !assignable(&elem_ty, running, self.resolver()) {
+                                self.error(
+                                    elem_span,
+                                    format!(
+                                        "expected `{running}` (matching first element), got `{elem_ty}`"
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                    typed_elements.push(crate::TypedArrayElement::Value(typed_id));
+                }
+                crate::ArrayLiteralElement::Spread {
+                    value,
+                    span: spread_span,
+                } => {
+                    let source_hint = element_ty
+                        .as_ref()
+                        .map(|t| Type::Array(Box::new(t.clone())));
+                    let (typed_source, source_ty) = self.infer_expr(value, source_hint.as_ref());
+                    // The spread source must be an array — or a tuple, which is one at
+                    // runtime and contributes the union of its positions. Reject other
+                    // shapes (primitive, object, unknown, union, function) with a typed
+                    // diagnostic. Aliases peel first.
+                    let peeled_source = source_ty.peel().clone();
+                    match spread_element_type(&peeled_source) {
+                        // A `Type::Error` source was already reported by inner inference.
+                        None if matches!(peeled_source, Type::Error) => {}
+                        None => self.error(
+                            spread_span,
+                            format!("expected an array to spread, got `{peeled_source}`"),
+                        ),
+                        Some(elem_t) => match &element_ty {
+                            None => element_ty = Some(elem_t),
+                            Some(running) if !assignable(&elem_t, running, self.resolver()) => {
+                                self.error(
+                                    spread_span,
+                                    format!(
+                                        "expected `{running}` (matching first element), got `{elem_t}`",
+                                    ),
+                                );
+                            }
+                            Some(_) => {}
+                        },
+                    }
+                    // Push the source even when it was rejected, so the typed AST stays
+                    // well-formed for downstream passes.
+                    typed_elements.push(crate::TypedArrayElement::Spread(typed_source));
+                }
+            }
+        }
+
+        // If every element failed to determine an element type (e.g.
+        // every spread had an invalid source), fall back to the hint
+        // or `Type::Error` rather than panicking.
+        let element_ty = element_ty.unwrap_or_else(|| match expected_elem {
+            Some(t) => t.clone(),
+            None => Type::Error,
+        });
+
+        (
+            TypedExprKind::ArrayLiteral {
+                elements: typed_elements,
+                element_ty: element_ty.clone(),
+            },
+            Type::Array(Box::new(element_ty)),
+        )
+    }
+
+    /// array-literal expression interpreted as a tuple. Caller
+    /// has already established that `expected` is `Type::Tuple`. Each
+    /// source element is inferred against its position's expected type;
+    /// arity mismatch and element-type mismatches produce diagnostics
+    /// but the returned `Type::Tuple(...)` still reflects the
+    /// annotation so downstream type-checking doesn't cascade.
+    fn infer_tuple_literal(
+        &mut self,
+        elements: Vec<ExprId>,
+        expected_elems: Vec<Type>,
+        span: Span,
+    ) -> (TypedExprKind, Type) {
+        if elements.len() != expected_elems.len() {
+            self.error(
+                span,
+                format!(
+                    "tuple literal has {} element{}, but type expects {}",
+                    elements.len(),
+                    if elements.len() == 1 { "" } else { "s" },
+                    expected_elems.len(),
+                ),
+            );
+            // Still infer each element so any nested errors get
+            // reported. Pair against the available expected slots;
+            // extra source elements get no hint, extra expected slots
+            // are silently unfilled in the typed AST.
+            let mut typed_elements: Vec<ExprId> = Vec::with_capacity(elements.len());
+            for (i, elem_id) in elements.iter().enumerate() {
+                let hint = expected_elems.get(i);
+                let (typed_id, _ty) = self.infer_expr(*elem_id, hint);
+                typed_elements.push(typed_id);
+            }
+            return (
+                TypedExprKind::TupleLiteral {
+                    elements: typed_elements,
+                    element_types: expected_elems.clone(),
+                },
+                Type::Tuple(expected_elems),
+            );
+        }
+
+        let mut typed_elements: Vec<ExprId> = Vec::with_capacity(elements.len());
+        let mut slot_types: Vec<Type> = Vec::with_capacity(elements.len());
+        for (elem_id, expected_ty) in elements.iter().zip(expected_elems.iter()) {
+            let elem_span = self.ast.expr(*elem_id).span;
+            let (typed_id, elem_ty) = self.infer_expr(*elem_id, Some(expected_ty));
+            // Unbound generic-param slots take the inferred element type —
+            // `new Map([["a", 1]])` must report `[string, number]`, not
+            // `[K, V]`, so the call site can bind K and V.
+            let slot = if matches!(expected_ty, Type::TypeVar(_) | Type::GenericParam { .. }) {
+                elem_ty.clone()
+            } else {
+                if !assignable(&elem_ty, expected_ty, self.resolver()) {
+                    self.error(
+                        elem_span,
+                        format!("expected `{expected_ty}`, got `{elem_ty}`"),
+                    );
+                }
+                expected_ty.clone()
+            };
+            slot_types.push(slot);
+            typed_elements.push(typed_id);
+        }
+
+        (
+            TypedExprKind::TupleLiteral {
+                elements: typed_elements,
+                element_types: slot_types.clone(),
+            },
+            Type::Tuple(slot_types),
+        )
+    }
+
+    fn infer_field_access(
+        &mut self,
+        receiver: ExprId,
+        name: Ident,
+        span: Span,
+    ) -> (TypedExprKind, Type) {
+        // namespace-symbol member read in non-call
+        // position. `Math.PI` returns a const; `Temporal.Now` (no
+        // following member) errors as a namespace-not-a-value. Must
+        // run before namespace check so namespace-symbol
+        // names are never shadowable. The chain extractor
+        // reconstructs the dotted path from `receiver` + `name`;
+        // the chain root must be in `namespace_symbols` for the
+        // dispatch to engage.
+        if let Some((root, mut segments)) = namespace_symbol::extract_chain(self.ast, receiver)
+            && self.namespace_symbols.contains_key(&root.name)
+        {
+            segments.push(name.clone());
+            return self.infer_namespace_symbol_field_access(root, segments, span);
+        }
+
+        // namespace member in non-call position
+        // (`uuid.v4` without `(…)`). Reaching here means the call
+        // intercept in `infer_call` didn't fire — i.e., the
+        // namespace member is being read as a value. Reject with a
+        // tailored fix.
+        if let ExprKind::Identifier(ref recv_ident) = self.ast.expr(receiver).kind
+            && self.namespace_bindings.contains_key(&recv_ident.name)
+        {
+            let recv_name = recv_ident.name.clone();
+            self.error_with_help(
+                span,
+                format!(
+                    "namespace member `{}.{}` is only valid in call position",
+                    recv_name, name.name,
+                ),
+                vec![format!(
+                    "to bind it as a value, use `import {{ {} }} from \"<pkg>\";`",
+                    name.name,
+                )],
+            );
+            return (
+                TypedExprKind::LocalRef {
+                    ident: name,
+                    boxed: false,
+                },
+                Type::Error,
+            );
+        }
+
+        // Syntactic enum-namespace form: `EnumName.Variant`. We
+        // peek at the receiver AST *before* typing it — bare
+        // enum-name identifiers are not first-class values and
+        // would error in `resolve_ident`. Doing the check here
+        // means `EnumName.Variant` typechecks cleanly without that
+        // diagnostic firing first.
+        if let ExprKind::Identifier(ref recv_ident) = self.ast.expr(receiver).kind {
+            let recv_name = recv_ident.name.clone();
+            if let Some(sym) = self.lookup_named_type(&recv_name) {
+                let enum_mangled = sym.mangled_name.clone();
+                let enum_package = self.type_package(&recv_name);
+                match &sym.kind {
+                    crate::TypeKind::NumberEnum { variants, .. } => {
+                        let variants = variants.clone();
+                        if let Some((_, value)) = variants.iter().find(|(v, _)| v == &name.name) {
+                            return (
+                                TypedExprKind::NumberEnumMember {
+                                    enum_mangled: enum_mangled.clone(),
+                                    variant: name,
+                                    value: *value,
+                                },
+                                Type::number_enum(enum_package, recv_name, enum_mangled),
+                            );
+                        }
+                        let help = enum_variant_help(&recv_name, variants.iter().map(|(v, _)| v));
+                        self.error_with_help(
+                            name.span,
+                            format!("no variant `{}` on enum `{}`", name.name, recv_name,),
+                            help,
+                        );
+                        return (
+                            TypedExprKind::NumberEnumMember {
+                                enum_mangled,
+                                variant: name,
+                                // Placeholder: codegen never reaches
+                                // this path; the diagnostic blocked
+                                // compilation. 0.0 keeps the variant
+                                // well-formed.
+                                value: 0.0,
+                            },
+                            Type::Error,
+                        );
+                    }
+                    crate::TypeKind::StringEnum { variants, .. } => {
+                        let variants = variants.clone();
+                        if let Some((_, value)) = variants.iter().find(|(v, _)| v == &name.name) {
+                            return (
+                                TypedExprKind::StringEnumMember {
+                                    enum_mangled: enum_mangled.clone(),
+                                    variant: name,
+                                    value: value.clone(),
+                                },
+                                Type::string_enum(enum_package, recv_name, enum_mangled),
+                            );
+                        }
+                        let help = enum_variant_help(&recv_name, variants.iter().map(|(v, _)| v));
+                        self.error_with_help(
+                            name.span,
+                            format!("no variant `{}` on enum `{}`", name.name, recv_name,),
+                            help,
+                        );
+                        return (
+                            TypedExprKind::StringEnumMember {
+                                enum_mangled,
+                                variant: name,
+                                value: String::new(),
+                            },
+                            Type::Error,
+                        );
+                    }
+                    crate::TypeKind::Class { .. }
+                        if self.scopes.get(&recv_name).is_none()
+                            && !self.top_symbols.contains_key(&recv_name) =>
+                    {
+                        // `ClassName.member` read: static field → backing global,
+                        // static method → function value. A value binding of the
+                        // same name shadows the class (checked above).
+                        return self.infer_class_static_access(recv_name, enum_mangled, name, span);
+                    }
+                    _ => {
+                        // Identifier resolves to a non-enum type —
+                        // fall through to the normal field-access
+                        // path below.
+                    }
+                }
+            }
+        }
+        self.infer_property_access(receiver, name, span)
+    }
+
+    fn infer_property_access(
+        &mut self,
+        receiver: ExprId,
+        name: Ident,
+        span: Span,
+    ) -> (TypedExprKind, Type) {
+        let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None);
+        // Plan 75.17: in-region rewrite for field-path
+        // narrowings. If the candidate path `<receiver>.<name>` has an
+        // active `NarrowedView`, return a `LocalNarrowRef` to the
+        // shadow instead of building a fresh `FieldAccess` — codegen
+        // then reads the narrowed shadow slot once, not the field
+        // every time. Mirrors the identifier-path rewrite in
+        // `resolve_ident`. `expr_to_reference_path` returns `None` for
+        // non-path receivers (calls, binops, …) — the rewrite then
+        // skips and we fall through to the normal field-access path.
+        if let Some(path) = self
+            .expr_to_reference_path(self.typed_ast.expr(typed_receiver))
+            .map(|mut p| {
+                p.chain
+                    .push(super::narrowing::PathElem::Field(name.name.clone()));
+                p
+            })
+            && let Some(view) = self.lookup_narrowed_view(&path)
+        {
+            let binding = view.binding.clone();
+            let narrowed_ty = view.narrowed_ty.clone();
+            return (TypedExprKind::LocalNarrowRef { binding, path }, narrowed_ty);
+        }
+        // interface-property dispatch lands here BEFORE the
+        // user-object field path. `lookup_interface_property` returns `None`
+        // for `Object` so user-object reads aren't shadowed by a hypothetical
+        // `Object.foo`.
+        if let Some((prop_sig, bindings, iface_mangled, dispatch)) =
+            self.lookup_interface_property(&receiver_ty, &name.name)
+        {
+            let resolved_ty = if bindings.is_empty() {
+                prop_sig.ty.clone()
+            } else {
+                super::generic::substitute_typevars(&prop_sig.ty, &bindings)
+            };
+            // VTable interfaces (every user-declared interface) have no
+            // getter import — read through shape-based field dispatch, the
+            // same path object fields and the for-of desugar use. The getter
+            // funcref returns null for an absent optional field, so an
+            // optional read widens to `T | null` like the Object arm below.
+            if dispatch == crate::Dispatch::VTable {
+                let read_ty = if prop_sig.optional {
+                    Type::union(vec![resolved_ty, Type::Null])
+                } else {
+                    resolved_ty
+                };
+                return (
+                    TypedExprKind::FieldAccess {
+                        receiver: typed_receiver,
+                        name,
+                    },
+                    read_ty,
+                );
+            }
+            return (
+                TypedExprKind::InterfacePropertyAccess {
+                    receiver: typed_receiver,
+                    iface: iface_mangled,
+                    name,
+                },
+                resolved_ty,
+            );
+        }
+        if let Type::ClassRef { mangled, args, .. } = receiver_ty.peel() {
+            let mangled = mangled.clone();
+            let class_args = args.clone();
+            if let Some(read_ty) = self.class_field_read_ty(&mangled, &class_args, &name) {
+                return (
+                    TypedExprKind::FieldAccess {
+                        receiver: typed_receiver,
+                        name,
+                    },
+                    read_ty,
+                );
+            }
+            // Statics are checked only after instance members, matching
+            // `lookup_chain_field` and what dispatch actually does: a class may
+            // declare a static and an instance method of the same name, and an
+            // instance receiver resolves to the instance one. Reporting the
+            // static first would point `c.m` at a different member than `c.m()`
+            // just called.
+            //
+            // A miss on an instance field is phrased the same whether the field
+            // is absent or private to another module (docs/classes.md §2-3).
+            if !self.try_report_method_reference(name.span, &receiver_ty, &name.name)
+                && !self.report_static_on_instance(&receiver_ty, &mangled, &name)
+            {
+                self.report_missing_field(name.span, &receiver_ty, &name.name);
+            }
+            return (
+                TypedExprKind::FieldAccess {
+                    receiver: typed_receiver,
+                    name,
+                },
+                Type::Error,
+            );
+        }
+        if matches!(receiver_ty.peel(), Type::InterfaceRef { .. }) {
+            if !self.try_report_method_reference(name.span, &receiver_ty, &name.name) {
+                self.report_missing_field(name.span, &receiver_ty, &name.name);
+            }
+            return (
+                TypedExprKind::FieldAccess {
+                    receiver: typed_receiver,
+                    name,
+                },
+                Type::Error,
+            );
+        }
+        // field-access dispatch is structural — peel
+        // through alias wrappers to find the underlying Object /
+        // Union form. Error messages still use the un-peeled
+        // `receiver_ty` so the alias name surfaces in diagnostics.
+        let field_ty = match receiver_ty.peel() {
+            Type::Object { fields } => {
+                if let Some(field) = fields.get(&name.name) {
+                    field.read_ty()
+                } else {
+                    // An object literal still resolves the prelude `Object`
+                    // members, so the name can be a real method here too.
+                    if !self.try_report_method_reference(name.span, &receiver_ty, &name.name) {
+                        self.report_missing_object_field(name.span, &receiver_ty, &name.name);
+                    }
+                    Type::Error
+                }
+            }
+            Type::Union(members) if members.iter().all(Self::is_field_bearing) => {
+                let path = self.expr_to_reference_path(self.typed_ast.expr(typed_receiver));
+                self.union_field_read_ty(
+                    name.span,
+                    path.as_ref(),
+                    &receiver_ty,
+                    members,
+                    &name.name,
+                )
+            }
+            Type::Error => Type::Error,
+            // field access on un-narrowed `unknown` is
+            // rejected. The user must narrow via `typeof` /
+            // `Array.isArray` / `=== null` / a user type guard
+            // before reading fields. Keeping the call path inside
+            // the match (not a fall-through to the catch-all) lets
+            // us tailor the help to point at the narrowing
+            // primitives rather than at `format_definition`, which
+            // for `unknown` is just the literal `"unknown"`.
+            Type::Unknown => {
+                self.error_with_help(
+                    span,
+                    format!("cannot read field `{}` on `unknown`", name.name,),
+                    vec![
+                        "narrow first with `typeof x === \"…\"`, \
+                         `Array.isArray(x)`, `x === null`, or a \
+                         user-defined type guard before reading fields"
+                            .to_string(),
+                    ],
+                );
+                Type::Error
+            }
+            _ => {
+                // A primitive's members are all methods, so the name usually
+                // does exist — "non-object type" would send the reader looking
+                // for a missing field instead of a missing call. Anchored at the
+                // member, like the other method-reference sites; the non-object
+                // report keeps the whole-expression span it always had.
+                if !self.try_report_method_reference(name.span, &receiver_ty, &name.name) {
+                    self.report_non_object_field_read(
+                        span,
+                        typed_receiver,
+                        &receiver_ty,
+                        &name.name,
+                    );
+                }
+                Type::Error
+            }
+        };
+        (
+            TypedExprKind::FieldAccess {
+                receiver: typed_receiver,
+                name,
+            },
+            field_ty,
+        )
+    }
+
+    fn infer_index_access(
+        &mut self,
+        receiver: ExprId,
+        index: ExprId,
+        span: Span,
+        expr_id: ExprId,
+    ) -> (TypedExprKind, Type) {
+        if let ExprKind::String(name) = &self.ast.expr(index).kind {
+            let field = Ident {
+                name: name.clone(),
+                span: self.ast.expr(index).span,
+            };
+            return self.infer_property_access(receiver, field, span);
+        }
+
+        // detect when this IndexAccess was synthesised by the
+        // destructuring lowering pass, so we can replace generic
+        // tuple-index / non-indexable errors with destructure-specific
+        // messages anchored on the user's pattern bracket.
+        let pattern_origin = self.ast.pattern_origins.get(&expr_id).cloned();
+        let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None);
+        // Peel: an array or tuple reached through an alias (`type Pair = [A, B]`)
+        // is indexable on the same terms as the type it names.
+        let elem_ty = match receiver_ty.peel() {
+            Type::Array(elem) => (**elem).clone(),
+            // tuple indexing must be a non-negative integer
+            // literal that's in range. Out-of-range or non-literal
+            // indices are compile-time errors — there's no dynamic
+            // index path because each tuple slot has a distinct static
+            // type.
+            Type::Tuple(elements) => {
+                let index_expr = self.ast.expr(index);
+                let literal_idx: Option<usize> = match &index_expr.kind {
+                    ExprKind::Number(n) if n.is_finite() && n.fract() == 0.0 && *n >= 0.0 => {
+                        Some(*n as usize)
+                    }
+                    _ => None,
+                };
+                match literal_idx {
+                    Some(idx) if idx < elements.len() => elements[idx].clone(),
+                    Some(idx) => {
+                        if let Some(origin) = &pattern_origin {
+                            self.error(
+                                origin.pattern_span,
+                                format!(
+                                    "destructuring pattern has {} element{}, but right-hand side tuple has {} element{}",
+                                    origin.slot_arity,
+                                    if origin.slot_arity == 1 { "" } else { "s" },
+                                    elements.len(),
+                                    if elements.len() == 1 { "" } else { "s" },
+                                ),
+                            );
+                        } else {
+                            self.error(
+                                index_expr.span,
+                                format!(
+                                    "tuple index {} out of bounds; tuple has {} element{}",
+                                    idx,
+                                    elements.len(),
+                                    if elements.len() == 1 { "" } else { "s" },
+                                ),
+                            );
+                        }
+                        Type::Error
+                    }
+                    None => {
+                        self.error(
+                            index_expr.span,
+                            format!(
+                                "tuple index must be a non-negative integer literal; tuple has {} element{}",
+                                elements.len(),
+                                if elements.len() == 1 { "" } else { "s" },
+                            ),
+                        );
+                        Type::Error
+                    }
+                }
+            }
+            // indexed read on Uint8Array returns the byte as
+            // an unsigned number 0..=255. Indexed write isn't a parse
+            // form at all (`arr[i] = v` is rejected by the parser as
+            // "invalid assignment target"), so no separate check
+            // needed here.
+            // tuple-union receiver. Every member of the
+            // union must be a `Type::Tuple` (after peeling), the
+            // literal index must be in range for every variant, and
+            // the result type is the union of each variant's element
+            // at that position. Cross-arity unions where the index
+            // is out of bounds for some variants stay rejected
+            // (would need a runtime length check).
+            Type::Union(members) if members.iter().all(|m| matches!(m.peel(), Type::Tuple(_))) => {
+                let index_expr = self.ast.expr(index);
+                let literal_idx: Option<usize> = match &index_expr.kind {
+                    ExprKind::Number(n) if n.is_finite() && n.fract() == 0.0 && *n >= 0.0 => {
+                        Some(*n as usize)
+                    }
+                    _ => None,
+                };
+                if let Some(idx) = literal_idx {
+                    let mut elems: Vec<Type> = Vec::with_capacity(members.len());
+                    let mut oob = false;
+                    let mut min_arity = usize::MAX;
+                    for m in members {
+                        if let Type::Tuple(es) = m.peel() {
+                            min_arity = min_arity.min(es.len());
+                            if let Some(t) = es.get(idx) {
+                                elems.push(t.clone());
+                            } else {
+                                oob = true;
+                                break;
+                            }
+                        }
+                    }
+                    if oob {
+                        if let Some(origin) = &pattern_origin {
+                            self.error(
+                                origin.pattern_span,
+                                format!(
+                                    "destructuring pattern has {} element{}, but right-hand side tuple union has variants with only {} element{}",
+                                    origin.slot_arity,
+                                    if origin.slot_arity == 1 { "" } else { "s" },
+                                    min_arity,
+                                    if min_arity == 1 { "" } else { "s" },
+                                ),
+                            );
+                        } else {
+                            self.error(
+                                index_expr.span,
+                                format!(
+                                    "tuple index {idx} out of bounds for some variants of the tuple union (smallest variant has {min_arity} element{})",
+                                    if min_arity == 1 { "" } else { "s" },
+                                ),
+                            );
+                        }
+                        Type::Error
+                    } else {
+                        Type::union(elems)
+                    }
+                } else {
+                    self.error(
+                        index_expr.span,
+                        "tuple index must be a non-negative integer literal".to_string(),
+                    );
+                    Type::Error
+                }
+            }
+            Type::Uint8Array => Type::Number,
+            Type::Error => Type::Error,
+            // indexing into un-narrowed `unknown` is rejected.
+            Type::Unknown => {
+                if let Some(origin) = &pattern_origin {
+                    self.error_with_help(
+                        origin.pattern_span,
+                        "cannot destructure a value of type `unknown`".to_string(),
+                        vec![
+                            "narrow first with `Array.isArray(x)` (or another \
+                             type guard) before destructuring"
+                                .to_string(),
+                        ],
+                    );
+                } else {
+                    self.error_with_help(
+                        span,
+                        "cannot index into `unknown`".to_string(),
+                        vec![
+                            "narrow first with `Array.isArray(x)` (or another \
+                             type guard) before indexing"
+                                .to_string(),
+                        ],
+                    );
+                }
+                Type::Error
+            }
+            // objects/interfaces *are* indexable, just by a string literal
+            // (which routes to property access above) — a dynamic index here
+            // is the real error. Distinguish it from genuinely non-indexable
+            // receivers (`number`, etc.), which keep the message below.
+            _ if pattern_origin.is_none()
+                && matches!(
+                    receiver_ty.peel(),
+                    Type::Object { .. } | Type::InterfaceRef { .. }
+                ) =>
+            {
+                self.error_with_help(
+                    span,
+                    "objects can only be indexed by a string literal".to_string(),
+                    vec![
+                        "use `obj[\"fieldName\"]` for a known field, or \
+                         `Map<string, V>` if you need dynamic string keys"
+                            .to_string(),
+                    ],
+                );
+                // the index isn't a number here, so skip the trailing
+                // `Some(&Type::Number)` inference that would add a spurious
+                // "expected number" secondary error.
+                let (typed_index, _) = self.infer_expr(index, None);
+                return (
+                    TypedExprKind::IndexAccess {
+                        receiver: typed_receiver,
+                        index: typed_index,
+                    },
+                    Type::Error,
+                );
+            }
+            _ => {
+                if let Some(origin) = &pattern_origin {
+                    self.error_with_help(
+                        origin.pattern_span,
+                        format!(
+                            "cannot destructure a value of type `{receiver_ty}`; expected a tuple or array"
+                        ),
+                        self.definition_help(&receiver_ty),
+                    );
+                } else {
+                    let help = self.definition_help(&receiver_ty);
+                    // Only an indexable non-null form makes the narrowing the fix.
+                    let culprit = self.nullable_culprit(&[(typed_receiver, &receiver_ty)], |t| {
+                        matches!(
+                            t.peel(),
+                            Type::Array(_) | Type::Tuple(_) | Type::String | Type::Uint8Array
+                        )
+                    });
+                    self.error_with_narrowing_hint(
+                        span,
+                        format!("cannot index into non-array type `{receiver_ty}`"),
+                        help,
+                        culprit,
+                    );
+                }
+                Type::Error
+            }
+        };
+        let (typed_index, _) = self.infer_expr(index, Some(&Type::Number));
+        (
+            TypedExprKind::IndexAccess {
+                receiver: typed_receiver,
+                index: typed_index,
+            },
+            elem_ty,
+        )
+    }
+
+    /// arrow function inference. Two-mode:
+    /// * **Hint mode** — `expected` is `Some(Type::Function { … })` with
+    ///   the same arity. The hint fills in any unannotated params and
+    ///   provides the body's `expected` return-type hint. Annotated
+    ///   params still typecheck against the hint and produce a
+    ///   diagnostic on mismatch.
+    /// * **No-hint mode** — every param needs an annotation (else
+    ///   diagnostic). Expression-body return type comes from the body
+    ///   itself; block-body return type is unified across all `return`
+    ///   paths via the `inferred_returns` collector frame this method
+    ///   pushes/pops. Conflicting block returns produce a diagnostic
+    ///   pointing at / Layer 3 union widening.
+    fn infer_arrow(
+        &mut self,
+        params: Vec<ParamDecl>,
+        return_ty_ann: Option<TypeAnnotation>,
+        type_predicate: Option<crate::TypePredicateAnnotation>,
+        body: ArrowBody,
+        expected: Option<&Type>,
+        span: Span,
+    ) -> (TypedExprKind, Type) {
+        // arrows can declare a type-guard predicate (`(x): x is T => …`).
+        // For Phase 1 the predicate is parsed but not yet resolved onto the
+        // function signature; consume the binding so the unused-var lint is
+        // happy and the parameter survives to Phase 2.
+        let _ = type_predicate;
+        // Arrow parameters never reach `resolve_params`, so the duplicate check
+        // has to be repeated here rather than inherited.
+        self.report_duplicate_params(params.iter().map(|p| &p.name));
+        // Take a hint from `expected` only when it's a function type
+        // with a matching arity. We clone out into owned data so we can
+        // continue mutating `self` without borrow-checker complaints.
+        // Peel aliases, and look through a `T | null`-style union to its
+        // sole function member so an optional callback param (e.g. a
+        // nullable `sort` comparator) still gives the arrow its contextual
+        // parameter types.
+        let hint_owned: Option<(Vec<Type>, Type)> = match expected.map(crate::types::Type::peel) {
+            Some(Type::Function {
+                params: hp,
+                ret: hr,
+                ..
+            }) if hp.len() == params.len() => Some((hp.clone(), (**hr).clone())),
+            Some(Type::Union(members)) => members.iter().find_map(|m| match m.peel() {
+                Type::Function {
+                    params: hp,
+                    ret: hr,
+                    ..
+                } if hp.len() == params.len() => Some((hp.clone(), (**hr).clone())),
+                _ => None,
+            }),
+            _ => None,
+        };
+
+        let mut typed_params: Vec<TypedParam> = Vec::with_capacity(params.len());
+        for (i, p) in params.iter().enumerate() {
+            let ann_ty =
+                p.ty.as_ref()
+                    .map(|t| self.resolve_value_type(t, ValuePosition::Parameter));
+            let ty = match (&ann_ty, hint_owned.as_ref()) {
+                (Some(t), Some((hp, _))) => {
+                    // Parameters are **contravariant**: the call site
+                    // will pass a value of type `hp[i]` into a slot
+                    // declared as `t`, so we need `hp[i] ≤ t`. (Return
+                    // type below is covariant — `user_ret ≤ hint_ret`.)
+                    // `assignable` today is structural equality, so
+                    // both directions agree; encoding the right
+                    // variance here keeps the rule sound when
+                    // structural subtyping / `unknown` land.
+                    //
+                    // When the hint param contains an unresolved
+                    // generic (`(T) => U` from a generic call site),
+                    // skip the check — the user's annotation is the
+                    // source of truth for the closure body, and the
+                    // call site's `TypeParamSubstitution::unify`
+                    // walks the resulting closure type to bind T/U.
+                    if !assignable(&hp[i], t, self.resolver()) {
+                        self.error(
+                            p.name.span,
+                            format!(
+                                "parameter `{}`: expected `{}`, got `{}`",
+                                p.name.name, hp[i], t
+                            ),
+                        );
+                    }
+                    t.clone()
+                }
+                (Some(t), None) => t.clone(),
+                (None, Some((hp, _))) => hp[i].clone(),
+                (None, None) => {
+                    self.error_with_help(
+                        p.name.span,
+                        format!("parameter `{}` requires a type annotation", p.name.name),
+                        vec!["(x: T, y: U) => …".to_string()],
+                    );
+                    Type::Error
+                }
+            };
+            typed_params.push(TypedParam {
+                name: p.name.clone(),
+                ty,
+                boxed: false,
+                // arrow rest flag rides from ParamDecl.rest
+                // (set by `parse_arrow_param_list` once that arm lands).
+                rest: p.rest,
+                // Arrow/function-typed params don't accept defaults.
+                default: None,
+            });
+        }
+
+        // Decide the return-type hint. With an annotation: it always
+        // wins (and must be assignable to the contextual hint when
+        // present). Without an annotation but with a hint: use the
+        // hint. Otherwise: pure inference (no hint), and we collect
+        // returns for block bodies.
+        //
+        // track whether the hint came from the explicit
+        // return-type annotation (`(): T => …`) or from a contextual
+        // hint at the call site. Only the explicit annotation widens
+        // the closure's *outer* type — a contextual hint with a
+        // `TypeVar` left by a generic call (`arr.map(x => x * 2)`)
+        // must NOT replace the body's inferred return type, since
+        // the generic-arg unification reads the body type to bind
+        // its `U`.
+        let mut annotated_ret: Option<Type> = None;
+        let ret_hint: Option<Type> = match (&return_ty_ann, hint_owned.as_ref()) {
+            (Some(ann), Some((_, hr))) => {
+                let t = self.resolve_type(ann);
+                // Skip when the hint return contains an unresolved
+                // generic — same logic as the param contravariance
+                // check above. The closure's annotation is the truth;
+                // the call site's unify binds the var.
+                if !assignable(&t, hr, self.resolver()) {
+                    self.error(ann.span, format!("return type: expected `{hr}`, got `{t}`"));
+                }
+                annotated_ret = Some(t.clone());
+                Some(t)
+            }
+            (Some(ann), None) => {
+                let t = self.resolve_type(ann);
+                annotated_ret = Some(t.clone());
+                Some(t)
+            }
+            (None, Some((_, hr))) => Some(hr.clone()),
+            (None, None) => None,
+        };
+
+        // Push scope, bind params.
+        self.scopes.push();
+        for p in &typed_params {
+            self.scopes
+                .insert(p.name.name.clone(), p.ty.clone(), false, p.name.span);
+        }
+        // Fresh narrowing stack for the body, seeded with the `const`-rooted
+        // narrowings that legally cross the boundary. Params must already be in
+        // scope so a shadowed root is rejected. `pending_joins` is deliberately
+        // left alone: a `break` inside the body snapshots an empty range over
+        // the fresh, shorter stack.
+        let narrow_seed = self.enter_closure_narrow_boundary(span);
+
+        // Save / set return-type frames. Stack-based so nested arrows
+        // restore correctly.
+        let prev_return = std::mem::replace(&mut self.current_return, ret_hint.clone());
+        let prev_collect = if ret_hint.is_none() {
+            self.inferred_returns.replace(Vec::new())
+        } else {
+            // Annotated body uses `current_return` for checking; clear
+            // the collector frame to avoid attributing inner-arrow
+            // returns to an outer collector.
+            self.inferred_returns.take()
+        };
+
+        let (typed_body, body_ret) = match body {
+            ArrowBody::Expr(e) => {
+                let (id, t) = self.infer_expr(e, ret_hint.as_ref());
+                // Re-emit the seeded regions inside the body, over a fresh read
+                // of the `const` — the closure then captures the ordinary
+                // binding and re-checks the cast per call.
+                let id = self.wrap_narrow_exprs(id, &narrow_seed, span);
+                (ClosureBody::Expr(id), t)
+            }
+            ArrowBody::Block(b) => {
+                let id = self
+                    .infer_stmt(b)
+                    .expect("arrow block body is a Block, never a type-only decl");
+                let id = self.wrap_narrow_regions(id, &narrow_seed, span);
+                let t = if let Some(t) = &ret_hint {
+                    t.clone()
+                } else {
+                    let collected = self.inferred_returns.take().unwrap_or_default();
+                    self.unify_returns(&collected, span)
+                };
+                (ClosureBody::Block(id), t)
+            }
+        };
+
+        // Restore frames.
+        self.exit_closure_narrow_boundary();
+        self.inferred_returns = prev_collect;
+        self.current_return = prev_return;
+        self.scopes.pop();
+
+        // when the arrow has an explicit return-type
+        // annotation (`(): T | null => null`), use it as the
+        // closure's effective return type — both for `expr.ty.ret`
+        // (consulted by call-site cast emission) and for the typed
+        // AST's `return_type` field (codegen's closure-body return
+        // boxing). The body's inferred type stays as the literal /
+        // expression's narrow type for validation but doesn't widen
+        // the closure's outer surface. Contextual hints (without an
+        // explicit annotation) DO NOT widen — the body's actual
+        // type must flow out so generic-arg unification at the call
+        // site can bind type variables from it.
+        //
+        // One exception: `never` occupies a value slot, so a closure returning
+        // it cannot lower into a `void` funcref signature, which has no result
+        // at all. `never` is assignable to everything, so adopting the hint is
+        // unobservable to the typechecker — and only a `void` hint is safe to
+        // adopt, since a hint still holding a `TypeVar` has to bind against the
+        // body's own type. `contextual_ret` is read off `hint_owned` because
+        // `ret_hint` holds the annotation whenever there is one.
+        let contextual_ret_is_void = hint_owned.as_ref().is_some_and(|(_, hr)| hr.is_void());
+        let declared_ret = annotated_ret.unwrap_or_else(|| body_ret.clone());
+        let effective_ret = if contextual_ret_is_void && matches!(declared_ret.peel(), Type::Never)
+        {
+            Type::Void
+        } else {
+            declared_ret
+        };
+        let arrow_ty = Type::Function {
+            params: typed_params.iter().map(|p| p.ty.clone()).collect(),
+            ret: Box::new(effective_ret.clone()),
+            // arrow predicates aren't resolved in Phase 2;
+            // they'd land here when arrow-function guards are wired
+            // through. For now, every arrow is None.
+            predicate: None,
+            // arrows can declare rest params via
+            // `(...xs: T[]) => …`; the parser lowers that into a
+            // `TypedParam` with `rest: true` at the trailing slot.
+            has_rest: typed_params.last().is_some_and(|p| p.rest),
+        };
+        (
+            TypedExprKind::Closure {
+                params: typed_params,
+                return_type: effective_ret,
+                body: typed_body,
+                // Filled in by the capture pass after the
+                // typed AST is fully built. The inferer doesn't have a
+                // function-boundary view of references, so it just
+                // emits the empty vec here.
+                captured: Vec::new(),
+            },
+            arrow_ty,
+        )
+    }
+
+    /// Reduce the `(Type, Span)` entries collected during a block-body
+    /// arrow's walk to a single return type. Empty → `Void`. Single →
+    /// that type. Multiple compatible (all `assignable` against the
+    /// first) → the first. Mismatched → diagnostic pointing at
+    /// for the planned union-widening lift, plus `Type::Error` to keep
+    /// downstream silent.
+    fn unify_returns(&mut self, collected: &[(Type, Span)], fallback_span: Span) -> Type {
+        if collected.is_empty() {
+            return Type::Void;
+        }
+        let first = collected[0].0.clone();
+        let mut conflict: Option<(Type, Span)> = None;
+        for (t, s) in &collected[1..] {
+            if !assignable(t, &first, self.resolver()) && !assignable(&first, t, self.resolver()) {
+                conflict = Some((t.clone(), *s));
+                break;
+            }
+        }
+        if let Some((other, span)) = conflict {
+            self.error(
+                span,
+                format!(
+                    "return type `{other}` conflicts with earlier return `{first}`; \
+                     union widening lands in Layer 3 (SUB-77)"
+                ),
+            );
+            let _ = fallback_span;
+            return Type::Error;
+        }
+        first
+    }
+
+    // Statement walker (`infer_stmt`, `infer_assign`) moved to
+    // `super::stmt`.
+
+    // ====================================================================
+    // ternary, nullish coalescing,
+    // optional chaining.
+    // ====================================================================
+
+    /// postfix `x++` / `x--` / `obj.f++` / `arr[i]++`.
+    /// Dispatches on operand shape; rejects non-mutable / non-numeric
+    /// targets with the same diagnostic style as `infer_assign`.
+    /// Operand kinds other than `Identifier` / `FieldAccess` /
+    /// `IndexAccess` are rejected with "requires an assignable
+    /// target".
+    fn infer_postfix_unary(
+        &mut self,
+        op: crate::PostfixOp,
+        operand: ExprId,
+        span: Span,
+    ) -> (TypedExprKind, Type) {
+        let op_symbol = match op {
+            crate::PostfixOp::Inc => "++",
+            crate::PostfixOp::Dec => "--",
+            crate::PostfixOp::NonNullAssert => return self.infer_non_null_assert(operand),
+        };
+        let operand_kind = self.ast.expr(operand).kind.clone();
+        match operand_kind {
+            ExprKind::Identifier(ident) => self.infer_postfix_ident(op, op_symbol, ident, span),
+            ExprKind::FieldAccess { receiver, name } => {
+                self.infer_postfix_field(op, op_symbol, receiver, name, span)
+            }
+            ExprKind::IndexAccess { receiver, index } => {
+                self.infer_postfix_index(op, op_symbol, receiver, index, span)
+            }
+            _ => {
+                let operand_span = self.ast.expr(operand).span;
+                self.error_with_help(
+                    operand_span,
+                    format!("postfix `{op_symbol}` requires an assignable target"),
+                    vec!["operand must be an identifier, `obj.field`, or `arr[i]`".to_string()],
+                );
+                // Still infer the operand so any nested type errors surface.
+                let (_, _) = self.infer_expr(operand, None);
+                (
+                    TypedExprKind::PostfixUnary {
+                        op,
+                        target: crate::PostfixTarget::Local {
+                            ident: Ident {
+                                name: String::new(),
+                                span,
+                            },
+                            boxed: false,
+                            target_ty: Type::Error,
+                        },
+                    },
+                    Type::Error,
+                )
+            }
+        }
+    }
+
+    fn infer_non_null_assert(&mut self, operand: ExprId) -> (TypedExprKind, Type) {
+        let operand_span = self.ast.expr(operand).span;
+        let (value, value_ty) = self.infer_expr(operand, None);
+        let result_ty = self.check_non_null_assert(&value_ty, operand_span);
+        (TypedExprKind::NonNullAssert { value }, result_ty)
+    }
+
+    /// The type `!` yields for an operand of `value_ty`. An operand that is
+    /// *only* `null` never survives the assertion, so the result is `never`
+    /// rather than `strip_null`'s poisoned `Error`. Rejects a `void` operand
+    /// and returns `Error`.
+    fn check_non_null_assert(&mut self, value_ty: &Type, span: Span) -> Type {
+        match value_ty.peel() {
+            Type::Null => Type::Never,
+            // `void` is a return type, not a value — there is nothing to test
+            // for null, and admitting it reaches `emit_box`, which has no
+            // lowering for it.
+            Type::Void => {
+                self.error_with_help(
+                    span,
+                    "cannot assert non-null on a value of type `void`".to_string(),
+                    vec![
+                        "drop the `!` — a `void` call produces no value, so there is \
+                         no null to rule out"
+                            .to_string(),
+                    ],
+                );
+                Type::Error
+            }
+            _ => super::narrowing::strip_null(value_ty),
+        }
+    }
+
+    fn infer_postfix_ident(
+        &mut self,
+        op: crate::PostfixOp,
+        op_symbol: &'static str,
+        target: Ident,
+        span: Span,
+    ) -> (TypedExprKind, Type) {
+        // Function-local first, then top-level (mirrors `infer_assign`).
+        if let Some(entry) = self.scopes.get(&target.name).cloned() {
+            if entry.is_const {
+                self.diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    span: target.span,
+                    message: format!("cannot assign to const binding `{}`", target.name),
+                    help: vec![format!(
+                        "declare with `let` if reassignment is required: `let {} = …;`",
+                        target.name
+                    )],
+                    notes: vec![(entry.decl_span, "declared as `const` here".to_string())],
+                });
+            }
+            if !matches!(
+                entry.ty.peel(),
+                Type::Number | Type::NumberLiteral(_) | Type::BigInt | Type::Error
+            ) {
+                self.error(
+                    target.span,
+                    format!(
+                        "postfix `{}` expects `number` or `bigint`, found `{}`",
+                        op_symbol, entry.ty,
+                    ),
+                );
+            }
+            // the increment writes back a value of the same
+            // numeric kind as the operand — `BigInt` for bigint
+            // operands (so `1n + 1n: bigint` round-trips), otherwise
+            // widened `Number` (so a `NumberLiteral`/literal-union
+            // slot like `1 | 2 | 3` doesn't restrict the result).
+            let result_ty = postfix_result_ty(&entry.ty);
+            // For non-error declared types that aren't assignable from
+            // the result, mirror `infer_assign`'s rejection.
+            if !matches!(entry.ty, Type::Error)
+                && !assignable(&result_ty, &entry.ty, self.resolver())
+            {
+                self.error(
+                    span,
+                    format!("expected `{}`, got `{}`", entry.ty, result_ty),
+                );
+            }
+            // Re-install assignment narrowing: result reads see the
+            // post-increment type.
+            if !matches!(entry.ty, Type::Error) && entry.ty != result_ty {
+                let path = narrowing::ReferencePath::root(narrowing::BindingId::Local {
+                    name: target.name.clone(),
+                    decl_scope: entry.decl_scope,
+                });
+                self.install_assignment_narrowing(
+                    path,
+                    target.clone(),
+                    result_ty.clone(),
+                    target.span,
+                );
+            }
+            return (
+                TypedExprKind::PostfixUnary {
+                    op,
+                    target: crate::PostfixTarget::Local {
+                        ident: target,
+                        boxed: false,
+                        target_ty: entry.ty,
+                    },
+                },
+                result_ty,
+            );
+        }
+        if let Some(entry) = self.top_symbols.get(&target.name) {
+            let kind_clone = entry.kind.clone();
+            let prev_span = entry.declaration_span;
+            let mangled = entry.mangled_name.clone();
+            match kind_clone {
+                ValueKind::Let { ty, .. } => {
+                    self.postfix_on_global(op, op_symbol, target, mangled, ty, span)
+                }
+                ValueKind::Const { ty, .. } => {
+                    self.diagnostics.push(Diagnostic {
+                        severity: Severity::Error,
+                        span: target.span,
+                        message: format!("cannot assign to const binding `{}`", target.name),
+                        help: vec![format!(
+                            "declare with `let` if reassignment is required: `let {} = …;`",
+                            target.name
+                        )],
+                        notes: vec![(prev_span, "declared as `const` here".to_string())],
+                    });
+                    (
+                        TypedExprKind::PostfixUnary {
+                            op,
+                            target: crate::PostfixTarget::Global {
+                                name: target,
+                                mangled,
+                                target_ty: ty,
+                            },
+                        },
+                        Type::Number,
+                    )
+                }
+                ValueKind::Function { .. } => {
+                    self.error_with_help(
+                        target.span,
+                        format!("cannot assign to function `{}`", target.name),
+                        vec![
+                            "top-level functions are immutable; declare a `let f = …` binding to reassign"
+                                .to_string(),
+                        ],
+                    );
+                    (
+                        TypedExprKind::PostfixUnary {
+                            op,
+                            target: crate::PostfixTarget::Global {
+                                name: target,
+                                mangled,
+                                target_ty: Type::Error,
+                            },
+                        },
+                        Type::Error,
+                    )
+                }
+            }
+        } else {
+            let help: Vec<String> = self
+                .closest_local_or_global(&target.name)
+                .map(|s| vec![format!("did you mean `{}`?", s)])
+                .unwrap_or_default();
+            self.error_with_help(
+                span,
+                format!("unresolved identifier `{}`", target.name),
+                help,
+            );
+            (
+                TypedExprKind::PostfixUnary {
+                    op,
+                    target: crate::PostfixTarget::Local {
+                        ident: target,
+                        boxed: false,
+                        target_ty: Type::Error,
+                    },
+                },
+                Type::Error,
+            )
+        }
+    }
+
+    fn infer_postfix_field(
+        &mut self,
+        op: crate::PostfixOp,
+        op_symbol: &'static str,
+        receiver: ExprId,
+        name: Ident,
+        span: Span,
+    ) -> (TypedExprKind, Type) {
+        // A bare class name is not a value, so `ClassName.field++` must resolve
+        // before the receiver is typed — same intercept the assignment forms use,
+        // so all three write forms share one set of diagnostics.
+        match self.resolve_static_field_write(receiver, &name) {
+            StaticWrite::NotClassName => {}
+            StaticWrite::Rejected { .. } => return (TypedExprKind::Null, Type::Error),
+            StaticWrite::Resolved { mangled, ty } => {
+                return self.postfix_on_global(op, op_symbol, name, mangled, ty, span);
+            }
+        }
+        let recv_span = self.ast.expr(receiver).span;
+        let rw_op = super::diagnostics::RwOp::Postfix(op);
+        let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None);
+        let target_ty: Type = if let Type::ClassRef { mangled, args, .. } = receiver_ty.peel() {
+            let mangled = mangled.clone();
+            let class_args = args.clone();
+            self.class_postfix_target(&mangled, &class_args, receiver, &receiver_ty, &name, rw_op)
+        } else if self.try_report_method_assignment(name.span, &receiver_ty, &name.name) {
+            Type::Error
+        } else if let Some((prop_sig, _, _, _)) = self.find_property(&receiver_ty, &name.name) {
+            if prop_sig.readonly {
+                self.error(
+                    name.span,
+                    format!(
+                        "cannot assign to readonly property `{}` on `{}`",
+                        name.name, receiver_ty,
+                    ),
+                );
+            }
+            if self.try_report_nullable_rw_target(
+                recv_span,
+                &receiver_ty,
+                &name,
+                &prop_sig.ty,
+                prop_sig.optional,
+                rw_op,
+            ) {
+                Type::Error
+            } else {
+                prop_sig.ty
+            }
+        } else if matches!(receiver_ty, Type::Error) {
+            Type::Error
+        } else if let Some(fields) = self.assignment_target_fields(&receiver_ty) {
+            if let Some(field) = fields.get(&name.name).cloned() {
+                if field.readonly {
+                    self.error(
+                        name.span,
+                        format!(
+                            "cannot assign to readonly property `{}` on `{}`",
+                            name.name, receiver_ty,
+                        ),
+                    );
+                }
+                if self.try_report_nullable_rw_target(
+                    recv_span,
+                    &receiver_ty,
+                    &name,
+                    &field.ty,
+                    field.optional,
+                    rw_op,
+                ) {
+                    Type::Error
+                } else {
+                    field.ty.clone()
+                }
+            } else {
+                let help = self.definition_help(&receiver_ty);
+                self.error_with_help(
+                    name.span,
+                    format!("no field `{}` on type `{}`", name.name, receiver_ty),
+                    help,
+                );
+                Type::Error
+            }
+        } else {
+            let recv_path = self.expr_to_reference_path(self.typed_ast.expr(typed_receiver));
+            self.report_unassignable_field_target(
+                recv_span,
+                &name,
+                &receiver_ty,
+                recv_path.as_ref(),
+                Some(rw_op),
+            );
+            Type::Error
+        };
+        if !matches!(
+            target_ty.peel(),
+            Type::Number | Type::NumberLiteral(_) | Type::BigInt | Type::Error
+        ) {
+            self.error(
+                name.span,
+                format!("postfix `{op_symbol}` expects `number` or `bigint`, found `{target_ty}`",),
+            );
+        }
+        let result_ty = postfix_result_ty(&target_ty);
+        if !matches!(target_ty, Type::Error) && !assignable(&result_ty, &target_ty, self.resolver())
+        {
+            self.error(
+                name.span,
+                format!("expected `{target_ty}`, got `{result_ty}`"),
+            );
+        }
+        (
+            TypedExprKind::PostfixUnary {
+                op,
+                target: crate::PostfixTarget::Field {
+                    receiver: typed_receiver,
+                    name,
+                    target_ty: target_ty.clone(),
+                },
+            },
+            if matches!(target_ty, Type::Error) {
+                Type::Error
+            } else {
+                result_ty
+            },
+        )
+    }
+
+    /// `g++` on a module global — shared by a module `let` and by a writable
+    /// static field, which is the same global under a mangled key.
+    fn postfix_on_global(
+        &mut self,
+        op: crate::PostfixOp,
+        op_symbol: &'static str,
+        name: Ident,
+        mangled: crate::MangledName,
+        ty: Type,
+        span: Span,
+    ) -> (TypedExprKind, Type) {
+        if !matches!(
+            ty.peel(),
+            Type::Number | Type::NumberLiteral(_) | Type::BigInt | Type::Error
+        ) {
+            self.error(
+                name.span,
+                format!("postfix `{op_symbol}` expects `number` or `bigint`, found `{ty}`",),
+            );
+        }
+        let result_ty = postfix_result_ty(&ty);
+        if !matches!(ty, Type::Error) && !assignable(&result_ty, &ty, self.resolver()) {
+            self.error(span, format!("expected `{ty}`, got `{result_ty}`"));
+        }
+        (
+            TypedExprKind::PostfixUnary {
+                op,
+                target: crate::PostfixTarget::Global {
+                    name,
+                    mangled,
+                    target_ty: ty,
+                },
+            },
+            result_ty,
+        )
+    }
+
+    /// The slot type `x.f++` reads and writes back on a class receiver.
+    /// `Type::Error` (after reporting) when the target can't take a postfix.
+    fn class_postfix_target(
+        &mut self,
+        mangled: &crate::MangledName,
+        class_args: &[Type],
+        receiver: ExprId,
+        receiver_ty: &Type,
+        name: &Ident,
+        rw_op: super::diagnostics::RwOp,
+    ) -> Type {
+        // An accessor property has no data slot. Expression-position postfix
+        // reads and writes that slot directly, with nowhere to hand its computed
+        // value to a setter call; statement-position postfix desugars to an
+        // assignment and could dispatch the setter, but the position isn't
+        // visible here, so both are rejected together.
+        if self.class_getter(mangled, class_args, &name.name).is_some()
+            || self.class_setter(mangled, class_args, &name.name).is_some()
+        {
+            let delta = format!("{} 1", rw_op.sign());
+            let op_symbol = rw_op.text();
+            self.error_with_help(
+                name.span,
+                format!(
+                    "postfix `{op_symbol}` is not supported on accessor property `{}`",
+                    name.name,
+                ),
+                vec![format!(
+                    "write `x.{n} = x.{n} {delta};` instead",
+                    n = name.name
+                )],
+            );
+            return Type::Error;
+        }
+        self.class_read_write_target(mangled, class_args, receiver, receiver_ty, name, rw_op)
+            .map_or(Type::Error, |rw| rw.read)
+    }
+
+    fn infer_postfix_index(
+        &mut self,
+        op: crate::PostfixOp,
+        op_symbol: &'static str,
+        receiver: ExprId,
+        index: ExprId,
+        span: Span,
+    ) -> (TypedExprKind, Type) {
+        let recv_span = self.ast.expr(receiver).span;
+        let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None);
+        let elem_ty: Type = match receiver_ty.peel() {
+            Type::Array(elem) => (**elem).clone(),
+            Type::Uint8Array => {
+                self.error_with_help(
+                    recv_span,
+                    "indexed write on `Uint8Array` not supported in v1".to_string(),
+                    vec![
+                        "use a typed array constructor or copy into a new `Uint8Array`".to_string(),
+                    ],
+                );
+                Type::Error
+            }
+            Type::Tuple(_) => {
+                self.error_with_help(
+                    recv_span,
+                    "indexed write on tuple not supported".to_string(),
+                    vec![
+                        "tuples are read-only; reconstruct the tuple with the updated element"
+                            .to_string(),
+                    ],
+                );
+                Type::Error
+            }
+            Type::Error => Type::Error,
+            _ => {
+                let help = vec![self.format_definition(&receiver_ty)];
+                self.error_with_help(
+                    span,
+                    format!("cannot assign to index of `{receiver_ty}`"),
+                    help,
+                );
+                Type::Error
+            }
+        };
+        let (typed_index, _) = self.infer_expr(index, Some(&Type::Number));
+        if !matches!(
+            elem_ty.peel(),
+            Type::Number | Type::NumberLiteral(_) | Type::BigInt | Type::Error
+        ) {
+            self.error(
+                span,
+                format!("postfix `{op_symbol}` expects `number` or `bigint`, found `{elem_ty}`",),
+            );
+        }
+        let result_ty = postfix_result_ty(&elem_ty);
+        if !matches!(elem_ty, Type::Error) && !assignable(&result_ty, &elem_ty, self.resolver()) {
+            self.error(span, format!("expected `{elem_ty}`, got `{result_ty}`"));
+        }
+        (
+            TypedExprKind::PostfixUnary {
+                op,
+                target: crate::PostfixTarget::Index {
+                    receiver: typed_receiver,
+                    index: typed_index,
+                    elem_ty: elem_ty.clone(),
+                },
+            },
+            if matches!(elem_ty, Type::Error) {
+                Type::Error
+            } else {
+                result_ty
+            },
+        )
+    }
+
+    /// `cond ? then_: else_`. `cond` is type-checked against
+    /// `Boolean`; predicate narrowings flow into the two branches the
+    /// same way `if`/`&&`/`||` already do.
+    fn infer_ternary(
+        &mut self,
+        cond: ExprId,
+        then_: ExprId,
+        else_: ExprId,
+        expected: Option<&Type>,
+        _span: Span,
+    ) -> (TypedExprKind, Type) {
+        let (typed_cond, cond_ty) = self.infer_expr(cond, None);
+        let cond_span = self.ast.expr(cond).span;
+        self.check_condition_ty(&cond_ty, cond_span);
+
+        let (true_env, false_env) = self.predicate_envs(typed_cond);
+
+        self.push_narrow_frame(true_env.clone());
+        let (typed_then, then_ty) = self.infer_expr(then_, expected);
+        self.pop_narrow_frame();
+        let then_span = self.ast.expr(then_).span;
+        let wrapped_then = self.wrap_narrow_exprs(typed_then, &true_env, then_span);
+
+        self.push_narrow_frame(false_env.clone());
+        let (typed_else, else_ty) = self.infer_expr(else_, expected);
+        self.pop_narrow_frame();
+        let else_span = self.ast.expr(else_).span;
+        let wrapped_else = self.wrap_narrow_exprs(typed_else, &false_env, else_span);
+
+        let result_ty = Type::union(vec![then_ty, else_ty]);
+        (
+            TypedExprKind::Ternary {
+                cond: typed_cond,
+                then_: wrapped_then,
+                else_: wrapped_else,
+            },
+            result_ty,
+        )
+    }
+
+    /// `a ?? b`. Result type is `union(strip_null(lhs), rhs)`.
+    /// Emits a `Severity::Warning` when `lhs` is statically
+    /// non-nullable (the `??` clause is unreachable).
+    fn infer_nullish_coalesce(
+        &mut self,
+        lhs: ExprId,
+        rhs: ExprId,
+        span: Span,
+    ) -> (TypedExprKind, Type) {
+        let (typed_lhs, lhs_ty) = self.infer_expr(lhs, None);
+        let (typed_rhs, rhs_ty) = self.infer_expr(rhs, None);
+
+        // A poisoned operand has no knowable nullability, and naming it in the
+        // message would print `<error>` at the user.
+        if !type_admits_null(&lhs_ty, self.resolver()) && !matches!(lhs_ty.peel(), Type::Error) {
+            self.diagnostics.push(crate::Diagnostic {
+                severity: Severity::Warning,
+                span,
+                message: format!(
+                    "`??` on non-nullable type `{lhs_ty}` — right side is unreachable",
+                ),
+                help: vec![],
+                notes: vec![],
+            });
+        }
+
+        // A left side that is *only* `null` always takes the right, so the
+        // result is the right's type. Running it through `strip_null` instead
+        // would yield `Error` — a poison type with no diagnostic behind it,
+        // which reaches codegen and panics in `value_type`.
+        let result_ty = if matches!(lhs_ty.peel(), Type::Null) {
+            rhs_ty
+        } else {
+            Type::union(vec![super::narrowing::strip_null(&lhs_ty), rhs_ty])
+        };
+        (
+            TypedExprKind::NullishCoalesce {
+                lhs: typed_lhs,
+                rhs: typed_rhs,
+            },
+            result_ty,
+        )
+    }
+
+    /// Infers the chain, then lifts a trailing `!` off it.
+    ///
+    /// A `!` in the middle of a chain asserts the step before it, and the chain
+    /// re-adds its own `| null` afterwards. At the tail there is no later step
+    /// to feed, and the only null left to remove is the one the short-circuit
+    /// adds — which no step-level assertion can reach. So a trailing `!` becomes
+    /// an assertion over the whole chain, which is also how TypeScript parses
+    /// `a?.b!`.
+    fn infer_optional_chain(
+        &mut self,
+        base: ExprId,
+        mut parts: Vec<ChainPart>,
+        _expected: Option<&Type>,
+        span: Span,
+    ) -> (TypedExprKind, Type) {
+        // `parts[0]` is the `?.` that opened the chain, so it is never a
+        // `NonNull`; the bound only keeps the remaining walk non-empty.
+        let mut asserts_chain = false;
+        while parts.len() > 1 && matches!(parts.last(), Some(ChainPart::NonNull { .. })) {
+            parts.pop();
+            asserts_chain = true;
+        }
+        let (kind, ty) = self.infer_chain_steps(base, parts);
+        if !asserts_chain {
+            return (kind, ty);
+        }
+        let value = self.typed_ast.push_expr(TypedExpr {
+            kind,
+            span,
+            ty: ty.clone(),
+        });
+        let result_ty = self.check_non_null_assert(&ty, span);
+        (TypedExprKind::NonNullAssert { value }, result_ty)
+    }
+
+    /// Walk the chain left-to-right: each step's receiver is the previous step's
+    /// result, and only a `?.` step sees that receiver with null stripped — a
+    /// plain step on a nullable receiver is rejected, as it would be outside a
+    /// chain. Produces `tail_ty | null` overall.
+    ///
+    /// For v1, supported part shapes: `Field` on `Type::Object` /
+    /// `Type::InterfaceRef`; `Index` on `Type::Array`; `Call` on a
+    /// closure-typed receiver; `Call` directly after a `Field` resolving to an
+    /// interface method (lowered to `MethodCall`); `NonNull` anywhere.
+    fn infer_chain_steps(&mut self, base: ExprId, parts: Vec<ChainPart>) -> (TypedExprKind, Type) {
+        let (typed_base, base_ty) = self.infer_expr(base, None);
+        // The namespace rejection subsumes the redundancy warning — a namespace
+        // receiver is non-nullable too, and two diagnostics for one `?` is noise.
+        if !self.reported_namespace_chain_base(base, &base_ty, &parts) {
+            self.warn_redundant_leading_optional(&base_ty, self.ast.expr(base).span, &parts);
+        }
+
+        let mut receiver_ty = base_ty.clone();
+        // The path the steps have walked so far, rooted at the base. Field-path
+        // narrowings are keyed on it, so a step whose path a guard has already
+        // proven reads at the narrowed type, the way the same `o.b.y` does
+        // outside a chain. `None` once a step has no path form.
+        let mut step_path = self.expr_to_reference_path(self.typed_ast.expr(typed_base));
+        let mut typed_parts: Vec<TypedChainPart> = Vec::with_capacity(parts.len());
+        // Set by a `Field` step that resolved to a method, consumed by the
+        // `Call` step that lifts the pair into a `MethodCall`.
+        let mut pending_method: Option<ChainMethod> = None;
+
+        for part in parts {
+            // A method step is only legal as the callee of the `Call` that
+            // follows it; anything else means the user wrote a bare method
+            // reference, which is not a value here. Poisoning the receiver stops
+            // *this* step from also reporting a missing member on the method's
+            // function type.
+            if !matches!(part, ChainPart::Call { .. })
+                && let Some(dangling) = pending_method.take()
+            {
+                receiver_ty = self.reject_chain_method_reference(&dangling);
+            }
+            // Must run before the receiver guards below: `!` reads no member,
+            // so it accepts the `null` and `unknown` receivers they reject —
+            // exactly as the non-chain postfix `!` does.
+            if let ChainPart::NonNull { span } = part {
+                let result_ty = self.check_non_null_assert(&receiver_ty, span);
+                receiver_ty = result_ty.clone();
+                typed_parts.push(TypedChainPart::NonNull { result_ty, span });
+                continue;
+            }
+            // `null` and `unknown` carry no member to dispatch on and no Wasm
+            // lowering: `strip_null` on `null` yields `Error`, and every member
+            // of `unknown` resolves to `unknown`. Reject here, while the member
+            // name is still in hand.
+            if matches!(receiver_ty.peel(), Type::Null | Type::Unknown) {
+                self.reject_undispatchable_chain_receiver(&receiver_ty, &part);
+                break;
+            }
+            // Only `?.` short-circuits, so only `?.` may see the receiver with
+            // null removed.
+            if !part.is_optional() && type_admits_null(&receiver_ty, self.resolver()) {
+                self.reject_nullable_chain_step(&receiver_ty, step_path.as_ref(), &part);
+                break;
+            }
+            let effective_recv = super::narrowing::strip_null(&receiver_ty);
+            // `infer_chain_part` may rewrite the previous part
+            // (InterfaceProperty + Call → MethodCall), so it gets
+            // `&mut typed_parts` rather than a borrow of the last
+            // element. It returns the new part to push and the
+            // resulting type.
+            let (mut typed_part, next_ty) = self.infer_chain_part(
+                &effective_recv,
+                step_path.as_ref(),
+                part,
+                &mut typed_parts,
+                &mut pending_method,
+            );
+            step_path = self.extend_chain_path(step_path, &typed_part);
+            receiver_ty = self.narrow_step_result(
+                step_path.as_ref(),
+                &pending_method,
+                &mut typed_part,
+                next_ty,
+            );
+            typed_parts.push(typed_part);
+        }
+        // A method named by the chain's last step never sees a `Call` at all.
+        if let Some(dangling) = pending_method.take() {
+            receiver_ty = self.reject_chain_method_reference(&dangling);
+        }
+
+        // A void-tailed chain has no value on either branch, so it stays
+        // `void` rather than widening to `void | null` (void is a return
+        // type only — see `reject_void_binding`).
+        let final_ty = if matches!(receiver_ty.peel(), Type::Void) {
+            Type::Void
+        } else {
+            Type::union(vec![receiver_ty, Type::Null])
+        };
+        (
+            TypedExprKind::OptionalChain {
+                base: typed_base,
+                parts: typed_parts,
+            },
+            final_ty,
+        )
+    }
+
+    /// A chain step that dispatches on the receiver — every kind but `!`, which
+    /// `infer_chain_steps` handles itself because it reads no member. Mirrors
+    /// the shape decisions `infer_field_access` /
+    /// `infer_index_access` / `infer_call` make on the non-optional path.
+    fn infer_chain_part(
+        &mut self,
+        receiver_ty: &Type,
+        receiver_path: Option<&super::narrowing::ReferencePath>,
+        part: ChainPart,
+        typed_parts: &mut Vec<TypedChainPart>,
+        pending_method: &mut Option<ChainMethod>,
+    ) -> (TypedChainPart, Type) {
+        match part {
+            ChainPart::NonNull { .. } => {
+                unreachable!("`!` steps never reach the member-dispatch path")
+            }
+            ChainPart::Field {
+                name,
+                optional,
+                span,
+            } => {
+                let resolved = self.lookup_chain_field(receiver_ty, receiver_path, &name, span);
+                *pending_method = resolved.method;
+                let result_ty = resolved.ty;
+                let typed_part = if let Some(iface_name) = resolved.iface {
+                    TypedChainPart::InterfaceProperty {
+                        iface: iface_name,
+                        name,
+                        optional,
+                        result_ty: result_ty.clone(),
+                        span,
+                    }
+                } else {
+                    TypedChainPart::Field {
+                        name,
+                        optional,
+                        result_ty: result_ty.clone(),
+                        span,
+                    }
+                };
+                (typed_part, result_ty)
+            }
+            ChainPart::Index {
+                idx,
+                optional,
+                span,
+            } => {
+                let (typed_idx, idx_ty) = self.infer_expr(idx, None);
+                let idx_span = self.ast.expr(idx).span;
+                if !matches!(
+                    idx_ty.peel(),
+                    Type::Number | Type::NumberLiteral(_) | Type::Error
+                ) {
+                    self.error(
+                        idx_span,
+                        format!("array index must be `number`, got `{idx_ty}`"),
+                    );
+                }
+                let elem_ty = match receiver_ty.peel() {
+                    Type::Array(elem) => *elem.clone(),
+                    Type::Error => Type::Error,
+                    Type::Unknown => Type::Unknown,
+                    other => {
+                        self.error(
+                            span,
+                            format!("cannot index into `{other}` (expected an array)"),
+                        );
+                        Type::Error
+                    }
+                };
+                (
+                    TypedChainPart::Index {
+                        idx: typed_idx,
+                        optional,
+                        result_ty: elem_ty.clone(),
+                        span,
+                    },
+                    elem_ty,
+                )
+            }
+            ChainPart::Call {
+                args,
+                type_args: _,
+                optional,
+                span,
+            } => {
+                let resolved_method = pending_method.take();
+                // The call form of a method-level-generic method: genuinely
+                // unimplemented, unlike the bare reference `chain_method_field`
+                // defers to us. Falls through rather than returning so the
+                // arguments still typecheck; the `Error` field type keeps the
+                // lift below from firing, so no second diagnostic follows.
+                if let Some(m) = &resolved_method
+                    && !m.sig.generics.is_empty()
+                {
+                    self.error(
+                        m.span,
+                        format!(
+                            "optional method `{}` with method-level generics is not yet \
+                             supported in chain position",
+                            m.name,
+                        ),
+                    );
+                }
+
+                // when the preceding part is an
+                // InterfaceProperty whose resolved type is a function,
+                // lift the InterfaceProperty + Call pair into a single
+                // `MethodCall` part. The prelude exposes a method
+                // wrapper at `<iface>#<method>` (consumed by
+                // `emit_method_call_with_receiver_on_stack`) but no
+                // separate property-getter wrapper that would let the
+                // two-step shape (property-load → call_ref) work for
+                // methods.
+                if let Some(TypedChainPart::InterfaceProperty {
+                    result_ty: prop_result_ty,
+                    ..
+                }) = typed_parts.last()
+                    && matches!(prop_result_ty.peel(), Type::Function { .. })
+                {
+                    let Some(TypedChainPart::InterfaceProperty {
+                        iface,
+                        name,
+                        optional: prop_optional,
+                        result_ty: fn_ty,
+                        span: prop_span,
+                    }) = typed_parts.pop()
+                    else {
+                        unreachable!("matched on InterfaceProperty above");
+                    };
+                    let Type::Function {
+                        params,
+                        ret,
+                        has_rest,
+                        ..
+                    } = fn_ty.peel()
+                    else {
+                        unreachable!("guarded by `matches!(.., Function)` above");
+                    };
+                    let (param_tys, ret_ty, has_rest) =
+                        (params.clone(), (**ret).clone(), *has_rest);
+                    // The lifted `MethodCall`'s `optional` is the
+                    // property step's `?.` bit; the call's own
+                    // `optional` is the trailing-`()` chaining bit
+                    // (`?.()` shape) which, for the lifted form, is
+                    // absorbed since the call is part of the same
+                    // step. The combined span covers
+                    // property-start..call-end so diagnostics point
+                    // at the whole `o?.m(args)` form.
+                    let combined_span = prop_span.merge(span);
+                    let _ = optional;
+                    // A method resolved through `find_method` binds against its
+                    // full signature; a function-typed *property* has only the
+                    // structural type to bind against.
+                    let typed_args = match &resolved_method {
+                        Some(m) => self.bind_param_call_args(
+                            &m.params,
+                            &ret_ty,
+                            CallLift::Method {
+                                receiver_ty: &m.receiver_ty,
+                                name: &name.name,
+                                sig: &m.sig,
+                            },
+                            &args,
+                            combined_span,
+                        ),
+                        None => self.bind_fn_type_call_args(
+                            &param_tys,
+                            &ret_ty,
+                            has_rest,
+                            CallLift::Anon,
+                            &args,
+                            combined_span,
+                        ),
+                    };
+                    return (
+                        TypedChainPart::MethodCall {
+                            iface,
+                            name,
+                            args: typed_args,
+                            optional: prop_optional,
+                            result_ty: ret_ty.clone(),
+                            span: combined_span,
+                        },
+                        ret_ty,
+                    );
+                }
+
+                // Closure-typed receiver: ordinary `Call` part.
+                let (ret_ty, typed_args) = match receiver_ty.peel() {
+                    Type::Function {
+                        params,
+                        ret,
+                        has_rest,
+                        ..
+                    } => {
+                        let (param_tys, ret_ty, has_rest) =
+                            (params.clone(), (**ret).clone(), *has_rest);
+                        let typed_args = self.bind_fn_type_call_args(
+                            &param_tys,
+                            &ret_ty,
+                            has_rest,
+                            CallLift::Anon,
+                            &args,
+                            span,
+                        );
+                        (ret_ty, typed_args)
+                    }
+                    other => {
+                        let ret_ty = match other {
+                            Type::Error => Type::Error,
+                            Type::Unknown => Type::Unknown,
+                            _ => {
+                                self.error(
+                                    span,
+                                    format!("cannot call `{other}` (expected a function)"),
+                                );
+                                Type::Error
+                            }
+                        };
+                        let typed_args = args.iter().map(|&a| self.infer_expr(a, None).0).collect();
+                        (ret_ty, typed_args)
+                    }
+                };
+                (
+                    TypedChainPart::Call {
+                        args: typed_args,
+                        optional,
+                        result_ty: ret_ty.clone(),
+                        span,
+                    },
+                    ret_ty,
+                )
+            }
+        }
+    }
+
+    /// A static-dispatch interface is a namespace, not a value: its binding
+    /// lowers to an inert typed null that every call site drops. A `?.` on it
+    /// would see that null, short-circuit, and yield `null` where the member was
+    /// asked for — so reject the form rather than compile that meaning.
+    fn reported_namespace_chain_base(
+        &mut self,
+        base: ExprId,
+        base_ty: &Type,
+        parts: &[ChainPart],
+    ) -> bool {
+        let Some(first) = parts.first() else {
+            return false;
+        };
+        if !first.is_optional() {
+            return false;
+        }
+        let Type::InterfaceRef { mangled, name, .. } = base_ty.peel() else {
+            return false;
+        };
+        let Some(sym) = self.resolver().lookup(mangled, name) else {
+            return false;
+        };
+        if !matches!(
+            &sym.kind,
+            crate::TypeKind::Interface {
+                dispatch: crate::Dispatch::Static,
+                ..
+            }
+        ) {
+            return false;
+        }
+        // The declared interface is `NumberConstructor` / `InstantConstructor`,
+        // which is not a name in scope — so a fix naming it would not compile.
+        // Quote the path the source wrote, and where there is none (a ternary,
+        // a call result), name no replacement at all rather than a wrong one.
+        let base_expr = self.ast.expr(base);
+        let (subject, help) = match self.dotted_path(base) {
+            Some(written) => {
+                let help = match namespace_fix_forms(&written, first) {
+                    Some((fixed, wrote)) => {
+                        format!("a namespace is never null — write `{fixed}`, not `{wrote}`")
+                    }
+                    None => NAMESPACE_DROP_HELP.to_string(),
+                };
+                (format!("`{written}`"), help)
+            }
+            None => (
+                "this expression".to_string(),
+                NAMESPACE_DROP_HELP.to_string(),
+            ),
+        };
+        self.error_with_help(
+            base_expr.span,
+            format!("{subject} is a namespace, not a value — `?.` has nothing to guard"),
+            vec![help],
+        );
+        true
+    }
+
+    /// The dotted name an expression spells (`Number`, `Temporal.Instant`), if
+    /// it is one. A namespace is always reached by a path of plain identifiers,
+    /// so anything else has no name to quote back at the user.
+    fn dotted_path(&self, expr: ExprId) -> Option<String> {
+        match &self.ast.expr(expr).kind {
+            ExprKind::Identifier(ident) => Some(ident.name.clone()),
+            ExprKind::FieldAccess { receiver, name } => {
+                Some(format!("{}.{}", self.dotted_path(*receiver)?, name.name))
+            }
+            // `(Number)?.x` is a shape an LLM writes; the parens are not part
+            // of the name.
+            ExprKind::Paren(inner) => self.dotted_path(*inner),
+            _ => None,
+        }
+    }
+
+    /// A `?.` on a base that can never be null does nothing. Warn only for the
+    /// *leading* `?.`, where the base's type is the user's own annotation —
+    /// mid-chain the same shape comes from a member's declared type, which the
+    /// user may not control.
+    fn warn_redundant_leading_optional(
+        &mut self,
+        base_ty: &Type,
+        base_span: Span,
+        parts: &[ChainPart],
+    ) {
+        if parts.first().is_none_or(|p| !p.is_optional()) {
+            return;
+        }
+        // A poisoned receiver has no knowable nullability, and naming it in the
+        // message would print `<error>` at the user.
+        if type_admits_null(base_ty, self.resolver()) || matches!(base_ty.peel(), Type::Error) {
+            return;
+        }
+        self.diagnostics.push(crate::Diagnostic {
+            severity: Severity::Warning,
+            span: base_span,
+            message: format!("optional chain on non-nullable receiver `{base_ty}` is redundant"),
+            help: vec![],
+            notes: vec![],
+        });
+    }
+
+    /// Report a chain step whose receiver has no member to dispatch on.
+    /// `unknown` gets the same "narrow first" help the non-chain field-access
+    /// path gives, since narrowing away `null` — whether by `?.` or a guard —
+    /// leaves the dynamic type just as unknown.
+    fn reject_undispatchable_chain_receiver(&mut self, receiver_ty: &Type, part: &ChainPart) {
+        let ChainStepPhrasing { action, span, .. } = chain_step_phrasing(part);
+        if matches!(receiver_ty.peel(), Type::Unknown) {
+            self.error_with_help(
+                span,
+                format!("cannot {action} a value of type `unknown`"),
+                vec![
+                    "narrow first with `typeof x === \"…\"`, `Array.isArray(x)`, \
+                     or a user-defined type guard — a null check alone leaves \
+                     the type `unknown`"
+                        .to_string(),
+                ],
+            );
+            return;
+        }
+        self.error(
+            span,
+            format!(
+                "cannot {action} a value of type `null` — the receiver is always \
+                 null, so give it a type that can hold a value"
+            ),
+        );
+    }
+
+    /// Report a plain `.`/`[]`/`()` step whose receiver can be null. The earlier
+    /// `?.` short-circuits its own step only; every step after it is an ordinary
+    /// access and needs its own null handling.
+    /// A step whose receiver still admits `null`. `receiver_path` is that
+    /// receiver's path, when it has one: a step is admitted on the strength of a
+    /// narrowing, so the *absence* of one is often the whole reason this fires,
+    /// and the hint that names what killed it is the actionable half. Without it
+    /// the `?.` suggestion silences a dropped narrowing rather than fixing it.
+    fn reject_nullable_chain_step(
+        &mut self,
+        receiver_ty: &Type,
+        receiver_path: Option<&super::narrowing::ReferencePath>,
+        part: &ChainPart,
+    ) {
+        let ChainStepPhrasing {
+            action,
+            optional_form,
+            span,
+        } = chain_step_phrasing(part);
+        let mut help = vec![format!(
+            "continue the chain with `{optional_form}`, or assert non-null with `!`"
+        )];
+        let mut notes = Vec::new();
+        if let Some((extra_help, extra_notes)) =
+            receiver_path.and_then(|p| self.narrowing_hint_for_path(p))
+        {
+            help.extend(extra_help);
+            notes.extend(extra_notes);
+        }
+        self.error_with_help_and_notes(
+            span,
+            format!("cannot {action} a value of type `{receiver_ty}`"),
+            help,
+            notes,
+        );
+    }
+
+    /// A chain step named a method but no `Call` consumed it. Left admitted,
+    /// the step lowers to an argument-less invocation of the method wrapper.
+    ///
+    /// Returns the type the chain continues with: poisoned, so the step that
+    /// follows doesn't also report a miss on the method's function type, and a
+    /// trailing reference doesn't hand that type to the binding.
+    fn reject_chain_method_reference(&mut self, method: &ChainMethod) -> Type {
+        self.report_method_reference(method.span, &method.receiver_ty, &method.name, &method.sig);
+        Type::Error
+    }
+
+    /// `s.field` on a union whose every member carries fields — object types,
+    /// interfaces, classes, or a mix. Accepts iff every member has `field`; the
+    /// result is the canonical union of each member's field type. The members may
+    /// lay the field out at different slots, so there is no static index — the
+    /// read goes through the runtime field-name scan over
+    /// `$ObjectShape.field_names`, which class instances carry too (their
+    /// struct's header slots 0-2 are the `$ObjectShape` prefix).
+    ///
+    /// Reports the first member that cannot back the field and returns
+    /// `Type::Error`. `receiver_path` anchors the "what killed the narrowing"
+    /// hint; `None` omits it.
+    fn union_field_read_ty(
+        &mut self,
+        span: Span,
+        receiver_path: Option<&super::narrowing::ReferencePath>,
+        receiver_ty: &Type,
+        members: &[Type],
+        name: &str,
+    ) -> Type {
+        let mut per_member_tys: Vec<Type> = Vec::with_capacity(members.len());
+        for m in members {
+            match self.union_member_field_read_ty(m, name) {
+                Ok(ty) => per_member_tys.push(ty),
+                Err(miss) => {
+                    let missing = m.clone();
+                    self.report_union_field_miss(
+                        span,
+                        receiver_path,
+                        receiver_ty,
+                        &missing,
+                        name,
+                        miss,
+                    );
+                    return Type::Error;
+                }
+            }
+        }
+        Type::union(per_member_tys)
+    }
+
+    /// Look up a field on an optional-chain receiver. The resolution carries
+    /// the field's type, (for interface receivers) the owner's mangled name so
+    /// the typed chain part can be tagged `InterfaceProperty` vs `Field`, and
+    /// (for methods) the signature a following `Call` binds its arguments to.
+    fn lookup_chain_field(
+        &mut self,
+        receiver_ty: &Type,
+        receiver_path: Option<&super::narrowing::ReferencePath>,
+        name: &Ident,
+        span: Span,
+    ) -> ChainField {
+        match receiver_ty.peel() {
+            // An object literal carries the prelude `Object` interface's members
+            // (`toJson`, …) beside its own fields, so a miss on the field map is
+            // not yet a miss on the receiver.
+            Type::Object { fields } => {
+                if let Some(f) = fields.get(&name.name) {
+                    let ty = if f.optional {
+                        Type::union(vec![f.ty.clone(), Type::Null])
+                    } else {
+                        f.ty.clone()
+                    };
+                    return ChainField::plain(ty);
+                }
+                if let Some(found) = self.chain_method_lookup(receiver_ty, name, span) {
+                    return found;
+                }
+                self.report_missing_object_field(span, receiver_ty, &name.name);
+                ChainField::plain(Type::Error)
+            }
+            Type::Error => ChainField::plain(Type::Error),
+            Type::Unknown => ChainField::plain(Type::Unknown),
+            // A union reads the same way it does off a chain; `union_field_read_ty`
+            // owns the rule, and this arm exists so `u?.v` and `u.v` agree.
+            Type::Union(members) if members.iter().all(Self::is_field_bearing) => {
+                let ty =
+                    self.union_field_read_ty(span, receiver_path, receiver_ty, members, &name.name);
+                ChainField::plain(ty)
+            }
+            // Class receivers resolve against the class field map before the
+            // interface/method attempts below — `lookup_interface_property`
+            // rejects a class outright and `find_method` only covers methods,
+            // so without this a `?.` on a class field reports it as missing.
+            // Same authority as `infer_property_access`, so the same fields are
+            // visible (inherited, generic-substituted, module-scoped privacy).
+            Type::ClassRef { mangled, args, .. } => {
+                let mangled = mangled.clone();
+                let class_args = args.clone();
+                if let Some(read_ty) = self.class_field_read_ty(&mangled, &class_args, name) {
+                    return ChainField::plain(read_ty);
+                }
+                // Statics after instance members, for the reason
+                // `infer_property_access`'s `ClassRef` arm spells out.
+                if let Some(found) = self.chain_method_lookup(receiver_ty, name, span) {
+                    return found;
+                }
+                if self.report_static_on_instance(receiver_ty, &mangled, name) {
+                    return ChainField::plain(Type::Error);
+                }
+                self.report_missing_field(span, receiver_ty, &name.name);
+                ChainField::plain(Type::Error)
+            }
+            // interface receivers — mirror
+            // `InterfacePropertyAccess`'s `find_property` lookup. Returns
+            // the iface mangled name so the chain part lifts to
+            // `InterfaceProperty`. If the name doesn't resolve as a
+            // property, try `find_method` so chains like `s?.toUpperCase()`
+            // get a function-typed `InterfaceProperty` step that
+            // [`infer_chain_part`]'s `Call` branch can lift to
+            // `MethodCall`.
+            _ => {
+                if let Some((prop_sig, bindings, iface_mangled, dispatch)) =
+                    self.lookup_interface_property(receiver_ty, &name.name)
+                {
+                    let resolved_ty = if bindings.is_empty() {
+                        prop_sig.ty
+                    } else {
+                        super::generic::substitute_typevars(&prop_sig.ty, &bindings)
+                    };
+                    if dispatch == crate::Dispatch::VTable {
+                        let read_ty = if prop_sig.optional {
+                            Type::union(vec![resolved_ty, Type::Null])
+                        } else {
+                            resolved_ty
+                        };
+                        return ChainField::plain(read_ty);
+                    }
+                    return ChainField::property(resolved_ty, iface_mangled);
+                }
+                if let Some(found) = self.chain_method_lookup(receiver_ty, name, span) {
+                    return found;
+                }
+                self.report_missing_field(span, receiver_ty, &name.name);
+                ChainField::plain(Type::Error)
+            }
+        }
+    }
+
+    /// The name resolved as a method on `receiver_ty`, in the form a chain step
+    /// takes. Every receiver kind tries this after its own member map, so a
+    /// method never reports as a missing field.
+    fn chain_method_lookup(
+        &mut self,
+        receiver_ty: &Type,
+        name: &Ident,
+        span: Span,
+    ) -> Option<ChainField> {
+        let (method_sig, bindings, iface_mangled, _dispatch) =
+            self.find_method(receiver_ty, &name.name)?;
+        Some(self.chain_method_field(
+            receiver_ty,
+            method_sig,
+            &bindings,
+            iface_mangled,
+            name,
+            span,
+        ))
+    }
+
+    /// A step whose path a guard has already narrowed yields the narrowed type,
+    /// admitting what the same `receiver.field` admits outside a chain. Rewrites
+    /// the step in place so the next step's receiver follows. `result_path` is
+    /// the path *including* this step — the referent being read.
+    ///
+    /// The two paths can still disagree on the *value*: outside a chain the read
+    /// is rewritten to the guard's shadow local, while a step re-reads the slot.
+    /// Where a narrowing has gone stale — a call, a loop back edge — the shadow
+    /// holds what the guard saw and the step sees what is there now.
+    ///
+    /// A method step is skipped: its function type is not something the narrowing
+    /// store keys, and rewriting it would strand the `Call` step that consumes it.
+    ///
+    /// So is an index step, which is where the whole index rule lives: a
+    /// narrowing whose path *ends* at an index is refused on the plain path too
+    /// — no shadow local can be synthesized for an element, so
+    /// `unpreserved_shape_hint` tells the author to bind it to a `const` first —
+    /// and applying it here would let the chain accept what `h.elems[0].y`
+    /// rejects. A path that merely passes *through* an index still narrows at the
+    /// steps after it, which is why [`extend_chain_path`] keeps walking past one.
+    fn narrow_step_result(
+        &self,
+        result_path: Option<&super::narrowing::ReferencePath>,
+        pending_method: &Option<ChainMethod>,
+        part: &mut TypedChainPart,
+        step_ty: Type,
+    ) -> Type {
+        if pending_method.is_some() || matches!(part, TypedChainPart::Index { .. }) {
+            return step_ty;
+        }
+        let Some(view) = result_path.and_then(|p| self.lookup_narrowed_view(p)) else {
+            return step_ty;
+        };
+        let narrowed = view.narrowed_ty.clone();
+        part.set_result_ty(narrowed.clone());
+        narrowed
+    }
+
+    /// Extends the chain's reference path by one step, keying the field-path
+    /// narrowings a step may read at.
+    ///
+    /// A call has no path form at all, and a computed index has none we can key
+    /// a narrowing on; both drop the path, so the steps after them read their
+    /// declared types. A *literal* index extends it — a view is nonetheless
+    /// never applied at one, for the reason [`narrow_step_result`] gives.
+    ///
+    /// `!` steps never reach here; [`infer_chain_steps`] handles them before it
+    /// dispatches. Its arm records the rule the exhaustive match needs anyway:
+    /// `!` asserts the referent, it does not move to a new one.
+    fn extend_chain_path(
+        &self,
+        path: Option<super::narrowing::ReferencePath>,
+        part: &TypedChainPart,
+    ) -> Option<super::narrowing::ReferencePath> {
+        let mut path = path?;
+        match part {
+            TypedChainPart::Field { name, .. } | TypedChainPart::InterfaceProperty { name, .. } => {
+                path.chain
+                    .push(super::narrowing::PathElem::Field(name.name.clone()));
+                Some(path)
+            }
+            TypedChainPart::Index { idx, .. } => {
+                let lit =
+                    super::predicate_envs::index_literal_value(&self.typed_ast.expr(*idx).kind)?;
+                path.chain.push(super::narrowing::PathElem::Index(lit));
+                Some(path)
+            }
+            TypedChainPart::NonNull { .. } => Some(path),
+            TypedChainPart::Call { .. } | TypedChainPart::MethodCall { .. } => None,
+        }
+    }
+
+    /// A method resolved in chain position: its function type plus the owner's
+    /// mangled name, so [`infer_chain_part`]'s `Call` branch can lift the step
+    /// to a `MethodCall`, plus the substituted signature so that branch can
+    /// bind the call's arguments to it.
+    ///
+    /// A method with method-level generics gets an `Error` field type and no
+    /// owner, and carries its `ChainMethod` anyway: which diagnostic it earns
+    /// depends on whether a `Call` follows, which only the driver knows. A bare
+    /// reference is permanently illegal and takes
+    /// [`reject_chain_method_reference`]; the call form is the one that is
+    /// merely unimplemented, and the `Call` branch reports it.
+    fn chain_method_field(
+        &mut self,
+        receiver_ty: &Type,
+        method_sig: crate::MethodSig,
+        bindings: &std::collections::BTreeMap<String, Type>,
+        owner_mangled: crate::MangledName,
+        name: &Ident,
+        span: Span,
+    ) -> ChainField {
+        let params: Vec<crate::Param> = method_sig
+            .params
+            .iter()
+            .map(|p| crate::Param {
+                ty: super::generic::substitute_typevars(&p.ty, bindings),
+                ..p.clone()
+            })
+            .collect();
+        // The `Error` field type is load-bearing beyond poisoning the step: it
+        // also keeps the `Call` branch off the `InterfaceProperty` lift, which
+        // cannot represent an un-bound method-level generic.
+        let (ty, iface) = if method_sig.generics.is_empty() {
+            let ret = super::generic::substitute_typevars(&method_sig.ret, bindings);
+            let has_rest = params.last().is_some_and(|p| p.rest);
+            let fn_ty = Type::Function {
+                params: params.iter().map(|p| p.ty.clone()).collect(),
+                ret: Box::new(ret),
+                predicate: None,
+                has_rest,
+            };
+            (fn_ty, Some(owner_mangled))
+        } else {
+            (Type::Error, None)
+        };
+        ChainField {
+            ty,
+            iface,
+            method: Some(ChainMethod {
+                receiver_ty: receiver_ty.clone(),
+                sig: method_sig,
+                params,
+                name: name.name.clone(),
+                span,
+            }),
+        }
+    }
+
+    /// Whether `x as T` would compile for an `x` of type `source`, asked exactly
+    /// as [`infer_as`](Self::infer_as) asks it — so a diagnostic offering a cast
+    /// can neither name a target the cast rejects nor withhold one it accepts.
+    ///
+    /// Both halves matter. A proven upcast emits no runtime test, so it does not
+    /// need a runtime-verifiable target: a method-bearing or recursive interface
+    /// is an illegal *check* target and still a legal cast from a source already
+    /// assignable to it. Otherwise the target is reduced to its structural shape
+    /// and put to the same predicate `infer_as` uses.
+    pub(super) fn is_legal_cast_target(&self, source: &Type, target: &Type) -> bool {
+        let shape = self.reduce_interfaces_to_shapes(target, &mut Vec::new());
+        if super::assignable::assignable(source, &shape, self.resolver()) {
+            return true;
+        }
+        unsupported_cast_target_reason(&shape, self.resolver(), &mut Vec::new()).is_none()
+    }
+
+    /// typecheck `x as T`. Resolves the target, infers the operand, validates the static
+    /// relationship, and decides the runtime check:
+    ///
+    /// - Relatedness: at least one direction `assignable` must hold (interfaces relate via
+    ///   their structural data shape). Neither → reject (the check would always fail).
+    /// - `as` is the language's runtime-validation boundary. When the source is **not** a
+    ///   static subtype of the target (`unknown`, downcasts), emit a deep structural check
+    ///   (`Cast.check = Some(shape)`); codegen verifies fields/elements/literals and throws
+    ///   on mismatch. A statically-proven upcast carries `check = None` (repr-only narrow).
+    ///
+    /// `check`'s shape has all interfaces reduced to their structural data form, so codegen
+    /// walks plain object/array/primitive types and never needs interface knowledge.
+    fn infer_as(&mut self, inner: ExprId, ty: TypeAnnotation, span: Span) -> (TypedExprKind, Type) {
+        let target_ty = self.resolve_type(&ty);
+        let (inner_id, inner_ty) = self.infer_expr(inner, None);
+        // Error escape — already in error state; produce a Cast so
+        // downstream passes see a sensible node, but don't emit more
+        // diagnostics on top.
+        if matches!(target_ty.peel(), Type::Error) || matches!(inner_ty.peel(), Type::Error) {
+            return (
+                TypedExprKind::Cast {
+                    value: inner_id,
+                    target_ty: target_ty.clone(),
+                    check: None,
+                },
+                target_ty,
+            );
+        }
+        // `assignable` is nominal for `InterfaceRef`; relate (and later check) against the
+        // interface's structural data shape so `unknown`/structurally-compatible sources pass.
+        // A `void`-carrying source has no value for the cast to check, and
+        // `number | void` → `number` otherwise passes the assignability pair
+        // below and reaches codegen.
+        if inner_ty.carries_void() {
+            self.error_with_help(
+                self.ast.expr(inner).span,
+                format!("cannot cast `{inner_ty}`: it has no value"),
+                vec![
+                    "`void` carries nothing to cast. Call the expression as its own                      statement, and cast a value produced separately."
+                        .to_string(),
+                ],
+            );
+            return (
+                TypedExprKind::Cast {
+                    value: inner_id,
+                    target_ty: target_ty.clone(),
+                    check: None,
+                },
+                Type::Error,
+            );
+        }
+        let shape = self.reduce_interfaces_to_shapes(&target_ty, &mut Vec::new());
+        let inner_to_target = assignable(&inner_ty, &shape, self.resolver());
+        let target_to_inner = assignable(&shape, &inner_ty, self.resolver());
+        if !inner_to_target && !target_to_inner {
+            let blockers = optional_vs_required_blockers(&inner_ty, &shape, self.resolver());
+            if let Some(first) = blockers.first() {
+                let (subj, verb) = if blockers.len() == 1 {
+                    ("field", "is")
+                } else {
+                    ("fields", "are")
+                };
+                let list = blockers
+                    .iter()
+                    .map(|f| format!("`{f}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                self.error_with_help(
+                    span,
+                    format!(
+                        "cannot cast `{inner_ty}` to `{target_ty}`: {subj} {list} {verb} \
+                         optional on the source but required on the target"
+                    ),
+                    vec![format!(
+                        "you don't need a cast — use the value directly and narrow the \
+                         optional field before access, e.g. `if (x.{first} !== null)` or \
+                         `x.{first}!`"
+                    )],
+                );
+                return (TypedExprKind::Null, Type::Error);
+            }
+            self.error_with_help(
+                span,
+                format!(
+                    "cannot cast `{inner_ty}` to `{target_ty}`: no assignable direction \
+                     between these types"
+                ),
+                vec![format!(
+                    "re-check the target — a typed value is usually usable directly. For a \
+                     deliberate dynamic reinterpretation, cast through `unknown`: \
+                     `x as unknown as {target_ty}`"
+                )],
+            );
+            return (TypedExprKind::Null, Type::Error);
+        }
+        // Deep check only when the source isn't a proven subtype of the target.
+        // A proven upcast emits no runtime test, so it doesn't need the target
+        // to be runtime-verifiable — `m as Map<K, V>` on an `m` that already is
+        // one must compile even though a `Map` can't be structurally checked.
+        let check = if inner_to_target {
+            None
+        } else {
+            if let Some(reason) =
+                unsupported_cast_target_reason(&shape, self.resolver(), &mut Vec::new())
+            {
+                self.error_with_help(
+                    span,
+                    format!("`as` to `{target_ty}` is not yet supported: {reason}"),
+                    vec![
+                        "supported targets: primitives (`number`, `string`, `boolean`, \
+                         `null`), `bigint`, arrays, tuples, `Uint8Array`, object shapes \
+                         (`{ a: T }`), interfaces, closures, `unknown`, and unions of these"
+                            .to_string(),
+                    ],
+                );
+                return (TypedExprKind::Null, Type::Error);
+            }
+            Some(Box::new(shape))
+        };
+        (
+            TypedExprKind::Cast {
+                value: inner_id,
+                target_ty: target_ty.clone(),
+                check,
+            },
+            target_ty,
+        )
+    }
+
+    /// `x instanceof Foo` — a runtime class test. `Foo` must name a class (interfaces aren't
+    /// runtime types in v1), and `x`'s static type must be related to `Foo` by subtyping in
+    /// either direction; an unrelated pair is an always-false test and a hard error. Lowers
+    /// to the nominal vtable-identity walk (`emit_nominal_instance_test`) — shape can't
+    /// carry the answer, same-shape classes canonicalize together — and feeds the
+    /// narrowing engine.
+    fn infer_instanceof(
+        &mut self,
+        value: ExprId,
+        ty: TypeAnnotation,
+        span: Span,
+    ) -> (TypedExprKind, Type) {
+        let class_ty = self.resolve_runtime_class_test(&ty);
+        let (value_id, value_ty) = self.infer_expr(value, None);
+
+        // Already in an error state (unknown type name or bad operand) — produce a node so
+        // downstream passes stay happy, but don't pile on diagnostics.
+        if matches!(class_ty.peel(), Type::Error) || matches!(value_ty.peel(), Type::Error) {
+            return (
+                TypedExprKind::InstanceOf {
+                    value: value_id,
+                    class: class_ty,
+                },
+                Type::Boolean,
+            );
+        }
+
+        // `Uint8Array` keeps its own type variant rather than becoming a class
+        // the way Map/Set did — the variant carries byte-array semantics across
+        // a dozen typechecker sites. It still tests soundly: `$Uint8Array` is
+        // canonically unique, so codegen reaches it with the structural
+        // `ref.test` that `is`/`as` already use.
+        if !matches!(class_ty.peel(), Type::ClassRef { .. } | Type::Uint8Array) {
+            self.error_with_help(
+                ty.span,
+                format!(
+                    "`instanceof` requires a class on the right-hand side, but `{class_ty}` is not a class",
+                ),
+                vec![
+                    "interfaces aren't runtime types in v1 — test against a class".to_string(),
+                ],
+            );
+            return (
+                TypedExprKind::InstanceOf {
+                    value: value_id,
+                    class: Type::Error,
+                },
+                Type::Boolean,
+            );
+        }
+
+        let class_ty = self.refine_class_test_target(&class_ty, &value_ty);
+        // Relatedness is per-member on both sides: `x: Box<number> | string`
+        // can still be a `Sub<number>`, and the test may narrow to any of
+        // several instantiations. Requiring every pairing would wrongly call
+        // that always-false.
+        //
+        // A target parameter the operand didn't determine probes as a
+        // wildcard rather than as `unknown`: `Shaped` (an interface) can hold
+        // some `Box<T>`, and `unknown` would compare against the interface's
+        // concrete member types and say otherwise. A genuinely impossible
+        // pair — `Box<number>` against `StrBox extends Box<string>` — has no
+        // undetermined parameters and is still caught.
+        let probes: Vec<Type> = class_members(&class_ty)
+            .iter()
+            .map(wildcard_undetermined_args)
+            .collect();
+        let related = class_members(&value_ty).iter().any(|m| {
+            probes
+                .iter()
+                .any(|t| assignable(m, t, self.resolver()) || assignable(t, m, self.resolver()))
+        });
+        if !related {
+            self.error_with_help(
+                span,
+                format!(
+                    "`{value_ty} instanceof {class_ty}` is always false: the types are not related",
+                ),
+                vec![format!(
+                    "`{value_ty}` can never be an instance of `{class_ty}` — widen to \
+                     `unknown` first if a dynamic test is intended",
+                )],
+            );
+            return (
+                TypedExprKind::InstanceOf {
+                    value: value_id,
+                    class: Type::Error,
+                },
+                Type::Boolean,
+            );
+        }
+
+        (
+            TypedExprKind::InstanceOf {
+                value: value_id,
+                class: class_ty,
+            },
+            Type::Boolean,
+        )
+    }
+
+    /// Resolve an annotation used as a **runtime class test** — the RHS of
+    /// `instanceof`, or a `catch` clause's type. The runtime check is the
+    /// nominal vtable-identity walk, which cannot see type arguments, so a
+    /// generic class is written bare and narrows at `unknown` args (the
+    /// `Array.isArray` precedent).
+    ///
+    /// Explicit arguments are rejected however they are spelled: directly,
+    /// through a namespace, or behind an alias. Accepting them would narrow a
+    /// value to an instantiation the test never checked.
+    pub(super) fn resolve_runtime_class_test(&mut self, ty: &TypeAnnotation) -> Type {
+        // The bare form is resolved first because `resolve_class_reference`
+        // would reject its arity before this function saw it.
+        if let Some((package, name, mangled, arity)) = self.bare_generic_class_target(ty) {
+            return Type::class_ref(package, name, mangled, vec![Type::Unknown; arity]);
+        }
+        let resolved = self.resolve_type(ty);
+        let Type::ClassRef { args, .. } = resolved.peel() else {
+            return resolved;
+        };
+        if args.iter().all(|a| matches!(a, Type::Unknown)) {
+            return resolved;
+        }
+        // Report the spelling the source used — the class's own name may not
+        // even be in scope here (`ns.Box`), and behind an alias it never
+        // appears on the line at all.
+        let Type::ClassRef { name, .. } = resolved.peel() else {
+            return resolved;
+        };
+        let class_name = name.clone();
+        let spelled = self
+            .annotation_type_name(ty)
+            .unwrap_or_else(|| class_name.clone());
+        // `ns.Box` is already the testable spelling; an alias is not, so point
+        // at the class it names.
+        let bare = if spelled == class_name || spelled.ends_with(&format!(".{class_name}")) {
+            spelled.clone()
+        } else {
+            class_name
+        };
+        let erased = args
+            .iter()
+            .map(|_| "unknown")
+            .collect::<Vec<_>>()
+            .join(", ");
+        let help = if bare == spelled {
+            format!(
+                "type arguments are erased at runtime — test the class itself: \
+                 `{bare}` (the value narrows to `{bare}<{erased}>`)"
+            )
+        } else {
+            format!(
+                "`{spelled}` names one instantiation, and type arguments are erased at \
+                 runtime — test the class itself: `{bare}` (the value narrows to \
+                 `{bare}<{erased}>`)"
+            )
+        };
+        self.error_with_help(
+            ty.span,
+            format!("`{spelled}` cannot be tested at a specific instantiation"),
+            vec![help],
+        );
+        Type::Error
+    }
+
+    /// Bind a runtime class test's erased type arguments from the operand.
+    ///
+    /// `x instanceof Sub` resolves `Sub` at `unknown` args because the runtime
+    /// walk carries none. When `x` is already a `Box<number>` and `Sub<T>`
+    /// extends `Box<T>`, though, a successful test proves `Sub<number>` — so
+    /// solve the target's parameters against the operand rather than narrowing
+    /// to an unrelated `Sub<unknown>`, which relates to nothing and drops the
+    /// narrowing entirely.
+    fn refine_class_test_target(&self, target: &Type, operand: &Type) -> Type {
+        let Type::ClassRef { args, .. } = target.peel() else {
+            return target.clone();
+        };
+        if args.is_empty() || !args.iter().all(|a| matches!(a, Type::Unknown)) {
+            return target.clone();
+        }
+        // Only refine when every union member the target could descend from
+        // agrees on the instantiation. Picking one of several would claim
+        // something the runtime tag never proved — and because same-shape
+        // classes canonicalize to one WasmGC type, reading a value at the
+        // wrong type would not even trap. Disagreement leaves the arguments
+        // erased, which stays sound and narrows to `unknown` members.
+        let members = class_members(operand);
+        let refined: Vec<Type> = members
+            .iter()
+            .filter_map(|m| self.solve_class_test_target(target, m))
+            .collect();
+        match refined.split_first() {
+            Some((first, rest)) if rest.iter().all(|r| r == first) => first.clone(),
+            _ => target.clone(),
+        }
+    }
+
+    /// Solve `target`'s type parameters so that its `extends` chain reaches
+    /// `operand`'s class at `operand`'s arguments. `None` when `operand` is not
+    /// a class the target descends from.
+    fn solve_class_test_target(&self, target: &Type, operand: &Type) -> Option<Type> {
+        use crate::typechecker::type_param_substitution::TypeParamSubstitution;
+
+        let Type::ClassRef {
+            mangled: target_mangled,
+            package,
+            name,
+            ..
+        } = target.peel()
+        else {
+            return None;
+        };
+        let Type::ClassRef {
+            mangled: operand_mangled,
+            args: operand_args,
+            ..
+        } = operand.peel()
+        else {
+            return None;
+        };
+        let crate::TypeKind::Class { generics, .. } = &self
+            .lookup_structural_type(target_mangled, name)
+            .map(|s| &s.kind)?
+        else {
+            return None;
+        };
+        let identity: Vec<Type> = generics.iter().map(|g| Type::TypeVar(g.clone())).collect();
+        // The args the target's own parameters take on where its chain reaches
+        // the operand's class — `[T]` for `Sub<T> extends Box<T>`.
+        let at_operand =
+            self.resolver()
+                .class_args_at_ancestor(target_mangled, &identity, operand_mangled)?;
+        let mut sub = TypeParamSubstitution::new();
+        for (from_target, actual) in at_operand.iter().zip(operand_args) {
+            let _ = sub.unify(from_target, actual, self.resolver());
+        }
+        let solved: Vec<Type> = identity
+            .iter()
+            .map(|t| {
+                let applied = sub.apply(t);
+                // A parameter the operand doesn't constrain stays erased.
+                if type_contains_type_var(&applied) {
+                    Type::Unknown
+                } else {
+                    applied
+                }
+            })
+            .collect();
+        Some(Type::class_ref(
+            package.clone(),
+            name.clone(),
+            target_mangled.clone(),
+            solved,
+        ))
+    }
+
+    /// How the source spelled a type annotation's name: `Box`, or the dotted
+    /// `ns.Box`. Type arguments are a separate part of the annotation and are
+    /// not included.
+    pub(super) fn annotation_type_name(&self, annot: &TypeAnnotation) -> Option<String> {
+        match &annot.kind {
+            crate::TypeAnnotationKind::Name { name_span, .. } => {
+                Some(self.source[name_span.start as usize..name_span.end as usize].to_string())
+            }
+            crate::TypeAnnotationKind::Qualified { path, .. } => Some(
+                path.iter()
+                    .map(|s| &self.source[s.start as usize..s.end as usize])
+                    .collect::<Vec<&str>>()
+                    .join("."),
+            ),
+            _ => None,
+        }
+    }
+
+    /// A bare (argument-less) mention of a generic class, spelled either
+    /// directly or through a namespace import. `None` for anything else,
+    /// including an alias — an alias names an instantiation, so it must go
+    /// through the normal resolver and be rejected there.
+    fn bare_generic_class_target(
+        &mut self,
+        ty: &TypeAnnotation,
+    ) -> Option<(crate::Package, String, crate::MangledName, usize)> {
+        let generic_class = |sym: &crate::TypeSymbol| match &sym.kind {
+            crate::TypeKind::Class { generics, .. } if !generics.is_empty() => {
+                Some((sym.mangled_name.clone(), generics.len()))
+            }
+            _ => None,
+        };
+        match &ty.kind {
+            crate::TypeAnnotationKind::Name { name_span, args } if args.is_empty() => {
+                let text =
+                    self.source[name_span.start as usize..name_span.end as usize].to_string();
+                // A type parameter shadows a class of the same name, exactly as
+                // it does in `resolve_type`.
+                if self.lookup_body_gp(&text).is_some() || self.is_generic_in_scope(&text) {
+                    return None;
+                }
+                let (mangled, arity) = self.lookup_named_type(&text).and_then(generic_class)?;
+                let package = self.type_package(&text);
+                Some((package, text, mangled, arity))
+            }
+            crate::TypeAnnotationKind::Qualified { path, args } if args.is_empty() => {
+                let root = &self.source[path[0].start as usize..path[0].end as usize];
+                let ns = self.namespace_bindings.get(root)?;
+                let member = path[1..]
+                    .iter()
+                    .map(|s| &self.source[s.start as usize..s.end as usize])
+                    .collect::<Vec<&str>>()
+                    .join(".");
+                let package = crate::Package(ns.members.package_name().to_string());
+                let (mangled, arity) = ns.members.type_symbol(&member).and_then(generic_class)?;
+                let display: String = path
+                    .iter()
+                    .map(|s| &self.source[s.start as usize..s.end as usize])
+                    .collect::<Vec<&str>>()
+                    .join(".");
+                Some((package, display, mangled, arity))
+            }
+            _ => None,
+        }
+    }
+
+    /// Recursively replace every **data-only** `InterfaceRef` in `ty` with its structural
+    /// shape (`Type::Object` of the interface's properties). Method-bearing interfaces
+    /// (`Map`, `Iterator`, …) are nominal — a structural check can't verify their vtable —
+    /// so they stay `InterfaceRef` and relate nominally instead. Recurses through object
+    /// fields, arrays, tuples, and unions. `seen` guards against recursive/mutually-recursive
+    /// interfaces: a re-encountered interface is left as `InterfaceRef`. Leftover
+    /// `InterfaceRef`s are rejected by `unsupported_cast_target_reason` when a runtime
+    /// check is actually needed.
+    fn reduce_interfaces_to_shapes(&self, ty: &Type, seen: &mut Vec<String>) -> Type {
+        match ty.peel() {
+            Type::InterfaceRef {
+                mangled,
+                name,
+                args,
+                ..
+            } => {
+                if seen.iter().any(|n| n == name) {
+                    return ty.peel().clone();
+                }
+                let Some(fields) = self.interface_data_shape(mangled, name, args) else {
+                    return ty.peel().clone();
+                };
+                seen.push(name.clone());
+                let reduced: std::collections::BTreeMap<String, crate::ObjectField> = fields
+                    .into_iter()
+                    .map(|(k, f)| {
+                        (
+                            k,
+                            crate::ObjectField {
+                                ty: self.reduce_interfaces_to_shapes(&f.ty, seen),
+                                optional: f.optional,
+                                readonly: f.readonly,
+                            },
+                        )
+                    })
+                    .collect();
+                seen.pop();
+                Type::Object { fields: reduced }
+            }
+            Type::Object { fields } => Type::Object {
+                fields: fields
+                    .iter()
+                    .map(|(k, f)| {
+                        (
+                            k.clone(),
+                            crate::ObjectField {
+                                ty: self.reduce_interfaces_to_shapes(&f.ty, seen),
+                                optional: f.optional,
+                                readonly: f.readonly,
+                            },
+                        )
+                    })
+                    .collect(),
+            },
+            Type::Array(elem) => {
+                Type::Array(Box::new(self.reduce_interfaces_to_shapes(elem, seen)))
+            }
+            Type::Tuple(elems) => Type::Tuple(
+                elems
+                    .iter()
+                    .map(|e| self.reduce_interfaces_to_shapes(e, seen))
+                    .collect(),
+            ),
+            Type::Union(ms) => Type::union(
+                ms.iter()
+                    .map(|m| self.reduce_interfaces_to_shapes(m, seen))
+                    .collect(),
+            ),
+            other => other.clone(),
+        }
+    }
+
+    /// regex literal inference. Runs the JS→regex-crate
+    /// translator (`runtime::prelude::regex::engine::translate_js_pattern`) and the
+    /// underlying `RegexBuilder::new` call at compile time so
+    /// unsupported features (lookarounds, backreferences) and
+    /// malformed patterns surface as `Diagnostic`s with source
+    /// caret, not runtime traps — matches CLAUDE.md "LLM-native
+    /// errors" §1 + §3 (always show source context; name the fix).
+    ///
+    /// On success the type currently resolves to `Type::Error` as a
+    /// placeholder; PR 4 wires the `RegExp` prelude
+    /// interface and codegen lowering, at which point this returns
+    /// `Type::Named("RegExp")` and a `TypedExprKind::Regex` variant.
+    fn infer_regex(&mut self, source: String, flags: String, span: Span) -> (TypedExprKind, Type) {
+        // validator (translator + `RegexBuilder::new`) runs
+        // at compile time, so lookarounds / backreferences /
+        // malformed patterns surface as `Diagnostic`s with source
+        // caret + a self-contained `help:` block explaining the
+        // Submilli subset and the rewrite path. Per CLAUDE.md
+        // "LLM-native errors" §1 + §3: the help is enough for an
+        // LLM to fix the regex in one shot without any external
+        // reference.
+        match crate::runtime::prelude::regex::engine::build_regex(&source, &flags) {
+            Ok(_) => (
+                TypedExprKind::Regex { source, flags },
+                Type::prelude_interface("RegExp", Vec::new()),
+            ),
+            Err(e) => {
+                let help = regex_error_help(&e);
+                self.error_with_help(span, e.to_string(), help);
+                (TypedExprKind::Null, Type::Error)
+            }
+        }
+    }
+}
+
+/// return `Some(reason)` when `target_ty` is a cast target
+/// the runtime emission can't yet discriminate against, or
+/// `None` when the cast is emittable. Peels aliases. Recurses into
+/// unions — every member must be supported.
+/// per-variant help for regex-translation errors. Built so
+/// an LLM (the primary consumer of compile diagnostics — see
+/// CLAUDE.md "LLM-native errors") can fix the regex in one shot
+/// without any external documentation reference.
+///
+/// Each variant returns a multi-line `help:` block that:
+/// - states the constraint
+/// - gives a concrete rewrite example where one exists
+/// - lists the supported feature set so the fix doesn't drift into
+///   another unsupported corner
+fn regex_error_help(e: &crate::runtime::prelude::regex::engine::TranslateError) -> Vec<String> {
+    use crate::runtime::prelude::regex::engine::TranslateError as E;
+    match e {
+        E::Lookahead => vec![
+            "the Submilli regex engine uses linear-time matching (Rust `regex` crate) \
+             and does not support lookahead. Rewrite by capturing the following text \
+             explicitly and checking it after the match — e.g. instead of \
+             `\\d+(?=px)`, use `(\\d+)px` and read capture group 1."
+                .to_string(),
+            "supported regex features: literal characters, character classes \
+             (`[a-z]`, `[^...]`), `\\d`/`\\w`/`\\s` (ASCII without `u` flag, Unicode \
+             with), anchors (`^`, `$`, `\\b`), alternation (`a|b`), quantifiers \
+             (`*`, `+`, `?`, `{n,m}`), non-capturing groups (`(?:...)`), named \
+             capture groups (`(?<name>...)`), and flags `g`/`i`/`m`/`s`/`u`/`y`."
+                .to_string(),
+        ],
+        E::Lookbehind => vec![
+            "the Submilli regex engine uses linear-time matching (Rust `regex` crate) \
+             and does not support lookbehind. Rewrite to match the prefix as part of \
+             the pattern with a capture group, then use only the capture — e.g. \
+             instead of `(?<=\\$)\\d+`, use `\\$(\\d+)` and read capture group 1."
+                .to_string(),
+            "supported regex features: literal characters, character classes \
+             (`[a-z]`, `[^...]`), `\\d`/`\\w`/`\\s` (ASCII without `u` flag, Unicode \
+             with), anchors (`^`, `$`, `\\b`), alternation (`a|b`), quantifiers \
+             (`*`, `+`, `?`, `{n,m}`), non-capturing groups (`(?:...)`), named \
+             capture groups (`(?<name>...)`), and flags `g`/`i`/`m`/`s`/`u`/`y`."
+                .to_string(),
+        ],
+        E::Backreference => vec![
+            "the Submilli regex engine does not support backreferences (`\\1`, \
+             `\\k<name>`) — they would force exponential-time matching. Restructure \
+             the pattern so it does not need to re-match the same captured text, or \
+             do the equality check in code after running `exec` (compare \
+             `m.groups[0]` with `m.groups[1]` etc.)."
+                .to_string(),
+            "supported regex features: literal characters, character classes, \
+             `\\d`/`\\w`/`\\s`, anchors (`^`, `$`, `\\b`), alternation, quantifiers, \
+             non-capturing groups (`(?:...)`), named capture groups (`(?<name>...)`), \
+             and flags `g`/`i`/`m`/`s`/`u`/`y`."
+                .to_string(),
+        ],
+        E::InvalidFlag(c) => vec![
+            format!(
+                "valid flags: `g` (global / stateful `lastIndex`), `i` \
+                 (case-insensitive), `m` (multiline — `^`/`$` match line boundaries), \
+                 `s` (dot-all — `.` matches newlines), `u` (Unicode — \
+                 `\\d`/`\\w`/`\\s` are Unicode classes), `y` (sticky — anchor at \
+                 `lastIndex`). `{c}` is none of these.",
+            ),
+            "note: Submilli does not support the ES2022 `d` (hasIndices) flag.".to_string(),
+        ],
+        E::DuplicateFlag(c) => vec![format!(
+            "remove the duplicate `{c}` — each flag may appear at most once."
+        )],
+        E::InvalidPattern(_) => vec![
+            "the message above is from the underlying regex engine (Rust `regex` \
+             crate, linear-time). Common causes: unbalanced parens, malformed \
+             quantifier, unterminated character class."
+                .to_string(),
+            "supported regex features: literal characters, character classes \
+             (`[a-z]`, `[^...]`), `\\d`/`\\w`/`\\s` (ASCII without `u` flag, Unicode \
+             with), anchors (`^`, `$`, `\\b`), alternation (`a|b`), quantifiers \
+             (`*`, `+`, `?`, `{n,m}`), non-capturing groups (`(?:...)`), named \
+             capture groups (`(?<name>...)`), and flags `g`/`i`/`m`/`s`/`u`/`y`. \
+             Lookarounds and backreferences are NOT supported."
+                .to_string(),
+        ],
+    }
+}
+
+/// Explains a rejected `as` whose two types are *almost* related: the source would satisfy
+/// the target but for fields that are optional on the source and required on the target
+/// (the common "`x as Subset`" over an MCP result with `foo?` fields). Returns those field
+/// names so the diagnostic can say "narrow, don't cast". Empty when optionality isn't the
+/// sole blocker — a missing field or an incompatible field type makes the two genuinely
+/// unrelated, and the generic message applies. Peels matching array layers so `T[] as U[]`
+/// is judged by its element types.
+fn optional_vs_required_blockers(
+    source: &Type,
+    target: &Type,
+    types: super::assignable::TypeResolver,
+) -> Vec<String> {
+    let (mut s, mut t) = (source, target);
+    while let (Type::Array(se), Type::Array(te)) = (s, t) {
+        s = &**se;
+        t = &**te;
+    }
+    let (Type::Object { fields: s_fields }, Type::Object { fields: t_fields }) = (s, t) else {
+        return Vec::new();
+    };
+    let mut blockers = Vec::new();
+    for (name, t_field) in t_fields {
+        let Some(s_field) = s_fields.get(name) else {
+            return Vec::new();
+        };
+        if !assignable(&s_field.ty, &t_field.ty, types) {
+            return Vec::new();
+        }
+        if s_field.optional && !t_field.optional {
+            blockers.push(name.clone());
+        }
+    }
+    blockers
+}
+
+/// Recurses the (interface-reduced) cast-target shape so the compile-time gate matches
+/// exactly what `emit_structural_test` can verify at runtime. A leftover `InterfaceRef`
+/// here means an interface `reduce_interfaces_to_shapes` could not expand: either
+/// method-bearing (nominal) or recursive/mutually-recursive.
+fn unsupported_cast_target_reason(
+    target_ty: &Type,
+    types: super::assignable::TypeResolver,
+    seen: &mut Vec<Type>,
+) -> Option<&'static str> {
+    let peeled = target_ty.peel();
+    match peeled {
+        Type::Number
+        | Type::NumberLiteral(_)
+        | Type::BigInt
+        | Type::String
+        | Type::StringLiteral(_)
+        | Type::Boolean
+        | Type::Null
+        | Type::Uint8Array
+        | Type::Function { .. }
+        | Type::Unknown => None,
+        Type::Object { fields } => fields
+            .values()
+            .find_map(|f| unsupported_cast_target_reason(&f.ty, types, seen)),
+        Type::Array(elem) => unsupported_cast_target_reason(elem, types, seen),
+        Type::Tuple(elems) => elems
+            .iter()
+            .find_map(|e| unsupported_cast_target_reason(e, types, seen)),
+        Type::Union(members) => members
+            .iter()
+            .find_map(|m| unsupported_cast_target_reason(m, types, seen)),
+        Type::InterfaceRef { mangled, name, .. } => {
+            if types.interface_has_methods(mangled, name) {
+                Some(
+                    "interfaces with methods are nominal — a plain structural check \
+                     can't verify their vtable at runtime",
+                )
+            } else {
+                Some("recursive interface types aren't supported as `as` targets")
+            }
+        }
+        Type::ClassRef { .. } => Some("class types aren't yet supported as `as` targets"),
+        // A recursion back-edge: expand the alias and check its body once.
+        // `seen` breaks the cycle so a re-encounter is assumed supported,
+        // matching the per-alias recursive validator codegen emits.
+        Type::AliasRef { .. } => {
+            if seen.iter().any(|s| s == peeled) {
+                return None;
+            }
+            seen.push(peeled.clone());
+            let expanded = assignable::expand_alias_ref(peeled, types);
+            if matches!(expanded, Type::AliasRef { .. }) {
+                return Some("recursive type targets need a recursive structural check at runtime");
+            }
+            unsupported_cast_target_reason(&expanded, types, seen)
+        }
+        Type::NumberEnum { .. } | Type::StringEnum { .. } => {
+            Some("enum targets need a per-variant value check at runtime")
+        }
+        Type::TypeVar(_) | Type::GenericParam { .. } => {
+            Some("generic type parameters are erased at runtime")
+        }
+        Type::Never => Some("`never` has no runtime values"),
+        Type::Void => Some("`void` is not a value type"),
+        Type::Error => None,
+        Type::Alias { .. } => unreachable!("peel guarantees no alias here"),
+    }
+}
+
+/// Render `variants: \`E.A\`, \`E.B\`, …` for an unknown-variant
+/// diagnostic. Returns an empty help block when the enum has no
+/// variants (which only happens on a malformed decl that already
+/// emitted its own diagnostic).
+fn enum_variant_help<'a>(
+    enum_name: &str,
+    variant_names: impl Iterator<Item = &'a String>,
+) -> Vec<String> {
+    let list: Vec<String> = variant_names
+        .map(|v| format!("`{enum_name}.{v}`"))
+        .collect();
+    if list.is_empty() {
+        Vec::new()
+    } else {
+        vec![format!("variants: {}", list.join(", "))]
+    }
+}
+
+/// The pairs `+` is defined for, and the result. The single source of truth for both
+/// the `+` arm and the narrowing hint it emits: a hint may only claim a guard is the
+/// fix when the guarded pair is one this accepts.
+fn plus_result(lt: &Type, rt: &Type) -> Option<Type> {
+    match (lt.peel(), rt.peel()) {
+        (Type::Number, Type::Number) => Some(Type::Number),
+        (Type::String, Type::String) => Some(Type::String),
+        // Mixed `number` ↔ `bigint` is rejected, so no widening arm here.
+        (Type::BigInt, Type::BigInt) => Some(Type::BigInt),
+        _ => None,
+    }
+}
+
+/// [`plus_result`] for `-`, `*`, `/`, `%`, `**` — same role, no string arm.
+fn arithmetic_result(lt: &Type, rt: &Type) -> Option<Type> {
+    match (lt.peel(), rt.peel()) {
+        (Type::Number, Type::Number) => Some(Type::Number),
+        (Type::BigInt, Type::BigInt) => Some(Type::BigInt),
+        _ => None,
+    }
+}
+
+/// [`plus_result`] for `<`, `>`, `<=`, `>=`, which always yield `boolean` — strings
+/// compare lexicographically, and literal types order as their widened base.
+fn ordering_accepts(lt: &Type, rt: &Type) -> bool {
+    matches!(
+        (lt.peel(), rt.peel()),
+        (
+            Type::Number | Type::NumberLiteral(_),
+            Type::Number | Type::NumberLiteral(_)
+        ) | (Type::BigInt, Type::BigInt)
+            | (
+                Type::String | Type::StringLiteral(_),
+                Type::String | Type::StringLiteral(_),
+            )
+    )
+}
+
+/// [`plus_result`] for unary `-` / `+`. `unknown` is absent because the call site
+/// answers it with its own "narrow first" diagnostic before asking this.
+fn unary_arith_result(op: UnOp, ty: &Type) -> Option<Type> {
+    match ty.peel() {
+        Type::BigInt => Some(Type::BigInt),
+        Type::Number | Type::NumberLiteral(_) | Type::Error => Some(Type::Number),
+        // `+s` is JS's explicit string→number coercion and the one TS keeps; it
+        // lowers to the same parse `Number(s)` does (`NaN` when the text isn't a
+        // number). Unary `-` on a string stays rejected: it reads as arithmetic,
+        // not a conversion.
+        t if matches!(op, UnOp::Pos) && t.is_string_shaped() => Some(Type::Number),
+        _ => None,
+    }
+}
+
+/// Types whose values reach a `toString` — the receivers `String(x)` and `${x}` accept.
+fn has_to_string(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::String
+            | Type::StringLiteral(_)
+            | Type::Number
+            | Type::BigInt
+            | Type::Boolean
+            | Type::Array(_)
+            | Type::Object { .. }
+            // Class instances answer `toString` through vtable slot 0
+            // (a user method fills it, else "[object Object]").
+            | Type::ClassRef { .. }
+            | Type::TypeVar(_)
+            | Type::GenericParam { .. }
+            | Type::Unknown
+            | Type::Error
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::test_support::{
+        nth_decl_value_ty, nth_expr_stmt_ty, run, run_clean, run_with_packages,
+    };
+    use crate::{ClosureBody, Type, TypedAst, TypedExprKind, TypedParam, TypedStmtKind};
+
+    /// Typecheck `source` against the real `submilli:session` declaration.
+    fn run_with_session(source: &str) -> (TypedAst, Vec<crate::Diagnostic>) {
+        let session = crate::stdlib::session::declaration::package_declaration();
+        run_with_packages(source, &[&session])
+    }
+
+    /// Every `session.get` call in `ta`, as (has a structural `check`, the
+    /// inner call's `return_cast`).
+    fn session_get_shapes(ta: &TypedAst) -> Vec<(bool, Option<Type>)> {
+        let mut out = Vec::new();
+        for i in 0..ta.exprs_len() {
+            let expr = ta.expr(crate::ExprId(i as u32));
+            let TypedExprKind::Cast { value, check, .. } = &expr.kind else {
+                continue;
+            };
+            let TypedExprKind::GenericCall {
+                mangled,
+                return_cast,
+                ..
+            } = &ta.expr(*value).kind
+            else {
+                continue;
+            };
+            if crate::stdlib::session::declaration::is_checked_get(mangled) {
+                out.push((check.is_some(), return_cast.clone()));
+            }
+        }
+        out
+    }
+
+    /// The soundness invariant of the checked read: a `get<T>` must lower to a
+    /// `Cast` that carries a structural check, and the call it wraps must NOT
+    /// carry a `return_cast` — that is a `ref.cast`, a representation-only
+    /// narrow that verifies nothing and traps uncatchably on a stored `null`.
+    #[test]
+    fn typed_session_get_is_a_checked_cast_and_never_a_return_cast() {
+        let src = "import session from \"submilli:session\"; \
+                   interface P { step: number; } \
+                   function main(): void { const p = session.get<P>(\"k\"); }";
+        let (ta, diags) = run_with_session(src);
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
+
+        let shapes = session_get_shapes(&ta);
+        assert_eq!(shapes.len(), 1, "expected one wrapped get, got {shapes:?}");
+        assert!(shapes[0].0, "get<P> lost its structural check: {shapes:?}");
+        assert_eq!(
+            shapes[0].1, None,
+            "get<P> kept an unsound return_cast: {shapes:?}",
+        );
+    }
+
+    /// No raw `GenericCall` on `session.get` may survive with a `return_cast`,
+    /// whichever import form produced it.
+    #[test]
+    fn no_import_form_of_session_get_keeps_a_return_cast() {
+        let src = "import session from \"submilli:session\"; \
+                   import kv from \"submilli:session\"; \
+                   import { get } from \"submilli:session\"; \
+                   interface P { step: number; } \
+                   function main(): void { \
+                     const a = session.get<P>(\"k\"); \
+                     const b = kv.get<P>(\"k\"); \
+                     const c = get<P>(\"k\"); }";
+        let (ta, diags) = run_with_session(src);
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
+        assert_eq!(
+            session_get_shapes(&ta),
+            vec![(true, None), (true, None), (true, None)],
+            "every import form must produce a checked, uncast get",
+        );
+
+        for i in 0..ta.exprs_len() {
+            let expr = ta.expr(crate::ExprId(i as u32));
+            if let TypedExprKind::GenericCall {
+                mangled,
+                return_cast,
+                ..
+            } = &expr.kind
+                && crate::stdlib::session::declaration::is_checked_get(mangled)
+            {
+                assert_eq!(
+                    *return_cast, None,
+                    "a session.get GenericCall kept a return_cast",
+                );
+            }
+        }
+    }
+
+    /// A bare `get(key)` keeps its pre-generic meaning — an unchecked read of
+    /// `unknown` — rather than erroring on an uninferable `T`.
+    #[test]
+    fn untyped_session_get_defaults_to_unknown_without_erroring() {
+        let src = "import session from \"submilli:session\"; \
+                   function main(): void { const v = session.get(\"k\"); }";
+        let (_, diags) = run_with_session(src);
+        assert!(diags.is_empty(), "bare get should not error: {diags:?}");
+    }
+
+    /// Only a *written* `<unknown>` is rejected; the message names the fix.
+    #[test]
+    fn explicit_unknown_type_argument_is_rejected() {
+        let src = "import session from \"submilli:session\"; \
+                   function main(): void { const v = session.get<unknown>(\"k\"); }";
+        let (_, diags) = run_with_session(src);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("would not verify anything")),
+            "expected the unknown-target rejection, got: {diags:?}",
+        );
+    }
+
+    /// A user generic parameter is erased, so it cannot be a check target.
+    #[test]
+    fn erased_type_parameter_is_rejected() {
+        let src = "import session from \"submilli:session\"; \
+                   function load<T>(k: string): T { return session.get<T>(k); } \
+                   function main(): void { const n = load<number>(\"k\"); }";
+        let (_, diags) = run_with_session(src);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("erased at runtime")),
+            "expected the erasure rejection, got: {diags:?}",
+        );
+    }
+
+    /// The narrowing hint may only fire when dropping `null` actually makes the
+    /// operator legal. `boolean + boolean` is rejected either way, so advising a
+    /// guard there would send the reader after a fix that leaves the same error.
+    #[test]
+    fn narrowing_hint_skips_operators_a_guard_cannot_fix() {
+        let src = "function main(): void { \
+                   let v: boolean | null = true; \
+                   if (v !== null) { const f = (): boolean => v + true; } }";
+        let (_, diags) = run(src);
+        assert!(
+            diags.iter().any(|d| d.message.contains("not defined for")),
+            "expected the operator error, got: {diags:?}",
+        );
+        assert!(
+            !diags
+                .iter()
+                .any(|d| d.help.iter().any(|h| h.contains("closure boundary"))),
+            "narrowing hint fired where narrowing is not the fix: {diags:?}",
+        );
+    }
+
+    /// The counterpart: same shape, an operator a guard *does* fix.
+    #[test]
+    fn narrowing_hint_fires_when_a_guard_would_fix_the_operator() {
+        let src = "function main(): void { \
+                   let v: string | null = \"a\"; \
+                   if (v !== null) { const f = (): string => v + \"!\"; } }";
+        let (_, diags) = run(src);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.help.iter().any(|h| h.contains("closure boundary"))),
+            "expected the narrowing hint, got: {diags:?}",
+        );
+    }
+
+    // ----------------------- Literals / identifiers -----------------------
+
+    #[test]
+    fn literal_types() {
+        let ta = run_clean(r#"42; "s"; true; null;"#);
+        assert_eq!(nth_expr_stmt_ty(&ta, 0), Type::Number);
+        assert_eq!(nth_expr_stmt_ty(&ta, 1), Type::String);
+        assert_eq!(nth_expr_stmt_ty(&ta, 2), Type::Boolean);
+        assert_eq!(nth_expr_stmt_ty(&ta, 3), Type::Null);
+    }
+
+    #[test]
+    fn identifier_resolves_to_global() {
+        let ta = run_clean("let x: number = 1; let y: number = x;");
+        assert_eq!(nth_decl_value_ty(&ta, 1), Type::Number);
+    }
+
+    #[test]
+    fn identifier_resolves_to_local_param() {
+        let ta = run_clean("function f(n: number): number { return n; }");
+        let body = ta.functions[0].body;
+        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+            panic!("expected Block");
+        };
+        let TypedStmtKind::Return(Some(ret_val)) = &ta.stmt(stmts[0]).kind else {
+            panic!("expected Return(Some)");
+        };
+        let ret_expr = ta.expr(*ret_val);
+        assert_eq!(ret_expr.ty, Type::Number);
+        assert!(matches!(ret_expr.kind, TypedExprKind::LocalRef { .. }));
+    }
+
+    #[test]
+    fn identifier_resolves_to_local_let() {
+        let ta = run_clean("function f(): number { let n: number = 1; return n; }");
+        let body = ta.functions[0].body;
+        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+            panic!("expected Block");
+        };
+        let TypedStmtKind::Return(Some(ret_val)) = &ta.stmt(stmts[1]).kind else {
+            panic!("expected Return(Some)");
+        };
+        assert_eq!(ta.expr(*ret_val).ty, Type::Number);
+    }
+
+    #[test]
+    fn unresolved_identifier_diagnoses() {
+        let (ta, diags) = run("let y: number = q;");
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].message, "unresolved identifier `q`");
+        assert_eq!(nth_decl_value_ty(&ta, 0), Type::Error);
+    }
+
+    // ----------------------- LocalRef / GlobalRef split -----------------------
+
+    #[test]
+    fn function_local_let_is_local_ref() {
+        let ta = run_clean("function f(): number { let n: number = 1; return n; }");
+        let body = ta.functions[0].body;
+        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+            panic!("expected Block");
+        };
+        let TypedStmtKind::Return(Some(ret_val)) = &ta.stmt(stmts[1]).kind else {
+            panic!("expected Return(Some)");
+        };
+        assert!(matches!(
+            ta.expr(*ret_val).kind,
+            TypedExprKind::LocalRef { boxed: false, .. }
+        ));
+    }
+
+    #[test]
+    fn param_reference_is_local_ref() {
+        let ta = run_clean("function f(n: number): number { return n; }");
+        let body = ta.functions[0].body;
+        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+            panic!("expected Block");
+        };
+        let TypedStmtKind::Return(Some(ret_val)) = &ta.stmt(stmts[0]).kind else {
+            panic!("expected Return(Some)");
+        };
+        assert!(matches!(
+            ta.expr(*ret_val).kind,
+            TypedExprKind::LocalRef { boxed: false, .. }
+        ));
+    }
+
+    #[test]
+    fn top_level_let_reference_is_global_ref() {
+        // The reference `r` inside `f`'s body resolves to the top-level
+        // `let r`, so it's a GlobalRef.
+        let ta = run_clean("let r: number = 1; function f(): number { return r; }");
+        let body = ta.functions[0].body;
+        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+            panic!("expected Block");
+        };
+        let TypedStmtKind::Return(Some(ret_val)) = &ta.stmt(stmts[0]).kind else {
+            panic!("expected Return(Some)");
+        };
+        assert!(matches!(
+            ta.expr(*ret_val).kind,
+            TypedExprKind::GlobalRef { .. }
+        ));
+    }
+
+    #[test]
+    fn call_to_top_level_function_is_static_with_mangled_name() {
+        let ta = run_clean("function g(x: number): number { return x; } let r: number = g(1);");
+        // top_level: [Let r (uses g), Function g]
+        let assign = ta.top_level_statements[0];
+        let TypedStmtKind::AssignGlobal { value, .. } = &ta.stmt(assign).kind else {
+            panic!("expected AssignGlobal");
+        };
+        // The call resolves to a static `Call` carrying the callee's
+        // mangled name directly — no callee expression indirection.
+        let TypedExprKind::Call { mangled, .. } = &ta.expr(*value).kind else {
+            panic!("expected static Call (not CallClosure)");
+        };
+        assert_eq!(mangled.as_str(), "main#g");
+    }
+
+    #[test]
+    fn unresolved_is_local_ref_placeholder() {
+        let (ta, diags) = run("let y: number = q;");
+        assert_eq!(diags.len(), 1);
+        let assign = ta.top_level_statements[0];
+        let TypedStmtKind::AssignGlobal { value, .. } = &ta.stmt(assign).kind else {
+            panic!("expected AssignGlobal");
+        };
+        // Placeholder for unresolved names; downstream suppression via
+        // Type::Error means the variant choice doesn't propagate.
+        assert!(matches!(
+            ta.expr(*value).kind,
+            TypedExprKind::LocalRef { boxed: false, .. }
+        ));
+        assert_eq!(ta.expr(*value).ty, Type::Error);
+    }
+
+    // ----------------------- `+` -----------------------
+
+    #[test]
+    fn number_plus_number() {
+        let ta = run_clean("let x: number = 1 + 2;");
+        assert_eq!(nth_decl_value_ty(&ta, 0), Type::Number);
+    }
+
+    #[test]
+    fn string_plus_string() {
+        let ta = run_clean(r#"let x: string = "a" + "b";"#);
+        assert_eq!(nth_decl_value_ty(&ta, 0), Type::String);
+    }
+
+    #[test]
+    fn number_plus_string_diagnoses() {
+        let (_, diags) = run(r#"let x: number = 1 + "a";"#);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(
+            diags[0].message,
+            "`+` not defined for `number` and `string`"
+        );
+        assert_eq!(
+            diags[0].help,
+            vec![
+                "`+` does not coerce; convert the string with `Number(...)`, `parseInt(...)`, or `parseFloat(...)` before adding"
+            ]
+        );
+    }
+
+    #[test]
+    fn string_plus_number_diagnoses_with_string_help() {
+        let (_, diags) = run(r#"let x: string = "a" + 1;"#);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(
+            diags[0].message,
+            "`+` not defined for `string` and `number`"
+        );
+        assert_eq!(
+            diags[0].help,
+            vec!["`+` does not coerce; wrap the number with `String(...)` before concatenating"]
+        );
+    }
+
+    #[test]
+    fn plus_with_number_hint_propagates() {
+        let _ = run_clean("function f(n: number): number { return n + 1; }");
+    }
+
+    #[test]
+    fn plus_with_string_hint_propagates() {
+        let _ = run_clean(r#"function f(s: string): string { return s + "!"; }"#);
+    }
+
+    // ----------------------- Other binary / unary -----------------------
+
+    #[test]
+    fn arith_sub_correct() {
+        let ta = run_clean("let x: number = 1 - 2;");
+        assert_eq!(nth_decl_value_ty(&ta, 0), Type::Number);
+    }
+
+    #[test]
+    fn arith_sub_wrong_operand() {
+        let (_, d) = run(r#"let x: number = "a" - 2;"#);
+        assert_eq!(d.len(), 1);
+        // dispatch shape changed from "force-hint Number,
+        // complain about LHS" to "infer operands freely, name which
+        // combo isn't defined" — the bigint mixed-type case fires the
+        // same phrasing.
+        assert_eq!(d[0].message, "`-` not defined for `string` and `number`");
+    }
+
+    #[test]
+    fn arith_mul_div_rem() {
+        let _ = run_clean("let x: number = 2 * 3; let y: number = 4 / 2; let z: number = 5 % 2;");
+    }
+
+    #[test]
+    fn comparison_lt_correct() {
+        let ta = run_clean("let x: boolean = 1 < 2;");
+        assert_eq!(nth_decl_value_ty(&ta, 0), Type::Boolean);
+    }
+
+    #[test]
+    fn comparison_lt_wrong_operand() {
+        let (_, d) = run(r#"let x: boolean = "a" < 2;"#);
+        assert_eq!(d.len(), 1);
+        // comparison accepts `number × number`, `bigint × bigint`,
+        // or `string × string`; mismatch names both operands.
+        assert_eq!(d[0].message, "`<` not defined for `string` and `number`");
+    }
+
+    #[test]
+    fn comparison_lt_strings_ok() {
+        let ta = run_clean(r#"let x: boolean = "apple" < "banana";"#);
+        assert_eq!(nth_decl_value_ty(&ta, 0), Type::Boolean);
+    }
+
+    #[test]
+    fn equality_same_type_correct() {
+        let ta = run_clean("let x: boolean = 1 === 1;");
+        assert_eq!(nth_decl_value_ty(&ta, 0), Type::Boolean);
+    }
+
+    #[test]
+    fn equality_different_type_diagnoses() {
+        let (_, d) = run(r#"let x: boolean = 1 === "a";"#);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].message, "expected `number`, got `string`");
+    }
+
+    #[test]
+    fn logical_and_correct() {
+        let ta = run_clean("let x: boolean = true && false;");
+        assert_eq!(nth_decl_value_ty(&ta, 0), Type::Boolean);
+    }
+
+    #[test]
+    fn logical_and_number_lhs_widens_result() {
+        // `1` widens to `number` (no literal-type inference without a hint),
+        // so the falsy part of the lhs survives in the result union.
+        let ta = run_clean("let x: number | boolean = 1 && true;");
+        assert_eq!(
+            nth_decl_value_ty(&ta, 0),
+            Type::union(vec![Type::Number, Type::Boolean])
+        );
+    }
+
+    #[test]
+    fn logical_or_string_fallback_returns_value() {
+        let ta = run_clean(r#"let s: string = "name"; let x: string = s || "Unknown";"#);
+        assert_eq!(nth_decl_value_ty(&ta, 1), Type::String);
+    }
+
+    #[test]
+    fn logical_or_nullable_lhs_strips_null() {
+        let ta = run_clean(r#"let s: string | null = null; let x: string = s || "d";"#);
+        assert_eq!(nth_decl_value_ty(&ta, 1), Type::String);
+    }
+
+    #[test]
+    fn logical_and_nullable_lhs_keeps_null_in_result() {
+        let ta =
+            run_clean("let xs: number[] | null = null; let x: number | null = xs && xs.length;");
+        assert_eq!(
+            nth_decl_value_ty(&ta, 1),
+            Type::union(vec![Type::Number, Type::Null])
+        );
+    }
+
+    #[test]
+    fn unary_not_correct() {
+        let ta = run_clean("let x: boolean = !true;");
+        assert_eq!(nth_decl_value_ty(&ta, 0), Type::Boolean);
+    }
+
+    #[test]
+    fn unary_not_truthiness_operands() {
+        let ta = run_clean("let x: boolean = !1;");
+        assert_eq!(nth_decl_value_ty(&ta, 0), Type::Boolean);
+        let ta = run_clean("let xs: number[] = [1]; let x: boolean = !xs;");
+        assert_eq!(nth_decl_value_ty(&ta, 1), Type::Boolean);
+    }
+
+    #[test]
+    fn unary_neg_correct() {
+        let ta = run_clean("let x: number = -1;");
+        assert_eq!(nth_decl_value_ty(&ta, 0), Type::Number);
+    }
+
+    #[test]
+    fn unary_neg_wrong_operand() {
+        let (_, d) = run(r#"let x: number = -"a";"#);
+        assert_eq!(d.len(), 1);
+        // unary `-` / `+` accept number OR bigint; the
+        // catch-all phrasing names the operand type that failed.
+        assert_eq!(d[0].message, "unary `-` not defined for `string`");
+    }
+
+    // ----------------------- Calls -----------------------
+
+    #[test]
+    fn call_correct_args() {
+        let src = r#"
+            function f(a: number, b: string): boolean { return true; }
+            let x: boolean = f(1, "s");
+        "#;
+        let _ = run_clean(src);
+    }
+
+    #[test]
+    fn call_arity_mismatch() {
+        let src = r#"
+            function f(a: number, b: string): boolean { return true; }
+            let x: boolean = f(1);
+        "#;
+        let (_, d) = run(src);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].message, "expected 2 argument(s), got 1");
+    }
+
+    #[test]
+    fn call_arg_type_mismatch() {
+        let src = r#"
+            function f(a: number, b: string): boolean { return true; }
+            let x: boolean = f(1, 2);
+        "#;
+        let (_, d) = run(src);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].message, "expected `string`, got `number`");
+    }
+
+    #[test]
+    fn call_return_type_propagates() {
+        let src = r#"
+            function f(a: number, b: string): boolean { return true; }
+            let x: boolean = f(1, "s");
+        "#;
+        let ta = run_clean(src);
+        assert_eq!(nth_decl_value_ty(&ta, 0), Type::Boolean);
+    }
+
+    #[test]
+    fn call_non_function_diagnoses() {
+        let (_, d) = run("let x: number = 1; let y: number = x(1);");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].message, "cannot call value of type `number`");
+    }
+
+    #[test]
+    fn call_nested() {
+        let src = r#"
+            function g(x: number): number { return x; }
+            let r: number = g(g(1));
+        "#;
+        let _ = run_clean(src);
+    }
+
+    // ----------------------- object & array inference -----------------------
+
+    fn point_ty() -> Type {
+        let mut fields = std::collections::BTreeMap::new();
+        fields.insert("x".to_string(), crate::ObjectField::required(Type::Number));
+        fields.insert("y".to_string(), crate::ObjectField::required(Type::Number));
+        Type::Object { fields }
+    }
+
+    #[test]
+    fn object_literal_no_annotation_infers_shape() {
+        let ta = run_clean("function main(): void { let p = { x: 1, y: 2 }; }");
+        let body = ta.functions[0].body;
+        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+            panic!("expected Block");
+        };
+        let TypedStmtKind::Let { ty, .. } = &ta.stmt(stmts[0]).kind else {
+            panic!("expected Let");
+        };
+        assert_eq!(*ty, point_ty());
+    }
+
+    #[test]
+    fn object_literal_with_annotation_uses_hint() {
+        let (ta, d) =
+            run("function main(): void { let p: { x: number; y: number } = { y: 2, x: 1 }; }");
+        assert!(d.is_empty(), "unexpected diagnostics: {d:?}");
+        let body = ta.functions[0].body;
+        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+            panic!("expected Block");
+        };
+        let TypedStmtKind::Let { ty, .. } = &ta.stmt(stmts[0]).kind else {
+            panic!("expected Let");
+        };
+        assert_eq!(*ty, point_ty());
+    }
+
+    #[test]
+    fn object_literal_missing_field_diagnoses() {
+        let (_, d) = run("function main(): void { let p: { x: number; y: number } = { x: 1 }; }");
+        assert!(
+            d.iter()
+                .any(|x| x.message.contains("missing required field `y`")),
+            "expected missing-field diag, got: {d:?}"
+        );
+    }
+
+    #[test]
+    fn object_literal_missing_fields_collapse_to_one_error() {
+        let (_, d) =
+            run("function main(): void { let p: { x: number; y: number; z: number } = { x: 1 }; }");
+        let missing: Vec<_> = d
+            .iter()
+            .filter(|x| x.message.contains("missing required field"))
+            .collect();
+        assert_eq!(missing.len(), 1, "expected one collapsed diag, got: {d:?}");
+        assert!(
+            missing[0].message.contains("`y`") && missing[0].message.contains("`z`"),
+            "collapsed diag should list every missing field: {:?}",
+            missing[0].message,
+        );
+    }
+
+    #[test]
+    fn fresh_object_literal_extra_field_diagnoses() {
+        let (_, d) = run("function main(): void { let p: { x: number } = { x: 1, y: 2 }; }");
+        assert!(
+            d.iter().any(|x| x.message.contains("unknown field `y`")),
+            "expected excess-field diagnostic, got: {d:?}"
+        );
+    }
+
+    #[test]
+    fn intermediate_object_extra_field_is_accepted_via_width_sub() {
+        let (_, d) = run("function takesX(p: { x: number }): void { }\n\
+             function main(): void { let p = { x: 1, y: 2 }; takesX(p); }");
+        assert!(
+            d.is_empty(),
+            "expected no diagnostics for non-fresh width subtyping, got: {d:?}"
+        );
+    }
+
+    #[test]
+    fn array_literal_infers_element_type() {
+        let ta = run_clean("function main(): void { let xs = [1, 2, 3]; }");
+        let body = ta.functions[0].body;
+        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+            panic!("expected Block");
+        };
+        let TypedStmtKind::Let { ty, .. } = &ta.stmt(stmts[0]).kind else {
+            panic!("expected Let");
+        };
+        assert_eq!(*ty, Type::Array(Box::new(Type::Number)));
+    }
+
+    #[test]
+    fn array_literal_unification_failure_diagnoses() {
+        let (_, d) = run(r#"function main(): void { let xs = [1, "two"]; }"#);
+        assert!(
+            d.iter()
+                .any(|x| x.message.contains("matching first element")),
+            "expected unification diag, got: {d:?}"
+        );
+    }
+
+    #[test]
+    fn empty_array_without_hint_diagnoses() {
+        let (_, d) = run("function main(): void { let xs = []; }");
+        assert!(
+            d.iter().any(|x| x
+                .message
+                .contains("cannot infer element type of empty array")),
+            "expected empty-array diag, got: {d:?}"
+        );
+    }
+
+    #[test]
+    fn empty_array_with_hint_succeeds() {
+        let (ta, d) = run("function main(): void { let xs: number[] = []; }");
+        assert!(d.is_empty(), "unexpected diagnostics: {d:?}");
+        let body = ta.functions[0].body;
+        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+            panic!("expected Block");
+        };
+        let TypedStmtKind::Let { ty, .. } = &ta.stmt(stmts[0]).kind else {
+            panic!("expected Let");
+        };
+        assert_eq!(*ty, Type::Array(Box::new(Type::Number)));
+    }
+
+    #[test]
+    fn field_access_returns_field_type() {
+        let ta = run_clean("function main(): void { let p = { x: 1 }; let q = p.x; }");
+        let body = ta.functions[0].body;
+        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+            panic!("expected Block");
+        };
+        let TypedStmtKind::Let { ty, .. } = &ta.stmt(stmts[1]).kind else {
+            panic!("expected Let");
+        };
+        assert_eq!(*ty, Type::Number);
+    }
+
+    #[test]
+    fn field_access_missing_field_diagnoses() {
+        let (_, d) = run("function main(): void { let p = { x: 1 }; let q = p.y; }");
+        assert!(
+            d.iter().any(|x| x.message.contains("does not exist")),
+            "expected missing-field diag, got: {d:?}"
+        );
+    }
+
+    #[test]
+    fn field_access_on_non_object_diagnoses() {
+        let (_, d) = run("function main(): void { let n = 1; let q = n.x; }");
+        assert!(
+            d.iter().any(|x| x.message.contains("non-object type")),
+            "expected non-object diag, got: {d:?}"
+        );
+    }
+
+    #[test]
+    fn index_access_returns_element_type() {
+        let ta = run_clean("function main(): void { let xs = [1, 2, 3]; let q = xs[0]; }");
+        let body = ta.functions[0].body;
+        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+            panic!("expected Block");
+        };
+        let TypedStmtKind::Let { ty, .. } = &ta.stmt(stmts[1]).kind else {
+            panic!("expected Let");
+        };
+        assert_eq!(*ty, Type::Number);
+    }
+
+    #[test]
+    fn index_access_on_non_array_diagnoses() {
+        let (_, d) = run("function main(): void { let n = 1; let q = n[0]; }");
+        assert!(
+            d.iter().any(|x| x.message.contains("non-array type")),
+            "expected non-array diag, got: {d:?}"
+        );
+    }
+
+    // ----------------------- Integration snapshot -----------------------
+
+    #[test]
+    fn snapshot_mixed_program() {
+        let src = r#"
+function add(a: number, b: number): number { return a + b; }
+let result: number = add(1, 2);
+function main(): void { if (result < 10) { } }
+"#;
+        let ta = run_clean(src);
+        insta::assert_debug_snapshot!(ta);
+    }
+
+    // ----------------------- number coercions -----------------------
+
+    // `Number` / `String` are now regular prelude `Const`
+    // values typed as `NumberConstructor` / `StringConstructor`, so
+    // they're legal in value position (a const holding the
+    // constructor object — same shape as `console` / `Uint8Array`).
+    #[test]
+    fn number_is_a_value_of_constructor_interface() {
+        let (_, diags) = run("function main(): void { let f = Number; }");
+        assert!(
+            diags.is_empty(),
+            "expected no diagnostics for `Number` as a value, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn string_is_a_value_of_constructor_interface() {
+        let (_, diags) = run("function main(): void { let f = String; }");
+        assert!(
+            diags.is_empty(),
+            "expected no diagnostics for `String` as a value, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn bare_to_string_is_unresolved() {
+        let (_, diags) = run("function main(): void { let s = toString(42); }");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("unresolved identifier `toString`")),
+            "expected unresolved identifier diagnostic, got: {diags:?}"
+        );
+    }
+
+    // `Number(boolean)` now goes through the standard
+    // call-signature dispatch — the union parameter `string | bigint`
+    // rejects `boolean` via the standard assignability diagnostic.
+    #[test]
+    fn number_call_with_wrong_type_diagnoses() {
+        let (_, diags) = run("function main(): void { let n = Number(true); }");
+        assert!(
+            !diags.is_empty(),
+            "expected an assignability diagnostic for Number(boolean), got none"
+        );
+    }
+
+    #[test]
+    fn string_call_on_string_is_identity() {
+        let (_, diags) = run(r#"function main(): void { let s = String("x"); }"#);
+        assert!(
+            diags.is_empty(),
+            "String(\"x\") should typecheck cleanly, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn to_string_on_string_receiver_typechecks() {
+        let (_, diags) = run(r#"function main(): void { let s = "hi".toString(); }"#);
+        assert!(
+            diags.is_empty(),
+            "\"hi\".toString() should typecheck cleanly, got: {diags:?}"
+        );
+    }
+
+    // ----------------------- console.log -----------------------
+
+    #[test]
+    fn console_value_typechecks_as_console_interface_ref() {
+        let (_, diags) = run("function main(): void { let c = console; }");
+        assert!(
+            diags.is_empty(),
+            "console-as-value should typecheck cleanly, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn console_log_member_call_resolves_to_variadic_method() {
+        let (ta, diags) = run(r#"function main(): void { console.log("hi"); }"#);
+        assert!(diags.is_empty(), "expected clean typecheck, got {diags:?}");
+        let body = ta.functions[0].body;
+        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+            panic!("expected block body");
+        };
+        let TypedStmtKind::Expr(call_id) = &ta.stmt(stmts[0]).kind else {
+            panic!("expected expression statement");
+        };
+        let TypedExprKind::GenericMethodCall { name, args, .. } = &ta.expr(*call_id).kind else {
+            panic!(
+                "expected GenericMethodCall, got {:?}",
+                ta.expr(*call_id).kind,
+            );
+        };
+        assert_eq!(name.name, "log");
+        assert_eq!(args.len(), 2);
+        assert!(args[0].is_generic);
+        let rest = args[1].expr;
+        let TypedExprKind::ArrayLiteral { elements, .. } = &ta.expr(rest).kind else {
+            panic!(
+                "expected packed rest ArrayLiteral, got {:?}",
+                ta.expr(rest).kind
+            );
+        };
+        assert!(elements.is_empty());
+    }
+
+    #[test]
+    fn console_log_multi_arg_packs_rest_array() {
+        let (ta, diags) = run(r#"function main(): void { console.log("a", 1, true); }"#);
+        assert!(diags.is_empty(), "expected clean typecheck, got {diags:?}");
+        let body = ta.functions[0].body;
+        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+            panic!("expected block body");
+        };
+        let TypedStmtKind::Expr(call_id) = &ta.stmt(stmts[0]).kind else {
+            panic!("expected expression statement");
+        };
+        let TypedExprKind::GenericMethodCall { name, args, .. } = &ta.expr(*call_id).kind else {
+            panic!(
+                "expected GenericMethodCall, got {:?}",
+                ta.expr(*call_id).kind,
+            );
+        };
+        assert_eq!(name.name, "log");
+        assert_eq!(args.len(), 2);
+        assert!(args[0].is_generic);
+        let rest = args[1].expr;
+        let TypedExprKind::ArrayLiteral {
+            elements,
+            element_ty,
+        } = &ta.expr(rest).kind
+        else {
+            panic!(
+                "expected packed rest ArrayLiteral, got {:?}",
+                ta.expr(rest).kind
+            );
+        };
+        assert_eq!(elements.len(), 2);
+        assert_eq!(*element_ty, Type::Unknown);
+    }
+
+    #[test]
+    fn console_log_rejects_zero_args() {
+        let (_, diags) = run("function main(): void { console.log(); }");
+        assert!(
+            diags.iter().any(|d| d
+                .message
+                .contains("method `log` expects 1+ argument(s), got 0")),
+            "expected zero-arg console.log diagnostic, got {diags:?}"
+        );
+    }
+
+    // ----------------------- Equality -----------------------
+
+    #[test]
+    fn mixed_type_equality_rejected() {
+        let (_, diags) = run(
+            r#"function main(): void { let n: number = 1; let s: string = "1"; let b = n === s; }"#,
+        );
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("expected `number`")),
+            "expected mixed-type equality diagnostic, got: {diags:?}"
+        );
+    }
+
+    // ============================================================
+    // Arrow function inference
+    // ============================================================
+
+    /// Pull a `Closure` typed-expr out of `function main(): void { let f = <arrow>; }`.
+    fn closure_in_main_let(ta: &TypedAst) -> (Vec<TypedParam>, Type, ClosureBody) {
+        let main_fn = ta
+            .functions
+            .iter()
+            .find(|f| f.name.name == "main")
+            .expect("main not found");
+        let body_id = main_fn.body;
+        let stmts = match &ta.stmt(body_id).kind {
+            TypedStmtKind::Block(stmts) => stmts.clone(),
+            _ => panic!("expected block body"),
+        };
+        let let_stmt = stmts
+            .into_iter()
+            .find(|&sid| {
+                matches!(
+                    &ta.stmt(sid).kind,
+                    TypedStmtKind::Let { .. } | TypedStmtKind::Const { .. }
+                )
+            })
+            .expect("expected let/const in main body");
+        let value = match &ta.stmt(let_stmt).kind {
+            TypedStmtKind::Let { value, .. } | TypedStmtKind::Const { value, .. } => *value,
+            _ => unreachable!(),
+        };
+        let expr = ta.expr(value);
+        match &expr.kind {
+            TypedExprKind::Closure {
+                params,
+                return_type,
+                body,
+                ..
+            } => (params.clone(), return_type.clone(), body.clone()),
+            other => panic!("expected Closure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn arrow_with_typed_param_infers_expr_body_return() {
+        let ta = run_clean("function main(): void { let f = (x: number) => x * 2; }");
+        let (params, ret, _body) = closure_in_main_let(&ta);
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].ty, Type::Number);
+        assert_eq!(ret, Type::Number);
+    }
+
+    #[test]
+    fn arrow_with_typed_param_block_body_unifies_single_return() {
+        let ta = run_clean("function main(): void { let f = (x: number) => { return x * 2; }; }");
+        let (_params, ret, _body) = closure_in_main_let(&ta);
+        assert_eq!(ret, Type::Number);
+    }
+
+    #[test]
+    fn arrow_block_body_two_compatible_returns_unifies() {
+        let ta = run_clean(
+            "function main(): void { let f = (x: number) => { if (x > 0) { return x; } return 0; }; }",
+        );
+        let (_params, ret, _body) = closure_in_main_let(&ta);
+        assert_eq!(ret, Type::Number);
+    }
+
+    #[test]
+    fn arrow_block_body_conflicting_returns_errors() {
+        let (_, diags) = run(
+            r#"function main(): void { let f = (x: number) => { if (x > 0) { return x; } return "y"; }; }"#,
+        );
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("conflicts with earlier return")),
+            "expected conflicting-return diagnostic, got: {diags:?}"
+        );
+        assert!(
+            diags.iter().any(|d| d.message.contains("SUB-77")),
+            "expected SUB-77 hint in diagnostic, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn arrow_bare_ident_without_hint_errors() {
+        let (_, diags) = run("function main(): void { let f = x => x; }");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("requires a type annotation")),
+            "expected `parameter requires a type annotation`, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn arrow_with_explicit_return_annotation_used() {
+        let ta = run_clean("function main(): void { let f = (x: number): number => x; }");
+        let (_params, ret, _body) = closure_in_main_let(&ta);
+        assert_eq!(ret, Type::Number);
+    }
+
+    #[test]
+    fn arrow_block_body_void_when_no_returns() {
+        let ta = run_clean(
+            "function main(): void { let f = (x: number) => { console.log(x.toString()); }; }",
+        );
+        let (_params, ret, _body) = closure_in_main_let(&ta);
+        assert_eq!(ret, Type::Void);
+    }
+
+    /// A failing field read that is itself a method call's receiver used to be
+    /// reported twice: the method-dispatch path infers the receiver, and the
+    /// fall-through then re-infers the whole callee. Presence is not the property
+    /// under test — the count is, which no fixture directive can express.
+    #[test]
+    fn failing_receiver_of_a_method_call_reports_once() {
+        let (_, diags) =
+            run("function main(): string { let n: number = 3; return n.nope.toString(); }");
+        let reads = diags
+            .iter()
+            .filter(|d| d.message.contains("cannot read field `nope`"))
+            .count();
+        assert_eq!(reads, 1, "expected one read diagnostic, got {diags:?}");
+    }
+
+    /// The arguments of a call on a poisoned receiver are still walked, so a real
+    /// error in one is not lost with the duplicate.
+    #[test]
+    fn poisoned_receiver_still_checks_its_arguments() {
+        let (_, diags) =
+            run("function main(): string { let n: number = 3; return n.nope.toString(missing); }");
+        assert!(
+            diags.iter().any(|d| d.message.contains("missing")),
+            "argument diagnostic lost: {diags:?}"
+        );
+    }
+
+    // ============================================================
+    // `unknown` rejection diagnostics
+    // ============================================================
+
+    #[test]
+    fn field_access_on_unknown_diagnoses() {
+        let (_, diags) = run("function main(): void { let x: unknown = 1; let y = x.length; }");
+        assert!(
+            diags.iter().any(|d| d
+                .message
+                .contains("cannot read field `length` on `unknown`")),
+            "expected field-on-unknown diag, got: {diags:?}",
+        );
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.help.iter().any(|h| h.contains("narrow first"))),
+            "expected narrow-first help, got: {diags:?}",
+        );
+    }
+
+    #[test]
+    fn index_access_on_unknown_diagnoses() {
+        let (_, diags) = run("function main(): void { let x: unknown = 1; let y = x[0]; }");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("cannot index into `unknown`")),
+            "expected index-on-unknown diag, got: {diags:?}",
+        );
+    }
+
+    #[test]
+    fn call_on_unknown_diagnoses() {
+        let (_, diags) = run("function main(): void { let x: unknown = 1; let y = x(); }");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("cannot call value of type `unknown`")),
+            "expected call-on-unknown diag, got: {diags:?}",
+        );
+    }
+
+    #[test]
+    fn add_on_unknown_diagnoses() {
+        let (_, diags) = run("function main(): void { let x: unknown = 1; let y = x + 1; }");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("cannot apply `+` to `unknown`")),
+            "expected add-on-unknown diag, got: {diags:?}",
+        );
+    }
+
+    #[test]
+    fn arithmetic_on_unknown_diagnoses() {
+        for op in ["-", "*", "/", "%"] {
+            let src = format!("function main(): void {{ let x: unknown = 1; let y = x {op} 1; }}");
+            let (_, diags) = run(&src);
+            assert!(
+                diags.iter().any(|d| d
+                    .message
+                    .contains(&format!("cannot apply `{op}` to `unknown`"))),
+                "{op}: expected unknown-arith diag, got: {diags:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn ordering_on_unknown_diagnoses() {
+        for op in ["<", ">", "<=", ">="] {
+            let src = format!("function main(): void {{ let x: unknown = 1; let y = x {op} 1; }}");
+            let (_, diags) = run(&src);
+            assert!(
+                diags.iter().any(|d| d
+                    .message
+                    .contains(&format!("cannot apply `{op}` to `unknown`"))),
+                "{op}: expected unknown-ordering diag, got: {diags:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn boolean_context_on_unknown_diagnoses() {
+        // `if (x)` where `x: unknown` rejects with a "narrow first"
+        // hint, not a generic "expected boolean" mismatch.
+        let (_, diags) = run("function main(): void { let x: unknown = 1; if (x) { } }");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("cannot use `unknown` as a condition")),
+            "expected unknown-as-condition diag, got: {diags:?}",
+        );
+        // `&&` operand:
+        let (_, diags) = run("function main(): void { let x: unknown = 1; let y = x && true; }");
+        assert!(
+            diags.iter().any(|d| d
+                .message
+                .contains("cannot use `unknown` in a boolean context")),
+            "expected unknown-in-bool diag, got: {diags:?}",
+        );
+        // Unary `!`:
+        let (_, diags) = run("function main(): void { let x: unknown = 1; let y = !x; }");
+        assert!(
+            diags.iter().any(|d| d
+                .message
+                .contains("cannot use `unknown` in a boolean context")),
+            "expected unknown-in-not diag, got: {diags:?}",
+        );
+    }
+
+    #[test]
+    fn unary_arithmetic_on_unknown_diagnoses() {
+        let (_, diags) = run("function main(): void { let x: unknown = 1; let y = -x; }");
+        assert!(
+            diags.iter().any(|d| d
+                .message
+                .contains("cannot apply unary arithmetic to `unknown`")),
+            "expected unknown-unary-arith diag, got: {diags:?}",
+        );
+    }
+
+    #[test]
+    fn typeof_narrowing_lets_unknown_through() {
+        // typeof x === "string" narrows unknown to string; the body
+        // can then use it as a string.
+        let (_, diags) = run("function main(): void { let x: unknown = \"hi\"; \
+             if (typeof x === \"string\") { let n: number = x.length; } }");
+        assert!(
+            diags.is_empty(),
+            "expected clean typecheck after typeof narrowing, got: {diags:?}",
+        );
+    }
+
+    #[test]
+    fn anything_assigns_into_unknown() {
+        // Every concrete type flows into an `unknown` slot.
+        let (_, diags) = run("function main(): void { \
+             let a: unknown = 1; \
+             let b: unknown = \"hi\"; \
+             let c: unknown = true; \
+             let d: unknown = null; \
+             let e: unknown = [1, 2]; }");
+        assert!(
+            diags.is_empty(),
+            "expected all upcasts to typecheck, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn cast_optional_to_required_field_suggests_narrowing() {
+        // The MCP-result footgun: casting a value with an optional `foo?` field to
+        // a type that requires it. Steer toward narrowing, not `as unknown as T`.
+        let src = "interface Row { commit: { message: string }; } \
+                   function main(): void { \
+                     const x: { commit?: { message: string }; sha: string } = { sha: \"a\" }; \
+                     const y = x as Row; \
+                   }";
+        let (_, diags) = run(src);
+        assert!(
+            diags.iter().any(|d| d
+                .message
+                .contains("`commit` is optional on the source but required on the target")),
+            "expected an optionality-specific cast error, got: {diags:?}",
+        );
+        assert!(
+            diags.iter().any(|d| d
+                .help
+                .iter()
+                .any(|h| h.contains("narrow the optional field"))),
+            "expected a narrow-don't-cast help block, got: {diags:?}",
+        );
+        assert!(
+            !diags
+                .iter()
+                .any(|d| d.message.contains("types are not related")),
+            "the old misleading message must be gone: {diags:?}",
+        );
+    }
+
+    #[test]
+    fn cast_between_unrelated_types_keeps_the_generic_message() {
+        let src = "function main(): void { \
+                     const x: { a: string } = { a: \"x\" }; \
+                     const y = x as { b: number }; \
+                   }";
+        let (_, diags) = run(src);
+        assert!(
+            diags.iter().any(|d| d
+                .message
+                .contains("no assignable direction between these types")),
+            "expected the generic unrelated-cast message, got: {diags:?}",
+        );
+    }
+
+    #[test]
+    fn tostring_on_unknown_typechecks() {
+        // the universal `$Object`-vtable methods
+        // (`toString`, `toJson`) are callable on un-narrowed
+        // `unknown`. Spec §2.11.
+        let (_, diags) =
+            run("function main(): void { let x: unknown = 1; let s: string = x.toString(); }");
+        assert!(
+            diags.is_empty(),
+            "expected toString on unknown to typecheck, got: {diags:?}",
+        );
+    }
+
+    #[test]
+    fn tojson_on_unknown_typechecks() {
+        let (_, diags) =
+            run("function main(): void { let x: unknown = 1; let s: string = x.toJson(); }");
+        assert!(
+            diags.is_empty(),
+            "expected toJson on unknown to typecheck, got: {diags:?}",
+        );
+    }
+
+    #[test]
+    fn non_vtable_method_on_unknown_still_rejects() {
+        // `length` isn't on the `$Object` vtable — still rejected
+        // with the "narrow first" hint. Confirms the universal-
+        // method allowlist hasn't accidentally opened the door
+        // for arbitrary member access.
+        let (_, diags) = run("function main(): void { let x: unknown = 1; let n = x.length; }");
+        assert!(
+            diags.iter().any(|d| d
+                .message
+                .contains("cannot read field `length` on `unknown`")),
+            "expected length-on-unknown to reject, got: {diags:?}",
+        );
+    }
+
+    // ----------------------- Template literals -----------------------
+
+    /// Recursively collect every `MethodCall { name: "toString" }`
+    /// reachable from `id`. Used by the elision tests below — string
+    /// interpolations must produce zero such nodes; primitive
+    /// interpolations must produce exactly one per slot.
+    fn collect_to_string_calls(ta: &TypedAst, id: crate::ExprId) -> Vec<crate::ExprId> {
+        fn walk(ta: &TypedAst, id: crate::ExprId, out: &mut Vec<crate::ExprId>) {
+            let e = ta.expr(id);
+            if let TypedExprKind::MethodCall { name, .. } = &e.kind
+                && name.name == "toString"
+            {
+                out.push(id);
+            }
+            match &e.kind {
+                TypedExprKind::Binary { lhs, rhs, .. } => {
+                    walk(ta, *lhs, out);
+                    walk(ta, *rhs, out);
+                }
+                TypedExprKind::MethodCall { receiver, args, .. } => {
+                    walk(ta, *receiver, out);
+                    for &a in args {
+                        walk(ta, a, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        walk(ta, id, &mut out);
+        out
+    }
+
+    #[test]
+    fn template_literal_number_interpolation_wraps_in_to_string() {
+        let ta = run_clean(
+            r#"function main(): void { const n: number = 1; const s: string = `n=${n}`; }"#,
+        );
+        let body = ta.functions[0].body;
+        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+            panic!("expected Block")
+        };
+        // stmts[0] = const n; stmts[1] = const s
+        let TypedStmtKind::Const { value, ty, .. } = &ta.stmt(stmts[1]).kind else {
+            panic!("expected Const for s")
+        };
+        assert_eq!(*ty, Type::String);
+        assert_eq!(ta.expr(*value).ty, Type::String);
+        let calls = collect_to_string_calls(&ta, *value);
+        assert_eq!(
+            calls.len(),
+            1,
+            "expected one toString call for number interpolation, got {}",
+            calls.len()
+        );
+        // Confirm the resolved iface is the Number interface.
+        let TypedExprKind::MethodCall { iface, .. } = &ta.expr(calls[0]).kind else {
+            unreachable!();
+        };
+        assert_eq!(iface.as_str(), crate::mangle::prelude("Number").as_str());
+    }
+
+    #[test]
+    fn template_literal_string_interpolation_elides_to_string() {
+        // The acceptance criterion: when the interpolation is
+        // already string-typed, no `.toString()` wrapping is emitted.
+        let ta = run_clean(
+            r#"function main(): void { const x: string = "x"; const s: string = `s=${x}`; }"#,
+        );
+        let body = ta.functions[0].body;
+        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+            panic!("expected Block")
+        };
+        let TypedStmtKind::Const { value, ty, .. } = &ta.stmt(stmts[1]).kind else {
+            panic!("expected Const for s")
+        };
+        assert_eq!(*ty, Type::String);
+        let calls = collect_to_string_calls(&ta, *value);
+        assert!(
+            calls.is_empty(),
+            "expected no toString call for string interpolation, got {}",
+            calls.len()
+        );
+    }
+
+    #[test]
+    fn template_literal_boolean_interpolation_wraps_in_to_string() {
+        let ta = run_clean(
+            r#"function main(): void { const b: boolean = true; const s: string = `b=${b}`; }"#,
+        );
+        let body = ta.functions[0].body;
+        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+            panic!("expected Block")
+        };
+        let TypedStmtKind::Const { value, .. } = &ta.stmt(stmts[1]).kind else {
+            panic!("expected Const for s")
+        };
+        let calls = collect_to_string_calls(&ta, *value);
+        assert_eq!(calls.len(), 1);
+        let TypedExprKind::MethodCall { iface, .. } = &ta.expr(calls[0]).kind else {
+            unreachable!();
+        };
+        assert_eq!(iface.as_str(), crate::mangle::prelude("Boolean").as_str());
+    }
+
+    #[test]
+    fn template_literal_lone_interpolation_skips_empty_parts() {
+        // `` `${n}` `` has empty head and tail. After elision the
+        // chain is a single operand (the toString call) — no Binary
+        // wrapper.
+        let ta = run_clean(
+            r#"function main(): void { const n: number = 1; const s: string = `${n}`; }"#,
+        );
+        let body = ta.functions[0].body;
+        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+            panic!("expected Block")
+        };
+        let TypedStmtKind::Const { value, .. } = &ta.stmt(stmts[1]).kind else {
+            panic!("expected Const for s")
+        };
+        // The top expression is the toString MethodCall itself
+        // (no Binary wrapping with empty-string operands).
+        match &ta.expr(*value).kind {
+            TypedExprKind::MethodCall { name, .. } => {
+                assert_eq!(name.name, "toString");
+            }
+            other => panic!("expected lone MethodCall, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn template_literal_no_substitution_collapses_to_string_literal() {
+        // No-substitution templates lower to `ExprKind::String` at the
+        // parser level — by the time we reach the typechecker, they
+        // are indistinguishable from `"plain"`.
+        let ta = run_clean(r#"function main(): void { const s: string = `plain`; }"#);
+        let body = ta.functions[0].body;
+        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+            panic!("expected Block")
+        };
+        let TypedStmtKind::Const { value, .. } = &ta.stmt(stmts[0]).kind else {
+            panic!("expected Const")
+        };
+        assert!(matches!(
+            &ta.expr(*value).kind,
+            TypedExprKind::String(s) if s == "plain"
+        ));
+    }
+
+    #[test]
+    fn template_literal_null_interpolation_emits_narrow_diagnostic() {
+        let (_, diags) = run(
+            r#"function main(): void { const n: string | null = null; const s: string = `${n}`; }"#,
+        );
+        assert!(
+            diags.iter().any(|d| d.message.contains("narrow")),
+            "expected narrow-first diagnostic, got: {diags:?}",
+        );
+    }
+
+    // ----------------------- namespace-member calls -----------------------
+
+    /// Synthetic package exercising the three argument shapes a namespace
+    /// call must bind: a trailing optional (defaulted) param, a rest param,
+    /// and a generic. No stdlib package carries a rest param, so the shapes
+    /// are declared directly here.
+    fn ns_test_package() -> crate::PackageDeclaration {
+        use crate::{DefaultValue, Param, Span, ValueKind, ValueSymbol};
+
+        fn func(name: &str, generics: Vec<String>, params: Vec<Param>, ret: Type) -> ValueSymbol {
+            ValueSymbol {
+                name: name.to_string(),
+                mangled_name: crate::mangle::package_symbol("test:ns", name),
+                declaration_span: Span::at(crate::FileId(0)),
+                kind: ValueKind::Function {
+                    generics,
+                    params,
+                    ret,
+                    type_predicate: None,
+                    doc: None,
+                },
+            }
+        }
+
+        let mut defs = crate::PackageDeclaration::with_package("test:ns");
+        defs.values.insert(
+            "opt".to_string(),
+            func(
+                "opt",
+                Vec::new(),
+                vec![
+                    Param::new("a", Type::Number),
+                    Param::with_default("b", Type::Number, DefaultValue::Number(5.0)),
+                ],
+                Type::Number,
+            ),
+        );
+        defs.values.insert(
+            "sum".to_string(),
+            func(
+                "sum",
+                Vec::new(),
+                vec![Param::rest("nums", Type::Array(Box::new(Type::Number)))],
+                Type::Number,
+            ),
+        );
+        defs.values.insert(
+            "identity".to_string(),
+            func(
+                "identity",
+                vec!["T".to_string()],
+                vec![Param::new("x", Type::TypeVar("T".to_string()))],
+                Type::TypeVar("T".to_string()),
+            ),
+        );
+        defs
+    }
+
+    /// First call-shaped node in the typed AST (namespace calls lower to a
+    /// `Call` or, when generic, a `GenericCall`).
+    fn first_call_arg_count(ta: &TypedAst) -> usize {
+        for i in 0..ta.exprs_len() {
+            match &ta.expr(crate::ExprId(i as u32)).kind {
+                TypedExprKind::Call { args, .. } => return args.len(),
+                TypedExprKind::GenericCall { args, .. } => return args.len(),
+                _ => {}
+            }
+        }
+        panic!("no call node found");
+    }
+
+    #[test]
+    fn namespace_call_omits_trailing_optional_arg() {
+        let pkg = ns_test_package();
+        let (ta, diags) = run_with_packages(
+            r#"import ns from "test:ns";
+               function main(): void { const r: number = ns.opt(1); }"#,
+            &[&pkg],
+        );
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
+        // the defaulted `b = 5` is synthesized, so the lowered call is arity-2.
+        assert_eq!(first_call_arg_count(&ta), 2);
+    }
+
+    #[test]
+    fn namespace_call_binds_rest_param() {
+        let pkg = ns_test_package();
+        let (ta, diags) = run_with_packages(
+            r#"import ns from "test:ns";
+               function main(): void { const r: number = ns.sum(1, 2, 3); }"#,
+            &[&pkg],
+        );
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
+        // the three trailing args pack into one rest array, so arity-1.
+        assert_eq!(first_call_arg_count(&ta), 1);
+    }
+
+    #[test]
+    fn namespace_call_to_generic_function_infers_return() {
+        let pkg = ns_test_package();
+        let (ta, diags) = run_with_packages(
+            r#"import ns from "test:ns";
+               function main(): void { const r: number = ns.identity(42); }"#,
+            &[&pkg],
+        );
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
+        // `T` binds to `number` from the argument; the call lowers to a
+        // `GenericCall` (single arg, no spurious arity rejection).
+        assert_eq!(first_call_arg_count(&ta), 1);
+    }
+
+    #[test]
+    fn namespace_call_too_few_args_still_errors() {
+        let pkg = ns_test_package();
+        let (_, diags) = run_with_packages(
+            r#"import ns from "test:ns";
+               function main(): void { const r: number = ns.opt(); }"#,
+            &[&pkg],
+        );
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("argument(s), got 0")),
+            "expected arity diagnostic, got: {diags:?}",
+        );
+    }
+}

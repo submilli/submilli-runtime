@@ -1,0 +1,16 @@
+// expect-error: expected expression
+// An unparseable first statement in a case body must recover with a clean
+// diagnostic, not a `start <= end` span panic.
+function f(x: number): number {
+  switch (x) {
+    case 0:
+      )
+    case 1:
+      return 1;
+  }
+  return 0;
+}
+
+function main(): void {
+  assert(f(1) === 1, "unreachable — compile error blocks runtime");
+}

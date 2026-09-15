@@ -1,0 +1,16 @@
+function tick(i: number, n: number): IteratorResult<number> {
+  if (i >= n) { const r: IteratorResult<number> = { done: true }; return r; }
+  const y: IteratorResult<number> = { done: false, value: i }; return y;
+}
+
+function range(n: number): Iterator<number> {
+  let i = 0;
+  const it: Iterator<number> = { next: (): IteratorResult<number> => { const r = tick(i, n); i = i + 1; return r; } };
+  return it;
+}
+
+function main(): void {
+  let sum: number = 0;
+  for (const x of range(4)) { sum = sum + x; }
+  assert(sum === 6, "0 + 1 + 2 + 3 = 6 — finally elided the null close");
+}

@@ -1,0 +1,7 @@
+// expect-error: expected 1+ argument(s), got 0
+function tag(label: string, ...vals: number[]): string {
+  return label;
+}
+function main(): void {
+  let x = tag();
+}

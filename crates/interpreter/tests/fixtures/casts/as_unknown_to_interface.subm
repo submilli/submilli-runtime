@@ -1,0 +1,13 @@
+// `unknown as Interface` runs a deep structural check against the interface's data shape.
+
+interface Point {
+  x: number;
+  y: number;
+}
+
+function main(): void {
+  const u: unknown = { x: 1, y: 2 };
+  const p: Point = u as Point;
+  assert(p.x === 1, "x read after interface cast");
+  assert(p.y === 2, "y read after interface cast");
+}

@@ -1,0 +1,19 @@
+// Structural discrimination by distinct required field names (no literal tag).
+
+type V = { a: number } | { b: string };
+
+function main(): void {
+  const v1 = JSON.parse("{\"a\":7}") as V;
+  if ("a" in v1) {
+    assert(v1.a === 7, "a");
+  } else {
+    assert(false, "expected a-variant");
+  }
+
+  const v2 = JSON.parse("{\"b\":\"hi\"}") as V;
+  if ("b" in v2) {
+    assert(v2.b === "hi", "b");
+  } else {
+    assert(false, "expected b-variant");
+  }
+}

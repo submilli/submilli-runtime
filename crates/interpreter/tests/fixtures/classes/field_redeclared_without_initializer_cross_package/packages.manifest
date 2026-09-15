@@ -1,0 +1,5 @@
+# The parent lives in a dependency, so the child's inherited-slot list is the
+# reconstructed imported layout rather than one this module built.
+# name          dir  deps          root
+@test/base      lib  -
+main            app  @test/base    root

@@ -1,0 +1,17 @@
+// Deep array cast iterates and type-checks every element at runtime.
+
+function main(): void {
+  const ok: unknown = [1, 2, 3];
+  const a = ok as number[];
+  assert(a[0] === 1 && a[2] === 3, "all-number array passes the element check");
+
+  const bad: unknown = ["a", "b"];
+  let caught: boolean = false;
+  try {
+    const _ = bad as number[];
+    assert(false, "string array cast to number[] should throw — never reached");
+  } catch (e: Error) {
+    caught = true;
+  }
+  assert(caught, "non-number array element threw");
+}

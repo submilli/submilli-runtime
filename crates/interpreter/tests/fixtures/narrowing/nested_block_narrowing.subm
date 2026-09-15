@@ -1,0 +1,16 @@
+function inner_assign(): number {
+  let x: string | null = "outer";
+  {
+    x = "inner";
+    let inner_len: number = x.length;
+    assert(inner_len === 5, "inner narrowing lets x.length resolve");
+  }
+  if (x !== null) {
+    return x.length;
+  }
+  return -1;
+}
+
+function main(): void {
+  assert(inner_assign() === 5, "nested block narrowing dies at exit");
+}

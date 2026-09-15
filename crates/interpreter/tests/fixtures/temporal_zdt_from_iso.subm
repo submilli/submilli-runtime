@@ -1,0 +1,11 @@
+function main(): void {
+  const z: Temporal.ZonedDateTime = Temporal.ZonedDateTime.from("2024-03-09T12:00:00+00:00[UTC]");
+  assert(z.timeZoneId === "UTC", "timeZoneId");
+  assert(z.year === 2024, "year");
+  assert(z.month === 3, "month");
+  assert(z.day === 9, "day");
+  assert(z.hour === 12, "hour");
+  assert(z.minute === 0, "minute");
+  assert(z.second === 0, "second");
+  assert(z.dayOfWeek === 6, "Saturday = 6 (Monday = 1)");
+}

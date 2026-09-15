@@ -1,0 +1,18 @@
+function main(): void {
+  const a: { id: number, nickname?: string } = { id: 1 };
+  assert(a.id === 1, "required field populated");
+  assert(a.nickname === null, "omitted optional reads as null");
+
+  const b: { id: number, nickname?: string } = { id: 2, nickname: "alice" };
+  assert(b.id === 2, "required field populated");
+  assert(b.nickname !== null, "present optional is non-null");
+
+  const c: { x?: number, y?: number } = {};
+  assert(c.x === null, "inline optional x omitted");
+  assert(c.y === null, "inline optional y omitted");
+
+  // exercises the leading-comma path in JSON.stringify's first_local logic
+  const d: { x?: number, y?: number } = { y: 7 };
+  assert(d.x === null, "inline optional x omitted");
+  assert(d.y !== null, "inline optional y present");
+}

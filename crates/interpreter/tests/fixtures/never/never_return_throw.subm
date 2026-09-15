@@ -1,0 +1,17 @@
+function todo(msg: string): never {
+  throw new Error(msg);
+}
+
+function caller(): number {
+  return todo("nope");
+}
+
+function main(): void {
+  let caught: string = "<none>";
+  try {
+    caller();
+  } catch (e: Error) {
+    caught = e.message;
+  }
+  assert(caught === "nope", "throw bubbles via Never return");
+}

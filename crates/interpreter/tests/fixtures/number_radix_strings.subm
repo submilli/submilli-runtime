@@ -1,0 +1,23 @@
+function main(): void {
+  assert(Number("0xff") === 255, "hex lowercase prefix");
+  assert(Number("0XFF") === 255, "hex uppercase prefix");
+  assert(Number("0o17") === 15, "octal prefix");
+  assert(Number("0O17") === 15, "octal uppercase prefix");
+  assert(Number("0b101") === 5, "binary prefix");
+  assert(Number("0B101") === 5, "binary uppercase prefix");
+  assert(Number("  0xff  ") === 255, "radix literal trims whitespace");
+
+  // Whole-string rule: trailing junk and bad digits are NaN, not a prefix value.
+  const junk: number = Number("12px");
+  assert(junk !== junk, "trailing junk is NaN");
+  const badHex: number = Number("0xZZ");
+  assert(badHex !== badHex, "non-hex digits are NaN");
+  const emptyHex: number = Number("0x");
+  assert(emptyHex !== emptyHex, "0x with no digits is NaN");
+  const badBin: number = Number("0b12");
+  assert(badBin !== badBin, "out-of-range binary digit is NaN");
+
+  // Sign is not part of the non-decimal integer-literal grammar.
+  const signedHex: number = Number("-0xff");
+  assert(signedHex !== signedHex, "signed hex literal is NaN");
+}

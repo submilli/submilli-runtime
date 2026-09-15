@@ -1,0 +1,27 @@
+// JSON.stringify omits optional fields ("lenient omission on output").
+
+function main(): void {
+  const a: { id: number, deletedAt?: string } = { id: 1 };
+  assert(JSON.stringify(a) === "{\"id\":1}", "omits absent optional");
+
+  const b: { id: number, deletedAt?: string } = { id: 2, deletedAt: "x" };
+  assert(
+    JSON.stringify(b) === "{\"deletedAt\":\"x\",\"id\":2}",
+    "emits present optional"
+  );
+
+  const c: { a?: number, b?: number, c: number } = { c: 5, b: 7 };
+  assert(
+    JSON.stringify(c) === "{\"b\":7,\"c\":5}",
+    "first-flag suppresses leading comma when a is absent"
+  );
+
+  const d: { a?: number, b?: number } = { a: 1, b: 2 };
+  assert(
+    JSON.stringify(d) === "{\"a\":1,\"b\":2}",
+    "all-present optional path"
+  );
+
+  const e: { a?: number, b?: number } = {};
+  assert(JSON.stringify(e) === "{}", "all-absent optional path");
+}

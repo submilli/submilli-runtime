@@ -1,0 +1,16 @@
+function main(): void {
+  assert(2 ** 0 === 1, "x ** 0 === 1");
+  assert(2 ** 1 === 2, "x ** 1 === x");
+  assert(2 ** 10 === 1024, "2 ** 10");
+  assert(3 ** 4 === 81, "3 ** 4");
+
+  assert(2 ** 3 ** 2 === 512, "2 ** 3 ** 2 = 2 ** 9 = 512");
+
+  assert(2 * 3 ** 2 === 18, "** binds tighter than *");
+
+  assert(1 + 2 ** 3 === 9, "** binds tighter than +");
+
+  assert(2n ** 3n === 8n, "bigint pow");
+  assert(2n ** 10n === 1024n, "bigint 2n ** 10n");
+  assert(10n ** 0n === 1n, "bigint x ** 0n === 1n");
+}

@@ -1,0 +1,18 @@
+function main(): void {
+  const dt = Temporal.PlainDateTime.from("2026-06-07T10:30:45");
+  assert(dt.year === 2026, "year");
+  assert(dt.month === 6, "month");
+  assert(dt.day === 7, "day");
+  assert(dt.hour === 10, "hour");
+  assert(dt.minute === 30, "minute");
+  assert(dt.second === 45, "second");
+  assert(dt.toString() === "2026-06-07T10:30:45", "toString");
+
+  const d = dt.toPlainDate();
+  assert(d.equals(Temporal.PlainDate.from("2026-06-07")), "toPlainDate");
+  const t = dt.toPlainTime();
+  assert(t.equals(Temporal.PlainTime.from("10:30:45")), "toPlainTime");
+
+  assert(dt.equals(Temporal.PlainDateTime.from("2026-06-07T10:30:45")), "equal");
+  assert(!dt.equals(Temporal.PlainDateTime.from("2026-06-07T10:30:46")), "unequal");
+}

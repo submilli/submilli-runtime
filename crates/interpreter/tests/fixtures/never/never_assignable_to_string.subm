@@ -1,0 +1,18 @@
+function todo(msg: string): never {
+  throw new Error(msg);
+}
+
+function read_message(): string {
+  let result: string = "ok";
+  try {
+    const s: string = todo("expected this");
+    result = s;
+  } catch (e: Error) {
+    result = e.message;
+  }
+  return result;
+}
+
+function main(): void {
+  assert(read_message() === "expected this", "Never flows into string slot");
+}

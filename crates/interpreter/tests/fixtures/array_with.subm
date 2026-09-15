@@ -1,0 +1,28 @@
+function main(): void {
+  let a: number[] = [1, 2, 3, 4];
+
+  let updated = a.with(1, 99);
+  assert(updated[0] === 1 && updated[1] === 99 && updated[2] === 3 && updated[3] === 4, "replaces one slot");
+  assert(a[1] === 2, "original is unchanged");
+
+  let fromEnd = a.with(-1, 50);
+  assert(fromEnd[3] === 50, "negative index counts from end");
+  assert(fromEnd[0] === 1, "other slots unchanged");
+
+  let threw: boolean = false;
+  try {
+    a.with(4, 0);
+  } catch (e: Error) {
+    threw = true;
+    assert(e.message === "index out of range", "OOB carries the standard message");
+  }
+  assert(threw, "index at length throws");
+
+  threw = false;
+  try {
+    a.with(-5, 0);
+  } catch (e: Error) {
+    threw = true;
+  }
+  assert(threw, "negative index past the start throws");
+}

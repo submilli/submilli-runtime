@@ -1,0 +1,14 @@
+function double_or_zero(x: number | null): number {
+  if (x !== null) {
+    return x + x;
+  } else {
+    return 0;
+  }
+}
+
+function main(): void {
+  assert(double_or_zero(5) === 10, "positive number doubles");
+  assert(double_or_zero(0) === 0, "zero non-null doubles to zero");
+  assert(double_or_zero(null) === 0, "null returns 0");
+  assert(double_or_zero(7) === 14, "another non-null");
+}

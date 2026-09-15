@@ -1,0 +1,14 @@
+function noop(): void {}
+
+function f(obj: { foo: { len: number } | null }): number {
+  if (obj.foo !== null) {
+    noop();
+    return obj.foo.len;
+  }
+  return 0;
+}
+
+function main(): void {
+  assert(f({ foo: { len: 5 } }) === 5, "call preserves field-path narrowing");
+  assert(f({ foo: null }) === 0, "null field takes fallback");
+}

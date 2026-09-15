@@ -1,0 +1,12 @@
+function f(x: { v: string | number }): number {
+  if (typeof x.v === "string") {
+    return x.v.length;
+  }
+  return 0;
+}
+
+function main(): void {
+  assert(f({ v: "hello" }) === 5, "string field narrows to string");
+  assert(f({ v: "" }) === 0, "empty string narrows, length 0");
+  assert(f({ v: 42 }) === 0, "number falls through to else");
+}

@@ -1,0 +1,6 @@
+# Typed subclass catch across the package boundary: the filter compares against
+# the producer's imported vtable singleton, so a `catch (e: ParseError)` in the
+# root binds only the imported subclass and re-raises the rest.
+# name         dir    deps         root
+@test/errs     errs   -
+main           app    @test/errs   root

@@ -1,0 +1,6 @@
+// expect-error: cannot assign to field of `number`
+
+function main(): void {
+  let n = 1;
+  n.x = 2;
+}

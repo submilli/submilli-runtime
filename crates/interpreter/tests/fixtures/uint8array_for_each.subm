@@ -1,0 +1,16 @@
+function main(): void {
+  let bytes: Uint8Array = Uint8Array.new([1, 2, 3, 4]);
+
+  let acc: number = 0;
+  bytes.forEach((v: number) => {
+    acc = acc + v;
+  });
+  assert(acc === 10, "sum via forEach");
+
+  let empty: Uint8Array = Uint8Array.alloc(0);
+  let calls: number = 0;
+  empty.forEach((v: number) => {
+    calls = calls + 1;
+  });
+  assert(calls === 0, "forEach on empty calls 0 times");
+}

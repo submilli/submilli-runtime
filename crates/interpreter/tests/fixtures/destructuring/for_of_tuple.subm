@@ -1,0 +1,22 @@
+function main(): void {
+  const pairs: [string, number][] = [["a", 1], ["b", 2], ["c", 3]];
+  let i: number = 0;
+  let total: number = 0;
+  let last_key: string = "";
+  for (const [k, v] of pairs) {
+    if (i === 0) {
+      assert(k === "a", "first key is 'a'");
+      assert(v === 1, "first value is 1");
+    }
+    if (i === 2) {
+      assert(k === "c", "third key is 'c'");
+      assert(v === 3, "third value is 3");
+    }
+    total = total + v;
+    last_key = k;
+    i = i + 1;
+  }
+  assert(i === 3, "iterated 3 pairs");
+  assert(total === 6, "1+2+3 = 6");
+  assert(last_key === "c", "last key kept across iterations");
+}

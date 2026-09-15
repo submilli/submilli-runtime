@@ -1,0 +1,17 @@
+// `Temporal.Instant` add/subtract/until/since end-to-end.
+
+function main(): void {
+  const a: Temporal.Instant = Temporal.Instant.from("2024-03-09T15:30:45Z");
+  const oneHour: Temporal.Duration = Temporal.Duration.from("PT1H");
+  const b: Temporal.Instant = a.add(oneHour);
+  assert(b.toString() === "2024-03-09T16:30:45Z", "add 1 hour");
+
+  const back: Temporal.Instant = b.subtract(oneHour);
+  assert(back.equals(a), "subtract round-trip");
+
+  const span: Temporal.Duration = a.until(b);
+  assert(span.total("seconds") === 3600, "until span = 1h");
+
+  const negSpan: Temporal.Duration = b.since(a);
+  assert(negSpan.total("seconds") === 3600, "since span = 1h");
+}

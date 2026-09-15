@@ -1,0 +1,11 @@
+function describeJson<T>(x: T): string {
+  return x.toJson();
+}
+
+function main(): void {
+  assert(describeJson(42) === "42", "number");
+  assert(describeJson(true) === "true", "boolean");
+  assert(describeJson("hi") === "\"hi\"", "string");
+  assert(describeJson([1, 2, 3]) === "[1,2,3]", "array");
+  assert(describeJson({ a: 1 }) === "{\"a\":1}", "object");
+}

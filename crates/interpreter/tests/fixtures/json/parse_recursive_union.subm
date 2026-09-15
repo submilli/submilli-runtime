@@ -1,0 +1,28 @@
+// JSON.parse into a recursive union alias. Recursion runs through the
+// `Json[]` member: the per-alias validator re-enters itself for each
+// nested array, terminating on the finite parsed tree.
+type Json = number | string | boolean | Json[];
+
+function main(): void {
+  const j = JSON.parse("[1, [2, 3], \"x\", true]") as Json;
+  assert(Array.isArray(j), "top is an array");
+  if (Array.isArray(j)) {
+    assert(j.length === 4, "four elements");
+
+    const first: Json = j[0];
+    const second: Json = j[1];
+    const third: Json = j[2];
+    const fourth: Json = j[3];
+
+    assert(typeof first === "number", "first parsed as number");
+    assert(typeof third === "string", "third parsed as string");
+    assert(typeof fourth === "boolean", "fourth parsed as boolean");
+
+    assert(Array.isArray(second), "second element is a nested array");
+    if (Array.isArray(second)) {
+      assert(second.length === 2, "nested length 2");
+      const inner: Json = second[0];
+      assert(typeof inner === "number", "nested element parsed as number");
+    }
+  }
+}

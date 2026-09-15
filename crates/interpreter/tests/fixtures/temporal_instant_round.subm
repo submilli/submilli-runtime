@@ -1,0 +1,27 @@
+function main(): void {
+  const positive = Temporal.Instant.from("2024-03-09T15:30:45.600Z");
+  assert(
+    positive.round("second").toString() === "2024-03-09T15:30:46Z",
+    "string shorthand uses halfExpand",
+  );
+  assert(
+    positive.round({ smallestUnit: "minute", roundingMode: "floor" }).toString()
+      === "2024-03-09T15:30:00Z",
+    "options bag controls mode",
+  );
+
+  const increment = Temporal.Instant.from("2024-03-09T15:22:00Z");
+  assert(
+    increment.round({ smallestUnit: "minute", roundingIncrement: 15 }).toString()
+      === "2024-03-09T15:15:00Z",
+    "rounding increment is applied",
+  );
+
+  let caught = false;
+  try {
+    positive.round({ smallestUnit: "day" });
+  } catch (_e) {
+    caught = true;
+  }
+  assert(caught, "Instant.round rejects calendar units");
+}

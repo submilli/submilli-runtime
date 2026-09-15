@@ -1,0 +1,36 @@
+---
+source: crates/interpreter/tests/diagnostic_snapshots.rs
+assertion_line: 235
+expression: render_all(source)
+---
+error: object literal has unknown field `firstNmae` for the target type
+ --> test.subm:2:51
+  |
+1 | function main(): void {
+2 |   const p: { firstName: string; age: number } = { firstNmae: "Ada", age: 37 };
+  |                                                   ^^^^^^^^^
+3 | }
+  |
+help: valid fields: `age`, `firstName`
+  |
+help: remove `firstNmae` or rename it to `firstName`
+---
+error: object literal is missing required field `firstName`
+ --> test.subm:2:49
+  |
+1 | function main(): void {
+2 |   const p: { firstName: string; age: number } = { firstNmae: "Ada", age: 37 };
+  |                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+3 | }
+---
+error: expected `{ age: number; firstName: string }`, got `{ age: number; firstNmae: string }`
+ --> test.subm:2:49
+  |
+1 | function main(): void {
+2 |   const p: { firstName: string; age: number } = { firstNmae: "Ada", age: 37 };
+  |                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+3 | }
+  |
+help: missing field(s): `firstName`
+extra field(s): `firstNmae`
+---

@@ -1,0 +1,17 @@
+// PlainDate climbs to PlainDateTime: no arg defaults to midnight, an optional
+// PlainTime supplies the wall-clock.
+
+function main(): void {
+  const d: Temporal.PlainDate = Temporal.PlainDate.from("2024-03-15");
+
+  const midnight: Temporal.PlainDateTime = d.toPlainDateTime();
+  assert(midnight.year === 2024 && midnight.month === 3 && midnight.day === 15, "date kept");
+  assert(midnight.hour === 0 && midnight.minute === 0 && midnight.second === 0, "midnight default");
+  assert(midnight.nanosecond === 0, "no subseconds");
+  assert(midnight.toString() === "2024-03-15T00:00:00", "midnight ISO");
+
+  const t: Temporal.PlainTime = Temporal.PlainTime.from("09:41:30.123456789");
+  const dt: Temporal.PlainDateTime = d.toPlainDateTime(t);
+  assert(dt.day === 15 && dt.hour === 9 && dt.minute === 41 && dt.second === 30, "time merged");
+  assert(dt.nanosecond === 123456789, "subsecond precision merged");
+}

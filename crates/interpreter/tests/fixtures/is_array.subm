@@ -1,0 +1,23 @@
+function is_array<T>(x: T): boolean { return Array.isArray(x); }
+
+function main(): void {
+  const ns: number[] = [1, 2, 3];
+  const ss: string[] = ["a", "b"];
+
+  assert(Array.isArray(ns), "number[] static true");
+  assert(Array.isArray(ss), "string[] static true");
+
+  const n: number = 42;
+  const s: string = "hi";
+  assert(!Array.isArray(n), "number static false");
+  assert(!Array.isArray(s), "string static false");
+
+  // Both array arguments pass regardless of element type; element type has no runtime tag.
+  assert(is_array<number[]>(ns), "ref.test array == array");
+  assert(is_array<string[]>(ss), "ref.test array (cross-element, erased)");
+  assert(!is_array<number>(42), "ref.test number != array");
+  assert(!is_array<string>("hi"), "ref.test string != array");
+  assert(!is_array<boolean>(true), "ref.test boolean != array");
+
+  assert(!is_array<{ x: number }>({ x: 1 }), "ref.test object != array");
+}

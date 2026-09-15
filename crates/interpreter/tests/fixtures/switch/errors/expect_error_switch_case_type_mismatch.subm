@@ -1,0 +1,8 @@
+// expect-error: not compatible with switch discriminant
+function main(): void {
+  let s: string = "hi";
+  switch (s) {
+    case 1: break;
+    default: break;
+  }
+}

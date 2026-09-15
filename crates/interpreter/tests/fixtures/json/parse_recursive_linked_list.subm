@@ -1,0 +1,18 @@
+// JSON.parse into a self-referential object alias whose back-edge is a
+// nullable field (`next: Node | null`). The `Node | null` field lowers to
+// a union dispatch with the back-edge in the object bucket.
+type Node = { value: number; next: Node | null };
+
+function main(): void {
+  const head = JSON.parse(
+    "{\"value\": 1, \"next\": {\"value\": 2, \"next\": {\"value\": 3, \"next\": null}}}"
+  ) as Node;
+
+  let sum: number = 0;
+  let cur: Node | null = head;
+  while (cur !== null) {
+    sum = sum + cur.value;
+    cur = cur.next;
+  }
+  assert(sum === 6, "summed the parsed list");
+}

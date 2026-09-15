@@ -1,0 +1,32 @@
+function main(): void {
+  let a: bigint = 12345678901234567890n;
+  let b: bigint = 98765432109876543210n;
+
+  assert(
+    (a + b).toString() === "111111111011111111100",
+    "20-digit add"
+  );
+  assert(
+    (b - a).toString() === "86419753208641975320",
+    "20-digit sub"
+  );
+
+  assert(
+    (a * b).toString() === "1219326311370217952237463801111263526900",
+    "20 × 20 digit mul"
+  );
+
+  let q: bigint = b / a;
+  let r: bigint = b % a;
+  assert(q * a + r === b, "div/mod round-trip");
+
+  assert((5n + 3n).toString() === "8", "5 + 3");
+  assert((10n - 3n).toString() === "7", "10 - 3");
+  assert((4n * 5n).toString() === "20", "4 * 5");
+  assert((20n / 4n).toString() === "5", "20 / 4");
+  assert((23n % 5n).toString() === "3", "23 % 5");
+
+  assert(((-7n) + 3n).toString() === "-4", "negative add");
+  assert(((-7n) * 3n).toString() === "-21", "negative mul");
+  assert(((-7n) * (-3n)).toString() === "21", "neg × neg");
+}

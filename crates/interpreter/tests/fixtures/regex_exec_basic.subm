@@ -1,0 +1,13 @@
+function main(): void {
+  const re: RegExp = new RegExp("[0-9]+", "");
+  const m: RegExpMatch | null = re.exec("abc42xyz");
+  assert(m !== null, "exec returns a match");
+  if (m !== null) {
+    assert(m.match === "42", "captured match text");
+    assert(m.index === 3, "match index");
+    assert(m.input === "abc42xyz", "input round-trip");
+  }
+
+  const none: RegExpMatch | null = re.exec("no digits here");
+  assert(none === null, "exec returns null on no-match");
+}

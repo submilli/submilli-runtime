@@ -1,0 +1,24 @@
+function notNull<T>(x: T | null): x is T {
+  return x !== null;
+}
+
+function lenOr(v: string | null, fallback: number): number {
+  if (notNull<string>(v)) {
+    return v.length;
+  }
+  return fallback;
+}
+
+function doubleOr(v: number | null, fallback: number): number {
+  if (notNull<number>(v)) {
+    return v * 2;
+  }
+  return fallback;
+}
+
+function main(): void {
+  assert(lenOr("abc", -1) === 3, "generic guard narrows string|null → string");
+  assert(lenOr(null, 7) === 7, "else-branch keeps null on string side");
+  assert(doubleOr(4, -1) === 8, "generic guard narrows number|null → number");
+  assert(doubleOr(null, 9) === 9, "else-branch keeps null on number side");
+}

@@ -1,0 +1,25 @@
+// Verifies false-env narrowing: guard else-branch narrows to `from_ty − asserted_type`.
+
+function isNumber(x: number | string | boolean): x is number {
+  return typeof x === "number";
+}
+
+function describe(x: number | string | boolean): number {
+  if (isNumber(x)) {
+    return x;
+  }
+  if (typeof x === "string") {
+    return x.length;
+  }
+  if (x) {
+    return 1000;
+  }
+  return 999;
+}
+
+function main(): void {
+  assert(describe(7) === 7, "number stays in then-branch");
+  assert(describe("ab") === 2, "string narrowed via residual + typeof");
+  assert(describe(true) === 1000, "boolean true narrowed via residual");
+  assert(describe(false) === 999, "boolean false narrowed via residual");
+}

@@ -1,0 +1,9 @@
+# An inherited class-typed static, resolved through two levels of imported
+# class. `Local.W` resolves to `Top`'s static even though the consumer names
+# only `Mid`, so the import must carry `Widget`'s concrete struct type — and
+# `Top` is reconstructed before `Widget`, which is neither its ancestor nor
+# alphabetically before it. Statics therefore cannot be imported while
+# reconstruction is still running.
+# name          dir    deps          root
+@test/glib      lib    -
+main            app    @test/glib    root

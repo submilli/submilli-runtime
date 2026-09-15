@@ -1,0 +1,39 @@
+// ECMA-262 §23.2 conformance vectors for `Uint8Array`, plus pinned
+// divergences: saturating writes (vs JS modulo) and deep-copy `subarray`.
+
+function main(): void {
+  const b = new Uint8Array([1, 2, 3, 4]);
+  assert(b.length === 4 && b.byteLength === 4, "length and alias");
+  assert(b[0] === 1 && b[3] === 4, "indexed reads");
+
+  b[1] = 300;
+  assert(b[1] === 44, "writes truncate to the low 8 bits");
+
+  const z = Uint8Array.alloc(3);
+  assert(z.length === 3 && z[0] === 0, "alloc zero-fills");
+
+  assert(b.indexOf(3) === 2 && b.includes(4), "search");
+  assert(b.slice(1, 3).length === 2, "slice");
+  const r = b.toReversed();
+  assert(r[0] === 4 && b[0] === 1, "toReversed copies");
+
+  const summed = b.reduce((acc: number, x: number): number => acc + x, 0);
+  assert(summed === 1 + 44 + 3 + 4, "reduce");
+
+  const hex = new Uint8Array([0xde, 0xad]).toHex();
+  assert(hex === "dead", "toHex lowercase");
+  assert(Uint8Array.fromHex("DEAD")[0] === 0xde, "fromHex accepts uppercase");
+
+  const b64 = new Uint8Array([104, 105]).toBase64();
+  assert(b64 === "aGk=", "standard base64 with padding");
+  assert(Uint8Array.fromBase64("aGk=")[1] === 105, "base64 round-trip");
+
+  const enc = new TextEncoder();
+  const dec = new TextDecoder();
+  assert(dec.decode(enc.encode("héllo")) === "héllo", "UTF-8 round-trip");
+
+  // Divergence: subarray deep-copies in v1 — no shared buffer.
+  const sub = b.subarray(0, 2);
+  sub[0] = 99;
+  assert(b[0] === 1, "subarray mutation does not alias the source");
+}

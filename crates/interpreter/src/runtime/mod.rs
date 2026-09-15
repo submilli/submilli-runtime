@@ -1,0 +1,422 @@
+//! Wasmtime engine configuration for Submilli.
+
+pub mod exec;
+pub mod fs;
+pub mod gc_singleton;
+pub mod host;
+pub mod intrinsic_types;
+pub mod json;
+pub mod limits;
+pub mod mcp;
+pub mod metrics;
+pub mod number;
+pub mod prelude;
+pub mod secrets;
+pub mod security;
+pub mod session_kv;
+pub mod vfs;
+pub mod watchdog;
+
+pub use exec::{RunResult, dispatch_main_async};
+pub use host::{
+    INTERNAL_MODULE_NAME, NUMBER_MODULE_NAME, host_package_declarations,
+    install_async as install_runtime_async,
+    install_host_functions as install_runtime_host_functions,
+    install_store_bound as install_runtime_store_bound, internal_host_package_declarations,
+    stdlib_package_declarations,
+};
+pub use json::JSON_MODULE_NAME;
+pub use limits::{DEFAULT_MAX_STORE_BYTES, MemoryCapExceeded, TenantLimits, install_tenant_limits};
+pub use mcp::{
+    MCP_MODULE_NAME, McpCallError, McpTransport, install_mcp_async, mcp_call_package_declaration,
+};
+pub use metrics::{HttpMetric, MetricsSink, NoopMetricsSink};
+pub use prelude::bigint::ops::BIGINT_MODULE_NAME;
+pub use prelude::temporal::shared::TEMPORAL_MODULE_NAME;
+pub use secrets::{NoopSecretProvider, SecretProvider};
+pub use security::{AllowAllCheck, CheckOutcome, SecurityCheck};
+pub use session_kv::{
+    InMemorySessionKv, SessionKvEntry, SessionKvError, SessionKvLimitKind, SessionKvLimits,
+    SessionKvPage, SessionKvStore, SharedKvBudget,
+};
+pub use vfs::{Vfs, VfsMode};
+pub use watchdog::Watchdog;
+
+pub use crate::stdlib::http::{
+    AuthProxy, AuthProxyError, HttpClient, HttpError, HttpRequest, HttpResponse, NetworkPolicy,
+    NoopAuthProxy, ReqwestHttpClient,
+};
+
+use std::cell::RefCell;
+use std::io::Write;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use wasmtime::{
+    ArrayRef, AsContextMut, Config, Engine, Instance, Linker, Module, OptLevel, Rooted, Store, Val,
+    WasmBacktraceDetails,
+};
+
+use crate::{PackageDeclaration, TypeInfoTable};
+
+/// Filesystem metadata surfaced to scripts via `submilli:fs.info()`. Carries
+/// the active mode and the (advisory, not-yet-enforced) limits so the script —
+/// and the LLM — can branch on the sandbox shape. Never exposes the host path.
+#[derive(Debug, Clone)]
+pub struct VfsInfo {
+    pub mode: VfsMode,
+    pub size_limit: Option<u64>,
+    pub path_limit: Option<u64>,
+}
+
+pub struct StoreData {
+    pub console: Box<dyn Write + Send>,
+    pub vfs: Vfs,
+    pub vfs_info: VfsInfo,
+    pub security_check: Arc<dyn SecurityCheck>,
+    pub fs_max_read_size: u64,
+    pub http_client: Arc<dyn HttpClient>,
+    pub http_max_response_size: u64,
+    pub auth_proxy: Arc<dyn AuthProxy>,
+    pub secret_provider: Arc<dyn SecretProvider>,
+    /// The outbound `@mcp/<server>` transport the `submilli:mcp.call` host fn
+    /// dispatches through, present when the embedder wires one. `None` in the
+    /// pure-interpreter path, where MCP calls throw "transport not configured".
+    pub mcp_transport: Option<Arc<dyn McpTransport>>,
+    /// Session-scoped key-value storage, present only when the embedder wires a
+    /// provider. Left `None` the store stays absent rather than silently
+    /// becoming per-execution scratch state that no later `execute` can read —
+    /// the guest surface reports that as a configuration error.
+    pub session_kv: Option<Arc<dyn SessionKvStore>>,
+    /// Embedder sink for host-operation metrics (HTTP transport latencies).
+    /// Defaults to [`NoopMetricsSink`]; the server installs a Sentry-backed one.
+    pub metrics: Arc<dyn metrics::MetricsSink>,
+    pub tenant_limits: TenantLimits,
+    /// Test-segment labels recorded by `submilli:test.label`, in call order.
+    /// Only the test runner installs that host fn; an ordinary run leaves this
+    /// empty. The runner reads it after `main()` returns to attribute the
+    /// pass/fail outcome to the segment that was open at the time.
+    pub test_labels: RefCell<Vec<String>>,
+    /// Recovered runtime types + the prelude instance handle host functions use
+    /// to build *real* `$string`/`$Array` structs (vtable + payload) instead of
+    /// raw arrays. `None` until the prelude instantiates; set by
+    /// `install_prelude_async`. See [`crate::runtime::host::HostAbi`].
+    pub host_abi: Option<crate::runtime::host::HostAbi>,
+    /// Runtime type metadata keyed by package name.
+    pub type_info: std::collections::BTreeMap<String, TypeInfoTable>,
+    /// Depth of the in-flight universal-vtable walk; see
+    /// [`MAX_VTABLE_WALK_DEPTH`].
+    pub vtable_walk_depth: u32,
+}
+
+/// The nesting the universal-vtable walk allows before it reports a runaway.
+///
+/// Pinned to `serde_json`'s own recursion limit, which is what bounds
+/// `JSON.parse`: a document the runtime is willing to parse must still be
+/// comparable and re-serializable, or `JSON.parse` would accept graphs that
+/// `JSON.stringify` then refuses. Measured headroom: a debug build on a 2 MB
+/// test-harness thread aborts between 160 and 200 levels, so the bound sits
+/// below the point where the native stack runs out.
+pub(crate) const MAX_VTABLE_WALK_DEPTH: u32 = 128;
+
+pub const DEFAULT_FS_MAX_READ_SIZE: u64 = 50 * 1024 * 1024;
+
+pub const DEFAULT_HTTP_MAX_RESPONSE_SIZE: u64 = 50 * 1024 * 1024;
+
+#[derive(Clone, Copy)]
+pub struct LinkedPackageModule<'a> {
+    pub module: &'a Module,
+    pub declaration: &'a PackageDeclaration,
+    pub type_info: &'a TypeInfoTable,
+}
+
+impl StoreData {
+    pub fn with_vfs(vfs: Vfs) -> Self {
+        Self::with_vfs_and_cap(vfs, DEFAULT_MAX_STORE_BYTES)
+    }
+
+    pub fn with_vfs_and_cap(vfs: Vfs, max_store_bytes: u64) -> Self {
+        let vfs_info = VfsInfo {
+            mode: vfs.mode(),
+            size_limit: None,
+            path_limit: None,
+        };
+        Self {
+            console: Box::new(std::io::stderr()),
+            vfs,
+            vfs_info,
+            security_check: security::default_check(),
+            fs_max_read_size: DEFAULT_FS_MAX_READ_SIZE,
+            http_client: crate::stdlib::http::default_http_client(),
+            http_max_response_size: DEFAULT_HTTP_MAX_RESPONSE_SIZE,
+            auth_proxy: crate::stdlib::http::default_auth_proxy(),
+            secret_provider: Arc::new(secrets::NoopSecretProvider),
+            mcp_transport: None,
+            session_kv: None,
+            metrics: Arc::new(metrics::NoopMetricsSink),
+            tenant_limits: TenantLimits::new(max_store_bytes),
+            test_labels: RefCell::new(Vec::new()),
+            host_abi: None,
+            type_info: std::collections::BTreeMap::new(),
+            vtable_walk_depth: 0,
+        }
+    }
+
+    pub fn install_type_info(&mut self, table: TypeInfoTable) {
+        self.type_info.insert(table.package_name.clone(), table);
+    }
+
+    pub fn with_tempdir() -> std::io::Result<Self> {
+        Ok(Self::with_vfs(Vfs::tempdir()?))
+    }
+}
+
+pub async fn install_package_modules_async(
+    linker: &mut Linker<StoreData>,
+    store: &mut Store<StoreData>,
+    packages: &[LinkedPackageModule<'_>],
+) -> wasmtime::Result<()> {
+    for package in packages {
+        let name = package.declaration.package_name.as_str();
+        // The module's declared name *is* its principal at every gated call, so bind it to the
+        // name the package is being linked under. Without this, a prebuilt `pkg.wasm` naming
+        // itself `main` — or naming another package — would be granted that principal's
+        // permissions and, for `main`, the operator's injected credentials. The bytes are not
+        // necessarily ones this compiler produced: `submilli run` and the server both
+        // instantiate artifacts straight from the package store.
+        match package.module.name() {
+            Some(declared) if declared == name => {}
+            Some(declared) => wasmtime::bail!(
+                "package `{name}`: its module declares the name `{declared}`, which would give \
+                 it that principal's permissions. Rebuild the package."
+            ),
+            None => wasmtime::bail!(
+                "package `{name}`: its module declares no name, so its gated calls cannot be \
+                 attributed. Rebuild the package."
+            ),
+        }
+        store
+            .data_mut()
+            .install_type_info(package.type_info.clone());
+        // Instantiation runs the package's module-level initializers. They are the
+        // package's own code, executing in the package's own module, so identity read
+        // off the running frame names them without any bracketing here.
+        let instance = {
+            let outcome = linker.instantiate_async(&mut *store, package.module).await;
+            name_the_failing_initializer(&mut *store, name, outcome)?
+        };
+        linker.instance(&mut *store, name, instance)?;
+    }
+    Ok(())
+}
+
+/// Initializers run inside the Wasm start function, so anything they throw —
+/// a denial most of all — escapes instantiation as the engine's opaque
+/// `ThrownException`, whose Display is "wasm exception thrown". The thrown
+/// value is still on the store, so recover its text the way an uncaught throw
+/// from `main` is recovered and say which package it came from. Without this an
+/// operator who granted a capability under `main:` rather than the package's own
+/// block — the mistake this attribution makes easy — gets no package, no
+/// capability, and no reason.
+fn name_the_failing_initializer(
+    store: &mut Store<StoreData>,
+    package: &str,
+    outcome: wasmtime::Result<Instance>,
+) -> wasmtime::Result<Instance> {
+    let err = match outcome {
+        Ok(instance) => return Ok(instance),
+        Err(err) => err,
+    };
+    let Err(recovered) = exec::map_uncaught_exception(store, Err(err)) else {
+        unreachable!("mapping an Err never yields Ok")
+    };
+    let Some(thrown) = recovered.downcast_ref::<crate::backtrace::ThrownError>() else {
+        return Err(recovered);
+    };
+    Err(wasmtime::Error::new(crate::backtrace::ThrownError {
+        message: format!(
+            "package `{package}` failed to initialize: {}",
+            thrown.message
+        ),
+        backtrace: thrown.backtrace.clone(),
+    }))
+}
+
+#[derive(Clone, Debug)]
+pub struct RuntimeConfig {
+    pub fuel: u64,
+    pub max_wasm_stack: usize,
+    pub memory_reservation: u64,
+    pub memory_guard_size: u64,
+    pub memory_reservation_for_growth: u64,
+    pub max_store_bytes: u64,
+    pub timeout: Option<Duration>,
+    pub async_yield_fuel: Option<u64>,
+}
+
+impl Default for RuntimeConfig {
+    fn default() -> Self {
+        Self {
+            // Temporarily very high: large structural JSON.stringify and other
+            // per-code-unit Wasm work still burns fuel, and exhausting it mid-run
+            // is a worse failure than the loose runaway-loop bound this gives up.
+            // The real CPU cap belongs in a wall-clock timeout; revisit once the
+            // hot encoding paths are off the meter.
+            fuel: 1_000_000_000_000,
+            max_wasm_stack: 512 * 1024,
+            memory_reservation: 3 * 1024 * 1024,
+            memory_guard_size: 64 * 1024,
+            memory_reservation_for_growth: 16 * 1024 * 1024,
+            max_store_bytes: DEFAULT_MAX_STORE_BYTES,
+            timeout: None,
+            // 10K fuel ≈ ~10K wasm instructions. At the default fuel budget a
+            // CPU-bound full-budget call yields thousands of times before
+            // exhaustion — fine-grained enough for fair scheduling, coarse enough
+            // that yield overhead stays negligible.
+            async_yield_fuel: Some(10_000),
+        }
+    }
+}
+
+impl RuntimeConfig {
+    pub fn engine(&self) -> wasmtime::Result<Engine> {
+        Engine::new(&self.wasmtime_config())
+    }
+
+    /// Same as [`engine`](Self::engine). `Config::async_support` is a no-op in
+    /// wasmtime 44+; this entry point exists so async embedders have a distinct
+    /// call site to evolve independently.
+    pub fn engine_async(&self) -> wasmtime::Result<Engine> {
+        Engine::new(&self.wasmtime_config())
+    }
+
+    pub fn wasmtime_config(&self) -> Config {
+        let mut config = Config::new();
+        // Winch lacks `wasm_gc` + `wasm_function_references`; Pulley is ~10× slower.
+        // Strategy::Auto → Cranelift JIT.
+        //
+        // No optimization passes: the per-request user script is compiled fresh by
+        // `Module::new` (it can't be AOT-cached — it's LLM-generated), and for
+        // short-lived scripts that compile cost dominates the run. The trade is
+        // global, though: precompiled prelude/stdlib share this engine, so they run
+        // unoptimized too. TODO: precompile stdlib + curated packages on a separate
+        // high-opt engine and `deserialize` the optimized artifacts here, so only the
+        // user script pays the unoptimized-codegen tax.
+        config.cranelift_opt_level(OptLevel::None);
+        config.consume_fuel(true);
+        config.max_wasm_stack(self.max_wasm_stack);
+
+        config.epoch_interruption(true);
+
+        config.memory_reservation(self.memory_reservation);
+        config.memory_guard_size(self.memory_guard_size);
+        config.memory_reservation_for_growth(self.memory_reservation_for_growth);
+        config.memory_may_move(true);
+        config.memory_init_cow(true);
+
+        config.gc_heap_reservation(self.memory_reservation);
+        config.gc_heap_guard_size(self.memory_guard_size);
+        config.gc_heap_reservation_for_growth(self.memory_reservation_for_growth);
+        config.gc_heap_may_move(true);
+
+        config.wasm_gc(true);
+        config.wasm_function_references(true);
+        config.wasm_exceptions(true);
+
+        config.wasm_backtrace_details(WasmBacktraceDetails::Enable);
+
+        config
+    }
+
+    pub fn store<T>(&self, engine: &Engine, data: T) -> wasmtime::Result<Store<T>> {
+        let mut store = Store::new(engine, data);
+        store.set_fuel(self.fuel)?;
+        // With epoch_interruption(true), an unset deadline traps immediately.
+        // Use 1 for watchdog-tripped timeouts, MAX to effectively disable.
+        let delta = if self.timeout.is_some() { 1 } else { u64::MAX };
+        store.set_epoch_deadline(delta);
+        store.epoch_deadline_trap();
+        Ok(store)
+    }
+
+    pub fn store_async<T>(&self, engine: &Engine, data: T) -> wasmtime::Result<Store<T>> {
+        let mut store = self.store(engine, data)?;
+        store.fuel_async_yield_interval(self.async_yield_fuel)?;
+        Ok(store)
+    }
+
+    pub fn arm_timeout(&self, engine: &Engine) -> Option<Watchdog> {
+        self.timeout.map(|d| watchdog::arm(engine, d))
+    }
+
+    /// One-shot runner: compile, instantiate, call `main`, return typed result
+    /// and captured console. Async like the rest of the runtime — a caller that
+    /// isn't on a runtime bridges it itself (`pollster::block_on` for
+    /// compute/`fs`-only programs, a tokio runtime when `http` is involved). For
+    /// live console streaming, build a custom `Store<StoreData>` and call
+    /// [`dispatch_main_async`] directly.
+    pub async fn run(&self, wasm_bytes: &[u8]) -> wasmtime::Result<RunResult> {
+        self.run_with_type_info(wasm_bytes, None).await
+    }
+
+    pub async fn run_compiled(
+        &self,
+        compiled: &crate::compile::CompiledScript,
+    ) -> wasmtime::Result<RunResult> {
+        self.run_with_type_info(&compiled.wasm, Some(compiled.type_info.clone()))
+            .await
+    }
+
+    async fn run_with_type_info(
+        &self,
+        wasm_bytes: &[u8],
+        type_info: Option<TypeInfoTable>,
+    ) -> wasmtime::Result<RunResult> {
+        struct Sink(Arc<Mutex<Vec<u8>>>);
+        impl Write for Sink {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().write(buf)
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let mut data = StoreData::with_vfs_and_cap(Vfs::tempdir()?, self.max_store_bytes);
+        data.console = Box::new(Sink(Arc::clone(&buf)));
+        if let Some(type_info) = type_info {
+            data.install_type_info(type_info);
+        }
+        let engine = self.engine()?;
+        let mut store = self.store_async(&engine, data)?;
+        install_tenant_limits(&mut store);
+        let module = Module::new(&engine, wasm_bytes)?;
+        let mut linker = Linker::<StoreData>::new(&engine);
+        install_runtime_async(&mut linker, &mut store).await?;
+        let inst = linker.instantiate_async(&mut store, &module).await?;
+        let _watchdog = self.arm_timeout(&engine);
+        let value = dispatch_main_async(&mut store, &inst).await?;
+        let captured = buf.lock().unwrap().clone();
+        let console = String::from_utf8(captured)
+            .map_err(|e| wasmtime::Error::msg(format!("console output not utf-8: {e}")))?;
+        Ok(RunResult { value, console })
+    }
+}
+
+/// Decode a Submilli `(ref $string)` (packed UTF-16) into a Rust `String`.
+/// Wasmtime returns each `i16` element as `Val::I32` zero-extended.
+pub(crate) fn read_submilli_string(
+    mut ctx: impl AsContextMut,
+    msg: Rooted<ArrayRef>,
+) -> wasmtime::Result<String> {
+    let len = msg.len(&mut ctx)?;
+    let mut units = Vec::with_capacity(len as usize);
+    for i in 0..len {
+        match msg.get(&mut ctx, i)? {
+            Val::I32(v) => units.push(v as u16),
+            other => wasmtime::bail!("expected i16 array element, got {other:?}"),
+        }
+    }
+    Ok(String::from_utf16_lossy(&units))
+}

@@ -1,0 +1,20 @@
+import { download, DownloadResult } from "submilli:http";
+import { readText } from "submilli:fs";
+
+function main(): void {
+  const r: DownloadResult = download(
+    "{{BASE}}/dl/gzip",
+    "/out.txt",
+    { decompress: true }
+  );
+
+  assert(r.status === 200, "200 over the wire");
+  assert(r.bytesWritten === 18, r.toString());
+
+  const back: string | null = readText("/out.txt");
+  if (back === null) {
+    assert(false, "readText returned null");
+  } else {
+    assert(back === "hello gzipped live", back);
+  }
+}

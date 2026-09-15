@@ -1,0 +1,59 @@
+function main(): void {
+  const m = new Map<string, number>();
+  m.set("z", 1);
+  m.set("a", 2);
+  m.set("m", 3);
+  m.set("b", 4);
+  m.set("c", 5);
+
+  let ks: string[] = [];
+
+  for (const __ks of m.keys()) {
+
+    ks.push(__ks);
+
+  }
+  assert(ks.length === 5, "5 keys");
+  assert(ks[0] === "z", "ks[0] = z (first inserted)");
+  assert(ks[1] === "a", "ks[1] = a");
+  assert(ks[2] === "m", "ks[2] = m");
+  assert(ks[3] === "b", "ks[3] = b");
+  assert(ks[4] === "c", "ks[4] = c");
+
+  let vs: number[] = [];
+
+  for (const __vs of m.values()) {
+
+    vs.push(__vs);
+
+  }
+  assert(vs[0] === 1, "vs[0] paired with z");
+  assert(vs[1] === 2, "vs[1] paired with a");
+  assert(vs[2] === 3, "vs[2] paired with m");
+  assert(vs[3] === 4, "vs[3] paired with b");
+  assert(vs[4] === 5, "vs[4] paired with c");
+
+  let seen: string = "";
+  for (const p of m) {
+    seen = seen + p[0];
+  }
+  assert(seen === "zambc", "for-of yields entries in insertion order");
+
+  m.set("a", 99);
+  let ks2: string[] = [];
+  for (const __ks2 of m.keys()) {
+    ks2.push(__ks2);
+  }
+  assert(ks2.length === 5, "still 5 keys after overwrite");
+  assert(ks2[1] === "a", "overwrite keeps a in its original slot");
+
+  let vs2: number[] = [];
+
+  for (const __vs2 of m.values()) {
+
+    vs2.push(__vs2);
+
+  }
+  assert(vs2[1] === 99, "overwrite updates the value");
+  assert(vs2[0] === 1, "z value unchanged");
+}

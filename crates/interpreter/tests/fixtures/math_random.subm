@@ -1,0 +1,15 @@
+function main(): void {
+  const r1: number = Math.random();
+  assert(r1 >= 0, "Math.random() >= 0");
+  assert(r1 < 1, "Math.random() < 1");
+
+  // Two calls almost certainly differ. Run multiple times to make
+  // a flaky-on-2^-52 false-positive astronomically unlikely.
+  let same: boolean = true;
+  for (let i: number = 0; i < 5; i = i + 1) {
+    if (Math.random() !== r1) {
+      same = false;
+    }
+  }
+  assert(!same, "Math.random() varies across calls");
+}

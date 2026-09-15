@@ -1,0 +1,62 @@
+function main(): void {
+  const instant: Temporal.Instant = Temporal.Instant.from("2024-03-09T15:30:45.123Z");
+  assert(
+    JSON.stringify(instant) === "\"2024-03-09T15:30:45.123Z\"",
+    "Instant JSON.stringify uses ISO string"
+  );
+  const instantUnknown: unknown = instant;
+  assert(
+    instantUnknown.toJson() === "\"2024-03-09T15:30:45.123Z\"",
+    "Instant unknown.toJson uses Temporal vtable"
+  );
+  assert(instant.toJSON() === "2024-03-09T15:30:45.123Z", "Instant toJSON returns ISO string");
+  const duration: Temporal.Duration = Temporal.Duration.from("PT1H30M");
+  assert(JSON.stringify(duration) === "\"PT1H30M\"", "Duration JSON.stringify uses ISO string");
+  assert(duration.toJSON() === "PT1H30M", "Duration toJSON returns ISO string");
+
+  const zdt: Temporal.ZonedDateTime =
+    Temporal.ZonedDateTime.from("2024-03-09T12:00:00+00:00[UTC]");
+  assert(
+    JSON.stringify(zdt) === "\"2024-03-09T12:00:00+00:00[UTC]\"",
+    "ZonedDateTime JSON.stringify uses ISO string"
+  );
+  assert(
+    zdt.toJSON() === "2024-03-09T12:00:00+00:00[UTC]",
+    "ZonedDateTime toJSON returns ISO string"
+  );
+
+  const date: Temporal.PlainDate = Temporal.PlainDate.from("2026-06-07");
+  const time: Temporal.PlainTime = Temporal.PlainTime.from("09:41:30.123456789");
+  const dateTime: Temporal.PlainDateTime =
+    Temporal.PlainDateTime.from("2026-06-07T09:41:30.123456789");
+  const yearMonth: Temporal.PlainYearMonth = Temporal.PlainYearMonth.from("2026-06");
+  const monthDay: Temporal.PlainMonthDay = Temporal.PlainMonthDay.from("06-07");
+
+  assert(JSON.stringify(date) === "\"2026-06-07\"", "PlainDate JSON.stringify");
+  assert(date.toJSON() === "2026-06-07", "PlainDate toJSON returns ISO string");
+  assert(JSON.stringify(time) === "\"09:41:30.123456789\"", "PlainTime JSON.stringify");
+  assert(time.toJSON() === "09:41:30.123456789", "PlainTime toJSON returns ISO string");
+  assert(
+    JSON.stringify(dateTime) === "\"2026-06-07T09:41:30.123456789\"",
+    "PlainDateTime JSON.stringify"
+  );
+  assert(
+    dateTime.toJSON() === "2026-06-07T09:41:30.123456789",
+    "PlainDateTime toJSON returns ISO string"
+  );
+  assert(JSON.stringify(yearMonth) === "\"2026-06\"", "PlainYearMonth JSON.stringify");
+  assert(yearMonth.toJSON() === "2026-06", "PlainYearMonth toJSON returns ISO string");
+  assert(JSON.stringify(monthDay) === "\"06-07\"", "PlainMonthDay JSON.stringify");
+  assert(monthDay.toJSON() === "06-07", "PlainMonthDay toJSON returns ISO string");
+
+  assert(
+    JSON.stringify({ duration, instant }) ===
+      "{\"duration\":\"PT1H30M\",\"instant\":\"2024-03-09T15:30:45.123Z\"}",
+    "object fields use Temporal toJson vtable"
+  );
+  assert(
+    JSON.stringify([date, Temporal.PlainDate.from("2026-06-08")]) ===
+      "[\"2026-06-07\",\"2026-06-08\"]",
+    "array elements use Temporal toJson vtable"
+  );
+}

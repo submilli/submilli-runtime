@@ -1,0 +1,275 @@
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::path::PathBuf;
+use std::time::Duration;
+
+use anyhow::{Context, Result};
+use clap::Parser;
+use ipnet::IpNet;
+use submilli_server::serve;
+
+mod file_config;
+
+/// Long enough for a loaded server to answer `/v1/status`, short enough to land
+/// inside the image's `HEALTHCHECK --timeout=5s` — so a hung probe reports its
+/// own failure with a reason instead of being killed by the daemon.
+const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(4);
+
+/// Shutting down has three stages, and only the first is `--shutdown-grace`.
+/// The other two are bounded here because they are otherwise unbounded and
+/// stack on top of it: the container runtime is timing the whole process, not
+/// the drain, and overshooting its window means SIGKILL — the exact outcome the
+/// grace period exists to avoid.
+///
+/// Stage 2: axum spawns a task per connection, so the dropped server future
+/// leaves work running. A plain runtime drop waits for it (and cannot cancel a
+/// `spawn_blocking` task at all); `shutdown_timeout` returns regardless.
+const RUNTIME_TEARDOWN_BUDGET: Duration = Duration::from_millis(250);
+
+/// Stage 3: `ClientInitGuard::drop` blocks while it flushes queued events, and
+/// sentry's own default is 2s — too much to inherit silently when it lands
+/// after everything else.
+const TELEMETRY_FLUSH_BUDGET: Duration = Duration::from_secs(1);
+
+#[derive(Parser)]
+#[command(
+    name = "submilli-server",
+    version,
+    about = "Submilli HTTP execution server"
+)]
+pub struct Cli {
+    /// YAML config file supplying values for the options below. Any flag passed
+    /// on the command line overrides the corresponding file value.
+    /// Env: `$SUBMILLI_CONFIG`.
+    #[arg(long)]
+    config: Option<PathBuf>,
+
+    /// Address to bind. A non-loopback address emits a warning. Falls back to the
+    /// `$HOST` env var, or `0.0.0.0` when `$PORT` is set (so it's reachable on
+    /// Render and similar hosts). [default: 127.0.0.1]
+    /// Env: `$SUBMILLI_BIND`, which outranks the config file and `$HOST`.
+    #[arg(long)]
+    bind: Option<IpAddr>,
+
+    /// TCP port to listen on. Falls back to the `$PORT` env var (set by Render and
+    /// similar hosts), then 8128. [default: 8128]
+    /// Env: `$SUBMILLI_PORT`, which outranks the config file and `$PORT`.
+    #[arg(long)]
+    port: Option<u16>,
+
+    /// Directory the registered blueprints are persisted to and loaded from on
+    /// startup. Created if absent. [default: ~/.submilli/blueprints (override the
+    /// base with $SUBMILLI_HOME)]
+    /// Env: `$SUBMILLI_BLUEPRINT_DIR`.
+    #[arg(long)]
+    blueprint_dir: Option<PathBuf>,
+
+    /// Read-only directory of blueprint YAML reconciled into the store on every
+    /// start. Use it to deploy blueprints declaratively — a Kubernetes ConfigMap
+    /// mount, a bind-mounted git checkout, `/etc/submilli/blueprints`. The files
+    /// win: a blueprint seeded from here is restored on the next start if it was
+    /// edited or removed through the API. Blueprints the directory does not name
+    /// are left alone. Distinct from `--blueprint-dir`, which is the writable
+    /// store. Off by default. Env: `$SUBMILLI_BLUEPRINT_SEED_DIR`
+    #[arg(long)]
+    blueprint_seed_dir: Option<PathBuf>,
+
+    /// Directory the session lifecycle store persists to and loads from on
+    /// startup — the bookkeeping that makes resume and idle reaping survive a
+    /// restart. Mount on durable storage. [default: ~/.submilli/sessions]
+    /// Env: `$SUBMILLI_SESSION_STORE_DIR`.
+    #[arg(long)]
+    session_store_dir: Option<PathBuf>,
+
+    /// Durable root for `per_session` VFS directories. Mount on a
+    /// PersistentVolume so a session's files survive a server restart.
+    /// [default: ~/.submilli/vfs/sessions]
+    /// Env: `$SUBMILLI_VFS_SESSION_DIR`.
+    #[arg(long)]
+    vfs_session_dir: Option<PathBuf>,
+
+    /// Root for `ephemeral` scratch directories. Defaults to the OS temp dir;
+    /// point it at volatile storage (tmpfs / `emptyDir`) to keep them off the
+    /// durable volume.
+    /// Env: `$SUBMILLI_VFS_EPHEMERAL_DIR`.
+    #[arg(long)]
+    vfs_ephemeral_dir: Option<PathBuf>,
+
+    /// Directory backing the encrypted secret store (one sealed file per
+    /// secret). Dev-only — encrypted at rest, but no rotation or audit.
+    /// [default: ~/.submilli/secrets]
+    /// Env: `$SUBMILLI_SECRET_STORE_DIR`.
+    #[arg(long)]
+    secret_store_dir: Option<PathBuf>,
+
+    /// Root of the local package artifact store that `submilli server packages install`
+    /// writes to and the runtime loads packages from. Created if absent.
+    /// [default: ~/.submilli/packages]
+    /// Env: `$SUBMILLI_PACKAGE_STORE_DIR`.
+    #[arg(long)]
+    package_store_dir: Option<PathBuf>,
+
+    /// Name of the env var holding the base64-encoded 32-byte store key. The
+    /// store enables itself when this var is set; it stays off when unset. The
+    /// key itself is never passed on the command line. [default: SUBMILLI_SECRET_KEY]
+    /// Env: `$SUBMILLI_SECRET_STORE_KEY_ENV`.
+    #[arg(long)]
+    secret_store_key_env: Option<String>,
+
+    /// Path to a file holding the base64-encoded 32-byte store key. Takes
+    /// priority over `--secret-store-key-env` when both are given.
+    /// Env: `$SUBMILLI_SECRET_STORE_KEY_FILE`.
+    #[arg(long)]
+    secret_store_key_file: Option<PathBuf>,
+
+    /// Permit outbound HTTP to IPv4 + IPv6 loopback. Off by default to block
+    /// SSRF against services on the server host. Additive with the config file:
+    /// enabling on either side grants it.
+    /// Env: `$SUBMILLI_ALLOW_LOCALHOST` (`1`/`true`/`yes`/`on`), also additive.
+    #[arg(long)]
+    allow_localhost: bool,
+
+    /// Permit outbound HTTP to all RFC1918 / CGNAT / IPv6-ULA private ranges.
+    /// Off by default to block SSRF against the internal network. Additive with
+    /// the config file.
+    /// Env: `$SUBMILLI_ALLOW_PRIVATE` (`1`/`true`/`yes`/`on`), also additive.
+    #[arg(long)]
+    allow_private: bool,
+
+    /// Permit outbound HTTP to a specific address or CIDR range, overriding the
+    /// default block (repeatable). Accepts `1.2.3.4` or `10.0.0.0/24`.
+    /// Env: `$SUBMILLI_ALLOW_IP` (comma-separated), additive with both.
+    #[arg(long = "allow-ip", value_name = "IP|CIDR", value_parser = file_config::parse_ip_or_cidr)]
+    allow_ip: Vec<IpNet>,
+
+    /// Extra `Host` header the MCP endpoint accepts, on top of the loopback
+    /// defaults (rmcp's DNS-rebinding guard); repeatable. Behind a reverse proxy
+    /// or PaaS, set the host the client targets — e.g. `submilli-ai:10000` on
+    /// Render or `your-app.onrender.com`. Also settable via the config file or
+    /// `$SUBMILLI_MCP_ALLOWED_HOSTS` (comma-separated).
+    #[arg(long = "mcp-allowed-host", value_name = "HOST")]
+    mcp_allowed_host: Vec<String>,
+
+    /// How long in-flight requests may keep running after SIGTERM or SIGINT
+    /// before their connections are dropped; a second signal skips the rest of
+    /// the wait. Teardown adds up to ~1.3s on top, so keep the total under the
+    /// container runtime's own grace period (Docker allows 10s) — overshoot and
+    /// the drain is SIGKILLed halfway through instead. [default: 5]
+    /// Env: `$SUBMILLI_SHUTDOWN_GRACE`, which outranks the config file.
+    #[arg(long, value_name = "SECONDS")]
+    shutdown_grace: Option<u64>,
+
+    /// Memory one execution may hold live, in megabytes. A program that asks
+    /// for more traps catchably instead of growing until the host or the
+    /// container's own limit stops it, so this is what makes a container's
+    /// `--memory` sizeable: budget roughly this times peak concurrency.
+    /// Note that strings are UTF-16, so text costs two bytes per character —
+    /// a 25 MB document needs ~50 MB here. [default: 50]
+    /// Env: `$SUBMILLI_MAX_EXECUTION_MEMORY`, which outranks the config file.
+    #[arg(long, value_name = "MEGABYTES")]
+    max_execution_memory: Option<u64>,
+
+    /// Memory every live session's `submilli:session` state may hold *in total*,
+    /// in megabytes. Unlike `--max-execution-memory`, which bounds one execution,
+    /// this bounds the process against session count: reservations are taken
+    /// atomically, so a `set` that would push the server past this is refused
+    /// rather than evicting another session's state. [default: 1024]
+    /// Env: `$SUBMILLI_MAX_SESSION_STATE_MEMORY`, which outranks the config file.
+    #[arg(long, value_name = "MEGABYTES")]
+    max_session_state_memory: Option<u64>,
+
+    /// Probe a running server and exit 0 when it answers, non-zero otherwise —
+    /// the container `HEALTHCHECK`, which has no shell or `curl` to call. The
+    /// address is resolved from this process's own config file and environment,
+    /// so the probe follows a non-default bind or port instead of drifting from
+    /// it. It cannot see flags given only to the serving process, so a container
+    /// should set the address via `$SUBMILLI_BIND`/`$SUBMILLI_PORT` or
+    /// `--config` rather than `CMD` arguments.
+    #[arg(long)]
+    health_check: bool,
+}
+
+fn main() -> Result<()> {
+    let cli = Cli::parse();
+    // Ahead of the runtime and Sentry: the probe runs every 30s for the life of
+    // the container, and should pay for neither a runtime nor a liveness metric
+    // swamping the real invocation counts.
+    if cli.health_check {
+        return health_check(&cli);
+    }
+
+    let resolved = file_config::resolve(cli)?;
+
+    // Init before the async runtime starts so the guard binds the Sentry hub for
+    // every worker thread the runtime spawns. Skipped when telemetry is disabled
+    // (env opt-out or `telemetry: false` in the config file).
+    let _guard = resolved.telemetry.then(|| {
+        sentry::init((
+            "https://3de786dd0e1733e40a3e3425ab3e4ddc@o4511530557702144.ingest.us.sentry.io/4511530561110016",
+            sentry::ClientOptions {
+                release: sentry::release_name!(),
+                // Capture user IPs and potentially sensitive headers via the HTTP integration.
+                // https://docs.sentry.io/platforms/rust/data-management/data-collected
+                send_default_pii: true,
+                shutdown_timeout: TELEMETRY_FLUSH_BUDGET,
+                ..Default::default()
+            },
+        ))
+    });
+
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "submilli_server=info,info".into()),
+        )
+        .init();
+
+    // Only now is there a subscriber to warn to.
+    let egress_grants = file_config::env_egress_grants();
+    if !egress_grants.is_empty() {
+        tracing::warn!(
+            vars = egress_grants.join(", "),
+            "the outbound egress guard was widened by environment variables; the config file cannot revoke these"
+        );
+    }
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    let result = runtime.block_on(serve(
+        resolved.addr,
+        resolved.config,
+        resolved.shutdown_grace,
+    ));
+    // Consumes the runtime, so this replaces the implicit drop rather than
+    // preceding it — the drop is what would otherwise wait indefinitely.
+    runtime.shutdown_timeout(RUNTIME_TEARDOWN_BUDGET);
+    result
+}
+
+/// `GET /v1/status` against the address this process's configuration resolves
+/// to. Any failure to reach a healthy server surfaces as an `Err`, which exits
+/// non-zero.
+fn health_check(cli: &Cli) -> Result<()> {
+    let addr = file_config::resolve_bind_addr(cli)?;
+    let url = format!("http://{}/v1/status", probe_target(addr));
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(HEALTH_CHECK_TIMEOUT))
+        .build()
+        .into();
+    agent
+        .get(&url)
+        .call()
+        .with_context(|| format!("probing {url}"))?;
+    Ok(())
+}
+
+/// A wildcard bind is not a connectable address, so probe loopback instead —
+/// where a server listening on all interfaces is reachable anyway.
+fn probe_target(addr: SocketAddr) -> SocketAddr {
+    let ip = match addr.ip() {
+        IpAddr::V4(v4) if v4.is_unspecified() => IpAddr::V4(Ipv4Addr::LOCALHOST),
+        IpAddr::V6(v6) if v6.is_unspecified() => IpAddr::V6(Ipv6Addr::LOCALHOST),
+        ip => ip,
+    };
+    SocketAddr::new(ip, addr.port())
+}

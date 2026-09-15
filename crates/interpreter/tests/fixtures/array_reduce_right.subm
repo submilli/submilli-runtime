@@ -1,0 +1,13 @@
+function main(): void {
+  let letters: string[] = ["a", "b", "c"];
+  let reversed = letters.reduceRight((acc: string, x: string): string => acc + x, "");
+  assert(reversed === "cba", "folds right-to-left");
+
+  let nums: number[] = [1, 2, 3];
+  let total = nums.reduceRight((acc: number, x: number): number => acc + x, 10);
+  assert(total === 16, "sums with initial value");
+
+  let empty: number[] = [];
+  let untouched = empty.reduceRight((acc: number, x: number): number => acc + x, 7);
+  assert(untouched === 7, "empty array returns the initial value");
+}

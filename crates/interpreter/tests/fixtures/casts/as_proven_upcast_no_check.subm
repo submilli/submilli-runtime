@@ -1,0 +1,8 @@
+// A statically-proven upcast (source is already a subtype) needs no runtime check —
+// it just narrows the static view. Must run cleanly.
+
+function main(): void {
+  const wide = { a: 1, b: 2 };
+  const narrow = wide as { a: number };
+  assert(narrow.a === 1, "width upcast preserves field reads, no runtime check");
+}

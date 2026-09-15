@@ -1,0 +1,15 @@
+
+function has_value(x: unknown): boolean {
+  if (x !== null && "value" in x) {
+    const v: unknown = x.value;
+    const _: unknown = v;
+    return true;
+  }
+  return false;
+}
+
+function main(): void {
+  assert(has_value({ value: 42 }) === true, "object with value");
+  assert(has_value({ other: 5 }) === false, "object without value");
+  assert(has_value(null) === false, "null fails null guard");
+}

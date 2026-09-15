@@ -1,0 +1,12 @@
+function main(): void {
+  let label: string = "";
+  let n: number = 2;
+  switch (n) {
+    case 1: label = "one"; break;
+    case 2: label = "two"; break;
+    case 3: label = "three"; break;
+    default: label = "other"; break;
+  }
+  assert(label === "two", "post-switch code runs after every-case-break");
+  assert(label.length === 3, "post-switch reachable");
+}

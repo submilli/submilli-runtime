@@ -1,0 +1,10 @@
+function display_name(u: { name: string | null }): string {
+  return u.name ?? "anon";
+}
+
+function main(): void {
+  const named: { name: string | null } = { name: "alice" };
+  const anon: { name: string | null } = { name: null };
+  assert(display_name(named) === "alice", "named user");
+  assert(display_name(anon) === "anon", "null name -> fallback");
+}

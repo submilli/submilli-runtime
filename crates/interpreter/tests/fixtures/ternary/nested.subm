@@ -1,0 +1,9 @@
+function classify(n: number): string {
+  return n < 0 ? "neg" : n === 0 ? "zero" : "pos";
+}
+
+function main(): void {
+  assert(classify(-5) === "neg", "negative");
+  assert(classify(0) === "zero", "zero");
+  assert(classify(7) === "pos", "positive");
+}

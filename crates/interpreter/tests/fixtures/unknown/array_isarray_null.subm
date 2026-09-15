@@ -1,0 +1,8 @@
+function main(): void {
+  const x: unknown = [1, 2, 3];
+  if (x === null) {
+    assert(false, "non-null array narrowed away");
+  } else {
+    assert(Array.isArray(x), "array recognized after null-narrowing");
+  }
+}

@@ -1,0 +1,24 @@
+# Patterns to ignore when packaging the chart. Without this, `helm package`
+# sweeps stray files into the .tgz.
+.DS_Store
+.git/
+.gitignore
+.idea/
+.vscode/
+*.tmproj
+*.swp
+*.bak
+*.orig
+*~
+
+# Chart-testing inputs: consumed by `ct install` from the repo, never needed by
+# an installed release.
+/ci/
+
+# helm-unittest specs live beside the chart but are not part of it.
+#
+# The leading slash is load-bearing. Unanchored, `tests/` matches a directory of
+# that name at *any* depth — including `templates/tests/`, which is where the
+# `helm test` hooks live. That excluded them from the chart with no error: lint
+# passed, `helm template` exited 0, and the tests silently did not exist.
+/tests/

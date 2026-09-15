@@ -1,0 +1,18 @@
+// The finally clause must observe the loop variable *before* the for-update runs:
+// per ECMA-262 the update happens after the body's (continue) completion, so finally
+// sees the pre-increment value.
+function main(): void {
+  let seen: number = 0;
+  for (let i: number = 0; i < 4; i++) {
+    try {
+      if (i % 2 === 0) {
+        continue;
+      }
+      seen = seen + i * 100;
+    } finally {
+      seen = seen + i;
+    }
+  }
+  // finally adds i for i=0..3 -> 0+1+2+3 = 6; body adds i*100 for odd i -> 100+300 = 400.
+  assert(seen === 406, "finally sees pre-update i; update runs after");
+}

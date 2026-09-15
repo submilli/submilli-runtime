@@ -1,0 +1,33 @@
+interface IssueStatus {
+  id: string;
+  name: string;
+  type: string;
+  default?: string;
+}
+
+type IssueStatusAlias = {
+  id: string;
+  name: string;
+  type: string;
+  default?: string;
+};
+
+function readType(status: IssueStatus | null): string | null {
+  return status?.type;
+}
+
+function main(): void {
+  const x: IssueStatusAlias = { id: "1", name: "Done", type: "completed", default: "closed" };
+  assert(x.type === "completed", "object literal keyword field");
+  assert(x.default === "closed", "default field");
+
+  const { type: statusType, default: fallback } = x;
+  assert(statusType === "completed", "destructuring keyword source field");
+  assert(fallback === "closed", "destructuring default source field");
+
+  const statuses = JSON.parse(
+    "[{\"id\":\"1\",\"name\":\"Done\",\"type\":\"completed\",\"default\":\"closed\"}]"
+  ) as IssueStatus[];
+  assert(statuses[0].type === "completed", "JSON.parse type key");
+  assert(readType(statuses[0]) === "completed", "optional field keyword access");
+}

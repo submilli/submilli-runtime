@@ -1,0 +1,6 @@
+// expect-error: backreferences (`\1`, `\2`, `\k<name>`) are not supported
+
+function main(): void {
+  const r = /(?<a>x)\k<a>/;
+  assert(r !== null, "never reached");
+}

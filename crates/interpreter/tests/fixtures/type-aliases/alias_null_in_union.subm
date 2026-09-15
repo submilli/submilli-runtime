@@ -1,0 +1,10 @@
+type N = null;
+
+function main(): void {
+  let x: string | N = null;
+  let y: string | N = "hi";
+  assert(x === null, "aliased null member accepts null assignment");
+  assert(y === "hi", "non-null branch still flows through the same slot");
+  x = "later";
+  assert(x === "later", "aliased-null union slot rebindable to non-null");
+}

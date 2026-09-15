@@ -1,0 +1,28 @@
+// `===` / `!==` between union values whose runtime types differ. Each value
+// lowers to `$Object`, so the equality dispatches off the LHS's vtable
+// `equals`; a mismatched-type argument must be treated as not-equal, never an
+// unchecked cast that traps.
+type Mixed = number | string | boolean | bigint;
+type U = { k: number } | number;
+
+function main(): void {
+  const xs: Mixed[] = [1, "a", true, 9n];
+  const big: Mixed = xs[3];
+  assert(big === 9n, "bigint equals its literal");
+  assert(big !== 1, "bigint differs from a number");
+  assert(big !== "a", "bigint differs from a string");
+
+  // Arrays of differing element types share one `$Array` vtable; the element
+  // compare recurses and the primitive guards keep it from trapping.
+  const a: number[] = [1, 2];
+  const b: string[] = ["1", "2"];
+  const arrs: Array<number[] | string[]> = [a, b];
+  assert(arrs[0] !== arrs[1], "number[] differs from string[]");
+
+  // Object member vs primitive member of the same union.
+  const o: U = { k: 5 };
+  const n: U = 5;
+  assert(o !== 5, "object differs from a number");
+  assert(n === 5, "number member equals its literal");
+  assert(n !== o, "number differs from an object");
+}

@@ -1,0 +1,7 @@
+# A field redeclared in a subclass shares the inherited field's payload slot.
+# The consumer reconstructs the imported parent's layout independently, so its
+# shadowing rule has to match the producer's exactly — a disagreement gives the
+# same class different slot numbers on the two sides of the boundary.
+# name        dir   deps        root
+@test/base    lib   -
+main          app   @test/base  root

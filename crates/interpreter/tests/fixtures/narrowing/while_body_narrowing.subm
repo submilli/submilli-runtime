@@ -1,0 +1,18 @@
+function count_chars_until_empty(s: string | null): number {
+  let total: number = 0;
+  while (s !== null) {
+    if (s === "stop") {
+      return total;
+    }
+    total = total + s.length;
+    s = null;
+  }
+  return total;
+}
+
+function main(): void {
+  assert(count_chars_until_empty("hello") === 5, "one-pass: counts then null-out");
+  assert(count_chars_until_empty("stop") === 0, "early return on sentinel");
+  assert(count_chars_until_empty(null) === 0, "null skips the loop");
+  assert(count_chars_until_empty("") === 0, "empty string still narrows");
+}

@@ -1,0 +1,6 @@
+// expect-error: `default` is a reserved keyword and can't be used as a name
+// expect-error: rename it, for example: `defaultValue`
+
+function main(): void {
+  const default = "x";
+}

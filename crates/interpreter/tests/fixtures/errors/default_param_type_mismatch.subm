@@ -1,0 +1,9 @@
+// expect-error: not assignable to parameter type
+
+function f(x: number = "hi"): void {
+  return;
+}
+
+function main(): void {
+  f();
+}

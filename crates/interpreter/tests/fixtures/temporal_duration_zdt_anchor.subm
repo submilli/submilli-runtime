@@ -1,0 +1,22 @@
+// relativeTo as a ZonedDateTime (kind-2 anchor): DST makes a calendar day
+// 23 or 25 hours, which the host resolves through the zoned timezone.
+function main(): void {
+  const oneDay: Temporal.Duration = Temporal.Duration.from("P1D");
+
+  // America/New_York springs forward on 2024-03-10 (the local day is 23h).
+  const springStart: Temporal.ZonedDateTime = Temporal.ZonedDateTime.from("2024-03-10T00:00:00-05:00[America/New_York]");
+  const springHours: number = oneDay.total({ unit: "hours", relativeTo: springStart });
+  assert(springHours === 23, "P1D over a spring-forward day totals 23 hours");
+
+  // The same day in UTC has no DST — 24 hours.
+  const utcStart: Temporal.ZonedDateTime = Temporal.ZonedDateTime.from("2024-03-10T00:00:00+00:00[UTC]");
+  const utcHours: number = oneDay.total({ unit: "hours", relativeTo: utcStart });
+  assert(utcHours === 24, "P1D in UTC totals 24 hours");
+
+  // round() with a ZonedDateTime anchor on a 25h fall-back day (2024-11-03).
+  const fallStart: Temporal.ZonedDateTime = Temporal.ZonedDateTime.from("2024-11-03T00:00:00-04:00[America/New_York]");
+  const twentyFiveHours: Temporal.Duration = Temporal.Duration.from("PT25H");
+  const rounded: Temporal.Duration = twentyFiveHours.round({ largestUnit: "day", smallestUnit: "hour", relativeTo: fallStart });
+  assert(rounded.days === 1, "25h over a 25h fall-back day balances to 1 day ...");
+  assert(rounded.hours === 0, "... and 0 hours");
+}

@@ -1,0 +1,27 @@
+function main(): void {
+  // from() broadening: string, Duration (pass-through), and bag.
+  const fromStr: Temporal.Duration = Temporal.Duration.from("PT1H");
+  assert(fromStr.total("minutes") === 60, "from(string)");
+  const fromDur: Temporal.Duration = Temporal.Duration.from(fromStr);
+  assert(fromDur.total("minutes") === 60, "from(Duration) passes through");
+  const fromBag: Temporal.Duration = Temporal.Duration.from({ minutes: 90 });
+  assert(fromBag.total("minutes") === 90, "from(bag)");
+
+  // compare() — time-only, no relativeTo.
+  const a: Temporal.Duration = Temporal.Duration.from("PT1H");
+  const b: Temporal.Duration = Temporal.Duration.from("PT90M");
+  assert(Temporal.Duration.compare(a, b) === -1, "1h < 90m");
+  assert(Temporal.Duration.compare(b, a) === 1, "90m > 1h");
+  assert(Temporal.Duration.compare(a, a) === 0, "1h == 1h");
+
+  // compare() accepts DurationLike bags directly.
+  assert(Temporal.Duration.compare({ hours: 2 }, { minutes: 90 }) === 1, "2h > 90m (bags)");
+
+  // compare() — calendar durations need relativeTo.
+  const month: Temporal.Duration = Temporal.Duration.from("P1M");
+  const thirty: Temporal.Duration = Temporal.Duration.from("P30D");
+  const feb: Temporal.PlainDate = Temporal.PlainDate.from("2024-02-01");
+  const jan: Temporal.PlainDate = Temporal.PlainDate.from("2024-01-01");
+  assert(Temporal.Duration.compare(month, thirty, { relativeTo: feb }) === -1, "Feb 2024 (29d) < 30d");
+  assert(Temporal.Duration.compare(month, thirty, { relativeTo: jan }) === 1, "Jan (31d) > 30d");
+}

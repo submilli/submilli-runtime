@@ -1,0 +1,5 @@
+// expect-error: cannot spread
+function main(): void {
+  const xs: number[] = [1, 2, 3];
+  const bad = { ...xs };
+}

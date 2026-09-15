@@ -1,0 +1,7 @@
+// expect-error: cannot use `unknown` in a boolean context
+
+
+function main(): void {
+  const x: unknown = 1;
+  const b = x && true;
+}

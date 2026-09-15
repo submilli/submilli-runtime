@@ -1,0 +1,11 @@
+function main(): void {
+  const ops = { add: (x: number, y: number): number => x + y, double: (x: number): number => x * 2 };
+  assert(ops.add(2, 3) === 5, "function-typed field call");
+  assert(ops.double(7) === 14, "second function-typed field call");
+
+  let bias = 10;
+  const calc = { apply: (x: number): number => x + bias };
+  assert(calc.apply(5) === 15, "captured environment threads through field");
+  bias = 100;
+  assert(calc.apply(5) === 105, "field closure sees later writes to captured let");
+}

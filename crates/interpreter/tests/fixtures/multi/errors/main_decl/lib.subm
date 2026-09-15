@@ -1,0 +1,2 @@
+// expect-error: packages cannot declare main
+function main(): void {}

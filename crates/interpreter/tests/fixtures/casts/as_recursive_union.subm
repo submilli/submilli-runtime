@@ -1,0 +1,15 @@
+// `as` to a recursive union alias from `unknown` runs a recursive
+// structural check: the validator for `Json` re-enters itself per nested
+// array element.
+type Json = number | string | boolean | Json[];
+
+function main(): void {
+  const u = JSON.parse("[1, [2, [3]], \"y\"]") as unknown;
+  const j: Json = u as Json;
+  assert(Array.isArray(j), "top is array");
+  if (Array.isArray(j)) {
+    assert(j.length === 3, "three elements");
+    const mid: Json = j[1];
+    assert(Array.isArray(mid), "middle is nested array");
+  }
+}

@@ -1,0 +1,730 @@
+//! The submilli `Uint8Array` operations — the Rust port of the prelude's
+//! `Uint8Array` and `Uint8ArrayConstructor` surface. Bytes live as a `Vec<u8>`;
+//! the higher-order methods box each byte into a `$boxed_number` before calling
+//! back into a *guest* closure. The `$Uint8Array` marshalling and host-fn
+//! registration live in [`install`]; the shared
+//! [`Closure`](crate::runtime::prelude::closure::Closure) handles callbacks.
+//!
+//! In-place mutators (`reverse`/`fill`/`copyWithin`/`set`/`sort`) overwrite the
+//! receiver's existing `$rawUint8Array` backing element-wise and return the
+//! receiver: unlike `$Array`, the `$Uint8Array` struct's field 1 is an immutable
+//! reference, so the backing is never swapped — `array.set` mutates it in place.
+
+mod install;
+
+pub(crate) use install::declare_types;
+pub use install::{declare, install};
+
+use base64::Engine as _;
+use base64::alphabet;
+use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig, NO_PAD, PAD};
+use wasmtime::{ArrayRef, Caller, Rooted, StructRef, StructRefPre, Val};
+
+use crate::runtime::StoreData;
+use crate::runtime::host::{
+    host_boxed_number_vtable, read_uint8_array_arg, write_submilli_uint8array_struct,
+};
+use crate::runtime::intrinsic_types::build_intrinsic_types;
+use crate::runtime::number::format_number_js;
+use crate::runtime::prelude::closure::Closure;
+use crate::runtime::prelude::iterator::as_struct;
+use crate::runtime::prelude::vtable::read_object_entries;
+
+// ---------------------------------------------------------------------------
+// Marshalling
+// ---------------------------------------------------------------------------
+
+/// Read a `$Uint8Array` (or bare `$rawUint8Array`) `Val` into its bytes — a local
+/// name so the method bodies open uniformly with `super::read_bytes`, mirroring the
+/// Array port's `read_array`. The actual struct/payload decode lives in `host`.
+pub(crate) fn read_bytes(
+    caller: &mut Caller<'_, StoreData>,
+    val: &Val,
+    name: &str,
+) -> wasmtime::Result<Vec<u8>> {
+    read_uint8_array_arg(caller, val, name)
+}
+
+/// Build a fresh `$Uint8Array` `Val` from bytes (reuses the host-owned vtable).
+fn build(caller: &mut Caller<'_, StoreData>, bytes: &[u8]) -> wasmtime::Result<Val> {
+    let st = write_submilli_uint8array_struct(caller, bytes)?;
+    Ok(Val::AnyRef(Some(st.to_anyref())))
+}
+
+/// Overwrite the receiver's `$rawUint8Array` backing element-wise (`bytes.len()`
+/// must equal the backing length) — the in-place primitive for the mutators.
+fn store_bytes(
+    caller: &mut Caller<'_, StoreData>,
+    receiver: &Val,
+    bytes: &[u8],
+) -> wasmtime::Result<()> {
+    let raw = backing(caller, receiver)?;
+    for (i, &b) in bytes.iter().enumerate() {
+        raw.set(&mut *caller, i as u32, Val::I32(i32::from(b)))?;
+    }
+    Ok(())
+}
+
+/// The receiver's field-1 `$rawUint8Array` backing.
+fn backing(
+    caller: &mut Caller<'_, StoreData>,
+    receiver: &Val,
+) -> wasmtime::Result<Rooted<ArrayRef>> {
+    let st = as_struct(caller, receiver, "Uint8Array mutate receiver")?;
+    match st.field(&mut *caller, 1)? {
+        Val::AnyRef(Some(arr)) => arr.unwrap_array(&mut *caller),
+        other => Err(wasmtime::Error::msg(format!(
+            "Uint8Array: malformed $rawUint8Array backing {other:?}"
+        ))),
+    }
+}
+
+/// `ToUint8` as the Wasm bodies do it: `i32.trunc_sat_f64_u` then keep the low
+/// byte (saturates NaN/negatives to 0, not JS `% 256`, matching the prelude).
+fn to_byte(n: f64) -> u8 {
+    (n as u32 & 0xff) as u8
+}
+
+/// Box a byte into a `$boxed_number` for a callback argument or boxed return.
+fn box_byte(caller: &mut Caller<'_, StoreData>, b: u8) -> wasmtime::Result<Val> {
+    let boxed = build_intrinsic_types(caller.engine())?.boxed_number;
+    let vtable = host_boxed_number_vtable(caller)?;
+    let pre = StructRefPre::new(&mut *caller, boxed);
+    let st = StructRef::new(
+        &mut *caller,
+        &pre,
+        &[vtable, Val::F64(f64::from(b).to_bits())],
+    )?;
+    Ok(Val::AnyRef(Some(st.to_anyref())))
+}
+
+/// Unbox a `$boxed_number` callback result back to a byte (`map`).
+fn unbox_byte(caller: &mut Caller<'_, StoreData>, v: &Val, name: &str) -> wasmtime::Result<u8> {
+    let Val::AnyRef(Some(any)) = v else {
+        return Err(wasmtime::Error::msg(format!(
+            "{name} callback returned {v:?}, expected a number"
+        )));
+    };
+    let st = any
+        .as_struct(&mut *caller)?
+        .ok_or_else(|| wasmtime::Error::msg(format!("{name} callback result is not a number")))?;
+    match st.field(&mut *caller, 1)? {
+        Val::F64(bits) => Ok(to_byte(f64::from_bits(bits))),
+        other => Err(wasmtime::Error::msg(format!(
+            "{name} callback result field was {other:?}, not f64"
+        ))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Index math (ported 1:1 from the Wasm bodies; identical to the Array port)
+// ---------------------------------------------------------------------------
+
+fn trunc_sat(x: f64) -> i32 {
+    x as i32
+}
+
+fn norm_clamp(x: f64, len: i32) -> i32 {
+    let mut i = trunc_sat(x);
+    if i < 0 {
+        i += len;
+    }
+    i.clamp(0, len)
+}
+
+fn at_index(x: f64, len: i32) -> Option<usize> {
+    let mut i = trunc_sat(x);
+    if i < 0 {
+        i += len;
+    }
+    if i < 0 || i >= len {
+        None
+    } else {
+        Some(i as usize)
+    }
+}
+
+fn fwd_from(x: f64, len: i32) -> i32 {
+    let mut fi = trunc_sat(x);
+    if fi < 0 {
+        fi += len;
+    }
+    fi.max(0)
+}
+
+fn last_from(x: f64, len: i32) -> Option<i32> {
+    let mut fi = trunc_sat(x);
+    if fi < 0 {
+        fi += len;
+    }
+    if fi < 0 {
+        return None;
+    }
+    Some(fi.min(len - 1))
+}
+
+// ---------------------------------------------------------------------------
+// Accessors / pure value methods
+// ---------------------------------------------------------------------------
+
+fn length(bytes: &[u8]) -> f64 {
+    bytes.len() as f64
+}
+
+/// `at(index)` → the byte boxed as a `$boxed_number`, or `null` when out of range.
+fn at(caller: &mut Caller<'_, StoreData>, bytes: &[u8], index: f64) -> wasmtime::Result<Val> {
+    match at_index(index, bytes.len() as i32) {
+        Some(i) => box_byte(caller, bytes[i]),
+        None => Ok(Val::null_any_ref()),
+    }
+}
+
+fn slice(bytes: &[u8], start: f64, end: f64) -> Vec<u8> {
+    let len = bytes.len() as i32;
+    let si = norm_clamp(start, len);
+    let ei = norm_clamp(end, len);
+    let count = (ei - si).max(0) as usize;
+    bytes[si as usize..si as usize + count].to_vec()
+}
+
+/// `with(index, value)` → a copy with `index` replaced; `None` when out of range
+/// ([`install`] raises the catchable `RangeError("index out of range")`).
+fn with(bytes: &[u8], index: f64, value: f64) -> Option<Vec<u8>> {
+    let i = at_index(index, bytes.len() as i32)?;
+    let mut out = bytes.to_vec();
+    out[i] = to_byte(value);
+    Some(out)
+}
+
+fn index_of(bytes: &[u8], target: f64, from: f64) -> f64 {
+    let len = bytes.len() as i32;
+    let target = to_byte(target);
+    let mut i = fwd_from(from, len);
+    while i < len {
+        if bytes[i as usize] == target {
+            return f64::from(i);
+        }
+        i += 1;
+    }
+    -1.0
+}
+
+fn last_index_of(bytes: &[u8], target: f64, from: f64) -> f64 {
+    let len = bytes.len() as i32;
+    let target = to_byte(target);
+    let Some(mut i) = last_from(from, len) else {
+        return -1.0;
+    };
+    while i >= 0 {
+        if bytes[i as usize] == target {
+            return f64::from(i);
+        }
+        i -= 1;
+    }
+    -1.0
+}
+
+fn includes(bytes: &[u8], target: f64, from: f64) -> bool {
+    index_of(bytes, target, from) >= 0.0
+}
+
+/// Bytes formatted as decimals and joined by `sep` (`toString` passes `","`).
+/// Shared by the `join`/`toString` host fns and the vtable's `toString` slot.
+pub(crate) fn join(bytes: &[u8], sep: &[u16]) -> Vec<u16> {
+    let mut out: Vec<u16> = Vec::new();
+    for (i, &b) in bytes.iter().enumerate() {
+        if i > 0 {
+            out.extend_from_slice(sep);
+        }
+        out.extend(format_number_js(f64::from(b)).encode_utf16());
+    }
+    out
+}
+
+fn equals(a: &[u8], b: &[u8]) -> bool {
+    a == b
+}
+
+// ---------------------------------------------------------------------------
+// In-place mutators (overwrite the receiver backing, return the receiver)
+// ---------------------------------------------------------------------------
+
+fn reverse(
+    caller: &mut Caller<'_, StoreData>,
+    receiver: &Val,
+    mut bytes: Vec<u8>,
+) -> wasmtime::Result<Val> {
+    bytes.reverse();
+    store_bytes(caller, receiver, &bytes)?;
+    Ok(*receiver)
+}
+
+fn fill(
+    caller: &mut Caller<'_, StoreData>,
+    receiver: &Val,
+    mut bytes: Vec<u8>,
+    value: f64,
+    start: f64,
+    end: f64,
+) -> wasmtime::Result<Val> {
+    let len = bytes.len() as i32;
+    let si = norm_clamp(start, len);
+    let ei = norm_clamp(end, len);
+    let v = to_byte(value);
+    for slot in bytes.iter_mut().take(ei as usize).skip(si as usize) {
+        *slot = v;
+    }
+    store_bytes(caller, receiver, &bytes)?;
+    Ok(*receiver)
+}
+
+fn copy_within(
+    caller: &mut Caller<'_, StoreData>,
+    receiver: &Val,
+    mut bytes: Vec<u8>,
+    target: f64,
+    start: f64,
+    end: f64,
+) -> wasmtime::Result<Val> {
+    let len = bytes.len() as i32;
+    let ti = norm_clamp(target, len);
+    let si = norm_clamp(start, len);
+    let ei = norm_clamp(end, len);
+    let mut count = (ei - si).max(0);
+    let rem = len - ti;
+    if count > rem {
+        count = rem;
+    }
+    // Snapshot the source span first so overlapping ranges stay memmove-correct.
+    let src: Vec<u8> = bytes[si as usize..(si + count) as usize].to_vec();
+    for (k, v) in src.into_iter().enumerate() {
+        bytes[ti as usize + k] = v;
+    }
+    store_bytes(caller, receiver, &bytes)?;
+    Ok(*receiver)
+}
+
+/// `set(source, offset)` — copy `source`'s bytes into the receiver at `offset`;
+/// `None` when the span overflows ([`install`] raises `Error("offset is out of
+/// bounds")`).
+fn set(
+    caller: &mut Caller<'_, StoreData>,
+    receiver: &Val,
+    mut bytes: Vec<u8>,
+    source: &[u8],
+    offset: f64,
+) -> wasmtime::Result<Option<Val>> {
+    let off = trunc_sat(offset);
+    if off < 0 || (off as usize) + source.len() > bytes.len() {
+        return Ok(None);
+    }
+    bytes[off as usize..off as usize + source.len()].copy_from_slice(source);
+    store_bytes(caller, receiver, &bytes)?;
+    Ok(Some(*receiver))
+}
+
+async fn sort_bytes(
+    caller: &mut Caller<'_, StoreData>,
+    bytes: &mut [u8],
+    cmp: Option<&Closure>,
+) -> wasmtime::Result<()> {
+    let Some(c) = cmp else {
+        bytes.sort_unstable();
+        return Ok(());
+    };
+    // Insertion sort that re-enters the guest comparator on boxed bytes — stable,
+    // matching the Wasm body's adjacent-swap shape.
+    let n = bytes.len();
+    let mut i = 1;
+    while i < n {
+        let mut j = i;
+        while j > 0 {
+            let a = box_byte(caller, bytes[j - 1])?;
+            let b = box_byte(caller, bytes[j])?;
+            if c.call_number(caller, a, b).await? > 0.0 {
+                bytes.swap(j - 1, j);
+                j -= 1;
+            } else {
+                break;
+            }
+        }
+        i += 1;
+    }
+    Ok(())
+}
+
+async fn sort(
+    caller: &mut Caller<'_, StoreData>,
+    receiver: &Val,
+    mut bytes: Vec<u8>,
+    cmp: Option<Closure>,
+) -> wasmtime::Result<Val> {
+    sort_bytes(caller, &mut bytes, cmp.as_ref()).await?;
+    store_bytes(caller, receiver, &bytes)?;
+    Ok(*receiver)
+}
+
+// ---------------------------------------------------------------------------
+// Immutable variants (build a fresh result; receiver untouched)
+// ---------------------------------------------------------------------------
+
+fn to_reversed(mut bytes: Vec<u8>) -> Vec<u8> {
+    bytes.reverse();
+    bytes
+}
+
+async fn to_sorted(
+    caller: &mut Caller<'_, StoreData>,
+    mut bytes: Vec<u8>,
+    cmp: Option<Closure>,
+) -> wasmtime::Result<Vec<u8>> {
+    sort_bytes(caller, &mut bytes, cmp.as_ref()).await?;
+    Ok(bytes)
+}
+
+// ---------------------------------------------------------------------------
+// Higher-order methods (box each byte, re-enter a guest closure)
+// ---------------------------------------------------------------------------
+
+async fn for_each(
+    caller: &mut Caller<'_, StoreData>,
+    bytes: Vec<u8>,
+    f: &Closure,
+) -> wasmtime::Result<()> {
+    for b in bytes {
+        let boxed = box_byte(caller, b)?;
+        f.call_void(caller, boxed).await?;
+    }
+    Ok(())
+}
+
+async fn map(
+    caller: &mut Caller<'_, StoreData>,
+    bytes: Vec<u8>,
+    f: &Closure,
+) -> wasmtime::Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(bytes.len());
+    for b in bytes {
+        let boxed = box_byte(caller, b)?;
+        let r = f.call(caller, &[boxed]).await?;
+        out.push(unbox_byte(caller, &r, "Uint8Array#map")?);
+    }
+    Ok(out)
+}
+
+async fn filter(
+    caller: &mut Caller<'_, StoreData>,
+    bytes: Vec<u8>,
+    pred: &Closure,
+) -> wasmtime::Result<Vec<u8>> {
+    let mut out = Vec::new();
+    for b in bytes {
+        let boxed = box_byte(caller, b)?;
+        if pred.call_predicate(caller, boxed).await? {
+            out.push(b);
+        }
+    }
+    Ok(out)
+}
+
+async fn reduce(
+    caller: &mut Caller<'_, StoreData>,
+    bytes: Vec<u8>,
+    f: &Closure,
+    mut acc: Val,
+    reverse: bool,
+) -> wasmtime::Result<Val> {
+    let order: Vec<usize> = if reverse {
+        (0..bytes.len()).rev().collect()
+    } else {
+        (0..bytes.len()).collect()
+    };
+    for i in order {
+        let boxed = box_byte(caller, bytes[i])?;
+        acc = f.call(caller, &[acc, boxed]).await?;
+    }
+    Ok(acc)
+}
+
+async fn some(
+    caller: &mut Caller<'_, StoreData>,
+    bytes: Vec<u8>,
+    pred: &Closure,
+) -> wasmtime::Result<bool> {
+    for b in bytes {
+        let boxed = box_byte(caller, b)?;
+        if pred.call_predicate(caller, boxed).await? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+async fn every(
+    caller: &mut Caller<'_, StoreData>,
+    bytes: Vec<u8>,
+    pred: &Closure,
+) -> wasmtime::Result<bool> {
+    for b in bytes {
+        let boxed = box_byte(caller, b)?;
+        if !pred.call_predicate(caller, boxed).await? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Index of the first (or, with `reverse`, last) byte matching `pred`.
+async fn find_match(
+    caller: &mut Caller<'_, StoreData>,
+    bytes: &[u8],
+    pred: &Closure,
+    reverse: bool,
+) -> wasmtime::Result<Option<usize>> {
+    let order: Vec<usize> = if reverse {
+        (0..bytes.len()).rev().collect()
+    } else {
+        (0..bytes.len()).collect()
+    };
+    for i in order {
+        let boxed = box_byte(caller, bytes[i])?;
+        if pred.call_predicate(caller, boxed).await? {
+            return Ok(Some(i));
+        }
+    }
+    Ok(None)
+}
+
+// ---------------------------------------------------------------------------
+// base64 / hex codecs
+// ---------------------------------------------------------------------------
+
+/// Standard padded base64 — the `$Uint8Array` `toJson` form.
+pub(crate) fn to_base64_standard(bytes: &[u8]) -> String {
+    encode_base64(bytes, false, false)
+}
+
+fn encode_base64(bytes: &[u8], url_safe: bool, omit_padding: bool) -> String {
+    let alpha = if url_safe {
+        &alphabet::URL_SAFE
+    } else {
+        &alphabet::STANDARD
+    };
+    let config: GeneralPurposeConfig = if omit_padding { NO_PAD } else { PAD };
+    GeneralPurpose::new(alpha, config).encode(bytes)
+}
+
+/// Forgiving on padding: try `PAD`, fall back to `NO_PAD`.
+fn decode_base64(s: &str, url_safe: bool) -> wasmtime::Result<Vec<u8>> {
+    let alpha = if url_safe {
+        &alphabet::URL_SAFE
+    } else {
+        &alphabet::STANDARD
+    };
+    let padded = GeneralPurpose::new(alpha, PAD);
+    let decoded = padded
+        .decode(s.as_bytes())
+        .or_else(|_| GeneralPurpose::new(alpha, NO_PAD).decode(s.as_bytes()));
+    decoded.map_err(|e| crate::runtime::host::syntax_error(format!("Uint8Array.fromBase64: {e}")))
+}
+
+fn to_hex(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        out.push(hex_digit(b >> 4));
+        out.push(hex_digit(b & 0xf));
+    }
+    out
+}
+
+fn hex_digit(nibble: u8) -> char {
+    char::from(if nibble < 10 {
+        b'0' + nibble
+    } else {
+        b'a' + (nibble - 10)
+    })
+}
+
+/// Parse a hex string (case-insensitive). Throws the prelude's messages on an odd
+/// length or an invalid digit so the error fixtures match.
+fn from_hex(units: &[u16]) -> wasmtime::Result<Vec<u8>> {
+    if !units.len().is_multiple_of(2) {
+        return Err(crate::runtime::host::syntax_error(
+            "Uint8Array.fromHex: string must have an even number of characters",
+        ));
+    }
+    let mut out = Vec::with_capacity(units.len() / 2);
+    for pair in units.as_chunks::<2>().0 {
+        let hi = hex_nibble(pair[0])?;
+        let lo = hex_nibble(pair[1])?;
+        out.push((hi << 4) | lo);
+    }
+    Ok(out)
+}
+
+fn hex_nibble(c: u16) -> wasmtime::Result<u8> {
+    match c {
+        0x30..=0x39 => Ok((c - 0x30) as u8),
+        0x61..=0x66 => Ok((c - 0x61 + 10) as u8),
+        0x41..=0x46 => Ok((c - 0x41 + 10) as u8),
+        _ => Err(crate::runtime::host::syntax_error(
+            "Uint8Array.fromHex: invalid hex digit",
+        )),
+    }
+}
+
+/// Read `Base64Options` — `(url_safe, omit_padding)`. A null/absent options object
+/// means standard alphabet, padded.
+fn read_base64_options(
+    caller: &mut Caller<'_, StoreData>,
+    opt: &Val,
+) -> wasmtime::Result<(bool, bool)> {
+    if matches!(opt, Val::AnyRef(None)) {
+        return Ok((false, false));
+    }
+    let (mut url_safe, mut omit_padding) = (false, false);
+    for (name, value) in read_object_entries(caller, opt, "Base64Options")? {
+        // An optional field the caller omitted is materialized as `null`; leave
+        // the default for it.
+        if matches!(value, Val::AnyRef(None)) {
+            continue;
+        }
+        match String::from_utf16_lossy(&name).as_str() {
+            "alphabet" => {
+                let alphabet = read_string_units(caller, &value)?;
+                url_safe = String::from_utf16_lossy(&alphabet) == "base64url";
+            }
+            "omitPadding" => omit_padding = read_boolean(caller, &value)?,
+            _ => {}
+        }
+    }
+    Ok((url_safe, omit_padding))
+}
+
+fn read_string_units(caller: &mut Caller<'_, StoreData>, val: &Val) -> wasmtime::Result<Vec<u16>> {
+    let st = as_struct(caller, val, "Base64Options.alphabet")?;
+    let raw = match st.field(&mut *caller, 1)? {
+        Val::AnyRef(Some(arr)) => arr.unwrap_array(&mut *caller)?,
+        other => wasmtime::bail!("Base64Options.alphabet: malformed $string backing {other:?}"),
+    };
+    let len = raw.len(&mut *caller)?;
+    let mut units = Vec::with_capacity(len as usize);
+    for i in 0..len {
+        match raw.get(&mut *caller, i)? {
+            Val::I32(u) => units.push(u as u16),
+            other => wasmtime::bail!("Base64Options.alphabet: non-i32 code unit {other:?}"),
+        }
+    }
+    Ok(units)
+}
+
+fn read_boolean(caller: &mut Caller<'_, StoreData>, val: &Val) -> wasmtime::Result<bool> {
+    let st = as_struct(caller, val, "Base64Options.omitPadding")?;
+    match st.field(&mut *caller, 1)? {
+        Val::I32(b) => Ok(b != 0),
+        other => wasmtime::bail!("Base64Options.omitPadding: field 1 is {other:?}, not i32"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Constructor statics
+// ---------------------------------------------------------------------------
+
+/// The byte count `Uint8Array.alloc(n)` / `new Uint8Array(n)` reserve, or a
+/// `RangeError` when `n` is not a length at all.
+///
+/// Truncation toward zero matches JS (`2.7` → 2, `NaN` → 0). The two rejected
+/// ends are the ones where saturating instead would be silently wrong: `f64 as
+/// u32` saturates a large positive to `u32::MAX` — a 4 GiB request — and a
+/// negative to `0`, an empty buffer where the program asked for a sized one.
+/// JS raises `RangeError: Invalid typed array length` for both.
+pub(crate) fn alloc_len(n: f64) -> wasmtime::Result<usize> {
+    // Truncate before testing the sign, the way JS's `ToIndex` does: `-0.5`
+    // truncates to `0` and is a legal empty length, while `-1` is not.
+    if n.trunc() < 0.0 {
+        return Err(crate::runtime::host::range_error(format!(
+            "invalid Uint8Array length {} — a length cannot be negative",
+            format_number_js(n)
+        )));
+    }
+    if n > MAX_ALLOC_LEN as f64 {
+        return Err(crate::runtime::host::range_error(format!(
+            "invalid Uint8Array length {} — the maximum is {MAX_ALLOC_LEN}",
+            format_number_js(n)
+        )));
+    }
+    Ok(n as u32 as usize)
+}
+
+/// Ceiling on a single `Uint8Array` allocation. Well past any real payload and
+/// far below the point where the request is a denial of service in itself; the
+/// store's `ResourceLimiter` still caps the aggregate.
+pub(crate) const MAX_ALLOC_LEN: usize = 1 << 30;
+
+/// Read an `$Array` of boxed numbers into bytes — backs `new`/`of`/`fromArray`.
+fn read_number_array(
+    caller: &mut Caller<'_, StoreData>,
+    val: &Val,
+    name: &str,
+) -> wasmtime::Result<Vec<u8>> {
+    let elements = crate::runtime::prelude::array::read_array(caller, val, name)?;
+    let mut bytes = Vec::with_capacity(elements.len());
+    for e in &elements {
+        bytes.push(unbox_byte(caller, e, name)?);
+    }
+    Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn units(s: &str) -> Vec<u16> {
+        s.encode_utf16().collect()
+    }
+
+    #[test]
+    fn to_byte_saturates_like_trunc_sat_u() {
+        // Saturates NaN/negatives to 0 (not JS `% 256`), then keeps the low byte —
+        // matching the Wasm `i32.trunc_sat_f64_u` + `& 0xff` path.
+        assert_eq!(to_byte(7.0), 7);
+        assert_eq!(to_byte(256.0), 0);
+        assert_eq!(to_byte(257.0), 1);
+        assert_eq!(to_byte(-1.0), 0);
+        assert_eq!(to_byte(f64::NAN), 0);
+    }
+
+    #[test]
+    fn base64_round_trips_both_alphabets() {
+        let bytes = [0xfb_u8, 0xff, 0x00, 0x10, 0x41];
+        for url_safe in [false, true] {
+            let padded = encode_base64(&bytes, url_safe, false);
+            assert_eq!(decode_base64(&padded, url_safe).unwrap(), bytes);
+            // Decoding is forgiving on padding: an unpadded form still decodes.
+            let unpadded = encode_base64(&bytes, url_safe, true);
+            assert_eq!(decode_base64(&unpadded, url_safe).unwrap(), bytes);
+        }
+        // url-safe encodes 0xfb 0xff as `-_`, standard as `+/`.
+        assert!(encode_base64(&[0xfb, 0xff], true, false).contains('-'));
+        assert!(encode_base64(&[0xfb, 0xff], false, false).contains('+'));
+    }
+
+    #[test]
+    fn hex_round_trips_and_rejects_bad_input() {
+        let bytes = [0x00_u8, 0x0f, 0xa0, 0xff];
+        assert_eq!(to_hex(&bytes), "000fa0ff");
+        assert_eq!(from_hex(&units("000fA0Ff")).unwrap(), bytes);
+        assert!(
+            from_hex(&units("0"))
+                .unwrap_err()
+                .to_string()
+                .contains("even number of characters")
+        );
+        assert!(
+            from_hex(&units("0g"))
+                .unwrap_err()
+                .to_string()
+                .contains("invalid hex digit")
+        );
+    }
+}

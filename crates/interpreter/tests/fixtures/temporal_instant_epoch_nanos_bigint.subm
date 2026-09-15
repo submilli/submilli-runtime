@@ -1,0 +1,7 @@
+// Tests bigint carrier round-trip across the host boundary.
+
+function main(): void {
+  const ns: bigint = 1700000000123456789n;
+  const ts: Temporal.Instant = Temporal.Instant.fromEpochNanoseconds(ns);
+  assert(ts.epochNanoseconds === ns, "bigint epoch ns round-trip");
+}

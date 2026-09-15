@@ -1,0 +1,7 @@
+import { writeText, peek, Peek } from "submilli:fs";
+
+function main(): void {
+  writeText("/crlf.txt", "alpha\r\nbeta\r\n");
+  const p: Peek = peek("/crlf.txt");
+  assert(p.lineEnding === "crlf", "CRLF detected");
+}

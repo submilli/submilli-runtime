@@ -1,0 +1,45 @@
+interface Range {
+  hi: number;
+  iterator(): Iterator<number>;
+}
+
+function range(hi: number): Range {
+  const r: Range = {
+    hi: hi,
+    iterator: (): Iterator<number> => {
+      let i = 0;
+      const it: Iterator<number> = {
+        next: (): IteratorResult<number> => {
+          if (i >= hi) { const d: IteratorResult<number> = { done: true }; return d; }
+          const y: IteratorResult<number> = { done: false, value: i };
+          i = i + 1;
+          return y;
+        },
+      };
+      return it;
+    },
+  };
+  return r;
+}
+
+function main(): void {
+  const copy = Array.from([1, 2, 3]);
+  assert(copy.length === 3 && copy[2] === 3, "array copy");
+
+  const doubled = Array.from([1, 2, 3], (x: number): number => x * 2);
+  assert(doubled[0] === 2 && doubled[2] === 6, "mapFn applies");
+
+  const chars: string[] = Array.from("h😀i");
+  assert(chars.length === 3 && chars[1] === "😀", "string yields code points");
+
+  const s = new Set<number>();
+  s.add(5);
+  s.add(6);
+  assert(Array.from(s.values()).length === 2, "prelude cursor source");
+
+  const user = Array.from(range(4));
+  assert(user.length === 4 && user[3] === 3, "user-declared Iterable source");
+
+  const it = range(2).iterator();
+  assert(Array.from(it).length === 2, "raw Iterator source");
+}

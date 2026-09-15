@@ -1,0 +1,7 @@
+// expect-error: object literal is missing required field `log` of type `Logger`
+
+interface Logger { log(msg: string): void; }
+
+function main(): void {
+  const l: Logger = { unrelated: 42 };
+}

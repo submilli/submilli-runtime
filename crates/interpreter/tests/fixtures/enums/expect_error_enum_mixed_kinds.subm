@@ -1,0 +1,4 @@
+// expect-error: mixed numeric and string enum members are not allowed
+enum Mix { A = 1, B = "two" }
+
+function main(): void {}

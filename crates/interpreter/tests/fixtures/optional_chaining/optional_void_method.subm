@@ -1,0 +1,22 @@
+// `a?.m()` where `m` returns `void`. The chain has no value on either
+// branch — the null short-circuit yields nothing and the call itself
+// produces nothing — so the whole expression is `void`, usable only in
+// statement position (like any other void call).
+interface Sink {
+  push(n: number): void;
+}
+
+function main(): void {
+  let total: number = 0;
+
+  // Non-null receiver: the void method runs for its side effect.
+  const s: Sink | null = { push: (n: number): void => { total = total + n; } };
+  s?.push(10);
+  s?.push(32);
+
+  // Null receiver: the call short-circuits, no side effect.
+  const none: Sink | null = null;
+  none?.push(999);
+
+  assert(total === 42, "both non-null pushes ran; null receiver skipped");
+}

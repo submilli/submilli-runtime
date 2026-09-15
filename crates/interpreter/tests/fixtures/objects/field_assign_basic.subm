@@ -1,0 +1,9 @@
+function main(): void {
+  let o = { x: 1, y: 2 };
+  o.x = 5;
+  assert(o.x === 5, "field x updated");
+  assert(o.y === 2, "field y unchanged");
+  o.y = 99;
+  assert(o.y === 99, "field y updated");
+  assert(o.x === 5, "field x still 5");
+}

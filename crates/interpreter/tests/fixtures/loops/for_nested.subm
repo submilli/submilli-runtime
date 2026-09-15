@@ -1,0 +1,12 @@
+function main(): void {
+  let total: number = 0;
+  for (let i: number = 0; i < 3; i = i + 1) {
+    for (let j: number = 0; j < 5; j = j + 1) {
+      if (j === 2) {
+        break;
+      }
+      total = total + 1;
+    }
+  }
+  assert(total === 6, "inner break exits only inner loop");
+}

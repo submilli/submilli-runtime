@@ -1,0 +1,6 @@
+// expect-error: no variant `Sideways` on enum `Direction`
+enum Direction { Up, Down }
+
+function main(): void {
+  const d: Direction = Direction.Sideways;
+}

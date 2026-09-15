@@ -1,0 +1,52 @@
+// Out-of-range `arr[i]` read/write throws a catchable Error rather than
+// trapping uncatchably (SUB-340). In-bounds access is unaffected.
+
+function readOob(arr: number[], i: number): boolean {
+  let threw: boolean = false;
+  try {
+    const v: number = arr[i];
+    assert(v !== v, "unreachable: OOB read should have thrown");
+  } catch (e: Error) {
+    threw = true;
+    assert(e.message === "index out of range", "OOB read carries a message");
+  }
+  return threw;
+}
+
+function writeOob(arr: number[], i: number): boolean {
+  let threw: boolean = false;
+  try {
+    arr[i] = 99;
+  } catch (e: Error) {
+    threw = true;
+    assert(e.message === "index out of range", "OOB write carries a message");
+  }
+  return threw;
+}
+
+function main(): void {
+  const arr: number[] = [10, 20, 30];
+
+  // In-bounds reads and writes still work.
+  assert(arr[0] === 10, "in-bounds read at 0");
+  assert(arr[2] === 30, "in-bounds read at last index");
+  arr[1] = 25;
+  assert(arr[1] === 25, "in-bounds write round-trips");
+
+  // Out-of-range read throws and is catchable.
+  assert(readOob(arr, 10), "OOB read (index 10) throws");
+  assert(readOob(arr, 3), "OOB read at exactly length throws");
+
+  // Out-of-range write throws and is catchable.
+  assert(writeOob(arr, 10), "OOB write (index 10) throws");
+  assert(arr.length === 3, "failed OOB write does not extend the array");
+
+  // Postfix on an OOB index throws too.
+  let postfixThrew: boolean = false;
+  try {
+    arr[7]++;
+  } catch (e: Error) {
+    postfixThrew = true;
+  }
+  assert(postfixThrew, "OOB postfix increment throws");
+}

@@ -1,0 +1,17 @@
+function len_after_assign(): number {
+  let x: string | null = null;
+  x = "hello";
+  return x.length;
+}
+
+function widen_then_narrow(): number {
+  let s: string | null = "first";
+  s = null;
+  s = "second wave";
+  return s.length;
+}
+
+function main(): void {
+  assert(len_after_assign() === 5, "assignment narrows null to string");
+  assert(widen_then_narrow() === 11, "subsequent assignment replaces narrowing");
+}

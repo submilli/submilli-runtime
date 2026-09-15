@@ -1,0 +1,9 @@
+function main(): void {
+  const flag: boolean = true;
+  if (flag) {
+    const obj: { a: number; b: number } = { a: 5, b: 6 };
+    const { a, b } = obj;
+    assert(a === 5, "a is 5 (inside nested block)");
+    assert(b === 6, "b is 6 (inside nested block)");
+  }
+}

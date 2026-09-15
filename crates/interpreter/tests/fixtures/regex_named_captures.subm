@@ -1,0 +1,20 @@
+function main(): void {
+  const cap: RegExp = new RegExp("(?<user>\\w+)@(?<host>\\w+)", "");
+  const m: RegExpMatch | null = cap.exec("alice@example.com");
+  assert(m !== null, "match found");
+  if (m !== null) {
+    assert(m.match === "alice@example", "full match (no trailing .com — \\w doesn't span `.`)");
+    // Snapshot before assert() calls (which invalidate narrowing).
+    const groups: Map<string, string> = m.namedGroups;
+    assert(groups.get("user") === "alice", "user named capture");
+    assert(groups.get("host") === "example", "host named capture");
+  }
+
+  const numbered: RegExp = new RegExp("(\\w+)", "");
+  const m2: RegExpMatch | null = numbered.exec("hello");
+  assert(m2 !== null, "match found");
+  if (m2 !== null) {
+    const ng: Map<string, string> = m2.namedGroups;
+    assert(ng.size === 0, "no named captures → empty map");
+  }
+}

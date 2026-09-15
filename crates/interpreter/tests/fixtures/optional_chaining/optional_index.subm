@@ -1,0 +1,9 @@
+function first(arr: number[] | null): number | null {
+  return arr?.[0];
+}
+
+function main(): void {
+  const xs: number[] = [10, 20, 30];
+  assert(first(xs) === 10, "non-null array index");
+  assert(first(null) === null, "null array short-circuits");
+}

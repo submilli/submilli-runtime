@@ -1,0 +1,8 @@
+function takesA(p: { a: number }): number {
+  return p.a;
+}
+
+function main(): void {
+  const args = { a: 1, extra: 2 };
+  assert(takesA(args) === 1, "intermediate object width-subtypes into narrower arg");
+}

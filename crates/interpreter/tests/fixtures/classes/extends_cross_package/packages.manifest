@@ -1,0 +1,8 @@
+# `Dog extends Animal` across SEPARATE packages (separate Wasm modules, linked).
+# `@test/dogs` reconstructs the imported `Animal` rec group and lays `Dog` out as
+# a subtype of it; the root script links both and exercises construction,
+# inherited + overridden dispatch, `super(...)`, fields, and `instanceof`.
+# name           dir       deps                       root
+@test/animals    animals   -
+@test/dogs       dogs      @test/animals
+main             app       @test/animals,@test/dogs   root

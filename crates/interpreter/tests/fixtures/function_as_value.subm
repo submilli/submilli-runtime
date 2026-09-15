@@ -1,0 +1,11 @@
+function greet(x: number): number { return x + 1; }
+
+function apply(f: (n: number) => number, n: number): number {
+  return f(n);
+}
+
+function main(): void {
+  let f = greet;
+  assert(f(2) === 3, "bound function callable through local");
+  assert(apply(greet, 5) === 6, "HOF receives bare function reference");
+}

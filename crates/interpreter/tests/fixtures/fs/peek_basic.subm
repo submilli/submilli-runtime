@@ -1,0 +1,10 @@
+import { writeText, peek, Peek } from "submilli:fs";
+
+function main(): void {
+  writeText("/sample.txt", "hello\nworld\n");
+  const p: Peek = peek("/sample.txt");
+  assert(p.size === 12, "size matches write");
+  assert(p.encoding === "utf-8", "ascii detected as utf-8");
+  assert(p.lineEnding === "lf", "LF detected");
+  assert(p.preview === "hello\nworld\n", "preview returns full content for small files");
+}

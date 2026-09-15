@@ -1,0 +1,19 @@
+function main(): void {
+  const s = new Set<number>();
+  s.add(1);
+  s.add(2);
+  s.add(3);
+  s.add(4);
+
+  const it = s.iterator();
+  let visits: number = 0;
+  while (true) {
+    const r = it.next();
+    if (r.done) { break; }
+    visits = visits + 1;
+  }
+  assert(visits === 4, "iterator yields each element once");
+
+  const r2 = it.next();
+  assert(r2.done, "subsequent next() after exhaustion stays done");
+}

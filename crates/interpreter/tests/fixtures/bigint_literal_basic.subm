@@ -1,0 +1,10 @@
+function main(): void {
+  let one: bigint = 1n;
+  assert(one.toString() === "1", "1n round-trips");
+
+  let neg: bigint = -42n;
+  assert(neg.toString() === "-42", "-42n via unary neg");
+
+  let zero: bigint = 0n;
+  assert(zero.toString() === "0", "0n canonical");
+}

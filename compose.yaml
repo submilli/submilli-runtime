@@ -1,0 +1,110 @@
+# Partner-facing example for running `submilli-server` in a container, and the
+# fixture the release workflow's smoke test drives.
+#
+#   docker compose up -d
+#   curl -X PUT http://127.0.0.1:8128/v1/blueprints/demo \
+#     -H 'content-type: application/json' \
+#     -d "$(python3 -c 'import json,sys; print(json.dumps({"yaml": sys.stdin.read()}))' \
+#         < examples/docker/blueprints/demo.yaml)"
+#
+# SUBMILLI_IMAGE lets the smoke test point this at a locally-built image; the
+# default is the published tag a partner would pull.
+
+services:
+  submilli:
+    image: ${SUBMILLI_IMAGE:-ghcr.io/submilli/submilli:latest}
+
+    # The HTTP API has no inbound authentication yet (SUB-159/160), so the
+    # published port is scoped to the loopback interface. This is substantive,
+    # not stylistic: Docker DNATs published ports in nat/PREROUTING and they then
+    # traverse FORWARD via DOCKER-USER/DOCKER, so the INPUT rules ufw writes are
+    # never consulted — a plain `8128:8128` would expose an unauthenticated
+    # code-execution endpoint to the LAN on a host the operator believes is
+    # firewalled.
+    #
+    # Loopback publishing scopes the *host* interface only. It does not isolate
+    # the server from other containers, which is why `submilli-net` below is a
+    # dedicated network rather than the default bridge: on the default bridge any
+    # co-resident container reaches the server directly on its container IP,
+    # where the published-port restriction does not apply.
+    ports:
+      - "127.0.0.1:8128:8128"
+    networks:
+      - submilli-net
+
+    # Five of the six state directories resolve under SUBMILLI_HOME, which the
+    # image sets to /var/lib/submilli — blueprints, sessions, vfs/sessions,
+    # secrets, packages. Blueprints are part of that state: the store is a
+    # revision log (index.json plus <name>.<rev>.yaml), not a directory of
+    # hand-written files, so it is registered over the API and persists here.
+    volumes:
+      - submilli-state:/var/lib/submilli
+
+    # The sixth state directory. The ephemeral VFS root is a separate setting
+    # that defaults to the system temp dir, so it is not moved by SUBMILLI_HOME;
+    # left on the container filesystem it would grow the writable layer instead
+    # of a volume. A tmpfs is the right home for it — the data is per-execution
+    # scratch by definition. mode=1777 matches the base image's /tmp.
+    tmpfs:
+      - /tmp:mode=1777,size=256m
+
+    # Two layers behind non-root. The server binds unprivileged 8128, needs no
+    # capabilities, and spawns no subprocesses, so both cost nothing here — and
+    # the threat being defended against is a sandbox escape from interpreted
+    # user code, which is the same reason the base image ships no shell.
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    read_only: true
+
+    # Docker's SIGKILL fallback. The server's own teardown is bounded well inside
+    # it: a 5s request drain (--shutdown-grace), then 250ms of runtime teardown,
+    # then up to 1s flushing telemetry — about 6.25s worst case. Raise
+    # --shutdown-grace and this together, never one alone.
+    stop_grace_period: 10s
+
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/submilli-server", "--health-check"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+    # SUBMILLI_BIND/SUBMILLI_PORT are what the healthcheck reads: it runs as its
+    # own process and cannot inherit the server's flags. The image already sets
+    # HOST=0.0.0.0, but that is the *ambient* tier — naming them explicitly is
+    # what makes an operator's port override apply to the probe as well.
+    environment:
+      SUBMILLI_BIND: 0.0.0.0
+      SUBMILLI_PORT: 8128
+
+    # Supply the secret-store key as a file, not as an environment variable: an
+    # env var is readable via `docker inspect`, appears in `docker compose
+    # config` output, and is inherited by the process environment.
+    #
+    # Uncomment both blocks after creating the key. Compose's uid/gid/mode secret
+    # attributes are ignored outside swarm and Docker does not chown bind mounts,
+    # so a conventionally-permissioned root-owned 0600 file is unreadable by uid
+    # 65532 — and the server fails boot rather than degrading. Mode 0444 (or
+    # owner 65532:65532 with 0400) is required:
+    #
+    #   head -c32 /dev/urandom | base64 > submilli-store-key
+    #   chmod 0444 submilli-store-key
+    #
+    #   environment:
+    #     SUBMILLI_SECRET_STORE_KEY_FILE: /run/secrets/submilli-store-key
+    #   secrets:
+    #     - submilli-store-key
+    #
+    # Without a key the secret store is simply off and the server boots normally.
+
+volumes:
+  submilli-state:
+
+networks:
+  submilli-net:
+
+# secrets:
+#   submilli-store-key:
+#     file: ./submilli-store-key

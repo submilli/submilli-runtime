@@ -1,0 +1,7 @@
+// expect-error: unknown regex flag `q`
+// expect-error: `g` (global / stateful `lastIndex`)
+
+function main(): void {
+  const r = /abc/q;
+  assert(r !== null, "never reached");
+}

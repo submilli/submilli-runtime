@@ -1,0 +1,39 @@
+function setOf(values: number[]): Set<number> {
+  const s = new Set<number>();
+  for (const v of values) {
+    s.add(v);
+  }
+  return s;
+}
+
+function contents(s: Set<number>): string {
+  let vs: number[] = [];
+  for (const v of s.values()) {
+    vs.push(v);
+  }
+  return vs.join(",");
+}
+
+function main(): void {
+  const a = setOf([1, 2, 3]);
+  const b = setOf([3, 4]);
+
+  const u = a.union(b);
+  assert(u.size === 4, "union has every distinct element");
+  assert(contents(u) === "1,2,3,4", "union keeps first-seen order");
+  assert(a.size === 3 && b.size === 2, "inputs are unchanged");
+
+  const i = a.intersection(b);
+  assert(i.size === 1 && i.has(3), "intersection keeps shared elements");
+
+  const d = a.difference(b);
+  assert(contents(d) === "1,2", "difference removes the other set's elements");
+
+  const x = a.symmetricDifference(b);
+  assert(contents(x) === "1,2,4", "symmetric difference drops the overlap");
+
+  const empty = new Set<number>();
+  assert(a.union(empty).size === 3, "union with empty is a copy");
+  assert(a.intersection(empty).size === 0, "intersection with empty is empty");
+  assert(contents(empty.difference(a)) === "", "empty minus anything is empty");
+}

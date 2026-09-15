@@ -1,0 +1,5 @@
+# The ancestor is imported, so the kind the redeclaration collides with comes
+# from the reconstructed dependency symbol rather than a class in this module.
+# name           dir  deps          root
+@test/kinds      lib  -
+main             app  @test/kinds   root

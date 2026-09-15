@@ -1,0 +1,11 @@
+import { writeText, readText } from "submilli:fs";
+
+function main(): void {
+  writeText("/hello.txt", "hello, fs");
+  const back: string | null = readText("/hello.txt");
+  if (back === null) {
+    assert(false, "readText returned null for a small file");
+    return;
+  }
+  assert(back === "hello, fs", "round-trip preserves content");
+}

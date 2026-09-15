@@ -1,0 +1,8 @@
+interface Counter { tick(): number; }
+
+function main(): void {
+  let n = 0;
+  const store: { counter: Counter } = { counter: { tick: (): number => { n = n + 1; return n; } } };
+  assert(store.counter.tick() === 1, "nested tick");
+  assert(store.counter.tick() === 2, "nested tick again");
+}

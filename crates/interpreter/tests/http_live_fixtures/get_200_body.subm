@@ -1,0 +1,21 @@
+import { get, Response, Headers } from "submilli:http";
+
+function main(): void {
+  const r: Response = get("{{BASE}}/status/200");
+
+  const _status: number = r.status;
+  const _statusText: string = r.statusText;
+  const _body: string = r.body;
+  const _ok: boolean = r.ok;
+  const _url: string = r.url;
+  const _headers: Headers = r.headers;
+
+  assert(r.status === 200, "200 over the wire");
+  assert(r.statusText === "OK", "ureq parsed the canonical reason phrase");
+  assert(r.ok, "ok");
+  assert(r.body === "hello", "body decoded");
+  assert(r.headers.get("content-type") === "text/plain", "header lowercased + present");
+
+  // throwForStatus must not throw on 2xx.
+  r.throwForStatus();
+}

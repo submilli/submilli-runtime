@@ -1,0 +1,13 @@
+function main(): void {
+  assert(Number.parseInt("42px") === 42, "leading integer wins");
+  assert(Number.parseInt("ff", 16) === 255, "explicit radix");
+  assert(isNaN(Number.parseInt("zz")), "no digits is NaN");
+  assert(Number.parseInt("0x1f", 0) === 31, "radix 0 auto-detects hex");
+
+  assert(Number.parseFloat("1.5x") === 1.5, "leading float wins");
+  assert(Number.parseFloat("-2.5e2") === -250, "exponent form parses");
+  assert(isNaN(Number.parseFloat("abc")), "no prefix is NaN");
+
+  assert(Number.parseInt("42") === parseInt("42"), "static matches the global");
+  assert(Number.parseFloat("1.5") === parseFloat("1.5"), "static matches the global");
+}

@@ -1,0 +1,13 @@
+import { write, read } from "submilli:fs";
+
+function main(): void {
+  const payload: Uint8Array = new Uint8Array([0, 1, 2, 254, 255]);
+  write("/bytes.bin", payload);
+  const back: Uint8Array | null = read("/bytes.bin");
+  if (back === null) {
+    assert(false, "read returned null for a small file");
+    return;
+  }
+  assert(back.length === 5, "byte count preserved");
+  assert(back.equals(payload), "byte values preserved");
+}

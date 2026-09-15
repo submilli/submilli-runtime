@@ -1,0 +1,53 @@
+function main(): void {
+  const base: Temporal.Duration = Temporal.Duration.from("PT1H30M");
+  assert(base.toString() === "PT1H30M", "default toString remains unchanged");
+  assert(
+    base.toString({ smallestUnit: "hour", roundingMode: "floor" }) === "PT1H",
+    "rounds to the requested smallest unit"
+  );
+
+  const subsecond: Temporal.Duration = Temporal.Duration.from("PT1.987654321S");
+  assert(
+    subsecond.toString({ smallestUnit: "second" }) === subsecond.round("second").toString(),
+    "smallestUnit second matches Duration.round"
+  );
+
+  const padded: Temporal.Duration = Temporal.Duration.from("PT1.2345674S");
+  assert(padded.toString({ fractionalSecondDigits: 0 }) === "PT1S", "0 fractional digits");
+  assert(padded.toString({ fractionalSecondDigits: 3 }) === "PT1.235S", "3 fractional digits");
+  assert(padded.toString({ fractionalSecondDigits: 6 }) === "PT1.234567S", "6 fractional digits");
+  assert(
+    padded.toString({ fractionalSecondDigits: 9 }) === "PT1.234567400S",
+    "9 fractional digits"
+  );
+
+  const carry: Temporal.Duration = Temporal.Duration.from("PT1.9995S");
+  assert(
+    carry.toString({ fractionalSecondDigits: 3, roundingMode: "halfExpand" }) === "PT2.000S",
+    "fractionalSecondDigits rounds with carry into seconds"
+  );
+
+  let badLow = false;
+  try {
+    padded.toString({ fractionalSecondDigits: -1 });
+  } catch (e: Error) {
+    badLow = e.message.length > 0;
+  }
+  assert(badLow, "negative fractionalSecondDigits throws");
+
+  let badHigh = false;
+  try {
+    padded.toString({ fractionalSecondDigits: 10 });
+  } catch (e: Error) {
+    badHigh = e.message.length > 0;
+  }
+  assert(badHigh, "too-large fractionalSecondDigits throws");
+
+  let badFraction = false;
+  try {
+    padded.toString({ fractionalSecondDigits: 1.5 });
+  } catch (e: Error) {
+    badFraction = e.message.length > 0;
+  }
+  assert(badFraction, "non-integer fractionalSecondDigits throws");
+}

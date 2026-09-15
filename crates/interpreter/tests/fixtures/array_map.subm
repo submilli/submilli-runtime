@@ -1,0 +1,11 @@
+function main(): void {
+  let nums: number[] = [1, 2, 3];
+  let doubled = nums.map(x => x * 2);
+  assert(doubled.length === 3, "map preserves length");
+  assert(doubled[0] === 2 && doubled[1] === 4 && doubled[2] === 6, "doubled");
+
+  let lengths = ["a", "ab", "abc"].map(s => s.length);
+  assert(lengths[0] === 1 && lengths[1] === 2 && lengths[2] === 3, "string to number");
+
+  assert(nums[0] === 1, "source preserved");
+}

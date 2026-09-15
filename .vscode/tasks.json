@@ -1,0 +1,34 @@
+{
+  "tasks": [
+    {
+      "command": "submilli build check",
+      "group": {
+        "isDefault": true,
+        "kind": "build"
+      },
+      "label": "submilli build check",
+      "problemMatcher": {
+        "fileLocation": [
+          "relative",
+          "${workspaceFolder}"
+        ],
+        "owner": "submilli",
+        "pattern": [
+          {
+            "message": 2,
+            "regexp": "^\\s*(error|warning):\\s+(.*)$",
+            "severity": 1
+          },
+          {
+            "column": 3,
+            "file": 1,
+            "line": 2,
+            "regexp": "^\\s*-->\\s+(.+):(\\d+):(\\d+)$"
+          }
+        ]
+      },
+      "type": "shell"
+    }
+  ],
+  "version": "2.0.0"
+}

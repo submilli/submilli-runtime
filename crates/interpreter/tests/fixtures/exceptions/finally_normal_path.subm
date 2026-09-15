@@ -1,0 +1,8 @@
+function main(): void {
+  let finally_ran: boolean = false;
+  try {
+  } finally {
+    finally_ran = true;
+  }
+  assert(finally_ran === true, "finally runs after a clean try body");
+}

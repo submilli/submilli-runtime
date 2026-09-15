@@ -1,0 +1,7 @@
+// expect-error: nested destructuring
+
+function main(): void {
+  const obj: { a: { b: number } } = { a: { b: 1 } };
+  const { a: { b } } = obj;
+  assert(b === 1, "unreachable");
+}

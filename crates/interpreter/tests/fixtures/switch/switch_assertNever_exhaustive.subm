@@ -1,0 +1,25 @@
+function assertNever(x: never): never {
+  throw new Error("unreachable");
+}
+
+function area(
+  s: { kind: "circle"; radius: number }
+   | { kind: "rect"; w: number; h: number }
+   | { kind: "tri"; base: number; height: number }
+): number {
+  switch (s.kind) {
+    case "circle": return s.radius * s.radius * 3;
+    case "rect": return s.w * s.h;
+    case "tri": return (s.base * s.height) / 2;
+    default: return assertNever(s);
+  }
+}
+
+function main(): void {
+  const c: { kind: "circle"; radius: number } = { kind: "circle", radius: 2 };
+  const r: { kind: "rect"; w: number; h: number } = { kind: "rect", w: 3, h: 4 };
+  const t: { kind: "tri"; base: number; height: number } = { kind: "tri", base: 6, height: 4 };
+  assert(area(c) === 12, "circle");
+  assert(area(r) === 12, "rect");
+  assert(area(t) === 12, "tri");
+}

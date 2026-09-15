@@ -1,0 +1,17 @@
+function describe(
+  s: { kind: "circle"; radius: number }
+   | { kind: "rect"; height: number; width: number }
+): number {
+  if (s.kind === "circle") {
+    return s.radius;
+  }
+  return s.height * s.width;
+}
+
+function main(): void {
+  const c: { kind: "circle"; radius: number } = { kind: "circle", radius: 3 };
+  assert(describe(c) === 3, "circle: narrowed via kind === \"circle\"");
+
+  const r: { kind: "rect"; height: number; width: number } = { kind: "rect", height: 4, width: 5 };
+  assert(describe(r) === 20, "rect: else branch narrowed to rectangle");
+}

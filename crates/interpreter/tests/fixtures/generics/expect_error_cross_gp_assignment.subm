@@ -1,0 +1,9 @@
+// expect-error: expected `T`, got `U`
+
+function identity<T>(x: T): T { return x; }
+
+function bar<T, U>(y: U): void {
+  const x: T = identity(y);
+}
+
+function main(): void {}

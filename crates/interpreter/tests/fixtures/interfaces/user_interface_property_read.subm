@@ -1,0 +1,17 @@
+interface Point { x: number; y: number; }
+interface Box<T> { value: T; }
+interface Tagged { tag: string; note?: string; }
+
+function main(): void {
+  const p: Point = { x: 1, y: 2 };
+  assert(p.x + p.y === 3, "concrete property read");
+
+  const b: Box<number> = { value: 7 };
+  assert(b.value === 7, "generic property read");
+
+  const present: Tagged = { tag: "a", note: "hi" };
+  assert(present.note === "hi", "present optional reads value");
+
+  const absent: Tagged = { tag: "b" };
+  assert(absent.note === null, "absent optional reads null");
+}

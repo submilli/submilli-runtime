@@ -1,0 +1,14 @@
+// `identity<T>` — exercises the boxed-erasure path for number, string, object, and bool.
+
+function identity<T>(x: T): T {
+  return x;
+}
+
+function main(): void {
+  assert(identity(42) === 42, "identity(number)");
+  assert(identity("hi") === "hi", "identity(string)");
+  const o = { a: 1 };
+  assert(identity(o) === o, "identity(object) preserves reference");
+  assert(identity(true), "identity(true)");
+  assert(!identity(false), "identity(false)");
+}

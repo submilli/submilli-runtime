@@ -1,0 +1,14 @@
+// Acceptance round-trip: dropping a ZonedDateTime to wall-clock and re-zoning it
+// in the same zone recovers the original instant (away from a DST gap/overlap).
+
+function main(): void {
+  const z: Temporal.ZonedDateTime =
+    Temporal.ZonedDateTime.from("2024-07-09T15:30:45.123456789-04:00[America/New_York]");
+
+  const back: Temporal.ZonedDateTime = z.toPlainDateTime().toZonedDateTime("America/New_York");
+  assert(
+    back.toInstant().epochNanoseconds === z.toInstant().epochNanoseconds,
+    "round-trip recovers the instant"
+  );
+  assert(back.timeZoneId === "America/New_York", "round-trip keeps the zone");
+}

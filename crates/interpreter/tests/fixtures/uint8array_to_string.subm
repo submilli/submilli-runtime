@@ -1,0 +1,16 @@
+function main(): void {
+  let empty: Uint8Array = Uint8Array.alloc(0);
+  assert(empty.toString() === "", "empty array → empty string");
+
+  let one: Uint8Array = Uint8Array.new([42]);
+  assert(one.toString() === "42", "single element has no separator");
+
+  let three: Uint8Array = Uint8Array.new([1, 2, 3]);
+  assert(three.toString() === "1,2,3", "three elements comma-separated");
+
+  let zeros: Uint8Array = Uint8Array.alloc(4);
+  assert(zeros.toString() === "0,0,0,0", "zero-filled formats each byte");
+
+  let boundary: Uint8Array = Uint8Array.new([0, 127, 128, 255]);
+  assert(boundary.toString() === "0,127,128,255", "boundary byte values");
+}

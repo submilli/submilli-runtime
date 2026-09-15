@@ -1,0 +1,10 @@
+function main(): void {
+  const md = Temporal.PlainMonthDay.from("02-29"); // leap day must be accepted
+  assert(md.month === 2, "month");
+  assert(md.day === 29, "day");
+  assert(md.toString() === "02-29", "toString");
+
+  // The `--MM-DD` ISO form is also accepted.
+  assert(md.equals(Temporal.PlainMonthDay.from("--02-29")), "double-dash form");
+  assert(!md.equals(Temporal.PlainMonthDay.from("06-07")), "unequal");
+}

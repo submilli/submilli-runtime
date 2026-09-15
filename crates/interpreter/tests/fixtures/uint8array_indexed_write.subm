@@ -1,0 +1,22 @@
+function main(): void {
+  let bytes: Uint8Array = Uint8Array.alloc(4);
+  assert(bytes[0] === 0, "alloc zero-fills");
+
+  bytes[0] = 1;
+  bytes[1] = 2;
+  bytes[2] = 3;
+  bytes[3] = 255;
+  assert(bytes[0] === 1, "byte 0 after write");
+  assert(bytes[1] === 2, "byte 1 after write");
+  assert(bytes[2] === 3, "byte 2 after write");
+  assert(bytes[3] === 255, "byte 3 after write");
+
+  bytes[0] = 256;
+  assert(bytes[0] === 0, "256 truncates to 0");
+  bytes[0] = 257;
+  assert(bytes[0] === 1, "257 truncates to 1");
+  bytes[0] = 511;
+  assert(bytes[0] === 255, "511 truncates to 255");
+  bytes[0] = -1;
+  assert(bytes[0] === 0, "negative saturates to 0 (matches ctor)");
+}

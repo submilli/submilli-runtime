@@ -1,0 +1,26 @@
+function main(): void {
+  const nums: [number, number, number] = [1, 2, 3];
+
+  assert(nums.length === 3, "length");
+
+  const doubled = nums.map(x => x * 2);
+  assert(doubled[0] === 2, "map first");
+  assert(doubled[2] === 6, "map last");
+
+  const evens = nums.filter(x => x % 2 === 0);
+  assert(evens.length === 1, "filter");
+
+  assert(nums.includes(2), "includes");
+  assert(nums.indexOf(3) === 2, "indexOf");
+
+  const sum = nums.reduce((acc, x) => acc + x, 0);
+  assert(sum === 6, "reduce");
+
+  assert(nums.join("-") === "1-2-3", "join");
+  assert(nums.slice(1).length === 2, "slice");
+
+  // Heterogeneous tuple: element type is the positions' union.
+  const pair: [number, string] = [42, "hello"];
+  assert(pair.length === 2, "pair length");
+  assert(pair.join(",") === "42,hello", "pair join");
+}

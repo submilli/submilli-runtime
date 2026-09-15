@@ -1,0 +1,5 @@
+// expect-error: `WeakSet` is not supported
+
+function main(): void {
+  const s: WeakSet<string> = new Set<string>();
+}

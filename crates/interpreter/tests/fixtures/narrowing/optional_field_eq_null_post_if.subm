@@ -1,0 +1,11 @@
+function f(u: { name?: string }): string {
+  if (u.name === null) {
+    return "";
+  }
+  return u.name;
+}
+
+function main(): void {
+  assert(f({ name: "alice" }) === "alice", "post-if narrowing on optional read holds");
+  assert(f({}) === "", "early-return branch handles absent optional");
+}

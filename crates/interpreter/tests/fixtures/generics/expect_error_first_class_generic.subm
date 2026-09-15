@@ -1,0 +1,9 @@
+// expect-error: cannot bind generic function
+
+function id<T>(x: T): T {
+  return x;
+}
+
+function main(): void {
+  let f = id;
+}

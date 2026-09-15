@@ -1,0 +1,13 @@
+function main(): void {
+  assert(JSON.stringify({ a: 1 }) === "{\"a\":1}", "single field");
+
+  assert(JSON.stringify({ a: 1, b: "two" }) === "{\"a\":1,\"b\":\"two\"}", "two fields");
+
+  assert(JSON.stringify({ b: "two", a: 1 }) === "{\"a\":1,\"b\":\"two\"}", "field order canonical");
+
+  assert(JSON.stringify({ outer: { inner: 7 } }) === "{\"outer\":{\"inner\":7}}", "nested");
+
+  assert(JSON.stringify({ flag: true, n: 5, s: "hi" }) === "{\"flag\":true,\"n\":5,\"s\":\"hi\"}", "mixed primitives");
+
+  assert(JSON.stringify({ xs: [1, 2] }) === "{\"xs\":[1,2]}", "array value");
+}

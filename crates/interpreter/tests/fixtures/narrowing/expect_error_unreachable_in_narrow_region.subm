@@ -1,0 +1,11 @@
+// expect-error: unreachable code
+
+// Dead code inside an if-branch: the unreachable walker must recurse into NarrowRegion.body.
+
+function f(x: string | null): number {
+  if (x !== null) {
+    return x.length;
+    let dead: number = 1;
+  }
+  return 0;
+}

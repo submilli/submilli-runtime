@@ -1,0 +1,22 @@
+
+function kindOf(
+  s: { kind: string; radius: number }
+   | { kind: string; height: number; width: number }
+): string {
+  return s.kind;
+}
+
+function main(): void {
+  const c = { kind: "circle", radius: 3 };
+  const r = { kind: "rect", height: 4, width: 5 };
+
+  assert(kindOf(c) === "circle", "circle's kind");
+  assert(kindOf(r) === "rect", "rectangle's kind");
+
+  // Reverse to double-check: the virtual dispatch is not aliasing
+  // one shape's slot to the other.
+  const r2 = { kind: "rect", height: 1, width: 2 };
+  const c2 = { kind: "circle", radius: 99 };
+  assert(kindOf(r2) === "rect", "rectangle r2 still 'rect'");
+  assert(kindOf(c2) === "circle", "circle c2 still 'circle'");
+}

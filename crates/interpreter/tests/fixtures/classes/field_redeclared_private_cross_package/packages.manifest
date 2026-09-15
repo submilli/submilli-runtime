@@ -1,0 +1,6 @@
+# `private` is module-scoped, so a consumer cannot see the name it collides
+# with — but the shadowed field shares one payload slot, which would hand the
+# consumer write access to the library's encapsulated state.
+# name        dir   deps        root
+@test/base    lib   -
+main          app   @test/base  root

@@ -1,0 +1,14 @@
+function main(): void {
+  let x: number = 5;
+  let y: number = x++;
+  assert(y === 5, "x++ as expr yields original value");
+  assert(x === 6, "x is incremented");
+
+  let z: number = x--;
+  assert(z === 6, "x-- as expr yields original value");
+  assert(x === 5, "x is decremented");
+
+  let w: number = x++ + 1;
+  assert(w === 6, "x++ + 1: original (5) plus 1");
+  assert(x === 6, "x is incremented once");
+}

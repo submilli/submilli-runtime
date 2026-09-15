@@ -1,0 +1,25 @@
+// A leading `export` marks a top-level declaration visible to sibling
+// modules (Form 1). In a single-file package this is a no-op at runtime —
+// the program behaves identically to one without `export`.
+export type Id = string;
+
+export interface Point {
+  x: number;
+  y: number;
+}
+
+export enum Color {
+  Red,
+  Green,
+}
+
+export const GREETING: string = "hi";
+
+export function main(): void {
+  const p: Point = { x: 1, y: 2 };
+  const id: Id = GREETING;
+  const c: Color = Color.Green;
+  assert(id === "hi", "exported const is reachable");
+  assert(p.x + p.y === 3, "exported interface type works");
+  assert(c !== Color.Red, "exported enum works");
+}

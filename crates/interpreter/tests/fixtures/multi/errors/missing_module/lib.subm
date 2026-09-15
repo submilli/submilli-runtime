@@ -1,0 +1,4 @@
+// expect-error: no such module
+import { x } from "./missing";
+
+export const y: number = 1;

@@ -1,0 +1,12 @@
+function main(): void {
+  let hello: Uint8Array = Uint8Array.new([104, 101, 108, 108, 111]);
+  assert(
+    JSON.stringify(hello) === "\"aGVsbG8=\"",
+    "JSON.stringify wraps base64 in quotes"
+  );
+
+  let empty: Uint8Array = Uint8Array.alloc(0);
+  assert(JSON.stringify(empty) === "\"\"", "empty bytes → empty base64");
+
+  assert(hello.toJson() === "\"aGVsbG8=\"", "toJson matches JSON.stringify");
+}

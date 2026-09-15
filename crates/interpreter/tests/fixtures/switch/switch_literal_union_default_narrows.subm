@@ -1,0 +1,17 @@
+function classify(s: "a" | "b" | "c" | "d"): string {
+  switch (s) {
+    case "a": return "A";
+    case "b": return "B";
+    default: {
+      const r: "c" | "d" = s;
+      return r;
+    }
+  }
+}
+
+function main(): void {
+  assert(classify("a") === "A", "a");
+  assert(classify("b") === "B", "b");
+  assert(classify("c") === "c", "c");
+  assert(classify("d") === "d", "d");
+}

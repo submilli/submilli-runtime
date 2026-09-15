@@ -1,0 +1,5 @@
+function main(): void {
+  const o = { x: 1 };
+  o.x = 7;
+  assert(o.x === 7, "const-bound object's field is mutable");
+}

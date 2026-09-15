@@ -1,0 +1,8 @@
+type Point = { x: number; y: number };
+
+function main(): void {
+  const xs: Point[] = [{ x: 1, y: 2 }, { x: 3, y: 4 }];
+  assert(xs.length === 2, "array of aliased elements has length 2");
+  assert(xs[0].x === 1, "indexed access exposes alias field");
+  assert(xs[1].y === 4, "indexed access exposes alias field on 2nd element");
+}

@@ -1,0 +1,15 @@
+function main(): void {
+  const s = JSON.parse("\"hi\"") as string | number;
+  if (typeof s === "string") {
+    assert(s === "hi", "string branch value");
+  } else {
+    assert(false, "expected string branch");
+  }
+
+  const n = JSON.parse("42") as string | number;
+  if (typeof n === "number") {
+    assert(n === 42, "number branch value");
+  } else {
+    assert(false, "expected number branch");
+  }
+}

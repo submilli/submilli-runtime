@@ -1,0 +1,20 @@
+function main(): void {
+  let bytes: Uint8Array = Uint8Array.new([0, 15, 255, 171, 205]);
+  assert(bytes.toHex() === "000fffabcd", "toHex lowercase");
+
+  let back: Uint8Array = Uint8Array.fromHex("000fffabcd");
+  assert(back.equals(bytes), "fromHex round-trip");
+
+  let mixed: Uint8Array = Uint8Array.fromHex("ABCDef01");
+  assert(mixed[0] === 171, "mixed case byte 0");
+  assert(mixed[1] === 205, "mixed case byte 1");
+  assert(mixed[2] === 239, "mixed case byte 2");
+  assert(mixed[3] === 1, "mixed case byte 3");
+
+  let empty: Uint8Array = Uint8Array.alloc(0);
+  assert(empty.toHex() === "", "empty → empty");
+  assert(Uint8Array.fromHex("").length === 0, "empty decode");
+
+  let one: Uint8Array = Uint8Array.new([42]);
+  assert(one.toHex() === "2a", "42 → 2a");
+}

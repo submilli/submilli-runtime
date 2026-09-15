@@ -1,0 +1,8 @@
+// expect-error: field `bogus` does not exist on `Response`
+
+import { get, Response } from "submilli:http";
+
+function main(): void {
+  const r: Response = get("https://example.test/");
+  const _x = r.bogus;
+}

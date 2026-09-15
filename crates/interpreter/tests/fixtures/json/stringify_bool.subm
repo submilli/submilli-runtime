@@ -1,0 +1,4 @@
+function main(): void {
+  assert(JSON.stringify(true) === "true", "stringify(true)");
+  assert(JSON.stringify(false) === "false", "stringify(false)");
+}

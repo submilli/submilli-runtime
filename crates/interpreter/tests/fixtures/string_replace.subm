@@ -1,0 +1,52 @@
+// (regex-arm) + (string-arm) — String#replace
+// and String#replaceAll.
+
+function main(): void {
+  const re: RegExp = new RegExp("[0-9]+", "");
+  assert("a1b2c3".replace(re, "X") === "aXb2c3", "regex first match");
+  assert("a1b2c3".replaceAll(re, "X") === "aXbXcX", "regex all matches");
+
+  const cap: RegExp = new RegExp("(\\w+)@(\\w+)", "");
+  assert(
+    "user@example".replace(cap, "$2/$1") === "example/user",
+    "regex numbered captures"
+  );
+
+  assert("hello".replace(re, "X") === "hello", "regex no match — replace");
+  assert("hello".replaceAll(re, "X") === "hello", "regex no match — replaceAll");
+
+  assert("hello world".replace(/o/g, "0") === "hell0 w0rld", "/g/ replaces all");
+  assert("ababab".replace(/a/g, "X") === "XbXbXb", "/g/ replaces every match");
+  assert("hello world".replace(/o/, "0") === "hell0 world", "no /g/ — first only");
+  const reG: RegExp = new RegExp("[0-9]+", "g");
+  assert("a1b2c3".replace(reG, "X") === "aXbXcX", "constructed /g/ replaces all");
+
+  assert("a1b1c".replace("1", "X") === "aXb1c", "string first match");
+  assert("abc".replace("x", "Y") === "abc", "string no match — replace");
+  assert("abc".replace("", "X") === "Xabc", "empty search — replace");
+
+  assert("a-b".replace("-", "$$") === "a$b", "string $$ literal");
+  assert("abc".replace("b", "[$&]") === "a[b]c", "string $& matched");
+  assert("abc".replace("b", "[$`]") === "a[a]c", "string $` prefix");
+  assert("abc".replace("b", "[$']") === "a[c]c", "string $' suffix");
+  assert("abc".replace("b", "Z") === "aZc", "string no-token fast path");
+  assert("a-b".replace("-", "$1") === "a$1b", "string $1 literal (no captures)");
+
+  // `$&` = "<<" (the match), `$`` = "" (empty prefix at index 0).
+  assert(
+    "<<x>>".replace("<<", "$&{$`}") === "<<{}x>>",
+    "string $& + $` combination"
+  );
+
+  const search: string | RegExp = "x";
+  assert(
+    "axbxc".replace(search, "Y") === "aYbxc",
+    "narrowed union — string-arm replace"
+  );
+
+  const searchRe: string | RegExp = new RegExp("x", "");
+  assert(
+    "axbxc".replace(searchRe, "Y") === "aYbxc",
+    "narrowed union — regex-arm replace"
+  );
+}

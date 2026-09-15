@@ -1,0 +1,8 @@
+function main(): void {
+  const a: Temporal.Instant = Temporal.Instant.from("2024-03-09T15:30:45.123Z");
+  const b: Temporal.Instant = Temporal.Instant.from("2024-03-09T15:30:45.123Z");
+  const c: Temporal.Instant = Temporal.Instant.from("2024-03-09T15:30:45.124Z");
+
+  assert(a.equals(b), "Instants parsed from the same ISO compare equal");
+  assert(!a.equals(c), "Instants 1ms apart compare unequal");
+}

@@ -1,0 +1,16 @@
+enum Level {
+  Info,
+  Warn,
+  Error,
+}
+
+function isInfo(level: Level = Level.Info): boolean {
+  return level === Level.Info;
+}
+
+function main(): void {
+  assert(isInfo(), "enum-variant default fills in at omitted call");
+  assert(!isInfo(Level.Warn), "explicit variant overrides default");
+  assert(!isInfo(Level.Error), "another explicit variant overrides default");
+  assert(isInfo(Level.Info), "explicit matching variant still equals");
+}

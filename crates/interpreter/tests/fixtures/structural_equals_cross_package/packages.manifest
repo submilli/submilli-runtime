@@ -1,0 +1,6 @@
+# Structural `===` across SEPARATE packages: each module emits its own
+# field-names globals, so the equals shape guard's `ref.eq` fast path misses
+# and the per-name string compare must still find the shapes equal.
+# name           dir       deps          root
+@test/points     points    -
+main             app       @test/points  root

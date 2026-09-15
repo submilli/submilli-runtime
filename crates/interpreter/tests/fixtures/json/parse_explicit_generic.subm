@@ -1,0 +1,7 @@
+function main(): void {
+  const n = JSON.parse("42") as number;
+  assert(n === 42, "parse as number");
+
+  const s = JSON.parse("\"x\"") as string;
+  assert(s === "x", "parse as string");
+}

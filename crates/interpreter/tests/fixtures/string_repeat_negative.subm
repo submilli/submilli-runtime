@@ -1,0 +1,19 @@
+// `String#repeat` with a negative count raises a catchable Error; zero (or an
+// empty receiver) still yields the empty string.
+
+function main(): void {
+  // A computed count keeps the negative value out of any constant folding.
+  let n: number = -1;
+  let err: string = "<none>";
+  try {
+    const s: string = "ab".repeat(n);
+    assert(false, "negative repeat should throw");
+  } catch (e: Error) {
+    err = e.message;
+  }
+  assert(err.length > 0, "String#repeat negative count throws a catchable Error");
+
+  assert("ab".repeat(0) === "", "repeat(0) returns the empty string");
+  assert("".repeat(3) === "", "repeat of empty receiver is empty");
+  assert("ab".repeat(3) === "ababab", "positive repeat still works");
+}

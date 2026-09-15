@@ -1,0 +1,17 @@
+// A recursive *union* alias — the JSON-value shape. Recursion runs
+// through the `Json[]` member: a `Json[]` is itself a valid `Json`, so
+// arrays nest arbitrarily. Exercises the coinductive assignability that
+// expands the recursion back-edge by name.
+type Json = number | string | boolean | Json[];
+
+function main(): void {
+  const inner: Json[] = [1, 2, 3];
+  // `inner` (a `Json[]`) is admissible as an element of another
+  // `Json[]` because `Json[] <: Json`.
+  const outer: Json[] = [inner, "x", 42, true];
+  assert(Array.isArray(outer), "outer is an array");
+  assert(outer.length === 4, "four elements");
+
+  const first: Json = outer[0];
+  assert(Array.isArray(first), "first element is a nested Json array");
+}

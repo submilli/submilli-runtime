@@ -1,0 +1,16 @@
+type Point = { x: number; y: number };
+
+function makePoint(x: number, y: number): Point {
+  return { x: x, y: y };
+}
+
+function distance_squared(p: Point): number {
+  return p.x * p.x + p.y * p.y;
+}
+
+function main(): void {
+  const p: Point = makePoint(3, 4);
+  assert(p.x === 3, "alias field x");
+  assert(p.y === 4, "alias field y");
+  assert(distance_squared(p) === 25, "alias flows through function param");
+}

@@ -1,0 +1,3 @@
+{
+  "extends": "./.submilli/tsconfig.submilli.json"
+}

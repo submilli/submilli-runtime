@@ -1,0 +1,6 @@
+# A local class extending a dependency class carries the parent's members in its
+# payload, so their closure-typed parameters, returns and accessor types need
+# rec-group entries here — and nothing in this package names those shapes.
+# name        dir    deps        root
+@test/base    base   -
+main          app    @test/base  root

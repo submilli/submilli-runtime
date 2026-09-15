@@ -1,0 +1,10 @@
+// Aliased strings passed to host calls must unwrap to `$rawString`; Wasm validation
+// rejects an aliased type in the host import signature.
+
+type S = string;
+
+function main(): void {
+  const x: S = "hello";
+  console.log(x);
+  assert(x === "hello", "aliased-string value preserved across host call");
+}

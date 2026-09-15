@@ -1,0 +1,24 @@
+function main(): void {
+  const enc = new TextEncoder();
+  const dec = new TextDecoder();
+
+  const bytes = enc.encode("hello");
+  assert(bytes.length === 5, "ASCII = 1 byte per codepoint");
+  assert(bytes[0] === 104, "'h' = 0x68");
+  assert(bytes[1] === 101, "'e' = 0x65");
+  assert(bytes[2] === 108, "'l' = 0x6c");
+  assert(bytes[3] === 108, "'l'");
+  assert(bytes[4] === 111, "'o' = 0x6f");
+
+  const back = dec.decode(bytes);
+  assert(back === "hello", "round-trips losslessly");
+
+  const empty = enc.encode("");
+  assert(empty.length === 0, "empty string → empty bytes");
+  assert(dec.decode(empty) === "", "empty bytes → empty string");
+
+  // Captured constructor pattern (proves InterfaceRef value flow).
+  const c = TextEncoder;
+  const more = c.new().encode("hi");
+  assert(more.length === 2, "namespace value captured");
+}

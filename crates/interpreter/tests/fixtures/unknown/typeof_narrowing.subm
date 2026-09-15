@@ -1,0 +1,18 @@
+function main(): void {
+  const s: unknown = "hello";
+  if (typeof s === "string") {
+    assert(s.length === 5, "string narrowing");
+  }
+
+  const n: unknown = 42;
+  if (typeof n === "number") {
+    assert(n + 8 === 50, "number narrowing");
+  }
+
+  const b: unknown = true;
+  if (typeof b === "boolean") {
+    if (b) {
+      assert(true, "boolean narrowing reached");
+    }
+  }
+}

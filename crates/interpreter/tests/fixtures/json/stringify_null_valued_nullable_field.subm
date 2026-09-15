@@ -1,0 +1,22 @@
+// A required `T | null` field whose value is null must serialize as `null`,
+// not trap. Same for a `(T | null)[]` element that is null. (SUB-337)
+
+type R = { age: number | null };
+
+function main(): void {
+  const r: R = { age: null };
+  assert(JSON.stringify(r) === "{\"age\":null}", "null-valued nullable field");
+
+  const r2: R = { age: 7 };
+  assert(JSON.stringify(r2) === "{\"age\":7}", "non-null nullable field");
+
+  // Multiple fields: the null value still participates in comma placement.
+  const m: { a: number, b: string | null } = { a: 1, b: null };
+  assert(JSON.stringify(m) === "{\"a\":1,\"b\":null}", "null after non-null");
+
+  const m2: { a: number | null, b: number } = { a: null, b: 2 };
+  assert(JSON.stringify(m2) === "{\"a\":null,\"b\":2}", "null before non-null");
+
+  const arr: Array<number | null> = [1, null, 3];
+  assert(JSON.stringify(arr) === "[1,null,3]", "null array element");
+}

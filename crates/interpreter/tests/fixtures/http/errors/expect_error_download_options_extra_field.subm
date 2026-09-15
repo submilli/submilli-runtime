@@ -1,0 +1,11 @@
+// expect-error: object literal has unknown field `completedAt` for the target type
+// expect-error: valid fields: `decompress`, `headers`, `maxBytes`, `overwrite`, `timeout`
+// expect-error: remove `completedAt` or rename it to a valid field
+
+import http from "submilli:http";
+
+function main(): void {
+  const _r = http.download("https://example.test/file.txt", "/file.txt", {
+    completedAt: "2026-01-01",
+  });
+}

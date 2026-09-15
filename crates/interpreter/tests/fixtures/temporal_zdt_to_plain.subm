@@ -1,0 +1,26 @@
+// ZonedDateTime projects its wall-clock fields onto the tz-free Plain* family.
+
+function main(): void {
+  const z: Temporal.ZonedDateTime = Temporal.ZonedDateTime.from(
+    "2024-03-09T15:30:45-05:00[America/New_York]"
+  );
+
+  const d: Temporal.PlainDate = z.toPlainDate();
+  assert(d.year === 2024, "year");
+  assert(d.month === 3, "month");
+  assert(d.day === 9, "day");
+  assert(d.toString() === "2024-03-09", "PlainDate ISO");
+
+  const t: Temporal.PlainTime = z.toPlainTime();
+  assert(t.hour === 15, "hour");
+  assert(t.minute === 30, "minute");
+  assert(t.second === 45, "second");
+  assert(t.nanosecond === 0, "nanosecond");
+
+  const dt: Temporal.PlainDateTime = z.toPlainDateTime();
+  assert(dt.year === 2024, "dt year");
+  assert(dt.day === 9, "dt day");
+  assert(dt.hour === 15, "dt hour");
+  assert(dt.second === 45, "dt second");
+  assert(dt.toString() === "2024-03-09T15:30:45", "PlainDateTime ISO");
+}

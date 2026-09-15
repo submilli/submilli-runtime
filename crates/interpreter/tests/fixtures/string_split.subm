@@ -1,0 +1,85 @@
+function main(): void {
+  const ws: RegExp = new RegExp("[ ]+", "");
+  const parts: string[] = "the  quick   brown   fox".split(ws);
+  assert(parts.length === 4, "split into 4 parts");
+  assert(parts[0] === "the", "part 0");
+  assert(parts[1] === "quick", "part 1");
+  assert(parts[2] === "brown", "part 2");
+  assert(parts[3] === "fox", "part 3");
+
+  const csv: RegExp = new RegExp(",", "");
+  const single: string[] = "abc".split(csv);
+  assert(single.length === 1, "no-match → one element");
+  assert(single[0] === "abc", "whole input");
+
+  const emptyRe: RegExp = new RegExp("", "");
+  const chars: string[] = "abc".split(emptyRe);
+  assert(chars.length >= 3, "empty regex splits into individual chars");
+
+  const csvParts: string[] = "a,b,c,d".split(",");
+  assert(csvParts.length === 4, "csv split count");
+  assert(csvParts[0] === "a", "csv 0");
+  assert(csvParts[1] === "b", "csv 1");
+  assert(csvParts[2] === "c", "csv 2");
+  assert(csvParts[3] === "d", "csv 3");
+
+  const oneOnly: string[] = "abc".split("x");
+  assert(oneOnly.length === 1, "string no-match → one element");
+  assert(oneOnly[0] === "abc", "string no-match whole input");
+
+  const emptyInput: string[] = "".split("x");
+  assert(emptyInput.length === 1, "empty input → one element");
+  assert(emptyInput[0] === "", "empty input → empty string");
+
+  const each: string[] = "abc".split("");
+  assert(each.length === 3, "empty-sep split count");
+  assert(each[0] === "a", "char 0");
+  assert(each[1] === "b", "char 1");
+  assert(each[2] === "c", "char 2");
+
+  const noChars: string[] = "".split("");
+  assert(noChars.length === 0, "empty input + empty sep → []");
+
+  const edges: string[] = "xax".split("x");
+  assert(edges.length === 3, "leading/trailing edges");
+  assert(edges[0] === "", "leading empty");
+  assert(edges[1] === "a", "middle");
+  assert(edges[2] === "", "trailing empty");
+
+  const adjacent: string[] = "axxxa".split("x");
+  assert(adjacent.length === 4, "adjacent seps");
+  assert(adjacent[0] === "a", "before first x");
+  assert(adjacent[1] === "", "between 1st-2nd x");
+  assert(adjacent[2] === "", "between 2nd-3rd x");
+  assert(adjacent[3] === "a", "after last x");
+
+  const truncated: string[] = "a,b,c,d".split(",", 2);
+  assert(truncated.length === 2, "limit truncated count");
+  assert(truncated[0] === "a", "trunc 0");
+  assert(truncated[1] === "b", "trunc 1");
+
+  const exact: string[] = "a,b,c".split(",", 3);
+  assert(exact.length === 3, "limit exact");
+  assert(exact[2] === "c", "trailing kept");
+
+  const over: string[] = "a,b".split(",", 5);
+  assert(over.length === 2, "limit over natural");
+
+  const zero: string[] = "a,b,c".split(",", 0);
+  assert(zero.length === 0, "limit 0 → []");
+
+  const charCap: string[] = "abcdef".split("", 3);
+  assert(charCap.length === 3, "empty sep + limit");
+  assert(charCap[0] === "a", "cap char 0");
+  assert(charCap[2] === "c", "cap char 2");
+
+  const reLimit: string[] = "a,b,c,d".split(new RegExp(",", ""), 2);
+  assert(reLimit.length === 2, "regex limit");
+  assert(reLimit[0] === "a", "regex trunc 0");
+  assert(reLimit[1] === "b", "regex trunc 1");
+
+  const sep: string | RegExp = ",";
+  const narrowed: string[] = "p,q,r".split(sep);
+  assert(narrowed.length === 3, "narrowed union → string-arm");
+  assert(narrowed[0] === "p", "narrowed 0");
+}

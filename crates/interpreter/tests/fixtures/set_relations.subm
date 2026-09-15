@@ -1,0 +1,28 @@
+function setOf(values: number[]): Set<number> {
+  const s = new Set<number>();
+  for (const v of values) {
+    s.add(v);
+  }
+  return s;
+}
+
+function main(): void {
+  const small = setOf([1, 2]);
+  const big = setOf([1, 2, 3]);
+  const other = setOf([4, 5]);
+
+  assert(small.isSubsetOf(big), "subset holds");
+  assert(!big.isSubsetOf(small), "strict superset is not a subset");
+  assert(big.isSubsetOf(big), "every set is a subset of itself");
+
+  assert(big.isSupersetOf(small), "superset holds");
+  assert(!small.isSupersetOf(big), "strict subset is not a superset");
+
+  assert(small.isDisjointFrom(other), "no shared elements");
+  assert(!small.isDisjointFrom(big), "overlap is not disjoint");
+
+  const empty = new Set<number>();
+  assert(empty.isSubsetOf(small), "empty set is a subset of anything");
+  assert(small.isSupersetOf(empty), "anything is a superset of the empty set");
+  assert(empty.isDisjointFrom(small), "empty set is disjoint from anything");
+}

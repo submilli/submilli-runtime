@@ -1,0 +1,20 @@
+function pick0(t: [string, string] | [number, number]): string | number {
+  return t[0];
+}
+
+function main(): void {
+  const ss: [string, string] = ["hi", "there"];
+  const nn: [number, number] = [3, 4];
+  const r_ss: string | number = pick0(ss);
+  const r_nn: string | number = pick0(nn);
+  if (typeof r_ss === "string") {
+    assert(r_ss === "hi", "ss[0] is \"hi\"");
+  } else {
+    assert(false, "ss[0] should narrow to string");
+  }
+  if (typeof r_nn === "number") {
+    assert(r_nn === 3, "nn[0] is 3");
+  } else {
+    assert(false, "nn[0] should narrow to number");
+  }
+}

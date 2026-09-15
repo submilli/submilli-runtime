@@ -1,0 +1,1341 @@
+use crate::typechecker::infer::narrowing::{CastInfo, ReferencePath};
+use crate::{BinOp, BindingKind, ExprId, Ident, MangledName, Span, StmtId, Type, UnOp};
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TypedExpr {
+    pub kind: TypedExprKind,
+    pub span: Span,
+    pub ty: Type,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum TypedExprKind {
+    Number(f64),
+    /// bigint literal — no `n` suffix, no sign; negatives are `Unary { Neg, … }`.
+    BigInt(String),
+    String(String),
+    Boolean(bool),
+    Null,
+    /// `this` inside a class method or constructor body. A leaf; `TypedExpr.ty`
+    /// carries the enclosing class's `Type::ClassRef`. Codegen lowers it to
+    /// `local.get <this-slot>` (the receiver param for methods, the allocated
+    /// instance local for constructors).
+    This,
+    Regex {
+        source: String,
+        flags: String,
+    },
+    LocalRef {
+        ident: Ident,
+        boxed: bool,
+    },
+    /// Narrowed shadow of a `LocalRef`/`GlobalRef`. `binding` holds the synthetic
+    /// `#narrow_<N>` ident so tooling can recover `path` without string-matching the
+    /// `#` prefix. No `boxed` field — shadows are region-scoped and never mutated.
+    LocalNarrowRef {
+        binding: Ident,
+        path: crate::typechecker::infer::narrowing::ReferencePath,
+    },
+    GlobalRef {
+        mangled: MangledName,
+        name: Ident,
+    },
+    /// Distinct from `GlobalRef` — codegen lowers to a closure adapter, not `global.get`.
+    FunctionRef {
+        mangled: MangledName,
+        name: Ident,
+    },
+    /// Evaluate `effect`, discard its value, then yield `result`.
+    ///
+    /// No surface syntax lowers to this — the comma operator is out of scope.
+    /// It exists so a fold that decides an expression's *value* statically can
+    /// still keep the computation that produced the operand: `typeof f() ===
+    /// "number"` has a constant answer when `f`'s return type decides the tag,
+    /// but JS evaluates the operand either way.
+    EffectThen {
+        effect: ExprId,
+        result: ExprId,
+    },
+    Binary {
+        op: BinOp,
+        lhs: ExprId,
+        rhs: ExprId,
+    },
+    Unary {
+        op: UnOp,
+        operand: ExprId,
+    },
+    /// Static dispatch. Closure-through-value invocation goes through `CallClosure` instead.
+    Call {
+        mangled: MangledName,
+        args: Vec<ExprId>,
+        /// Type guard predicate from callee's signature; codegen ignores it.
+        type_predicate: Option<Box<crate::TypePredicate>>,
+    },
+    /// `call_ref` dispatch; distinct from `Call` (direct `call` instruction).
+    CallClosure {
+        callee: ExprId,
+        args: Vec<ExprId>,
+    },
+    /// `@mcp/<server>.<tool>(args)` — dispatched through the single
+    /// `submilli:mcp.call` host fn rather than a per-tool import. Carries the
+    /// server and tool names directly, so codegen needs no mangled-name parsing.
+    /// The result type (on the containing `TypedExpr`) drives how the returned JSON
+    /// text is materialized (a `string`, or a typed value via the `JSON.parse`
+    /// validator).
+    McpCall {
+        server: String,
+        tool: String,
+        args: Vec<ExprId>,
+    },
+    /// Callee signature has bare `Type::TypeVar` slots. Per-position `is_generic` flags
+    /// and `return_cast` drive box/cast at the call boundary. Always statically dispatched
+    /// (no generic closures).
+    GenericCall {
+        mangled: MangledName,
+        args: Vec<GenericArgument>,
+        /// `Some(T)` when the unsubstituted return is a bare `TypeVar`; codegen emits a
+        /// cast to materialize the call-site type. `None` when return is already concrete.
+        return_cast: Option<crate::Type>,
+        type_predicate: Option<Box<crate::TypePredicate>>,
+    },
+    /// Intrinsic recognised by name in the inferer; bypasses the normal `Call` path.
+    IntrinsicCall {
+        kind: Intrinsic,
+        args: Vec<ExprId>,
+    },
+    /// Interface method dispatch. Codegen composes `<iface>#<name>` to find the
+    /// direct-dispatch thunk, falling back to vtable dispatch.
+    MethodCall {
+        receiver: ExprId,
+        iface: MangledName,
+        name: Ident,
+        args: Vec<ExprId>,
+        type_predicate: Option<Box<crate::TypePredicate>>,
+    },
+    /// `super(...)` in a subclass constructor: a direct call of the parent's
+    /// constructor *init* fn on the current `this` (self-first ABI). Codegen
+    /// pushes `this` then the args. Type is `Void`.
+    SuperCtorCall {
+        parent: MangledName,
+        args: Vec<ExprId>,
+    },
+    /// `super.method(...)`: a direct call of the parent body that *declares* the
+    /// method (`owner`), skipping vtable dispatch so it doesn't re-resolve to the
+    /// override. Codegen pushes `this` then the args.
+    SuperMethodCall {
+        owner: MangledName,
+        name: Ident,
+        args: Vec<ExprId>,
+    },
+    /// `MethodSig` has a bare `TypeVar` in args or return. HOF methods (`map`, `filter`, …)
+    /// with `TypeVar` only inside composites stay as plain `MethodCall`. Variadic trailing
+    /// args are pre-packed by the typechecker, so `args.len()` always matches `params.len()` 1:1.
+    GenericMethodCall {
+        receiver: ExprId,
+        iface: MangledName,
+        name: Ident,
+        args: Vec<GenericArgument>,
+        return_cast: Option<crate::Type>,
+        /// Guard predicate after type-arg substitution; codegen ignores it.
+        type_predicate: Option<Box<crate::TypePredicate>>,
+    },
+    /// `fields` is in `Type::Object` BTreeMap order; all spread resolution happened at
+    /// typecheck time, no merge logic in codegen.
+    ObjectLiteral {
+        spread_sources: Vec<ExprId>,
+        fields: Vec<TypedObjectFieldOrigin>,
+    },
+    /// `element_ty` lets codegen pick the wrapper struct's element type without re-running inference.
+    ArrayLiteral {
+        elements: Vec<TypedArrayElement>,
+        element_ty: Type,
+    },
+    /// Same source syntax as `ArrayLiteral`; emitted when the expected type is `Type::Tuple`.
+    /// `element_types` drives per-slot boxing in codegen.
+    TupleLiteral {
+        elements: Vec<ExprId>,
+        element_types: Vec<Type>,
+    },
+    FieldAccess {
+        receiver: ExprId,
+        name: Ident,
+    },
+    /// Distinct from `FieldAccess` — codegen composes `<iface>#<name>` rather than a struct field offset.
+    InterfacePropertyAccess {
+        receiver: ExprId,
+        iface: MangledName,
+        name: Ident,
+    },
+    /// Enum name is a compile-time namespace with no runtime representation; `value` is
+    /// stored inline so codegen emits `i32.const N`.
+    NumberEnumMember {
+        enum_mangled: MangledName,
+        variant: Ident,
+        value: f64,
+    },
+    /// Codegen emits a string-pool reference rather than `i32.const`.
+    StringEnumMember {
+        enum_mangled: MangledName,
+        variant: Ident,
+        value: String,
+    },
+    IndexAccess {
+        receiver: ExprId,
+        index: ExprId,
+    },
+    /// `captured` is empty until the capture pass runs; codegen reads entries in order as env struct slots.
+    Closure {
+        params: Vec<TypedParam>,
+        return_type: Type,
+        body: ClosureBody,
+        captured: Vec<CapturedVar>,
+    },
+    /// `typeof x === "<tag>"` check. Distinct from `Is` so primitive type-test codegen
+    /// stays free of vtable/shape-disjunction logic (`Object` and `Function` need both).
+    TypeofTag {
+        value: ExprId,
+        tag: TypeofTagKind,
+    },
+    /// Wraps the dependent side of `&&`/`||`/ternary. See `docs/narrowing.md` primitive #6.
+    Narrowed {
+        path: ReferencePath,
+        source: ExprId,
+        binding: Ident,
+        cast_info: CastInfo,
+        inner: ExprId,
+    },
+    /// Narrowing on `cond` flows into `then_` (true env) and `else_` (false env).
+    Ternary {
+        cond: ExprId,
+        then_: ExprId,
+        else_: ExprId,
+    },
+    /// `a ?? b`. Result type is `union(strip_null(lhs.ty), rhs.ty)`.
+    NullishCoalesce {
+        lhs: ExprId,
+        rhs: ExprId,
+    },
+    /// Each part carries `result_ty` so codegen steps through without re-running inference.
+    /// Containing `TypedExpr.ty` is `union(tail_result_ty, Null)`.
+    OptionalChain {
+        base: ExprId,
+        parts: Vec<TypedChainPart>,
+    },
+    /// Statement-position uses are desugared into `AssignLocal`/`AssignGlobal`/etc. before
+    /// codegen; only expression-position uses reach here.
+    PostfixUnary {
+        op: crate::PostfixOp,
+        target: PostfixTarget,
+    },
+    /// `value!` — runtime-checked non-null assertion. Throws `Error` on `null`.
+    NonNullAssert {
+        value: ExprId,
+    },
+    /// `value as target_ty`. `check` carries the structural shape to validate at runtime
+    /// (the target with interfaces reduced to object shapes) when the source isn't a static
+    /// subtype of the target; `None` for a statically-proven upcast (repr-only narrow, no
+    /// runtime test).
+    Cast {
+        value: ExprId,
+        target_ty: Type,
+        check: Option<Box<Type>>,
+    },
+    /// `x instanceof Foo` — lowers to `ref.test (ref $Foo)`. `class` is the resolved
+    /// `Type::ClassRef`; the result type is `boolean`.
+    InstanceOf {
+        value: ExprId,
+        class: Type,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PostfixTarget {
+    /// `boxed` is set by Capture when an inner closure references this binding.
+    Local {
+        ident: Ident,
+        boxed: bool,
+        target_ty: Type,
+    },
+    /// Only `let` globals; `const` global targets are rejected by the inferer.
+    Global {
+        name: Ident,
+        mangled: MangledName,
+        target_ty: Type,
+    },
+    /// Receiver is cached in an anonymous local to avoid double-evaluating side effects.
+    Field {
+        receiver: ExprId,
+        name: Ident,
+        target_ty: Type,
+    },
+    /// Both `receiver` and `index` are cached in anonymous locals to avoid double-evaluation.
+    Index {
+        receiver: ExprId,
+        index: ExprId,
+        elem_ty: Type,
+    },
+}
+
+/// `optional` drives short-circuit codegen; `result_ty` is the type after this part, without `| null`.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TypedChainPart {
+    Field {
+        name: Ident,
+        optional: bool,
+        result_ty: Type,
+        span: Span,
+    },
+    InterfaceProperty {
+        iface: MangledName,
+        name: Ident,
+        optional: bool,
+        result_ty: Type,
+        span: Span,
+    },
+    Index {
+        idx: ExprId,
+        optional: bool,
+        result_ty: Type,
+        span: Span,
+    },
+    Call {
+        args: Vec<ExprId>,
+        optional: bool,
+        result_ty: Type,
+        span: Span,
+    },
+    MethodCall {
+        iface: MangledName,
+        name: Ident,
+        args: Vec<ExprId>,
+        optional: bool,
+        result_ty: Type,
+        span: Span,
+    },
+    /// `!` applied to the step before it. A runtime-checked narrowing that throws
+    /// `TypeError` on null, matching the non-chain `NonNullAssert` — not TS's
+    /// unchecked assertion.
+    NonNull { result_ty: Type, span: Span },
+}
+
+impl TypedChainPart {
+    /// The type this step yields, which is the next step's receiver.
+    pub fn result_ty(&self) -> &Type {
+        match self {
+            TypedChainPart::Field { result_ty, .. }
+            | TypedChainPart::InterfaceProperty { result_ty, .. }
+            | TypedChainPart::Index { result_ty, .. }
+            | TypedChainPart::Call { result_ty, .. }
+            | TypedChainPart::MethodCall { result_ty, .. }
+            | TypedChainPart::NonNull { result_ty, .. } => result_ty,
+        }
+    }
+
+    /// Replaces the type this step yields. Used when a chain step's path turns
+    /// out to be narrowed: the step reads at the narrowed type, not the declared
+    /// one, and the next step's receiver follows.
+    pub fn set_result_ty(&mut self, ty: Type) {
+        match self {
+            TypedChainPart::Field { result_ty, .. }
+            | TypedChainPart::InterfaceProperty { result_ty, .. }
+            | TypedChainPart::Index { result_ty, .. }
+            | TypedChainPart::Call { result_ty, .. }
+            | TypedChainPart::MethodCall { result_ty, .. }
+            | TypedChainPart::NonNull { result_ty, .. } => *result_ty = ty,
+        }
+    }
+
+    /// Whether this step short-circuits on a null receiver (`?.`).
+    pub fn is_optional(&self) -> bool {
+        match self {
+            TypedChainPart::Field { optional, .. }
+            | TypedChainPart::InterfaceProperty { optional, .. }
+            | TypedChainPart::Index { optional, .. }
+            | TypedChainPart::Call { optional, .. }
+            | TypedChainPart::MethodCall { optional, .. } => *optional,
+            TypedChainPart::NonNull { .. } => false,
+        }
+    }
+}
+
+/// `is_generic` = the callee's unsubstituted slot was a bare `TypeVar`; codegen emits `cast::emit_box` when set.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GenericArgument {
+    pub expr: ExprId,
+    pub is_generic: bool,
+}
+
+/// `boxed: true` — env stores `(ref $box T)`, mutations go through box (let/param captures).
+/// `boxed: false` — env stores the value directly (const captures, copied at construction).
+#[derive(Clone, Debug, PartialEq)]
+pub struct CapturedVar {
+    pub name: Ident,
+    pub ty: Type,
+    pub boxed: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ClosureBody {
+    Expr(ExprId),
+    Block(StmtId),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TypedObjectLiteralField {
+    pub name: Ident,
+    pub value: ExprId,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TypedObjectFieldOrigin {
+    pub name: Ident,
+    pub source: TypedObjectFieldSource,
+    /// Carried so the shape collector and codegen build the object's struct
+    /// with the right optional flags — an absent optional must read back null
+    /// and be omitted by `JSON.stringify`, not materialized as a `null` slot.
+    pub optional: bool,
+    /// The field's declared type, not the source value's type. They diverge for
+    /// a null-filled optional field (value is `Type::Null`, declared type is the
+    /// real type) and for a literal widened to its hint. The shape collector and
+    /// codegen must build the object's struct — and its `TypeInfo` — from this so
+    /// `JSON.stringify` serializes by the declared type, not the fill value.
+    pub ty: Type,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum TypedObjectFieldSource {
+    Literal(ExprId),
+    /// `source_ty` is the spread's `Type::Object` so codegen can index by BTreeMap order.
+    Spread {
+        source_index: usize,
+        field_name: String,
+        source_ty: Type,
+    },
+}
+
+impl TypedObjectFieldSource {
+    pub fn literal_expr_id(&self) -> Option<ExprId> {
+        match self {
+            TypedObjectFieldSource::Literal(id) => Some(*id),
+            TypedObjectFieldSource::Spread { .. } => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum TypedArrayElement {
+    Value(ExprId),
+    Spread(ExprId),
+}
+
+impl TypedArrayElement {
+    pub fn expr_id(&self) -> ExprId {
+        match self {
+            TypedArrayElement::Value(id) | TypedArrayElement::Spread(id) => *id,
+        }
+    }
+}
+
+/// `"undefined"` is unsupported — Submilli has no `undefined`.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum TypeofTagKind {
+    Number,
+    String,
+    Boolean,
+    /// `"object"` — includes `null` (the JS quirk) and arrays; excludes functions.
+    Object,
+    /// `"function"` — vtable equality check against shared `closure_vtable` global.
+    Function,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Intrinsic {
+    /// `assert(cond, msg)` — `unreachable` on false; will throw `Error` post-exceptions.
+    Assert,
+    /// `JSON.stringify(x)` — only the call form is accepted; bare `JSON` ref is rejected.
+    JsonStringify,
+    /// `JSON.parse(s)` — returns `unknown`; use `as T` for runtime validation.
+    JsonParse,
+    /// `BigInt.fromString(s)` — decimal parse via `submilli:bigint.fromString`; throws on failure.
+    BigIntFromString,
+}
+
+impl Intrinsic {
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "assert" => Some(Intrinsic::Assert),
+            _ => None,
+        }
+    }
+
+    /// `JsonStringify` uses `Type::Error` as the value slot — typechecker accepts any
+    /// non-`void` arg; only diagnostic formatting reads this.
+    pub fn params(self) -> Vec<crate::Param> {
+        use crate::{Param, Type};
+        match self {
+            Intrinsic::Assert => vec![
+                Param::new("condition", Type::Boolean),
+                Param {
+                    name: "message".to_string(),
+                    ty: Type::String,
+                    default: Some(crate::DefaultValue::String("assertion failed".to_string())),
+                    rest: false,
+                },
+            ],
+            Intrinsic::BigIntFromString => vec![Param::new("value", Type::String)],
+            Intrinsic::JsonStringify => vec![Param::new("value", Type::Error)],
+            Intrinsic::JsonParse => vec![Param::new("text", Type::String)],
+        }
+    }
+
+    /// `JsonParse` returns `unknown`.
+    pub fn ret(self) -> crate::Type {
+        match self {
+            Intrinsic::Assert => crate::Type::Void,
+            Intrinsic::BigIntFromString => crate::Type::BigInt,
+            Intrinsic::JsonStringify => crate::Type::String,
+            Intrinsic::JsonParse => crate::Type::Unknown,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Intrinsic::Assert => "assert",
+            Intrinsic::BigIntFromString => "BigInt.fromString",
+            Intrinsic::JsonStringify => "JSON.stringify",
+            Intrinsic::JsonParse => "JSON.parse",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TypedStmt {
+    pub kind: TypedStmtKind,
+    pub span: Span,
+}
+
+/// Resolved at typecheck time so desugar doesn't re-run assignability. `Iterable` subsumes
+/// `Map`/`Set` and any structurally-iterable interface.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ForOfKind {
+    Array,
+    Iterator,
+    Iterable,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum TypedStmtKind {
+    /// Function-local only; top-level `let` is in `TypedAst::globals`.
+    /// `ty` is the annotation when present, else the inferred type — annotation wins on mismatch.
+    Let {
+        name: Ident,
+        ty: Type,
+        value: ExprId,
+        boxed: bool,
+        doc: Option<crate::DocComment>,
+    },
+    /// Replace the box in `ident`'s slot with a fresh one holding the same value,
+    /// so closures created from here on capture a cell nothing before them shares.
+    ///
+    /// Only the `for` lowering emits this, for the per-iteration binding a `let`
+    /// head has in JS (ECMA-262 §14.7.4.4 CreatePerIterationEnvironment): each
+    /// pass gets its own copy, which is why `for (let i …) fns.push(() => i)`
+    /// yields `0,1,2` rather than three views of one slot. `ident` must name a
+    /// *boxed* binding — an unboxed one is captured by value, so there is
+    /// nothing to separate.
+    ReboxLocal {
+        ident: Ident,
+        ty: Type,
+    },
+    /// Captured `const` bindings are copied into the closure env (no `boxed` field).
+    /// Function-local only — see `Let`.
+    Const {
+        name: Ident,
+        ty: Type,
+        value: ExprId,
+        doc: Option<crate::DocComment>,
+    },
+    If {
+        condition: ExprId,
+        then_block: StmtId,
+        else_block: Option<StmtId>,
+    },
+    While {
+        condition: ExprId,
+        body: StmtId,
+    },
+    /// Pre-desugar; codegen never sees this variant.
+    For {
+        init: Option<StmtId>,
+        condition: Option<ExprId>,
+        update: Option<StmtId>,
+        body: StmtId,
+    },
+    /// Pre-desugar; codegen never sees this variant. `kind` lets desugar dispatch
+    /// without re-running assignability.
+    ForOf {
+        binding_kind: BindingKind,
+        name: Ident,
+        element_ty: Type,
+        iter: ExprId,
+        body: StmtId,
+        kind: ForOfKind,
+    },
+    /// Pre-desugar; lowers to a `while`-true whose head tests `cond` on every
+    /// pass but the first, so a `continue` still reaches the test.
+    DoWhile {
+        body: StmtId,
+        condition: ExprId,
+    },
+    /// Not lowered to if/else — first-class through desugar and codegen.
+    /// `discriminant_ty` drives dispatch strategy. Case bodies are wrapped in
+    /// `NarrowRegion` by the inferer for discriminated-union narrowing.
+    Switch {
+        discriminant: ExprId,
+        discriminant_ty: Type,
+        cases: Vec<TypedSwitchCase>,
+        default: Option<StmtId>,
+    },
+    Break,
+    /// Desugar injects the update step before the jump in `for`/`for-of`.
+    /// A switch frame on the loop-contexts stack is skipped so `continue` inside
+    /// `switch` reaches the enclosing loop.
+    Continue,
+    Return(Option<ExprId>),
+    /// `throw <expr>`. Value must be `Error`; diverges in control-flow analysis.
+    Throw {
+        value: ExprId,
+    },
+    /// `catches` dispatch in declaration order on the thrown value's nominal
+    /// class; an unmatched error re-raises. Codegen duplicates `finally` on
+    /// normal/caught/uncaught paths.
+    Try {
+        body: StmtId,
+        catches: Vec<TypedCatchClause>,
+        finally: Option<StmtId>,
+    },
+    Expr(ExprId),
+    Block(Vec<StmtId>),
+    /// Function-scope binding assignment. `target_ty` is the slot's declared type;
+    /// codegen coerces primitives into ref-typed slots (e.g. `number | null` boxes f64).
+    AssignLocal {
+        ident: Ident,
+        target_ty: Type,
+        value: ExprId,
+        boxed: bool,
+        /// When set, codegen materializes a shadow Wasm local of this narrowed type
+        /// alongside the slot write. Subsequent `LocalNarrowRef` reads resolve to the
+        /// shadow; it disappears at block exit.
+        narrowed_shadow_ty: Option<Type>,
+    },
+    /// `const` and function targets are rejected. `target_ty` mirrors `AssignLocal.target_ty` for codegen coercion.
+    AssignGlobal {
+        ident: Ident,
+        mangled: MangledName,
+        target_ty: Type,
+        value: ExprId,
+    },
+    AssignField {
+        receiver: ExprId,
+        name: Ident,
+        value: ExprId,
+    },
+    /// `elem_ty` is carried so codegen picks the boxing path without re-walking
+    /// the receiver's `Type`.
+    AssignIndex {
+        receiver: ExprId,
+        index: ExprId,
+        value: ExprId,
+        elem_ty: Type,
+    },
+    /// Wraps then/else blocks and switch case bodies. `path` is for diagnostics; codegen
+    /// consults only `source`, `cast_info`, `binding`, and `body`.
+    NarrowRegion {
+        path: ReferencePath,
+        source: ExprId,
+        binding: Ident,
+        cast_info: CastInfo,
+        body: StmtId,
+    },
+}
+
+/// `ty` is the binding's class type — the root `Error` class for untyped
+/// `catch (e)`, or the annotated `Error` subclass (which filters at runtime);
+/// `boxed` mirrors `Let.boxed` from the Capture pass.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TypedCatchClause {
+    pub binding: Ident,
+    pub ty: Type,
+    pub body: StmtId,
+    pub boxed: bool,
+    pub span: Span,
+}
+
+/// Multiple entries in `values` when consecutive `case` labels share a body.
+/// `body` is wrapped in `NarrowRegion` by the inferer for discriminated unions.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TypedSwitchCase {
+    pub values: Vec<TypedSwitchValue>,
+    pub body: StmtId,
+    pub span: Span,
+}
+
+/// Non-literals are rejected at typecheck. `span` anchors fallthrough and duplicate-case diagnostics.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TypedSwitchValue {
+    String {
+        value: String,
+        span: Span,
+    },
+    Number {
+        value: f64,
+        span: Span,
+    },
+    Boolean {
+        value: bool,
+        span: Span,
+    },
+    Null {
+        span: Span,
+    },
+    /// `value` is the lowered runtime representation.
+    Enum {
+        enum_name: MangledName,
+        member: Ident,
+        value: EnumVariantPayload,
+        span: Span,
+    },
+}
+
+/// Distinct from the top-level `Number`/`String` variants so the inferer can attach enum-identity diagnostics.
+#[derive(Clone, Debug, PartialEq)]
+pub enum EnumVariantPayload {
+    Number(f64),
+    String(String),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TypedParam {
+    pub name: Ident,
+    pub ty: Type,
+    /// Set by Capture when an inner closure captures this param. The Wasm signature
+    /// is unaffected — codegen emits a body prologue that wraps the arg into
+    /// `(ref $box T)` and shadows it; all subsequent reads/writes go through the box.
+    pub boxed: bool,
+    /// Callee sees `T[]`; call sites pre-pack trailing args. Only valid on the last param.
+    pub rest: bool,
+    /// Resolved default for an omitted argument, carried so `PackageDeclaration`
+    /// can export it — without it, cross-module calls can't omit the arg.
+    pub default: Option<crate::DefaultValue>,
+}
+
+#[derive(Default, Clone, Debug)]
+pub struct TypedAst {
+    /// Module name used for mangling. Defaults to `USER_PACKAGE` (`"main"`).
+    pub package_name: String,
+    exprs: Vec<TypedExpr>,
+    stmts: Vec<TypedStmt>,
+    /// Slot definitions only; initializers are `AssignGlobal` in `top_level_statements`.
+    pub globals: Vec<TypedGlobal>,
+    /// Top-level function declarations. Hoisted — codegen doesn't depend on source order.
+    pub functions: Vec<TypedFunction>,
+    /// Source-order `_start` body — currently one `AssignGlobal` per global initializer.
+    pub top_level_statements: Vec<StmtId>,
+    /// Type declarations (`interface`, `enum`) — no Wasm representation, no body.
+    /// Stored here so post-inference passes see member spans/types without re-exposing
+    /// the inferer's `TypeNamespace`.
+    pub types: Vec<TypedTypeDecl>,
+    /// Distinct anonymous shapes (`Object`, `Array`, `Union`) reachable from the module.
+    /// Built at end of inference; consumers read this instead of re-walking the AST.
+    pub shapes: Vec<crate::Shape>,
+    /// Public surface: one entry per `export`-marked declaration. Single source of
+    /// truth for visibility — `TypedFunction`/`TypedGlobal` carry no `is_exported`
+    /// flag. Built but not yet consumed for surface projection in single-file mode.
+    pub exports: Vec<ExportEntry>,
+    /// External package names that were resolved from explicit imports in this
+    /// module. This is deliberately package-level, not symbol-level: embedders
+    /// use it to install only the package modules the typed program imports.
+    pub imported_packages: std::collections::BTreeSet<String>,
+}
+
+/// A public export: maps a package-public mangled name onto the internal symbol
+/// it refers to. In single-file packages `public_name == target`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExportEntry {
+    pub public_name: MangledName,
+    pub target: MangledName,
+    pub kind: ExportKind,
+    /// Span of the `export` keyword (or re-export statement) that produced this entry.
+    pub span: Span,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExportKind {
+    Function,
+    Global,
+    Type,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TypedGlobal {
+    pub name: Ident,
+    pub mangled_name: MangledName,
+    pub ty: Type,
+    pub kind: GlobalKind,
+    pub doc: Option<crate::DocComment>,
+    pub span: Span,
+}
+
+/// Codegen treats both identically at the Wasm-global level; the inferer enforces the `const` write diagnostic.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum GlobalKind {
+    Let,
+    Const,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TypedFunction {
+    pub name: Ident,
+    pub mangled_name: MangledName,
+    /// Body is type-checked under `Type::GenericParam` instantiations then erased
+    /// to `Type::TypeVar` for the external view.
+    pub generics: Vec<String>,
+    pub params: Vec<TypedParam>,
+    pub return_type: Type,
+    /// Type guard predicate. When set, `return_type` is always `Type::Boolean`.
+    pub type_predicate: Option<crate::TypePredicate>,
+    pub body: StmtId,
+    pub doc: Option<crate::DocComment>,
+    pub span: Span,
+}
+
+/// Enums split by representation kind so the typed AST can't represent a mixed-kind enum.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TypedTypeDecl {
+    Interface(TypedInterfaceDecl),
+    Class(TypedClassDecl),
+    NumberEnum(TypedNumberEnumDecl),
+    StringEnum(TypedStringEnumDecl),
+    Alias(TypedTypeAliasDecl),
+}
+
+/// A typechecked class. Method/constructor bodies are checked in the class-body
+/// pass; codegen (SUB-480+) consumes the field layout, body IDs, and signatures.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TypedClassDecl {
+    pub name: Ident,
+    pub fields: Vec<TypedClassField>,
+    pub constructor: Option<TypedClassConstructor>,
+    /// The signature a class with no `constructor` of its own exposes, taken
+    /// from the nearest ancestor that declares one with the `extends` clause's
+    /// type arguments already substituted. Empty when `constructor` is `Some`.
+    ///
+    /// This is what the package declaration exports and what a cross-package
+    /// consumer imports, so the emitted constructor must use it rather than
+    /// re-deriving the parent's unsubstituted parameters — the two disagree the
+    /// moment a subclass fixes a generic parent's type argument.
+    pub inherited_ctor_params: Vec<TypedParam>,
+    pub methods: Vec<TypedClassMethod>,
+    /// Accessor functions (`get`/`set`), one entry each — getter and setter are
+    /// symmetric, neither is required (a property may be get-only, set-only, or
+    /// both). They are *not* in `methods`; codegen synthesizes the vtable method
+    /// per entry (see `codegen::classes`).
+    pub accessors: Vec<TypedClassAccessor>,
+    pub extends: Option<crate::MangledName>,
+    pub implements: Vec<crate::MangledName>,
+    pub mangled_name: crate::MangledName,
+    pub doc: Option<crate::DocComment>,
+}
+
+/// One accessor function. Getter and setter are independent: the read type
+/// (`ret_ty`) and write type (`param.ty`) need not match (TS 4.3+).
+#[derive(Clone, Debug, PartialEq)]
+pub enum TypedClassAccessor {
+    Getter {
+        name: Ident,
+        ret_ty: Type,
+        visibility: crate::Visibility,
+        body: StmtId,
+    },
+    Setter {
+        name: Ident,
+        /// The setter parameter; `param.ty` is the property's write type.
+        param: TypedParam,
+        visibility: crate::Visibility,
+        body: StmtId,
+    },
+}
+
+impl TypedClassAccessor {
+    pub fn name(&self) -> &Ident {
+        match self {
+            TypedClassAccessor::Getter { name, .. } | TypedClassAccessor::Setter { name, .. } => {
+                name
+            }
+        }
+    }
+
+    pub fn body(&self) -> StmtId {
+        match self {
+            TypedClassAccessor::Getter { body, .. } | TypedClassAccessor::Setter { body, .. } => {
+                *body
+            }
+        }
+    }
+
+    pub fn visibility(&self) -> crate::Visibility {
+        match self {
+            TypedClassAccessor::Getter { visibility, .. }
+            | TypedClassAccessor::Setter { visibility, .. } => *visibility,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TypedClassField {
+    pub name: Ident,
+    pub ty: Type,
+    pub visibility: crate::Visibility,
+    pub readonly: bool,
+    pub optional: bool,
+    pub initializer: Option<ExprId>,
+    /// `true` for a parameter property (`constructor(public x: T)`): the field is
+    /// assigned from the constructor parameter, so it's exempt from the
+    /// definite-assignment check.
+    pub auto_assigned: bool,
+    /// Set when this declaration *narrows* an inherited one. See
+    /// [`FieldNarrowingCheck`]. Boxed because every class field carries this and
+    /// almost none of them narrow.
+    pub narrowing_check: Option<Box<FieldNarrowingCheck>>,
+    pub doc: Option<crate::DocComment>,
+}
+
+/// A read guard for a field whose subclass declaration narrows the inherited
+/// one. The two declarations share one storage slot, so a write that goes
+/// through the parent's — an inherited method, a parent-typed reference, the
+/// parent's constructor — can leave the slot holding a value the subclass's
+/// declaration does not admit. The language accepts the narrowing anyway
+/// (spec.md §Classes, matching TypeScript), so the read is what has to check.
+///
+/// Without this the read's bare `ref.cast` raises an uncatchable `cast failure`
+/// naming nothing the author wrote; with it, the read runs `test` first —
+/// presence for a narrowing that only strips `null`, structural conformance
+/// otherwise — and throws `message` as a catchable `TypeError`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FieldNarrowingCheck {
+    pub test: FieldNarrowingTest,
+    pub message: String,
+}
+
+/// What a *redeclared* field's read guard verifies before it casts.
+#[derive(Clone, Debug, PartialEq)]
+pub enum FieldNarrowingTest {
+    /// The two declarations differ only in admitting `null`, so presence is the
+    /// whole check. Worth its own case: the structural walk below is O(size of
+    /// the stored value), and this is both the commonest narrowing and the one
+    /// where walking proves nothing. It also has no shape to lower, so it guards
+    /// types `Shape` cannot — a recursive one, an interface with methods.
+    ///
+    /// Whether the test actually runs is settled at the read, not here: an
+    /// erased type parameter's `v: T` is `string | null` at `Sub<string | null>`,
+    /// where a `null` is legal, and `string` at `Sub<string>`, where it is not.
+    /// `emit_narrowed_field_read` asks the substituted read type and skips the
+    /// test when it admits `null`.
+    NonNull,
+    /// Structural conformance to this shape, which is restricted to what
+    /// `cast_check::emit_structural_test` can lower. A narrowing whose type falls
+    /// outside that set records no check at all and keeps the bare cast.
+    Shape(Type),
+}
+
+impl TypedClassDecl {
+    /// The constructor signature this class exposes: its own if it declares
+    /// one, otherwise the inherited signature. Callers should prefer this over
+    /// reading either field directly — `inherited_ctor_params` is meaningful
+    /// only when `constructor` is `None`.
+    pub fn effective_ctor_params(&self) -> &[TypedParam] {
+        match &self.constructor {
+            Some(c) => &c.params,
+            None => &self.inherited_ctor_params,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TypedClassConstructor {
+    pub params: Vec<TypedParam>,
+    pub body: StmtId,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TypedClassMethod {
+    pub name: Ident,
+    pub generics: Vec<String>,
+    pub params: Vec<TypedParam>,
+    pub return_type: Type,
+    pub body: StmtId,
+    pub visibility: crate::Visibility,
+    pub doc: Option<crate::DocComment>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TypedInterfaceDecl {
+    pub name: Ident,
+    pub generics: Vec<String>,
+    pub members: Vec<TypedInterfaceMember>,
+    pub doc: Option<crate::DocComment>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum TypedInterfaceMember {
+    Method {
+        name: Ident,
+        generics: Vec<String>,
+        params: Vec<TypedParam>,
+        return_type: Type,
+        doc: Option<crate::DocComment>,
+    },
+    Property {
+        name: Ident,
+        ty: Type,
+        readonly: bool,
+        /// Reads widen to `T | null`; may be omitted at construction.
+        optional: bool,
+        doc: Option<crate::DocComment>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TypedNumberEnumDecl {
+    pub name: Ident,
+    pub members: Vec<TypedNumberEnumMember>,
+    pub doc: Option<crate::DocComment>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TypedNumberEnumMember {
+    pub name: Ident,
+    pub value: f64,
+    pub doc: Option<crate::DocComment>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TypedStringEnumDecl {
+    pub name: Ident,
+    pub members: Vec<TypedStringEnumMember>,
+    pub doc: Option<crate::DocComment>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TypedStringEnumMember {
+    pub name: Ident,
+    pub value: String,
+    pub doc: Option<crate::DocComment>,
+}
+
+/// `ty` is fully resolved; `Type::TypeVar(name)` placeholders correspond to `generics` entries.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TypedTypeAliasDecl {
+    pub name: Ident,
+    pub generics: Vec<String>,
+    pub ty: Type,
+    pub doc: Option<crate::DocComment>,
+}
+
+impl TypedAst {
+    pub fn new() -> Self {
+        Self {
+            package_name: crate::mangle::USER_PACKAGE.to_string(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_package(package_name: impl Into<String>) -> Self {
+        Self {
+            package_name: package_name.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn push_expr(&mut self, expr: TypedExpr) -> ExprId {
+        let id = self.exprs.len();
+        debug_assert!(id < u32::MAX as usize, "TypedAst expr index overflow");
+        self.exprs.push(expr);
+        ExprId(id as u32)
+    }
+
+    pub fn push_stmt(&mut self, stmt: TypedStmt) -> StmtId {
+        let id = self.stmts.len();
+        debug_assert!(id < u32::MAX as usize, "TypedAst stmt index overflow");
+        self.stmts.push(stmt);
+        StmtId(id as u32)
+    }
+
+    /// Body `StmtId`s of every class constructor + method — additional codegen
+    /// roots alongside `functions` (the string/bigint/closure/box collection
+    /// passes must walk these too).
+    pub fn class_body_roots(&self) -> Vec<StmtId> {
+        let mut roots = Vec::new();
+        for decl in &self.types {
+            if let TypedTypeDecl::Class(c) = decl {
+                if let Some(ctor) = &c.constructor {
+                    roots.push(ctor.body);
+                }
+                roots.extend(c.methods.iter().map(|m| m.body));
+                roots.extend(c.accessors.iter().map(TypedClassAccessor::body));
+            }
+        }
+        roots
+    }
+
+    /// Field-initializer expressions across all classes — `expr` roots that live
+    /// outside any statement body, so analysis/erasure passes must visit them too.
+    pub fn class_field_initializers(&self) -> Vec<ExprId> {
+        let mut inits = Vec::new();
+        for decl in &self.types {
+            if let TypedTypeDecl::Class(c) = decl {
+                inits.extend(c.fields.iter().filter_map(|f| f.initializer));
+            }
+        }
+        inits
+    }
+
+    pub fn expr(&self, id: ExprId) -> &TypedExpr {
+        &self.exprs[id.0 as usize]
+    }
+
+    pub fn stmt(&self, id: StmtId) -> &TypedStmt {
+        &self.stmts[id.0 as usize]
+    }
+
+    /// Used by post-inference passes to iterate just-pushed IDs (e.g. GenericParam erasure).
+    pub fn exprs_len(&self) -> usize {
+        self.exprs.len()
+    }
+
+    pub fn stmts_len(&self) -> usize {
+        self.stmts.len()
+    }
+
+    /// Whether evaluating `id` can be skipped without changing what the program
+    /// does. Deliberately a short whitelist of leaves: everything else — a call,
+    /// a field read that may hit an accessor, an operator that may throw — says
+    /// `false`, so a caller that folds an expression's value away and relies on
+    /// this to decide whether to keep the computation errs toward keeping it.
+    pub fn is_effect_free(&self, id: ExprId) -> bool {
+        matches!(
+            self.expr(id).kind,
+            TypedExprKind::Number(_)
+                | TypedExprKind::BigInt(_)
+                | TypedExprKind::String(_)
+                | TypedExprKind::Boolean(_)
+                | TypedExprKind::Null
+                | TypedExprKind::This
+                | TypedExprKind::Regex { .. }
+                | TypedExprKind::LocalRef { .. }
+                | TypedExprKind::LocalNarrowRef { .. }
+                | TypedExprKind::GlobalRef { .. }
+                | TypedExprKind::FunctionRef { .. }
+                | TypedExprKind::NumberEnumMember { .. }
+                | TypedExprKind::StringEnumMember { .. }
+        )
+    }
+
+    /// Mutable accessor for post-inference rewrites (capture pass flips `boxed` flags).
+    pub fn stmt_mut(&mut self, id: StmtId) -> &mut TypedStmt {
+        &mut self.stmts[id.0 as usize]
+    }
+
+    /// Mutable accessor for post-inference rewrites (sets `LocalRef.boxed`, fills `Closure.captured`).
+    pub fn expr_mut(&mut self, id: ExprId) -> &mut TypedExpr {
+        &mut self.exprs[id.0 as usize]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TypedAst, TypedExpr, TypedExprKind, TypedParam, TypedStmt, TypedStmtKind};
+    use crate::{BinOp, Ident, Span, Type, UnOp};
+
+    #[test]
+    fn arena_round_trip_for_typed_exprs() {
+        let mut ast = TypedAst::new();
+        let id = ast.push_expr(TypedExpr {
+            kind: TypedExprKind::Number(42.0),
+            span: Span::new(crate::FileId(0), 0, 2),
+            ty: Type::Number,
+        });
+        assert_eq!(id.0, 0);
+        let e = ast.expr(id);
+        assert_eq!(e.kind, TypedExprKind::Number(42.0));
+        assert_eq!(e.span, Span::new(crate::FileId(0), 0, 2));
+        assert_eq!(e.ty, Type::Number);
+    }
+
+    #[test]
+    fn arena_round_trip_for_typed_stmts() {
+        let mut ast = TypedAst::new();
+        let expr_id = ast.push_expr(TypedExpr {
+            kind: TypedExprKind::Boolean(true),
+            span: Span::new(crate::FileId(0), 0, 4),
+            ty: Type::Boolean,
+        });
+        let stmt_id = ast.push_stmt(TypedStmt {
+            kind: TypedStmtKind::Expr(expr_id),
+            span: Span::new(crate::FileId(0), 0, 5),
+        });
+        assert_eq!(stmt_id.0, 0);
+        let s = ast.stmt(stmt_id);
+        assert_eq!(s.span, Span::new(crate::FileId(0), 0, 5));
+        assert!(matches!(s.kind, TypedStmtKind::Expr(_)));
+    }
+
+    #[test]
+    fn build_typed_binary_tree() {
+        let mut ast = TypedAst::new();
+        let lhs = ast.push_expr(TypedExpr {
+            kind: TypedExprKind::Number(1.0),
+            span: Span::new(crate::FileId(0), 0, 1),
+            ty: Type::Number,
+        });
+        let rhs = ast.push_expr(TypedExpr {
+            kind: TypedExprKind::Number(2.0),
+            span: Span::new(crate::FileId(0), 4, 5),
+            ty: Type::Number,
+        });
+        let sum = ast.push_expr(TypedExpr {
+            kind: TypedExprKind::Binary {
+                op: BinOp::Add,
+                lhs,
+                rhs,
+            },
+            span: Span::new(crate::FileId(0), 0, 5),
+            ty: Type::Number,
+        });
+
+        let outer = ast.expr(sum);
+        assert_eq!(outer.ty, Type::Number);
+        let TypedExprKind::Binary { op, lhs, rhs } = outer.kind else {
+            panic!("expected Binary");
+        };
+        assert_eq!(op, BinOp::Add);
+        assert_eq!(ast.expr(lhs).ty, Type::Number);
+        assert_eq!(ast.expr(rhs).ty, Type::Number);
+    }
+
+    #[test]
+    fn build_typed_function_with_return() {
+        let mut ast = TypedAst::new();
+        let one = ast.push_expr(TypedExpr {
+            kind: TypedExprKind::Number(1.0),
+            span: Span::new(crate::FileId(0), 31, 32),
+            ty: Type::Number,
+        });
+        let ret = ast.push_stmt(TypedStmt {
+            kind: TypedStmtKind::Return(Some(one)),
+            span: Span::new(crate::FileId(0), 24, 33),
+        });
+        let body = ast.push_stmt(TypedStmt {
+            kind: TypedStmtKind::Block(vec![ret]),
+            span: Span::new(crate::FileId(0), 22, 35),
+        });
+        ast.functions.push(crate::TypedFunction {
+            name: Ident {
+                name: "f".to_string(),
+                span: Span::new(crate::FileId(0), 9, 10),
+            },
+            mangled_name: crate::mangle::package_symbol("main", "f"),
+            generics: vec![],
+            params: vec![],
+            return_type: Type::Number,
+            type_predicate: None,
+            body,
+            doc: None,
+            span: Span::new(crate::FileId(0), 0, 35),
+        });
+
+        let f = &ast.functions[0];
+        assert_eq!(f.return_type, Type::Number);
+        assert!(matches!(ast.stmt(f.body).kind, TypedStmtKind::Block(_)));
+    }
+
+    #[test]
+    fn clone_and_equality() {
+        let kind = TypedExprKind::Unary {
+            op: UnOp::Neg,
+            operand: crate::ExprId(0),
+        };
+        assert_eq!(kind.clone(), kind);
+    }
+
+    #[test]
+    fn typed_param_construction() {
+        let p = TypedParam {
+            name: Ident {
+                name: "param".to_string(),
+                span: Span::new(crate::FileId(0), 10, 15),
+            },
+            ty: Type::String,
+            boxed: false,
+            rest: false,
+            default: None,
+        };
+        assert_eq!(p.name.name, "param");
+        assert_eq!(p.name.span, Span::new(crate::FileId(0), 10, 15));
+        assert_eq!(p.ty, Type::String);
+        assert!(!p.boxed);
+    }
+
+    #[test]
+    fn local_ref_carries_name_and_boxed_flag() {
+        let mut ast = TypedAst::new();
+        let id = ast.push_expr(TypedExpr {
+            kind: TypedExprKind::LocalRef {
+                ident: Ident {
+                    name: "x".to_string(),
+                    span: Span::new(crate::FileId(0), 0, 1),
+                },
+                boxed: false,
+            },
+            span: Span::new(crate::FileId(0), 0, 1),
+            ty: Type::Number,
+        });
+        match ast.expr(id).kind {
+            TypedExprKind::LocalRef { ref ident, boxed } => {
+                assert_eq!(ident.name, "x");
+                assert_eq!(ident.span, Span::new(crate::FileId(0), 0, 1));
+                assert!(!boxed);
+            }
+            _ => panic!("expected LocalRef"),
+        }
+    }
+
+    #[test]
+    fn global_ref_carries_name_and_mangled() {
+        let mut ast = TypedAst::new();
+        let mangled = crate::mangle::package_symbol("main", "y");
+        let id = ast.push_expr(TypedExpr {
+            kind: TypedExprKind::GlobalRef {
+                mangled: mangled.clone(),
+                name: Ident {
+                    name: "y".to_string(),
+                    span: Span::new(crate::FileId(0), 2, 3),
+                },
+            },
+            span: Span::new(crate::FileId(0), 2, 3),
+            ty: Type::Number,
+        });
+        match ast.expr(id).kind {
+            TypedExprKind::GlobalRef {
+                ref name,
+                ref mangled,
+            } => {
+                assert_eq!(name.name, "y");
+                assert_eq!(name.span, Span::new(crate::FileId(0), 2, 3));
+                assert_eq!(mangled.as_str(), "main#y");
+            }
+            _ => panic!("expected GlobalRef"),
+        }
+    }
+}

@@ -1,0 +1,7 @@
+# Accessor properties across SEPARATE packages. `@test/geo` exports a class with
+# a get/set accessor; the root app imports it and reads/writes the accessor both
+# on the class type and through an interface the class implements — exercising the
+# imported-class reconstruction of the synthetic getter/setter vtable methods.
+# name         dir   deps         root
+@test/geo      geo   -
+main           app   @test/geo    root

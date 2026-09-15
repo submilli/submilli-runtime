@@ -1,0 +1,16 @@
+// Interface-typed values flow through bindings.
+
+function main(): void {
+  const c = console;
+  c.log("captured console works");
+
+  const ctor = Uint8Array;
+  const bytes = ctor.alloc(4);
+  assert(bytes.length === 4, "alloc through captured constructor");
+  assert(bytes[0] === 0, "alloc still zero-fills");
+
+  const ctor2 = Uint8Array;
+  const made = ctor2.new([7, 8, 9]);
+  assert(made.length === 3, "new through captured constructor");
+  assert(made[1] === 8, "new round-trips bytes");
+}

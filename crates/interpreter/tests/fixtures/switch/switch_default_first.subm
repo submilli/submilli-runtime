@@ -1,0 +1,13 @@
+function describe(n: number): string {
+  switch (n) {
+    default: return "other";
+    case 1: return "one";
+    case 2: return "two";
+  }
+}
+
+function main(): void {
+  assert(describe(1) === "one", "matches case 1 not default");
+  assert(describe(2) === "two", "matches case 2 not default");
+  assert(describe(7) === "other", "default catches 7");
+}

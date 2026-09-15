@@ -1,0 +1,10 @@
+// expect-error: no method `withTimeZon` on `Temporal.ZonedDateTime`
+// expect-error: did you mean `withTimeZone`?
+// expect-error: interface Temporal.ZonedDateTime
+// expect-error: withTimeZone(tz: string): Temporal.ZonedDateTime
+
+function main(): void {
+  const z: Temporal.ZonedDateTime =
+    Temporal.ZonedDateTime.from("2024-03-09T12:00:00+00:00[UTC]");
+  z.withTimeZon("UTC");
+}

@@ -1,0 +1,11 @@
+function main(): void {
+  const empty: number[] = [];
+  const xs: number[] = [...empty, 1, ...empty, 2, ...empty];
+
+  assert(xs.length === 2, "empty spreads contribute zero length");
+  assert(xs[0] === 1, "first fixed element");
+  assert(xs[1] === 2, "second fixed element");
+
+  const ys: number[] = [...empty, ...empty];
+  assert(ys.length === 0, "all-empty spreads produce empty array");
+}

@@ -1,0 +1,21 @@
+// Binary tree from a recursive object alias, summed by a recursive
+// function. Fields are read into locals before the recursive calls so
+// a call doesn't invalidate the post-null-check narrowing on `t`.
+type Tree = { value: number; left: Tree | null; right: Tree | null };
+
+function sumTree(t: Tree | null): number {
+  if (t === null) {
+    return 0;
+  }
+  const v: number = t.value;
+  const l: Tree | null = t.left;
+  const r: Tree | null = t.right;
+  return v + sumTree(l) + sumTree(r);
+}
+
+function main(): void {
+  const leftChild: Tree = { value: 2, left: null, right: null };
+  const rightChild: Tree = { value: 4, left: null, right: null };
+  const root: Tree = { value: 1, left: leftChild, right: rightChild };
+  assert(sumTree(root) === 7, "summed the tree");
+}

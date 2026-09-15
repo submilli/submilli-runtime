@@ -1,0 +1,5 @@
+// expect-error: `Date` is not supported
+
+function main(): void {
+  new Date();
+}

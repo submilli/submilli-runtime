@@ -1,0 +1,13 @@
+function describe(t: [string, string] | [number, number]): string {
+  if (typeof t[0] === "string") {
+    return t[1];
+  }
+  return t[1].toString();
+}
+
+function main(): void {
+  const ss: [string, string] = ["hi", "there"];
+  const nn: [number, number] = [3, 4];
+  assert(describe(ss) === "there", "string variant returns string slot");
+  assert(describe(nn) === "4", "number variant stringifies");
+}

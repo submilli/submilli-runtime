@@ -1,0 +1,48 @@
+function main(): void {
+  assert("apple" < "banana", "apple < banana");
+  assert(!("banana" < "apple"), "banana not < apple");
+  assert("banana" > "apple", "banana > apple");
+
+  // Uppercase precedes lowercase (code unit 65-90 < 97-122).
+  assert("App" < "app", "App < app");
+  assert("Z" < "a", "Z < a");
+
+  // Prefixes sort before their extensions (length tiebreak).
+  assert("app" < "apple", "app < apple");
+  assert("apple" > "app", "apple > app");
+
+  // Equal strings satisfy <= and >=, but not < or >.
+  assert("abc" <= "abc", "abc <= abc");
+  assert("abc" >= "abc", "abc >= abc");
+  assert(!("abc" < "abc"), "abc not < abc");
+  assert(!("abc" > "abc"), "abc not > abc");
+
+  // Empty string is the smallest.
+  assert("" < "a", "empty < a");
+  assert("" <= "", "empty <= empty");
+
+  let a: string = "cherry";
+  let b: string = "date";
+  assert(a < b, "cherry < date");
+
+  assert("apple".localeCompare("banana") < 0, "apple localeCompare banana < 0");
+  assert("banana".localeCompare("apple") > 0, "banana localeCompare apple > 0");
+  assert("apple".localeCompare("apple") === 0, "apple localeCompare apple === 0");
+  assert("app".localeCompare("apple") < 0, "app localeCompare apple < 0");
+
+  // Sort with a relational-operator comparator, then with localeCompare.
+  let fruits: string[] = ["banana", "apple", "cherry"];
+  fruits.sort((x, y) => {
+    if (x < y) { return -1; }
+    if (x > y) { return 1; }
+    return 0;
+  });
+  assert(fruits[0] === "apple" && fruits[1] === "banana" && fruits[2] === "cherry",
+         "operator-comparator sort");
+
+  let more: string[] = ["delta", "alpha", "charlie", "bravo"];
+  more.sort((x, y) => x.localeCompare(y));
+  assert(more[0] === "alpha" && more[1] === "bravo"
+         && more[2] === "charlie" && more[3] === "delta",
+         "localeCompare sort");
+}

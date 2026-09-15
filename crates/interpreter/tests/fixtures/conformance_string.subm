@@ -1,0 +1,44 @@
+// ECMA-262 §22.1 conformance vectors for `String` — worked examples lifted
+// from the standard's method definitions.
+
+function main(): void {
+  const s = "The quick brown fox";
+
+  assert(s.length === 19, "length counts UTF-16 units");
+  assert(s.charAt(4) === "q", "charAt");
+  assert(s.at(-3) === "f", "at with negative index");
+  assert(s.charCodeAt(0) === 84, "charCodeAt");
+  assert("😀".length === 2, "astral chars take two units");
+  assert("😀".codePointAt(0) === 128512, "codePointAt decodes the pair");
+
+  assert(s.slice(4, 9) === "quick", "slice");
+  assert(s.slice(-3) === "fox", "negative slice");
+  assert(s.substring(9, 4) === "quick", "substring swaps reversed bounds");
+
+  assert(s.indexOf("quick") === 4, "indexOf");
+  assert(s.lastIndexOf("o") === 17, "lastIndexOf");
+  assert(s.includes("brown"), "includes");
+  assert(s.startsWith("The") && s.endsWith("fox"), "startsWith/endsWith");
+  assert(s.startsWith("quick", 4), "startsWith with position");
+
+  assert("ab".concat("cd") === "abcd", "concat");
+  assert("ha".repeat(3) === "hahaha", "repeat");
+  assert("5".padStart(3, "0") === "005", "padStart");
+  assert("5".padEnd(3, "0") === "500", "padEnd");
+
+  assert("MiXeD".toUpperCase() === "MIXED", "toUpperCase");
+  assert("MiXeD".toLowerCase() === "mixed", "toLowerCase");
+  assert("  x  ".trim() === "x", "trim");
+  assert("  x  ".trimStart() === "x  ", "trimStart");
+  assert("  x  ".trimEnd() === "  x", "trimEnd");
+
+  assert("a,b,,c".split(",").length === 4, "split keeps empties");
+  assert("a-b-c".split("-", 2).length === 2, "split limit");
+  assert("aaa".replace("a", "b") === "baa", "replace first only");
+  assert("aaa".replaceAll("a", "b") === "bbb", "replaceAll");
+
+  // Unicode-correct casing beyond ASCII.
+  assert("straße".toUpperCase() === "STRASSE", "sharp s uppercases to SS");
+  // localeCompare is plain code-unit order — no locale tables.
+  assert("App".localeCompare("app") < 0, "uppercase sorts before lowercase");
+}

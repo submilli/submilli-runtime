@@ -1,0 +1,8 @@
+function identity<T>(x: T): T {
+  return x;
+}
+
+function main(): void {
+  assert(identity<number>(42) === 42, "explicit T=number matches arg");
+  assert(identity<string>("hi") === "hi", "explicit T=string matches arg");
+}

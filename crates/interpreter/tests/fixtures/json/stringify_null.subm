@@ -1,0 +1,3 @@
+function main(): void {
+  assert(JSON.stringify(null) === "null", "null literal");
+}

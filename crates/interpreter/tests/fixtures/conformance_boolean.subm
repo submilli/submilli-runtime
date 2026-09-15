@@ -1,0 +1,11 @@
+// ECMA-262 §20.3 conformance vectors for `Boolean` — toString plus the
+// logical operators' exact-equality behavior (no truthy coercion here).
+
+function main(): void {
+  assert(true.toString() === "true", "true formats");
+  assert(false.toString() === "false", "false formats");
+  assert((1 < 2) === true, "comparison yields a boolean");
+  assert(!false && !!true, "negation");
+  assert((true && false) === false, "and");
+  assert((false || true) === true, "or");
+}

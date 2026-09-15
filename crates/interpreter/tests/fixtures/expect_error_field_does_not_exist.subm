@@ -1,0 +1,5 @@
+// expect-error: field `z` does not exist on
+function main(): number {
+  let p: { x: number; y: number } = { x: 1, y: 2 };
+  return p.z;
+}

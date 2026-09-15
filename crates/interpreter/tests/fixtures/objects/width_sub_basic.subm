@@ -1,0 +1,16 @@
+// — width subtyping for object parameters.
+//
+// `{ a: number, b: number }` is structurally a subtype of
+// `{ a: number }`: an object with more fields flows into a target
+// that requires a subset.
+
+function readA(p: { a: number }): number {
+  return p.a;
+}
+
+function main(): void {
+  assert(readA({ a: 1 }) === 1, "exact-shape arg");
+
+  const obj = { a: 42, b: "ignored" };
+  assert(readA(obj) === 42, "width-sub through a let binding");
+}

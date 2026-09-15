@@ -1,0 +1,19 @@
+// number[] overload deferred; use Uint8Array.new([...]) first.
+
+function main(): void {
+  let dst: Uint8Array = Uint8Array.alloc(8);
+  let src: Uint8Array = Uint8Array.new([10, 20, 30]);
+
+  dst.set(src);
+  assert(dst[0] === 10 && dst[1] === 20 && dst[2] === 30, "set at offset 0");
+  assert(dst[3] === 0, "trailing bytes untouched");
+
+  let dst2: Uint8Array = Uint8Array.alloc(8);
+  dst2.set(src, 4);
+  assert(dst2[4] === 10 && dst2[5] === 20 && dst2[6] === 30, "set at offset 4");
+  assert(dst2[3] === 0 && dst2[7] === 0, "boundary untouched");
+
+  let copy: Uint8Array = Uint8Array.new([1, 2, 3]);
+  copy.set(copy);
+  assert(copy[0] === 1 && copy[1] === 2 && copy[2] === 3, "self-set preserves values");
+}

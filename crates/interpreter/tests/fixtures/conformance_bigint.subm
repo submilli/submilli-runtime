@@ -1,0 +1,35 @@
+// ECMA-262 §21.2 conformance vectors for `BigInt` — exact arithmetic past
+// f64's safe-integer range, explicit conversions only.
+
+function main(): void {
+  assert(9007199254740993n !== 9007199254740992n, "bigints keep precision past 2^53");
+  assert(2n ** 64n === 18446744073709551616n, "exponentiation is exact");
+  assert(10n / 3n === 3n, "division truncates toward zero");
+  assert(-10n / 3n === -3n, "negative division truncates");
+  assert(10n % 3n === 1n && -10n % 3n === -1n, "remainder keeps the dividend sign");
+
+  assert(BigInt("12345678901234567890") === 12345678901234567890n, "string conversion is exact");
+  assert(BigInt(42) === 42n, "integer number converts");
+  assert(Number(42n) === 42, "bigint to number");
+
+  assert((255n).toString(16) === "ff", "radix formatting");
+  assert((9007199254740993n).toString() === "9007199254740993", "decimal stays exact");
+
+  let threw: boolean = false;
+  try {
+    const x = BigInt(1.5);
+    assert(x === x, "unreachable");
+  } catch (e: Error) {
+    threw = true;
+  }
+  assert(threw, "non-integer number conversion throws");
+
+  threw = false;
+  try {
+    const y = 1n / 0n;
+    assert(y === y, "unreachable");
+  } catch (e: Error) {
+    threw = true;
+  }
+  assert(threw, "division by zero throws");
+}

@@ -1,0 +1,7 @@
+// expect-error: rest element must be the last element
+
+function main(): void {
+  const obj: { a: number; b: number } = { a: 1, b: 2 };
+  const { ...r, a } = obj;
+  assert(a === 1, "unreachable");
+}

@@ -1,0 +1,45 @@
+// ECMA-262 §23.1 conformance vectors for `Array`, plus pinned divergences:
+// indexed OOB throws (vs JS undefined/sparse) and default sort is
+// lexicographic (matching JS).
+
+function main(): void {
+  const a = [5, 1, 4, 2, 3];
+
+  assert(a.length === 5, "length");
+  assert(a.indexOf(4) === 2 && a.lastIndexOf(3) === 4, "index search");
+  assert(a.includes(2) && !a.includes(9), "includes");
+  assert(a.find((x: number): boolean => x > 3) === 5, "find returns first match");
+  assert(a.findLast((x: number): boolean => x > 3) === 4, "findLast scans backward");
+  assert(a.findIndex((x: number): boolean => x === 4) === 2, "findIndex");
+
+  const doubled = a.map((x: number): number => x * 2);
+  assert(doubled[0] === 10 && doubled.length === 5, "map");
+  const big = a.filter((x: number): boolean => x >= 3);
+  assert(big.length === 3, "filter");
+  assert(a.reduce((acc: number, x: number): number => acc + x, 0) === 15, "reduce");
+  assert(a.reduceRight((acc: string, x: number): string => acc + x.toString(), "") === "32415", "reduceRight order");
+  assert(a.some((x: number): boolean => x === 1), "some");
+  assert(a.every((x: number): boolean => x > 0), "every");
+  const none: number[] = [];
+  assert(none.every((x: number): boolean => false), "vacuous every is true");
+
+  assert([1, 2, 10].toSorted()[1] === 10, "default sort is lexicographic");
+  assert([1, 2, 10].toSorted((x: number, y: number): number => x - y)[2] === 10, "numeric comparator");
+
+  assert([[1], [2, 3]].flat().length === 3, "flat one level");
+  assert([1, 2].flatMap((x: number): number[] => [x, x]).length === 4, "flatMap");
+  assert([1, 2, 3].join("-") === "1-2-3", "join");
+  assert([1, 2].concat([3], [4, 5]).length === 5, "concat");
+  assert([1, 2, 3].slice(1, 2).length === 1, "slice");
+
+  // Divergence: OOB indexing throws a catchable Error, never undefined.
+  let threw: boolean = false;
+  try {
+    const v = a[99];
+    assert(v !== v, "unreachable");
+  } catch (e: Error) {
+    threw = true;
+  }
+  assert(threw, "OOB read throws");
+  assert(a.at(99) === null, "at() is the null-returning accessor");
+}

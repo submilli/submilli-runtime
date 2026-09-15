@@ -1,0 +1,5 @@
+function main(): void {
+  const x: unknown = { a: 1, b: 2 };
+  const o = x as { a: number };
+  assert(o.a === 1, "object-shape cast preserves field reads");
+}

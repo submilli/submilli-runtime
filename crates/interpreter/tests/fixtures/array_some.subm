@@ -1,0 +1,12 @@
+function main(): void {
+  let nums: number[] = [1, 2, 3, 4];
+  assert(nums.some(x => x > 3), "some hit");
+  assert(!nums.some(x => x > 100), "some miss");
+
+  let empty: number[] = [];
+  assert(!empty.some(x => true), "empty.some is false");
+
+  let strs: string[] = ["a", "ab", "abc"];
+  assert(strs.some(s => s.length === 2), "string some");
+  assert(!strs.some(s => s.length > 100), "string some miss");
+}

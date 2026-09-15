@@ -1,0 +1,9 @@
+import { get, Response } from "submilli:http";
+
+function main(): void {
+  const r: Response = get("{{BASE}}/json");
+  assert(r.status === 200, "json route ok");
+  assert(r.headers.get("content-type") === "application/json", "ct present");
+  const parsed = JSON.parse(r.body) as { hello: string };
+  assert(parsed.hello === "world", "parsed JSON value");
+}

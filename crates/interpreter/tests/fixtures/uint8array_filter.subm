@@ -1,0 +1,15 @@
+function main(): void {
+  let bytes: Uint8Array = Uint8Array.new([1, 2, 3, 4, 5, 6]);
+
+  let evens: Uint8Array = bytes.filter((v: number) => v % 2 === 0);
+  assert(evens.length === 3, "filter keeps 3 evens");
+  assert(evens[0] === 2 && evens[1] === 4 && evens[2] === 6, "even bytes");
+
+  let none: Uint8Array = bytes.filter((v: number) => v > 100);
+  assert(none.length === 0, "no matches → empty");
+
+  let all: Uint8Array = bytes.filter((v: number) => v > 0);
+  assert(all.length === 6, "all match → full copy");
+
+  assert(bytes[0] === 1, "source unchanged");
+}

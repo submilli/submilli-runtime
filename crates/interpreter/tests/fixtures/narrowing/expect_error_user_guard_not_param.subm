@@ -1,0 +1,9 @@
+// expect-error: type predicate references unknown parameter `x`
+
+function bogus(s: number): x is number {
+  return true;
+}
+
+function main(): void {
+  bogus(1);
+}

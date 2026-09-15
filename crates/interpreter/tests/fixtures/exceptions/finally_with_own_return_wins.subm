@@ -1,0 +1,11 @@
+function inner(): number {
+  try {
+    return 1;
+  } finally {
+    return 2;
+  }
+}
+
+function main(): void {
+  assert(inner() === 2, "finally's return overrides try's");
+}

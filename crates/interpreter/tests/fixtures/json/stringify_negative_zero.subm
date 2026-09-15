@@ -1,0 +1,21 @@
+// Negative zero has no JSON representation, and JS `Number#toString`
+// normalizes it to "0". Both surfaces share the number-to-string host path,
+// so fixing one fixes both. Regression guard: this used to emit "-0".
+
+function main(): void {
+  assert(JSON.stringify(-0) === "0", "JSON.stringify(-0) normalizes to 0");
+
+  const negZero: number = 0 * -1;
+  assert(negZero.toString() === "0", "Number#toString drops the sign on -0");
+  // Prove it is genuinely negative zero: 1 / -0 is -Infinity (< 0).
+  assert(1 / negZero < 0, "negZero is really -0");
+
+  // Positive zero and ordinary signed numbers are unaffected.
+  assert(JSON.stringify(0) === "0", "+0 still serializes to 0");
+  assert(JSON.stringify(-5) === "-5", "negative non-zero keeps its sign");
+  assert((-3.5).toString() === "-3.5", "negative fraction keeps its sign");
+
+  // Nested -0 normalizes too.
+  const arr: number[] = [0 * -1, 1];
+  assert(JSON.stringify(arr) === "[0,1]", "nested -0 normalizes to 0");
+}

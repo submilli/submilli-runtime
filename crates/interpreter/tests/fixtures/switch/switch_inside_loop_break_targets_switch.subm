@@ -1,0 +1,15 @@
+function main(): void {
+  let hits: number = 0;
+  for (let i: number = 0; i < 5; i = i + 1) {
+    switch (i) {
+      case 0:
+      case 2:
+      case 4:
+        hits = hits + 1;
+        break;
+      default:
+        break;
+    }
+  }
+  assert(hits === 3, "break in switch did not exit the loop");
+}

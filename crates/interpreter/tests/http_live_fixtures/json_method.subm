@@ -1,0 +1,12 @@
+// `Response#json()` returns unknown; validate it with `as`.
+// End-to-end sibling of json_body.subm.
+
+import { get, Response } from "submilli:http";
+
+function main(): void {
+  const r: Response = get("{{BASE}}/json");
+  assert(r.status === 200, "json route ok");
+
+  const cast = r.json() as { hello: string };
+  assert(cast.hello === "world", "as-cast supplies T");
+}

@@ -1,0 +1,13 @@
+function rethrowSuppressed(): number {
+  try {
+    throw new Error("boom");
+  } catch (e: Error) {
+    throw new Error("rethrown");
+  } finally {
+    return 99;
+  }
+}
+
+function main(): void {
+  assert(rethrowSuppressed() === 99, "finally return suppresses catch's rethrow");
+}

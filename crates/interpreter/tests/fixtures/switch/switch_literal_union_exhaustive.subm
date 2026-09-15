@@ -1,0 +1,15 @@
+// No `default` or trailing `return`: exhaustiveness over a literal-union proves all paths return.
+
+function classify(s: "a" | "b" | "c"): number {
+  switch (s) {
+    case "a": return 1;
+    case "b": return 2;
+    case "c": return 3;
+  }
+}
+
+function main(): void {
+  assert(classify("a") === 1, "a");
+  assert(classify("b") === 2, "b");
+  assert(classify("c") === 3, "c");
+}

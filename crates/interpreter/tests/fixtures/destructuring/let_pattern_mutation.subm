@@ -1,0 +1,7 @@
+function main(): void {
+  const obj: { a: number } = { a: 1 };
+  let { a } = obj;
+  assert(a === 1, "initial a is 1");
+  a = a + 1;
+  assert(a === 2, "let binding is reassignable");
+}

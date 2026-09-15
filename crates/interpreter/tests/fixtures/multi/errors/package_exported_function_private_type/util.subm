@@ -1,0 +1,7 @@
+export interface Result {
+  value: number;
+}
+
+export function make(): Result {
+  return { value: 1 };
+}

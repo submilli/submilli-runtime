@@ -1,0 +1,4 @@
+function main(): void {
+  const s: string = JSON.stringify(42) as string;
+  assert(s === "42", "JSON.stringify(42) === \"42\" survives the cast");
+}

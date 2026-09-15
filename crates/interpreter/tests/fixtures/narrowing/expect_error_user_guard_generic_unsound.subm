@@ -1,0 +1,10 @@
+// expect-error: type-guard return value does not narrow parameter
+
+function notNull<T>(x: T | null): x is T {
+  return true;
+}
+
+function main(): void {
+  const r: number | null = 1;
+  notNull(r);
+}

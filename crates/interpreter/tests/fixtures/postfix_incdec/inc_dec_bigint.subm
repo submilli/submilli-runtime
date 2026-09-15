@@ -1,0 +1,44 @@
+function main(): void {
+  let x: bigint = 0n;
+  x++;
+  assert(x === 1n, "x++ -> 1n");
+  x++;
+  assert(x === 2n, "x++ -> 2n");
+  x--;
+  assert(x === 1n, "x-- -> 1n");
+
+  let y: bigint = x++;
+  assert(y === 1n, "x++ as expr yields original");
+  assert(x === 2n, "x committed new value");
+
+  let z: bigint = x--;
+  assert(z === 2n, "x-- as expr yields original");
+  assert(x === 1n, "x committed dec");
+
+  let w: bigint = x++ + 1n;
+  assert(w === 2n, "x++ + 1n: orig (1n) plus 1n");
+  assert(x === 2n, "x committed once");
+
+  let big: bigint = 12345678901234567890n;
+  big++;
+  assert(big === 12345678901234567891n, "large bigint ++");
+
+  let o = { count: 100n };
+  o.count++;
+  assert(o.count === 101n, "field ++");
+  o.count--;
+  o.count--;
+  assert(o.count === 99n, "field -- twice");
+  let prev: bigint = o.count++;
+  assert(prev === 99n, "field expr yields original");
+  assert(o.count === 100n, "field committed");
+
+  let xs: bigint[] = [10n, 20n, 30n];
+  xs[1]++;
+  assert(xs[1] === 21n, "xs[1]++");
+  xs[2]--;
+  assert(xs[2] === 29n, "xs[2]--");
+  let first: bigint = xs[0]++;
+  assert(first === 10n, "index expr yields original");
+  assert(xs[0] === 11n, "xs[0] committed");
+}

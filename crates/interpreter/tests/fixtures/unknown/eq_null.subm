@@ -1,0 +1,8 @@
+function main(): void {
+  const y: unknown = 42;
+  if (y !== null) {
+    if (typeof y === "number") {
+      assert(y + 8 === 50, "non-null + typeof narrowing chains");
+    }
+  }
+}

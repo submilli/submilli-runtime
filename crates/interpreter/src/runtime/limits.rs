@@ -1,0 +1,119 @@
+//! Per-store [`ResourceLimiter`] enforcing a single aggregate cap on
+//! GC heap, linear memory, and host-attached bytes (e.g. compiled regexes).
+//! `host_attached_bytes` is `Arc<AtomicU64>` so externref `Drop` impls can
+//! decrement it without a `&mut TenantLimits` borrow.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use wasmtime::{ResourceLimiter, Store};
+
+use super::StoreData;
+
+pub const DEFAULT_MAX_STORE_BYTES: u64 = 50 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy)]
+pub struct MemoryCapExceeded {
+    pub requested: u64,
+    pub already_observed: u64,
+    pub already_host_attached: u64,
+    pub cap: u64,
+}
+
+impl std::fmt::Display for MemoryCapExceeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "memory cap exceeded: requested {} host bytes; \
+             already observed {} bytes + {} host bytes against {} cap",
+            self.requested, self.already_observed, self.already_host_attached, self.cap
+        )
+    }
+}
+
+impl std::error::Error for MemoryCapExceeded {}
+
+pub struct TenantLimits {
+    pub max_total_bytes: u64,
+    observed_bytes: u64,
+    host_attached_bytes: Arc<AtomicU64>,
+}
+
+impl TenantLimits {
+    pub fn new(max_total_bytes: u64) -> Self {
+        Self {
+            max_total_bytes,
+            observed_bytes: 0,
+            host_attached_bytes: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    pub fn observed_bytes(&self) -> u64 {
+        self.observed_bytes
+    }
+
+    pub fn host_attached_bytes(&self) -> u64 {
+        self.host_attached_bytes.load(Ordering::Relaxed)
+    }
+
+    pub fn host_attached_counter(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.host_attached_bytes)
+    }
+
+    /// Atomic for borrow-checker compatibility with the externref `Drop` path,
+    /// not cross-thread coordination — Submilli stores are single-threaded.
+    pub fn charge_host_bytes(&self, n: u64) -> Result<(), MemoryCapExceeded> {
+        let current = self.host_attached_bytes.load(Ordering::Relaxed);
+        let next = current.saturating_add(n);
+        let total = self.observed_bytes.saturating_add(next);
+        if total > self.max_total_bytes {
+            return Err(MemoryCapExceeded {
+                requested: n,
+                already_observed: self.observed_bytes,
+                already_host_attached: current,
+                cap: self.max_total_bytes,
+            });
+        }
+        self.host_attached_bytes.store(next, Ordering::Relaxed);
+        Ok(())
+    }
+
+    pub fn release_host_bytes(&self, n: u64) {
+        let current = self.host_attached_bytes.load(Ordering::Relaxed);
+        self.host_attached_bytes
+            .store(current.saturating_sub(n), Ordering::Relaxed);
+    }
+}
+
+impl ResourceLimiter for TenantLimits {
+    fn memory_growing(
+        &mut self,
+        current: usize,
+        desired: usize,
+        _maximum: Option<usize>,
+    ) -> wasmtime::Result<bool> {
+        let delta = (desired as u64).saturating_sub(current as u64);
+        let next = self.observed_bytes.saturating_add(delta);
+        // host_attached_bytes is read-only here; writes belong to charge/release_host_bytes.
+        let host = self.host_attached_bytes.load(Ordering::Relaxed);
+        if next.saturating_add(host) > self.max_total_bytes {
+            return Ok(false);
+        }
+        self.observed_bytes = next;
+        Ok(true)
+    }
+
+    fn table_growing(
+        &mut self,
+        _current: usize,
+        _desired: usize,
+        _maximum: Option<usize>,
+    ) -> wasmtime::Result<bool> {
+        Ok(true)
+    }
+}
+
+/// Call once, immediately after constructing the `Store`, before instantiating any module.
+pub fn install_tenant_limits(store: &mut Store<StoreData>) {
+    store.limiter(|data| &mut data.tenant_limits);
+}

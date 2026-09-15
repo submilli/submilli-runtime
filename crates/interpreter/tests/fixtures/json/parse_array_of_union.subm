@@ -1,0 +1,20 @@
+type Event = { tag: "a", n: number } | { tag: "b", s: string };
+
+function main(): void {
+  const xs = JSON.parse("[{\"tag\":\"a\",\"n\":1},{\"tag\":\"b\",\"s\":\"hi\"}]") as Event[];
+  assert(xs.length === 2, "length");
+
+  const first: Event = xs[0];
+  if (first.tag === "a") {
+    assert(first.n === 1, "first.n");
+  } else {
+    assert(false, "expected a at 0");
+  }
+
+  const second: Event = xs[1];
+  if (second.tag === "b") {
+    assert(second.s === "hi", "second.s");
+  } else {
+    assert(false, "expected b at 1");
+  }
+}

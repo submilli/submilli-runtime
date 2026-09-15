@@ -1,0 +1,5 @@
+import * as uuid from "submilli:uuid";
+
+function main(): void {
+  assert(uuid.validate(uuid.v4()), "* as ns synonym binds the package as a namespace");
+}

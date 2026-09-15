@@ -1,0 +1,17 @@
+
+function tag(label: string, ...vals: number[]): string {
+  let s = label + ":";
+  let i = 0;
+  while (i < vals.length) {
+    s = s + vals[i].toString();
+    if (i < vals.length - 1) { s = s + ","; }
+    i = i + 1;
+  }
+  return s;
+}
+
+function main(): void {
+  assert(tag("x") === "x:", "zero rest args");
+  assert(tag("nums", 1) === "nums:1", "one rest arg");
+  assert(tag("nums", 1, 2, 3) === "nums:1,2,3", "three rest args");
+}

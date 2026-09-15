@@ -1,0 +1,7 @@
+// expect-error: does not return a value on all paths
+
+function f(x: string | null): number {
+  if (x !== null) {
+    return x.length;
+  }
+}

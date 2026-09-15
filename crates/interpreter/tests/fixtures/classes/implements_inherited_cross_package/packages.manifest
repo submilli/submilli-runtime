@@ -1,0 +1,8 @@
+# A subclass declared in the consuming package inherits its `implements`
+# conformance from an imported base. The consumer has no adapter for the
+# parent's methods (adapters are neither imported nor exported), so it must
+# emit its own — and `Kid` declares no methods at all, which also exercises the
+# "no local class methods" gate on the closure machinery.
+# name          dir    deps          root
+@test/base      base   -
+main            app    @test/base    root

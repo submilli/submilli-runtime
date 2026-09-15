@@ -1,0 +1,22 @@
+function main(): void {
+  const enc = new TextEncoder();
+  const dec = new TextDecoder();
+
+  const eacute = enc.encode("é");
+  assert(eacute.length === 2, "é = 2 UTF-8 bytes");
+  assert(eacute[0] === 195, "0xC3");
+  assert(eacute[1] === 169, "0xA9");
+
+  const euro = enc.encode("€");
+  assert(euro.length === 3, "€ = 3 UTF-8 bytes");
+  assert(euro[0] === 226, "0xE2");
+  assert(euro[1] === 130, "0x82");
+  assert(euro[2] === 172, "0xAC");
+
+  const grin = enc.encode("😀");
+  assert(grin.length === 4, "😀 = 4 UTF-8 bytes");
+
+  assert(dec.decode(eacute) === "é", "é round-trips");
+  assert(dec.decode(euro) === "€", "€ round-trips");
+  assert(dec.decode(grin) === "😀", "😀 round-trips");
+}

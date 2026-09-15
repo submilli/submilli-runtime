@@ -1,0 +1,9 @@
+// expect-error: exported type `Public` uses private type `Private` in its definition
+
+interface Private {
+  value: number;
+}
+
+export interface Public {
+  inner: Private;
+}

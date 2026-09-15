@@ -1,0 +1,4 @@
+# Stock defaults: persistence on, NetworkPolicy on, no blueprints, no secrets.
+# Deliberately empty — `ct install` installs once per file in this directory, and
+# this file is the case where the operator overrides nothing.
+{}

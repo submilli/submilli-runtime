@@ -1,0 +1,6 @@
+type Thunk = () => number;
+
+function main(): void {
+  const f: Thunk = () => 42;
+  assert(f() === 42, "aliased function-type const calls correctly");
+}

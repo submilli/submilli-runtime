@@ -1,0 +1,12 @@
+// Captured `let` reassigned in the same frame must write through the box cell, not a local.
+
+function apply(f: (x: number) => number, x: number): number {
+  return f(x);
+}
+
+function main(): void {
+  let bias: number = 100;
+  assert(apply((n: number) => n + bias, 7) === 107, "first call: 7 + 100");
+  bias = bias + 1;
+  assert(apply((n: number) => n + bias, 0) === 101, "second call: 0 + 101");
+}

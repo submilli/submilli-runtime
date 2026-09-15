@@ -1,0 +1,18 @@
+function main(): void {
+  let a: number[] = [1, 2, 3, 4];
+
+  let cut = a.toSpliced(1, 2);
+  assert(cut.length === 2 && cut[0] === 1 && cut[1] === 4, "removes the middle");
+  assert(a.length === 4, "original is unchanged");
+
+  let swapped = a.toSpliced(1, 1, 9, 8);
+  assert(swapped.length === 5, "replacement can grow the array");
+  assert(swapped[0] === 1 && swapped[1] === 9 && swapped[2] === 8 && swapped[3] === 3 && swapped[4] === 4, "items replace the deleted span");
+
+  let inserted = a.toSpliced(2, 0, 7);
+  assert(inserted.length === 5, "pure insertion grows by one");
+  assert(inserted[1] === 2 && inserted[2] === 7 && inserted[3] === 3, "item lands at start index");
+
+  let tail = a.toSpliced(2);
+  assert(tail.length === 2 && tail[0] === 1 && tail[1] === 2, "omitted deleteCount removes to the end");
+}

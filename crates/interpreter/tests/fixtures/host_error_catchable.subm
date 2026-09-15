@@ -1,0 +1,36 @@
+// SUB-288: host-function rejections are now catchable Error instances rather
+// than uncatchable Wasm traps.
+function main(): void {
+  // String.normalize with an invalid form (host-validated).
+  let normErr: string = "<none>";
+  try {
+    "x".normalize("BAD");
+    assert(false, "normalize should have thrown");
+  } catch (e: Error) {
+    normErr = e.message;
+  }
+  assert(normErr.startsWith("String.normalize:"), normErr);
+
+  // BigInt division by zero (host arithmetic). A variable divisor dodges any
+  // constant folding so the zero divide happens at runtime.
+  let divErr: string = "<none>";
+  try {
+    const z: bigint = 0n;
+    const r: bigint = 5n / z;
+    assert(false, "bigint divide-by-zero should have thrown");
+  } catch (e: Error) {
+    divErr = e.message;
+  }
+  assert(divErr === "Division by zero", divErr);
+
+  // BigInt modulo by zero traps on the same underlying op.
+  let modErr: string = "<none>";
+  try {
+    const z: bigint = 0n;
+    const r: bigint = 5n % z;
+    assert(false, "bigint modulo-by-zero should have thrown");
+  } catch (e: Error) {
+    modErr = e.message;
+  }
+  assert(modErr === "Division by zero", modErr);
+}

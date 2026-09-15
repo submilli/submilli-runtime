@@ -1,0 +1,28 @@
+// RFC 4231 test vectors 1 & 2.
+
+import { hmacSha256 } from "submilli:crypto";
+
+function main(): void {
+  const key1: Uint8Array = Uint8Array.fromHex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b");
+  assert(
+    hmacSha256(key1, "Hi There").toHex() ===
+      "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7",
+    "RFC 4231 case 1"
+  );
+
+  const msg1: Uint8Array = Uint8Array.new([72, 105, 32, 84, 104, 101, 114, 101]);
+  assert(
+    hmacSha256(key1, msg1).toHex() ===
+      "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7",
+    "RFC 4231 case 1 (bytes message)"
+  );
+
+  const key2: Uint8Array = Uint8Array.new([74, 101, 102, 101]);
+  assert(
+    hmacSha256(key2, "what do ya want for nothing?").toHex() ===
+      "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843",
+    "RFC 4231 case 2"
+  );
+
+  assert(hmacSha256(key1, "Hi There").length === 32, "HMAC-SHA-256 output is 32 bytes");
+}

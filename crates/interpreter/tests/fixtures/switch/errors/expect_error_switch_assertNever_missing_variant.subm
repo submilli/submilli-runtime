@@ -1,0 +1,22 @@
+// expect-error: expected `never`, got
+
+function assertNever(x: never): never {
+  throw new Error("unreachable");
+}
+
+function area(
+  s: { kind: "circle"; radius: number }
+   | { kind: "rect"; w: number; h: number }
+   | { kind: "tri"; base: number; height: number }
+): number {
+  switch (s.kind) {
+    case "circle": return s.radius * s.radius * 3;
+    case "rect": return s.w * s.h;
+    default: return assertNever(s);
+  }
+}
+
+function main(): void {
+  const c: { kind: "circle"; radius: number } = { kind: "circle", radius: 2 };
+  assert(area(c) === 12, "circle");
+}

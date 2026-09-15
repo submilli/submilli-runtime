@@ -1,0 +1,8 @@
+// expect-error: expected `T`, got `number`
+
+function recurse<T>(x: T): T {
+  let bad: T = 42;
+  return bad;
+}
+
+function main(): void {}

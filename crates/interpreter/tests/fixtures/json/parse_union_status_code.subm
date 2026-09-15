@@ -1,0 +1,10 @@
+function main(): void {
+  const ok = JSON.parse("200") as 200 | 404 | 500;
+  assert(ok === 200, "200");
+
+  const nf = JSON.parse("404") as 200 | 404 | 500;
+  assert(nf === 404, "404");
+
+  const err = JSON.parse("500") as 200 | 404 | 500;
+  assert(err === 500, "500");
+}

@@ -1,0 +1,6 @@
+// expect-error: cannot index into `unknown`
+
+function main(): void {
+  const x: unknown = [1, 2, 3];
+  const first = x[0];
+}

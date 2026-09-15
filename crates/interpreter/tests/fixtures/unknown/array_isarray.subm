@@ -1,0 +1,6 @@
+function main(): void {
+  const data: unknown = [1, 2, 3];
+  if (Array.isArray(data)) {
+    assert(data.length === 3, "array length on narrowed unknown");
+  }
+}

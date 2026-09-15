@@ -1,0 +1,16 @@
+// User-declared `interface` parses, typechecks, and is available as a type annotation.
+
+interface Logger {
+  log(msg: string): void;
+}
+
+function main(): void {
+  console.log((42).toString());
+  console.log("hi".toString());
+  const xs = [1, 2, 3];
+  console.log(xs.toString());
+  console.log(xs.join(", "));
+
+  assert((42).toString() === "42", "Number.toString via prelude interface");
+  assert("hi".toString() === "hi", "String.toString via prelude interface");
+}

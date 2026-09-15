@@ -1,0 +1,14 @@
+function main(): void {
+  const a: { age: number | null } = { age: null };
+  assert(a.age === null, "null age reads back as null");
+
+  const b: { age: number | null } = { age: 42 };
+  assert(b.age === 42, "non-null age reads back as 42");
+  assert(b.age !== null, "non-null age is not null");
+
+  const d: { name: string | null } = { name: null };
+  assert(d.name === null, "null string field");
+
+  const c: { name: string | null } = { name: "hi" };
+  assert(c.name === "hi", "non-null string field reads back");
+}

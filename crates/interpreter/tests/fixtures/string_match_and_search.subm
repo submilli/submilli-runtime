@@ -1,0 +1,16 @@
+function main(): void {
+  const re: RegExp = new RegExp("[0-9]+", "");
+
+  const m: RegExpMatch | null = "abc42def".match(re);
+  assert(m !== null, "match returns a match");
+  if (m !== null) {
+    assert(m.match === "42", "match text");
+    assert(m.index === 3, "match index");
+    assert(m.input === "abc42def", "input round-trip");
+  }
+  assert("hello".match(re) === null, "no match");
+
+  assert("abc42xyz".search(re) === 3, "search returns first index");
+  assert("hello world".search(re) === -1, "search returns -1 on no match");
+  assert("xyz".search(new RegExp("xyz", "")) === 0, "search at start");
+}

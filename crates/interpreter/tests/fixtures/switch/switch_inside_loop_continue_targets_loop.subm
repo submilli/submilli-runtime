@@ -1,0 +1,14 @@
+function main(): void {
+  let counted: number = 0;
+  for (let i: number = 0; i < 10; i = i + 1) {
+    switch (i % 3) {
+      case 0:
+        continue;
+      default:
+        break;
+    }
+    counted = counted + 1;
+  }
+  // i in 0..9; i%3==0 at i=0,3,6,9 (4 skips) → counted = 10 - 4 = 6.
+  assert(counted === 6, "continue from switch returned to loop head");
+}

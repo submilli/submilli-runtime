@@ -1,0 +1,18 @@
+function main(): void {
+  const m = new Map<string, number>();
+  m.set("a", 1);
+  m.set("b", 2);
+  m.set("c", 3);
+
+  const it = m.iterator();
+  let visits: number = 0;
+  while (true) {
+    const r = it.next();
+    if (r.done) { break; }
+    visits = visits + 1;
+  }
+  assert(visits === 3, "iterator yields each entry once");
+
+  const r2 = it.next();
+  assert(r2.done, "subsequent next() after exhaustion stays done");
+}

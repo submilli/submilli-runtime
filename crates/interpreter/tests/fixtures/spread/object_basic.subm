@@ -1,0 +1,13 @@
+type Base = { x: number; y: number };
+
+function main(): void {
+  const base: Base = { x: 1, y: 2 };
+  const extended = { ...base, z: 3 };
+
+  assert(extended.x === 1, "spread copies x");
+  assert(extended.y === 2, "spread copies y");
+  assert(extended.z === 3, "literal-position z added");
+
+  assert(base.x === 1, "source x untouched");
+  assert(base.y === 2, "source y untouched");
+}

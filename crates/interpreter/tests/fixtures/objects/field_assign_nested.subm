@@ -1,0 +1,6 @@
+function main(): void {
+  let o = { inner: { x: 1, y: 2 } };
+  o.inner.x = 99;
+  assert(o.inner.x === 99, "nested field updated");
+  assert(o.inner.y === 2, "sibling field unchanged");
+}

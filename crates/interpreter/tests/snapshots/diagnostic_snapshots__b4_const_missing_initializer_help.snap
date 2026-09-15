@@ -1,0 +1,14 @@
+---
+source: crates/interpreter/tests/diagnostic_snapshots.rs
+expression: "render_inside_main(\"  const x: number;\")"
+---
+error: `const` declaration requires an initializer
+ --> test.subm:2:18
+  |
+1 | function main(): void {
+2 |   const x: number;
+  |                  ^
+3 | }
+  |
+help: const x: T = expr;
+---

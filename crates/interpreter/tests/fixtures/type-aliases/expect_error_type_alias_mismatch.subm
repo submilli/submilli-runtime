@@ -1,0 +1,7 @@
+// expect-error: expected `Name`, got `number`
+
+type Name = string;
+
+function main(): void {
+  const n: Name = 42;
+}

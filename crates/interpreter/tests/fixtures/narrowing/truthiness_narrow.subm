@@ -1,0 +1,13 @@
+function len_or_zero(s: string | null): number {
+  if (s) {
+    return s.length;
+  } else {
+    return 0;
+  }
+}
+
+function main(): void {
+  assert(len_or_zero("hello") === 5, "non-null narrows via truthiness");
+  assert(len_or_zero("") === 0, "empty string is still non-null (length 0)");
+  assert(len_or_zero(null) === 0, "null falls through to else");
+}

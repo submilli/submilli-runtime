@@ -1,0 +1,63 @@
+namespace: submilli
+provides:
+- name: submilli/google-calendar.agenda
+  description: Build a bounded chronological agenda across explicit calendars or up to ten visible calendars.
+  fields: {}
+- name: submilli/google-calendar.createEvent
+  description: Create a Calendar event and optionally request a Google Meet conference.
+  fields:
+    calendarId:
+      type: string
+- name: submilli/google-calendar.deleteEvent
+  description: Delete an event. This is idempotent when the event is already absent.
+  fields:
+    calendarId:
+      type: string
+- name: submilli/google-calendar.findFreeTime
+  description: Find bounded candidate slots by merging busy intervals from multiple calendars.
+  fields:
+    calendarIds:
+      type: string[]
+- name: submilli/google-calendar.getEvent
+  description: Fetch one event, returning null when it does not exist.
+  fields:
+    calendarId:
+      type: string
+- name: submilli/google-calendar.listCalendars
+  description: List calendars visible to the authenticated account.
+  fields: {}
+- name: submilli/google-calendar.listEvents
+  description: List one page of events. The default calendar is `primary`.
+  fields:
+    calendarId:
+      type: string
+- name: submilli/google-calendar.queryFreeBusy
+  description: Query busy intervals for explicit calendars and a bounded time range.
+  fields:
+    calendarIds:
+      type: string[]
+- name: submilli/google-calendar.respondToEvent
+  description: Set the authenticated attendee's response status on an event.
+  fields:
+    calendarId:
+      type: string
+    response:
+      type: string
+- name: submilli/google-calendar.updateEvent
+  description: Patch an event. Omitted fields remain unchanged; empty attendees clears attendees.
+  fields:
+    calendarId:
+      type: string
+requires:
+- capability: http.delete
+  filter: host == "www.googleapis.com" and method == "DELETE"
+- capability: http.get
+  filter: host == "www.googleapis.com" and method == "GET"
+- capability: http.patch
+  filter: host == "www.googleapis.com" and method == "PATCH"
+- capability: http.post
+  filter: host == "www.googleapis.com" and method == "POST"
+- capability: http.post
+  filter: host == "www.googleapis.com" and path == "/calendar/v3/freeBusy" and method == "POST"
+- capability: secrets.get
+  filter: name == "GOOGLE_ACCESS_TOKEN"

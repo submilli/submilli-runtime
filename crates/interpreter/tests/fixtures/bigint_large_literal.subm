@@ -1,0 +1,21 @@
+// bigint literals beyond f64 safe-integer range
+function main(): void {
+  let v: bigint = 1267650600228229401496703205376n;
+  assert(
+    v.toString() === "1267650600228229401496703205376",
+    "2^100 literal round-trips"
+  );
+
+  // 2^64 — first value past u64 single-limb.
+  let two_pow_64: bigint = 18446744073709551616n;
+  assert(
+    two_pow_64.toString() === "18446744073709551616",
+    "2^64 literal round-trips"
+  );
+
+  let neg: bigint = -1267650600228229401496703205376n;
+  assert(
+    neg.toString() === "-1267650600228229401496703205376",
+    "negated 2^100"
+  );
+}

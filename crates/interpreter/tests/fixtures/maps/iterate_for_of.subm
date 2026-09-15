@@ -1,0 +1,40 @@
+// for-of on Map desugars to m.entries(), yielding [K, V] tuples.
+
+function main(): void {
+  const m = new Map<string, number>();
+  m.set("a", 1);
+  m.set("b", 2);
+  m.set("c", 3);
+  m.set("d", 4);
+
+  let total: number = 0;
+  let visits: number = 0;
+  for (const p of m) {
+    const k: string = p[0];
+    const v: number = p[1];
+    total = total + v;
+    visits = visits + 1;
+    assert(k.length === 1, "every key is a single char");
+  }
+  assert(visits === 4, "for-of visits each entry once");
+  assert(total === 10, "values sum to 10 regardless of order");
+
+  let ks: string[] = [];
+
+  for (const __ks of m.keys()) {
+
+    ks.push(__ks);
+
+  }
+  let vs: number[] = [];
+  for (const __vs of m.values()) {
+    vs.push(__vs);
+  }
+  let es: [string, number][] = [];
+  for (const __es of m.entries()) {
+    es.push(__es);
+  }
+  assert(ks.length === 4, "keys() returns 4-element array");
+  assert(vs.length === 4, "values() returns 4-element array");
+  assert(es.length === 4, "entries() returns 4-element array");
+}

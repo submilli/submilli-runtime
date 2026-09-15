@@ -1,0 +1,7 @@
+function main(): void {
+  let sum: number = 0;
+  for (let i: number = 0; i < 5; i = i + 1) {
+    sum = sum + i;
+  }
+  assert(sum === 10, "0+1+2+3+4 = 10");
+}

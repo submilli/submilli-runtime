@@ -1,0 +1,15 @@
+type Item = { key: number; tag: string };
+
+function main(): void {
+  const xs: Item[] = [
+    { key: 3, tag: "c" },
+    { key: 1, tag: "a" },
+    { key: 2, tag: "b" },
+  ];
+  xs.sort((a, b) => a.key - b.key);
+  assert(xs[0].key === 1, "smallest key first");
+  assert(xs[1].key === 2, "middle key second");
+  assert(xs[2].key === 3, "largest key last");
+  assert(xs[0].tag === "a", "tag follows the sort");
+  assert(xs[2].tag === "c", "tag follows the sort");
+}

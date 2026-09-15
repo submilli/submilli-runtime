@@ -1,0 +1,6 @@
+// expect-error: lookbehind (`(?<=...)` / `(?<!...)`) is not supported
+
+function main(): void {
+  const r = /(?<!foo)bar/;
+  assert(r !== null, "never reached");
+}

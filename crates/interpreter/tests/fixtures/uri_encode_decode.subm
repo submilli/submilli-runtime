@@ -1,0 +1,32 @@
+function main(): void {
+  assert(encodeURIComponent("a b") === "a%20b", "space encodes");
+  assert(encodeURIComponent("a&b=c") === "a%26b%3Dc", "reserved characters encode");
+  assert(encodeURIComponent("aA1-_.!~*'()") === "aA1-_.!~*'()", "unreserved marks survive");
+  assert(encodeURIComponent("こん") === "%E3%81%93%E3%82%93", "multibyte UTF-8 encodes per byte");
+
+  assert(encodeURI("https://a.dev/p?q=1&r=2") === "https://a.dev/p?q=1&r=2", "URI structure survives encodeURI");
+  assert(encodeURI("https://a.dev/a b") === "https://a.dev/a%20b", "spaces still encode");
+
+  assert(decodeURIComponent("a%20b") === "a b", "decodes space");
+  assert(decodeURIComponent("%E3%81%93%E3%82%93") === "こん", "decodes multibyte UTF-8");
+  assert(decodeURIComponent(encodeURIComponent("x?y&z=1")) === "x?y&z=1", "round-trips");
+
+  assert(decodeURI("https://a.dev/a%20b%3Fc") === "https://a.dev/a b%3Fc", "decodeURI keeps reserved escapes");
+
+  let threw: boolean = false;
+  try {
+    decodeURIComponent("%zz");
+  } catch (e: Error) {
+    threw = true;
+    assert(e.message === "URI malformed", "invalid escape names the problem");
+  }
+  assert(threw, "malformed escape throws");
+
+  threw = false;
+  try {
+    decodeURIComponent("%e3%81");
+  } catch (e: Error) {
+    threw = true;
+  }
+  assert(threw, "truncated multibyte sequence throws");
+}

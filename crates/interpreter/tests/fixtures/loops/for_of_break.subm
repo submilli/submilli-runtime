@@ -1,0 +1,10 @@
+function main(): void {
+  let acc: number = 0;
+  for (const n of [10, 20, 30, 40, 50]) {
+    if (n === 30) {
+      break;
+    }
+    acc = acc + n;
+  }
+  assert(acc === 30, "for-of break stops at third element");
+}

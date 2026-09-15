@@ -1,0 +1,35 @@
+// `typeof x === "T"` predicate, primitive form.
+
+function is_number<T>(x: T): boolean { return typeof x === "number"; }
+function is_string<T>(x: T): boolean { return typeof x === "string"; }
+function is_boolean<T>(x: T): boolean { return typeof x === "boolean"; }
+
+function main(): void {
+  const n: number = 42;
+  assert(typeof n === "number", "n is number (static true)");
+  assert(!(typeof n === "string"), "n is string (static false)");
+  assert(!(typeof n === "boolean"), "n is boolean (static false)");
+
+  const s: string = "hi";
+  assert(typeof s === "string", "s is string (static true)");
+  assert(!(typeof s === "number"), "s is number (static false)");
+
+  const b: boolean = true;
+  assert(typeof b === "boolean", "b is boolean (static true)");
+  assert(!(typeof b === "number"), "b is number (static false)");
+
+  assert(is_number<number>(42), "ref.test number == number");
+  assert(!is_number<string>("hi"), "ref.test string != number");
+  assert(!is_number<boolean>(true), "ref.test boolean != number");
+
+  assert(is_string<string>("hi"), "ref.test string == string");
+  assert(!is_string<number>(42), "ref.test number != string");
+  assert(!is_string<boolean>(true), "ref.test boolean != string");
+
+  assert(is_boolean<boolean>(true), "ref.test boolean == boolean");
+  assert(!is_boolean<number>(42), "ref.test number != boolean");
+  assert(!is_boolean<string>("hi"), "ref.test string != boolean");
+
+  assert(typeof n !== "string", "typeof !== \"string\"");
+  assert(typeof s !== "number", "typeof !== \"number\"");
+}

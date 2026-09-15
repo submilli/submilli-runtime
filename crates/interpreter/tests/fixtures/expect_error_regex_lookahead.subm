@@ -1,0 +1,7 @@
+// expect-error: lookahead (`(?=...)` / `(?!...)`) is not supported
+// expect-error: Rewrite by capturing the following text explicitly
+
+function main(): void {
+  const r = /(?=foo)bar/;
+  assert(r !== null, "never reached");
+}

@@ -1,0 +1,30 @@
+function main(): void {
+  let nums: number[] = [10, 20, 30, 40, 30];
+
+  assert(nums.findIndex((n) => n > 15) === 1, "findIndex returns the first matching index");
+  assert(nums.findIndex((n) => n === 10) === 0, "findIndex finds the head");
+  assert(nums.findIndex((n) => n > 100) === -1, "findIndex returns -1 when nothing matches");
+
+  assert(nums.findLastIndex((n) => n === 30) === 4, "findLastIndex scans from the end");
+  assert(nums.findLastIndex((n) => n > 15) === 4, "findLastIndex returns the last match");
+  assert(nums.findLastIndex((n) => n > 100) === -1, "findLastIndex returns -1 when nothing matches");
+
+  let last = nums.findLast((n) => n === 30);
+  if (last !== null) {
+    assert(last === 30, "findLast returns the last matching element");
+  } else {
+    assert(false, "findLast should locate 30");
+  }
+
+  let lastBig = nums.findLast((n) => n > 100);
+  assert(lastBig === null, "findLast returns null when nothing matches");
+
+  let empty: number[] = [];
+  assert(empty.findIndex((n) => true) === -1, "findIndex on empty array returns -1");
+  assert(empty.findLastIndex((n) => true) === -1, "findLastIndex on empty array returns -1");
+  assert(empty.findLast((n) => true) === null, "findLast on empty array returns null");
+
+  let words = ["apple", "banana", "cherry", "fig"];
+  assert(words.findIndex((s) => s.length === 3) === 3, "findIndex over strings");
+  assert(words.findLastIndex((s) => s.length > 4) === 2, "findLastIndex over strings");
+}

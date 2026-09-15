@@ -1,0 +1,12 @@
+function main(): void {
+  const o = { toJson: (): string => "\"custom\"" };
+  assert(o.toJson() === "\"custom\"", "direct toJson call hits override");
+  assert(JSON.stringify(o) === "\"custom\"", "JSON.stringify hits override");
+
+  const u: unknown = o;
+  assert(u.toJson() === "\"custom\"", "unknown toJson call hits override");
+  assert(JSON.stringify(u) === "\"custom\"", "unknown stringify hits override");
+
+  const normal = { x: 1, y: 2 };
+  assert(JSON.stringify(normal) === "{\"x\":1,\"y\":2}", "default structural JSON unchanged");
+}

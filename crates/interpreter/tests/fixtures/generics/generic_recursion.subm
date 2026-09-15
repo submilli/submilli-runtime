@@ -1,0 +1,14 @@
+// Checks recursive calls don't introduce a fresh TypeVar for T; `let next: T = ...` exercises T-to-T assignability.
+
+function recurse<T>(x: T, depth: number): T {
+  if (depth === 0) {
+    return x;
+  }
+  let next: T = recurse(x, depth - 1);
+  return next;
+}
+
+function main(): void {
+  assert(recurse(42, 3) === 42, "recurse on number unwinds");
+  assert(recurse("hi", 2) === "hi", "recurse on string unwinds");
+}

@@ -1,0 +1,188 @@
+name: Release candidate
+
+# Build and validate candidate artifacts. Publication is configured separately.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Candidate version (e.g. v0.1.4-rc.1)"
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  SUBMILLI_TELEMETRY: "0"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          # Linux builds are static musl via cargo-zigbuild so the binaries run
+          # on any distro regardless of its glibc version. Our deps are pure
+          # Rust (rustls, no OpenSSL/C), so static linking is clean.
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            zig: true
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            zig: true
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install zig
+        if: matrix.zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.14.1
+      - name: Install cargo-zigbuild
+        if: matrix.zig
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+
+      - name: Build
+        shell: bash
+        run: |
+          if [ "${{ matrix.zig }}" = "true" ]; then
+            cargo zigbuild --release --target ${{ matrix.target }} \
+              --bin submilli --bin submilli-server
+          else
+            cargo build --release --target ${{ matrix.target }} \
+              --bin submilli --bin submilli-server
+          fi
+
+      - name: Package
+        shell: bash
+        run: |
+          VERSION="${{ inputs.tag || github.ref_name }}"
+          DIST="submilli-${VERSION}-${{ matrix.target }}"
+          BIN_DIR="target/${{ matrix.target }}/release"
+          mkdir -p "$DIST"
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            cp "$BIN_DIR/submilli.exe" "$BIN_DIR/submilli-server.exe" "$DIST"/
+            7z a "${DIST}.zip" "$DIST" >/dev/null
+            echo "ASSET=${DIST}.zip" >> "$GITHUB_ENV"
+          else
+            cp "$BIN_DIR/submilli" "$BIN_DIR/submilli-server" "$DIST"/
+            tar -czf "${DIST}.tar.gz" "$DIST"
+            echo "ASSET=${DIST}.tar.gz" >> "$GITHUB_ENV"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: ${{ env.ASSET }}
+
+  docker:
+    name: Validate container image
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      # Before the artifacts: without a checkout there is no Dockerfile.
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "*-linux-musl"
+          path: artifacts
+          merge-multiple: true
+
+      # The image copies `dist/$TARGETARCH/`, using Docker's arch names rather
+      # than the Rust target triples the tarballs are named for. Each tarball
+      # carries a top-level `submilli-<version>-<target>/` directory.
+      - name: Lay out binaries by Docker architecture
+        run: |
+          VERSION="${{ inputs.tag || github.ref_name }}"
+          mkdir -p dist/amd64 dist/arm64
+          tar -xzf "artifacts/submilli-${VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+            -C dist/amd64 --strip-components=1
+          tar -xzf "artifacts/submilli-${VERSION}-aarch64-unknown-linux-musl.tar.gz" \
+            -C dist/arm64 --strip-components=1
+
+      # `latest=auto` is what keeps a prerelease tag such as v0.1.0-rc.1 from
+      # claiming `latest`. The explicit `value:` feeds the same
+      # `inputs.tag || github.ref_name` expression the tarball steps use, so a
+      # workflow_dispatch test release tags correctly despite having no tag ref.
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/submilli
+          flavor: latest=auto
+          tags: |
+            type=semver,pattern={{version}},value=${{ inputs.tag || github.ref_name }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.tag || github.ref_name }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Three builds, not one, and the ordering is the gate: nothing is pushed
+      # until the candidate has been run. They share the builder's layer cache,
+      # and the image is a file copy, so the second and third are near-free.
+      #
+      # `context: .` is not the default — the action would otherwise use the Git
+      # context, which cannot see the untracked `dist/` this job just created.
+      #
+      # `provenance: false` because buildx otherwise attaches attestations that
+      # add `unknown/unknown` entries to the manifest list.
+      #
+      # No QEMU anywhere: nothing is executed during a build, only copied.
+
+      # `load: true` and a multi-platform `platforms:` list are mutually
+      # exclusive — the docker daemon's image store cannot hold a multi-arch
+      # manifest — which is why this step is the runner's own platform only.
+      - name: Build the candidate for the runner's platform
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          provenance: false
+          tags: submilli-candidate:smoke
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            REVISION=${{ github.sha }}
+
+      # arm64 is verified from this tarball rather than from the registry:
+      # `imagetools inspect` resolves a *published* reference, so it could only
+      # confirm a defect that had already shipped under `latest`.
+      - name: Export both platforms for structural checks
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          provenance: false
+          outputs: type=oci,dest=/tmp/submilli-image.tar
+          tags: submilli-candidate:multi
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            REVISION=${{ github.sha }}
+
+      - name: Smoke test
+        run: scripts/docker-smoke.sh submilli-candidate:smoke /tmp/submilli-image.tar
+
+      # Runs second because it is the slower of the two and has more moving
+      # parts: a broken image should fail on `--version`, not four minutes into a
+      # restart test. This one reaches the network (an HTTPS GET proves the
+      # bundled CA roots and musl's resolver), so a transport failure fails the
+      # release rather than shipping an image that cannot reach anything.
+      - name: Conformance
+        run: scripts/docker-conformance.sh submilli-candidate:smoke

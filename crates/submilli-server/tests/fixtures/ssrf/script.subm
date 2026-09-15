@@ -1,0 +1,10 @@
+// Hits a mock server bound to loopback. Whether this succeeds depends entirely
+// on the server's network policy: deny-private blocks the loopback resolution
+// before the connection; an allow-list opt-out lets it through. `__PORT__` is
+// substituted with the mock's bound port by the test harness.
+import { get, Response } from "submilli:http";
+
+function main(): string {
+  const r: Response = get("http://127.0.0.1:__PORT__/");
+  return r.body;
+}

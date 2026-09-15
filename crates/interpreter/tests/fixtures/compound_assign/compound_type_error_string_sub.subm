@@ -1,0 +1,6 @@
+// expect-error: not defined for `string` and `number`
+
+function main(): void {
+  let s: string = "hello";
+  s -= 3;
+}

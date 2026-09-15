@@ -1,0 +1,13 @@
+function main(): void {
+  let caught: string = "<none>";
+  try {
+    const r = JSON.parse("not valid json") as number;
+    assert(false, "JSON.parse on invalid input should have thrown — never reached");
+  } catch (e: Error) {
+    caught = e.message;
+  }
+  // serde's exact wording isn't pinned, but the message must be prefixed and
+  // carry positional detail (not collapsed to a generic string).
+  assert(caught.startsWith("JSON.parse: "), "thrown Error keeps the JSON.parse prefix");
+  assert(caught.length > 12, "thrown Error carries serde's position/expectation detail");
+}

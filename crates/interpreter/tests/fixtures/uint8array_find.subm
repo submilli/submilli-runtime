@@ -1,0 +1,23 @@
+function main(): void {
+  let bytes: Uint8Array = Uint8Array.new([1, 2, 3, 4, 5]);
+
+  let first_even: number | null = bytes.find((v: number) => v % 2 === 0);
+  assert(first_even === 2, "find first even");
+
+  let last_even: number | null = bytes.findLast((v: number) => v % 2 === 0);
+  assert(last_even === 4, "findLast: last even");
+
+  let no_match: number | null = bytes.find((v: number) => v > 100);
+  assert(no_match === null, "find: no match → null");
+
+  assert(bytes.findIndex((v: number) => v === 3) === 2, "findIndex");
+  assert(bytes.findIndex((v: number) => v === 99) === -1, "findIndex: miss is -1");
+
+  assert(bytes.findLastIndex((v: number) => v % 2 === 1) === 4, "findLastIndex");
+  assert(bytes.findLastIndex((v: number) => v === 99) === -1, "findLastIndex: miss");
+
+  let empty: Uint8Array = Uint8Array.alloc(0);
+  let empty_find: number | null = empty.find((v: number) => true);
+  assert(empty_find === null, "find on empty → null");
+  assert(empty.findIndex((v: number) => true) === -1, "findIndex on empty → -1");
+}

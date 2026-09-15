@@ -1,0 +1,5 @@
+import { check } from "submilli:security";
+
+function main(): void {
+  check("test.com/op", { foo: 1 });
+}

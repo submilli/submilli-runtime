@@ -1,0 +1,8 @@
+// expect-error: typeof
+
+
+function main(): void {
+  const x: number = 1;
+  const t: string = typeof x;
+  assert(t === "number", "never reached");
+}

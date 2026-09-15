@@ -1,0 +1,13 @@
+function main(): void {
+  let x: string | null = null;
+  let i: number = 0;
+  while (true) {
+    if (i === 3) {
+      x = "found";
+      break;
+    }
+    i = i + 1;
+  }
+  assert(x.length === 5, "break carries assignment narrowing past loop");
+  assert(i === 3, "exited at i=3");
+}

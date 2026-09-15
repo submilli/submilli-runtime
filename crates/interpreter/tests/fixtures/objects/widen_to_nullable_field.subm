@@ -1,0 +1,7 @@
+
+function main(): void {
+  const a: { name: string } = { name: "Doron" };
+  const b: { name: string | null } = a;
+  assert(b.name === "Doron", "widened view sees the underlying value");
+  assert(a.name === "Doron", "narrow view still reads as the literal");
+}

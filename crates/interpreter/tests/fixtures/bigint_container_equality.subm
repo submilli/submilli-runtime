@@ -1,0 +1,39 @@
+// `bigint` values dispatch value-based equality through their vtable, so the
+// stdlib containers that search by element/key — Array#indexOf / #includes,
+// Map, Set — find them. Regression guard: these used to fall back to reference
+// equality and never match.
+
+function main(): void {
+  const arr: bigint[] = [10n, 20n, 30n];
+  assert(arr.indexOf(20n) === 1, "indexOf finds a bigint by value");
+  assert(arr.indexOf(40n) === -1, "indexOf reports a genuine miss");
+  assert(arr.includes(20n), "includes finds a bigint by value");
+  assert(!arr.includes(40n), "includes reports a genuine miss");
+
+  // A computed value lands at a different heap address than the literal it
+  // equals — proving the match is by value, not by reference.
+  const computed: bigint = 19n + 1n;
+  assert(arr.indexOf(computed) === 1, "indexOf matches a freshly computed bigint");
+
+  const m: Map<bigint, string> = new Map<bigint, string>();
+  m.set(100n, "a");
+  m.set(200n, "b");
+  assert(m.has(100n), "Map finds a bigint key by value");
+  assert(m.get(200n) === "b", "Map#get returns the value for a bigint key");
+  assert(!m.has(300n), "Map reports a genuine bigint-key miss");
+  m.set(100n, "c");
+  assert(m.size === 2, "re-setting an equal bigint key overwrites, not appends");
+  assert(m.get(100n) === "c", "Map#set overwrites under an equal bigint key");
+
+  const s: Set<bigint> = new Set<bigint>();
+  s.add(7n);
+  s.add(7n);
+  assert(s.size === 1, "Set dedupes equal bigints");
+  assert(s.has(7n), "Set finds a bigint by value");
+  assert(!s.has(8n), "Set reports a genuine bigint miss");
+
+  // Sign participates in equality: 5n and -5n must not collide.
+  const signs: bigint[] = [5n, -5n];
+  assert(signs.indexOf(-5n) === 1, "negative bigint distinguished from its magnitude");
+  assert(signs.indexOf(5n) === 0, "positive bigint distinguished from its negation");
+}

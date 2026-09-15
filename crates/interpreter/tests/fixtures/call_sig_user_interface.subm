@@ -1,0 +1,13 @@
+interface Adder {
+  (x: number, y: number): number;
+}
+
+function main(): void {
+  assert(Number("4") + Number("2") === 6, "Number() call-sig path");
+  assert(String(42) === "42", "String() call-sig path");
+  assert(BigInt(7).toString() === "7", "BigInt(number) call-sig path");
+  assert(
+    BigInt("12345678901234567890").toString() === "12345678901234567890",
+    "BigInt(string) call-sig path"
+  );
+}

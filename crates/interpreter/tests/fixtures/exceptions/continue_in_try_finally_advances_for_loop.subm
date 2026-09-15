@@ -1,0 +1,13 @@
+// Regression: `continue` inside `try { } finally { }` in a `for` loop must run the
+// finally, then advance the update step, then re-test the condition — not loop forever.
+function main(): void {
+  let finallyCount: number = 0;
+  for (let i: number = 0; i < 3; i++) {
+    try {
+      continue;
+    } finally {
+      finallyCount = finallyCount + 1;
+    }
+  }
+  assert(finallyCount === 3, "finally ran once per iteration");
+}

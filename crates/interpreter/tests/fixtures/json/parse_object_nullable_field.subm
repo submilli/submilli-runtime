@@ -1,0 +1,14 @@
+function main(): void {
+  const a = JSON.parse(
+    "{\"name\":\"x\",\"age\":null}"
+  ) as { name: string; age: number | null };
+  assert(a.name === "x", "name parsed");
+  assert(a.age === null, "null age parsed");
+
+  const b = JSON.parse(
+    "{\"name\":\"y\",\"age\":42}"
+  ) as { name: string; age: number | null };
+  assert(b.name === "y", "name parsed");
+  assert(b.age === 42, "non-null age parsed and equals literal");
+  assert(b.age !== null, "non-null age is not null");
+}

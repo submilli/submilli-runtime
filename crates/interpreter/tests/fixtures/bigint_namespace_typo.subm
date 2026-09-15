@@ -1,0 +1,5 @@
+// expect-error: BigInt
+// expect-error: BigInt.fromString(s)
+function main(): void {
+  let _: bigint = BigInt.fromBad("123");
+}

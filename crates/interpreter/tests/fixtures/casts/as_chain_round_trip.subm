@@ -1,0 +1,4 @@
+function main(): void {
+  const n: number = (3.14 as unknown) as number;
+  assert(n === 3.14, "value survives widen-to-unknown then narrow back");
+}

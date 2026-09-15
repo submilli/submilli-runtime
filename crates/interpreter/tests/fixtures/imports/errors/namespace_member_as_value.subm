@@ -1,0 +1,6 @@
+// expect-error: namespace member `uuid.v4` is only valid in call position
+import uuid from "submilli:uuid";
+
+function main(): void {
+  const f = uuid.v4;
+}

@@ -1,0 +1,56 @@
+//! Standard-library packages user code reaches via `import` —
+//! `submilli:crypto` / `submilli:fs` / `submilli:http` / `submilli:secrets` /
+//! `submilli:security` / `submilli:session` / `submilli:url` / `submilli:uuid`.
+//!
+//! Every package is pure Rust host functions registered directly under its
+//! package name; the linker resolves user imports with no Wasm shim modules
+//! and no per-store instantiation.
+
+pub(crate) mod abi;
+pub mod capabilities;
+pub mod crypto;
+pub mod fs;
+pub mod http;
+pub mod secrets;
+pub mod security;
+pub mod session;
+pub mod shared;
+/// Test-authoring package. Deliberately absent from
+/// [`stdlib_package_declarations`] and [`install_host_functions`]: only
+/// `submilli build test` makes it importable (by passing its declaration into
+/// the compile and installing it directly), so `submilli run` rejects
+/// `import ... from "submilli:test"` as not found.
+pub mod test;
+pub mod url;
+pub mod uuid;
+
+use wasmtime::Linker;
+
+use crate::PackageDeclaration;
+use crate::runtime::StoreData;
+
+pub fn stdlib_package_declarations() -> Vec<PackageDeclaration> {
+    vec![
+        // Alphabetical by package name; codegen import-emission relies on this order.
+        crypto::package_declaration(),
+        fs::package_declaration(),
+        http::package_declaration(),
+        secrets::package_declaration(),
+        security::package_declaration(),
+        session::package_declaration(),
+        url::package_declaration(),
+        uuid::package_declaration(),
+    ]
+}
+
+pub fn install_host_functions(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    crypto::install(linker)?;
+    fs::install(linker)?;
+    http::install(linker)?;
+    secrets::install(linker)?;
+    security::install(linker)?;
+    session::install(linker)?;
+    url::install(linker)?;
+    uuid::install(linker)?;
+    Ok(())
+}

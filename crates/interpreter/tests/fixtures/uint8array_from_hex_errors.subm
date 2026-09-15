@@ -1,0 +1,34 @@
+// `Uint8Array.fromHex` raises a catchable SyntaxError on malformed input
+// rather than an uncatchable Wasm trap.
+
+function main(): void {
+  // Odd number of hex characters.
+  let oddErr: string = "<none>";
+  try {
+    const r: Uint8Array = Uint8Array.fromHex("abc");
+    assert(false, "odd-length hex should throw");
+  } catch (e: SyntaxError) {
+    oddErr = e.name + ":" + e.message;
+  }
+  assert(
+    oddErr === "SyntaxError:Uint8Array.fromHex: string must have an even number of characters",
+    "fromHex odd-length throws a catchable SyntaxError",
+  );
+
+  // Non-hex digit.
+  let badErr: string = "<none>";
+  try {
+    const r: Uint8Array = Uint8Array.fromHex("zz");
+    assert(false, "invalid hex digit should throw");
+  } catch (e: SyntaxError) {
+    badErr = e.name + ":" + e.message;
+  }
+  assert(
+    badErr === "SyntaxError:Uint8Array.fromHex: invalid hex digit",
+    "fromHex invalid-digit throws a catchable SyntaxError",
+  );
+
+  // Valid input still decodes.
+  const ok: Uint8Array = Uint8Array.fromHex("00ff");
+  assert(ok.length === 2 && ok[1] === 255, "valid fromHex still decodes");
+}

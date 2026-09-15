@@ -1,0 +1,18 @@
+function main(): void {
+  const entries: [string, number][] = [["a", 1], ["b", 2], ["a", 9]];
+  const m = new Map(entries);
+  assert(m.size === 2, "duplicate key collapses");
+  assert(m.get("a") === 9, "last write wins");
+
+  const m2 = new Map<string, number>([["x", 7]]);
+  assert(m2.get("x") === 7, "explicit type args with literal entries");
+
+  const roundtrip = new Map(m.entries());
+  assert(roundtrip.size === 2 && roundtrip.get("a") === 9, "round-trips through entries()");
+
+  const empty = new Map<string, number>();
+  assert(empty.size === 0, "zero-arg form unchanged");
+
+  const bare = new Map([["k1", 10], ["k2", 20]]);
+  assert(bare.size === 2 && bare.get("k2") === 20, "unannotated inline entries infer K and V");
+}

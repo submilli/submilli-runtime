@@ -1,0 +1,55 @@
+// A nullable `let` mutated inside a `for` loop is boxed (the loop body is a
+// capture frame). Reading it after an `=== null` early-return guard must unbox
+// before the narrowing cast — the fall-through read used to cast the box itself
+// and trap. Covers for-of and C-style loops, fall-through and explicit-else,
+// positive and negative guards.
+
+function for_of_fall_through(arr: string[]): string {
+  let latest: string | null = null;
+  for (const s of arr) { latest = s; }
+  if (latest === null) { return "none"; }
+  return latest;
+}
+
+function c_style_fall_through(arr: string[]): string {
+  let latest: string | null = null;
+  for (let i = 0; i < arr.length; i = i + 1) { latest = arr[i]; }
+  if (latest === null) { return "none"; }
+  return latest;
+}
+
+function fall_through_method_call(arr: string[]): string {
+  let latest: string | null = null;
+  for (const s of arr) { latest = s; }
+  if (latest === null) { return "none"; }
+  return latest.substring(0, 3);
+}
+
+function explicit_else(arr: string[]): string {
+  let latest: string | null = null;
+  for (const s of arr) { latest = s; }
+  if (latest === null) { return "none"; } else { return latest; }
+}
+
+function positive_guard(arr: string[]): string {
+  let latest: string | null = null;
+  for (const s of arr) { latest = s; }
+  if (latest !== null) { return latest; }
+  return "none";
+}
+
+function main(): void {
+  const arr: string[] = ["hello", "world"];
+  const empty: string[] = [];
+
+  assert(for_of_fall_through(arr) === "world", "for-of fall-through reads last element");
+  assert(for_of_fall_through(empty) === "none", "for-of never assigns -> still null");
+
+  assert(c_style_fall_through(arr) === "world", "c-style fall-through reads last element");
+  assert(c_style_fall_through(empty) === "none", "c-style never assigns -> still null");
+
+  assert(fall_through_method_call(arr) === "wor", "method call on narrowed boxed read");
+
+  assert(explicit_else(arr) === "world", "explicit-else branch reads last element");
+  assert(positive_guard(arr) === "world", "positive guard then-branch reads last element");
+}

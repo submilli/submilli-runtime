@@ -1,0 +1,20 @@
+enum Color {
+  Red,
+  Green,
+  Blue,
+}
+
+function name(c: Color): string {
+  switch (c) {
+    case Color.Red: return "red";
+    case Color.Green: return "green";
+    case Color.Blue: return "blue";
+    default: return "unknown";
+  }
+}
+
+function main(): void {
+  assert(name(Color.Red) === "red", "red");
+  assert(name(Color.Green) === "green", "green");
+  assert(name(Color.Blue) === "blue", "blue");
+}

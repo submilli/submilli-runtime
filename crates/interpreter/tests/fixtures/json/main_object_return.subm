@@ -1,0 +1,16 @@
+// Returning a non-string GC ref (object) from main must JSON-encode the
+// result rather than trap in the host's result decoder.
+function main(): { sumOfSquares: number; evenSquaresCount: number } {
+  let sum = 0;
+  let even = 0;
+  for (let i = 1; i <= 10; i = i + 1) {
+    let sq = i * i;
+    sum = sum + sq;
+    if (sq % 2 === 0) {
+      even = even + 1;
+    }
+  }
+  assert(sum === 385, "sum of squares 1..10");
+  assert(even === 5, "even squares count");
+  return { sumOfSquares: sum, evenSquaresCount: even };
+}

@@ -1,0 +1,53 @@
+// Type-checker + codegen + wasm-validation fixture for `Map<K,V>` / `Set<T>`.
+// Methods are wrapped in `if (false)` so unreachable prelude stubs are never
+// called; mismatched signatures still fail at wasmtime instantiation.
+
+function main(): void {
+  if (false) {
+    const m = new Map<string, number>();
+    m.set("a", 1);
+    const v: number | null = m.get("a");
+    if (v !== null) {
+      assert(v === 1, "Map#get value matches");
+    }
+    const present: boolean = m.has("a");
+    assert(present, "Map#has reports presence");
+    const removed: boolean = m.delete("a");
+    assert(removed, "Map#delete reports removal");
+    const size: number = m.size;
+    assert(size === 0, "Map#size readable");
+    let keys: string[] = [];
+    for (const __keys of m.keys()) {
+      keys.push(__keys);
+    }
+    assert(keys.length === 0, "Map#keys returns array");
+    let values: number[] = [];
+    for (const __values of m.values()) {
+      values.push(__values);
+    }
+    assert(values.length === 0, "Map#values returns array");
+    let entries: [string, number][] = [];
+    for (const __entries of m.entries()) {
+      entries.push(__entries);
+    }
+    assert(entries.length === 0, "Map#entries returns tuple array");
+    m.clear();
+  }
+  if (false) {
+    const s = new Set<string>();
+    s.add("a");
+    const present: boolean = s.has("a");
+    assert(present, "Set#has reports presence");
+    const removed: boolean = s.delete("a");
+    assert(removed, "Set#delete reports removal");
+    const size: number = s.size;
+    assert(size === 0, "Set#size readable");
+    let values: string[] = [];
+    for (const __values of s.values()) {
+      values.push(__values);
+    }
+    assert(values.length === 0, "Set#values returns array");
+    s.clear();
+  }
+  assert(true, "phase 2 plumbing compiles and validates");
+}

@@ -1,0 +1,22 @@
+
+function identity(s: string | null): string {
+  if (s !== null) {
+    return s;
+  }
+  return "";
+}
+
+function len_around_call(): number {
+  let x: string | null = null;
+  x = "hello";
+  const round_trip: string = identity(x);
+
+  if (x !== null) {
+    return x.length + round_trip.length;
+  }
+  return round_trip.length;
+}
+
+function main(): void {
+  assert(len_around_call() === 10, "re-narrow after call recovers length");
+}

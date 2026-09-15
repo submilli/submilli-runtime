@@ -1,0 +1,6 @@
+function main(): void {
+  const xs = JSON.parse("[{\"name\":\"a\"}, {\"name\":\"b\"}]") as { name: string }[];
+  assert(xs.length === 2, "length");
+  assert(xs[0].name === "a", "xs[0].name");
+  assert(xs[1].name === "b", "xs[1].name");
+}

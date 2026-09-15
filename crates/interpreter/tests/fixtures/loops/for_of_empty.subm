@@ -1,0 +1,8 @@
+function main(): void {
+  let ran: boolean = false;
+  let empty: number[] = [];
+  for (const _ of empty) {
+    ran = true;
+  }
+  assert(!ran, "for-of over empty array does not enter body");
+}

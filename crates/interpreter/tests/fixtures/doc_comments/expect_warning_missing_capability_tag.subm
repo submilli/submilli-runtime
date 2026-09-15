@@ -1,0 +1,6 @@
+// expect-warning: missing `@capability x/op`
+import { check } from "submilli:security";
+
+function main(): void {
+  check("x/op", { name: "TOKEN" });
+}

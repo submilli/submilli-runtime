@@ -1,0 +1,23 @@
+function side(): number {
+  return 1;
+}
+
+function push(out: string[], value: string): void {
+  out.push(value);
+}
+
+function f(v: string | null): string {
+  const out: string[] = [];
+  if (v !== null) {
+    const k = side();
+    if (k > 0) {
+      push(out, v);
+    }
+  }
+  return JSON.stringify(out);
+}
+
+function main(): void {
+  assert(f("x") === "[\"x\"]", "call preserves identifier narrowing in nested block");
+  assert(f(null) === "[]", "null branch does not push");
+}

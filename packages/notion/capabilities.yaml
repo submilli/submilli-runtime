@@ -1,0 +1,222 @@
+namespace: submilli
+provides:
+- name: submilli/notion.appendBlockChildren
+  description: Append block children at an optional position.
+  fields:
+    pageId:
+      type: string
+- name: submilli/notion.appendPageMarkdown
+  description: Append enhanced Markdown to a page.
+  fields:
+    pageId:
+      type: string
+- name: submilli/notion.continueViewQuery
+  description: Continue a cached view query.
+  fields:
+    viewId:
+      type: string
+- name: submilli/notion.createComment
+  description: Create a Markdown comment.
+  fields:
+    pageId:
+      type: string
+- name: submilli/notion.createDatabase
+  description: Create a database and its initial data source.
+  fields:
+    parentId:
+      type: string
+- name: submilli/notion.createPage
+  description: Create a page with properties and one content strategy.
+  fields:
+    parentId:
+      type: string
+- name: submilli/notion.createPages
+  description: Create pages sequentially and stop on the first failure.
+  fields: {}
+- name: submilli/notion.createView
+  description: Create a configured database view.
+  fields:
+    dataSourceId:
+      type: string
+    databaseId:
+      type: string
+- name: submilli/notion.fetch
+  description: Fetch one resource using its explicit kind.
+  fields:
+    id:
+      type: string
+    kind:
+      type: string
+- name: submilli/notion.fetchDataSource
+  description: Retrieve a data source by ID, URL, or collection reference.
+  fields:
+    dataSourceId:
+      type: string
+- name: submilli/notion.fetchDatabase
+  description: Retrieve a database container by ID or Notion URL.
+  fields:
+    databaseId:
+      type: string
+- name: submilli/notion.fetchPage
+  description: Retrieve a page by ID or Notion URL.
+  fields:
+    pageId:
+      type: string
+- name: submilli/notion.getBlock
+  description: Retrieve one block.
+  fields:
+    pageId:
+      type: string
+- name: submilli/notion.getComments
+  description: List open comments for a page or block.
+  fields:
+    pageId:
+      type: string
+- name: submilli/notion.getFileUpload
+  description: Retrieve one file upload.
+  fields:
+    uploadId:
+      type: string
+- name: submilli/notion.getPageProperty
+  description: Retrieve one page property item.
+  fields:
+    pageId:
+      type: string
+- name: submilli/notion.getSelf
+  description: Retrieve the integration bot user.
+  fields: {}
+- name: submilli/notion.getUser
+  description: Retrieve a workspace user.
+  fields:
+    userId:
+      type: string
+- name: submilli/notion.listBlockChildren
+  description: List direct children of a block or page.
+  fields:
+    pageId:
+      type: string
+- name: submilli/notion.listDataSourceTemplates
+  description: List page templates available to a data source.
+  fields:
+    dataSourceId:
+      type: string
+- name: submilli/notion.listFileUploads
+  description: List file uploads owned by this connection.
+  fields: {}
+- name: submilli/notion.listUsers
+  description: List users visible to the connection.
+  fields: {}
+- name: submilli/notion.listViews
+  description: List views belonging to a database.
+  fields:
+    databaseId:
+      type: string
+- name: submilli/notion.movePage
+  description: Move a page under another page or data source.
+  fields:
+    pageId:
+      type: string
+    parentId:
+      type: string
+- name: submilli/notion.movePages
+  description: Move pages sequentially and stop on the first failure.
+  fields: {}
+- name: submilli/notion.queryDataSource
+  description: Query pages and nested data sources.
+  fields:
+    dataSourceId:
+      type: string
+- name: submilli/notion.queryMeetingNotes
+  description: Query meeting-note blocks visible to the integration user.
+  fields: {}
+- name: submilli/notion.queryView
+  description: Execute a view's saved filters and sorts.
+  fields:
+    viewId:
+      type: string
+- name: submilli/notion.readPageMarkdown
+  description: Retrieve a page as enhanced Markdown.
+  fields:
+    pageId:
+      type: string
+- name: submilli/notion.replacePageMarkdown
+  description: Replace all page content with enhanced Markdown.
+  fields:
+    pageId:
+      type: string
+- name: submilli/notion.restoreBlock
+  description: Restore a block from trash.
+  fields:
+    pageId:
+      type: string
+- name: submilli/notion.restoreDatabase
+  description: Restore a database from trash.
+  fields:
+    databaseId:
+      type: string
+- name: submilli/notion.restorePage
+  description: Restore a page from trash.
+  fields:
+    pageId:
+      type: string
+- name: submilli/notion.search
+  description: Search titles visible to the connection.
+  fields: {}
+- name: submilli/notion.trashBlock
+  description: Move a block to trash.
+  fields:
+    pageId:
+      type: string
+- name: submilli/notion.trashDatabase
+  description: Move a database to trash.
+  fields:
+    databaseId:
+      type: string
+- name: submilli/notion.trashPage
+  description: Move a page to trash.
+  fields:
+    pageId:
+      type: string
+- name: submilli/notion.updateBlock
+  description: Update fields on a block.
+  fields:
+    pageId:
+      type: string
+- name: submilli/notion.updateDataSource
+  description: Update a data source title, schema, or parent.
+  fields:
+    dataSourceId:
+      type: string
+- name: submilli/notion.updatePage
+  description: Update page properties, icon, cover, or template.
+  fields:
+    pageId:
+      type: string
+- name: submilli/notion.updatePageMarkdown
+  description: Replace matching enhanced Markdown content.
+  fields:
+    pageId:
+      type: string
+- name: submilli/notion.updateView
+  description: Update a view's saved query or presentation.
+  fields:
+    viewId:
+      type: string
+- name: submilli/notion.uploadFile
+  description: Upload a VFS file using automatic single- or multipart mode.
+  fields:
+    path:
+      type: string
+requires:
+- capability: fs.read
+  filter: op == "readBytes"
+- capability: fs.stat
+  filter: op == "stat"
+- capability: http.get
+  filter: host == "api.notion.com" and method == "GET"
+- capability: http.patch
+  filter: host == "api.notion.com" and method == "PATCH"
+- capability: http.post
+  filter: host == "api.notion.com" and method == "POST"
+- capability: secrets.get
+  filter: name == "NOTION_ACCESS_TOKEN"

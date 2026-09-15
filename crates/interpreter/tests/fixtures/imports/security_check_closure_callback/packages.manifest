@@ -1,0 +1,6 @@
+# A closure written by the script but *invoked inside* a package keeps the
+# script's identity: a package cannot launder a caller's callback into its own.
+# name        dir     deps                     root
+@test/inner   inner   -
+@test/outer   outer   @test/inner
+main          app     @test/inner,@test/outer  root

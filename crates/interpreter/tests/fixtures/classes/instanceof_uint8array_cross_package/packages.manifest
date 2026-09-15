@@ -1,0 +1,7 @@
+# `instanceof Uint8Array` evaluated inside a separate package. Unlike the class
+# route — which resolves the producer's imported vtable singleton — this route
+# needs only the consuming module's own `$Uint8Array` intrinsic, so there is no
+# cross-package symbol to import. This pins that asymmetry.
+# name           dir     deps          root
+@test/bytes      bytes   -
+main             app     @test/bytes   root

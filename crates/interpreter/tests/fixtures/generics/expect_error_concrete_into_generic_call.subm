@@ -1,0 +1,10 @@
+// expect-error: expected `T`, got `number`
+
+function inner<U>(y: U): U { return y; }
+
+function outer<T>(x: T): T {
+  let n: number = 42;
+  return inner(n);
+}
+
+function main(): void {}

@@ -1,0 +1,10 @@
+interface Commit {
+  sha: string;
+  stats: { additions: number };
+}
+
+function main(): void {
+  const commits = JSON.parse("[{\"sha\":\"abc\",\"stats\":{\"additions\":1}}]") as Commit[];
+  const actual = JSON.stringify(commits);
+  assert(actual === "[{\"sha\":\"abc\",\"stats\":{\"additions\":1}}]", actual);
+}

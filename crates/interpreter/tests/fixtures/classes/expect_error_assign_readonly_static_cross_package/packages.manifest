@@ -1,0 +1,5 @@
+# The write side of the cross-package readonly guarantee: a consumer sees an
+# imported `static readonly` as immutable, not merely undocumented.
+# name             dir       deps              root
+@test/counters     counters  -
+main               app       @test/counters    root

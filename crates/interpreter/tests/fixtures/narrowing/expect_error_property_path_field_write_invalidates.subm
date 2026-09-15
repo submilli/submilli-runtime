@@ -1,0 +1,14 @@
+// expect-error: cannot read field `len` on `null | { len: number }`: the receiver can be `null`
+// expect-error: was dropped by the write
+
+function f(obj: { foo: { len: number } | null }): number {
+  if (obj.foo !== null) {
+    obj.foo = null;
+    return obj.foo.len;
+  }
+  return 0;
+}
+
+function main(): void {
+  assert(f({ foo: { len: 5 } }) === 5);
+}

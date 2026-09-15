@@ -1,0 +1,6 @@
+# A class-typed constructor parameter across a package boundary: the ctor
+# signature must erase the class type on both sides (producer and the
+# consumer's reconstruction), or the module fails to link.
+# name         dir   deps         root
+@test/lib      lib   -
+main           app   @test/lib    root

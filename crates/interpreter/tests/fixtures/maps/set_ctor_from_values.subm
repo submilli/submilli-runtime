@@ -1,0 +1,13 @@
+function main(): void {
+  const s = new Set([1, 2, 2, 3]);
+  assert(s.size === 3, "array initializer dedups");
+  assert(s.has(2) && s.has(3), "elements present");
+
+  const copy = new Set(s);
+  assert(copy.size === 3, "another Set is a valid initializer");
+  copy.add(4);
+  assert(s.size === 3, "copy is independent");
+
+  const fromString = new Set("abca");
+  assert(fromString.size === 3, "string initializer yields code points");
+}

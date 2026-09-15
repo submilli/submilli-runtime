@@ -1,0 +1,17 @@
+// Breaking out of the loop closes the iterator (and frees the fd) via for-of finally.
+
+import { writeText, lines } from "submilli:fs";
+
+function main(): void {
+  writeText("/big.txt", "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n");
+
+  let count: number = 0;
+  for (const line of lines("/big.txt")) {
+    count = count + 1;
+    if (count === 3) {
+      break;
+    }
+  }
+
+  assert(count === 3, "break exited after 3 lines");
+}

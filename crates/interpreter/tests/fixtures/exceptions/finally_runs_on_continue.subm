@@ -1,0 +1,14 @@
+let counter: number = 0;
+
+function main(): void {
+  let i: number = 0;
+  while (i < 3) {
+    i = i + 1;
+    try {
+      continue;
+    } finally {
+      counter = counter + 1;
+    }
+  }
+  assert(counter === 3, "finally ran once per iteration's continue");
+}

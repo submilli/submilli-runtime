@@ -1,0 +1,5 @@
+// expect-error: expected `Error`
+
+function main(): void {
+  throw "oops";
+}

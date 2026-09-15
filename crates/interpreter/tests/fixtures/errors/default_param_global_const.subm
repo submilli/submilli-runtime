@@ -1,0 +1,11 @@
+// expect-error: top-level `const` references as defaults are not yet supported
+
+const RADIX: number = 16;
+
+function parse_at(x: number, base: number = RADIX): number {
+  return x + base;
+}
+
+function main(): void {
+  parse_at(1);
+}

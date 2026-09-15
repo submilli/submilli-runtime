@@ -1,0 +1,35 @@
+// An exhaustive `switch` over an enum returns on all paths without a `default:`
+// arm — the canonical enum-dispatch pattern.
+enum Color {
+  Red,
+  Green,
+  Blue,
+}
+
+function nameOf(c: Color): string {
+  switch (c) {
+    case Color.Red: return "red";
+    case Color.Green: return "green";
+    case Color.Blue: return "blue";
+  }
+}
+
+enum Dir {
+  North = "N",
+  South = "S",
+}
+
+function arrow(d: Dir): string {
+  switch (d) {
+    case Dir.North: return "up";
+    case Dir.South: return "down";
+  }
+}
+
+function main(): void {
+  assert(nameOf(Color.Red) === "red", "red");
+  assert(nameOf(Color.Green) === "green", "green");
+  assert(nameOf(Color.Blue) === "blue", "blue");
+  assert(arrow(Dir.North) === "up", "north");
+  assert(arrow(Dir.South) === "down", "south");
+}

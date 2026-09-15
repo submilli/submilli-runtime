@@ -1,0 +1,7 @@
+// expect-error: expected `Headers | null`, got `number`
+
+import { get } from "submilli:http";
+
+function main(): void {
+  const _r = get("https://example.test/", 42);
+}

@@ -1,0 +1,13 @@
+let counter: number = 0;
+
+function build(): { a: number; b: number } {
+  counter = counter + 1;
+  return { a: 10, b: 20 };
+}
+
+function main(): void {
+  const { a, b } = build();
+  assert(a === 10, "a is 10");
+  assert(b === 20, "b is 20");
+  assert(counter === 1, "RHS was evaluated exactly once");
+}

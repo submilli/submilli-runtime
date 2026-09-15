@@ -1,0 +1,11 @@
+function main(): void {
+  let hello: Uint8Array = Uint8Array.new([104, 101, 108, 108, 111]);
+  assert(hello.toBase64() === "aGVsbG8=", "hello → base64 (no options)");
+
+  let back: Uint8Array = Uint8Array.fromBase64("aGVsbG8=");
+  assert(back.equals(hello), "round-trip (no options)");
+
+  let empty: Uint8Array = Uint8Array.alloc(0);
+  assert(empty.toBase64() === "", "empty → empty");
+  assert(Uint8Array.fromBase64("").length === 0, "empty decode");
+}

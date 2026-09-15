@@ -1,0 +1,96 @@
+namespace: submilli
+provides:
+- name: slack.com/bot/addReaction
+  description: Add an emoji reaction as the bot.
+  fields:
+    channelId:
+      type: string
+- name: slack.com/bot/deleteMessage
+  description: Permanently delete a message authored by this bot.
+  fields:
+    channelId:
+      type: string
+- name: slack.com/bot/getConversation
+  description: Fetch metadata for one channel, private group, or direct-message conversation. Visibility follows the bot token's scopes and conversation membership.
+  fields:
+    channelId:
+      type: string
+- name: slack.com/bot/getIdentity
+  description: Return the bot user and workspace represented by `SLACK_BOT_TOKEN`. Use this to verify an installation and obtain the bot's Slack user ID.
+  fields: {}
+- name: slack.com/bot/getMessage
+  description: Fetch one message by channel and Slack timestamp, returning null when absent. When reading a thread reply, set `ref.threadTs` to the root message timestamp.
+  fields:
+    channelId:
+      type: string
+- name: slack.com/bot/getThread
+  description: Return one cursor page containing a thread root and its replies.
+  fields:
+    channelId:
+      type: string
+- name: slack.com/bot/getUser
+  description: Fetch one workspace user by Slack user ID.
+  fields:
+    userId:
+      type: string
+- name: slack.com/bot/listConversations
+  description: List channels, private groups, DMs, and group DMs visible to the bot token. A returned public channel is not necessarily one the bot has joined.
+  fields: {}
+- name: slack.com/bot/listMembers
+  description: List the Slack user IDs belonging to a conversation.
+  fields:
+    channelId:
+      type: string
+- name: slack.com/bot/listMessages
+  description: Return one cursor page of messages from a conversation the bot can read. Timestamp bounds are Slack timestamps represented as strings.
+  fields:
+    channelId:
+      type: string
+- name: slack.com/bot/listUsers
+  description: List workspace users visible to the bot token, including deactivated users and bots.
+  fields: {}
+- name: slack.com/bot/openDirectMessage
+  description: Open or resume a 1:1 direct-message conversation without sending a message. Requires Slack's `im:write` bot-token scope.
+  fields:
+    userId:
+      type: string
+      description: Workspace user ID to include, excluding the bot itself.
+- name: slack.com/bot/openGroupDirectMessage
+  description: Open or resume a multi-person direct message without sending a message. Pass 2–8 workspace user IDs and do not include the bot itself. Requires Slack's `mpim:write` bot-token scope.
+  fields:
+    userIds:
+      type: string[]
+      description: Workspace user IDs to include, excluding the bot itself.
+- name: slack.com/bot/removeReaction
+  description: Remove this bot's emoji reaction from a message.
+  fields:
+    channelId:
+      type: string
+- name: slack.com/bot/sendDirectMessage
+  description: Open or resume a 1:1 DM with a workspace user, send text as the bot, and return Slack's stored message. The recipient must not be the bot itself. Requires Slack's `im:write` and `chat:write` bot-token scopes.
+  fields:
+    userId:
+      type: string
+- name: slack.com/bot/sendGroupDirectMessage
+  description: Open or resume a multi-person direct message with 2–8 workspace users, send text as the bot, and return Slack's stored message. Do not include the bot's own user ID. Requires Slack's `mpim:write` and `chat:write` bot-token scopes.
+  fields:
+    userIds:
+      type: string[]
+      description: Workspace user IDs that should receive the message.
+- name: slack.com/bot/sendMessage
+  description: Post a message as the bot and return Slack's stored message. Set `threadTs` to reply in a thread. The bot must be allowed to post in the target conversation, which normally means it must already be a member.
+  fields:
+    channelId:
+      type: string
+- name: slack.com/bot/updateMessage
+  description: Replace the text of a message authored by this bot and return the refreshed message. Slack does not allow a bot token to edit messages authored by another user or app.
+  fields:
+    channelId:
+      type: string
+requires:
+- capability: http.get
+  filter: host == "slack.com" and method == "GET"
+- capability: http.post
+  filter: host == "slack.com" and method == "POST"
+- capability: secrets.get
+  filter: name == "SLACK_BOT_TOKEN"

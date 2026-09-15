@@ -1,0 +1,5 @@
+# Writing a `private static` from outside the declaring module is rejected on
+# the write path, the same way a read is.
+# name             dir       deps              root
+@test/counters     counters  -
+main               app       @test/counters    root

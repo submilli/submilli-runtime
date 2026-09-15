@@ -1,0 +1,9 @@
+// — JSON.parse(JSON.stringify(t)) round-trips a tuple.
+
+function main(): void {
+  const original: [string, number] = ["x", 1];
+  const encoded = JSON.stringify(original);
+  const decoded = JSON.parse(encoded) as [string, number];
+  assert(decoded[0] === original[0], "decoded[0]");
+  assert(decoded[1] === original[1], "decoded[1]");
+}

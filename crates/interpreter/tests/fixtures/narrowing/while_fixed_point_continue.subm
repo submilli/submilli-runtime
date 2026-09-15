@@ -1,0 +1,20 @@
+function find_first_nonempty(items: string[]): string {
+  let i: number = 0;
+  let found: string = "";
+  while (i < items.length) {
+    const item: string = items[i];
+    i = i + 1;
+    if (item === "") {
+      continue;
+    }
+    found = item;
+    return found;
+  }
+  return found;
+}
+
+function main(): void {
+  assert(find_first_nonempty(["", "", "hit"]) === "hit", "skips empties");
+  assert(find_first_nonempty(["", ""]) === "", "all empty");
+  assert(find_first_nonempty([]) === "", "empty array");
+}

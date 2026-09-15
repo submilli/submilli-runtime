@@ -1,0 +1,24 @@
+// ECMA-262 §20.1 conformance vectors for the `Object` statics we expose,
+// with the documented divergences pinned: canonical sorted key order and
+// structural (not identity) object comparison in `Object.is`.
+
+function main(): void {
+  const o = { gamma: 1, alpha: 2, beta: 3 };
+
+  const keys = Object.keys(o);
+  assert(keys.length === 3, "all keys");
+  assert(keys[0] === "alpha" && keys[1] === "beta" && keys[2] === "gamma", "sorted order");
+
+  const values = Object.values(o);
+  assert((values[0] as number) === 2, "values follow key order");
+
+  const entries = Object.entries(o);
+  assert(entries[1][0] === "beta" && (entries[1][1] as number) === 3, "entries pair up");
+
+  assert(Object.hasOwn(o, "alpha") && !Object.hasOwn(o, "delta"), "hasOwn");
+
+  assert(Object.is(NaN, NaN), "SameValue: NaN equals itself");
+  assert(!Object.is(0, -0), "SameValue: signed zeros differ");
+  assert(Object.is("x", "x") && !Object.is("x", "y"), "strings by content");
+  assert(Object.is(true, true), "booleans");
+}

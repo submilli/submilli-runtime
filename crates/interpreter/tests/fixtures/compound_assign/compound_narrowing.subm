@@ -1,0 +1,9 @@
+function main(): void {
+  let x: number | null = 0;
+  if (x !== null) {
+    x += 5;
+    assert(x === 5, "narrowed compound assignment works");
+  }
+  x = 100;
+  assert(x === 100, "slot still writable after narrowed block");
+}

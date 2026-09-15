@@ -1,0 +1,22 @@
+function main(): void {
+  let a: number[] = [1, 2, 3, 4];
+  let r = a.fill(9);
+  assert(a[0] === 9 && a[1] === 9 && a[2] === 9 && a[3] === 9, "fills every slot");
+  assert(r.length === 4, "returns the filled array");
+
+  let b: number[] = [1, 2, 3, 4];
+  b.fill(9, 1);
+  assert(b[0] === 1 && b[1] === 9 && b[2] === 9 && b[3] === 9, "start bounds the fill");
+
+  let c: number[] = [1, 2, 3, 4];
+  c.fill(9, 1, 3);
+  assert(c[0] === 1 && c[1] === 9 && c[2] === 9 && c[3] === 4, "end bounds the fill");
+
+  let d: number[] = [1, 2, 3, 4];
+  d.fill(9, -2);
+  assert(d[0] === 1 && d[1] === 2 && d[2] === 9 && d[3] === 9, "negative start counts from end");
+
+  let s: string[] = ["x", "y"];
+  s.fill("z");
+  assert(s[0] === "z" && s[1] === "z", "fills string elements");
+}

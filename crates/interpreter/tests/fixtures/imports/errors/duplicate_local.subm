@@ -1,0 +1,5 @@
+// expect-error: duplicate declaration of `v4`
+import { v4 } from "submilli:uuid";
+import { v4 } from "submilli:uuid";
+
+function main(): void { }

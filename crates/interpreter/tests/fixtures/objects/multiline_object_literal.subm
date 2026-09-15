@@ -1,0 +1,37 @@
+type P = { a: string; b: string };
+
+function main(): void {
+  // No trailing comma.
+  const p: P = {
+    a: "x",
+    b: "y"
+  };
+  assert(p.a === "x", "p.a");
+  assert(p.b === "y", "p.b");
+
+  // Trailing comma.
+  const q: P = {
+    a: "1",
+    b: "2",
+  };
+  assert(q.a === "1", "q.a");
+  assert(q.b === "2", "q.b");
+
+  // Nested multi-line object literal.
+  const nested = {
+    outer: {
+      inner: 42,
+    },
+    flag: true
+  };
+  assert(nested.outer.inner === 42, "nested inner");
+  assert(nested.flag === true, "nested flag");
+
+  // Multi-line destructuring pattern.
+  const {
+    a,
+    b
+  } = p;
+  assert(a === "x", "destructured a");
+  assert(b === "y", "destructured b");
+}

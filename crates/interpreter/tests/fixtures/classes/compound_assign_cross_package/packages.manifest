@@ -1,0 +1,8 @@
+# Read-modify-write (`+=`, `++`) on class fields across package boundaries, where
+# the field's slot comes from a reconstructed rec group rather than a local class
+# declaration: an imported class's own field, an imported field inherited by a
+# subclass in a third package, and expression-position postfix on both.
+# name            dir        deps                          root
+@test/counters    counters   -
+@test/tickers     tickers    @test/counters
+main              app        @test/counters,@test/tickers  root

@@ -1,0 +1,12 @@
+---
+source: crates/interpreter/tests/diagnostic_snapshots.rs
+expression: render_all(source)
+---
+warning: missing `@returns` on a non-`void`-returning function
+ --> test.subm:5:10
+  |
+4 |  */
+5 | function square(x: number): number { return x * x; }
+  |          ^^^^^^
+6 | function main(): void { }
+---

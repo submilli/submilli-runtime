@@ -1,0 +1,30 @@
+// Temporal host-operation failures surface as catchable `RangeError`s (via the
+// `register_host_fn` Err->throw wrapper), not uncatchable traps — so user code
+// can `try`/`catch` them. `catch (e: Error)` still binds them (subclass).
+
+function main(): void {
+  const a: Temporal.Instant = Temporal.Instant.from("2024-03-09T15:30:45Z");
+
+  // Calendar units (weeks) are invalid on a bare Instant — only hours and
+  // smaller carry an exact length without a calendar/zone anchor.
+  let reached: boolean = false;
+  let caught: boolean = false;
+  try {
+    const w: Temporal.Instant = a.subtract({ weeks: 1 });
+    reached = true;
+  } catch (e: Error) {
+    caught = true;
+    assert(e.message.length > 0, "thrown Error carries a message");
+  }
+  assert(!reached, "subtract({ weeks }) on an Instant must throw");
+  assert(caught, "the Temporal error must be catchable");
+
+  // Invalid ISO input throws catchably too.
+  let caughtParse: boolean = false;
+  try {
+    const bad: Temporal.Instant = Temporal.Instant.from("not-a-timestamp");
+  } catch (e: Error) {
+    caughtParse = true;
+  }
+  assert(caughtParse, "Temporal.Instant.from on bad input must be catchable");
+}

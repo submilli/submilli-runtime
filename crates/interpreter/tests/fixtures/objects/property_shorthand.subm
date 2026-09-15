@@ -1,0 +1,28 @@
+// Object-literal property shorthand `{ x }` desugars to `{ x: x }`, mixable
+// with long-form fields and spreads.
+type Pair = { x: number; y: number };
+
+function makePair(x: number, y: number): Pair {
+  return { x, y };
+}
+
+function main(): void {
+  const x: number = 10;
+  const y: number = 20;
+
+  const p: Pair = { x, y };
+  assert(p.x === 10, "shorthand x");
+  assert(p.y === 20, "shorthand y");
+
+  const mixed: Pair = { x, y: 99 };
+  assert(mixed.x === 10, "mixed shorthand");
+  assert(mixed.y === 99, "mixed longform");
+
+  const r: Pair = makePair(1, 2);
+  assert(r.x === 1, "returned x");
+  assert(r.y === 2, "returned y");
+
+  const spread: Pair = { ...p, y };
+  assert(spread.x === 10, "spread x");
+  assert(spread.y === 20, "spread shorthand override");
+}

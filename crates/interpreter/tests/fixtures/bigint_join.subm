@@ -1,0 +1,20 @@
+function main(): void {
+  const xs: bigint[] = [10n, 20n, 30n];
+  assert(xs.join(",") === "10,20,30", "bigint join with separator");
+  assert(xs.join() === "10,20,30", "bigint join default separator");
+
+  const neg: bigint[] = [-5n, 0n, 7n];
+  assert(neg.join("|") === "-5|0|7", "bigint join with sign and zero");
+
+  const big: bigint[] = [123456789012345678901234567890n];
+  assert(big.join() === "123456789012345678901234567890", "bigint join beyond safe-int range");
+
+  // Array#toString joins with ",".
+  assert(`${xs}` === "10,20,30", "bigint array template interpolation");
+
+  // Scalar bigint stringifies through the same vtable toString slot.
+  const b: bigint = -123n;
+  assert(b.toString() === "-123", "scalar bigint toString");
+  assert(`v=${b}` === "v=-123", "scalar bigint template interpolation");
+  assert(String(456n) === "456", "String(bigint) coercion");
+}

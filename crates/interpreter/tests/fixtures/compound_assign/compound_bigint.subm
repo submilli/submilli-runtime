@@ -1,0 +1,26 @@
+function main(): void {
+  let b: bigint = 10n;
+
+  b += 5n;
+  assert(b === 15n, "+= on bigint");
+
+  b -= 3n;
+  assert(b === 12n, "-= on bigint");
+
+  b *= 2n;
+  assert(b === 24n, "*= on bigint");
+
+  b /= 4n;
+  assert(b === 6n, "/= on bigint");
+
+  b %= 4n;
+  assert(b === 2n, "%= on bigint");
+
+  let p: bigint = 2n;
+  p **= 10n;
+  assert(p === 1024n, "**= on bigint");
+
+  let big: bigint = 2n;
+  big **= 64n;
+  assert(big === 18446744073709551616n, "2 ** 64");
+}

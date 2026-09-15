@@ -1,0 +1,6 @@
+# Thresholds for the complexity lints enabled in [workspace.lints.clippy].
+# These are deliberately at clippy defaults — the point is to surface the
+# offenders as a tracked count, not to pick a clever number. Lower them as the
+# hotspot list shrinks.
+too-many-lines-threshold = 100
+cognitive-complexity-threshold = 25

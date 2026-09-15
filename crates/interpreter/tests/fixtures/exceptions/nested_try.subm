@@ -1,0 +1,15 @@
+function main(): void {
+  let inner_caught: string = "<none>";
+  let outer_caught: string = "<none>";
+  try {
+    try {
+      throw new Error("inner-throw");
+    } catch (e: Error) {
+      inner_caught = e.message;
+    }
+  } catch (e: Error) {
+    outer_caught = e.message;
+  }
+  assert(inner_caught === "inner-throw", "inner catch handled the throw");
+  assert(outer_caught === "<none>", "outer catch did not fire");
+}

@@ -1,0 +1,36 @@
+function main(): void {
+  const s = new Set<string>();
+  s.add("z");
+  s.add("a");
+  s.add("m");
+  s.add("b");
+  s.add("c");
+
+  let vs: string[] = [];
+
+  for (const __vs of s.values()) {
+
+    vs.push(__vs);
+
+  }
+  assert(vs.length === 5, "5 values");
+  assert(vs[0] === "z", "vs[0] = z");
+  assert(vs[1] === "a", "vs[1] = a");
+  assert(vs[2] === "m", "vs[2] = m");
+  assert(vs[3] === "b", "vs[3] = b");
+  assert(vs[4] === "c", "vs[4] = c");
+
+  let seen: string = "";
+  for (const v of s) {
+    seen = seen + v;
+  }
+  assert(seen === "zambc", "for-of yields elements in insertion order");
+
+  s.add("a");
+  let vs2: string[] = [];
+  for (const __vs2 of s.values()) {
+    vs2.push(__vs2);
+  }
+  assert(vs2.length === 5, "size unchanged after redundant add");
+  assert(vs2[1] === "a", "a stays in original position");
+}

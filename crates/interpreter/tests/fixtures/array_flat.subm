@@ -1,0 +1,38 @@
+function main(): void {
+  let nested: number[][] = [[1, 2], [3], [], [4, 5]];
+  let flat1 = nested.flat();
+  assert(flat1.length === 5, "flat() collapses one level");
+  assert(flat1[0] === 1, "flat preserves order (head)");
+  assert(flat1[2] === 3, "flat preserves order (middle)");
+  assert(flat1[4] === 5, "flat preserves order (tail)");
+
+  // flat() returns a new array — element type is number[], not number[][].
+  let copy: number[][] = [[1], [2]];
+  let depth0 = copy.flat(0);
+  assert(depth0.length === 2, "flat(0) is a shallow copy");
+  assert(depth0[0][0] === 1, "flat(0) keeps nesting");
+
+  let deep: number[][][] = [[[1], [2]], [[3]]];
+  let flat2 = deep.flat(2);
+  assert(flat2.length === 3, "flat(2) collapses two levels");
+  assert(flat2[0] === 1, "flat(2) head");
+  assert(flat2[2] === 3, "flat(2) tail");
+
+  // flat(1) on a triply-nested array leaves one level of nesting.
+  let flat2by1 = deep.flat(1);
+  assert(flat2by1.length === 3, "flat(1) on number[][][] yields number[][]");
+  assert(flat2by1[0][0] === 1, "flat(1) keeps the innermost arrays");
+
+  // Chaining is equivalent to a deeper literal depth.
+  let chained = deep.flat().flat();
+  assert(chained.length === 3, "chained flat collapses two levels");
+  assert(chained[1] === 2, "chained flat preserves order");
+
+  let allEmpty: number[][] = [[], [], []];
+  assert(allEmpty.flat().length === 0, "flat of empties is empty");
+
+  let strs: string[][] = [["a", "b"], ["c"]];
+  let flatStrs = strs.flat();
+  assert(flatStrs.length === 3, "flat over strings");
+  assert(flatStrs[1] === "b", "flat preserves string elements");
+}

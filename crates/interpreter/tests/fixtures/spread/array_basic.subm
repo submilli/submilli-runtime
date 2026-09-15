@@ -1,0 +1,16 @@
+function main(): void {
+  const a: number[] = [1, 2, 3];
+  const b: number[] = [4, 5];
+  const merged: number[] = [...a, 0, ...b];
+
+  assert(merged.length === 6, "length sums fixed + each spread");
+  assert(merged[0] === 1, "first spread element");
+  assert(merged[1] === 2, "second spread element");
+  assert(merged[2] === 3, "third spread element");
+  assert(merged[3] === 0, "fixed middle element");
+  assert(merged[4] === 4, "first element of second spread");
+  assert(merged[5] === 5, "second element of second spread");
+
+  assert(a.length === 3, "left source untouched");
+  assert(b.length === 2, "right source untouched");
+}

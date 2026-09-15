@@ -1,0 +1,31 @@
+function main(): void {
+  const base: Temporal.Duration = new Temporal.Duration({ hours: 1, minutes: 30 });
+
+  // with(): replace listed slots, keep the rest.
+  const replaced: Temporal.Duration = base.with({ minutes: 45 });
+  assert(replaced.hours === 1, "with keeps unlisted hours");
+  assert(replaced.minutes === 45, "with replaces minutes");
+
+  // with() can add a slot the receiver didn't have.
+  const widened: Temporal.Duration = base.with({ seconds: 10 });
+  assert(widened.hours === 1, "with keeps hours");
+  assert(widened.minutes === 30, "with keeps minutes");
+  assert(widened.seconds === 10, "with adds seconds");
+
+  // abs(): non-negative copy.
+  const neg: Temporal.Duration = base.negated();
+  assert(neg.sign === -1, "negated is negative");
+  const back: Temporal.Duration = neg.abs();
+  assert(back.sign === 1, "abs of negative is positive");
+  assert(back.hours === 1, "abs keeps magnitude (hours)");
+  assert(back.minutes === 30, "abs keeps magnitude (minutes)");
+  // abs() of an already-positive duration is unchanged.
+  assert(base.abs().total("minutes") === 90, "abs of positive is identity");
+
+  // blank: true only when every slot is zero.
+  assert(!base.blank, "non-empty duration is not blank");
+  assert(neg.blank === false, "negative duration is not blank");
+  const empty: Temporal.Duration = new Temporal.Duration({});
+  assert(empty.blank, "empty duration is blank");
+  assert(empty.sign === 0, "empty duration has sign 0");
+}

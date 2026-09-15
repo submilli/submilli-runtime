@@ -1,0 +1,9 @@
+// expect-error: default value must be a literal or enum variant
+
+function f(x: number = 1 + 1): void {
+  return;
+}
+
+function main(): void {
+  f();
+}

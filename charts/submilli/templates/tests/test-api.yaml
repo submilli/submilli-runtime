@@ -1,0 +1,221 @@
+{{- $fullname := include "submilli.fullname" . -}}
+{{/* Pod 0 by name through the headless Service, not the load-balanced one.
+     Replicas share nothing, so a round-robin Service would register the probe
+     blueprint on one server and then assert against another. */}}
+{{- $base := printf "http://%s-0.%s:%v" $fullname (include "submilli.headlessName" .) .Values.server.port -}}
+{{- $execProbe := printf "%s-helmtest-exec" $fullname | trunc 63 | trimSuffix "-" -}}
+
+{{/*
+The probe blueprint the execute check runs against. Created by the test and
+deleted on exit, so this check works on a default install with no blueprints
+configured — which is the install where the /tmp failure mode below actually
+bites.
+*/}}
+{{- $execYaml := printf "name: %s\ndefault: deny\nvfs:\n  mode: ephemeral\npermissions:\n  main:\n    - capability: fs.write\n      action: allow\n    - capability: fs.read\n      action: allow\n" $execProbe -}}
+{{/*
+`readText` returns `string | null`, and `!` here is a runtime-checked narrowing
+rather than TypeScript's unchecked assertion — on null it throws, which is the
+behaviour this test wants.
+*/}}
+{{- $program := "import { readText, writeText } from \"submilli:fs\";\n\nexport function main(): string {\n  writeText(\"/probe.txt\", \"helm-test-ok\");\n  return readText(\"/probe.txt\")!;\n}\n" -}}
+
+{{/*
+Cross-checks the `file:` paths the operator's blueprints name against the paths
+the chart actually mounts. Two independent inputs — the blueprint YAML in
+`blueprints:` and the Secret references in `secrets:` — that have to agree on a
+path neither of them owns, which is the definition of a drift that nothing else
+catches.
+
+It is deliberately not an assertion that each declared Secret projects its key.
+That failure is not silent: the kubelet refuses the mount outright
+(`MountVolume.SetUp failed ... references non-existent secret key`) and the
+server pod never becomes ready, so `helm test` never runs and the assertion
+could not fire.
+
+Nor is it a probe blueprint registered over the API: the server refuses
+`env:`/`file:` sources on anything registered over the wire, since with no
+inbound auth those sources would let a caller read the server's own files,
+including the secret-store key. `file:` remains valid for blueprints an operator
+supplies locally, which is what `blueprints:` does.
+*/}}
+{{- $mountRoot := include "submilli.secretMountPath" . -}}
+{{- $declaredPaths := list -}}
+{{- range $name, $ref := .Values.secrets -}}
+{{-   $declaredPaths = append $declaredPaths (printf "%s/%s/%s" $mountRoot $name $ref.key) -}}
+{{- end -}}
+{{- $referencedPaths := list -}}
+{{- range $key, $yaml := .Values.blueprints -}}
+{{-   range $m := regexFindAll "file:[ \t]*\\S+" $yaml -1 -}}
+{{-     $referencedPaths = append $referencedPaths (trimPrefix "file:" $m | trim) -}}
+{{-   end -}}
+{{- end -}}
+{{/*
+Blueprint names come from the `name:` inside each YAML, not from the values key
+(the key only names the file). Anchored to column 0 so a nested `name:` — an mcp
+server, an auth_proxy host — cannot be mistaken for the blueprint's own.
+*/}}
+{{- $seeded := list -}}
+{{- range $key, $yaml := .Values.blueprints -}}
+{{-   $match := regexFind "(?m)^name:[ \t]*\\S+" $yaml -}}
+{{-   if $match -}}
+{{-     $seeded = append $seeded (trimPrefix "name:" $match | trim) -}}
+{{-   end -}}
+{{- end -}}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ $fullname }}-test-api
+  labels:
+    {{- include "submilli.labels" . | nindent 4 }}
+    # Load-bearing, not decoration: the NetworkPolicy's allowlist rule keys on
+    # this exact label plus the release instance. Remove it and this pod is
+    # blocked by the same policy it is here to prove works.
+    app.kubernetes.io/component: test
+  annotations:
+    helm.sh/hook: test
+    # Runs before the NetworkPolicy probe, so a broken server surfaces as "the
+    # API is broken" rather than as a confusing pass on a test whose whole
+    # premise is that the API is reachable.
+    helm.sh/hook-weight: "1"
+    # Deleted on success, and on the next run if it failed — so a failed pod
+    # stays around for `kubectl logs` while a successful one does not linger.
+    # That matters here beyond tidiness: this pod mounts every Secret named in
+    # `secrets:` and, unlike the distroless server, has a shell. Retaining it
+    # after a green run would leave operator secret material sitting in a pod
+    # anyone with `pods/exec` could read, indefinitely.
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  enableServiceLinks: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: {{ .Values.tests.runAsUser }}
+    runAsGroup: {{ .Values.tests.runAsGroup }}
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: test
+      image: "{{ .Values.tests.image.repository }}:{{ .Values.tests.image.tag }}"
+      imagePullPolicy: {{ .Values.tests.image.pullPolicy }}
+      securityContext:
+        readOnlyRootFilesystem: true
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+      volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        {{- range $name, $ref := .Values.secrets }}
+        # Same helper the StatefulSet mounts with, so the path under test is the
+        # one the chart actually contracts for.
+        - name: secret-{{ $name }}
+          mountPath: {{ include "submilli.secretMountPath" $ }}/{{ $name }}
+          readOnly: true
+        {{- end }}
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          set -eu
+
+          BASE="{{ $base }}"
+          CURL="curl -sS --connect-timeout 5 --max-time 30"
+
+          fail() {
+            echo "FAIL: $*" >&2
+            echo "--- last response body ---" >&2
+            cat /tmp/body >&2 2>/dev/null || true
+            echo >&2
+            exit 1
+          }
+
+          # $1 method, $2 path, $3 optional JSON body file. Echoes the HTTP
+          # status (000 if the connection never completed); body lands in
+          # /tmp/body.
+          call() {
+            if [ -n "${3:-}" ]; then
+              code=$($CURL -o /tmp/body -w '%{http_code}' -X "$1" \
+                -H 'Content-Type: application/json' --data-binary "@$3" "$BASE$2") || true
+            else
+              code=$($CURL -o /tmp/body -w '%{http_code}' -X "$1" "$BASE$2") || true
+            fi
+            [ -n "${code:-}" ] || code=000
+            echo "$code"
+          }
+
+          CREATED_EXEC=0
+          cleanup() {
+            if [ "$CREATED_EXEC" = 1 ]; then
+              $CURL -o /dev/null -X DELETE "$BASE/v1/blueprints/{{ $execProbe }}" || true
+            fi
+            return 0
+          }
+          trap cleanup EXIT
+
+          # `helm test` does not imply the pod is ready, so poll rather than
+          # assume. 60 x 2s comfortably outlasts the startupProbe's budget.
+          echo "==> waiting for $BASE/v1/status"
+          i=0
+          while [ "$(call GET /v1/status)" != "200" ]; do
+            i=$((i + 1))
+            [ "$i" -lt 60 ] || fail "/v1/status never returned 200 after 120s"
+            sleep 2
+          done
+          echo "ok: GET /v1/status"
+
+          cat >/tmp/exec-bp.json <<'JSON'
+          {{ dict "yaml" $execYaml | toJson }}
+          JSON
+          code=$(call POST /v1/blueprints /tmp/exec-bp.json)
+          [ "$code" = "200" ] || fail "could not register the probe blueprint (HTTP $code)"
+          CREATED_EXEC=1
+          echo "ok: registered probe blueprint {{ $execProbe }}"
+
+          # The point of this test. A server whose ephemeral VFS root is not
+          # writable answers /v1/status perfectly happily and fails every
+          # execute, so health alone would call that deployment green. The
+          # program writes and reads a file to exercise the VFS rather than
+          # merely reaching the interpreter.
+          cat >/tmp/exec.json <<'JSON'
+          {{ dict "code" $program "blueprint" $execProbe | toJson }}
+          JSON
+          code=$(call POST /v1/execute /tmp/exec.json)
+          [ "$code" = "200" ] || fail "POST /v1/execute returned $code"
+          grep -q '"result":"helm-test-ok"' /tmp/body \
+            || fail "execute did not return the expected result — the VFS write/read round-trip failed"
+          echo "ok: POST /v1/execute round-tripped a file through the VFS"
+
+          {{- if $seeded }}
+
+          code=$(call GET /v1/blueprints)
+          [ "$code" = "200" ] || fail "GET /v1/blueprints returned $code"
+          {{- range $name := $seeded }}
+          grep -q '"name":"{{ $name }}"' /tmp/body \
+            || fail "seeded blueprint '{{ $name }}' is not registered — the ConfigMap seed did not reconcile"
+          echo "ok: seeded blueprint {{ $name }} is registered"
+          {{- end }}
+          {{- end }}
+
+          {{- if $referencedPaths }}
+
+          {{- range $path := $referencedPaths | uniq }}
+          if [ ! -e "{{ $path }}" ]; then
+            fail "a blueprint declares a secret at {{ $path }}, but the chart does not mount anything there. Paths the chart mounts: {{ if $declaredPaths }}{{ join ", " $declaredPaths }}{{ else }}(none — the secrets: values map is empty){{ end }}"
+          fi
+          echo "ok: blueprint secret path {{ $path }} is mounted"
+          {{- end }}
+          {{- end }}
+
+          echo
+          echo "PASS"
+  volumes:
+    - name: tmp
+      emptyDir: {}
+    {{- range $name, $ref := .Values.secrets }}
+    - name: secret-{{ $name }}
+      secret:
+        secretName: {{ $ref.secretName }}
+        items:
+          - key: {{ $ref.key }}
+            path: {{ $ref.key }}
+    {{- end }}

@@ -1,0 +1,61 @@
+function main(): void {
+  const leap = Temporal.PlainDate.from("2024-02-29");
+  assert(leap.monthCode === "M02", "PlainDate monthCode");
+  assert(leap.dayOfWeek === 4, "PlainDate dayOfWeek");
+  assert(leap.dayOfYear === 60, "PlainDate dayOfYear leap day");
+  assert(leap.daysInMonth === 29, "PlainDate daysInMonth leap February");
+  assert(leap.daysInYear === 366, "PlainDate daysInYear leap");
+  assert(leap.monthsInYear === 12, "PlainDate monthsInYear");
+  assert(leap.daysInWeek === 7, "PlainDate daysInWeek");
+  assert(leap.inLeapYear, "PlainDate inLeapYear");
+
+  const end = Temporal.PlainDate.from("2023-12-31");
+  assert(end.dayOfYear === 365, "PlainDate dayOfYear year end");
+  assert(end.weekOfYear === 52, "PlainDate weekOfYear year end");
+  assert(end.yearOfWeek === 2023, "PlainDate yearOfWeek year end");
+  assert(!end.inLeapYear, "PlainDate non-leap");
+
+  const weekBoundary = Temporal.PlainDate.from("2021-01-01");
+  assert(weekBoundary.weekOfYear === 53, "PlainDate weekOfYear boundary");
+  assert(weekBoundary.yearOfWeek === 2020, "PlainDate yearOfWeek boundary");
+
+  const t = Temporal.PlainTime.from("09:41:30.123456789");
+  assert(t.millisecond === 123, "PlainTime millisecond");
+  assert(t.microsecond === 456, "PlainTime microsecond");
+  assert(t.nanosecond === 123456789, "PlainTime nanosecond");
+
+  const dt = Temporal.PlainDateTime.from("2024-02-29T09:41:30.123456789");
+  assert(dt.dayOfWeek === 4, "PlainDateTime dayOfWeek");
+  assert(dt.monthCode === "M02", "PlainDateTime monthCode");
+  assert(dt.dayOfYear === 60, "PlainDateTime dayOfYear");
+  assert(dt.daysInMonth === 29, "PlainDateTime daysInMonth");
+  assert(dt.inLeapYear, "PlainDateTime inLeapYear");
+  assert(dt.millisecond === 123, "PlainDateTime millisecond");
+  assert(dt.microsecond === 456, "PlainDateTime microsecond");
+  assert(dt.nanosecond === 123456789, "PlainDateTime nanosecond");
+
+  const ym = Temporal.PlainYearMonth.from("2024-02");
+  assert(ym.monthCode === "M02", "PlainYearMonth monthCode");
+  assert(ym.daysInMonth === 29, "PlainYearMonth daysInMonth");
+  assert(ym.daysInYear === 366, "PlainYearMonth daysInYear");
+  assert(ym.monthsInYear === 12, "PlainYearMonth monthsInYear");
+  assert(ym.inLeapYear, "PlainYearMonth inLeapYear");
+
+  const md = Temporal.PlainMonthDay.from("06-07");
+  assert(md.monthCode === "M06", "PlainMonthDay monthCode");
+
+  const z = Temporal.ZonedDateTime.from("2024-02-29T09:41:30.123456789+00:00[UTC]");
+  assert(z.monthCode === "M02", "ZonedDateTime monthCode");
+  assert(z.dayOfWeek === 4, "ZonedDateTime dayOfWeek");
+  assert(z.dayOfYear === 60, "ZonedDateTime dayOfYear");
+  assert(z.weekOfYear === 9, "ZonedDateTime weekOfYear");
+  assert(z.yearOfWeek === 2024, "ZonedDateTime yearOfWeek");
+  assert(z.daysInWeek === 7, "ZonedDateTime daysInWeek");
+  assert(z.daysInMonth === 29, "ZonedDateTime daysInMonth");
+  assert(z.daysInYear === 366, "ZonedDateTime daysInYear");
+  assert(z.monthsInYear === 12, "ZonedDateTime monthsInYear");
+  assert(z.inLeapYear, "ZonedDateTime inLeapYear");
+  assert(z.millisecond === 123, "ZonedDateTime millisecond");
+  assert(z.microsecond === 456, "ZonedDateTime microsecond");
+  assert(z.nanosecond === 789, "ZonedDateTime nanosecond");
+}

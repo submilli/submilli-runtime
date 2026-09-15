@@ -1,0 +1,9 @@
+import { mkdir, writeText, remove, exists } from "submilli:fs";
+
+function main(): void {
+  mkdir("/tree/sub", true);
+  writeText("/tree/a.txt", "a");
+  writeText("/tree/sub/b.txt", "b");
+  remove("/tree", true);
+  assert(exists("/tree") === false, "recursive remove clears the tree");
+}

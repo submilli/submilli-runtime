@@ -1,0 +1,10 @@
+type Thunk = () => number;
+
+function main(): void {
+  const xs: Thunk[] = [];
+  xs.push(() => 1);
+  xs.push(() => 2);
+  assert(xs[0]() === 1, "first thunk returns 1");
+  assert(xs[1]() === 2, "second thunk returns 2");
+  assert(xs.length === 2, "two thunks pushed");
+}

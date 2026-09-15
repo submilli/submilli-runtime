@@ -1,0 +1,19 @@
+function main(): void {
+  const m = new Map<number, number>();
+  let i: number = 0;
+  while (i < 100) {
+    m.set(i, i * 10);
+    i = i + 1;
+  }
+  assert(m.size === 100, "100 inserts brings size to 100");
+
+  i = 0;
+  while (i < 100) {
+    const v: number | null = m.get(i);
+    assert(v !== null && v === i * 10, "get round-trips after resize");
+    i = i + 1;
+  }
+
+  assert(m.get(100) === null, "absent key still returns null");
+  assert(m.get(-1) === null, "neg absent key still null");
+}

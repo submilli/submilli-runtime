@@ -1,0 +1,3 @@
+import { a } from "./lib";
+
+export const b: number = a;

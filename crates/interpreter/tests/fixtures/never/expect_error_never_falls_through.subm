@@ -1,0 +1,9 @@
+// expect-error: does not return a value on all paths
+
+function broken(): never {
+  const _ignored: number = 1;
+}
+
+function main(): void {
+  broken();
+}

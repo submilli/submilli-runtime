@@ -1,0 +1,6 @@
+
+function main(): void {
+  let o = { name: "alice" };
+  o.name = "bob";
+  assert(o.name === "bob", "string field updated");
+}

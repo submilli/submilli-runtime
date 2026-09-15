@@ -1,0 +1,6 @@
+function main(): void {
+  const obj: { a: number; b: number } = { a: 1, b: 2 };
+  const { a, b } = obj;
+  assert(a === 1, "a is 1");
+  assert(b === 2, "b is 2");
+}

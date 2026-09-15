@@ -1,0 +1,10 @@
+function main(): void {
+  let x: number | null = 5;
+  assert(JSON.stringify(x) === "5", "non-null integer");
+
+  let y: number | null = null;
+  assert(JSON.stringify(y) === "null", "null branch");
+
+  let f: number | null = -1.5;
+  assert(JSON.stringify(f) === "-1.5", "fractional negative");
+}

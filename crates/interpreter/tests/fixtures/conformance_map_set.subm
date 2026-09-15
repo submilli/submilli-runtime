@@ -1,0 +1,52 @@
+// ECMA-262 §24 conformance vectors for `Map` and `Set` — insertion-order
+// iteration and structural key equality (our keys compare via `equals`,
+// which for primitives matches JS SameValueZero).
+
+function main(): void {
+  const m = new Map<string, number>();
+  assert(m.size === 0, "empty map");
+  m.set("a", 1);
+  m.set("b", 2);
+  m.set("a", 3);
+  assert(m.size === 2, "set overwrites existing keys");
+  assert(m.get("a") === 3, "get returns the latest value");
+  assert(m.get("zz") === null, "missing key is null");
+  assert(m.has("b") && !m.has("zz"), "has");
+  assert(m.delete("b") && !m.delete("b"), "delete reports presence");
+  m.set("c", 4);
+  let keys: string[] = [];
+  for (const k of m.keys()) {
+    keys.push(k);
+  }
+  assert(keys[0] === "a" && keys[1] === "c", "insertion order survives delete");
+  m.clear();
+  assert(m.size === 0, "clear empties");
+
+  const s = new Set<number>();
+  s.add(1);
+  s.add(2);
+  s.add(1);
+  assert(s.size === 2, "add dedupes");
+  assert(s.has(1) && !s.has(9), "has");
+  assert(s.delete(1) && !s.delete(1), "delete reports presence");
+  let remaining: number[] = [];
+  for (const v of s.values()) {
+    remaining.push(v);
+  }
+  assert(remaining[0] === 2, "insertion order after delete");
+
+  // Structural keys: two equal-content strings are one key.
+  const sk = new Set<string>();
+  sk.add("k" + "1");
+  sk.add("k1");
+  assert(sk.size === 1, "string keys compare by content");
+
+  const nested = new Map<string, number[]>();
+  nested.set("xs", [1, 2]);
+  const xs = nested.get("xs");
+  if (xs !== null) {
+    assert(xs.length === 2, "container values round-trip");
+  } else {
+    assert(false, "value should be present");
+  }
+}

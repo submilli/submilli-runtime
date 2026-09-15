@@ -1,0 +1,10 @@
+function main(): void {
+  assert(String.fromCharCode(104, 105) === "hi", "builds from UTF-16 code units");
+  assert(String.fromCharCode(72) === "H", "single unit");
+  assert(String.fromCharCode() === "", "no arguments gives empty string");
+  assert(String.fromCharCode(0x3053, 0x3093) === "こん", "BMP code points");
+
+  const lone = String.fromCharCode(0xd800);
+  assert(lone.length === 1, "a lone surrogate is one code unit");
+  assert(lone.charCodeAt(0) === 0xd800, "unit survives round-trip");
+}

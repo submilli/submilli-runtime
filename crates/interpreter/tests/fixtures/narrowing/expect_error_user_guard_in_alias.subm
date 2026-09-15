@@ -1,0 +1,6 @@
+// expect-error: expected
+
+type Guard = (x: number) => x is number;
+
+function main(): void {
+}

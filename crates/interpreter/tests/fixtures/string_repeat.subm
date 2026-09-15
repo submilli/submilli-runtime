@@ -1,0 +1,18 @@
+function main(): void {
+  assert("ab".repeat(3) === "ababab", "basic repeat");
+  assert("x".repeat(5) === "xxxxx", "single-char repeat");
+  assert("hello".repeat(1) === "hello", "repeat(1)");
+  assert("anything".repeat(0) === "", "repeat(0) is empty");
+  // Negative count throws a catchable RangeError. A computed value
+  // keeps it out of any constant folding.
+  let n: number = -1;
+  let threw: boolean = false;
+  try {
+    const bad: string = "x".repeat(n);
+    assert(false, "negative repeat should throw");
+  } catch (e: Error) {
+    threw = true;
+  }
+  assert(threw, "negative repeat throws");
+  assert("".repeat(100) === "", "empty repeat is empty");
+}

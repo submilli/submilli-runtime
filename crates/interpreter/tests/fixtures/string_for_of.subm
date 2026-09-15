@@ -1,0 +1,31 @@
+// for-of over a string yields CODE POINTS — surrogate pairs arrive as one
+// two-unit string, matching JS string iteration.
+
+function main(): void {
+  let parts: string[] = [];
+  for (const c of "abc") {
+    parts.push(c);
+  }
+  assert(parts.length === 3, "three code points");
+  assert(parts[0] === "a" && parts[2] === "c", "units in order");
+
+  let astral: string[] = [];
+  for (const c of "a😀b") {
+    astral.push(c);
+  }
+  assert(astral.length === 3, "astral char is ONE code point");
+  assert(astral[1] === "😀", "surrogate pair stays together");
+  assert(astral[1].length === 2, "but still two UTF-16 units long");
+
+  let count = 0;
+  for (const c of "") {
+    count = count + 1;
+  }
+  assert(count === 0, "empty string yields nothing");
+
+  let viaIterator = "";
+  for (const c of "xy".iterator()) {
+    viaIterator = viaIterator + c;
+  }
+  assert(viaIterator === "xy", "explicit .iterator() drives for-of too");
+}

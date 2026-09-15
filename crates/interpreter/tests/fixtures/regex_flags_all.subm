@@ -1,0 +1,24 @@
+function main(): void {
+  const i: RegExp = new RegExp("hello", "i");
+  assert(i.test("HELLO"), "i matches upper");
+  assert(i.test("HeLlO"), "i matches mixed");
+
+  const m: RegExp = new RegExp("^foo", "m");
+  assert(m.test("bar\nfoo"), "m: ^ matches after newline");
+  const no_m: RegExp = new RegExp("^foo", "");
+  assert(!no_m.test("bar\nfoo"), "no m: ^ only matches at start");
+
+  const s: RegExp = new RegExp("a.b", "s");
+  assert(s.test("a\nb"), "s: . matches newline");
+  const no_s: RegExp = new RegExp("a.b", "");
+  assert(!no_s.test("a\nb"), "no s: . does not match newline");
+
+  const u: RegExp = new RegExp("\\d+", "u");
+  assert(u.test("٠"), "u: Arabic-Indic digit matches \\d+");
+  const no_u: RegExp = new RegExp("\\d+", "");
+  assert(!no_u.test("٠"), "no u: ASCII \\d does not match Arabic digit");
+
+  const gi: RegExp = new RegExp("foo", "gi");
+  assert(gi.global && gi.ignoreCase, "gi composes");
+  assert(gi.flags === "gi", "flag string preserves source order");
+}

@@ -1,0 +1,8 @@
+# Static members across SEPARATE packages. `@test/mathx` exports classes with
+# static methods and static readonly fields; the root app calls/reads them.
+# `Pure` is used ONLY through statics — never constructed, never extended —
+# pinning that static-only usage still forces imported-class reconstruction.
+# `LocalCalc` subclasses the imported `Calc` and resolves inherited statics.
+# name          dir    deps          root
+@test/mathx     mathx  -
+main            app    @test/mathx   root

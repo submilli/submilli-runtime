@@ -1,0 +1,8 @@
+# Deny by default. The Dockerfile sits at the repo root, so the build context is
+# the whole tree — including a `target/` directory that runs to several GB and
+# would be uploaded to the daemon on every build.
+#
+# The image is assembled from prebuilt binaries and the scaffold stage needs
+# nothing from the context, so `dist/` is the complete allowlist.
+*
+!dist/

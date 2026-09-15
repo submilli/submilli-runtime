@@ -1,0 +1,6 @@
+# A package exporting a function whose parameter is a closure: the producer has
+# no closure literal of its own, so its `$closure_<sig>` rec-group type has to
+# come from the exported signature itself.
+# name        dir    deps        root
+@test/host    host   -
+main          app    @test/host  root

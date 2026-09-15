@@ -1,0 +1,12 @@
+// Hits the mock server through submilli:http. The blueprint's auth_proxy injects
+// `Authorization: Bearer <secret>` transparently — this script never sees the
+// token. The mock returns 200 only when the header is present and correct, so a
+// non-200 status means the injection didn't happen. `__PORT__` is substituted
+// with the mock server's bound port by the test harness.
+import { get, Response } from "submilli:http";
+
+function main(): string {
+  const r: Response = get("http://127.0.0.1:__PORT__/secure");
+  assert(r.status === 200, "mock rejected the request: auth header missing or wrong");
+  return r.body;
+}

@@ -1,0 +1,49 @@
+// Array keys()/values()/entries() return LIVE iterators — unlike the Map/Set
+// snapshot cursors, they observe pushes made during iteration.
+
+function main(): void {
+  const xs = ["a", "b", "c"];
+
+  let ks: number[] = [];
+  for (const i of xs.keys()) {
+    ks.push(i);
+  }
+  assert(ks.length === 3 && ks[0] === 0 && ks[2] === 2, "keys are indices");
+
+  let vs: string[] = [];
+  for (const v of xs.values()) {
+    vs.push(v);
+  }
+  assert(vs.join("") === "abc", "values in order");
+
+  let pairs = "";
+  for (const e of xs.entries()) {
+    pairs = pairs + e[0].toString() + e[1];
+  }
+  assert(pairs === "0a1b2c", "entries pair index and element");
+
+  // Live semantics: a push during iteration is seen by the same cursor.
+  const grow = [1, 2];
+  let seen = 0;
+  for (const v of grow.values()) {
+    seen = seen + 1;
+    if (seen === 1) {
+      grow.push(3);
+    }
+  }
+  assert(seen === 3, "live iterator sees the pushed element");
+
+  // Two cursors over the same array advance independently.
+  const it1 = xs.values();
+  const it2 = xs.values();
+  let first1 = "";
+  for (const v of it1) {
+    first1 = v;
+    break;
+  }
+  let all2 = "";
+  for (const v of it2) {
+    all2 = all2 + v;
+  }
+  assert(first1 === "a" && all2 === "abc", "independent cursors");
+}

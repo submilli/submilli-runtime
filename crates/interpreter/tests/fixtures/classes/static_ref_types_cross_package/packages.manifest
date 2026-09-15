@@ -1,0 +1,9 @@
+# Reference-typed `static readonly` fields across SEPARATE packages. The
+# producer emits value-globals nullable so the `ref.null` initializer
+# validates; the consumer must declare the import the same way, because the
+# engine's import check is invariant on the content type of a mutable global.
+# `static_cross_package` only covers `number`, which has no nullability bit to
+# disagree on.
+# name          dir    deps          root
+@test/strx      strx   -
+main            app    @test/strx    root

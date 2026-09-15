@@ -1,0 +1,4 @@
+function main(): void {
+  const pair: [number, string] = [42, "hello"];
+  assert(pair.length === 2, "tuple length is 2");
+}

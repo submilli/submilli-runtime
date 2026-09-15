@@ -1,0 +1,12 @@
+// `as` to a recursive object alias from `unknown`. The structural check
+// verifies the node shape and recurses through `children`.
+type Tree = { value: number; children: Tree[] };
+
+function main(): void {
+  const u = JSON.parse("{\"value\": 5, \"children\": [{\"value\": 6, \"children\": []}]}") as unknown;
+  const t: Tree = u as Tree;
+  assert(t.value === 5, "root value");
+  assert(t.children.length === 1, "one child");
+  assert(t.children[0].value === 6, "child value");
+  assert(t.children[0].children.length === 0, "child is a leaf");
+}

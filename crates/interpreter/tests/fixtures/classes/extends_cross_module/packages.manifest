@@ -1,0 +1,7 @@
+# `Dog extends Animal` across two modules of ONE package (compiled into one Wasm
+# module), consumed by a separate script. Exercises within-package inheritance
+# on the producer side and cross-package class reconstruction on the consumer
+# side (SUB-488).
+# name        dir   deps        root
+@test/zoo     zoo   -
+main          app   @test/zoo   root

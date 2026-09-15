@@ -1,0 +1,8 @@
+---
+source: crates/interpreter/src/typechecker/infer/type_diff.rs
+expression: out.unwrap()
+---
+missing field(s): `y`
+extra field(s): `z`
+field type mismatches:
+  `x`: expected `number`, got `boolean`

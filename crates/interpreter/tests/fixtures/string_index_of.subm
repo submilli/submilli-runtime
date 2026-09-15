@@ -1,0 +1,27 @@
+function main(): void {
+  let s: string = "abcdeabcde";
+
+  assert(s.indexOf("abc", 0) === 0, "indexOf at start");
+  assert(s.indexOf("cd", 0) === 2, "indexOf middle");
+  assert(s.indexOf("xyz", 0) === -1, "indexOf not found");
+
+  assert(s.indexOf("abc", 1) === 5, "indexOf skip");
+  assert(s.indexOf("abc", 6) === -1, "indexOf past last match");
+
+  assert(s.indexOf("", 0) === 0, "indexOf empty needle");
+  assert(s.indexOf("", 3) === 3, "indexOf empty needle fromIndex");
+  assert(s.indexOf("", 100) === 10, "indexOf empty needle clamped");
+
+  assert(s.lastIndexOf("abc", 10) === 5, "lastIndexOf last");
+  assert(s.lastIndexOf("abc", 4) === 0, "lastIndexOf earlier");
+  assert(s.lastIndexOf("xyz", 10) === -1, "lastIndexOf not found");
+  assert(s.lastIndexOf("", 3) === 3, "lastIndexOf empty needle");
+
+  assert(s.lastIndexOf("abc") === 5, "lastIndexOf default fromIndex");
+  assert(s.lastIndexOf("xyz") === -1, "lastIndexOf default — not found");
+
+  assert(s.includes("cde", 0), "includes middle");
+  assert(s.includes("abc", 5), "includes from idx");
+  assert(!s.includes("xyz", 0), "not includes");
+  assert(s.includes("", 0), "empty needle always included");
+}

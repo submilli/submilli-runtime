@@ -1,0 +1,37 @@
+function main(): void {
+  let s: string = "hello";
+
+  assert(s.charAt(0) === "h", "charAt(0)");
+  assert(s.charAt(4) === "o", "charAt(last)");
+
+  assert(s.charAt(-1) === "", "charAt(-1) empty");
+  assert(s.charAt(5) === "", "charAt(len) empty");
+  assert(s.charAt(100) === "", "charAt(big) empty");
+
+  assert(s.at(0) === "h", "at(0)");
+  assert(s.at(-1) === "o", "at(-1) is last");
+  assert(s.at(-5) === "h", "at(-len)");
+  assert(s.at(-6) === null, "at(out-of-range neg) is null");
+  assert(s.at(5) === null, "at(len) is null");
+  assert(s.at(100) === null, "at(big) is null");
+
+  const hit = s.at(1);
+  assert(hit !== null, "an in-range at() is non-null");
+  if (hit !== null) {
+    assert(hit === "e", "the narrowed hit is the character");
+  }
+
+  assert(s.charCodeAt(0) === 104, "charCodeAt(0) === 'h'");
+  let nan = s.charCodeAt(-1);
+  assert(nan !== nan, "charCodeAt(-1) is NaN");
+
+  assert(s.codePointAt(0) === 104, "codePointAt(0) ascii");
+
+  // codePointAt: surrogate pair (𝐀 = U+1D400 in UTF-16 = D835 DC00)
+  let bold: string = "𝐀";
+  assert(bold.length === 2, "surrogate pair occupies 2 code units");
+  assert(bold.codePointAt(0) === 119808, "codePointAt of surrogate pair");
+  // At low surrogate index, codePointAt returns the low surrogate
+  // code unit (matches JS).
+  assert(bold.codePointAt(1) === 56320, "codePointAt of low surrogate");
+}

@@ -1,0 +1,13 @@
+# `mid` declares only @test/p1, but the code it compiles names @test/p2's
+# `Token` — as `Api`'s return type, and as the ancestor of its own class. Only
+# direct dependencies used to reach the compiler, so `Token` had no declaration
+# to reconstruct from and the divergent lowering surfaced at link time as
+# `imported global type mismatch` / `imported function signature mismatch`.
+#
+# The consumer has to be a library package: the fixture harness hands the root
+# script every declaration in the manifest regardless of its `deps`.
+# name          dir    deps                            root
+@test/p2        lib2   -
+@test/p1        lib1   @test/p2
+@test/p3        mid    @test/p1
+main            app    @test/p1,@test/p2,@test/p3      root

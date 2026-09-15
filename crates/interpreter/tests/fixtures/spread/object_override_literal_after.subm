@@ -1,0 +1,9 @@
+type Base = { x: number; y: number };
+
+function main(): void {
+  const base: Base = { x: 1, y: 2 };
+  const overridden = { ...base, x: 10 };
+
+  assert(overridden.x === 10, "literal-position x wins after spread");
+  assert(overridden.y === 2, "spread y kept");
+}

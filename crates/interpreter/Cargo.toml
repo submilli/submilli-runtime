@@ -1,0 +1,55 @@
+[package]
+name = "interpreter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+wasmtime = { workspace = true }
+wasm-encoder = { workspace = true }
+wasmparser = { workspace = true }
+wast = { workspace = true }
+gimli = { workspace = true }
+unicode-ident = { workspace = true }
+unicode-normalization = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "net", "time"] }
+reqwest = { workspace = true }
+futures = { workspace = true }
+uuid = { workspace = true }
+url = { workspace = true }
+ipnet = { workspace = true }
+percent-encoding = { workspace = true }
+base64 = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+ureq = { workspace = true }
+cap-std = { workspace = true }
+cap-fs-ext = { workspace = true }
+num-bigint = { workspace = true }
+num-traits = { workspace = true }
+flate2 = { workspace = true }
+zstd = { workspace = true }
+regex = { workspace = true }
+jiff = { workspace = true }
+# SUB-279: `Math.random()` entropy source. Already a transitive dep
+# through uuid; calling it directly avoids pulling in `rand`.
+getrandom = "0.2"
+# SUB-182: `submilli:crypto` hashing + HMAC. Battle-tested RustCrypto
+# crates; bundled in pure Rust so they slot straight into wasmtime
+# host fns. Constant-time comparison is hand-rolled to keep the dep
+# footprint small.
+sha2 = "0.10"
+hmac = "0.12"
+
+[dev-dependencies]
+insta = { workspace = true }
+httpmock = { workspace = true }
+flate2 = { workspace = true }
+pollster = { workspace = true }

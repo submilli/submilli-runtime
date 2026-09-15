@@ -1,0 +1,37 @@
+// Map keys()/values()/entries() return lazy snapshot cursors in insertion
+// order; entries() is the same cursor for-of uses.
+
+function main(): void {
+  const m = new Map<string, number>();
+  m.set("x", 10);
+  m.set("y", 20);
+  m.set("z", 30);
+
+  let ks = "";
+  for (const k of m.keys()) {
+    ks = ks + k;
+  }
+  assert(ks === "xyz", "keys in insertion order");
+
+  let total = 0;
+  for (const v of m.values()) {
+    total = total + v;
+  }
+  assert(total === 60, "values sum");
+
+  let rendered = "";
+  for (const e of m.entries()) {
+    rendered = rendered + e[0] + e[1].toString();
+  }
+  assert(rendered === "x10y20z30", "entries pair key and value");
+
+  // Snapshot semantics: a set() after cursor creation is invisible to it.
+  const it = m.keys();
+  m.set("w", 40);
+  let snap = "";
+  for (const k of it) {
+    snap = snap + k;
+  }
+  assert(snap === "xyz", "cursor walks the snapshot");
+  assert(m.size === 4, "map itself sees the new entry");
+}

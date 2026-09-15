@@ -1,0 +1,42 @@
+// Round-trips via parse rather than string-equality: query iteration order is probe-order.
+
+import { build, parse, URL } from "submilli:url";
+
+function main(): void {
+  const query: Map<string, string> = new Map<string, string>();
+  query.set("status", "paid");
+  query.set("limit", "10");
+  const s: string = build("https", "api.acme.com", 8443, "/v1/orders", query, "section");
+  assert(s.length > 0, "build produces non-empty output");
+
+  const parsed: URL = parse(s);
+  assert(parsed.protocol === "https", "round-trip protocol");
+  assert(parsed.host === "api.acme.com", "round-trip host");
+  const port: number | null = parsed.port;
+  assert(port !== null, "round-trip port present");
+  if (port !== null) {
+    assert(port === 8443, "round-trip port value");
+  }
+  assert(parsed.path === "/v1/orders", "round-trip path");
+  const frag: string | null = parsed.fragment;
+  assert(frag !== null, "round-trip fragment present");
+  if (frag !== null) {
+    assert(frag === "section", "round-trip fragment value");
+  }
+  assert(parsed.query.size === 2, "round-trip query size");
+  const status: string | null = parsed.query.get("status");
+  assert(status !== null && status === "paid", "round-trip status");
+  const limit: string | null = parsed.query.get("limit");
+  assert(limit !== null && limit === "10", "round-trip limit");
+
+  const empty: Map<string, string> = new Map<string, string>();
+  const minimal: string = build("http", "example.com", null, "/", empty, null);
+  assert(minimal.length > 0, "minimal build produces output");
+  const reparsed: URL = parse(minimal);
+  assert(reparsed.protocol === "http", "minimal protocol");
+  assert(reparsed.host === "example.com", "minimal host");
+  assert(reparsed.port === null, "minimal port null");
+  assert(reparsed.path === "/", "minimal path");
+  assert(reparsed.query.size === 0, "minimal query empty");
+  assert(reparsed.fragment === null, "minimal fragment null");
+}

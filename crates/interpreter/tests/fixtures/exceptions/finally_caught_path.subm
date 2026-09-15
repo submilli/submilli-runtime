@@ -1,0 +1,13 @@
+function main(): void {
+  let caught_msg: string = "<none>";
+  let finally_ran: boolean = false;
+  try {
+    throw new Error("oops");
+  } catch (e: Error) {
+    caught_msg = e.message;
+  } finally {
+    finally_ran = true;
+  }
+  assert(caught_msg === "oops", "catch ran and bound the message");
+  assert(finally_ran === true, "finally runs on the caught path");
+}

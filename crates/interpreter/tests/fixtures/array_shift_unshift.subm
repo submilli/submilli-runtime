@@ -1,0 +1,23 @@
+function main(): void {
+  let a: number[] = [1, 2, 3];
+
+  let first = a.shift();
+  if (first !== null) {
+    assert(first === 1, "shift returns the first element");
+  } else {
+    assert(false, "shift on non-empty should not return null");
+  }
+  assert(a.length === 2 && a[0] === 2, "remaining elements move forward");
+
+  a.shift();
+  a.shift();
+  assert(a.length === 0, "shifting all elements empties the array");
+  assert(a.shift() === null, "shift on empty array returns null");
+
+  let len = a.unshift(5);
+  assert(len === 1 && a[0] === 5, "unshift prepends and returns the new length");
+
+  let len2 = a.unshift(7, 8);
+  assert(len2 === 3, "multi-element unshift returns the new length");
+  assert(a[0] === 7 && a[1] === 8 && a[2] === 5, "items keep their argument order");
+}

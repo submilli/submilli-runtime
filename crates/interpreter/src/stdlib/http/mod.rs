@@ -1,0 +1,2734 @@
+//! `submilli:http` — agent-facing HTTP client library.
+//!
+//! Pure Rust host functions registered directly under the package name.
+//! `Response` and `DownloadResult` are host-built backing structs the guest
+//! holds opaquely and reads through the registered getters; `Headers` maps are
+//! real prelude `Map<string, string>`s built and consumed host-side. The
+//! embedder-facing transport traits live in [`transport`], the SSRF policy in
+//! [`policy`].
+
+mod declaration;
+pub mod policy;
+pub mod transport;
+
+use wasmtime::{
+    Caller, FuncType, HeapType, Linker, RefType, Rooted, StructRef, StructType, Val, ValType,
+};
+
+use crate::runtime::StoreData;
+use crate::runtime::fs::{ContainError, ContentPath};
+use crate::runtime::host::{
+    read_boxed_number, read_string_arg, read_uint8_array_arg, register_host_fn,
+    register_host_fn_async, write_submilli_string_struct,
+};
+use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
+use crate::runtime::metrics::{HttpMetric, MetricsSink};
+use crate::runtime::prelude::collection::{is_a, object_field, unbox_bool};
+use crate::runtime::prelude::map;
+use crate::runtime::prelude::vtable::dispatch_vtable_slot;
+use crate::stdlib::abi::{
+    self, backing_receiver, backing_struct, f64_field, i32_field, install_field_getters,
+    nullable_object_field, string_field,
+};
+use crate::stdlib::shared::{check_security, contain_trap, resolve_content_or_trap};
+use transport::{DownloadMeta, http_failure_outcome};
+
+pub const MODULE_NAME: &str = "submilli:http";
+
+pub use declaration::package_declaration;
+pub use policy::NetworkPolicy;
+pub use transport::{
+    AuthProxy, AuthProxyError, HttpClient, HttpError, HttpRequest, HttpResponse, NoopAuthProxy,
+    ReqwestHttpClient, default_auth_proxy, default_http_client,
+};
+
+/// Verb-form helpers' per-request timeout; `download` defaults to
+/// [`DOWNLOAD_TIMEOUT_MS`] instead (downloads are usually larger).
+const DEFAULT_TIMEOUT_MS: u64 = 30_000;
+const DOWNLOAD_TIMEOUT_MS: u64 = 60_000;
+
+/// `toJson` is slot 1 of the four-slot `$VTable`.
+const TO_JSON_SLOT: usize = 1;
+
+// `$ResponseBacking` field indices (0 is the vtable).
+const R_BODY: usize = 1;
+const R_HEADERS: usize = 2;
+const R_OK: usize = 3;
+const R_STATUS: usize = 4;
+const R_STATUS_TEXT: usize = 5;
+const R_URL: usize = 6;
+
+// `$DownloadResultBacking` field indices (0 is the vtable).
+const D_BYTES_WRITTEN: usize = 1;
+const D_CONTENT_TYPE: usize = 2;
+const D_DURATION_MS: usize = 3;
+const D_FINAL_URL: usize = 4;
+const D_PATH: usize = 5;
+const D_STATUS: usize = 6;
+
+/// `$ResponseBacking` — a host-only `$Object` subtype; the guest holds it as
+/// `(ref null $Object)` and reads it through the registered getters, so the
+/// layout is the host's to choose.
+fn response_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructType> {
+    let intr = build_intrinsic_types(engine)?;
+    backing_struct(
+        engine,
+        &intr,
+        vec![
+            string_field(&intr),          // body
+            nullable_object_field(&intr), // headers map
+            i32_field(),                  // ok
+            f64_field(),                  // status
+            string_field(&intr),          // statusText
+            string_field(&intr),          // url (final, after redirects)
+        ],
+    )
+}
+
+/// `$DownloadResultBacking` — same host-only pattern as `$ResponseBacking`.
+fn download_result_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructType> {
+    let intr = build_intrinsic_types(engine)?;
+    backing_struct(
+        engine,
+        &intr,
+        vec![
+            f64_field(),         // bytesWritten
+            string_field(&intr), // contentType
+            f64_field(),         // duration_ms
+            string_field(&intr), // finalUrl
+            string_field(&intr), // path
+            f64_field(),         // status
+        ],
+    )
+}
+
+pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    let engine = linker.engine().clone();
+    let intr = build_intrinsic_types(&engine)?;
+    let string = ValType::Ref(RefType::new(
+        false,
+        HeapType::ConcreteStruct(intr.string.clone()),
+    ));
+    let object = ValType::Ref(RefType::new(
+        false,
+        HeapType::ConcreteStruct(intr.object.clone()),
+    ));
+    let nullable_object = ValType::Ref(RefType::new(
+        true,
+        HeapType::ConcreteStruct(intr.object.clone()),
+    ));
+
+    // Body-less verbs: (url, headers?) → Response.
+    for verb in ["get", "delete", "head", "options"] {
+        let method = verb.to_ascii_uppercase();
+        register_host_fn_async(
+            linker,
+            MODULE_NAME,
+            crate::mangle::package_symbol(MODULE_NAME, verb),
+            FuncType::new(
+                &engine,
+                [string.clone(), nullable_object.clone()],
+                [nullable_object.clone()],
+            ),
+            /* deterministic = */ false,
+            move |caller, params, results| {
+                let method = method.clone();
+                Box::pin(async move {
+                    let url = read_string_arg(&mut *caller, &params[0], "http (url)")?;
+                    results[0] =
+                        perform_request(caller, &method, &url, &Val::AnyRef(None), &params[1])
+                            .await?;
+                    Ok(())
+                })
+            },
+        )?;
+    }
+
+    // Body-carrying verbs: (url, body?, headers?) → Response.
+    for verb in ["post", "put", "patch"] {
+        let method = verb.to_ascii_uppercase();
+        register_host_fn_async(
+            linker,
+            MODULE_NAME,
+            crate::mangle::package_symbol(MODULE_NAME, verb),
+            FuncType::new(
+                &engine,
+                [
+                    string.clone(),
+                    nullable_object.clone(),
+                    nullable_object.clone(),
+                ],
+                [nullable_object.clone()],
+            ),
+            /* deterministic = */ false,
+            move |caller, params, results| {
+                let method = method.clone();
+                Box::pin(async move {
+                    let url = read_string_arg(&mut *caller, &params[0], "http (url)")?;
+                    results[0] =
+                        perform_request(caller, &method, &url, &params[1], &params[2]).await?;
+                    Ok(())
+                })
+            },
+        )?;
+    }
+
+    // Runtime-verb form: (method, url, body?, headers?) → Response.
+    register_host_fn_async(
+        linker,
+        MODULE_NAME,
+        crate::mangle::package_symbol(MODULE_NAME, "request"),
+        FuncType::new(
+            &engine,
+            [
+                string.clone(),
+                string.clone(),
+                nullable_object.clone(),
+                nullable_object.clone(),
+            ],
+            [nullable_object.clone()],
+        ),
+        /* deterministic = */ false,
+        |caller, params, results| {
+            Box::pin(async move {
+                let method = read_string_arg(&mut *caller, &params[0], "http.request (method)")?;
+                let url = read_string_arg(&mut *caller, &params[1], "http.request (url)")?;
+                results[0] = perform_request(caller, &method, &url, &params[2], &params[3]).await?;
+                Ok(())
+            })
+        },
+    )?;
+
+    register_host_fn_async(
+        linker,
+        MODULE_NAME,
+        crate::mangle::package_symbol(MODULE_NAME, "download"),
+        FuncType::new(
+            &engine,
+            [string.clone(), string, nullable_object.clone()],
+            [nullable_object],
+        ),
+        /* deterministic = */ false,
+        |caller, params, results| {
+            Box::pin(async move {
+                results[0] = perform_download(caller, params).await?;
+                Ok(())
+            })
+        },
+    )?;
+
+    install_response_members(linker, &engine, &intr, object.clone())?;
+    install_download_result_members(linker, &engine, &intr, object)?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Request path
+// ---------------------------------------------------------------------------
+
+/// What the guest passed as the request body, discriminated host-side.
+enum RequestBody {
+    Empty,
+    /// UTF-8 text; defaults `Content-Type: text/plain; charset=utf-8`.
+    Text(Vec<u8>),
+    /// JSON-encoded object/array; defaults `Content-Type: application/json`.
+    Json(Vec<u8>),
+    /// Raw bytes; never defaults a Content-Type.
+    Binary(Vec<u8>),
+}
+
+impl RequestBody {
+    fn bytes(self) -> Vec<u8> {
+        match self {
+            RequestBody::Empty => Vec::new(),
+            RequestBody::Text(b) | RequestBody::Json(b) | RequestBody::Binary(b) => b,
+        }
+    }
+
+    fn default_content_type(&self) -> Option<&'static str> {
+        match self {
+            RequestBody::Text(_) => Some("text/plain; charset=utf-8"),
+            RequestBody::Json(_) => Some("application/json"),
+            RequestBody::Empty | RequestBody::Binary(_) => None,
+        }
+    }
+}
+
+/// Discriminate the `string | Uint8Array | object | Array | null` body union.
+/// Objects and arrays serialize through their `toJson` vtable slot (which may
+/// re-enter the guest for user classes).
+async fn read_request_body(
+    caller: &mut Caller<'_, StoreData>,
+    val: &Val,
+) -> wasmtime::Result<RequestBody> {
+    if matches!(val, Val::AnyRef(None)) {
+        return Ok(RequestBody::Empty);
+    }
+    let intr = build_intrinsic_types(caller.engine())?;
+    if is_a(caller, val, &intr.string)? {
+        let text = read_string_arg(caller, val, "http (body)")?;
+        return Ok(RequestBody::Text(text.into_bytes()));
+    }
+    if is_a(caller, val, &intr.uint8_array)? {
+        return Ok(RequestBody::Binary(read_uint8_array_arg(
+            caller,
+            val,
+            "http (body)",
+        )?));
+    }
+    let json_val = dispatch_vtable_slot(caller, val, TO_JSON_SLOT, &[]).await?;
+    let json = read_string_arg(caller, &json_val, "http (body json)")?;
+    Ok(RequestBody::Json(json.into_bytes()))
+}
+
+/// Read a `Headers | null` param into name/value pairs, names as given —
+/// casing is the caller's; lookups here are case-insensitive.
+fn read_headers(
+    caller: &mut Caller<'_, StoreData>,
+    val: &Val,
+) -> wasmtime::Result<Vec<(String, String)>> {
+    if matches!(val, Val::AnyRef(None)) {
+        return Ok(Vec::new());
+    }
+    map::string_entries(caller, val)
+}
+
+/// The shared verb/`request` path: discriminate the body, default the
+/// Content-Type, gate the capability, run the transport, and build the
+/// `$ResponseBacking` the guest sees.
+/// Host and path of `url` for capability context / metrics; empty strings when
+/// the URL doesn't parse (the transport reports the real failure).
+fn url_host_and_path(url: &str) -> (String, String) {
+    url::Url::parse(url).map_or_else(
+        |_| (String::new(), String::new()),
+        |u| (u.host_str().unwrap_or("").to_string(), u.path().to_string()),
+    )
+}
+
+/// Record one transport operation, mapping a failure to its bounded outcome class.
+fn record_http_metric(
+    metrics: &dyn MetricsSink,
+    capability: String,
+    host: String,
+    duration_ms: u64,
+    outcome: Result<(u16, u64), &HttpError>,
+) {
+    let (status, bytes, outcome) = match outcome {
+        Ok((status, bytes)) => (status, bytes, "ok"),
+        Err(e) => (0, 0, http_failure_outcome(e)),
+    };
+    metrics.http_operation(HttpMetric {
+        capability,
+        host,
+        duration_ms,
+        status,
+        bytes,
+        outcome,
+    });
+}
+
+async fn perform_request(
+    caller: &mut Caller<'_, StoreData>,
+    method: &str,
+    url: &str,
+    body_val: &Val,
+    headers_val: &Val,
+) -> wasmtime::Result<Val> {
+    let body = read_request_body(caller, body_val).await?;
+    let mut headers = read_headers(caller, headers_val)?;
+
+    // User-supplied Content-Type (any casing) always wins over the body-shaped default.
+    if let Some(default_ct) = body.default_content_type()
+        && !headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+    {
+        headers.push(("content-type".to_string(), default_ct.to_string()));
+    }
+    let body = body.bytes();
+
+    // Capability is verb-shaped: http.get, http.post, etc.
+    let capability = format!("http.{}", method.to_ascii_lowercase());
+    let (host_str, path_str) = url_host_and_path(url);
+    check_security(
+        &*caller,
+        &capability,
+        serde_json::json!({
+            "host": host_str.clone(),
+            "path": path_str,
+            "method": method,
+            "body_size": body.len(),
+            "timeout_ms": DEFAULT_TIMEOUT_MS,
+        }),
+    )?;
+
+    let req = HttpRequest {
+        method: method.to_ascii_uppercase(),
+        url: url.to_string(),
+        headers,
+        body,
+        timeout_ms: DEFAULT_TIMEOUT_MS,
+        max_response_size: caller.data().http_max_response_size,
+        decompress: false,
+    };
+    // The running code, not the last export entered: injection is main-only, so a package
+    // misattributed to `main` would be handed the operator's credentials. An unresolvable
+    // principal keeps its bracketed label, which can never equal `main`.
+    let who = crate::stdlib::shared::running_package(&*caller)
+        .unwrap_or_else(|unknown| unknown.label.to_string());
+    let auth_proxy = std::sync::Arc::clone(&caller.data().auth_proxy);
+    let http_client = std::sync::Arc::clone(&caller.data().http_client);
+    let req = auth_proxy
+        .transform(req, &who)
+        .await
+        .map_err(|e| wasmtime::Error::msg(format!("http {method} {url}: auth proxy: {e}")))?;
+
+    let metrics = std::sync::Arc::clone(&caller.data().metrics);
+    let start = std::time::Instant::now();
+    let send_result = http_client.send(&req).await;
+    let duration_ms = start.elapsed().as_millis() as u64;
+    record_http_metric(
+        metrics.as_ref(),
+        capability,
+        host_str,
+        duration_ms,
+        send_result
+            .as_ref()
+            .map(|resp| (resp.status, resp.body.len() as u64)),
+    );
+    let resp = send_result.map_err(|e| {
+        let msg = format!("http {method} {url}: {e}");
+        // An over-limit response body is a spec `RangeError` (out-of-range
+        // size) and a bad verb a `TypeError`; other transport failures stay
+        // base `Error`s.
+        match e {
+            HttpError::TooLarge { .. } => crate::runtime::host::range_error(msg),
+            HttpError::UnsupportedMethod(_) => crate::runtime::host::type_error(msg),
+            _ => wasmtime::Error::msg(msg),
+        }
+    })?;
+
+    write_response(caller, resp).await
+}
+
+/// Build the `$ResponseBacking` from a transport [`HttpResponse`].
+async fn write_response(
+    caller: &mut Caller<'_, StoreData>,
+    resp: HttpResponse,
+) -> wasmtime::Result<Val> {
+    let body_text = std::str::from_utf8(&resp.body)
+        .map_err(|e| wasmtime::Error::msg(format!("http: response body is not UTF-8: {e}")))?
+        .to_string();
+    let body = write_submilli_string_struct(caller, &body_text)?.to_anyref();
+    let headers = map::string_map_from_pairs(caller, &resp.headers).await?;
+    let ok = (200..300).contains(&resp.status);
+    let status_text = write_submilli_string_struct(caller, &resp.status_text)?.to_anyref();
+    let url = write_submilli_string_struct(caller, &resp.final_url)?.to_anyref();
+
+    let ty = response_backing_struct(caller.engine())?;
+    abi::new_backing(
+        caller,
+        ty,
+        &[
+            Val::AnyRef(Some(body)),
+            headers,
+            Val::I32(i32::from(ok)),
+            Val::F64(f64::from(resp.status).to_bits()),
+            Val::AnyRef(Some(status_text)),
+            Val::AnyRef(Some(url)),
+        ],
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Download path
+// ---------------------------------------------------------------------------
+
+/// The `DownloadOptions` bag with every default filled in.
+struct DownloadOptions {
+    overwrite: bool,
+    max_bytes: u64,
+    headers: Vec<(String, String)>,
+    timeout_ms: u64,
+    decompress: bool,
+}
+
+/// Unpack a `DownloadOptions | null` param, filling defaults for absent fields.
+fn read_download_options(
+    caller: &mut Caller<'_, StoreData>,
+    val: &Val,
+) -> wasmtime::Result<DownloadOptions> {
+    let mut options = DownloadOptions {
+        overwrite: false,
+        max_bytes: caller.data().http_max_response_size,
+        headers: Vec::new(),
+        timeout_ms: DOWNLOAD_TIMEOUT_MS,
+        decompress: false,
+    };
+    if matches!(val, Val::AnyRef(None)) {
+        return Ok(options);
+    }
+    if let Some(v) = present_field(caller, val, "overwrite")? {
+        options.overwrite = unbox_bool(caller, &v)?;
+    }
+    if let Some(v) = present_field(caller, val, "maxBytes")? {
+        let n = read_boxed_number(caller, &v, "http.download (maxBytes)")?;
+        if n < 0.0 {
+            wasmtime::bail!("http.download: maxBytes must be non-negative, got {n}");
+        }
+        options.max_bytes = n as u64;
+    }
+    if let Some(v) = present_field(caller, val, "headers")? {
+        options.headers = read_headers(caller, &v)?;
+    }
+    if let Some(v) = present_field(caller, val, "timeout")? {
+        let n = read_boxed_number(caller, &v, "http.download (timeout)")?;
+        if n < 0.0 {
+            wasmtime::bail!("http.download: timeout must be non-negative, got {n}");
+        }
+        options.timeout_ms = n as u64;
+    }
+    if let Some(v) = present_field(caller, val, "decompress")? {
+        options.decompress = unbox_bool(caller, &v)?;
+    }
+    Ok(options)
+}
+
+/// An options-bag field, `None` when absent — an omitted optional field may
+/// still occupy a slot holding `null`, which reads as absent.
+fn present_field(
+    caller: &mut Caller<'_, StoreData>,
+    obj: &Val,
+    name: &str,
+) -> wasmtime::Result<Option<Val>> {
+    Ok(object_field(caller, obj, name)?.filter(|v| !matches!(v, Val::AnyRef(None))))
+}
+
+/// `download(url, path, options?)`: two security checks (`http.download` then
+/// `fs.write`), refuse-on-exists, stream to a temp sibling, then commit with
+/// fsync + atomic rename and build the `$DownloadResultBacking`.
+async fn perform_download(
+    caller: &mut Caller<'_, StoreData>,
+    params: &[Val],
+) -> wasmtime::Result<Val> {
+    let url = read_string_arg(&mut *caller, &params[0], "http.download (url)")?;
+    let guest_path = read_string_arg(&mut *caller, &params[1], "http.download (path)")?;
+    let options = read_download_options(caller, &params[2])?;
+
+    let (host_str, url_path_str) = url_host_and_path(&url);
+
+    // http-side check first; remote-only policies can deny without path-context cost.
+    check_security(
+        &*caller,
+        "http.download",
+        serde_json::json!({
+            "host": host_str.clone(),
+            "url_path": url_path_str,
+            "vfs_path": guest_path,
+            "max_bytes": options.max_bytes,
+            "overwrite": options.overwrite,
+            "decompress": options.decompress,
+        }),
+    )?;
+    check_security(
+        &*caller,
+        "fs.write",
+        serde_json::json!({
+            "op": "download",
+            "path": guest_path,
+            "max_bytes": options.max_bytes,
+        }),
+    )?;
+
+    // Resolution follows the policy checks, matching every `fs` module's ordering: no
+    // filesystem work happens until the call is authorized.
+    let resolved = resolve_content_or_trap(caller.data(), &guest_path, "http.download")?;
+
+    if !options.overwrite
+        && resolved
+            .try_exists()
+            .map_err(|err| contain_trap("http.download", &guest_path, &err))?
+    {
+        wasmtime::bail!(
+            "http.download {guest_path}: file exists (pass {{ overwrite: true }} to clobber)"
+        );
+    }
+
+    let req = HttpRequest {
+        method: "GET".to_string(),
+        url: url.clone(),
+        headers: options.headers,
+        body: Vec::new(),
+        timeout_ms: options.timeout_ms,
+        max_response_size: options.max_bytes,
+        decompress: options.decompress,
+    };
+    // The running code, not the last export entered: injection is main-only, so a package
+    // misattributed to `main` would be handed the operator's credentials. An unresolvable
+    // principal keeps its bracketed label, which can never equal `main`.
+    let who = crate::stdlib::shared::running_package(&*caller)
+        .unwrap_or_else(|unknown| unknown.label.to_string());
+    let auth_proxy = std::sync::Arc::clone(&caller.data().auth_proxy);
+    let req = auth_proxy
+        .transform(req, &who)
+        .await
+        .map_err(|e| wasmtime::Error::msg(format!("http.download {url}: auth proxy: {e}")))?;
+
+    // No auto-mkdir; a missing parent surfaces when the temp sibling is created, which
+    // is also where an escaping parent is refused.
+    let tmp = resolved.temp_sibling();
+    let start = std::time::Instant::now();
+    let streamed = stream_to_temp(caller, &req, &tmp, &guest_path).await;
+    // A filesystem failure has no transport outcome to record.
+    match &streamed {
+        Ok((meta, _)) => record_http_metric(
+            caller.data().metrics.as_ref(),
+            "http.download".to_string(),
+            host_str,
+            start.elapsed().as_millis() as u64,
+            Ok((meta.status, meta.bytes_written)),
+        ),
+        Err(DownloadFailure::Transport(e, _)) => record_http_metric(
+            caller.data().metrics.as_ref(),
+            "http.download".to_string(),
+            host_str,
+            start.elapsed().as_millis() as u64,
+            Err(e),
+        ),
+        Err(DownloadFailure::Fs(_)) => {}
+    }
+    let (meta, file) = streamed.map_err(DownloadFailure::into_error)?;
+    commit_temp(file, &tmp, &resolved, &guest_path)?;
+
+    let duration_ms = start.elapsed().as_millis() as f64;
+    write_download_result(caller, &meta, &guest_path, duration_ms)
+}
+
+/// Why a download attempt failed before commit. Transport failures carry the
+/// [`HttpError`] for metric classification; filesystem failures don't touch
+/// the transport metrics (matching the pre-stream error paths).
+enum DownloadFailure {
+    Transport(HttpError, String),
+    Fs(wasmtime::Error),
+}
+
+impl DownloadFailure {
+    fn into_error(self) -> wasmtime::Error {
+        match self {
+            DownloadFailure::Transport(HttpError::TooLarge { .. }, msg) => {
+                crate::runtime::host::range_error(msg)
+            }
+            DownloadFailure::Transport(HttpError::UnsupportedMethod(_), msg) => {
+                crate::runtime::host::type_error(msg)
+            }
+            DownloadFailure::Transport(_, msg) => wasmtime::Error::msg(msg),
+            DownloadFailure::Fs(err) => err,
+        }
+    }
+}
+
+/// Create the temp sibling, stream the response body into it, and flush.
+/// Every error path removes the temp file — through the same handle, so cleanup
+/// cannot be redirected either.
+async fn stream_to_temp(
+    caller: &mut Caller<'_, StoreData>,
+    req: &HttpRequest,
+    tmp: &ContentPath,
+    guest_path: &str,
+) -> Result<(DownloadMeta, cap_std::fs::File), DownloadFailure> {
+    let file = tmp
+        .create()
+        .map_err(|err| DownloadFailure::Fs(temp_create_error(guest_path, &err)))?;
+    let mut writer = std::io::BufWriter::new(file);
+    let http_client = std::sync::Arc::clone(&caller.data().http_client);
+    let result = http_client.download(req, &mut writer).await;
+    // Flush explicitly; BufWriter swallows errors on drop.
+    let inner = match writer.into_inner() {
+        Ok(f) => f,
+        Err(e) => {
+            let _ = tmp.remove_file();
+            return Err(DownloadFailure::Fs(wasmtime::Error::msg(format!(
+                "http.download {guest_path}: flush tempfile: {e}",
+                e = e.error()
+            ))));
+        }
+    };
+    match result {
+        Ok(meta) => Ok((meta, inner)),
+        Err(e) => {
+            let _ = tmp.remove_file();
+            let msg = format!("http.download {url}: {e}", url = req.url);
+            Err(DownloadFailure::Transport(e, msg))
+        }
+    }
+}
+
+/// Creating the temp sibling is where a missing parent and an escaping one both
+/// surface. Keeping them apart is what an LLM needs: one is fixable with `mkdir`, the
+/// other can never succeed.
+fn temp_create_error(guest_path: &str, err: &ContainError) -> wasmtime::Error {
+    match err {
+        ContainError::Io(e) if e.kind() == std::io::ErrorKind::NotFound => wasmtime::Error::msg(
+            format!("http.download {guest_path}: parent directory does not exist"),
+        ),
+        _ => contain_trap("http.download", guest_path, err),
+    }
+}
+
+/// Fsync and atomically rename the streamed temp file into place; a crash
+/// leaves a `.tmp` sibling instead of a half-written final file.
+///
+/// The rename goes through the handle the destination resolved against, so a link
+/// swapped over a parent component while the body streamed cannot redirect the commit.
+fn commit_temp(
+    file: cap_std::fs::File,
+    tmp: &ContentPath,
+    resolved: &ContentPath,
+    guest_path: &str,
+) -> wasmtime::Result<()> {
+    if let Err(e) = file.sync_all() {
+        let _ = tmp.remove_file();
+        wasmtime::bail!("http.download {guest_path}: fsync: {e}");
+    }
+    drop(file);
+    if let Err(err) = tmp.rename_to(resolved) {
+        let _ = tmp.remove_file();
+        return Err(match err {
+            ContainError::Escape => contain_trap("http.download", guest_path, &err),
+            _ => wasmtime::Error::msg(format!("http.download {guest_path}: rename: {err}")),
+        });
+    }
+    Ok(())
+}
+
+/// Build the `$DownloadResultBacking` from the committed download's metadata.
+fn write_download_result(
+    caller: &mut Caller<'_, StoreData>,
+    meta: &DownloadMeta,
+    guest_path: &str,
+    duration_ms: f64,
+) -> wasmtime::Result<Val> {
+    let content_type = meta
+        .headers
+        .iter()
+        .find(|(k, _)| k == "content-type")
+        .map(|(_, v)| v.clone())
+        .unwrap_or_default();
+
+    let content_type = write_submilli_string_struct(caller, &content_type)?.to_anyref();
+    let final_url = write_submilli_string_struct(caller, &meta.final_url)?.to_anyref();
+    let path = write_submilli_string_struct(caller, guest_path)?.to_anyref();
+
+    let ty = download_result_backing_struct(caller.engine())?;
+    abi::new_backing(
+        caller,
+        ty,
+        &[
+            Val::F64((meta.bytes_written as f64).to_bits()),
+            Val::AnyRef(Some(content_type)),
+            Val::F64(duration_ms.to_bits()),
+            Val::AnyRef(Some(final_url)),
+            Val::AnyRef(Some(path)),
+            Val::F64(f64::from(meta.status).to_bits()),
+        ],
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Response / DownloadResult members
+// ---------------------------------------------------------------------------
+
+fn install_response_members(
+    linker: &mut Linker<StoreData>,
+    engine: &wasmtime::Engine,
+    intr: &IntrinsicTypes,
+    receiver: ValType,
+) -> wasmtime::Result<()> {
+    let string = ValType::Ref(RefType::new(
+        false,
+        HeapType::ConcreteStruct(intr.string.clone()),
+    ));
+    let nullable_object = ValType::Ref(RefType::new(
+        true,
+        HeapType::ConcreteStruct(intr.object.clone()),
+    ));
+    install_field_getters(
+        linker,
+        MODULE_NAME,
+        "Response",
+        engine,
+        &receiver,
+        &[
+            ("body", R_BODY, string.clone()),
+            ("headers", R_HEADERS, nullable_object),
+            ("ok", R_OK, ValType::I32),
+            ("status", R_STATUS, ValType::F64),
+            ("statusText", R_STATUS_TEXT, string.clone()),
+            ("url", R_URL, string.clone()),
+        ],
+    )?;
+
+    let response_key = crate::mangle::package_symbol(MODULE_NAME, "Response");
+    register_host_fn(
+        linker,
+        MODULE_NAME,
+        crate::mangle::extend(&response_key, "throwForStatus"),
+        FuncType::new(engine, [receiver.clone()], []),
+        /* deterministic = */ true,
+        |caller, params, _results| {
+            let st = backing_receiver(caller, &params[0])?;
+            if matches!(st.field(&mut *caller, R_OK)?, Val::I32(ok) if ok != 0) {
+                return Ok(());
+            }
+            let (status, status_text, url) = read_response_status_line(caller, &st)?;
+            Err(wasmtime::Error::msg(if status_text.is_empty() {
+                format!("HTTP {status}: {url}")
+            } else {
+                format!("HTTP {status} {status_text}: {url}")
+            }))
+        },
+    )?;
+
+    register_host_fn(
+        linker,
+        MODULE_NAME,
+        crate::mangle::extend(&response_key, "toString"),
+        FuncType::new(engine, [receiver], [string]),
+        /* deterministic = */ true,
+        |caller, params, results| {
+            let st = backing_receiver(caller, &params[0])?;
+            let (status, status_text, url) = read_response_status_line(caller, &st)?;
+            let text = if status_text.is_empty() {
+                format!("Response({status}, {url})")
+            } else {
+                format!("Response({status} {status_text}, {url})")
+            };
+            let out = write_submilli_string_struct(caller, &text)?;
+            results[0] = Val::AnyRef(Some(out.to_anyref()));
+            Ok(())
+        },
+    )?;
+
+    Ok(())
+}
+
+fn read_response_status_line(
+    caller: &mut Caller<'_, StoreData>,
+    st: &Rooted<StructRef>,
+) -> wasmtime::Result<(i64, String, String)> {
+    let Val::F64(bits) = st.field(&mut *caller, R_STATUS)? else {
+        wasmtime::bail!("Response: status is not a number");
+    };
+    let status = f64::from_bits(bits) as i64;
+    let status_text_val = st.field(&mut *caller, R_STATUS_TEXT)?;
+    let status_text = read_string_arg(caller, &status_text_val, "Response (statusText)")?;
+    let url_val = st.field(&mut *caller, R_URL)?;
+    let url = read_string_arg(caller, &url_val, "Response (url)")?;
+    Ok((status, status_text, url))
+}
+
+fn install_download_result_members(
+    linker: &mut Linker<StoreData>,
+    engine: &wasmtime::Engine,
+    intr: &IntrinsicTypes,
+    receiver: ValType,
+) -> wasmtime::Result<()> {
+    let string = ValType::Ref(RefType::new(
+        false,
+        HeapType::ConcreteStruct(intr.string.clone()),
+    ));
+    install_field_getters(
+        linker,
+        MODULE_NAME,
+        "DownloadResult",
+        engine,
+        &receiver,
+        &[
+            ("bytesWritten", D_BYTES_WRITTEN, ValType::F64),
+            ("contentType", D_CONTENT_TYPE, string.clone()),
+            ("duration_ms", D_DURATION_MS, ValType::F64),
+            ("finalUrl", D_FINAL_URL, string.clone()),
+            ("path", D_PATH, string.clone()),
+            ("status", D_STATUS, ValType::F64),
+        ],
+    )?;
+
+    let result_key = crate::mangle::package_symbol(MODULE_NAME, "DownloadResult");
+    register_host_fn(
+        linker,
+        MODULE_NAME,
+        crate::mangle::extend(&result_key, "toString"),
+        FuncType::new(engine, [receiver], [string]),
+        /* deterministic = */ true,
+        |caller, params, results| {
+            let st = backing_receiver(caller, &params[0])?;
+            let Val::F64(status_bits) = st.field(&mut *caller, D_STATUS)? else {
+                wasmtime::bail!("DownloadResult: status is not a number");
+            };
+            let Val::F64(bytes_bits) = st.field(&mut *caller, D_BYTES_WRITTEN)? else {
+                wasmtime::bail!("DownloadResult: bytesWritten is not a number");
+            };
+            let path_val = st.field(&mut *caller, D_PATH)?;
+            let path = read_string_arg(caller, &path_val, "DownloadResult (path)")?;
+            let status = f64::from_bits(status_bits) as i64;
+            let bytes_written = f64::from_bits(bytes_bits) as i64;
+            let text = format!("Download({status}, {bytes_written} bytes -> {path})");
+            let out = write_submilli_string_struct(caller, &text)?;
+            results[0] = Val::AnyRef(Some(out.to_anyref()));
+            Ok(())
+        },
+    )?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+
+    use crate::compile_script;
+    use crate::runtime::security::{CheckOutcome, SecurityCheck};
+    use crate::runtime::{
+        RuntimeConfig, StoreData, Vfs, dispatch_main_async, install_runtime_async,
+    };
+
+    use super::transport::{
+        DownloadMeta, HttpClient, HttpError, HttpRequest, HttpResponse, detect_decompression,
+        stream_to_writer,
+    };
+
+    struct MockHttpClient {
+        scripted: Mutex<VecDeque<HttpResponse>>,
+        seen: Mutex<Vec<HttpRequest>>,
+    }
+
+    impl MockHttpClient {
+        fn new(scripted: Vec<HttpResponse>) -> Self {
+            Self {
+                scripted: Mutex::new(scripted.into()),
+                seen: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl HttpClient for MockHttpClient {
+        async fn send(&self, req: &HttpRequest) -> Result<HttpResponse, HttpError> {
+            self.seen.lock().unwrap().push(req.clone());
+            self.scripted
+                .lock()
+                .unwrap()
+                .pop_front()
+                .ok_or_else(|| HttpError::Other("mock: scripted queue empty".into()))
+        }
+
+        // Uses `stream_to_writer` so `max_response_size` enforcement matches the production path.
+        async fn download(
+            &self,
+            req: &HttpRequest,
+            writer: &mut (dyn std::io::Write + Send),
+        ) -> Result<DownloadMeta, HttpError> {
+            self.seen.lock().unwrap().push(req.clone());
+            let resp = self
+                .scripted
+                .lock()
+                .unwrap()
+                .pop_front()
+                .ok_or_else(|| HttpError::Other("mock: scripted queue empty".into()))?;
+            let kind = detect_decompression(&resp.headers, &req.url, req.decompress);
+            let cursor = std::io::Cursor::new(resp.body);
+            let bytes_written = stream_to_writer(cursor, writer, kind, req.max_response_size)?;
+            Ok(DownloadMeta {
+                status: resp.status,
+                status_text: resp.status_text,
+                headers: resp.headers,
+                final_url: resp.final_url,
+                bytes_written,
+            })
+        }
+    }
+
+    struct DenyAllHttp;
+    impl SecurityCheck for DenyAllHttp {
+        fn check(
+            &self,
+            _caller: &str,
+            capability: &str,
+            _context: &serde_json::Value,
+        ) -> CheckOutcome {
+            if capability.starts_with("http.") {
+                CheckOutcome::Deny {
+                    reason: format!("denied {capability} in test"),
+                }
+            } else {
+                CheckOutcome::Allow
+            }
+        }
+    }
+
+    async fn run_with_mock(source: &str, scripted: Vec<HttpResponse>) -> Arc<MockHttpClient> {
+        let compiled = crate::compile_script(source, "test.subm", crate::FileId(0), &[], &[])
+            .expect("compile clean");
+        let cfg = RuntimeConfig::default();
+        let engine = cfg.engine().expect("engine");
+        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        data.install_type_info(compiled.type_info.clone());
+        let mock = Arc::new(MockHttpClient::new(scripted));
+        data.http_client = mock.clone();
+        let mut store = cfg.store(&engine, data).expect("store");
+        let module = wasmtime::Module::new(&engine, &compiled.wasm).expect("module");
+        let mut linker = wasmtime::Linker::<StoreData>::new(&engine);
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .expect("install");
+        let inst = linker
+            .instantiate_async(&mut store, &module)
+            .await
+            .expect("instantiate");
+        dispatch_main_async(&mut store, &inst)
+            .await
+            .expect("main ran without trap");
+        mock
+    }
+
+    fn ok_response(status: u16, body: &str) -> HttpResponse {
+        HttpResponse {
+            status,
+            status_text: "OK".to_string(),
+            headers: vec![("content-type".to_string(), "text/plain".to_string())],
+            body: body.as_bytes().to_vec(),
+            final_url: "https://example.test/".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn get_status_and_body_roundtrip() {
+        let source = r#"
+            import { get, Response } from "submilli:http";
+            function main(): void {
+                const r: Response = get("https://example.test/u");
+                assert(r.status === 200, "status is 200");
+                assert(r.body === "hello", "body decoded");
+                assert(r.ok, "ok for 2xx");
+            }
+        "#;
+        let mock = run_with_mock(source, vec![ok_response(200, "hello")]).await;
+        let seen = mock.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1, "exactly one request");
+        assert_eq!(seen[0].method, "GET");
+        assert_eq!(seen[0].url, "https://example.test/u");
+    }
+
+    /// Records the caller it's handed and injects a marker header, so a test can
+    /// assert both the caller-threading and that injection reaches the wire.
+    struct RecordingAuthProxy {
+        callers: Mutex<Vec<String>>,
+    }
+    #[async_trait::async_trait]
+    impl super::transport::AuthProxy for RecordingAuthProxy {
+        async fn transform(
+            &self,
+            mut req: HttpRequest,
+            caller: &str,
+        ) -> Result<HttpRequest, super::transport::AuthProxyError> {
+            self.callers.lock().unwrap().push(caller.to_string());
+            req.headers
+                .push(("x-injected".to_string(), "yes".to_string()));
+            Ok(req)
+        }
+    }
+
+    /// Runs `source` as code owned by `owner` (`None` for `main`) and returns the callers the
+    /// auth proxy was told, plus whether the injected header reached the wire.
+    async fn auth_proxy_callers_for(owner: Option<&str>, source: &str) -> (Vec<String>, bool) {
+        let compiled = match owner {
+            Some(package) => crate::compile::compile_script_owned_by(
+                package,
+                source,
+                "test.subm",
+                crate::FileId(0),
+                &[],
+                &[],
+            ),
+            None => compile_script(source, "test.subm", crate::FileId(0), &[], &[]),
+        }
+        .expect("compile clean");
+        let cfg = RuntimeConfig::default();
+        let engine = cfg.engine().expect("engine");
+        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mock = Arc::new(MockHttpClient::new(vec![ok_response(200, "hi")]));
+        let proxy = Arc::new(RecordingAuthProxy {
+            callers: Mutex::new(Vec::new()),
+        });
+        data.http_client = mock.clone();
+        data.auth_proxy = proxy.clone();
+        let mut store = cfg.store(&engine, data).expect("store");
+        let module = wasmtime::Module::new(&engine, &compiled.wasm).expect("module");
+        let mut linker = wasmtime::Linker::<StoreData>::new(&engine);
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .expect("install");
+        let inst = linker
+            .instantiate_async(&mut store, &module)
+            .await
+            .expect("instantiate");
+        dispatch_main_async(&mut store, &inst)
+            .await
+            .expect("main ran without trap");
+        let callers = proxy.callers.lock().unwrap().clone();
+        let injected = mock.seen.lock().unwrap()[0]
+            .headers
+            .iter()
+            .any(|(k, v)| k == "x-injected" && v == "yes");
+        (callers, injected)
+    }
+
+    const REQUESTS_A_URL: &str = r#"
+        import { get, Response } from "submilli:http";
+        function main(): number {
+            const r: Response = get("https://example.test/u");
+            return r.status;
+        }
+    "#;
+
+    /// Credential injection is scoped to `main` and withheld from libraries
+    /// (`submilli-shared`'s `BlueprintAuthProxy` gates on `caller != MAIN_PACKAGE`), so the
+    /// identity it selects on must be the running code's — not the top of a stack that only
+    /// package *export wrappers* push to.
+    ///
+    /// This is package-owned code running with nothing pushed, the same condition as the
+    /// exported class methods the report names: they carry no identity wrapper, so the stack
+    /// still reads `main` while the package's own code runs. Attributed to `main`, that code
+    /// would be handed the operator's credentials.
+    #[tokio::test]
+    async fn a_package_making_a_request_is_never_attributed_to_main() {
+        let (callers, _injected) = auth_proxy_callers_for(Some("@acme/sdk"), REQUESTS_A_URL).await;
+        assert_eq!(
+            callers,
+            vec!["@acme/sdk".to_string()],
+            "package code must not borrow main's identity at the auth proxy",
+        );
+    }
+
+    /// The mirror of the above: over-correcting here would silently strip the operator's own
+    /// credentials, which fails as an auth error far from its cause.
+    #[tokio::test]
+    async fn mains_own_request_still_gets_injection() {
+        let (callers, injected) = auth_proxy_callers_for(None, REQUESTS_A_URL).await;
+        assert_eq!(callers, vec!["main".to_string()]);
+        assert!(injected, "main's own request must still be injected");
+    }
+
+    /// R7, the inverse direction, asserted deliberately rather than discovered: when a package
+    /// invokes `main`-authored code — here a `toJson` reached through the package's
+    /// `JSON.stringify` — the innermost frame is `main`'s, so the request is `main`'s and is
+    /// injected. That follows from reading identity off the running code, and it is safe:
+    /// the code is `main`'s own, `main` chose to hand it over, and the package cannot read the
+    /// injected header. What R3 forbids is the reverse, covered by the test above.
+    #[tokio::test]
+    async fn main_authored_code_invoked_by_a_package_is_still_main() {
+        let (lib_bytes, lib_decl, lib_type_info) = crate::codegen::tests::compile_package_modules(
+            "test:wrap",
+            &[(
+                "lib",
+                r#"
+                /** Pass-through JSON encoder. */
+                export function passthrough(value: unknown): string {
+                    return JSON.stringify(value);
+                }
+                "#,
+            )],
+            &[],
+        );
+        let cfg = RuntimeConfig::default();
+        let engine = cfg.engine().expect("engine");
+        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        data.install_type_info(lib_type_info);
+        let mock = Arc::new(MockHttpClient::new(vec![ok_response(200, "hi")]));
+        let proxy = Arc::new(RecordingAuthProxy {
+            callers: Mutex::new(Vec::new()),
+        });
+        data.http_client = mock.clone();
+        data.auth_proxy = proxy.clone();
+        let mut store = cfg.store(&engine, data).expect("store");
+        let mut linker = wasmtime::Linker::<StoreData>::new(&engine);
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .expect("install");
+        let lib_module = wasmtime::Module::new(&engine, &lib_bytes).expect("library module");
+        let lib_inst = linker
+            .instantiate_async(&mut store, &lib_module)
+            .await
+            .expect("instantiate library");
+        linker
+            .instance(&mut store, "test:wrap", lib_inst)
+            .expect("register library instance");
+        let public_name = crate::mangle::package_symbol("test:wrap", "passthrough");
+        let func = lib_inst
+            .get_func(&mut store, public_name.as_str())
+            .expect("library public export");
+        linker
+            .define(&mut store, "test:wrap", "passthrough", func)
+            .expect("plain package import alias");
+
+        let consumer = compile_script(
+            r#"
+            import { passthrough } from "test:wrap";
+            import { get, Response } from "submilli:http";
+
+            class Pinger {
+                hit: number;
+                constructor() { this.hit = 0; }
+                toJson(): string {
+                    const r: Response = get("https://example.test/u");
+                    this.hit = r.status;
+                    return "\"ok\"";
+                }
+            }
+
+            function main(): number {
+                const p = new Pinger();
+                const _ = passthrough(p);
+                return p.hit;
+            }
+            "#,
+            "consumer.subm",
+            crate::FileId(0),
+            &[&lib_decl],
+            &[],
+        )
+        .expect("consumer compiles");
+        store
+            .data_mut()
+            .install_type_info(consumer.type_info.clone());
+        let consumer_module = wasmtime::Module::new(&engine, &consumer.wasm).expect("module");
+        let inst = linker
+            .instantiate_async(&mut store, &consumer_module)
+            .await
+            .expect("instantiate consumer");
+        dispatch_main_async(&mut store, &inst)
+            .await
+            .expect("main ran without trap");
+
+        assert_eq!(
+            proxy.callers.lock().unwrap().as_slice(),
+            &["main".to_string()],
+            "main-authored code stays main's wherever a package invokes it",
+        );
+    }
+
+    #[tokio::test]
+    async fn auth_proxy_sees_main_caller_and_injects_to_wire() {
+        let source = r#"
+            import { get, Response } from "submilli:http";
+            function main(): number {
+                const r: Response = get("https://example.test/u");
+                return r.status;
+            }
+        "#;
+        let compiled =
+            compile_script(source, "test.subm", crate::FileId(0), &[], &[]).expect("compile clean");
+        let cfg = RuntimeConfig::default();
+        let engine = cfg.engine().expect("engine");
+        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mock = Arc::new(MockHttpClient::new(vec![ok_response(200, "hi")]));
+        let proxy = Arc::new(RecordingAuthProxy {
+            callers: Mutex::new(Vec::new()),
+        });
+        data.http_client = mock.clone();
+        data.auth_proxy = proxy.clone();
+        let mut store = cfg.store(&engine, data).expect("store");
+        let module = wasmtime::Module::new(&engine, &compiled.wasm).expect("module");
+        let mut linker = wasmtime::Linker::<StoreData>::new(&engine);
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .expect("install");
+        let inst = linker
+            .instantiate_async(&mut store, &module)
+            .await
+            .expect("instantiate");
+        dispatch_main_async(&mut store, &inst)
+            .await
+            .expect("main ran without trap");
+
+        assert_eq!(
+            proxy.callers.lock().unwrap().as_slice(),
+            &["main".to_string()]
+        );
+        let seen = mock.seen.lock().unwrap();
+        assert!(
+            seen[0]
+                .headers
+                .iter()
+                .any(|(k, v)| k == "x-injected" && v == "yes"),
+            "injected header reached the outbound request"
+        );
+    }
+
+    #[tokio::test]
+    async fn response_ok_false_for_non_2xx() {
+        let source = r#"
+            import { get, Response } from "submilli:http";
+            function main(): void {
+                const r: Response = get("https://example.test/x");
+                assert(!r.ok, "300 is not ok");
+                assert(r.status === 300, "status preserved");
+            }
+        "#;
+        run_with_mock(source, vec![ok_response(300, "")]).await;
+    }
+
+    #[tokio::test]
+    async fn deny_policy_blocks_http_get() {
+        let source = r#"
+            import { get } from "submilli:http";
+            function main(): void {
+                get("https://example.test/y");
+            }
+        "#;
+        let compiled =
+            compile_script(source, "test.subm", crate::FileId(0), &[], &[]).expect("compile clean");
+        let cfg = RuntimeConfig::default();
+        let engine = cfg.engine().expect("engine");
+        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        data.security_check = Arc::new(DenyAllHttp);
+        // Mock client never invoked — the security check denies first.
+        data.http_client = Arc::new(MockHttpClient::new(vec![ok_response(200, "")]));
+        let mut store = cfg.store(&engine, data).expect("store");
+        let module = wasmtime::Module::new(&engine, &compiled.wasm).expect("module");
+        let mut linker = wasmtime::Linker::<StoreData>::new(&engine);
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .expect("install");
+        let inst = linker
+            .instantiate_async(&mut store, &module)
+            .await
+            .expect("instantiate");
+        let err = dispatch_main_async(&mut store, &inst)
+            .await
+            .expect_err("must trap on deny");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("permission denied"),
+            "expected deny trap; got: {msg}"
+        );
+        assert!(
+            msg.contains("http.get"),
+            "expected http.get capability in trap; got: {msg}"
+        );
+        assert!(
+            msg.contains("caller=main"),
+            "expected caller=main in trap; got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn verb_matrix_method_passthrough() {
+        let source = r#"
+            import { post, put, patch, delete, head, options, Response } from "submilli:http";
+            function main(): void {
+                const a: Response = post("https://example.test/a");
+                const b: Response = put("https://example.test/b");
+                const c: Response = patch("https://example.test/c");
+                const d: Response = delete("https://example.test/d");
+                const e: Response = head("https://example.test/e");
+                const f: Response = options("https://example.test/f");
+                assert(a.status === 200, "post status");
+                assert(b.status === 200, "put status");
+                assert(c.status === 200, "patch status");
+                assert(d.status === 200, "delete status");
+                assert(e.status === 200, "head status");
+                assert(f.status === 200, "options status");
+            }
+        "#;
+        let mock = run_with_mock(
+            source,
+            vec![
+                ok_response(200, ""),
+                ok_response(200, ""),
+                ok_response(200, ""),
+                ok_response(200, ""),
+                ok_response(200, ""),
+                ok_response(200, ""),
+            ],
+        )
+        .await;
+        let seen = mock.seen.lock().unwrap();
+        assert_eq!(seen.len(), 6);
+        assert_eq!(seen[0].method, "POST");
+        assert_eq!(seen[1].method, "PUT");
+        assert_eq!(seen[2].method, "PATCH");
+        assert_eq!(seen[3].method, "DELETE");
+        assert_eq!(seen[4].method, "HEAD");
+        assert_eq!(seen[5].method, "OPTIONS");
+    }
+
+    struct RecordingCheck {
+        seen: Mutex<Vec<(String, String)>>,
+    }
+    impl SecurityCheck for RecordingCheck {
+        fn check(
+            &self,
+            caller: &str,
+            capability: &str,
+            _context: &serde_json::Value,
+        ) -> CheckOutcome {
+            self.seen
+                .lock()
+                .unwrap()
+                .push((caller.to_string(), capability.to_string()));
+            CheckOutcome::Allow
+        }
+    }
+
+    #[tokio::test]
+    async fn a_script_is_attributed_to_main() {
+        let source = r#"
+            import { get, Response } from "submilli:http";
+            function main(): void {
+                const _r: Response = get("https://example.test/c");
+            }
+        "#;
+        let recording = Arc::new(RecordingCheck {
+            seen: Mutex::new(Vec::new()),
+        });
+        let compiled = crate::compile_script(source, "test.subm", crate::FileId(0), &[], &[])
+            .expect("compile clean");
+        let cfg = RuntimeConfig::default();
+        let engine = cfg.engine().expect("engine");
+        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        data.security_check = recording.clone();
+        data.http_client = Arc::new(MockHttpClient::new(vec![ok_response(200, "")]));
+        let mut store = cfg.store(&engine, data).expect("store");
+        let module = wasmtime::Module::new(&engine, &compiled.wasm).expect("module");
+        let mut linker = wasmtime::Linker::<StoreData>::new(&engine);
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .expect("install");
+        let inst = linker
+            .instantiate_async(&mut store, &module)
+            .await
+            .expect("instantiate");
+        dispatch_main_async(&mut store, &inst)
+            .await
+            .expect("main ran");
+
+        let seen = recording.seen.lock().unwrap().clone();
+        assert!(
+            !seen.is_empty(),
+            "RecordingCheck should have captured at least one http.* call"
+        );
+        for (caller, capability) in &seen {
+            assert_eq!(
+                caller, "main",
+                "expected caller=main for capability {capability}; got {caller}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_package_is_attributed_to_the_package() {
+        let source = r#"
+            import { get, Response } from "submilli:http";
+            function main(): void {
+                const _r: Response = get("https://example.test/c2");
+            }
+        "#;
+        let recording = Arc::new(RecordingCheck {
+            seen: Mutex::new(Vec::new()),
+        });
+        // Compiled under the package name so the identity rides the wasm frame the runtime
+        // reads, rather than being declared out-of-band.
+        let compiled = crate::compile::compile_script_owned_by(
+            "submilli:foo",
+            source,
+            "test.subm",
+            crate::FileId(0),
+            &[],
+            &[],
+        )
+        .expect("compile clean");
+        let cfg = RuntimeConfig::default();
+        let engine = cfg.engine().expect("engine");
+        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        data.security_check = recording.clone();
+        data.http_client = Arc::new(MockHttpClient::new(vec![ok_response(200, "")]));
+        let mut store = cfg.store(&engine, data).expect("store");
+        let module = wasmtime::Module::new(&engine, &compiled.wasm).expect("module");
+        let mut linker = wasmtime::Linker::<StoreData>::new(&engine);
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .expect("install");
+        let inst = linker
+            .instantiate_async(&mut store, &module)
+            .await
+            .expect("instantiate");
+        dispatch_main_async(&mut store, &inst)
+            .await
+            .expect("main ran");
+
+        let seen = recording.seen.lock().unwrap().clone();
+        assert!(
+            !seen.is_empty(),
+            "RecordingCheck should have captured calls"
+        );
+        for (caller, capability) in &seen {
+            assert_eq!(
+                caller, "submilli:foo",
+                "expected caller=submilli:foo for capability {capability}; got {caller}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn headers_roundtrip_to_client() {
+        let source = r#"
+            import { get, Response } from "submilli:http";
+            function main(): void {
+                const h = new Map<string, string>();
+                h.set("Authorization", "Bearer xyz");
+                h.set("X-Foo", "bar");
+                const r: Response = get("https://example.test/h", h);
+                assert(r.status === 200, "status");
+            }
+        "#;
+        let mock = run_with_mock(source, vec![ok_response(200, "")]).await;
+        let seen = mock.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        // Map iteration is insertion-ordered so the
+        // emitted header sequence is stable; membership check is
+        // still sufficient for this regression.
+        let names: Vec<&str> = seen[0].headers.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(names.contains(&"Authorization"), "auth header sent");
+        assert!(names.contains(&"X-Foo"), "x-foo header sent");
+        let auth_value = seen[0]
+            .headers
+            .iter()
+            .find(|(n, _)| n == "Authorization")
+            .map_or("", |(_, v)| v.as_str());
+        assert_eq!(auth_value, "Bearer xyz");
+    }
+
+    #[tokio::test]
+    async fn headers_default_null_sends_no_headers() {
+        let source = r#"
+            import { get, Response } from "submilli:http";
+            function main(): void {
+                const r: Response = get("https://example.test/n");
+                assert(r.status === 200, "status");
+            }
+        "#;
+        let mock = run_with_mock(source, vec![ok_response(200, "")]).await;
+        let seen = mock.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert!(seen[0].headers.is_empty(), "no headers when omitted");
+    }
+
+    #[tokio::test]
+    async fn response_to_string_format() {
+        let source = r#"
+            import { get, Response } from "submilli:http";
+            function main(): void {
+                const r: Response = get("https://example.test/t");
+                const s: string = r.toString();
+                assert(s === "Response(200 OK, https://example.test/)", s);
+            }
+        "#;
+        run_with_mock(source, vec![ok_response(200, "")]).await;
+    }
+
+    #[tokio::test]
+    async fn throw_for_status_no_op_when_ok() {
+        let source = r#"
+            import { get, Response } from "submilli:http";
+            function main(): void {
+                const r: Response = get("https://example.test/ok");
+                r.throwForStatus();
+                assert(r.ok, "still alive");
+            }
+        "#;
+        run_with_mock(source, vec![ok_response(200, "")]).await;
+    }
+
+    #[tokio::test]
+    async fn throw_for_status_traps_on_4xx() {
+        let source = r#"
+            import { get, Response } from "submilli:http";
+            function main(): void {
+                const r: Response = get("https://example.test/bad");
+                r.throwForStatus();
+            }
+        "#;
+        let compiled = crate::compile_script(source, "test.subm", crate::FileId(0), &[], &[])
+            .expect("compile clean");
+        let cfg = RuntimeConfig::default();
+        let engine = cfg.engine().expect("engine");
+        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let response_404 = HttpResponse {
+            status: 404,
+            status_text: "Not Found".to_string(),
+            headers: vec![],
+            body: vec![],
+            final_url: "https://example.test/bad".to_string(),
+        };
+        data.http_client = Arc::new(MockHttpClient::new(vec![response_404]));
+        let mut store = cfg.store(&engine, data).expect("store");
+        let module = wasmtime::Module::new(&engine, &compiled.wasm).expect("module");
+        let mut linker = wasmtime::Linker::<StoreData>::new(&engine);
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .expect("install");
+        let inst = linker
+            .instantiate_async(&mut store, &module)
+            .await
+            .expect("instantiate");
+        let err = dispatch_main_async(&mut store, &inst)
+            .await
+            .expect_err("must trap on throwForStatus");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("404") && msg.contains("Not Found"),
+            "expected formatted HTTP error in trap; got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn request_runtime_verb_passthrough() {
+        let source = r#"
+            import { request, Response } from "submilli:http";
+            function main(): void {
+                const r: Response = request("post", "https://example.test/q");
+                assert(r.status === 201, "status 201");
+            }
+        "#;
+        let mock = run_with_mock(source, vec![ok_response(201, "")]).await;
+        let seen = mock.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        // Host fn upper-cases the method before storing it on the
+        // `HttpRequest`.
+        assert_eq!(seen[0].method, "POST");
+    }
+
+    #[tokio::test]
+    async fn network_error_traps_with_message() {
+        struct FailingClient;
+        #[async_trait::async_trait]
+        impl HttpClient for FailingClient {
+            async fn send(&self, _req: &HttpRequest) -> Result<HttpResponse, HttpError> {
+                Err(HttpError::Network("dns: no such host".into()))
+            }
+            async fn download(
+                &self,
+                _req: &HttpRequest,
+                _writer: &mut (dyn std::io::Write + Send),
+            ) -> Result<DownloadMeta, HttpError> {
+                Err(HttpError::Network("dns: no such host".into()))
+            }
+        }
+        let source = r#"
+            import { get } from "submilli:http";
+            function main(): void {
+                get("https://example.test/z");
+            }
+        "#;
+        let compiled =
+            compile_script(source, "test.subm", crate::FileId(0), &[], &[]).expect("compile clean");
+        let cfg = RuntimeConfig::default();
+        let engine = cfg.engine().expect("engine");
+        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        data.http_client = Arc::new(FailingClient);
+        let mut store = cfg.store(&engine, data).expect("store");
+        let module = wasmtime::Module::new(&engine, &compiled.wasm).expect("module");
+        let mut linker = wasmtime::Linker::<StoreData>::new(&engine);
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .expect("install");
+        let inst = linker
+            .instantiate_async(&mut store, &module)
+            .await
+            .expect("instantiate");
+        let err = dispatch_main_async(&mut store, &inst)
+            .await
+            .expect_err("must trap on network error");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("dns: no such host"),
+            "expected network error message in trap; got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn post_with_string_body_defaults_ct() {
+        let source = r#"
+            import { post, Response } from "submilli:http";
+            function main(): void {
+                const r: Response = post("https://example.test/p", "hello");
+                assert(r.status === 200, "status round-tripped");
+            }
+        "#;
+        let mock = run_with_mock(source, vec![ok_response(200, "")]).await;
+        let seen = mock.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].method, "POST");
+        assert_eq!(seen[0].body, b"hello");
+        let ct = seen[0]
+            .headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+            .map(|(_, v)| v.as_str());
+        assert_eq!(
+            ct,
+            Some("text/plain; charset=utf-8"),
+            "string body must default Content-Type for string body"
+        );
+    }
+
+    #[tokio::test]
+    async fn post_with_uint8_body_no_ct_default() {
+        let source = r#"
+            import { post, Response } from "submilli:http";
+            function main(): void {
+                const r: Response = post(
+                    "https://example.test/p",
+                    new Uint8Array([1, 2, 3])
+                );
+                assert(r.status === 200, "status round-tripped");
+            }
+        "#;
+        let mock = run_with_mock(source, vec![ok_response(200, "")]).await;
+        let seen = mock.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].body, vec![1u8, 2, 3]);
+        let ct_present = seen[0]
+            .headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("content-type"));
+        assert!(
+            !ct_present,
+            "binary body must NOT default Content-Type for Uint8Array body; saw headers={:?}",
+            seen[0].headers
+        );
+    }
+
+    #[tokio::test]
+    async fn post_user_ct_wins_over_default() {
+        let source = r#"
+            import { post, Response, Headers } from "submilli:http";
+            function main(): void {
+                const h: Headers = new Map<string, string>();
+                h.set("Content-Type", "application/json");
+                const r: Response = post(
+                    "https://example.test/p",
+                    "{\"k\":1}",
+                    h
+                );
+                assert(r.status === 200, "status round-tripped");
+            }
+        "#;
+        let mock = run_with_mock(source, vec![ok_response(200, "")]).await;
+        let seen = mock.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].body, br#"{"k":1}"#);
+        let cts: Vec<&str> = seen[0]
+            .headers
+            .iter()
+            .filter(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+            .map(|(_, v)| v.as_str())
+            .collect();
+        assert_eq!(
+            cts,
+            vec!["application/json"],
+            "user Content-Type must win and not be duplicated"
+        );
+    }
+
+    #[tokio::test]
+    async fn post_null_body_sends_empty() {
+        let source = r#"
+            import { post, Response } from "submilli:http";
+            function main(): void {
+                const r: Response = post("https://example.test/p", null);
+                assert(r.status === 200, "status round-tripped");
+                const r2: Response = post("https://example.test/p");
+                assert(r2.status === 200, "omitted body round-tripped");
+            }
+        "#;
+        let mock = run_with_mock(source, vec![ok_response(200, ""), ok_response(200, "")]).await;
+        let seen = mock.seen.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        for req in seen.iter() {
+            assert!(req.body.is_empty(), "null body must wire as zero bytes");
+            let ct_present = req
+                .headers
+                .iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("content-type"));
+            assert!(
+                !ct_present,
+                "null body must not trigger CT default; saw headers={:?}",
+                req.headers
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn post_lowercase_user_ct_blocks_default() {
+        let source = r#"
+            import { post, Response, Headers } from "submilli:http";
+            function main(): void {
+                const h: Headers = new Map<string, string>();
+                h.set("content-type", "application/xml");
+                const r: Response = post("https://example.test/p", "<x/>", h);
+                assert(r.status === 200, "status round-tripped");
+            }
+        "#;
+        let mock = run_with_mock(source, vec![ok_response(200, "")]).await;
+        let seen = mock.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        let cts: Vec<&str> = seen[0]
+            .headers
+            .iter()
+            .filter(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+            .map(|(_, v)| v.as_str())
+            .collect();
+        assert_eq!(cts, vec!["application/xml"]);
+    }
+
+    #[tokio::test]
+    async fn post_object_body_json_ct() {
+        let source = r#"
+            import { post, Response } from "submilli:http";
+            function main(): void {
+                const r: Response = post("https://example.test/p", { name: "alice" });
+                assert(r.status === 200, "status round-tripped");
+            }
+        "#;
+        let mock = run_with_mock(source, vec![ok_response(200, "")]).await;
+        let seen = mock.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].body, br#"{"name":"alice"}"#);
+        let ct = seen[0]
+            .headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+            .map(|(_, v)| v.as_str());
+        assert_eq!(
+            ct,
+            Some("application/json"),
+            "object body must default Content-Type to application/json"
+        );
+    }
+
+    #[tokio::test]
+    async fn post_array_body_json_ct() {
+        let source = r#"
+            import { post, Response } from "submilli:http";
+            function main(): void {
+                const r: Response = post("https://example.test/p", [1, 2, 3]);
+                assert(r.status === 200, "status round-tripped");
+            }
+        "#;
+        let mock = run_with_mock(source, vec![ok_response(200, "")]).await;
+        let seen = mock.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].body, b"[1,2,3]");
+        let ct = seen[0]
+            .headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+            .map(|(_, v)| v.as_str());
+        assert_eq!(
+            ct,
+            Some("application/json"),
+            "array body must default Content-Type to application/json"
+        );
+    }
+
+    #[tokio::test]
+    async fn post_object_body_user_ct_wins() {
+        let source = r#"
+            import { post, Response, Headers } from "submilli:http";
+            function main(): void {
+                const h: Headers = new Map<string, string>();
+                h.set("Content-Type", "application/vnd.custom");
+                const r: Response = post("https://example.test/p", { name: "alice" }, h);
+                assert(r.status === 200, "status round-tripped");
+            }
+        "#;
+        let mock = run_with_mock(source, vec![ok_response(200, "")]).await;
+        let seen = mock.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].body, br#"{"name":"alice"}"#);
+        let cts: Vec<&str> = seen[0]
+            .headers
+            .iter()
+            .filter(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+            .map(|(_, v)| v.as_str())
+            .collect();
+        assert_eq!(
+            cts,
+            vec!["application/vnd.custom"],
+            "user Content-Type must win over the application/json default"
+        );
+    }
+
+    #[tokio::test]
+    async fn request_form_with_body() {
+        let source = r#"
+            import { request, Response } from "submilli:http";
+            function main(): void {
+                const r: Response = request("POST", "https://example.test/p", "abc");
+                assert(r.status === 200, "status round-tripped");
+            }
+        "#;
+        let mock = run_with_mock(source, vec![ok_response(200, "")]).await;
+        let seen = mock.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].method, "POST");
+        assert_eq!(seen[0].body, b"abc");
+    }
+
+    async fn run_download_with_mock(
+        source: &str,
+        scripted: Vec<HttpResponse>,
+        security: Option<Arc<dyn SecurityCheck>>,
+        vfs_root: &std::path::Path,
+    ) -> (Arc<MockHttpClient>, Result<(), String>) {
+        let mock = Arc::new(MockHttpClient::new(scripted));
+        let res = run_download_with_client(source, mock.clone(), security, vfs_root).await;
+        (mock, res)
+    }
+
+    async fn run_download_with_client(
+        source: &str,
+        client: Arc<dyn HttpClient>,
+        security: Option<Arc<dyn SecurityCheck>>,
+        vfs_root: &std::path::Path,
+    ) -> Result<(), String> {
+        let compiled =
+            compile_script(source, "test.subm", crate::FileId(0), &[], &[]).expect("compile clean");
+        let cfg = RuntimeConfig::default();
+        let engine = cfg.engine().expect("engine");
+        let vfs = Vfs::external(vfs_root.to_path_buf()).expect("external vfs");
+        let mut data = StoreData::with_vfs(vfs);
+        data.http_client = client;
+        if let Some(sec) = security {
+            data.security_check = sec;
+        }
+        let mut store = cfg.store(&engine, data).expect("store");
+        let module = wasmtime::Module::new(&engine, &compiled.wasm).expect("module");
+        let mut linker = wasmtime::Linker::<StoreData>::new(&engine);
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .expect("install");
+        let inst = linker
+            .instantiate_async(&mut store, &module)
+            .await
+            .expect("instantiate");
+        dispatch_main_async(&mut store, &inst)
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("{e:?}"))
+    }
+
+    #[tokio::test]
+    async fn download_basic_writes_file_and_returns_meta() {
+        let source = r#"
+            import { download, DownloadResult } from "submilli:http";
+            function main(): void {
+                const r: DownloadResult = download(
+                    "https://example.test/file.bin",
+                    "/out.bin"
+                );
+                assert(r.status === 200, "status 200");
+                assert(r.bytesWritten === 5, "wrote 5 bytes");
+                assert(r.path === "/out.bin", "path echoed");
+                assert(r.contentType === "text/plain", "content type extracted");
+            }
+        "#;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let (mock, res) =
+            run_download_with_mock(source, vec![ok_response(200, "hello")], None, tmp.path()).await;
+        res.expect("main ran");
+        let on_disk = std::fs::read(tmp.path().join("out.bin")).expect("file written");
+        assert_eq!(on_disk, b"hello");
+        let seen = mock.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].method, "GET");
+        assert_eq!(seen[0].url, "https://example.test/file.bin");
+    }
+
+    #[tokio::test]
+    async fn download_refuses_when_file_exists_default() {
+        let source = r#"
+            import { download } from "submilli:http";
+            function main(): void {
+                download("https://example.test/f", "/exists.bin");
+            }
+        "#;
+        let cfg = RuntimeConfig::default();
+        let engine = cfg.engine().expect("engine");
+        let vfs = Vfs::tempdir().expect("tempdir");
+        std::fs::write(vfs.root().join("exists.bin"), b"old").expect("seed");
+        let mut data = StoreData::with_vfs(vfs);
+        let mock = Arc::new(MockHttpClient::new(vec![ok_response(200, "hello")]));
+        data.http_client = mock;
+        let compiled =
+            compile_script(source, "test.subm", crate::FileId(0), &[], &[]).expect("compile");
+        let mut store = cfg.store(&engine, data).expect("store");
+        let module = wasmtime::Module::new(&engine, &compiled.wasm).expect("module");
+        let mut linker = wasmtime::Linker::<StoreData>::new(&engine);
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .expect("install");
+        let inst = linker
+            .instantiate_async(&mut store, &module)
+            .await
+            .expect("instantiate");
+        let err = dispatch_main_async(&mut store, &inst)
+            .await
+            .expect_err("must trap on existing file");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("file exists"),
+            "expected file-exists trap; got: {msg}"
+        );
+        assert!(
+            msg.contains("overwrite: true"),
+            "expected actionable hint; got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn download_overwrites_when_true() {
+        let source = r#"
+            import { download, DownloadResult } from "submilli:http";
+            function main(): void {
+                const r: DownloadResult = download(
+                    "https://example.test/f",
+                    "/exists.bin",
+                    { overwrite: true }
+                );
+                assert(r.bytesWritten === 3, "wrote 3 bytes");
+            }
+        "#;
+        let cfg = RuntimeConfig::default();
+        let engine = cfg.engine().expect("engine");
+        let vfs = Vfs::tempdir().expect("tempdir");
+        std::fs::write(vfs.root().join("exists.bin"), b"old").expect("seed");
+        let vfs_root = vfs.root().to_path_buf();
+        let mut data = StoreData::with_vfs(vfs);
+        let mock = Arc::new(MockHttpClient::new(vec![ok_response(200, "new")]));
+        data.http_client = mock;
+        let compiled =
+            compile_script(source, "test.subm", crate::FileId(0), &[], &[]).expect("compile");
+        let mut store = cfg.store(&engine, data).expect("store");
+        let module = wasmtime::Module::new(&engine, &compiled.wasm).expect("module");
+        let mut linker = wasmtime::Linker::<StoreData>::new(&engine);
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .expect("install");
+        let inst = linker
+            .instantiate_async(&mut store, &module)
+            .await
+            .expect("instantiate");
+        dispatch_main_async(&mut store, &inst)
+            .await
+            .expect("main ran");
+        let on_disk = std::fs::read(vfs_root.join("exists.bin")).expect("file written");
+        assert_eq!(on_disk, b"new", "overwritten with new bytes");
+    }
+
+    #[tokio::test]
+    async fn download_too_large_traps() {
+        let source = r#"
+            import { download } from "submilli:http";
+            function main(): void {
+                download(
+                    "https://example.test/f",
+                    "/big.bin",
+                    { maxBytes: 3 }
+                );
+            }
+        "#;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let (_mock, res) =
+            run_download_with_mock(source, vec![ok_response(200, "hello")], None, tmp.path()).await;
+        let err = res.expect_err("must trap on too-large");
+        assert!(
+            err.contains("too large") || err.contains("limit"),
+            "expected too-large trap; got: {err}"
+        );
+        assert!(
+            !tmp.path().join("big.bin").exists(),
+            "no final file should be written when capped",
+        );
+        // Best-effort cleanup on error removes .tmp siblings too.
+        let stragglers: Vec<_> = std::fs::read_dir(tmp.path())
+            .expect("readdir")
+            .filter_map(std::result::Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(
+            stragglers.is_empty(),
+            "expected no .tmp leftovers, got: {:?}",
+            stragglers
+                .iter()
+                .map(std::fs::DirEntry::file_name)
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    #[tokio::test]
+    async fn download_headers_threaded() {
+        let source = r#"
+            import { download, Headers } from "submilli:http";
+            function main(): void {
+                const h: Headers = new Map<string, string>();
+                h.set("Authorization", "Bearer xyz");
+                download("https://example.test/f", "/out.bin", { headers: h });
+            }
+        "#;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let (mock, res) =
+            run_download_with_mock(source, vec![ok_response(200, "")], None, tmp.path()).await;
+        res.expect("main ran");
+        let seen = mock.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        let auth = seen[0]
+            .headers
+            .iter()
+            .find(|(n, _)| n == "Authorization")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(auth, Some("Bearer xyz"));
+    }
+
+    #[tokio::test]
+    async fn download_deny_http_traps() {
+        struct DenyHttpDownload;
+        impl SecurityCheck for DenyHttpDownload {
+            fn check(
+                &self,
+                _caller: &str,
+                capability: &str,
+                _context: &serde_json::Value,
+            ) -> CheckOutcome {
+                if capability == "http.download" {
+                    CheckOutcome::Deny {
+                        reason: "denied http.download in test".into(),
+                    }
+                } else {
+                    CheckOutcome::Allow
+                }
+            }
+        }
+        let source = r#"
+            import { download } from "submilli:http";
+            function main(): void {
+                download("https://example.test/f", "/out.bin");
+            }
+        "#;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let (mock, res) = run_download_with_mock(
+            source,
+            vec![ok_response(200, "hello")],
+            Some(Arc::new(DenyHttpDownload)),
+            tmp.path(),
+        )
+        .await;
+        let err = res.expect_err("must trap on deny");
+        assert!(err.contains("permission denied"), "got: {err}");
+        assert!(err.contains("http.download"), "got: {err}");
+        assert!(err.contains("caller=main"), "got: {err}");
+        assert!(
+            mock.seen.lock().unwrap().is_empty(),
+            "http_client.send should not have been invoked"
+        );
+    }
+
+    #[tokio::test]
+    async fn download_deny_fs_write_traps() {
+        struct DenyFsWrite;
+        impl SecurityCheck for DenyFsWrite {
+            fn check(
+                &self,
+                _caller: &str,
+                capability: &str,
+                _context: &serde_json::Value,
+            ) -> CheckOutcome {
+                if capability == "fs.write" {
+                    CheckOutcome::Deny {
+                        reason: "denied fs.write in test".into(),
+                    }
+                } else {
+                    CheckOutcome::Allow
+                }
+            }
+        }
+        let source = r#"
+            import { download } from "submilli:http";
+            function main(): void {
+                download("https://example.test/f", "/out.bin");
+            }
+        "#;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let (mock, res) = run_download_with_mock(
+            source,
+            vec![ok_response(200, "hello")],
+            Some(Arc::new(DenyFsWrite)),
+            tmp.path(),
+        )
+        .await;
+        let err = res.expect_err("must trap on deny");
+        assert!(err.contains("permission denied"), "got: {err}");
+        assert!(err.contains("fs.write"), "got: {err}");
+        assert!(
+            mock.seen.lock().unwrap().is_empty(),
+            "fs.write check must run before transport"
+        );
+    }
+
+    #[tokio::test]
+    async fn download_path_escape_traps() {
+        let source = r#"
+            import { download } from "submilli:http";
+            function main(): void {
+                download("https://example.test/f", "../etc/passwd");
+            }
+        "#;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let (_mock, res) =
+            run_download_with_mock(source, vec![ok_response(200, "x")], None, tmp.path()).await;
+        let err = res.expect_err("must trap on path escape");
+        assert!(
+            err.contains("path escapes the VFS root"),
+            "expected sandbox-escape trap; got: {err}"
+        );
+    }
+
+    /// A VFS root plus a sibling directory outside it, so a test can assert that
+    /// nothing leaked past the boundary.
+    fn root_and_outside() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+        let td = tempfile::tempdir().expect("tempdir");
+        let root = td.path().join("root");
+        let outside = td.path().join("outside");
+        std::fs::create_dir(&root).expect("mkdir root");
+        std::fs::create_dir(&outside).expect("mkdir outside");
+        (td, root, outside)
+    }
+
+    fn dir_is_empty(dir: &std::path::Path) -> bool {
+        std::fs::read_dir(dir).expect("readdir").next().is_none()
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn download_under_an_escaping_link_refuses() {
+        let source = r#"
+            import { download } from "submilli:http";
+            function main(): void {
+                download("https://example.test/f", "/link/authorized_keys");
+            }
+        "#;
+        let (_td, root, outside) = root_and_outside();
+        std::os::unix::fs::symlink(&outside, root.join("link")).expect("symlink");
+        let (_mock, res) =
+            run_download_with_mock(source, vec![ok_response(200, "pwned")], None, &root).await;
+        let err = res.expect_err("must refuse a destination behind an escaping link");
+        assert!(
+            err.contains("path escapes the VFS root"),
+            "expected the escape diagnostic; got: {err}"
+        );
+        assert!(
+            dir_is_empty(&outside),
+            "nothing may be written outside the VFS root",
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn download_under_an_escaping_link_refuses_even_with_overwrite() {
+        let source = r#"
+            import { download } from "submilli:http";
+            function main(): void {
+                download(
+                    "https://example.test/f",
+                    "/link/authorized_keys",
+                    { overwrite: true }
+                );
+            }
+        "#;
+        let (_td, root, outside) = root_and_outside();
+        std::os::unix::fs::symlink(&outside, root.join("link")).expect("symlink");
+        std::fs::write(outside.join("authorized_keys"), b"original").expect("seed");
+        let (_mock, res) =
+            run_download_with_mock(source, vec![ok_response(200, "pwned")], None, &root).await;
+        let err = res.expect_err("overwrite must not license an escape");
+        assert!(
+            err.contains("path escapes the VFS root"),
+            "expected the escape diagnostic; got: {err}"
+        );
+        assert_eq!(
+            std::fs::read(outside.join("authorized_keys")).expect("still there"),
+            b"original",
+            "the host file must be untouched",
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn download_through_an_internal_relative_link_succeeds() {
+        let source = r#"
+            import { download } from "submilli:http";
+            function main(): void {
+                download("https://example.test/f", "/inner/out.bin");
+            }
+        "#;
+        let (_td, root, _outside) = root_and_outside();
+        std::fs::create_dir(root.join("real")).expect("mkdir real");
+        std::os::unix::fs::symlink("./real", root.join("inner")).expect("symlink");
+        let (_mock, res) =
+            run_download_with_mock(source, vec![ok_response(200, "hello")], None, &root).await;
+        res.expect("a relative link staying inside the root is traversable");
+        assert_eq!(
+            std::fs::read(root.join("real/out.bin")).expect("file written"),
+            b"hello",
+        );
+    }
+
+    /// Policy is evaluated before any filesystem work, so a denied download reports the
+    /// denial rather than whatever the path would have done.
+    #[tokio::test]
+    async fn download_denial_precedes_path_resolution() {
+        struct DenyFsWrite;
+        impl SecurityCheck for DenyFsWrite {
+            fn check(
+                &self,
+                _caller: &str,
+                capability: &str,
+                _context: &serde_json::Value,
+            ) -> CheckOutcome {
+                if capability == "fs.write" {
+                    CheckOutcome::Deny {
+                        reason: "denied fs.write in test".into(),
+                    }
+                } else {
+                    CheckOutcome::Allow
+                }
+            }
+        }
+        let source = r#"
+            import { download } from "submilli:http";
+            function main(): void {
+                download("https://example.test/f", "../etc/passwd");
+            }
+        "#;
+        let (_td, root, _outside) = root_and_outside();
+        let (_mock, res) = run_download_with_mock(
+            source,
+            vec![ok_response(200, "x")],
+            Some(Arc::new(DenyFsWrite)),
+            &root,
+        )
+        .await;
+        let err = res.expect_err("must trap");
+        assert!(
+            err.contains("permission denied") && err.contains("fs.write"),
+            "policy must be consulted before the path is resolved; got: {err}"
+        );
+        assert!(
+            !err.contains("path escapes the VFS root"),
+            "resolution must not preempt the denial; got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn download_missing_parent_reports_not_found_not_escape() {
+        let source = r#"
+            import { download } from "submilli:http";
+            function main(): void {
+                download("https://example.test/f", "/nope/out.bin");
+            }
+        "#;
+        let (_td, root, _outside) = root_and_outside();
+        let (_mock, res) =
+            run_download_with_mock(source, vec![ok_response(200, "hello")], None, &root).await;
+        let err = res.expect_err("must trap on a missing parent");
+        assert!(
+            err.contains("parent directory does not exist"),
+            "a missing parent must not read as an escape; got: {err}"
+        );
+        assert!(
+            !err.contains("path escapes the VFS root"),
+            "a missing parent must not read as an escape; got: {err}"
+        );
+    }
+
+    /// The commit goes through the handle the destination resolved against, so a link
+    /// swapped over the parent while the body streams cannot redirect it.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn download_commit_refuses_when_the_parent_is_swapped_mid_transfer() {
+        struct SwapDuringTransfer {
+            parent: std::path::PathBuf,
+            outside: std::path::PathBuf,
+        }
+        #[async_trait::async_trait]
+        impl HttpClient for SwapDuringTransfer {
+            async fn send(&self, _req: &HttpRequest) -> Result<HttpResponse, HttpError> {
+                Err(HttpError::Other("send unused".into()))
+            }
+            async fn download(
+                &self,
+                _req: &HttpRequest,
+                writer: &mut (dyn std::io::Write + Send),
+            ) -> Result<DownloadMeta, HttpError> {
+                writer.write_all(b"payload").expect("write body");
+                std::fs::remove_dir_all(&self.parent).expect("drop the real parent");
+                std::os::unix::fs::symlink(&self.outside, &self.parent).expect("swap in a link");
+                Ok(DownloadMeta {
+                    status: 200,
+                    status_text: "OK".to_string(),
+                    headers: Vec::new(),
+                    final_url: "https://example.test/f".to_string(),
+                    bytes_written: 7,
+                })
+            }
+        }
+        let source = r#"
+            import { download } from "submilli:http";
+            function main(): void {
+                download("https://example.test/f", "/a/b/out.bin");
+            }
+        "#;
+        let (_td, root, outside) = root_and_outside();
+        std::fs::create_dir_all(root.join("a/b")).expect("mkdir a/b");
+        let client = Arc::new(SwapDuringTransfer {
+            parent: root.join("a/b"),
+            outside: outside.clone(),
+        });
+        let res = run_download_with_client(source, client, None, &root).await;
+        let err = res.expect_err("the commit must refuse");
+        assert!(
+            err.contains("path escapes the VFS root"),
+            "expected the escape diagnostic at commit; got: {err}"
+        );
+        assert!(
+            dir_is_empty(&outside),
+            "the swapped-in link must not receive the download",
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_download_leaves_nothing_outside_the_root() {
+        struct FailingTransfer;
+        #[async_trait::async_trait]
+        impl HttpClient for FailingTransfer {
+            async fn send(&self, _req: &HttpRequest) -> Result<HttpResponse, HttpError> {
+                Err(HttpError::Network("dns: no such host".into()))
+            }
+            async fn download(
+                &self,
+                _req: &HttpRequest,
+                _writer: &mut (dyn std::io::Write + Send),
+            ) -> Result<DownloadMeta, HttpError> {
+                Err(HttpError::Network("dns: no such host".into()))
+            }
+        }
+        let source = r#"
+            import { download } from "submilli:http";
+            function main(): void {
+                download("https://example.test/f", "/out.bin");
+            }
+        "#;
+        let (_td, root, _outside) = root_and_outside();
+        let res = run_download_with_client(source, Arc::new(FailingTransfer), None, &root).await;
+        assert!(res.is_err(), "must trap on transport failure");
+        // The destination is inside the root, so an assertion about the *outside* directory
+        // would hold no matter what the code did. The root is where a straggler can actually
+        // appear, and it is what this test is for.
+        assert!(
+            dir_is_empty(&root),
+            "a failed transfer must leave no temp file behind",
+        );
+    }
+
+    #[tokio::test]
+    async fn download_decompress_gzip() {
+        use std::io::Write;
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(b"hello gzipped").expect("encode");
+        let gz_bytes = encoder.finish().expect("finish");
+
+        let source = r#"
+            import { download, DownloadResult } from "submilli:http";
+            function main(): void {
+                const r: DownloadResult = download(
+                    "https://example.test/data.txt.gz",
+                    "/out.txt",
+                    { decompress: true }
+                );
+                assert(r.bytesWritten === 13, "decompressed length");
+            }
+        "#;
+        let response = HttpResponse {
+            status: 200,
+            status_text: "OK".into(),
+            headers: vec![
+                ("content-encoding".into(), "gzip".into()),
+                ("content-type".into(), "text/plain".into()),
+            ],
+            body: gz_bytes,
+            final_url: "https://example.test/data.txt.gz".into(),
+        };
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let (_mock, res) = run_download_with_mock(source, vec![response], None, tmp.path()).await;
+        res.expect("main ran");
+        let on_disk = std::fs::read(tmp.path().join("out.txt")).expect("file written");
+        assert_eq!(on_disk, b"hello gzipped");
+    }
+
+    // If `download` buffered via `send`, this test would never terminate — guards the streaming contract.
+    #[tokio::test]
+    async fn download_infinite_body_caps_without_buffering() {
+        struct InfiniteReader;
+        impl std::io::Read for InfiniteReader {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                buf.fill(b'a');
+                Ok(buf.len())
+            }
+        }
+
+        struct StreamingClient;
+        #[async_trait::async_trait]
+        impl HttpClient for StreamingClient {
+            async fn send(&self, _req: &HttpRequest) -> Result<HttpResponse, HttpError> {
+                panic!("download must NOT fall back to send")
+            }
+            async fn download(
+                &self,
+                req: &HttpRequest,
+                writer: &mut (dyn std::io::Write + Send),
+            ) -> Result<DownloadMeta, HttpError> {
+                let bytes_written = stream_to_writer(
+                    InfiniteReader,
+                    writer,
+                    super::transport::Decompression::None,
+                    req.max_response_size,
+                )?;
+                Ok(DownloadMeta {
+                    status: 200,
+                    status_text: "OK".into(),
+                    headers: vec![],
+                    final_url: req.url.clone(),
+                    bytes_written,
+                })
+            }
+        }
+
+        let source = r#"
+            import { download } from "submilli:http";
+            function main(): void {
+                download(
+                    "https://example.test/infinite",
+                    "/never.bin",
+                    { maxBytes: 1024 }
+                );
+            }
+        "#;
+        let compiled =
+            compile_script(source, "test.subm", crate::FileId(0), &[], &[]).expect("compile clean");
+        let cfg = RuntimeConfig::default();
+        let engine = cfg.engine().expect("engine");
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let vfs = Vfs::external(tmp.path().to_path_buf()).expect("external vfs");
+        let mut data = StoreData::with_vfs(vfs);
+        data.http_client = Arc::new(StreamingClient);
+        let mut store = cfg.store(&engine, data).expect("store");
+        let module = wasmtime::Module::new(&engine, &compiled.wasm).expect("module");
+        let mut linker = wasmtime::Linker::<StoreData>::new(&engine);
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .expect("install");
+        let inst = linker
+            .instantiate_async(&mut store, &module)
+            .await
+            .expect("instantiate");
+        let err = dispatch_main_async(&mut store, &inst)
+            .await
+            .expect_err("must trap on infinite-body cap");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("too large") || msg.contains("limit"),
+            "expected too-large trap; got: {msg}"
+        );
+        assert!(
+            !tmp.path().join("never.bin").exists(),
+            "no final file should land when cap aborts the stream",
+        );
+    }
+
+    // Security check order: http.download fires before fs.write.
+    #[tokio::test]
+    async fn download_from_a_script_is_attributed_to_main() {
+        let recording = Arc::new(RecordingCheck {
+            seen: Mutex::new(Vec::new()),
+        });
+        let source = r#"
+            import { download } from "submilli:http";
+            function main(): void {
+                download("https://example.test/f", "/out.bin");
+            }
+        "#;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let (_mock, res) = run_download_with_mock(
+            source,
+            vec![ok_response(200, "")],
+            Some(recording.clone()),
+            tmp.path(),
+        )
+        .await;
+        res.expect("main ran");
+        let seen = recording.seen.lock().unwrap().clone();
+        let download_caps: Vec<&str> = seen
+            .iter()
+            .map(|(_, c)| c.as_str())
+            .filter(|c| *c == "http.download" || *c == "fs.write")
+            .collect();
+        assert_eq!(
+            download_caps,
+            vec!["http.download", "fs.write"],
+            "expected http.download then fs.write in order; got: {download_caps:?}"
+        );
+        for (caller, capability) in &seen {
+            assert_eq!(
+                caller, "main",
+                "expected caller=main for {capability}; got {caller}"
+            );
+        }
+    }
+
+    fn json_response(body: &str) -> HttpResponse {
+        HttpResponse {
+            status: 200,
+            status_text: "OK".to_string(),
+            headers: vec![("content-type".to_string(), "application/json".to_string())],
+            body: body.as_bytes().to_vec(),
+            final_url: "https://example.test/json".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn response_json_type_arg_errors() {
+        let source = r#"
+            import { get, Response } from "submilli:http";
+            function main(): void {
+                const r: Response = get("https://example.test/json");
+                const o: { k: string } = r.json<{ k: string }>();
+                assert(o.k === "v", "parsed json field");
+            }
+        "#;
+        let diags = compile_script(source, "test.subm", crate::FileId(0), &[], &[])
+            .expect_err("Response#json type arguments must error");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("`r.json` does not take type arguments")),
+            "expected the type-argument diagnostic; got: {:?}",
+            diags.iter().map(|d| &d.message).collect::<Vec<_>>(),
+        );
+    }
+
+    #[tokio::test]
+    async fn response_json_assignment_to_concrete_type_errors() {
+        let source = r#"
+            import { get, Response } from "submilli:http";
+            function main(): void {
+                const r: Response = get("https://example.test/json");
+                const o: { k: string } = r.json();
+            }
+        "#;
+        let diags = compile_script(source, "test.subm", crate::FileId(0), &[], &[])
+            .expect_err("assigning unknown to concrete type must error");
+        assert!(
+            diags.iter().any(|d| d.message.contains("got `unknown`")),
+            "expected the `unknown` assignment diagnostic; got: {:?}",
+            diags.iter().map(|d| &d.message).collect::<Vec<_>>(),
+        );
+    }
+
+    #[tokio::test]
+    async fn response_json_as_cast() {
+        // `r.json()` returns `unknown`; `as T` performs normal runtime validation.
+        let source = r#"
+            import { get, Response } from "submilli:http";
+            function main(): void {
+                const r: Response = get("https://example.test/json");
+                const o = r.json() as { k: string };
+                assert(o.k === "v", "parsed via `r.json() as T`");
+            }
+        "#;
+        run_with_mock(source, vec![json_response(r#"{"k":"v"}"#)]).await;
+    }
+
+    // SUB-386: member access on a library-typed value must resolve without the
+    // user also importing the interface name. These import only `get` and never
+    // name `Response` — the type flows entirely from the return type.
+
+    #[tokio::test]
+    async fn importless_response_property_access() {
+        let source = r#"
+            import { get } from "submilli:http";
+            function main(): void {
+                const r = get("https://example.test/u");
+                assert(r.status === 200, "status is 200");
+                assert(r.body === "hello", "body decoded");
+                assert(r.ok, "ok for 2xx");
+            }
+        "#;
+        run_with_mock(source, vec![ok_response(200, "hello")]).await;
+    }
+
+    #[tokio::test]
+    async fn importless_response_method_call() {
+        let source = r#"
+            import { get } from "submilli:http";
+            function main(): void {
+                const r = get("https://example.test/t");
+                const s: string = r.toString();
+                assert(s === "Response(200 OK, https://example.test/)", s);
+                r.throwForStatus();
+            }
+        "#;
+        run_with_mock(source, vec![ok_response(200, "")]).await;
+    }
+
+    #[tokio::test]
+    async fn importless_response_json() {
+        // The `json()` rewrite must also fire without a `Response` import.
+        let source = r#"
+            import { get } from "submilli:http";
+            function main(): void {
+                const r = get("https://example.test/json");
+                const o = r.json() as { k: string };
+                assert(o.k === "v", "parsed json importlessly");
+            }
+        "#;
+        run_with_mock(source, vec![json_response(r#"{"k":"v"}"#)]).await;
+    }
+
+    #[tokio::test]
+    async fn importless_headers_alias_member_access() {
+        // The library `Headers` alias (→ prelude `Map`) resolves structurally
+        // without importing `Headers`; `r.headers.get(...)` reads through it.
+        let source = r#"
+            import { get } from "submilli:http";
+            function main(): void {
+                const r = get("https://example.test/u");
+                const ct = r.headers.get("content-type");
+                assert(ct === "text/plain", "header read through importless alias");
+            }
+        "#;
+        run_with_mock(source, vec![ok_response(200, "hi")]).await;
+    }
+}

@@ -1,0 +1,7 @@
+function main(): void {
+  const t = JSON.parse("true") as boolean;
+  assert(t === true, "parse true");
+
+  const f = JSON.parse("false") as boolean;
+  assert(f === false, "parse false");
+}

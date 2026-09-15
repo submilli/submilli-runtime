@@ -1,0 +1,45 @@
+// TC39 Temporal conformance vectors over the implemented ISO-8601-only
+// surface: parsing, arithmetic, conversions, calendar getters, rounding,
+// and string round-trips.
+
+function main(): void {
+  const d = Temporal.PlainDate.from("2024-02-29");
+  assert(d.year === 2024 && d.month === 2 && d.day === 29, "leap-day parses");
+  assert(d.toString() === "2024-02-29", "ISO round-trip");
+
+  const next = d.add({ days: 1 });
+  assert(next.toString() === "2024-03-01", "leap-day rollover");
+  const back = next.subtract({ days: 1 });
+  assert(back.equals(d), "add/subtract are inverse");
+
+  assert(Temporal.PlainDate.compare(d, next) === -1, "compare orders");
+  const gap = d.until(next);
+  assert(gap.days === 1, "until measures days");
+
+  const t = Temporal.PlainTime.from("23:30:00");
+  const later = t.add({ hours: 1 });
+  assert(later.hour === 0 && later.minute === 30, "time wraps midnight");
+
+  const dt = Temporal.PlainDateTime.from("2026-06-10T12:34:56");
+  assert(dt.toPlainDate().day === 10 && dt.toPlainTime().minute === 34, "decomposition");
+
+  const inst = Temporal.Instant.from("2024-03-09T15:30:45Z");
+  assert(inst.epochMilliseconds === 1709998245000, "epoch milliseconds");
+  const inst2 = inst.add({ hours: 1 });
+  assert(inst2.epochMilliseconds - inst.epochMilliseconds === 3600000, "instant arithmetic");
+
+  const zdt = inst.toZonedDateTimeISO("UTC");
+  assert(zdt.hour === 15 && zdt.timeZoneId === "UTC", "zone projection");
+  const ny = zdt.withTimeZone("America/New_York");
+  assert(ny.epochMilliseconds === zdt.epochMilliseconds, "same instant across zones");
+  assert(ny.hour === 10, "wall clock shifts with the zone");
+
+  const dur = Temporal.Duration.from("PT1H30M");
+  assert(dur.hours === 1 && dur.minutes === 30, "ISO duration parses");
+  assert(dur.total("minutes") === 90, "total converts");
+  assert(dur.negated().sign === -1, "negated flips sign");
+  assert(dur.round("hour").hours === 2, "round half-expands 90 minutes to 2h");
+
+  const ym = Temporal.PlainYearMonth.from("2026-06");
+  assert(ym.year === 2026 && ym.month === 6, "year-month parses");
+}

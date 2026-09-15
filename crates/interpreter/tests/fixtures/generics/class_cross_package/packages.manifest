@@ -1,0 +1,7 @@
+# A generic class exported from a package: the app constructs both
+# instantiations, mutates a T field, calls methods through the reconstructed
+# erased slots, and locally extends the imported generic class at concrete
+# args (serialized extends clause carries the parent's type args).
+# name         dir   deps         root
+@test/boxes    boxes -
+main           app   @test/boxes  root

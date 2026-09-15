@@ -1,0 +1,4 @@
+// expect-error: import escapes package root
+import { x } from "../x";
+
+function main(): void { }

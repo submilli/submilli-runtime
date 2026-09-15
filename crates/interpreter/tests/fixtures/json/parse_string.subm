@@ -1,0 +1,7 @@
+function main(): void {
+  const s = JSON.parse("\"hello\"") as string;
+  assert(s === "hello", "parse string");
+
+  const e = JSON.parse("\"\"") as string;
+  assert(e === "", "parse empty string");
+}

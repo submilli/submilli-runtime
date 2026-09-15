@@ -1,0 +1,340 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "submilli chart values",
+  "description": "Helm validates values against this on install, upgrade, lint, and template. Its job is to turn a typo or a wrong unit into an error before a cluster is involved.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "replicaCount": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of independent servers, each with its own volume and its own blueprint, session, secret, and package stores. They share nothing. Anything registered through the API exists on exactly one pod, so above 1 the client must address a specific server through the headless Service instead of the load-balanced one."
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository"
+      ],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tag": {
+          "type": "string",
+          "description": "Empty means the chart's appVersion. Avoid 'latest': Kubernetes forces imagePullPolicy Always for it, which breaks air-gapped and kind-loaded images."
+        },
+        "pullPolicy": {
+          "type": "string",
+          "enum": [
+            "Always",
+            "IfNotPresent",
+            "Never"
+          ]
+        }
+      }
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "nameOverride": {
+      "type": "string",
+      "maxLength": 63
+    },
+    "fullnameOverride": {
+      "type": "string",
+      "maxLength": 63
+    },
+    "serviceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "annotations": {
+          "type": "object"
+        }
+      }
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "ClusterIP",
+            "NodePort",
+            "LoadBalancer"
+          ]
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "annotations": {
+          "type": "object"
+        }
+      }
+    },
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bind": {
+          "type": "string",
+          "format": "ipv4",
+          "description": "Must be 0.0.0.0 for a Service to route to the pod."
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "shutdownGrace": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 300
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxMemoryMB": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "A bare count of megabytes. The server rejects a Kubernetes quantity such as '512Mi' here and refuses to boot, which is why this is an integer rather than a string. Bounds live GC heap, not process RSS."
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "baselineMi": {
+          "type": "integer",
+          "minimum": 32
+        },
+        "headroomMultiplier": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Multiplier on execution.maxMemoryMB for the container memory limit. Not a concurrency count: maxMemoryMB bounds live GC heap, and peak RSS has been measured >12x it. See SUB-704."
+        },
+        "cpuRequest": {
+          "type": "string"
+        },
+        "cpuLimit": {
+          "type": "string"
+        }
+      }
+    },
+    "persistence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "size": {
+          "type": "string",
+          "pattern": "^[0-9]+(\\.[0-9]+)?(E|P|T|G|M|K|Ei|Pi|Ti|Gi|Mi|Ki)?$"
+        },
+        "storageClass": {
+          "type": "string"
+        },
+        "accessMode": {
+          "type": "string",
+          "enum": [
+            "ReadWriteOncePod",
+            "ReadWriteOnce"
+          ],
+          "description": "ReadWriteOncePod (default) lets exactly one pod mount the volume; the scheduler refuses a second. ReadWriteOnce is the fallback for clusters below Kubernetes 1.29, which reject ReadWriteOncePod outright \u2014 it admits any number of pods on one node, so on that setting the single-writer guarantee rests solely on the StatefulSet. ReadWriteMany is deliberately absent: the blueprint, session, and secret stores are single-writer on-disk logs, and no access mode that permits concurrent writers is safe for them."
+        }
+      }
+    },
+    "blueprints": {
+      "type": "object",
+      "description": "Map of blueprint name to YAML content. Keys become <name>.yaml in the mounted ConfigMap; the suffix is added by the template, so do not include it.",
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      },
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_-]+$",
+        "description": "Blueprint names are validated to [A-Za-z0-9_-] by the server, and the same set keeps the ConfigMap key legal."
+      }
+    },
+    "secrets": {
+      "type": "object",
+      "description": "Map of local name to an existing Kubernetes Secret reference. Never secret values.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "secretName",
+          "key"
+        ],
+        "properties": {
+          "secretName": {
+            "type": "string",
+            "minLength": 1
+          },
+          "key": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_-]+$"
+      }
+    },
+    "secretStore": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "existingSecret": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "allowHelmTests": {
+          "type": "boolean"
+        },
+        "allowFrom": {
+          "type": "array",
+          "description": "Raw NetworkPolicy ingress 'from' entries. Note the selector semantics: two selectors in separate list items is OR; in the same item it is AND. Getting that backwards yields an accidentally-open policy that looks correct.",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "className": {
+          "type": "string"
+        },
+        "annotations": {
+          "type": "object"
+        },
+        "hosts": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "tls": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "tests": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "repository"
+          ],
+          "properties": {
+            "repository": {
+              "type": "string",
+              "minLength": 1
+            },
+            "tag": {
+              "type": "string",
+              "description": "Pinned tag. Avoid 'latest': Kubernetes forces imagePullPolicy Always for it, which breaks air-gapped and side-loaded images."
+            },
+            "pullPolicy": {
+              "type": "string",
+              "enum": [
+                "Always",
+                "IfNotPresent",
+                "Never"
+              ]
+            }
+          }
+        },
+        "runAsUser": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Must be non-zero: the test pods set runAsNonRoot."
+        },
+        "runAsGroup": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "extraEnv": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "podAnnotations": {
+      "type": "object"
+    },
+    "podLabels": {
+      "type": "object"
+    },
+    "nodeSelector": {
+      "type": "object"
+    },
+    "tolerations": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "affinity": {
+      "type": "object"
+    }
+  }
+}

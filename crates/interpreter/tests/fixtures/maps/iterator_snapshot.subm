@@ -1,0 +1,25 @@
+// Map#iterator captures a snapshot: a resize after iterator() does not affect the
+// cursor — it still walks the pre-resize entries only.
+
+function main(): void {
+  const m = new Map<string, number>();
+  m.set("a", 1);
+  m.set("b", 2);
+  m.set("c", 3);
+  m.set("d", 4);
+  m.set("e", 5);
+  m.set("f", 6);
+
+  const it = m.iterator();
+
+  m.set("g", 7);
+
+  let visits: number = 0;
+  while (true) {
+    const r = it.next();
+    if (r.done) { break; }
+    visits = visits + 1;
+  }
+  assert(visits === 6, "cursor walks the snapshot, not post-resize entries");
+  assert(m.size === 7, "map sees all inserts including post-iterator()");
+}

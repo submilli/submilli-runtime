@@ -1,0 +1,36 @@
+---
+source: crates/interpreter/tests/diagnostic_snapshots.rs
+assertion_line: 86
+expression: render_all(source)
+---
+error: object literal has unknown field `z` for the target type
+ --> test.subm:3:40
+  |
+2 | function main(): void {
+3 |   let p = pick({ x: 1, y: 2 }, { x: 1, z: 3 });
+  |                                        ^
+4 | }
+  |
+help: valid fields: `x`, `y`
+  |
+help: remove `z` or rename it to `x`
+---
+error: object literal is missing required field `y`
+ --> test.subm:3:32
+  |
+2 | function main(): void {
+3 |   let p = pick({ x: 1, y: 2 }, { x: 1, z: 3 });
+  |                                ^^^^^^^^^^^^^^
+4 | }
+---
+error: expected `{ x: number; y: number }`, got `{ x: number; z: number }`
+ --> test.subm:3:32
+  |
+2 | function main(): void {
+3 |   let p = pick({ x: 1, y: 2 }, { x: 1, z: 3 });
+  |                                ^^^^^^^^^^^^^^
+4 | }
+  |
+help: missing field(s): `y`
+extra field(s): `z`
+---

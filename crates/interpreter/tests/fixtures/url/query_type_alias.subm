@@ -1,0 +1,26 @@
+import { decodeQuery, encodeQuery, Query } from "submilli:url";
+
+function summarise(q: Query): number {
+  return q.size;
+}
+
+function main(): void {
+  const parsed: Query = decodeQuery("a=1&b=2&c=3");
+  assert(parsed.size === 3, "Query annotation accepts decodeQuery result");
+
+  const n: number = summarise(parsed);
+  assert(n === 3, "Query flows through function parameters");
+
+  parsed.set("d", "4");
+  assert(parsed.size === 4, "Map.set on Query-typed value");
+  const a: string | null = parsed.get("a");
+  assert(a !== null && a === "1", "Map.get on Query-typed value");
+
+  const s: string = encodeQuery(parsed);
+  const reparsed: Query = decodeQuery(s);
+  assert(reparsed.size === 4, "round-trip preserves size through alias");
+
+  const fresh: Query = new Map<string, string>();
+  fresh.set("k", "v");
+  assert(fresh.size === 1, "fresh Map<string, string> assignable to Query");
+}

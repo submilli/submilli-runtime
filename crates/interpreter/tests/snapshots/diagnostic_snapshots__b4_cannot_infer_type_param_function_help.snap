@@ -1,0 +1,21 @@
+---
+source: crates/interpreter/tests/diagnostic_snapshots.rs
+expression: render_all(source)
+---
+error: expected `T`, got `null`
+ --> test.subm:1:38
+  |
+1 | function pickReturn<T>(): T { return null; }
+  |                                      ^^^^
+2 | function main(): void {
+---
+error: cannot infer type parameter(s) `T`; consider adding an explicit type argument
+ --> test.subm:3:11
+  |
+2 | function main(): void {
+3 |   let r = pickReturn();
+  |           ^^^^^^^^^^^^
+4 | }
+  |
+help: add an explicit type argument: `pickReturn<T>(…)`
+---

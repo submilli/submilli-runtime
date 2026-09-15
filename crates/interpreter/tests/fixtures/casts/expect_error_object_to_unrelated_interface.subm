@@ -1,0 +1,12 @@
+// Casting a concrete object to a structurally-unrelated interface is rejected statically
+// (relatedness uses the interface's data shape).
+// expect-error: no assignable direction between these types
+
+interface HasName {
+  name: string;
+}
+
+function main(): void {
+  const o = { age: 5 };
+  const _ = o as HasName;
+}

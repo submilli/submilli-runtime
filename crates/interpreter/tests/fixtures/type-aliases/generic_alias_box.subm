@@ -1,0 +1,9 @@
+type Box<T> = { value: T };
+
+function main(): void {
+  const b: Box<number> = { value: 42 };
+  assert(b.value === 42, "Box<number>");
+
+  const s: Box<string> = { value: "hi" };
+  assert(s.value === "hi", "Box<string>");
+}

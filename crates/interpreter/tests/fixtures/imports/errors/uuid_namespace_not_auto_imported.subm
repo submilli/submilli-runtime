@@ -1,0 +1,4 @@
+// expect-error: unresolved identifier `uuid`
+function main(): void {
+  uuid.v4();
+}

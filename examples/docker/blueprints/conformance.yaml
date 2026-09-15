@@ -1,0 +1,15 @@
+# Blueprint for the release gate's conformance run. Allow-by-default because the
+# program under it is our own and the point is to exercise every host boundary,
+# not to test policy — `examples/web-demo/backend/blueprint.demo.yaml` is the
+# deny-by-default shape to copy for real work.
+
+name: conformance
+vfs: per_session
+default: allow
+
+# Resolved from the server's encrypted store, whose key the container reads from
+# a mounted file. That is the whole point of declaring one here: it exercises the
+# file-permission path that a `-e` key would bypass.
+secrets:
+  conformance_key:
+    store: conformance_key

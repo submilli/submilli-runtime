@@ -1,0 +1,7 @@
+function main(): void {
+  assert(Math.hypot() === 0, "Math.hypot() === 0");
+  assert(Math.hypot(3, 4) === 5, "Math.hypot(3, 4) === 5");
+  assert(Math.hypot(5) === 5, "Math.hypot(5) === 5");
+  assert(Math.hypot(0, 0, 0) === 0, "Math.hypot(0, 0, 0)");
+  assert(Math.hypot(1, 2, 2) === 3, "Math.hypot(1, 2, 2) === 3");
+}

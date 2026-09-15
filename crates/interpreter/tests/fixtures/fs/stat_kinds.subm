@@ -1,0 +1,25 @@
+import { writeText, mkdir, stat, Stat } from "submilli:fs";
+
+function main(): void {
+  writeText("/file.txt", "hello");
+  mkdir("/dir", false);
+
+  const f: Stat | null = stat("/file.txt");
+  if (f === null) {
+    assert(false, "stat(file) should not be null");
+    return;
+  }
+  assert(f.kind === "file", "file kind");
+  assert(f.size === 5, "file size");
+
+  const d: Stat | null = stat("/dir");
+  if (d === null) {
+    assert(false, "stat(dir) should not be null");
+    return;
+  }
+  assert(d.kind === "directory", "directory kind");
+  assert(d.size === 0, "non-file size is 0");
+
+  const missing: Stat | null = stat("/nope");
+  assert(missing === null, "stat returns null on missing path");
+}

@@ -1,0 +1,879 @@
+use std::collections::BTreeSet;
+
+use crate::codegen::bigint_pool::BigIntPool;
+use crate::codegen::closures::{ClosureMeta, ClosureSig};
+use crate::codegen::dependency_usage::DependencyUsage;
+use crate::codegen::function_adapters::AdapterMeta;
+use crate::codegen::string_pool::StringPool;
+use crate::codegen::{bounds, cast_check, throw};
+use crate::{
+    AccessorKind, BinOp, ClosureBody, ExprId, Intrinsic, PostfixTarget, Shape, StmtId, Type,
+    TypedAst, TypedChainPart, TypedExprKind, TypedObjectFieldSource, TypedStmtKind,
+    TypedSwitchValue,
+};
+
+pub struct CodegenAnalysis {
+    pub string_pool: StringPool,
+    pub bigint_pool: BigIntPool,
+    pub dependency_usage: DependencyUsage,
+    pub closure_metas: Vec<ClosureMeta>,
+    pub adapter_metas: Vec<AdapterMeta>,
+    /// Closure shapes named by any type the module mentions; see
+    /// [`crate::codegen::closures`] for how this fits the other sources.
+    pub mentioned_closure_sigs: Vec<ClosureSig>,
+    pub extra_field_names: Vec<String>,
+    adapter_seen: BTreeSet<crate::MangledName>,
+}
+
+impl CodegenAnalysis {
+    pub fn collect(ta: &TypedAst) -> Self {
+        let mut analysis = Self {
+            string_pool: StringPool::default(),
+            bigint_pool: BigIntPool::default(),
+            dependency_usage: DependencyUsage::empty(),
+            closure_metas: Vec::new(),
+            adapter_metas: Vec::new(),
+            mentioned_closure_sigs: Vec::new(),
+            extra_field_names: Vec::new(),
+            adapter_seen: BTreeSet::new(),
+        };
+
+        for shape in &ta.shapes {
+            if matches!(shape, Shape::Object { .. }) {
+                analysis
+                    .dependency_usage
+                    .collect_typed_object_stringify_host_value();
+            }
+            analysis.dependency_usage.note_shape(shape.clone());
+        }
+        for g in &ta.globals {
+            analysis.visit_type(&g.ty);
+        }
+
+        for f in &ta.functions {
+            for p in &f.params {
+                analysis.visit_type(&p.ty);
+            }
+            analysis.visit_type(&f.return_type);
+            analysis.walk_stmt(ta, f.body);
+        }
+        for &stmt_id in &ta.top_level_statements {
+            analysis.walk_stmt(ta, stmt_id);
+        }
+        for stmt_id in ta.class_body_roots() {
+            analysis.walk_stmt(ta, stmt_id);
+        }
+        for expr_id in ta.class_field_initializers() {
+            analysis.walk_expr(ta, expr_id);
+        }
+        analysis.note_narrowing_checks(ta);
+
+        analysis
+    }
+
+    /// A narrowed field's read guard throws a constant message and, when its test
+    /// is structural, tests a shape; both need the same interning and imports a
+    /// `Cast` gets, and neither is reachable from any expression, so no walk above
+    /// finds them.
+    fn note_narrowing_checks(&mut self, ta: &TypedAst) {
+        for decl in &ta.types {
+            let crate::TypedTypeDecl::Class(class) = decl else {
+                continue;
+            };
+            for check in class
+                .fields
+                .iter()
+                .filter_map(|f| f.narrowing_check.as_ref())
+            {
+                self.string_pool.intern_text(&check.message);
+                if let crate::FieldNarrowingTest::Shape(shape) = &check.test {
+                    self.visit_type(shape);
+                    self.note_shape_member_names(shape);
+                }
+            }
+        }
+    }
+
+    /// The per-name `$string` globals the shape's field scan reads: for each
+    /// property, its own name and its `get <prop>` accessor name, plus the getter
+    /// closure sig the accessor branch casts to. A recorded shape reaches neither
+    /// `ta.shapes` nor any expression, so a member named nowhere else in the
+    /// module has no global unless this registers it — and the field-scan lookup
+    /// panics rather than importing one on demand.
+    ///
+    /// The accessor half is interned off the *test*, not off any accessor
+    /// declaration, for the reason [`Self::note_shaped_property_access`] gives:
+    /// whether a value is accessor-backed is a whole-program fact, and the module
+    /// running the cast need not see the class that declares the accessor.
+    ///
+    /// The catch-all is complete because no `InterfaceRef` can appear in a
+    /// recorded shape at all: `typechecker::infer::classes`'s
+    /// `narrowed_type_is_testable` rejects one at every position. The arms below
+    /// are the only ones that can nest an object, so a new nesting arm in
+    /// `cast_check::emit_structural_test` needs one here too.
+    fn note_shape_member_names(&mut self, ty: &Type) {
+        match ty.peel() {
+            Type::Object { fields } => {
+                if !fields.is_empty() {
+                    self.mentioned_closure_sigs.push(
+                        crate::codegen::classes::accessor_closure_sig(AccessorKind::Get),
+                    );
+                }
+                for (name, field) in fields {
+                    self.extra_field_names.push(name.clone());
+                    self.extra_field_names
+                        .push(crate::codegen::classes::accessor_getter_name(name));
+                    self.note_shape_member_names(&field.ty);
+                }
+            }
+            Type::Array(elem) => self.note_shape_member_names(elem),
+            Type::Tuple(elems) => {
+                for e in elems {
+                    self.note_shape_member_names(e);
+                }
+            }
+            Type::Union(members) => {
+                for m in members {
+                    self.note_shape_member_names(m);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Every type the module mentions funnels through here. `dependency_usage`
+    /// needs it to import the symbols the type names; closure codegen needs the
+    /// function-typed positions inside it. These are post-substitution types, so
+    /// a generic instantiated with `void` contributes the sig it lowers to
+    /// rather than the one its declaration spells.
+    ///
+    /// Call this rather than `dependency_usage.collect_type` directly —
+    /// bypassing it drops the closure half silently, and the failure surfaces as
+    /// a codegen panic far from the omission.
+    fn visit_type(&mut self, ty: &Type) {
+        self.dependency_usage.collect_type(ty);
+        crate::codegen::closures::walk_type(ty, &mut self.mentioned_closure_sigs);
+    }
+
+    fn walk_stmt(&mut self, ta: &TypedAst, id: StmtId) {
+        self.note_stmt_pre(ta, id);
+        match &ta.stmt(id).kind {
+            TypedStmtKind::Let { value, .. } | TypedStmtKind::Const { value, .. } => {
+                self.walk_expr(ta, *value);
+            }
+            TypedStmtKind::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
+                self.walk_expr(ta, *condition);
+                self.walk_stmt(ta, *then_block);
+                if let Some(else_block) = else_block {
+                    self.walk_stmt(ta, *else_block);
+                }
+            }
+            TypedStmtKind::While { condition, body } => {
+                self.walk_expr(ta, *condition);
+                self.walk_stmt(ta, *body);
+            }
+            TypedStmtKind::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                if let Some(init) = init {
+                    self.walk_stmt(ta, *init);
+                }
+                if let Some(condition) = condition {
+                    self.walk_expr(ta, *condition);
+                }
+                if let Some(update) = update {
+                    self.walk_stmt(ta, *update);
+                }
+                self.walk_stmt(ta, *body);
+            }
+            TypedStmtKind::ForOf { iter, body, .. } => {
+                self.walk_expr(ta, *iter);
+                self.walk_stmt(ta, *body);
+            }
+            TypedStmtKind::DoWhile { body, condition } => {
+                self.walk_stmt(ta, *body);
+                self.walk_expr(ta, *condition);
+            }
+            TypedStmtKind::Switch {
+                discriminant,
+                cases,
+                default,
+                ..
+            } => {
+                self.walk_expr(ta, *discriminant);
+                for case in cases {
+                    self.walk_stmt(ta, case.body);
+                }
+                if let Some(default) = default {
+                    self.walk_stmt(ta, *default);
+                }
+            }
+            TypedStmtKind::Break | TypedStmtKind::Continue | TypedStmtKind::ReboxLocal { .. } => {}
+            TypedStmtKind::Return(value) => {
+                if let Some(value) = value {
+                    self.walk_expr(ta, *value);
+                }
+            }
+            TypedStmtKind::Expr(expr) => self.walk_expr(ta, *expr),
+            TypedStmtKind::Block(stmts) => {
+                for &stmt in stmts {
+                    self.walk_stmt(ta, stmt);
+                }
+            }
+            TypedStmtKind::AssignLocal { value, .. }
+            | TypedStmtKind::AssignGlobal { value, .. } => self.walk_expr(ta, *value),
+            TypedStmtKind::AssignField {
+                receiver, value, ..
+            } => {
+                self.walk_expr(ta, *receiver);
+                self.walk_expr(ta, *value);
+            }
+            TypedStmtKind::AssignIndex {
+                receiver,
+                index,
+                value,
+                ..
+            } => {
+                self.walk_expr(ta, *receiver);
+                self.walk_expr(ta, *index);
+                self.walk_expr(ta, *value);
+            }
+            TypedStmtKind::NarrowRegion { source, body, .. } => {
+                self.walk_expr(ta, *source);
+                self.walk_stmt(ta, *body);
+            }
+            TypedStmtKind::Throw { value } => self.walk_expr(ta, *value),
+            TypedStmtKind::Try {
+                body,
+                catches,
+                finally,
+            } => {
+                self.walk_stmt(ta, *body);
+                for clause in catches {
+                    self.walk_stmt(ta, clause.body);
+                }
+                if let Some(finally) = finally {
+                    self.walk_stmt(ta, *finally);
+                }
+            }
+        }
+        self.note_stmt_post(ta, id);
+    }
+
+    fn walk_expr(&mut self, ta: &TypedAst, id: ExprId) {
+        self.note_expr_pre(ta, id);
+        match &ta.expr(id).kind {
+            TypedExprKind::Call { args, .. }
+            | TypedExprKind::McpCall { args, .. }
+            | TypedExprKind::SuperCtorCall { args, .. }
+            | TypedExprKind::SuperMethodCall { args, .. }
+            | TypedExprKind::IntrinsicCall { args, .. } => {
+                for &arg in args {
+                    self.walk_expr(ta, arg);
+                }
+            }
+            TypedExprKind::CallClosure { callee, args } => {
+                self.walk_expr(ta, *callee);
+                for &arg in args {
+                    self.walk_expr(ta, arg);
+                }
+            }
+            TypedExprKind::GenericCall { args, .. } => {
+                for arg in args {
+                    self.walk_expr(ta, arg.expr);
+                }
+            }
+            TypedExprKind::Closure { body, .. } => match *body {
+                ClosureBody::Expr(expr) => self.walk_expr(ta, expr),
+                ClosureBody::Block(stmt) => self.walk_stmt(ta, stmt),
+            },
+            TypedExprKind::Binary { lhs, rhs, .. } => {
+                self.walk_expr(ta, *lhs);
+                self.walk_expr(ta, *rhs);
+            }
+            TypedExprKind::EffectThen { effect, result } => {
+                self.walk_expr(ta, *effect);
+                self.walk_expr(ta, *result);
+            }
+            TypedExprKind::Unary { operand, .. }
+            | TypedExprKind::TypeofTag { value: operand, .. }
+            | TypedExprKind::InstanceOf { value: operand, .. }
+            | TypedExprKind::NonNullAssert { value: operand } => self.walk_expr(ta, *operand),
+            TypedExprKind::MethodCall { receiver, args, .. } => {
+                self.walk_expr(ta, *receiver);
+                for &arg in args {
+                    self.walk_expr(ta, arg);
+                }
+            }
+            TypedExprKind::GenericMethodCall { receiver, args, .. } => {
+                self.walk_expr(ta, *receiver);
+                for arg in args {
+                    self.walk_expr(ta, arg.expr);
+                }
+            }
+            TypedExprKind::ObjectLiteral {
+                spread_sources,
+                fields,
+            } => {
+                for &source in spread_sources {
+                    self.walk_expr(ta, source);
+                }
+                for field in fields {
+                    if let Some(expr) = field.source.literal_expr_id() {
+                        self.walk_expr(ta, expr);
+                    }
+                }
+            }
+            TypedExprKind::ArrayLiteral { elements, .. } => {
+                for elem in elements {
+                    self.walk_expr(ta, elem.expr_id());
+                }
+            }
+            TypedExprKind::TupleLiteral { elements, .. } => {
+                for &elem in elements {
+                    self.walk_expr(ta, elem);
+                }
+            }
+            TypedExprKind::FieldAccess { receiver, .. }
+            | TypedExprKind::InterfacePropertyAccess { receiver, .. } => {
+                self.walk_expr(ta, *receiver);
+            }
+            TypedExprKind::IndexAccess { receiver, index } => {
+                self.walk_expr(ta, *receiver);
+                self.walk_expr(ta, *index);
+            }
+            TypedExprKind::Narrowed { source, inner, .. } => {
+                self.walk_expr(ta, *source);
+                self.walk_expr(ta, *inner);
+            }
+            TypedExprKind::Ternary { cond, then_, else_ } => {
+                self.walk_expr(ta, *cond);
+                self.walk_expr(ta, *then_);
+                self.walk_expr(ta, *else_);
+            }
+            TypedExprKind::NullishCoalesce { lhs, rhs } => {
+                self.walk_expr(ta, *lhs);
+                self.walk_expr(ta, *rhs);
+            }
+            TypedExprKind::OptionalChain { base, parts } => {
+                self.walk_expr(ta, *base);
+                for part in parts {
+                    match part {
+                        TypedChainPart::Index { idx, .. } => self.walk_expr(ta, *idx),
+                        TypedChainPart::Call { args, .. }
+                        | TypedChainPart::MethodCall { args, .. } => {
+                            for &arg in args {
+                                self.walk_expr(ta, arg);
+                            }
+                        }
+                        TypedChainPart::Field { .. }
+                        | TypedChainPart::InterfaceProperty { .. }
+                        | TypedChainPart::NonNull { .. } => {}
+                    }
+                }
+            }
+            TypedExprKind::PostfixUnary { target, .. } => match target {
+                PostfixTarget::Field { receiver, .. } => self.walk_expr(ta, *receiver),
+                PostfixTarget::Index {
+                    receiver, index, ..
+                } => {
+                    self.walk_expr(ta, *receiver);
+                    self.walk_expr(ta, *index);
+                }
+                PostfixTarget::Local { .. } | PostfixTarget::Global { .. } => {}
+            },
+            TypedExprKind::Cast { value, .. } => self.walk_expr(ta, *value),
+            TypedExprKind::Number(_)
+            | TypedExprKind::BigInt(_)
+            | TypedExprKind::String(_)
+            | TypedExprKind::Boolean(_)
+            | TypedExprKind::Null
+            | TypedExprKind::This
+            | TypedExprKind::Regex { .. }
+            | TypedExprKind::LocalRef { .. }
+            | TypedExprKind::LocalNarrowRef { .. }
+            | TypedExprKind::GlobalRef { .. }
+            | TypedExprKind::FunctionRef { .. }
+            | TypedExprKind::NumberEnumMember { .. }
+            | TypedExprKind::StringEnumMember { .. } => {}
+        }
+    }
+
+    fn note_stmt_pre(&mut self, ta: &TypedAst, id: StmtId) {
+        match &ta.stmt(id).kind {
+            TypedStmtKind::Let { ty, .. } | TypedStmtKind::Const { ty, .. } => {
+                self.visit_type(ty);
+            }
+            TypedStmtKind::ForOf { element_ty, .. } => {
+                self.visit_type(element_ty);
+            }
+            TypedStmtKind::Switch {
+                discriminant_ty,
+                cases,
+                ..
+            } => {
+                self.visit_type(discriminant_ty);
+                for case in cases {
+                    for value in &case.values {
+                        if let TypedSwitchValue::Enum { enum_name, .. } = value {
+                            self.dependency_usage.note_type(enum_name.clone());
+                        }
+                    }
+                }
+            }
+            TypedStmtKind::AssignLocal { target_ty, .. } => {
+                self.visit_type(target_ty);
+            }
+            TypedStmtKind::AssignGlobal {
+                mangled, target_ty, ..
+            } => {
+                self.dependency_usage.note_value(mangled.clone());
+                self.visit_type(target_ty);
+            }
+            TypedStmtKind::AssignField { receiver, name, .. } => {
+                self.extra_field_names.push(name.name.clone());
+                self.note_shaped_property_access(
+                    &ta.expr(*receiver).ty,
+                    &name.name,
+                    AccessorKind::Set,
+                );
+            }
+            TypedStmtKind::AssignIndex { elem_ty, .. } => {
+                self.visit_type(elem_ty);
+                self.string_pool.intern_text(bounds::INDEX_OOB_MESSAGE);
+            }
+            TypedStmtKind::NarrowRegion { cast_info, .. } => {
+                self.visit_type(&cast_info.from_ty);
+                self.visit_type(&cast_info.to_ty);
+            }
+            TypedStmtKind::Try { catches, .. } => {
+                // A cross-package subclass used only in a catch annotation
+                // still needs its class reconstructed.
+                for clause in catches {
+                    self.visit_type(&clause.ty);
+                }
+            }
+            TypedStmtKind::If { .. }
+            | TypedStmtKind::While { .. }
+            | TypedStmtKind::For { .. }
+            | TypedStmtKind::DoWhile { .. }
+            | TypedStmtKind::Break
+            | TypedStmtKind::Continue
+            | TypedStmtKind::ReboxLocal { .. }
+            | TypedStmtKind::Return(_)
+            | TypedStmtKind::Expr(_)
+            | TypedStmtKind::Block(_)
+            | TypedStmtKind::Throw { .. } => {}
+        }
+    }
+
+    fn note_stmt_post(&mut self, ta: &TypedAst, id: StmtId) {
+        if let TypedStmtKind::Switch { cases, .. } = &ta.stmt(id).kind {
+            for case in cases {
+                for value in &case.values {
+                    match value {
+                        TypedSwitchValue::String { value, .. } => {
+                            self.string_pool.intern_text(value);
+                        }
+                        TypedSwitchValue::Enum {
+                            value: crate::EnumVariantPayload::String(text),
+                            ..
+                        } => {
+                            self.string_pool.intern_text(text);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    fn note_expr_pre(&mut self, ta: &TypedAst, id: ExprId) {
+        let expr = ta.expr(id);
+        self.visit_type(&expr.ty);
+        match &expr.kind {
+            TypedExprKind::String(text) => {
+                self.string_pool.record_expr(id, text);
+            }
+            TypedExprKind::StringEnumMember {
+                enum_mangled,
+                value,
+                ..
+            } => {
+                self.string_pool.record_expr(id, value);
+                self.dependency_usage.note_type(enum_mangled.clone());
+            }
+            TypedExprKind::BigInt(digits) => {
+                self.bigint_pool.intern_digits(digits);
+                self.dependency_usage
+                    .collect_bigint_host_value("fromNumber");
+            }
+            TypedExprKind::GlobalRef { mangled, .. } => {
+                self.dependency_usage.note_value(mangled.clone());
+            }
+            TypedExprKind::FunctionRef { name, mangled } => {
+                self.dependency_usage.note_value(mangled.clone());
+                if self.adapter_seen.insert(mangled.clone()) {
+                    self.adapter_metas.push(AdapterMeta {
+                        name: name.name.clone(),
+                        mangled: mangled.clone(),
+                        signature: expr.ty.clone(),
+                    });
+                }
+            }
+            TypedExprKind::NumberEnumMember { enum_mangled, .. } => {
+                self.dependency_usage.note_type(enum_mangled.clone());
+            }
+            TypedExprKind::Binary { op, lhs, .. } => {
+                if matches!(op, BinOp::Pow) && matches!(expr.ty.peel(), Type::Number) {
+                    self.dependency_usage
+                        .note_value(crate::runtime::prelude::math::math_key("pow"));
+                }
+                if matches!(expr.ty.peel(), Type::BigInt) {
+                    match op {
+                        BinOp::Add => self.dependency_usage.collect_bigint_host_value("add"),
+                        BinOp::Sub => self.dependency_usage.collect_bigint_host_value("sub"),
+                        BinOp::Mul => self.dependency_usage.collect_bigint_host_value("mul"),
+                        BinOp::Div => self.dependency_usage.collect_bigint_host_value("div"),
+                        BinOp::Rem => self.dependency_usage.collect_bigint_host_value("mod"),
+                        BinOp::Pow => self.dependency_usage.collect_bigint_host_value("pow"),
+                        BinOp::Eq
+                        | BinOp::NotEq
+                        | BinOp::Lt
+                        | BinOp::Gt
+                        | BinOp::Le
+                        | BinOp::Ge
+                        | BinOp::And
+                        | BinOp::Or
+                        | BinOp::In
+                        | BinOp::NullishCoalesce => {}
+                    }
+                }
+                if matches!(ta.expr(*lhs).ty.peel(), Type::BigInt)
+                    && matches!(
+                        op,
+                        BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge
+                    )
+                {
+                    self.dependency_usage.collect_bigint_host_value("cmp");
+                }
+                if matches!(op, BinOp::In)
+                    && let TypedExprKind::String(name) = &ta.expr(*lhs).kind
+                {
+                    self.extra_field_names.push(name.clone());
+                }
+            }
+            TypedExprKind::Unary { op, operand } => {
+                let operand_ty = ta.expr(*operand).ty.peel();
+                if matches!(op, crate::UnOp::Neg) && matches!(operand_ty, Type::BigInt) {
+                    self.dependency_usage.collect_bigint_host_value("neg");
+                }
+                if matches!(op, crate::UnOp::Pos) && operand_ty.is_string_shaped() {
+                    self.dependency_usage.collect_number_coercion_host_value();
+                }
+            }
+            TypedExprKind::Call { mangled, .. } | TypedExprKind::GenericCall { mangled, .. } => {
+                self.dependency_usage.note_value(mangled.clone());
+            }
+            TypedExprKind::McpCall { server, tool, .. } => {
+                self.dependency_usage
+                    .note_value(crate::mangle::host(&format!("@mcp/{server}"), tool));
+                self.dependency_usage
+                    .note_value(crate::mangle::host(crate::runtime::MCP_MODULE_NAME, "call"));
+                if !matches!(expr.ty.peel(), Type::String) {
+                    self.dependency_usage.collect_json_host_values();
+                }
+            }
+            TypedExprKind::IntrinsicCall { kind, .. } => match kind {
+                Intrinsic::JsonParse | Intrinsic::JsonStringify => {
+                    self.dependency_usage.collect_json_host_values();
+                }
+                Intrinsic::BigIntFromString => {
+                    self.dependency_usage
+                        .collect_bigint_host_value("fromString");
+                }
+                Intrinsic::Assert => {}
+            },
+            TypedExprKind::MethodCall {
+                receiver,
+                iface,
+                name,
+                args,
+                ..
+            } => self.note_method_call(&ta.expr(*receiver).ty, iface, name, args.len(), &expr.ty),
+            TypedExprKind::GenericMethodCall {
+                receiver,
+                iface,
+                name,
+                args,
+                ..
+            } => self.note_method_call(&ta.expr(*receiver).ty, iface, name, args.len(), &expr.ty),
+            TypedExprKind::InterfacePropertyAccess { iface, name, .. } => {
+                self.dependency_usage
+                    .note_member(crate::mangle::extend(iface, &name.name));
+            }
+            TypedExprKind::ObjectLiteral { fields, .. } => {
+                for field in fields {
+                    if let TypedObjectFieldSource::Spread { source_ty, .. } = &field.source {
+                        self.visit_type(source_ty);
+                    }
+                }
+            }
+            TypedExprKind::ArrayLiteral { element_ty, .. } => {
+                self.visit_type(element_ty);
+            }
+            TypedExprKind::TupleLiteral { element_types, .. } => {
+                for ty in element_types {
+                    self.visit_type(ty);
+                }
+            }
+            TypedExprKind::FieldAccess { receiver, name } => {
+                self.extra_field_names.push(name.name.clone());
+                self.note_shaped_property_access(
+                    &ta.expr(*receiver).ty,
+                    &name.name,
+                    AccessorKind::Get,
+                );
+            }
+            TypedExprKind::IndexAccess { .. } => {
+                self.string_pool.intern_text(bounds::INDEX_OOB_MESSAGE);
+            }
+            TypedExprKind::Closure {
+                params,
+                captured,
+                body,
+                return_type,
+                ..
+            } => {
+                self.closure_metas.push(ClosureMeta {
+                    expr_id: id,
+                    signature: expr.ty.clone(),
+                    captured: captured.clone(),
+                    params: params.clone(),
+                    body: body.clone(),
+                    return_type: return_type.clone(),
+                });
+                for p in params {
+                    self.visit_type(&p.ty);
+                }
+                self.visit_type(return_type);
+            }
+            TypedExprKind::Narrowed { cast_info, .. } => {
+                self.visit_type(&cast_info.from_ty);
+                self.visit_type(&cast_info.to_ty);
+            }
+            TypedExprKind::OptionalChain { base, parts } => {
+                self.note_chain_parts(ta, *base, parts);
+            }
+            TypedExprKind::PostfixUnary { target, .. } => match target {
+                PostfixTarget::Local { target_ty, .. } => {
+                    self.note_postfix_target(target_ty);
+                }
+                PostfixTarget::Global {
+                    mangled, target_ty, ..
+                } => {
+                    self.dependency_usage.note_value(mangled.clone());
+                    self.note_postfix_target(target_ty);
+                }
+                PostfixTarget::Field { target_ty, .. } => {
+                    self.note_postfix_target(target_ty);
+                }
+                PostfixTarget::Index { elem_ty, .. } => {
+                    self.note_postfix_target(elem_ty);
+                }
+            },
+            TypedExprKind::NonNullAssert { .. } => {
+                self.string_pool.intern_text(throw::NON_NULL_ASSERT_MESSAGE);
+            }
+            TypedExprKind::Cast {
+                target_ty, check, ..
+            } => {
+                self.string_pool
+                    .intern_text(&cast_check::error_prefix(target_ty));
+                for tag in cast_check::TYPE_TAG_STRINGS {
+                    self.string_pool.intern_text(tag);
+                }
+                self.visit_type(target_ty);
+                if let Some(check) = check {
+                    self.visit_type(check);
+                    self.note_shape_member_names(check);
+                }
+            }
+            TypedExprKind::Regex { source, flags } => {
+                self.string_pool.intern_text(source);
+                self.string_pool.intern_text(flags);
+            }
+            TypedExprKind::InstanceOf { class, .. } => {
+                // `ref.test (ref $Foo)` needs the class's type (and its rec group, for an
+                // imported class) pulled into the dependency set; `expr.ty` is just `boolean`.
+                self.visit_type(class);
+            }
+            TypedExprKind::Number(_)
+            | TypedExprKind::Boolean(_)
+            | TypedExprKind::Null
+            | TypedExprKind::This
+            | TypedExprKind::EffectThen { .. }
+            | TypedExprKind::LocalRef { .. }
+            | TypedExprKind::LocalNarrowRef { .. }
+            | TypedExprKind::SuperCtorCall { .. }
+            | TypedExprKind::SuperMethodCall { .. }
+            | TypedExprKind::CallClosure { .. }
+            | TypedExprKind::TypeofTag { .. }
+            | TypedExprKind::Ternary { .. }
+            | TypedExprKind::NullishCoalesce { .. } => {}
+        }
+    }
+
+    /// A method call notes its member for imports and, when it dispatches
+    /// through an object shape, the sig that dispatch builds.
+    fn note_method_call(
+        &mut self,
+        receiver_ty: &Type,
+        iface: &crate::MangledName,
+        name: &crate::Ident,
+        arity: usize,
+        ret: &Type,
+    ) {
+        self.dependency_usage
+            .note_member(crate::mangle::extend(iface, &name.name));
+        self.note_shape_dispatch(receiver_ty, arity, ret);
+    }
+
+    /// A method reached through an `$ObjectShape` receiver dispatches as a
+    /// closure field, and codegen builds that closure's sig from the *call
+    /// site* — arity plus return type — rather than from any type in scope
+    /// (`emit_interface_method_via_shape_with_receiver_on_stack`). Nothing else
+    /// records it: `walk_type` on an `InterfaceRef` visits type arguments only,
+    /// and a `void` return contributes no type at all.
+    ///
+    /// `InterfaceRef` only, unlike [`Self::note_shaped_property_access`]: a method on
+    /// an anonymous object type is a function-typed *field*, so it lowers to a
+    /// property read followed by a closure call, never to method dispatch.
+    fn note_shape_dispatch(&mut self, receiver_ty: &Type, arity: usize, ret: &Type) {
+        // An optional chain dispatches on the non-null half of its receiver.
+        let receiver_ty = crate::typechecker::infer::narrowing::strip_null(receiver_ty);
+        if !matches!(receiver_ty.peel(), Type::InterfaceRef { .. }) {
+            return;
+        }
+        self.mentioned_closure_sigs.push(ClosureSig::of(arity, ret));
+    }
+
+    /// Each step's receiver is the previous step's result, so a chain has to be
+    /// read in order to know what any one step dispatches on.
+    fn note_chain_parts(&mut self, ta: &TypedAst, base: ExprId, parts: &[TypedChainPart]) {
+        let mut receiver_ty = &ta.expr(base).ty;
+        for part in parts {
+            match part {
+                TypedChainPart::Field {
+                    name, result_ty, ..
+                } => {
+                    self.extra_field_names.push(name.name.clone());
+                    self.visit_type(result_ty);
+                    self.note_shaped_property_access(receiver_ty, &name.name, AccessorKind::Get);
+                }
+                TypedChainPart::InterfaceProperty {
+                    iface,
+                    name,
+                    result_ty,
+                    ..
+                } => {
+                    self.extra_field_names.push(name.name.clone());
+                    self.dependency_usage
+                        .note_member(crate::mangle::extend(iface, &name.name));
+                    self.visit_type(result_ty);
+                }
+                TypedChainPart::Index { result_ty, .. } => {
+                    self.visit_type(result_ty);
+                    // A chain index is bounds-checked like any other, so it
+                    // needs the same message in the pool.
+                    self.string_pool.intern_text(bounds::INDEX_OOB_MESSAGE);
+                }
+                TypedChainPart::Call { result_ty, .. } => {
+                    self.visit_type(result_ty);
+                }
+                TypedChainPart::NonNull { result_ty, .. } => {
+                    self.visit_type(result_ty);
+                    self.string_pool.intern_text(throw::NON_NULL_ASSERT_MESSAGE);
+                }
+                TypedChainPart::MethodCall {
+                    iface,
+                    name,
+                    args,
+                    result_ty,
+                    ..
+                } => {
+                    self.extra_field_names.push(name.name.clone());
+                    self.dependency_usage
+                        .note_member(crate::mangle::extend(iface, &name.name));
+                    self.visit_type(result_ty);
+                    self.note_shape_dispatch(receiver_ty, args.len(), result_ty);
+                }
+            }
+            receiver_ty = part.result_ty();
+        }
+    }
+
+    /// A property access on an `$ObjectShape` receiver emits every branch it
+    /// might take: the payload-slot read (or write), a dispatch to the synthetic
+    /// `get <prop>` / `set <prop>` method for the accessor case, and — for a
+    /// write — the read-only-property message the getter-backed branch throws.
+    /// The accessor branch needs its closure sig even when the program declares
+    /// no accessor at all, since the branch is emitted on the field-name scan
+    /// alone.
+    ///
+    /// The `get <prop>` / `set <prop>` `$string` globals are interned off the
+    /// *access*, not off a declaration: whether a value is accessor-backed is a
+    /// whole-program fact, and a library that declares an interface and reads it
+    /// never sees the consumer's accessor implementation.
+    fn note_shaped_property_access(&mut self, receiver_ty: &Type, prop: &str, kind: AccessorKind) {
+        if !is_shaped_receiver(receiver_ty) {
+            return;
+        }
+        // Both directions need the getter's name and sig: a write scans the
+        // `get <prop>` slot to tell a read-only property from an absent one.
+        self.extra_field_names
+            .push(crate::codegen::classes::accessor_getter_name(prop));
+        self.mentioned_closure_sigs
+            .push(crate::codegen::classes::accessor_closure_sig(
+                AccessorKind::Get,
+            ));
+        if matches!(kind, AccessorKind::Set) {
+            self.extra_field_names
+                .push(crate::codegen::classes::accessor_setter_name(prop));
+            self.mentioned_closure_sigs
+                .push(crate::codegen::classes::accessor_closure_sig(
+                    AccessorKind::Set,
+                ));
+            // A write also emits the read-only-property throw, for the case
+            // where the receiver turns out to be getter-backed.
+            self.string_pool
+                .intern_text(throw::READ_ONLY_PROPERTY_MESSAGE);
+        }
+    }
+
+    fn note_postfix_target(&mut self, ty: &Type) {
+        self.dependency_usage.collect_postfix_bigint_ops(ty);
+        self.visit_type(ty);
+    }
+}
+
+/// Whether a property access on this receiver lowers to the `$ObjectShape`
+/// field-name scan, which is what carries the accessor branch. `infer_field_access`
+/// admits a union of object shapes as well as a single one.
+fn is_shaped_receiver(ty: &Type) -> bool {
+    let ty = crate::typechecker::infer::narrowing::strip_null(ty);
+    match ty.peel() {
+        Type::InterfaceRef { .. } | Type::Object { .. } => true,
+        Type::Union(members) => members
+            .iter()
+            .any(|m| matches!(m.peel(), Type::InterfaceRef { .. } | Type::Object { .. })),
+        _ => false,
+    }
+}

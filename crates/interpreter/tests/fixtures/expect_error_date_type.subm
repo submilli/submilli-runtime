@@ -1,0 +1,3 @@
+// expect-error: `Date` is not supported
+
+function main(d: Date): void { }

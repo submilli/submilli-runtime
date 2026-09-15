@@ -1,0 +1,7 @@
+// expect-error: unterminated regex literal
+
+function main(): void {
+  const r = /abc
+;
+  assert(r !== null, "never reached");
+}

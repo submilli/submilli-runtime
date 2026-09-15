@@ -1,0 +1,8 @@
+type Inner = { value: number };
+type Outer = { value: Inner };
+
+function main(): void {
+  const inner: Inner = { value: 7 };
+  const outer: Outer = { value: inner };
+  assert(outer.value.value === 7, "nested non-generic aliases unwrap correctly");
+}

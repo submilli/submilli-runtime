@@ -1,0 +1,21 @@
+function main(): void {
+  const xs: number[] = [10, 20, 30];
+
+  xs[0] += 5;
+  xs[1] *= 2;
+  xs[2] -= 3;
+  assert(xs[0] === 15, "xs[0] += 5");
+  assert(xs[1] === 40, "xs[1] *= 2");
+  assert(xs[2] === 27, "xs[2] -= 3");
+
+  xs[0] %= 4;
+  assert(xs[0] === 3, "xs[0] %= 4");
+  xs[0] **= 4;
+  assert(xs[0] === 81, "xs[0] **= 4");
+
+  const ss: string[] = ["a", "b"];
+  ss[0] += "x";
+  ss[1] += "y";
+  assert(ss[0] === "ax", "ss[0] += x");
+  assert(ss[1] === "by", "ss[1] += y");
+}

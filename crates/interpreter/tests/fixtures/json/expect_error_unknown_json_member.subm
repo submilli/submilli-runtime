@@ -1,0 +1,5 @@
+// expect-error: `JSON` has no method `unknownThing`
+
+function main(): void {
+  let _ = JSON.unknownThing("\"hi\"");
+}

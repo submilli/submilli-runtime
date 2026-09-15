@@ -1,0 +1,8 @@
+namespace: acme
+provides:
+- name: acme.com/charges.list
+  description: List the charges on one customer's account.
+  fields:
+    customerId:
+      type: string
+requires: []

@@ -1,0 +1,27 @@
+function main(): void {
+  const cap: RegExp = new RegExp("(\\w+)@(\\w+)", "");
+  const m: RegExpMatch | null = cap.exec("user@example");
+  assert(m !== null, "match found");
+  if (m !== null) {
+    assert(m.match === "user@example", "full match");
+    assert(m.groups.length === 2, "two captures");
+    assert(m.groups[0] === "user", "capture 1");
+    assert(m.groups[1] === "example", "capture 2");
+  }
+
+  const re: RegExp = new RegExp("hello", "");
+  const m2: RegExpMatch | null = re.exec("hello");
+  assert(m2 !== null, "match found");
+  if (m2 !== null) {
+    assert(m2.groups.length === 0, "no captures");
+  }
+
+  const alt: RegExp = new RegExp("(a)|(b)", "");
+  const m3: RegExpMatch | null = alt.exec("a");
+  assert(m3 !== null, "match found");
+  if (m3 !== null) {
+    assert(m3.groups.length === 2, "two capture groups");
+    assert(m3.groups[0] === "a", "first arm matched");
+    assert(m3.groups[1] === null, "second arm did NOT match → null");
+  }
+}

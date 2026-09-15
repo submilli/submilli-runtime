@@ -1,0 +1,15 @@
+function main(): void {
+  assert(Math.PI > 3.14159 && Math.PI < 3.14160, "Math.PI");
+  assert(Math.E > 2.71828 && Math.E < 2.71829, "Math.E");
+  assert(Math.LN2 > 0.6931 && Math.LN2 < 0.6932, "Math.LN2");
+  assert(Math.LN10 > 2.3025 && Math.LN10 < 2.3026, "Math.LN10");
+  assert(Math.LOG2E > 1.4426 && Math.LOG2E < 1.4427, "Math.LOG2E");
+  assert(Math.LOG10E > 0.4342 && Math.LOG10E < 0.4343, "Math.LOG10E");
+  assert(Math.SQRT2 > 1.4142 && Math.SQRT2 < 1.4143, "Math.SQRT2");
+  assert(Math.SQRT1_2 > 0.7071 && Math.SQRT1_2 < 0.7072, "Math.SQRT1_2");
+
+  const id1: number = Math.LN2 * Math.LOG2E;
+  assert(id1 > 0.999999 && id1 < 1.000001, "LN2 * LOG2E ≈ 1");
+  const id2: number = Math.SQRT2 * Math.SQRT1_2;
+  assert(id2 > 0.999999 && id2 < 1.000001, "SQRT2 * SQRT1_2 ≈ 1");
+}

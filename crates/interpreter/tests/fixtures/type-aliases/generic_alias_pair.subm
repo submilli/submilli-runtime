@@ -1,0 +1,11 @@
+type Pair<K, V> = { key: K; value: V };
+
+function main(): void {
+  const p: Pair<string, number> = { key: "x", value: 1 };
+  assert(p.key === "x", "Pair key");
+  assert(p.value === 1, "Pair value");
+
+  const inv: Pair<number, string> = { key: 7, value: "seven" };
+  assert(inv.key === 7, "swapped K/V key");
+  assert(inv.value === "seven", "swapped K/V value");
+}

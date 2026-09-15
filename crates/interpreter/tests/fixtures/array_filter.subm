@@ -1,0 +1,14 @@
+function main(): void {
+  let nums: number[] = [1, 2, 3, 4, 5];
+  let evens = nums.filter(x => x % 2 === 0);
+  assert(evens.length === 2, "two evens");
+  assert(evens[0] === 2 && evens[1] === 4, "even contents");
+
+  let none = nums.filter(x => x > 100);
+  assert(none.length === 0, "no matches");
+
+  let all = nums.filter(x => x > 0);
+  assert(all.length === 5, "all match");
+
+  assert(nums.length === 5, "source preserved");
+}

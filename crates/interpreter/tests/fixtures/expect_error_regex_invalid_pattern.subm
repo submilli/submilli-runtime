@@ -1,0 +1,6 @@
+// expect-error: invalid regex pattern
+
+function main(): void {
+  const r = /(/;
+  assert(r !== null, "never reached");
+}

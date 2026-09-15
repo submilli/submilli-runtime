@@ -1,0 +1,29 @@
+function main(): void {
+  const s = new Set<string>();
+  assert(s.size === 0, "fresh set is empty");
+
+  s.add("apple");
+  s.add("banana");
+  s.add("cherry");
+  assert(s.size === 3, "three distinct adds");
+
+  s.add("apple");
+  assert(s.size === 3, "duplicate add leaves size unchanged");
+
+  assert(s.has("apple"), "has(apple)");
+  assert(s.has("banana"), "has(banana)");
+  assert(s.has("cherry"), "has(cherry)");
+  assert(!s.has("durian"), "missing → false");
+
+  const removed: boolean = s.delete("banana");
+  assert(removed, "delete returns true");
+  assert(s.size === 2, "size drops to 2");
+  assert(!s.has("banana"), "deleted no longer present");
+
+  const removedAgain: boolean = s.delete("banana");
+  assert(!removedAgain, "second delete returns false");
+
+  s.clear();
+  assert(s.size === 0, "clear empties the set");
+  assert(!s.has("apple"), "clear removes all");
+}

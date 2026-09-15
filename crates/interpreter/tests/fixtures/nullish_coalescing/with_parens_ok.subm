@@ -1,0 +1,8 @@
+// Parens around the || subexpr suppress the ||/??-mixing diagnostic.
+function main(): void {
+  const a: boolean = false;
+  const b: boolean = true;
+  const c: boolean = false;
+  const r: boolean = (a || b) ?? c;
+  assert(r === true, "(a || b) ?? c picks b");
+}

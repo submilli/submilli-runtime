@@ -1,0 +1,15 @@
+function get_a_or_len(x: { a: number } | string): number {
+  if (typeof x === "object") {
+    return x.a;
+  } else {
+    return x.length;
+  }
+}
+
+function main(): void {
+  assert(get_a_or_len({ a: 42 }) === 42, "object narrows + field access");
+  assert(get_a_or_len({ a: 0 }) === 0, "object zero");
+  assert(get_a_or_len({ a: -7 }) === -7, "object negative");
+  assert(get_a_or_len("hello") === 5, "string falls through to .length");
+  assert(get_a_or_len("") === 0, "empty string");
+}

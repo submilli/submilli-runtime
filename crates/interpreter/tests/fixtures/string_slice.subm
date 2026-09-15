@@ -1,0 +1,23 @@
+function main(): void {
+  let s: string = "hello world";
+
+  assert(s.slice(0, 5) === "hello", "slice(0,5)");
+  assert(s.slice(6, 11) === "world", "slice(6,11)");
+  assert(s.slice(0, 0) === "", "empty slice");
+  assert(s.slice(-5, 11) === "world", "slice(-5,end)");
+  assert(s.slice(-5, -1) === "worl", "slice(-5,-1)");
+  assert(s.slice(5, 3) === "", "start > end");
+  assert(s.slice(-100, 100) === "hello world", "full clamp");
+  assert(s.substring(0, 5) === "hello", "substring(0,5)");
+  assert(s.substring(-3, 5) === "hello", "substring negative start clamps");
+  assert(s.substring(5, 0) === "hello", "substring swaps args");
+  assert(s.substring(6, 11) === "world", "substring(6,11)");
+  assert(s.slice() === "hello world", "slice() no args");
+  assert(s.slice(6) === "world", "slice(6) end omitted");
+  assert(s.slice(-5) === "world", "slice(-5) negative start, end omitted");
+  assert(s.slice(100) === "", "slice(100) start past length");
+  assert(s.substring() === "hello world", "substring() no args");
+  assert(s.substring(6) === "world", "substring(6) end omitted");
+  assert(s.substring(-3) === "hello world", "substring(-3) negative clamps to 0");
+  assert(s.length === 11, "slice/substring pure");
+}

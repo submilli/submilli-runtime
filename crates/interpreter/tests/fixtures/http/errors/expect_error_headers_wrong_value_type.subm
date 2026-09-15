@@ -1,0 +1,9 @@
+// expect-error: expected `Headers | null`, got `Map<string, number>`
+
+import { get } from "submilli:http";
+
+function main(): void {
+  const wrong = new Map<string, number>();
+  wrong.set("X-Count", 42);
+  const _r = get("https://example.test/", wrong);
+}

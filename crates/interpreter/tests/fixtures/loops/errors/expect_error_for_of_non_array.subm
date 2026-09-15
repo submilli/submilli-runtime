@@ -1,0 +1,6 @@
+// expect-error: `for-of` requires an array
+function main(): void {
+  for (const x of 5) {
+    assert(true, "");
+  }
+}

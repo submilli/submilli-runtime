@@ -1,0 +1,4 @@
+function main(): void {
+  const u = JSON.parse("{\"id\": 7, \"name\": \"alice\", \"extra\": true}") as { id: number };
+  assert(u.id === 7, "id parsed");
+}

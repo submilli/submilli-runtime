@@ -1,0 +1,84 @@
+namespace: submilli
+provides:
+- name: slack.com/user/addReaction
+  description: Add an emoji reaction as the authenticated user.
+  fields:
+    channelId:
+      type: string
+- name: slack.com/user/downloadFile
+  description: Stream a Slack-hosted private file into the Submilli VFS. The package rejects download URLs outside `files.slack.com`; the destination is not overwritten unless the underlying download policy permits it.
+  fields:
+    path:
+      type: string
+- name: slack.com/user/findUserByEmail
+  description: Find a workspace user by their registered email address. Requires Slack's `users:read.email` user-token scope and throws when no user matches.
+  fields:
+    email:
+      type: string
+- name: slack.com/user/getChannel
+  description: Fetch metadata for one channel, private group, or direct-message conversation.
+  fields:
+    channelId:
+      type: string
+- name: slack.com/user/getFile
+  description: Fetch metadata and authenticated private URLs for a Slack-hosted file.
+  fields: {}
+- name: slack.com/user/getIdentity
+  description: Return the Slack user and workspace represented by `SLACK_USER_TOKEN`. Use this to verify a per-user OAuth binding before performing other operations.
+  fields: {}
+- name: slack.com/user/getMessage
+  description: Fetch one message by channel and Slack timestamp, returning null when absent. When reading a thread reply, set `ref.threadTs` to the root message timestamp.
+  fields:
+    channelId:
+      type: string
+- name: slack.com/user/getThread
+  description: Return one cursor page containing a thread root and its replies.
+  fields:
+    channelId:
+      type: string
+- name: slack.com/user/getUser
+  description: Fetch one workspace user by Slack user ID.
+  fields:
+    userId:
+      type: string
+- name: slack.com/user/listChannels
+  description: List channels, private groups, DMs, and group DMs visible to the user.
+  fields: {}
+- name: slack.com/user/listMessages
+  description: Return one cursor page of messages visible to the authenticated user. Public-channel and private-conversation access follows the user's Slack access.
+  fields:
+    channelId:
+      type: string
+- name: slack.com/user/listUsers
+  description: List workspace users visible to the authenticated user, including bots and deactivated accounts.
+  fields: {}
+- name: slack.com/user/search
+  description: Search Slack as the authenticated user and return mixed message, file, channel, and user results. Availability and visible results follow the workspace's Slack search features, the token's search scopes, and the user's own access.
+  fields: {}
+- name: slack.com/user/sendDirectMessage
+  description: Open or resume a 1:1 DM with another workspace user, send text as the authenticated user, and return Slack's stored message. Do not pass the authenticated user's own ID. Requires Slack's `im:write` and `chat:write` user-token scopes.
+  fields:
+    userId:
+      type: string
+- name: slack.com/user/sendGroupDirectMessage
+  description: Open or resume a multi-person direct message with 2–8 other workspace users, send text as the authenticated user, and return Slack's stored message. Do not include the authenticated user's own ID. Requires Slack's `mpim:write` and `chat:write` user-token scopes.
+  fields:
+    userIds:
+      type: string[]
+      description: Workspace user IDs that should receive the message.
+- name: slack.com/user/sendMessage
+  description: Post a message as the authenticated user and return Slack's stored message. Set `threadTs` to reply in a thread. The action is attributed to the user whose OAuth token is bound to the session.
+  fields:
+    channelId:
+      type: string
+requires:
+- capability: fs.write
+  filter: op == "download"
+- capability: http.download
+  filter: host == "files.slack.com"
+- capability: http.get
+  filter: host == "slack.com" and method == "GET"
+- capability: http.post
+  filter: host == "slack.com" and method == "POST"
+- capability: secrets.get
+  filter: name == "SLACK_USER_TOKEN"

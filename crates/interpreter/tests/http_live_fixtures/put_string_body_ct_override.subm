@@ -1,0 +1,8 @@
+import { put, Response, Headers } from "submilli:http";
+
+function main(): void {
+  const h: Headers = new Map<string, string>();
+  h.set("Content-Type", "application/json");
+  const r: Response = put("{{BASE}}/put-json", "{\"hello\":\"world\"}", h);
+  assert(r.status === 200, "user CT wins over auto-default");
+}

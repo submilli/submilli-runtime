@@ -1,0 +1,7 @@
+// expect-error: type alias `ID` expects 0 type arguments, got 1
+
+type ID = number;
+
+function main(): void {
+  const x: ID<number> = 1;
+}

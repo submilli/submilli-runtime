@@ -1,0 +1,5 @@
+// expect-error: expected expression after `throw`
+
+function main(): void {
+  throw;
+}

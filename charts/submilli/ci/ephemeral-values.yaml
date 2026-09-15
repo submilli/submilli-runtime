@@ -1,0 +1,5 @@
+# No PersistentVolumeClaim. Covers the branch where the state volume is an
+# emptyDir, which is the shape a reviewer is most likely to break by assuming a
+# claim always exists.
+persistence:
+  enabled: false

@@ -1,0 +1,14 @@
+function main(): void {
+  const re: RegExp = new RegExp("abc", "y");
+  assert(re.test("abcabc"), "sticky matches at lastIndex 0");
+  assert(re.lastIndex === 3, "sticky advances on match");
+  assert(re.test("abcabc"), "sticky matches at lastIndex 3");
+  assert(re.lastIndex === 6, "sticky advances again");
+  assert(!re.test("abcabc"), "sticky no-match past end");
+  assert(re.lastIndex === 0, "sticky resets to 0 on no-match");
+
+  const sticky: RegExp = new RegExp("foo", "y");
+  assert(!sticky.test("barfoo"), "sticky requires match at lastIndex");
+  const global: RegExp = new RegExp("foo", "g");
+  assert(global.test("barfoo"), "global finds match anywhere");
+}

@@ -1,0 +1,5 @@
+function main(): void {
+  const o = JSON.parse("{\"pair\":[\"x\",1]}") as { pair: [string, number] };
+  assert(o.pair[0] === "x", "o.pair[0]");
+  assert(o.pair[1] === 1, "o.pair[1]");
+}

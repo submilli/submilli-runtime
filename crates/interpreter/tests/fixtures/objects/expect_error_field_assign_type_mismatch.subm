@@ -1,0 +1,6 @@
+// expect-error: expected `number`, got `string`
+
+function main(): void {
+  let o = { x: 1 };
+  o.x = "not a number";
+}

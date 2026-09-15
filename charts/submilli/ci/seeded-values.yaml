@@ -1,0 +1,26 @@
+# The configuration with the most moving parts: blueprints arriving through a
+# ConfigMap, and a Kubernetes Secret a blueprint reads by path.
+#
+# The `file:` path below is not arbitrary — it must match where the chart mounts
+# the Secret (/etc/submilli/secrets/<name>/<key>). That agreement between two
+# separate values maps is what the helm test asserts at runtime.
+blueprints:
+  demo: |
+    name: demo
+    default: deny
+    vfs:
+      mode: ephemeral
+
+  billing: |
+    name: billing
+    default: deny
+    vfs:
+      mode: ephemeral
+    secrets:
+      STRIPE_KEY:
+        file: /etc/submilli/secrets/stripe/api-key
+
+secrets:
+  stripe:
+    secretName: submilli-ci-stripe
+    key: api-key

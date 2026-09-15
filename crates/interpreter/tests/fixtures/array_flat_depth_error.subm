@@ -1,0 +1,6 @@
+// expect-error: depth must be a non-negative integer literal
+function main(): void {
+  let nested: number[][] = [[1], [2]];
+  let d: number = 1;
+  let flat = nested.flat(d);
+}

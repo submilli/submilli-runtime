@@ -1,0 +1,5 @@
+// expect-error: cannot call `sort` on tuple
+function main(): void {
+  const nums: [number, number] = [2, 1];
+  nums.sort();
+}

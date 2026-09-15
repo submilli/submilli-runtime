@@ -1,0 +1,19 @@
+function tick(i: number, n: number): IteratorResult<number> {
+  if (i >= n) { const ret: IteratorResult<number> = { done: true }; return ret; }
+  const r: IteratorResult<number> = { done: false, value: i }; return r;
+}
+
+function range(n: number): Iterator<number> {
+  let i = 0;
+  const it: Iterator<number> = { next: (): IteratorResult<number> => { const r = tick(i, n); i = i + 1; return r; } };
+  return it;
+}
+
+function main(): void {
+  let last = -1;
+  for (const x of range(10)) {
+    if (x === 3) { break; }
+    last = x;
+  }
+  assert(last === 2, "break after x = 3, last assigned value was 2");
+}

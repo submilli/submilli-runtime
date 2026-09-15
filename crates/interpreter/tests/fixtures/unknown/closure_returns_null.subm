@@ -1,0 +1,15 @@
+function nullable(n: number): number | null {
+  if (n === 0) {
+    return null;
+  }
+  return n + 1;
+}
+
+function apply(f: (n: number) => number | null, x: number): number | null {
+  return f(x);
+}
+
+function main(): void {
+  assert(apply(nullable, 0) === null, "closure returning null");
+  assert(apply(nullable, 5) === 6, "closure returning value");
+}

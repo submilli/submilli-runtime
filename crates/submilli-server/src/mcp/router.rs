@@ -1,0 +1,139 @@
+//! Per-blueprint `StreamableHttpService` cache + the `/mcp/{blueprint}` axum
+//! handler that delegates to it.
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+use axum::body::Body;
+use axum::extract::{Path, Request, State};
+use axum::http::{Method, StatusCode};
+use axum::response::{IntoResponse, Response};
+use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
+use submilli_blueprint::Blueprint;
+use tower::ServiceExt;
+
+use crate::app::AppState;
+use crate::handlers::execute::blueprint_miss_message;
+use crate::mcp::server::SubmilliMcp;
+use crate::mcp::session::{RmcpSessionStore, VfsSessionManager, initialize_binding_error};
+
+type McpService = StreamableHttpService<SubmilliMcp, VfsSessionManager>;
+
+/// Lazily-built MCP service per blueprint name. A service outlives blueprint
+/// updates so its live `MCP-Session-Id` map survives — the execute path and
+/// `list_tools` re-fetch the blueprint per call. Only blueprint *removal* drops
+/// the service (see `AppState::evict_mcp_service`).
+pub(crate) type BlueprintServiceCache = Mutex<HashMap<String, Arc<McpService>>>;
+
+pub(crate) fn new_service_cache() -> BlueprintServiceCache {
+    Mutex::new(HashMap::new())
+}
+
+/// All methods (POST/GET/DELETE) on the MCP endpoint route here; rmcp's service
+/// dispatches by method internally.
+pub(crate) async fn mcp_handler(
+    State(state): State<AppState>,
+    Path(blueprint): Path<String>,
+    req: Request,
+) -> Response {
+    let Some(bp) = state.blueprints().get(&blueprint).await else {
+        // The blueprint is part of the endpoint identity; a name with no runnable
+        // blueprint is an addressing failure, distinct from an MCP handshake
+        // rejection.
+        return (
+            StatusCode::NOT_FOUND,
+            blueprint_miss_message(&state, &blueprint).await,
+        )
+            .into_response();
+    };
+
+    // Validate `initialize` variables here, not in rmcp's session layer: rmcp maps
+    // any `initialize_session` error to an unlogged HTTP 500, whereas here we can
+    // return a logged 400 — and validating against the just-fetched `bp` reflects
+    // the latest `apply` even though the cached service predates it.
+    let req = match reject_invalid_variables(&blueprint, &bp, req).await {
+        Ok(req) => req,
+        Err(response) => return *response,
+    };
+
+    // An unauthenticated/unavailable MCP server no longer blocks the blueprint: it
+    // is simply omitted from discovery (with a warning) so the rest of the
+    // blueprint stays usable. See `discover_all`.
+    let service = get_or_build(&state, &blueprint, &bp);
+
+    // `oneshot` consumes the service; the inner state is `Arc`-shared, so the
+    // clone is cheap and shares sessions across requests.
+    match (*service).clone().oneshot(req).await {
+        Ok(resp) => resp.map(Body::new),
+        Err(infallible) => match infallible {},
+    }
+}
+
+/// Reject an `initialize` whose `${vars.NAME}` bindings don't satisfy the
+/// blueprint, with a logged 400. Buffering the body (as rmcp does, unbounded)
+/// lets us inspect it and hand the exact bytes onward; a non-`initialize` or
+/// unparseable body passes straight through for rmcp to handle.
+async fn reject_invalid_variables(
+    name: &str,
+    blueprint: &Blueprint,
+    req: Request,
+) -> Result<Request, Box<Response>> {
+    if req.method() != Method::POST {
+        return Ok(req);
+    }
+    let (parts, body) = req.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, usize::MAX).await else {
+        // An unreadable body is rmcp's to reject (it returns its own error); we
+        // can't reconstruct it, so surface a 400 rather than a silent hang.
+        return Err(Box::new(
+            (StatusCode::BAD_REQUEST, "unreadable request body").into_response(),
+        ));
+    };
+    if let Some(err) = initialize_binding_error(blueprint, &parts, &bytes) {
+        tracing::warn!(blueprint = name, error = %err, "rejecting MCP initialize: invalid bindings");
+        return Err(Box::new((StatusCode::BAD_REQUEST, err).into_response()));
+    }
+    Ok(Request::from_parts(parts, Body::from(bytes)))
+}
+
+fn get_or_build(state: &AppState, name: &str, blueprint: &Blueprint) -> Arc<McpService> {
+    let mut cache = state
+        .mcp_services()
+        .lock()
+        .expect("mcp service cache poisoned");
+    if let Some(service) = cache.get(name) {
+        return service.clone();
+    }
+
+    // Every blueprint runs stateful so each connection has an `MCP-Session-Id`
+    // — the key `lastRun` stores its run under. `json_response` only applied in
+    // stateless mode, so it's irrelevant here.
+    let mut config = StreamableHttpServerConfig::default()
+        .with_stateful_mode(true)
+        .with_sse_keep_alive(None)
+        .with_sse_retry(None);
+    if let Some(hosts) = state.mcp_allowed_hosts() {
+        config = config.with_allowed_hosts(hosts.to_vec());
+    }
+
+    let blueprint_owned = blueprint.clone();
+    let session_manager = Arc::new(VfsSessionManager::new(state.clone(), name.to_string()));
+    config.session_store = Some(Arc::new(RmcpSessionStore::new(
+        state.session_store().clone(),
+        state.session_manager().clone(),
+        blueprint_owned.clone(),
+    )));
+    let state_for_factory = state.clone();
+    let name_owned = name.to_string();
+    let factory = move || {
+        Ok(SubmilliMcp::new(
+            state_for_factory.clone(),
+            name_owned.clone(),
+            blueprint_owned.clone(),
+        ))
+    };
+
+    let service = Arc::new(StreamableHttpService::new(factory, session_manager, config));
+    cache.insert(name.to_string(), service.clone());
+    service
+}

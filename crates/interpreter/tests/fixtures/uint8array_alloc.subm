@@ -1,0 +1,10 @@
+function main(): void {
+  let bytes: Uint8Array = Uint8Array.alloc(8);
+  assert(bytes.length === 8, "alloc returns the requested length");
+  assert(bytes[0] === 0, "alloc zero-fills slot 0");
+  assert(bytes[3] === 0, "alloc zero-fills middle slot");
+  assert(bytes[7] === 0, "alloc zero-fills last slot");
+
+  let empty: Uint8Array = Uint8Array.alloc(0);
+  assert(empty.length === 0, "alloc(0) is zero-length");
+}

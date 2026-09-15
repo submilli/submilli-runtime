@@ -1,0 +1,9 @@
+// Verifies the no-header path doesn't accidentally inject a default Authorization.
+
+import { get, Response } from "submilli:http";
+
+function main(): void {
+  const r: Response = get("{{BASE}}/requires-auth");
+  assert(r.status === 404, "no match → 404");
+  assert(!r.ok, "not ok");
+}

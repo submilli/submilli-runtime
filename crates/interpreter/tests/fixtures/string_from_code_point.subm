@@ -1,0 +1,23 @@
+function main(): void {
+  assert(String.fromCodePoint(104, 105) === "hi", "BMP code points are single units");
+  assert(String.fromCodePoint() === "", "no arguments gives empty string");
+
+  const emoji = String.fromCodePoint(0x1f600);
+  assert(emoji.length === 2, "astral code point becomes a surrogate pair");
+  assert(emoji.charCodeAt(0) === 0xd83d, "high surrogate");
+  assert(emoji.charCodeAt(1) === 0xde00, "low surrogate");
+  assert(emoji.codePointAt(0) === 0x1f600, "codePointAt recovers the input");
+
+  const mixed = String.fromCodePoint(65, 0x1f600, 66);
+  assert(mixed.length === 4, "mixed BMP and astral lengths add up");
+  assert(mixed.charAt(0) === "A" && mixed.charAt(3) === "B", "BMP neighbours preserved");
+
+  let threw: boolean = false;
+  try {
+    String.fromCodePoint(0x110000);
+  } catch (e: Error) {
+    threw = true;
+    assert(e.message === "invalid code point", "out-of-range code point names the problem");
+  }
+  assert(threw, "code point above 0x10FFFF throws");
+}

@@ -1,0 +1,11 @@
+export interface Private {
+  value: number;
+}
+
+export interface Public {
+  inner: Private;
+}
+
+export function make(): Public {
+  return { inner: { value: 1 } };
+}

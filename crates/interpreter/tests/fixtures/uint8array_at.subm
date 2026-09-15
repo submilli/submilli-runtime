@@ -1,0 +1,15 @@
+function main(): void {
+  let bytes: Uint8Array = Uint8Array.new([10, 20, 30, 40]);
+
+  assert(bytes.at(0) === 10, "at 0");
+  assert(bytes.at(3) === 40, "at length-1");
+
+  assert(bytes.at(-1) === 40, "at -1 (last)");
+  assert(bytes.at(-4) === 10, "at -length (first)");
+
+  assert(bytes.at(4) === null, "at length is null");
+  assert(bytes.at(-5) === null, "at -length-1 is null");
+
+  let empty: Uint8Array = Uint8Array.alloc(0);
+  assert(empty.at(0) === null, "at on empty");
+}

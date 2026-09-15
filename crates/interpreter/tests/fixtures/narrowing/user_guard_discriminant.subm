@@ -1,0 +1,24 @@
+function isCircle(
+  s: { kind: "circle"; radius: number }
+   | { kind: "rect"; height: number; width: number }
+): s is { kind: "circle"; radius: number } {
+  return s.kind === "circle";
+}
+
+function area(
+  s: { kind: "circle"; radius: number }
+   | { kind: "rect"; height: number; width: number }
+): number {
+  if (isCircle(s)) {
+    return s.radius;
+  }
+  return s.height * s.width;
+}
+
+function main(): void {
+  const c: { kind: "circle"; radius: number } = { kind: "circle", radius: 7 };
+  assert(area(c) === 7, "circle: guard narrowed in then-branch");
+
+  const r: { kind: "rect"; height: number; width: number } = { kind: "rect", height: 4, width: 5 };
+  assert(area(r) === 20, "rect: residual narrowed in else-branch");
+}

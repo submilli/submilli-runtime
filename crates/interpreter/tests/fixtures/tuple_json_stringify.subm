@@ -1,0 +1,5 @@
+function main(): void {
+  const t: [string, number] = ["x", 1];
+  const json = JSON.stringify(t);
+  assert(json === "[\"x\",1]", "tuple JSON.stringify");
+}

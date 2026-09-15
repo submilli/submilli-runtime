@@ -1,0 +1,14 @@
+function main(): void {
+  let three: Uint8Array = Uint8Array.of(1, 2, 3);
+  assert(three.length === 3, "of three elements");
+  assert(three[0] === 1 && three[1] === 2 && three[2] === 3, "values match");
+
+  let single: Uint8Array = Uint8Array.of(42);
+  assert(single.length === 1 && single[0] === 42, "single arg");
+
+  let none: Uint8Array = Uint8Array.of();
+  assert(none.length === 0, "no args → empty");
+
+  let trunc: Uint8Array = Uint8Array.of(257);
+  assert(trunc[0] === 1, "257 truncates to 1");
+}

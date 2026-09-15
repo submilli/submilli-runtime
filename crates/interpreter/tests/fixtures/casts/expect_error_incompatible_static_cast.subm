@@ -1,0 +1,7 @@
+// expect-error: cannot cast `string` to `number`
+// expect-error: no assignable direction between these types
+
+function main(): void {
+  const s: string = "hi";
+  const n: number = s as number;
+}

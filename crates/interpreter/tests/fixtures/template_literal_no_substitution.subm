@@ -1,0 +1,6 @@
+function main(): void {
+  assert(`plain` === "plain", "no interpolation");
+  assert(`with \n newline` === "with \n newline", "escapes inside no-sub template");
+  assert(`a\${b}` === "a${b}", "escaped dollar-brace stays literal");
+  assert(`a\`b` === "a`b", "escaped backtick");
+}

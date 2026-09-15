@@ -1,0 +1,9 @@
+function main(): void {
+  const enc = new TextEncoder();
+  const bytes = enc.encode("hello");
+
+  assert(
+    JSON.stringify(bytes) === "\"aGVsbG8=\"",
+    "string → bytes → base64 (JSON form)"
+  );
+}

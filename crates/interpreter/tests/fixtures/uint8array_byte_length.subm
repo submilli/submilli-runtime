@@ -1,0 +1,14 @@
+// `byteLength` is a readonly alias for `length`, included
+// for JS `TypedArray` API compatibility.
+
+function main(): void {
+  let bytes: Uint8Array = Uint8Array.new([1, 2, 3, 4, 5]);
+  assert(bytes.byteLength === 5, "byteLength matches length");
+  assert(bytes.byteLength === bytes.length, "always equal to length");
+
+  let empty: Uint8Array = Uint8Array.alloc(0);
+  assert(empty.byteLength === 0, "byteLength on empty");
+
+  let allocd: Uint8Array = Uint8Array.alloc(42);
+  assert(allocd.byteLength === 42, "byteLength of alloc'd array");
+}

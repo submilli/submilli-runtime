@@ -1,0 +1,9 @@
+// /echo-string-body matches only when both the raw bytes and the default
+// Content-Type: text/plain; charset=utf-8 header arrive — 200 proves both.
+
+import { post, Response } from "submilli:http";
+
+function main(): void {
+  const r: Response = post("{{BASE}}/echo-string-body", "raw payload");
+  assert(r.status === 200, "body + default CT reached server");
+}

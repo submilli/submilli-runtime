@@ -1,0 +1,4 @@
+function main(): void {
+  const s: string = "hi" as string;
+  assert(s === "hi", "string-to-string cast preserves the value");
+}

@@ -1,0 +1,9 @@
+// expect-error: `+` not defined for `T` and `T`
+
+function bad<T>(x: T): T {
+  return x + x;
+}
+
+function main(): void {
+  bad(1);
+}

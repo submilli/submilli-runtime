@@ -1,0 +1,28 @@
+// expect-error: cannot read field `length` on non-object type `null`
+// expect-error: cannot read field `len` on `null | { len: number }`: the receiver can be `null`
+// expect-error: was dropped by the write
+
+function noop(): void {}
+
+function local_write(x: string | null): number {
+  if (x !== null) {
+    noop();
+    x = null;
+    return x.length;
+  }
+  return 0;
+}
+
+function field_write(obj: { foo: { len: number } | null }): number {
+  if (obj.foo !== null) {
+    noop();
+    obj.foo = null;
+    return obj.foo.len;
+  }
+  return 0;
+}
+
+function main(): void {
+  assert(local_write("hi") === 2, "unreachable in successful build");
+  assert(field_write({ foo: { len: 5 } }) === 5, "unreachable in successful build");
+}

@@ -1,0 +1,7 @@
+// expect-error: exported global `DEFAULT` uses private type `Result` in its type annotation
+
+interface Result {
+  value: number;
+}
+
+export const DEFAULT: Result = { value: 1 };

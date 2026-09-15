@@ -1,0 +1,10 @@
+type Pair = { x: number; y: number };
+
+function main(): void {
+  const a: Pair = { x: 1, y: 2 };
+  const b: Pair = { x: 100, y: 200 };
+  const merged = { ...a, ...b };
+
+  assert(merged.x === 100, "later spread overrides earlier");
+  assert(merged.y === 200, "later spread overrides earlier");
+}

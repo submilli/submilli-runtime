@@ -1,0 +1,24 @@
+function main(): void {
+  let nums: number[] = [1, 2, 3];
+
+  let doubled = nums.flatMap((x) => [x, x * 10]);
+  assert(doubled.length === 6, "flatMap concatenates each result array");
+  assert(doubled[0] === 1, "flatMap order: first element");
+  assert(doubled[1] === 10, "flatMap order: first mapped");
+  assert(doubled[4] === 3, "flatMap order: last element");
+  assert(doubled[5] === 30, "flatMap order: last mapped");
+
+  // Callbacks may return empty arrays (acts as a filter).
+  let evensOnly = nums.flatMap((x): number[] => x % 2 === 0 ? [x] : []);
+  assert(evensOnly.length === 1, "flatMap with empty results drops elements");
+  assert(evensOnly[0] === 2, "flatMap keeps the matching element");
+
+  let empty: number[] = [];
+  assert(empty.flatMap((x) => [x, x]).length === 0, "flatMap on empty array is empty");
+
+  // flatMap can change the element type.
+  let chars = nums.flatMap((x) => x === 2 ? ["two", "TWO"] : ["n"]);
+  assert(chars.length === 4, "flatMap over differing-length results");
+  assert(chars[1] === "two", "flatMap maps to strings");
+  assert(chars[2] === "TWO", "flatMap flattens the multi-element result");
+}

@@ -1,0 +1,7 @@
+function main(): void {
+  let count: number = 0;
+  do {
+    count = count + 1;
+  } while (false);
+  assert(count === 1, "do-while runs body at least once");
+}

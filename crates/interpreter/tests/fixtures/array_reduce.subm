@@ -1,0 +1,19 @@
+function main(): void {
+  let nums: number[] = [1, 2, 3, 4];
+
+  let sum = nums.reduce((acc, x) => acc + x, 0);
+  assert(sum === 10, "sum reduce");
+
+  let product = nums.reduce((acc, x) => acc * x, 1);
+  assert(product === 24, "product reduce");
+
+  let empty: number[] = [];
+  let zero = empty.reduce((acc, x) => acc + x, 7);
+  assert(zero === 7, "empty returns init");
+
+  let words = ["a", "b", "c"].reduce((acc, s) => acc + s, "");
+  assert(words === "abc", "string reduce");
+
+  let sumExplicit = nums.reduce<number>((acc, x) => acc + x, 0);
+  assert(sumExplicit === 10, "explicit <U> still works");
+}

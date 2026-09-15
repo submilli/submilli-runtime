@@ -1,0 +1,17 @@
+let outer_finally_ran: boolean = false;
+
+function main(): void {
+  let n: number = 0;
+  try {
+    while (true) {
+      if (n === 2) {
+        break;
+      }
+      n = n + 1;
+    }
+  } finally {
+    outer_finally_ran = true;
+  }
+  assert(n === 2, "while exited cleanly");
+  assert(outer_finally_ran === true, "outer finally ran once, at try exit");
+}

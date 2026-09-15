@@ -1,0 +1,3 @@
+// expect-error: rest parameter cannot have a default value
+function f(...xs: number[] = []): void {}
+function main(): void {}

@@ -1,0 +1,11 @@
+function looks_like_array<T>(x: T): boolean {
+  return Array.isArray(x);
+}
+
+function main(): void {
+  assert(looks_like_array<number[]>([1, 2, 3]), "number array is array");
+  assert(looks_like_array<string[]>(["a", "b"]), "string array is array");
+  assert(!looks_like_array<number>(42), "number is not an array");
+  assert(!looks_like_array<string>("hello"), "string is not an array");
+  assert(!looks_like_array<boolean>(true), "boolean is not an array");
+}

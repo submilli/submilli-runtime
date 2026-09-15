@@ -1,0 +1,19 @@
+let counter: number = 0;
+
+function inner(): number {
+  try {
+    try {
+      return 42;
+    } finally {
+      counter = counter + 1;
+    }
+  } finally {
+    counter = counter * 10;
+  }
+}
+
+function main(): void {
+  const result = inner();
+  assert(counter === 10, "innermost finally ran first, then outer");
+  assert(result === 42, "return value preserved through both finallys");
+}

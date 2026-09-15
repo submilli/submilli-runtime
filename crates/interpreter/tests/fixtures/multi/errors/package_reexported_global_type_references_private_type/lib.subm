@@ -1,0 +1,3 @@
+// expect-error: exported type `Public` uses private type `Private` in its definition
+
+export { DEFAULT, Public } from "./util";

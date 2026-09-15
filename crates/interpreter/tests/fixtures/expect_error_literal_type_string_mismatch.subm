@@ -1,0 +1,6 @@
+// expect-error: expected `"hi"`, got `"bye"`
+
+function main(): void {
+  const x: "hi" = "bye";
+  assert(x === x, "unreachable — compile error blocks runtime");
+}

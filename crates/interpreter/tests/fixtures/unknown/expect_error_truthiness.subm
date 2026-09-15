@@ -1,0 +1,8 @@
+// expect-error: cannot use `unknown` as a condition
+
+function main(): void {
+  const x: unknown = 1;
+  if (x) {
+    assert(true, "unreachable");
+  }
+}

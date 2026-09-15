@@ -1,0 +1,6 @@
+// expect-error: expected `never`, got
+
+function main(): void {
+  const x: never = 5;
+  assert(true === true, "unreachable", x);
+}

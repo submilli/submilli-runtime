@@ -1,0 +1,4 @@
+// expect-error: circular import
+import { b } from "./b";
+
+export const a: number = b;

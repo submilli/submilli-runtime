@@ -1,0 +1,14 @@
+---
+source: crates/interpreter/src/codegen/mod.rs
+expression: dump
+---
+sequence start=0x6 end=0xb
+  addr=0x6 file=1 line=1 col=Column(25) stmt=true
+  addr=0x6 file=1 line=2 col=Column(3) stmt=true
+  addr=0x6 file=1 line=2 col=Column(10) stmt=true
+  addr=0xb file=1 line=2 col=Column(10) stmt=true end_sequence
+sequence start=0xd end=0x19
+  addr=0xd file=1 line=4 col=Column(27) stmt=true
+  addr=0xd file=1 line=5 col=Column(3) stmt=true
+  addr=0xd file=1 line=5 col=Column(10) stmt=true
+  addr=0x19 file=1 line=5 col=Column(10) stmt=true end_sequence

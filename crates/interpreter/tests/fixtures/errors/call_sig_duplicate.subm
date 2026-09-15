@@ -1,0 +1,8 @@
+// expect-error: duplicate call signature on interface `F`
+
+interface F {
+  (x: number): string;
+  (y: string): number;
+}
+
+function main(): void { }

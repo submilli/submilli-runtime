@@ -1,0 +1,14 @@
+# The gate also covers a static whose signature names a class the *consumer*
+# never declares as a dependency. `@test/uconsumer` uses `Api` as a class but
+# none of its statics; `Zu` lives in `@test/ubase`, two hops away and outside
+# `@test/uconsumer`'s dependency closure, so reconstructing `Api`'s statics
+# there would type them against a class it cannot name.
+#
+# The consumer has to be a library package: the fixture harness hands the root
+# script every package declaration regardless of its manifest deps, so a
+# root-only version of this cannot exercise the path at all.
+# name          dir       deps            root
+@test/ubase     base      -
+@test/umid      mid       @test/ubase
+@test/uconsumer consumer  @test/umid
+main            app       @test/uconsumer  root

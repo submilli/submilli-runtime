@@ -1,0 +1,6 @@
+// expect-error: no field `missing` on type
+
+function main(): void {
+  let o = { x: 1 };
+  o.missing = 2;
+}

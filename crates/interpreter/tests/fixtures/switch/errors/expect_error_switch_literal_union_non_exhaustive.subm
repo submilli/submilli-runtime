@@ -1,0 +1,12 @@
+// expect-error: non-exhaustive
+
+function classify(s: "a" | "b" | "c"): number {
+  switch (s) {
+    case "a": return 1;
+    case "b": return 2;
+  }
+}
+
+function main(): void {
+  assert(classify("a") === 1, "a");
+}

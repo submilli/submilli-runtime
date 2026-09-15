@@ -1,0 +1,53 @@
+// for-of over a USER-DECLARED interface that satisfies Iterable<T> structurally
+// (a named interface with .iterator(), not the prelude Iterable<T> alias).
+
+interface Range {
+  lo: number;
+  hi: number;
+  iterator(): Iterator<number>;
+}
+
+function makeRange(lo: number, hi: number): Range {
+  const r: Range = {
+    lo: lo,
+    hi: hi,
+    iterator: (): Iterator<number> => {
+      let i = lo;
+      const it: Iterator<number> = {
+        next: (): IteratorResult<number> => {
+          if (i >= hi) {
+            const done: IteratorResult<number> = { done: true };
+            return done;
+          }
+          const out: IteratorResult<number> = { done: false, value: i };
+          i = i + 1;
+          return out;
+        },
+      };
+      return it;
+    },
+  };
+  return r;
+}
+
+function main(): void {
+  const r = makeRange(2, 6);
+  let sum = 0;
+  for (const x of r) {
+    sum = sum + x;
+  }
+  assert(sum === 14, "2+3+4+5 = 14");
+
+  let again = 0;
+  for (const x of r) {
+    again = again + x;
+  }
+  assert(again === 14, "the interface is re-iterable: each for-of gets a fresh cursor");
+
+  let viaIterator = 0;
+  const direct = r.iterator();
+  for (const x of direct) {
+    viaIterator = viaIterator + x;
+  }
+  assert(viaIterator === 14, "a manually obtained Iterator drives for-of too");
+}

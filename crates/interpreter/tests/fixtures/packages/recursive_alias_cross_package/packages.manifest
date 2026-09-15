@@ -1,0 +1,6 @@
+# A recursive alias declared in a package and consumed from another. The
+# consumer never writes the alias body, so its shape has to arrive through the
+# package's own export surface with its recursion back-edges resolvable by name.
+# name          dir    deps            root
+@test/tree      lib    -
+main            app    @test/tree      root

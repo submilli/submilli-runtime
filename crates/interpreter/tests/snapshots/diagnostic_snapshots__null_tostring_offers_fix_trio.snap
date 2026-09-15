@@ -1,0 +1,17 @@
+---
+source: crates/interpreter/tests/diagnostic_snapshots.rs
+expression: "render_inside_main(\"  const n = null;\\n  let s = n.toString();\")"
+---
+error: cannot call `.toString()` on a `null` value; narrow to a non-null type first
+ --> test.subm:3:13
+  |
+2 |   const n = null;
+3 |   let s = n.toString();
+  |             ^^^^^^^^
+4 | }
+  |
+help: use a non-null value:
+  `n!.toString()` — assert non-null (throws `Error` at runtime if null)
+  `(n ?? "fallback").toString()` — provide a fallback
+  or narrow first: `if (n !== null) { … }`
+---

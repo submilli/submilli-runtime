@@ -1,0 +1,5 @@
+function main(): void {
+  const b: boolean = true;
+  assert(`b=${b}` === "b=true", "boolean interpolation");
+  assert(`${false}` === "false", "lone false");
+}

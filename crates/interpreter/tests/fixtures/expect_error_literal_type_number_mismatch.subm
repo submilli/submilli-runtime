@@ -1,0 +1,7 @@
+// expect-error: expected `42`, got `43`
+
+
+function main(): void {
+  const x: 42 = 43;
+  assert(x === x, "unreachable — compile error blocks runtime");
+}

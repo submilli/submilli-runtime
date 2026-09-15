@@ -1,0 +1,17 @@
+
+function eval(t: ["add", number, number] | ["mul", number, number] | ["sub", number, number]): number {
+  switch (t[0]) {
+    case "add": return t[1] + t[2];
+    case "mul": return t[1] * t[2];
+    case "sub": return t[1] - t[2];
+  }
+}
+
+function main(): void {
+  const add: ["add", number, number] = ["add", 5, 3];
+  const mul: ["mul", number, number] = ["mul", 5, 3];
+  const sub: ["sub", number, number] = ["sub", 5, 3];
+  assert(eval(add) === 8, "add");
+  assert(eval(mul) === 15, "mul");
+  assert(eval(sub) === 2, "sub");
+}

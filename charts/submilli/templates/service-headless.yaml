@@ -1,0 +1,29 @@
+{{/*
+The StatefulSet's governing Service. Separate from the ClusterIP Service in
+service.yaml, which is what clients actually call: this one exists to give the
+pod a stable per-ordinal DNS name, and it deliberately carries no cluster IP so
+that name resolves straight to the pod.
+
+This is load-bearing, not decoration: both `helm test` hooks address
+`<fullname>-0.<headless>` to reach a specific server, and the per-pod A record
+that name resolves to is published for a headless Service. `clusterIP: None` is
+what makes the name answer with the pod rather than a virtual IP.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "submilli.headlessName" . }}
+  labels:
+    {{- include "submilli.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  # Not `publishNotReadyAddresses`. Resolving a pod that has not passed its
+  # readiness probe would hand callers a server still replaying its blueprint
+  # seed, and nothing here needs peer discovery during startup.
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "submilli.selectorLabels" . | nindent 4 }}

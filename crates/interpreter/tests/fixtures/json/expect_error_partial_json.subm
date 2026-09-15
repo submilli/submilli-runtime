@@ -1,0 +1,5 @@
+// expect-error: `JSON` is a compiler intrinsic, not a value
+
+function main(): void {
+  let f = JSON.stringify;
+}

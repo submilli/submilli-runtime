@@ -1,0 +1,4 @@
+// expect-error: string enum member `B` requires an explicit value
+enum S { A = "a", B }
+
+function main(): void {}

@@ -1,0 +1,26 @@
+function create<T>(x: T): { x: T } {
+  return { x: x };
+}
+
+function consume_str(o: { x: string }): string {
+  return o.x;
+}
+
+function consume_num(o: { x: number }): number {
+  return o.x;
+}
+
+function main(): void {
+  const s = consume_str(create("hello"));
+  assert(s === "hello", "string round-trip through generic+consumer");
+
+  const n = consume_num(create(42));
+  assert(n === 42, "number round-trip through generic+consumer");
+
+  const pair = { a: "x", b: 1 };
+  assert(pair.a === "x", "string field reads back");
+  assert(pair.b === 1, "number field reads back through unbox");
+
+  const o = create(pair);
+  assert(o.x === pair, "object-typed field preserves identity");
+}

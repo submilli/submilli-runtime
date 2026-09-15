@@ -1,0 +1,8 @@
+// expect-error: not a valid narrowing guard
+
+
+function main(): void {
+  const x: number = 1;
+  const b: boolean = typeof x === "circle";
+  assert(!b, "never reached");
+}

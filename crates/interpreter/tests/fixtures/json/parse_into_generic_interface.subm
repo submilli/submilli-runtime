@@ -1,0 +1,11 @@
+// JSON.parse into a generic data-only interface — the cast target is
+// substituted into the property shape before validation.
+interface Box<T> { value: T; }
+
+function main(): void {
+  const b = JSON.parse("{\"value\": 42}") as Box<number>;
+  assert(b.value === 42, "generic interface, number");
+
+  const s = JSON.parse("{\"value\": \"hi\"}") as Box<string>;
+  assert(s.value === "hi", "generic interface, string");
+}

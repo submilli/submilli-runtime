@@ -1,0 +1,25 @@
+function main(): void {
+  assert("plain ascii".isWellFormed(), "ascii is well-formed");
+  assert("".isWellFormed(), "empty string is well-formed");
+
+  const paired = String.fromCodePoint(0x1f600);
+  assert(paired.isWellFormed(), "a proper surrogate pair is well-formed");
+
+  const loneHigh = String.fromCharCode(0xd800);
+  assert(!loneHigh.isWellFormed(), "lone high surrogate is ill-formed");
+  const loneLow = String.fromCharCode(0xdc00);
+  assert(!loneLow.isWellFormed(), "lone low surrogate is ill-formed");
+  const highAtEnd = String.fromCharCode(65, 0xd800);
+  assert(!highAtEnd.isWellFormed(), "high surrogate at end is ill-formed");
+
+  assert("abc".toWellFormed() === "abc", "well-formed strings are unchanged");
+  assert(paired.toWellFormed() === paired, "surrogate pairs are kept");
+
+  const repaired = loneHigh.toWellFormed();
+  assert(repaired.length === 1, "repair keeps the length");
+  assert(repaired.charCodeAt(0) === 0xfffd, "lone surrogate becomes U+FFFD");
+
+  const mixed = String.fromCharCode(65, 0xdc00, 66).toWellFormed();
+  assert(mixed.charAt(0) === "A" && mixed.charAt(2) === "B", "neighbours survive the repair");
+  assert(mixed.charCodeAt(1) === 0xfffd, "embedded lone surrogate is replaced");
+}

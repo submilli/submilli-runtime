@@ -1,0 +1,5 @@
+function main(): void {
+  const o = { x: 1 };
+  assert(o.toString() === "[object Object]", "default toString unchanged");
+  assert(`${o}` === "[object Object]", "template default unchanged");
+}

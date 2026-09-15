@@ -1,0 +1,8 @@
+function main(): void {
+  const x: string = 5 ? "a" : "b";
+  assert(x === "a", "nonzero number is truthy");
+  const y: string = 0 ? "a" : "b";
+  assert(y === "b", "zero is falsy");
+  const s: string = "" ? "a" : "b";
+  assert(s === "b", "empty string is falsy");
+}

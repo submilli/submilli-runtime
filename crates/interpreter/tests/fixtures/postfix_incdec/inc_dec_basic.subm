@@ -1,0 +1,10 @@
+function main(): void {
+  let x: number = 5;
+  x++;
+  assert(x === 6, "after x++, x === 6");
+  x--;
+  assert(x === 5, "after x--, x === 5");
+  x--;
+  x--;
+  assert(x === 3, "two more x-- → 3");
+}

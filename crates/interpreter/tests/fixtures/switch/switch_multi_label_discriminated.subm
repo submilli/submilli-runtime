@@ -1,0 +1,22 @@
+function area(
+  s: { kind: "sq"; side: number }
+   | { kind: "rect"; w: number; h: number }
+   | { kind: "tri"; base: number; h: number }
+): number {
+  switch (s.kind) {
+    case "rect":
+    case "tri":
+      return s.h * 2;
+    case "sq":
+      return s.side * s.side;
+  }
+}
+
+function main(): void {
+  const sq: { kind: "sq"; side: number } = { kind: "sq", side: 3 };
+  const rect: { kind: "rect"; w: number; h: number } = { kind: "rect", w: 4, h: 5 };
+  const tri: { kind: "tri"; base: number; h: number } = { kind: "tri", base: 6, h: 7 };
+  assert(area(sq) === 9, "sq");
+  assert(area(rect) === 10, "rect");
+  assert(area(tri) === 14, "tri");
+}

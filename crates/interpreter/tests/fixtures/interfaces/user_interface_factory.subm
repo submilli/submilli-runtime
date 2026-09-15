@@ -1,0 +1,16 @@
+interface Counter { next(): number; }
+
+function makeCounter(start: number): Counter {
+  let i = start;
+  return { next: (): number => { i = i + 1; return i; } };
+}
+
+function main(): void {
+  const a = makeCounter(0);
+  const b = makeCounter(100);
+  assert(a.next() === 1, "a first");
+  assert(a.next() === 2, "a second");
+  assert(b.next() === 101, "b first — independent state");
+  assert(a.next() === 3, "a third — still independent");
+  assert(b.next() === 102, "b second");
+}

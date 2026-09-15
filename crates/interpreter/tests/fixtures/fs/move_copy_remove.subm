@@ -1,0 +1,18 @@
+import { writeText, readText, move, copy, remove, exists } from "submilli:fs";
+
+function main(): void {
+  writeText("/src.txt", "data");
+
+  move("/src.txt", "/dst.txt");
+  assert(exists("/src.txt") === false, "src gone after move");
+  assert(exists("/dst.txt"), "dst exists after move");
+  const moved: string | null = readText("/dst.txt");
+  assert(moved !== null && moved === "data", "move preserves content");
+
+  copy("/dst.txt", "/copy.txt", false);
+  assert(exists("/dst.txt"), "source preserved after copy");
+  assert(exists("/copy.txt"), "destination created by copy");
+
+  remove("/copy.txt", false);
+  assert(exists("/copy.txt") === false, "removed file gone");
+}

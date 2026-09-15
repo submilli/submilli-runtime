@@ -1,0 +1,11 @@
+
+function main(): void {
+  const n = JSON.parse("42") as number;
+  assert(n === 42, "parse 42");
+
+  const m = JSON.parse("-3.14") as number;
+  assert(m === -3.14, "parse -3.14");
+
+  const z = JSON.parse("0") as number;
+  assert(z === 0, "parse 0");
+}

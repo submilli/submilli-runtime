@@ -1,0 +1,26 @@
+// Self-referential and mutually-recursive interface declarations
+// resolve. Before two-pass name registration these reported
+// `unknown type 'Node'` / `unknown type 'Leaf'` because a name wasn't
+// in scope while its own (or a sibling's) body was being resolved.
+//
+// Reads through interface-typed values (`n.value`) are a separate,
+// not-yet-implemented feature, so this fixture exercises resolution +
+// nullability only — the recursive `type` fixtures cover traversal.
+interface Node {
+  value: number;
+  next: Node | null;
+}
+interface Branch {
+  leaf: Leaf | null;
+}
+interface Leaf {
+  value: number;
+  parent: Branch | null;
+}
+
+function main(): void {
+  const n: Node | null = null;
+  const b: Branch | null = null;
+  const l: Leaf | null = null;
+  assert(n === null && b === null && l === null, "recursive interfaces resolve");
+}

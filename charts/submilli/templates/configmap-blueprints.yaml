@@ -1,0 +1,20 @@
+{{- if .Values.blueprints }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "submilli.fullname" . }}-blueprints
+  labels:
+    {{- include "submilli.labels" . | nindent 4 }}
+data:
+  {{- /*
+  The `.yaml` suffix is appended here rather than left to the operator. The
+  server's seed scan filters on it, and the natural values shape
+  (`blueprints: { demo: ... }`) would otherwise mount as `/etc/.../demo`, get
+  skipped, and produce a server that boots clean with no blueprints and no
+  diagnostic. Templating the suffix removes the ability to get it wrong.
+  */}}
+  {{- range $name, $yaml := .Values.blueprints }}
+  {{ $name }}.yaml: |
+    {{- $yaml | nindent 4 }}
+  {{- end }}
+{{- end }}

@@ -1,0 +1,26 @@
+// PlainDate / PlainDateTime project onto the coarser PlainYearMonth and
+// PlainMonthDay carriers (pure field selection, no calendar math).
+
+function main(): void {
+  const d: Temporal.PlainDate = Temporal.PlainDate.from("2024-03-15");
+
+  const ym: Temporal.PlainYearMonth = d.toPlainYearMonth();
+  assert(ym.year === 2024 && ym.month === 3, "PlainDate -> PlainYearMonth");
+  assert(ym.toString() === "2024-03", "PlainYearMonth ISO");
+
+  const md: Temporal.PlainMonthDay = d.toPlainMonthDay();
+  assert(md.month === 3 && md.day === 15, "PlainDate -> PlainMonthDay");
+  assert(md.toString() === "03-15", "PlainMonthDay ISO");
+
+  const dt: Temporal.PlainDateTime = Temporal.PlainDateTime.from("2024-07-09T15:30:45");
+
+  const dtym: Temporal.PlainYearMonth = dt.toPlainYearMonth();
+  assert(dtym.year === 2024 && dtym.month === 7, "PlainDateTime -> PlainYearMonth");
+
+  const dtmd: Temporal.PlainMonthDay = dt.toPlainMonthDay();
+  assert(dtmd.month === 7 && dtmd.day === 9, "PlainDateTime -> PlainMonthDay");
+
+  // Leap day survives the projection.
+  const leap: Temporal.PlainDate = Temporal.PlainDate.from("2024-02-29");
+  assert(leap.toPlainMonthDay().day === 29, "leap day projects to 02-29");
+}

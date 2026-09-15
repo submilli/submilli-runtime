@@ -1,0 +1,11 @@
+function either_truthy(x: string | null, y: string | null): boolean {
+  return !!(x || y !== null);
+}
+
+function main(): void {
+  assert(either_truthy("a", null), "first truthy short-circuits to true");
+  assert(either_truthy(null, "b"), "first null, second non-null is true");
+  assert(!either_truthy(null, null), "both null is false");
+  assert(either_truthy("a", "b"), "both non-null is true");
+  assert(!either_truthy("", null), "empty string is falsy (JS truthiness)");
+}

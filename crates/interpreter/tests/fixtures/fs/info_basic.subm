@@ -1,0 +1,10 @@
+import { info, Info } from "submilli:fs";
+
+function main(): void {
+  const fs = info();
+  // The fixture harness backs the VFS with a temp directory (ephemeral mode)
+  // and sets no limits, so the limits report the -1 "not applicable" sentinel.
+  assert(fs.mode === "ephemeral", "fixture VFS runs in ephemeral mode");
+  assert(fs.sizeLimit === -1, "no size limit configured");
+  assert(fs.pathLimit === -1, "no path limit configured");
+}

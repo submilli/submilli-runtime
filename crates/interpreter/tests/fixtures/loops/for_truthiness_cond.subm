@@ -1,0 +1,10 @@
+function main(): void {
+  let runs: number = 0;
+  for (let i: number = 3; i; i = i - 1) {
+    runs = runs + 1;
+  }
+  assert(runs === 3, "for-loop condition counts down to falsy 0");
+  for (let i: number = 0; i; i = i + 1) {
+    assert(false, "zero initial condition never enters the loop");
+  }
+}

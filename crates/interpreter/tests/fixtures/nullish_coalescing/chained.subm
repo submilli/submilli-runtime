@@ -1,0 +1,9 @@
+function main(): void {
+  const a: string | null = null;
+  const b: string | null = null;
+  const c: string = "third";
+  assert((a ?? b ?? c) === "third", "chained ?? falls through to last");
+
+  const d: string | null = "second";
+  assert((a ?? d ?? c) === "second", "first non-null wins");
+}

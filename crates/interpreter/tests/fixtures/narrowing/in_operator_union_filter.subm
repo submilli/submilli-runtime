@@ -1,0 +1,16 @@
+function tag(
+  s: { kind: "a"; va: number } | { kind: "b"; vb: number }
+): number {
+  if ("va" in s) {
+    return s.va;
+  }
+  return s.vb;
+}
+
+function main(): void {
+  const a: { kind: "a"; va: number } = { kind: "a", va: 1 };
+  assert(tag(a) === 1, "variant a — true-branch narrows to va-having variant");
+
+  const b: { kind: "b"; vb: number } = { kind: "b", vb: 2 };
+  assert(tag(b) === 2, "variant b — false-branch narrows to vb-having variant");
+}

@@ -1,0 +1,5 @@
+// expect-error: `toString` cannot be optional
+
+function main(): void {
+  let x: { toString?: () => string } = { toString: (): string => "x" };
+}

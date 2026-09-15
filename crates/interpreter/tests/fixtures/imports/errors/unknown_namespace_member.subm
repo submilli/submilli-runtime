@@ -1,0 +1,6 @@
+// expect-error: package `submilli:uuid` does not export `nope`
+import uuid from "submilli:uuid";
+
+function main(): void {
+  uuid.nope();
+}

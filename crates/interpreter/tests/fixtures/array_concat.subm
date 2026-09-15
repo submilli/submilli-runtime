@@ -1,0 +1,32 @@
+function main(): void {
+  let a: number[] = [1, 2];
+  let b: number[] = [3, 4, 5];
+
+  let c = a.concat(b);
+  assert(c.length === 5, "concat sums lengths");
+  assert(c[0] === 1 && c[1] === 2 && c[2] === 3 && c[3] === 4 && c[4] === 5,
+         "concat order");
+
+  assert(a.length === 2, "left untouched");
+  assert(b.length === 3, "right untouched");
+
+  let copy = a.concat();
+  assert(copy.length === 2 && copy[0] === 1 && copy[1] === 2, "zero-arg concat copies self");
+
+  let d: number[] = [6];
+  let two = a.concat(b, d);
+  assert(two.length === 6, "two-arg concat length");
+  assert(two[0] === 1 && two[2] === 3 && two[5] === 6, "two-arg concat order");
+
+  let empty: number[] = [];
+  let three = a.concat(empty, b, d);
+  assert(three.length === 6, "empty in the middle is a no-op for length");
+  assert(three[0] === 1 && three[1] === 2 && three[2] === 3 && three[5] === 6,
+         "three-arg concat order");
+
+  let r = empty.concat(a);
+  assert(r.length === 2 && r[0] === 1 && r[1] === 2, "empty + non-empty");
+
+  let r2 = a.concat(empty);
+  assert(r2.length === 2 && r2[0] === 1 && r2[1] === 2, "non-empty + empty");
+}

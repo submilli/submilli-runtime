@@ -1,0 +1,22 @@
+kind: blueprint
+name: quickstart
+
+# Bound once per request by the application, never by the program.
+variables:
+  customerId:
+    required: true
+
+packages:
+- '@acme/billing'
+
+default: deny
+
+permissions:
+  # What generated code may do.
+  main:
+  - capability: acme.com/charges.list
+    filter: customerId == ${vars.customerId}
+    action: allow
+
+  # What the package itself may do. Nothing: it reads a fixture.
+  '@acme/billing': []

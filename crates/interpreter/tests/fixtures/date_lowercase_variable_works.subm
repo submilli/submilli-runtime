@@ -1,0 +1,4 @@
+function main(): void {
+  const date: number = 3;
+  assert(date === 3, "lowercase `date` identifier compiles cleanly");
+}

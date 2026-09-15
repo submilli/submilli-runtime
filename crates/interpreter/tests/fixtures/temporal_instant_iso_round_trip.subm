@@ -1,0 +1,9 @@
+function main(): void {
+  const iso: string = "2024-03-09T15:30:45.123Z";
+  const ts: Temporal.Instant = Temporal.Instant.from(iso);
+  const back: string = ts.toString();
+  assert(back === iso, "ISO 8601 round-trip preserves the input string");
+
+  const ms: number = ts.epochMilliseconds;
+  assert(ms === 1709998245123, "epochMilliseconds matches the parsed instant");
+}

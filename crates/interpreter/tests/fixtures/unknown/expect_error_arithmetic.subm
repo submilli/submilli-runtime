@@ -1,0 +1,6 @@
+// expect-error: cannot apply `+` to `unknown`
+
+function main(): void {
+  const x: unknown = 1;
+  const y = x + 1;
+}

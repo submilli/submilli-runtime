@@ -1,0 +1,16 @@
+
+function classify(x: number | string): number {
+  if (typeof x === "number") {
+    return x + 100;
+  } else {
+    return x.length;
+  }
+}
+
+function main(): void {
+  assert(classify(5) === 105, "number narrows + arithmetic works");
+  assert(classify(0) === 100, "zero narrows correctly");
+  assert(classify("hi") === 2, "else-branch narrows to string, .length works");
+  assert(classify("") === 0, "empty string");
+  assert(classify("hello") === 5, "longer string");
+}

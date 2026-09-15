@@ -1,0 +1,9 @@
+// expect-error: expects 1 type argument(s), got 2
+
+function identity<T>(x: T): T {
+  return x;
+}
+
+function main(): void {
+  identity<number, string>(42);
+}

@@ -1,0 +1,11 @@
+# Class-ref-typed statics across packages. The producer types a static's global
+# and function signature after its class struct types are recorded, so it names
+# `(ref $Zed)`; the consumer must too. Reconstruction visits classes
+# parents-first then alphabetically, so were statics imported during it,
+# `Alpha`'s would be declared while `Zed` — neither its ancestor nor
+# alphabetically before it — still had no recorded struct type. Hence the
+# separate pass. `static_ref_types_cross_package` covers only types whose
+# lowering doesn't depend on that ordering.
+# name          dir    deps          root
+@test/zlib      lib    -
+main            app    @test/zlib    root

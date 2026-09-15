@@ -1,0 +1,6 @@
+// expect-error: `JSON.parse` does not take type arguments
+
+function main(): void {
+  const fn: (x: number) => number = JSON.parse<(x: number) => number>("{}");
+  console.log(fn(1).toString());
+}

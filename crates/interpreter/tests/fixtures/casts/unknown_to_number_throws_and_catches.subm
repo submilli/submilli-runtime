@@ -1,0 +1,14 @@
+function main(): void {
+  const x: unknown = "hi";
+  let caught: string = "<none>";
+  try {
+    const n: number = x as number;
+    assert(false, "cast should have thrown — never reached");
+  } catch (e: Error) {
+    caught = e.message;
+  }
+  assert(
+    caught === "type mismatch: expected number, got string",
+    "spec-mandated error format must round-trip through Error"
+  );
+}

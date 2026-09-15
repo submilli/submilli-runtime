@@ -1,0 +1,16 @@
+function main(): void {
+  assert(Number.isInteger(2), "whole number");
+  assert(Number.isInteger(-3), "negative whole number");
+  assert(Number.isInteger(0), "zero");
+  assert(!Number.isInteger(2.5), "fraction");
+  assert(!Number.isInteger(NaN), "NaN");
+  assert(!Number.isInteger(Infinity), "Infinity");
+
+  assert(Number.isSafeInteger(9007199254740991), "max safe integer");
+  assert(!Number.isSafeInteger(9007199254740992), "2^53 is unsafe");
+  assert(Number.isSafeInteger(-9007199254740991), "min safe integer");
+  assert(!Number.isSafeInteger(2.5), "fraction is not a safe integer");
+
+  assert(Number.isFinite(1) && !Number.isFinite(Infinity), "static isFinite");
+  assert(Number.isNaN(NaN) && !Number.isNaN(7), "static isNaN");
+}

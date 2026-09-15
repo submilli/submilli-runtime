@@ -1,0 +1,31 @@
+function main(): void {
+  let arr: number[] = [10, 20, 30, 40, 50];
+
+  let mid = arr.at(2);
+  if (mid !== null) {
+    assert(mid === 30, "at(2) returns the third element");
+  } else {
+    assert(false, "at(2) should not be null");
+  }
+
+  let last = arr.at(-1);
+  if (last !== null) {
+    assert(last === 50, "at(-1) returns the last element");
+  } else {
+    assert(false, "at(-1) should not be null");
+  }
+
+  let first = arr.at(-5);
+  if (first !== null) {
+    assert(first === 10, "at(-len) returns the first element");
+  }
+
+  let beyond = arr.at(100);
+  assert(beyond === null, "at(100) on len=5 array returns null");
+
+  let below = arr.at(-100);
+  assert(below === null, "at(-100) on len=5 array returns null");
+
+  let edgeHigh = arr.at(5);
+  assert(edgeHigh === null, "at(len) is OOB and returns null");
+}

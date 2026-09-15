@@ -1,0 +1,7 @@
+// expect-error: default values in function-type annotations are not yet supported
+
+
+function main(): void {
+  const f: (x: number = 0) => void = (x: number) => { return; };
+  f();
+}

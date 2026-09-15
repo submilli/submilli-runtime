@@ -1,0 +1,9 @@
+// expect-error: recursive interface types aren't supported as `as` targets
+
+interface Node { value: number; next: Node | null; }
+
+function main(): void {
+  const _ = JSON.parse(
+    "{\"value\": 1, \"next\": {\"value\": 2, \"next\": {\"value\": 3, \"next\": null}}}"
+  ) as Node;
+}

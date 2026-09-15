@@ -1,0 +1,15 @@
+function f(x: number): number {
+  switch (x) {
+    case 0:
+      return 0xff;
+    case 1:
+      return 0b10;
+  }
+  return 0;
+}
+
+function main(): void {
+  assert(f(0) === 255, "hex in case body");
+  assert(f(1) === 2, "binary in case body");
+  assert(f(2) === 0, "fallthrough default-less");
+}

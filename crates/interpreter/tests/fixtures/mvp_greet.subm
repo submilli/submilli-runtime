@@ -1,0 +1,10 @@
+function greet(name: string): string {
+  return "Hello, " + name;
+}
+
+function main(): string {
+  const msg = greet("world");
+  console.log(msg);
+  assert(msg === "Hello, world", "greeting should match");
+  return msg;
+}

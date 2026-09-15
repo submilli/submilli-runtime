@@ -1,0 +1,69 @@
+[[package]]
+name = "@submilli/jina"
+version = "0.1.0"
+description = "Jina AI Reader and Search helpers for turning web pages and search results into LLM-friendly markdown or structured data."
+keywords = ["jina", "reader", "search", "web", "markdown", "llm"]
+path = "packages/jina"
+
+[[package]]
+name = "@submilli/linear"
+version = "0.1.0"
+description = "Synchronous GraphQL client for Linear — read issues, teams, projects, and users, and create or update issues and comments."
+keywords = ["linear", "graphql", "issues", "project-management", "api"]
+path = "packages/linear"
+
+[[package]]
+name = "@submilli/slack-user"
+version = "0.1.0"
+description = "User-token Slack client for agent search, messages, channels, users, files, and reactions."
+keywords = ["slack", "user", "search", "messages", "agents"]
+path = "packages/slack-user"
+
+[[package]]
+name = "@submilli/slack-bot"
+version = "0.1.0"
+description = "Bot-token Slack Web API client for messages, conversations, users, and reactions."
+keywords = ["slack", "bot", "web-api", "messages", "conversations"]
+path = "packages/slack-bot"
+
+[[package]]
+name = "@submilli/google-calendar"
+version = "0.1.0"
+description = "Google Calendar client for calendars, events, free/busy queries, and bounded scheduling helpers."
+keywords = ["google", "calendar", "events", "scheduling", "api"]
+path = "packages/google-calendar"
+
+[[package]]
+name = "@submilli/gmail"
+version = "0.1.0"
+description = "Gmail client for messages, threads, drafts, labels, MIME attachments, and sending mail."
+keywords = ["google", "gmail", "email", "mime", "api"]
+path = "packages/gmail"
+
+[[package]]
+name = "@submilli/google-drive"
+version = "0.1.0"
+description = "Google Drive client for files, folders, Shared Drives, uploads, downloads, and permissions."
+keywords = ["google", "drive", "files", "shared-drives", "api"]
+path = "packages/google-drive"
+
+[[package]]
+name = "@submilli/notion"
+version = "0.1.0"
+description = "Native Notion client for agent discovery, enhanced Markdown, pages, data sources, views, comments, blocks, and file uploads."
+keywords = ["notion", "pages", "databases", "markdown", "agents", "api"]
+path = "packages/notion"
+
+[[package]]
+name = "@submilli/github"
+version = "0.1.0"
+description = "Native GitHub client for repositories, content, commits, issues, pull requests, teams, releases, and scoped search."
+keywords = ["github", "repositories", "issues", "pull-requests", "agents", "api"]
+path = "packages/github"
+
+[[package]]
+name = "@submilli/sentry"
+version = "0.1.0"
+description = "Native Sentry Cloud client for organizations, projects, issues, events, and core issue triage."
+keywords = ["sentry", "errors", "issues", "events", "observability", "api"]
+path = "packages/sentry"

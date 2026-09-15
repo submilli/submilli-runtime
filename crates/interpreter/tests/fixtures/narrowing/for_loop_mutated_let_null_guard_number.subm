@@ -1,0 +1,29 @@
+// Value-typed (`number | null`) counterpart to the string fixture: a nullable
+// `let` mutated inside a `for` loop is boxed, so the post-guard fall-through read
+// must unbox-then-narrow. A boxed `number` narrows through `boxed_number`, a
+// different unbox path than reference types.
+
+function for_of_fall_through(arr: number[]): number {
+  let latest: number | null = null;
+  for (const n of arr) { latest = n; }
+  if (latest === null) { return -1; }
+  return latest;
+}
+
+function c_style_fall_through(arr: number[]): number {
+  let latest: number | null = null;
+  for (let i = 0; i < arr.length; i = i + 1) { latest = arr[i]; }
+  if (latest === null) { return -1; }
+  return latest + 100;
+}
+
+function main(): void {
+  const arr: number[] = [1, 2, 3];
+  const empty: number[] = [];
+
+  assert(for_of_fall_through(arr) === 3, "for-of fall-through reads last number");
+  assert(for_of_fall_through(empty) === -1, "for-of never assigns -> still null");
+
+  assert(c_style_fall_through(arr) === 103, "c-style fall-through, arithmetic on narrowed read");
+  assert(c_style_fall_through(empty) === -1, "c-style never assigns -> still null");
+}

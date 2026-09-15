@@ -1,0 +1,21 @@
+function main(): void {
+  const counter = { hits: 0, label: "x" };
+  counter.hits += 1;
+  counter.hits += 1;
+  counter.hits += 5;
+  assert(counter.hits === 7, "field += accumulates");
+
+  counter.hits -= 2;
+  assert(counter.hits === 5, "field -= subtracts");
+
+  counter.hits *= 3;
+  assert(counter.hits === 15, "field *= multiplies");
+
+  counter.label += "y";
+  counter.label += "z";
+  assert(counter.label === "xyz", "field += on string");
+
+  const power = { base: 2 };
+  power.base **= 8;
+  assert(power.base === 256, "field **= on number");
+}

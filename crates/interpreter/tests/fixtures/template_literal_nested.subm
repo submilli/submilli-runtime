@@ -1,0 +1,4 @@
+function main(): void {
+  const x: number = 7;
+  assert(`outer ${`inner ${x}`}!` === "outer inner 7!", "nested templates");
+}

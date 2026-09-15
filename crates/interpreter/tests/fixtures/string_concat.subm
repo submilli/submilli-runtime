@@ -1,0 +1,14 @@
+function main(): void {
+  let hello: string = "hello";
+  let world: string = "world";
+
+  assert(hello.concat(world) === "helloworld", "concat result");
+  assert("".concat("abc") === "abc", "concat empty left");
+  assert("abc".concat("") === "abc", "concat empty right");
+  assert(hello.length === 5, "concat is pure");
+
+  assert(hello.equals("hello"), "equals same content");
+  assert(!hello.equals("Hello"), "equals case-sensitive");
+  assert(!hello.equals("hellos"), "equals different length");
+  assert("".equals(""), "empty equals empty");
+}

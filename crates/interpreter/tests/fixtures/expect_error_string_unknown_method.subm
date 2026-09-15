@@ -1,0 +1,6 @@
+// expect-error: toUppperCase
+
+function main(): void {
+let s: string = "hello";
+  let _ = s.toUppperCase();
+}

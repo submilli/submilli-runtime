@@ -1,0 +1,10 @@
+import { Temporal } from "temporal";
+import { JSON } from "json";
+import { Math } from "@js-temporal/polyfill";
+
+function main(): void {
+  const d = Temporal.PlainDate.from("2026-06-07");
+  assert(d.year === 2026);
+  assert(JSON.stringify(1) === "1");
+  assert(Math.max(1, 2) === 2);
+}

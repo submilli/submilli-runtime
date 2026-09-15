@@ -1,0 +1,8 @@
+# A package that EXPORTS a subclass of a generic class without declaring its own
+# constructor. The inherited signature has to be the substituted one in the
+# declaration, the emitted ctor, and the consumer's import alike — if the three
+# disagree the exporting package's module cannot be linked at all.
+# name        dir   deps       root
+@test/base    base  -
+@test/mid     mid   @test/base
+main          app   @test/mid  root

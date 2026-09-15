@@ -1,0 +1,35 @@
+// An object literal assigned to a union-of-objects target keeps its
+// literal-typed fields (contextual variant selection) instead of widening,
+// so it matches a variant — for discriminated and untagged unions alike.
+
+type Shape =
+  | { kind: "circle"; radius: number }
+  | { kind: "square"; side: number };
+
+function area(s: Shape): number {
+  if (s.kind === "circle") {
+    return s.radius * s.radius * 3;
+  }
+  return s.side * s.side;
+}
+
+// Untagged union — variant chosen by which fields are present.
+type Untagged = { a: number } | { b: string };
+
+function main(): void {
+  const c: Shape = { kind: "circle", radius: 2 };
+  assert(c.kind === "circle", "circle discriminant preserved");
+
+  const sq: Shape = { kind: "square", side: 3 };
+  assert(sq.kind === "square", "square (non-first variant) preserved");
+
+  assert(area(c) === 12, "circle area via kind narrow");
+  assert(area(sq) === 9, "square area via else branch");
+
+  if (c.kind === "circle") {
+    assert(c.radius === 2, "radius readable after narrow");
+  }
+
+  const u: Untagged = { a: 7 };
+  assert("a" in u, "untagged union: field-set selects the {a} variant");
+}

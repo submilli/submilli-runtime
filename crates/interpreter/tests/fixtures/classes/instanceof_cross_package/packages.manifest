@@ -1,0 +1,7 @@
+# `instanceof` nominal identity across SEPARATE packages: the consumer compares
+# against the producer's imported vtable singleton (not a reconstructed shape),
+# and a local subclass of an imported class chains its parent link to it.
+# name           dir       deps                       root
+@test/shapes     shapes    -
+@test/rects      rects     @test/shapes
+main             app       @test/shapes,@test/rects   root

@@ -1,0 +1,24 @@
+interface Nested {
+  ok: boolean;
+}
+
+interface Point {
+  x: number;
+  y: number;
+  nested: Nested | null;
+}
+
+function main(): void {
+  const a = JSON.parse("{\"x\":1,\"y\":2,\"nested\":{\"ok\":true}}") as Point;
+  const b = JSON.parse("{\"nested\":{\"ok\":true},\"y\":2,\"x\":1}") as Point;
+  const c = JSON.parse("{\"x\":1,\"y\":3,\"nested\":{\"ok\":true}}") as Point;
+
+  assert(a === b, "parsed objects compare structurally");
+  assert(a !== c, "different parsed object field is not equal");
+
+  const seen = new Set<Point>();
+  seen.add(a);
+  seen.add(b);
+  seen.add(c);
+  assert(seen.size === 2, "Set dedupes equal parsed objects by structural hash");
+}

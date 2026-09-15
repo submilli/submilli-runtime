@@ -1,0 +1,27 @@
+// ECMA-262 §21.1 + §19.2 conformance vectors for `Number` and the global
+// numeric functions.
+
+function main(): void {
+  assert(Number("42") === 42, "string to number");
+  assert(Number("") === 0, "empty string is 0");
+  assert(isNaN(Number("1.3a")), "trailing junk is NaN under Number()");
+  assert(Number("0xff") === 255, "hex literal accepted");
+
+  assert(parseInt("42px") === 42, "parseInt prefix rule");
+  assert(parseInt("-17") === -17, "negative parses");
+  assert(parseInt("ff", 16) === 255, "explicit radix");
+  assert(parseFloat("3.14tau") === 3.14, "parseFloat prefix rule");
+  assert(parseFloat("2.5e2") === 250, "exponent form");
+
+  assert((255).toString(2) === "11111111", "binary toString");
+  assert((0.1 + 0.2).toFixed(1) === "0.3", "toFixed rounds the famous sum");
+  assert((1e21).toFixed(2) === "1000000000000000000000", "huge values fall back to toString (full decimal — documented divergence from JS exponential)");
+
+  assert(Number.MAX_SAFE_INTEGER + 1 === Number.MAX_SAFE_INTEGER + 2, "precision loss past 2^53");
+  assert(Number.isSafeInteger(Number.MAX_SAFE_INTEGER), "max safe integer is safe");
+  assert(!Number.isSafeInteger(Number.MAX_SAFE_INTEGER + 1), "2^53 is not");
+  assert(1 / Number.MIN_VALUE === Infinity, "MIN_VALUE is subnormal-small");
+
+  assert(0.1 + 0.2 !== 0.3, "binary floats are inexact");
+  assert(Math.abs(0.1 + 0.2 - 0.3) < Number.EPSILON, "but within EPSILON");
+}

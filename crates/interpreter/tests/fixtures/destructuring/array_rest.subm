@@ -1,0 +1,8 @@
+function main(): void {
+  const arr: number[] = [10, 20, 30, 40];
+  const [first, ...rest] = arr;
+  assert(first === 10, "first is 10");
+  assert(rest.length === 3, "rest has 3 elements");
+  assert(rest[0] === 20, "rest[0] is 20");
+  assert(rest[2] === 40, "rest[2] is 40");
+}

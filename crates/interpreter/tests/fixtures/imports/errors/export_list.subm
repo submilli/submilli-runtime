@@ -1,0 +1,5 @@
+// expect-error: only valid in multi-file packages
+function main(): string {
+  return "x";
+}
+export { main };

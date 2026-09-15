@@ -1,0 +1,8 @@
+function len_or_zero(x: string | null): number {
+  return x !== null ? x.length : 0;
+}
+
+function main(): void {
+  assert(len_or_zero("hi") === 2, "narrowing into then-branch");
+  assert(len_or_zero(null) === 0, "else-branch when null");
+}

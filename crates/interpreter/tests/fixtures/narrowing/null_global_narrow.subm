@@ -1,0 +1,14 @@
+
+const g: string | null = "hello";
+
+function len(): number {
+  if (g !== null) {
+    return g.length;
+  } else {
+    return 0;
+  }
+}
+
+function main(): void {
+  assert(len() === 5, "global string|null narrows in then-branch");
+}

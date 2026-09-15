@@ -1,0 +1,14 @@
+let counter: number = 0;
+
+function bump(): void {
+  counter++;
+}
+
+function main(): void {
+  bump();
+  bump();
+  bump();
+  assert(counter === 3, "global counter incremented three times");
+  counter--;
+  assert(counter === 2, "global decrement");
+}

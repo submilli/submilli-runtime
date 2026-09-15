@@ -1,0 +1,6 @@
+# A consumer package writes an imported class's mutable static, and the
+# declaring package observes the write — statics are one Wasm global, not a
+# per-package copy. `private static` stays invisible across the boundary.
+# name             dir       deps              root
+@test/counters     counters  -
+main               app       @test/counters    root

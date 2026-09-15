@@ -1,0 +1,6 @@
+// expect-error: tuple index must be a non-negative integer literal
+function main(): void {
+  const t: [string, number] = ["x", 1];
+  let i: number = 0;
+  const s = t[i];
+}

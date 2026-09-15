@@ -1,0 +1,8 @@
+function main(): void {
+  const a: Temporal.ZonedDateTime = Temporal.ZonedDateTime.from("2024-03-09T12:00:00+00:00[UTC]");
+  const b: Temporal.ZonedDateTime = Temporal.ZonedDateTime.from("2024-03-09T12:00:00+00:00[UTC]");
+  assert(a.equals(b), "identical inputs compare equal");
+
+  const tokyo: Temporal.ZonedDateTime = a.withTimeZone("Asia/Tokyo");
+  assert(!a.equals(tokyo), "same instant, different tz - not equal");
+}

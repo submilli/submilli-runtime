@@ -1,0 +1,24 @@
+function tag(
+  s: { kind: "a"; va: number }
+   | { kind: "b"; vb: number }
+   | { kind: "c"; vc: number }
+): number {
+  if (s.kind === "a") {
+    return s.va;
+  }
+  if (s.kind === "b") {
+    return s.vb;
+  }
+  return s.vc;
+}
+
+function main(): void {
+  const a: { kind: "a"; va: number } = { kind: "a", va: 1 };
+  assert(tag(a) === 1, "variant a");
+
+  const b: { kind: "b"; vb: number } = { kind: "b", vb: 2 };
+  assert(tag(b) === 2, "variant b");
+
+  const c: { kind: "c"; vc: number } = { kind: "c", vc: 3 };
+  assert(tag(c) === 3, "variant c — fall-through narrowing past two joins");
+}

@@ -1,0 +1,26 @@
+// JSON.parse into a recursive discriminated union — the canonical AST
+// shape. The union members are concrete objects discriminated by `kind`;
+// recursion lives in the `left`/`right` field positions, each compiled to
+// a call into the `Expr` validator.
+type Expr =
+  | { kind: "lit"; value: number }
+  | { kind: "add"; left: Expr; right: Expr };
+
+function main(): void {
+  const e = JSON.parse(
+    "{\"kind\":\"add\",\"left\":{\"kind\":\"lit\",\"value\":3},\"right\":{\"kind\":\"lit\",\"value\":4}}"
+  ) as Expr;
+  assert(e.kind === "add", "root is add");
+  if (e.kind === "add") {
+    const l: Expr = e.left;
+    const r: Expr = e.right;
+    assert(l.kind === "lit", "left is lit");
+    if (l.kind === "lit") {
+      assert(l.value === 3, "left value");
+    }
+    assert(r.kind === "lit", "right is lit");
+    if (r.kind === "lit") {
+      assert(r.value === 4, "right value");
+    }
+  }
+}

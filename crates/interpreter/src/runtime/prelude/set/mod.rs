@@ -1,0 +1,960 @@
+//! The submilli `Set<T>` — the Rust port of the prelude's hand-written Wasm
+//! hashset (`codegen/prelude/set.rs`).
+//!
+//! Mirrors the `Map` port (`super::map`) with a single `elements` array instead
+//! of separate `keys`/`values`: the same `$Object`-subtype backing struct
+//! (`$SetBacking { vtable, elements, size, order, order_len }`), the same
+//! open-addressing probe, insertion-order ledger, tombstones, resize, and
+//! compaction. Storage stays in the GC heap; host fns drive the logic through
+//! the struct ABI.
+//!
+//! Elements hash and compare through the object vtable — slot 3 (`hash`) and
+//! slot 2 (`equals`) via [`dispatch_vtable_slot`] — so `add`/`has`/`delete` (and
+//! the algebra/relation ops that probe through them) are async; `size`/`clear`
+//! and iterator construction stay sync. The tombstone sentinel
+//! ([`host_map_tombstone`]) is shared with `Map`, as are the deferred SUB-584
+//! optimisations (primitive sync fast-path, per-entry hash cache) — this is the
+//! minimal unified port.
+
+mod install;
+
+pub(crate) use install::declare_types;
+pub use install::{declare, install};
+
+use wasmtime::{
+    ArrayRef, ArrayRefPre, Caller, FieldType, Finality, Func, HeapType, Mutability, RefType,
+    Rooted, StorageType, StructRef, StructRefPre, StructType, Val, ValType,
+};
+
+use crate::runtime::StoreData;
+use crate::runtime::gc_singleton::singleton_struct;
+use crate::runtime::host::{host_map_tombstone, host_object_vtable, write_submilli_array_struct};
+use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
+use crate::runtime::prelude::closure::{self, Closure};
+use crate::runtime::prelude::collection::{is_a, object_field, read_array_vals, unbox_bool};
+use crate::runtime::prelude::iterator::{
+    IterKind, as_struct, build_iterator, iter_done, iter_yield, next_closure_type,
+};
+use crate::runtime::prelude::map::raw_index_array_type;
+use crate::runtime::prelude::vtable::dispatch_vtable_slot;
+
+/// The set's initial bucket capacity (must stay a power of two for the
+/// `& (cap - 1)` probe mask).
+const INITIAL_CAPACITY: i32 = 8;
+
+// ---------------------------------------------------------------------------
+// Backing type (shared with codegen via WasmGC canonicalization)
+// ---------------------------------------------------------------------------
+
+/// `$SetBacking` — a non-final `$Object` subtype
+/// `{ vtable, elements, size, order, order_len }`, mirroring
+/// `add_set_backing_subtype` in codegen. Built as a singleton so it
+/// canonicalizes to the same engine type the guest's `ref.cast` targets.
+/// [`set_backing_matches_codegen`] pins the agreement.
+pub(crate) fn set_backing_struct(
+    engine: &wasmtime::Engine,
+    intr: &IntrinsicTypes,
+) -> wasmtime::Result<StructType> {
+    let imm = Mutability::Const;
+    let mutv = Mutability::Var;
+    let raw_index = raw_index_array_type(engine)?;
+    singleton_struct(
+        engine,
+        Finality::NonFinal,
+        Some(intr.object.clone()),
+        vec![
+            FieldType::new(
+                imm,
+                StorageType::ValType(ValType::Ref(RefType::new(
+                    false,
+                    intr.vtable.clone().into(),
+                ))),
+            ),
+            FieldType::new(
+                mutv,
+                StorageType::ValType(ValType::Ref(RefType::new(
+                    false,
+                    intr.raw_array.clone().into(),
+                ))),
+            ),
+            FieldType::new(mutv, StorageType::ValType(ValType::I32)),
+            FieldType::new(
+                mutv,
+                StorageType::ValType(ValType::Ref(RefType::new(false, raw_index.into()))),
+            ),
+            FieldType::new(mutv, StorageType::ValType(ValType::I32)),
+        ],
+    )
+}
+
+// Field indices into `$SetBacking`.
+const F_ELEMENTS: usize = 1;
+const F_SIZE: usize = 2;
+const F_ORDER: usize = 3;
+const F_ORDER_LEN: usize = 4;
+
+/// The set's `$SetBacking` receiver, cast from the erased `(ref $Object)`.
+fn backing(caller: &mut Caller<'_, StoreData>, recv: &Val) -> wasmtime::Result<Rooted<StructRef>> {
+    let Val::AnyRef(Some(any)) = recv else {
+        return Err(wasmtime::Error::msg("Set method: receiver is null"));
+    };
+    any.as_struct(&mut *caller)?
+        .ok_or_else(|| wasmtime::Error::msg("Set method: receiver is not a $SetBacking"))
+}
+
+/// Read a `$rawArray`/`$rawIndexArray` field of the backing.
+fn field_array(
+    caller: &mut Caller<'_, StoreData>,
+    b: &Rooted<StructRef>,
+    idx: usize,
+) -> wasmtime::Result<Rooted<ArrayRef>> {
+    match b.field(&mut *caller, idx)? {
+        Val::AnyRef(Some(a)) => a.unwrap_array(&mut *caller),
+        other => Err(wasmtime::Error::msg(format!(
+            "Set backing field {idx} is not an array: {other:?}"
+        ))),
+    }
+}
+
+/// Read an i32 field (`size` / `order_len`) of the backing.
+fn field_i32(
+    caller: &mut Caller<'_, StoreData>,
+    b: &Rooted<StructRef>,
+    idx: usize,
+) -> wasmtime::Result<i32> {
+    match b.field(&mut *caller, idx)? {
+        Val::I32(n) => Ok(n),
+        other => Err(wasmtime::Error::msg(format!(
+            "Set backing field {idx} is not an i32: {other:?}"
+        ))),
+    }
+}
+
+/// Whether `slot` is the tombstone sentinel.
+fn is_tombstone(caller: &mut Caller<'_, StoreData>, slot: &Val) -> wasmtime::Result<bool> {
+    let tomb = host_map_tombstone(caller)?;
+    match (slot, &tomb) {
+        (Val::AnyRef(Some(a)), Val::AnyRef(Some(b))) => Ok(Rooted::ref_eq(&caller, a, b)?),
+        _ => Ok(false),
+    }
+}
+
+fn is_null(v: &Val) -> bool {
+    matches!(v, Val::AnyRef(None))
+}
+
+/// `elem.vtable.hash(elem)` (slot 3).
+async fn hash(caller: &mut Caller<'_, StoreData>, elem: &Val) -> wasmtime::Result<i32> {
+    match dispatch_vtable_slot(caller, elem, 3, &[]).await? {
+        Val::I32(h) => Ok(h),
+        other => Err(wasmtime::Error::msg(format!(
+            "Set element hash returned {other:?}, expected i32"
+        ))),
+    }
+}
+
+/// `elem.vtable.equals(elem, slot)` (slot 2).
+async fn equals(
+    caller: &mut Caller<'_, StoreData>,
+    elem: &Val,
+    slot: &Val,
+) -> wasmtime::Result<bool> {
+    match dispatch_vtable_slot(caller, elem, 2, &[*slot]).await? {
+        Val::I32(b) => Ok(b != 0),
+        other => Err(wasmtime::Error::msg(format!(
+            "Set element equals returned {other:?}, expected i32"
+        ))),
+    }
+}
+
+/// A fresh `$rawArray` of `n` null slots.
+fn new_raw_array(caller: &mut Caller<'_, StoreData>, n: i32) -> wasmtime::Result<Rooted<ArrayRef>> {
+    let raw = build_intrinsic_types(caller.engine())?.raw_array;
+    let pre = ArrayRefPre::new(&mut *caller, raw);
+    let nulls = vec![Val::null_any_ref(); n.max(0) as usize];
+    ArrayRef::new_fixed(&mut *caller, &pre, &nulls)
+}
+
+/// A fresh `$rawIndexArray` of `n` zero slots.
+fn new_index_array(
+    caller: &mut Caller<'_, StoreData>,
+    n: i32,
+) -> wasmtime::Result<Rooted<ArrayRef>> {
+    let ty = raw_index_array_type(caller.engine())?;
+    let pre = ArrayRefPre::new(&mut *caller, ty);
+    let zeros = vec![Val::I32(0); n.max(0) as usize];
+    ArrayRef::new_fixed(&mut *caller, &pre, &zeros)
+}
+
+// ---------------------------------------------------------------------------
+// Data methods
+// ---------------------------------------------------------------------------
+
+/// `Set#add(self, value) -> self`. Resizes/compacts to keep a free slot, then
+/// probes; an already-present element is a no-op, a new element takes the first
+/// tombstone or empty slot and appends to the ledger.
+pub(super) async fn add(
+    caller: &mut Caller<'_, StoreData>,
+    recv: &Val,
+    value: &Val,
+) -> wasmtime::Result<Val> {
+    let b = backing(caller, recv)?;
+
+    let size = field_i32(caller, &b, F_SIZE)?;
+    let cap0 = field_array(caller, &b, F_ELEMENTS)?.len(&mut *caller)? as i32;
+    if (size + 1) * 4 > cap0 * 3 {
+        resize(caller, &b).await?;
+    } else {
+        compact_order_in_place(caller, &b)?;
+    }
+
+    let elements = field_array(caller, &b, F_ELEMENTS)?;
+    let order = field_array(caller, &b, F_ORDER)?;
+    let order_len = field_i32(caller, &b, F_ORDER_LEN)?;
+    let cap = elements.len(&mut *caller)? as i32;
+
+    let mut i = hash(caller, value).await? & (cap - 1);
+    let mut first_tomb: i32 = -1;
+    loop {
+        let slot = elements.get(&mut *caller, i as u32)?;
+        if is_null(&slot) {
+            let ins = if first_tomb == -1 { i } else { first_tomb };
+            elements.set(&mut *caller, ins as u32, *value)?;
+            order.set(&mut *caller, order_len as u32, Val::I32(ins))?;
+            b.set_field(&mut *caller, F_ORDER_LEN, Val::I32(order_len + 1))?;
+            b.set_field(&mut *caller, F_SIZE, Val::I32(size + 1))?;
+            return Ok(*recv);
+        }
+        if is_tombstone(caller, &slot)? {
+            if first_tomb == -1 {
+                first_tomb = i;
+            }
+        } else if equals(caller, value, &slot).await? {
+            return Ok(*recv);
+        }
+        i = (i + 1) & (cap - 1);
+    }
+}
+
+/// `Set#has(self, value) -> boolean`.
+pub(super) async fn has(
+    caller: &mut Caller<'_, StoreData>,
+    recv: &Val,
+    value: &Val,
+) -> wasmtime::Result<bool> {
+    let b = backing(caller, recv)?;
+    let elements = field_array(caller, &b, F_ELEMENTS)?;
+    let cap = elements.len(&mut *caller)? as i32;
+    let mut i = hash(caller, value).await? & (cap - 1);
+    loop {
+        let slot = elements.get(&mut *caller, i as u32)?;
+        if is_null(&slot) {
+            return Ok(false);
+        }
+        if !is_tombstone(caller, &slot)? && equals(caller, value, &slot).await? {
+            return Ok(true);
+        }
+        i = (i + 1) & (cap - 1);
+    }
+}
+
+/// `Set#delete(self, value) -> boolean`. Tombstones the slot and marks its
+/// ledger entry `-1`.
+pub(super) async fn delete(
+    caller: &mut Caller<'_, StoreData>,
+    recv: &Val,
+    value: &Val,
+) -> wasmtime::Result<bool> {
+    let b = backing(caller, recv)?;
+    let elements = field_array(caller, &b, F_ELEMENTS)?;
+    let order = field_array(caller, &b, F_ORDER)?;
+    let order_len = field_i32(caller, &b, F_ORDER_LEN)?;
+    let cap = elements.len(&mut *caller)? as i32;
+    let tomb = host_map_tombstone(caller)?;
+
+    let mut i = hash(caller, value).await? & (cap - 1);
+    loop {
+        let slot = elements.get(&mut *caller, i as u32)?;
+        if is_null(&slot) {
+            return Ok(false);
+        }
+        if !is_tombstone(caller, &slot)? && equals(caller, value, &slot).await? {
+            elements.set(&mut *caller, i as u32, tomb)?;
+            for j in 0..order_len {
+                if let Val::I32(idx) = order.get(&mut *caller, j as u32)?
+                    && idx == i
+                {
+                    order.set(&mut *caller, j as u32, Val::I32(-1))?;
+                    break;
+                }
+            }
+            let size = field_i32(caller, &b, F_SIZE)?;
+            b.set_field(&mut *caller, F_SIZE, Val::I32(size - 1))?;
+            return Ok(true);
+        }
+        i = (i + 1) & (cap - 1);
+    }
+}
+
+/// `Set#clear(self) -> void`. Swaps in fresh empty backing arrays.
+pub(super) fn clear(caller: &mut Caller<'_, StoreData>, recv: &Val) -> wasmtime::Result<()> {
+    let b = backing(caller, recv)?;
+    let elements = new_raw_array(caller, INITIAL_CAPACITY)?;
+    let order = new_index_array(caller, INITIAL_CAPACITY)?;
+    b.set_field(
+        &mut *caller,
+        F_ELEMENTS,
+        Val::AnyRef(Some(elements.to_anyref())),
+    )?;
+    b.set_field(&mut *caller, F_SIZE, Val::I32(0))?;
+    b.set_field(&mut *caller, F_ORDER, Val::AnyRef(Some(order.to_anyref())))?;
+    b.set_field(&mut *caller, F_ORDER_LEN, Val::I32(0))?;
+    Ok(())
+}
+
+/// `Set#size` — the element count as a `number`. Ported (unlike `Map#size`) so
+/// no Set member routes to the Wasm path; reads the backing's `size` field.
+pub(super) fn size(caller: &mut Caller<'_, StoreData>, recv: &Val) -> wasmtime::Result<Val> {
+    let b = backing(caller, recv)?;
+    let n = field_i32(caller, &b, F_SIZE)?;
+    Ok(Val::F64((n as f64).to_bits()))
+}
+
+/// Double the capacity and rehash live elements into a fresh array, rebuilding
+/// the insertion-order ledger from the old one (skipping `-1` tombstones).
+async fn resize(caller: &mut Caller<'_, StoreData>, b: &Rooted<StructRef>) -> wasmtime::Result<()> {
+    let old_elements = field_array(caller, b, F_ELEMENTS)?;
+    let old_order = field_array(caller, b, F_ORDER)?;
+    let old_order_len = field_i32(caller, b, F_ORDER_LEN)?;
+    let new_cap = (old_elements.len(&mut *caller)? as i32) << 1;
+
+    let new_elements = new_raw_array(caller, new_cap)?;
+    let new_order = new_index_array(caller, new_cap)?;
+    let mut new_order_len: i32 = 0;
+
+    for o in 0..old_order_len {
+        let Val::I32(probe_idx) = old_order.get(&mut *caller, o as u32)? else {
+            continue;
+        };
+        if probe_idx == -1 {
+            continue;
+        }
+        let elem = old_elements.get(&mut *caller, probe_idx as u32)?;
+        let mut k = hash(caller, &elem).await? & (new_cap - 1);
+        loop {
+            if is_null(&new_elements.get(&mut *caller, k as u32)?) {
+                new_elements.set(&mut *caller, k as u32, elem)?;
+                new_order.set(&mut *caller, new_order_len as u32, Val::I32(k))?;
+                new_order_len += 1;
+                break;
+            }
+            k = (k + 1) & (new_cap - 1);
+        }
+    }
+
+    b.set_field(
+        &mut *caller,
+        F_ELEMENTS,
+        Val::AnyRef(Some(new_elements.to_anyref())),
+    )?;
+    b.set_field(
+        &mut *caller,
+        F_ORDER,
+        Val::AnyRef(Some(new_order.to_anyref())),
+    )?;
+    b.set_field(&mut *caller, F_ORDER_LEN, Val::I32(new_order_len))?;
+    Ok(())
+}
+
+/// In-place ledger compaction: when the ledger has grown to capacity from
+/// delete-then-reinsert churn (without crossing the resize line), drop the `-1`
+/// holes so fresh inserts have room. Read head never overtakes the write head.
+fn compact_order_in_place(
+    caller: &mut Caller<'_, StoreData>,
+    b: &Rooted<StructRef>,
+) -> wasmtime::Result<()> {
+    let order = field_array(caller, b, F_ORDER)?;
+    let order_len = field_i32(caller, b, F_ORDER_LEN)?;
+    let cap = order.len(&mut *caller)? as i32;
+    if order_len < cap {
+        return Ok(());
+    }
+    let mut new_len: i32 = 0;
+    for i in 0..order_len {
+        let entry = order.get(&mut *caller, i as u32)?;
+        if !matches!(entry, Val::I32(-1)) {
+            order.set(&mut *caller, new_len as u32, entry)?;
+            new_len += 1;
+        }
+    }
+    b.set_field(&mut *caller, F_ORDER_LEN, Val::I32(new_len))?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// forEach + iteration
+// ---------------------------------------------------------------------------
+
+/// `Set#forEach(self, callback)` — walks the insertion-order ledger (skipping
+/// `-1` holes) and calls `callback(element)` for each live element. The backing
+/// arrays are captured once, matching the Wasm body's local-capture semantics.
+pub(super) async fn for_each(
+    caller: &mut Caller<'_, StoreData>,
+    recv: &Val,
+    f: &Closure,
+) -> wasmtime::Result<()> {
+    let b = backing(caller, recv)?;
+    let elements = field_array(caller, &b, F_ELEMENTS)?;
+    let order = field_array(caller, &b, F_ORDER)?;
+    let order_len = field_i32(caller, &b, F_ORDER_LEN)?;
+    for o in 0..order_len {
+        let Val::I32(idx) = order.get(&mut *caller, o as u32)? else {
+            continue;
+        };
+        if idx == -1 {
+            continue;
+        }
+        let elem = elements.get(&mut *caller, idx as u32)?;
+        f.call_void(caller, elem).await?;
+    }
+    Ok(())
+}
+
+/// Build a `keys`/`values`/`entries`/`iterator` iterator. Like the Map cursor
+/// (and JS `Set` iterator semantics) it captures the backing's `elements`/`order`
+/// references plus `order_len` at construction time, then reads them **live**
+/// each step: a `delete` of an unvisited element is observed (its ledger slot is
+/// `-1`, so the step skips it), while elements added afterward — or a resize that
+/// swaps in a fresh array — are invisible (the captured `order_len` bounds the
+/// walk and the captured refs outlive the swap).
+fn make_set_iterator(
+    caller: &mut Caller<'_, StoreData>,
+    recv: &Val,
+    kind: IterKind,
+) -> wasmtime::Result<Val> {
+    let b = backing(caller, recv)?;
+    let elements = field_array(caller, &b, F_ELEMENTS)?;
+    let order = field_array(caller, &b, F_ORDER)?;
+    let order_len = field_i32(caller, &b, F_ORDER_LEN)?;
+    let cursor = make_set_cursor(caller, &elements, &order, order_len)?;
+
+    let intr = build_intrinsic_types(caller.engine())?;
+    let (next_ty, next_struct) = next_closure_type(caller.engine(), &intr)?;
+    let next = Func::new(&mut *caller, next_ty, move |mut caller, params, results| {
+        set_next_step(&mut caller, params, results, kind)
+    });
+    build_iterator(caller, next_struct, next, cursor)
+}
+
+/// `(struct (mut i32 pos) (ref null any) (ref null any) (i32 order_len))` — the
+/// host-private set cursor: position, captured elements/order arrays, and the
+/// captured ledger length. Host-only, so its shape matches no codegen type.
+fn make_set_cursor(
+    caller: &mut Caller<'_, StoreData>,
+    elements: &Rooted<ArrayRef>,
+    order: &Rooted<ArrayRef>,
+    order_len: i32,
+) -> wasmtime::Result<Val> {
+    let imm = Mutability::Const;
+    let cursor_ty = singleton_struct(
+        caller.engine(),
+        Finality::Final,
+        None,
+        vec![
+            FieldType::new(Mutability::Var, StorageType::ValType(ValType::I32)),
+            FieldType::new(
+                imm,
+                StorageType::ValType(ValType::Ref(RefType::new(true, HeapType::Any))),
+            ),
+            FieldType::new(
+                imm,
+                StorageType::ValType(ValType::Ref(RefType::new(true, HeapType::Any))),
+            ),
+            FieldType::new(imm, StorageType::ValType(ValType::I32)),
+        ],
+    )?;
+    let pre = StructRefPre::new(&mut *caller, cursor_ty);
+    let st = StructRef::new(
+        &mut *caller,
+        &pre,
+        &[
+            Val::I32(0),
+            Val::AnyRef(Some(elements.to_anyref())),
+            Val::AnyRef(Some(order.to_anyref())),
+            Val::I32(order_len),
+        ],
+    )?;
+    Ok(Val::AnyRef(Some(st.to_anyref())))
+}
+
+/// One `next()` step: walk the captured ledger from the cursor position, skip
+/// `-1` (deleted) slots, and yield the projected element at the first live slot —
+/// or `{ done: true }` past `order_len`. `Keys`/`Values` both yield the element;
+/// `Entries` boxes it into a `[value, value]` pair (mirroring `Map#entries`).
+fn set_next_step(
+    caller: &mut Caller<'_, StoreData>,
+    params: &[Val],
+    results: &mut [Val],
+    kind: IterKind,
+) -> wasmtime::Result<()> {
+    let cursor = as_struct(caller, &params[0], "set iterator env")?;
+    let Val::I32(mut pos) = cursor.field(&mut *caller, 0)? else {
+        return Err(wasmtime::Error::msg("set iterator: position is not an i32"));
+    };
+    let elements = cursor_array(caller, &cursor, 1)?;
+    let order = cursor_array(caller, &cursor, 2)?;
+    let Val::I32(order_len) = cursor.field(&mut *caller, 3)? else {
+        return Err(wasmtime::Error::msg(
+            "set iterator: order_len is not an i32",
+        ));
+    };
+    loop {
+        if pos >= order_len {
+            cursor.set_field(&mut *caller, 0, Val::I32(pos))?;
+            results[0] = iter_done(caller)?;
+            return Ok(());
+        }
+        let Val::I32(probe) = order.get(&mut *caller, pos as u32)? else {
+            return Err(wasmtime::Error::msg(
+                "set iterator: ledger slot is not an i32",
+            ));
+        };
+        pos += 1;
+        if probe != -1 {
+            let elem = elements.get(&mut *caller, probe as u32)?;
+            let yielded = match kind {
+                IterKind::Keys | IterKind::Values => elem,
+                IterKind::Entries => {
+                    let pair = write_submilli_array_struct(caller, &[elem, elem])?;
+                    Val::AnyRef(Some(pair.to_anyref()))
+                }
+            };
+            cursor.set_field(&mut *caller, 0, Val::I32(pos))?;
+            results[0] = iter_yield(caller, yielded)?;
+            return Ok(());
+        }
+    }
+}
+
+/// Read a captured `(ref any)` cursor field back as its array.
+fn cursor_array(
+    caller: &mut Caller<'_, StoreData>,
+    cursor: &Rooted<StructRef>,
+    idx: usize,
+) -> wasmtime::Result<Rooted<ArrayRef>> {
+    match cursor.field(&mut *caller, idx)? {
+        Val::AnyRef(Some(a)) => a.unwrap_array(&mut *caller),
+        other => Err(wasmtime::Error::msg(format!(
+            "set iterator: cursor field {idx} is not an array {other:?}"
+        ))),
+    }
+}
+
+/// `keys`/`values`/`iterator` — sets have no separate keys, so all three yield
+/// the elements in insertion order.
+pub(super) fn values(caller: &mut Caller<'_, StoreData>, recv: &Val) -> wasmtime::Result<Val> {
+    make_set_iterator(caller, recv, IterKind::Values)
+}
+
+/// `entries` — a `[value, value]`-pair cursor (the element repeats).
+pub(super) fn entries(caller: &mut Caller<'_, StoreData>, recv: &Val) -> wasmtime::Result<Val> {
+    make_set_iterator(caller, recv, IterKind::Entries)
+}
+
+// ---------------------------------------------------------------------------
+// Algebra + relations (ES2025), composed over add/has + a ledger walk
+// ---------------------------------------------------------------------------
+
+/// Per-element filter for one [`add_pass`]: keep everything, or keep `elem` iff
+/// `member.has(elem)` equals `want`.
+enum Keep {
+    All,
+    IfMember { member: Val, want: bool },
+}
+
+/// "for elem in source (insertion order): if `keep`, result.add(elem)". `source`
+/// is walked through its ledger; `result` is mutated through [`add`].
+async fn add_pass(
+    caller: &mut Caller<'_, StoreData>,
+    source: &Val,
+    keep: Keep,
+    result: &Val,
+) -> wasmtime::Result<()> {
+    let b = backing(caller, source)?;
+    let elements = field_array(caller, &b, F_ELEMENTS)?;
+    let order = field_array(caller, &b, F_ORDER)?;
+    let order_len = field_i32(caller, &b, F_ORDER_LEN)?;
+    for o in 0..order_len {
+        let Val::I32(idx) = order.get(&mut *caller, o as u32)? else {
+            continue;
+        };
+        if idx == -1 {
+            continue;
+        }
+        let elem = elements.get(&mut *caller, idx as u32)?;
+        let keep_it = match &keep {
+            Keep::All => true,
+            Keep::IfMember { member, want } => has(caller, member, &elem).await? == *want,
+        };
+        if keep_it {
+            add(caller, result, &elem).await?;
+        }
+    }
+    Ok(())
+}
+
+/// `Set#union(self, other) -> Set` — every element of `self` then of `other`
+/// (`add` dedups); first-seen insertion order kept.
+pub(super) async fn union(
+    caller: &mut Caller<'_, StoreData>,
+    recv: &Val,
+    other: &Val,
+) -> wasmtime::Result<Val> {
+    let result = build_empty(caller)?;
+    add_pass(caller, recv, Keep::All, &result).await?;
+    add_pass(caller, other, Keep::All, &result).await?;
+    Ok(result)
+}
+
+/// `Set#intersection(self, other) -> Set` — elements of `self` also in `other`.
+pub(super) async fn intersection(
+    caller: &mut Caller<'_, StoreData>,
+    recv: &Val,
+    other: &Val,
+) -> wasmtime::Result<Val> {
+    let result = build_empty(caller)?;
+    add_pass(
+        caller,
+        recv,
+        Keep::IfMember {
+            member: *other,
+            want: true,
+        },
+        &result,
+    )
+    .await?;
+    Ok(result)
+}
+
+/// `Set#difference(self, other) -> Set` — elements of `self` not in `other`.
+pub(super) async fn difference(
+    caller: &mut Caller<'_, StoreData>,
+    recv: &Val,
+    other: &Val,
+) -> wasmtime::Result<Val> {
+    let result = build_empty(caller)?;
+    add_pass(
+        caller,
+        recv,
+        Keep::IfMember {
+            member: *other,
+            want: false,
+        },
+        &result,
+    )
+    .await?;
+    Ok(result)
+}
+
+/// `Set#symmetricDifference(self, other) -> Set` — elements in exactly one of
+/// the two: `self`'s not in `other`, then `other`'s not in `self`.
+pub(super) async fn symmetric_difference(
+    caller: &mut Caller<'_, StoreData>,
+    recv: &Val,
+    other: &Val,
+) -> wasmtime::Result<Val> {
+    let result = build_empty(caller)?;
+    add_pass(
+        caller,
+        recv,
+        Keep::IfMember {
+            member: *other,
+            want: false,
+        },
+        &result,
+    )
+    .await?;
+    add_pass(
+        caller,
+        other,
+        Keep::IfMember {
+            member: *recv,
+            want: false,
+        },
+        &result,
+    )
+    .await?;
+    Ok(result)
+}
+
+/// "for elem in source: if `member.has(elem) == fail_when_found`, return false".
+/// `false`/`false` → subset/superset (fail on a miss); `_`/`true` → disjoint
+/// (fail on a hit).
+async fn relation(
+    caller: &mut Caller<'_, StoreData>,
+    source: &Val,
+    member: &Val,
+    fail_when_found: bool,
+) -> wasmtime::Result<bool> {
+    let b = backing(caller, source)?;
+    let elements = field_array(caller, &b, F_ELEMENTS)?;
+    let order = field_array(caller, &b, F_ORDER)?;
+    let order_len = field_i32(caller, &b, F_ORDER_LEN)?;
+    for o in 0..order_len {
+        let Val::I32(idx) = order.get(&mut *caller, o as u32)? else {
+            continue;
+        };
+        if idx == -1 {
+            continue;
+        }
+        let elem = elements.get(&mut *caller, idx as u32)?;
+        if has(caller, member, &elem).await? == fail_when_found {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// `Set#isSubsetOf(self, other)` — every element of `self` is in `other`.
+pub(super) async fn is_subset_of(
+    caller: &mut Caller<'_, StoreData>,
+    recv: &Val,
+    other: &Val,
+) -> wasmtime::Result<bool> {
+    relation(caller, recv, other, false).await
+}
+
+/// `Set#isSupersetOf(self, other)` — every element of `other` is in `self`.
+pub(super) async fn is_superset_of(
+    caller: &mut Caller<'_, StoreData>,
+    recv: &Val,
+    other: &Val,
+) -> wasmtime::Result<bool> {
+    relation(caller, other, recv, false).await
+}
+
+/// `Set#isDisjointFrom(self, other)` — `self` and `other` share no element.
+pub(super) async fn is_disjoint_from(
+    caller: &mut Caller<'_, StoreData>,
+    recv: &Val,
+    other: &Val,
+) -> wasmtime::Result<bool> {
+    relation(caller, recv, other, true).await
+}
+
+// ---------------------------------------------------------------------------
+// Constructor (`new Set(init)`)
+// ---------------------------------------------------------------------------
+
+/// `SetConstructor#new(init?) -> Set`. Builds an empty set, then populates it
+/// from the initializer: `null` → empty; an `$Array` → add each element; a
+/// `$string` → add each code point (surrogate-pair-aware); a `$Set` → its
+/// `values()` cursor; any other value → drive the iterator protocol (an
+/// `iterator()` method if present, else the value itself), reading each
+/// `{ done, value }` result. Elements are deduplicated by `add`.
+pub(super) async fn construct(
+    caller: &mut Caller<'_, StoreData>,
+    init: &Val,
+) -> wasmtime::Result<Val> {
+    let coll = build_empty(caller)?;
+    if is_null(init) {
+        return Ok(coll);
+    }
+
+    let intr = build_intrinsic_types(caller.engine())?;
+    if is_a(caller, init, &intr.array)? {
+        for elem in read_array_vals(caller, init)? {
+            add(caller, &coll, &elem).await?;
+        }
+        return Ok(coll);
+    }
+    if is_a(caller, init, &intr.string)? {
+        for cp in super::collection::string_code_points(caller, init)? {
+            add(caller, &coll, &cp).await?;
+        }
+        return Ok(coll);
+    }
+
+    let it = if is_a(caller, init, &set_backing_struct(caller.engine(), &intr)?)? {
+        values(caller, init)?
+    } else if let Some(iter_method) = object_field(caller, init, "iterator")? {
+        let c = closure::read(caller, &iter_method, "Set ctor iterable")?;
+        c.call(caller, &[]).await?
+    } else {
+        *init
+    };
+
+    let next = object_field(caller, &it, "next")?
+        .ok_or_else(|| wasmtime::Error::msg("Set ctor: initializer is not iterable"))?;
+    let next_closure = closure::read(caller, &next, "Set ctor iterator")?;
+    loop {
+        let result = next_closure.call(caller, &[]).await?;
+        let done = object_field(caller, &result, "done")?
+            .ok_or_else(|| wasmtime::Error::msg("Set ctor: iterator result missing `done`"))?;
+        if unbox_bool(caller, &done)? {
+            break;
+        }
+        let value = object_field(caller, &result, "value")?
+            .ok_or_else(|| wasmtime::Error::msg("Set ctor: iterator result missing `value`"))?;
+        add(caller, &coll, &value).await?;
+    }
+    Ok(coll)
+}
+
+/// A fresh empty `$SetBacking` carrying the host object vtable.
+fn build_empty(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Val> {
+    let intr = build_intrinsic_types(caller.engine())?;
+    let ty = set_backing_struct(caller.engine(), &intr)?;
+    let vtable = host_object_vtable(caller)?;
+    let elements = new_raw_array(caller, INITIAL_CAPACITY)?;
+    let order = new_index_array(caller, INITIAL_CAPACITY)?;
+    let pre = StructRefPre::new(&mut *caller, ty);
+    let st = StructRef::new(
+        &mut *caller,
+        &pre,
+        &[
+            vtable,
+            Val::AnyRef(Some(elements.to_anyref())),
+            Val::I32(0),
+            Val::AnyRef(Some(order.to_anyref())),
+            Val::I32(0),
+        ],
+    )?;
+    Ok(Val::AnyRef(Some(st.to_anyref())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::intrinsics::declare_intrinsic_types;
+    use wasm_encoder::{
+        ConstExpr, ExportKind, ExportSection, GlobalSection, GlobalType as EncGlobalType,
+        HeapType as EncHeapType, Module, RefType as EncRefType, StorageType as EncStorageType,
+        TypeSection, ValType as EncValType,
+    };
+    use wasmtime::{Config, Engine};
+
+    /// The host `$SetBacking` must canonically equal the `$Object` subtype
+    /// codegen emits (`add_set_backing_subtype`); otherwise a host-built set's
+    /// `ref.cast` to `$SetBacking` would trap at the receiver of every method.
+    #[test]
+    fn set_backing_matches_codegen() {
+        let mut config = Config::new();
+        config.wasm_gc(true);
+        config.wasm_function_references(true);
+        let engine = Engine::new(&config).unwrap();
+
+        let intr = build_intrinsic_types(&engine).unwrap();
+        let host = set_backing_struct(&engine, &intr).unwrap();
+
+        let mut module = Module::new();
+        let mut types = TypeSection::new();
+        let idx = declare_intrinsic_types(&mut types);
+        // $rawIndexArray, then $SetBacking referencing it.
+        types
+            .ty()
+            .array(&EncStorageType::Val(EncValType::I32), true);
+        let raw_index_idx = crate::codegen::intrinsics::INTRINSIC_TYPE_COUNT;
+        add_set_backing_subtype(
+            &mut types,
+            idx.object,
+            idx.vtable,
+            idx.raw_array,
+            raw_index_idx,
+        );
+        let backing_idx = raw_index_idx + 1;
+        module.section(&types);
+
+        let mut globals = GlobalSection::new();
+        globals.global(
+            EncGlobalType {
+                val_type: EncValType::Ref(EncRefType {
+                    nullable: true,
+                    heap_type: EncHeapType::Concrete(backing_idx),
+                }),
+                mutable: false,
+                shared: false,
+            },
+            &ConstExpr::ref_null(EncHeapType::Concrete(backing_idx)),
+        );
+        let mut exports = ExportSection::new();
+        exports.export("backing", ExportKind::Global, 0);
+        module.section(&globals);
+        module.section(&exports);
+
+        let module = wasmtime::Module::new(&engine, module.finish()).unwrap();
+        let recovered = module
+            .get_export("backing")
+            .unwrap()
+            .global()
+            .unwrap()
+            .content()
+            .as_ref()
+            .map(|r| r.heap_type().clone())
+            .unwrap()
+            .as_concrete_struct()
+            .unwrap()
+            .clone();
+        assert!(StructType::eq(&host, &recovered));
+    }
+
+    fn add_set_backing_subtype(
+        types: &mut TypeSection,
+        object_type_idx: u32,
+        vtable_type_idx: u32,
+        raw_array_type_idx: u32,
+        raw_index_array_type_idx: u32,
+    ) {
+        use wasm_encoder::{
+            CompositeInnerType, CompositeType, FieldType, StorageType, StructType, SubType,
+        };
+        let vtable_field = FieldType {
+            element_type: StorageType::Val(EncValType::Ref(EncRefType {
+                nullable: false,
+                heap_type: EncHeapType::Concrete(vtable_type_idx),
+            })),
+            mutable: false,
+        };
+        let bucket_field = FieldType {
+            element_type: StorageType::Val(EncValType::Ref(EncRefType {
+                nullable: false,
+                heap_type: EncHeapType::Concrete(raw_array_type_idx),
+            })),
+            mutable: true,
+        };
+        let size_field = FieldType {
+            element_type: StorageType::Val(EncValType::I32),
+            mutable: true,
+        };
+        let order_field = FieldType {
+            element_type: StorageType::Val(EncValType::Ref(EncRefType {
+                nullable: false,
+                heap_type: EncHeapType::Concrete(raw_index_array_type_idx),
+            })),
+            mutable: true,
+        };
+        let order_len_field = FieldType {
+            element_type: StorageType::Val(EncValType::I32),
+            mutable: true,
+        };
+        types.ty().subtype(&SubType {
+            is_final: false,
+            supertype_idx: Some(object_type_idx),
+            composite_type: CompositeType {
+                inner: CompositeInnerType::Struct(StructType {
+                    fields: vec![
+                        vtable_field,
+                        bucket_field,
+                        size_field,
+                        order_field,
+                        order_len_field,
+                    ]
+                    .into_boxed_slice(),
+                }),
+                shared: false,
+                descriptor: None,
+                describes: None,
+            },
+        });
+    }
+}

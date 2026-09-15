@@ -1,0 +1,15 @@
+function main(): void {
+  assert((255n).toString(16) === "ff", "hex");
+  assert((10n).toString(2) === "1010", "binary");
+  assert((255n).toString() === "255", "radix defaults to 10");
+  assert((-255n).toString(16) === "-ff", "negative carries the sign");
+  assert(12345678901234567890n.toString(36).length > 0, "huge values format");
+
+  let threw: boolean = false;
+  try {
+    (255n).toString(1);
+  } catch (e: Error) {
+    threw = true;
+  }
+  assert(threw, "radix below 2 throws");
+}

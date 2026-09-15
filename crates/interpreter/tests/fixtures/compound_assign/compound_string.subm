@@ -1,0 +1,12 @@
+function main(): void {
+  let s: string = "hello";
+  s += ", ";
+  s += "world";
+  assert(s === "hello, world", "+= concatenates strings");
+
+  let t: string = "";
+  t += "a";
+  t += "";
+  t += "b";
+  assert(t === "ab", "empty rhs leaves slot unchanged");
+}

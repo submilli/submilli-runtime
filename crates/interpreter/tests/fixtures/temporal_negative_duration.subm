@@ -1,0 +1,6 @@
+function main(): void {
+  const d: Temporal.Duration = Temporal.Duration.from("-PT1H30M");
+  assert(d.hours === -1, "negative hours");
+  assert(d.minutes === -30, "negative minutes");
+  assert(d.total("seconds") === -5400, "total is negative");
+}

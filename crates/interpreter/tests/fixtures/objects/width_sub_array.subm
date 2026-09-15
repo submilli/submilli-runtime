@@ -1,0 +1,18 @@
+// — width subtyping flows through array element types.
+
+function sumA(arr: { a: number }[]): number {
+  let total = 0;
+  let i = 0;
+  while (i < arr.length) {
+    total = total + arr[i].a;
+    i = i + 1;
+  }
+  return total;
+}
+
+function main(): void {
+  const xs = [{ a: 1, b: 2 }, { a: 3, b: 4 }];
+  assert(sumA(xs) === 4, "width-sub on array element type");
+
+  assert(sumA([{ a: 10 }, { a: 20 }]) === 30, "exact-shape elements");
+}

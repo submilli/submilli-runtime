@@ -1,0 +1,5 @@
+import { v4 as makeId, validate } from "submilli:uuid";
+
+function main(): void {
+  assert(validate(makeId()), "aliased v4 generates a valid UUID");
+}

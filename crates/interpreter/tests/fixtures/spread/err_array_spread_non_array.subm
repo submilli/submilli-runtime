@@ -1,0 +1,4 @@
+// expect-error: expected an array to spread
+function main(): void {
+  const xs: number[] = [...5];
+}

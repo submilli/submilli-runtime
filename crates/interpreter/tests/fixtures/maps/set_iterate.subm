@@ -1,0 +1,27 @@
+// Iteration order is implementation-defined; only visit count and sum are asserted.
+
+function main(): void {
+  const s = new Set<number>();
+  s.add(10);
+  s.add(20);
+  s.add(30);
+  s.add(40);
+
+  let total: number = 0;
+  let visits: number = 0;
+  for (const x of s) {
+    total = total + x;
+    visits = visits + 1;
+  }
+  assert(visits === 4, "for-of visits each value once");
+  assert(total === 100, "values sum to 100");
+
+  let all: number[] = [];
+
+  for (const __all of s.values()) {
+
+    all.push(__all);
+
+  }
+  assert(all.length === 4, "values() returns 4-element array");
+}

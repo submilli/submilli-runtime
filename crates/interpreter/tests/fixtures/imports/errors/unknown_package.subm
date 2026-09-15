@@ -1,0 +1,4 @@
+// expect-error: package `submilli:does-not-exist` not found
+import { x } from "submilli:does-not-exist";
+
+function main(): void { }

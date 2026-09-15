@@ -1,0 +1,23 @@
+function main(): void {
+  const a: { age: number | null } = { age: 42 };
+  assert(a.age === 42, "nullable number-union equals literal");
+  assert(!(a.age === 7), "unequal numbers");
+  assert(a.age !== 7, "!== form, unequal");
+  assert(a.age !== null, "non-null !== null short-circuit still works");
+
+  const b: { age: number | null } = { age: null };
+  assert(!(b.age === 42), "null lhs vs number literal is unequal");
+  assert(b.age !== 42, "!== form, null vs number");
+
+  const o: { name: string } = { name: "Doron" };
+  const w: { name: string | null } = o;
+  assert(w.name === "Doron", "widened nullable-string equals literal");
+  assert(!(w.name === "Other"), "widened nullable-string unequal");
+
+  const c1: { name: string | null } = { name: "x" };
+  const c2: { name: string | null } = { name: "x" };
+  assert(c1.name === c2.name, "two nullable sides, both non-null, equal");
+  const c3: { name: string | null } = { name: null };
+  assert(!(c1.name === c3.name), "one nullable side null, other not");
+  assert(c1.name !== c3.name, "!== form, mixed null/non-null");
+}

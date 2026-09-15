@@ -1,0 +1,23 @@
+function pick(flag: boolean): string | number {
+  if (flag) {
+    return "hello";
+  }
+  return 42;
+}
+
+function main(): void {
+  const s: string = pick(true) as string;
+  assert(s === "hello", "matching member cast preserves the value");
+
+  let caught: string = "<none>";
+  try {
+    const n: number = pick(true) as number;
+    assert(false, "non-matching member cast should have thrown");
+  } catch (e: Error) {
+    caught = e.message;
+  }
+  assert(
+    caught === "type mismatch: expected number, got string",
+    "non-matching member produces the spec error format"
+  );
+}

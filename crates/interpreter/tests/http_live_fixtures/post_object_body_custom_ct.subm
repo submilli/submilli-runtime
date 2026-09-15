@@ -1,0 +1,14 @@
+// An object body with an explicit Content-Type: the shim must NOT override it
+// with the application/json default. /echo-json-custom-ct matches only on the
+// custom CT, so a 200 proves the user's header survived.
+
+import { post, Response, Headers } from "submilli:http";
+
+function main(): void {
+  const h: Headers = new Map<string, string>();
+  h.set("Content-Type", "application/vnd.api+json");
+  const r: Response = post("{{BASE}}/echo-json-custom-ct", { name: "alice" }, h);
+  assert(r.status === 200, "user Content-Type survived (not overridden)");
+  const parsed = r.json() as { name: string };
+  assert(parsed.name === "alice", "object body still serialized as JSON");
+}

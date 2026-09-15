@@ -1,0 +1,12 @@
+function f(obj: { foo: number | null }): number {
+  if (obj.foo === null) {
+    return 0;
+  } else {
+    return obj.foo + 1;
+  }
+}
+
+function main(): void {
+  assert(f({ foo: 4 }) === 5, "else-branch narrows field to number");
+  assert(f({ foo: null }) === 0, "then-branch (null) returns 0");
+}

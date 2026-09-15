@@ -1,0 +1,18 @@
+
+function loop_sum(s: string | null): number {
+  let total: number = 0;
+  while (s !== null) {
+    total = total + s.length;
+    if (s === "stop") {
+      return total;
+    }
+    s = null;
+  }
+  return total;
+}
+
+function main(): void {
+  assert(loop_sum("hello") === 5, "single pass: one body run");
+  assert(loop_sum("stop") === 4, "early-return on sentinel after summing");
+  assert(loop_sum(null) === 0, "null skips loop");
+}

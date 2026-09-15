@@ -1,0 +1,14 @@
+---
+source: crates/interpreter/tests/diagnostic_snapshots.rs
+expression: "render_inside_main(\"  let x: number;\")"
+---
+error: `let` declaration requires an initializer
+ --> test.subm:2:16
+  |
+1 | function main(): void {
+2 |   let x: number;
+  |                ^
+3 | }
+  |
+help: let x: T = expr;
+---

@@ -1,0 +1,17 @@
+function main(): void {
+  const m = new Map<string, number>();
+  m.set("a", 1);
+  m.set("b", 2);
+  m.set("c", 3);
+  m.set("d", 4);
+
+  let total: number = 0;
+  let visits: number = 0;
+  for (const [k, v] of m) {
+    total = total + v;
+    visits = visits + 1;
+    assert(k.length === 1, "every key is a single char");
+  }
+  assert(visits === 4, "for-of visits each entry once");
+  assert(total === 10, "values sum to 10 regardless of order");
+}

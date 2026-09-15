@@ -1,0 +1,7 @@
+// expect-error: backreferences (`\1`, `\2`, `\k<name>`) are not supported
+// expect-error: do the equality check in code after running `exec`
+
+function main(): void {
+  const r = /(a)\1/;
+  assert(r !== null, "never reached");
+}

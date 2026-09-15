@@ -1,0 +1,319 @@
+suite: statefulset
+templates:
+  - statefulset.yaml
+tests:
+  - it: hardens the pod and the container
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.securityContext.runAsUser
+          value: 65532
+      # Pod-level, and the reason a freshly provisioned volume is writable at
+      # all: a PV arrives root-owned and uid 65532 cannot create its own state
+      # directory.
+      - equal:
+          path: spec.template.spec.securityContext.fsGroup
+          value: 65532
+      - equal:
+          path: spec.template.spec.securityContext.seccompProfile.type
+          value: RuntimeDefault
+      # Container-level, not pod-level. Neither field is valid in a
+      # PodSecurityContext, so moving them up silently drops the hardening.
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+
+  - it: carries no ServiceAccount token
+    asserts:
+      # The single most valuable line in the chart: it removes the credential an
+      # arbitrary-file-read would otherwise exfiltrate. See SUB-699.
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+
+  - it: keeps mutable labels out of the immutable selector
+    asserts:
+      # `spec.selector.matchLabels` cannot be changed after creation. A version
+      # or chart label in here makes every appVersion bump fail `helm upgrade`
+      # with "field is immutable", recoverable only by deleting the StatefulSet.
+      - notExists:
+          path: spec.selector.matchLabels["app.kubernetes.io/version"]
+      - notExists:
+          path: spec.selector.matchLabels["helm.sh/chart"]
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/name"]
+          value: submilli
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/instance"]
+          value: RELEASE-NAME
+      # The pod template must still match the selector, or the StatefulSet
+      # manages nothing and reports zero ready replicas forever.
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/name"]
+          value: submilli
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/instance"]
+          value: RELEASE-NAME
+
+  - it: defends against the kubelet's service-link injection
+    asserts:
+      # A release named `submilli` creates a Service named `submilli`, and the
+      # kubelet then injects SUBMILLI_PORT=tcp://<clusterIP>:8128. The server
+      # reads SUBMILLI_PORT as an explicit config tier and fails boot when it is
+      # set but unparseable, so the pod exits at startup with a confusing parse
+      # error. Both guards are asserted because they fail in different
+      # directions if one is later removed.
+      - equal:
+          path: spec.template.spec.enableServiceLinks
+          value: false
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SUBMILLI_PORT
+            value: "8128"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SUBMILLI_BIND
+            value: 0.0.0.0
+
+  - it: gives the ephemeral VFS somewhere writable to live
+    asserts:
+      # SUBMILLI_HOME relocates five of the server's six state directories; the
+      # ephemeral VFS root is the sixth and still defaults to the OS temp dir.
+      # Under readOnlyRootFilesystem, omitting this breaks /v1/execute — the
+      # product — while /v1/status stays green.
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SUBMILLI_VFS_EPHEMERAL_DIR
+            value: /tmp
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: tmp
+            mountPath: /tmp
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: tmp
+            emptyDir: {}
+
+  - it: derives the memory limit from the execution cap
+    asserts:
+      # baselineMi(128) + headroomMultiplier(16) * maxMemoryMB(50)
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 928Mi
+      # Equal to the limit, so an OOMKill means the server exceeded its own
+      # budget rather than the node being oversubscribed.
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.memory
+          value: 928Mi
+      # A bare integer: the server rejects "50Mi" for this setting.
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SUBMILLI_MAX_EXECUTION_MEMORY
+            value: "50"
+
+  - it: keeps the memory limit and the execution cap in step when either moves
+    set:
+      execution.maxMemoryMB: 100
+      resources.baselineMi: 256
+    asserts:
+      # 256 + 16 * 100. The point of one knob rather than two numbers: raising
+      # the execution cap without raising the container limit — the classic way
+      # to turn a tunable into an OOMKill — is not expressible.
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 1856Mi
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SUBMILLI_MAX_EXECUTION_MEMORY
+            value: "100"
+
+  - it: sets no CPU limit by default
+    asserts:
+      # CFS quota throttling is enforced per 100ms period and punishes tail
+      # latency on a bursty request handler, while requests already give
+      # proportional share under contention. This also makes the pod Burstable
+      # rather than Guaranteed, which is deliberate.
+      - notExists:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 250m
+
+  - it: sets a CPU limit when the operator asks for one
+    set:
+      resources.cpuLimit: "2"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+          value: "2"
+
+  - it: leaves room for the drain to finish
+    set:
+      server.shutdownGrace: 30
+    asserts:
+      # The server's own budget plus the ~1.3s its runtime and telemetry
+      # teardown add. Undershooting SIGKILLs the drain partway through, which is
+      # the outcome shutdownGrace exists to avoid.
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 33
+
+  - it: is a workload kind that guarantees at most one pod on the volume
+    asserts:
+      # The load-bearing assertion in this file. A Deployment cannot make this
+      # guarantee: `strategy: Recreate` covers rollouts only, and on an
+      # eviction, drain, taint, or preemption the ReplicaSet controller starts
+      # the replacement while the old container is still running and still
+      # mounted, so both hold the volume at once. The stores take no lock, so
+      # that is silent corruption, not a deadlock.
+      - isKind:
+          of: StatefulSet
+
+  - it: updates in place without stranding the pod on an old image
+    asserts:
+      # At one ordinal RollingUpdate terminates before creating, which is what
+      # the Deployment needed `strategy: Recreate` to approximate. Pinned
+      # because the alternatives fail silently rather than loudly: OnDelete
+      # never updates the pod, and a partition of 1 reports a successful
+      # upgrade that changed nothing.
+      - equal:
+          path: spec.updateStrategy.type
+          value: RollingUpdate
+      - notExists:
+          path: spec.updateStrategy.rollingUpdate.partition
+      # Required by the apps/v1 schema through Kubernetes 1.32; the chart's floor
+      # is 1.25, so omitting it would be rejected there while passing here. It
+      # names the headless Service, not the client-facing one.
+      - equal:
+          path: spec.serviceName
+          value: RELEASE-NAME-submilli-headless
+
+  - it: probes over HTTP with a tolerant timeout
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /v1/status
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.path
+          value: /v1/status
+      # The default is 1s, which a loaded server can exceed while perfectly
+      # healthy — and a readiness flap pulls the pod out of the Service.
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.timeoutSeconds
+          value: 3
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.timeoutSeconds
+          value: 3
+
+  - it: does not mount a seed directory when no blueprints are configured
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SUBMILLI_BLUEPRINT_SEED_DIR
+            value: /etc/submilli/blueprints
+      - notExists:
+          path: spec.template.metadata.annotations["checksum/blueprints"]
+
+  - it: mounts a referenced Secret at the path blueprints must name
+    set:
+      secrets:
+        stripe:
+          secretName: stripe-credentials
+          key: api-key
+    asserts:
+      # This path is a contract between two separate values maps — a blueprint's
+      # `file:` source has to name the same place — not an implementation
+      # detail.
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: secret-stripe
+            mountPath: /etc/submilli/secrets/stripe
+            readOnly: true
+      # Projects only the named key, so the file lands at exactly
+      # <mountPath>/<key> and not under some other name.
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: secret-stripe
+            secret:
+              secretName: stripe-credentials
+              items:
+                - key: api-key
+                  path: api-key
+
+  - it: reads the secret-store key from a file, never the environment
+    set:
+      secretStore:
+        enabled: true
+        existingSecret: submilli-store-key
+        key: store-key
+    asserts:
+      # Environment is readable through /proc/self/environ, so the key itself
+      # must never be an env var — only the path to it.
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SUBMILLI_SECRET_STORE_KEY_FILE
+            value: /etc/submilli/secret-store/store-key
+
+  - it: defaults to a single server
+    asserts:
+      # Replicas are independent servers sharing nothing, so more than one is a
+      # deployment topology the client has to know about, not a scaling knob.
+      - equal:
+          path: spec.replicas
+          value: 1
+
+  - it: renders independent servers when asked for more than one
+    set:
+      replicaCount: 3
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 3
+      # Still one claim template — the controller renders it per ordinal, so
+      # each server gets its own volume rather than three sharing one.
+      - lengthEqual:
+          path: spec.volumeClaimTemplates
+          count: 1
+
+  - it: starts servers in parallel rather than waiting on each other
+    asserts:
+      # These share nothing, so a pod stuck pulling an image must not hold up its
+      # peers. It does not weaken at-most-one per ordinal — that comes from pod
+      # names being unique, not from ordering. Immutable after creation, so it
+      # cannot be added later without recreating the object.
+      - equal:
+          path: spec.podManagementPolicy
+          value: Parallel
+
+  - it: refuses secret material in values
+    set:
+      secrets:
+        stripe:
+          secretName: stripe-credentials
+          key: api-key
+          value: sk_live_actual_secret
+    asserts:
+      # Anything in values.yaml is stored in plaintext in the Helm release
+      # object and echoed by `helm get values`. The schema is what stops a
+      # well-meaning operator from putting a live key there.
+      - failedTemplate:
+          errorPattern: value

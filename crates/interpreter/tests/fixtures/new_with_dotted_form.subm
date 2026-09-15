@@ -1,0 +1,6 @@
+function main(): void {
+  const a: Uint8Array = new Uint8Array([1, 2, 3, 4]);
+  const b: Uint8Array = Uint8Array.new([1, 2, 3, 4]);
+  assert(a.equals(b), "both call shapes produce equal bytes");
+  assert(a.length === b.length, "lengths match");
+}

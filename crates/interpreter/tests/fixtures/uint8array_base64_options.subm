@@ -1,0 +1,27 @@
+function main(): void {
+  let bytes: Uint8Array = Uint8Array.new([255, 254, 253]);
+
+  assert(bytes.toBase64() === "//79", "default standard");
+
+  assert(bytes.toBase64({alphabet: "base64"}) === "//79", "explicit base64");
+
+  assert(bytes.toBase64({alphabet: "base64url"}) === "__79", "base64url");
+
+  let one: Uint8Array = Uint8Array.new([1]);
+  assert(one.toBase64() === "AQ==", "padded default");
+  assert(one.toBase64({omitPadding: true}) === "AQ", "omitPadding");
+
+  assert(bytes.toBase64({alphabet: "base64url", omitPadding: true}) === "__79", "combined options");
+
+  let encoded: string = bytes.toBase64({alphabet: "base64url"});
+  let decoded: Uint8Array = Uint8Array.fromBase64(encoded, {alphabet: "base64url"});
+  assert(decoded.equals(bytes), "round-trip base64url");
+
+  let padded_url: Uint8Array = Uint8Array.fromBase64("AQ==", {alphabet: "base64url"});
+  assert(padded_url.length === 1 && padded_url[0] === 1, "padded under base64url");
+
+  // Null options = defaults (smoke check — wrapping null shouldn't
+  // crash the field-getter dispatch).
+  assert(bytes.toBase64(null) === "//79", "null options → default");
+  assert(Uint8Array.fromBase64("//79", null).equals(bytes), "null options on decode");
+}

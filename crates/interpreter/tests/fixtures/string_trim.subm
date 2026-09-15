@@ -1,0 +1,14 @@
+function main(): void {
+  assert("  hello  ".trim() === "hello", "basic trim");
+  assert("hello".trim() === "hello", "no whitespace");
+  assert("   ".trim() === "", "all whitespace");
+  assert("".trim() === "", "empty trim");
+
+  // Tabs and newlines are whitespace too.
+  assert("\t\nhello\r\n".trim() === "hello", "control whitespace");
+
+  assert("  hello  ".trimStart() === "hello  ", "trimStart");
+  assert("  hello  ".trimEnd() === "  hello", "trimEnd");
+  assert("hello".trimStart() === "hello", "trimStart no-op");
+  assert("hello".trimEnd() === "hello", "trimEnd no-op");
+}

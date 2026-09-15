@@ -1,0 +1,15 @@
+// expect-error: no method `loog` on `Logger`
+// expect-error: did you mean `log`?
+// expect-error: interface Logger
+// expect-error: log(msg: string): void
+
+interface Logger { log(msg: string): void; }
+
+function makeLogger(): Logger {
+  return { log: (msg: string): void => {} };
+}
+
+function main(): void {
+  const logger: Logger = makeLogger();
+  logger.loog("hello");
+}

@@ -1,0 +1,6 @@
+# Multi-catch across the package boundary: each arm compares against its
+# imported vtable singleton, including a class used only in a later arm's
+# annotation.
+# name         dir    deps         root
+@test/errs     errs   -
+main           app    @test/errs   root

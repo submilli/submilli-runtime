@@ -1,0 +1,7 @@
+// expect-error: interface `Box` expects 1 type argument, got 2
+
+interface Box<T> {
+  value: T;
+}
+
+function main(b: Box<number, string> | null): void { }

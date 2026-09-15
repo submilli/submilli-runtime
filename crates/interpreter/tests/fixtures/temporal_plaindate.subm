@@ -1,0 +1,13 @@
+function main(): void {
+  const d = Temporal.PlainDate.from("2026-06-07");
+  assert(d.year === 2026, "year");
+  assert(d.month === 6, "month");
+  assert(d.day === 7, "day");
+  assert(d.dayOfWeek === 7, "2026-06-07 is a Sunday");
+  assert(d.toString() === "2026-06-07", "toString");
+
+  const same = Temporal.PlainDate.from("2026-06-07");
+  const other = Temporal.PlainDate.from("2026-06-08");
+  assert(d.equals(same), "equal dates");
+  assert(!d.equals(other), "unequal dates");
+}

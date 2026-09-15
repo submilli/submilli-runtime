@@ -1,0 +1,6 @@
+// expect-error: declares no `new` method
+
+function main(): void {
+  const bytes: Uint8Array = Uint8Array.alloc(4);
+  const bad = new bytes();
+}

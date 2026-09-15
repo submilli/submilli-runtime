@@ -1,0 +1,9 @@
+import { get, Response } from "submilli:http";
+
+function main(): void {
+  const r: Response = get("{{BASE}}/status/200");
+  const s: string = r.toString();
+  // ureq fills status_text from the canonical reason phrase; httpmock
+  // returns "OK" for 200 by default.
+  assert(s === "Response(200 OK, " + r.url + ")", s);
+}

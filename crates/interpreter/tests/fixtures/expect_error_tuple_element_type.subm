@@ -1,0 +1,4 @@
+// expect-error: expected `string`, got
+function main(): void {
+  const t: [string, number] = [1, 2];
+}

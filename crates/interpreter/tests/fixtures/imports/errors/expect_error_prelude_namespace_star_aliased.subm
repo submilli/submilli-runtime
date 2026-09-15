@@ -1,0 +1,8 @@
+// expect-error: `Temporal` is built in
+
+import * as T from "temporal";
+
+function main(): void {
+  const d = T.PlainDate.from("2026-06-07");
+  assert(d.year === 2026);
+}

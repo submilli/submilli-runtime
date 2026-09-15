@@ -1,0 +1,15 @@
+function isPresent(s: string | null): s is string {
+  return s !== null;
+}
+
+function lengthOr(v: string | null, fallback: number): number {
+  if (isPresent(v)) {
+    return v.length;
+  }
+  return fallback;
+}
+
+function main(): void {
+  assert(lengthOr("abc", 99) === 3, "guard strips null in then-branch");
+  assert(lengthOr(null, 99) === 99, "else-branch keeps null");
+}

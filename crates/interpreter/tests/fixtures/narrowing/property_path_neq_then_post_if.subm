@@ -1,0 +1,13 @@
+
+function f(obj: { foo: number | null }): number {
+  if (obj.foo === null) {
+    return 0;
+  }
+  return obj.foo + 1;
+}
+
+function main(): void {
+  assert(f({ foo: 4 }) === 5, "post-if narrowing on obj.foo holds");
+  assert(f({ foo: null }) === 0, "early-return branch unchanged");
+  assert(f({ foo: 0 }) === 1, "zero is non-null, narrowing applies");
+}

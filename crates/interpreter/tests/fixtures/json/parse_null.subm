@@ -1,0 +1,4 @@
+function main(): void {
+  const n = JSON.parse("null") as null;
+  assert(n === null, "parse null");
+}

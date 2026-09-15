@@ -1,0 +1,23 @@
+function area(
+  s: { kind: "circle"; radius: number }
+   | { kind: "rect"; width: number; height: number }
+   | number
+): number {
+  if (typeof s === "number") {
+    return s;
+  }
+  if (s.kind === "circle") {
+    return s.radius * s.radius * 3;
+  }
+  return s.width * s.height;
+}
+
+function main(): void {
+  assert(area(7) === 7, "number arm");
+
+  const c: { kind: "circle"; radius: number } = { kind: "circle", radius: 4 };
+  assert(area(c) === 48, "circle: r*r*3");
+
+  const r: { kind: "rect"; width: number; height: number } = { kind: "rect", width: 5, height: 6 };
+  assert(area(r) === 30, "rect: w*h");
+}

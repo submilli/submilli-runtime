@@ -1,0 +1,9 @@
+// expect-error: duplicate `case` label
+function main(): void {
+  let s: string = "a";
+  switch (s) {
+    case "a": break;
+    case "a": break;
+    default: break;
+  }
+}

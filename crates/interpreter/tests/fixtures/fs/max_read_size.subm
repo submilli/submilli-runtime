@@ -1,0 +1,6 @@
+import { maxReadSize } from "submilli:fs";
+
+function main(): void {
+  const cap: number = maxReadSize();
+  assert(cap === 52428800, "default cap is 50 MiB");
+}

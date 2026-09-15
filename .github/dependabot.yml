@@ -1,0 +1,16 @@
+version: 2
+
+# Scoped to Docker only, on purpose. The runtime image pins its base by digest
+# rather than by the floating `:nonroot` tag, which is what makes a release
+# reproducible — and also what makes the pin rot silently once upstream ships
+# security fixes. Dependabot is what keeps it current.
+#
+# Cargo and npm are deliberately not enrolled here; enrolling them is a separate
+# decision about PR volume on a repo whose CI does not currently run on PRs.
+updates:
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "chore(docker)"

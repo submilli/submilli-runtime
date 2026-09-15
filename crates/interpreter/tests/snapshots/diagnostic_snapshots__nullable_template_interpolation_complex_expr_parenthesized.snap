@@ -1,0 +1,17 @@
+---
+source: crates/interpreter/tests/diagnostic_snapshots.rs
+expression: render_all(source)
+---
+error: template-literal interpolation: receiver `string | null` may be `null`; narrow to a non-null type first
+ --> test.subm:2:18
+  |
+1 | function fmt(a: string | null, b: string | null): string {
+2 |   return `got: ${a ?? b}`;
+  |                  ^^^^^^
+3 | }
+  |
+help: use a non-null value:
+  `${(a ?? b)!}` — assert non-null (throws `Error` at runtime if null)
+  `${(a ?? b) ?? "fallback"}` — provide a fallback
+  or narrow first: `if ((a ?? b) !== null) { … }`
+---

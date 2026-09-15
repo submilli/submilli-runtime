@@ -1,0 +1,15 @@
+function is_obj<T>(x: T): boolean {
+  return typeof x === "object";
+}
+
+function main(): void {
+  assert(is_obj<{ a: number }>({ a: 1 }), "user object classifies as object");
+  assert(is_obj<{ x: number, y: number }>({ x: 0, y: 0 }), "2-arity object too");
+
+  assert(is_obj<number[]>([1, 2, 3]), "number array classifies as object");
+  assert(is_obj<string[]>(["a"]), "string array classifies as object");
+
+  assert(!is_obj<number>(42), "number is not an object");
+  assert(!is_obj<string>("hello"), "string is not an object");
+  assert(!is_obj<boolean>(true), "boolean is not an object");
+}

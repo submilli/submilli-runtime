@@ -1,0 +1,20 @@
+function main(): void {
+  let double = (x: number): number => x * 2;
+  let isEven = (x: number): boolean => x % 2 === 0;
+
+  let nums: number[] = [1, 2, 3, 4];
+
+  let doubled = nums.map(double);
+  assert(doubled.length === 4, "map via var preserves length");
+  assert(
+    doubled[0] === 2 && doubled[1] === 4 && doubled[2] === 6 && doubled[3] === 8,
+    "doubled via var"
+  );
+
+  let evens = nums.filter(isEven);
+  assert(evens.length === 2, "filter via var gets evens");
+  assert(evens[0] === 2 && evens[1] === 4, "filter values");
+
+  let doubled_again = nums.map(double);
+  assert(doubled_again.length === 4, "map reusing closure var");
+}

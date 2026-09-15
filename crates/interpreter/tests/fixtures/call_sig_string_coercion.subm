@@ -1,0 +1,10 @@
+function main(): void {
+  assert(String(42) === "42", "String(number)");
+  assert(String(0) === "0", "String(0)");
+  assert(String(true) === "true", "String(true)");
+  assert(String(false) === "false", "String(false)");
+  assert(String("hello") === "hello", "String(string) is identity");
+  assert(String(-42n) === "-42", "String(bigint)");
+  let arr: number[] = [1, 2, 3];
+  assert(String(arr) === "1,2,3", "String(array)");
+}

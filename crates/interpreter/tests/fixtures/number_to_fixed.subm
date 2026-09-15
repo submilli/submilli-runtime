@@ -1,0 +1,17 @@
+function main(): void {
+  assert((3.14159).toFixed(2) === "3.14", "rounds to two places");
+  assert((1.005).toFixed(2) === "1.00", "binary value rounds down");
+  assert((42).toFixed(0) === "42", "zero digits drops the point");
+  assert((42).toFixed() === "42", "digits defaults to 0");
+  assert((1.5).toFixed(3) === "1.500", "pads with zeros");
+  assert((-2.7).toFixed(0) === "-3", "negative rounds away");
+  assert((0 / 0).toFixed(2) === "NaN", "NaN formats as NaN");
+
+  let threw: boolean = false;
+  try {
+    (1).toFixed(101);
+  } catch (e: Error) {
+    threw = true;
+  }
+  assert(threw, "digits above 100 throws");
+}

@@ -1,0 +1,4 @@
+// expect-error: bigint literal cannot have a fractional or exponent part
+function main(): void {
+  let _: bigint = 3.14n;
+}

@@ -1,0 +1,10 @@
+
+function main(): void {
+  const e = new Error("something broke");
+  assert(e.message === "something broke", "message field round-trips");
+  assert(e.name === "Error", "name defaults to \"Error\"");
+
+  const empty = new Error("");
+  assert(empty.message === "", "empty message round-trips");
+  assert(empty.name === "Error", "name is constant across instances");
+}

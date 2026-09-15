@@ -1,0 +1,70 @@
+interface LinearIssue {
+  id: string;
+  title: string;
+  state: string;
+}
+
+interface LinearIssueWithIdentifier {
+  completedAt: string | null;
+  createdAt: string;
+  id: string;
+  identifier: string;
+  state: string;
+  title: string;
+}
+
+interface ListIssuesResponse {
+  hasNextPage: boolean;
+  issues: LinearIssue[];
+}
+
+interface ListNodesResponse {
+  hasNextPage: boolean;
+  nodes: LinearIssue[];
+}
+
+function expectMessage(thunk: () => void): string {
+  try {
+    thunk();
+  } catch (e: Error) {
+    return e.message;
+  }
+  assert(false, "expected JSON.parse(... ) as T to throw");
+  return "";
+}
+
+function main(): void {
+  const objectAsArray = expectMessage((): void => {
+    const issues = JSON.parse("{\"hasNextPage\":false,\"issues\":[]}") as LinearIssue[];
+  });
+  assert(objectAsArray === "type mismatch: expected LinearIssue[], got object", objectAsArray);
+
+  const nestedMissing = expectMessage((): void => {
+    const response = JSON.parse(
+      "{\"hasNextPage\":false,\"issues\":[{\"id\":\"SUB-1\",\"title\":\"x\",\"status\":\"Done\",\"statusType\":\"completed\"}]}"
+    ) as ListIssuesResponse;
+  });
+  assert(nestedMissing === "type mismatch: expected ListIssuesResponse, got object", nestedMissing);
+
+  const multiMissingRoot = expectMessage((): void => {
+    const issue = JSON.parse(
+      "{\"completedAt\":null,\"createdAt\":\"2026-06-09\",\"id\":\"SUB-1\",\"status\":\"Done\",\"statusType\":\"completed\",\"title\":\"x\"}"
+    ) as LinearIssueWithIdentifier;
+  });
+  assert(
+    multiMissingRoot === "type mismatch: expected LinearIssueWithIdentifier, got object",
+    multiMissingRoot
+  );
+
+  const shapeRename = expectMessage((): void => {
+    const response = JSON.parse(
+      "{\"hasNextPage\":false,\"issues\":[]}"
+    ) as ListNodesResponse;
+  });
+  assert(shapeRename === "type mismatch: expected ListNodesResponse, got object", shapeRename);
+
+  const indexed = expectMessage((): void => {
+    const nums = JSON.parse("[1,\"two\",3]") as number[];
+  });
+  assert(indexed === "type mismatch: expected number[], got object", indexed);
+}

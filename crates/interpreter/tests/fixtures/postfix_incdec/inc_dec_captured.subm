@@ -1,0 +1,12 @@
+// postfix increment on a captured-and-boxed local.
+
+function main(): void {
+  let n: number = 0;
+  let bump = (): void => {
+    n++;
+  };
+  bump();
+  bump();
+  bump();
+  assert(n === 3, "captured local incremented through box");
+}

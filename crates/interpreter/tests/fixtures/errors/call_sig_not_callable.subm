@@ -1,0 +1,11 @@
+// expect-error: cannot call value of type `Plain`
+
+interface Plain {
+  greet(): string;
+}
+
+function take(p: Plain): void {
+  p();
+}
+
+function main(): void { }

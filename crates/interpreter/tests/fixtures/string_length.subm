@@ -1,0 +1,6 @@
+function main(): void {
+  assert("hello".length === 5, "hello length");
+  assert("".length === 0, "empty string length");
+  let s: string = "world!";
+  assert(s.length === 6, "bound string length");
+}

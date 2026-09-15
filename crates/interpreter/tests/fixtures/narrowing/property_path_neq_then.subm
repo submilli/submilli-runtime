@@ -1,0 +1,12 @@
+function f(obj: { foo: number | null }): number {
+  if (obj.foo !== null) {
+    return obj.foo + 1;
+  }
+  return 0;
+}
+
+function main(): void {
+  assert(f({ foo: 4 }) === 5, "non-null field reads narrowed shadow");
+  assert(f({ foo: null }) === 0, "else branch returns 0");
+  assert(f({ foo: 0 }) === 1, "zero is non-null, still narrowed");
+}

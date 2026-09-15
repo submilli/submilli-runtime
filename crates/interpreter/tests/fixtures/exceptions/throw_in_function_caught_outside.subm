@@ -1,0 +1,13 @@
+function inner(): void {
+  throw new Error("from inner");
+}
+
+function main(): void {
+  let msg: string = "<none>";
+  try {
+    inner();
+  } catch (e: Error) {
+    msg = e.message;
+  }
+  assert(msg === "from inner", "throw propagates across function boundary");
+}

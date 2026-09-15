@@ -1,0 +1,5 @@
+// expect-error: cannot call `push` on tuple
+function main(): void {
+  const pair: [number, string] = [42, "hello"];
+  pair.push(1);
+}

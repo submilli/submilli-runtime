@@ -1,0 +1,8 @@
+function add({ a, b }: { a: number; b: number }): number {
+  return a + b;
+}
+
+function main(): void {
+  const r: number = add({ a: 3, b: 4 });
+  assert(r === 7, "destructured params bind correctly");
+}

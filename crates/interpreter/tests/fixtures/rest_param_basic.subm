@@ -1,0 +1,16 @@
+function sum(...nums: number[]): number {
+  let total = 0;
+  let i = 0;
+  while (i < nums.length) {
+    total = total + nums[i];
+    i = i + 1;
+  }
+  return total;
+}
+
+function main(): void {
+  assert(sum() === 0, "empty rest packs an empty $Array");
+  assert(sum(1) === 1, "one-arg rest");
+  assert(sum(1, 2, 3) === 6, "three-arg rest");
+  assert(sum(10, 20, 30, 40) === 100, "four-arg rest");
+}

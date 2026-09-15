@@ -1,0 +1,17 @@
+import { writer, readText, exists, FileWriter } from "submilli:fs";
+
+function main(): void {
+  const w: FileWriter = writer("/output.txt");
+  w.writeLine("alpha");
+  w.writeLine("beta");
+  w.writeLine("gamma");
+  w.close();
+
+  assert(exists("/output.txt"), "writer output exists after close");
+  const back: string | null = readText("/output.txt");
+  if (back === null) {
+    assert(false, "readText returned null");
+    return;
+  }
+  assert(back === "alpha\nbeta\ngamma\n", "writer preserved order with LF");
+}

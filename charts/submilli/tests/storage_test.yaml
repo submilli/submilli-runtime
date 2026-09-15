@@ -1,0 +1,117 @@
+suite: storage
+templates:
+  - statefulset.yaml
+tests:
+  - it: gives every server its own claim
+    asserts:
+      # One template, rendered per ordinal by the controller as
+      # `state-<fullname>-<n>`. A single shared claim would make replicas
+      # concurrent writers over one dataset rather than independent servers.
+      - lengthEqual:
+          path: spec.volumeClaimTemplates
+          count: 1
+      - equal:
+          path: spec.volumeClaimTemplates[0].metadata.name
+          value: state
+      # Must match the container's mountPath name, or the pod references a
+      # volume that does not exist and never schedules.
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[0].name
+          value: state
+
+  - it: keeps volumes when the release is uninstalled and when it scales down
+    asserts:
+      # whenDeleted is what survives `helm uninstall` — the volume holds
+      # blueprints registered through the API, sessions, packages, and secrets,
+      # and losing it to a reinstall is not recoverable. whenScaled matters
+      # because scaling down is how a server is taken out of rotation; its state
+      # should still be there when it comes back.
+      - equal:
+          path: spec.persistentVolumeClaimRetentionPolicy.whenDeleted
+          value: Retain
+      - equal:
+          path: spec.persistentVolumeClaimRetentionPolicy.whenScaled
+          value: Retain
+
+  - it: defaults to the access mode the cluster itself enforces
+    asserts:
+      # ReadWriteOnce bounds a volume to one *node*, so several pods landing
+      # there could mount it at once. Only ReadWriteOncePod makes the scheduler
+      # refuse a second mounter — the one guard that still holds against a pod
+      # this chart did not create.
+      - equal:
+          path: spec.volumeClaimTemplates[0].spec.accessModes[0]
+          value: ReadWriteOncePod
+
+  - it: wires size, storageClass, and accessMode through
+    set:
+      persistence:
+        size: 25Gi
+        storageClass: fast-ssd
+        # Deliberately the non-default: asserting the default value here would
+        # pass just as well against a template that ignored the setting.
+        accessMode: ReadWriteOnce
+    asserts:
+      - equal:
+          path: spec.volumeClaimTemplates[0].spec.resources.requests.storage
+          value: 25Gi
+      - equal:
+          path: spec.volumeClaimTemplates[0].spec.storageClassName
+          value: fast-ssd
+      - equal:
+          path: spec.volumeClaimTemplates[0].spec.accessModes[0]
+          value: ReadWriteOnce
+
+  - it: omits storageClassName entirely when unset, rather than sending an empty string
+    asserts:
+      # `storageClassName: ""` is not "use the default" — it means "no
+      # StorageClass", which disables dynamic provisioning and leaves every
+      # claim pending forever.
+      - notExists:
+          path: spec.volumeClaimTemplates[0].spec.storageClassName
+
+  - it: falls back to an emptyDir rather than a dangling claim when persistence is off
+    set:
+      persistence.enabled: false
+    asserts:
+      # The failure this guards: a pod referencing a claim the chart never
+      # rendered, which schedules and then hangs unschedulable forever.
+      - notExists:
+          path: spec.volumeClaimTemplates
+      - equal:
+          path: spec.template.spec.volumes[0].name
+          value: state
+      - exists:
+          path: spec.template.spec.volumes[0].emptyDir
+      # Retention policy is meaningless with no claims to retain, and naming a
+      # policy for volumes that do not exist reads as though state survives.
+      - notExists:
+          path: spec.persistentVolumeClaimRetentionPolicy
+
+  - it: rejects the removed existingClaim key rather than ignoring it
+    set:
+      persistence:
+        existingClaim: my-claim
+    asserts:
+      # Claims come from volumeClaimTemplates now, so there is nothing for this
+      # to point at. It was a real key in an earlier revision of this chart, so
+      # an override carried forward from then must fail loudly instead of being
+      # silently dropped — which is what `additionalProperties: false` buys, and
+      # what this pins.
+      - failedTemplate:
+          errorPattern: existingClaim
+
+  - it: keeps mutable labels out of the immutable claim template
+    asserts:
+      # volumeClaimTemplates cannot be changed after creation, so a label that
+      # moves with the chart or app version makes the next `helm upgrade` fail
+      # with "updates to statefulset spec for fields other than ... are
+      # forbidden" — for every existing install, on every release. Same hazard
+      # as spec.selector, one field over.
+      - notExists:
+          path: spec.volumeClaimTemplates[0].metadata.labels["helm.sh/chart"]
+      - notExists:
+          path: spec.volumeClaimTemplates[0].metadata.labels["app.kubernetes.io/version"]
+      - equal:
+          path: spec.volumeClaimTemplates[0].metadata.labels["app.kubernetes.io/name"]
+          value: submilli

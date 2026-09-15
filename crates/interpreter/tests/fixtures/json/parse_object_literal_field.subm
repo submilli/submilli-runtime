@@ -1,0 +1,6 @@
+
+function main(): void {
+  const o = JSON.parse("{\"kind\":\"ok\",\"data\":\"x\"}") as { kind: "ok", data: string };
+  assert(o.kind === "ok", "kind literal matched");
+  assert(o.data === "x", "data string carried through");
+}

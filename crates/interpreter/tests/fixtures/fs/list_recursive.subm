@@ -1,0 +1,20 @@
+import { mkdir, writeText, list, DirEntry } from "submilli:fs";
+
+function main(): void {
+  mkdir("/tree/sub", true);
+  writeText("/tree/a.txt", "alpha");
+  writeText("/tree/sub/b.txt", "bravo");
+
+  let fileCount: number = 0;
+  let dirCount: number = 0;
+  for (const entry of list("/tree", true)) {
+    if (entry.kind === "file") {
+      fileCount = fileCount + 1;
+    } else if (entry.kind === "directory") {
+      dirCount = dirCount + 1;
+    }
+  }
+
+  assert(fileCount === 2, "recursive walk yields both files");
+  assert(dirCount === 1, "recursive walk yields the sub directory");
+}

@@ -1,0 +1,27 @@
+// `typeof` narrowing sees through a type alias to its underlying union — an
+// aliased union narrows exactly like the inline spelling.
+type NS = number | string;
+
+function classify(x: NS): number {
+  if (typeof x === "number") {
+    return x + 1;
+  }
+  return x.length;
+}
+
+// Second site: `typeof === "function"` over an aliased union.
+type NumOrFn = number | (v: number) => number;
+
+function apply(x: NumOrFn): number {
+  if (typeof x === "function") {
+    return x(10);
+  }
+  return x;
+}
+
+function main(): void {
+  assert(classify(5) === 6, "number arm: x + 1");
+  assert(classify("hello") === 5, "string arm: x.length");
+  assert(apply(7) === 7, "number arm of NumOrFn");
+  assert(apply(d => d * 2) === 20, "function arm of NumOrFn");
+}

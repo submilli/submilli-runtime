@@ -1,0 +1,27 @@
+function main(): void {
+  let x: number = 5;
+
+  x += 3;
+  assert(x === 8, "+= adds");
+
+  x -= 2;
+  assert(x === 6, "-= subtracts");
+
+  x *= 4;
+  assert(x === 24, "*= multiplies");
+
+  x /= 2;
+  assert(x === 12, "/= divides");
+
+  x %= 5;
+  assert(x === 2, "%= takes remainder");
+
+  x **= 3;
+  assert(x === 8, "**= exponentiates");
+
+  let y: number = 1;
+  y += 2;
+  y += 3;
+  y += 4;
+  assert(y === 10, "consecutive += accumulate");
+}

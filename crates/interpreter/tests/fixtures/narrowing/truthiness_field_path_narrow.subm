@@ -1,0 +1,53 @@
+// Truthiness narrowing on a field-access path (`if (o.c)` / `o.c && …`), the
+// non-comparison counterpart to `o.c !== null`. Covers a `string | null` field,
+// an object-`| null` field, a nested `a.b.c` path, and the `&&` short-circuit
+// form whose RHS reads the narrowed field.
+
+function field_if(o: { c: string | null }): string {
+  if (o.c) {
+    return o.c.substring(0, 1);
+  }
+  return "none";
+}
+
+function field_and(o: { c: string | null }): number {
+  if (o.c && o.c.substring(0, 1) === "h") {
+    return o.c.length;
+  }
+  return -1;
+}
+
+function object_field_if(o: { inner: { n: number } | null }): number {
+  if (o.inner) {
+    return o.inner.n;
+  }
+  return -1;
+}
+
+function object_field_and(o: { inner: { n: number } | null }): number {
+  return o.inner && o.inner.n > 0 ? o.inner.n : -1;
+}
+
+function nested_path_if(o: { a: { b: string | null } }): string {
+  if (o.a.b) {
+    return o.a.b.substring(0, 2);
+  }
+  return "none";
+}
+
+function main(): void {
+  assert(field_if({ c: "hi" }) === "h", "if-truthiness narrows string field");
+  assert(field_if({ c: null }) === "none", "null field falls through");
+
+  assert(field_and({ c: "hello" }) === 5, "&& narrows the RHS field read");
+  assert(field_and({ c: null }) === -1, "&& short-circuits on null field");
+
+  assert(object_field_if({ inner: { n: 7 } }) === 7, "if-truthiness narrows object field");
+  assert(object_field_if({ inner: null }) === -1, "null object field falls through");
+
+  assert(object_field_and({ inner: { n: 42 } }) === 42, "&& narrows object field RHS");
+  assert(object_field_and({ inner: null }) === -1, "&& short-circuits on null object field");
+
+  assert(nested_path_if({ a: { b: "deep" } }) === "de", "nested a.b.c narrows under truthiness");
+  assert(nested_path_if({ a: { b: null } }) === "none", "nested null falls through");
+}

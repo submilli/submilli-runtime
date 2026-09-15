@@ -1,0 +1,91 @@
+namespace: submilli
+provides:
+- name: submilli/gmail.createDraft
+  description: Create a draft from structured headers, bodies, and VFS attachments.
+  fields:
+    recipients:
+      type: string[]
+- name: submilli/gmail.createLabel
+  description: Create a visible user label.
+  fields:
+    name:
+      type: string
+- name: submilli/gmail.createReplyDraft
+  description: Create a draft reply after resolving recipients and threading headers.
+  fields:
+    recipients:
+      type: string[]
+- name: submilli/gmail.deleteDraft
+  description: Permanently delete a draft. Missing drafts are treated as already deleted.
+  fields: {}
+- name: submilli/gmail.downloadAttachment
+  description: Decode one Gmail attachment into the VFS.
+  fields:
+    path:
+      type: string
+- name: submilli/gmail.getDraft
+  description: Fetch one draft, returning null when absent.
+  fields: {}
+- name: submilli/gmail.getMessage
+  description: Fetch and normalize one Gmail message, returning null when absent.
+  fields: {}
+- name: submilli/gmail.getProfile
+  description: Return the authenticated Gmail profile.
+  fields: {}
+- name: submilli/gmail.getThread
+  description: Fetch and normalize one Gmail thread, returning null when absent.
+  fields: {}
+- name: submilli/gmail.listDrafts
+  description: List one page of drafts.
+  fields: {}
+- name: submilli/gmail.listLabels
+  description: List Gmail system and user labels.
+  fields: {}
+- name: submilli/gmail.modifyMessageLabels
+  description: Add and remove labels from one message.
+  fields: {}
+- name: submilli/gmail.modifyThreadLabels
+  description: Add and remove labels from every message in a thread.
+  fields: {}
+- name: submilli/gmail.reply
+  description: Reply to a message after resolving reply or reply-all recipients.
+  fields:
+    recipients:
+      type: string[]
+- name: submilli/gmail.searchThreads
+  description: Search Gmail threads using Gmail's query syntax.
+  fields: {}
+- name: submilli/gmail.sendDraft
+  description: Send an existing draft.
+  fields: {}
+- name: submilli/gmail.sendEmail
+  description: Send a new email.
+  fields:
+    recipients:
+      type: string[]
+- name: submilli/gmail.triage
+  description: Return a bounded page of unread inbox threads.
+  fields: {}
+requires:
+- capability: fs.read
+  filter: op == "read"
+- capability: fs.stat
+  filter: op == "stat"
+- capability: fs.write
+  filter: op == "write"
+- capability: http.delete
+  filter: host == "gmail.googleapis.com" and method == "DELETE"
+- capability: http.get
+  filter: host == "gmail.googleapis.com" and method == "GET"
+- capability: http.post
+  filter: host == "gmail.googleapis.com" and method == "POST"
+- capability: http.post
+  filter: host == "gmail.googleapis.com" and path == "/gmail/v1/users/me/drafts" and method == "POST"
+- capability: http.post
+  filter: host == "gmail.googleapis.com" and path == "/gmail/v1/users/me/drafts/send" and method == "POST"
+- capability: http.post
+  filter: host == "gmail.googleapis.com" and path == "/gmail/v1/users/me/labels" and method == "POST"
+- capability: http.post
+  filter: host == "gmail.googleapis.com" and path == "/gmail/v1/users/me/messages/send" and method == "POST"
+- capability: secrets.get
+  filter: name == "GOOGLE_ACCESS_TOKEN"

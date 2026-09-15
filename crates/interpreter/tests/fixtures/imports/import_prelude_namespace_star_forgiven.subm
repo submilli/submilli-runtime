@@ -1,0 +1,6 @@
+import * as Temporal from "temporal";
+
+function main(): void {
+  const d = Temporal.PlainDate.from("2026-06-07");
+  assert(d.month === 6);
+}

@@ -1,0 +1,9 @@
+function main(): void {
+  const n: number = 1;
+  assert(`n=${n}` === "n=1", "number interpolation");
+
+  const m: number = 42;
+  assert(`m=${m}!` === "m=42!", "trailing literal");
+
+  assert(`${n}+${m}` === "1+42", "two interpolations, no head/tail");
+}

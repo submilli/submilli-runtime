@@ -1,0 +1,14 @@
+// expect-error: type-guard return value does not narrow parameter
+
+type Circle = { kind: "circle"; radius: number };
+type Rectangle = { kind: "rect"; height: number; width: number };
+type Shape = Circle | Rectangle;
+
+function isCircle(s: Shape): s is Circle {
+  return true;
+}
+
+function main(): void {
+  const c: Circle = { kind: "circle", radius: 1 };
+  isCircle(c);
+}

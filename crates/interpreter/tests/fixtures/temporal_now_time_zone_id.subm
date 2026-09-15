@@ -1,0 +1,7 @@
+// Non-deterministic (reads the system tz); we only check shape, not
+// the specific value.
+
+function main(): void {
+  const tz: string = Temporal.Now.timeZoneId();
+  assert(tz.length > 0, "Now.timeZoneId() returns a non-empty IANA id");
+}

@@ -1,0 +1,6 @@
+function main(): void {
+  const arr: number[] = [10, 20];
+  const [x, y] = arr;
+  assert(x === 10, "x is 10");
+  assert(y === 20, "y is 20");
+}

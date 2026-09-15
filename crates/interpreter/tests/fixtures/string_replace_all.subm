@@ -1,0 +1,33 @@
+function main(): void {
+  assert("a-b-c".replaceAll("-", "/") === "a/b/c", "basic replaceAll");
+  assert("abc".replaceAll("x", "Y") === "abc", "no match");
+
+  // Empty `search` inserts `replacement` between every code unit
+  // (including leading and trailing positions). JS-faithful.
+  assert("abc".replaceAll("", "X") === "XaXbXcX", "empty search expansion");
+  assert("".replaceAll("", "X") === "X", "empty input + empty search");
+
+  // Non-overlapping advance: after each match, position advances by
+  // `search.length`, not by `replacement.length`. `"aaa".replaceAll(
+  // "aa", "b")` matches at position 0 (consuming "aa"), then resumes
+  // at position 2, finding only "a". So the result is `"ba"`, NOT
+  // `"bb"` (which would suggest re-scanning the replacement).
+  assert("aaa".replaceAll("aa", "b") === "ba", "non-overlapping advance");
+
+  assert("xxxx".replaceAll("x", "ab") === "abababab", "char repeated");
+
+  assert("a.b.c".replaceAll(".", "$$") === "a$b$c", "$$ across all matches");
+  assert("axbxc".replaceAll("x", "[$&]") === "a[x]b[x]c", "$& across matches");
+  // `` $` `` is the prefix at THIS match (everything before the
+  // current match position), not the original prefix.
+  assert("axbxc".replaceAll("x", "[$`]") === "a[a]b[axb]c", "$` per-match prefix");
+  // `$'` is the suffix at THIS match (everything after the matched
+  // substring in the ORIGINAL input).
+  assert("axbxc".replaceAll("x", "[$']") === "a[bxc]b[c]c", "$' per-match suffix");
+
+  const search: string | RegExp = "x";
+  assert(
+    "axbxc".replaceAll(search, "Y") === "aYbYc",
+    "narrowed union — string-arm replaceAll"
+  );
+}

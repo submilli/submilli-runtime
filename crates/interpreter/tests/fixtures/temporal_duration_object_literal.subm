@@ -1,0 +1,24 @@
+// `new Temporal.Duration({...})` — the object-literal constructor.
+
+function main(): void {
+  const d: Temporal.Duration = new Temporal.Duration({ hours: 1, minutes: 30 });
+  assert(d.hours === 1, "hours from literal");
+  assert(d.minutes === 30, "minutes from literal");
+  assert(d.seconds === 0, "missing field defaults to 0");
+  assert(d.toString() === "PT1H30M", "ISO format from literal");
+
+  const big: Temporal.Duration = new Temporal.Duration({
+    years: 1,
+    months: 2,
+    weeks: 3,
+    days: 4,
+    hours: 5,
+    minutes: 6,
+    seconds: 7,
+    milliseconds: 8,
+    microseconds: 9,
+    nanoseconds: 10,
+  });
+  assert(big.years === 1, "years");
+  assert(big.nanoseconds === 10, "nanoseconds");
+}

@@ -1,0 +1,53 @@
+[package]
+name = "submilli-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "submilli-server"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+interpreter = { path = "../interpreter" }
+submilli-blueprint = { path = "../submilli-blueprint" }
+submilli-build = { path = "../submilli-build" }
+submilli-shared = { path = "../submilli-shared" }
+wasmtime = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+
+axum = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_yml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+sha2 = "0.10"
+sentry = { workspace = true }
+url = { workspace = true }
+ipnet = { workspace = true }
+rmcp = { workspace = true }
+tower = { workspace = true, features = ["util"] }
+futures = { workspace = true }
+ureq = { workspace = true }
+
+[dev-dependencies]
+async-trait = { workspace = true }
+http-body-util = { workspace = true }
+submilli-blueprint = { path = "../submilli-blueprint" }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
+libc = { workspace = true }

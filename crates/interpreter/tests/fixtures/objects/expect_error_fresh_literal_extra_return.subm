@@ -1,0 +1,11 @@
+// expect-error: object literal has unknown field `extra` for the target type
+// expect-error: valid fields: `a`
+// expect-error: remove `extra` or rename it to a valid field
+
+function f(): { a: number } {
+  return { a: 1, extra: 2 };
+}
+
+function main(): void {
+  const _x = f();
+}

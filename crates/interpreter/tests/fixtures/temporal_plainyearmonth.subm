@@ -1,0 +1,9 @@
+function main(): void {
+  const ym = Temporal.PlainYearMonth.from("2026-06");
+  assert(ym.year === 2026, "year");
+  assert(ym.month === 6, "month");
+  assert(ym.toString() === "2026-06", "toString");
+
+  assert(ym.equals(Temporal.PlainYearMonth.from("2026-06")), "equal");
+  assert(!ym.equals(Temporal.PlainYearMonth.from("2026-07")), "unequal");
+}

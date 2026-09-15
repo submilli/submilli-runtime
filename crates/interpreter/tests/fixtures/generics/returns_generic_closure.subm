@@ -1,0 +1,9 @@
+function createCls<T>(x: T): () => T {
+  return () => x;
+}
+
+function main(): void {
+  const f = createCls(5);
+  const x = f();
+  assert(x === 5, "expected x to be 5");
+}

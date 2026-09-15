@@ -1,0 +1,4 @@
+// expect-error: `import` statements must appear at the top of the file
+function main(): void {
+  import { v4 } from "submilli:uuid";
+}

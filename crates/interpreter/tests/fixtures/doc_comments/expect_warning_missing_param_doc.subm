@@ -1,0 +1,14 @@
+// expect-warning: parameter `name` is undocumented
+import { check } from "submilli:security";
+
+/**
+ * Reads a named value.
+ * @capability x/op { name }
+ */
+function readNamed(name: string): void {
+  check("x/op", { name });
+}
+
+function main(): void {
+  readNamed("TOKEN");
+}

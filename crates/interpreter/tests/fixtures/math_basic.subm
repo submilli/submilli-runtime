@@ -1,0 +1,42 @@
+function main(): void {
+  assert(Math.abs(-3.5) === 3.5, "Math.abs(-3.5)");
+  assert(Math.abs(3.5) === 3.5, "Math.abs(3.5)");
+  assert(Math.ceil(1.2) === 2, "Math.ceil(1.2)");
+  assert(Math.ceil(-1.2) === -1, "Math.ceil(-1.2)");
+  assert(Math.floor(1.8) === 1, "Math.floor(1.8)");
+  assert(Math.floor(-1.2) === -2, "Math.floor(-1.2)");
+  assert(Math.trunc(1.8) === 1, "Math.trunc(1.8)");
+  assert(Math.trunc(-1.8) === -1, "Math.trunc(-1.8)");
+  assert(Math.sqrt(9) === 3, "Math.sqrt(9)");
+  assert(Math.sqrt(0) === 0, "Math.sqrt(0)");
+
+  assert(Math.round(0.5) === 1, "Math.round(0.5) === 1 (JS ties toward +∞)");
+  assert(Math.round(1.5) === 2, "Math.round(1.5)");
+  assert(Math.round(-0.5) === 0, "Math.round(-0.5)");
+  assert(Math.round(-1.5) === -1, "Math.round(-1.5) (toward +∞ for ties)");
+  assert(Math.round(2.4) === 2, "Math.round(2.4)");
+  assert(Math.round(-2.6) === -3, "Math.round(-2.6)");
+
+  assert(Math.sign(5) === 1, "Math.sign(5)");
+  assert(Math.sign(-5) === -1, "Math.sign(-5)");
+  assert(Math.sign(0) === 0, "Math.sign(0)");
+
+  assert(Math.min(1, 2, 3) === 1, "Math.min(1, 2, 3)");
+  assert(Math.max(1, 2, 3) === 3, "Math.max(1, 2, 3)");
+  assert(Math.min(5) === 5, "Math.min(5)");
+  assert(Math.max(5) === 5, "Math.max(5)");
+  assert(Math.min() > 1e308, "Math.min() returns +Infinity");
+  assert(Math.max() < -1e308, "Math.max() returns -Infinity");
+
+  assert(Math.imul(2, 3) === 6, "Math.imul(2, 3)");
+  assert(Math.imul(-2, 3) === -6, "Math.imul(-2, 3)");
+
+  assert(Math.clz32(1) === 31, "Math.clz32(1)");
+  assert(Math.clz32(0) === 32, "Math.clz32(0)");
+  assert(Math.clz32(255) === 24, "Math.clz32(255)");
+
+  const r: number = Math.fround(1.337);
+  assert(r > 1.336 && r < 1.338, "Math.fround(1.337) within tolerance");
+  assert(Math.fround(0) === 0, "Math.fround(0)");
+  assert(Math.fround(1) === 1, "Math.fround(1) is exact");
+}

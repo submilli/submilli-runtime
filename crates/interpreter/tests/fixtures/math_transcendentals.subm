@@ -1,0 +1,40 @@
+function main(): void {
+  assert(Math.exp(0) === 1, "exp(0)");
+  // log(E) rounds to 1 within FP tolerance, not exactly 1.
+  const log_e: number = Math.log(Math.E);
+  assert(log_e > 0.999999 && log_e < 1.000001, "log(E) ≈ 1");
+
+  assert(Math.log2(2) === 1, "log2(2)");
+  assert(Math.log10(10) === 1, "log10(10)");
+  assert(Math.log10(1000) === 3, "log10(1000)");
+
+  assert(Math.pow(2, 10) === 1024, "pow(2, 10)");
+  assert(Math.pow(0, 0) === 1, "pow(0, 0) === 1 (IEEE-754)");
+  assert(Math.pow(2, 0.5) > 1.4142 && Math.pow(2, 0.5) < 1.4143, "pow(2, 0.5) ≈ sqrt(2)");
+
+  assert(Math.sin(0) === 0, "sin(0)");
+  assert(Math.cos(0) === 1, "cos(0)");
+  assert(Math.tan(0) === 0, "tan(0)");
+
+  const half_pi: number = Math.PI / 2;
+  const cos_hp: number = Math.cos(half_pi);
+  assert(cos_hp > -0.0001 && cos_hp < 0.0001, "cos(π/2) ≈ 0");
+
+  assert(Math.asin(0) === 0, "asin(0)");
+  assert(Math.acos(1) === 0, "acos(1)");
+  assert(Math.atan(0) === 0, "atan(0)");
+  const at: number = Math.atan2(1, 1);
+  assert(at > 0.7853 && at < 0.7854, "atan2(1, 1) ≈ π/4");
+
+  assert(Math.sinh(0) === 0, "sinh(0)");
+  assert(Math.cosh(0) === 1, "cosh(0)");
+  assert(Math.tanh(0) === 0, "tanh(0)");
+
+  assert(Math.cbrt(27) === 3, "cbrt(27)");
+  assert(Math.cbrt(-8) === -2, "cbrt(-8)");
+
+  const e1: number = Math.expm1(0);
+  assert(e1 === 0, "expm1(0)");
+  const l1: number = Math.log1p(0);
+  assert(l1 === 0, "log1p(0)");
+}

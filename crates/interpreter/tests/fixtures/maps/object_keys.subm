@@ -1,0 +1,24 @@
+// Map<object, T>: two object literals with identical field values must hash equal and compare equal.
+
+function main(): void {
+  const m = new Map<{ x: number, y: number }, string>();
+  m.set({ x: 1, y: 2 }, "first");
+  m.set({ x: 3, y: 4 }, "second");
+  m.set({ x: 5, y: 6 }, "third");
+  assert(m.size === 3, "three distinct keys");
+
+  const a: string | null = m.get({ x: 1, y: 2 });
+  assert(a !== null && a === "first", "structurally-equal key hits");
+  const b: string | null = m.get({ x: 3, y: 4 });
+  assert(b !== null && b === "second", "second key hits");
+  const c: string | null = m.get({ x: 5, y: 6 });
+  assert(c !== null && c === "third", "third key hits");
+
+  const miss: string | null = m.get({ x: 1, y: 99 });
+  assert(miss === null, "different field values miss");
+
+  m.set({ x: 1, y: 2 }, "updated");
+  assert(m.size === 3, "overwrite leaves size at 3");
+  const updated: string | null = m.get({ x: 1, y: 2 });
+  assert(updated !== null && updated === "updated", "overwrite via equal-shape key");
+}

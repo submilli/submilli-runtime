@@ -1,0 +1,247 @@
+# Default values for the submilli chart.
+#
+# Every key here is validated by values.schema.json — a typo like
+# `persistance.enabled` is rejected at install time rather than silently doing
+# nothing. Run `helm lint` after editing an override file to get that check
+# without a cluster.
+
+# -- Number of independent servers. Each gets its own volume and shares nothing
+# with the others: no clustering, no leader, no replication.
+#
+# Blueprints listed under `blueprints:` below are seeded into every one of them
+# and agree across them. Anything registered through the API — blueprints,
+# sessions, secrets, packages — lives only on the pod that served the request, so
+# a client must address a specific server rather than the load-balanced Service:
+#
+#   <release>-submilli-0.<release>-submilli-headless.<namespace>.svc:8128
+#
+# Leave this at 1 unless your clients do that. See "Running more than one server"
+# in the chart README.
+replicaCount: 1
+
+image:
+  # -- Image repository. The published image is private until launch; see
+  # `imagePullSecrets` below.
+  repository: ghcr.io/submilli/submilli
+  # -- Image tag. Empty means "use the chart's appVersion", which keeps the
+  # chart version and the server version locked together. Avoid `latest`:
+  # Kubernetes silently forces `imagePullPolicy: Always` for it.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# -- Names of existing `kubernetes.io/dockerconfigjson` Secrets used to pull the
+# image. Required while the GHCR package is private.
+imagePullSecrets: []
+
+# -- Override the generated resource name. Defaults to the release name.
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  # -- Create a dedicated ServiceAccount. It is granted no RBAC: the server
+  # never talks to the Kubernetes API, so a token stolen from the pod should be
+  # worth nothing. See `automountServiceAccountToken` below.
+  create: true
+  # -- Use an existing ServiceAccount instead. Only set this if you know why.
+  name: ""
+  annotations: {}
+
+service:
+  type: ClusterIP
+  port: 8128
+  annotations: {}
+
+server:
+  # -- Address the server binds inside the pod. Must be 0.0.0.0 for a Service to
+  # route to it; there is no loopback-only mode that also works behind a Service.
+  bind: "0.0.0.0"
+  # -- Container port. Kept in step with `service.port` by default.
+  port: 8128
+  # -- Seconds in-flight requests may finish after SIGTERM. Teardown adds ~1.3s,
+  # and `terminationGracePeriodSeconds` is derived from this plus that margin.
+  shutdownGrace: 5
+
+execution:
+  # -- Memory a single execution may hold **live**, in megabytes (a bare number:
+  # the server rejects `512Mi` here). Also the input to the pod's memory
+  # request/limit — see `resources` below, which is why there is one knob rather
+  # than two numbers that can drift apart.
+  #
+  # It bounds live GC heap, not process RSS. Peak RSS runs far above it; see
+  # `resources.headroomMultiplier`.
+  #
+  # Strings are UTF-16, so text costs two bytes per character: a 25 MB document
+  # needs ~50 MB of this budget.
+  maxMemoryMB: 50
+
+resources:
+  # -- Baseline pod memory in MiB, before any execution budget. Measured: the
+  # server idles at ~8 MiB, so 128 is generous cover for startup and the
+  # non-execution surface.
+  baselineMi: 128
+  # -- Multiplier applied to `execution.maxMemoryMB` to size the container's
+  # memory limit.
+  #
+  # This is NOT a concurrency count and NOT a guarantee. `maxMemoryMB` bounds
+  # *live GC heap*; peak process RSS during an allocation-heavy execution has
+  # been measured at more than 12x that — 628 MiB of RSS for one execution
+  # holding ~33 MB of live string under a 50 MB cap, because transient garbage
+  # is not collected until the run ends. The memory is fully released
+  # afterwards, so this is peak headroom, not steady-state need.
+  #
+  # 16 covers the worst case observed for a single execution. Concurrent
+  # executions near the cap can still exceed it — the server has no
+  # max-concurrency setting. Tracked in SUB-704.
+  headroomMultiplier: 16
+  # -- CPU request. Set deliberately; there is no CPU limit by default, because
+  # CFS quota throttling is enforced per 100ms period and punishes tail latency
+  # on a bursty request handler while requests already give proportional share
+  # under contention.
+  cpuRequest: "250m"
+  # -- CPU limit. Empty by default (see above). Set it if your organisation
+  # mandates limits or a LimitRange would otherwise inject one.
+  cpuLimit: ""
+
+persistence:
+  # -- Persist server state to a PersistentVolumeClaim. On by default: blueprints
+  # registered through the API, sessions, installed packages, and secrets all
+  # live here, and the failure mode of `false` is silent data loss on reschedule
+  # while the failure mode of `true` is a loud unbound-PVC error at install.
+  #
+  # Note that node-local storage cannot follow a pod to another node. Surviving
+  # a node drain needs a StorageClass whose volumes are not node-local.
+  enabled: true
+  # -- Volume size per server. Fixed at creation: volumeClaimTemplates cannot be
+  # changed by an upgrade, so growing it later is a manual procedure.
+  size: 10Gi
+  # -- StorageClass name. Empty uses the cluster default.
+  storageClass: ""
+  # -- ReadWriteOncePod or ReadWriteOnce. The default has the scheduler itself
+  # refuse a second pod on this claim. The StatefulSet already guarantees this
+  # chart never runs two pods; the access mode covers what the controller never
+  # sees — a hand-written pod, a debug shell, or a second StatefulSet pointed at
+  # another release's claims.
+  #
+  # Needs Kubernetes 1.29+. Enforcement is in kube-scheduler and kubelet rather
+  # than the storage driver, so any provisioner works. On an older cluster the
+  # install fails immediately with an explicit Unsupported value error; set
+  # ReadWriteOnce there and accept that a second writer becomes possible.
+  #
+  # Fixed at creation. Claims come from volumeClaimTemplates, which Kubernetes
+  # will not let a later upgrade change — see the chart README for how to move an
+  # existing deployment.
+  accessMode: ReadWriteOncePod
+
+# -- Blueprints to deploy declaratively, as a map of name to YAML. Rendered into
+# a ConfigMap and mounted read-only; the server reconciles them into its store on
+# every start.
+#
+# These files own the blueprints they name: editing or deleting one through the
+# API is undone on the next pod restart. To change one, change it here. Blueprints
+# not named here are left alone — the chart never deletes.
+#
+# Example:
+#   blueprints:
+#     demo: |
+#       name: demo
+#       default: deny
+#       vfs:
+#         mode: ephemeral
+blueprints: {}
+
+# -- Kubernetes Secrets to mount for blueprints to read, as a map of a local name
+# to an existing Secret reference. Secret *values* never appear here — only
+# references — because anything in values.yaml is stored in plaintext in the Helm
+# release object and echoed by `helm get values`.
+#
+# Each entry mounts at /etc/submilli/secrets/<name>/<key>, which is the path a
+# blueprint's `secrets:` block references with a `file:` source:
+#
+#   secrets:
+#     stripe:
+#       secretName: stripe-credentials
+#       key: api-key
+#
+#   # ...then, in a blueprint above:
+#   #   secrets:
+#   #     STRIPE_KEY: { file: /etc/submilli/secrets/stripe/api-key }
+secrets: {}
+
+secretStore:
+  # -- Enable the server's encrypted-at-rest secret store. Off by default. It
+  # protects the volume against offline disclosure, and only earns that if its
+  # key comes from a different trust domain than the data — a key kept in a
+  # Kubernetes Secret beside the volume it protects buys very little. Turn this
+  # on when you have a KMS or CSI-driver key source, not before.
+  enabled: false
+  # -- Existing Secret holding the base64-encoded 32-byte key, mounted as a file.
+  # A file rather than an env var deliberately: env is readable through
+  # /proc/self/environ.
+  existingSecret: ""
+  key: "key"
+
+networkPolicy:
+  # -- Restrict which pods may reach the server. **On by default**, which is
+  # unusual for a chart — the server's HTTP API is entirely unauthenticated, so
+  # in a cluster without this every pod in every namespace can execute code on
+  # it. See the README's security section before turning it off.
+  #
+  # Only enforced if your CNI implements NetworkPolicy. Where it does not, the
+  # policy is accepted by the API server and does nothing, with no warning.
+  enabled: true
+  # -- Render an ingress rule permitting the chart's own `helm test` pods. On by
+  # default, because a default-deny policy otherwise blocks the tests that exist
+  # to prove the deployment works. Narrow: a pod must carry both this release's
+  # instance label and `app.kubernetes.io/component: test`. Set false to close
+  # it — `helm test` will then fail rather than silently pass.
+  allowHelmTests: true
+  # -- Pod/namespace selectors permitted to reach the server, as raw
+  # NetworkPolicy `from` entries. Empty means nothing may reach it except the
+  # chart's own `helm test` pod.
+  #
+  # Example:
+  #   allowFrom:
+  #     - namespaceSelector:
+  #         matchLabels:
+  #           kubernetes.io/metadata.name: agents
+  #       podSelector:
+  #         matchLabels:
+  #           app.kubernetes.io/name: my-agent
+  allowFrom: []
+
+ingress:
+  # -- Expose the server outside the cluster. **Off by default, and think hard
+  # before enabling.** The API is unauthenticated: an Ingress publishes arbitrary
+  # code execution to whatever can reach it.
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts: []
+  tls: []
+
+tests:
+  # -- Image used by the `helm test` pods. Needs only `sh`, `curl`, and `grep`.
+  # Overridable because a cluster without registry egress — or a `kind` node with
+  # images side-loaded — needs to point this somewhere local.
+  image:
+    repository: curlimages/curl
+    # Pinned, not `latest`: `latest` makes Kubernetes force
+    # `imagePullPolicy: Always`, which breaks exactly those air-gapped and
+    # side-loaded cases.
+    tag: "8.16.0"
+    pullPolicy: IfNotPresent
+  # -- uid/gid the test image runs as. `curlimages/curl` is 101:102. Set these to
+  # match if you override the image, or a `restricted` Pod Security namespace
+  # will reject the pod.
+  runAsUser: 101
+  runAsGroup: 102
+
+# -- Extra environment variables for the server container, as a list of
+# `name`/`value` (or `valueFrom`) entries.
+extraEnv: []
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

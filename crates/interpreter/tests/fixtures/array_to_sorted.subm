@@ -1,0 +1,13 @@
+function main(): void {
+  let a: number[] = [1, 2, 10];
+  let lex = a.toSorted();
+  assert(lex[0] === 1 && lex[1] === 10 && lex[2] === 2, "no comparator sorts by string form");
+  assert(a[0] === 1 && a[1] === 2 && a[2] === 10, "original is unchanged");
+
+  let numeric = a.toSorted((x: number, y: number): number => x - y);
+  assert(numeric[0] === 1 && numeric[1] === 2 && numeric[2] === 10, "comparator sorts numerically");
+
+  let desc = a.toSorted((x: number, y: number): number => y - x);
+  assert(desc[0] === 10 && desc[1] === 2 && desc[2] === 1, "descending comparator");
+  assert(a[0] === 1 && a[1] === 2 && a[2] === 10, "original still unchanged");
+}

@@ -1,0 +1,16 @@
+function pack<T>(...xs: T[]): T[] {
+  return xs;
+}
+
+function main(): void {
+  let nums = pack(1, 2, 3);
+  assert(nums.length === 3, "number pack length");
+  assert(nums[0] === 1 && nums[2] === 3, "number pack contents");
+
+  let words = pack("a", "b");
+  assert(words.length === 2, "string pack length");
+  assert(words[0] === "a" && words[1] === "b", "string pack contents");
+
+  let empty = pack<number>();
+  assert(empty.length === 0, "empty generic pack");
+}

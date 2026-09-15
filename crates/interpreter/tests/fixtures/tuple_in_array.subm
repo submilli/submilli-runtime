@@ -1,0 +1,7 @@
+function main(): void {
+  const xs: [string, number][] = [["a", 1], ["b", 2]];
+  assert(xs[0][0] === "a", "xs[0][0]");
+  assert(xs[0][1] === 1, "xs[0][1]");
+  assert(xs[1][0] === "b", "xs[1][0]");
+  assert(xs[1][1] === 2, "xs[1][1]");
+}

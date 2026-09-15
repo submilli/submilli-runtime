@@ -1,0 +1,6 @@
+[[package]]
+name = "@acme/billing"
+version = "0.1.0"
+description = "Quickstart example: a one-operation charge lookup keyed by customer, backed by a local fixture."
+keywords = ["quickstart", "example", "billing", "charges"]
+path = "package"

@@ -1,0 +1,21 @@
+function main(): void {
+  let s: string = "hello world";
+
+  assert(s.startsWith("hello", 0), "startsWith from 0");
+  assert(s.startsWith("world", 6), "startsWith from position");
+  assert(!s.startsWith("world", 0), "no match at 0");
+  assert(!s.startsWith("hello", 1), "shifted prefix not match");
+  assert(s.startsWith("", 0), "empty prefix at 0");
+  assert(s.startsWith("", 5), "empty prefix middle");
+
+  assert(s.endsWith("world", 11), "endsWith at end");
+  assert(s.endsWith("hello", 5), "endsWith at custom end");
+  assert(!s.endsWith("hello", 11), "wrong suffix");
+  assert(s.endsWith("", 5), "empty suffix");
+  assert(!s.endsWith("hello world!", 11), "needle longer than range");
+
+  // endPosition defaults to the string length.
+  assert(s.endsWith("world"), "endsWith default endPosition");
+  assert(!s.endsWith("hello"), "endsWith default — wrong suffix");
+  assert(s.endsWith(""), "endsWith default — empty suffix");
+}

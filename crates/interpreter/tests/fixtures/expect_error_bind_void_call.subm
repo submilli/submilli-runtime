@@ -1,0 +1,10 @@
+// expect-error: cannot bind a `void` value
+// Binding the result of a `void`-returning call has no Wasm lowering
+// (`void` is a return type only). The typechecker rejects it rather
+// than panicking in codegen.
+function noop(): void {}
+
+function main(): void {
+  const x = noop();
+  assert(true, "");
+}

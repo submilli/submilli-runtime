@@ -1,0 +1,4 @@
+// expect-error: `<` not defined for `boolean` and `boolean`
+function main(): void {
+  let ok: boolean = true < false;
+}

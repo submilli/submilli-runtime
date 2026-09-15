@@ -1,0 +1,15 @@
+import { writeText, lines } from "submilli:fs";
+
+function main(): void {
+  writeText("/poem.txt", "alpha\nbeta\ngamma\n");
+
+  let count: number = 0;
+  let total: number = 0;
+  for (const line of lines("/poem.txt")) {
+    count = count + 1;
+    total = total + line.length;
+  }
+
+  assert(count === 3, "iterated 3 lines");
+  assert(total === 14, "summed line lengths");
+}

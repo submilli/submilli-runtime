@@ -1,0 +1,48 @@
+function main(): void {
+  // ---- PlainDate: override keeps the rest; out-of-range constrains ----
+  const d: Temporal.PlainDate = Temporal.PlainDate.from("2024-03-15");
+  const first: Temporal.PlainDate = d.with({ day: 1 });
+  assert(first.day === 1 && first.month === 3 && first.year === 2024, "with{day} start of month");
+  assert(d.with({ month: 2 }).month === 2, "with{month} keeps year/day");
+  // Day constrains to the month length (2024 is a leap year).
+  assert(Temporal.PlainDate.from("2024-02-10").with({ day: 31 }).day === 29, "Feb 2024 day 31 -> 29");
+  assert(Temporal.PlainDate.from("2023-02-10").with({ day: 31 }).day === 28, "Feb 2023 day 31 -> 28");
+  // Month constrains to 1..12.
+  assert(d.with({ month: 13 }).month === 12, "month 13 -> 12");
+
+  // ---- PlainTime: truncate, sub-second components, wrap-free constrain ----
+  const t: Temporal.PlainTime = Temporal.PlainTime.from("09:41:30");
+  const trunc: Temporal.PlainTime = t.with({ minute: 0, second: 0 });
+  assert(trunc.hour === 9 && trunc.minute === 0 && trunc.second === 0, "with truncate to hour");
+  // millisecond overrides only the ms component; us/ns are preserved.
+  const sub: Temporal.PlainTime = Temporal.PlainTime.from("12:00:00.123456789");
+  assert(sub.with({ millisecond: 500 }).nanosecond === 500456789, "with{millisecond} keeps us/ns");
+  assert(sub.with({ nanosecond: 7 }).nanosecond === 123456007, "with{nanosecond} keeps ms/us");
+  assert(t.with({ hour: 25 }).hour === 23, "hour 25 constrains to 23");
+
+  // ---- PlainDateTime ----
+  const dt: Temporal.PlainDateTime = Temporal.PlainDateTime.from("2024-03-15T09:41:30");
+  const dtw: Temporal.PlainDateTime = dt.with({ day: 1, hour: 0, minute: 0, second: 0 });
+  assert(dtw.day === 1 && dtw.hour === 0 && dtw.minute === 0, "datetime with date+time fields");
+  assert(dtw.year === 2024 && dtw.month === 3, "datetime with keeps untouched fields");
+
+  // ---- PlainYearMonth ----
+  const ym: Temporal.PlainYearMonth = Temporal.PlainYearMonth.from("2024-03");
+  assert(ym.with({ month: 6 }).month === 6, "yearmonth with{month}");
+  assert(ym.with({ year: 2030 }).year === 2030, "yearmonth with{year}");
+  assert(ym.with({ month: 13 }).month === 12, "yearmonth month 13 -> 12");
+
+  // ---- PlainMonthDay ----
+  const md: Temporal.PlainMonthDay = Temporal.PlainMonthDay.from("03-15");
+  assert(md.with({ day: 20 }).day === 20, "monthday with{day}");
+  // Feb 30 constrains to 29 (leap reference year).
+  assert(Temporal.PlainMonthDay.from("02-10").with({ day: 30 }).day === 29, "monthday Feb 30 -> 29");
+
+  // ---- ZonedDateTime: keeps the time zone, re-resolves the instant ----
+  const z: Temporal.ZonedDateTime =
+    Temporal.ZonedDateTime.from("2024-03-15T09:41:30-04:00[America/New_York]");
+  const midnight: Temporal.ZonedDateTime = z.with({ hour: 0, minute: 0, second: 0 });
+  assert(midnight.hour === 0 && midnight.minute === 0, "zdt with to midnight");
+  assert(midnight.day === 15 && midnight.year === 2024, "zdt with keeps date");
+  assert(midnight.timeZoneId === "America/New_York", "zdt with keeps the time zone");
+}

@@ -1,0 +1,13 @@
+export interface Result {
+  value: number;
+}
+
+export enum State {
+  Ready,
+}
+
+export type Boxed = Result;
+
+export function make(state: State): Boxed {
+  return { value: 1 };
+}

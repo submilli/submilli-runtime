@@ -1,0 +1,290 @@
+apiVersion: apps/v1
+# A StatefulSet: one volume per pod, and at most one pod per volume.
+#
+# A Deployment cannot give the second half. `strategy: Recreate` governs the
+# rollout path only; on an eviction, drain, taint, or preemption the ReplicaSet
+# controller treats a pod as gone the moment it carries a deletion timestamp and
+# starts the replacement while the old container is still running and still
+# mounted. Two pods then hold one volume, which is unsurvivable here because the
+# stores take no lock: two writers hand out the same blueprint revision, and a
+# booting process deletes session directories it has no record of.
+kind: StatefulSet
+metadata:
+  name: {{ include "submilli.fullname" . }}
+  labels:
+    {{- include "submilli.labels" . | nindent 4 }}
+spec:
+  # Each pod gets its own volume via volumeClaimTemplates below, so replicas are
+  # independent servers rather than copies of one. They share nothing: no
+  # clustering, no leader, no replication.
+  #
+  # That makes the addressing contract part of the deployment. Blueprints from
+  # `blueprints:` are seeded into every pod from the same ConfigMap and agree
+  # across them, but anything registered through the API — blueprints, sessions,
+  # secrets, packages — lives on the single pod that served the request. Reach a
+  # specific server through the headless Service, never the load-balanced one:
+  #
+  #   <release>-submilli-0.<release>-submilli-headless.<namespace>.svc:8128
+  #
+  # A client that round-robins across them will see a different world per
+  # request. The chart README says this louder.
+  replicas: {{ .Values.replicaCount }}
+  # Parallel, not the default OrderedReady: these servers do not depend on each
+  # other, so a pod stuck pulling an image should not hold up its peers. It does
+  # not weaken the at-most-one-per-ordinal guarantee — that comes from pod names
+  # being unique, not from the controller's ordering. Immutable after creation,
+  # so it is set now.
+  podManagementPolicy: Parallel
+  # Required by the apps/v1 schema through Kubernetes 1.32 (optional from 1.33),
+  # and the chart's floor is 1.25, so it is set rather than omitted.
+  serviceName: {{ include "submilli.headlessName" . }}
+  # Explicit, because the two alternatives both fail silently: `OnDelete` strands
+  # the pod on the old image, and a `partition` of 1 makes every upgrade report
+  # success while updating nothing. At one ordinal this terminates the existing
+  # pod before creating its replacement.
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "submilli.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "submilli.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- if .Values.blueprints }}
+        # Without this, a `helm upgrade` that changes only ConfigMap contents
+        # leaves the StatefulSet spec identical, so no rollout happens and the
+        # running pod keeps the old blueprints. Users reasonably conclude the
+        # chart is broken. This is Helm's own documented recipe.
+        checksum/blueprints: {{ include (print $.Template.BasePath "/configmap-blueprints.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "submilli.serviceAccountName" . }}
+      # Nothing in the pod calls the Kubernetes API, so there is no reason to
+      # carry a credential for it. This is also the single most valuable line in
+      # the chart: it removes the token an arbitrary-file-read would otherwise
+      # exfiltrate. See SUB-699.
+      automountServiceAccountToken: false
+      # Without this the kubelet injects Docker-link-style variables for every
+      # Service in the namespace — and a release named `submilli` creates a
+      # Service named `submilli`, which injects
+      # `SUBMILLI_PORT=tcp://<clusterIP>:8128`. The server reads SUBMILLI_PORT as
+      # an explicit config tier and fails boot when it is set but unparseable, so
+      # the pod would exit at startup with a confusing parse error. The explicit
+      # SUBMILLI_PORT below also overrides it; both are set because they fail in
+      # different directions if one is later removed.
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: {{ include "submilli.terminationGrace" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        # Makes a freshly provisioned volume group-writable by uid 65532. Without
+        # it the PV arrives root-owned and the server cannot write to its own
+        # state directory. The image treats uid 65532 and /var/lib/submilli as
+        # its public contract.
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: submilli-server
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            # Container-level, not pod-level: readOnlyRootFilesystem and
+            # allowPrivilegeEscalation are not valid PodSecurityContext fields.
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          ports:
+            - name: http
+              containerPort: {{ .Values.server.port }}
+              protocol: TCP
+          env:
+            - name: SUBMILLI_BIND
+              value: {{ .Values.server.bind | quote }}
+            - name: SUBMILLI_PORT
+              value: {{ .Values.server.port | quote }}
+            # SUBMILLI_HOME relocates five of the server's six state directories.
+            # The ephemeral VFS root is the sixth and still defaults to the OS
+            # temp dir, so under readOnlyRootFilesystem it must be pointed at a
+            # writable volume. Omitting this breaks /v1/execute — the product —
+            # while /v1/status stays green, which is why the chart's own test
+            # exercises execute rather than health alone.
+            - name: SUBMILLI_VFS_EPHEMERAL_DIR
+              value: /tmp
+            - name: SUBMILLI_MAX_EXECUTION_MEMORY
+              value: {{ .Values.execution.maxMemoryMB | quote }}
+            - name: SUBMILLI_SHUTDOWN_GRACE
+              value: {{ .Values.server.shutdownGrace | quote }}
+            {{- if .Values.blueprints }}
+            # The read-only source the server reconciles from at boot. A
+            # different directory from the writable store below — pointing both
+            # at one path would make the store read-only forever.
+            - name: SUBMILLI_BLUEPRINT_SEED_DIR
+              value: {{ include "submilli.seedPath" . }}
+            {{- end }}
+            {{- if and .Values.secretStore.enabled .Values.secretStore.existingSecret }}
+            # A file, never an env var holding the key itself: environment is
+            # readable through /proc/self/environ.
+            - name: SUBMILLI_SECRET_STORE_KEY_FILE
+              value: /etc/submilli/secret-store/{{ .Values.secretStore.key }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - name: state
+              mountPath: {{ include "submilli.homePath" . }}
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.blueprints }}
+            - name: blueprints
+              mountPath: {{ include "submilli.seedPath" . }}
+              readOnly: true
+            {{- end }}
+            {{- range $name, $ref := .Values.secrets }}
+            - name: secret-{{ $name }}
+              mountPath: {{ include "submilli.secretMountPath" $ }}/{{ $name }}
+              readOnly: true
+            {{- end }}
+            {{- if and .Values.secretStore.enabled .Values.secretStore.existingSecret }}
+            - name: secret-store-key
+              mountPath: /etc/submilli/secret-store
+              readOnly: true
+            {{- end }}
+          # httpGet rather than exec. The kubelet makes the request itself from
+          # the node, so a distroless image with no shell is irrelevant; an exec
+          # probe would fork a process every period to make a request the kubelet
+          # could make directly. The binary keeps `--health-check` for the
+          # `docker run` path, where there is no kubelet to do it.
+          startupProbe:
+            httpGet:
+              path: /v1/status
+              port: http
+            periodSeconds: 2
+            # 30 x 2s. Generous on purpose: while this is failing, liveness and
+            # readiness are suppressed, so a slow start cannot be mistaken for a
+            # deadlock and restarted into a loop.
+            failureThreshold: 30
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /v1/status
+              port: http
+            periodSeconds: 10
+            # The default is 1s, which a loaded server can exceed while perfectly
+            # healthy — and a readiness flap pulls the pod out of the Service.
+            timeoutSeconds: 3
+          resources:
+            requests:
+              # Equal to the limit, so memory is never the reason this pod is
+              # evicted or throttled: an OOMKill means the server exceeded its
+              # own budget, not that the node was oversubscribed.
+              #
+              # This is Burstable QoS, not Guaranteed — Guaranteed additionally
+              # requires a CPU limit equal to the request, which this chart
+              # deliberately omits — so the pod is Burstable, not Guaranteed.
+              memory: {{ include "submilli.memoryMi" . }}
+              cpu: {{ .Values.resources.cpuRequest | quote }}
+            limits:
+              memory: {{ include "submilli.memoryMi" . }}
+              {{- with .Values.resources.cpuLimit }}
+              cpu: {{ . | quote }}
+              {{- end }}
+      volumes:
+        {{- if not .Values.persistence.enabled }}
+        # Persistent state comes from volumeClaimTemplates instead; this branch
+        # exists so `persistence.enabled: false` still renders a valid pod.
+        - name: state
+          emptyDir: {}
+        {{- end }}
+        - name: tmp
+          emptyDir: {}
+        {{- if .Values.blueprints }}
+        - name: blueprints
+          configMap:
+            name: {{ include "submilli.fullname" . }}-blueprints
+        {{- end }}
+        {{- range $name, $ref := .Values.secrets }}
+        # One volume per referenced Secret, projecting only the named key, so
+        # the mount path is exactly the `file:` path a blueprint declares.
+        - name: secret-{{ $name }}
+          secret:
+            secretName: {{ $ref.secretName }}
+            items:
+              - key: {{ $ref.key }}
+                path: {{ $ref.key }}
+        {{- end }}
+        {{- if and .Values.secretStore.enabled .Values.secretStore.existingSecret }}
+        - name: secret-store-key
+          secret:
+            secretName: {{ .Values.secretStore.existingSecret }}
+            items:
+              - key: {{ .Values.secretStore.key }}
+                path: {{ .Values.secretStore.key }}
+        {{- end }}
+{{- if .Values.persistence.enabled }}
+  # Retain on both axes. `whenDeleted` is what makes the volume survive
+  # `helm uninstall`: it holds blueprints registered through the API, sessions,
+  # installed packages, and secrets, and losing it to a reinstall is not
+  # recoverable. `whenScaled` matters because scaling down is how you would take
+  # a server out of rotation — its state should still be there when you scale
+  # back up. Both are already the Kubernetes defaults; they are written out so a
+  # reader does not have to know that, and so flipping one is a visible edit.
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  volumeClaimTemplates:
+    # Renders one claim per pod, named `state-<fullname>-<ordinal>`. To restore
+    # from a snapshot, create a claim with that exact name before installing —
+    # the controller adopts a pre-existing claim that matches the convention, and
+    # ignores one that does not.
+    - metadata:
+        name: state
+        labels:
+          # selectorLabels, NOT the full label set. `volumeClaimTemplates` is
+          # immutable after creation, and `submilli.labels` carries
+          # `helm.sh/chart` and `app.kubernetes.io/version`, which move on every
+          # chart or appVersion bump. Including them makes the next `helm upgrade`
+          # fail with "updates to statefulset spec for fields other than ... are
+          # forbidden", recoverable only by deleting the StatefulSet with
+          # --cascade=orphan. Same hazard the selector guards against.
+          {{- include "submilli.selectorLabels" . | nindent 10 }}
+      spec:
+        accessModes:
+          - {{ .Values.persistence.accessMode }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}
+        {{- if .Values.persistence.storageClass }}
+        # `storageClassName: ""` is not "use the default" — it means "no
+        # StorageClass", which disables dynamic provisioning and leaves the claim
+        # pending forever. Omitted entirely when unset.
+        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        {{- end }}
+{{- end }}

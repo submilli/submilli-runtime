@@ -1,0 +1,7 @@
+# Class `===` across SEPARATE packages: dispatch lands on the producer
+# module's equals body via the imported vtable-singleton's funcref, and a
+# consumer-local subclass never equals the imported base.
+# name           dir       deps                       root
+@test/points     points    -
+@test/labeled    labeled   @test/points
+main             app       @test/points,@test/labeled root

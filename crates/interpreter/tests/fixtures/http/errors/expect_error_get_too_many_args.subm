@@ -1,0 +1,8 @@
+// expect-error: expected 1-2 argument(s), got 3
+
+import { get } from "submilli:http";
+
+function main(): void {
+  const h = new Map<string, string>();
+  const _r = get("https://example.test/", h, "extra");
+}

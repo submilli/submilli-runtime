@@ -1,0 +1,7 @@
+# An object literal whose shape appears only inside a class member body of a
+# *package*, where the consumer never writes that shape itself. The package
+# module carries its own shape collection, so its class bodies must be roots
+# there too.
+# name          dir    deps            root
+@test/probe     lib    -
+main            app    @test/probe     root

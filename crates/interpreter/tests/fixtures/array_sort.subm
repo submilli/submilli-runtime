@@ -1,0 +1,39 @@
+function main(): void {
+  let nums: number[] = [3, 1, 4, 1, 5, 9, 2, 6];
+  nums.sort((a, b) => a - b);
+  assert(nums[0] === 1 && nums[1] === 1 && nums[2] === 2 && nums[3] === 3
+         && nums[4] === 4 && nums[5] === 5 && nums[6] === 6 && nums[7] === 9,
+         "ascending sort");
+
+  let desc: number[] = [1, 3, 2];
+  desc.sort((a, b) => b - a);
+  assert(desc[0] === 3 && desc[1] === 2 && desc[2] === 1, "descending");
+
+  let one: number[] = [42];
+  one.sort((a, b) => a - b);
+  assert(one[0] === 42, "single");
+
+  let empty: number[] = [];
+  empty.sort((a, b) => a - b);
+  assert(empty.length === 0, "empty");
+
+  let strs: string[] = ["bbb", "a", "cc"];
+  strs.sort((a, b) => a.length - b.length);
+  assert(strs[0] === "a" && strs[1] === "cc" && strs[2] === "bbb",
+         "string sort by length");
+
+  let footgun: number[] = [2, 10, 1];
+  footgun.sort();
+  assert(footgun[0] === 1 && footgun[1] === 10 && footgun[2] === 2,
+         "default sort is lexicographic");
+
+  let words: string[] = ["banana", "apple", "cherry"];
+  words.sort();
+  assert(words[0] === "apple" && words[1] === "banana" && words[2] === "cherry",
+         "default string sort");
+
+  let prefix: string[] = ["apple", "app", "apply"];
+  prefix.sort();
+  assert(prefix[0] === "app" && prefix[1] === "apple" && prefix[2] === "apply",
+         "shorter common-prefix sorts first");
+}

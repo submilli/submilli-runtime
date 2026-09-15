@@ -1,0 +1,7 @@
+// assert(true) keeps the body non-empty for the typechecker's function-body pass.
+
+enum Direction { Up, Down, Left, Right }
+
+function main(): void {
+  assert(true, "enum declares cleanly");
+}

@@ -1,0 +1,8 @@
+
+function main(): void {
+  const now: Temporal.Instant = Temporal.Now.instant();
+  const ms: number = now.epochMilliseconds;
+  // Mid-2023 = 1_690_000_000_000 ms. Any sane wall clock today is past
+  // this point.
+  assert(ms > 1690000000000, "Temporal.Now.instant() returns a recent epoch");
+}

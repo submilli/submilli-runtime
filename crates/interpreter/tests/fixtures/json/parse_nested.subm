@@ -1,0 +1,8 @@
+function main(): void {
+  const r = JSON.parse("{\"count\": 3, \"items\": [10, 20, 30]}") as { items: number[], count: number };
+  assert(r.count === 3, "count");
+  assert(r.items.length === 3, "items.length");
+  assert(r.items[0] === 10, "items[0]");
+  assert(r.items[1] === 20, "items[1]");
+  assert(r.items[2] === 30, "items[2]");
+}

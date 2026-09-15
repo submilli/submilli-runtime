@@ -1,0 +1,2320 @@
+use num_bigint::BigUint;
+use num_traits::Num;
+use unicode_ident::{is_xid_continue, is_xid_start};
+
+use crate::{Diagnostic, FileId, RawDoc, Severity, Span, Token, TokenKind};
+
+const VALID_ESCAPES: &str =
+    "valid escapes: \\\", \\', \\\\, \\n, \\t, \\r, \\b, \\f, \\v, \\0, \\u{HHHH}";
+
+pub struct Lexer<'a> {
+    source: &'a str,
+    bytes: &'a [u8],
+    file: FileId,
+    pos: u32,
+    diagnostics: Vec<Diagnostic>,
+    /// Only the last doc comment before a declaration attaches (JSDoc convention); earlier ones are dropped.
+    pending_docs: Vec<RawDoc>,
+    /// Brace depth for each active `${ … }` interpolation. A `}` with the top
+    /// frame at `0` closes the interpolation and resumes template scanning;
+    /// nested templates push additional frames.
+    template_frames: Vec<u32>,
+    /// Previous non-newline token, used to disambiguate `/` as regex literal vs. division.
+    last_significant_token: Option<TokenKind>,
+}
+
+impl<'a> Lexer<'a> {
+    /// Lex `source`, attributing every span to `file`. The caller owns the
+    /// [`FileId`] (it indexes into the [`Sources`](crate::Sources) registry):
+    /// single-file scripts pass the script's id, multi-file packages pass each
+    /// module's.
+    pub fn new(source: &'a str, file: FileId) -> Self {
+        Self {
+            source,
+            bytes: source.as_bytes(),
+            file,
+            pos: 0,
+            diagnostics: Vec::new(),
+            pending_docs: Vec::new(),
+            template_frames: Vec::new(),
+            last_significant_token: None,
+        }
+    }
+
+    fn span(&self, start: u32, end: u32) -> Span {
+        Span::new(self.file, start, end)
+    }
+
+    pub fn next_token(&mut self) -> Token {
+        loop {
+            self.skip_trivia();
+            let Some(b) = self.peek() else {
+                let tok = self.eof_token();
+                return self.finalize(tok);
+            };
+            let tok = match b {
+                // Returns early to bypass finalize so pending_docs survive intervening newlines.
+                b'\n' | b'\r' => return self.lex_newline(),
+                b'0'..=b'9' => self.lex_number(),
+                b'"' | b'\'' => self.lex_string(b),
+                b'`' => {
+                    let start = self.pos;
+                    self.pos += 1;
+                    self.lex_template_part(start, true)
+                }
+                b'=' | b'!' | b'<' | b'>' | b'+' | b'-' | b'*' | b'/' | b'%' | b'.' => {
+                    self.lex_operator()
+                }
+                b'&' if self.peek_at(1) == Some(b'&') => self.lex_operator(),
+                b'|' => self.lex_operator(),
+                b'(' | b')' | b'{' | b'}' | b'[' | b']' | b',' | b':' | b';' | b'?' => {
+                    self.lex_delimiter()
+                }
+                _ => {
+                    if b.is_ascii_alphabetic() || b == b'_' || b == b'$' {
+                        self.lex_ident()
+                    } else if b >= 0x80
+                        && let Some(c) = self.peek_char()
+                    {
+                        if is_xid_start(c) {
+                            self.lex_ident()
+                        } else {
+                            self.diagnose_unexpected_char(c);
+                            self.pos += c.len_utf8() as u32;
+                            continue;
+                        }
+                    } else {
+                        self.diagnose_unexpected_byte(b);
+                        self.pos += 1;
+                        continue;
+                    }
+                }
+            };
+            return self.finalize(tok);
+        }
+    }
+
+    fn finalize(&mut self, tok: Token) -> Token {
+        let tok = self.attach_doc(tok);
+        match &tok.kind {
+            TokenKind::Newline => {}
+            other => self.last_significant_token = Some(other.clone()),
+        }
+        tok
+    }
+
+    pub fn into_diagnostics(self) -> Vec<Diagnostic> {
+        self.diagnostics
+    }
+
+    fn peek(&self) -> Option<u8> {
+        self.bytes.get(self.pos as usize).copied()
+    }
+
+    fn peek_at(&self, offset: usize) -> Option<u8> {
+        self.bytes.get(self.pos as usize + offset).copied()
+    }
+
+    fn peek_char(&self) -> Option<char> {
+        self.source[self.pos as usize..].chars().next()
+    }
+
+    fn eof_token(&self) -> Token {
+        Token::new(TokenKind::Eof, self.span(self.pos, self.pos))
+    }
+
+    fn error(&mut self, span: Span, message: impl Into<String>) {
+        self.diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            span,
+            message: message.into(),
+            help: vec![],
+            notes: vec![],
+        });
+    }
+
+    fn error_with_help(&mut self, span: Span, message: impl Into<String>, help: Vec<String>) {
+        self.diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            span,
+            message: message.into(),
+            help,
+            notes: vec![],
+        });
+    }
+
+    fn diagnose_unexpected_byte(&mut self, b: u8) {
+        let span = self.span(self.pos, self.pos + 1);
+        let message = if b.is_ascii() && !b.is_ascii_control() {
+            format!("unexpected character `{}`", b as char)
+        } else {
+            format!("unexpected byte 0x{b:02X}")
+        };
+        self.error(span, message);
+    }
+
+    fn diagnose_unexpected_char(&mut self, c: char) {
+        let len = c.len_utf8() as u32;
+        self.error(
+            self.span(self.pos, self.pos + len),
+            format!("unexpected character `{c}`"),
+        );
+    }
+
+    fn skip_trivia(&mut self) {
+        loop {
+            match self.peek() {
+                Some(b' ' | b'\t') => self.pos += 1,
+                Some(b'/') => match self.peek_at(1) {
+                    Some(b'/') => self.skip_line_comment(),
+                    Some(b'*') => {
+                        // `/**/` is a regular empty block comment; doc requires `/**` + non-`/` next.
+                        if self.peek_at(2) == Some(b'*') && self.peek_at(3) != Some(b'/') {
+                            self.capture_doc_comment();
+                        } else {
+                            self.skip_block_comment();
+                        }
+                    }
+                    _ => return,
+                },
+                _ => return,
+            }
+        }
+    }
+
+    fn skip_line_comment(&mut self) {
+        self.pos += 2;
+        while let Some(b) = self.peek() {
+            if matches!(b, b'\n' | b'\r') {
+                break;
+            }
+            self.pos += 1;
+        }
+    }
+
+    fn skip_block_comment(&mut self) {
+        let start = self.pos;
+        self.pos += 2;
+        loop {
+            match self.peek() {
+                None => {
+                    self.error(self.span(start, start + 2), "unterminated block comment");
+                    return;
+                }
+                Some(b'*') if self.peek_at(1) == Some(b'/') => {
+                    self.pos += 2;
+                    return;
+                }
+                Some(_) => self.pos += 1,
+            }
+        }
+    }
+
+    /// Captures a `/** ... */` comment into `pending_docs`. Stored text includes delimiters.
+    fn capture_doc_comment(&mut self) {
+        let start = self.pos;
+        self.pos += 3; // past `/**`
+        loop {
+            match self.peek() {
+                None => {
+                    self.error(self.span(start, start + 3), "unterminated block comment");
+                    return;
+                }
+                Some(b'*') if self.peek_at(1) == Some(b'/') => {
+                    self.pos += 2;
+                    let span = self.span(start, self.pos);
+                    let text = self.source[start as usize..self.pos as usize].to_string();
+                    self.pending_docs.push(RawDoc { text, span });
+                    return;
+                }
+                Some(_) => self.pos += 1,
+            }
+        }
+    }
+
+    fn attach_doc(&mut self, mut tok: Token) -> Token {
+        if !matches!(tok.kind, TokenKind::Newline) {
+            tok.leading_doc = self.pending_docs.pop();
+            self.pending_docs.clear();
+        }
+        tok
+    }
+
+    fn lex_newline(&mut self) -> Token {
+        let start = self.pos;
+        match self.peek() {
+            Some(b'\r') => {
+                self.pos += 1;
+                if self.peek() == Some(b'\n') {
+                    self.pos += 1;
+                }
+            }
+            Some(b'\n') => self.pos += 1,
+            _ => unreachable!("lex_newline called on non-newline byte"),
+        }
+        Token::new(TokenKind::Newline, self.span(start, self.pos))
+    }
+
+    fn lex_number(&mut self) -> Token {
+        let start = self.pos;
+
+        if self.peek() == Some(b'0')
+            && let Some(radix) = self.peek_at(1).and_then(Radix::from_prefix)
+        {
+            return self.lex_radix_number(start, radix);
+        }
+
+        let mut has_fraction_or_exponent = false;
+
+        while matches!(self.peek(), Some(b'0'..=b'9')) {
+            self.pos += 1;
+        }
+
+        let int_end = self.pos;
+
+        if self.peek() == Some(b'.') && matches!(self.peek_at(1), Some(b'0'..=b'9')) {
+            has_fraction_or_exponent = true;
+            self.pos += 1;
+            while matches!(self.peek(), Some(b'0'..=b'9')) {
+                self.pos += 1;
+            }
+        }
+
+        if matches!(self.peek(), Some(b'e' | b'E')) {
+            has_fraction_or_exponent = true;
+            let exp_start = self.pos;
+            self.pos += 1;
+            if matches!(self.peek(), Some(b'+' | b'-')) {
+                self.pos += 1;
+            }
+            let digits_start = self.pos;
+            while matches!(self.peek(), Some(b'0'..=b'9')) {
+                self.pos += 1;
+            }
+            if digits_start == self.pos {
+                self.error(self.span(exp_start, self.pos), "missing digits in exponent");
+                return Token::new(
+                    TokenKind::NumberLiteral(f64::NAN),
+                    self.span(start, self.pos),
+                );
+            }
+        }
+
+        if self.peek() == Some(b'n') {
+            self.pos += 1;
+            let span = self.span(start, self.pos);
+            if has_fraction_or_exponent {
+                self.error(
+                    span,
+                    "bigint literal cannot have a fractional or exponent part; \
+                     remove the `.` / exponent or drop the `n` suffix",
+                );
+                // Recovery: keep the integer prefix as the bigint payload.
+                let digits = self.source[start as usize..int_end as usize].to_string();
+                return Token::new(TokenKind::BigIntLiteral(digits), span);
+            }
+            let digits = self.source[start as usize..(self.pos - 1) as usize].to_string();
+            return Token::new(TokenKind::BigIntLiteral(digits), span);
+        }
+
+        let span = self.span(start, self.pos);
+        let lexeme = &self.source[start as usize..self.pos as usize];
+        let value = if let Ok(v) = lexeme.parse::<f64>() {
+            v
+        } else {
+            self.error(span, format!("invalid number literal `{lexeme}`"));
+            f64::NAN
+        };
+
+        Token::new(TokenKind::NumberLiteral(value), span)
+    }
+
+    /// Lex a radix-prefixed integer literal (`0x`/`0b`/`0o`). `start` points at the
+    /// leading `0`; the prefix letter has not been consumed yet. Trailing junk (e.g.
+    /// `0xfg`) is left for the next token, matching how `123abc` lexes as `123` + `abc`.
+    fn lex_radix_number(&mut self, start: u32, radix: Radix) -> Token {
+        self.pos += 2; // `0` + prefix letter
+        let digits_start = self.pos;
+        while self.peek().is_some_and(|b| radix.accepts(b)) {
+            self.pos += 1;
+        }
+        if self.pos == digits_start {
+            let span = self.span(start, self.pos);
+            self.error(span, format!("missing digits after `{}`", radix.prefix()));
+            return Token::new(TokenKind::NumberLiteral(f64::NAN), span);
+        }
+        let digits = self.source[digits_start as usize..self.pos as usize].to_string();
+
+        if self.peek() == Some(b'n') {
+            self.pos += 1;
+            return Token::new(
+                TokenKind::BigIntLiteral(radix.to_decimal(&digits)),
+                self.span(start, self.pos),
+            );
+        }
+
+        Token::new(
+            TokenKind::NumberLiteral(radix.to_f64(&digits)),
+            self.span(start, self.pos),
+        )
+    }
+
+    fn lex_string(&mut self, quote: u8) -> Token {
+        let start = self.pos;
+        self.pos += 1; // consume opening quote
+        let mut value = String::new();
+
+        loop {
+            match self.peek() {
+                None => {
+                    self.error(self.span(start, self.pos), "unterminated string literal");
+                    return Token::new(TokenKind::StringLiteral(value), self.span(start, self.pos));
+                }
+                Some(b) if b == quote => {
+                    self.pos += 1;
+                    return Token::new(TokenKind::StringLiteral(value), self.span(start, self.pos));
+                }
+                Some(b'\\') => self.read_escape(&mut value),
+                // Raw newlines are accepted as `\n` (forgiveness principle): LLMs
+                // routinely emit them via tool-input escaping slips, and the intent
+                // is unambiguous. CR/CRLF normalise to LF as in templates.
+                Some(b'\r') => {
+                    self.pos += 1;
+                    if self.peek() == Some(b'\n') {
+                        self.pos += 1;
+                    }
+                    value.push('\n');
+                }
+                Some(_) => {
+                    let c = self
+                        .peek_char()
+                        .expect("peek returned Some, so peek_char must too");
+                    value.push(c);
+                    self.pos += c.len_utf8() as u32;
+                }
+            }
+        }
+    }
+
+    /// Lex a regex literal. Escape sequences are preserved verbatim (the regex engine
+    /// interprets them). `/` inside `[...]` does not close the literal.
+    fn lex_regex_literal(&mut self) -> Token {
+        let start = self.pos;
+        self.pos += 1; // consume opening `/`
+        let mut source = String::new();
+        let mut in_class = false;
+
+        loop {
+            match self.peek() {
+                None | Some(b'\n' | b'\r') => {
+                    self.error(self.span(start, self.pos), "unterminated regex literal");
+                    return Token::new(
+                        TokenKind::RegexLiteral {
+                            source,
+                            flags: String::new(),
+                        },
+                        self.span(start, self.pos),
+                    );
+                }
+                Some(b'\\') => {
+                    source.push('\\');
+                    self.pos += 1;
+                    if let Some(c) = self.peek_char() {
+                        // JS disallows newline-continued escapes in regex literals.
+                        if matches!(c, '\n' | '\r') {
+                            continue;
+                        }
+                        source.push(c);
+                        self.pos += c.len_utf8() as u32;
+                    }
+                }
+                Some(b'[') if !in_class => {
+                    in_class = true;
+                    source.push('[');
+                    self.pos += 1;
+                }
+                Some(b']') if in_class => {
+                    in_class = false;
+                    source.push(']');
+                    self.pos += 1;
+                }
+                Some(b'/') if !in_class => {
+                    self.pos += 1;
+                    let flags = self.lex_regex_flags();
+                    return Token::new(
+                        TokenKind::RegexLiteral { source, flags },
+                        self.span(start, self.pos),
+                    );
+                }
+                Some(_) => {
+                    let c = self
+                        .peek_char()
+                        .expect("peek returned Some, so peek_char must too");
+                    source.push(c);
+                    self.pos += c.len_utf8() as u32;
+                }
+            }
+        }
+    }
+
+    /// Accepts any ASCII alphabetic letter; flag validation (`gimsuy` only) is the translator's job.
+    fn lex_regex_flags(&mut self) -> String {
+        let mut flags = String::new();
+        while let Some(b) = self.peek() {
+            if b.is_ascii_alphabetic() {
+                flags.push(b as char);
+                self.pos += 1;
+            } else {
+                break;
+            }
+        }
+        flags
+    }
+
+    fn read_escape(&mut self, out: &mut String) {
+        let esc_start = self.pos;
+        self.pos += 1;
+        match self.peek() {
+            None => {
+                self.error(
+                    self.span(esc_start, self.pos),
+                    "unterminated string literal",
+                );
+            }
+            Some(b'"') => {
+                out.push('"');
+                self.pos += 1;
+            }
+            Some(b'\'') => {
+                out.push('\'');
+                self.pos += 1;
+            }
+            Some(b'\\') => {
+                out.push('\\');
+                self.pos += 1;
+            }
+            Some(b'n') => {
+                out.push('\n');
+                self.pos += 1;
+            }
+            Some(b't') => {
+                out.push('\t');
+                self.pos += 1;
+            }
+            Some(b'r') => {
+                out.push('\r');
+                self.pos += 1;
+            }
+            Some(b'b') => {
+                out.push('\u{08}');
+                self.pos += 1;
+            }
+            Some(b'f') => {
+                out.push('\u{0C}');
+                self.pos += 1;
+            }
+            Some(b'v') => {
+                out.push('\u{0B}');
+                self.pos += 1;
+            }
+            Some(b'0') => {
+                out.push('\0');
+                self.pos += 1;
+            }
+            Some(b'u') => {
+                self.pos += 1;
+                self.read_unicode_escape(esc_start, out);
+            }
+            Some(_) => {
+                let c = self.peek_char().expect("peek returned Some");
+                let end = self.pos + c.len_utf8() as u32;
+                self.error_with_help(
+                    self.span(esc_start, end),
+                    format!("unknown escape sequence `\\{c}`"),
+                    vec![VALID_ESCAPES.to_string()],
+                );
+                out.push(c);
+                self.pos = end;
+            }
+        }
+    }
+
+    fn read_unicode_escape(&mut self, esc_start: u32, out: &mut String) {
+        if self.peek() == Some(b'{') {
+            self.pos += 1;
+            let hex_start = self.pos;
+            while matches!(self.peek(), Some(b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F')) {
+                self.pos += 1;
+            }
+            let hex_end = self.pos;
+            if hex_end == hex_start {
+                self.error(
+                    self.span(esc_start, self.pos),
+                    "invalid unicode escape: expected hex digits",
+                );
+                return;
+            }
+            if self.peek() != Some(b'}') {
+                self.error(
+                    self.span(esc_start, self.pos),
+                    "invalid unicode escape: expected `}`",
+                );
+                return;
+            }
+            self.pos += 1;
+            let hex = &self.source[hex_start as usize..hex_end as usize];
+            if hex.len() > 6 {
+                self.error(
+                    self.span(esc_start, self.pos),
+                    "invalid code point in `\\u{…}`: too many digits",
+                );
+                return;
+            }
+            let value = u32::from_str_radix(hex, 16).unwrap_or(0);
+            if value > 0x10FFFF {
+                self.error(
+                    self.span(esc_start, self.pos),
+                    "invalid code point in `\\u{…}`: exceeds U+10FFFF",
+                );
+                return;
+            }
+            if (0xD800..=0xDFFF).contains(&value) {
+                self.error(
+                    self.span(esc_start, self.pos),
+                    "invalid code point in `\\u{…}`: surrogate",
+                );
+                return;
+            }
+            if let Some(c) = char::from_u32(value) {
+                out.push(c);
+            }
+        } else {
+            let Some(value) = self.read_four_hex(esc_start) else {
+                return;
+            };
+            if (0xD800..=0xDBFF).contains(&value) {
+                // High surrogate — try to read a following \uYYYY low-surrogate.
+                let save = self.pos;
+                if self.peek() == Some(b'\\')
+                    && self.peek_at(1) == Some(b'u')
+                    && self.peek_at(2) != Some(b'{')
+                {
+                    self.pos += 2; // consume `\u`
+                    if let Some(low) = self.read_four_hex(save)
+                        && (0xDC00..=0xDFFF).contains(&low)
+                    {
+                        let code = 0x10000 + ((value - 0xD800) << 10) + (low - 0xDC00);
+                        if let Some(c) = char::from_u32(code) {
+                            out.push(c);
+                        }
+                        return;
+                    }
+                    self.pos = save;
+                }
+                self.error(self.span(esc_start, self.pos), "lone high surrogate");
+            } else if (0xDC00..=0xDFFF).contains(&value) {
+                self.error(self.span(esc_start, self.pos), "lone low surrogate");
+            } else if let Some(c) = char::from_u32(value) {
+                out.push(c);
+            }
+        }
+    }
+
+    fn read_four_hex(&mut self, esc_start: u32) -> Option<u32> {
+        let mut value = 0u32;
+        for _ in 0..4 {
+            if let Some(b @ (b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F')) = self.peek() {
+                let d = match b {
+                    b'0'..=b'9' => b - b'0',
+                    b'a'..=b'f' => b - b'a' + 10,
+                    b'A'..=b'F' => b - b'A' + 10,
+                    _ => unreachable!(),
+                };
+                value = value * 16 + d as u32;
+                self.pos += 1;
+            } else {
+                self.error(
+                    self.span(esc_start, self.pos),
+                    "invalid unicode escape: expected 4 hex digits",
+                );
+                return None;
+            }
+        }
+        Some(value)
+    }
+
+    fn lex_ident(&mut self) -> Token {
+        let start = self.pos;
+        let first = self.peek_char().expect("dispatch guaranteed a char here");
+        self.pos += first.len_utf8() as u32;
+        while let Some(c) = self.peek_char() {
+            if c == '_' || c == '$' || is_xid_continue(c) {
+                self.pos += c.len_utf8() as u32;
+            } else {
+                break;
+            }
+        }
+        let span = self.span(start, self.pos);
+        let lexeme = &self.source[start as usize..self.pos as usize];
+        let kind = match lexeme {
+            "true" => TokenKind::BooleanLiteral(true),
+            "false" => TokenKind::BooleanLiteral(false),
+            "null" => TokenKind::NullLiteral,
+            "let" => TokenKind::Let,
+            "const" => TokenKind::Const,
+            "function" => TokenKind::Function,
+            "if" => TokenKind::If,
+            "else" => TokenKind::Else,
+            "while" => TokenKind::While,
+            "do" => TokenKind::Do,
+            "for" => TokenKind::For,
+            "break" => TokenKind::Break,
+            "continue" => TokenKind::Continue,
+            "return" => TokenKind::Return,
+            "switch" => TokenKind::Switch,
+            "case" => TokenKind::Case,
+            "default" => TokenKind::Default,
+            "export" => TokenKind::Export,
+            "void" => TokenKind::Void,
+            "interface" => TokenKind::Interface,
+            "enum" => TokenKind::Enum,
+            "in" => TokenKind::In,
+            "typeof" => TokenKind::Typeof,
+            "import" => TokenKind::Import,
+            "instanceof" => TokenKind::Instanceof,
+            "new" => TokenKind::New,
+            "try" => TokenKind::Try,
+            "catch" => TokenKind::Catch,
+            "finally" => TokenKind::Finally,
+            "throw" => TokenKind::Throw,
+            "class" => TokenKind::Class,
+            "extends" => TokenKind::Extends,
+            "implements" => TokenKind::Implements,
+            "super" => TokenKind::Super,
+            "this" => TokenKind::This,
+            _ => TokenKind::Identifier,
+        };
+        Token::new(kind, span)
+    }
+
+    fn lex_operator(&mut self) -> Token {
+        let start = self.pos;
+        let b = self.peek().expect("dispatch guaranteed a byte here");
+        let kind = match b {
+            b'=' => {
+                self.pos += 1;
+                if self.peek() == Some(b'=') {
+                    self.pos += 1;
+                    if self.peek() == Some(b'=') {
+                        self.pos += 1;
+                        TokenKind::EqEqEq
+                    } else {
+                        TokenKind::EqEq
+                    }
+                } else if self.peek() == Some(b'>') {
+                    self.pos += 1;
+                    TokenKind::Arrow
+                } else {
+                    TokenKind::Equals
+                }
+            }
+            b'!' => {
+                self.pos += 1;
+                if self.peek() == Some(b'=') {
+                    self.pos += 1;
+                    if self.peek() == Some(b'=') {
+                        self.pos += 1;
+                        TokenKind::BangEqEq
+                    } else {
+                        TokenKind::BangEq
+                    }
+                } else {
+                    TokenKind::Bang
+                }
+            }
+            b'<' => {
+                self.pos += 1;
+                if self.peek() == Some(b'=') {
+                    self.pos += 1;
+                    TokenKind::LessEquals
+                } else {
+                    TokenKind::LessThan
+                }
+            }
+            b'>' => {
+                self.pos += 1;
+                if self.peek() == Some(b'=') {
+                    self.pos += 1;
+                    TokenKind::GreaterEquals
+                } else {
+                    TokenKind::GreaterThan
+                }
+            }
+            b'+' => {
+                self.pos += 1;
+                match self.peek() {
+                    Some(b'+') => {
+                        self.pos += 1;
+                        TokenKind::PlusPlus
+                    }
+                    Some(b'=') => {
+                        self.pos += 1;
+                        TokenKind::PlusEquals
+                    }
+                    _ => TokenKind::Plus,
+                }
+            }
+            b'-' => {
+                self.pos += 1;
+                match self.peek() {
+                    Some(b'-') => {
+                        self.pos += 1;
+                        TokenKind::MinusMinus
+                    }
+                    Some(b'=') => {
+                        self.pos += 1;
+                        TokenKind::MinusEquals
+                    }
+                    _ => TokenKind::Minus,
+                }
+            }
+            b'*' => {
+                self.pos += 1;
+                match self.peek() {
+                    Some(b'*') => {
+                        self.pos += 1;
+                        // `**=` checked before `**` so `x **= 2` doesn't lex as `**` + `=`.
+                        if self.peek() == Some(b'=') {
+                            self.pos += 1;
+                            TokenKind::StarStarEquals
+                        } else {
+                            TokenKind::StarStar
+                        }
+                    }
+                    Some(b'=') => {
+                        self.pos += 1;
+                        TokenKind::StarEquals
+                    }
+                    _ => TokenKind::Star,
+                }
+            }
+            b'/' => {
+                // `//` and `/*` already consumed as trivia; remaining `/` is regex or division.
+                if is_regex_context(&self.last_significant_token) {
+                    return self.lex_regex_literal();
+                }
+                self.pos += 1;
+                if self.peek() == Some(b'=') {
+                    self.pos += 1;
+                    TokenKind::SlashEquals
+                } else {
+                    TokenKind::Slash
+                }
+            }
+            b'%' => {
+                self.pos += 1;
+                if self.peek() == Some(b'=') {
+                    self.pos += 1;
+                    TokenKind::PercentEquals
+                } else {
+                    TokenKind::Percent
+                }
+            }
+            b'&' => {
+                self.pos += 2;
+                TokenKind::AmpAmp
+            }
+            b'|' => {
+                self.pos += 1;
+                if self.peek() == Some(b'|') {
+                    self.pos += 1;
+                    TokenKind::PipePipe
+                } else {
+                    TokenKind::Pipe
+                }
+            }
+            b'.' => {
+                self.pos += 1;
+                // Single token to avoid 3-token lookahead in the parser.
+                if self.peek() == Some(b'.') && self.peek_at(1) == Some(b'.') {
+                    self.pos += 2;
+                    TokenKind::DotDotDot
+                } else {
+                    TokenKind::Dot
+                }
+            }
+            _ => unreachable!("lex_operator dispatched on unexpected byte"),
+        };
+        Token::new(kind, self.span(start, self.pos))
+    }
+
+    fn lex_delimiter(&mut self) -> Token {
+        let start = self.pos;
+        let b = self.peek().expect("dispatch guaranteed a byte here");
+        if b == b'{' && !self.template_frames.is_empty() {
+            *self.template_frames.last_mut().unwrap() += 1;
+        }
+        if b == b'}' && !self.template_frames.is_empty() {
+            let top = self.template_frames.last().copied().unwrap();
+            if top == 0 {
+                self.template_frames.pop();
+                self.pos += 1; // consume `}`
+                return self.lex_template_part(start, false);
+            }
+            *self.template_frames.last_mut().unwrap() = top - 1;
+        }
+        self.pos += 1;
+        let kind = match b {
+            b'(' => TokenKind::LeftParen,
+            b')' => TokenKind::RightParen,
+            b'{' => TokenKind::LeftBrace,
+            b'}' => TokenKind::RightBrace,
+            b'[' => TokenKind::LeftBracket,
+            b']' => TokenKind::RightBracket,
+            b',' => TokenKind::Comma,
+            b':' => TokenKind::Colon,
+            b';' => TokenKind::Semicolon,
+            b'?' => match self.peek() {
+                Some(b'.') => {
+                    self.pos += 1;
+                    TokenKind::QuestionDot
+                }
+                Some(b'?') => {
+                    self.pos += 1;
+                    TokenKind::QuestionQuestion
+                }
+                _ => TokenKind::Question,
+            },
+            _ => unreachable!("lex_delimiter dispatched on unexpected byte"),
+        };
+        Token::new(kind, self.span(start, self.pos))
+    }
+
+    /// Scan one cooked segment of a template literal.
+    /// `start` is the offset of the leading delimiter; `is_head` selects
+    /// Head/NoSubstitution (true) vs. Middle/Tail (false).
+    fn lex_template_part(&mut self, start: u32, is_head: bool) -> Token {
+        let mut value = String::new();
+        loop {
+            match self.peek() {
+                None => {
+                    self.error(self.span(start, self.pos), "unterminated template literal");
+                    let kind = if is_head {
+                        TokenKind::TemplateNoSubstitution(value)
+                    } else {
+                        TokenKind::TemplateTail(value)
+                    };
+                    return Token::new(kind, self.span(start, self.pos));
+                }
+                Some(b'`') => {
+                    self.pos += 1;
+                    let kind = if is_head {
+                        TokenKind::TemplateNoSubstitution(value)
+                    } else {
+                        TokenKind::TemplateTail(value)
+                    };
+                    return Token::new(kind, self.span(start, self.pos));
+                }
+                Some(b'$') if self.peek_at(1) == Some(b'{') => {
+                    self.pos += 2; // consume `${`
+                    self.template_frames.push(0);
+                    let kind = if is_head {
+                        TokenKind::TemplateHead(value)
+                    } else {
+                        TokenKind::TemplateMiddle(value)
+                    };
+                    return Token::new(kind, self.span(start, self.pos));
+                }
+                Some(b'\\') => self.read_template_escape(&mut value),
+                Some(b'\r') => {
+                    // Normalise CR/CRLF to LF so platform line endings don't affect the cooked value.
+                    self.pos += 1;
+                    if self.peek() == Some(b'\n') {
+                        self.pos += 1;
+                    }
+                    value.push('\n');
+                }
+                Some(_) => {
+                    let c = self
+                        .peek_char()
+                        .expect("peek returned Some, so peek_char must too");
+                    value.push(c);
+                    self.pos += c.len_utf8() as u32;
+                }
+            }
+        }
+    }
+
+    /// Like `read_escape` but also handles `` \` `` and `\$` (template-only escapes).
+    fn read_template_escape(&mut self, out: &mut String) {
+        match self.peek_at(1) {
+            Some(b'`') => {
+                out.push('`');
+                self.pos += 2;
+            }
+            Some(b'$') => {
+                out.push('$');
+                self.pos += 2;
+            }
+            Some(_) => self.read_escape(out),
+            None => self.pos += 1,
+        }
+    }
+}
+
+/// A radix-prefixed integer literal base (`0x`, `0b`, `0o`).
+#[derive(Clone, Copy)]
+enum Radix {
+    Hex,
+    Binary,
+    Octal,
+}
+
+impl Radix {
+    fn from_prefix(b: u8) -> Option<Self> {
+        match b {
+            b'x' | b'X' => Some(Self::Hex),
+            b'b' | b'B' => Some(Self::Binary),
+            b'o' | b'O' => Some(Self::Octal),
+            _ => None,
+        }
+    }
+
+    fn accepts(self, b: u8) -> bool {
+        match self {
+            Self::Hex => b.is_ascii_hexdigit(),
+            Self::Binary => matches!(b, b'0' | b'1'),
+            Self::Octal => matches!(b, b'0'..=b'7'),
+        }
+    }
+
+    fn base(self) -> u32 {
+        match self {
+            Self::Hex => 16,
+            Self::Binary => 2,
+            Self::Octal => 8,
+        }
+    }
+
+    fn prefix(self) -> &'static str {
+        match self {
+            Self::Hex => "0x",
+            Self::Binary => "0b",
+            Self::Octal => "0o",
+        }
+    }
+
+    /// Accumulates in `f64` so an over-wide literal saturates to infinity rather than
+    /// panicking; `accepts` already guaranteed every byte is a valid digit.
+    fn to_f64(self, digits: &str) -> f64 {
+        let base = f64::from(self.base());
+        digits
+            .bytes()
+            .map(|b| f64::from(hex_digit_value(b)))
+            .fold(0.0, |acc, d| acc * base + d)
+    }
+
+    fn to_decimal(self, digits: &str) -> String {
+        BigUint::from_str_radix(digits, self.base())
+            .map_or_else(|_| "0".to_string(), |v| v.to_str_radix(10))
+    }
+}
+
+/// Numeric value of an ASCII hex digit; non-digits (never passed by `Radix::accepts`)
+/// map to `0`.
+fn hex_digit_value(b: u8) -> u32 {
+    match b {
+        b'0'..=b'9' => u32::from(b - b'0'),
+        b'a'..=b'f' => u32::from(b - b'a' + 10),
+        b'A'..=b'F' => u32::from(b - b'A' + 10),
+        _ => 0,
+    }
+}
+
+/// Returns `true` when `/` should start a regex literal rather than act as division.
+/// `None` (start of input) is treated as regex-context so `/foo/` at program start works.
+#[allow(clippy::match_like_matches_macro)] // grouped arms read clearer than a flat `matches!`
+pub fn is_regex_context(prev: &Option<TokenKind>) -> bool {
+    let Some(kind) = prev else {
+        return true;
+    };
+    match kind {
+        TokenKind::Plus
+        | TokenKind::Minus
+        | TokenKind::Star
+        | TokenKind::Slash
+        | TokenKind::Percent
+        | TokenKind::Equals
+        | TokenKind::PlusEquals
+        | TokenKind::MinusEquals
+        | TokenKind::StarEquals
+        | TokenKind::SlashEquals
+        | TokenKind::PercentEquals
+        | TokenKind::StarStar
+        | TokenKind::StarStarEquals
+        | TokenKind::EqEqEq
+        | TokenKind::EqEq
+        | TokenKind::BangEqEq
+        | TokenKind::BangEq
+        | TokenKind::LessThan
+        | TokenKind::GreaterThan
+        | TokenKind::LessEquals
+        | TokenKind::GreaterEquals
+        | TokenKind::Bang
+        | TokenKind::AmpAmp
+        | TokenKind::Pipe
+        | TokenKind::PipePipe
+        | TokenKind::Question
+        | TokenKind::QuestionDot
+        | TokenKind::QuestionQuestion
+        | TokenKind::Arrow
+        | TokenKind::DotDotDot => true,
+
+        TokenKind::LeftParen
+        | TokenKind::LeftBrace
+        | TokenKind::LeftBracket
+        | TokenKind::Comma
+        | TokenKind::Colon
+        | TokenKind::Semicolon => true,
+
+        TokenKind::Return
+        | TokenKind::Throw
+        | TokenKind::Typeof
+        | TokenKind::In
+        | TokenKind::New
+        | TokenKind::Case
+        | TokenKind::Default
+        | TokenKind::Else
+        | TokenKind::Do
+        | TokenKind::Void => true,
+
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Lexer;
+    use crate::source::Sources;
+    use crate::{Diagnostic, FileId, Span, Token, TokenKind, diagnostics};
+
+    const F: FileId = FileId(0);
+
+    fn sources(text: &str) -> Sources {
+        let (sources, _) = Sources::single("script.subm", text);
+        sources
+    }
+
+    fn tokenize_all(source: &str) -> (Vec<Token>, Vec<Diagnostic>) {
+        let mut lx = Lexer::new(source, crate::FileId(0));
+        let mut tokens = Vec::new();
+        loop {
+            let tok = lx.next_token();
+            let is_eof = tok.kind == TokenKind::Eof;
+            tokens.push(tok);
+            if is_eof {
+                break;
+            }
+        }
+        (tokens, lx.into_diagnostics())
+    }
+
+    fn tokenize_one(source: &str) -> (Token, Token, Vec<Diagnostic>) {
+        let mut lx = Lexer::new(source, crate::FileId(0));
+        let first = lx.next_token();
+        let second = lx.next_token();
+        (first, second, lx.into_diagnostics())
+    }
+
+    fn expect_number(source: &str, value: f64, span: Span) {
+        let (tok, eof, diags) = tokenize_one(source);
+        assert_eq!(tok.span, span, "span mismatch for {source:?}");
+        match tok.kind {
+            TokenKind::NumberLiteral(v) => assert_eq!(v, value, "value mismatch for {source:?}"),
+            other => panic!("expected NumberLiteral for {source:?}, got {other:?}"),
+        }
+        assert_eq!(eof.kind, TokenKind::Eof);
+        assert!(
+            diags.is_empty(),
+            "unexpected diagnostics for {source:?}: {diags:?}"
+        );
+    }
+
+    fn expect_string(source: &str, value: &str) {
+        let (tok, eof, diags) = tokenize_one(source);
+        match tok.kind {
+            TokenKind::StringLiteral(ref s) => {
+                assert_eq!(s, value, "string mismatch for {source:?}");
+            }
+            other => panic!("expected StringLiteral for {source:?}, got {other:?}"),
+        }
+        assert_eq!(eof.kind, TokenKind::Eof);
+        assert!(
+            diags.is_empty(),
+            "unexpected diagnostics for {source:?}: {diags:?}"
+        );
+    }
+
+    fn expect_single_token(source: &str, expected: TokenKind, span: Span) {
+        let (tok, eof, diags) = tokenize_one(source);
+        assert_eq!(tok.kind, expected, "kind mismatch for {source:?}");
+        assert_eq!(tok.span, span, "span mismatch for {source:?}");
+        assert_eq!(eof.kind, TokenKind::Eof);
+        assert!(
+            diags.is_empty(),
+            "unexpected diagnostics for {source:?}: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn lex_integer() {
+        expect_number("42", 42.0, Span::new(F, 0, 2));
+    }
+
+    #[test]
+    fn lex_zero() {
+        expect_number("0", 0.0, Span::new(F, 0, 1));
+    }
+
+    #[test]
+    #[allow(clippy::approx_constant)]
+    fn lex_decimal() {
+        expect_number("3.14", 3.14, Span::new(F, 0, 4));
+    }
+
+    #[test]
+    fn lex_leading_zero_decimal() {
+        expect_number("0.5", 0.5, Span::new(F, 0, 3));
+    }
+
+    #[test]
+    fn lex_exponent() {
+        expect_number("1e10", 1e10, Span::new(F, 0, 4));
+    }
+
+    #[test]
+    fn lex_decimal_with_exponent() {
+        expect_number("1.5e10", 1.5e10, Span::new(F, 0, 6));
+    }
+
+    #[test]
+    fn lex_uppercase_exponent_with_negative_sign() {
+        expect_number("2E-3", 2e-3, Span::new(F, 0, 4));
+    }
+
+    #[test]
+    fn lex_positive_exponent() {
+        expect_number("1e+2", 1e2, Span::new(F, 0, 4));
+    }
+
+    #[test]
+    fn lex_number_with_trailing_whitespace() {
+        let mut lx = Lexer::new("42 ", crate::FileId(0));
+        let tok = lx.next_token();
+        assert_eq!(tok.span, Span::new(F, 0, 2));
+        assert_eq!(tok.kind, TokenKind::NumberLiteral(42.0));
+        assert_eq!(lx.next_token().kind, TokenKind::Eof);
+        assert!(lx.into_diagnostics().is_empty());
+    }
+
+    #[test]
+    fn empty_input_is_eof() {
+        let mut lx = Lexer::new("", crate::FileId(0));
+        let tok = lx.next_token();
+        assert_eq!(tok.kind, TokenKind::Eof);
+        assert_eq!(tok.span, Span::new(F, 0, 0));
+        assert!(lx.into_diagnostics().is_empty());
+    }
+
+    #[test]
+    fn trailing_dot_is_now_dot() {
+        let (tokens, diags) = tokenize_all("1.");
+        assert!(diags.is_empty());
+        let kinds: Vec<_> = tokens.iter().map(|t| &t.kind).collect();
+        assert!(matches!(kinds[0], TokenKind::NumberLiteral(v) if *v == 1.0));
+        assert_eq!(tokens[0].span, Span::new(F, 0, 1));
+        assert_eq!(tokens[1].kind, TokenKind::Dot);
+        assert_eq!(tokens[1].span, Span::new(F, 1, 2));
+        assert_eq!(tokens[2].kind, TokenKind::Eof);
+    }
+
+    #[test]
+    fn bare_exponent_is_nan_with_diagnostic() {
+        let mut lx = Lexer::new("1e", crate::FileId(0));
+        let tok = lx.next_token();
+        assert_eq!(tok.span, Span::new(F, 0, 2));
+        match tok.kind {
+            TokenKind::NumberLiteral(v) => assert!(v.is_nan()),
+            other => panic!("expected NumberLiteral(NaN), got {other:?}"),
+        }
+        let diags = lx.into_diagnostics();
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].span, Span::new(F, 1, 2));
+        assert_eq!(diags[0].message, "missing digits in exponent");
+    }
+
+    #[test]
+    fn signed_exponent_with_no_digits_is_nan_with_diagnostic() {
+        let mut lx = Lexer::new("3.14e+", crate::FileId(0));
+        let tok = lx.next_token();
+        assert_eq!(tok.span, Span::new(F, 0, 6));
+        match tok.kind {
+            TokenKind::NumberLiteral(v) => assert!(v.is_nan()),
+            other => panic!("expected NumberLiteral(NaN), got {other:?}"),
+        }
+        let diags = lx.into_diagnostics();
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].span, Span::new(F, 4, 6));
+    }
+
+    #[test]
+    fn renders_bare_exponent_diagnostic() {
+        let source = "1e";
+        let mut lx = Lexer::new(source, crate::FileId(0));
+        let _ = lx.next_token();
+        let diags = lx.into_diagnostics();
+        let rendered = diagnostics::render(&diags[0], &sources(source));
+        insta::assert_snapshot!(rendered);
+    }
+
+    fn expect_bigint(source: &str, digits: &str, span: Span) {
+        let (tok, eof, diags) = tokenize_one(source);
+        assert_eq!(tok.span, span, "span mismatch for {source:?}");
+        match tok.kind {
+            TokenKind::BigIntLiteral(ref s) => {
+                assert_eq!(s, digits, "digits mismatch for {source:?}");
+            }
+            other => panic!("expected BigIntLiteral for {source:?}, got {other:?}"),
+        }
+        assert_eq!(eof.kind, TokenKind::Eof);
+        assert!(
+            diags.is_empty(),
+            "unexpected diagnostics for {source:?}: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn lex_bigint_simple() {
+        expect_bigint("42n", "42", Span::new(F, 0, 3));
+    }
+
+    #[test]
+    fn lex_bigint_zero() {
+        expect_bigint("0n", "0", Span::new(F, 0, 2));
+    }
+
+    #[test]
+    fn lex_bigint_large_beyond_u64() {
+        // Beyond u64::MAX — preserved as raw string for codegen.
+        expect_bigint(
+            "1267650600228229401496703205376n",
+            "1267650600228229401496703205376",
+            Span::new(F, 0, 32),
+        );
+    }
+
+    #[test]
+    fn lex_bigint_fraction_rejected() {
+        let mut lx = Lexer::new("3.14n", crate::FileId(0));
+        let tok = lx.next_token();
+        assert_eq!(tok.span, Span::new(F, 0, 5));
+        match tok.kind {
+            TokenKind::BigIntLiteral(ref s) => assert_eq!(s, "3"),
+            other => panic!("expected BigIntLiteral (recovery), got {other:?}"),
+        }
+        let diags = lx.into_diagnostics();
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].span, Span::new(F, 0, 5));
+        assert!(
+            diags[0]
+                .message
+                .contains("bigint literal cannot have a fractional or exponent part"),
+            "unexpected message: {:?}",
+            diags[0].message
+        );
+    }
+
+    #[test]
+    fn lex_bigint_exponent_rejected() {
+        let mut lx = Lexer::new("1e10n", crate::FileId(0));
+        let tok = lx.next_token();
+        assert_eq!(tok.span, Span::new(F, 0, 5));
+        match tok.kind {
+            TokenKind::BigIntLiteral(ref s) => assert_eq!(s, "1"),
+            other => panic!("expected BigIntLiteral (recovery), got {other:?}"),
+        }
+        let diags = lx.into_diagnostics();
+        assert_eq!(diags.len(), 1);
+        assert!(
+            diags[0]
+                .message
+                .contains("bigint literal cannot have a fractional or exponent part"),
+            "unexpected message: {:?}",
+            diags[0].message
+        );
+    }
+
+    #[test]
+    fn lex_hex_literal() {
+        expect_number("0xff", 255.0, Span::new(F, 0, 4));
+        expect_number("0XFF", 255.0, Span::new(F, 0, 4));
+        expect_number("0x0", 0.0, Span::new(F, 0, 3));
+        expect_number("0x10", 16.0, Span::new(F, 0, 4));
+    }
+
+    #[test]
+    fn lex_binary_literal() {
+        expect_number("0b1010", 10.0, Span::new(F, 0, 6));
+        expect_number("0B1", 1.0, Span::new(F, 0, 3));
+        expect_number("0b0", 0.0, Span::new(F, 0, 3));
+    }
+
+    #[test]
+    fn lex_octal_literal() {
+        expect_number("0o17", 15.0, Span::new(F, 0, 4));
+        expect_number("0O7", 7.0, Span::new(F, 0, 3));
+        expect_number("0o0", 0.0, Span::new(F, 0, 3));
+    }
+
+    #[test]
+    fn lex_radix_bigint() {
+        expect_bigint("0xffn", "255", Span::new(F, 0, 5));
+        expect_bigint("0b101n", "5", Span::new(F, 0, 6));
+        expect_bigint("0o17n", "15", Span::new(F, 0, 5));
+    }
+
+    #[test]
+    fn lex_hex_bigint_beyond_u64() {
+        expect_bigint(
+            "0xffffffffffffffffn",
+            "18446744073709551615",
+            Span::new(F, 0, 19),
+        );
+    }
+
+    #[test]
+    fn lex_radix_missing_digits() {
+        for src in ["0x", "0b", "0o"] {
+            let mut lx = Lexer::new(src, crate::FileId(0));
+            let tok = lx.next_token();
+            assert_eq!(tok.span, Span::new(F, 0, 2), "span for {src:?}");
+            assert!(
+                matches!(tok.kind, TokenKind::NumberLiteral(v) if v.is_nan()),
+                "expected NaN recovery for {src:?}, got {:?}",
+                tok.kind
+            );
+            let diags = lx.into_diagnostics();
+            assert_eq!(diags.len(), 1, "diags for {src:?}");
+            assert!(
+                diags[0].message.contains("missing digits after"),
+                "unexpected message for {src:?}: {:?}",
+                diags[0].message
+            );
+        }
+    }
+
+    #[test]
+    fn lex_hex_trailing_junk_splits() {
+        // `0xfg` lexes as `0xf` (15) then identifier `g`, mirroring `123abc`.
+        let (tokens, diags) = tokenize_all("0xfg");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        assert!(matches!(tokens[0].kind, TokenKind::NumberLiteral(v) if v == 15.0));
+        assert_eq!(tokens[0].span, Span::new(F, 0, 3));
+        assert_eq!(tokens[1].kind, TokenKind::Identifier);
+        assert_eq!(tokens[1].span, Span::new(F, 3, 4));
+    }
+
+    #[test]
+    fn lex_bigint_then_dot_method() {
+        let (tokens, diags) = tokenize_all("42n.toString()");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let kinds: Vec<_> = tokens.iter().map(|t| &t.kind).collect();
+        assert!(matches!(kinds[0], TokenKind::BigIntLiteral(s) if s == "42"));
+        assert_eq!(tokens[0].span, Span::new(F, 0, 3));
+        assert_eq!(tokens[1].kind, TokenKind::Dot);
+    }
+
+    #[test]
+    fn string_double_quoted() {
+        expect_string("\"hello\"", "hello");
+    }
+
+    #[test]
+    fn string_single_quoted() {
+        expect_string("'world'", "world");
+    }
+
+    #[test]
+    fn string_escaped_double_quote() {
+        expect_string("\"with \\\"escape\\\"\"", "with \"escape\"");
+    }
+
+    #[test]
+    fn string_escaped_single_quote() {
+        expect_string("'it\\'s'", "it's");
+    }
+
+    #[test]
+    fn string_newline_and_tab_escapes() {
+        expect_string("\"\\n\\t\"", "\n\t");
+    }
+
+    #[test]
+    fn string_carriage_return_escape() {
+        expect_string("\"a\\rb\"", "a\rb");
+    }
+
+    #[test]
+    fn string_null_and_other_escapes() {
+        expect_string("\"\\0\\b\\f\\v\"", "\0\u{08}\u{0C}\u{0B}");
+    }
+
+    #[test]
+    fn string_backslash_escape() {
+        expect_string("\"a\\\\b\"", "a\\b");
+    }
+
+    #[test]
+    fn string_unicode_4hex_escape() {
+        expect_string("\"\\u00e9\"", "é");
+    }
+
+    #[test]
+    fn string_unicode_brace_escape() {
+        expect_string("\"\\u{1F600}\"", "\u{1F600}");
+    }
+
+    #[test]
+    fn string_surrogate_pair_joins() {
+        // 😀 = U+1F600. Surrogate pair: D83D DE00.
+        expect_string("\"\\uD83D\\uDE00\"", "\u{1F600}");
+    }
+
+    #[test]
+    fn string_contains_multibyte_literal() {
+        expect_string("\"café\"", "café");
+    }
+
+    #[test]
+    fn string_unterminated_at_eof() {
+        let (tok, _eof, diags) = tokenize_one("\"hello");
+        assert!(matches!(tok.kind, TokenKind::StringLiteral(ref s) if s == "hello"));
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].message, "unterminated string literal");
+    }
+
+    #[test]
+    fn string_raw_newline_is_part_of_the_value() {
+        let (tok, _eof, diags) = tokenize_one("\"a\nb\"");
+        assert!(matches!(tok.kind, TokenKind::StringLiteral(ref s) if s == "a\nb"));
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn string_raw_crlf_normalised_to_lf() {
+        let (tok, _eof, diags) = tokenize_one("\"a\r\nb\"");
+        assert!(matches!(tok.kind, TokenKind::StringLiteral(ref s) if s == "a\nb"));
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn string_still_unterminated_when_newline_reaches_eof() {
+        let (tok, _eof, diags) = tokenize_one("\"abc\n");
+        assert!(matches!(tok.kind, TokenKind::StringLiteral(ref s) if s == "abc\n"));
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].message, "unterminated string literal");
+    }
+
+    #[test]
+    fn string_unknown_escape_diagnoses_but_keeps_character() {
+        let (tok, _eof, diags) = tokenize_one("\"\\q\"");
+        assert!(matches!(tok.kind, TokenKind::StringLiteral(ref s) if s == "q"));
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].message, "unknown escape sequence `\\q`");
+    }
+
+    #[test]
+    fn string_lone_high_surrogate_diagnosed() {
+        let (_, _, diags) = tokenize_one("\"\\uD83D\"");
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].message, "lone high surrogate");
+    }
+
+    #[test]
+    fn string_lone_low_surrogate_diagnosed() {
+        let (_, _, diags) = tokenize_one("\"\\uDE00\"");
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].message, "lone low surrogate");
+    }
+
+    #[test]
+    fn string_brace_escape_empty_diagnosed() {
+        let (_, _, diags) = tokenize_one("\"\\u{}\"");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.starts_with("invalid unicode escape"));
+    }
+
+    #[test]
+    fn string_brace_escape_too_big_diagnosed() {
+        let (_, _, diags) = tokenize_one("\"\\u{110000}\"");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("exceeds U+10FFFF"));
+    }
+
+    #[test]
+    fn string_brace_escape_unclosed_diagnosed() {
+        let (_, _, diags) = tokenize_one("\"\\u{1F600\"");
+        // At minimum the first diagnostic is about the unicode escape; unterminated string may follow.
+        assert!(!diags.is_empty());
+        assert!(diags[0].message.contains("invalid unicode escape"));
+    }
+
+    #[test]
+    fn renders_unterminated_string_diagnostic() {
+        let source = "let s = \"hello";
+        let (_, diags) = tokenize_all(source);
+        let unterminated = diags
+            .iter()
+            .find(|d| d.message == "unterminated string literal")
+            .expect("expected an unterminated-string diagnostic");
+        let rendered = diagnostics::render(unterminated, &sources(source));
+        insta::assert_snapshot!(rendered);
+    }
+
+    fn expect_template(source: &str, expected: &[TokenKind]) {
+        let (tokens, diags) = tokenize_all(source);
+        assert!(
+            diags.is_empty(),
+            "unexpected diagnostics for {source:?}: {diags:?}"
+        );
+        let kinds: Vec<TokenKind> = tokens.iter().map(|t| t.kind.clone()).collect();
+        let mut want = expected.to_vec();
+        want.push(TokenKind::Eof);
+        assert_eq!(kinds, want, "token stream mismatch for {source:?}");
+    }
+
+    #[test]
+    fn template_no_substitution_plain() {
+        expect_template(
+            "`hello`",
+            &[TokenKind::TemplateNoSubstitution("hello".to_string())],
+        );
+    }
+
+    #[test]
+    fn template_no_substitution_empty() {
+        expect_template("``", &[TokenKind::TemplateNoSubstitution(String::new())]);
+    }
+
+    #[test]
+    fn template_no_substitution_with_dollar_not_followed_by_brace() {
+        expect_template(
+            "`a$b`",
+            &[TokenKind::TemplateNoSubstitution("a$b".to_string())],
+        );
+    }
+
+    #[test]
+    fn template_single_interpolation() {
+        expect_template(
+            "`a${x}b`",
+            &[
+                TokenKind::TemplateHead("a".to_string()),
+                TokenKind::Identifier,
+                TokenKind::TemplateTail("b".to_string()),
+            ],
+        );
+    }
+
+    #[test]
+    fn template_two_interpolations() {
+        expect_template(
+            "`a${x}b${y}c`",
+            &[
+                TokenKind::TemplateHead("a".to_string()),
+                TokenKind::Identifier,
+                TokenKind::TemplateMiddle("b".to_string()),
+                TokenKind::Identifier,
+                TokenKind::TemplateTail("c".to_string()),
+            ],
+        );
+    }
+
+    #[test]
+    fn template_empty_head_and_tail() {
+        expect_template(
+            "`${x}`",
+            &[
+                TokenKind::TemplateHead(String::new()),
+                TokenKind::Identifier,
+                TokenKind::TemplateTail(String::new()),
+            ],
+        );
+    }
+
+    #[test]
+    fn template_object_literal_inside_interpolation_does_not_close() {
+        // `{` and `}` inside `${ }` adjust the frame counter, not the interpolation boundary.
+        let (tokens, diags) = tokenize_all("`x=${ {a:1} }`");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let kinds: Vec<TokenKind> = tokens.iter().map(|t| t.kind.clone()).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::TemplateHead("x=".to_string()),
+                TokenKind::LeftBrace,
+                TokenKind::Identifier,
+                TokenKind::Colon,
+                TokenKind::NumberLiteral(1.0),
+                TokenKind::RightBrace,
+                TokenKind::TemplateTail(String::new()),
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn template_nested_in_interpolation() {
+        // Nested template: outer pushes frame 0, inner backtick pushes frame 1;
+        // each `}` pops back to its level. Tests multi-frame correctness.
+        expect_template(
+            "`out${`in${x}`}end`",
+            &[
+                TokenKind::TemplateHead("out".to_string()),
+                TokenKind::TemplateHead("in".to_string()),
+                TokenKind::Identifier,
+                TokenKind::TemplateTail(String::new()),
+                TokenKind::TemplateTail("end".to_string()),
+            ],
+        );
+    }
+
+    #[test]
+    fn template_escapes_inside_part() {
+        // \` and \$ are template-only; others delegate to read_escape.
+        expect_template(
+            "`a\\nb\\`c\\${d}\\\\e\\u{1F600}`",
+            &[TokenKind::TemplateNoSubstitution(
+                "a\nb`c${d}\\e\u{1F600}".to_string(),
+            )],
+        );
+    }
+
+    #[test]
+    fn template_multiline_lf_preserved() {
+        expect_template(
+            "`line1\nline2`",
+            &[TokenKind::TemplateNoSubstitution(
+                "line1\nline2".to_string(),
+            )],
+        );
+    }
+
+    #[test]
+    fn template_multiline_crlf_normalised_to_lf() {
+        expect_template(
+            "`a\r\nb`",
+            &[TokenKind::TemplateNoSubstitution("a\nb".to_string())],
+        );
+    }
+
+    #[test]
+    fn template_unterminated_no_substitution_diagnosed() {
+        let (tokens, diags) = tokenize_all("`hello");
+        assert_eq!(diags.len(), 1, "diags: {diags:?}");
+        assert_eq!(diags[0].message, "unterminated template literal");
+        assert!(matches!(
+            &tokens[0].kind,
+            TokenKind::TemplateNoSubstitution(s) if s == "hello"
+        ));
+    }
+
+    #[test]
+    fn template_unterminated_after_head_diagnosed() {
+        let (_, diags) = tokenize_all("`a${x");
+        // The interpolation is still open at EOF — lexer is not in template-scanning mode,
+        // so no unterminated-template diagnostic; the parser catches the unclosed `${`.
+        assert!(diags.is_empty(), "unexpected lexer diags: {diags:?}");
+    }
+
+    #[test]
+    fn template_unterminated_after_interpolation_diagnosed() {
+        let (_, diags) = tokenize_all("`a${x}b");
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].message, "unterminated template literal");
+    }
+
+    #[test]
+    fn renders_unterminated_template_diagnostic() {
+        let source = "let s = `hello";
+        let (_, diags) = tokenize_all(source);
+        let unterminated = diags
+            .iter()
+            .find(|d| d.message == "unterminated template literal")
+            .expect("expected an unterminated-template diagnostic");
+        let rendered = diagnostics::render(unterminated, &sources(source));
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn lex_true_false_null() {
+        let (tokens, diags) = tokenize_all("true false null");
+        assert!(diags.is_empty());
+        assert_eq!(tokens[0].kind, TokenKind::BooleanLiteral(true));
+        assert_eq!(tokens[1].kind, TokenKind::BooleanLiteral(false));
+        assert_eq!(tokens[2].kind, TokenKind::NullLiteral);
+        assert_eq!(tokens[3].kind, TokenKind::Eof);
+    }
+
+    #[test]
+    fn literal_prefix_words_are_identifiers() {
+        for src in ["trueValue", "falseness", "nullable"] {
+            let (tok, _eof, diags) = tokenize_one(src);
+            assert!(diags.is_empty(), "diagnostics for {src:?}");
+            assert_eq!(
+                tok.kind,
+                TokenKind::Identifier,
+                "expected Identifier for {src:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn lex_all_mvp_keywords() {
+        let keywords = [
+            ("let", TokenKind::Let),
+            ("const", TokenKind::Const),
+            ("function", TokenKind::Function),
+            ("if", TokenKind::If),
+            ("else", TokenKind::Else),
+            ("while", TokenKind::While),
+            ("return", TokenKind::Return),
+            ("void", TokenKind::Void),
+            ("interface", TokenKind::Interface),
+            ("export", TokenKind::Export),
+            ("typeof", TokenKind::Typeof),
+            ("import", TokenKind::Import),
+            ("new", TokenKind::New),
+        ];
+        for (src, expected) in keywords {
+            let (tok, _eof, diags) = tokenize_one(src);
+            assert!(diags.is_empty(), "diagnostics for {src:?}");
+            assert_eq!(tok.kind, expected, "kind mismatch for {src:?}");
+            assert_eq!(tok.span, Span::new(F, 0, src.len() as u32));
+        }
+    }
+
+    #[test]
+    fn contextual_keywords_lex_as_identifiers() {
+        for src in ["type", "is", "from", "as", "of"] {
+            let (tok, _eof, diags) = tokenize_one(src);
+            assert!(diags.is_empty(), "diagnostics for {src:?}");
+            assert_eq!(tok.kind, TokenKind::Identifier, "kind mismatch for {src:?}");
+        }
+    }
+
+    #[test]
+    fn lex_ascii_identifiers() {
+        for src in ["foo", "_bar", "$baz", "x1", "_123", "camelCase"] {
+            let (tok, _eof, diags) = tokenize_one(src);
+            assert!(diags.is_empty(), "diagnostics for {src:?}");
+            assert_eq!(tok.kind, TokenKind::Identifier, "kind mismatch for {src:?}");
+            assert_eq!(tok.span, Span::new(F, 0, src.len() as u32));
+        }
+    }
+
+    #[test]
+    fn lex_unicode_identifier() {
+        let (tok, _eof, diags) = tokenize_one("café");
+        assert!(diags.is_empty());
+        assert_eq!(tok.kind, TokenKind::Identifier);
+        assert_eq!(tok.span, Span::new(F, 0, "café".len() as u32));
+    }
+
+    #[test]
+    fn keyword_prefix_is_identifier() {
+        let (tok, _eof, diags) = tokenize_one("letx");
+        assert!(diags.is_empty());
+        assert_eq!(tok.kind, TokenKind::Identifier);
+    }
+
+    #[test]
+    fn lex_arithmetic_operators() {
+        expect_single_token("+", TokenKind::Plus, Span::new(F, 0, 1));
+        expect_single_token("-", TokenKind::Minus, Span::new(F, 0, 1));
+        expect_single_token("*", TokenKind::Star, Span::new(F, 0, 1));
+        // `/` after an identifier is division; standalone it would start a regex literal.
+        let (toks, diags) = tokenize_all("a / b");
+        assert!(diags.is_empty(), "diags: {diags:?}");
+        assert_eq!(toks[1].kind, TokenKind::Slash);
+        expect_single_token("%", TokenKind::Percent, Span::new(F, 0, 1));
+    }
+
+    #[test]
+    fn lex_compound_assignment_operators() {
+        expect_single_token("+=", TokenKind::PlusEquals, Span::new(F, 0, 2));
+        expect_single_token("-=", TokenKind::MinusEquals, Span::new(F, 0, 2));
+        expect_single_token("*=", TokenKind::StarEquals, Span::new(F, 0, 2));
+        // `/=` after an identifier is compound-assign; standalone it would start a regex literal.
+        let (toks, diags) = tokenize_all("a /= 2");
+        assert!(diags.is_empty(), "diags: {diags:?}");
+        assert_eq!(toks[1].kind, TokenKind::SlashEquals);
+        expect_single_token("%=", TokenKind::PercentEquals, Span::new(F, 0, 2));
+        expect_single_token("**", TokenKind::StarStar, Span::new(F, 0, 2));
+        expect_single_token("**=", TokenKind::StarStarEquals, Span::new(F, 0, 3));
+        // `**=` must beat `**` + `=` in greedy dispatch.
+        let (toks, diags) = tokenize_all("a **= 2");
+        assert!(diags.is_empty(), "diags: {diags:?}");
+        assert_eq!(toks[1].kind, TokenKind::StarStarEquals);
+        let (toks, diags) = tokenize_all("a ** b");
+        assert!(diags.is_empty(), "diags: {diags:?}");
+        assert_eq!(toks[1].kind, TokenKind::StarStar);
+    }
+
+    #[test]
+    fn lex_regex_literal_basic() {
+        // At start of input `last_significant_token` is `None`; `is_regex_context` returns true.
+        expect_single_token(
+            "/abc/",
+            TokenKind::RegexLiteral {
+                source: "abc".to_string(),
+                flags: String::new(),
+            },
+            Span::new(F, 0, 5),
+        );
+    }
+
+    #[test]
+    fn lex_regex_literal_with_flags() {
+        let (toks, diags) = tokenize_all("/foo/gi");
+        assert!(diags.is_empty(), "diags: {diags:?}");
+        assert_eq!(
+            toks[0].kind,
+            TokenKind::RegexLiteral {
+                source: "foo".to_string(),
+                flags: "gi".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn lex_regex_after_open_paren_is_literal() {
+        let (toks, diags) = tokenize_all("f(/x/)");
+        assert!(diags.is_empty(), "diags: {diags:?}");
+        // [f, `(`, /x/, `)`, Eof]
+        assert_eq!(toks[0].kind, TokenKind::Identifier);
+        assert_eq!(toks[1].kind, TokenKind::LeftParen);
+        assert!(matches!(toks[2].kind, TokenKind::RegexLiteral { .. }));
+        assert_eq!(toks[3].kind, TokenKind::RightParen);
+    }
+
+    #[test]
+    fn lex_regex_after_equals_is_literal() {
+        let (toks, diags) = tokenize_all("let r = /a/g;");
+        assert!(diags.is_empty(), "diags: {diags:?}");
+        assert!(toks.iter().any(|t| matches!(
+            &t.kind,
+            TokenKind::RegexLiteral { source, flags } if source == "a" && flags == "g"
+        )));
+    }
+
+    #[test]
+    fn lex_regex_after_return_is_literal() {
+        let (toks, diags) = tokenize_all("return /x/;");
+        assert!(diags.is_empty(), "diags: {diags:?}");
+        assert_eq!(toks[0].kind, TokenKind::Return);
+        assert!(matches!(toks[1].kind, TokenKind::RegexLiteral { .. }));
+    }
+
+    #[test]
+    fn lex_regex_after_typeof_is_literal() {
+        let (toks, diags) = tokenize_all("typeof /x/");
+        assert!(diags.is_empty(), "diags: {diags:?}");
+        assert_eq!(toks[0].kind, TokenKind::Typeof);
+        assert!(matches!(toks[1].kind, TokenKind::RegexLiteral { .. }));
+    }
+
+    #[test]
+    fn lex_division_after_identifier_stays_division() {
+        let (toks, diags) = tokenize_all("a / b");
+        assert!(diags.is_empty(), "diags: {diags:?}");
+        assert_eq!(toks[0].kind, TokenKind::Identifier);
+        assert_eq!(toks[1].kind, TokenKind::Slash);
+        assert_eq!(toks[2].kind, TokenKind::Identifier);
+    }
+
+    #[test]
+    fn lex_division_after_close_paren_stays_division() {
+        let (toks, diags) = tokenize_all("(x) / 2");
+        assert!(diags.is_empty(), "diags: {diags:?}");
+        assert!(toks.iter().any(|t| t.kind == TokenKind::Slash));
+        assert!(
+            !toks
+                .iter()
+                .any(|t| matches!(t.kind, TokenKind::RegexLiteral { .. }))
+        );
+    }
+
+    #[test]
+    fn lex_division_chain_a_div_b_div_c() {
+        let (toks, diags) = tokenize_all("a / b / c");
+        assert!(diags.is_empty(), "diags: {diags:?}");
+        let kinds: Vec<&TokenKind> = toks.iter().map(|t| &t.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                &TokenKind::Identifier,
+                &TokenKind::Slash,
+                &TokenKind::Identifier,
+                &TokenKind::Slash,
+                &TokenKind::Identifier,
+                &TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_regex_escaped_slash_does_not_close() {
+        let (toks, diags) = tokenize_all("/a\\/b/");
+        assert!(diags.is_empty(), "diags: {diags:?}");
+        assert_eq!(
+            toks[0].kind,
+            TokenKind::RegexLiteral {
+                source: "a\\/b".to_string(),
+                flags: String::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn lex_regex_slash_inside_char_class_does_not_close() {
+        let (toks, diags) = tokenize_all("/[/]/");
+        assert!(diags.is_empty(), "diags: {diags:?}");
+        assert_eq!(
+            toks[0].kind,
+            TokenKind::RegexLiteral {
+                source: "[/]".to_string(),
+                flags: String::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn lex_regex_unterminated_at_newline_is_diagnosed() {
+        let (toks, diags) = tokenize_all("/abc\n");
+        assert!(
+            !diags.is_empty()
+                && diags
+                    .iter()
+                    .any(|d| d.message.contains("unterminated regex literal")),
+            "expected unterminated diagnostic, got {diags:?}"
+        );
+        assert!(matches!(toks[0].kind, TokenKind::RegexLiteral { .. }));
+    }
+
+    #[test]
+    fn lex_regex_unterminated_at_eof_is_diagnosed() {
+        let (_toks, diags) = tokenize_all("/abc");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("unterminated regex literal")),
+            "expected unterminated diagnostic, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn lex_regex_after_regex_is_division() {
+        // A regex literal is an operand; the `/` that follows is division.
+        let (toks, diags) = tokenize_all("/x/ / 2");
+        assert!(diags.is_empty(), "diags: {diags:?}");
+        assert!(matches!(toks[0].kind, TokenKind::RegexLiteral { .. }));
+        assert_eq!(toks[1].kind, TokenKind::Slash);
+    }
+
+    #[test]
+    fn lex_block_comment_remains_unaffected() {
+        let (toks, diags) = tokenize_all("/* a / b */ x");
+        assert!(diags.is_empty(), "diags: {diags:?}");
+        assert_eq!(toks[0].kind, TokenKind::Identifier);
+    }
+
+    #[test]
+    fn lex_line_comment_remains_unaffected() {
+        let (toks, diags) = tokenize_all("// /x/\n");
+        assert!(diags.is_empty(), "diags: {diags:?}");
+        // Line comment + newline are trivia; only Newline and Eof tokens remain.
+        assert!(
+            toks.iter()
+                .all(|t| matches!(t.kind, TokenKind::Newline | TokenKind::Eof))
+        );
+        assert!(
+            !toks
+                .iter()
+                .any(|t| matches!(t.kind, TokenKind::RegexLiteral { .. }))
+        );
+    }
+
+    #[test]
+    fn lex_postfix_increment_decrement() {
+        // `++` must beat `+=` in greedy dispatch; `--` must beat `-=`.
+        expect_single_token("++", TokenKind::PlusPlus, Span::new(F, 0, 2));
+        expect_single_token("--", TokenKind::MinusMinus, Span::new(F, 0, 2));
+        let (toks, diags) = tokenize_all("+=");
+        assert!(diags.is_empty());
+        assert_eq!(toks[0].kind, TokenKind::PlusEquals);
+        let (toks, diags) = tokenize_all("-=");
+        assert!(diags.is_empty());
+        assert_eq!(toks[0].kind, TokenKind::MinusEquals);
+        // Three pluses lex as `++ +` (greedy longest-match grabs the first two).
+        let (toks, diags) = tokenize_all("+++");
+        assert!(diags.is_empty());
+        assert_eq!(toks[0].kind, TokenKind::PlusPlus);
+        assert_eq!(toks[1].kind, TokenKind::Plus);
+    }
+
+    #[test]
+    fn lex_equality_operators_longest_match() {
+        expect_single_token("=", TokenKind::Equals, Span::new(F, 0, 1));
+        expect_single_token("==", TokenKind::EqEq, Span::new(F, 0, 2));
+        expect_single_token("===", TokenKind::EqEqEq, Span::new(F, 0, 3));
+        expect_single_token("!", TokenKind::Bang, Span::new(F, 0, 1));
+        expect_single_token("!=", TokenKind::BangEq, Span::new(F, 0, 2));
+        expect_single_token("!==", TokenKind::BangEqEq, Span::new(F, 0, 3));
+    }
+
+    #[test]
+    fn lex_arrow_token() {
+        expect_single_token("=>", TokenKind::Arrow, Span::new(F, 0, 2));
+    }
+
+    #[test]
+    fn lex_comparison_operators() {
+        expect_single_token("<", TokenKind::LessThan, Span::new(F, 0, 1));
+        expect_single_token(">", TokenKind::GreaterThan, Span::new(F, 0, 1));
+        expect_single_token("<=", TokenKind::LessEquals, Span::new(F, 0, 2));
+        expect_single_token(">=", TokenKind::GreaterEquals, Span::new(F, 0, 2));
+    }
+
+    #[test]
+    fn lex_logical_operators() {
+        expect_single_token("&&", TokenKind::AmpAmp, Span::new(F, 0, 2));
+        expect_single_token("||", TokenKind::PipePipe, Span::new(F, 0, 2));
+    }
+
+    #[test]
+    fn lex_pipe_longest_match() {
+        expect_single_token("|", TokenKind::Pipe, Span::new(F, 0, 1));
+        expect_single_token("||", TokenKind::PipePipe, Span::new(F, 0, 2));
+    }
+
+    #[test]
+    fn lex_dot_standalone_and_after_identifier() {
+        expect_single_token(".", TokenKind::Dot, Span::new(F, 0, 1));
+        let (tokens, diags) = tokenize_all("foo.bar");
+        assert!(diags.is_empty());
+        assert_eq!(tokens[0].kind, TokenKind::Identifier);
+        assert_eq!(tokens[1].kind, TokenKind::Dot);
+        assert_eq!(tokens[2].kind, TokenKind::Identifier);
+    }
+
+    #[test]
+    fn single_amp_is_unexpected() {
+        let (_, _, diags) = tokenize_one("&");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("unexpected character"));
+    }
+
+    #[test]
+    fn lex_all_delimiters() {
+        expect_single_token("(", TokenKind::LeftParen, Span::new(F, 0, 1));
+        expect_single_token(")", TokenKind::RightParen, Span::new(F, 0, 1));
+        expect_single_token("{", TokenKind::LeftBrace, Span::new(F, 0, 1));
+        expect_single_token("}", TokenKind::RightBrace, Span::new(F, 0, 1));
+        expect_single_token("[", TokenKind::LeftBracket, Span::new(F, 0, 1));
+        expect_single_token("]", TokenKind::RightBracket, Span::new(F, 0, 1));
+        expect_single_token(",", TokenKind::Comma, Span::new(F, 0, 1));
+        expect_single_token(":", TokenKind::Colon, Span::new(F, 0, 1));
+        expect_single_token(";", TokenKind::Semicolon, Span::new(F, 0, 1));
+        expect_single_token("?", TokenKind::Question, Span::new(F, 0, 1));
+    }
+
+    #[test]
+    fn lex_brackets_combined() {
+        let (tokens, diags) = tokenize_all("({[]})");
+        assert!(diags.is_empty());
+        let kinds: Vec<_> = tokens.iter().map(|t| t.kind.clone()).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::LeftParen,
+                TokenKind::LeftBrace,
+                TokenKind::LeftBracket,
+                TokenKind::RightBracket,
+                TokenKind::RightBrace,
+                TokenKind::RightParen,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_newline_lf() {
+        expect_single_token("\n", TokenKind::Newline, Span::new(F, 0, 1));
+    }
+
+    #[test]
+    fn lex_newline_crlf_is_one_token() {
+        expect_single_token("\r\n", TokenKind::Newline, Span::new(F, 0, 2));
+    }
+
+    #[test]
+    fn lex_newline_cr() {
+        expect_single_token("\r", TokenKind::Newline, Span::new(F, 0, 1));
+    }
+
+    #[test]
+    fn lex_mixed_newlines() {
+        let (tokens, diags) = tokenize_all("a\nb\r\nc\rd");
+        assert!(diags.is_empty());
+        let kinds: Vec<_> = tokens.iter().map(|t| t.kind.clone()).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Identifier,
+                TokenKind::Newline,
+                TokenKind::Identifier,
+                TokenKind::Newline,
+                TokenKind::Identifier,
+                TokenKind::Newline,
+                TokenKind::Identifier,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn line_comment_skipped_but_newline_preserved() {
+        let (tokens, diags) = tokenize_all("a // comment\nb");
+        assert!(diags.is_empty());
+        let kinds: Vec<_> = tokens.iter().map(|t| t.kind.clone()).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Identifier,
+                TokenKind::Newline,
+                TokenKind::Identifier,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn block_comment_skipped() {
+        let (tokens, diags) = tokenize_all("a /* block */ b");
+        assert!(diags.is_empty());
+        let kinds: Vec<_> = tokens.iter().map(|t| t.kind.clone()).collect();
+        assert_eq!(
+            kinds,
+            vec![TokenKind::Identifier, TokenKind::Identifier, TokenKind::Eof]
+        );
+    }
+
+    #[test]
+    fn empty_block_comment_is_fine() {
+        let (tokens, diags) = tokenize_all("/**/");
+        assert!(diags.is_empty());
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].kind, TokenKind::Eof);
+    }
+
+    #[test]
+    fn unterminated_block_comment_diagnosed() {
+        let (_, diags) = tokenize_all("/* unterminated");
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].message, "unterminated block comment");
+        assert_eq!(diags[0].span, Span::new(F, 0, 2));
+    }
+
+    #[test]
+    fn single_slash_star_not_block_comment_start() {
+        // `/*/` is parsed as the start of a block comment with no terminator.
+        let (_, diags) = tokenize_all("/*/");
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].message, "unterminated block comment");
+    }
+
+    #[test]
+    fn doc_comment_attaches_to_next_token() {
+        let (tok, eof, diags) = tokenize_one("/** Summary. */ foo");
+        let doc = tok.leading_doc.as_ref().expect("doc attached");
+        assert_eq!(doc.text, "/** Summary. */");
+        assert_eq!(doc.span, Span::new(F, 0, 15));
+        assert_eq!(tok.kind, TokenKind::Identifier);
+        assert!(eof.leading_doc.is_none());
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn doc_comment_survives_intervening_newlines() {
+        let (tokens, diags) = tokenize_all("/** doc */\n\nfoo");
+        assert!(diags.is_empty());
+        let ident = tokens
+            .iter()
+            .find(|t| t.kind == TokenKind::Identifier)
+            .expect("identifier present");
+        assert!(ident.leading_doc.is_some());
+        for nl in tokens.iter().filter(|t| t.kind == TokenKind::Newline) {
+            assert!(nl.leading_doc.is_none(), "newline shouldn't claim the doc");
+        }
+    }
+
+    #[test]
+    fn empty_doc_comment_captured() {
+        let (tok, _eof, _diags) = tokenize_one("/** */ x");
+        let doc = tok.leading_doc.as_ref().expect("doc attached");
+        assert_eq!(doc.text, "/** */");
+    }
+
+    #[test]
+    fn regular_block_comment_not_captured() {
+        let (tok, _eof, _diags) = tokenize_one("/* not a doc */ foo");
+        assert!(tok.leading_doc.is_none());
+    }
+
+    #[test]
+    fn empty_block_comment_not_a_doc() {
+        let (tok, _eof, _diags) = tokenize_one("/**/ foo");
+        assert!(tok.leading_doc.is_none());
+    }
+
+    #[test]
+    fn line_comment_not_captured() {
+        let (tok, _eof, _diags) = tokenize_one("// line\nfoo");
+        assert!(tok.leading_doc.is_none());
+    }
+
+    #[test]
+    fn last_doc_wins_when_multiple_in_a_row() {
+        let (tok, _eof, _diags) = tokenize_one("/** first */ /** second */ foo");
+        let doc = tok.leading_doc.as_ref().expect("doc attached");
+        assert_eq!(doc.text, "/** second */");
+    }
+
+    #[test]
+    fn unterminated_doc_emits_diagnostic() {
+        let (tok, _eof, diags) = tokenize_one("/** unterminated");
+        assert_eq!(tok.kind, TokenKind::Eof);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].message, "unterminated block comment");
+    }
+
+    #[test]
+    fn tokenize_mvp_fixture() {
+        let source = "function greet(name: string): string {\n  return \"Hello, \" + name;\n}\n\nfunction main(): string {\n  const msg = greet(\"world\");\n  console.log(msg);\n  assert(msg === \"Hello, world\", \"greeting should match\");\n  return msg;\n}\n";
+        let (tokens, diags) = tokenize_all(source);
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let kinds: Vec<String> = tokens.iter().map(|t| format!("{:?}", t.kind)).collect();
+        insta::assert_debug_snapshot!(kinds);
+    }
+}

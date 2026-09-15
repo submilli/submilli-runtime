@@ -1,0 +1,13 @@
+import http from "submilli:http";
+
+// `http.get`/`http.post` carry trailing optional (defaulted) params; the
+// namespace form must bind them like the named-import form does. The calls
+// are guarded so the fixture compiles, links, and runs to completion without
+// issuing a live network request.
+function main(): string {
+  if (false) {
+    const a = http.get("https://example.test");
+    const b = http.post("https://example.test", "body");
+  }
+  return "ok";
+}

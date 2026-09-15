@@ -1,0 +1,7 @@
+# A class reachable only as the *ancestor* of an imported class still has its
+# function-typed statics reconstructed by the consumer: the consumer's closure
+# collector must reach them through the extends chain, since nothing in its own
+# source names the ancestor.
+# name             dir  deps            root
+@test/ancestry     lib  -
+main               app  @test/ancestry  root

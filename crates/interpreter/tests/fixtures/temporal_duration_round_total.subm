@@ -1,0 +1,30 @@
+function main(): void {
+  // round() — string shorthand (smallestUnit), time units, no anchor.
+  const d: Temporal.Duration = Temporal.Duration.from("PT2H30M");
+  assert(d.round("hour").total("minutes") === 180, "round to nearest hour: 2h30m -> 3h");
+
+  // round() — options bag with roundingMode, no anchor.
+  const down: Temporal.Duration = d.round({ smallestUnit: "hour", roundingMode: "floor" });
+  assert(down.total("minutes") === 120, "round floor to hour: 2h30m -> 2h");
+
+  // round() — roundingIncrement.
+  const m: Temporal.Duration = Temporal.Duration.from("PT47M");
+  const inc: number = m.round({ smallestUnit: "minute", roundingIncrement: 15 }).total("minutes");
+  assert(inc === 45, "round to 15-minute increment: 47m -> 45m");
+
+  // total() — string form still works (time units, no anchor).
+  assert(Temporal.Duration.from("PT90M").total("hours") === 1.5, "total hours of 90m = 1.5");
+
+  // total() — options form with a PlainDate relativeTo for calendar units.
+  const cal: Temporal.Duration = Temporal.Duration.from("P1M");
+  const jan: Temporal.PlainDate = Temporal.PlainDate.from("2024-01-01");
+  const feb: Temporal.PlainDate = Temporal.PlainDate.from("2024-02-01");
+  assert(cal.total({ unit: "days", relativeTo: jan }) === 31, "P1M from 2024-01-01 = 31 days");
+  assert(cal.total({ unit: "days", relativeTo: feb }) === 29, "P1M from 2024-02-01 (leap) = 29 days");
+
+  // round() with a calendar anchor: balance days up into months.
+  const fortyDays: Temporal.Duration = Temporal.Duration.from("P40D");
+  const balanced: Temporal.Duration = fortyDays.round({ largestUnit: "month", smallestUnit: "day", relativeTo: jan });
+  assert(balanced.months === 1, "40 days from 2024-01-01 balances to 1 month ...");
+  assert(balanced.days === 9, "... and 9 days (Jan has 31)");
+}

@@ -1,0 +1,6 @@
+# Reference-typed top-level `export const` across SEPARATE packages. Same
+# producer/consumer nullability contract as `classes/static_ref_types_cross_package`,
+# on the plain package-value import path rather than the static-field one.
+# name          dir    deps          root
+@test/cfg       cfg    -
+main            app    @test/cfg     root

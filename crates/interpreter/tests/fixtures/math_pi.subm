@@ -1,0 +1,5 @@
+function main(): void {
+  const pi: number = Math.PI;
+  assert(pi > 3.14 && pi < 3.142, "Math.PI within tight bound");
+  assert(pi === 3.141592653589793, "Math.PI exact IEEE-754 double");
+}

@@ -1,0 +1,16 @@
+// JSON.parse into a recursive object alias (a rose tree). The validator
+// for `Tree` constructs each node and recurses through `children: Tree[]`.
+type Tree = { value: number; children: Tree[] };
+
+function main(): void {
+  const t = JSON.parse(
+    "{\"value\": 1, \"children\": [{\"value\": 2, \"children\": []}, {\"value\": 3, \"children\": [{\"value\": 4, \"children\": []}]}]}"
+  ) as Tree;
+  assert(t.value === 1, "root value");
+  assert(t.children.length === 2, "root has two children");
+  assert(t.children[0].value === 2, "first child value");
+  assert(t.children[0].children.length === 0, "first child is a leaf");
+  assert(t.children[1].value === 3, "second child value");
+  assert(t.children[1].children.length === 1, "second child has one child");
+  assert(t.children[1].children[0].value === 4, "grandchild value");
+}

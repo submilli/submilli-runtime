@@ -1,0 +1,7 @@
+import security from "submilli:security";
+
+function main(): void {
+  // generic `check<T>` called through the namespace form — must infer `T`
+  // from the context argument, matching the named-import path.
+  security.check("test.com/op", { foo: 1 });
+}

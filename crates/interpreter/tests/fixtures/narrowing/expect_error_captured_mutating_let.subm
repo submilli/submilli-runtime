@@ -1,0 +1,20 @@
+// expect-error: cannot read field `length` on `string | null`: the receiver can be `null`
+// expect-error: refused because a closure body reassigns `x`
+// expect-error: stability rule 5
+
+function broken(): number {
+  let x: string | null = "hi";
+  const setter = (): void => {
+    x = null;
+  };
+  // Burn a reference; mutator scan inspects closure assignments, not call sites.
+  const _: () => void = setter;
+  if (x !== null) {
+    return x.length;
+  }
+  return -1;
+}
+
+function main(): void {
+  assert(broken() >= 0, "unreachable in a successful build");
+}

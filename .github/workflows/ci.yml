@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  SUBMILLI_TELEMETRY: "0"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Rustfmt
+        run: cargo fmt --all --check
+
+      # Gate: the deny-tier lints in [workspace.lints] plus `-D warnings` (any stray
+      # default-clippy warning is an error too). The ratchet lints are not enabled
+      # here, so this stays clean.
+      - name: Clippy (gate)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # The fixture harness defaults to a smoke subset (196 of 1054) for fast local
+      # iteration. CI has no such constraint — the full sweep is a few seconds — and
+      # the subset keeps one fixture per top-level directory, so whole trees never run.
+      - name: Test
+        run: cargo test --workspace
+        env:
+          SUBMILLI_FULL_TEST: 1
+
+      # The shipped packages' own test files, run under each package's identity.
+      # `cargo test` cannot cover this: the identity is stamped by the CLI at
+      # compile time, so a regression there surfaces only by running the packages
+      # — as a `secrets.get` denial in every package that reads a token.
+      - name: Package tests
+        run: cargo run -p submilli -- build test
+
+      # Ratchet: the not-yet-zero lints are off the gate (so `-D warnings` is clean).
+      # Enable them explicitly here, as warnings, only to print the trend to the job
+      # summary. Not a gate. Keep this list in sync with the comment in Cargo.toml.
+      - name: Lint ratchet (informational)
+        if: always()
+        run: |
+          cargo clippy --workspace --all-targets -- \
+            -W clippy::too_many_lines -W clippy::cognitive_complexity 2>&1 \
+            | grep -oE 'index.html#[a-z_]+' | sed 's#index.html##' \
+            | sort | uniq -c | sort -rn | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # `cap-std` takes a different resolution path on each platform — `openat2` with
+  # RESOLVE_BENEATH on Linux, a manual resolver on macOS, and on Windows a lexical
+  # `..` pass plus reconstructed absolute paths for several non-open operations. The
+  # release workflow ships `x86_64-pc-windows-msvc`, so the platform where escape
+  # classification is least certain would otherwise be the one nothing exercises.
+  # A divergence here is a stop condition, not something to work around.
+  containment:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: VFS containment suite
+        run: cargo test -p interpreter --test vfs_containment
+
+      # The server's MCP file tools resolve through the same handles but reach them
+      # by a different route, so the interpreter suite passing says nothing about
+      # them. `files_` is every test over those two tools, escapes included.
+      - name: MCP file-tool containment
+        run: cargo test -p submilli-server --test mcp files_

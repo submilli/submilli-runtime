@@ -1,0 +1,27 @@
+function main(): void {
+  let arr: number[] = [10, 20, 30];
+
+  let last = arr.pop();
+  if (last !== null) {
+    assert(last === 30, "pop returns the last element");
+  } else {
+    assert(false, "pop on non-empty should not return null");
+  }
+  assert(arr.length === 2, "length shrinks after pop");
+
+  let mid = arr.pop();
+  if (mid !== null) {
+    assert(mid === 20, "second pop returns previous last");
+  }
+  assert(arr.length === 1, "length shrinks again");
+
+  let first = arr.pop();
+  if (first !== null) {
+    assert(first === 10, "third pop empties the array");
+  }
+  assert(arr.length === 0, "length is zero after popping all elements");
+
+  let empty = arr.pop();
+  assert(empty === null, "pop on empty array returns null");
+  assert(arr.length === 0, "popping an empty array does not shrink length");
+}

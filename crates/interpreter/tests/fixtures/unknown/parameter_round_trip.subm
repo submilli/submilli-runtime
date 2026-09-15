@@ -1,0 +1,42 @@
+function identity(x: unknown): unknown {
+  return x;
+}
+
+function describe(x: unknown): string {
+  if (x === null) {
+    return "null";
+  }
+  if (typeof x === "number") {
+    return "number";
+  }
+  if (typeof x === "string") {
+    return "string";
+  }
+  if (typeof x === "boolean") {
+    return "boolean";
+  }
+  return "other";
+}
+
+function main(): void {
+  const a: unknown = identity(1);
+  const b: unknown = identity("hi");
+  const c: unknown = identity(true);
+  const d: unknown = identity(null);
+
+  assert(describe(1) === "number", "describe number");
+  assert(describe("hi") === "string", "describe string");
+  assert(describe(true) === "boolean", "describe boolean");
+  assert(describe(null) === "null", "describe null");
+
+  if (typeof a === "number") {
+    assert(a === 1, "round-trip preserves number");
+  }
+  if (typeof b === "string") {
+    assert(b === "hi", "round-trip preserves string");
+  }
+  if (typeof c === "boolean" && c) {
+    assert(true, "round-trip preserves boolean");
+  }
+  assert(d === null, "round-trip preserves null");
+}

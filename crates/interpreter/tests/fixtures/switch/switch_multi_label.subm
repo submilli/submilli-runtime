@@ -1,0 +1,20 @@
+function vowelish(s: string): boolean {
+  switch (s) {
+    case "a":
+    case "e":
+    case "i":
+    case "o":
+    case "u":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function main(): void {
+  assert(vowelish("a"), "a is vowel");
+  assert(vowelish("e"), "e is vowel");
+  assert(vowelish("u"), "u is vowel");
+  assert(!vowelish("b"), "b is not");
+  assert(!vowelish("z"), "z is not");
+}

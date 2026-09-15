@@ -1,0 +1,25 @@
+function fresh_match(s: string): boolean {
+  const re: RegExp = /a/g;
+  assert(re.lastIndex === 0, "fresh per call");
+  const matched: boolean = re.test(s);
+  assert(re.lastIndex === 1 || re.lastIndex === 0, "advanced or reset");
+  return matched;
+}
+
+function shared_advances(): void {
+  const re: RegExp = /a/g;
+  assert(re.test("aaa"), "first match");
+  assert(re.lastIndex === 1, "advanced");
+  assert(re.test("aaa"), "second match");
+  assert(re.lastIndex === 2, "advanced again");
+  assert(re.test("aaa"), "third match");
+  assert(re.lastIndex === 3, "advanced to end");
+  assert(!re.test("aaa"), "exhausted");
+  assert(re.lastIndex === 0, "reset on no-match");
+}
+
+function main(): void {
+  assert(fresh_match("aaa"), "fresh literal matches");
+  assert(fresh_match("aaa"), "fresh literal matches again (no carryover)");
+  shared_advances();
+}

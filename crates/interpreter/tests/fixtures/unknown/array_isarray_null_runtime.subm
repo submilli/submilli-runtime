@@ -1,0 +1,6 @@
+// null flows through `Array.isArray` without trapping: erased-generic ABI is nullable, so `ref.test` returns false.
+
+function main(): void {
+  const x: unknown = null;
+  assert(Array.isArray(x) === false, "Array.isArray(null) returns false");
+}

@@ -1,0 +1,20 @@
+// Immediately-invoked closure expressions — a call whose callee is an inline
+// arrow. The Array.from / iterable-initializer lowerings synthesize this shape.
+
+function main(): void {
+  const n = ((x: number): number => x + 1)(41);
+  assert(n === 42, "one-param IIFE");
+
+  const s = ((a: string, b: string): string => a + b)("ii", "fe");
+  assert(s === "iife", "two-param IIFE");
+
+  const xs = [1, 2, 3];
+  const total = ((src: number[]): number => {
+    let acc = 0;
+    for (const x of src) {
+      acc = acc + x;
+    }
+    return acc;
+  })(xs);
+  assert(total === 6, "IIFE with a for-of body over a parameter");
+}

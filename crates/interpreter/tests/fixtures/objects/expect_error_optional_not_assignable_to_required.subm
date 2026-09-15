@@ -1,0 +1,8 @@
+// expect-error: expected
+
+function takesRequired(u: { id: number, name: string }): void {}
+
+function main(): void {
+  const partial: { id: number, name?: string } = { id: 1 };
+  takesRequired(partial);
+}

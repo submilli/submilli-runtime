@@ -1,0 +1,15 @@
+import { writeText, readBytes } from "submilli:fs";
+
+function main(): void {
+  writeText("/range.txt", "abcdefghij");
+  const middle: Uint8Array = readBytes("/range.txt", 3, 4);
+  assert(middle.length === 4, "exact length returned");
+  // 'd' = 100, 'e' = 101, 'f' = 102, 'g' = 103
+  assert(middle[0] === 100, "byte 0 = 'd'");
+  assert(middle[1] === 101, "byte 1 = 'e'");
+  assert(middle[2] === 102, "byte 2 = 'f'");
+  assert(middle[3] === 103, "byte 3 = 'g'");
+
+  const tail: Uint8Array = readBytes("/range.txt", 8, 10);
+  assert(tail.length === 2, "request past EOF truncates");
+}

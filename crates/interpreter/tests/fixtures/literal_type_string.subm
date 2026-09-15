@@ -1,0 +1,20 @@
+// string-literal types in annotations.
+
+function take_hi(s: "hi"): "hi" {
+  return s;
+}
+
+function widen(s: "hi"): string {
+  return s;
+}
+
+function main(): void {
+  const literal: "hi" = "hi";
+  assert(literal === "hi", "literal-typed const carries the value");
+
+  const echoed: "hi" = take_hi("hi");
+  assert(echoed === "hi", "literal-typed param and return round-trip");
+
+  const widened: string = widen("hi");
+  assert(widened === "hi", "literal flows to base primitive");
+}

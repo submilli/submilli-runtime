@@ -1,0 +1,14 @@
+function main(): void {
+  const re: RegExp = new RegExp("abc", "gi");
+  const empty: RegExp = new RegExp("x", "");
+  assert(re.test("abc"), "regex still usable with new toString vtable");
+  assert(empty.test("x"), "empty-flags regex still usable");
+
+  // Fresh regex (no g-flag advancement) so exec starts at 0.
+  const ci: RegExp = new RegExp("abc", "i");
+  const m: RegExpMatch | null = ci.exec("XABC");
+  assert(m !== null, "match found");
+  if (m !== null) {
+    assert(m.match === "ABC", "match text via property");
+  }
+}

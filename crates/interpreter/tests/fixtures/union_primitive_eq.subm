@@ -1,0 +1,22 @@
+// Equality between a union value (`$Object` repr) and a primitive literal.
+// The Eq rule infers the literal RHS onto a concrete member, so its Wasm
+// value-type (`f64` / `i32`) differs from the union's (`$Object`); codegen
+// must box the RHS before the vtable `equals` dispatch.
+type U = number | string | boolean;
+
+function main(): void {
+  const xs: U[] = [1, "x", true];
+  const a: U = xs[0];
+  const b: U = xs[1];
+  const c: U = xs[2];
+
+  assert(a === 1, "number member equals its literal");
+  assert(a !== 2, "number member differs from another literal");
+  assert(a !== "x", "number member differs from a string literal");
+
+  assert(b === "x", "string member equals its literal");
+  assert(b !== "y", "string member differs from another string literal");
+
+  assert(c === true, "boolean member equals its literal");
+  assert(c !== false, "boolean member differs from the other boolean");
+}

@@ -1,0 +1,16 @@
+function area(
+  s: { kind: "circle"; radius: number }
+   | { kind: "rect"; w: number; h: number }
+): number {
+  switch (s.kind) {
+    case "circle": return s.radius * s.radius * 3;
+    case "rect": return s.w * s.h;
+  }
+}
+
+function main(): void {
+  const c: { kind: "circle"; radius: number } = { kind: "circle", radius: 2 };
+  const r: { kind: "rect"; w: number; h: number } = { kind: "rect", w: 3, h: 4 };
+  assert(area(c) === 12, "circle radius=2 yields 12");
+  assert(area(r) === 12, "rect 3x4 yields 12");
+}

@@ -1,0 +1,10 @@
+// `ZonedDateTime#withTimeZone` shifts wall-clock fields while
+// preserving the instant.
+
+function main(): void {
+  const utc: Temporal.ZonedDateTime = Temporal.ZonedDateTime.from("2024-03-09T12:00:00+00:00[UTC]");
+  const tokyo: Temporal.ZonedDateTime = utc.withTimeZone("Asia/Tokyo");
+  assert(tokyo.timeZoneId === "Asia/Tokyo", "tz id rebound");
+  assert(tokyo.hour === 21, "Tokyo wall-clock = UTC + 9");
+  assert(tokyo.epochMilliseconds === utc.epochMilliseconds, "instant preserved");
+}

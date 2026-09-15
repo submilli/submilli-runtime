@@ -1,0 +1,5 @@
+function main(): void {
+  const t = JSON.parse("[\"x\", 1]") as [string, number];
+  assert(t[0] === "x", "t[0]");
+  assert(t[1] === 1, "t[1]");
+}

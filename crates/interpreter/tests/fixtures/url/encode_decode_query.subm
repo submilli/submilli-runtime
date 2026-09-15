@@ -1,0 +1,39 @@
+// Map pair order is probe-order, not insertion-order; tests use key lookups rather than string equality.
+
+import { encodeQuery, decodeQuery } from "submilli:url";
+
+function main(): void {
+  const m: Map<string, string> = decodeQuery("a=1&b=2&c=hello");
+  assert(m.size === 3, "three pairs");
+  const a: string | null = m.get("a");
+  assert(a !== null && a === "1", "a=1");
+  const b: string | null = m.get("b");
+  assert(b !== null && b === "2", "b=2");
+  const c: string | null = m.get("c");
+  assert(c !== null && c === "hello", "c=hello");
+
+  const empty: Map<string, string> = decodeQuery("");
+  assert(empty.size === 0, "empty query → empty map");
+
+  const encoded: Map<string, string> = decodeQuery("k=hello%20world&p=a%26b");
+  const k: string | null = encoded.get("k");
+  assert(k !== null && k === "hello world", "space decoded");
+  const p: string | null = encoded.get("p");
+  assert(p !== null && p === "a&b", "& decoded");
+
+  const out: Map<string, string> = new Map<string, string>();
+  out.set("foo", "bar baz");
+  out.set("qux", "1+2");
+  const s: string = encodeQuery(out);
+  assert(s.length > 0, "encoded string non-empty");
+
+  const reparsed: Map<string, string> = decodeQuery(s);
+  assert(reparsed.size === 2, "re-decode preserves pair count");
+  const foo: string | null = reparsed.get("foo");
+  assert(foo !== null && foo === "bar baz", "foo round-trips");
+  const qux: string | null = reparsed.get("qux");
+  assert(qux !== null && qux === "1+2", "qux round-trips with special chars");
+
+  const empty_out: string = encodeQuery(new Map<string, string>());
+  assert(empty_out === "", "empty map → empty query");
+}

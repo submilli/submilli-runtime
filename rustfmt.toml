@@ -1,0 +1,6 @@
+# Canonical Rust formatting for the workspace. Enforced by CI (`cargo fmt --check`).
+#
+# `style_edition` pins the formatting *rules* version so a future rustfmt upgrade
+# doesn't silently re-churn the whole tree.
+style_edition = "2024"
+max_width = 100

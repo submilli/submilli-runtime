@@ -1,0 +1,6 @@
+// Generic `JSON.parse<T>(s)` is no longer supported, even when followed by `as`.
+// expect-error: `JSON.parse` does not take type arguments
+
+function main(): void {
+  const _ = JSON.parse<number>("1") as string;
+}

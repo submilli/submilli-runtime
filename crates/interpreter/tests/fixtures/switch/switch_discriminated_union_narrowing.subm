@@ -1,0 +1,16 @@
+function describe(
+  s: { kind: "circle"; radius: number }
+   | { kind: "rect"; w: number; h: number }
+): number {
+  switch (s.kind) {
+    case "circle": return s.radius;
+    case "rect": return s.w + s.h;
+  }
+}
+
+function main(): void {
+  const c: { kind: "circle"; radius: number } = { kind: "circle", radius: 7 };
+  const r: { kind: "rect"; w: number; h: number } = { kind: "rect", w: 3, h: 4 };
+  assert(describe(c) === 7, "circle radius narrowed");
+  assert(describe(r) === 7, "rect dims narrowed");
+}

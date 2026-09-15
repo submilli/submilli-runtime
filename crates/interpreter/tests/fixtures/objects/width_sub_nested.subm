@@ -1,0 +1,16 @@
+function readInnerA(p: { inner: { a: number } }): number {
+  return p.inner.a;
+}
+
+function main(): void {
+  assert(readInnerA({ inner: { a: 1 } }) === 1, "exact nested");
+
+  const extraInner = { inner: { a: 2, b: 5 } };
+  assert(readInnerA(extraInner) === 2, "extra inner field");
+
+  const extraOuter = { inner: { a: 3 }, extra: 7 };
+  assert(readInnerA(extraOuter) === 3, "extra outer field");
+
+  const extrasEverywhere = { inner: { a: 4, c: 9 }, extra: 7, more: 11 };
+  assert(readInnerA(extrasEverywhere) === 4, "extras at every layer");
+}

@@ -1,0 +1,25 @@
+// Wall-clock -> zoned: interpret a tz-free Plain value in a named zone,
+// resolving the instant with `compatible` DST disambiguation.
+
+function main(): void {
+  const dt: Temporal.PlainDateTime = Temporal.PlainDateTime.from("2024-03-15T09:41:30");
+  const z: Temporal.ZonedDateTime = dt.toZonedDateTime("America/New_York");
+  assert(z.year === 2024 && z.month === 3 && z.day === 15, "zdt keeps date");
+  assert(z.hour === 9 && z.minute === 41 && z.second === 30, "zdt keeps wall clock");
+  assert(z.timeZoneId === "America/New_York", "zoned in the requested zone");
+
+  // PlainDate with a bare tz string -> midnight in that zone.
+  const d: Temporal.PlainDate = Temporal.PlainDate.from("2024-03-15");
+  const zMidnight: Temporal.ZonedDateTime = d.toZonedDateTime("America/New_York");
+  assert(zMidnight.hour === 0 && zMidnight.minute === 0, "PlainDate -> zoned midnight");
+  assert(zMidnight.timeZoneId === "America/New_York", "PlainDate zone");
+
+  // PlainDate with an options object carrying a wall-clock time.
+  const t: Temporal.PlainTime = Temporal.PlainTime.from("14:00:00");
+  const zNoon: Temporal.ZonedDateTime = d.toZonedDateTime({ timeZone: "America/New_York", plainTime: t });
+  assert(zNoon.hour === 14 && zNoon.day === 15, "PlainDate -> zoned with plainTime");
+
+  // Options object without plainTime falls back to midnight.
+  const zObjMidnight: Temporal.ZonedDateTime = d.toZonedDateTime({ timeZone: "UTC" });
+  assert(zObjMidnight.hour === 0 && zObjMidnight.timeZoneId === "UTC", "object form, no plainTime -> midnight");
+}

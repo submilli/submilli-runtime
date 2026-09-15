@@ -1,0 +1,15 @@
+function main(): void {
+  assert(/abc/.test("abc"), "literal match");
+  assert(!/abc/.test("xyz"), "literal non-match");
+
+  const re: RegExp = /hello/gi;
+  assert(re.source === "hello", "literal source");
+  assert(re.flags === "gi", "literal flags");
+  assert(re.global, "g flag");
+  assert(re.ignoreCase, "i flag");
+
+  assert(/a\/b/.test("a/b"), "escaped slash matches literal `/`");
+  assert(/\\/.test("a\\b"), "escaped backslash");
+
+  assert(/[/]/.test("a/b"), "slash inside character class is literal `/`");
+}

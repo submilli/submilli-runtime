@@ -1,0 +1,9 @@
+export interface Private {
+  value: number;
+}
+
+export interface Public {
+  inner: Private;
+}
+
+export const DEFAULT: Public = { inner: { value: 1 } };

@@ -1,0 +1,14 @@
+function main(): void {
+  let bytes: Uint8Array = Uint8Array.new([1, 2, 3, 4]);
+
+  assert(bytes.some((v: number) => v === 3) === true, "some: 3 is present");
+  assert(bytes.some((v: number) => v === 99) === false, "some: 99 is absent");
+
+  assert(bytes.every((v: number) => v > 0) === true, "every positive");
+  assert(bytes.every((v: number) => v > 2) === false, "not every >2");
+
+  // Empty: some=false, every=true (vacuous truth).
+  let empty: Uint8Array = Uint8Array.alloc(0);
+  assert(empty.some((v: number) => true) === false, "some on empty is false");
+  assert(empty.every((v: number) => false) === true, "every on empty is true (vacuous)");
+}

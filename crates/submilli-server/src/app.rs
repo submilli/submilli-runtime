@@ -1,0 +1,797 @@
+use std::collections::{BTreeSet, HashMap};
+use std::fmt;
+use std::net::SocketAddr;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
+
+use anyhow::Result;
+use axum::{
+    Router,
+    routing::{delete, get, post},
+};
+use interpreter::runtime::{
+    HttpClient, ReqwestHttpClient, RuntimeConfig, StoreData, install_runtime_host_functions,
+};
+use interpreter::{PackageDeclaration, ScriptImports};
+use submilli_blueprint::Blueprint;
+use submilli_build::{ArtifactMetadata, PackageStore, PackageStoreError};
+use submilli_shared::EnvFileSecretResolver;
+use submilli_shared::secret_store::SecretStore;
+use tokio::sync::Notify;
+use wasmtime::{Engine, Linker, Module};
+
+use crate::ServerConfig;
+use crate::blueprint::{BlueprintStore, FileBlueprintStore, InMemoryBlueprintStore};
+use crate::blueprint_seed::seed_blueprints;
+use crate::config::{OAuthProvider, VolumeTable};
+use crate::idempotency::Coordinator;
+use crate::idempotency_store::{FileIdempotencyStore, IdempotencyStore, InMemoryIdempotencyStore};
+use crate::mcp::{
+    BlueprintServiceCache, McpCatalog, discover_all, discover_selected, new_service_cache,
+};
+use crate::session::{InMemorySessionStore, SessionStore};
+use crate::session_manager::{
+    DEFAULT_TOTAL_SESSION_KV_BYTES, HttpClientFactory, SessionKvSettings, SessionManager,
+};
+use crate::session_store::{
+    DurableSessionStore, FileDurableSessionStore, InMemoryDurableSessionStore,
+};
+use submilli_shared::mcp::discovery::DiscoveryAuth;
+use submilli_shared::mcp_token::OAuthTokenManager;
+
+/// How often the background reaper sweeps for expired sessions.
+const REAP_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Subdirectory of the session-store directory holding the idempotency ledger.
+const IDEMPOTENCY_SUBDIR: &str = "idempotency";
+
+/// Long-lived engine amortises Cranelift init cost across requests.
+#[derive(Clone)]
+pub struct AppState {
+    inner: Arc<AppStateInner>,
+}
+
+struct AppStateInner {
+    engine: Engine,
+    base_linker: Linker<StoreData>,
+    runtime: RuntimeConfig,
+    sessions: Arc<dyn SessionStore>,
+    blueprints: Arc<dyn BlueprintStore>,
+    /// See [`ServerConfig::blueprint_seed_dir`].
+    blueprint_seed_dir: Option<PathBuf>,
+    secret_store: Option<Arc<dyn SecretStore>>,
+    /// Mints/rotates `@mcp/<server>` OAuth access tokens. `Some` only when a
+    /// secret store is configured (OAuth refresh tokens have nowhere to live
+    /// otherwise).
+    oauth_tokens: Option<Arc<OAuthTokenManager>>,
+    session_manager: Arc<SessionManager>,
+    session_store: Arc<dyn DurableSessionStore>,
+    /// Mediates `Idempotency-Key` reservations against the ledger it owns.
+    idempotency: Arc<Coordinator>,
+    /// Per-blueprint MCP services, built lazily and evicted on blueprint change.
+    mcp_services: BlueprintServiceCache,
+    /// `Host` headers the MCP endpoint accepts (DNS-rebinding guard). `None`
+    /// leaves rmcp's loopback-only default in place.
+    mcp_allowed_hosts: Option<Vec<String>>,
+    /// Configured OAuth client apps, matched by authorization-server host.
+    mcp_oauth_providers: Arc<Vec<OAuthProvider>>,
+    /// Outbound HTTP for the OAuth handlers (discovery + code exchange).
+    oauth_http: Arc<dyn HttpClient>,
+    /// Per-blueprint discovered `@mcp/<server>` catalogs (the typed import
+    /// surface), built lazily on first execute and evicted on blueprint change.
+    mcp_catalogs: Mutex<HashMap<String, Arc<McpCatalog>>>,
+    package_store: PackageStore,
+    prepared_packages: Mutex<HashMap<String, Arc<PreparedBlueprintPackages>>>,
+    /// Signalled by `POST /v1/shutdown`; awaited by `serve` to drain gracefully.
+    shutdown: Arc<Notify>,
+    /// Bound address, set by `serve` once the listener is up. Reported by status.
+    bind_addr: OnceLock<SocketAddr>,
+}
+
+impl AppState {
+    pub fn new(config: ServerConfig) -> Result<Self> {
+        let runtime = config.runtime;
+        let engine = server_engine(&runtime)?;
+        let mut base_linker = Linker::<StoreData>::new(&engine);
+        install_runtime_host_functions(&mut base_linker)?;
+        // One HTTP client (connection pool) is built per session for isolation —
+        // see `SessionManager`. The factory captures the server-wide SSRF policy.
+        let policy = Arc::new(config.network_policy);
+        let http_client_factory: HttpClientFactory = {
+            let policy = Arc::clone(&policy);
+            Arc::new(move || {
+                Arc::new(ReqwestHttpClient::new(Arc::clone(&policy))) as Arc<dyn HttpClient>
+            })
+        };
+        let sessions = config
+            .sessions
+            .unwrap_or_else(|| Arc::new(InMemorySessionStore::default()));
+        let blueprints: Arc<dyn BlueprintStore> = match (config.blueprints, config.blueprint_dir) {
+            (Some(store), _) => store,
+            (None, Some(dir)) => Arc::new(FileBlueprintStore::new(dir)?),
+            (None, None) => Arc::new(InMemoryBlueprintStore::default()),
+        };
+        let secret_store = config.secret_store;
+        let mcp_oauth_providers = Arc::new(config.mcp_oauth_providers);
+        // Dedicated HTTP client (its own pool) for token-endpoint exchanges,
+        // governed by the same SSRF policy as script-issued requests.
+        let oauth_tokens = secret_store.clone().map(|store| {
+            let http = Arc::new(ReqwestHttpClient::new(Arc::clone(&policy))) as Arc<dyn HttpClient>;
+            Arc::new(OAuthTokenManager::new(
+                store,
+                http,
+                Arc::clone(&mcp_oauth_providers),
+            ))
+        });
+        // Outbound HTTP for the OAuth handlers (discovery + code exchange), same
+        // SSRF policy.
+        let oauth_http =
+            Arc::new(ReqwestHttpClient::new(Arc::clone(&policy))) as Arc<dyn HttpClient>;
+
+        // Both roots are created lazily on first use (`create_dir_all` makes
+        // parents), so construction never touches the filesystem — tests and
+        // read-only deploys stay happy.
+        let session_root = config
+            .session_storage_root
+            .unwrap_or_else(crate::config::default_session_storage_root);
+        let session_store_dir = config.session_store_dir;
+        let session_store: Arc<dyn DurableSessionStore> =
+            match (config.session_store, &session_store_dir) {
+                (Some(store), _) => store,
+                (None, Some(dir)) => Arc::new(FileDurableSessionStore::new(dir.clone())?),
+                (None, None) => Arc::new(InMemoryDurableSessionStore::default()),
+            };
+        // The ledger rides the session store's directory rather than its own
+        // knob. `is_record_file` skips subdirectories, so the two never
+        // see each other's entries.
+        let idempotency_store: Arc<dyn IdempotencyStore> =
+            match (config.idempotency_store, &session_store_dir) {
+                (Some(store), _) => store,
+                (None, Some(dir)) => {
+                    Arc::new(FileIdempotencyStore::new(dir.join(IDEMPOTENCY_SUBDIR))?)
+                }
+                (None, None) => Arc::new(InMemoryIdempotencyStore::default()),
+            };
+        let session_manager = Arc::new(SessionManager::new(
+            session_root,
+            config.ephemeral_storage_root,
+            Arc::new(config.volumes),
+            http_client_factory,
+            Arc::clone(&session_store),
+            Arc::clone(&idempotency_store),
+            SessionKvSettings::new(
+                config.session_kv_limits,
+                config
+                    .max_session_state_memory
+                    .unwrap_or(DEFAULT_TOTAL_SESSION_KV_BYTES),
+            ),
+        ));
+        session_manager.spawn_reaper(REAP_INTERVAL);
+
+        Ok(Self {
+            inner: Arc::new(AppStateInner {
+                engine,
+                base_linker,
+                runtime,
+                sessions,
+                blueprints,
+                blueprint_seed_dir: config.blueprint_seed_dir,
+                secret_store,
+                oauth_tokens,
+                session_manager,
+                session_store,
+                idempotency: Arc::new(Coordinator::new(idempotency_store)),
+                mcp_services: new_service_cache(),
+                mcp_allowed_hosts: config.mcp_allowed_hosts,
+                mcp_oauth_providers,
+                oauth_http,
+                mcp_catalogs: Mutex::new(HashMap::new()),
+                package_store: PackageStore::new(
+                    config
+                        .package_store_root
+                        .unwrap_or_else(crate::config::default_package_store_dir),
+                ),
+                prepared_packages: Mutex::new(HashMap::new()),
+                shutdown: Arc::new(Notify::new()),
+                bind_addr: OnceLock::new(),
+            }),
+        })
+    }
+
+    /// Rehydrate persisted sessions, sweep orphan directories, and reconcile the
+    /// blueprint store against the seed directory. Must be awaited once before
+    /// serving so a reconnect resolves, stale `per_session` directories are
+    /// reclaimed, and seeded blueprints are present on the first request; `serve`
+    /// does this, and any embedded host that bypasses `serve` should too.
+    pub async fn boot(&self) {
+        self.inner.session_manager.boot().await;
+        if let Some(dir) = &self.inner.blueprint_seed_dir {
+            let resolver = EnvFileSecretResolver::new(self.secret_store().cloned());
+            seed_blueprints(
+                self.inner.blueprints.as_ref(),
+                &resolver,
+                dir,
+                self.inner.session_manager.volumes(),
+            )
+            .await;
+        }
+    }
+
+    /// Handle `serve` awaits for graceful shutdown; `POST /v1/shutdown` signals it.
+    pub fn shutdown_signal(&self) -> Arc<Notify> {
+        Arc::clone(&self.inner.shutdown)
+    }
+
+    /// Record the bound address once the listener is up (idempotent).
+    pub fn set_bind_addr(&self, addr: SocketAddr) {
+        let _ = self.inner.bind_addr.set(addr);
+    }
+
+    pub(crate) fn bind_addr(&self) -> Option<SocketAddr> {
+        self.inner.bind_addr.get().copied()
+    }
+
+    pub(crate) fn engine(&self) -> &Engine {
+        &self.inner.engine
+    }
+
+    pub(crate) fn base_linker(&self) -> &Linker<StoreData> {
+        &self.inner.base_linker
+    }
+
+    pub(crate) fn runtime(&self) -> &RuntimeConfig {
+        &self.inner.runtime
+    }
+
+    pub(crate) fn sessions(&self) -> &Arc<dyn SessionStore> {
+        &self.inner.sessions
+    }
+
+    pub(crate) fn blueprints(&self) -> &Arc<dyn BlueprintStore> {
+        &self.inner.blueprints
+    }
+
+    pub(crate) fn secret_store(&self) -> Option<&Arc<dyn SecretStore>> {
+        self.inner.secret_store.as_ref()
+    }
+
+    /// The OAuth access-token manager for `@mcp/<server>` calls, present when a
+    /// secret store is configured. The MCP transport calls into it to attach a
+    /// bearer token and to refresh on a mid-call `401`.
+    pub fn oauth_token_manager(&self) -> Option<&Arc<OAuthTokenManager>> {
+        self.inner.oauth_tokens.as_ref()
+    }
+
+    pub(crate) fn session_manager(&self) -> &Arc<SessionManager> {
+        &self.inner.session_manager
+    }
+
+    /// The operator-declared volume table, read from the session manager so
+    /// the listing endpoint and mount-time resolution share one source.
+    pub(crate) fn volumes(&self) -> &VolumeTable {
+        self.inner.session_manager.volumes()
+    }
+
+    pub(crate) fn session_store(&self) -> &Arc<dyn DurableSessionStore> {
+        &self.inner.session_store
+    }
+
+    pub(crate) fn idempotency(&self) -> &Arc<Coordinator> {
+        &self.inner.idempotency
+    }
+
+    pub(crate) fn mcp_services(&self) -> &BlueprintServiceCache {
+        &self.inner.mcp_services
+    }
+
+    pub(crate) fn mcp_allowed_hosts(&self) -> Option<&[String]> {
+        self.inner.mcp_allowed_hosts.as_deref()
+    }
+
+    pub(crate) fn mcp_oauth_providers(&self) -> &[OAuthProvider] {
+        &self.inner.mcp_oauth_providers
+    }
+
+    pub(crate) fn oauth_http(&self) -> &Arc<dyn HttpClient> {
+        &self.inner.oauth_http
+    }
+
+    /// The auth inputs MCP discovery needs, drawn from this server's state.
+    fn discovery_auth<'a>(
+        &'a self,
+        harness_secrets: Option<&'a Arc<submilli_blueprint::HarnessSecretBindings>>,
+    ) -> DiscoveryAuth<'a> {
+        DiscoveryAuth {
+            secret_store: self.secret_store(),
+            oauth: self.oauth_token_manager(),
+            harness_secrets,
+        }
+    }
+
+    /// The `@mcp/<server>` catalog for a blueprint, discovered (and cached) on
+    /// first use. A blueprint with no `mcp:` block skips discovery entirely.
+    pub(crate) async fn mcp_catalog(
+        &self,
+        blueprint_name: &str,
+        blueprint: &Blueprint,
+    ) -> Arc<McpCatalog> {
+        if blueprint.mcp.is_empty() {
+            return Arc::new(McpCatalog::empty());
+        }
+        let key = mcp_catalog_cache_key(blueprint_name, None);
+        if let Some(cached) = self.cached_mcp_catalog(&key) {
+            return cached;
+        }
+        // Discovery does network I/O, so it runs without the cache lock held; a
+        // concurrent first-caller may also discover — the first to insert wins.
+        let discovered =
+            Arc::new(discover_all(self.discovery_auth(None), blueprint_name, blueprint).await);
+        let mut cache = self
+            .inner
+            .mcp_catalogs
+            .lock()
+            .expect("mcp catalog poisoned");
+        Arc::clone(cache.entry(key).or_insert(discovered))
+    }
+
+    fn cached_mcp_catalog(&self, key: &str) -> Option<Arc<McpCatalog>> {
+        self.inner
+            .mcp_catalogs
+            .lock()
+            .expect("mcp catalog poisoned")
+            .get(key)
+            .map(Arc::clone)
+    }
+
+    pub(crate) async fn mcp_catalog_for_imports(
+        &self,
+        blueprint_name: &str,
+        blueprint: &Blueprint,
+        servers: &BTreeSet<String>,
+        harness_secrets: &Arc<submilli_blueprint::HarnessSecretBindings>,
+    ) -> Arc<McpCatalog> {
+        if servers.is_empty() || blueprint.mcp.is_empty() {
+            return Arc::new(McpCatalog::empty());
+        }
+        let declared: BTreeSet<String> = servers
+            .iter()
+            .filter(|server| blueprint.mcp.contains_key(*server))
+            .cloned()
+            .collect();
+        if declared.is_empty() {
+            return Arc::new(McpCatalog::empty());
+        }
+        let key = mcp_catalog_cache_key(blueprint_name, Some(&declared));
+        let session_scoped = !harness_secrets.is_empty();
+        if !session_scoped && let Some(cached) = self.cached_mcp_catalog(&key) {
+            return cached;
+        }
+        let discovered = Arc::new(
+            discover_selected(
+                self.discovery_auth(Some(harness_secrets)),
+                blueprint_name,
+                blueprint,
+                &declared,
+            )
+            .await,
+        );
+        if session_scoped {
+            return discovered;
+        }
+        let mut cache = self
+            .inner
+            .mcp_catalogs
+            .lock()
+            .expect("mcp catalog poisoned");
+        Arc::clone(cache.entry(key).or_insert(discovered))
+    }
+
+    pub(crate) fn package_store(&self) -> &PackageStore {
+        &self.inner.package_store
+    }
+
+    fn cached_prepared_packages(&self, key: &str) -> Option<Arc<PreparedBlueprintPackages>> {
+        self.inner
+            .prepared_packages
+            .lock()
+            .expect("prepared package cache poisoned")
+            .get(key)
+            .map(Arc::clone)
+    }
+
+    pub(crate) fn prepared_packages_for_imports(
+        &self,
+        blueprint_name: &str,
+        blueprint: &Blueprint,
+        imports: &ScriptImports,
+    ) -> std::result::Result<Arc<PreparedBlueprintPackages>, PreparePackagesError> {
+        let registry_roots: BTreeSet<String> = imports
+            .registry_packages
+            .iter()
+            .filter(|package| blueprint.packages.contains(*package))
+            .cloned()
+            .collect();
+        if registry_roots.is_empty() && imports.stdlib.is_empty() {
+            return Ok(Arc::new(PreparedBlueprintPackages::default()));
+        }
+        let key = prepared_packages_cache_key(blueprint_name, &registry_roots, &imports.stdlib);
+        if let Some(cached) = self.cached_prepared_packages(&key) {
+            return Ok(cached);
+        }
+        let prepared = Arc::new(self.prepare_selected_packages(&registry_roots, &imports.stdlib)?);
+        let mut cache = self
+            .inner
+            .prepared_packages
+            .lock()
+            .expect("prepared package cache poisoned");
+        Ok(Arc::clone(cache.entry(key).or_insert(prepared)))
+    }
+
+    fn prepare_selected_packages(
+        &self,
+        registry_roots: &BTreeSet<String>,
+        stdlib_names: &BTreeSet<String>,
+    ) -> std::result::Result<PreparedBlueprintPackages, PreparePackagesError> {
+        let stdlib_declarations = selected_stdlib_declarations(stdlib_names);
+        let mut script_declarations = Vec::with_capacity(registry_roots.len());
+        let artifacts = self
+            .package_store()
+            .load_closure(registry_roots.iter().map(String::as_str))?;
+        let mut modules = Vec::with_capacity(artifacts.len());
+        for artifact in artifacts {
+            let name = artifact.metadata.package_name.clone();
+            let package_dir = self.package_store().package_dir(&name)?;
+            let module = package_module(&self.inner.engine, &artifact.wasm).map_err(|source| {
+                PreparePackagesError::Module {
+                    name: name.clone(),
+                    package_dir,
+                    source,
+                }
+            })?;
+            if registry_roots.contains(&name) {
+                script_declarations.push(artifact.package_declaration.clone());
+            }
+            modules.push(PreparedPackageModule {
+                module,
+                declaration: artifact.package_declaration,
+                type_info: artifact.type_info,
+                metadata: artifact.metadata,
+                sources: artifact.sources,
+            });
+        }
+        Ok(PreparedBlueprintPackages {
+            stdlib_declarations,
+            script_declarations,
+            modules,
+        })
+    }
+
+    /// Drop the cached MCP service for a blueprint, taking its live `MCP-Session-Id`
+    /// map down with it. Only blueprint *removal* does this — a blueprint update
+    /// keeps the service so existing sessions stay connected (the execute path
+    /// re-fetches the blueprint per call, so they pick up the new config).
+    pub(crate) fn evict_mcp_service(&self, name: &str) {
+        self.inner
+            .mcp_services
+            .lock()
+            .expect("mcp service cache poisoned")
+            .remove(name);
+    }
+
+    /// Drop the discovered `@mcp/<server>` catalog so the next execute rediscovers
+    /// it against the current `mcp:` block. Called on blueprint update and removal.
+    pub(crate) fn evict_mcp_catalog(&self, name: &str) {
+        self.inner
+            .mcp_catalogs
+            .lock()
+            .expect("mcp catalog poisoned")
+            .retain(|key, _| !cache_key_belongs_to_blueprint(key, name));
+    }
+
+    pub(crate) fn evict_prepared_packages(&self, name: &str) {
+        self.inner
+            .prepared_packages
+            .lock()
+            .expect("prepared package cache poisoned")
+            .retain(|key, _| !cache_key_belongs_to_blueprint(key, name));
+    }
+
+    pub(crate) async fn wipe_blueprint_sessions(&self, name: &str) {
+        self.inner.session_manager.wipe_blueprint(name).await;
+    }
+}
+
+fn package_module(engine: &Engine, wasm: &[u8]) -> wasmtime::Result<Module> {
+    Module::new(engine, wasm)
+}
+
+/// The server runs every guest on the default on-demand allocator, not the
+/// pooling allocator. Pooling backs each linear memory and GC heap with a
+/// fixed-size slot it can neither grow nor move beyond, so its slot size must be
+/// baked into the engine — forcing one global memory ceiling across all tenants
+/// and pre-reserving it per slot regardless of load. It also can't honour the
+/// growable, movable GC heap our `RuntimeConfig` asks for: a guest heap told it
+/// may grow/move walks past its fixed slot during collection and corrupts the
+/// host (SUB-555). On-demand allocation is per-store: each run reserves only what
+/// it uses and is bounded by its own `TenantLimits`, which lets callers set a
+/// different cap per tenant. The instantiation-setup cost pooling would amortise
+/// is negligible next to an agent script's multi-second runtime.
+fn server_engine(runtime: &RuntimeConfig) -> wasmtime::Result<Engine> {
+    Engine::new(&runtime.wasmtime_config())
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct PreparedBlueprintPackages {
+    pub stdlib_declarations: Vec<PackageDeclaration>,
+    /// Declarations of the blueprint-listed packages — the script's importable
+    /// surface. Closure-only dependencies are linked but not importable.
+    pub script_declarations: Vec<PackageDeclaration>,
+    /// The full dependency closure in instantiation (topological) order.
+    pub modules: Vec<PreparedPackageModule>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PreparedPackageModule {
+    pub module: Module,
+    pub declaration: PackageDeclaration,
+    pub type_info: interpreter::TypeInfoTable,
+    pub metadata: ArtifactMetadata,
+    pub sources: Vec<submilli_build::ArtifactSource>,
+}
+
+#[derive(Debug)]
+pub enum PreparePackagesError {
+    Store(PackageStoreError),
+    Module {
+        name: String,
+        package_dir: PathBuf,
+        source: wasmtime::Error,
+    },
+}
+
+impl fmt::Display for PreparePackagesError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PreparePackagesError::Store(err) => err.fmt(f),
+            PreparePackagesError::Module {
+                name,
+                package_dir,
+                source,
+            } => write!(
+                f,
+                "failed to compile package `{name}` wasm from {}: {source}",
+                package_dir.display()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PreparePackagesError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            PreparePackagesError::Store(err) => Some(err),
+            PreparePackagesError::Module { .. } => None,
+        }
+    }
+}
+
+impl From<PackageStoreError> for PreparePackagesError {
+    fn from(value: PackageStoreError) -> Self {
+        Self::Store(value)
+    }
+}
+
+pub fn app(state: AppState) -> Router {
+    Router::new()
+        .route("/v1/status", get(crate::handlers::admin::status))
+        .route("/v1/shutdown", post(crate::handlers::admin::shutdown))
+        .route("/v1/execute", post(crate::handlers::execute::handle))
+        .route("/v1/sessions", post(crate::handlers::sessions::create))
+        .route(
+            "/v1/sessions/{session_id}/execute",
+            post(crate::handlers::sessions::execute),
+        )
+        .route(
+            "/v1/sessions/{session_id}/rebind",
+            post(crate::handlers::sessions::rebind),
+        )
+        .route(
+            "/v1/sessions/{session_id}/last-run",
+            get(crate::handlers::last_run::handle),
+        )
+        .route(
+            "/v1/sessions/{session_id}",
+            delete(crate::handlers::sessions::disconnect),
+        )
+        .route(
+            "/v1/blueprints",
+            post(crate::handlers::blueprint::add).get(crate::handlers::blueprint::list),
+        )
+        .route(
+            "/v1/blueprints/{name}",
+            get(crate::handlers::blueprint::show)
+                .put(crate::handlers::blueprint::apply)
+                .delete(crate::handlers::blueprint::remove),
+        )
+        .route(
+            "/v1/blueprints/{name}/prompt",
+            get(crate::handlers::blueprint::prompt),
+        )
+        .route(
+            "/v1/secrets",
+            post(crate::handlers::secret::put).get(crate::handlers::secret::list),
+        )
+        // Write-only externally: secrets can be stored, listed, and deleted, but
+        // never read back over the API. The runtime reads values in-process.
+        .route(
+            "/v1/secrets/{*key}",
+            delete(crate::handlers::secret::remove),
+        )
+        .route("/v1/packages", get(crate::handlers::packages::installed))
+        .route(
+            "/v1/packages/{*name}",
+            delete(crate::handlers::packages::uninstall),
+        )
+        .route(
+            "/v1/packages/search",
+            get(crate::handlers::packages::search),
+        )
+        .route("/v1/packages/docs", get(crate::handlers::packages::docs))
+        .route(
+            "/v1/packages/install",
+            post(crate::handlers::packages::install),
+        )
+        .route("/v1/builtins", get(crate::handlers::packages::builtins))
+        .route(
+            "/v1/builtins/docs",
+            get(crate::handlers::packages::builtin_docs),
+        )
+        .route("/v1/capabilities", get(crate::handlers::capabilities::list))
+        // Read-only, and names only: the host directory behind a volume name
+        // never crosses this boundary.
+        .route("/v1/volumes", get(crate::handlers::volumes::list))
+        .route(
+            "/v1/mcp/{blueprint}/auth-status",
+            get(crate::handlers::mcp_auth::auth_status),
+        )
+        .route(
+            "/v1/mcp/{blueprint}/{server}/auth-config",
+            get(crate::handlers::mcp_auth::auth_config),
+        )
+        .route(
+            "/v1/mcp/{blueprint}/{server}/refresh-token",
+            post(crate::handlers::mcp_auth::put_refresh_token)
+                .delete(crate::handlers::mcp_auth::delete_refresh_token),
+        )
+        .route(
+            "/v1/mcp/{blueprint}/{server}/oauth/exchange",
+            post(crate::handlers::mcp_auth::oauth_exchange),
+        )
+        .route(
+            "/mcp/{blueprint}",
+            post(crate::mcp::mcp_handler)
+                .get(crate::mcp::mcp_handler)
+                .delete(crate::mcp::mcp_handler),
+        )
+        .with_state(state)
+}
+
+fn selected_stdlib_declarations(names: &BTreeSet<String>) -> Vec<PackageDeclaration> {
+    interpreter::runtime::stdlib_package_declarations()
+        .into_iter()
+        .filter(|defs| names.contains(&defs.package_name))
+        .collect()
+}
+
+fn mcp_catalog_cache_key(blueprint_name: &str, servers: Option<&BTreeSet<String>>) -> String {
+    match servers {
+        Some(servers) => format!("mcp:{blueprint_name}:{}", join_key_parts(servers)),
+        None => format!("mcp:{blueprint_name}:*"),
+    }
+}
+
+fn prepared_packages_cache_key(
+    blueprint_name: &str,
+    registry_roots: &BTreeSet<String>,
+    stdlib_names: &BTreeSet<String>,
+) -> String {
+    format!(
+        "pkg:{blueprint_name}:{}:{}",
+        join_key_parts(registry_roots),
+        join_key_parts(stdlib_names)
+    )
+}
+
+fn join_key_parts(parts: &BTreeSet<String>) -> String {
+    parts.iter().cloned().collect::<Vec<_>>().join("\u{1f}")
+}
+
+fn cache_key_belongs_to_blueprint(key: &str, blueprint_name: &str) -> bool {
+    key.starts_with(&format!("mcp:{blueprint_name}:"))
+        || key.starts_with(&format!("pkg:{blueprint_name}:"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use interpreter::FileId;
+    use interpreter::runtime::{
+        Vfs, dispatch_main_async, install_runtime_async, install_tenant_limits,
+    };
+
+    /// Compile `src`, run it through the server engine, and return the dispatch
+    /// result. A high fuel budget keeps the allocation-heavy guests off the fuel
+    /// meter so the GC heap / tenant cap is what bounds them.
+    async fn run_on_server_engine(src: &str) -> wasmtime::Result<Option<String>> {
+        let compiled =
+            interpreter::compile_script(src, "<test>", FileId(0), &[], &[]).expect("compiles");
+        let runtime = RuntimeConfig {
+            fuel: 50_000_000_000,
+            ..RuntimeConfig::default()
+        };
+        let engine = server_engine(&runtime).expect("server engine");
+        let module = Module::new(&engine, &compiled.wasm).expect("module");
+        let data = StoreData::with_vfs(Vfs::tempdir().unwrap());
+        let mut store = runtime.store_async(&engine, data).expect("store");
+        install_tenant_limits(&mut store);
+        let mut linker = Linker::<StoreData>::new(&engine);
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .unwrap();
+        let inst = linker.instantiate_async(&mut store, &module).await.unwrap();
+        dispatch_main_async(&mut store, &inst).await
+    }
+
+    /// The ledger has no operator knob of its own: it is derived from the
+    /// session-store directory, and an explicitly injected store wins over it.
+    #[tokio::test]
+    async fn session_store_dir_derives_a_file_backed_ledger() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _state = AppState::new(ServerConfig {
+            session_store_dir: Some(dir.path().to_path_buf()),
+            ..ServerConfig::default()
+        })
+        .expect("app state");
+
+        assert!(
+            dir.path().join(IDEMPOTENCY_SUBDIR).is_dir(),
+            "the ledger lands in a subdirectory of the session store dir"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_explicit_ledger_wins_over_the_derived_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _state = AppState::new(ServerConfig {
+            session_store_dir: Some(dir.path().to_path_buf()),
+            idempotency_store: Some(Arc::new(InMemoryIdempotencyStore::default())),
+            ..ServerConfig::default()
+        })
+        .expect("app state");
+
+        assert!(
+            !dir.path().join(IDEMPOTENCY_SUBDIR).exists(),
+            "an explicit store must suppress the derived directory entirely"
+        );
+    }
+
+    // A guest that asks for more memory than its `TenantLimits` cap must trap
+    // *catchably* — the test reaching this assertion at all proves the host did
+    // not panic or abort the way the corrupting pooled heap did.
+    #[tokio::test]
+    async fn server_guest_over_tenant_cap_traps_cleanly() {
+        // ~120 MB single GC array, far past the 50 MB tenant cap.
+        let out = run_on_server_engine(
+            r#"function main(): number {
+                 const s: string = "x".repeat(60000000);
+                 return s.length;
+               }"#,
+        )
+        .await;
+        assert!(
+            out.is_err(),
+            "over-cap allocation must trap, not succeed: {out:?}",
+        );
+    }
+}

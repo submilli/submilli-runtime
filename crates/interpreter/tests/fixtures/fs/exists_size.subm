@@ -1,0 +1,8 @@
+import { writeText, exists, size } from "submilli:fs";
+
+function main(): void {
+  assert(exists("/missing.txt") === false, "absent path doesn't exist");
+  writeText("/sized.txt", "twelve chars");
+  assert(exists("/sized.txt"), "written file exists");
+  assert(size("/sized.txt") === 12, "size matches written content");
+}

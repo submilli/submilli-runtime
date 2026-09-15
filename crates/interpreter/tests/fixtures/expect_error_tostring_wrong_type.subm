@@ -1,0 +1,5 @@
+// expect-error: field `toString` must have type `() => string`
+
+function main(): void {
+  let x: { toString: number } = { toString: 42 };
+}

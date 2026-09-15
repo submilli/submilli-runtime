@@ -1,0 +1,9 @@
+// expect-error: expected `never`, got `number`
+
+function broken(): never {
+  return 42;
+}
+
+function main(): void {
+  broken();
+}

@@ -1,0 +1,26 @@
+// Loops guarded by `if (false)` because Map/Set stubs trap at runtime.
+// Uses `p[0]`/`p[1]` because destructuring is not yet supported.
+
+function main(): void {
+  if (false) {
+    const m = new Map<string, number>();
+    let total: number = 0;
+    for (const p of m) {
+      const k: string = p[0];
+      const v: number = p[1];
+      total = total + v;
+      assert(k.length >= 0, "Map iterates tuples");
+    }
+    assert(total === 0, "Map for-of completed");
+  }
+  if (false) {
+    const s = new Set<string>();
+    let count: number = 0;
+    for (const x of s) {
+      assert(x.length >= 0, "Set iterates values");
+      count = count + 1;
+    }
+    assert(count === 0, "Set for-of completed");
+  }
+  assert(true, "phase 6 for-of plumbing typechecks");
+}

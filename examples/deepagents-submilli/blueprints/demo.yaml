@@ -1,0 +1,7 @@
+name: demo
+vfs: per_session
+
+# Allow-by-default: this demo trusts its own code, so every capability is
+# permitted unless a rule denies it. A locked-down blueprint would instead use
+# `default: deny` and allow specific capabilities (see the web-demo blueprint).
+default: allow

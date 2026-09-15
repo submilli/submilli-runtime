@@ -1,0 +1,4 @@
+# Python 3.10+
+deepagents>=0.0.6
+langchain-mcp-adapters>=0.1.0
+langchain-google-genai>=2.0.0

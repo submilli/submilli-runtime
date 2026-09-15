@@ -1,0 +1,18 @@
+function main(): void {
+  assert(JSON.stringify("") === "\"\"", "empty");
+  assert(JSON.stringify("hi") === "\"hi\"", "plain ASCII");
+
+  assert(JSON.stringify("a\"b") === "\"a\\\"b\"", "double-quote");
+  assert(JSON.stringify("a\\b") === "\"a\\\\b\"", "backslash");
+  assert(JSON.stringify("a\nb") === "\"a\\nb\"", "newline");
+  assert(JSON.stringify("a\tb") === "\"a\\tb\"", "tab");
+  assert(JSON.stringify("a\rb") === "\"a\\rb\"", "carriage return");
+  assert(JSON.stringify("a\bb") === "\"a\\bb\"", "backspace");
+  assert(JSON.stringify("a\fb") === "\"a\\fb\"", "form feed");
+
+  assert(JSON.stringify("\u{0001}") === "\"\\u0001\"", "SOH");
+  assert(JSON.stringify("\u{000B}") === "\"\\u000b\"", "VT");
+  assert(JSON.stringify("\u{001F}") === "\"\\u001f\"", "US");
+
+  assert(JSON.stringify("\"x\\") === "\"\\\"x\\\\\"", "quote + x + backslash");
+}

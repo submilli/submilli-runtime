@@ -1,0 +1,18 @@
+function main(): void {
+  assert((255).toString(16) === "ff", "hex");
+  assert((10).toString(2) === "1010", "binary");
+  assert((255).toString() === "255", "radix defaults to 10");
+  assert((-255).toString(16) === "-ff", "negative carries the sign");
+  assert((35).toString(36) === "z", "base 36 digit");
+  assert((0.5).toString(2) === "0.1", "binary fraction");
+  assert((9007199254740993e3).toString(16).length > 10, "large integers stay exact");
+
+  let threw: boolean = false;
+  try {
+    (255).toString(37);
+  } catch (e: Error) {
+    threw = true;
+    assert(e.message === "toString radix must be between 2 and 36", "range error names the rule");
+  }
+  assert(threw, "radix above 36 throws");
+}

@@ -1,0 +1,24 @@
+// Map<K, object-value>: a narrowed `.get` result lowers to `$ObjectShape`,
+// but the erased wrapper returns `$Object`. The call boundary must cast the
+// erased return back to the value's static shape, or codegen emits invalid Wasm.
+
+type Point = { x: number; y: number };
+
+function main(): void {
+  const aliased = new Map<string, Point>();
+  aliased.set("a", { x: 1, y: 2 });
+  const a = aliased.get("a");
+  if (a !== null) {
+    assert(a.x === 1, "aliased value field read");
+    assert(a.y === 2, "aliased second field");
+  }
+
+  // Same shape without the alias — the cast lives in codegen, not the alias.
+  const inline = new Map<string, { x: number; y: number }>();
+  inline.set("b", { x: 3, y: 4 });
+  const b: { x: number; y: number } | null = inline.get("b");
+  assert(b !== null && b.x === 3, "inline object value field read");
+
+  const miss = aliased.get("z");
+  assert(miss === null, "absent key returns null");
+}

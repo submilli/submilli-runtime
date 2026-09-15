@@ -1,0 +1,6 @@
+// expect-error: field `missing` does not exist on `{ type: string }`
+
+function main(): void {
+  const status: { type: string } = { type: "completed" };
+  const _ = status["missing"];
+}

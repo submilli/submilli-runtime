@@ -1,0 +1,7 @@
+function present(o: { a: number }): boolean {
+  return "a" in o;
+}
+
+function main(): void {
+  assert(present({ a: 42 }) === true, "field a is in shape");
+}

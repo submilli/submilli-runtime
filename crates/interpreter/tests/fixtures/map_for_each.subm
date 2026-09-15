@@ -1,0 +1,29 @@
+function main(): void {
+  const m = new Map<string, number>();
+  m.set("a", 1);
+  m.set("b", 2);
+  m.set("c", 3);
+
+  let total: number = 0;
+  let order: string = "";
+  m.forEach((value: number, key: string): void => {
+    total = total + value;
+    order = order + key;
+  });
+  assert(total === 6, "visits every value");
+  assert(order === "abc", "visits in insertion order with keys");
+
+  m.delete("b");
+  let after: string = "";
+  m.forEach((value: number, key: string): void => {
+    after = after + key;
+  });
+  assert(after === "ac", "deleted entries are skipped");
+
+  const empty = new Map<string, number>();
+  let calls: number = 0;
+  empty.forEach((value: number, key: string): void => {
+    calls = calls + 1;
+  });
+  assert(calls === 0, "empty map never calls back");
+}

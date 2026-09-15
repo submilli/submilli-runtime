@@ -1,0 +1,28 @@
+import { parse, URL } from "submilli:url";
+
+function main(): void {
+  const url: URL = parse("https://api.acme.com:8443/v1/orders?status=paid&limit=10#section");
+
+  assert(url.protocol === "https", "protocol");
+  assert(url.host === "api.acme.com", "host");
+  assert(url.path === "/v1/orders", "path");
+
+  const port: number | null = url.port;
+  assert(port !== null, "port present");
+  if (port !== null) {
+    assert(port === 8443, "port value");
+  }
+
+  const fragment: string | null = url.fragment;
+  assert(fragment !== null, "fragment present");
+  if (fragment !== null) {
+    assert(fragment === "section", "fragment value");
+  }
+
+  const query: Map<string, string> = url.query;
+  assert(query.size === 2, "two query params");
+  const status: string | null = query.get("status");
+  assert(status !== null && status === "paid", "status=paid");
+  const limit: string | null = query.get("limit");
+  assert(limit !== null && limit === "10", "limit=10");
+}

@@ -1,0 +1,5 @@
+// expect-error: matching first element
+function main(): void {
+  const xs: string[] = ["a"];
+  const bad = [1, ...xs];
+}

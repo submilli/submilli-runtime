@@ -1,0 +1,10 @@
+// expect-error: no fallthrough
+function main(): void {
+  let x: number = 1;
+  switch (x) {
+    case 1: {
+      let y: number = 2;
+    }
+    case 2: break;
+  }
+}

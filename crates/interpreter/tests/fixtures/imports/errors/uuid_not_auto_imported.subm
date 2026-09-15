@@ -1,0 +1,4 @@
+// expect-error: unresolved identifier `v4`
+function main(): void {
+  v4();
+}

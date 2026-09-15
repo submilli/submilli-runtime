@@ -1,0 +1,12 @@
+function identity<T>(x: T): T {
+  return x;
+}
+
+function id2<T>(x: T): T {
+  return identity(x);
+}
+
+function main(): void {
+  assert(id2(7) === 7, "id2(number) round-trips through identity");
+  assert(id2("z") === "z", "id2(string) round-trips through identity");
+}

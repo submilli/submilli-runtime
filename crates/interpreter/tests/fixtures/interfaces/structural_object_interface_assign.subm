@@ -1,0 +1,17 @@
+// Data-only interface <-> structural object, both directions.
+interface Issue { id: string; title: string; }
+
+function describe(p: { id: string; title: string }): string {
+  return p.id + ":" + p.title;
+}
+
+function main(): void {
+  // object-typed value -> interface binding (forward: repr no-op)
+  const t: { id: string; title: string } = { id: "a", title: "x" };
+  const o: Issue = t;
+  assert(o.id === "a", "object value -> interface, id");
+  assert(o.title === "x", "object value -> interface, title");
+
+  // interface value -> object-typed parameter (reverse: downcast at the slot)
+  assert(describe(o) === "a:x", "interface value -> object param");
+}

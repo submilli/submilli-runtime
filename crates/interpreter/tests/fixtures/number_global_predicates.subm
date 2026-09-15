@@ -1,0 +1,15 @@
+function main(): void {
+  assert(isNaN(NaN), "NaN is NaN");
+  assert(isNaN(0 / 0), "0/0 is NaN");
+  assert(!isNaN(1), "a number is not NaN");
+  assert(!isNaN(Infinity), "Infinity is not NaN");
+
+  assert(isFinite(0) && isFinite(-42.5), "finite numbers are finite");
+  assert(!isFinite(Infinity), "Infinity is not finite");
+  assert(!isFinite(-Infinity), "-Infinity is not finite");
+  assert(!isFinite(NaN), "NaN is not finite");
+
+  assert(Infinity > 1e308, "Infinity exceeds every finite number");
+  assert(-Infinity < -1e308, "-Infinity undercuts every finite number");
+  assert(NaN !== NaN, "NaN compares unequal to itself");
+}

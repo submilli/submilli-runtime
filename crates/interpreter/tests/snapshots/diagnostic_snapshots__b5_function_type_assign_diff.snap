@@ -1,0 +1,15 @@
+---
+source: crates/interpreter/tests/diagnostic_snapshots.rs
+expression: "render_inside_main(\"  let f: (a: number, b: number) => boolean = (x: string) => true;\")"
+---
+error: expected `(arg0: number, arg1: number) => boolean`, got `(arg0: string) => boolean`
+ --> test.subm:2:46
+  |
+1 | function main(): void {
+2 |   let f: (a: number, b: number) => boolean = (x: string) => true;
+  |                                              ^^^^^^^^^^^^^^^^^^^
+3 | }
+  |
+help: arity: expected 2 param(s), got 1
+param 1: expected `number`, got `string`
+---

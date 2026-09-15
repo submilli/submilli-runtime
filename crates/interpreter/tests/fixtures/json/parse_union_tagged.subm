@@ -1,0 +1,18 @@
+type Shape = { kind: "circle", r: number } | { kind: "rect", w: number, h: number };
+
+function main(): void {
+  const c = JSON.parse("{\"kind\":\"circle\",\"r\":3}") as Shape;
+  if (c.kind === "circle") {
+    assert(c.r === 3, "circle r");
+  } else {
+    assert(false, "expected circle variant");
+  }
+
+  const r = JSON.parse("{\"kind\":\"rect\",\"w\":4,\"h\":5}") as Shape;
+  if (r.kind === "rect") {
+    assert(r.w === 4, "rect w");
+    assert(r.h === 5, "rect h");
+  } else {
+    assert(false, "expected rect variant");
+  }
+}

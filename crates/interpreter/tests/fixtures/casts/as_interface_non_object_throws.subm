@@ -1,0 +1,18 @@
+// A non-object value cast to an interface fails the is-object check and throws a catchable Error.
+
+interface Point {
+  x: number;
+  y: number;
+}
+
+function main(): void {
+  const u: unknown = 5;
+  let caught: boolean = false;
+  try {
+    const p: Point = u as Point;
+    assert(false, "non-object cast to interface should throw — never reached");
+  } catch (e: Error) {
+    caught = true;
+  }
+  assert(caught, "interface cast on a non-object threw");
+}

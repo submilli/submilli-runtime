@@ -1,0 +1,27 @@
+function is_fn<T>(x: T): boolean {
+  return typeof x === "function";
+}
+
+function not_fn<T>(x: T): boolean {
+  return typeof x !== "function";
+}
+
+function add_one(n: number): number {
+  return n + 1;
+}
+
+function take_two(a: number, b: number): number {
+  return a + b;
+}
+
+function main(): void {
+  assert(is_fn<(n: number) => number>(add_one), "1-arity closure classifies as function");
+  assert(is_fn<(a: number, b: number) => number>(take_two), "2-arity closure too");
+
+  assert(!is_fn<number>(42), "number is not a function");
+  assert(!is_fn<string>("hello"), "string is not a function");
+  assert(!is_fn<boolean>(true), "boolean is not a function");
+
+  assert(not_fn<number>(0), "number flips to true under !==");
+  assert(!not_fn<(n: number) => number>(add_one), "closure flips to false under !==");
+}

@@ -1,0 +1,16 @@
+const arr: number[] = [10, 20, 30];
+let xs: string[] = ["a", "b"];
+
+const p: { x: number; y: number } = { x: 1, y: 2 };
+
+function main(): void {
+  assert(arr[0] === 10, "array global indexed read");
+  assert(arr.length === 3, "array global length");
+
+  xs.push("c");
+  assert(xs.length === 3, "mutated array global");
+  assert(xs[2] === "c", "array global element after push");
+
+  assert(p.x === 1, "object global field x");
+  assert(p.y === 2, "object global field y");
+}

@@ -1,0 +1,57 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "submilli.fullname" . }}
+  labels:
+    {{- include "submilli.labels" . | nindent 4 }}
+spec:
+  # Scoped to this release's pod, not `{}`. An empty podSelector selects *every
+  # pod in the namespace*, so a default-deny policy written that way would sever
+  # ingress to every co-resident workload the moment this chart is installed
+  # into a shared namespace — silently, and invisibly to CI, which installs into
+  # a namespace containing only this release.
+  podSelector:
+    matchLabels:
+      {{- include "submilli.selectorLabels" . | nindent 6 }}
+  # Ingress only. Egress is deliberately not restricted here: the server already
+  # blocks loopback, RFC1918, and link-local (including cloud metadata) at
+  # DNS-resolution time in-process. What that does *not* cover is public egress,
+  # so a Kubernetes egress policy would be a real additional layer — it needs its
+  # own design pass, because a DNS-plus-allowlist that is slightly wrong breaks
+  # every outbound call the product exists to make.
+  policyTypes:
+    - Ingress
+  ingress:
+    {{- if .Values.networkPolicy.allowHelmTests }}
+    # The chart's own `helm test` pods. Without this the default-deny policy
+    # blocks the tests that exist to prove the deployment works, and a correct
+    # chart fails its own verification.
+    #
+    # This is a hole, and it is narrow on purpose: a pod must carry both this
+    # release's instance label and the test component label, in this namespace.
+    # Set networkPolicy.allowHelmTests=false to close it — `helm test` will then
+    # fail, which is the honest trade rather than a silent one.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: test
+      ports:
+        - port: {{ .Values.server.port }}
+          protocol: TCP
+    {{- end }}
+    {{- with .Values.networkPolicy.allowFrom }}
+    # Operator-supplied peers. Note the selector semantics: two selectors as
+    # separate list items is OR; in the same list item it is AND. Getting that
+    # backwards produces an accidentally-open policy that looks correct.
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        # `$`, not `.`: `with` rebinds the dot to the allowFrom list, so the
+        # relative form resolves against a []interface{} and the chart fails to
+        # render for exactly the operators who use this feature.
+        - port: {{ $.Values.server.port }}
+          protocol: TCP
+    {{- end }}
+{{- end }}

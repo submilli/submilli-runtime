@@ -1,0 +1,7 @@
+function main(): void {
+  const xs = JSON.parse("[\"a\", \"b\", \"c\"]") as string[];
+  assert(xs.length === 3, "length");
+  assert(xs[0] === "a", "xs[0]");
+  assert(xs[1] === "b", "xs[1]");
+  assert(xs[2] === "c", "xs[2]");
+}

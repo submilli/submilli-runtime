@@ -1,0 +1,23 @@
+// Opening and closing many readers in sequence must not accumulate host resources:
+// each for-of loop closes its iterator (freeing the fd and refunding charged bytes)
+// before the next opens. Under the old leak-until-Store-drop handle table this pinned
+// every reader; with externref + eager close it stays flat. The Rust-level
+// `fs_handles_recovered_under_tight_cap` test asserts the byte recovery directly.
+
+import { writeText, lines } from "submilli:fs";
+
+function main(): void {
+  writeText("/data.txt", "alpha\nbeta\ngamma\n");
+
+  let total: number = 0;
+  let round: number = 0;
+  while (round < 200) {
+    for (const line of lines("/data.txt")) {
+      total = total + line.length;
+    }
+    round = round + 1;
+  }
+
+  // 200 rounds × ("alpha"+"beta"+"gamma" = 5+4+5 = 14) = 2800.
+  assert(total === 2800, "counted every line across all rounds");
+}

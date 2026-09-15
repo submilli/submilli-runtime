@@ -1,0 +1,6 @@
+// expect-error: duplicate regex flag `g`
+
+function main(): void {
+  const r = /abc/gg;
+  assert(r !== null, "never reached");
+}

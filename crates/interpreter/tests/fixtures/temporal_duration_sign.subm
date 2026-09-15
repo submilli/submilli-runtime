@@ -1,0 +1,23 @@
+function main(): void {
+  const pos: Temporal.Duration = Temporal.Duration.from("PT1H");
+  assert(pos.sign === 1, "positive duration has sign 1");
+
+  const neg: Temporal.Duration = pos.negated();
+  assert(neg.sign === -1, "negated duration has sign -1");
+
+  const zero: Temporal.Duration = new Temporal.Duration({});
+  assert(zero.sign === 0, "zero duration has sign 0");
+
+  // Sign comes from the first non-zero slot regardless of which unit it is.
+  const calendar: Temporal.Duration = new Temporal.Duration({ days: 3 });
+  assert(calendar.sign === 1, "positive calendar-only duration has sign 1");
+
+  const negCalendar: Temporal.Duration = new Temporal.Duration({ months: -2 });
+  assert(negCalendar.sign === -1, "negative calendar-only duration has sign -1");
+
+  // Matches JS: sign drives the >/< comparison Instant.since produces.
+  const earlier: Temporal.Instant = Temporal.Instant.from("2026-01-01T00:00:00Z");
+  const later: Temporal.Instant = Temporal.Instant.from("2026-01-08T00:00:00Z");
+  assert(later.since(earlier).sign === 1, "later.since(earlier) is positive");
+  assert(earlier.since(later).sign === -1, "earlier.since(later) is negative");
+}

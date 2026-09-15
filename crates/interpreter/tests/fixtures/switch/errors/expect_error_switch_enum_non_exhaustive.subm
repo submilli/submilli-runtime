@@ -1,0 +1,19 @@
+// expect-error: does not return a value on all paths
+// A `switch` that omits an enum variant and has no `default:` does not return
+// on all paths — exhaustiveness must cover every variant.
+enum Color {
+  Red,
+  Green,
+  Blue,
+}
+
+function nameOf(c: Color): string {
+  switch (c) {
+    case Color.Red: return "red";
+    case Color.Green: return "green";
+  }
+}
+
+function main(): void {
+  assert(nameOf(Color.Red) === "red", "red");
+}

@@ -1,0 +1,11 @@
+// Regression: `continue` inside for-of must advance the internal index so iteration terminates.
+function main(): void {
+  let total: number = 0;
+  for (const n of [10, 20, 30, 40, 50]) {
+    if (n === 30) {
+      continue;
+    }
+    total = total + n;
+  }
+  assert(total === 120, "10+20+40+50 = 120");
+}

@@ -1,0 +1,68 @@
+// ECMA-262 §21.3 conformance vectors for `Math` — values lifted from the
+// standard's definitions.
+
+function approx(actual: number, expected: number, message: string): void {
+  assert(Math.abs(actual - expected) < 1e-12, message);
+}
+
+function main(): void {
+  approx(Math.PI, 3.141592653589793, "PI");
+  approx(Math.E, 2.718281828459045, "E");
+  approx(Math.LN2, 0.6931471805599453, "LN2");
+  approx(Math.LN10, 2.302585092994046, "LN10");
+  approx(Math.LOG2E, 1.4426950408889634, "LOG2E");
+  approx(Math.LOG10E, 0.4342944819032518, "LOG10E");
+  approx(Math.SQRT2, 1.4142135623730951, "SQRT2");
+  approx(Math.SQRT1_2, 0.7071067811865476, "SQRT1_2");
+
+  assert(Math.abs(-5) === 5 && Math.abs(5) === 5, "abs");
+  assert(Math.ceil(1.1) === 2 && Math.ceil(-1.1) === -1, "ceil");
+  assert(Math.floor(1.9) === 1 && Math.floor(-1.1) === -2, "floor");
+  assert(Math.trunc(1.9) === 1 && Math.trunc(-1.9) === -1, "trunc");
+  assert(Math.round(1.5) === 2 && Math.round(2.5) === 3, "round halves go up");
+  assert(Math.round(-1.5) === -1, "negative half rounds toward +inf");
+  assert(1 / Math.round(-0.5) === -Infinity, "round(-0.5) preserves -0");
+  assert(1 / Math.round(-0.1) === -Infinity, "round(-0.1) preserves -0");
+  assert(1 / Math.round(-0) === -Infinity, "round(-0) preserves -0");
+  assert(isNaN(Math.round(NaN)), "round(NaN)");
+  assert(Math.round(Infinity) === Infinity, "round(+Infinity)");
+  assert(Math.sign(-3) === -1 && Math.sign(7) === 1 && Math.sign(0) === 0, "sign");
+  assert(1 / Math.sign(-0) === -Infinity, "sign(-0)");
+  assert(1 / Math.abs(-0) === Infinity, "abs(-0) is +0");
+  assert(Math.sqrt(144) === 12, "sqrt");
+  assert(isNaN(Math.sqrt(-1)), "sqrt of negative is NaN");
+
+  assert(Math.min(3, 1, 2) === 1 && Math.max(3, 1, 2) === 3, "min/max");
+  assert(Math.min() === Infinity, "min of nothing is Infinity");
+  assert(Math.max() === -Infinity, "max of nothing is -Infinity");
+  assert(isNaN(Math.min(1, NaN, 2)) && isNaN(Math.max(1, NaN, 2)), "min/max NaN");
+  assert(1 / Math.min(0, -0) === -Infinity, "min signed zero");
+  assert(1 / Math.max(-0, 0) === Infinity, "max signed zero");
+  approx(Math.hypot(3, 4), 5, "hypot");
+  assert(Math.hypot() === 0, "hypot()");
+  assert(Math.hypot(1e308, 1e308) === Infinity || Math.hypot(1e308, 1e308) > 1e308, "hypot huge");
+  assert(Math.hypot(Infinity, NaN) === Infinity, "hypot infinity beats NaN");
+  assert(isNaN(Math.hypot(NaN, 1)), "hypot NaN");
+
+  approx(Math.exp(0), 1, "exp(0)");
+  approx(Math.log(Math.E), 1, "log(e)");
+  approx(Math.log2(8), 3, "log2");
+  approx(Math.log10(1000), 3, "log10");
+  approx(Math.cbrt(27), 3, "cbrt");
+  approx(Math.sin(0), 0, "sin(0)");
+  approx(Math.cos(0), 1, "cos(0)");
+  approx(Math.atan2(1, 1), Math.PI / 4, "atan2");
+  approx(Math.pow(2, 10), 1024, "pow");
+  assert(Math.imul(3, 4) === 12, "imul");
+  assert(Math.imul(0xffffffff, 5) === -5, "imul ToInt32 modulo");
+  assert(Math.clz32(1) === 31 && Math.clz32(0) === 32, "clz32");
+  assert(Math.clz32(0xffffffff) === 0, "clz32 ToUint32 modulo");
+  assert(Math.clz32(4294967296) === 32, "clz32 wraps 2^32 to zero");
+  assert(Math.fround(1.5) === 1.5, "fround exact for halves");
+
+  const r = Math.random();
+  assert(r >= 0 && r < 1, "random in [0, 1)");
+
+  assert(Math.round(-0.4) === 0, "round(-0.4) is zero");
+  assert(1 / Math.round(-0.4) === -Infinity, "round(-0.4) is -0");
+}

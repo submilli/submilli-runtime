@@ -1,0 +1,21 @@
+function main(): void {
+  const m = new Map<number, string>();
+  m.set(0, "zero");
+  m.set(1, "one");
+  m.set(42, "forty-two");
+  m.set(-7, "neg-seven");
+  m.set(3.14, "pi");
+
+  assert(m.size === 5, "five distinct number keys");
+
+  const z: string | null = m.get(0);
+  assert(z !== null && z === "zero", "0 → zero");
+  const o: string | null = m.get(1);
+  assert(o !== null && o === "one", "1 → one");
+  const f: string | null = m.get(42);
+  assert(f !== null && f === "forty-two", "42 → forty-two");
+  const n: string | null = m.get(-7);
+  assert(n !== null && n === "neg-seven", "-7 → neg-seven");
+  const p: string | null = m.get(3.14);
+  assert(p !== null && p === "pi", "3.14 → pi");
+}

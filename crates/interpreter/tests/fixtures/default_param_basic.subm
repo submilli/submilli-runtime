@@ -1,0 +1,14 @@
+function greet(name: string, greeting: string = "Hello"): string {
+  return greeting + " " + name;
+}
+
+function offset(x: number, by: number = 1): number {
+  return x + by;
+}
+
+function main(): void {
+  assert(greet("World") === "Hello World", "string default fills in for omitted arg");
+  assert(greet("World", "Hi") === "Hi World", "explicit arg overrides default");
+  assert(offset(5) === 6, "number default flows through");
+  assert(offset(5, 10) === 15, "explicit number overrides default");
+}

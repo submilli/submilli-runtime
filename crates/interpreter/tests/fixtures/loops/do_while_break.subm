@@ -1,0 +1,10 @@
+function main(): void {
+  let i: number = 0;
+  do {
+    if (i === 3) {
+      break;
+    }
+    i = i + 1;
+  } while (true);
+  assert(i === 3, "break exits do-while at i=3");
+}

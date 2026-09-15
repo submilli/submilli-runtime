@@ -1,0 +1,16 @@
+function main(): void {
+  const n: unknown = 42;
+  assert(n.toString() === "42", "toString on unknown-wrapped number");
+
+  const s: unknown = "hi";
+  assert(s.toString() === "hi", "toString on unknown-wrapped string");
+
+  const b: unknown = true;
+  assert(b.toString() === "true", "toString on unknown-wrapped boolean");
+
+  const o: unknown = { x: 1 };
+  assert(o.toString() === "[object Object]", "toString on unknown-wrapped object");
+
+  const j: unknown = { x: 1, y: 2 };
+  assert(j.toJson() === "{\"x\":1,\"y\":2}", "toJson on unknown-wrapped object");
+}

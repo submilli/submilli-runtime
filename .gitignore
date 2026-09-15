@@ -1,0 +1,19 @@
+/target
+CLAUDE.local.md
+.claude/worktrees/
+.claude/scheduled_tasks.lock
+.cleanup/
+.submilli/
+.env
+*.swp
+
+# Docker build staging: `dist/<arch>/` holds the prebuilt binaries the image
+# copies. Populated by the release workflow, or by hand for a local build.
+/dist
+
+
+.DS_Store
+node_modules/
+.venv/
+.env.*
+!.env.example

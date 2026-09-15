@@ -1,0 +1,14 @@
+function strlen_or_value(x: number | string): number {
+  if (typeof x === "string") {
+    return x.length;
+  } else {
+    return x;
+  }
+}
+
+function main(): void {
+  assert(strlen_or_value("hello") === 5, "string narrows to use .length");
+  assert(strlen_or_value("") === 0, "empty string");
+  assert(strlen_or_value(42) === 42, "number passes through else branch");
+  assert(strlen_or_value(0) === 0, "zero number passes through");
+}

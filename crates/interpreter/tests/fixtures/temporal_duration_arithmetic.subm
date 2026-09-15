@@ -1,0 +1,15 @@
+function main(): void {
+  const a: Temporal.Duration = Temporal.Duration.from("PT1H");
+  const b: Temporal.Duration = Temporal.Duration.from("PT30M");
+  const sum: Temporal.Duration = a.add(b);
+  assert(sum.total("minutes") === 90, "add: 1h + 30m = 90m");
+
+  const diff: Temporal.Duration = a.subtract(b);
+  assert(diff.total("minutes") === 30, "subtract: 1h - 30m = 30m");
+
+  const neg: Temporal.Duration = a.negated();
+  assert(neg.total("minutes") === -60, "negated: -60m");
+
+  const back: Temporal.Duration = neg.negated();
+  assert(back.total("minutes") === 60, "negated.negated = identity");
+}

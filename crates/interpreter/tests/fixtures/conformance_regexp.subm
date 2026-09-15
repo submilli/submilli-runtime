@@ -1,0 +1,45 @@
+// ECMA-262 §22.2 conformance vectors for `RegExp` (the `regex`-crate engine;
+// backreferences and lookbehind are documented engine divergences and are
+// not exercised here — see docs/regex.md).
+
+function main(): void {
+  const re = new RegExp("(\\d+)-(\\d+)", "");
+  assert(re.test("12-34"), "test matches");
+  assert(!re.test("abc"), "test rejects");
+  assert(re.source === "(\\d+)-(\\d+)", "source round-trips");
+
+  const m = re.exec("order 12-34 shipped");
+  if (m !== null) {
+    assert(m.match === "12-34", "full match text");
+    assert(m.index === 6, "match offset");
+    const g1 = m.groups[0];
+    const g2 = m.groups[1];
+    assert(g1 !== null && g2 !== null, "both groups captured");
+    if (g1 !== null && g2 !== null) {
+      assert(g1 === "12" && g2 === "34", "capture contents");
+    }
+  } else {
+    assert(false, "exec should match");
+  }
+
+  const named = new RegExp("(?<year>\\d{4})-(?<month>\\d{2})", "");
+  const nm = named.exec("2026-06-10");
+  if (nm === null) {
+    assert(false, "named exec should match");
+    return;
+  }
+  const groups = nm.namedGroups;
+  assert(groups.get("year") === "2026", "named group year");
+  assert(groups.get("month") === "06", "named group month");
+
+  const ci = new RegExp("hello", "i");
+  assert(ci.test("HeLLo") && ci.ignoreCase, "ignoreCase flag");
+  const ml = new RegExp("^b", "m");
+  assert(ml.test("a\nb") && ml.multiline, "multiline anchors");
+  const dot = new RegExp("a.b", "s");
+  assert(dot.test("a\nb") && dot.dotAll, "dotAll spans newlines");
+
+  assert("a1b2".replace("1", "x") === "ax b2".replace(" ", ""), "string replace");
+  assert("one two".match(new RegExp("\\w+", "")) !== null, "String#match");
+  assert("x=1&y=2".split("&").length === 2, "split");
+}

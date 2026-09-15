@@ -1,0 +1,12 @@
+type ID = number;
+
+function double(x: ID): number {
+  return x + x;
+}
+
+function main(): void {
+  const id: ID = 7;
+  assert(double(id) === 14, "alias of number behaves like number");
+  const back: ID = 42;
+  assert(back === 42, "number literal flows into alias slot");
+}

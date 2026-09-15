@@ -1,0 +1,16 @@
+
+function describe(x: number[] | string): number {
+  if (Array.isArray(x)) {
+    return x.length;
+  } else {
+    return x.length + 1000;
+  }
+}
+
+function main(): void {
+  const empty: number[] = [];
+  assert(describe([10, 20, 30]) === 3, "array branch reports length");
+  assert(describe(empty) === 0, "empty array narrows correctly");
+  assert(describe("hello") === 1005, "string branch adds 1000");
+  assert(describe("") === 1000, "empty string still narrows");
+}

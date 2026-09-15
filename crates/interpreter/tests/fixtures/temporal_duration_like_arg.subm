@@ -1,0 +1,36 @@
+// DurationLike forgiveness: arithmetic methods accept a `{...}` options bag
+// directly, lowering it as `new Temporal.Duration({...})` (the Temporal
+// proposal's DurationLike rule — the methods run `Duration.from` on the bag).
+
+function main(): void {
+  const a: Temporal.Instant = Temporal.Instant.from("2024-03-09T15:30:45Z");
+
+  // Object literal in place of a Duration on Instant#add / #subtract.
+  const later: Temporal.Instant = a.add({ hours: 1 });
+  assert(later.toString() === "2024-03-09T16:30:45Z", "add { hours: 1 }");
+
+  const earlier: Temporal.Instant = a.subtract({ minutes: 30 });
+  assert(earlier.toString() === "2024-03-09T15:00:45Z", "subtract { minutes: 30 }");
+
+  // Equivalent to the explicit constructor form.
+  const explicit: Temporal.Instant = a.add(new Temporal.Duration({ hours: 1 }));
+  assert(later.equals(explicit), "literal coercion matches explicit Duration");
+
+  // Duration#add / #subtract also accept the bag.
+  const base: Temporal.Duration = Temporal.Duration.from("PT1H");
+  const sum: Temporal.Duration = base.add({ minutes: 30 });
+  assert(sum.toString() === "PT1H30M", "Duration.add { minutes: 30 }");
+
+  const diff: Temporal.Duration = base.subtract({ minutes: 15 });
+  assert(diff.toString() === "PT45M", "Duration.subtract { minutes: 15 }");
+
+  // Missing fields default to 0, just like the constructor.
+  const noon: Temporal.Instant = a.add({});
+  assert(noon.equals(a), "empty bag is a zero Duration");
+
+  // ZonedDateTime#add / #subtract accept the bag too (calendar-aware).
+  const z: Temporal.ZonedDateTime =
+    Temporal.ZonedDateTime.from("2024-03-10T01:30:00-05:00[America/New_York]");
+  const zAfter: Temporal.ZonedDateTime = z.add({ hours: 1 });
+  assert(zAfter.hour === 3, "ZDT.add { hours: 1 } skips the DST gap to 3am");
+}

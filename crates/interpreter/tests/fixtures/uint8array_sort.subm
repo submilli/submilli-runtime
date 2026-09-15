@@ -1,0 +1,27 @@
+function main(): void {
+  let bytes: Uint8Array = Uint8Array.new([5, 3, 8, 1, 4, 2]);
+  let returned: Uint8Array = bytes.sort((a: number, b: number) => a - b);
+  assert(returned.equals(bytes), "sort returns this");
+  assert(bytes[0] === 1 && bytes[1] === 2 && bytes[2] === 3, "ascending sort: 1, 2, 3");
+  assert(bytes[3] === 4 && bytes[4] === 5 && bytes[5] === 8, "ascending sort: 4, 5, 8");
+
+  let desc: Uint8Array = Uint8Array.new([1, 5, 2, 4, 3]);
+  desc.sort((a: number, b: number) => b - a);
+  assert(desc[0] === 5 && desc[1] === 4 && desc[2] === 3, "descending: 5, 4, 3");
+
+  let already: Uint8Array = Uint8Array.new([1, 2, 3, 4]);
+  already.sort((a: number, b: number) => a - b);
+  assert(already[0] === 1 && already[3] === 4, "already sorted stays put");
+
+  let empty: Uint8Array = Uint8Array.alloc(0);
+  empty.sort((a: number, b: number) => a - b);
+  assert(empty.length === 0, "empty sort");
+
+  let one: Uint8Array = Uint8Array.new([42]);
+  one.sort((a: number, b: number) => a - b);
+  assert(one[0] === 42, "single-element sort");
+
+  let def: Uint8Array = Uint8Array.new([2, 10, 1]);
+  def.sort();
+  assert(def[0] === 1 && def[1] === 2 && def[2] === 10, "default numeric sort");
+}

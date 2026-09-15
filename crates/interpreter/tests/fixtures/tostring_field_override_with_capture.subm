@@ -1,0 +1,7 @@
+function main(): void {
+  let suffix = "!";
+  const o = { toString: (): string => "hello" + suffix };
+  assert(o.toString() === "hello!", "captured let visible in override");
+  suffix = "?";
+  assert(o.toString() === "hello?", "later writes to captured let still visible");
+}

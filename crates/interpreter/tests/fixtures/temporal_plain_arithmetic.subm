@@ -1,0 +1,52 @@
+function main(): void {
+  // ---- PlainDate ----
+  const d: Temporal.PlainDate = Temporal.PlainDate.from("2024-01-15");
+  assert(d.add(Temporal.Duration.from({ days: 10 })).day === 25, "date + 10d");
+  assert(d.add({ months: 1 }).month === 2, "date + 1mo (DurationLike)");
+  assert(d.subtract({ days: 20 }).day === 26, "date - 20d crosses month");
+  // Month rollover constrains the day (Jan 31 + 1mo -> Feb 29 in a leap year).
+  const eom: Temporal.PlainDate = Temporal.PlainDate.from("2024-01-31");
+  assert(eom.add({ months: 1 }).day === 29, "Jan 31 + 1mo -> Feb 29");
+  // Time units fold into whole days, truncated toward zero.
+  assert(d.add({ hours: 25 }).day === 16, "date + 25h -> +1 day");
+  assert(d.subtract({ hours: 23 }).day === 15, "date - 23h -> same day");
+  // until: default largest unit is days.
+  const jan: Temporal.PlainDate = Temporal.PlainDate.from("2024-01-01");
+  const mar: Temporal.PlainDate = Temporal.PlainDate.from("2024-03-01");
+  assert(jan.until(mar).days === 60, "Jan 1 until Mar 1 = 60 days (leap)");
+  assert(mar.since(jan).days === 60, "Mar 1 since Jan 1 = 60 days");
+
+  // ---- PlainTime (wraps mod 24h; date units ignored) ----
+  const t: Temporal.PlainTime = Temporal.PlainTime.from("10:30:00");
+  assert(t.add({ hours: 2 }).hour === 12, "time + 2h");
+  assert(t.add({ hours: 25 }).hour === 11, "time + 25h wraps");
+  assert(t.subtract({ minutes: 45 }).minute === 45, "time - 45m");
+  assert(t.add({ days: 5 }).hour === 10, "time + days is a no-op on wall clock");
+  const wrap: Temporal.PlainTime = Temporal.PlainTime.from("23:00:00");
+  assert(wrap.add({ hours: 2 }).hour === 1, "23:00 + 2h wraps to 01:00");
+  const until: Temporal.Duration =
+    Temporal.PlainTime.from("09:00:00").until(Temporal.PlainTime.from("10:30:00"));
+  assert(until.hours === 1 && until.minutes === 30, "09:00 until 10:30 = 1h30m");
+
+  // ---- PlainDateTime ----
+  const dt: Temporal.PlainDateTime = Temporal.PlainDateTime.from("2024-01-15T10:00:00");
+  const shifted: Temporal.PlainDateTime = dt.add({ days: 1, hours: 2 });
+  assert(shifted.day === 16 && shifted.hour === 12, "datetime + 1d2h");
+  const back: Temporal.PlainDateTime = dt.subtract({ hours: 11 });
+  assert(back.day === 14 && back.hour === 23, "datetime - 11h crosses midnight");
+  const dtdiff: Temporal.Duration = dt.until(Temporal.PlainDateTime.from("2024-01-15T12:30:00"));
+  assert(dtdiff.hours === 2 && dtdiff.minutes === 30, "datetime until = 2h30m");
+
+  // ---- PlainYearMonth ----
+  const ym: Temporal.PlainYearMonth = Temporal.PlainYearMonth.from("2024-01");
+  assert(ym.add({ months: 2 }).month === 3, "yearmonth + 2mo");
+  assert(ym.add({ years: 1 }).year === 2025, "yearmonth + 1y");
+  const subbed: Temporal.PlainYearMonth = ym.subtract({ months: 2 });
+  assert(subbed.year === 2023 && subbed.month === 11, "yearmonth - 2mo crosses year");
+  const ymdiff: Temporal.Duration =
+    ym.until(Temporal.PlainYearMonth.from("2025-03"));
+  assert(ymdiff.years === 1 && ymdiff.months === 2, "yearmonth until = 1y2mo");
+  const ymsince: Temporal.Duration =
+    Temporal.PlainYearMonth.from("2025-03").since(ym);
+  assert(ymsince.years === 1 && ymsince.months === 2, "yearmonth since = 1y2mo");
+}

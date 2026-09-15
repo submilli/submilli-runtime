@@ -1,0 +1,100 @@
+namespace: submilli
+provides:
+- name: submilli/google-drive.copyFile
+  description: Copy a file with an optional new name or parent.
+  fields:
+    fileId:
+      type: string
+- name: submilli/google-drive.createFolder
+  description: Create a folder, optionally under a parent.
+  fields:
+    parentId:
+      type: string
+- name: submilli/google-drive.downloadFile
+  description: Stream a Drive file or native-document export into the VFS.
+  fields:
+    fileId:
+      type: string
+    path:
+      type: string
+- name: submilli/google-drive.getFile
+  description: Fetch one Drive file, returning null when absent.
+  fields:
+    fileId:
+      type: string
+- name: submilli/google-drive.listPermissions
+  description: List permissions on a Drive file.
+  fields:
+    fileId:
+      type: string
+- name: submilli/google-drive.listRecentFiles
+  description: List recently modified, non-trashed files.
+  fields: {}
+- name: submilli/google-drive.moveFile
+  description: Move a file to one parent, removing its current parents.
+  fields:
+    fileId:
+      type: string
+    parentId:
+      type: string
+- name: submilli/google-drive.readText
+  description: Read a text file or export a Google Doc as UTF-8 text.
+  fields:
+    fileId:
+      type: string
+- name: submilli/google-drive.removePermission
+  description: Remove a permission from a Drive file.
+  fields:
+    fileId:
+      type: string
+- name: submilli/google-drive.renameFile
+  description: Rename a file.
+  fields:
+    fileId:
+      type: string
+- name: submilli/google-drive.restoreFile
+  description: Restore a trashed file.
+  fields:
+    fileId:
+      type: string
+- name: submilli/google-drive.searchFiles
+  description: Search Drive files with structured filters plus an optional raw Drive query. Shared Drive searches set `driveId` and use `corpora=drive`.
+  fields: {}
+- name: submilli/google-drive.shareFile
+  description: Share a file with exactly one user, group, domain, or anyone principal.
+  fields:
+    fileId:
+      type: string
+    principal:
+      type: string
+- name: submilli/google-drive.trashFile
+  description: Move a file to trash. This package intentionally has no permanent-delete API.
+  fields:
+    fileId:
+      type: string
+- name: submilli/google-drive.uploadFile
+  description: Upload a VFS file using Google's resumable protocol and fixed 8 MiB chunks.
+  fields:
+    path:
+      type: string
+requires:
+- capability: fs.read
+  filter: op == "readBytes"
+- capability: fs.stat
+  filter: op == "stat"
+- capability: fs.write
+  filter: op == "download"
+- capability: http.delete
+  filter: host == "www.googleapis.com" and method == "DELETE"
+- capability: http.download
+  filter: host == "www.googleapis.com"
+- capability: http.get
+  filter: host == "www.googleapis.com" and method == "GET"
+- capability: http.patch
+  filter: host == "www.googleapis.com" and method == "PATCH"
+- capability: http.post
+  filter: host == "www.googleapis.com" and method == "POST"
+- capability: http.put
+  filter: host == "www.googleapis.com" and method == "PUT"
+- capability: secrets.get
+  filter: name == "GOOGLE_ACCESS_TOKEN"

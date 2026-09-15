@@ -1,0 +1,10 @@
+function main(): void {
+  let counter: number = 0;
+  for (let i: number = 0; i < 100; i = i + 1) {
+    if (i === 3) {
+      break;
+    }
+    counter = counter + 1;
+  }
+  assert(counter === 3, "break exits at iteration 3");
+}

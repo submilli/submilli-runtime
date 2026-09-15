@@ -1,0 +1,13 @@
+function eval(t: ["add", number, number] | ["mul", number, number]): number {
+  if (t[0] === "add") {
+    return t[1] + t[2];
+  }
+  return t[1] * t[2];
+}
+
+function main(): void {
+  const add: ["add", number, number] = ["add", 3, 4];
+  const mul: ["mul", number, number] = ["mul", 3, 4];
+  assert(eval(add) === 7, "add path: 3 + 4");
+  assert(eval(mul) === 12, "mul path: 3 * 4");
+}

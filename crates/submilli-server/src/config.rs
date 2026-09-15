@@ -1,0 +1,663 @@
+use std::collections::BTreeMap;
+use std::fmt;
+use std::net::IpAddr;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use interpreter::runtime::{NetworkPolicy, RuntimeConfig, SessionKvLimits};
+
+use submilli_shared::secret_store::SecretStore;
+
+use crate::blueprint::BlueprintStore;
+use crate::idempotency_store::IdempotencyStore;
+use crate::session::SessionStore;
+use crate::session_store::DurableSessionStore;
+
+#[derive(Clone, Default)]
+pub struct ServerConfig {
+    pub runtime: RuntimeConfig,
+    /// Outbound HTTP egress policy (SSRF guard). Defaults to allow-all; the
+    /// `submilli-server` binary installs `deny_private` via its CLI flags.
+    pub network_policy: NetworkPolicy,
+    /// When `None`, `AppState::new` installs an in-memory store.
+    pub sessions: Option<Arc<dyn SessionStore>>,
+    /// Explicit blueprint store. Takes precedence over `blueprint_dir`; mainly
+    /// for tests and embedded callers that inject their own store.
+    pub blueprints: Option<Arc<dyn BlueprintStore>>,
+    /// Directory backing a file-persisted blueprint store. Used only when
+    /// `blueprints` is `None`; when both are `None`, `AppState::new` installs an
+    /// in-memory store.
+    pub blueprint_dir: Option<PathBuf>,
+    /// Read-only directory of blueprint YAML reconciled into the store at boot.
+    /// A declarative *source* (a Kubernetes ConfigMap mount, a bind-mounted git
+    /// checkout); the store stays the authority. Distinct from `blueprint_dir`,
+    /// which is the writable revision log — pointing both at one path would make
+    /// the store read-only forever. `None` disables seeding.
+    pub blueprint_seed_dir: Option<PathBuf>,
+    /// Explicit durable session store. Takes precedence over `session_store_dir`;
+    /// mainly for tests and embedded callers that inject their own store.
+    pub session_store: Option<Arc<dyn DurableSessionStore>>,
+    /// Directory backing a file-persisted session store (the lifecycle metadata
+    /// that makes resume and idle reaping survive a restart). Used only when
+    /// `session_store` is `None`; when both are `None`, `AppState::new` installs
+    /// an in-memory store. Mount this on **durable** storage alongside
+    /// `session_storage_root`.
+    pub session_store_dir: Option<PathBuf>,
+    /// Explicit idempotency ledger, backing `Idempotency-Key` on the session
+    /// execute endpoint. When `None` and `session_store_dir` is set,
+    /// `AppState::new` derives a file-backed ledger in a subdirectory of it;
+    /// when both are `None`, an in-memory ledger. Deliberately has no CLI flag,
+    /// env var, or config-file key: both stores have identical durability
+    /// requirements and would share a volume in any deployment, so a separate
+    /// path is speculative — and a knob that ships cannot be withdrawn.
+    pub idempotency_store: Option<Arc<dyn IdempotencyStore>>,
+    /// The secret store backing the blueprint `store:` secret source and the
+    /// `submilli server secret` CLI. `None` (the default) disables it: `store:`
+    /// secrets fail to resolve, while `env:`/`file:` are unaffected. Built at the
+    /// binary boundary so the encryption-key source lives there, not here.
+    pub secret_store: Option<Arc<dyn SecretStore>>,
+    /// Root for `ephemeral` scratch directories (one temp dir per execute,
+    /// wiped at return). `None` uses the OS temp dir. Mount this on volatile
+    /// storage (tmpfs / k8s `emptyDir`) — ephemeral VFSes are not meant to
+    /// survive a restart.
+    pub ephemeral_storage_root: Option<PathBuf>,
+    /// Root for `per_session` directories. Defaults to
+    /// [`default_session_storage_root`] (under the user's data dir). Mount this
+    /// on **durable** storage (a PersistentVolume): a `per_session` VFS is keyed
+    /// by session id, so a client that reconnects with the same id after a
+    /// restart finds its files intact.
+    pub session_storage_root: Option<PathBuf>,
+    /// Root of the local package artifact store. Defaults to
+    /// [`default_package_store_dir`].
+    pub package_store_root: Option<PathBuf>,
+    /// `Host` headers the MCP streamable-HTTP endpoint accepts (rmcp's
+    /// DNS-rebinding guard). `None` keeps rmcp's loopback-only default; `Some`
+    /// replaces it wholesale, so the binary boundary pre-composes the loopback
+    /// defaults with any operator-supplied hosts.
+    pub mcp_allowed_hosts: Option<Vec<String>>,
+    /// OAuth client apps for MCP servers, keyed by authorization-server host. The
+    /// server uses these to build authorize URLs and exchange/refresh tokens, so
+    /// the `client_secret` lives only here — never on the CLI or in a blueprint.
+    pub mcp_oauth_providers: Vec<OAuthProvider>,
+    /// Per-session bounds on `submilli:session` storage (value size, entry
+    /// count, key length, retained bytes per session). Defaults to
+    /// [`SessionKvLimits::default`].
+    pub session_kv_limits: SessionKvLimits,
+    /// Server-wide ceiling on retained `submilli:session` bytes summed across
+    /// every live session, reserved atomically so two sessions cannot both
+    /// claim the same headroom. `None` uses
+    /// [`crate::session_manager::DEFAULT_TOTAL_SESSION_KV_BYTES`]. Unlike the
+    /// per-session limits, this
+    /// bounds the *process*: it is the only aggregate memory knob the server
+    /// has, `max_store_bytes` being per-execute.
+    pub max_session_state_memory: Option<u64>,
+    /// Operator-declared volumes a blueprint's `persistent` VFS mode resolves
+    /// through, name → host directory. Config-file only: no CLI flag and no
+    /// environment variable, so the mapping lives in one reviewable place.
+    /// [`validate_volumes`] refuses a declaration that overlaps a server-owned
+    /// directory; it runs on the config-file path, not here.
+    pub volumes: VolumeTable,
+}
+
+pub use submilli_shared::OAuthProvider;
+
+/// Base directory for Submilli's on-disk state when no explicit path is given.
+/// Resolves to `$SUBMILLI_HOME` if set, else `$HOME/.submilli`, else a temp-dir
+/// fallback so the server still boots in a bare environment. A single `~/.submilli`
+/// dotdir (à la `~/.cargo`, `~/.aws`, `~/.docker`) so the out-of-the-box defaults
+/// need no root and land somewhere a developer expects; production deployments set
+/// explicit paths (CLI flags / config file) pointing at their mounted volumes.
+pub fn default_data_root() -> PathBuf {
+    submilli_build::default_data_root()
+}
+
+/// Default directory the file-backed blueprint store persists to.
+pub fn default_blueprint_dir() -> PathBuf {
+    default_data_root().join("blueprints")
+}
+
+/// Default durable root for `per_session` VFS directories.
+pub fn default_session_storage_root() -> PathBuf {
+    default_data_root().join("vfs/sessions")
+}
+
+/// Default directory the file-backed session store persists lifecycle metadata
+/// to — sibling to the VFS directories under `~/.submilli`.
+pub fn default_session_store_dir() -> PathBuf {
+    default_data_root().join("sessions")
+}
+
+/// Default directory backing the encrypted secret store.
+pub fn default_secret_store_dir() -> PathBuf {
+    default_data_root().join("secrets")
+}
+
+pub fn default_package_store_dir() -> PathBuf {
+    submilli_build::default_package_store_dir()
+}
+
+pub fn warn_if_external_bind(addr: IpAddr) {
+    if addr.is_loopback() {
+        return;
+    }
+    tracing::warn!(
+        %addr,
+        "binding outside loopback exposes the server publicly; auth/blueprint is not yet implemented (SUB-159/160)"
+    );
+}
+
+/// An operator-declared volume table: name → host directory. A blueprint's
+/// `vfs: { mode: persistent, volume: <name> }` resolves through this table, so a
+/// blueprint never names a host directory of its own.
+pub type VolumeTable = BTreeMap<String, PathBuf>;
+
+/// The server-owned directories [`validate_volumes`] guards. Callers pass
+/// *effective* values — after defaults are applied — because a volume that
+/// overlaps the directory the server actually uses is the hazard, not one that
+/// overlaps the value the operator happened to type.
+///
+/// The secret-store directory and key file are deliberately here rather than
+/// read off [`ServerConfig`]: that struct carries the opened store, not the
+/// paths it was opened from, so a caller that skipped these fields would let a
+/// volume swallow the decryption key unnoticed.
+#[derive(Clone, Debug, Default)]
+pub struct ServerDirectories {
+    pub blueprint_dir: Option<PathBuf>,
+    pub blueprint_seed_dir: Option<PathBuf>,
+    pub package_store_root: Option<PathBuf>,
+    pub secret_store_dir: Option<PathBuf>,
+    pub secret_store_key_file: Option<PathBuf>,
+    pub session_storage_root: Option<PathBuf>,
+    /// The durable session store — lifecycle records plus the idempotency
+    /// ledger in a subdirectory of it. A different directory from
+    /// [`Self::session_storage_root`], with a different default.
+    pub session_store_dir: Option<PathBuf>,
+    /// `None` means the OS temp directory, which is where ephemeral scratch
+    /// lands when the operator configures no root.
+    pub ephemeral_storage_root: Option<PathBuf>,
+    /// The config file this server was started from, when it was started from one.
+    /// It is not reachable from [`ServerConfig`] — the file is consumed during
+    /// resolution and nothing keeps the path — so only the config-file channel can
+    /// supply it.
+    pub config_file: Option<PathBuf>,
+}
+
+impl ServerDirectories {
+    /// Every guarded directory [`ServerConfig`] can supply, with the defaults
+    /// applied. The secret-store fields are left empty — fill them in from
+    /// wherever the store was opened before validating.
+    pub fn from_config(config: &ServerConfig) -> Self {
+        Self {
+            blueprint_dir: Some(
+                config
+                    .blueprint_dir
+                    .clone()
+                    .unwrap_or_else(default_blueprint_dir),
+            ),
+            blueprint_seed_dir: config.blueprint_seed_dir.clone(),
+            package_store_root: Some(
+                config
+                    .package_store_root
+                    .clone()
+                    .unwrap_or_else(default_package_store_dir),
+            ),
+            secret_store_dir: None,
+            secret_store_key_file: None,
+            // Neither the secret store's paths nor the config file's survive into
+            // `ServerConfig`; an embedder that wants them guarded fills them in.
+            config_file: None,
+            session_storage_root: Some(
+                config
+                    .session_storage_root
+                    .clone()
+                    .unwrap_or_else(default_session_storage_root),
+            ),
+            session_store_dir: Some(
+                config
+                    .session_store_dir
+                    .clone()
+                    .unwrap_or_else(default_session_store_dir),
+            ),
+            ephemeral_storage_root: config.ephemeral_storage_root.clone(),
+        }
+    }
+}
+
+/// Why a volume declaration was refused. Every variant names the volume, so an
+/// operator reading the boot failure knows which line of the config to edit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VolumeError {
+    /// A blank map key. An unnamed volume can never be referenced.
+    EmptyName,
+    /// A control character (a newline, most plausibly) in a name. Names are
+    /// echoed into log lines and client-facing errors.
+    ControlCharInName { name: String },
+    /// A relative target. Every other path option is resolved against the
+    /// process working directory, so a container `WORKDIR` change would
+    /// silently repoint the volume at a different host directory.
+    RelativeTarget { name: String, target: PathBuf },
+    /// The volume overlaps a directory the server owns. See [`Overlap`].
+    Overlap(Overlap),
+    /// One declared volume resolves inside another. Mounting opens the target
+    /// with ambient authority and follows symlinks, so a guest holding the
+    /// outer volume can replace the inner volume's root with a link and
+    /// redirect it anywhere on the host.
+    NestedVolumes {
+        outer: String,
+        outer_target: PathBuf,
+        inner: String,
+        inner_target: PathBuf,
+    },
+    /// Two volume names resolving to one directory: each blueprint would
+    /// silently share the other's files.
+    SharedTarget {
+        first: String,
+        second: String,
+        target: PathBuf,
+    },
+}
+
+/// One volume declaration overlapping one server-owned directory, in the
+/// direction that is unsafe for that directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Overlap {
+    pub name: String,
+    /// The declared target, as the operator wrote it.
+    pub target: PathBuf,
+    /// What the volume collides with, in words an operator recognises.
+    pub owned: &'static str,
+    /// The server-owned directory, as the server resolved it.
+    pub owned_path: PathBuf,
+    pub direction: Direction,
+    pub reason: &'static str,
+}
+
+/// Which way containment is unsafe. The two directions fail for different
+/// reasons, and a directory can be guarded in both: the `per_session` VFS root
+/// leaks outward and loses data inward, while the package store and the durable
+/// session store have nested layouts, so a volume one level down still lands on
+/// server-owned files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    /// The volume is at or above the server-owned directory.
+    VolumeContains,
+    /// The volume is at or below the server-owned directory.
+    VolumeInside,
+}
+
+impl fmt::Display for VolumeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            VolumeError::EmptyName => f.write_str(
+                "a volume name is empty; give every entry under `volumes:` a name a blueprint can \
+                 reference",
+            ),
+            VolumeError::ControlCharInName { name } => write!(
+                f,
+                "volume name {name:?} contains a control character; use a plain single-line name"
+            ),
+            VolumeError::RelativeTarget { name, target } => write!(
+                f,
+                "volume '{name}' points at the relative path {}; give an absolute path — a \
+                 relative one moves with the process working directory",
+                target.display()
+            ),
+            VolumeError::Overlap(o) => write!(
+                f,
+                "volume '{name}' ({target}) {direction} the {owned} ({owned_path}): {reason}. \
+                 Point the volume at a directory outside it, or move the {owned} elsewhere",
+                name = o.name,
+                target = o.target.display(),
+                direction = match o.direction {
+                    Direction::VolumeContains => "contains",
+                    Direction::VolumeInside => "is inside",
+                },
+                owned = o.owned,
+                owned_path = o.owned_path.display(),
+                reason = o.reason,
+            ),
+            VolumeError::NestedVolumes {
+                outer,
+                outer_target,
+                inner,
+                inner_target,
+            } => write!(
+                f,
+                "volume '{inner}' ({inner_path}) is inside volume '{outer}' ({outer_path}): a \
+                 guest holding '{outer}' can replace the root of '{inner}' with a symlink and \
+                 redirect it anywhere on the host. Point one of them at a directory outside the \
+                 other",
+                inner_path = inner_target.display(),
+                outer_path = outer_target.display(),
+            ),
+            VolumeError::SharedTarget {
+                first,
+                second,
+                target,
+            } => write!(
+                f,
+                "volumes '{first}' and '{second}' both point at {target}: give each volume its \
+                 own directory, or declare one name and reference it from both blueprints",
+                target = target.display(),
+            ),
+        }
+    }
+}
+
+impl std::error::Error for VolumeError {}
+
+/// Refuse a volume table that a guest could use to reach the server's own
+/// state. Called automatically on the config-file path; an embedder that builds
+/// [`ServerConfig`] programmatically gets no such check and should call this
+/// itself before serving.
+///
+/// Volumes are also refused when they overlap *each other*: nesting one inside
+/// another hands the outer volume's holder the inner one's root.
+///
+/// Comparison runs over both the written and the symlink-resolved target (see
+/// [`Shape`]), so an overlap that appears only once a link is followed and one
+/// that appears only in the operator's spelling are both refused.
+pub fn validate_volumes(
+    volumes: &VolumeTable,
+    dirs: &ServerDirectories,
+) -> Result<(), VolumeError> {
+    let guarded = guarded_dirs(dirs);
+    let mut checked: Vec<Volume> = Vec::new();
+    for (name, target) in volumes {
+        let volume = prepare_volume(name, target)?;
+        check_against_guarded_dirs(&volume, &guarded)?;
+        check_against_other_volumes(&volume, &checked)?;
+        checked.push(volume);
+    }
+    Ok(())
+}
+
+/// One declaration, validated far enough to compare: an absolute target with a
+/// usable name, plus the shapes that target is compared in.
+struct Volume {
+    name: String,
+    target: PathBuf,
+    shape: Shape,
+}
+
+/// The two shapes a directory is compared in: the path as it is written, and
+/// where that path lands once symlinks are followed.
+///
+/// Both are load-bearing, and neither subsumes the other. The resolved shape
+/// catches a target that only overlaps once a link is followed. The written
+/// shape catches the reverse — a target that *is* a link, resolving away from
+/// where it sits. `volume inner: /data/outer/alias`, where `alias` is a link
+/// pointing somewhere else entirely, shows no resolved overlap with `volume
+/// outer: /data/outer`; but the entry named `alias` lives in a directory a
+/// guest can write, so that guest can repoint it and the next mount of `inner`
+/// opens wherever the guest chose, with ambient authority. Comparing what the
+/// operator wrote keeps a guest-reachable pathname out of the table to begin
+/// with, which is the only durable fix: a check on the resolved target is a
+/// check on a value that can change after it is read.
+struct Shape {
+    written: PathBuf,
+    resolved: PathBuf,
+}
+
+impl Shape {
+    fn of(path: &Path) -> Self {
+        Self {
+            written: path.to_path_buf(),
+            resolved: resolve_links(path),
+        }
+    }
+
+    /// Whether this directory is `other` or sits beneath it, in either shape.
+    fn beneath(&self, other: &Self) -> bool {
+        starts_with(&self.written, &other.written) || starts_with(&self.resolved, &other.resolved)
+    }
+
+    /// Whether the two name the same directory, in either shape.
+    fn same_as(&self, other: &Self) -> bool {
+        same(&self.written, &other.written) || same(&self.resolved, &other.resolved)
+    }
+}
+
+fn same(a: &Path, b: &Path) -> bool {
+    starts_with(a, b) && starts_with(b, a)
+}
+
+/// Component-wise prefix test that honours the platform's case sensitivity.
+///
+/// `Path::starts_with` is always case-sensitive. On the default macOS and
+/// Windows filesystems that under-refuses: `resolve_links` folds the case of
+/// the part of a target that already exists — `canonicalize` returns the
+/// on-disk spelling — but a directory that does not exist yet keeps whatever
+/// the operator typed, so `/srv/STATE` and `/srv/state` name the same future
+/// directory while an exact comparison calls them unrelated. Folding ASCII case
+/// there refuses a pair that would collide once created; it never accepts one
+/// an exact comparison would have refused.
+fn starts_with(path: &Path, prefix: &Path) -> bool {
+    let mut have = path.components();
+    prefix.components().all(|want| {
+        have.next()
+            .is_some_and(|got| same_component(got.as_os_str(), want.as_os_str()))
+    })
+}
+
+#[cfg(any(target_os = "macos", windows))]
+fn same_component(a: &std::ffi::OsStr, b: &std::ffi::OsStr) -> bool {
+    a.as_encoded_bytes()
+        .eq_ignore_ascii_case(b.as_encoded_bytes())
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn same_component(a: &std::ffi::OsStr, b: &std::ffi::OsStr) -> bool {
+    a == b
+}
+
+fn prepare_volume(name: &str, target: &Path) -> Result<Volume, VolumeError> {
+    validate_name(name)?;
+    if !target.is_absolute() {
+        return Err(VolumeError::RelativeTarget {
+            name: name.to_string(),
+            target: target.to_path_buf(),
+        });
+    }
+    Ok(Volume {
+        name: name.to_string(),
+        target: target.to_path_buf(),
+        shape: Shape::of(target),
+    })
+}
+
+fn check_against_guarded_dirs(volume: &Volume, guarded: &[GuardedDir]) -> Result<(), VolumeError> {
+    for guard in guarded {
+        let overlaps = match guard.direction {
+            Direction::VolumeContains => guard.shape.beneath(&volume.shape),
+            Direction::VolumeInside => volume.shape.beneath(&guard.shape),
+        };
+        if overlaps {
+            return Err(VolumeError::Overlap(Overlap {
+                name: volume.name.clone(),
+                target: volume.target.clone(),
+                owned: guard.owned,
+                owned_path: guard.path.clone(),
+                direction: guard.direction,
+                reason: guard.reason,
+            }));
+        }
+    }
+    Ok(())
+}
+
+fn check_against_other_volumes(volume: &Volume, declared: &[Volume]) -> Result<(), VolumeError> {
+    for other in declared {
+        if volume.shape.same_as(&other.shape) {
+            return Err(VolumeError::SharedTarget {
+                first: other.name.clone(),
+                second: volume.name.clone(),
+                target: volume.target.clone(),
+            });
+        }
+        let (outer, inner) = if volume.shape.beneath(&other.shape) {
+            (other, volume)
+        } else if other.shape.beneath(&volume.shape) {
+            (volume, other)
+        } else {
+            continue;
+        };
+        return Err(VolumeError::NestedVolumes {
+            outer: outer.name.clone(),
+            outer_target: outer.target.clone(),
+            inner: inner.name.clone(),
+            inner_target: inner.target.clone(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_name(name: &str) -> Result<(), VolumeError> {
+    if name.trim().is_empty() {
+        return Err(VolumeError::EmptyName);
+    }
+    if name.chars().any(char::is_control) {
+        return Err(VolumeError::ControlCharInName {
+            name: name.to_string(),
+        });
+    }
+    Ok(())
+}
+
+struct GuardedDir {
+    owned: &'static str,
+    path: PathBuf,
+    shape: Shape,
+    direction: Direction,
+    reason: &'static str,
+}
+
+/// The refusal table: one row per server-owned directory, with the *one*
+/// direction that is unsafe for it and why. Ordered so the most damaging
+/// collisions are reported first; leave the order alone.
+///
+/// A volume *inside* the OS temp directory is deliberately absent: that is
+/// where ephemeral scratch lands by default, and containment there runs the
+/// other way.
+fn guarded_dirs(dirs: &ServerDirectories) -> Vec<GuardedDir> {
+    let ephemeral = dirs
+        .ephemeral_storage_root
+        .clone()
+        .unwrap_or_else(std::env::temp_dir);
+    let rows: [(&'static str, Option<PathBuf>, Direction, &'static str); 12] = [
+        (
+            "secret store",
+            dirs.secret_store_dir.clone(),
+            Direction::VolumeContains,
+            "a guest read would reach the store's decryption key",
+        ),
+        (
+            "secret-store key file",
+            dirs.secret_store_key_file.clone(),
+            Direction::VolumeContains,
+            "a guest read would reach the store's decryption key",
+        ),
+        (
+            "blueprint store",
+            dirs.blueprint_dir.clone(),
+            Direction::VolumeContains,
+            "a guest write would reach the blueprint index, letting a program grant itself \
+             capabilities",
+        ),
+        (
+            "blueprint seed directory",
+            dirs.blueprint_seed_dir.clone(),
+            Direction::VolumeContains,
+            "a guest write would reach the seed documents the store is reconciled against",
+        ),
+        (
+            "package store",
+            dirs.package_store_root.clone(),
+            Direction::VolumeContains,
+            "a guest write would reach executable package artifacts, running code as another \
+             package",
+        ),
+        (
+            "package store",
+            dirs.package_store_root.clone(),
+            Direction::VolumeInside,
+            "the store nests artifacts under <scope>/<package>, so a volume one level down still \
+             reaches executable package artifacts, running code as another package",
+        ),
+        (
+            "durable session store",
+            dirs.session_store_dir.clone(),
+            Direction::VolumeContains,
+            "a guest read would reach every session's stored variables and the recorded response \
+             body of every idempotent execute, and a guest write could repoint a session at \
+             another blueprint — running it under that blueprint's permissions",
+        ),
+        (
+            "durable session store",
+            dirs.session_store_dir.clone(),
+            Direction::VolumeInside,
+            "the idempotency ledger lives in a subdirectory of that root, so a guest write would \
+             forge the recorded outcome of a keyed execute",
+        ),
+        (
+            "per-session VFS root",
+            dirs.session_storage_root.clone(),
+            Direction::VolumeContains,
+            "the volume would expose every other session's files to any caller",
+        ),
+        (
+            "per-session VFS root",
+            dirs.session_storage_root.clone(),
+            Direction::VolumeInside,
+            "orphan reconciliation deletes unclaimed directories under that root on every boot, \
+             so the volume's contents would be wiped",
+        ),
+        (
+            "ephemeral storage root",
+            Some(ephemeral),
+            Direction::VolumeContains,
+            "the volume would expose every concurrent execute's scratch directory",
+        ),
+        (
+            "server config file",
+            dirs.config_file.clone(),
+            Direction::VolumeContains,
+            "a guest write would reach the server's own configuration — rewriting the `volumes:` \
+             table, the network policy, or the secret-store key path, all of which take effect \
+             at the next restart",
+        ),
+    ];
+
+    rows.into_iter()
+        .filter_map(|(owned, path, direction, reason)| {
+            let path = path?;
+            Some(GuardedDir {
+                owned,
+                shape: Shape::of(&path),
+                path,
+                direction,
+                reason,
+            })
+        })
+        .collect()
+}
+
+/// Resolve symlinks as far as the path exists, keeping the components that do
+/// not yet. A volume target is allowed not to exist at start; what matters is
+/// where it would land once created.
+fn resolve_links(path: &Path) -> PathBuf {
+    let mut missing: Vec<std::ffi::OsString> = Vec::new();
+    let mut head = path.to_path_buf();
+    loop {
+        if let Ok(real) = std::fs::canonicalize(&head) {
+            return missing.iter().rev().fold(real, |acc, seg| acc.join(seg));
+        }
+        let Some(name) = head.file_name().map(std::ffi::OsStr::to_os_string) else {
+            return path.to_path_buf();
+        };
+        if !head.pop() {
+            return path.to_path_buf();
+        }
+        missing.push(name);
+    }
+}

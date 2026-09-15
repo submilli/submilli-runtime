@@ -1,0 +1,17 @@
+function len_after_throw_guard(x: string | null): number {
+  if (x === null) {
+    throw new Error("null");
+  }
+  return x.length;
+}
+
+function main(): void {
+  assert(len_after_throw_guard("hello") === 5, "non-null narrows via throw-guard");
+  assert(len_after_throw_guard("") === 0, "empty string");
+  try {
+    len_after_throw_guard(null);
+    assert(false, "expected throw on null");
+  } catch (e: Error) {
+    assert(true, "caught the throw");
+  }
+}

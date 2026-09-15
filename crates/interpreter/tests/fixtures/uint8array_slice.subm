@@ -1,0 +1,31 @@
+function main(): void {
+  let bytes: Uint8Array = Uint8Array.new([0, 1, 2, 3, 4]);
+
+  let mid: Uint8Array = bytes.slice(1, 4);
+  assert(mid.length === 3, "mid length");
+  assert(mid[0] === 1 && mid[1] === 2 && mid[2] === 3, "mid contents");
+
+  let full: Uint8Array = bytes.slice();
+  assert(full.length === 5, "full copy length");
+  assert(full[0] === 0 && full[4] === 4, "full copy contents");
+
+  let tail: Uint8Array = bytes.slice(2);
+  assert(tail.length === 3 && tail[0] === 2 && tail[2] === 4, "tail from index 2");
+
+  let last_two: Uint8Array = bytes.slice(-2);
+  assert(last_two.length === 2 && last_two[0] === 3 && last_two[1] === 4, "last 2 via negative");
+
+  let drop_last: Uint8Array = bytes.slice(0, -1);
+  assert(drop_last.length === 4 && drop_last[3] === 3, "drop last via negative end");
+
+  let inverted: Uint8Array = bytes.slice(3, 1);
+  assert(inverted.length === 0, "inverted range");
+
+  let clamped: Uint8Array = bytes.slice(-100, 100);
+  assert(clamped.length === 5, "out-of-range clamps to full");
+
+  // Slice is a fresh copy — mutating the slice doesn't touch the source.
+  let copy: Uint8Array = bytes.slice(0, 3);
+  copy[0] = 99;
+  assert(bytes[0] === 0, "source unchanged after slice write");
+}

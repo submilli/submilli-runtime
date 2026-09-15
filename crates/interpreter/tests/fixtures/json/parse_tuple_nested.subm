@@ -1,0 +1,7 @@
+
+function main(): void {
+  const t = JSON.parse("[\"point\", [3, 4]]") as [string, [number, number]];
+  assert(t[0] === "point", "outer[0]");
+  assert(t[1][0] === 3, "inner[0]");
+  assert(t[1][1] === 4, "inner[1]");
+}

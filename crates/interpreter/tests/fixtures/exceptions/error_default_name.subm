@@ -1,0 +1,9 @@
+function main(): void {
+  let n: string = "<none>";
+  try {
+    throw new Error("anything");
+  } catch (e: Error) {
+    n = e.name;
+  }
+  assert(n === "Error", "Error.name is always \"Error\" in v1");
+}

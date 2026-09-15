@@ -1,0 +1,9 @@
+function main(): void {
+  assert(JSON.stringify(42) === "42", "integer");
+  assert(JSON.stringify(0) === "0", "zero");
+  assert(JSON.stringify(-1) === "-1", "negative");
+  assert(JSON.stringify(0.1 + 0.2) === "0.30000000000000004", "float drift");
+  assert(JSON.stringify(0 / 0) === "null", "NaN");
+  assert(JSON.stringify(1 / 0) === "null", "+Infinity");
+  assert(JSON.stringify(-1 / 0) === "null", "-Infinity");
+}

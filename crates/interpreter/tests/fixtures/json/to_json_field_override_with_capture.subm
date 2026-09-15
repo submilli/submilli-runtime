@@ -1,0 +1,7 @@
+function main(): void {
+  let suffix: string = "!";
+  const o = { toJson: (): string => "\"hello" + suffix + "\"" };
+  assert(o.toJson() === "\"hello!\"", "captured let visible in override");
+  suffix = "?";
+  assert(JSON.stringify(o) === "\"hello?\"", "later writes to captured let still visible");
+}

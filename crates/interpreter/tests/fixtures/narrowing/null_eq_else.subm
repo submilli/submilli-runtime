@@ -1,0 +1,14 @@
+function f(x: string | null): number {
+  if (x === null) {
+    return 0;
+  } else {
+    return x.length;
+  }
+}
+
+function main(): void {
+  assert(f(null) === 0, "x === null branch returns 0");
+  assert(f("hi") === 2, "else-branch narrows to string, .length works");
+  assert(f("") === 0, "empty string narrows to string, .length is 0");
+  assert(f("foobar") === 6, "longer string");
+}

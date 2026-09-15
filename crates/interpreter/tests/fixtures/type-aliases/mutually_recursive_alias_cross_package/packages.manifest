@@ -1,0 +1,6 @@
+# The consumer imports only the functions, never the alias names, so the
+# recursive alias reaches it as a bare back-edge that has to be resolved
+# structurally — by the alias's own package, not by anything the consumer named.
+# name           dir  deps          root
+@test/ring       lib  -
+main             app  @test/ring    root

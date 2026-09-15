@@ -1,0 +1,8 @@
+function main(): void {
+  let words: string[] = ["foo", "bar", "baz"];
+  let acc: string = "";
+  for (let w of words) {
+    acc = acc + w;
+  }
+  assert(acc === "foobarbaz", "for-of concatenates strings");
+}

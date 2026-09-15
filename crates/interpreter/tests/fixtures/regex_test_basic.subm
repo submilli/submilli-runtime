@@ -1,0 +1,14 @@
+function main(): void {
+  const a: RegExp = new RegExp("abc", "");
+  assert(a.test("abc"), "literal match against itself");
+  assert(a.test("xabcx"), "literal match in middle of input");
+  assert(!a.test("xyz"), "non-match returns false");
+
+  const digits: RegExp = new RegExp("[0-9]+", "");
+  assert(digits.test("hello42"), "character-class match");
+  assert(!digits.test("hello"), "character-class non-match");
+
+  const ci: RegExp = new RegExp("hello", "i");
+  assert(ci.test("HELLO"), "case-insensitive flag");
+  assert(ci.test("Hello"), "case-insensitive flag against mixed-case");
+}

@@ -1,0 +1,16 @@
+function apply_or_zero(x: null | (n: number) => number): number {
+  if (typeof x === "function") {
+    return x(10);
+  } else {
+    return 0;
+  }
+}
+
+function add_one(n: number): number {
+  return n + 1;
+}
+
+function main(): void {
+  assert(apply_or_zero(add_one) === 11, "function narrows + invokes");
+  assert(apply_or_zero(null) === 0, "null falls through to else");
+}

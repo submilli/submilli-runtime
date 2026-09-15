@@ -1,0 +1,8 @@
+function main(): void {
+  const original = "{\"id\":1,\"name\":\"alice\"}";
+  const u = JSON.parse(original) as { id: number, name: string };
+  const back: string = JSON.stringify(u);
+  // Field order in the round-tripped output is BTreeMap-canonical
+  // (alphabetical), matching how user-object codegen emits fields.
+  assert(back === "{\"id\":1,\"name\":\"alice\"}", "round-trip");
+}

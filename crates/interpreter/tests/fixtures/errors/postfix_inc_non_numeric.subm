@@ -1,0 +1,6 @@
+// expect-error: postfix `++` expects `number`
+
+function main(): void {
+  let s: string = "hi";
+  s++;
+}

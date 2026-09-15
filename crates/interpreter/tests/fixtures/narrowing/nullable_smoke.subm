@@ -1,0 +1,46 @@
+let g_num: number | null = 7;
+
+function box_via_return(x: number): number | null {
+  return x;
+}
+
+function pair_is_null(a: number | null, b: number | null): boolean {
+  return a === null;
+}
+
+function main(): void {
+  const x_null: string | null = null;
+  const x_some: string | null = "hi";
+  assert(x_null === null, "string|null literal-null equals null");
+  assert(x_some !== null, "string|null literal-string is non-null");
+
+  const z_null: number | null = null;
+  const z_some: number | null = 5;
+  assert(z_null === null, "number|null literal-null equals null");
+  assert(z_some !== null, "number|null literal-number is non-null");
+
+  const b_null: boolean | null = null;
+  const b_some: boolean | null = true;
+  assert(b_null === null, "boolean|null literal-null equals null");
+  assert(b_some !== null, "boolean|null literal-boolean is non-null");
+
+  let n: number | null = 1;
+  assert(n !== null, "AssignLocal init: n is non-null");
+  n = null;
+  assert(n === null, "AssignLocal: ref→ref subtype (null literal)");
+  n = 42;
+  assert(n !== null, "AssignLocal: primitive→ref-slot (box)");
+
+  let s: string | null = null;
+  assert(s === null, "AssignLocal init: s is null");
+  s = "hi";
+  assert(s !== null, "AssignLocal: ref→ref subtype (string literal)");
+
+  assert(g_num !== null, "AssignGlobal init: g_num is non-null");
+
+  const ret_some: number | null = box_via_return(99);
+  assert(ret_some !== null, "Return: f64 → (ref null $Object)");
+
+  assert(pair_is_null(null, 5), "Call-arg: null + boxed-primitive args");
+  assert(!pair_is_null(7, null), "Call-arg: boxed-primitive + null args");
+}

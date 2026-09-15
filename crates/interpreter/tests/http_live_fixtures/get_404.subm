@@ -1,0 +1,8 @@
+import { get, Response } from "submilli:http";
+
+function main(): void {
+  const r: Response = get("{{BASE}}/status/404");
+  assert(r.status === 404, "404 round-trip");
+  assert(!r.ok, "ok=false for 4xx");
+  assert(r.body === "not found", "body decoded");
+}

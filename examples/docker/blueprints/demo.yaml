@@ -1,0 +1,18 @@
+# Fixture for the containerized quickstart and for the release
+# workflow's smoke test.
+#
+# The server's blueprint store is a revision log managed over the REST API, not a
+# directory it scans, so this file is a *source* to register rather than
+# something to bind-mount:
+#
+#   curl -X PUT http://127.0.0.1:8128/v1/blueprints/demo \
+#     -H 'content-type: application/json' \
+#     -d '{"yaml": "name: demo\nvfs: per_session\ndefault: allow\n"}'
+
+name: demo
+vfs: per_session
+
+# Allow-by-default: this demo trusts its own code, so every capability is
+# permitted unless a rule denies it. A locked-down blueprint would instead use
+# `default: deny` and allow specific capabilities.
+default: allow

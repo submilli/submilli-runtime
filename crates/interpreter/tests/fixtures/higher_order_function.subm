@@ -1,0 +1,8 @@
+function apply(f: (x: number) => number, x: number): number {
+  return f(x);
+}
+
+function main(): void {
+  assert(apply((n: number) => n + 10, 5) === 15, "apply forwards arg through callback");
+  assert(apply((n: number) => n * 2, 7) === 14, "different callback, different result");
+}

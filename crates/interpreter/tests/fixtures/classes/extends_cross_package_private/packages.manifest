@@ -1,0 +1,6 @@
+# A consumer in another package cannot read an imported class's private field,
+# even though the WasmGC rec group it reconstructs contains the slot (privacy is
+# enforced at the typechecker, docs/classes.md §2). Compile-error fixture.
+# name           dir       deps            root
+@test/zoo3       animals   -
+main             app       @test/zoo3      root

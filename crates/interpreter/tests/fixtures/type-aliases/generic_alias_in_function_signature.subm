@@ -1,0 +1,10 @@
+type Box<T> = { value: T };
+
+function unwrap<T>(b: Box<T>): T {
+  return b.value;
+}
+
+function main(): void {
+  const b: Box<number> = { value: 99 };
+  assert(unwrap<number>(b) === 99, "unwrap via Box<number>");
+}

@@ -1,0 +1,15 @@
+function main(): void {
+  let src: Uint8Array = Uint8Array.new([10, 20, 30]);
+  let copy: Uint8Array = Uint8Array.fromBytes(src);
+
+  assert(copy.length === 3, "copy length");
+  assert(copy.equals(src), "values match");
+
+  copy[0] = 99;
+  assert(src[0] === 10, "source unchanged after copy mutation");
+  assert(copy[0] === 99, "copy reflects mutation");
+
+  let empty: Uint8Array = Uint8Array.alloc(0);
+  let empty_copy: Uint8Array = Uint8Array.fromBytes(empty);
+  assert(empty_copy.length === 0, "empty copy");
+}

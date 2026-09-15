@@ -1,0 +1,8 @@
+// expect-error: `for-of` requires an array, tuple, string, `Iterator<T>`, or `Iterable<T>`
+
+function main(): void {
+  const e = new TextEncoder();
+  for (const x of e) {
+    assert(true, "unreachable");
+  }
+}

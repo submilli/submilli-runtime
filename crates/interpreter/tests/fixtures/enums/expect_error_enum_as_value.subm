@@ -1,0 +1,6 @@
+// expect-error: `Direction` is an enum type, not a value
+enum Direction { Up, Down }
+
+function main(): void {
+  const x = Direction;
+}

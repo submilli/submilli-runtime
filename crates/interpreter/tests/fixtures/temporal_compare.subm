@@ -1,0 +1,53 @@
+function main(): void {
+  // Instant: ordered by epoch, with nanosecond tiebreak.
+  const i1: Temporal.Instant = Temporal.Instant.from("2024-01-01T00:00:00Z");
+  const i2: Temporal.Instant = Temporal.Instant.from("2024-06-01T00:00:00Z");
+  assert(Temporal.Instant.compare(i1, i2) === -1, "instant earlier < later");
+  assert(Temporal.Instant.compare(i2, i1) === 1, "instant later > earlier");
+  assert(Temporal.Instant.compare(i1, i1) === 0, "instant equal");
+  const iLo: Temporal.Instant = Temporal.Instant.from("2024-01-01T00:00:00.001Z");
+  const iHi: Temporal.Instant = Temporal.Instant.from("2024-01-01T00:00:00.002Z");
+  assert(Temporal.Instant.compare(iLo, iHi) === -1, "instant nanosecond tiebreak");
+
+  // ZonedDateTime: compared by exact instant, ignoring the time zone.
+  const z1: Temporal.ZonedDateTime =
+    Temporal.ZonedDateTime.from("2024-01-01T12:00:00-05:00[America/New_York]");
+  const z2: Temporal.ZonedDateTime =
+    Temporal.ZonedDateTime.from("2024-06-01T12:00:00-04:00[America/New_York]");
+  assert(Temporal.ZonedDateTime.compare(z1, z2) === -1, "zdt earlier < later");
+  assert(Temporal.ZonedDateTime.compare(z2, z1) === 1, "zdt later > earlier");
+  // Same instant, different zone → equal (17:00Z either way).
+  const utc: Temporal.ZonedDateTime =
+    Temporal.ZonedDateTime.from("2024-01-01T17:00:00+00:00[UTC]");
+  const ny: Temporal.ZonedDateTime =
+    Temporal.ZonedDateTime.from("2024-01-01T12:00:00-05:00[America/New_York]");
+  assert(Temporal.ZonedDateTime.compare(utc, ny) === 0, "zdt same instant, different zone");
+
+  // PlainDate: lexicographic year, month, day.
+  const d1: Temporal.PlainDate = Temporal.PlainDate.from("2024-01-01");
+  const d2: Temporal.PlainDate = Temporal.PlainDate.from("2024-02-01");
+  assert(Temporal.PlainDate.compare(d1, d2) === -1, "date earlier < later");
+  assert(Temporal.PlainDate.compare(d2, d1) === 1, "date later > earlier");
+  assert(Temporal.PlainDate.compare(d1, d1) === 0, "date equal");
+
+  // PlainTime: lexicographic hour, minute, second, nanosecond.
+  const t1: Temporal.PlainTime = Temporal.PlainTime.from("09:00:00");
+  const t2: Temporal.PlainTime = Temporal.PlainTime.from("09:30:00");
+  assert(Temporal.PlainTime.compare(t1, t2) === -1, "time earlier < later");
+  assert(Temporal.PlainTime.compare(t2, t1) === 1, "time later > earlier");
+  assert(Temporal.PlainTime.compare(t1, t1) === 0, "time equal");
+
+  // PlainDateTime: lexicographic date then time.
+  const dt1: Temporal.PlainDateTime = Temporal.PlainDateTime.from("2024-01-01T09:00:00");
+  const dt2: Temporal.PlainDateTime = Temporal.PlainDateTime.from("2024-01-01T09:00:01");
+  assert(Temporal.PlainDateTime.compare(dt1, dt2) === -1, "datetime earlier < later");
+  assert(Temporal.PlainDateTime.compare(dt2, dt1) === 1, "datetime later > earlier");
+  assert(Temporal.PlainDateTime.compare(dt1, dt1) === 0, "datetime equal");
+
+  // PlainYearMonth: lexicographic year, month.
+  const ym1: Temporal.PlainYearMonth = Temporal.PlainYearMonth.from("2024-01");
+  const ym2: Temporal.PlainYearMonth = Temporal.PlainYearMonth.from("2024-02");
+  assert(Temporal.PlainYearMonth.compare(ym1, ym2) === -1, "yearmonth earlier < later");
+  assert(Temporal.PlainYearMonth.compare(ym2, ym1) === 1, "yearmonth later > earlier");
+  assert(Temporal.PlainYearMonth.compare(ym1, ym1) === 0, "yearmonth equal");
+}

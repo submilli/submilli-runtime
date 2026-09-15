@@ -1,0 +1,17 @@
+let flag: boolean = false;
+
+function main(): void {
+  let n: number = 0;
+  while (n < 10) {
+    try {
+      if (n === 3) {
+        break;
+      }
+      n = n + 1;
+    } finally {
+      flag = true;
+    }
+  }
+  assert(flag === true, "finally ran on the break iteration");
+  assert(n === 3, "loop exited at the expected iteration");
+}

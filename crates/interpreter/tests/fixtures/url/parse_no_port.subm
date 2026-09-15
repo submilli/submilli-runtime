@@ -1,0 +1,19 @@
+// port stays null even for http/https — scheme defaults (80/443) are not applied.
+
+import { parse, URL } from "submilli:url";
+
+function main(): void {
+  const u: URL = parse("https://example.com/some/path");
+  assert(u.protocol === "https", "protocol");
+  assert(u.host === "example.com", "host");
+  assert(u.port === null, "port is null when omitted");
+  assert(u.path === "/some/path", "path");
+  assert(u.fragment === null, "fragment is null when omitted");
+  assert(u.query.size === 0, "query is empty when omitted");
+
+  const v: URL = parse("https://example.com:1234/");
+  assert(v.port !== null, "explicit port surfaces");
+  if (v.port !== null) {
+    assert(v.port === 1234, "explicit port value");
+  }
+}

@@ -1,0 +1,15 @@
+
+function f(x: string | null): number {
+  if (x !== null) {
+    return x.length;
+  } else {
+    return 0;
+  }
+}
+
+function main(): void {
+  assert(f("hi") === 2, "then-branch narrows to string");
+  assert(f(null) === 0, "else-branch (null) returns 0");
+  assert(f("") === 0, "empty string narrows to string");
+  assert(f("foo") === 3, "non-empty string");
+}

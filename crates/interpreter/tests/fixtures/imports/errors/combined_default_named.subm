@@ -1,0 +1,4 @@
+// expect-error: combining default and named imports is not supported
+import uuid, { v4 } from "submilli:uuid";
+
+function main(): void { }

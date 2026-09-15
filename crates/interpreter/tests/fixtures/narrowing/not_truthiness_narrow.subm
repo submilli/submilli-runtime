@@ -1,0 +1,13 @@
+function describe(s: string | null): number {
+  if (!s) {
+    return -1;
+  } else {
+    return s.length;
+  }
+}
+
+function main(): void {
+  assert(describe(null) === -1, "null is falsy");
+  assert(describe("") === -1, "empty string is falsy (JS truthiness)");
+  assert(describe("hello") === 5, "truthy narrows to string");
+}

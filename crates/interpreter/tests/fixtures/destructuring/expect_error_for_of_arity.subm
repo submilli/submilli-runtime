@@ -1,0 +1,11 @@
+// expect-error: destructuring pattern has 3 elements, but right-hand side tuple has 2 elements
+
+
+function main(): void {
+  const pairs: [string, number][] = [["a", 1]];
+  for (const [a, b, c] of pairs) {
+    assert(a.length >= 0, "unreachable");
+    assert(b > 0, "unreachable");
+    assert(c > 0, "unreachable");
+  }
+}

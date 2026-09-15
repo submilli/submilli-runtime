@@ -1,0 +1,11 @@
+function main(): void {
+  let catch_ran: boolean = false;
+  let body_ran: boolean = false;
+  try {
+    body_ran = true;
+  } catch (e: Error) {
+    catch_ran = true;
+  }
+  assert(body_ran === true, "try body runs on the normal path");
+  assert(catch_ran === false, "catch is skipped when no throw");
+}

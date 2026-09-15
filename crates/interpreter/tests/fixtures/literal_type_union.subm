@@ -1,0 +1,15 @@
+function take(d: "north" | "south"): string {
+  return d;
+}
+
+function main(): void {
+  const a: "north" | "south" = "north";
+  const b: "north" | "south" = "south";
+  assert(a === "north", "first union literal");
+  assert(b === "south", "second union literal");
+
+  const got_n: string = take("north");
+  const got_s: string = take("south");
+  assert(got_n === "north", "union call accepts first literal");
+  assert(got_s === "south", "union call accepts second literal");
+}

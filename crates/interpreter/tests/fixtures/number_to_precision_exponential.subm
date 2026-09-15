@@ -1,0 +1,20 @@
+function main(): void {
+  assert((123.456).toPrecision(4) === "123.5", "four significant digits");
+  assert((123.456).toPrecision(2) === "1.2e+2", "fewer digits than the integer part goes exponential");
+  assert((0.000123).toPrecision(2) === "0.00012", "small values stay fixed until e < -6");
+  assert((123.456).toPrecision() === "123.456", "omitted precision behaves like toString");
+  assert((0).toPrecision(3) === "0.00", "zero pads to the precision");
+
+  assert((1234.5).toExponential(2) === "1.23e+3", "two fraction digits");
+  assert((1234.5).toExponential() === "1.2345e+3", "omitted digits uses what the value needs");
+  assert((0.0042).toExponential(1) === "4.2e-3", "negative exponent keeps its sign");
+  assert((1).toExponential(0) === "1e+0", "zero fraction digits");
+
+  let threw: boolean = false;
+  try {
+    (1).toPrecision(0);
+  } catch (e: Error) {
+    threw = true;
+  }
+  assert(threw, "precision below 1 throws");
+}

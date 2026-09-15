@@ -1,0 +1,12 @@
+function main(): void {
+  let o = { count: 10 };
+  o.count++;
+  assert(o.count === 11, "field increment");
+  o.count--;
+  o.count--;
+  assert(o.count === 9, "field decrement twice");
+
+  let original: number = o.count++;
+  assert(original === 9, "field expr yields pre-increment value");
+  assert(o.count === 10, "field is incremented");
+}

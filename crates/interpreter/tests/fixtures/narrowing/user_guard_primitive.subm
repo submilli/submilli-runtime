@@ -1,0 +1,16 @@
+function isStr(x: string | number): x is string {
+  return typeof x === "string";
+}
+
+function describe(x: string | number): number {
+  if (isStr(x)) {
+    return x.length;
+  } else {
+    return x + 100;
+  }
+}
+
+function main(): void {
+  assert(describe("hello") === 5, "guard narrows union to string");
+  assert(describe(42) === 142, "else-branch narrows to number");
+}

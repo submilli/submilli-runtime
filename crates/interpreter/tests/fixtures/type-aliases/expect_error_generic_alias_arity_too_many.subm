@@ -1,0 +1,7 @@
+// expect-error: type alias `Box` expects 1 type argument, got 2
+
+type Box<T> = { value: T };
+
+function main(): void {
+  const b: Box<number, string> = { value: 1 };
+}

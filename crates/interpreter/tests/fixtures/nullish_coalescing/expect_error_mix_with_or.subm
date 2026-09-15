@@ -1,0 +1,9 @@
+// expect-error: mixing `??` with `||` / `&&` requires parentheses
+
+function main(): void {
+  const a: boolean = true;
+  const b: boolean = false;
+  const c: boolean = true;
+  const r: boolean = a || b ?? c;
+  assert(r === true, "unreachable");
+}

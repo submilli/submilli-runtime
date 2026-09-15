@@ -1,0 +1,7 @@
+// expect-error: must be `Error`
+
+function main(): void {
+  try {
+  } catch (e: string) {
+  }
+}

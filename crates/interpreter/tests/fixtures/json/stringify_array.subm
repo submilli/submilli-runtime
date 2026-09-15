@@ -1,0 +1,13 @@
+function main(): void {
+  assert(JSON.stringify([1, 2, 3]) === "[1,2,3]", "numbers");
+  assert(JSON.stringify([true, false]) === "[true,false]", "booleans");
+  assert(JSON.stringify(["a", "b\n"]) === "[\"a\",\"b\\n\"]", "strings");
+
+  let empty: number[] = [];
+  assert(JSON.stringify(empty) === "[]", "empty");
+
+  assert(JSON.stringify([[1, 2], [3]]) === "[[1,2],[3]]", "nested");
+
+  // Single-element edge case (no trailing separator).
+  assert(JSON.stringify([7]) === "[7]", "single elem");
+}

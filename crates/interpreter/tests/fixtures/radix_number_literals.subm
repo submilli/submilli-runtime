@@ -1,0 +1,23 @@
+function main(): void {
+  assert(0xff === 255, "lowercase hex");
+  assert(0XFF === 255, "uppercase hex prefix and digits");
+  assert(0x0 === 0, "hex zero");
+  assert(0x10 === 16, "hex ten");
+
+  assert(0b1010 === 10, "binary");
+  assert(0B1 === 1, "uppercase binary prefix");
+  assert(0b0 === 0, "binary zero");
+
+  assert(0o17 === 15, "octal");
+  assert(0O7 === 7, "uppercase octal prefix");
+  assert(0o0 === 0, "octal zero");
+
+  assert(0x10 + 0b1 + 0o1 === 18, "mixed radices arithmetic");
+
+  let hexBig: bigint = 0xffn;
+  assert(hexBig === 255n, "hex bigint");
+  let binBig: bigint = 0b101n;
+  assert(binBig === 5n, "binary bigint");
+  let octBig: bigint = 0o17n;
+  assert(octBig === 15n, "octal bigint");
+}

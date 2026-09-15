@@ -1,0 +1,11 @@
+# A consumer imports only the statics it uses. Importing the rest would not
+# merely be wasteful: a static's signature is unerased, so it has to be
+# expressible in the consumer's own type space, and one it never calls need not
+# be. `Top` is reconstructed only as `Sub`'s ancestor — a root that carries no
+# usage record — so nothing registered the five-parameter closure struct its
+# statics name, and reaching either of them is a compiler panic. The arity has
+# to be one no other closure in the program shares, since closure types are
+# keyed by arity and void-ness alone.
+# name          dir    deps          root
+@test/zchk      lib    -
+main            app    @test/zchk    root

@@ -1,0 +1,15 @@
+let flag: boolean = false;
+
+function inner(): number {
+  try {
+    return 42;
+  } finally {
+    flag = true;
+  }
+}
+
+function main(): void {
+  const result = inner();
+  assert(flag === true, "finally ran before the return unwound");
+  assert(result === 42, "the original return value flowed through");
+}

@@ -1,0 +1,58 @@
+// Interfaces are structural (TS-style): a value satisfies an interface when
+// its members do, regardless of declared names. The nominal fast path is an
+// optimization, not a semantic.
+
+interface Named {
+  name: string;
+}
+
+interface Tagged {
+  name: string;
+  tag: number;
+}
+
+function describe(n: Named): string {
+  return n.name;
+}
+
+interface Counter {
+  hi: number;
+  iterator(): Iterator<number>;
+}
+
+function counter(hi: number): Counter {
+  const c: Counter = {
+    hi: hi,
+    iterator: (): Iterator<number> => {
+      let i = 0;
+      const it: Iterator<number> = {
+        next: (): IteratorResult<number> => {
+          if (i >= hi) { const d: IteratorResult<number> = { done: true }; return d; }
+          const y: IteratorResult<number> = { done: false, value: i };
+          i = i + 1;
+          return y;
+        },
+      };
+      return it;
+    },
+  };
+  return c;
+}
+
+function total(src: Iterable<number>): number {
+  let acc = 0;
+  for (const x of src) {
+    acc = acc + x;
+  }
+  return acc;
+}
+
+function main(): void {
+  const t: Tagged = { name: "widget", tag: 7 };
+  assert(describe(t) === "widget", "wider interface satisfies a narrower one");
+
+  assert(total(counter(4)) === 6, "user interface flows into an Iterable<number> param");
+
+  const viaFrom = Array.from(counter(3));
+  assert(viaFrom.length === 3, "and into Array.from");
+}

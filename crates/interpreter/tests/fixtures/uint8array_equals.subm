@@ -1,0 +1,15 @@
+function main(): void {
+  let a: Uint8Array = Uint8Array.new([1, 2, 3]);
+  let b: Uint8Array = Uint8Array.new([1, 2, 3]);
+  let c: Uint8Array = Uint8Array.new([1, 2, 4]);
+  let d: Uint8Array = Uint8Array.new([1, 2]);
+
+  assert(a.equals(a), "self-equality");
+  assert(a.equals(b), "byte-by-byte equal");
+  assert(!a.equals(c), "differs in last byte");
+  assert(!a.equals(d), "different length");
+
+  let empty1: Uint8Array = Uint8Array.alloc(0);
+  let empty2: Uint8Array = Uint8Array.alloc(0);
+  assert(empty1.equals(empty2), "two empty arrays equal");
+}

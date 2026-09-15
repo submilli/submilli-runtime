@@ -1,0 +1,13 @@
+// /echo-json-object matches only when the auto-serialized JSON body AND the
+// defaulted Content-Type: application/json both arrive — 200 proves both, and
+// the echoed body confirms the round-trip.
+
+import { post, Response } from "submilli:http";
+
+function main(): void {
+  const r: Response = post("{{BASE}}/echo-json-object", { name: "alice" });
+  assert(r.status === 200, "object body auto-encoded with application/json");
+  assert(r.headers.get("content-type") === "application/json", "response CT");
+  const parsed = r.json() as { name: string };
+  assert(parsed.name === "alice", "server echoed the JSON body");
+}

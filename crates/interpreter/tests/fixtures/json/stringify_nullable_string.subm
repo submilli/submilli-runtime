@@ -1,0 +1,13 @@
+function main(): void {
+  let s: string | null = "hi";
+  assert(JSON.stringify(s) === "\"hi\"", "non-null branch");
+
+  let n: string | null = null;
+  assert(JSON.stringify(n) === "null", "null branch");
+
+  let e: string | null = "";
+  assert(JSON.stringify(e) === "\"\"", "empty string is non-null");
+
+  let q: string | null = "a\"b";
+  assert(JSON.stringify(q) === "\"a\\\"b\"", "escape passes through");
+}

@@ -1,0 +1,40 @@
+// Temporal errors carry clean, Temporal-native messages — no leak of the
+// backing crate (`jiff`) internals — and stay catchable.
+
+function main(): void {
+  const a: Temporal.Instant = Temporal.Instant.from("2024-03-09T15:30:45Z");
+
+  // Calendar units on an Instant: actionable message, no crate leak.
+  let reachedA: boolean = false;
+  try {
+    a.subtract({ weeks: 1 });
+    reachedA = true;
+  } catch (e: Error) {
+    assert(e.message.includes("calendar units"), "names the problem");
+    assert(e.message.includes("ZonedDateTime"), "names the fix");
+    assert(!e.message.includes("jiff"), "no jiff leak");
+  }
+  assert(!reachedA, "calendar units on an Instant must throw");
+
+  // Invalid ISO input: names the format, no crate leak.
+  let reachedB: boolean = false;
+  try {
+    const bad: Temporal.Instant = Temporal.Instant.from("not-a-timestamp");
+    reachedB = true;
+  } catch (e: Error) {
+    assert(e.message.includes("ISO 8601"), "names the format");
+    assert(!e.message.includes("jiff"), "no jiff leak");
+  }
+  assert(!reachedB, "invalid ISO input must throw");
+
+  // Unknown time zone: names the expectation, no crate leak.
+  let reachedC: boolean = false;
+  try {
+    const z: Temporal.ZonedDateTime = Temporal.Now.zonedDateTimeISO("Mars/Phobos");
+    reachedC = true;
+  } catch (e: Error) {
+    assert(e.message.includes("not found"), "says not found");
+    assert(!e.message.includes("jiff"), "no jiff leak");
+  }
+  assert(!reachedC, "unknown time zone must throw");
+}

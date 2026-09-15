@@ -1,0 +1,16 @@
+function main(): void {
+  let bytes: Uint8Array = Uint8Array.new([1, 2, 3, 2, 1]);
+
+  assert(bytes.indexOf(2) === 1, "first index of 2");
+  assert(bytes.indexOf(2, 2) === 3, "indexOf with from skips earlier");
+  assert(bytes.indexOf(99) === -1, "indexOf missing → -1");
+
+  assert(bytes.lastIndexOf(2) === 3, "last index of 2");
+  assert(bytes.lastIndexOf(2, 2) === 1, "lastIndexOf with from constrains scan");
+  assert(bytes.lastIndexOf(99) === -1, "lastIndexOf missing → -1");
+
+  assert(bytes.includes(3) === true, "includes existing");
+  assert(bytes.includes(99) === false, "includes missing");
+  assert(bytes.includes(1, 1) === true, "includes from index 1 still finds last 1");
+  assert(bytes.includes(1, 5) === false, "includes past length is false");
+}

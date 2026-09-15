@@ -1,0 +1,25 @@
+function main(): void {
+  const m = new Map<string, number>();
+  m.set("alpha", 1);
+  m.set("beta", 2);
+  m.set("gamma", 3);
+  m.set("delta", 4);
+  assert(m.size === 4, "four entries");
+
+  m.delete("beta");
+  m.delete("gamma");
+  assert(m.size === 2, "size drops to 2 after deletes");
+
+  m.set("beta", 20);
+  m.set("gamma", 30);
+  assert(m.size === 4, "re-insert reuses tombstones, size returns to 4");
+
+  const a: number | null = m.get("alpha");
+  const b: number | null = m.get("beta");
+  const g: number | null = m.get("gamma");
+  const d: number | null = m.get("delta");
+  assert(a !== null && a === 1, "alpha unchanged");
+  assert(b !== null && b === 20, "beta has new value");
+  assert(g !== null && g === 30, "gamma has new value");
+  assert(d !== null && d === 4, "delta unchanged");
+}

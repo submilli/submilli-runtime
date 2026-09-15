@@ -1,0 +1,18 @@
+// Draws are probabilistic; the inequality assertion could theoretically fail on identical entropy.
+
+import { randomBytes } from "submilli:crypto";
+
+function main(): void {
+  const a: Uint8Array = randomBytes(32);
+  assert(a.length === 32, "randomBytes(32) returns 32 bytes");
+
+  const b: Uint8Array = randomBytes(32);
+  assert(b.length === 32, "second draw also 32 bytes");
+  assert(!a.equals(b), "two independent draws differ");
+
+  const empty: Uint8Array = randomBytes(0);
+  assert(empty.length === 0, "randomBytes(0) returns empty");
+
+  const big: Uint8Array = randomBytes(1024);
+  assert(big.length === 1024, "randomBytes(1024) returns 1024 bytes");
+}

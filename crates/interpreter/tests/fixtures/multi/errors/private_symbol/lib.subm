@@ -1,0 +1,4 @@
+// expect-error: private to
+import { hidden } from "./util";
+
+export const y: number = 1;

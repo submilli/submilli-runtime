@@ -1,0 +1,15 @@
+function describe(s: string): number {
+  switch (s) {
+    case "a": return 1;
+    case "b": return 2;
+    case "c": return 3;
+    default: return 0;
+  }
+}
+
+function main(): void {
+  assert(describe("a") === 1, "matches first case");
+  assert(describe("b") === 2, "matches middle case");
+  assert(describe("c") === 3, "matches last case");
+  assert(describe("z") === 0, "falls through to default");
+}

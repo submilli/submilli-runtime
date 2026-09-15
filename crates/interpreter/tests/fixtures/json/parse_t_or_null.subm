@@ -1,0 +1,12 @@
+// — `T | null` parses both JSON `null` and a non-null value.
+
+function main(): void {
+  const a = JSON.parse("null") as number | null;
+  assert(a === null, "null branch");
+
+  const b = JSON.parse("7") as number | null;
+  assert(b !== null, "non-null branch");
+  if (b !== null) {
+    assert(b === 7, "narrowed value");
+  }
+}

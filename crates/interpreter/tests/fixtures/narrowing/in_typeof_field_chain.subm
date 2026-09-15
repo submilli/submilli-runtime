@@ -1,0 +1,13 @@
+function describe(x: unknown): string {
+  if (x !== null && "name" in x && typeof x.name === "string") {
+    return x.name;
+  }
+  return "n/a";
+}
+
+function main(): void {
+  assert(describe({ name: "alice" }) === "alice", "object with string name");
+  assert(describe({ name: 42 }) === "n/a", "object with non-string name");
+  assert(describe({ other: 5 }) === "n/a", "object without name field");
+  assert(describe(null) === "n/a", "null");
+}

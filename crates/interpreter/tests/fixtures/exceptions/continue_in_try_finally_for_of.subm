@@ -1,0 +1,18 @@
+// `continue` inside try/finally in a for-of must advance the iteration and run the
+// finally each pass — the array path had the same fuel-exhaustion bug as for-loops.
+function main(): void {
+  let total: number = 0;
+  let finallyCount: number = 0;
+  for (const n of [10, 20, 30, 40]) {
+    try {
+      if (n === 20) {
+        continue;
+      }
+      total = total + n;
+    } finally {
+      finallyCount = finallyCount + 1;
+    }
+  }
+  assert(total === 80, "10+30+40 = 80");
+  assert(finallyCount === 4, "finally ran for every element");
+}

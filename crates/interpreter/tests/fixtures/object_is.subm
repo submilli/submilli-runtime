@@ -1,0 +1,25 @@
+function main(): void {
+  assert(Object.is(1, 1), "equal numbers");
+  assert(!Object.is(1, 2), "unequal numbers");
+  assert(Object.is("a", "a"), "equal strings");
+  assert(!Object.is("a", "b"), "unequal strings");
+  assert(Object.is(true, true), "equal booleans");
+
+  const nan: number = 0 / 0;
+  assert(Object.is(nan, nan), "NaN is SameValue to NaN (unlike ===)");
+  assert(Object.is(nan, NaN), "a computed NaN matches the NaN constant regardless of payload bits");
+  assert(Object.is(NaN, Number.NaN), "the two NaN spellings match");
+  assert(!Object.is(0, -0), "+0 and -0 are distinguishable (unlike ===)");
+  assert(Object.is(0, 0), "+0 equals +0");
+
+  const a: unknown = null;
+  const b: unknown = null;
+  assert(Object.is(a, b), "null is SameValue to null");
+  assert(!Object.is(a, 1), "null differs from a value");
+
+  // Object equality follows the language's structural `===`, not JS identity.
+  const o1 = { x: 1 };
+  const o2 = { x: 1 };
+  assert(Object.is(o1, o1), "an object is SameValue to itself");
+  assert(Object.is(o1, o2), "structurally equal objects match (diverges from JS identity)");
+}

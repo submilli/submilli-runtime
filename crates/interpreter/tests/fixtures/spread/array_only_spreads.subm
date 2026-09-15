@@ -1,0 +1,10 @@
+function main(): void {
+  const a: number[] = [10, 20];
+  const b: number[] = [30];
+  const merged: number[] = [...a, ...b];
+
+  assert(merged.length === 3, "only spreads sum to source lengths");
+  assert(merged[0] === 10, "first spread element");
+  assert(merged[1] === 20, "second spread element");
+  assert(merged[2] === 30, "third spread element");
+}

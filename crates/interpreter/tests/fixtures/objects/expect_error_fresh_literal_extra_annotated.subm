@@ -1,0 +1,10 @@
+// expect-error: object literal has unknown field `completedAt` for the target type
+// expect-error: valid fields: `state`, `team`
+// expect-error: remove `completedAt` or rename it to a valid field
+
+function main(): void {
+  const args: { team?: string; state?: string } = {
+    team: "x",
+    completedAt: "2026-01-01",
+  };
+}

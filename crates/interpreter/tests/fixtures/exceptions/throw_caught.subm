@@ -1,0 +1,9 @@
+function main(): void {
+  let caught: string = "<none>";
+  try {
+    throw new Error("boom");
+  } catch (e: Error) {
+    caught = e.message;
+  }
+  assert(caught === "boom", "caught message round-trips through Error");
+}

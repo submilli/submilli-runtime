@@ -1,0 +1,16 @@
+// The host fn upper-cases the method before sending, so lowercase "post" routes correctly.
+
+import { request, Response, Headers } from "submilli:http";
+
+function main(): void {
+  let m1: string = "post";
+  const r1: Response = request(m1, "{{BASE}}/verb/post");
+  assert(r1.status === 201, "lowercase 'post' upper-cased and routed");
+
+  let m2: string = "get";
+  const h: Headers = new Map<string, string>();
+  h.set("Authorization", "Bearer test-token");
+  const r2: Response = request(m2, "{{BASE}}/requires-auth", null, h);
+  assert(r2.status === 200, "headers passed through request()");
+  assert(r2.body === "authorized", "matched");
+}

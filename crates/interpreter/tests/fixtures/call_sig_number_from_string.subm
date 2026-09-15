@@ -1,0 +1,9 @@
+function main(): void {
+  assert(Number("42") === 42, "Number(\"42\") parses");
+  assert(Number("3.14") === 3.14, "Number(\"3.14\") parses float");
+  assert(Number("") === 0, "Number(\"\") is 0");
+  assert(Number("  7  ") === 7, "Number trims whitespace");
+
+  let big: bigint = 100n;
+  assert(Number(big) === 100, "Number(bigint) lossy");
+}

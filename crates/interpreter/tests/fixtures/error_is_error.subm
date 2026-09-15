@@ -1,0 +1,28 @@
+function main(): void {
+  const err: unknown = new Error("boom");
+  assert(Error.isError(err), "an Error instance is an error");
+
+  const s: unknown = "not an error";
+  assert(!Error.isError(s), "a string is not an error");
+  const n: unknown = 5;
+  assert(!Error.isError(n), "a number is not an error");
+  const o: unknown = { message: "fake" };
+  assert(!Error.isError(o), "an error-shaped object is not an error");
+  const nil: unknown = null;
+  assert(!Error.isError(nil), "null is not an error");
+
+  if (Error.isError(err)) {
+    assert(err.message === "boom", "the guard narrows to Error");
+  } else {
+    assert(false, "guard should have matched");
+  }
+
+  let caught: boolean = false;
+  try {
+    throw new Error("thrown");
+  } catch (e: Error) {
+    const v: unknown = e;
+    caught = Error.isError(v);
+  }
+  assert(caught, "a caught error is an error");
+}

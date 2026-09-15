@@ -1,0 +1,12 @@
+// Regression: `continue` inside a `for` loop must run the update step
+// before jumping, so the loop terminates and skips only the intended iteration.
+function main(): void {
+  let sum: number = 0;
+  for (let i: number = 1; i <= 10; i = i + 1) {
+    if (i % 2 === 0) {
+      continue;
+    }
+    sum = sum + i;
+  }
+  assert(sum === 25, "sum of odd 1..10 is 25");
+}

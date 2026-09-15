@@ -1,0 +1,5 @@
+# A gated session op attributes to whoever's code is running: the package, not
+# the script that called into it.
+# name        dir     deps   root
+@test/store   store   -
+main          app     @test/store   root

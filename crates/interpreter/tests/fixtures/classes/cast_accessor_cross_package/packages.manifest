@@ -1,0 +1,8 @@
+# A structural cast whose accessor is declared in ANOTHER package, and whose
+# class the app never names. The `get <prop>` string global the conformance test
+# scans for is interned off the *cast*, not off any accessor declaration this
+# module can see — if it were the latter, the property would read as absent here
+# and the cast would throw.
+# name         dir   deps         root
+@test/geo      geo   -
+main           app   @test/geo    root

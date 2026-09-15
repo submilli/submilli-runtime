@@ -1,0 +1,29 @@
+function main(): void {
+  // A namespace static method passed directly as a first-class comparator value.
+  const dates: Temporal.PlainDate[] = [
+    Temporal.PlainDate.from("2024-03-01"),
+    Temporal.PlainDate.from("2024-01-01"),
+    Temporal.PlainDate.from("2024-02-01"),
+  ];
+  dates.sort(Temporal.PlainDate.compare);
+  assert(dates[0].month === 1, "sorted first = Jan");
+  assert(dates[1].month === 2, "sorted second = Feb");
+  assert(dates[2].month === 3, "sorted third = Mar");
+
+  // Arrow-wrapped form must agree with the direct form.
+  const insts: Temporal.Instant[] = [
+    Temporal.Instant.from("2024-06-01T00:00:00Z"),
+    Temporal.Instant.from("2024-01-01T00:00:00Z"),
+  ];
+  insts.sort((a, b) => Temporal.Instant.compare(a, b));
+  assert(Temporal.Instant.compare(insts[0], insts[1]) === -1, "instants ascending");
+
+  // Two distinct `compare` statics referenced as values in one program — the
+  // bare name `compare` collides, so adapters must be keyed by mangled name.
+  const times: Temporal.PlainTime[] = [
+    Temporal.PlainTime.from("12:00:00"),
+    Temporal.PlainTime.from("09:00:00"),
+  ];
+  times.sort(Temporal.PlainTime.compare);
+  assert(times[0].hour === 9, "times ascending");
+}

@@ -1,0 +1,6 @@
+// expect-error: duplicate declaration of type `Foo`
+
+type Foo = number;
+type Foo = string;
+
+function main(): void {}

@@ -1,0 +1,26 @@
+function tick(i: number): IteratorResult<string | null> {
+  if (i === 0) { const r: IteratorResult<string | null> = { done: false, value: "first" }; return r; }
+  if (i === 1) { const r: IteratorResult<string | null> = { done: false, value: null }; return r; }
+  if (i === 2) { const r: IteratorResult<string | null> = { done: false, value: "third" }; return r; }
+  const ret: IteratorResult<string | null> = { done: true }; return ret;
+}
+
+function rangeNullable(): Iterator<string | null> {
+  let i = 0;
+  const it: Iterator<string | null> = { next: (): IteratorResult<string | null> => { const r = tick(i); i = i + 1; return r; } };
+  return it;
+}
+
+function main(): void {
+  let count = 0;
+  let saw_null = false;
+  let saw_third = false;
+  for (const v of rangeNullable()) {
+    count = count + 1;
+    if (v === null) { saw_null = true; }
+    if (v === "third") { saw_third = true; }
+  }
+  assert(count === 3, "iterator yielded exactly three elements");
+  assert(saw_null === true, "a real null element was observed mid-stream");
+  assert(saw_third === true, "the post-null element was still yielded");
+}

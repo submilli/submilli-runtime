@@ -1,0 +1,12 @@
+function main(): void {
+  const xs: number[] = [1, 2, 3];
+  assert(xs.join("-") === "1-2-3", "explicit separator");
+  // separator defaults to ",".
+  assert(xs.join() === "1,2,3", "default separator is comma");
+
+  const one: string[] = ["only"];
+  assert(one.join() === "only", "single element, no separator");
+
+  const empty: number[] = [];
+  assert(empty.join() === "", "empty array joins to empty string");
+}

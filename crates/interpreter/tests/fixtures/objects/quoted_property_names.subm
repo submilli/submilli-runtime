@@ -1,0 +1,27 @@
+interface IssueStatus {
+  id: string;
+  name: string;
+  "type": string;
+}
+
+type Headers = {
+  "content-type": string;
+  "x-request-id"?: string;
+};
+
+function main(): void {
+  const status: IssueStatus = { id: "1", name: "Done", "type": "completed" };
+  assert(status["type"] === "completed", "interface quoted key bracket read");
+
+  const headers: Headers = { "content-type": "application/json" };
+  assert(headers["content-type"] === "application/json", "object type quoted key bracket read");
+  assert(headers["x-request-id"] === null, "optional quoted key reads null when omitted");
+
+  const parsed = JSON.parse(
+    "{\"id\":\"2\",\"name\":\"Closed\",\"type\":\"completed\"}"
+  ) as IssueStatus;
+  assert(parsed["type"] === "completed", "JSON.parse quoted key");
+
+  const normal: { type: string } = { type: "completed" };
+  assert(normal["type"] === "completed", "identifier key bracket read");
+}

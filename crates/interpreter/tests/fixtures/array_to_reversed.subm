@@ -1,0 +1,13 @@
+function main(): void {
+  let a: number[] = [1, 2, 3];
+  let r = a.toReversed();
+  assert(r[0] === 3 && r[1] === 2 && r[2] === 1, "result is reversed");
+  assert(a[0] === 1 && a[1] === 2 && a[2] === 3, "original is unchanged");
+
+  let empty: number[] = [];
+  assert(empty.toReversed().length === 0, "empty array reverses to empty");
+
+  let strs: string[] = ["x", "y"];
+  let sr = strs.toReversed();
+  assert(sr[0] === "y" && sr[1] === "x", "string elements reverse");
+}

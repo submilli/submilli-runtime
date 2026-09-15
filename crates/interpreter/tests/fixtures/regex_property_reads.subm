@@ -1,0 +1,27 @@
+function main(): void {
+  const re: RegExp = new RegExp("hello", "gi");
+  assert(re.source === "hello", "source round-trips");
+  assert(re.flags === "gi", "flags round-trip in source order");
+  assert(re.global, "global flag");
+  assert(re.ignoreCase, "ignoreCase flag");
+  assert(!re.multiline, "no multiline flag");
+  assert(!re.dotAll, "no dotAll flag");
+  assert(!re.unicode, "no unicode flag");
+  assert(!re.sticky, "no sticky flag");
+  assert(re.lastIndex === 0, "fresh regex starts at lastIndex 0");
+
+  const ms: RegExp = new RegExp("x", "ms");
+  assert(ms.multiline, "m flag detected");
+  assert(ms.dotAll, "s flag detected");
+  assert(!ms.global, "no g flag");
+
+  const uy: RegExp = new RegExp("x", "uy");
+  assert(uy.unicode, "u flag detected");
+  assert(uy.sticky, "y flag detected");
+
+  const empty: RegExp = new RegExp("x", "");
+  assert(empty.flags === "", "empty flags string round-trips");
+  assert(!empty.global && !empty.ignoreCase && !empty.multiline
+      && !empty.dotAll && !empty.unicode && !empty.sticky,
+      "no flags set on bare regex");
+}

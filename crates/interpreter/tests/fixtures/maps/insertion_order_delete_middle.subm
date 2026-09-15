@@ -1,0 +1,41 @@
+function main(): void {
+  const m = new Map<string, number>();
+  m.set("a", 1);
+  m.set("b", 2);
+  m.set("c", 3);
+  m.set("d", 4);
+  m.set("e", 5);
+
+  assert(m.delete("b"), "delete b");
+  assert(m.delete("d"), "delete d");
+  assert(m.size === 3, "size drops to 3");
+
+  let ks: string[] = [];
+
+  for (const __ks of m.keys()) {
+
+    ks.push(__ks);
+
+  }
+  assert(ks.length === 3, "3 keys after deletes");
+  assert(ks[0] === "a", "ks[0] = a");
+  assert(ks[1] === "c", "ks[1] = c");
+  assert(ks[2] === "e", "ks[2] = e");
+
+  m.set("b", 20);
+  let ks2: string[] = [];
+  for (const __ks2 of m.keys()) {
+    ks2.push(__ks2);
+  }
+  assert(ks2.length === 4, "4 keys after reinsert");
+  assert(ks2[0] === "a", "a still first");
+  assert(ks2[1] === "c", "c still second");
+  assert(ks2[2] === "e", "e still third");
+  assert(ks2[3] === "b", "b appended at the end");
+
+  let seen: string = "";
+  for (const p of m) {
+    seen = seen + p[0];
+  }
+  assert(seen === "aceb", "for-of yields a, c, e, b");
+}

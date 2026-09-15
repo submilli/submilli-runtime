@@ -1,0 +1,6 @@
+// expect-error: try requires at least one of
+
+function main(): void {
+  try {
+  }
+}

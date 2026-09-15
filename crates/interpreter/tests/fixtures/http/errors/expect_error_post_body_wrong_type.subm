@@ -1,0 +1,7 @@
+// expect-error: expected `string | Uint8Array | {} | unknown[] | null`, got `number`
+
+import { post } from "submilli:http";
+
+function main(): void {
+  const _r = post("https://example.test/", 42);
+}

@@ -1,0 +1,10 @@
+function main(): void {
+  let count: number = 0;
+  let inc = (): number => {
+    count = count + 1;
+    return count;
+  };
+  assert(inc() === 1, "first call returns 1");
+  assert(inc() === 2, "second call returns 2");
+  assert(inc() === 3, "third call returns 3");
+}

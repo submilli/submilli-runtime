@@ -1,0 +1,5 @@
+function main(): void {
+  const o = { toString: (): string => "custom" };
+  assert(o.toString() === "custom", "direct .toString() call hits override");
+  assert(`${o}` === "custom", "template interpolation hits override");
+}

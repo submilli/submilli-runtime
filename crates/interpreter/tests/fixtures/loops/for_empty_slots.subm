@@ -1,0 +1,10 @@
+function main(): void {
+  let i: number = 0;
+  for (;;) {
+    if (i >= 5) {
+      break;
+    }
+    i = i + 1;
+  }
+  assert(i === 5, "infinite for with break terminates at 5");
+}

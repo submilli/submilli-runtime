@@ -1,0 +1,18 @@
+function main(): void {
+  let nums: number[] = [10, 20, 30, 20];
+  assert(nums.lastIndexOf(20) === 3, "last occurrence wins");
+  assert(nums.lastIndexOf(10) === 0, "single occurrence");
+  assert(nums.lastIndexOf(99) === -1, "miss");
+
+  assert(nums.lastIndexOf(20, 2) === 1, "fromIndex bounds the backward scan");
+  assert(nums.lastIndexOf(20, -1) === 3, "negative fromIndex counts from end");
+  assert(nums.lastIndexOf(20, -2) === 1, "negative fromIndex skips later match");
+  assert(nums.lastIndexOf(10, -10) === -1, "fromIndex before start misses");
+  assert(nums.lastIndexOf(20, 10) === 3, "fromIndex beyond length clamps to end");
+
+  let strs: string[] = ["alpha", "beta", "alpha"];
+  assert(strs.lastIndexOf("alpha") === 2, "string match scans from end");
+
+  let empty: number[] = [];
+  assert(empty.lastIndexOf(0) === -1, "empty array miss");
+}

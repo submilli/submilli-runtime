@@ -1,0 +1,5 @@
+// expect-error: invalid assignment target
+
+function main(): void {
+  1 + 2 = 3;
+}

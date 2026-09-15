@@ -1,0 +1,5 @@
+import { v7, validate } from "submilli:uuid";
+
+function main(): void {
+  assert(validate(v7()), "v7 generates a valid UUID");
+}

@@ -1,0 +1,5 @@
+// expect-error: tuple index 2 out of bounds
+function main(): void {
+  const t: [string, number] = ["x", 1];
+  const v = t[2];
+}

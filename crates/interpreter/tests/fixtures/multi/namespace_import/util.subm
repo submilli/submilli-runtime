@@ -1,0 +1,7 @@
+export interface Answer {
+  value: number;
+}
+
+export function answer(): number {
+  return 42;
+}

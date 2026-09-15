@@ -1,0 +1,30 @@
+import { download, DownloadResult } from "submilli:http";
+import { readText } from "submilli:fs";
+
+function main(): void {
+  const r: DownloadResult = download(
+    "{{BASE}}/dl/small",
+    "/out.bin"
+  );
+
+  // DownloadResult fields pin types so a regression in shim wiring
+  // shows up at compile.
+  const _bytes: number = r.bytesWritten;
+  const _ct: string = r.contentType;
+  const _dur: number = r.duration_ms;
+  const _final: string = r.finalUrl;
+  const _path: string = r.path;
+  const _status: number = r.status;
+
+  assert(r.status === 200, "200 over the wire");
+  assert(r.bytesWritten === 10, "10 bytes (\"hello live\")");
+  assert(r.contentType === "text/plain", "content-type extracted");
+  assert(r.path === "/out.bin", "path echoes the user-supplied arg");
+
+  const back: string | null = readText("/out.bin");
+  if (back === null) {
+    assert(false, "readText returned null");
+  } else {
+    assert(back === "hello live", back);
+  }
+}

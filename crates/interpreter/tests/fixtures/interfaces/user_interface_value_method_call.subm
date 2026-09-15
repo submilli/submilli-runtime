@@ -1,0 +1,9 @@
+interface Counter { tick(): number; }
+
+function main(): void {
+  let n = 0;
+  const c: Counter = { tick: (): number => { n = n + 1; return n; } };
+  assert(c.tick() === 1, "first tick");
+  assert(c.tick() === 2, "second tick");
+  assert(c.tick() === 3, "third tick");
+}

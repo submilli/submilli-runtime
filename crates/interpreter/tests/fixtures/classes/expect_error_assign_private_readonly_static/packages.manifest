@@ -1,0 +1,5 @@
+# A caller that cannot see a member should hear that first — not a `readonly`
+# complaint about a member it is not allowed to name.
+# name             dir       deps              root
+@test/counters     counters  -
+main               app       @test/counters    root

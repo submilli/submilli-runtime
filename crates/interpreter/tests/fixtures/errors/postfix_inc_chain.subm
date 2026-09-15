@@ -1,0 +1,6 @@
+// expect-error: expected `;` after declaration
+
+function main(): void {
+  let x: number = 1;
+  let y: number = x++.toString;
+}

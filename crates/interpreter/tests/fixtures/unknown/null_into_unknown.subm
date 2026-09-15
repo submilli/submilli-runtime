@@ -1,0 +1,10 @@
+function main(): void {
+  const x: unknown = null;
+  assert(x === null, "null literal stored in unknown");
+
+  if (x === null) {
+    assert(x === null, "narrowed-null branch reached");
+  } else {
+    assert(false, "non-null branch unreachable for null literal");
+  }
+}

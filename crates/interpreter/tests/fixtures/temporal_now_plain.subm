@@ -1,0 +1,39 @@
+// Non-deterministic: assert structural shape, not specific values.
+function main(): void {
+  const d = Temporal.Now.plainDateISO();
+  assert(d.year >= 2024, "current year is recent");
+  assert(d.month >= 1 && d.month <= 12, "month in range");
+  assert(d.day >= 1 && d.day <= 31, "day in range");
+  assert(d.toString().length === 10, "YYYY-MM-DD is 10 chars");
+
+  const t = Temporal.Now.plainTimeISO();
+  assert(t.hour >= 0 && t.hour <= 23, "hour in range");
+  assert(t.minute >= 0 && t.minute <= 59, "minute in range");
+
+  const dt = Temporal.Now.plainDateTimeISO();
+  assert(dt.year === d.year || dt.year === d.year + 1, "datetime year matches date");
+
+  // Explicit time-zone form (optional `tz` argument).
+  const du = Temporal.Now.plainDateISO("UTC");
+  assert(du.month >= 1 && du.month <= 12, "explicit-tz date month in range");
+
+  const tu = Temporal.Now.plainTimeISO("UTC");
+  assert(tu.hour >= 0 && tu.hour <= 23, "explicit-tz time hour in range");
+
+  const dtu = Temporal.Now.plainDateTimeISO("UTC");
+  assert(dtu.day >= 1 && dtu.day <= 31, "explicit-tz datetime day in range");
+
+  // The explicit UTC zone should agree with the UTC zoned wall clock taken at
+  // nearly the same instant (allow a year rollover between the two reads).
+  const zu = Temporal.Now.zonedDateTimeISO("UTC");
+  assert(zu.year === dtu.year || zu.year === dtu.year + 1, "UTC zoned year matches UTC plain");
+
+  // 0-arg `zonedDateTimeISO` works as a side effect of the namespace
+  // default-arg fix (reads the system zone).
+  const z0 = Temporal.Now.zonedDateTimeISO();
+  assert(z0.epochMilliseconds > 1690000000000, "0-arg wall clock is post-2023");
+
+  // `zonedDateTime` is an alias of `zonedDateTimeISO`.
+  const z = Temporal.Now.zonedDateTime("UTC");
+  assert(z.timeZoneId === "UTC", "explicit tz honoured");
+}

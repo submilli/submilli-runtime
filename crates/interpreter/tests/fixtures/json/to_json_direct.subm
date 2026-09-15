@@ -1,0 +1,8 @@
+function main(): void {
+  assert((42).toJson() === "42", "number");
+  assert(true.toJson() === "true", "boolean");
+  assert("hi".toJson() === "\"hi\"", "string (with quotes)");
+  assert([1, 2].toJson() === "[1,2]", "array");
+
+  assert(({ a: 1 }).toJson() === "{\"a\":1}", "object via vtable");
+}

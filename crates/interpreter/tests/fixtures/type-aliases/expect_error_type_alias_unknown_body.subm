@@ -1,0 +1,5 @@
+// expect-error: unknown type `NotAType`
+
+type Bad = NotAType;
+
+function main(): void {}

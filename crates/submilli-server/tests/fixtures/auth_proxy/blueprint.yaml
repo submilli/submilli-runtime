@@ -1,0 +1,17 @@
+name: auth-demo
+
+secrets:
+  DEMO_TOKEN:
+    env: SUB_E2E_AUTHPROXY_TOKEN
+
+auth_proxy:
+  - host: 127.0.0.1
+    headers:
+      Authorization: "Bearer ${secrets.DEMO_TOKEN}"
+
+# The server is deny-by-default; grant the script's http.get so the auth-proxy
+# injection (what's under test) actually fires.
+permissions:
+  main:
+    - capability: http.get
+      action: allow

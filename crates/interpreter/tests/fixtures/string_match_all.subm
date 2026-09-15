@@ -1,0 +1,18 @@
+function main(): void {
+  const re: RegExp = new RegExp("[0-9]+", "");
+  const matches: RegExpMatch[] = "a1b22c333".matchAll(re);
+  assert(matches.length === 3, "three matches");
+  assert(matches[0].match === "1", "first match");
+  assert(matches[0].index === 1, "first match index");
+  assert(matches[1].match === "22", "second match");
+  assert(matches[1].index === 3, "second match index");
+  assert(matches[2].match === "333", "third match");
+  assert(matches[2].index === 6, "third match index");
+
+  const none: RegExpMatch[] = "no digits".matchAll(re);
+  assert(none.length === 0, "empty array on no-match");
+
+  const a: RegExp = new RegExp("a", "");
+  const aMatches: RegExpMatch[] = "aaa".matchAll(a);
+  assert(aMatches.length === 3, "three a matches");
+}

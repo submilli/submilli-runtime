@@ -1,0 +1,15 @@
+function main(): void {
+  let arr: number[] = [1, 2, 3];
+  let n = arr.push(4);
+  assert(n === 4, "push returns new length");
+  assert(arr.length === 4, "push mutates receiver");
+  assert(arr[3] === 4, "push stores element at last slot");
+
+  let strs: string[] = [];
+  let m = strs.push("hi");
+  assert(m === 1, "push on empty");
+  assert(strs[0] === "hi", "first element");
+  strs.push("bye");
+  assert(strs.length === 2, "two elements after two pushes");
+  assert(strs[1] === "bye", "second element");
+}

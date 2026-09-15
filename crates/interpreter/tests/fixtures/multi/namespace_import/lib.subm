@@ -1,0 +1,7 @@
+import util from "./util";
+
+export function call(): number {
+  const answer: util.Answer = { value: util.answer() };
+  assert(answer.value === 42);
+  return util.answer();
+}

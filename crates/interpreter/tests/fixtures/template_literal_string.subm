@@ -1,0 +1,4 @@
+function main(): void {
+  const s: string = "x";
+  assert(`s=${s}` === "s=x", "string interpolation (no toString call emitted)");
+}

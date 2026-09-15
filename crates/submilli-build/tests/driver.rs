@@ -1,0 +1,501 @@
+//! Integration tests for the cross-package compilation driver.
+
+use std::fs;
+use std::path::Path;
+
+use interpreter::{FileId, ModulePath, PackageSourceModule, compile_package, compile_script};
+use submilli_build::{
+    ArtifactDependency, ArtifactMetadata, DriverError, PackageName, PackageStore, build_packages,
+    derive_capability_schema, install_packages, parse_manifest, write_package_artifact,
+};
+use tempfile::TempDir;
+
+fn write_module(project: &Path, relative: &str, text: &str) {
+    let path = project.join(relative);
+    fs::create_dir_all(path.parent().expect("module parent")).expect("create module dir");
+    fs::write(path, text).expect("write module");
+}
+
+fn write_docs(project: &Path, package_path: &str, text: &str) {
+    let path = project.join(package_path).join("docs/readme.md");
+    fs::create_dir_all(path.parent().expect("docs parent")).expect("create docs dir");
+    fs::write(path, text).expect("write docs");
+}
+
+fn write_external_dep(store_root: &Path) {
+    let package = compile_package(
+        "@ext/dep",
+        ModulePath::from("lib"),
+        &[PackageSourceModule {
+            path: ModulePath::from("lib"),
+            source: "export function base(): number { return 40; }",
+        }],
+        &[],
+    )
+    .expect("compile external package");
+    write_package_artifact(
+        store_root.join("@ext").join("dep"),
+        &package.wasm,
+        &package.type_info,
+        &derive_capability_schema(&package.declaration, &package.required_capabilities),
+        &package.declaration,
+        &ArtifactMetadata::new("@ext/dep", "1.0.0", Vec::new()),
+    )
+    .expect("write external artifact");
+}
+
+fn build(
+    project: &Path,
+    externals: &PackageStore,
+    manifest_toml: &str,
+    only: Option<&str>,
+) -> Result<Vec<submilli_build::BuiltPackage>, DriverError> {
+    let manifest = parse_manifest(manifest_toml, project).expect("manifest parses");
+    let only = only.map(PackageName::new);
+    build_packages(&manifest, project, externals, only.as_ref())
+}
+
+const GRAPH_MANIFEST: &str = r#"
+[dependencies]
+"@ext/dep" = "1.0.0"
+
+[[package]]
+name = "@acme/app"
+version = "0.1.0"
+description = "App package."
+path = "app"
+dependencies = ["@acme/util"]
+
+[[package]]
+name = "@acme/util"
+version = "0.2.0"
+description = "Utility package."
+path = "util"
+dependencies = ["@ext/dep"]
+"#;
+
+fn write_graph_project(project: &Path) {
+    write_docs(project, "app", "# App\n");
+    write_docs(project, "util", "# Util\n");
+    write_module(
+        project,
+        "util/src/lib.subm",
+        r#"
+            import { base } from "@ext/dep";
+            export function answer(): number { return base() + 2; }
+        "#,
+    );
+    write_module(
+        project,
+        "app/src/wrap.subm",
+        r#"
+            import { answer } from "@acme/util";
+            export function fortyTwo(): number { return answer(); }
+        "#,
+    );
+    write_module(
+        project,
+        "app/src/lib.subm",
+        "export { fortyTwo } from \"./wrap\";\n",
+    );
+}
+
+#[test]
+fn graph_compiles_in_dependency_order_and_artifacts_reload() {
+    let externals_dir = TempDir::new().expect("externals tempdir");
+    write_external_dep(externals_dir.path());
+    let externals = PackageStore::new(externals_dir.path());
+    let project = TempDir::new().expect("project tempdir");
+    write_graph_project(project.path());
+
+    // The manifest lists app before util; the driver must reorder.
+    let built = build(project.path(), &externals, GRAPH_MANIFEST, None).expect("build succeeds");
+    let names: Vec<&str> = built.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(names, vec!["@acme/util", "@acme/app"]);
+
+    let target_dir = TempDir::new().expect("target tempdir");
+    let target = PackageStore::new(target_dir.path());
+    let dirs = install_packages(&target, &built).expect("install succeeds");
+    assert_eq!(dirs.len(), 2);
+
+    let util = target.load("@acme/util").expect("util reloads");
+    assert_eq!(util.metadata.package_version, "0.2.0");
+    assert_eq!(
+        util.metadata.dependencies,
+        vec![ArtifactDependency::new("@ext/dep", "1.0.0")]
+    );
+    let app = target.load("@acme/app").expect("app reloads");
+    assert_eq!(
+        app.metadata.dependencies,
+        vec![ArtifactDependency::new("@acme/util", "0.2.0")]
+    );
+
+    let script = r#"
+        import { fortyTwo } from "@acme/app";
+        function main(): number { return fortyTwo(); }
+    "#;
+    compile_script(
+        script,
+        "main.subm",
+        FileId(1),
+        &[&app.package_declaration],
+        &[],
+    )
+    .expect("consumer compiles against reloaded declaration");
+}
+
+#[test]
+fn artifact_includes_capabilities_schema_with_literal_requires() {
+    let project = TempDir::new().expect("project tempdir");
+    write_module(
+        project.path(),
+        "sdk/src/lib.subm",
+        r#"
+            /**
+             * Charge a customer.
+             * @param customer Stripe customer id.
+             * @capability acme.com/charge { customer }
+             */
+            export function charge(customer: string): void { }
+        "#,
+    );
+    write_module(
+        project.path(),
+        "app/src/lib.subm",
+        r#"
+            import { charge } from "@acme/sdk";
+            export function run(): void { charge("cus_123"); }
+        "#,
+    );
+    write_docs(project.path(), "app", "# App\n");
+    write_docs(project.path(), "sdk", "# SDK\n");
+    let manifest = r#"
+[[package]]
+name = "@acme/app"
+version = "0.1.0"
+description = "App package."
+path = "app"
+dependencies = ["@acme/sdk"]
+
+[[package]]
+name = "@acme/sdk"
+version = "0.1.0"
+description = "SDK package."
+path = "sdk"
+"#;
+    let externals = PackageStore::new(project.path().join("store"));
+
+    let built = build(project.path(), &externals, manifest, None).expect("build succeeds");
+    let sdk = built
+        .iter()
+        .find(|package| package.name.as_str() == "@acme/sdk")
+        .expect("sdk package built");
+    assert_eq!(sdk.capabilities.namespace, "acme");
+    assert_eq!(sdk.capabilities.provides.len(), 1);
+    assert_eq!(sdk.capabilities.provides[0].name, "acme.com/charge");
+    assert_eq!(
+        sdk.capabilities.provides[0].fields["customer"]
+            .description
+            .as_deref(),
+        Some("Stripe customer id.")
+    );
+
+    let app = built
+        .iter()
+        .find(|package| package.name.as_str() == "@acme/app")
+        .expect("app package built");
+    assert_eq!(app.capabilities.requires.len(), 1);
+    assert_eq!(app.capabilities.requires[0].capability, "acme.com/charge");
+    assert_eq!(
+        app.capabilities.requires[0].filter.as_deref(),
+        Some("customer == \"cus_123\"")
+    );
+
+    let target_dir = TempDir::new().expect("target tempdir");
+    let target = PackageStore::new(target_dir.path());
+    install_packages(&target, &built).expect("install succeeds");
+    let reloaded = target.load("@acme/app").expect("app reloads");
+    assert_eq!(reloaded.capabilities, app.capabilities);
+}
+
+#[test]
+fn non_literal_requires_warning_has_no_filter() {
+    let project = TempDir::new().expect("project tempdir");
+    write_module(
+        project.path(),
+        "sdk/src/lib.subm",
+        r#"
+            /** @capability acme.com/charge { customer } */
+            export function charge(customer: string): void { }
+        "#,
+    );
+    write_module(
+        project.path(),
+        "app/src/lib.subm",
+        r#"
+            import { charge } from "@acme/sdk";
+            export function run(customer: string): void { charge(customer); }
+        "#,
+    );
+    write_docs(project.path(), "app", "# App\n");
+    write_docs(project.path(), "sdk", "# SDK\n");
+    let manifest = r#"
+[[package]]
+name = "@acme/app"
+version = "0.1.0"
+description = "App package."
+path = "app"
+dependencies = ["@acme/sdk"]
+
+[[package]]
+name = "@acme/sdk"
+version = "0.1.0"
+description = "SDK package."
+path = "sdk"
+"#;
+    let externals = PackageStore::new(project.path().join("store"));
+
+    let built = build(project.path(), &externals, manifest, None).expect("build succeeds");
+    let app = built
+        .iter()
+        .find(|package| package.name.as_str() == "@acme/app")
+        .expect("app package built");
+
+    assert_eq!(app.capabilities.requires.len(), 1);
+    assert_eq!(app.capabilities.requires[0].filter, None);
+    assert!(
+        app.warnings
+            .iter()
+            .any(|warning| warning.contains("non-literal argument")),
+        "expected non-literal warning, got: {:?}",
+        app.warnings
+    );
+}
+
+#[test]
+fn unresolved_http_host_warning_is_exposed_by_package_build() {
+    let project = TempDir::new().expect("project tempdir");
+    write_module(
+        project.path(),
+        "app/src/lib.ts",
+        r#"
+            import { get } from "submilli:http";
+
+            function endpoint(): string { return "https://api.example.com/items"; }
+
+            export function run(): string { return get(endpoint()).body; }
+        "#,
+    );
+    write_docs(project.path(), "app", "# App\n");
+    let manifest = r#"
+[[package]]
+name = "@acme/app"
+version = "0.1.0"
+description = "App package."
+path = "app"
+"#;
+    let externals = PackageStore::new(project.path().join("store"));
+
+    let built = build(project.path(), &externals, manifest, None).expect("build succeeds");
+    let app = built.first().expect("app package built");
+
+    assert_eq!(app.capabilities.requires.len(), 1);
+    assert_eq!(
+        app.capabilities.requires[0].filter.as_deref(),
+        Some("method == \"GET\"")
+    );
+    assert!(
+        app.warnings.iter().any(|warning| warning
+            .contains("cannot statically resolve the host in the URL passed to `http.get`")),
+        "expected unresolved HTTP host warning, got: {:?}",
+        app.warnings
+    );
+}
+
+#[test]
+fn sibling_dependency_cycle_is_fatal() {
+    let project = TempDir::new().expect("project tempdir");
+    write_module(project.path(), "a/src/lib.subm", "export const x = 1;\n");
+    write_module(project.path(), "b/src/lib.subm", "export const y = 1;\n");
+    let manifest = r#"
+[[package]]
+name = "@acme/a"
+version = "0.1.0"
+description = "Package A."
+path = "a"
+dependencies = ["@acme/b"]
+
+[[package]]
+name = "@acme/b"
+version = "0.1.0"
+description = "Package B."
+path = "b"
+dependencies = ["@acme/a"]
+"#;
+    let externals = PackageStore::new(project.path().join("store"));
+
+    let err = build(project.path(), &externals, manifest, None).expect_err("cycle is fatal");
+
+    assert!(matches!(err, DriverError::DependencyCycle { .. }));
+    let text = err.to_string();
+    assert!(text.contains("circular package dependency"), "got: {text}");
+    assert!(
+        text.contains("@acme/a -> @acme/b -> @acme/a")
+            || text.contains("@acme/b -> @acme/a -> @acme/b"),
+        "got: {text}"
+    );
+}
+
+#[test]
+fn missing_external_dependency_lists_available_packages() {
+    let externals_dir = TempDir::new().expect("externals tempdir");
+    write_external_dep(externals_dir.path());
+    let externals = PackageStore::new(externals_dir.path());
+    let project = TempDir::new().expect("project tempdir");
+    write_module(project.path(), "src/lib.subm", "export const x = 1;\n");
+    let manifest = r#"
+[dependencies]
+"@ext/missing" = "1.0.0"
+
+[[package]]
+name = "@acme/app"
+version = "0.1.0"
+description = "App package."
+dependencies = ["@ext/missing"]
+"#;
+
+    let err = build(project.path(), &externals, manifest, None).expect_err("missing external");
+
+    assert!(matches!(err, DriverError::MissingExternal { .. }));
+    let text = err.to_string();
+    assert!(text.contains("@ext/missing"), "got: {text}");
+    assert!(text.contains("@ext/dep"), "available list missing: {text}");
+}
+
+#[test]
+fn external_version_mismatch_is_fatal() {
+    let externals_dir = TempDir::new().expect("externals tempdir");
+    write_external_dep(externals_dir.path());
+    let externals = PackageStore::new(externals_dir.path());
+    let project = TempDir::new().expect("project tempdir");
+    write_module(project.path(), "src/lib.subm", "export const x = 1;\n");
+    let manifest = r#"
+[dependencies]
+"@ext/dep" = "2.0.0"
+
+[[package]]
+name = "@acme/app"
+version = "0.1.0"
+description = "App package."
+dependencies = ["@ext/dep"]
+"#;
+
+    let err = build(project.path(), &externals, manifest, None).expect_err("version mismatch");
+
+    assert!(matches!(err, DriverError::ExternalVersionMismatch { .. }));
+    let text = err.to_string();
+    assert!(
+        text.contains("2.0.0") && text.contains("1.0.0"),
+        "got: {text}"
+    );
+}
+
+#[test]
+fn only_builds_the_sibling_dependency_closure() {
+    let project = TempDir::new().expect("project tempdir");
+    write_module(project.path(), "util/src/lib.subm", "export const u = 1;\n");
+    write_module(
+        project.path(),
+        "app/src/lib.subm",
+        "import { u } from \"@acme/util\";\nexport const a = u;\n",
+    );
+    write_module(
+        project.path(),
+        "other/src/lib.subm",
+        "export const o = 1;\n",
+    );
+    write_docs(project.path(), "app", "# App\n");
+    write_docs(project.path(), "util", "# Util\n");
+    let manifest = r#"
+[[package]]
+name = "@acme/app"
+version = "0.1.0"
+description = "App package."
+path = "app"
+dependencies = ["@acme/util"]
+
+[[package]]
+name = "@acme/util"
+version = "0.1.0"
+description = "Utility package."
+path = "util"
+
+[[package]]
+name = "@acme/other"
+version = "0.1.0"
+description = "Other package."
+path = "other"
+"#;
+    let externals = PackageStore::new(project.path().join("store"));
+
+    let built = build(project.path(), &externals, manifest, Some("@acme/app"))
+        .expect("scoped build succeeds");
+
+    let names: Vec<&str> = built.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(names, vec!["@acme/util", "@acme/app"]);
+}
+
+#[test]
+fn unknown_only_package_lists_declared_packages() {
+    let project = TempDir::new().expect("project tempdir");
+    write_module(project.path(), "src/lib.subm", "export const x = 1;\n");
+    let manifest = r#"
+[[package]]
+name = "@acme/app"
+version = "0.1.0"
+description = "App package."
+"#;
+    let externals = PackageStore::new(project.path().join("store"));
+
+    let err = build(project.path(), &externals, manifest, Some("@acme/nope"))
+        .expect_err("unknown package");
+
+    assert!(matches!(err, DriverError::UnknownPackage { .. }));
+    let text = err.to_string();
+    assert!(
+        text.contains("@acme/nope") && text.contains("@acme/app"),
+        "got: {text}"
+    );
+}
+
+#[test]
+fn compile_errors_render_with_source_path_and_caret() {
+    let project = TempDir::new().expect("project tempdir");
+    write_module(project.path(), "src/lib.subm", "export const x = 1;\n");
+    write_module(
+        project.path(),
+        "src/extra.subm",
+        "export function bad(): number { return \"x\"; }\n",
+    );
+    write_docs(project.path(), ".", "# App\n");
+    let manifest = r#"
+[[package]]
+name = "@acme/app"
+version = "0.1.0"
+description = "App package."
+"#;
+    let externals = PackageStore::new(project.path().join("store"));
+
+    let err = build(project.path(), &externals, manifest, None).expect_err("compile error");
+
+    let DriverError::Compile { package, rendered } = err else {
+        panic!("expected Compile error, got: {err}");
+    };
+    assert_eq!(package.as_str(), "@acme/app");
+    assert!(rendered.contains("error:"), "got: {rendered}");
+    assert!(
+        rendered.contains("--> src/extra.subm:"),
+        "missing source path: {rendered}"
+    );
+    assert!(rendered.contains('^'), "missing caret: {rendered}");
+}

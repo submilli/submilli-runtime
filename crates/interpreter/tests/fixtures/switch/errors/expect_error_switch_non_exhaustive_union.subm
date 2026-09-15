@@ -1,0 +1,16 @@
+// expect-error: non-exhaustive
+function area(
+  s: { kind: "circle"; radius: number }
+   | { kind: "rect"; w: number; h: number }
+): number {
+  switch (s.kind) {
+    case "circle": return s.radius;
+  }
+  return 0;
+}
+
+function main(): void {
+  const c: { kind: "circle"; radius: number } = { kind: "circle", radius: 1 };
+  const x: number = area(c);
+  assert(x === 1, "area");
+}

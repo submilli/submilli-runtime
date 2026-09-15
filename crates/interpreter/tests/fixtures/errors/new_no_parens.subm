@@ -1,0 +1,5 @@
+// expect-error: expected `(` after constructor name in `new` expression
+
+function main(): void {
+  const bytes = new Uint8Array;
+}

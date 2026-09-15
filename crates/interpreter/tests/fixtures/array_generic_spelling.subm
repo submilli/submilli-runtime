@@ -1,0 +1,41 @@
+// `Array<T>` is the standard-library spelling of `T[]` — the two are fully
+// interchangeable: literal assignment, indexing, methods, and cross-spelling
+// assignability all work.
+function sum(xs: Array<number>): number {
+  let total = 0;
+  for (let i = 0; i < xs.length; i = i + 1) {
+    total = total + xs[i];
+  }
+  return total;
+}
+
+function main(): void {
+  // literal-to-annotation unification and indexing
+  const a: Array<number> = [1, 2, 3];
+  assert(a[0] === 1, "index 0");
+  assert(a[2] === 3, "index 2");
+  assert(a.length === 3, "length");
+
+  // method dispatch on the generic spelling
+  a.push(4);
+  assert(a.length === 4, "push");
+  const doubled: Array<number> = a.map(x => x * 2);
+  assert(doubled[3] === 8, "map");
+
+  // cross-spelling assignability: T[] satisfies Array<T> and vice versa
+  const bracket: number[] = a;
+  const generic: Array<number> = bracket;
+  assert(generic[1] === 2, "round-trips through both spellings");
+  assert(sum(generic) === 10, "Array<number> arg accepts a number[]");
+
+  // nested spelling
+  const grid: Array<number[]> = [[1, 2], [3, 4]];
+  assert(grid[1][0] === 3, "nested generic-of-bracket");
+  const grid2: Array<Array<number>> = grid;
+  assert(grid2[0][1] === 2, "nested generic-of-generic");
+
+  // empty-literal inference threads the Array<T> annotation as the element hint
+  const empty: Array<string> = [];
+  empty.push("x");
+  assert(empty[0] === "x", "empty Array<string> infers element type");
+}

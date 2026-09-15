@@ -1,0 +1,5 @@
+function main(): void {
+  const century: Temporal.Duration = Temporal.Duration.from("P100Y");
+  assert(century.years === 100, "100 calendar years");
+  assert(century.toString() === "P100Y", "ISO round-trip");
+}

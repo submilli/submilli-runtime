@@ -1,0 +1,9 @@
+// expect-error: `in` operator receiver must be an object
+
+function check(s: string): boolean {
+  return "length" in s;
+}
+
+function main(): void {
+  assert(check("hi") === true);
+}

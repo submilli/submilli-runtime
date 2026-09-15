@@ -1,0 +1,10 @@
+function setA(p: { a: number }): void {
+  p.a = 42;
+}
+
+function main(): void {
+  let o = { a: 1, b: "hi" };
+  setA(o);
+  assert(o.a === 42, "width-sub write hits field a");
+  assert(o.b === "hi", "width-sub write preserves field b");
+}

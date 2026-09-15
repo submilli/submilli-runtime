@@ -1,0 +1,22 @@
+---
+source: crates/interpreter/tests/diagnostic_snapshots.rs
+expression: "render_inside_main(\"  const k = 1;\\n  k = 2;\")"
+---
+error: cannot assign to const binding `k`
+ --> test.subm:3:3
+  |
+2 |   const k = 1;
+3 |   k = 2;
+  |   ^
+4 | }
+  |
+help: declare with `let` if reassignment is required: `let k = …;`
+  |
+note: declared as `const` here
+ --> test.subm:2:9
+  |
+1 | function main(): void {
+2 |   const k = 1;
+  |         ^
+3 |   k = 2;
+---

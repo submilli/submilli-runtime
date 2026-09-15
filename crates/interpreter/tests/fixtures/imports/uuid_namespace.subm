@@ -1,0 +1,5 @@
+import uuid from "submilli:uuid";
+
+function main(): void {
+  assert(uuid.validate(uuid.v4()), "namespace v4 generates a valid UUID");
+}

@@ -1,0 +1,16 @@
+function main(): void {
+  assert("hello".toUpperCase() === "HELLO", "basic upper");
+  assert("HELLO".toLowerCase() === "hello", "basic lower");
+  assert("Hello, World!".toUpperCase() === "HELLO, WORLD!", "punctuation passes through");
+
+  assert("café".toUpperCase() === "CAFÉ", "non-ASCII upper");
+  assert("CAFÉ".toLowerCase() === "café", "non-ASCII lower");
+
+  assert("".toUpperCase() === "", "empty upper");
+  assert("".toLowerCase() === "", "empty lower");
+
+  let s: string = "abc";
+  let upper = s.toUpperCase();
+  assert(s === "abc", "toUpperCase is pure");
+  assert(upper === "ABC", "toUpperCase result");
+}

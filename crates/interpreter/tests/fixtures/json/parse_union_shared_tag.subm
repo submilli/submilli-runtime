@@ -1,0 +1,20 @@
+// Discriminated union where every variant shares the same required-field names
+// but differs in the literal tag value — tests ByLiteralTagValue resolution.
+
+type Msg = { kind: "a", x: number } | { kind: "b", x: number };
+
+function main(): void {
+  const m1 = JSON.parse("{\"kind\":\"a\",\"x\":1}") as Msg;
+  if (m1.kind === "a") {
+    assert(m1.x === 1, "a.x");
+  } else {
+    assert(false, "expected a");
+  }
+
+  const m2 = JSON.parse("{\"kind\":\"b\",\"x\":2}") as Msg;
+  if (m2.kind === "b") {
+    assert(m2.x === 2, "b.x");
+  } else {
+    assert(false, "expected b");
+  }
+}

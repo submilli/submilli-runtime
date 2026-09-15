@@ -1,0 +1,35 @@
+function main(): void {
+  // \u escapes keep this test robust to editor/clipboard normalization.
+  const precomposed: string = "café";
+  const decomposed: string = "café";
+
+  assert(precomposed !== decomposed, "precomposed and decomposed differ at the code-unit level");
+
+  assert(decomposed.normalize("NFC") === precomposed, "NFC composes");
+  assert(decomposed.normalize() === precomposed, "normalize() defaults to NFC");
+  assert(precomposed.normalize("NFD") === decomposed, "NFD decomposes");
+
+  assert(precomposed.normalize("NFD").normalize("NFC") === precomposed, "NFC ∘ NFD = id on precomposed");
+  assert(decomposed.normalize("NFC").normalize("NFD") === decomposed, "NFD ∘ NFC = id on decomposed");
+
+  assert(precomposed.normalize("NFC") === precomposed, "NFC idempotent on NFC input");
+  assert(decomposed.normalize("NFD") === decomposed, "NFD idempotent on NFD input");
+
+  // ﬁ (U+FB01) is a compatibility ligature — decomposes under NFKC/NFKD, preserved by NFC/NFD.
+  const ligature: string = "ﬁ";
+  assert(ligature.normalize("NFKC") === "fi", "NFKC decomposes ligature");
+  assert(ligature.normalize("NFKD") === "fi", "NFKD decomposes ligature");
+  assert(ligature.normalize("NFC")  === ligature, "NFC preserves ligature");
+  assert(ligature.normalize("NFD")  === ligature, "NFD preserves ligature");
+
+  assert("".normalize("NFC")  === "", "empty NFC");
+  assert("".normalize("NFD")  === "", "empty NFD");
+  assert("".normalize("NFKC") === "", "empty NFKC");
+  assert("".normalize("NFKD") === "", "empty NFKD");
+
+  assert("hello".normalize("NFC")  === "hello", "ASCII NFC");
+  assert("hello".normalize("NFD")  === "hello", "ASCII NFD");
+  assert("hello".normalize("NFKC") === "hello", "ASCII NFKC");
+  assert("hello".normalize("NFKD") === "hello", "ASCII NFKD");
+
+}

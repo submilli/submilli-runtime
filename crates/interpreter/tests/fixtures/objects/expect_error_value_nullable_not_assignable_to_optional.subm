@@ -1,0 +1,8 @@
+// expect-error: expected
+
+function takesOptional(u: { id: number, name?: string }): void {}
+
+function main(): void {
+  const nullable: { id: number, name: string | null } = { id: 1, name: null };
+  takesOptional(nullable);
+}

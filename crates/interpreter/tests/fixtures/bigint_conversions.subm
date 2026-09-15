@@ -1,0 +1,19 @@
+function main(): void {
+  let one_hundred: bigint = BigInt(100);
+  assert(one_hundred.toString() === "100", "BigInt(100)");
+  assert(Number(one_hundred) === 100, "Number(100n) round-trip");
+
+  let huge: bigint = BigInt.fromString("12345678901234567890");
+  assert(
+    huge.toString() === "12345678901234567890",
+    "fromString round-trip"
+  );
+
+  assert(String(-42n) === "-42", "String(-42n)");
+
+  let v: bigint = 999999999999999999999n;
+  assert(
+    BigInt.fromString(v.toString()) === v,
+    "toString → fromString round-trip"
+  );
+}

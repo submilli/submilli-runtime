@@ -1,0 +1,66 @@
+function main(): void {
+  const a = Temporal.Instant.from("2026-06-10T10:00:00Z");
+  const b = Temporal.Instant.from("2026-06-10T11:30:00Z");
+
+  const plain = a.until(b);
+  assert(plain.toString() === a.until(b).toString(), "no-options call is unchanged");
+
+  const inMinutes = a.until(b, { largestUnit: "minutes" });
+  assert(inMinutes.minutes === 90 && inMinutes.hours === 0, "largestUnit balances into minutes");
+
+  const inHours = a.until(b, { largestUnit: "hours" });
+  assert(inHours.hours === 1 && inHours.minutes === 30, "largestUnit balances into hours");
+
+  const rounded = a.until(b, { largestUnit: "hours", smallestUnit: "hour" });
+  assert(rounded.hours === 1, "default rounding for diffs is trunc: 90 minutes stays 1 hour");
+
+  const expanded = a.until(b, { largestUnit: "hours", smallestUnit: "hour", roundingMode: "halfExpand" });
+  assert(expanded.hours === 2, "halfExpand pushes 90 minutes to 2 hours");
+
+  const c = Temporal.Instant.from("2026-06-10T10:22:00Z");
+  const quarter = a.until(c, { smallestUnit: "minute", roundingIncrement: 15 });
+  assert(quarter.minutes === 15, "22 minutes rounds to the nearest quarter hour");
+
+  assert(b.since(a, { largestUnit: "minutes" }).minutes === 90, "since takes the same options");
+
+  const d1 = Temporal.PlainDate.from("2026-01-15");
+  const d2 = Temporal.PlainDate.from("2027-03-20");
+  const months = d1.until(d2, { largestUnit: "months" });
+  assert(months.months === 14 && months.days === 5 && months.years === 0, "calendar units balance against the receiver");
+  assert(d2.since(d1, { largestUnit: "years" }).years === 1, "since with calendar largestUnit");
+
+  const t1 = Temporal.PlainTime.from("01:00:00");
+  const t2 = Temporal.PlainTime.from("03:45:00");
+  assert(t1.until(t2, { largestUnit: "minutes" }).minutes === 165, "time diff in minutes");
+
+  const dt1 = Temporal.PlainDateTime.from("2026-06-01T00:00:00");
+  const dt2 = Temporal.PlainDateTime.from("2026-06-02T12:00:00");
+  assert(dt1.until(dt2, { largestUnit: "hours" }).hours === 36, "datetime diff in hours");
+
+  const ym1 = Temporal.PlainYearMonth.from("2024-03");
+  const ym2 = Temporal.PlainYearMonth.from("2026-07");
+  assert(ym1.until(ym2, { largestUnit: "months" }).months === 28, "year-month diff in months only");
+  const ymDefault = ym1.until(ym2);
+  assert(ymDefault.years === 2 && ymDefault.months === 4, "year-month default is unchanged");
+
+  const z1 = Temporal.ZonedDateTime.from("2026-03-07T12:00:00-05:00[America/New_York]");
+  const z2 = Temporal.ZonedDateTime.from("2026-03-09T12:00:00-04:00[America/New_York]");
+  const zdays = z1.until(z2, { largestUnit: "days" });
+  assert(zdays.days === 2 && zdays.hours === 0, "DST-crossing diff counts wall-clock days");
+
+  let threw: boolean = false;
+  try {
+    a.until(b, { largestUnit: "fortnights" });
+  } catch (e: Error) {
+    threw = true;
+  }
+  assert(threw, "invalid unit throws");
+
+  threw = false;
+  try {
+    a.until(b, { smallestUnit: "hour", roundingMode: "sideways" });
+  } catch (e: Error) {
+    threw = true;
+  }
+  assert(threw, "invalid rounding mode throws");
+}

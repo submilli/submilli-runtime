@@ -1,0 +1,4 @@
+// expect-error: expected `number`, got `string`
+function main(): number {
+  return "x";
+}

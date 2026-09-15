@@ -1,0 +1,8 @@
+// expect-error: `continue` outside of a loop
+function main(): void {
+  let x: number = 1;
+  switch (x) {
+    case 1: continue;
+    default: break;
+  }
+}

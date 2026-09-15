@@ -1,0 +1,13 @@
+import { writeText, appendText, readText } from "submilli:fs";
+
+function main(): void {
+  writeText("/log.txt", "line1\n");
+  appendText("/log.txt", "line2\n");
+  appendText("/log.txt", "line3\n");
+  const back: string | null = readText("/log.txt");
+  if (back === null) {
+    assert(false, "readText returned null");
+    return;
+  }
+  assert(back === "line1\nline2\nline3\n", "append preserves order");
+}

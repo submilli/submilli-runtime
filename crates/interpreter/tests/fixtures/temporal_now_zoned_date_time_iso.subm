@@ -1,0 +1,5 @@
+function main(): void {
+  const z: Temporal.ZonedDateTime = Temporal.Now.zonedDateTimeISO("UTC");
+  assert(z.timeZoneId === "UTC", "tz id passed through");
+  assert(z.epochMilliseconds > 1690000000000, "wall clock is post-2023");
+}

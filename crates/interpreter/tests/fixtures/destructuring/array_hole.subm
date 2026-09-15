@@ -1,0 +1,5 @@
+function main(): void {
+  const arr: number[] = [10, 20, 30];
+  const [, , z] = arr;
+  assert(z === 30, "third slot via holes");
+}

@@ -1,0 +1,13 @@
+// expect-error: does not exist on all members
+
+function radiusOf(
+  s: { kind: string; radius: number }
+   | { kind: string; height: number; width: number }
+): number {
+  return s.radius;
+}
+
+function main(): void {
+  const c = { kind: "circle", radius: 3 };
+  radiusOf(c);
+}

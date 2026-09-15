@@ -1,0 +1,6 @@
+// expect-error: expected `:` to complete ternary expression
+
+function main(): void {
+  const x: number = true ? 1;
+  assert(x === 1, "unreachable");
+}

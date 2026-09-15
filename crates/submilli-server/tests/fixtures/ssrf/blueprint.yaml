@@ -1,0 +1,8 @@
+name: ssrf-test
+
+# The server is deny-by-default; the script's http.get must be granted so the
+# request reaches the network layer (where the SSRF policy is what's under test).
+permissions:
+  main:
+    - capability: http.get
+      action: allow

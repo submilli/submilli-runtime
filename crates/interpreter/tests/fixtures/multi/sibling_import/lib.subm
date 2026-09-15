@@ -1,0 +1,5 @@
+import { answer } from "./util";
+
+export function call(): number {
+  return answer();
+}

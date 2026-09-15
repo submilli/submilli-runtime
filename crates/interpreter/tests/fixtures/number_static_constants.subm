@@ -1,0 +1,11 @@
+function main(): void {
+  assert(Number.MAX_SAFE_INTEGER === 9007199254740991, "2^53 - 1");
+  assert(Number.MIN_SAFE_INTEGER === -9007199254740991, "-(2^53 - 1)");
+  assert(Number.EPSILON > 0 && Number.EPSILON < 1e-15, "epsilon is tiny but positive");
+  assert(1 + Number.EPSILON > 1, "epsilon separates 1 from its successor");
+  assert(Number.MAX_VALUE > 1e308, "largest finite double");
+  assert(Number.MIN_VALUE > 0 && Number.MIN_VALUE < 1e-307, "smallest positive double");
+  assert(Number.POSITIVE_INFINITY === Infinity, "positive infinity matches the global");
+  assert(Number.NEGATIVE_INFINITY === -Infinity, "negative infinity matches the global");
+  assert(isNaN(Number.NaN), "Number.NaN is NaN");
+}

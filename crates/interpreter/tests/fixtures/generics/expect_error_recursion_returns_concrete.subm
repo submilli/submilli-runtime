@@ -1,0 +1,10 @@
+// expect-error: expected `T`, got `number`
+
+function recurse<T>(x: T, depth: number): T {
+  if (depth === 0) {
+    return 42;
+  }
+  return recurse(x, depth - 1);
+}
+
+function main(): void {}

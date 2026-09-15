@@ -1,0 +1,22 @@
+let finally_ran: boolean = false;
+
+function rethrows(): number {
+  try {
+    throw new Error("boom");
+  } catch (e: Error) {
+    throw new Error("rethrown");
+  } finally {
+    finally_ran = true;
+  }
+}
+
+function main(): void {
+  let msg: string = "<none>";
+  try {
+    rethrows();
+  } catch (e: Error) {
+    msg = e.message;
+  }
+  assert(finally_ran === true, "finally still runs on the rethrow path");
+  assert(msg === "rethrown", "catch's rethrow propagates when finally has no return");
+}

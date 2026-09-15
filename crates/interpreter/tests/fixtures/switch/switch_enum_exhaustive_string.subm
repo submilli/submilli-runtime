@@ -1,0 +1,18 @@
+// An exhaustive `switch` over a string enum returns on all paths without a
+// `default:` arm. Regression for an exhaustive string-enum switch.
+enum Status {
+  Active = "active",
+  Inactive = "inactive",
+}
+
+function label(s: Status): string {
+  switch (s) {
+    case Status.Active: return "on";
+    case Status.Inactive: return "off";
+  }
+}
+
+function main(): void {
+  assert(label(Status.Active) === "on", "active");
+  assert(label(Status.Inactive) === "off", "inactive");
+}

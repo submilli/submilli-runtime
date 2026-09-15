@@ -1,0 +1,34 @@
+function main(): void {
+  let arr: number[] = [1, 2, 3, 4, 5];
+
+  let mid = arr.slice(1, 4);
+  assert(mid.length === 3, "slice length");
+  assert(mid[0] === 2 && mid[1] === 3 && mid[2] === 4, "slice contents");
+
+  // Negative bounds: -1 means len - 1.
+  let tail = arr.slice(-2, 5);
+  assert(tail.length === 2, "negative start");
+  assert(tail[0] === 4 && tail[1] === 5, "negative start contents");
+
+  let empty = arr.slice(3, 2);
+  assert(empty.length === 0, "start >= end is empty");
+
+  // Out-of-range clamps to [0, len].
+  let clamped = arr.slice(-100, 100);
+  assert(clamped.length === 5, "clamps to full range");
+  assert(clamped[0] === 1 && clamped[4] === 5, "clamped contents");
+
+  assert(arr.length === 5, "slice is pure");
+
+  let all = arr.slice();
+  assert(all.length === 5, "no-arg slice is a full copy");
+  assert(all[0] === 1 && all[4] === 5, "no-arg slice contents");
+
+  let tail2 = arr.slice(2);
+  assert(tail2.length === 3, "one-arg slice goes to end");
+  assert(tail2[0] === 3 && tail2[2] === 5, "one-arg slice contents");
+
+  let last2 = arr.slice(-2);
+  assert(last2.length === 2, "negative one-arg slice goes to end");
+  assert(last2[0] === 4 && last2[1] === 5, "negative one-arg contents");
+}

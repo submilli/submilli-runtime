@@ -1,0 +1,4 @@
+// expect-error: `export default` is not supported
+export default function main(): string {
+  return "x";
+}

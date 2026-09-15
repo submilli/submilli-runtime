@@ -1,0 +1,228 @@
+# Validates the Helm chart without a cluster.
+#
+# Separate from ci.yml on purpose. This needs no Rust toolchain and no container
+# image, runs in seconds, and its failure modes are entirely inside charts/ — so
+# it stays green or red on its own merits rather than inheriting an unrelated
+# build's state.
+#
+# The `install` job installs onto a throwaway kind cluster and runs the chart's
+# own `helm test` hooks, once per file in charts/submilli/ci/. It pulls the
+# published server image rather than side-loading one, so the image reference the
+# chart derives from `appVersion` is under test too.
+#
+# That job needs a GHCR pull secret while the image package is private. It is
+# skipped rather than failed on a fork PR, where secrets are not available —
+# a fork contributor still gets lint, render, unit tests, and packaging.
+
+name: Chart CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'charts/**'
+      - '.github/workflows/chart-ci.yml'
+  pull_request:
+    paths:
+      - 'charts/**'
+      - '.github/workflows/chart-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # `Chart.yaml` is apiVersion v2, which both majors install, and the
+        # chart README makes that claim to operators. Rendering under both is
+        # what keeps the claim true — Helm 4 changed template and plugin
+        # behaviour enough that passing on one says little about the other.
+        helm: ['v3.21.3', 'v4.2.3']
+    name: helm ${{ matrix.helm }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: ${{ matrix.helm }}
+
+      - name: Install kubeconform
+        run: |
+          curl -sSLo /tmp/kubeconform.tar.gz \
+            https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz
+          tar -xzf /tmp/kubeconform.tar.gz -C /tmp kubeconform
+          sudo install -m 0755 /tmp/kubeconform /usr/local/bin/kubeconform
+          kubeconform -v
+
+      - name: Lint
+        run: |
+          # Once per ci/ file, not just defaults: values.schema.json is enforced
+          # on lint, so this is also where a schema/values disagreement surfaces.
+          helm lint charts/submilli
+          for f in charts/submilli/ci/*-values.yaml; do
+            echo "==> $f"
+            helm lint charts/submilli -f "$f"
+          done
+
+      - name: Render and validate against the Kubernetes schemas
+        # Explicit `shell: bash` to get `-o pipefail`. The default runner shell
+        # is `bash -e` WITHOUT it, so a `helm template` failure on the left of
+        # the pipe is swallowed: kubeconform reads empty stdin, finds zero
+        # resources, exits 0, and the gate goes green on a chart that does not
+        # render.
+        shell: bash
+        run: |
+          # `ct install` would cover this on a cluster; until that job exists,
+          # kubeconform is what catches a manifest the API server would reject.
+          # -strict rejects unknown fields, which is the class of typo that
+          # otherwise installs fine and silently does nothing.
+          for f in charts/submilli/ci/*-values.yaml; do
+            echo "==> $f"
+            helm template submilli charts/submilli -f "$f" \
+              | kubeconform -strict -summary -kubernetes-version 1.31.0
+          done
+
+      - name: Unit tests
+        env:
+          UNITTEST_VERSION: 'v1.1.2'
+        run: |
+          # Helm 4 refuses an unsigned plugin unless told not to verify; Helm 3
+          # has no such flag and errors on an unknown one. Probe rather than
+          # branch on the version string.
+          # Pinned. Unpinned, both branches would execute whatever is at the tip
+          # of a third-party repo, and the Helm 4 branch additionally disables
+          # signature verification — so a force-push upstream runs in CI.
+          if helm plugin install --help 2>&1 | grep -q -- '--verify'; then
+            helm plugin install https://github.com/helm-unittest/helm-unittest --version "$UNITTEST_VERSION" --verify=false
+          else
+            helm plugin install https://github.com/helm-unittest/helm-unittest --version "$UNITTEST_VERSION"
+          fi
+          helm unittest charts/submilli
+
+      - name: Package
+        run: |
+          # Guards the .helmignore boundary in both directions. `templates/tests/`
+          # must ship (they are the `helm test` hooks) and `tests/` must not (they
+          # are helm-unittest specs). An unanchored ignore pattern matched both
+          # and silently dropped the hooks from the chart, with lint and template
+          # still passing.
+          helm package charts/submilli -d /tmp/pkg
+          contents=$(tar -tzf /tmp/pkg/submilli-*.tgz)
+          echo "$contents" | grep -q 'submilli/templates/tests/test-api.yaml' \
+            || { echo "::error::helm test hooks are missing from the packaged chart"; exit 1; }
+          echo "$contents" | grep -q 'submilli/templates/tests/test-networkpolicy.yaml' \
+            || { echo "::error::helm test hooks are missing from the packaged chart"; exit 1; }
+          if echo "$contents" | grep -qE 'submilli/tests/.*_test\.yaml'; then
+            echo "::error::helm-unittest specs leaked into the packaged chart"
+            exit 1
+          fi
+          echo "packaged chart contents are correct"
+
+  # Enable once this repository has access to the configured GHCR image.
+  install:
+    name: install on kind
+    runs-on: ubuntu-latest
+    # Job-scoped, and it must restate `contents` — specifying `permissions`
+    # replaces the token's scopes wholesale rather than adding to them. Without
+    # `packages: read` the GITHUB_TOKEN behind the pull secret cannot read the
+    # private image, and the only symptom is ImagePullBackOff with a bare
+    # "unexpected status from HEAD request" from the kubelet.
+    permissions:
+      contents: read
+      packages: read
+    # Secrets are not exposed to workflows triggered from a fork, and the server
+    # image is private. Skipping keeps a fork PR green on everything it can
+    # actually run instead of failing it for a credential it cannot have.
+    if: vars.SUBMILLI_CHART_INSTALL_ENABLED == 'true' && (github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: azure/setup-helm@v4
+        with:
+          # chart-testing links the Helm 3 SDK, so this job is pinned to 3 by a
+          # dependency rather than by preference. The matrix job above is what
+          # keeps the Helm 4 claim honest.
+          version: v3.21.3
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: helm/chart-testing-action@v2.7.0
+
+      - uses: helm/kind-action@v1.12.0
+        with:
+          # kind enforces NetworkPolicy, which templates/tests/test-networkpolicy.yaml
+          # depends on: on a non-enforcing CNI that test would fail, which is the
+          # point of it.
+          cluster_name: chart-ci
+          # Pinned rather than inherited from the action's default. The chart
+          # defaults to accessMode: ReadWriteOncePod, which kind's local-path
+          # provisioner only supports from kind v0.26.0 (local-path-provisioner
+          # v0.0.25). Below that the PVC hangs Pending and this job times out
+          # with nothing naming the access mode as the cause.
+          version: v0.31.0
+
+      - name: Create the image pull secret and the fixtures ci/ expects
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Must match `namespace:` in .github/ci/ct.yaml. ct would otherwise
+          # generate a namespace name at run time, which nothing can pre-populate.
+          kubectl create namespace chart-ci
+          kubectl create secret docker-registry ghcr-creds --namespace chart-ci \
+            --docker-server=ghcr.io \
+            --docker-username='${{ github.actor }}' \
+            --docker-password="$GHCR_TOKEN"
+          # Referenced by ci/seeded-values.yaml. A wrong key name here is not a
+          # silent failure: the kubelet refuses the mount and the pod never
+          # starts.
+          kubectl create secret generic submilli-ci-stripe --namespace chart-ci \
+            --from-literal=api-key=ci-placeholder
+
+      # The class of failure nothing else here can see. lint, template,
+      # kubeconform, unittest and a fresh `ct install` are all structurally blind
+      # to StatefulSet immutability: selector, serviceName, volumeClaimTemplates
+      # and podManagementPolicy can only be rejected on an UPGRADE of a release
+      # that already exists. A version bump is mandatory on every chart change,
+      # so a mutable label reaching an immutable field breaks upgrade for every
+      # existing install — which is exactly what happened, and this is what
+      # catches it in seconds.
+      - name: Upgrade an existing release across a version bump
+        shell: bash
+        run: |
+          set -euo pipefail
+          helm install upgrade-probe charts/submilli --namespace chart-ci --wait --timeout 6m \
+            --set 'imagePullSecrets[0].name=ghcr-creds'
+
+          # Bump in a scratch copy so the committed chart is untouched.
+          cp -r charts/submilli /tmp/bumped
+          sed -i 's/^version: .*/version: 9.9.9/' /tmp/bumped/Chart.yaml
+
+          if ! helm upgrade upgrade-probe /tmp/bumped --namespace chart-ci --wait --timeout 6m \
+                 --set 'imagePullSecrets[0].name=ghcr-creds' 2>/tmp/upgrade.err; then
+            echo "::error::helm upgrade failed across a chart version bump"
+            cat /tmp/upgrade.err
+            if grep -q 'updates to statefulset spec for fields other than' /tmp/upgrade.err; then
+              echo "::error::a version-bearing value reached an immutable StatefulSet field \
+          (selector, serviceName, volumeClaimTemplates, or podManagementPolicy). \
+          This breaks upgrade for every existing install."
+            fi
+            exit 1
+          fi
+          helm uninstall upgrade-probe --namespace chart-ci --wait
+          kubectl delete pvc -l app.kubernetes.io/instance=upgrade-probe -n chart-ci --ignore-not-found
+          echo "upgrade across a version bump succeeded"
+
+      - name: Run chart-testing (install)
+        run: |
+          # --all rather than list-changed: this workflow only runs when charts/
+          # changed, so the filter would just re-derive what the path filter
+          # already decided.
+          ct install --config .github/ci/ct.yaml --all \
+            --helm-extra-set-args "--set=imagePullSecrets[0].name=ghcr-creds"

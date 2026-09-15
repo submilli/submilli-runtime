@@ -1,0 +1,12 @@
+function f(x: { v: string | number }): number {
+  if (typeof x.v === "string") {
+    return 0;
+  }
+  return x.v + 1;
+}
+
+function main(): void {
+  assert(f({ v: "hi" }) === 0, "string falls to then");
+  assert(f({ v: 41 }) === 42, "number narrows to number in else");
+  assert(f({ v: -1 }) === 0, "negative number narrows");
+}

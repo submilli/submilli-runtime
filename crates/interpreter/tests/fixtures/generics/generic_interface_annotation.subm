@@ -1,0 +1,27 @@
+// `Foo<T>` annotation parsing and arity-checking. Uses null bindings because
+// structural object→interface assignability is not yet implemented.
+
+interface Box<T> {
+  value: T;
+}
+
+interface Pair<A, B> {
+  first: A;
+  second: B;
+}
+
+function take(b: Box<number> | null): boolean {
+  return b === null;
+}
+
+function build(): Pair<string, number> | null {
+  return null;
+}
+
+function main(): void {
+  let b: Box<string> | null = null;
+  assert(b === null, "null Box<string>");
+  assert(take(null), "take rejects non-null trivially");
+  let p: Pair<string, number> | null = build();
+  assert(p === null, "build returns null");
+}

@@ -1,0 +1,26 @@
+function tick(i: number, n: number): IteratorResult<number> {
+  if (i >= n) { const ret: IteratorResult<number> = { done: true }; return ret; }
+  const r: IteratorResult<number> = { done: false, value: i }; return r;
+}
+
+function rangeIter(start: number, n: number): Iterator<number> {
+  let i = start;
+  const it: Iterator<number> = { next: (): IteratorResult<number> => { const r = tick(i, n); i = i + 1; return r; } };
+  return it;
+}
+
+function rangeIterable(n: number): Iterable<number> {
+  const it: Iterable<number> = { iterator: (): Iterator<number> => rangeIter(0, n) };
+  return it;
+}
+
+function main(): void {
+  const r = rangeIterable(4);
+  let sumA = 0;
+  for (const x of r) { sumA = sumA + x; }
+  assert(sumA === 6, "first walk: 0+1+2+3 = 6");
+
+  let sumB = 0;
+  for (const x of r) { sumB = sumB + x; }
+  assert(sumB === 6, "second walk over the same Iterable also sees 0+1+2+3");
+}

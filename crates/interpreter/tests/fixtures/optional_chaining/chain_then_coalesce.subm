@@ -1,0 +1,9 @@
+function display(u: { name: string } | null): string {
+  return u?.name ?? "anon";
+}
+
+function main(): void {
+  const u: { name: string } = { name: "alice" };
+  assert(display(u) === "alice", "non-null reads name");
+  assert(display(null) === "anon", "null short-circuits to coalesce default");
+}

@@ -1,0 +1,18 @@
+import { encodeComponent, decodeComponent } from "submilli:url";
+
+function main(): void {
+  assert(encodeComponent("hello") === "hello", "ascii alpha unchanged");
+
+  const enc: string = encodeComponent("hello world");
+  assert(enc === "hello%20world", "space encoded");
+
+  const dec: string = decodeComponent(enc);
+  assert(dec === "hello world", "decode round-trip");
+
+  const punct: string = encodeComponent("a&b=c");
+  assert(punct === "a%26b%3Dc", "& and = encoded");
+  assert(decodeComponent(punct) === "a&b=c", "punctuation round-trip");
+
+  assert(encodeComponent("") === "", "empty in / empty out");
+  assert(decodeComponent("") === "", "empty decode");
+}

@@ -1,0 +1,5 @@
+// expect-error: field `toJson` must have type `() => string`
+
+function main(): void {
+  let x: { toJson: (n: number) => string } = { toJson: (n: number): string => "x" };
+}

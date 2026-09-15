@@ -1,0 +1,18 @@
+function describe(cond: boolean, x: string | null): number {
+  if (cond) {
+    if (x !== null) {
+      return x.length;
+    } else {
+      return -1;
+    }
+  } else {
+    x = null;
+    return -2;
+  }
+}
+
+function main(): void {
+  assert(describe(true, "hello") === 5, "cond=true, non-null → length");
+  assert(describe(true, null) === -1, "cond=true, null sentinel");
+  assert(describe(false, "ignored") === -2, "cond=false, sibling assign branch");
+}

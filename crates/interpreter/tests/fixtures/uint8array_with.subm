@@ -1,0 +1,17 @@
+function main(): void {
+  let bytes: Uint8Array = Uint8Array.new([1, 2, 3, 4]);
+
+  let updated: Uint8Array = bytes.with(1, 99);
+  assert(updated[0] === 1, "updated byte 0 unchanged");
+  assert(updated[1] === 99, "updated byte 1 written");
+  assert(updated[2] === 3 && updated[3] === 4, "trailing bytes unchanged");
+
+  assert(bytes[1] === 2, "source unchanged");
+
+  let from_end: Uint8Array = bytes.with(-1, 50);
+  assert(from_end[3] === 50, "negative index counts from end");
+  assert(from_end[0] === 1, "other bytes unchanged");
+
+  let trunc: Uint8Array = bytes.with(0, 256);
+  assert(trunc[0] === 0, "256 truncates to 0");
+}

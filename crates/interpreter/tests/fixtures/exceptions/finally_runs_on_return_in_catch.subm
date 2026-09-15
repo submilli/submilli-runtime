@@ -1,0 +1,17 @@
+let flag: boolean = false;
+
+function inner(): number {
+  try {
+    throw new Error("oops");
+  } catch (e: Error) {
+    return 7;
+  } finally {
+    flag = true;
+  }
+}
+
+function main(): void {
+  const result = inner();
+  assert(flag === true, "finally ran after return inside catch");
+  assert(result === 7, "catch's return value preserved");
+}

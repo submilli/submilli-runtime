@@ -1,0 +1,5 @@
+// expect-error: cannot assign to readonly property `length`
+function main(): void {
+  let s: string = "hi";
+  s.length = 0;
+}

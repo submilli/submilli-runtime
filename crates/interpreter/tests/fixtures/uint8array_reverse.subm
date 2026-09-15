@@ -1,0 +1,20 @@
+function main(): void {
+  let three: Uint8Array = Uint8Array.new([1, 2, 3]);
+  let returned: Uint8Array = three.reverse();
+  assert(three[0] === 3, "in-place: byte 0");
+  assert(three[1] === 2, "in-place: byte 1");
+  assert(three[2] === 1, "in-place: byte 2");
+  assert(returned.equals(three), "returns this");
+
+  let four: Uint8Array = Uint8Array.new([10, 20, 30, 40]);
+  four.reverse();
+  assert(four[0] === 40 && four[1] === 30 && four[2] === 20 && four[3] === 10, "even length");
+
+  let one: Uint8Array = Uint8Array.new([42]);
+  one.reverse();
+  assert(one[0] === 42, "single element unchanged");
+
+  let empty: Uint8Array = Uint8Array.alloc(0);
+  empty.reverse();
+  assert(empty.length === 0, "empty unchanged");
+}

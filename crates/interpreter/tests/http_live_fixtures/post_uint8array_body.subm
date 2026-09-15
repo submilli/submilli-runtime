@@ -1,0 +1,7 @@
+import { post, Response } from "submilli:http";
+
+function main(): void {
+  const payload: Uint8Array = new Uint8Array([72, 105, 33]); // "Hi!"
+  const r: Response = post("{{BASE}}/echo-bytes", payload);
+  assert(r.status === 200, "bytes wire-transferred verbatim");
+}

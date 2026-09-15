@@ -1,0 +1,8 @@
+# The other half of the closure rule: a transitive dependency's types resolve,
+# but importing from one is still an error — and the diagnostic says which of
+# the two it is.
+# name          dir    deps          root
+@test/p2        lib2   -
+@test/p1        lib1   @test/p2
+@test/p3        mid    @test/p1
+main            app    @test/p3      root

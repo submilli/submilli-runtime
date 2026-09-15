@@ -1,0 +1,6 @@
+// expect-error: cannot assign to const binding
+
+function main(): void {
+  const x: number = 5;
+  x += 1;
+}

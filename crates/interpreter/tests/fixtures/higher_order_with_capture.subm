@@ -1,0 +1,9 @@
+function apply(f: (x: number) => number, x: number): number {
+  return f(x);
+}
+
+function main(): void {
+  let bias: number = 100;
+  assert(apply((n: number) => n + bias, 7) === 107, "captured bias added to arg");
+  assert(apply((n: number) => n + bias, 12) === 112, "second arrow captures the same bias");
+}

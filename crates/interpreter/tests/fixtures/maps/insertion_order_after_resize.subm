@@ -1,0 +1,37 @@
+function main(): void {
+  const m = new Map<number, number>();
+  let i: number = 0;
+  while (i < 100) {
+    m.set(i, i * 10);
+    i = i + 1;
+  }
+  assert(m.size === 100, "size = 100");
+
+  let expected: number = 0;
+  for (const p of m) {
+    assert(p[0] === expected, "for-of yields keys in insertion order");
+    assert(p[1] === expected * 10, "values pair with the right key");
+    expected = expected + 1;
+  }
+  assert(expected === 100, "for-of visited 100 entries");
+
+  let ks: number[] = [];
+
+  for (const __ks of m.keys()) {
+
+    ks.push(__ks);
+
+  }
+  let vs: number[] = [];
+  for (const __vs of m.values()) {
+    vs.push(__vs);
+  }
+  assert(ks.length === 100, "keys() 100 entries");
+  assert(vs.length === 100, "values() 100 entries");
+  i = 0;
+  while (i < 100) {
+    assert(ks[i] === i, "keys()[i] === i");
+    assert(vs[i] === i * 10, "values()[i] === i*10");
+    i = i + 1;
+  }
+}

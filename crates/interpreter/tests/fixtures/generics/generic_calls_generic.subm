@@ -1,0 +1,19 @@
+
+function inner<U>(y: U): U {
+  let z: U = y;
+  return z;
+}
+
+function outer<T>(x: T): T {
+  let stash: T = x;
+  const result = inner(stash);
+  let final_value: T = result;
+  return final_value;
+}
+
+function main(): void {
+  assert(outer(42) === 42, "outer(number) round-trips through inner");
+  assert(outer("hi") === "hi", "outer(string) round-trips through inner");
+  const o = { a: 1 };
+  assert(outer(o) === o, "outer(object) preserves reference");
+}

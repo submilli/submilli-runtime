@@ -1,0 +1,11 @@
+// Returning an array (including an array of objects) from main must JSON-encode
+// the result rather than trap in the host's result decoder.
+function main(): { v: number }[] {
+  let out: { v: number }[] = [];
+  for (let i = 0; i < 3; i = i + 1) {
+    out.push({ v: i });
+  }
+  assert(out.length === 3, "array length");
+  assert(out[2].v === 2, "last element value");
+  return out;
+}

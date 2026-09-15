@@ -1,0 +1,8 @@
+// expect-error: bogus
+
+import { get, Response } from "submilli:http";
+
+function main(): void {
+  const r: Response = get("https://example.test/");
+  r.bogus();
+}

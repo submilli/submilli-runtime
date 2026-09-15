@@ -1,0 +1,19 @@
+type Envelope = { id: number, payload: { kind: "ok", data: string } | { kind: "err", code: number } };
+
+function main(): void {
+  const ok = JSON.parse("{\"id\":1,\"payload\":{\"kind\":\"ok\",\"data\":\"hi\"}}") as Envelope;
+  assert(ok.id === 1, "id");
+  if (ok.payload.kind === "ok") {
+    assert(ok.payload.data === "hi", "ok.data");
+  } else {
+    assert(false, "expected ok payload");
+  }
+
+  const e = JSON.parse("{\"id\":2,\"payload\":{\"kind\":\"err\",\"code\":500}}") as Envelope;
+  assert(e.id === 2, "err id");
+  if (e.payload.kind === "err") {
+    assert(e.payload.code === 500, "err.code");
+  } else {
+    assert(false, "expected err payload");
+  }
+}

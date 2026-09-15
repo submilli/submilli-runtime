@@ -1,0 +1,13 @@
+function pick(n: number): string {
+  switch (n) {
+    case 0: return "zero";
+    case 1: return "one";
+    default: return "many";
+  }
+}
+
+function main(): void {
+  assert(pick(0) === "zero", "0");
+  assert(pick(1) === "one", "1");
+  assert(pick(5) === "many", "default");
+}

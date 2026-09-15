@@ -1,0 +1,22 @@
+// Constant-time guarantee is on the host side; this only verifies boolean outputs.
+
+import { sha256, timingSafeEqual } from "submilli:crypto";
+
+function main(): void {
+  const a: Uint8Array = sha256("hello");
+  const b: Uint8Array = sha256("hello");
+  assert(timingSafeEqual(a, b), "equal digests compare true");
+
+  const c: Uint8Array = sha256("world");
+  assert(!timingSafeEqual(a, c), "different digests compare false");
+
+  const empty: Uint8Array = Uint8Array.alloc(0);
+  assert(!timingSafeEqual(a, empty), "length mismatch is false");
+
+  const empty2: Uint8Array = Uint8Array.alloc(0);
+  assert(timingSafeEqual(empty, empty2), "two empties compare true");
+
+  const x: Uint8Array = Uint8Array.new([1, 2, 3, 4]);
+  const y: Uint8Array = Uint8Array.new([1, 2, 3, 5]);
+  assert(!timingSafeEqual(x, y), "trailing-byte difference is false");
+}

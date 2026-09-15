@@ -1,0 +1,8 @@
+function main(): void {
+  const d: Temporal.Duration = Temporal.Duration.from("PT1H30M");
+  assert(d.hours === 1, "hours slot");
+  assert(d.minutes === 30, "minutes slot");
+  assert(d.seconds === 0, "seconds slot");
+  assert(d.toString() === "PT1H30M", "ISO round-trip");
+  assert(d.total("minutes") === 90, "total('minutes') = 90");
+}

@@ -1,0 +1,4 @@
+// expect-error: `continue` outside of a loop
+function main(): void {
+  continue;
+}

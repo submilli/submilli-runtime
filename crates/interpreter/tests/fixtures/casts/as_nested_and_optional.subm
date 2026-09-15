@@ -1,0 +1,18 @@
+// Deep check recurses into nested objects and treats an absent optional field as OK.
+
+function main(): void {
+  const u: unknown = { inner: { v: 5 } };
+  const o = u as { inner: { v: number }; note?: string };
+  assert(o.inner.v === 5, "nested field verified through the cast");
+
+  // Present optional field of the wrong type is still rejected.
+  const bad: unknown = { inner: { v: 5 }, note: 7 };
+  let caught: boolean = false;
+  try {
+    const _ = bad as { inner: { v: number }; note?: string };
+    assert(false, "wrong-typed optional field should throw — never reached");
+  } catch (e: Error) {
+    caught = true;
+  }
+  assert(caught, "present optional field with wrong type threw");
+}

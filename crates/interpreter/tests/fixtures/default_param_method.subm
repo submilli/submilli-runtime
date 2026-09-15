@@ -1,0 +1,9 @@
+function main(): void {
+  assert("abracadabra".indexOf("a") === 0, "indexOf defaults fromIndex to 0");
+  assert("abracadabra".indexOf("a", 2) === 3, "explicit fromIndex overrides default");
+  assert("abracadabra".includes("cad"), "includes default fromIndex");
+  assert("hello".startsWith("he"), "startsWith default position");
+  assert("5".padStart(3) === "  5", "padStart default padString is a single space");
+  assert("5".padStart(3, "0") === "005", "explicit padString overrides default");
+  assert("5".padEnd(3) === "5  ", "padEnd default padString is a single space");
+}

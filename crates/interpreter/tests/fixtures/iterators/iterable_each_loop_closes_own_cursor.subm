@@ -1,0 +1,26 @@
+let close_count: number = 0;
+
+function tick(i: number, n: number): IteratorResult<number> {
+  if (i >= n) { const r: IteratorResult<number> = { done: true }; return r; }
+  const y: IteratorResult<number> = { done: false, value: i }; return y;
+}
+
+function fresh_cursor(n: number): Iterator<number> {
+  let i = 0;
+  const it: Iterator<number> = { next: (): IteratorResult<number> => { const r = tick(i, n); i = i + 1; return r; }, close: (): void => { close_count = close_count + 1; } };
+  return it;
+}
+
+function range_iterable(n: number): Iterable<number> {
+  const itrbl: Iterable<number> = { iterator: (): Iterator<number> => fresh_cursor(n) };
+  return itrbl;
+}
+
+function main(): void {
+  const r = range_iterable(2);
+  let total: number = 0;
+  for (const x of r) { total = total + x; }
+  for (const x of r) { total = total + x; }
+  assert(total === 2, "(0+1) + (0+1) = 2");
+  assert(close_count === 2, "each for-of closed its own cursor");
+}

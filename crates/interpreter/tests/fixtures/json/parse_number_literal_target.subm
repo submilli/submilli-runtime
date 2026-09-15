@@ -1,0 +1,4 @@
+function main(): void {
+  const x = JSON.parse("200") as 200;
+  assert(x === 200, "number literal matched");
+}

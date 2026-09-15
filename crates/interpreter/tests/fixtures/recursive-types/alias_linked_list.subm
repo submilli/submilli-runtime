@@ -1,0 +1,20 @@
+// The headline recursive data structure: a linked list built from a
+// self-referential object-typed alias. `next: Node | null` references
+// `Node` inside its own body; the body stays finite because the
+// back-edge is a lazy by-name reference, rehydrated to the inline shape
+// wherever a value of the field is read.
+type Node = { value: number; next: Node | null };
+
+function main(): void {
+  const c: Node = { value: 3, next: null };
+  const b: Node = { value: 2, next: c };
+  const a: Node = { value: 1, next: b };
+
+  let sum: number = 0;
+  let cur: Node | null = a;
+  while (cur !== null) {
+    sum = sum + cur.value;
+    cur = cur.next;
+  }
+  assert(sum === 6, "walked the whole list");
+}

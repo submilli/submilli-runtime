@@ -1,0 +1,2 @@
+// expect-error: exported function `make` uses private type `Result`
+export { make } from "./util";

@@ -1,0 +1,4 @@
+function main(): void {
+  const add = ({ a, b }: { a: number; b: number }): number => a + b;
+  assert(add({ a: 3, b: 4 }) === 7, "arrow expr-body destructuring");
+}

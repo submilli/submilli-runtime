@@ -1,0 +1,6 @@
+# A package-to-package chain answers the *middle* package, not the script:
+# `check` names the immediate invoker of the code that runs it.
+# name        dir     deps         root
+@test/inner   inner   -
+@test/outer   outer   @test/inner
+main          app     @test/inner,@test/outer  root

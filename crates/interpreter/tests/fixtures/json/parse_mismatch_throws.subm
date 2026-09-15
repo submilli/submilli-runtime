@@ -1,0 +1,43 @@
+// JSON.parse returns unknown; `as T` validates that value and throws a catchable
+// TypeError on mismatch.
+function main(): void {
+  // Wrong primitive node: expected number, got a JSON string.
+  let primitive: string = "<none>";
+  try {
+    const n = JSON.parse("\"hello\"") as number;
+    assert(false, "primitive mismatch should have thrown");
+  } catch (e: Error) {
+    primitive = e.message;
+  }
+  assert(primitive === "type mismatch: expected number, got string", primitive);
+
+  // Missing required field.
+  let missing: string = "<none>";
+  try {
+    const o = JSON.parse("{}") as { name: string };
+    assert(false, "missing field should have thrown");
+  } catch (e: Error) {
+    missing = e.message;
+  }
+  assert(missing === "type mismatch: expected { name: string }, got object", missing);
+
+  // Number literal mismatch.
+  let literal: string = "<none>";
+  try {
+    const x = JSON.parse("404") as 200;
+    assert(false, "literal mismatch should have thrown");
+  } catch (e: Error) {
+    literal = e.message;
+  }
+  assert(literal === "type mismatch: expected 200, got number", literal);
+
+  // Container-vs-primitive mismatch: expected array, got a JSON number.
+  let container: string = "<none>";
+  try {
+    const xs = JSON.parse("5") as number[];
+    assert(false, "container mismatch should have thrown");
+  } catch (e: Error) {
+    container = e.message;
+  }
+  assert(container === "type mismatch: expected number[], got number", container);
+}

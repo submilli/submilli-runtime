@@ -1,0 +1,83 @@
+function fib(n: number): number {
+  if (n < 2) return n;
+  return fib(n - 1) + fib(n - 2);
+}
+
+function classify(n: number): string {
+  if (n < 0) return "negative";
+  else if (n === 0) return "zero";
+  else return "positive";
+}
+
+function sumTo(n: number): number {
+  let total = 0;
+  for (let i = 1; i <= n; i = i + 1) total = total + i;
+  return total;
+}
+
+function countDown(n: number): number {
+  let steps = 0;
+  while (n > 0) {
+    n = n - 1;
+    steps = steps + 1;
+  }
+  return steps;
+}
+
+function whileBraceless(n: number): number {
+  while (n > 1) n = n - 1;
+  return n;
+}
+
+function sumArray(xs: number[]): number {
+  let total = 0;
+  for (const x of xs) total = total + x;
+  return total;
+}
+
+function doWhileBraceless(n: number): number {
+  let count = 0;
+  do count = count + 1;
+  while (count < n);
+  return count;
+}
+
+function absVal(n: number): number {
+  // braceless body on the next line — must not be severed by ASI
+  if (n < 0)
+    return 0 - n;
+  return n;
+}
+
+function sumToNextLine(n: number): number {
+  let total = 0;
+  for (let i = 1; i <= n; i = i + 1)
+    total = total + i;
+  return total;
+}
+
+function danglingElse(a: boolean, b: boolean): string {
+  // else binds to the nearest `if`
+  if (a)
+    if (b) return "ab";
+    else return "a-not-b";
+  return "not-a";
+}
+
+function main(): void {
+  assert(fib(20) === 6765, "fib");
+  assert(classify(-3) === "negative", "classify negative");
+  assert(classify(0) === "zero", "classify zero");
+  assert(classify(7) === "positive", "classify positive");
+  assert(sumTo(5) === 15, "for braceless");
+  assert(absVal(-4) === 4, "if next-line braceless");
+  assert(absVal(9) === 9, "if next-line braceless positive");
+  assert(sumToNextLine(5) === 15, "for next-line braceless");
+  assert(countDown(4) === 4, "while braced");
+  assert(whileBraceless(5) === 1, "while braceless");
+  assert(sumArray([1, 2, 3, 4]) === 10, "for-of braceless");
+  assert(doWhileBraceless(3) === 3, "do-while braceless");
+  assert(danglingElse(true, true) === "ab", "dangling else ab");
+  assert(danglingElse(true, false) === "a-not-b", "dangling else a-not-b");
+  assert(danglingElse(false, false) === "not-a", "dangling else not-a");
+}

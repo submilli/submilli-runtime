@@ -1,0 +1,5 @@
+// expect-error: `WeakMap` is not supported
+
+function main(): void {
+  const m = new WeakMap<string, number>();
+}

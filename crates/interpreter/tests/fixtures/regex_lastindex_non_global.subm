@@ -1,0 +1,19 @@
+// non-g/y regexes don't read or mutate lastIndex — ECMA-262 RegExp.prototype.test/exec.
+
+function main(): void {
+  const re: RegExp = new RegExp("foo", "");
+  assert(re.lastIndex === 0, "starts at 0");
+
+  assert(re.test("foofoo"), "first match");
+  assert(re.lastIndex === 0, "non-g/y leaves lastIndex untouched on match");
+
+  assert(re.test("foofoo"), "second match starts at 0");
+  assert(re.lastIndex === 0, "still 0");
+
+  assert(!re.test("xyz"), "no match");
+  assert(re.lastIndex === 0, "no-match also leaves 0");
+
+  const m: RegExpMatch | null = re.exec("foofoo");
+  assert(m !== null, "exec match");
+  assert(re.lastIndex === 0, "exec leaves lastIndex alone");
+}

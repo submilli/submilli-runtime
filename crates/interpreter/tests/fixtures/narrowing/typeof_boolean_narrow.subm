@@ -1,0 +1,18 @@
+function flip_or_negate(x: boolean | number): number {
+  if (typeof x === "boolean") {
+    if (x) {
+      return 1;
+    } else {
+      return 0;
+    }
+  } else {
+    return -x;
+  }
+}
+
+function main(): void {
+  assert(flip_or_negate(true) === 1, "boolean true narrows + flips");
+  assert(flip_or_negate(false) === 0, "boolean false narrows");
+  assert(flip_or_negate(5) === -5, "number passes through else");
+  assert(flip_or_negate(-3) === 3, "negative number doubly-negates");
+}

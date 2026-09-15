@@ -1,0 +1,5 @@
+# Static access through a namespace import is rejected with a fix-naming
+# diagnostic (import the class directly instead) — symmetric with `new ns.C()`.
+# name          dir    deps          root
+@test/mathx     mathx  -
+main            app    @test/mathx   root

@@ -1,0 +1,28 @@
+// Trailing commas are accepted in every list form, as in TypeScript: call
+// arguments, parameter lists, array/object/tuple literals, destructuring, and
+// generic argument/parameter lists (both declarations and call sites).
+
+function add(a: number, b: number,): number {
+  return a + b;
+}
+
+function id<T,>(x: T): T {
+  return x;
+}
+
+function main(): void {
+  const sum: number = add(1, 2,);
+  const arr: number[] = [1, 2, 3,];
+  const obj: { x: number; y: number } = { x: 1, y: 2, };
+  const tup: [number, string,] = [4, "a",];
+  const { x, y, } = obj;
+  const fn: (a: number, b: number,) => number = add;
+  const g: number = id<number,>(5);
+
+  assert(sum === 3, "call args");
+  assert(arr.length === 3, "array literal");
+  assert(x === 1 && y === 2, "object literal + destructure");
+  assert(tup[0] === 4, "tuple type/literal");
+  assert(fn(2, 3) === 5, "function-type params");
+  assert(g === 5, "generic call type args");
+}

@@ -1,0 +1,4 @@
+function main(): void {
+  const n: number = 42 as number;
+  assert(n === 42, "number-to-number cast preserves the value");
+}

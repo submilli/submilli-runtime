@@ -1,0 +1,15 @@
+function main(): void {
+  let nums: number[] = [1, 2, 3, 4];
+  let total = 0;
+  nums.forEach(x => { total = total + x; });
+  assert(total === 10, "forEach with captured-let mutation");
+
+  let count = 0;
+  ["a", "b", "c"].forEach(s => { count = count + 1; });
+  assert(count === 3, "forEach iterates each element");
+
+  let calls = 0;
+  let empty: number[] = [];
+  empty.forEach(x => { calls = calls + 1; });
+  assert(calls === 0, "empty forEach");
+}

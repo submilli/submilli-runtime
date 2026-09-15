@@ -1,0 +1,28 @@
+function main(): void {
+  let nums: number[] = [1, 2, 3, 4, 5];
+
+  let firstEven = nums.find((x) => x % 2 === 0);
+  if (firstEven !== null) {
+    assert(firstEven === 2, "find returns the first even number");
+  } else {
+    assert(false, "find should locate 2 in [1..5]");
+  }
+
+  let onlyFive = nums.find((x) => x === 5);
+  if (onlyFive !== null) {
+    assert(onlyFive === 5, "find returns 5 when it's the only match");
+  }
+
+  let none = nums.find((x) => x > 100);
+  assert(none === null, "find returns null when nothing matches");
+
+  let empty: number[] = [];
+  let alwaysFalse = empty.find((x) => true);
+  assert(alwaysFalse === null, "find on empty array returns null");
+
+  let words = ["apple", "banana", "cherry"];
+  let longish = words.find((s) => s.length > 5);
+  if (longish !== null) {
+    assert(longish === "banana", "find narrows to the first long word");
+  }
+}

@@ -1,0 +1,4 @@
+// expect-error: `break` outside of a loop
+function main(): void {
+  break;
+}

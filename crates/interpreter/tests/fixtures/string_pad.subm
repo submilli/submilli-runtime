@@ -1,0 +1,12 @@
+function main(): void {
+  assert("5".padStart(3, "0") === "005", "padStart basic");
+  assert("12".padStart(5, "ab") === "aba12", "padStart partial last chunk");
+  assert("hello".padStart(5, "x") === "hello", "padStart no-op when long enough");
+  assert("hello".padStart(3, "x") === "hello", "padStart no-op when target less");
+  assert("hi".padStart(5, "") === "hi", "padStart empty pad returns self");
+
+  assert("5".padEnd(3, "0") === "500", "padEnd basic");
+  assert("12".padEnd(5, "ab") === "12aba", "padEnd partial last chunk");
+  assert("hello".padEnd(5, "x") === "hello", "padEnd no-op when long enough");
+  assert("hi".padEnd(5, "") === "hi", "padEnd empty pad returns self");
+}

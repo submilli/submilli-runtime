@@ -1,0 +1,7 @@
+function main(): void {
+  let o: { a: number } | null = { a: 7 };
+  assert(JSON.stringify(o) === "{\"a\":7}", "non-null object");
+
+  let n: { a: number } | null = null;
+  assert(JSON.stringify(n) === "null", "null branch");
+}

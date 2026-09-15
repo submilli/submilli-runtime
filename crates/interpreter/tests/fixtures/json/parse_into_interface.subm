@@ -1,0 +1,14 @@
+// JSON.parse into a data-only interface, via explicit runtime casts.
+// Includes a `string | null` field read back as null.
+interface Issue { id: number; title: string; completedAt: string | null; }
+
+function main(): void {
+  const a = JSON.parse("{\"id\": 1, \"title\": \"x\", \"completedAt\": null}") as Issue;
+  assert(a.id === 1, "a.id");
+  assert(a.title === "x", "a.title");
+  assert(a.completedAt === null, "a.completedAt is null");
+
+  const b = JSON.parse("{\"id\": 2, \"title\": \"y\", \"completedAt\": \"2026-01-01\"}") as Issue;
+  assert(b.id === 2, "b.id");
+  assert(b.completedAt === "2026-01-01", "b.completedAt value");
+}

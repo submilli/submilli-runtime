@@ -1,0 +1,19 @@
+// Deep object-shape cast verifies field types, including string-literal field values.
+
+function main(): void {
+  const ok: unknown = { a: 1, kind: "user" };
+  const o = ok as { a: number; kind: "user" };
+  assert(o.a === 1, "number field verified");
+  assert(o.kind === "user", "literal field verified");
+
+  // Wrong literal value for the `kind` field → deep check rejects it.
+  const bad: unknown = { a: 1, kind: "admin" };
+  let caught: boolean = false;
+  try {
+    const _ = bad as { a: number; kind: "user" };
+    assert(false, "wrong literal field should throw — never reached");
+  } catch (e: Error) {
+    caught = true;
+  }
+  assert(caught, "literal-field mismatch threw");
+}

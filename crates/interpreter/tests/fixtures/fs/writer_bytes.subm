@@ -1,0 +1,18 @@
+// writer.writeBytes round-trips through the atomic rename.
+
+import { writer, read, FileWriter } from "submilli:fs";
+
+function main(): void {
+  const payload: Uint8Array = new Uint8Array([10, 20, 30, 40, 50]);
+  const w: FileWriter = writer("/bin.dat");
+  w.writeBytes(payload);
+  w.close();
+
+  const back: Uint8Array | null = read("/bin.dat");
+  if (back === null) {
+    assert(false, "read returned null");
+    return;
+  }
+  assert(back.length === 5, "five bytes round-tripped");
+  assert(back.equals(payload), "bytes preserved");
+}

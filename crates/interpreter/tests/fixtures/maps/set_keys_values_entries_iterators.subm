@@ -1,0 +1,28 @@
+// Set keys()/values() alias iterator(); entries() yields [v, v] pairs.
+
+function main(): void {
+  const s = new Set<number>();
+  s.add(7);
+  s.add(8);
+  s.add(9);
+
+  let viaKeys = 0;
+  for (const k of s.keys()) {
+    viaKeys = viaKeys + k;
+  }
+  let viaValues = 0;
+  for (const v of s.values()) {
+    viaValues = viaValues + v;
+  }
+  assert(viaKeys === 24 && viaValues === 24, "keys and values are the same cursor");
+
+  let pairsOk = true;
+  let count = 0;
+  for (const e of s.entries()) {
+    if (e[0] !== e[1]) {
+      pairsOk = false;
+    }
+    count = count + 1;
+  }
+  assert(pairsOk && count === 3, "entries repeat each element as [v, v]");
+}

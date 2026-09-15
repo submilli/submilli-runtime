@@ -1,0 +1,8 @@
+function takes_array(xs: number[]): number {
+  return xs.length;
+}
+
+function main(): void {
+  const t: [number, number] = [1, 2];
+  assert(takes_array(t) === 2, "tuple passes as array, length 2");
+}

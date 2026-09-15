@@ -1,0 +1,8 @@
+function f(): string | never {
+  return "hello";
+}
+
+function main(): void {
+  const s: string = f();
+  assert(s.length === 5, "string | never collapses to string");
+}

@@ -1,0 +1,23 @@
+// Verifies every verb thunk dispatches to the right HTTP method.
+
+import { post, put, patch, delete, head, options, Response } from "submilli:http";
+
+function main(): void {
+  const a: Response = post("{{BASE}}/verb/post");
+  assert(a.status === 201, "post → 201");
+
+  const b: Response = put("{{BASE}}/verb/put");
+  assert(b.status === 200, "put → 200");
+
+  const c: Response = patch("{{BASE}}/verb/patch");
+  assert(c.status === 200, "patch → 200");
+
+  const d: Response = delete("{{BASE}}/verb/delete");
+  assert(d.status === 204, "delete → 204");
+
+  const e: Response = head("{{BASE}}/verb/head");
+  assert(e.status === 200, "head → 200");
+
+  const f: Response = options("{{BASE}}/verb/options");
+  assert(f.status === 204, "options → 204");
+}

@@ -1,0 +1,8 @@
+enum Status {
+  Active = "active",
+  Inactive = "inactive",
+}
+
+function main(): void {
+  assert(true, "string enum declares cleanly");
+}

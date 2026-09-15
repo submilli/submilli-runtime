@@ -1,0 +1,6 @@
+# Constructor defaults and rest params across a package boundary: the ctor ABI
+# the consumer reconstructs must carry the default values and the rest flag, or
+# the call site emits the wrong argument count for the imported signature.
+# name         dir   deps         root
+@test/lib      lib   -
+main           app   @test/lib    root

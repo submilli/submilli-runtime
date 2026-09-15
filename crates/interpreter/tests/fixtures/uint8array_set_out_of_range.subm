@@ -1,0 +1,34 @@
+// Out-of-range `Uint8Array#set` raises a catchable Error rather than an
+// uncatchable Wasm trap.
+
+function main(): void {
+  const dst: Uint8Array = Uint8Array.alloc(3);
+
+  // Source longer than the destination from offset 0 → end past the array.
+  const src: Uint8Array = Uint8Array.new([1, 2, 3, 4]);
+  let oversized: string = "<none>";
+  try {
+    dst.set(src, 0);
+    assert(false, "oversized set should throw");
+  } catch (e: Error) {
+    oversized = e.message;
+  }
+  assert(oversized.length > 0, "Uint8Array#set out-of-range throws a catchable Error");
+
+  // Negative offset (computed, to keep it a runtime value).
+  const one: Uint8Array = Uint8Array.new([9]);
+  let off: number = -1;
+  let negative: string = "<none>";
+  try {
+    dst.set(one, off);
+    assert(false, "negative offset should throw");
+  } catch (e: Error) {
+    negative = e.message;
+  }
+  assert(negative.length > 0, "Uint8Array#set negative offset throws");
+
+  // The valid case still works after the error path exists.
+  const ok: Uint8Array = Uint8Array.alloc(4);
+  ok.set(one, 2);
+  assert(ok[2] === 9, "in-range set still writes");
+}

@@ -1,0 +1,122 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $fullname := include "submilli.fullname" . -}}
+{{/* A named pod, matching test-api. Through the load-balanced Service this
+     would still be blocked, but a timeout there could equally mean no pod was
+     ready; addressing pod 0 directly makes the block the only explanation. */}}
+{{- $base := printf "http://%s-0.%s:%v" $fullname (include "submilli.headlessName" .) .Values.server.port -}}
+{{/*
+Exists because a NetworkPolicy is not self-verifying. On a CNI that does not
+implement NetworkPolicy the object is accepted by the API server and enforces
+nothing — no error, no event, no warning anywhere. The chart's central security
+claim would then be false on a cluster where everything looks green.
+
+So this asserts the negative: a pod that is *not* on the allowlist must not
+reach the server. It fails on success. `kind` has enforced NetworkPolicy since
+v0.24.0, so this runs for real in CI rather than being aspirational.
+
+It is only half a test on its own — "nothing could connect" also passes when the
+server is simply down. `test-api` is the positive control, runs first
+(hook-weight 1 vs 2), and comes from a pod identical to this one but for the
+component label. The pair is the actual assertion.
+*/}}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ $fullname }}-test-networkpolicy
+  labels:
+    {{- include "submilli.labels" . | nindent 4 }}
+    # Deliberately NOT `app.kubernetes.io/component: test`. That label, with the
+    # release instance, is exactly what the policy's allowlist matches — so
+    # omitting it is what makes this pod an outsider. Adding it here would turn
+    # the test green permanently and prove nothing.
+    app.kubernetes.io/component: netpol-probe
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "2"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  enableServiceLinks: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: {{ .Values.tests.runAsUser }}
+    runAsGroup: {{ .Values.tests.runAsGroup }}
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: probe
+      image: "{{ .Values.tests.image.repository }}:{{ .Values.tests.image.tag }}"
+      imagePullPolicy: {{ .Values.tests.image.pullPolicy }}
+      securityContext:
+        readOnlyRootFilesystem: true
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          set -eu
+
+          BASE="{{ $base }}"
+
+          echo "==> expecting to be BLOCKED from $BASE/v1/status"
+
+          # Short timeouts on purpose: a policy drop manifests as a hang, not a
+          # refusal, so the timeout *is* the pass signal and there is no reason
+          # to wait long for it.
+          #
+          # curl's exit status is the assertion, not just the HTTP code. Treating
+          # "anything but 200" as success would pass on DNS failure or a refused
+          # connection — i.e. on a probe that never reached the server and proved
+          # nothing about the policy. Those are the failure modes a typo in this
+          # URL, or a pod that is simply not up, actually produce.
+          code=$(curl -sS -o /dev/null -w '%{http_code}' \
+                   --connect-timeout 5 --max-time 10 "$BASE/v1/status") || rc=$?
+          rc=${rc:-0}
+
+          case "$rc" in
+            28)
+              # Timed out with no response: the packets went nowhere, which is
+              # what a NetworkPolicy drop looks like from the client side.
+              ;;
+            6)
+              echo "FAIL: could not resolve $BASE — the probe never reached the server," >&2
+              echo "so this run proves nothing about the NetworkPolicy. Check that the" >&2
+              echo "headless Service exists and that the pod is Ready (its per-pod DNS" >&2
+              echo "record does not exist until then)." >&2
+              exit 1
+              ;;
+            7)
+              echo "FAIL: connection refused at $BASE — reached the host but nothing was" >&2
+              echo "listening. A policy drop times out; a refusal means the server is down," >&2
+              echo "so this run proves nothing about the NetworkPolicy." >&2
+              exit 1
+              ;;
+            0)
+              if [ "$code" = "200" ]; then
+                echo "FAIL: an unauthorised pod reached the server (HTTP 200)." >&2
+                echo >&2
+                echo "The NetworkPolicy is not being enforced. Most likely this cluster's" >&2
+                echo "CNI does not implement NetworkPolicy, in which case the object was" >&2
+                echo "accepted and silently does nothing — every pod in every namespace" >&2
+                echo "can execute code on this server. The API has no authentication of" >&2
+                echo "its own, so nothing else is stopping them." >&2
+                exit 1
+              fi
+              echo "FAIL: reached the server and got HTTP $code. The connection was not" >&2
+              echo "blocked; the server merely answered with an error, so the policy is" >&2
+              echo "not stopping this pod." >&2
+              exit 1
+              ;;
+            *)
+              echo "FAIL: curl exited $rc, which is neither a policy drop (28) nor a" >&2
+              echo "recognised connection failure. Not treating an unknown outcome as a pass." >&2
+              exit 1
+              ;;
+          esac
+
+          echo "ok: blocked (curl timed out — no response from the server)"
+          echo
+          echo "PASS"
+{{- end }}

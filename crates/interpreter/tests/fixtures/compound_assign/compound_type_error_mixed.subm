@@ -1,0 +1,6 @@
+// expect-error: not defined for `number` and `bigint`
+
+function main(): void {
+  let n: number = 1;
+  n += 2n;
+}

@@ -1,0 +1,82 @@
+submilli {{ .Chart.AppVersion }} installed as release {{ .Release.Name }}.
+
+Reach the server:
+{{- if .Values.ingress.enabled }}
+{{- range .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- else if eq .Values.service.type "ClusterIP" }}
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "submilli.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+  curl http://127.0.0.1:{{ .Values.service.port }}/v1/status
+{{- else }}
+  kubectl --namespace {{ .Release.Namespace }} get svc {{ include "submilli.fullname" . }} -w
+{{- end }}
+
+READ THIS BEFORE PUTTING ANYTHING REAL BEHIND IT
+------------------------------------------------
+The server's HTTP API is completely unauthenticated. There is no token, no
+allowlist, no per-request identity. Anything that can reach port
+{{ .Values.server.port }} can execute arbitrary code in the sandbox, register
+and rewrite blueprints, read back results, and stop the process via
+POST /v1/shutdown. Treat network reachability as the only access control, and
+treat this release as non-production until inbound auth ships.
+{{- if not .Values.networkPolicy.enabled }}
+
+  networkPolicy.enabled is FALSE. Nothing restricts which pods can reach this
+  server. In a shared cluster that means every pod in every namespace.
+{{- else if not .Values.networkPolicy.allowFrom }}
+
+  A default-deny NetworkPolicy is installed and networkPolicy.allowFrom is
+  empty, so nothing but the chart's own tests can reach the server yet. Add the
+  workloads that should talk to it.
+{{- end }}
+{{- if .Values.ingress.enabled }}
+
+  ingress.enabled is TRUE. An unauthenticated code-execution API is now
+  published outside the cluster. Put an authenticating proxy in front of it.
+{{- end }}
+
+{{- if .Values.networkPolicy.enabled }}
+
+  A NetworkPolicy is enforced only if your CNI implements one. Where it does
+  not, the object is accepted and silently does nothing. Verify rather than
+  assume:
+    helm --namespace {{ .Release.Namespace }} test {{ .Release.Name }}
+
+  kubectl port-forward tunnels through the API server and bypasses
+  NetworkPolicy entirely. Anyone with pods/portforward permission reaches this
+  server regardless of the policy.
+{{- end }}
+{{- if .Values.blueprints }}
+
+BLUEPRINTS
+----------
+{{ len .Values.blueprints }} blueprint(s) are deployed from values.yaml and
+reconciled into the store on every pod start.
+
+  The files win. Editing one through the API, or deleting it, is undone the next
+  time the pod restarts. To change a blueprint, change it in values.yaml and run
+  `helm upgrade`. The overwritten version is kept on disk as a revision, so a
+  revert is auditable rather than silent.
+
+  The chart never deletes. Blueprints you registered through the API and did not
+  list in values.yaml are left alone.
+{{- end }}
+{{- if not .Values.persistence.enabled }}
+
+STORAGE
+-------
+  persistence.enabled is FALSE. Sessions, installed packages, secrets, and any
+  blueprint registered through the API are lost when the pod restarts. Only
+  blueprints from values.yaml come back.
+{{- else }}
+
+STORAGE
+-------
+  The PersistentVolumeClaim survives `helm uninstall` by design; delete it by
+  hand when you want the data gone:
+    kubectl --namespace {{ .Release.Namespace }} delete pvc -l app.kubernetes.io/instance={{ .Release.Name }}
+
+  Node-local volumes cannot follow a pod to another node. Surviving a node drain
+  needs a StorageClass whose volumes are not node-local.
+{{- end }}

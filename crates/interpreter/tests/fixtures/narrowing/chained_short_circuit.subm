@@ -1,0 +1,12 @@
+function both_have_chars(x: string | null, y: string | null): boolean {
+  return !!(x && y && x.length + y.length > 0);
+}
+
+function main(): void {
+  assert(both_have_chars("a", "b"), "both non-null and non-empty");
+  assert(!both_have_chars(null, "b"), "first null short-circuits");
+  assert(!both_have_chars("a", null), "second null short-circuits");
+  assert(!both_have_chars(null, null), "both null short-circuits on first");
+  assert(!both_have_chars("", "b"), "empty string is falsy (JS truthiness)");
+  assert(both_have_chars("hello", "world"), "longer strings");
+}

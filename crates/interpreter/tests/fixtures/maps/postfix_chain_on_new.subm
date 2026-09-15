@@ -1,0 +1,33 @@
+// Postfix access (method call AND field access) chained directly off `new ClassName()`.
+
+function main(): void {
+  // Method call chained off `new Map()`, type args explicit.
+  const m: Map<string, number> = new Map<string, number>().set("x", 99);
+  assert(m.size === 1, "chained set after new produces a one-entry map");
+  assert(m.get("x") === 99, "chained set stored the value");
+
+  // Type arguments inferred from the call arguments through the builder chain:
+  // the constructor's K,V are unresolved at the receiver and resolve from
+  // `.set`'s arguments (and the assignment's expected type).
+  const inferred: Map<string, number> = new Map().set("y", 7);
+  assert(inferred.get("y") === 7, "inferred-type-arg chain stores the value");
+
+  // Longer inferred chain: every link is a postfix off the constructor result.
+  const n: Map<string, number> = new Map()
+    .set("a", 1)
+    .set("b", 2)
+    .set("c", 3);
+  assert(n.size === 3, "three chained sets after new");
+
+  // Builder chain on `new Set()`.
+  const s: Set<number> = new Set<number>().add(1).add(2).add(2);
+  assert(s.size === 2, "set add chain dedupes");
+
+  // Field access chained directly off `new Map<...>()`.
+  const sz: number = new Map<string, number>().size;
+  assert(sz === 0, "field access on new Map() reads size 0");
+
+  // Index access chained directly off a `new`-built array-returning expression.
+  const first: number | null = new Map<string, number>().set("k", 5).get("k");
+  assert(first === 5, "method chain after new resolves through get");
+}

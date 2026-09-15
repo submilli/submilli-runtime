@@ -1,0 +1,13 @@
+function main(): void {
+  let bytes: Uint8Array = Uint8Array.new([0, 10, 20, 30, 40]);
+
+  let middle: Uint8Array = bytes.subarray(1, 4);
+  assert(middle.length === 3, "subarray length");
+  assert(middle[0] === 10 && middle[2] === 30, "subarray contents");
+
+  middle[0] = 99;
+  assert(bytes[1] === 10, "source unchanged — v1 returns a copy");
+
+  assert(bytes.subarray().length === 5, "default subarray copies the whole array");
+  assert(bytes.subarray(-2).length === 2, "negative start mirrors slice");
+}

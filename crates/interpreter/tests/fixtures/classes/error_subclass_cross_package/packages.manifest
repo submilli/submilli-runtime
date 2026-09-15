@@ -1,0 +1,5 @@
+# `ParseError extends Error` declared in a package, thrown across the package
+# boundary, caught as `Error` by the root script and narrowed via `instanceof`.
+# name         dir    deps         root
+@test/errs     errs   -
+main           app    @test/errs   root

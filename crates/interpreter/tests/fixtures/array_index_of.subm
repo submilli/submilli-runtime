@@ -1,0 +1,20 @@
+function main(): void {
+  let nums: number[] = [10, 20, 30, 20];
+  assert(nums.indexOf(10) === 0, "first occurrence");
+  assert(nums.indexOf(20) === 1, "earliest of duplicates");
+  assert(nums.indexOf(30) === 2, "third");
+  assert(nums.indexOf(99) === -1, "miss");
+
+  let strs: string[] = ["alpha", "beta", "gamma"];
+  assert(strs.indexOf("beta") === 1, "string match");
+  assert(strs.indexOf("missing") === -1, "string miss");
+
+  let empty: number[] = [];
+  assert(empty.indexOf(0) === -1, "empty array miss");
+
+  assert(nums.indexOf(20, 2) === 3, "fromIndex skips earlier match");
+  assert(nums.indexOf(10, 1) === -1, "fromIndex past the only match");
+  assert(nums.indexOf(20, -1) === 3, "negative fromIndex counts from end");
+  assert(nums.indexOf(10, -10) === 0, "negative fromIndex clamps to 0");
+  assert(nums.indexOf(20, 10) === -1, "fromIndex beyond length");
+}

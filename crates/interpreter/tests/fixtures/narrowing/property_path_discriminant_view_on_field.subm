@@ -1,0 +1,20 @@
+function f(
+  s: { kind: "circle"; r: number }
+   | { kind: "rect"; w: number; h: number }
+): string {
+  if (s.kind === "circle") {
+    const tag: "circle" = s.kind;
+    return tag;
+  } else {
+    const tag: "rect" = s.kind;
+    return tag;
+  }
+}
+
+function main(): void {
+  const c: { kind: "circle"; r: number } = { kind: "circle", r: 3 };
+  assert(f(c) === "circle", "then-branch s.kind narrows to \"circle\"");
+
+  const r: { kind: "rect"; w: number; h: number } = { kind: "rect", w: 4, h: 5 };
+  assert(f(r) === "rect", "else-branch s.kind narrows to \"rect\"");
+}

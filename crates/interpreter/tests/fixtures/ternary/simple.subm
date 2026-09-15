@@ -1,0 +1,8 @@
+function main(): void {
+  const flag: boolean = true;
+  const x: number = flag ? 1 : 0;
+  assert(x === 1, "ternary picks then-branch when cond is true");
+
+  const y: number = false ? 1 : 0;
+  assert(y === 0, "ternary picks else-branch when cond is false");
+}

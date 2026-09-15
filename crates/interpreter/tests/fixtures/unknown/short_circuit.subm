@@ -1,0 +1,6 @@
+function main(): void {
+  const x: unknown = "hello world";
+  if (typeof x === "string" && x.length > 0) {
+    assert(x.length === 11, "narrowed via short-circuit");
+  }
+}

@@ -1,0 +1,9 @@
+// expect-error: duplicate `default` clause
+function main(): void {
+  let x: number = 1;
+  switch (x) {
+    case 1: break;
+    default: break;
+    default: break;
+  }
+}

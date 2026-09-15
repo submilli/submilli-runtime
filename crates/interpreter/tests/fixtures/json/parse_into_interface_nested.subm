@@ -1,0 +1,14 @@
+// The origin shape: an object type whose field is an array of a data-only
+// interface — `const issues = JSON.parse(s) as { issues: Issue[] }`.
+interface Issue { id: number; completedAt: string | null; }
+
+function main(): void {
+  const r = JSON.parse(
+    "{\"issues\": [{\"id\": 1, \"completedAt\": null}, {\"id\": 2, \"completedAt\": \"t\"}]}"
+  ) as { issues: Issue[] };
+  assert(r.issues.length === 2, "two issues");
+  assert(r.issues[0].id === 1, "first id");
+  assert(r.issues[0].completedAt === null, "first completedAt null");
+  assert(r.issues[1].id === 2, "second id");
+  assert(r.issues[1].completedAt === "t", "second completedAt value");
+}

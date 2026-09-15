@@ -1,0 +1,17 @@
+function main(): void {
+  let bytes: Uint8Array = Uint8Array.new([1, 2, 3]);
+
+  let doubled: Uint8Array = bytes.map((v: number) => v * 2);
+  assert(doubled.length === 3, "map preserves length");
+  assert(doubled[0] === 2 && doubled[1] === 4 && doubled[2] === 6, "map doubles");
+
+  assert(bytes[0] === 1, "source unchanged");
+
+  let big: Uint8Array = Uint8Array.new([130]);
+  let trunc: Uint8Array = big.map((v: number) => v * 2);
+  assert(trunc[0] === 4, "260 truncates to 4");
+
+  let empty: Uint8Array = Uint8Array.alloc(0);
+  let result: Uint8Array = empty.map((v: number) => v + 1);
+  assert(result.length === 0, "map on empty returns empty");
+}

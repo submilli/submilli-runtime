@@ -1,0 +1,17 @@
+function main(): void {
+  let i: number = 0;
+  let x: string | null = null;
+  while (i < 5) {
+    if (i === 2) {
+      x = "found";
+      break;
+    }
+    i = i + 1;
+  }
+  if (x === null) {
+    assert(i === 5, "natural exit reaches i=5");
+  } else {
+    assert(x === "found", "break-path x equals \"found\"");
+    assert(i === 2, "break-path stops at i=2");
+  }
+}

@@ -1,0 +1,10 @@
+---
+source: crates/interpreter/src/diagnostics.rs
+expression: "render(&diag, \"script.subm\", source, &line_index)"
+---
+error: boom
+ --> script.subm:3:1
+  |
+2 | second
+3 | third
+  | ^^^^^

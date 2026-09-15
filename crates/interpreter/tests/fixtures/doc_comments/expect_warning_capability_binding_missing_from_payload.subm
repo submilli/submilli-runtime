@@ -1,0 +1,15 @@
+// expect-warning: binding key `extra` is missing
+import { check } from "submilli:security";
+
+/**
+ * Checks a named operation.
+ * @param name Operation name.
+ * @capability x/op { name, extra: boolean }
+ */
+function checkNamed(name: string): void {
+  check("x/op", { name });
+}
+
+function main(): void {
+  checkNamed("TOKEN");
+}

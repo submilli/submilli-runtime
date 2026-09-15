@@ -1,0 +1,11 @@
+function f(u: { name?: string }): string {
+  if (u.name !== null) {
+    return u.name;
+  }
+  return "";
+}
+
+function main(): void {
+  assert(f({ name: "alice" }) === "alice", "narrowed read returns string");
+  assert(f({}) === "", "absent optional hits else");
+}

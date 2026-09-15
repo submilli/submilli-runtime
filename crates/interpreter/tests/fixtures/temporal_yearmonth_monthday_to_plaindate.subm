@@ -1,0 +1,20 @@
+// PlainYearMonth + { day } and PlainMonthDay + { year } complete to a PlainDate.
+// Out-of-range values constrain to the nearest valid (Temporal's default).
+
+function main(): void {
+  const ym: Temporal.PlainYearMonth = Temporal.PlainYearMonth.from("2024-03");
+  const d: Temporal.PlainDate = ym.toPlainDate({ day: 15 });
+  assert(d.year === 2024 && d.month === 3 && d.day === 15, "yearmonth + day");
+
+  // Day 31 in a 30-day month constrains to 30 (April).
+  const apr: Temporal.PlainDate = Temporal.PlainYearMonth.from("2024-04").toPlainDate({ day: 31 });
+  assert(apr.day === 30, "April day 31 -> 30");
+
+  const md: Temporal.PlainMonthDay = Temporal.PlainMonthDay.from("02-29");
+  const leap: Temporal.PlainDate = md.toPlainDate({ year: 2024 });
+  assert(leap.year === 2024 && leap.month === 2 && leap.day === 29, "monthday + leap year");
+
+  // Feb 29 in a non-leap year constrains to Feb 28.
+  const nonleap: Temporal.PlainDate = md.toPlainDate({ year: 2023 });
+  assert(nonleap.month === 2 && nonleap.day === 28, "Feb 29 + 2023 -> Feb 28");
+}

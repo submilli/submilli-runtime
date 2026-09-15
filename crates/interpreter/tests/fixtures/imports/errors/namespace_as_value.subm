@@ -1,0 +1,6 @@
+// expect-error: namespace `uuid` cannot be used as a value
+import uuid from "submilli:uuid";
+
+function main(): void {
+  const x = uuid;
+}

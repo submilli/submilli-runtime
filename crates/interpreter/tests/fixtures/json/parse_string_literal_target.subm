@@ -1,0 +1,5 @@
+
+function main(): void {
+  const x = JSON.parse("\"ok\"") as "ok";
+  assert(x === "ok", "string literal matched");
+}

@@ -1,0 +1,3 @@
+@t/lib   lib  -
+@t/mid   mid  @t/lib
+main     app  @t/mid  root

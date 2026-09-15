@@ -1,0 +1,4 @@
+// expect-error: this package has no sibling modules
+import { x } from "./util";
+
+function main(): void { }

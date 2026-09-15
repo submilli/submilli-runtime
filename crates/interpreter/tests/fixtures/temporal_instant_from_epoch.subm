@@ -1,0 +1,8 @@
+function main(): void {
+  const epoch: Temporal.Instant = Temporal.Instant.fromEpochMilliseconds(0);
+  assert(epoch.epochMilliseconds === 0, "epoch instant has ms=0");
+  assert(epoch.toString() === "1970-01-01T00:00:00Z", "epoch ISO");
+
+  const recent: Temporal.Instant = Temporal.Instant.fromEpochMilliseconds(1700000000000);
+  assert(recent.epochMilliseconds === 1700000000000, "round-trip recent ms");
+}

@@ -1,0 +1,18 @@
+function main(): void {
+  let nums: number[] = [1, 2, 3];
+  assert(nums.includes(2), "hit");
+  assert(!nums.includes(4), "miss");
+
+  let strs: string[] = ["a", "b"];
+  assert(strs.includes("a"), "string hit");
+  assert(!strs.includes("c"), "string miss");
+
+  let empty: number[] = [];
+  assert(!empty.includes(0), "empty");
+
+  let dup: number[] = [1, 2, 1, 3];
+  assert(dup.includes(1, 1), "later occurrence still found");
+  assert(!dup.includes(2, 2), "earlier-only occurrence skipped");
+  assert(dup.includes(3, -1), "negative fromIndex counts from end");
+  assert(!dup.includes(1, 10), "fromIndex beyond length");
+}

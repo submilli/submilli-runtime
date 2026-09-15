@@ -1,0 +1,15 @@
+type Point = { x: number; y: number };
+
+function main(): void {
+  const m = new Map<string, Point>();
+  m.set("origin", { x: 0, y: 0 });
+  m.set("a", { x: 1, y: 2 });
+
+  const p: Point = { x: 3, y: 4 };
+  m.set("b", p);
+
+  assert(m.has("origin"), "origin set");
+  assert(m.has("a"), "a set");
+  assert(m.has("b"), "b set from annotated temp");
+  assert(m.size === 3, "three entries");
+}

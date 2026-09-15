@@ -1,0 +1,16 @@
+function isStr<T>(x: T | string): x is string {
+  return typeof x === "string";
+}
+
+function describe(v: number | string): string {
+  if (isStr(v)) {
+    return v;
+  }
+  return v === 1 ? "one" : "other";
+}
+
+function main(): void {
+  assert(describe("hello") === "hello", "guard narrows union to string");
+  assert(describe(1) === "one", "guard else-branch keeps T (number)");
+  assert(describe(2) === "other", "else-branch uses T's value");
+}

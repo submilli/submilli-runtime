@@ -1,0 +1,8 @@
+// expect-error: expected
+
+function takesNullable(u: { id: number, name: string | null }): void {}
+
+function main(): void {
+  const opt: { id: number, name?: string } = { id: 1 };
+  takesNullable(opt);
+}

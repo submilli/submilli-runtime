@@ -1,0 +1,549 @@
+//! ABI wiring for the Rust `Map` / `MapConstructor` methods: registers each
+//! method under its dispatch key and declares the value symbols codegen routes
+//! through. The operations live in the parent module.
+//!
+//! `Map#size` is intentionally **not** ported — its Wasm getter is a pure
+//! `struct.get` of the backing's size field and works unchanged on host-built
+//! `$MapBacking` instances, so it stays on the Wasm path.
+
+use wasmtime::{
+    FieldType, Finality, FuncType, HeapType, Linker, Mutability, RefType, StorageType, ValType,
+};
+
+use crate::runtime::StoreData;
+use crate::runtime::gc_singleton::{singleton_func, singleton_struct};
+use crate::runtime::host::{register_host_fn, register_host_fn_async};
+use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
+use crate::runtime::prelude::{MODULE_NAME, closure, declare_method};
+use crate::{MangledName, PackageDeclaration, Param, Type};
+
+/// The dispatch key codegen looks up for `Map#<method>`.
+fn method_key(method: &str) -> MangledName {
+    crate::mangle::extend(&crate::mangle::prelude("Map"), method)
+}
+
+/// The dispatch key for a `MapConstructor` static (`new`).
+fn ctor_key(method: &str) -> MangledName {
+    crate::mangle::extend(&crate::mangle::prelude("MapConstructor"), method)
+}
+
+/// The `(ref $closure)` type for `Map#forEach`'s `(value, key) => void` callback,
+/// declared to canonicalize with `codegen::closures` so a guest closure flows in
+/// unchanged. Mirrors the array port's `closure_ty`.
+fn callback_2_void(engine: &wasmtime::Engine, intr: &IntrinsicTypes) -> wasmtime::Result<ValType> {
+    let imm = Mutability::Const;
+    let params = vec![
+        ValType::Ref(RefType::new(false, HeapType::Any)),
+        ValType::Ref(RefType::new(true, intr.object.clone().into())),
+        ValType::Ref(RefType::new(true, intr.object.clone().into())),
+    ];
+    let func = singleton_func(engine, params, Vec::new())?;
+    let st = singleton_struct(
+        engine,
+        Finality::NonFinal,
+        Some(intr.closure.clone()),
+        vec![
+            FieldType::new(
+                imm,
+                StorageType::ValType(ValType::Ref(RefType::new(
+                    false,
+                    intr.vtable.clone().into(),
+                ))),
+            ),
+            FieldType::new(
+                imm,
+                StorageType::ValType(ValType::Ref(RefType::new(false, func.into()))),
+            ),
+            FieldType::new(
+                imm,
+                StorageType::ValType(ValType::Ref(RefType::new(false, HeapType::Any))),
+            ),
+        ],
+    )?;
+    Ok(ValType::Ref(RefType::new(
+        false,
+        HeapType::ConcreteStruct(st),
+    )))
+}
+
+pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    let engine = linker.engine().clone();
+    let intr = build_intrinsic_types(&engine)?;
+    let obj = ValType::Ref(RefType::new(
+        true,
+        HeapType::ConcreteStruct(intr.object.clone()),
+    ));
+    let boolean = ValType::I32;
+    let cb2_void = callback_2_void(&engine, &intr)?;
+    let ft = |params: Vec<ValType>, results: Vec<ValType>| FuncType::new(&engine, params, results);
+
+    register_host_fn_async(
+        linker,
+        MODULE_NAME,
+        method_key("get"),
+        ft(vec![obj.clone(), obj.clone()], vec![obj.clone()]),
+        true,
+        |caller, params, results| {
+            Box::pin(async move {
+                results[0] = super::get(caller, &params[0], &params[1]).await?;
+                Ok(())
+            })
+        },
+    )?;
+    register_host_fn_async(
+        linker,
+        MODULE_NAME,
+        method_key("set"),
+        ft(
+            vec![obj.clone(), obj.clone(), obj.clone()],
+            vec![obj.clone()],
+        ),
+        true,
+        |caller, params, results| {
+            Box::pin(async move {
+                results[0] = super::set(caller, &params[0], &params[1], &params[2]).await?;
+                Ok(())
+            })
+        },
+    )?;
+    register_host_fn_async(
+        linker,
+        MODULE_NAME,
+        method_key("has"),
+        ft(vec![obj.clone(), obj.clone()], vec![boolean.clone()]),
+        true,
+        |caller, params, results| {
+            Box::pin(async move {
+                let r = super::has(caller, &params[0], &params[1]).await?;
+                results[0] = wasmtime::Val::I32(i32::from(r));
+                Ok(())
+            })
+        },
+    )?;
+    register_host_fn_async(
+        linker,
+        MODULE_NAME,
+        method_key("delete"),
+        ft(vec![obj.clone(), obj.clone()], vec![boolean.clone()]),
+        true,
+        |caller, params, results| {
+            Box::pin(async move {
+                let r = super::delete(caller, &params[0], &params[1]).await?;
+                results[0] = wasmtime::Val::I32(i32::from(r));
+                Ok(())
+            })
+        },
+    )?;
+    register_host_fn(
+        linker,
+        MODULE_NAME,
+        method_key("clear"),
+        ft(vec![obj.clone()], vec![]),
+        true,
+        |caller, params, _results| {
+            super::clear(caller, &params[0])?;
+            Ok(())
+        },
+    )?;
+    register_host_fn(
+        linker,
+        MODULE_NAME,
+        method_key("size"),
+        ft(vec![obj.clone()], vec![ValType::F64]),
+        true,
+        |caller, params, results| {
+            results[0] = super::size(caller, &params[0])?;
+            Ok(())
+        },
+    )?;
+    register_host_fn_async(
+        linker,
+        MODULE_NAME,
+        method_key("forEach"),
+        ft(vec![obj.clone(), cb2_void], vec![]),
+        true,
+        |caller, params, _results| {
+            Box::pin(async move {
+                let f = closure::read(caller, &params[1], "Map#forEach callback")?;
+                super::for_each(caller, &params[0], &f).await
+            })
+        },
+    )?;
+    let iter_ret = obj.clone();
+    register_host_fn(
+        linker,
+        MODULE_NAME,
+        method_key("keys"),
+        ft(vec![obj.clone()], vec![iter_ret.clone()]),
+        true,
+        |caller, params, results| {
+            results[0] = super::keys(caller, &params[0])?;
+            Ok(())
+        },
+    )?;
+    register_host_fn(
+        linker,
+        MODULE_NAME,
+        method_key("values"),
+        ft(vec![obj.clone()], vec![iter_ret.clone()]),
+        true,
+        |caller, params, results| {
+            results[0] = super::values(caller, &params[0])?;
+            Ok(())
+        },
+    )?;
+    for name in ["entries", "iterator"] {
+        register_host_fn(
+            linker,
+            MODULE_NAME,
+            method_key(name),
+            ft(vec![obj.clone()], vec![iter_ret.clone()]),
+            true,
+            |caller, params, results| {
+                results[0] = super::entries(caller, &params[0])?;
+                Ok(())
+            },
+        )?;
+    }
+    // `MapConstructor#new(init?)` — Static dispatch (the constructor receiver is
+    // dropped at the call site), so the host fn sees only the `entries` arg.
+    register_host_fn_async(
+        linker,
+        MODULE_NAME,
+        ctor_key("new"),
+        ft(vec![obj.clone()], vec![obj.clone()]),
+        true,
+        |caller, params, results| {
+            Box::pin(async move {
+                results[0] = super::construct(caller, &params[0]).await?;
+                Ok(())
+            })
+        },
+    )?;
+    Ok(())
+}
+
+pub fn declare(defs: &mut PackageDeclaration) {
+    let k = || Type::TypeVar("K".to_string());
+    let v = || Type::TypeVar("V".to_string());
+    let map_ty = || Type::prelude_interface("Map".to_string(), vec![k(), v()]);
+    let entry = || Type::Tuple(vec![k(), v()]);
+    let iter = |t: Type| Type::prelude_interface("Iterator".to_string(), vec![t]);
+    let map = || Param::new("map", map_ty());
+    let key = || Param::new("key", k());
+    let m = |defs: &mut PackageDeclaration, name: &str, params: Vec<Param>, ret: Type| {
+        declare_method(defs, name, method_key(name), params, ret);
+    };
+
+    m(defs, "size", vec![map()], Type::Number);
+    m(
+        defs,
+        "get",
+        vec![map(), key()],
+        Type::Union(vec![v(), Type::Null]),
+    );
+    m(
+        defs,
+        "set",
+        vec![map(), key(), Param::new("value", v())],
+        map_ty(),
+    );
+    m(defs, "has", vec![map(), key()], Type::Boolean);
+    m(defs, "delete", vec![map(), key()], Type::Boolean);
+    m(defs, "clear", vec![map()], Type::Void);
+
+    let callback = Type::Function {
+        params: vec![v(), k()],
+        ret: Box::new(Type::Void),
+        predicate: None,
+        has_rest: false,
+    };
+    m(
+        defs,
+        "forEach",
+        vec![map(), Param::new("callback", callback)],
+        Type::Void,
+    );
+    m(defs, "keys", vec![map()], iter(k()));
+    m(defs, "values", vec![map()], iter(v()));
+    m(defs, "entries", vec![map()], iter(entry()));
+    m(defs, "iterator", vec![map()], iter(entry()));
+
+    // Static: no receiver param — the constructor receiver is dropped at the call
+    // site, so the host fn sees only `entries`.
+    declare_method(
+        defs,
+        "new",
+        ctor_key("new"),
+        vec![Param::new(
+            "entries",
+            Type::union(vec![
+                Type::Array(Box::new(entry())),
+                Type::prelude_interface("Iterable".to_string(), vec![entry()]),
+                Type::prelude_interface("Iterator".to_string(), vec![entry()]),
+                Type::Null,
+            ]),
+        )],
+        map_ty(),
+    );
+}
+
+/// The type/interface surface this module implements — its slice of the
+/// prelude declaration (see `declaration::prelude_package_declaration`).
+#[allow(clippy::too_many_lines)]
+pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
+    use crate::runtime::prelude::declaration::doc;
+    use crate::{
+        Dispatch, MethodSig, Param, PropertySig, Span, Type, TypeKind, TypeSymbol, ValueKind,
+        ValueSymbol,
+    };
+    use std::collections::BTreeMap;
+    defs.types.insert(
+        "Map".to_string(),
+        TypeSymbol {
+            name: "Map".to_string(),
+            mangled_name: crate::mangle::prelude("Map"),
+            declaration_span: Span::at(crate::FileId::PRELUDE),
+            kind: TypeKind::Interface {
+                generics: vec!["K".to_string(), "V".to_string()],
+                methods: BTreeMap::from([
+                    (
+                        "get".to_string(),
+                        MethodSig {
+                            generics: Vec::new(),
+                            params: vec![Param::new("key", Type::TypeVar("K".to_string()))],
+                            ret: Type::Union(vec![
+                                Type::TypeVar("V".to_string()),
+                                Type::Null,
+                            ]),
+                            predicate: None,
+                            doc: doc(
+                                "/**\n * Returns the value associated with `key`, or `null` if the key is not present.\n * @param key The key to look up.\n */",
+                            ),
+                        },
+                    ),
+                    (
+                        "set".to_string(),
+                        MethodSig {
+                            generics: Vec::new(),
+                            params: vec![
+                                Param::new("key", Type::TypeVar("K".to_string())),
+                                Param::new("value", Type::TypeVar("V".to_string())),
+                            ],
+                            ret: Type::prelude_interface("Map".to_string(), vec![
+                                    Type::TypeVar("K".to_string()),
+                                    Type::TypeVar("V".to_string()),
+                                ]),
+                            predicate: None,
+                            doc: doc(
+                                "/**\n * Associates `value` with `key`, overwriting any prior value.\n * @returns The same map (for chaining).\n */",
+                            ),
+                        },
+                    ),
+                    (
+                        "has".to_string(),
+                        MethodSig {
+                            generics: Vec::new(),
+                            params: vec![Param::new("key", Type::TypeVar("K".to_string()))],
+                            ret: Type::Boolean,
+                            predicate: None,
+                            doc: doc(
+                                "/**\n * Returns `true` when `key` is present.\n * @param key The key to test for.\n */",
+                            ),
+                        },
+                    ),
+                    (
+                        "delete".to_string(),
+                        MethodSig {
+                            generics: Vec::new(),
+                            params: vec![Param::new("key", Type::TypeVar("K".to_string()))],
+                            ret: Type::Boolean,
+                            predicate: None,
+                            doc: doc(
+                                "/**\n * Removes `key` from the map. Returns `true` when something was actually removed.\n * @param key The key to remove.\n */",
+                            ),
+                        },
+                    ),
+                    (
+                        "keys".to_string(),
+                        MethodSig {
+                            generics: Vec::new(),
+                            params: Vec::new(),
+                            ret: Type::prelude_interface("Iterator".to_string(), vec![Type::TypeVar("K".to_string())]),
+                            predicate: None,
+                            doc: doc(
+                                "/** Returns a lazy `Iterator<K>` over the keys in insertion order (snapshots the buckets at creation). */",
+                            ),
+                        },
+                    ),
+                    (
+                        "values".to_string(),
+                        MethodSig {
+                            generics: Vec::new(),
+                            params: Vec::new(),
+                            ret: Type::prelude_interface("Iterator".to_string(), vec![Type::TypeVar("V".to_string())]),
+                            predicate: None,
+                            doc: doc(
+                                "/** Returns a lazy `Iterator<V>` over the values in insertion order (snapshots the buckets at creation). */",
+                            ),
+                        },
+                    ),
+                    (
+                        "entries".to_string(),
+                        MethodSig {
+                            generics: Vec::new(),
+                            params: Vec::new(),
+                            ret: Type::prelude_interface("Iterator".to_string(), vec![Type::Tuple(vec![
+                                Type::TypeVar("K".to_string()),
+                                Type::TypeVar("V".to_string()),
+                            ])]),
+                            predicate: None,
+                            doc: doc(
+                                "/** Returns a lazy `Iterator<[K, V]>` over the entries — the same cursor `for-of` uses. */",
+                            ),
+                        },
+                    ),
+                    (
+                        "forEach".to_string(),
+                        MethodSig {
+                            generics: Vec::new(),
+                            params: vec![Param::new(
+                                "callback",
+                                Type::Function {
+                                    params: vec![
+                                        Type::TypeVar("V".to_string()),
+                                        Type::TypeVar("K".to_string()),
+                                    ],
+                                    ret: Box::new(Type::Void),
+                                    predicate: None,
+                                    has_rest: false,
+                                },
+                            )],
+                            ret: Type::Void,
+                            predicate: None,
+                            doc: doc(
+                                "/**\n * Calls `callback(value, key)` once for each entry in insertion order.\n * @param callback Function called once per entry — value first, key second, matching JS.\n */",
+                            ),
+                        },
+                    ),
+                    (
+                        // lazy cursor over `[K, V]` pairs.
+                        // Each call returns a fresh `Iterator<[K, V]>`
+                        // that snapshots the backing's bucket-array
+                        // references at construction time and walks
+                        // them lazily; subsequent `m.set(...)` doesn't
+                        // affect the cursor (snapshot semantics).
+                        // This is what makes `Map<K, V>` structurally
+                        // satisfy `Iterable<[K, V]>` (follows
+                        // up to remove the phase-6 stopgap).
+                        "iterator".to_string(),
+                        MethodSig {
+                            generics: Vec::new(),
+                            params: Vec::new(),
+                            ret: Type::prelude_interface("Iterator".to_string(), vec![Type::Tuple(vec![
+                                    Type::TypeVar("K".to_string()),
+                                    Type::TypeVar("V".to_string()),
+                                ])]),
+                            predicate: None,
+                            doc: doc(
+                                "/** Returns a fresh `Iterator<[K, V]>` over the entries. Each call snapshots the bucket-array references at iterator-creation time and walks them lazily; intervening `m.set(...)` doesn't affect the cursor. */",
+                            ),
+                        },
+                    ),
+                    (
+                        "clear".to_string(),
+                        MethodSig {
+                            generics: Vec::new(),
+                            params: Vec::new(),
+                            ret: Type::Void,
+                            predicate: None,
+                            doc: doc("/** Removes every entry. */"),
+                        },
+                    ),
+                ]),
+                properties: BTreeMap::from([(
+                    "size".to_string(),
+                    PropertySig {
+                        ty: Type::Number,
+                        readonly: true,
+                        intrinsic: false,
+                        optional: false,
+                        doc: doc("/** The number of entries currently in the map. */"),
+                    },
+                )]),
+                dispatch: Dispatch::Direct,
+                doc: doc(
+                    "/** A hash-backed key-value collection. Keys are compared by structural equality through each key's `equals` method; lookup buckets via `hash`. Insertion-order iteration is not guaranteed in v1. */",
+                ),
+            },
+        },
+    );
+
+    defs.types.insert(
+        "MapConstructor".to_string(),
+        TypeSymbol {
+            name: "MapConstructor".to_string(),
+            mangled_name: crate::mangle::prelude("MapConstructor"),
+            declaration_span: Span::at(crate::FileId::PRELUDE),
+            kind: TypeKind::Interface {
+                generics: Vec::new(),
+                methods: BTreeMap::from([(
+                    "new".to_string(),
+                    MethodSig {
+                        generics: vec!["K".to_string(), "V".to_string()],
+                        params: vec![Param::with_default(
+                            "entries",
+                            Type::union(vec![
+                                Type::Array(Box::new(Type::Tuple(vec![
+                                    Type::TypeVar("K".to_string()),
+                                    Type::TypeVar("V".to_string()),
+                                ]))),
+                                Type::prelude_interface(
+                                    "Iterable".to_string(),
+                                    vec![Type::Tuple(vec![
+                                        Type::TypeVar("K".to_string()),
+                                        Type::TypeVar("V".to_string()),
+                                    ])],
+                                ),
+                                Type::prelude_interface(
+                                    "Iterator".to_string(),
+                                    vec![Type::Tuple(vec![
+                                        Type::TypeVar("K".to_string()),
+                                        Type::TypeVar("V".to_string()),
+                                    ])],
+                                ),
+                                Type::Null,
+                            ]),
+                            crate::DefaultValue::Null,
+                        )],
+                        ret: Type::prelude_interface("Map".to_string(), vec![
+                                Type::TypeVar("K".to_string()),
+                                Type::TypeVar("V".to_string()),
+                            ]),
+                        predicate: None,
+                        doc: doc(
+                            "/** Construct a `Map<K, V>`, optionally from an iterable of `[K, V]` entries: `new Map([[\"a\", 1]])`. */",
+                        ),
+                    },
+                )]),
+                properties: BTreeMap::new(),
+                dispatch: Dispatch::Static,
+                doc: doc(
+                    "/** Constructor object for `Map`. Accessed via the global `Map` binding — call `new Map<K, V>()`. */",
+                ),
+            },
+        },
+    );
+    defs.values.insert(
+        "Map".to_string(),
+        ValueSymbol {
+            name: "Map".to_string(),
+            mangled_name: crate::mangle::prelude("Map"),
+            declaration_span: Span::at(crate::FileId::PRELUDE),
+            kind: ValueKind::Const {
+                ty: Type::prelude_interface("MapConstructor".to_string(), Vec::new()),
+                doc: doc("/** The `Map` constructor — call `new Map<K, V>()`. */"),
+            },
+        },
+    );
+}

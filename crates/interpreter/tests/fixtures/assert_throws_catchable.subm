@@ -1,0 +1,27 @@
+function main(): void {
+  let caught = "";
+  try {
+    assert(false, "limit exceeded");
+  } catch (e: Error) {
+    caught = e.message;
+    assert(e.name === "Error", "assert throws a plain Error");
+  }
+  assert(caught === "limit exceeded", "message survives the throw");
+
+  let defaulted = "";
+  try {
+    assert(1 > 2);
+  } catch (e: Error) {
+    defaulted = e.message;
+  }
+  assert(defaulted === "assertion failed", "omitted message gets the default");
+
+  let ran = false;
+  try {
+    assert(true, "passing assert is a no-op");
+    ran = true;
+  } catch (e: Error) {
+    assert(false, "must not reach the catch arm");
+  }
+  assert(ran, "code after a passing assert runs");
+}

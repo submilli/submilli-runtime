@@ -1,0 +1,12 @@
+function main(): void {
+  let nums: number[] = [2, 4, 6, 8];
+  assert(nums.every(x => x % 2 === 0), "all even");
+  assert(!nums.every(x => x > 5), "not all > 5");
+
+  let mixed: number[] = [2, 3, 4];
+  assert(!mixed.every(x => x % 2 === 0), "false on first odd");
+
+  // Empty array: vacuous truth.
+  let empty: number[] = [];
+  assert(empty.every(x => false), "empty.every is true");
+}

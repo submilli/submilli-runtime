@@ -1,0 +1,10 @@
+function describe<T>(x: T): string {
+  return x.toString();
+}
+
+function main(): void {
+  assert(describe(42) === "42", "describe(number)");
+  assert(describe(true) === "true", "describe(true)");
+  assert(describe("hi") === "hi", "describe(string)");
+  assert(describe({ a: 1 }) === "[object Object]", "describe(object)");
+}

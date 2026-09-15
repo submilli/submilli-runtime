@@ -1,0 +1,20 @@
+---
+source: crates/interpreter/tests/diagnostic_snapshots.rs
+expression: "render_all(\"function f(a): number { return a; }\\nfunction main(): void { }\\n\")"
+---
+error: parameter requires a type annotation
+ --> test.subm:1:13
+  |
+1 | function f(a): number { return a; }
+  |             ^
+2 | function main(): void { }
+  |
+help: function name(x: T, y: U): R { … }
+---
+error: expected expression
+ --> test.subm:1:35
+  |
+1 | function f(a): number { return a; }
+  |                                   ^
+2 | function main(): void { }
+---
