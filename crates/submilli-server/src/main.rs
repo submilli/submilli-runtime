@@ -201,7 +201,7 @@ fn main() -> Result<()> {
 
     // Init before the async runtime starts so the guard binds the Sentry hub for
     // every worker thread the runtime spawns. Skipped when telemetry is disabled
-    // (env opt-out or `telemetry: false` in the config file).
+    // (the default unless explicitly enabled through the environment or config).
     let _guard = resolved.telemetry.then(|| {
         sentry::init((
             "https://3de786dd0e1733e40a3e3425ab3e4ddc@o4511530557702144.ingest.us.sentry.io/4511530561110016",

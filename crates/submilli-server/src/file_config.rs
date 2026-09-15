@@ -95,9 +95,9 @@ pub struct FileConfig {
     /// than spreading across flags and environment variables.
     #[serde(default)]
     pub volumes: VolumeTable,
-    /// Sentry crash-reporting + metrics. Defaults to on; set `false` to disable.
-    /// An env opt-out (`DO_NOT_TRACK` / `SUBMILLI_TELEMETRY`) also disables it —
-    /// opting out on either side wins.
+    /// Sentry crash-reporting + metrics. Defaults to off; set `true` to opt in.
+    /// `SUBMILLI_TELEMETRY` can also opt in. A config-file `false` or a supplied
+    /// environment value other than `1`/`true`/`yes`/`on` disables telemetry.
     pub telemetry: Option<bool>,
 }
 
@@ -308,7 +308,10 @@ fn load(path: &Path) -> Result<FileConfig> {
 pub(crate) fn resolve(cli: Cli) -> Result<Resolved> {
     let env = EnvConfig::from_env();
     let file = load_config_file(&cli, &env)?;
-    let telemetry = combine_telemetry(telemetry_opted_out_via_env(), file.telemetry);
+    let telemetry = combine_telemetry(
+        std::env::var("SUBMILLI_TELEMETRY").ok().as_deref(),
+        file.telemetry,
+    );
     let shutdown_grace = shutdown_grace(&cli, &file, &env)?;
     let (addr, config) = merge(cli, file, env)?;
     Ok(Resolved {
@@ -425,27 +428,19 @@ fn max_session_state_memory(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Re
     Ok(Some(mb.saturating_mul(1024 * 1024)))
 }
 
-/// Telemetry is on by default. Either an env opt-out or `telemetry: false` in the
-/// config file disables it; opting out on either side wins.
-fn combine_telemetry(env_opted_out: bool, file_setting: Option<bool>) -> bool {
-    !env_opted_out && file_setting != Some(false)
-}
-
-/// True when the user opted out via `DO_NOT_TRACK` (set & truthy) or
-/// `SUBMILLI_TELEMETRY` (set & falsy). Mirrors the CLI's `telemetry` module.
-fn telemetry_opted_out_via_env() -> bool {
-    fn token(name: &str) -> Option<String> {
-        std::env::var(name)
-            .ok()
-            .map(|v| v.trim().to_ascii_lowercase())
+/// Telemetry requires an explicit opt-in. A config-file opt-out always wins;
+/// a supplied environment value must also explicitly enable telemetry.
+fn combine_telemetry(env_setting: Option<&str>, file_setting: Option<bool>) -> bool {
+    if file_setting == Some(false) {
+        return false;
     }
-    matches!(
-        token("DO_NOT_TRACK").as_deref(),
-        Some("1" | "true" | "yes" | "on")
-    ) || matches!(
-        token("SUBMILLI_TELEMETRY").as_deref(),
-        Some("0" | "false" | "no" | "off")
-    )
+    match env_setting {
+        Some(value) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        None => file_setting == Some(true),
+    }
 }
 
 /// Merge of the CLI flags, environment, and parsed [`FileConfig`]. Split out
@@ -716,12 +711,18 @@ network:
 
     #[test]
     fn combine_telemetry_rules() {
-        // On by default; either side opting out disables it.
-        assert!(combine_telemetry(false, None));
-        assert!(combine_telemetry(false, Some(true)));
-        assert!(!combine_telemetry(false, Some(false)));
-        assert!(!combine_telemetry(true, None));
-        assert!(!combine_telemetry(true, Some(true)));
+        assert!(!combine_telemetry(None, None));
+        assert!(combine_telemetry(None, Some(true)));
+        assert!(!combine_telemetry(None, Some(false)));
+        for value in ["1", "true", "yes", "on", " TRUE ", "On"] {
+            assert!(combine_telemetry(Some(value), None));
+            assert!(combine_telemetry(Some(value), Some(true)));
+            assert!(!combine_telemetry(Some(value), Some(false)));
+        }
+        for value in ["0", "false", "no", "off", "", "invalid"] {
+            assert!(!combine_telemetry(Some(value), None));
+            assert!(!combine_telemetry(Some(value), Some(true)));
+        }
     }
 
     #[test]
