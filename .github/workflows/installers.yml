@@ -20,11 +20,12 @@ jobs:
       - uses: actions/checkout@v4
       - run: python3 scripts/tests/test_install.py
   windows:
-    strategy:
-      matrix:
-        shell: [powershell, pwsh]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - shell: ${{ matrix.shell }}
+      - name: Windows PowerShell
+        shell: powershell
+        run: ./scripts/tests/test_install.ps1
+      - name: PowerShell Core
+        shell: pwsh
         run: ./scripts/tests/test_install.ps1
