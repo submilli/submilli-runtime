@@ -123,9 +123,12 @@ jobs:
           compression-level: 0
 
   docker:
-    name: Validate container image
+    name: Validate and publish container image
     needs: [prepare, build]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       # Before the artifacts: without a checkout there is no Dockerfile.
       - uses: actions/checkout@v4
@@ -159,7 +162,7 @@ jobs:
       - uses: docker/setup-buildx-action@v3
 
       # Validate the runnable amd64 image and both platform layouts before
-      # attaching executable assets to the release. Images are not pushed here.
+      # publishing the image and attaching executable assets to the release.
       #
       # `context: .` is not the default — the action would otherwise use the Git
       # context, which cannot see the untracked `dist/` this job just created.
@@ -207,6 +210,25 @@ jobs:
       # release rather than shipping an image that cannot reach anything.
       - name: Conformance
         run: scripts/docker-conformance.sh submilli-candidate:smoke
+
+      # Authenticate only after the candidate passes its runtime checks.
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push the multi-arch manifest
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            REVISION=${{ needs.prepare.outputs.commit }}
 
   publish:
     name: Attach release executables
