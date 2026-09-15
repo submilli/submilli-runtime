@@ -1,0 +1,25 @@
+{
+  "name": "submilli-docs",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "astro dev",
+    "prebuild": "node ./scripts/ensure-root-tsconfig.mjs",
+    "build": "astro build",
+    "preview": "astro preview",
+    "check": "astro check",
+    "precheck": "node ./scripts/ensure-root-tsconfig.mjs"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.41.7",
+    "astro": "^7.2.2",
+    "sharp": "^0.35.3"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.10",
+    "typescript": "^6.0.3"
+  }
+}

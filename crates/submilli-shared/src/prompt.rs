@@ -1,5 +1,5 @@
 //! Renders the LLM-facing `execute` tool description — the "system prompt" the
-//! MCP server hands its caller. The text lives in `docs/llm-prompt.md`; this
+//! MCP server hands its caller. The text lives in `llm-prompt.md`; this
 //! crate extracts the prompt body and resolves its placeholders (`{vfs_mode}`,
 //! `{http_access}`, `{builtins}`) against the compiler and a blueprint's policy.
 //!
@@ -11,7 +11,7 @@ use submilli_blueprint::{Action, Blueprint, DefaultAction, FieldMatch, FilterExp
 
 /// The canonical LLM-facing prompt, embedded at build time. We serve its
 /// `## The prompt` section as the `execute` tool description.
-const LLM_PROMPT_DOC: &str = include_str!("../../../docs/llm-prompt.md");
+const LLM_PROMPT_DOC: &str = include_str!("../../../llm-prompt.md");
 
 /// The caller id of the user's script — the one the prompt describes.
 const MAIN_CALLER: &str = "main";

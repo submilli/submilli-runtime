@@ -6,7 +6,7 @@ This workspace contains the compiler/runtime (`interpreter`), CLI (`submilli`),
 HTTP/MCP server (`submilli-server`), supporting build/blueprint/shared crates,
 and the conformance suite. Maintained TypeScript packages live in `packages/`.
 
-The runtime embeds [docs/llm-prompt.md](docs/llm-prompt.md) at compile time.
+The runtime embeds [llm-prompt.md](llm-prompt.md) at compile time.
 Package `docs/readme.md` files are build inputs and their examples are tested.
 Changes must build and test from this repository without private documentation.
 
@@ -62,3 +62,16 @@ cargo run -p submilli -- build test
 Use focused tests while iterating. Interpreter fixtures use assertions to verify
 runtime behavior; compile-error fixtures use `// expect-error: <substring>`.
 Keep snapshots when the rendered diagnostic or declaration is the contract under test.
+
+## Documentation site
+
+The public user book lives in `docs/`. Build it independently with:
+
+```sh
+cd docs-site
+npm ci
+npm run check
+npm run build
+```
+
+See [docs-site/README.md](docs-site/README.md) for preview and hosting instructions.

@@ -17,3 +17,7 @@ node_modules/
 .venv/
 .env.*
 !.env.example
+
+# Static documentation site
+/docs-site/.astro/
+/docs-site/dist/

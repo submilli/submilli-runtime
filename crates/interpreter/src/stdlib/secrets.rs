@@ -230,7 +230,7 @@ mod tests {
     /// so "resolves it internally and never returns it" and the hand-it-back
     /// clause are both required. It keeps the do-not-work-around force, which
     /// exists because a model once hit a denial and rerouted through raw HTTP
-    /// (docs/llm-prompt.md, 2026-07-08). It names no package: listing who does
+    /// (llm-prompt.md, 2026-07-08). It names no package: listing who does
     /// hold the grant would hand `main` a map of the policy keeping it out.
     #[tokio::test]
     async fn the_denial_matches_the_fixed_wording() {

@@ -352,7 +352,7 @@ pub struct ToolDescriptions {
 }
 
 /// `GET /v1/blueprints/{name}/prompt` — the canonical LLM-facing prompt
-/// (`docs/llm-prompt.md`) with this blueprint's policy resolved into its
+/// (`llm-prompt.md`) with this blueprint's policy resolved into its
 /// placeholders. The same text the MCP surface publishes as the `execute` tool
 /// description, so a REST harness teaches its model exactly what an MCP client
 /// is taught — one source of truth for both.
