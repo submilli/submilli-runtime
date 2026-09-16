@@ -2,7 +2,7 @@
 //! `submilli:llm`, and the models it may name.
 //!
 //! Two name-keyed maps. `providers:` carries a `type`, an optional `base_url`,
-//! provider options, and an `api_key` holding a `${secrets.X}` placeholder that
+//! an `api_key` holding a `${secrets.X}` placeholder that
 //! resolves from the `secrets:` block, exactly as `mcp:` and `auth_proxy:` do.
 //! `models:` names the models a program may call, each pointing at a declared
 //! provider.
@@ -99,9 +99,6 @@ pub struct LlmProviderDecl {
         skip_serializing_if = "is_default_supports_structured_outputs"
     )]
     pub supports_structured_outputs: bool,
-    /// Free-form provider options passed through to the SDK.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub options: BTreeMap<String, String>,
 }
 
 fn default_supports_structured_outputs() -> bool {
@@ -122,17 +119,12 @@ impl LlmProviderDecl {
             base_url,
             api_key,
             supports_structured_outputs: _,
-            options,
         } = self;
-        let mut values = Vec::new();
-        values.extend(
-            [base_url, api_key]
-                .into_iter()
-                .flatten()
-                .map(String::as_str),
-        );
-        values.extend(options.values().map(String::as_str));
-        values
+        [base_url, api_key]
+            .into_iter()
+            .flatten()
+            .map(String::as_str)
+            .collect()
     }
 }
 
@@ -297,15 +289,28 @@ fn validate_endpoint(name: &str, base_url: &str) -> Result<(), BlueprintError> {
 
 /// Whether a URL host is one a credentialed client must not be pointed at.
 fn is_private_host(host: &str) -> bool {
-    if LOOPBACK_HOSTS.contains(&host) || host.eq_ignore_ascii_case("localhost") {
+    // A trailing dot makes a fully-qualified name: `localhost.` is a valid FQDN
+    // that resolves to loopback, so it must compare equal to `localhost` or it
+    // walks straight past this check.
+    let host = host.strip_suffix('.').unwrap_or(host);
+    if LOOPBACK_HOSTS
+        .iter()
+        .any(|known| host.eq_ignore_ascii_case(known))
+    {
         return true;
     }
     // `Url` brackets an IPv6 literal; parse the inside.
     let literal = host.strip_prefix('[').and_then(|h| h.strip_suffix(']'));
     match literal.unwrap_or(host).parse::<IpAddr>() {
         Ok(ip) => is_private_ip(normalize(ip)),
-        // A name that is not a literal cannot be decided here. The outbound
-        // network policy re-checks the resolved address at request time.
+        // A name that is not a literal cannot be decided here, and this is the
+        // whole of the SSRF control on this path: the LLM dispatch uses its own
+        // `reqwest` client, which does *not* install the `PolicyResolver` that
+        // re-checks resolved addresses for `submilli:http`. So a name resolving
+        // into private space is not caught later. Refusing redirects
+        // (`llm/dispatch.rs`) closes the credential-exfiltration half; the
+        // resolve-time half stays open by construction, which is why an
+        // operator-supplied `base_url` is a trusted input and documented as one.
         Err(_) => false,
     }
 }
@@ -348,7 +353,7 @@ fn is_v6_link_local(v6: Ipv6Addr) -> bool {
     v6.segments()[0] & 0xffc0 == 0xfe80
 }
 
-/// Every `${secrets.X}` in a provider's key, endpoint, and options names a
+/// Every `${secrets.X}` in a provider's key and endpoint names a
 /// declared secret — the load-time check `mcp:` and `auth_proxy:` both apply.
 fn check_secret_refs(
     name: &str,
@@ -702,6 +707,13 @@ permissions:
             "[fe80::1]",
             // An IPv4-mapped IPv6 literal reaches the same host as the bare v4.
             "[::ffff:127.0.0.1]",
+            // A trailing dot is a fully-qualified name, not a different host:
+            // `localhost.` resolves to loopback exactly as `localhost` does, so
+            // an exact-match check would let a credentialed client be aimed at
+            // the server's own services.
+            "localhost.",
+            "LocalHost.",
+            "127.0.0.1.",
         ] {
             let yaml = provider_yaml(&format!(
                 "      type: openai-compatible\n      base_url: https://{host}/v1\n"
@@ -751,10 +763,13 @@ permissions:
         assert!(fault.message.contains("secrets:"), "{}", fault.message);
     }
 
+    /// The scan covers every secret-bearing field, not just `api_key` — an
+    /// endpoint can carry a placeholder too, and an undeclared one there is the
+    /// same misconfiguration.
     #[test]
-    fn undeclared_secret_in_provider_options_rejected() {
+    fn undeclared_secret_in_a_provider_endpoint_rejected() {
         let fault = llm_fault(&provider_yaml(
-            "      type: anthropic\n      options:\n        org: \"${secrets.NOPE}\"\n",
+            "      type: openai-compatible\n      base_url: \"https://${secrets.NOPE}.example.com/v1\"\n",
         ));
         assert!(fault.message.contains("NOPE"), "{}", fault.message);
     }

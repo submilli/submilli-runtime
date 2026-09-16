@@ -32,6 +32,8 @@ use tower::ServiceExt;
 
 const BLUEPRINT: &str = "llm";
 const MODEL: &str = "test-model";
+/// A model no blueprint here declares, for the refusal path.
+const GHOST_MODEL: &str = "ghost-model";
 
 /// Output tokens reserved per prompt in these tests.
 ///
@@ -80,7 +82,6 @@ fn blueprint(name: &str) -> Blueprint {
                     base_url: None,
                     api_key: None,
                     supports_structured_outputs: true,
-                    options: BTreeMap::new(),
                 },
             )]),
             models: BTreeMap::from([(
@@ -189,6 +190,28 @@ function main(): string {
     } catch (e: Error) {
         return e.message;
     }
+}"#;
+
+/// Names a model the blueprint does not declare, so the refusal is raised before
+/// any request is built — which is what lets the *real* connector be the one
+/// under test without touching the network.
+const CATCH_GHOST: &str = r#"import llm from "submilli:llm";
+function main(): string {
+    try {
+        const t = llm.call("ghost-model", "hi").text;
+        return "OK:" + (t === null ? "NULL" : (t as string));
+    } catch (e: Error) {
+        return e.message;
+    }
+}"#;
+
+/// `models()` does no I/O (KTD9), so it reaches the provider without reaching a
+/// socket — the route that can prove a provider was installed at all.
+const LIST_MODELS: &str = r#"import llm from "submilli:llm";
+function main(): string {
+    const names: string[] = [];
+    for (const m of llm.models()) { names.push(m.name); }
+    return names.join(",");
 }"#;
 
 struct Harness {
@@ -435,35 +458,75 @@ async fn a_configured_provider_reaches_both_execution_routes() {
     );
 }
 
-/// R12: with no dispatch installed, a program gets the *catchable*
-/// configuration error naming the model — not an internal failure.
+/// R12: a model the blueprint does not declare is refused with a *catchable*
+/// error naming it — not an internal failure — on every route.
+///
+/// This used to key off "no dispatch installed". That state no longer exists:
+/// the real HTTP dispatch is the default, so an absent override means the real
+/// connector rather than no provider. Declaration is what a program can now be
+/// refused by, and it is the more actionable refusal anyway — it names the block
+/// to add rather than telling an operator the server is misconfigured.
+///
+/// The override is left `None` here deliberately, so the **real** provider is
+/// the one under test; the undeclared model is refused before any request is
+/// built, which is what keeps this test off the network.
 #[tokio::test]
-async fn no_provider_configured_is_a_catchable_configuration_error_on_both_routes() {
+async fn an_undeclared_model_is_a_catchable_configuration_error_on_both_routes() {
     let h = Harness::build(|c| c, None);
 
     let session = h.create_session(BLUEPRINT).await;
-    let over_rest = ok(&h.rest(&session, CATCH).await)["result"]
+    let over_rest = ok(&h.rest(&session, CATCH_GHOST).await)["result"]
         .as_str()
         .expect("a string result")
         .to_string();
     assert!(
-        over_rest.contains("no model provider is configured")
-            || over_rest.contains("not configured"),
-        "REST: the refusal must say the provider is unconfigured: {over_rest}"
+        over_rest.contains(GHOST_MODEL),
+        "REST: the refusal must name the model: {over_rest}"
     );
     assert!(
-        over_rest.contains(MODEL),
-        "REST: the refusal must name the model: {over_rest}"
+        !over_rest.starts_with("OK:"),
+        "REST: an undeclared model must not resolve: {over_rest}"
     );
 
     let mcp_session = h.mcp_handshake(BLUEPRINT).await;
-    let over_mcp = ok(&h.mcp(BLUEPRINT, &mcp_session, CATCH).await)["result"]
+    let over_mcp = ok(&h.mcp(BLUEPRINT, &mcp_session, CATCH_GHOST).await)["result"]
         .as_str()
         .expect("a string result")
         .to_string();
     assert!(
-        over_mcp.contains(MODEL),
+        over_mcp.contains(GHOST_MODEL),
         "MCP: the refusal must name the model: {over_mcp}"
+    );
+
+    let one_shot = ok(&h.one_shot(CATCH_GHOST).await)["result"]
+        .as_str()
+        .expect("a string result")
+        .to_string();
+    assert!(
+        one_shot.contains(GHOST_MODEL),
+        "one-shot: the refusal must name the model: {one_shot}"
+    );
+}
+
+/// The default really is the real connector, not a silently-absent provider.
+///
+/// Asserted without a socket: the provider is built for a blueprint whose
+/// declared model exists, so a `models()` listing resolves — which it could not
+/// if `llm_provider_for` still returned `None` when no override is installed.
+/// That is the whole of the wiring change, and it is checked on the route that
+/// needs no network.
+#[tokio::test]
+async fn the_default_provider_is_installed_when_no_dispatch_is_overridden() {
+    let h = Harness::build(|c| c, None);
+
+    let session = h.create_session(BLUEPRINT).await;
+    let listed = ok(&h.rest(&session, LIST_MODELS).await)["result"]
+        .as_str()
+        .expect("a string result")
+        .to_string();
+    assert!(
+        listed.contains(MODEL),
+        "the declared model must be listed, which proves a provider was built: {listed}"
     );
 }
 
