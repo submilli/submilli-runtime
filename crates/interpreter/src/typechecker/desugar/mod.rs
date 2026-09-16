@@ -28,7 +28,8 @@ impl DesugarCtx<'_> {
         let n = self.next_temp;
         self.next_temp += 1;
         Ident {
-            name: format!("__{prefix}_{n}"),
+            // `#` cannot occur in a source identifier.
+            name: format!("#desugar_{prefix}_{n}"),
             span: self.gen_span(),
         }
     }
@@ -86,7 +87,7 @@ impl DesugarCtx<'_> {
         self.ta.push_stmt(TypedStmt { kind, span })
     }
 
-    /// `let __<prefix>_N = true;` — the flag that tells a `while`-true's head
+    /// `let #desugar_<prefix>_N = true;` — the flag that tells a `while`-true's head
     /// which pass it is on. Returns the flag's name and its declaration.
     pub(crate) fn first_pass_flag(&mut self, prefix: &str, span: Span) -> (Ident, StmtId) {
         let flag = self.fresh_name(prefix);

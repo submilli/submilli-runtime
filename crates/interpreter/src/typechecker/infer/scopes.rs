@@ -67,6 +67,14 @@ impl Scopes {
         self.stack.iter().rev().find_map(|s| s.bindings.get(name))
     }
 
+    pub(super) fn get_binding(&self, name: &str, scope: narrowing::ScopeId) -> Option<&ScopeEntry> {
+        self.stack
+            .iter()
+            .find(|s| s.id == scope)?
+            .bindings
+            .get(name)
+    }
+
     pub(super) fn all_names(&self) -> impl Iterator<Item = &str> {
         self.stack
             .iter()

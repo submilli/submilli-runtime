@@ -1,8 +1,8 @@
 //! Inference pass — produces the Typed AST.
 
 pub(crate) mod assignable;
+mod binding_analysis;
 mod classes;
-mod closure_mutators;
 mod diagnostics;
 mod enums;
 mod exports;
@@ -55,12 +55,13 @@ pub fn infer<'a>(
         .iter()
         .map(|d| (d.package_name.as_str(), *d))
         .collect();
+    let bindings = binding_analysis::analyze(ast);
     let mut tc = Inferer {
         source,
         package_name,
         ast,
         typed_ast: TypedAst::with_package(package_name),
-        diagnostics: Vec::new(),
+        diagnostics: bindings.diagnostics,
         top_symbols: BTreeMap::new(),
         types: TypeNamespace::new(),
         type_registry: TypeRegistry::new(),
@@ -72,7 +73,7 @@ pub fn infer<'a>(
         last_write_spans: std::collections::BTreeMap::new(),
         suspended_narrow_scopes: Vec::new(),
         pending_post_if_materializations: Vec::new(),
-        captured_mutators: closure_mutators::collect_closure_mutators(ast),
+        captured_mutators: bindings.mutators,
         reachable: true,
         next_narrow_counter: 0,
         current_return: None,
@@ -202,7 +203,7 @@ pub fn infer_package<'a>(
         last_write_spans: std::collections::BTreeMap::new(),
         suspended_narrow_scopes: Vec::new(),
         pending_post_if_materializations: Vec::new(),
-        captured_mutators: BTreeSet::new(),
+        captured_mutators: Default::default(),
         reachable: true,
         next_narrow_counter: 0,
         current_return: None,
@@ -359,7 +360,7 @@ pub(super) struct Inferer<'a> {
     pub(super) scopes: Scopes,
     pub(super) narrow_scopes: Vec<narrowing::NarrowEnv>,
     /// Bindings reassigned inside closures; narrowings on these paths are dropped (a closure could invalidate the narrowing between check and use).
-    pub(super) captured_mutators: std::collections::BTreeSet<String>,
+    pub(super) captured_mutators: std::collections::HashSet<(String, Span)>,
     pub(super) reachable: bool,
     /// All clause writes, including terminating branches, for exceptional entry.
     pub(super) clause_write_scopes: Vec<std::collections::BTreeSet<narrowing::ReferencePath>>,
@@ -496,7 +497,9 @@ impl<'a> Inferer<'a> {
             self.pending_implements.is_empty(),
             "the signature pass must drain `implements` checks before the next module",
         );
-        self.captured_mutators = closure_mutators::collect_closure_mutators(ast);
+        let bindings = binding_analysis::analyze(ast);
+        self.captured_mutators = bindings.mutators;
+        self.diagnostics.extend(bindings.diagnostics);
         self.reachable = true;
         self.next_narrow_counter = 0;
         self.current_return = None;

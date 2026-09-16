@@ -737,6 +737,8 @@ pub struct Ast {
     /// populates this, so order is unobserved today. An ordered map keeps any future walk —
     /// or post-lowering snapshot — independent of the hash seed.
     pub pattern_origins: std::collections::BTreeMap<ExprId, PatternOrigin>,
+    /// Source names in lowered for-of heads, whose TDZ includes the iterable.
+    pub for_of_pattern_bindings: std::collections::BTreeMap<StmtId, Vec<Ident>>,
     /// Top-level declarations carrying a leading `export` (Form 1).
     pub exported_decls: Vec<ExportedDecl>,
 }

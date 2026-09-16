@@ -26,7 +26,8 @@ impl LowerCtx {
         let n = self.next_tmp;
         self.next_tmp += 1;
         Ident {
-            name: format!("__{prefix}_{n}"),
+            // Distinct from source identifiers and the later desugar pass.
+            name: format!("#pattern_{prefix}_{n}"),
             span,
         }
     }
@@ -169,8 +170,23 @@ impl LowerCtx {
         let pattern_span = binding.span();
         let dst = self.fresh("dst", pattern_span);
         let is_const = matches!(binding_kind, BindingKind::Const);
-        let decompose = self.emit_decompose(ast, binding, dst.clone(), is_const, None);
-        self.prepend_to_block(ast, body, decompose);
+        let mut decompose = self.emit_decompose(ast, binding, dst.clone(), is_const, None);
+        let source_bindings = decompose
+            .iter()
+            .filter_map(|&id| match &ast.stmt(id).kind {
+                StmtKind::Let { name, .. }
+                | StmtKind::Const { name, .. }
+                | StmtKind::ConstRest { name, .. } => Some(name.clone()),
+                _ => None,
+            })
+            .collect();
+        ast.for_of_pattern_bindings.insert(id, source_bindings);
+        // The loop head and the user's body are distinct lexical scopes.
+        decompose.push(body);
+        let body = ast.push_stmt(Stmt {
+            kind: StmtKind::Block(decompose),
+            span: ast.stmt(body).span,
+        });
 
         ast.stmt_mut(id).kind = StmtKind::ForOf {
             binding_kind,
@@ -528,7 +544,7 @@ mod tests {
                 other => panic!("expected Const, got {other:?}"),
             })
             .collect();
-        assert!(names[0].starts_with("__dst_"));
+        assert!(names[0].starts_with("#pattern_dst_"));
         assert_eq!(names[1], "a");
         assert_eq!(names[2], "b");
     }
@@ -623,12 +639,12 @@ mod tests {
         };
         assert_eq!(params.len(), 1);
         assert!(params[0].pattern.is_none());
-        assert!(params[0].name.name.starts_with("__p_"));
+        assert!(params[0].name.name.starts_with("#pattern_p_"));
         let body_stmts = match &ast.stmt(body).kind {
             StmtKind::Block(s) => s.clone(),
             _ => panic!("body is not a Block"),
         };
-        // a-decl, b-decl, return  (no __dst — params bind directly to __p_N)
+        // a-decl, b-decl, return  (no #pattern_dst — params bind directly to #pattern_p_N)
         assert_eq!(body_stmts.len(), 3);
         if let StmtKind::Const { name, .. } = &ast.stmt(body_stmts[0]).kind {
             assert_eq!(name.name, "a");
@@ -662,8 +678,8 @@ mod tests {
     #[test]
     fn lowers_for_of_array_pattern() {
         // `for (const [a, b] of pairs) { … }` becomes
-        // `for (const __dst_N of pairs) { const a = __dst_N[0];
-        // const b = __dst_N[1]; }` after lowering.
+        // `for (const #pattern_dst_N of pairs) { const a = #pattern_dst_N[0];
+        // const b = #pattern_dst_N[1]; { ... } }` after lowering.
         let src = "function main(): void { for (const [a, b] of pairs) { use(a, b); } }";
         let ast = pipeline(src);
         no_patterns_left(&ast);
@@ -686,7 +702,7 @@ mod tests {
             other => panic!("expected ForOf, got {other:?}"),
         };
         assert!(
-            loop_name.starts_with("__dst_"),
+            loop_name.starts_with("#pattern_dst_"),
             "loop var was rewritten to a synth temp; got {loop_name}",
         );
 

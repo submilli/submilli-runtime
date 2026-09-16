@@ -131,5 +131,6 @@ Ast {
         ),
     ],
     pattern_origins: {},
+    for_of_pattern_bindings: {},
     exported_decls: [],
 }

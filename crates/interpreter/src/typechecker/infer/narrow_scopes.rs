@@ -136,7 +136,7 @@ impl<'a> Inferer<'a> {
         }
         match &path.root {
             narrowing::BindingId::Local { name, decl_scope } => {
-                if self.captured_mutators.contains(name) {
+                if self.path_root_is_captured_mutator(path) {
                     return false;
                 }
                 // `decl_scope` equality rejects a root shadowed by one of the
@@ -434,10 +434,16 @@ impl<'a> Inferer<'a> {
         true
     }
 
-    /// Intentionally name-keyed and conservative — over-refusal is sound; under-refusal isn't.
+    /// Match the declaration, not its spelling: unrelated same-named locals stay stable.
     pub(super) fn path_root_is_captured_mutator(&self, path: &narrowing::ReferencePath) -> bool {
         match &path.root {
-            narrowing::BindingId::Local { name, .. } => self.captured_mutators.contains(name),
+            narrowing::BindingId::Local { name, decl_scope } => self
+                .scopes
+                .get_binding(name, *decl_scope)
+                .is_some_and(|entry| {
+                    self.captured_mutators
+                        .contains(&(name.clone(), entry.decl_span))
+                }),
             narrowing::BindingId::Global(_) | narrowing::BindingId::This => false,
         }
     }

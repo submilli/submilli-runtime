@@ -1749,7 +1749,7 @@ impl<'a> Parser<'a> {
         }
 
         // Placeholder `name` is the empty identifier at the pattern's span;
-        // the pre-infer lowering pass replaces it with a fresh `__p_N`.
+        // the pre-infer lowering pass replaces it with a fresh `#pattern_p_N`.
         let (name, pattern) = match self.peek().kind {
             TokenKind::LeftBrace | TokenKind::LeftBracket => {
                 if rest {

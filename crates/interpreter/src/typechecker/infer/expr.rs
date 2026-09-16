@@ -1523,9 +1523,9 @@ impl Inferer<'_> {
         // matching a reserved intrinsic name, we skip the normal
         // callee-as-expression path and produce a dedicated
         // `IntrinsicCall` node. Reserved names are rejected during
-        // signature binding, so an intrinsic identifier never
-        // resolves to a user binding.
+        // signature binding; local bindings still take precedence.
         if let ExprKind::Identifier(ident) = &callee_kind
+            && self.scopes.get(&ident.name).is_none()
             && let Some(intrinsic) = Intrinsic::from_name(&ident.name)
         {
             return self.infer_intrinsic_call(intrinsic, args, span);
@@ -1551,6 +1551,7 @@ impl Inferer<'_> {
         // never resolves as a user-imported namespace.
         if let ExprKind::FieldAccess { receiver, name } = &callee_kind
             && let ExprKind::Identifier(recv_ident) = &self.ast.expr(*receiver).kind.clone()
+            && self.scopes.get(&recv_ident.name).is_none()
             && recv_ident.name == "JSON"
         {
             return self.infer_json_namespace_call(name, args, type_args, expected, span);
@@ -1562,6 +1563,7 @@ impl Inferer<'_> {
         // resolve_ident path produces a focused diagnostic.
         if let ExprKind::FieldAccess { receiver, name } = &callee_kind
             && let ExprKind::Identifier(recv_ident) = &self.ast.expr(*receiver).kind.clone()
+            && self.scopes.get(&recv_ident.name).is_none()
             && recv_ident.name == "BigInt"
         {
             return self.infer_bigint_namespace_call(name, args, span);
@@ -1578,6 +1580,7 @@ impl Inferer<'_> {
         if let ExprKind::FieldAccess { .. } = &callee_kind
             && let Some((root, segments)) = namespace_symbol::extract_chain(self.ast, callee)
             && !segments.is_empty()
+            && self.scopes.get(&root.name).is_none()
             && self.namespace_symbols.contains_key(&root.name)
         {
             return self
@@ -1594,6 +1597,7 @@ impl Inferer<'_> {
         // reject it as "namespace cannot be used as a value").
         if let ExprKind::FieldAccess { receiver, name } = &callee_kind
             && let ExprKind::Identifier(recv_ident) = &self.ast.expr(*receiver).kind.clone()
+            && self.scopes.get(&recv_ident.name).is_none()
             && let Some(ns) = self.namespace_bindings.get(&recv_ident.name)
         {
             let package_name = ns.members.package_name().to_string();
@@ -1659,6 +1663,7 @@ impl Inferer<'_> {
                 name: type_name,
             } = &self.ast.expr(*receiver).kind.clone()
             && let ExprKind::Identifier(ns_ident) = &self.ast.expr(*inner_recv).kind.clone()
+            && self.scopes.get(&ns_ident.name).is_none()
             && let Some(ns) = self.namespace_bindings.get(&ns_ident.name)
             && matches!(
                 ns.members.type_symbol(&type_name.name).map(|s| &s.kind),
@@ -1859,7 +1864,7 @@ impl Inferer<'_> {
         // produces a "type arguments not allowed on a non-generic
         // function" diagnostic so the user gets a clear error.
         if let ExprKind::Identifier(ident) = &callee_kind
-            && let Some(entry) = self.top_symbols.get(&ident.name)
+            && let Some(entry) = self.lookup_top_function(&ident.name)
             && let ValueKind::Function {
                 generics,
                 params,
@@ -1985,8 +1990,7 @@ impl Inferer<'_> {
         // fill-in.
         let named_params: Option<Vec<crate::Param>> =
             if let ExprKind::Identifier(ident) = &callee_kind {
-                self.top_symbols
-                    .get(&ident.name)
+                self.lookup_top_function(&ident.name)
                     .and_then(|entry| match &entry.kind {
                         ValueKind::Function {
                             params, generics, ..
@@ -2041,12 +2045,13 @@ impl Inferer<'_> {
         // default for now (cleanup deferred to a follow-up); the
         // typechecker accepts the arity-1 form and synthesises a
         // `Number(10)` typed expression below so codegen always sees
-        // a uniform 2-arg call. Gate by identifier name — the
-        // duplicate-name guard ensures `parseInt` only ever refers
-        // to the imported host fn.
+        // a uniform 2-arg call. Only the resolved host function receives
+        // this default; a same-named local keeps its own signature.
         let arity1_parse_int = matches!(
             &callee_kind,
-            ExprKind::Identifier(ident) if ident.name == "parseInt",
+            ExprKind::Identifier(ident) if self.lookup_top_function(&ident.name).is_some_and(|entry| {
+                entry.package_name == "submilli:number" && entry.symbol_name == "parseInt"
+            }),
         ) && args.len() == 1
             && param_types.as_ref().is_some_and(|p| p.len() == 2);
 
@@ -2152,7 +2157,7 @@ impl Inferer<'_> {
         // (closure value, field access, etc.) goes through
         // `CallClosure`, which dispatches via `call_ref`.
         let kind = if let ExprKind::Identifier(ident) = &callee_kind
-            && let Some(entry) = self.top_symbols.get(&ident.name)
+            && let Some(entry) = self.lookup_top_function(&ident.name)
         {
             let mangled = entry.mangled_name.clone();
             let package = entry.package_name.clone();
@@ -4636,12 +4641,13 @@ impl Inferer<'_> {
         // namespace-symbol member read in non-call
         // position. `Math.PI` returns a const; `Temporal.Now` (no
         // following member) errors as a namespace-not-a-value. Must
-        // run before namespace check so namespace-symbol
-        // names are never shadowable. The chain extractor
+        // run before the import-namespace check; locals still take precedence.
+        // The chain extractor
         // reconstructs the dotted path from `receiver` + `name`;
         // the chain root must be in `namespace_symbols` for the
         // dispatch to engage.
         if let Some((root, mut segments)) = namespace_symbol::extract_chain(self.ast, receiver)
+            && self.scopes.get(&root.name).is_none()
             && self.namespace_symbols.contains_key(&root.name)
         {
             segments.push(name.clone());
@@ -4654,6 +4660,7 @@ impl Inferer<'_> {
         // namespace member is being read as a value. Reject with a
         // tailored fix.
         if let ExprKind::Identifier(ref recv_ident) = self.ast.expr(receiver).kind
+            && self.scopes.get(&recv_ident.name).is_none()
             && self.namespace_bindings.contains_key(&recv_ident.name)
         {
             let recv_name = recv_ident.name.clone();

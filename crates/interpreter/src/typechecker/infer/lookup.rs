@@ -33,6 +33,16 @@ pub(super) enum MemberFieldMiss {
 }
 
 impl<'a> Inferer<'a> {
+    /// Direct-call metadata belongs only to a function that survives lexical lookup.
+    pub(super) fn lookup_top_function(&self, name: &str) -> Option<&super::ValueEntry> {
+        if self.scopes.get(name).is_some() {
+            return None;
+        }
+        self.top_symbols
+            .get(name)
+            .filter(|entry| matches!(entry.kind, crate::ValueKind::Function { .. }))
+    }
+
     pub(super) fn lookup_named_type(&self, name: &str) -> Option<&TypeSymbol> {
         self.types.lookup(name)
     }
