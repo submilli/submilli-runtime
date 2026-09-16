@@ -108,14 +108,20 @@ pub struct ServerConfig {
     /// [`crate::session_manager::DEFAULT_MAX_CONCURRENCY`]. Bounded because
     /// unbounded fan-out manufactures the 429s it then cannot back off from.
     pub max_llm_concurrency: Option<usize>,
-    /// The outbound model dispatch every `submilli:llm` call rides.
+    /// An override for the outbound model dispatch every `submilli:llm` call
+    /// rides.
     ///
-    /// Embedder-supplied and `None` by default, so a server built without one
-    /// gives a program the catchable configuration error (R12) rather than
-    /// failing internally. It has no CLI flag, env var, or config-file key: the
-    /// choice of SDK is a compile-time dependency, not an operator setting, and
-    /// the credentials it uses already resolve from the blueprint's `llm:`
-    /// block.
+    /// `None` — the default — means the **real** HTTP dispatch, built per
+    /// execute against the executing blueprint and this server's secret store.
+    /// A value here replaces it for every blueprint, which is what the tests use
+    /// to drive `llm.call` without a socket; an embedder can also use it to
+    /// supply its own SDK.
+    ///
+    /// It has no CLI flag, env var, or config-file key: the choice of dispatch
+    /// is a compile-time dependency, not an operator setting, and the
+    /// credentials it uses already resolve from the blueprint's `llm:` block.
+    /// A deployment that configures no model still gets a catchable error (R12),
+    /// raised from the blueprint as the undeclared-model refusal.
     pub llm_dispatch: Option<Arc<dyn ModelDispatch>>,
     /// Operator-declared volumes a blueprint's `persistent` VFS mode resolves
     /// through, name → host directory. Config-file only: no CLI flag and no

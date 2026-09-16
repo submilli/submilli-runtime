@@ -28,6 +28,7 @@ chacha20poly1305 = { workspace = true }
 url = { workspace = true }
 http = { workspace = true }
 rmcp = { workspace = true }
+reqwest = { workspace = true, features = ["json"] }
 tokio = { workspace = true, features = ["sync", "time", "rt"] }
 ureq = { workspace = true }
 flate2 = { workspace = true }
@@ -35,4 +36,5 @@ tar = { workspace = true }
 tempfile = { workspace = true }
 
 [dev-dependencies]
+httpmock = { workspace = true }
 tokio = { workspace = true, features = ["test-util", "macros", "rt", "rt-multi-thread"] }

@@ -17,7 +17,7 @@ use interpreter::{BacktraceMode, Sources, compile_script, dispatch_main_async, r
 use submilli_blueprint::Blueprint;
 use submilli_build::{Artifact, PackageStore};
 use submilli_shared::llm::provider::DEFAULT_MAX_CONCURRENCY;
-use submilli_shared::llm::{BlueprintLlmProvider, ModelDispatch};
+use submilli_shared::llm::{BlueprintLlmProvider, HttpModelDispatch, ModelDispatch};
 use submilli_shared::mcp::StreamableHttpTransport;
 use submilli_shared::mcp::discovery::{DiscoveryAuth, McpCatalog, discover_all};
 use submilli_shared::mcp_token::OAuthTokenManager;
@@ -168,17 +168,17 @@ impl Args {
 }
 
 pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
-    // No dispatch is compiled into the CLI today, so a blueprint declaring an
-    // `llm:` block still gets the catchable configuration error rather than a
-    // silent success. The seam below is what a dispatch installs through, and is
-    // what the tests drive.
+    // `None` means "build the real HTTP dispatch below, once the blueprint and
+    // the secret store it needs are in hand". A test passes `Some(fake)` to
+    // drive `llm.call` without a socket.
     execute_with_dispatch(args, None)
 }
 
-/// `execute`, with the outbound model dispatch injected.
+/// `execute`, with the outbound model dispatch optionally overridden.
 ///
 /// Split out so a test can drive a real `llm.call` — and the budget refusal that
-/// guards it — without a live provider, the way the server's own tests do.
+/// guards it — without a live provider, the way the server's own tests do. A
+/// `None` here is not "no provider": it selects the real one.
 pub(crate) fn execute_with_dispatch(
     args: Args,
     llm_dispatch: Option<Arc<dyn ModelDispatch>>,
@@ -331,12 +331,17 @@ pub(crate) fn execute_with_dispatch(
             llm_limits,
             SharedTokenBudget::new(llm_limits.per_execution_tokens),
         )));
-        if let Some(dispatch) = llm_dispatch.clone() {
-            data.llm_provider = Some(Arc::new(
-                BlueprintLlmProvider::new(bp.clone(), dispatch)
-                    .with_max_concurrency(llm_concurrency),
-            ));
-        }
+        // An injected dispatch wins (a test's fake); otherwise the real HTTP one,
+        // holding this blueprint and the same secret store the MCP transport
+        // resolves through. A blueprint that declares no `llm:` block still gets
+        // a provider — and `llm.call` against it fails on the undeclared model,
+        // naming the block to add, rather than on a missing provider.
+        let dispatch = llm_dispatch
+            .clone()
+            .unwrap_or_else(|| Arc::new(HttpModelDispatch::new(bp.clone(), secret_store.clone())));
+        data.llm_provider = Some(Arc::new(
+            BlueprintLlmProvider::new(bp.clone(), dispatch).with_max_concurrency(llm_concurrency),
+        ));
     }
     let mut store = cfg.store(&engine, data)?;
     install_tenant_limits(&mut store);

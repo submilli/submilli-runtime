@@ -312,7 +312,7 @@ impl SubmilliMcp {
             http_client,
             mcp_transport,
             session_kv: manager.session_kv_for_execute(session_id.as_deref().unwrap_or("")),
-            llm_provider: self.state.llm_provider_for(&blueprint),
+            llm_provider: self.state.llm_provider_for(&blueprint, &harness_secrets),
             llm_budget: Some(manager.llm_budget_for_execute()),
         };
         let mcp_catalog = self

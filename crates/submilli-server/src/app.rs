@@ -18,7 +18,7 @@ use interpreter::{PackageDeclaration, ScriptImports};
 use submilli_blueprint::Blueprint;
 use submilli_build::{ArtifactMetadata, PackageStore, PackageStoreError};
 use submilli_shared::EnvFileSecretResolver;
-use submilli_shared::llm::{BlueprintLlmProvider, ModelDispatch};
+use submilli_shared::llm::{BlueprintLlmProvider, HttpModelDispatch, ModelDispatch};
 use submilli_shared::secret_store::SecretStore;
 use tokio::sync::Notify;
 use wasmtime::{Engine, Linker, Module};
@@ -91,8 +91,9 @@ struct AppStateInner {
     shutdown: Arc<Notify>,
     /// Bound address, set by `serve` once the listener is up. Reported by status.
     bind_addr: OnceLock<SocketAddr>,
-    /// Outbound model dispatch, shared by every blueprint's provider. `None`
-    /// leaves `submilli:llm` unconfigured, which a program catches.
+    /// An embedder-supplied override for the outbound model dispatch, shared by
+    /// every blueprint's provider. `None` — the default — means
+    /// [`AppState::llm_provider_for`] builds the real per-blueprint HTTP one.
     llm_dispatch: Option<Arc<dyn ModelDispatch>>,
 }
 
@@ -286,21 +287,45 @@ impl AppState {
         &self.inner.session_manager
     }
 
-    /// The outbound `submilli:llm` provider for one blueprint, or `None` when no
-    /// dispatch is installed — the catchable configuration error a program sees
-    /// (R12).
+    /// The outbound `submilli:llm` provider for one blueprint.
     ///
     /// Built per execute rather than cached: it borrows the blueprint, which is
-    /// re-read whenever the blueprint changes, and the construction is a pair of
-    /// `Arc` clones. Both execution routes funnel through here so a provider
-    /// cannot reach one and miss the other.
+    /// re-read whenever the blueprint changes, and it resolves credentials from
+    /// *that* blueprint's `llm:` rows. Both execution routes funnel through here
+    /// so a provider cannot reach one and miss the other.
+    ///
+    /// An embedder-supplied [`ModelDispatch`] on [`ServerConfig`] overrides the
+    /// default; absent one, the real HTTP dispatch is built here against this
+    /// blueprint and the configured secret store — the same pair
+    /// `StreamableHttpTransport` is built from on both routes. That override is
+    /// the seam the tests drive, so it stays; what changed is that its absence
+    /// now means "use the real one" rather than "there is no provider".
+    ///
+    /// Always `Some`, therefore. A deployment with no model configured still
+    /// gets a catchable error (R12) — it arrives from the blueprint instead, as
+    /// the undeclared-model refusal naming the `llm.models:` block to add, which
+    /// is the more actionable of the two.
+    ///
+    /// `harness_secrets` is this session's trusted bindings, and it is a
+    /// parameter rather than state for the same reason it is one on the MCP
+    /// transport: `harness:` is a valid source for any `${secrets.X}`, including
+    /// an `llm.providers.*.api_key`, and the bindings arrive per session. Omit
+    /// them and such a key resolves to nothing — which would surface as a
+    /// credential failure on a blueprint that is in fact correct.
     pub(crate) fn llm_provider_for(
         &self,
         blueprint: &Arc<Blueprint>,
+        harness_secrets: &Arc<submilli_blueprint::HarnessSecretBindings>,
     ) -> Option<Arc<dyn LlmProvider>> {
-        let dispatch = self.inner.llm_dispatch.as_ref()?;
+        let dispatch = match self.inner.llm_dispatch.as_ref() {
+            Some(installed) => Arc::clone(installed),
+            None => Arc::new(
+                HttpModelDispatch::new(Arc::clone(blueprint), self.secret_store().cloned())
+                    .with_harness_secrets(Arc::clone(harness_secrets)),
+            ) as Arc<dyn ModelDispatch>,
+        };
         Some(Arc::new(
-            BlueprintLlmProvider::new(Arc::clone(blueprint), Arc::clone(dispatch))
+            BlueprintLlmProvider::new(Arc::clone(blueprint), dispatch)
                 .with_max_concurrency(self.inner.session_manager.llm_max_concurrency()),
         ))
     }
