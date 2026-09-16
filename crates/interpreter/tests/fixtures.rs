@@ -829,7 +829,6 @@ impl FixtureLlm {
                     name: "claude-haiku-4-5".to_string(),
                     description: Some("Cheap and fast.".to_string()),
                     context_window: Some(200_000),
-                    output_reserve: None,
                 },
                 // Declared by name only — the operator asserted nothing else.
                 LlmModel::new("bare-model"),
@@ -840,13 +839,11 @@ impl FixtureLlm {
                 name: "claude-haiku-4-5".to_string(),
                 description: Some("Cheap and fast.".to_string()),
                 context_window: Some(200_000),
-                output_reserve: None,
             },
             LlmModel {
                 name: "claude-sonnet-5".to_string(),
                 description: Some("Strong reasoning.".to_string()),
                 context_window: Some(1_000_000),
-                output_reserve: None,
             },
             // The candidate a `model`-filtered policy hides in
             // `llm_models_filtered`. Serving it here is what makes that
@@ -855,7 +852,6 @@ impl FixtureLlm {
                 name: "internal-secret-model".to_string(),
                 description: Some("Operator-only.".to_string()),
                 context_window: Some(8_000),
-                output_reserve: None,
             },
         ]
     }

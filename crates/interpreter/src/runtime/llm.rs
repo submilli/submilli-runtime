@@ -118,12 +118,17 @@ impl std::fmt::Display for LlmLimitKind {
                  using fewer or shorter calls need not help; the operator raises the budget \
                  with `--max-llm-tokens`"
             ),
+            // No CLI rung names this ceiling: `max_held_tokens` is set by the
+            // embedder, unlike the two above. Saying otherwise would send an
+            // operator looking for a flag that does not exist, so the advice is
+            // the action they can actually take.
             Self::IndeterminateSpend { held, limit } => write!(
                 f,
                 "indeterminate spend ceiling reached: {held} tokens are held for calls the \
                  provider never reported usage for, exceeding the {limit} allowed — this is \
-                 unreported spend, not measured consumption; start a new execution, or the \
-                 operator raises the ceiling with `--max-llm-held-tokens`"
+                 unreported spend, not measured consumption; start a new execution, and if it \
+                 recurs the provider is not reporting usage and the operator should raise the \
+                 held-token ceiling in the server configuration"
             ),
         }
     }
@@ -580,20 +585,6 @@ pub struct LlmModel {
     pub name: String,
     pub description: Option<String>,
     pub context_window: Option<u64>,
-    /// The model's own output cap, when the operator declared one.
-    ///
-    /// Carried across the trait boundary because the reservation needs it
-    /// *before* dispatch: KTD3b reserves `input + (output_cap × prompt_count)`
-    /// and sends the same cap as the request's output limit, which is what makes
-    /// the reservation an upper bound rather than an estimate. Without this
-    /// field the interpreter can only reserve
-    /// [`LlmLimits::default_output_cap`] for every model, so a model declaring a
-    /// smaller reserve over-reserves — refusing calls the ceiling would
-    /// otherwise admit — and one declaring a larger reserve under-reserves,
-    /// which is the direction that actually lets spend past the ceiling.
-    ///
-    /// `None` means the operator declared none, and the default applies.
-    pub output_reserve: Option<u64>,
 }
 
 impl LlmModel {
@@ -602,7 +593,6 @@ impl LlmModel {
             name: name.into(),
             description: None,
             context_window: None,
-            output_reserve: None,
         }
     }
 }

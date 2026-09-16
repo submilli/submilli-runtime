@@ -346,7 +346,6 @@ impl LlmProvider for BlueprintLlmProvider {
                     // reports `null`, never zero.
                     description: declared.description.clone(),
                     context_window: declared.context_window,
-                    output_reserve: declared.output_reserve,
                 })
                 .collect())
         })
