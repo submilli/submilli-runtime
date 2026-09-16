@@ -119,7 +119,10 @@ tests:
       # keeps the old blueprints.
       #
       # Expect these to change if configmap-blueprints.yaml's rendered output
-      # changes. That is the test doing its job, not a flake.
+      # changes. That is the test doing its job, not a flake: re-run
+      # `helm unittest charts/submilli` and copy the reported `Actual:` digests
+      # here. Moving with no template change means something unpinned is
+      # reaching the digest — fix that instead.
       - equal:
           path: spec.template.metadata.annotations["checksum/blueprints"]
           value: 91807f9ebd077d621dddd64793db7678069ed19dbc23be163dc41a8b55035bde

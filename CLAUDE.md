@@ -63,6 +63,13 @@ Use focused tests while iterating. Interpreter fixtures use assertions to verify
 runtime behavior; compile-error fixtures use `// expect-error: <substring>`.
 Keep snapshots when the rendered diagnostic or declaration is the contract under test.
 
+The chart has its own suite, not covered by `cargo test`: `helm unittest
+charts/submilli`. Its `checksum/blueprints` tests assert literal digests of the
+rendered `configmap-blueprints.yaml`, so editing that template or
+`submilli.labels` moves them — re-run and copy the reported `Actual:` values.
+Chart `version` and `appVersion` are pinned there so release bumps don't;
+anything else that varies per release needs pinning too.
+
 ## Documentation site
 
 The public user book lives in `docs/`. Build it independently with:
