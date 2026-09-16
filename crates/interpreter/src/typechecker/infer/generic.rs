@@ -1140,6 +1140,37 @@ impl Inferer<'_> {
         // `schema` argument the default filled with `null`. The rewrite can also
         // fail (an unschemable or unverifiable `T`), in which case the whole
         // call is already an error and no node is built.
+        // The `schema` slot is compiler-filled, never program-written. Rejecting
+        // a written one is a soundness requirement, not tidiness: the host keys
+        // "this call is typed" off that argument being non-null
+        // (`stdlib/llm/mod.rs`), while the structural check rides on the cast
+        // emitted here. A hand-written schema sets the first without the second,
+        // so raw parsed JSON reaches the guest wearing the `Completion`
+        // interface type — reading `ok` off a JSON object yields a fabricated
+        // `true`, and reading `text` traps outside the error taxonomy. It also
+        // hands guest-controlled bytes to the provider as the schema.
+        //
+        // This rejects rather than ignoring the argument, because silently
+        // discarding what a program wrote is its own trap. Typed calls are
+        // unaffected in behavior — `substitute_schema_argument` overwrites the
+        // slot — but a written argument there is equally meaningless, so both
+        // forms are refused and no working program changes.
+        if checked_llm && args.len() > 2 {
+            let name = &callee_ident.name;
+            self.error_with_help(
+                span,
+                format!(
+                    "`{name}` takes the model and the prompt; the schema argument is filled by \
+                     the compiler from the type argument"
+                ),
+                vec![format!(
+                    "drop the third argument — write `{name}<T>(...)` to send a schema for `T`, \
+                     or `{name}(...)` for an untyped call"
+                )],
+            );
+            return (TypedExprKind::Null, Type::Error);
+        }
+
         let mut llm_schema = None;
         if checked_llm {
             match self.llm_call_schema(&result_ty, type_args_written, span) {
