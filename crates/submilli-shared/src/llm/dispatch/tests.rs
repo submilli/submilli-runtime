@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use httpmock::prelude::*;
-use interpreter::runtime::{FailureReason, LlmOutcome, LlmProvider};
+use interpreter::runtime::{FailureReason, LlmCallError, LlmOutcome, LlmProvider};
 use serde_json::{Value, json};
 use submilli_blueprint::{Blueprint, parse};
 
@@ -773,27 +773,34 @@ llm:
     bp.llm.providers.get_mut("p").unwrap().base_url = Some(server.base_url());
     let bp = Arc::new(bp);
 
-    let outcome = block_on(async {
+    // Three prompts, so "once per dispatch" is observable: the per-element
+    // shape reported the same misconfiguration once for each of them.
+    let error = block_on(async {
         BlueprintLlmProvider::new(Arc::clone(&bp), Arc::new(HttpModelDispatch::new(bp, None)))
-            .call(MODEL, &[PROMPT.to_string()], None)
+            .call(
+                MODEL,
+                &[PROMPT.to_string(), PROMPT.to_string(), PROMPT.to_string()],
+                None,
+            )
             .await
     })
-    .expect("the provider resolved")
-    .remove(0);
+    .expect_err("an unresolvable key is a dispatch-level failure");
 
-    let failure = outcome
-        .failure
-        .as_ref()
-        .expect("an unresolved key is a failure");
-    assert_eq!(failure.reason, FailureReason::RequestRejected);
+    // A credential belongs to the configuration, not to any one prompt, so it
+    // is refused once before the fan-out rather than N times inside it. Nothing
+    // was dispatched, so returning `Err` discards no billed sibling success.
+    assert!(
+        matches!(&error, LlmCallError::Unauthorized { model } if model == MODEL),
+        "expected a dispatch-level Unauthorized, got {error:?}",
+    );
     // The request was never sent: an unresolvable credential fails before the
     // socket, so no prompt reaches a provider that could log it.
     reached.assert_hits(0);
+    let rendered = error.to_string();
     for secret in [NEVER_SET, "secrets", PROMPT] {
         assert!(
-            !failure.message.contains(secret),
-            "'{secret}' reached the error: {}",
-            failure.message,
+            !rendered.contains(secret),
+            "'{secret}' reached the error: {rendered}",
         );
     }
 }

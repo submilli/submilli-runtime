@@ -194,8 +194,18 @@ pub enum ProviderFailure {
         /// The raw response body. Read for step 5's error code and then
         /// **dropped**: it carries request echoes and account identifiers.
         response_body: Option<String>,
-        /// A `retry-after`, in seconds, when the provider sent one.
+        /// A `retry-after`, in seconds, when the provider sent one in the
+        /// delta-seconds form.
         retry_after_secs: Option<u64>,
+        /// Whether a `retry-after` header was present at all.
+        ///
+        /// Separate from `retry_after_secs` because the header also has an
+        /// HTTP-date form, which carries the same "come back later" meaning
+        /// while parsing to `None` as seconds. Keying `retryable` off the
+        /// seconds alone reports a date-form 429 as non-retryable — the
+        /// taxonomy's word for "the same request will keep failing" — and a
+        /// guest retry loop would abandon a request that was going to succeed.
+        retry_after_present: bool,
     },
     /// The structured-output path could not produce an object.
     ///
@@ -226,6 +236,24 @@ pub trait ModelDispatch: Send + Sync {
         &'a self,
         request: ModelRequest<'a>,
     ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse, ProviderFailure>> + Send + 'a>>;
+
+    /// Check the provider row's credential before any element is dispatched.
+    ///
+    /// A credential that cannot resolve is a property of the configuration, not
+    /// of any one prompt: without this the fan-out reports the same
+    /// misconfiguration once per element, so a 128-prompt batch burns 128 slots
+    /// to say the operator's key is missing, and the guest sees N per-element
+    /// failures where the taxonomy has a dispatch-level variant meaning exactly
+    /// this ([`LlmCallError::Unauthorized`]).
+    ///
+    /// Defaulted to `Ok(())` so an implementor with nothing to check — or no
+    /// cheap way to check it — is unaffected.
+    fn preflight<'a>(
+        &'a self,
+        _provider: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ProviderFailure>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 /// What one element of a dispatch asks for.
@@ -292,6 +320,18 @@ impl LlmProvider for BlueprintLlmProvider {
     ) -> Pin<Box<dyn Future<Output = Result<Vec<LlmOutcome>, LlmCallError>> + Send + 'a>> {
         Box::pin(async move {
             let (provider, output_cap) = self.resolve(model)?;
+
+            // A credential that cannot resolve belongs to the configuration,
+            // not to any element, so it is refused once here rather than N
+            // times inside the fan-out. This is the dispatch-level arm the
+            // taxonomy reserves for it: nothing was dispatched, so no sibling
+            // success is discarded by returning `Err` (R3 holds).
+            if let Err(ProviderFailure::Unauthorized) = self.dispatch.preflight(provider).await {
+                return Err(LlmCallError::Unauthorized {
+                    model: model.to_string(),
+                });
+            }
+
             let limit = Arc::new(Semaphore::new(self.max_concurrency));
 
             // Positional ordering is contractual, and completion order is not
@@ -434,8 +474,14 @@ fn classify_failure(failure: ProviderFailure) -> LlmOutcome {
             status,
             message,
             response_body,
-            retry_after_secs,
-        } => classify_api_call(status, &message, response_body.as_deref(), retry_after_secs),
+            retry_after_secs: _,
+            retry_after_present,
+        } => classify_api_call(
+            status,
+            &message,
+            response_body.as_deref(),
+            retry_after_present,
+        ),
     }
 }
 
@@ -457,7 +503,7 @@ fn classify_api_call(
     status: Option<u16>,
     message: &str,
     body: Option<&str>,
-    retry_after_secs: Option<u64>,
+    retry_after_present: bool,
 ) -> LlmOutcome {
     // Step 4: structural first, because it is the part that does not depend on
     // provider prose.
@@ -492,9 +538,11 @@ fn classify_api_call(
 
     let mut failure = LlmFailure::new(reason, message).with_status(status);
     // A 429 carrying a retry-after is retryable; one on an exhausted quota is
-    // the provider saying the same request will keep failing.
+    // the provider saying the same request will keep failing. Keyed on the
+    // header's presence, not on whether its value parsed as seconds — the
+    // HTTP-date form says "come back later" just as plainly.
     if reason == FailureReason::RateLimited {
-        failure = failure.retryable(retry_after_secs.is_some());
+        failure = failure.retryable(retry_after_present);
     }
     LlmOutcome::failed(failure, None::<String>)
 }

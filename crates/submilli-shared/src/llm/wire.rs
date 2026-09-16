@@ -619,12 +619,18 @@ fn number_at(parent: Option<&Value>, field: &str) -> Option<f64> {
 /// the raw body, and any `retry-after`. The ladder reads them and drops them —
 /// this function's contract is to hand over what classification needs, not to
 /// decide what a guest sees.
-pub fn build_failure(status: u16, body: &str, retry_after_secs: Option<u64>) -> ProviderFailure {
+pub fn build_failure(
+    status: u16,
+    body: &str,
+    retry_after_secs: Option<u64>,
+    retry_after_present: bool,
+) -> ProviderFailure {
     ProviderFailure::ApiCall {
         status: Some(status),
         message: error_message(body),
         response_body: Some(body.to_string()),
         retry_after_secs,
+        retry_after_present,
     }
 }
 

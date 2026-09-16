@@ -217,7 +217,7 @@ impl HttpModelDispatch {
             .map_err(map_transport_error)?;
 
         let status = response.status().as_u16();
-        let retry_after = retry_after_secs(response.headers());
+        let (retry_after_present, retry_after) = retry_after(response.headers());
         // The body is read on both arms: the success parser needs it, and the
         // failure arm needs it for the ladder's context-length classification.
         let body = read_bounded(response).await?;
@@ -225,7 +225,12 @@ impl HttpModelDispatch {
         if (200..300).contains(&status) {
             wire::parse_response(kind, &body)
         } else {
-            Err(wire::build_failure(status, &body, retry_after))
+            Err(wire::build_failure(
+                status,
+                &body,
+                retry_after,
+                retry_after_present,
+            ))
         }
     }
 }
@@ -266,6 +271,27 @@ impl ModelDispatch for HttpModelDispatch {
     ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse, ProviderFailure>> + Send + 'a>> {
         Box::pin(async move { self.dispatch_once(request).await })
     }
+
+    /// Resolve the row's credential and discard it.
+    ///
+    /// Only the resolution can fail; the key itself is dropped immediately
+    /// rather than cached, so this adds no lifetime to a secret. Each element
+    /// resolves its own when it runs — this exists to answer "can it resolve at
+    /// all" before the fan-out commits to N attempts.
+    fn preflight<'a>(
+        &'a self,
+        provider: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ProviderFailure>> + Send + 'a>> {
+        Box::pin(async move {
+            let Some(decl) = self.blueprint.llm.providers.get(provider) else {
+                // An undeclared provider is caught by the caller's own
+                // resolution against the blueprint, so there is nothing to
+                // check and nothing to report here.
+                return Ok(());
+            };
+            self.api_key(decl).await.map(|_| ())
+        })
+    }
 }
 
 /// Map a transport-level reqwest failure.
@@ -295,16 +321,31 @@ fn map_transport_error(err: reqwest::Error) -> ProviderFailure {
     }
 }
 
-/// Read `retry-after` as whole seconds.
+/// Whether the response carried a `retry-after` header at all, and its delay in
+/// whole seconds when it used the delta-seconds form.
 ///
-/// Only the delta-seconds form is read. The HTTP-date form is valid and
-/// deliberately unhandled: it only feeds a boolean `retryable`, and parsing
-/// dates to decide a flag that a present-and-unparseable header already answers
-/// would add a clock dependency for nothing.
-fn retry_after_secs(headers: &reqwest::header::HeaderMap) -> Option<u64> {
-    let raw = headers.get("retry-after")?.to_str().ok()?;
-    let secs = raw.trim().parse::<u64>().ok()?;
-    (secs <= MAX_RETRY_AFTER_SECS).then_some(secs)
+/// The two answers are separate on purpose. Presence is what decides
+/// `retryable`, because *any* `retry-after` — delta-seconds or HTTP-date — is
+/// the provider saying to come back later. Reading only the parseable form to
+/// decide that flag gets it backwards: an endpoint behind a proxy that emits
+/// `Retry-After: Wed, 21 Oct 2026 07:28:00 GMT` would reach the guest as
+/// `retryable: false`, which the taxonomy defines as the provider saying the
+/// same request will keep failing, and a guest retry loop would abandon a
+/// request that was going to succeed.
+///
+/// The delay itself is still only read from the delta-seconds form, which is
+/// what the first-party kinds send. Parsing dates would add a clock dependency
+/// for a number nothing currently consumes.
+fn retry_after(headers: &reqwest::header::HeaderMap) -> (bool, Option<u64>) {
+    let Some(raw) = headers.get("retry-after").and_then(|v| v.to_str().ok()) else {
+        return (false, None);
+    };
+    let secs = raw
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .filter(|secs| *secs <= MAX_RETRY_AFTER_SECS);
+    (true, secs)
 }
 
 #[cfg(test)]

@@ -134,6 +134,7 @@ async fn each_of_the_nine_outcomes_maps_to_the_right_reason() {
                 message: "rate limited".into(),
                 response_body: None,
                 retry_after_secs: Some(3),
+                retry_after_present: true,
             }),
             FailureReason::RateLimited,
         ),
@@ -143,6 +144,7 @@ async fn each_of_the_nine_outcomes_maps_to_the_right_reason() {
                 message: "bad request".into(),
                 response_body: None,
                 retry_after_secs: None,
+                retry_after_present: false,
             }),
             FailureReason::RequestRejected,
         ),
@@ -152,6 +154,7 @@ async fn each_of_the_nine_outcomes_maps_to_the_right_reason() {
                 message: "overloaded".into(),
                 response_body: None,
                 retry_after_secs: None,
+                retry_after_present: false,
             }),
             FailureReason::ProviderUnavailable,
         ),
@@ -312,6 +315,7 @@ async fn a_persistent_429_under_retries_classifies_as_rate_limited() {
             message: "rate limit exceeded".into(),
             response_body: None,
             retry_after_secs: Some(30),
+            retry_after_present: true,
         }),
     };
     let outcome = one(Err(wrapped)).await;
@@ -333,6 +337,7 @@ async fn a_persistent_429_under_retries_classifies_as_rate_limited() {
                 message: "overloaded".into(),
                 response_body: None,
                 retry_after_secs: None,
+                retry_after_present: false,
             }),
         }),
     };
@@ -368,6 +373,7 @@ async fn an_api_call_with_no_status_classifies_as_transport() {
         message: "fetch failed".into(),
         response_body: None,
         retry_after_secs: None,
+        retry_after_present: false,
     }))
     .await;
     assert_eq!(reason_of(&outcome), FailureReason::Transport);
@@ -386,6 +392,7 @@ async fn context_length_exceeded_is_classified_from_the_body_code_then_prose() {
             r#"{"error":{"code":"context_length_exceeded","message":"too long"}}"#.into(),
         ),
         retry_after_secs: None,
+        retry_after_present: false,
     }))
     .await;
     assert_eq!(reason_of(&by_code), FailureReason::RequestRejected);
@@ -395,6 +402,7 @@ async fn context_length_exceeded_is_classified_from_the_body_code_then_prose() {
         message: "prompt is too long: 250000 tokens > 200000 maximum".into(),
         response_body: None,
         retry_after_secs: None,
+        retry_after_present: false,
     }))
     .await;
     assert_eq!(reason_of(&by_prose), FailureReason::RequestRejected);
@@ -408,6 +416,7 @@ async fn context_length_exceeded_is_classified_from_the_body_code_then_prose() {
         message: "messages[0].role is invalid".into(),
         response_body: None,
         retry_after_secs: None,
+        retry_after_present: false,
     }))
     .await;
     assert_eq!(reason_of(&generic), FailureReason::RequestRejected);
@@ -542,6 +551,7 @@ async fn one_failing_element_leaves_the_other_results_intact() {
             message: "slow down".into(),
             response_body: None,
             retry_after_secs: Some(1),
+            retry_after_present: true,
         }),
     );
     answers.insert("c".to_string(), Ok(stopped("third")));
@@ -789,6 +799,7 @@ async fn no_failure_carries_a_response_body_or_completion_text() {
         message: format!("Bad Request: {ECHOED_PROMPT}"),
         response_body: Some(body),
         retry_after_secs: None,
+        retry_after_present: false,
     }))
     .await;
 
@@ -909,6 +920,7 @@ async fn retryability_of_a_rate_limit_follows_the_retry_after() {
         message: "slow down".into(),
         response_body: None,
         retry_after_secs: Some(12),
+        retry_after_present: true,
     }))
     .await;
     assert!(with.failure.expect("failure arm").retryable);
@@ -918,7 +930,58 @@ async fn retryability_of_a_rate_limit_follows_the_retry_after() {
         message: "quota exhausted".into(),
         response_body: None,
         retry_after_secs: None,
+        retry_after_present: false,
     }))
     .await;
     assert!(!without.failure.expect("failure arm").retryable);
+
+    // The HTTP-date form carries no seconds but says "come back later" just as
+    // plainly. Keying retryability off the parsed seconds would report this as
+    // the provider saying the same request will keep failing, and a guest retry
+    // loop would abandon a request that was going to succeed.
+    let dated = one(Err(ProviderFailure::ApiCall {
+        status: Some(429),
+        message: "slow down".into(),
+        response_body: None,
+        retry_after_secs: None,
+        retry_after_present: true,
+    }))
+    .await;
+    assert!(
+        dated.failure.expect("failure arm").retryable,
+        "a retry-after in the HTTP-date form is still a retry-after"
+    );
+}
+
+/// The whole 5xx range maps to `provider-unavailable`, not just the one status a
+/// test happened to use.
+///
+/// The boundaries are what a regression moves. Misrouting a bare 500 to
+/// `request-rejected` flips two guest-visible fields — `reason`, and `retryable`
+/// from true to false — so a guest retry loop keyed on `retryable` would stop
+/// retrying a transient outage. 500 is the most common 5xx and was the one left
+/// unpinned: narrowing the arm to `503..=503` kept the whole suite green.
+#[tokio::test]
+async fn the_whole_5xx_range_is_provider_unavailable_and_its_neighbours_are_not() {
+    for (status, expected) in [
+        (499, FailureReason::RequestRejected),
+        (500, FailureReason::ProviderUnavailable),
+        (503, FailureReason::ProviderUnavailable),
+        (599, FailureReason::ProviderUnavailable),
+        (600, FailureReason::RequestRejected),
+    ] {
+        let outcome = one(Err(ProviderFailure::ApiCall {
+            status: Some(status),
+            message: "upstream".into(),
+            response_body: None,
+            retry_after_secs: None,
+            retry_after_present: false,
+        }))
+        .await;
+        assert_eq!(
+            outcome.failure.expect("failure arm").reason,
+            expected,
+            "status {status}",
+        );
+    }
 }

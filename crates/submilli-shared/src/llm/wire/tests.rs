@@ -997,12 +997,13 @@ fn an_unreadable_success_body_is_not_a_silent_empty_success() {
 
 #[test]
 fn a_failure_carries_the_status_body_and_retry_after_for_the_ladder() {
-    let failure = build_failure(429, r#"{"error":{"message":"slow down"}}"#, Some(30));
+    let failure = build_failure(429, r#"{"error":{"message":"slow down"}}"#, Some(30), true);
     let ProviderFailure::ApiCall {
         status,
         message,
         response_body,
         retry_after_secs,
+        retry_after_present: _,
     } = failure
     else {
         panic!("expected an ApiCall failure");
@@ -1017,13 +1018,18 @@ fn a_failure_carries_the_status_body_and_retry_after_for_the_ladder() {
 /// is not JSON falls back to itself — both only ever read by the ladder.
 #[test]
 fn the_error_message_is_read_from_the_error_envelope() {
-    let extracted = build_failure(400, r#"{"error":{"message":"too long","code":"x"}}"#, None);
+    let extracted = build_failure(
+        400,
+        r#"{"error":{"message":"too long","code":"x"}}"#,
+        None,
+        false,
+    );
     assert!(matches!(
         extracted,
         ProviderFailure::ApiCall { ref message, .. } if message == "too long"
     ));
 
-    let raw = build_failure(500, "upstream exploded", None);
+    let raw = build_failure(500, "upstream exploded", None, false);
     assert!(matches!(
         raw,
         ProviderFailure::ApiCall { ref message, .. } if message == "upstream exploded"
