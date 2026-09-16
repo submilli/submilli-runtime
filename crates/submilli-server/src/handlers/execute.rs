@@ -257,6 +257,8 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
         http_client,
         mcp_transport,
         session_kv: manager.session_kv_for_execute(session_id),
+        llm_provider: state.llm_provider_for(&blueprint),
+        llm_budget: Some(manager.llm_budget_for_execute()),
     };
     let mcp_catalog = state
         .mcp_catalog_for_imports(

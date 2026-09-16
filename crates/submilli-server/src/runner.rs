@@ -11,9 +11,9 @@ use std::time::Instant;
 
 use interpreter::diagnostics::{self, Severity};
 use interpreter::runtime::{
-    AuthProxy, HttpClient, LinkedPackageModule, McpTransport, RuntimeConfig, SecretProvider,
-    SecurityCheck, SessionKvStore, StoreData, Vfs, VfsInfo, install_package_modules_async,
-    install_runtime_store_bound, install_tenant_limits,
+    AuthProxy, ExecutionTokenBudget, HttpClient, LinkedPackageModule, LlmProvider, McpTransport,
+    RuntimeConfig, SecretProvider, SecurityCheck, SessionKvStore, StoreData, Vfs, VfsInfo,
+    install_package_modules_async, install_runtime_store_bound, install_tenant_limits,
 };
 use interpreter::{
     BacktraceMode, Diagnostic, FileId, ParsedScript, ScriptImports, Sources,
@@ -73,6 +73,15 @@ pub struct HostServices {
     pub mcp_transport: Arc<dyn McpTransport>,
     /// `submilli:session` storage for the session this run belongs to.
     pub session_kv: Arc<dyn SessionKvStore>,
+    /// Outbound `submilli:llm` dispatch. `None` when no operator dispatch is
+    /// installed, which is the catchable configuration error a script sees —
+    /// deliberately not an internal failure, because a program running against a
+    /// server with no model provider is a configuration state, not a bug.
+    pub llm_provider: Option<Arc<dyn LlmProvider>>,
+    /// This execution's token budget, reserving against its own ceiling and the
+    /// server-wide one together. Released on drop, so a run that traps or times
+    /// out returns its reservation.
+    pub llm_budget: Option<Arc<ExecutionTokenBudget>>,
 }
 
 pub(crate) struct RunnerImports<'a> {
@@ -162,6 +171,8 @@ async fn run_inner(
     data.http_client = services.http_client;
     data.mcp_transport = Some(services.mcp_transport);
     data.session_kv = Some(services.session_kv);
+    data.llm_provider = services.llm_provider;
+    data.llm_budget = services.llm_budget;
     data.metrics = Arc::new(crate::metrics::SentryMetricsSink);
     data.console = Box::new(Sink(buf.clone()));
     data.install_type_info(compiled.type_info.clone());

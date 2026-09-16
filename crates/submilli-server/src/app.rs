@@ -11,12 +11,14 @@ use axum::{
     routing::{delete, get, post},
 };
 use interpreter::runtime::{
-    HttpClient, ReqwestHttpClient, RuntimeConfig, StoreData, install_runtime_host_functions,
+    HttpClient, LlmProvider, ReqwestHttpClient, RuntimeConfig, StoreData,
+    install_runtime_host_functions,
 };
 use interpreter::{PackageDeclaration, ScriptImports};
 use submilli_blueprint::Blueprint;
 use submilli_build::{ArtifactMetadata, PackageStore, PackageStoreError};
 use submilli_shared::EnvFileSecretResolver;
+use submilli_shared::llm::{BlueprintLlmProvider, ModelDispatch};
 use submilli_shared::secret_store::SecretStore;
 use tokio::sync::Notify;
 use wasmtime::{Engine, Linker, Module};
@@ -32,7 +34,9 @@ use crate::mcp::{
 };
 use crate::session::{InMemorySessionStore, SessionStore};
 use crate::session_manager::{
-    DEFAULT_TOTAL_SESSION_KV_BYTES, HttpClientFactory, SessionKvSettings, SessionManager,
+    CapabilitySettings, DEFAULT_MAX_ALL_EXECUTIONS_TOKENS, DEFAULT_MAX_CONCURRENCY,
+    DEFAULT_TOTAL_SESSION_KV_BYTES, HttpClientFactory, LlmSettings, SessionKvSettings,
+    SessionManager,
 };
 use crate::session_store::{
     DurableSessionStore, FileDurableSessionStore, InMemoryDurableSessionStore,
@@ -87,6 +91,9 @@ struct AppStateInner {
     shutdown: Arc<Notify>,
     /// Bound address, set by `serve` once the listener is up. Reported by status.
     bind_addr: OnceLock<SocketAddr>,
+    /// Outbound model dispatch, shared by every blueprint's provider. `None`
+    /// leaves `submilli:llm` unconfigured, which a program catches.
+    llm_dispatch: Option<Arc<dyn ModelDispatch>>,
 }
 
 impl AppState {
@@ -160,12 +167,23 @@ impl AppState {
             http_client_factory,
             Arc::clone(&session_store),
             Arc::clone(&idempotency_store),
-            SessionKvSettings::new(
-                config.session_kv_limits,
-                config
-                    .max_session_state_memory
-                    .unwrap_or(DEFAULT_TOTAL_SESSION_KV_BYTES),
-            ),
+            CapabilitySettings {
+                session_kv: SessionKvSettings::new(
+                    config.session_kv_limits,
+                    config
+                        .max_session_state_memory
+                        .unwrap_or(DEFAULT_TOTAL_SESSION_KV_BYTES),
+                ),
+                llm: LlmSettings::new(
+                    config.llm_limits,
+                    config
+                        .max_llm_tokens
+                        .unwrap_or(DEFAULT_MAX_ALL_EXECUTIONS_TOKENS),
+                    config
+                        .max_llm_concurrency
+                        .unwrap_or(DEFAULT_MAX_CONCURRENCY),
+                ),
+            },
         ));
         session_manager.spawn_reaper(REAP_INTERVAL);
 
@@ -195,6 +213,7 @@ impl AppState {
                 prepared_packages: Mutex::new(HashMap::new()),
                 shutdown: Arc::new(Notify::new()),
                 bind_addr: OnceLock::new(),
+                llm_dispatch: config.llm_dispatch,
             }),
         })
     }
@@ -265,6 +284,25 @@ impl AppState {
 
     pub(crate) fn session_manager(&self) -> &Arc<SessionManager> {
         &self.inner.session_manager
+    }
+
+    /// The outbound `submilli:llm` provider for one blueprint, or `None` when no
+    /// dispatch is installed — the catchable configuration error a program sees
+    /// (R12).
+    ///
+    /// Built per execute rather than cached: it borrows the blueprint, which is
+    /// re-read whenever the blueprint changes, and the construction is a pair of
+    /// `Arc` clones. Both execution routes funnel through here so a provider
+    /// cannot reach one and miss the other.
+    pub(crate) fn llm_provider_for(
+        &self,
+        blueprint: &Arc<Blueprint>,
+    ) -> Option<Arc<dyn LlmProvider>> {
+        let dispatch = self.inner.llm_dispatch.as_ref()?;
+        Some(Arc::new(
+            BlueprintLlmProvider::new(Arc::clone(blueprint), Arc::clone(dispatch))
+                .with_max_concurrency(self.inner.session_manager.llm_max_concurrency()),
+        ))
     }
 
     /// The operator-declared volume table, read from the session manager so

@@ -177,6 +177,29 @@ pub struct Cli {
     #[arg(long, value_name = "MEGABYTES")]
     max_session_state_memory: Option<u64>,
 
+    /// Tokens every live execution's `submilli:llm` calls may spend *in total*.
+    /// This is the ceiling on what the server can spend against the operator's
+    /// provider credential: reservations cover the prompt plus the reserved
+    /// output before dispatch, so a call that would push the server past this is
+    /// refused rather than billed. [default: 20000000]
+    /// Env: `$SUBMILLI_MAX_LLM_TOKENS`, which outranks the config file.
+    #[arg(long, value_name = "TOKENS")]
+    max_llm_tokens: Option<u64>,
+
+    /// Tokens a *single* execution's `submilli:llm` calls may spend. Bounds one
+    /// run where `--max-llm-tokens` bounds the process, so one program cannot
+    /// consume the whole server's budget. [default: 1000000]
+    /// Env: `$SUBMILLI_MAX_EXECUTION_LLM_TOKENS`, which outranks the config file.
+    #[arg(long, value_name = "TOKENS")]
+    max_execution_llm_tokens: Option<u64>,
+
+    /// Prompts one `llm.batch` dispatches at once. Bounded deliberately:
+    /// unbounded fan-out manufactures the rate-limit errors it then cannot honor
+    /// a `retry-after` against. [default: 4]
+    /// Env: `$SUBMILLI_MAX_LLM_CONCURRENCY`, which outranks the config file.
+    #[arg(long, value_name = "PROMPTS")]
+    max_llm_concurrency: Option<usize>,
+
     /// Probe a running server and exit 0 when it answers, non-zero otherwise —
     /// the container `HEALTHCHECK`, which has no shell or `curl` to call. The
     /// address is resolved from this process's own config file and environment,

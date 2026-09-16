@@ -9,12 +9,15 @@ use std::time::Duration;
 use anyhow::{Context, anyhow};
 use interpreter::diagnostics;
 use interpreter::runtime::{
-    HttpClient, LinkedPackageModule, McpTransport, NetworkPolicy, ReqwestHttpClient, RuntimeConfig,
-    StoreData, Vfs, install_package_modules_async, install_runtime_async, install_tenant_limits,
+    DEFAULT_MAX_EXECUTION_TOKENS, ExecutionTokenBudget, HttpClient, LinkedPackageModule, LlmLimits,
+    McpTransport, NetworkPolicy, ReqwestHttpClient, RuntimeConfig, SharedTokenBudget, StoreData,
+    Vfs, install_package_modules_async, install_runtime_async, install_tenant_limits,
 };
 use interpreter::{BacktraceMode, Sources, compile_script, dispatch_main_async, render_backtrace};
 use submilli_blueprint::Blueprint;
 use submilli_build::{Artifact, PackageStore};
+use submilli_shared::llm::provider::DEFAULT_MAX_CONCURRENCY;
+use submilli_shared::llm::{BlueprintLlmProvider, ModelDispatch};
 use submilli_shared::mcp::StreamableHttpTransport;
 use submilli_shared::mcp::discovery::{DiscoveryAuth, McpCatalog, discover_all};
 use submilli_shared::mcp_token::OAuthTokenManager;
@@ -54,6 +57,95 @@ pub struct Args {
     /// `@mcp/<server>` servers are called in-process — no running server needed.
     #[arg(long)]
     blueprint: Option<PathBuf>,
+
+    /// Tokens this run's `submilli:llm` calls may spend in total. A run that
+    /// asks for more raises a catchable `RangeError` rather than being billed.
+    ///
+    /// Finite by default, deliberately: unlike `submilli:session`, whose state
+    /// is memory-only, a blueprint-configured provider spends real money against
+    /// the operator's credential, and a CLI run has no server-wide ceiling
+    /// behind it. [default: 1000000]
+    /// Env: `$SUBMILLI_MAX_EXECUTION_LLM_TOKENS`, which outranks the config file.
+    #[arg(long, value_name = "TOKENS")]
+    max_llm_tokens: Option<u64>,
+
+    /// Prompts one `llm.batch` dispatches at once. [default: 4]
+    /// Env: `$SUBMILLI_MAX_LLM_CONCURRENCY`, which outranks the config file.
+    #[arg(long, value_name = "PROMPTS")]
+    max_llm_concurrency: Option<usize>,
+}
+
+/// The CLI's rung of the same ladder the server walks: a flag, then an explicit
+/// `SUBMILLI_*` variable, then the built-in default.
+///
+/// There is no config-file tier because `submilli run` has no config file — the
+/// blueprint is the only file it reads.
+///
+/// `Ok(None)` means "nothing set at any rung, use the default". A set-but-bad
+/// variable is `Err`, never `Ok(None)`: falling through to the default would
+/// silently spend more than the operator's typo'd ceiling asked for.
+///
+/// Reading goes through a `lookup` rather than `std::env::var` directly, the way
+/// [`submilli_server`'s own resolver does][1], so the precedence rules are
+/// testable without mutating the process environment out from under tests
+/// running in parallel threads.
+///
+/// [1]: https://docs.rs/submilli-server
+fn env_ladder<T: std::str::FromStr + Copy>(
+    flag: Option<T>,
+    name: &str,
+    expected: &str,
+    lookup: &impl Fn(&str) -> Option<String>,
+) -> anyhow::Result<Option<T>> {
+    if let Some(value) = flag {
+        return Ok(Some(value));
+    }
+    match lookup(name).map(|v| v.trim().to_owned()) {
+        Some(raw) if !raw.is_empty() => raw
+            .parse()
+            .map(Some)
+            .map_err(|_| anyhow!("${name}: expected {expected}, got `{raw}`")),
+        _ => Ok(None),
+    }
+}
+
+/// This run's token ceiling and fan-out bound, resolved off the same ladder and
+/// with the same defaults the server uses.
+fn llm_settings(args: &Args) -> anyhow::Result<(LlmLimits, usize)> {
+    llm_settings_from(args, &|name| std::env::var(name).ok())
+}
+
+fn llm_settings_from(
+    args: &Args,
+    lookup: &impl Fn(&str) -> Option<String>,
+) -> anyhow::Result<(LlmLimits, usize)> {
+    let per_execution_tokens = env_ladder(
+        args.max_llm_tokens,
+        "SUBMILLI_MAX_EXECUTION_LLM_TOKENS",
+        "a whole number of tokens",
+        lookup,
+    )?
+    .unwrap_or(DEFAULT_MAX_EXECUTION_TOKENS);
+    if per_execution_tokens == 0 {
+        anyhow::bail!("max llm tokens must be at least 1, got 0");
+    }
+    let max_concurrency = env_ladder(
+        args.max_llm_concurrency,
+        "SUBMILLI_MAX_LLM_CONCURRENCY",
+        "a whole number of prompts",
+        lookup,
+    )?
+    .unwrap_or(DEFAULT_MAX_CONCURRENCY);
+    if max_concurrency == 0 {
+        anyhow::bail!("max llm concurrency must be at least 1, got 0");
+    }
+    Ok((
+        LlmLimits {
+            per_execution_tokens,
+            ..LlmLimits::default()
+        },
+        max_concurrency,
+    ))
 }
 
 impl Args {
@@ -66,11 +158,32 @@ impl Args {
             ("has_timeout", self.timeout.is_some()),
             ("has_vfs", self.vfs.is_some()),
             ("has_blueprint", self.blueprint.is_some()),
+            ("has_max_llm_tokens", self.max_llm_tokens.is_some()),
+            (
+                "has_max_llm_concurrency",
+                self.max_llm_concurrency.is_some(),
+            ),
         ]
     }
 }
 
 pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
+    // No dispatch is compiled into the CLI today, so a blueprint declaring an
+    // `llm:` block still gets the catchable configuration error rather than a
+    // silent success. The seam below is what a dispatch installs through, and is
+    // what the tests drive.
+    execute_with_dispatch(args, None)
+}
+
+/// `execute`, with the outbound model dispatch injected.
+///
+/// Split out so a test can drive a real `llm.call` — and the budget refusal that
+/// guards it — without a live provider, the way the server's own tests do.
+pub(crate) fn execute_with_dispatch(
+    args: Args,
+    llm_dispatch: Option<Arc<dyn ModelDispatch>>,
+) -> anyhow::Result<ExitCode> {
+    let (llm_limits, llm_concurrency) = llm_settings(&args)?;
     let source = fs::read_to_string(&args.script)
         .with_context(|| format!("reading {}", args.script.display()))?;
     let filename = args.script.to_string_lossy().into_owned();
@@ -204,6 +317,26 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
         if let Some(transport) = mcp_transport.clone() {
             data.mcp_transport = Some(transport);
         }
+        // The CLI is wired where `submilli:session` deliberately is not: session
+        // state is memory-only and a CLI run has nothing to carry it across,
+        // whereas a blueprint-configured provider is what makes `submilli run`
+        // useful for testing a program before it reaches a server — and the
+        // credentials already resolve from the blueprint being loaded here.
+        //
+        // The budget is allocated whether or not a dispatch is installed, so the
+        // ceiling is enforced on the path that spends, and the aggregate is
+        // per-run: a CLI invocation is one execution, so its own ceiling is the
+        // only one there is to share.
+        data.llm_budget = Some(Arc::new(ExecutionTokenBudget::new(
+            llm_limits,
+            SharedTokenBudget::new(llm_limits.per_execution_tokens),
+        )));
+        if let Some(dispatch) = llm_dispatch.clone() {
+            data.llm_provider = Some(Arc::new(
+                BlueprintLlmProvider::new(bp.clone(), dispatch)
+                    .with_max_concurrency(llm_concurrency),
+            ));
+        }
     }
     let mut store = cfg.store(&engine, data)?;
     install_tenant_limits(&mut store);
@@ -276,6 +409,202 @@ fn register_package_sources(sources: &mut Sources, artifacts: &[Artifact]) {
     for artifact in artifacts {
         for source in &artifact.sources {
             sources.add(source.path.clone(), source.text.clone());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use submilli_shared::llm::{
+        ModelDispatch, ModelRequest, ProviderFailure, ProviderResponse, ProviderUsage, StopReason,
+    };
+
+    use super::*;
+
+    /// A dispatch that always answers, counting how many times it was reached.
+    /// The seam exists so the CLI's budget wiring is testable without a live
+    /// provider — the same seam `submilli-shared`'s own tests drive.
+    struct AlwaysOk(Arc<AtomicUsize>);
+
+    impl ModelDispatch for AlwaysOk {
+        fn dispatch<'a>(
+            &'a self,
+            _request: ModelRequest<'a>,
+        ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse, ProviderFailure>> + Send + 'a>>
+        {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                Ok(ProviderResponse {
+                    text: Some("answer".to_string()),
+                    stop_reason: StopReason::Stop,
+                    usage: ProviderUsage::reported(1.0, 1.0),
+                })
+            })
+        }
+    }
+
+    const BLUEPRINT: &str = r#"name: llm-cli
+permissions:
+  main:
+    - capability: llm.call
+      action: allow
+llm:
+  providers:
+    fake:
+      type: anthropic
+  models:
+    test-model:
+      provider: fake
+"#;
+
+    const CATCH: &str = r#"import llm from "submilli:llm";
+function main(): string {
+    try {
+        const t = llm.call("test-model", "hi").text;
+        return "OK:" + (t === null ? "NULL" : (t as string));
+    } catch (e: Error) {
+        return e.message;
+    }
+}"#;
+
+    struct Fixture {
+        _dir: tempfile::TempDir,
+        args: Args,
+    }
+
+    fn fixture(name: &str, max_llm_tokens: Option<u64>) -> Fixture {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let script = dir.path().join(format!("{name}.subm"));
+        std::fs::write(&script, CATCH).expect("write script");
+        let blueprint = dir.path().join("blueprint.yaml");
+        std::fs::write(&blueprint, BLUEPRINT).expect("write blueprint");
+        Fixture {
+            _dir: dir,
+            args: Args {
+                script,
+                fuel: None,
+                max_stack: None,
+                timeout: None,
+                vfs: None,
+                blueprint: Some(blueprint),
+                max_llm_tokens,
+                max_llm_concurrency: None,
+            },
+        }
+    }
+
+    /// `submilli run` with a blueprint-configured provider executes a call.
+    ///
+    /// This is the whole reason the CLI is wired where `submilli:session`
+    /// deliberately is not: a program can be exercised against its real provider
+    /// before it reaches a server.
+    #[test]
+    fn a_cli_run_with_a_configured_provider_executes_a_call() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let f = fixture("llm_ok", None);
+        let code = execute_with_dispatch(f.args, Some(Arc::new(AlwaysOk(Arc::clone(&calls)))))
+            .expect("the run should not fail");
+
+        assert_eq!(code, ExitCode::SUCCESS);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "the configured provider must have been dispatched"
+        );
+    }
+
+    /// **The CLI is not an unbounded-spend escape hatch.** A run whose
+    /// reservation exceeds its per-execution ceiling is refused *before*
+    /// dispatch, which is what makes it a ceiling rather than an after-the-fact
+    /// accounting of spend that already happened.
+    ///
+    /// A dispatch is installed deliberately: without one the missing-provider
+    /// error would mask the budget refusal (the provider is resolved before the
+    /// reservation is taken), and the test would pass for the wrong reason.
+    #[test]
+    fn a_cli_run_over_its_per_execution_ceiling_is_refused_before_dispatch() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        // One call reserves the default output cap plus its input estimate, so
+        // a ceiling of 10 cannot cover it.
+        let f = fixture("llm_over", Some(10));
+        let code = execute_with_dispatch(f.args, Some(Arc::new(AlwaysOk(Arc::clone(&calls)))))
+            .expect("a caught RangeError still exits cleanly");
+
+        assert_eq!(code, ExitCode::SUCCESS, "the guest caught the refusal");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "a call over the ceiling must never reach the provider"
+        );
+    }
+
+    /// The ceiling resolves off the flag, then the environment, then the
+    /// default — the same ladder the server walks, minus the config-file rung
+    /// the CLI has no file for.
+    ///
+    /// Asserted on the resolver rather than through a run, so the tiers are
+    /// distinguishable by value instead of by whether a call happened to be
+    /// refused.
+    #[test]
+    fn the_cli_ceiling_walks_the_flag_then_env_then_default() {
+        const TOKENS: &str = "SUBMILLI_MAX_EXECUTION_LLM_TOKENS";
+
+        // Distinct numbers per rung, so precedence is proven rather than
+        // coincidental: 400 (flag) and 200 (env) cannot be confused, and a
+        // resolver that picked the larger or the smaller would fail one row.
+        for (flag, env, expected, tier) in [
+            (Some(400), Some("200"), 400, "the flag"),
+            (None, Some("200"), 200, "the env var"),
+            (None, None, DEFAULT_MAX_EXECUTION_TOKENS, "unset"),
+        ] {
+            let f = fixture("ladder", flag);
+            let (limits, _) =
+                llm_settings_from(&f.args, &env_from(&[(TOKENS, env)])).expect("resolves");
+            assert_eq!(
+                limits.per_execution_tokens, expected,
+                "{tier} should have won"
+            );
+        }
+
+        // That the default is *finite* — the whole point of wiring the CLI's
+        // budget — is asserted behaviourally by
+        // `a_cli_run_over_its_per_execution_ceiling_is_refused_before_dispatch`,
+        // which shows a run being refused rather than dispatched. A comparison
+        // against a constant here would be true at compile time and prove
+        // nothing.
+    }
+
+    /// A set-but-unparseable ceiling fails the run naming the variable, rather
+    /// than falling through to the default.
+    #[test]
+    fn a_malformed_ceiling_fails_naming_the_variable() {
+        const TOKENS: &str = "SUBMILLI_MAX_EXECUTION_LLM_TOKENS";
+        let f = fixture("ladder_bad", None);
+        let err = llm_settings_from(&f.args, &env_from(&[(TOKENS, Some("lots"))]))
+            .expect_err("a malformed ceiling must fail");
+        assert!(
+            err.to_string().contains(TOKENS),
+            "the error must name the variable: {err}"
+        );
+    }
+
+    /// A lookup over a fixed set of variables, so precedence is asserted without
+    /// mutating the process environment other tests are reading.
+    fn env_from(pairs: &[(&str, Option<&str>)]) -> impl Fn(&str) -> Option<String> {
+        let owned: Vec<(String, Option<String>)> = pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), v.map(str::to_owned)))
+            .collect();
+        move |name| {
+            owned
+                .iter()
+                .find(|(key, _)| key == name)
+                .and_then(|(_, value)| value.clone())
         }
     }
 }

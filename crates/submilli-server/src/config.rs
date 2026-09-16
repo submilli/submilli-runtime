@@ -4,8 +4,9 @@ use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use interpreter::runtime::{NetworkPolicy, RuntimeConfig, SessionKvLimits};
+use interpreter::runtime::{LlmLimits, NetworkPolicy, RuntimeConfig, SessionKvLimits};
 
+use submilli_shared::llm::ModelDispatch;
 use submilli_shared::secret_store::SecretStore;
 
 use crate::blueprint::BlueprintStore;
@@ -91,6 +92,31 @@ pub struct ServerConfig {
     /// bounds the *process*: it is the only aggregate memory knob the server
     /// has, `max_store_bytes` being per-execute.
     pub max_session_state_memory: Option<u64>,
+    /// Per-execution bounds on `submilli:llm` (token ceiling, indeterminate-spend
+    /// ceiling, default output cap, prompt count and size). Embedder-only, like
+    /// [`Self::session_kv_limits`]: the aggregate below is the knob an operator
+    /// reasons about. Defaults to [`LlmLimits::default`].
+    pub llm_limits: LlmLimits,
+    /// Server-wide ceiling on `submilli:llm` tokens summed across every live
+    /// execution, reserved atomically so two executions cannot both claim the
+    /// same headroom. `None` uses
+    /// [`crate::session_manager::DEFAULT_MAX_ALL_EXECUTIONS_TOKENS`]. Where
+    /// `llm_limits.per_execution_tokens` bounds one run, this bounds the spend
+    /// against the operator's provider credential across the whole process.
+    pub max_llm_tokens: Option<u64>,
+    /// Elements one `batch` dispatches at once. `None` uses
+    /// [`crate::session_manager::DEFAULT_MAX_CONCURRENCY`]. Bounded because
+    /// unbounded fan-out manufactures the 429s it then cannot back off from.
+    pub max_llm_concurrency: Option<usize>,
+    /// The outbound model dispatch every `submilli:llm` call rides.
+    ///
+    /// Embedder-supplied and `None` by default, so a server built without one
+    /// gives a program the catchable configuration error (R12) rather than
+    /// failing internally. It has no CLI flag, env var, or config-file key: the
+    /// choice of SDK is a compile-time dependency, not an operator setting, and
+    /// the credentials it uses already resolve from the blueprint's `llm:`
+    /// block.
+    pub llm_dispatch: Option<Arc<dyn ModelDispatch>>,
     /// Operator-declared volumes a blueprint's `persistent` VFS mode resolves
     /// through, name → host directory. Config-file only: no CLI flag and no
     /// environment variable, so the mapping lives in one reviewable place.

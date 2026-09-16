@@ -34,8 +34,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use interpreter::runtime::{
-    HttpClient, InMemorySessionKv, SessionKvLimits, SessionKvStore, SharedKvBudget, Vfs, VfsInfo,
-    VfsMode as RtVfsMode,
+    ExecutionTokenBudget, HttpClient, InMemorySessionKv, LlmLimits, SessionKvLimits,
+    SessionKvStore, SharedKvBudget, SharedTokenBudget, Vfs, VfsInfo, VfsMode as RtVfsMode,
 };
 use submilli_blueprint::{Blueprint, HarnessSecretBindings, VarBindings, VfsConfig};
 use uuid::Uuid;
@@ -62,6 +62,16 @@ const PERSIST_INTERVAL: Duration = Duration::from_secs(30);
 /// process cannot be pushed out of memory by session count alone; an operator
 /// sizing for many concurrent sessions raises it via `max_session_state_memory`.
 pub const DEFAULT_TOTAL_SESSION_KV_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// Server-wide ceiling on `submilli:llm` tokens across every live execution.
+/// Re-exported from the runtime rather than chosen again here, so the number an
+/// operator raises is the number the refusal message names.
+pub use interpreter::runtime::DEFAULT_MAX_ALL_EXECUTIONS_TOKENS;
+
+/// Elements one `batch` dispatches at once. Re-exported from the provider that
+/// enforces it, so the bound the operator configures and the bound the semaphore
+/// takes cannot drift apart.
+pub use submilli_shared::llm::provider::DEFAULT_MAX_CONCURRENCY;
 
 #[derive(Debug)]
 pub enum SessionError {
@@ -143,6 +153,7 @@ pub struct SessionManager {
     /// [`SessionManager::forget`].
     idempotency: Arc<dyn IdempotencyStore>,
     session_kv: SessionKvSettings,
+    llm: LlmSettings,
 }
 
 /// How a session's `submilli:session` store is built. Cloned into every session
@@ -178,6 +189,64 @@ impl SessionKvSettings {
     }
 }
 
+/// How an execution's `submilli:llm` token budget is built. Cloned into every
+/// execution that allocates one, so the server-wide ceiling is shared across
+/// them all — the [`SessionKvSettings`] shape, for the same reason.
+///
+/// The unit of allocation differs, and deliberately. A session-KV store is
+/// *per-session*, cached on the entry so two executes in one session see one set
+/// of entries. A token budget is *per-execution*: [`ExecutionTokenBudget`]
+/// releases its reservation on `Drop`, so caching one on the session would hold
+/// every execute's spend until the session ended, and the per-execution ceiling
+/// would bound a session's whole lifetime instead of one run.
+#[derive(Clone)]
+pub struct LlmSettings {
+    pub limits: LlmLimits,
+    /// Server-wide ceiling summed across every live execution. Reserved
+    /// compare-and-swap, so two executions cannot both claim the same headroom.
+    pub budget: SharedTokenBudget,
+    /// Elements dispatched at once within one `batch` (KTD4).
+    pub max_concurrency: usize,
+}
+
+impl Default for LlmSettings {
+    fn default() -> Self {
+        Self::new(
+            LlmLimits::default(),
+            DEFAULT_MAX_ALL_EXECUTIONS_TOKENS,
+            DEFAULT_MAX_CONCURRENCY,
+        )
+    }
+}
+
+impl LlmSettings {
+    pub fn new(limits: LlmLimits, total_tokens: u64, max_concurrency: usize) -> Self {
+        Self {
+            limits,
+            budget: SharedTokenBudget::new(total_tokens),
+            // Zero would deadlock the provider's semaphore, so it clamps to one
+            // here as well as at the provider — an operator who writes 0 gets
+            // serial dispatch, not a hang.
+            max_concurrency: max_concurrency.max(1),
+        }
+    }
+
+    /// A fresh per-execution budget sharing this server's aggregate ceiling.
+    fn build(&self) -> Arc<ExecutionTokenBudget> {
+        Arc::new(ExecutionTokenBudget::new(self.limits, self.budget.clone()))
+    }
+}
+
+/// The stateful host capabilities a session's executions draw on, each carrying
+/// the aggregate it reserves against. Grouped so the manager's constructor stays
+/// readable as the set grows — the reason [`crate::runner::HostServices`] is a
+/// struct rather than a parameter list.
+#[derive(Clone, Default)]
+pub struct CapabilitySettings {
+    pub session_kv: SessionKvSettings,
+    pub llm: LlmSettings,
+}
+
 impl SessionManager {
     pub fn new(
         session_root: PathBuf,
@@ -186,8 +255,9 @@ impl SessionManager {
         http_client_factory: HttpClientFactory,
         store: Arc<dyn DurableSessionStore>,
         idempotency: Arc<dyn IdempotencyStore>,
-        session_kv: SessionKvSettings,
+        capabilities: CapabilitySettings,
     ) -> Self {
+        let CapabilitySettings { session_kv, llm } = capabilities;
         Self {
             inner: Mutex::new(State {
                 sessions: HashMap::new(),
@@ -199,6 +269,7 @@ impl SessionManager {
             store,
             idempotency,
             session_kv,
+            llm,
         }
     }
 
@@ -233,6 +304,33 @@ impl SessionManager {
                 .clone(),
             None => self.session_kv.build(),
         }
+    }
+
+    /// A fresh `submilli:llm` token budget for one execution, sharing this
+    /// server's aggregate ceiling.
+    ///
+    /// Unlike [`Self::session_kv_for_execute`] this is deliberately *not* cached
+    /// on the session: the reservation releases on `Drop`, so a budget held by a
+    /// session entry would keep every past execute's spend charged until the
+    /// session ended — and the per-execution ceiling would silently become a
+    /// per-session one. Every execute gets its own, and the aggregate is what
+    /// ties them together.
+    ///
+    /// The one-shot `POST /v1/execute` route therefore needs no special case:
+    /// its transient session counts against the same aggregate and releases when
+    /// the run returns.
+    pub fn llm_budget_for_execute(&self) -> Arc<ExecutionTokenBudget> {
+        self.llm.build()
+    }
+
+    /// The fan-out bound one `batch` dispatches at (KTD4).
+    pub fn llm_max_concurrency(&self) -> usize {
+        self.llm.max_concurrency
+    }
+
+    /// The server-wide LLM token budget, for operator-facing reporting.
+    pub fn llm_budget(&self) -> &SharedTokenBudget {
+        &self.llm.budget
     }
 
     /// The server-wide session-KV budget, for operator-facing reporting.
@@ -852,7 +950,7 @@ mod tests {
                 no_http(),
                 mem_store(),
                 mem_ledger(),
-                SessionKvSettings::default(),
+                CapabilitySettings::default(),
             ),
             dir,
         )
@@ -870,7 +968,7 @@ mod tests {
                 no_http(),
                 mem_store(),
                 Arc::clone(&ledger),
-                SessionKvSettings::default(),
+                CapabilitySettings::default(),
             ),
             dir,
             ledger,
@@ -964,7 +1062,7 @@ mod tests {
             no_http(),
             mem_store(),
             mem_ledger(),
-            SessionKvSettings::default(),
+            CapabilitySettings::default(),
         );
         let bp = Blueprint {
             name: "e".into(),
@@ -995,7 +1093,7 @@ mod tests {
             no_http(),
             mem_store(),
             mem_ledger(),
-            SessionKvSettings::default(),
+            CapabilitySettings::default(),
         );
         mgr.ensure("sid", &bp).await.unwrap();
         let (v1, _) = mgr.vfs_for_execute("sid", &bp).unwrap();
@@ -1010,7 +1108,7 @@ mod tests {
             no_http(),
             mem_store(),
             mem_ledger(),
-            SessionKvSettings::default(),
+            CapabilitySettings::default(),
         );
         restarted.ensure("sid", &bp).await.unwrap();
         let (v2, _) = restarted.vfs_for_execute("sid", &bp).unwrap();
@@ -1031,7 +1129,7 @@ mod tests {
             no_http(),
             store.clone(),
             mem_ledger(),
-            SessionKvSettings::default(),
+            CapabilitySettings::default(),
         );
         mgr.ensure("sid", &bp).await.unwrap();
 
@@ -1043,7 +1141,7 @@ mod tests {
             no_http(),
             store,
             mem_ledger(),
-            SessionKvSettings::default(),
+            CapabilitySettings::default(),
         );
         assert!(!restarted.contains("sid"));
         restarted.boot().await;
@@ -1080,7 +1178,7 @@ mod tests {
             no_http(),
             store,
             mem_ledger(),
-            SessionKvSettings::default(),
+            CapabilitySettings::default(),
         );
         mgr.boot().await;
         assert!(mgr.contains("old"));
@@ -1106,7 +1204,7 @@ mod tests {
                 no_http(),
                 file_store(store_dir.path()),
                 mem_ledger(),
-                SessionKvSettings::default(),
+                CapabilitySettings::default(),
             );
             let bound = Arc::new(HarnessSecretBindings::from([(
                 "TOKEN".to_string(),
@@ -1134,7 +1232,7 @@ mod tests {
             no_http(),
             file_store(store_dir.path()),
             mem_ledger(),
-            SessionKvSettings::default(),
+            CapabilitySettings::default(),
         );
         mgr.boot().await;
         assert_eq!(
@@ -1160,7 +1258,7 @@ mod tests {
             no_http(),
             file_store(store_dir.path()),
             mem_ledger(),
-            SessionKvSettings::default(),
+            CapabilitySettings::default(),
         );
         mgr.boot().await;
         assert!(
@@ -1195,7 +1293,7 @@ mod tests {
             no_http(),
             store.clone(),
             mem_ledger(),
-            SessionKvSettings::default(),
+            CapabilitySettings::default(),
         );
         mgr.boot().await;
         assert!(!mgr.contains("vanished"), "a record with no dir is dropped");
@@ -1319,7 +1417,7 @@ mod tests {
             no_http(),
             store,
             Arc::clone(&ledger),
-            SessionKvSettings::default(),
+            CapabilitySettings::default(),
         );
         mgr.boot().await;
 
@@ -1344,7 +1442,7 @@ mod tests {
             no_http(),
             mem_store(),
             Arc::clone(&ledger),
-            SessionKvSettings::default(),
+            CapabilitySettings::default(),
         );
         mgr.boot().await;
 
@@ -1367,7 +1465,7 @@ mod tests {
             no_http(),
             Arc::clone(&store),
             Arc::clone(&ledger),
-            SessionKvSettings::default(),
+            CapabilitySettings::default(),
         );
         mgr.ensure("sid", &bp).await.unwrap();
         ledger.put(reserved("sid", "k")).await.unwrap();
@@ -1379,7 +1477,7 @@ mod tests {
             no_http(),
             store,
             Arc::clone(&ledger),
-            SessionKvSettings::default(),
+            CapabilitySettings::default(),
         );
         restarted.boot().await;
 
@@ -1542,6 +1640,51 @@ mod tests {
         );
     }
 
+    /// Every execution's budget reserves against *one* aggregate, so two live
+    /// executions cannot both claim the same headroom.
+    ///
+    /// Asserted on the manager rather than through a server, because this is the
+    /// property the `Clone` on [`LlmSettings`] exists for: a `build()` that
+    /// minted a fresh `SharedTokenBudget` would pass every single-execution test
+    /// and fail only here.
+    #[test]
+    fn every_execution_budget_shares_one_aggregate() {
+        let (mgr, _dir) = manager();
+        let first = mgr.llm_budget_for_execute();
+        let second = mgr.llm_budget_for_execute();
+
+        first.reserve("m", 1_000).expect("the first fits");
+        assert_eq!(
+            mgr.llm_budget().used(),
+            1_000,
+            "the first reservation must land on the server-wide budget"
+        );
+
+        second.reserve("m", 1_000).expect("the second fits");
+        assert_eq!(
+            mgr.llm_budget().used(),
+            2_000,
+            "a second execution must reserve against the same aggregate, not its own copy"
+        );
+
+        // Dropping one returns only its own share.
+        drop(first);
+        assert_eq!(
+            mgr.llm_budget().used(),
+            1_000,
+            "dropping one execution must release its reservation and no one else's"
+        );
+    }
+
+    /// Zero would deadlock the provider's fan-out semaphore, so it clamps to one
+    /// here as well as at the provider — an operator who writes 0 gets serial
+    /// dispatch, not a hang.
+    #[test]
+    fn a_zero_concurrency_bound_clamps_to_one() {
+        let settings = LlmSettings::new(LlmLimits::default(), 1_000, 0);
+        assert_eq!(settings.max_concurrency, 1);
+    }
+
     /// The aggregate budget is reserved atomically across sessions and released
     /// when a session ends — not by evicting another session's entries.
     #[tokio::test]
@@ -1557,7 +1700,10 @@ mod tests {
             no_http(),
             mem_store(),
             mem_ledger(),
-            settings,
+            CapabilitySettings {
+                session_kv: settings,
+                ..CapabilitySettings::default()
+            },
         );
 
         let first = mgr

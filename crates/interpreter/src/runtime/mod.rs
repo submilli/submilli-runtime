@@ -29,8 +29,9 @@ pub use host::{
 pub use json::JSON_MODULE_NAME;
 pub use limits::{DEFAULT_MAX_STORE_BYTES, MemoryCapExceeded, TenantLimits, install_tenant_limits};
 pub use llm::{
-    ExecutionTokenBudget, FailureReason, LLM_MODULE_NAME, LlmCallError, LlmFailure, LlmLimitKind,
-    LlmLimits, LlmModel, LlmOutcome, LlmProvider, PromptBoundKind, SharedTokenBudget,
+    DEFAULT_MAX_ALL_EXECUTIONS_TOKENS, DEFAULT_MAX_EXECUTION_TOKENS, ExecutionTokenBudget,
+    FailureReason, LLM_MODULE_NAME, LlmCallError, LlmFailure, LlmLimitKind, LlmLimits, LlmModel,
+    LlmOutcome, LlmProvider, PromptBoundKind, SharedTokenBudget,
 };
 pub use mcp::{
     MCP_MODULE_NAME, McpCallError, McpTransport, install_mcp_async, mcp_call_package_declaration,
