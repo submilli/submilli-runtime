@@ -112,6 +112,10 @@ pub fn package_declaration() -> PackageDeclaration {
          merely that nothing threw. A completion cut off at the output cap is `ok: \
          false` with `reason` `\"truncated\"` and still carries the partial `text`, \
          so a loop that skips every `!ok` element discards usable output.\n *\n * \
+         That envelope is what the typed form gives up, so a typed call on a \
+         failed completion throws a `TypeError` naming the reason and pointing \
+         back at the untyped form — there is no `ok` left to branch on, and the \
+         partial `text` is reachable only without a type argument.\n *\n * \
          Throws a `RangeError` when the \
          execution's token budget or the prompt bounds cannot cover the call, and a \
          catchable error naming the model when no provider is configured. No error \
