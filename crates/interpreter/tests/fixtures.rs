@@ -3,6 +3,16 @@
 //! `// deny-capability: <substring>` installs a security policy denying every
 //! matching capability with reason "denied by fixture policy", so fixtures can
 //! exercise the catchable `PermissionDeniedError` path.
+//! `// deny-llm-model: <model>` installs a *context*-keyed policy instead,
+//! denying `llm.call` only for that model — the shape a blueprint `model`
+//! filter has. `deny-capability` cannot express it: it matches on the
+//! capability name and ignores context, and `call`, `batch`, and `models()`
+//! share the single `llm.call` capability, so denying by name would refuse
+//! `models()` outright rather than filtering its candidates.
+//!
+//! A fixture whose name contains `llm_` also gets a canned [`FixtureLlm`]
+//! provider, and the budget-oriented ones get ceilings small enough to reach.
+//! `llm_no_provider` deliberately gets none, which is the unconfigured runtime.
 //!
 //! The default run is a smoke subset. Set `SUBMILLI_FULL_TEST=1` for
 //! nightly/CI coverage, or `SUBMILLI_FIXTURE_FILTER=<substring>` for targeted
@@ -14,8 +24,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use interpreter::runtime::{
-    InMemorySessionKv, LinkedPackageModule, StoreData, Vfs, install_package_modules_async,
-    install_runtime_host_functions, install_runtime_store_bound, install_tenant_limits,
+    ExecutionTokenBudget, FailureReason, InMemorySessionKv, LinkedPackageModule, LlmCallError,
+    LlmFailure, LlmLimits, LlmModel, LlmOutcome, LlmProvider, SharedTokenBudget, StoreData, Vfs,
+    install_package_modules_async, install_runtime_host_functions, install_runtime_store_bound,
+    install_tenant_limits,
 };
 use interpreter::{
     Asi, BacktraceMode, CompiledPackage, Diagnostic, ModulePath, PackageDeclaration,
@@ -94,6 +106,8 @@ impl PreparedRuntime {
         &self,
         compiled: &interpreter::compile::CompiledScript,
         deny_capabilities: &[String],
+        deny_llm_models: &[String],
+        fixture: &str,
     ) -> wasmtime::Result<RunResult> {
         struct Sink(Arc<Mutex<Vec<u8>>>);
         impl Write for Sink {
@@ -110,9 +124,13 @@ impl PreparedRuntime {
         let mut data = StoreData::with_vfs_and_cap(Vfs::tempdir()?, self.config.max_store_bytes);
         data.console = Box::new(Sink(Arc::clone(&buf)));
         data.session_kv = Some(Arc::new(InMemorySessionKv::default()));
+        install_llm_fixture_support(&mut data, fixture);
         data.install_type_info(compiled.type_info.clone());
         if !deny_capabilities.is_empty() {
             data.security_check = Arc::new(FixtureDeny(deny_capabilities.to_vec()));
+        }
+        if !deny_llm_models.is_empty() {
+            data.security_check = Arc::new(FixtureDenyLlmModel(deny_llm_models.to_vec()));
         }
         let mut store = self.config.store_async(&self.engine, data)?;
         install_tenant_limits(&mut store);
@@ -138,9 +156,11 @@ impl PreparedRuntime {
         deps: &[&CompiledPackage],
         root: &interpreter::compile::CompiledScript,
         deny_capabilities: &[String],
+        fixture: &str,
     ) -> wasmtime::Result<RunResult> {
         let mut data = StoreData::with_vfs_and_cap(Vfs::tempdir()?, self.config.max_store_bytes);
         data.session_kv = Some(Arc::new(InMemorySessionKv::default()));
+        install_llm_fixture_support(&mut data, fixture);
         if !deny_capabilities.is_empty() {
             data.security_check = Arc::new(FixtureDeny(deny_capabilities.to_vec()));
         }
@@ -361,7 +381,12 @@ fn run_one(
 
         (Ok(compiled), _) => {
             assert_diagnostics(&compiled.warnings, &expectations.warnings, &filename, &src)?;
-            let outcome = tokio.block_on(runtime.run(&compiled, &expectations.deny_capabilities));
+            let outcome = tokio.block_on(runtime.run(
+                &compiled,
+                &expectations.deny_capabilities,
+                &expectations.deny_llm_models,
+                &filename,
+            ));
             match outcome {
                 Ok(_) => Ok(()),
                 Err(err) => {
@@ -670,7 +695,8 @@ fn run_packages_fixture(
         .filter(|n| **n != root_entry.name)
         .map(|n| &compiled[n])
         .collect();
-    match tokio.block_on(runtime.run_packages(&deps, &root_script, &deny_capabilities)) {
+    let fixture = rel(path);
+    match tokio.block_on(runtime.run_packages(&deps, &root_script, &deny_capabilities, &fixture)) {
         Ok(_) => Ok(()),
         Err(err) => Err(format!("trapped: {err}")),
     }
@@ -723,6 +749,7 @@ struct Expectations {
     errors: Vec<String>,
     warnings: Vec<String>,
     deny_capabilities: Vec<String>,
+    deny_llm_models: Vec<String>,
 }
 
 fn parse_expectations(src: &str) -> Expectations {
@@ -749,8 +776,299 @@ fn parse_expectations(src: &str) -> Expectations {
                 expectations.deny_capabilities.push(needle.to_string());
             }
         }
+        if let Some((_, s)) = line.split_once("// deny-llm-model:") {
+            let needle = s.trim();
+            if !needle.is_empty() {
+                expectations.deny_llm_models.push(needle.to_string());
+            }
+        }
     }
     expectations
+}
+
+/// The canned model provider the `llm_*` fixtures dispatch against.
+///
+/// U7's real provider is unreachable from here by construction —
+/// `submilli-shared` depends on `interpreter` and not the reverse — so the
+/// fixtures implement the U1 trait directly. This is a *behavioral* fake, not a
+/// stub: it reproduces the parts of the contract the fixtures assert against,
+/// including the ones a lazier fake would paper over. It rejects a model it does
+/// not serve (so the gate-ordering fixtures are not vacuous), it returns exactly
+/// one outcome per prompt in input order, and it mixes successes with failures
+/// inside one batch so R3 has something real to survive.
+///
+/// Behavior is keyed off the fixture's own filename rather than a directive,
+/// because each scenario wants a *different provider*, not a different policy —
+/// and a fixture that had to describe its provider in a header comment would
+/// state the setup twice.
+struct FixtureLlm {
+    /// Which scenario this instance plays, from the fixture's file stem.
+    scenario: String,
+}
+
+impl FixtureLlm {
+    fn new(fixture: &str) -> Self {
+        Self {
+            scenario: fixture.to_string(),
+        }
+    }
+
+    /// The models this provider serves for the running fixture.
+    ///
+    /// `llm_models_empty` serves none, which is distinct from "no provider":
+    /// the provider answers, with an empty catalog. `llm_models_no_description`
+    /// declares a model with neither a description nor a context window, so the
+    /// `null`-means-unknown rule has a real subject.
+    fn catalog(&self) -> Vec<LlmModel> {
+        if self.scenario.contains("models_empty") {
+            return Vec::new();
+        }
+        if self.scenario.contains("models_no_description") {
+            return vec![
+                LlmModel {
+                    name: "claude-haiku-4-5".to_string(),
+                    description: Some("Cheap and fast.".to_string()),
+                    context_window: Some(200_000),
+                },
+                // Declared by name only — the operator asserted nothing else.
+                LlmModel::new("bare-model"),
+            ];
+        }
+        vec![
+            LlmModel {
+                name: "claude-haiku-4-5".to_string(),
+                description: Some("Cheap and fast.".to_string()),
+                context_window: Some(200_000),
+            },
+            LlmModel {
+                name: "claude-sonnet-5".to_string(),
+                description: Some("Strong reasoning.".to_string()),
+                context_window: Some(1_000_000),
+            },
+            // The candidate a `model`-filtered policy hides in
+            // `llm_models_filtered`. Serving it here is what makes that
+            // fixture's filtering assertion mean something.
+            LlmModel {
+                name: "internal-secret-model".to_string(),
+                description: Some("Operator-only.".to_string()),
+                context_window: Some(8_000),
+            },
+        ]
+    }
+
+    /// The outcome for prompt `index`.
+    ///
+    /// The typed fixtures answer in JSON so the structural check has something
+    /// to verify; `llm_typed_mismatch` and `llm_typed_provider_ignored_schema`
+    /// answer with the *wrong* shape on purpose, which is the only way the
+    /// "schema is advisory, the check is not" claim gets tested.
+    fn outcome(&self, index: usize, prompt: &str) -> LlmOutcome {
+        let scenario = self.scenario.as_str();
+
+        if scenario.contains("typed_mismatch") {
+            // Conforms to no requested type: `level` is a number where the
+            // interface says string, so the checked cast must throw.
+            return LlmOutcome::success(r#"{"level":7,"rationale":"malformed on purpose"}"#);
+        }
+        if scenario.contains("typed_provider_ignored_schema") {
+            // A provider that ignored the schema entirely and answered in
+            // prose. The schema is advisory; the check is not.
+            return LlmOutcome::success("I think this ticket is probably critical, honestly.");
+        }
+        if scenario.contains("typed_get") {
+            return LlmOutcome::success(
+                r#"{"level":"critical","rationale":"payment path down",
+                    "detail":{"service":"billing","restarts":3},"owner":null}"#,
+            );
+        }
+        if scenario.contains("batch_partial_failure") {
+            // R3: element 1 fails mid-batch and still carries partial text,
+            // while 0 and 2 succeed. A whole-batch `Err` would discard them.
+            return match index {
+                1 => LlmOutcome::failed(
+                    LlmFailure::new(FailureReason::Truncated, "output token cap reached")
+                        .with_finish_reason("length"),
+                    Some("partial answer that survi"),
+                ),
+                _ => LlmOutcome::success(format!("answer {index}")),
+            };
+        }
+        if scenario.contains("error_taxonomy") {
+            // One element per category, so the fixture can assert the
+            // kebab-case spelling and the text/retryable rules per reason.
+            return match index {
+                0 => LlmOutcome::failed(
+                    LlmFailure::new(FailureReason::Truncated, "output token cap reached")
+                        .with_finish_reason("length"),
+                    Some("cut off mid-sent"),
+                ),
+                1 => LlmOutcome::failed(
+                    LlmFailure::new(FailureReason::ContentFiltered, "blocked by safety filter"),
+                    Some("redacted portion "),
+                ),
+                2 => LlmOutcome::failed(
+                    LlmFailure::new(FailureReason::InvalidOutput, "output did not parse"),
+                    None::<String>,
+                ),
+                3 => LlmOutcome::failed(
+                    LlmFailure::new(FailureReason::RateLimited, "rate limited").with_status(429),
+                    None::<String>,
+                ),
+                4 => LlmOutcome::failed(
+                    LlmFailure::new(FailureReason::RequestRejected, "request rejected")
+                        .with_status(400),
+                    None::<String>,
+                ),
+                5 => LlmOutcome::failed(
+                    LlmFailure::new(FailureReason::ProviderUnavailable, "provider unavailable")
+                        .with_status(503),
+                    None::<String>,
+                ),
+                6 => LlmOutcome::failed(
+                    LlmFailure::new(FailureReason::Transport, "connection reset"),
+                    None::<String>,
+                ),
+                7 => LlmOutcome::failed(
+                    LlmFailure::new(FailureReason::Cancelled, "cancelled"),
+                    None::<String>,
+                ),
+                _ => LlmOutcome::failed(
+                    LlmFailure::new(FailureReason::Incomplete, "unclassified stop")
+                        .with_finish_reason("provider-specific-stop"),
+                    None::<String>,
+                ),
+            };
+        }
+        if scenario.contains("budget") {
+            // Report usage so the budget fixtures reconcile against real
+            // numbers rather than an indeterminate hold.
+            return LlmOutcome::success(format!("answer {index}")).with_usage(Some(10), Some(10));
+        }
+
+        // The default: echo the prompt's length rather than the prompt, so a
+        // fixture can prove ordering without the fake becoming a prompt oracle.
+        LlmOutcome::success(format!("answer {index} for {} bytes", prompt.len()))
+    }
+}
+
+impl LlmProvider for FixtureLlm {
+    fn call<'a>(
+        &'a self,
+        model: &'a str,
+        prompts: &'a [String],
+        _schema_json: Option<&'a str>,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Vec<LlmOutcome>, LlmCallError>> + Send + 'a>,
+    > {
+        // Declaration is authoritative (KTD9): a provider rejects a model it
+        // does not serve, and names the ones it does. Reproducing that here is
+        // what keeps `llm_denied`'s ordering claim honest — a fake that
+        // accepted every model name would pass that fixture vacuously.
+        let catalog = self.catalog();
+        if !catalog.iter().any(|m| m.name == model) {
+            let model = model.to_string();
+            let available = catalog.into_iter().map(|m| m.name).collect();
+            return Box::pin(async move { Err(LlmCallError::UnknownModel { model, available }) });
+        }
+        // Exactly one outcome per prompt, in input order.
+        let outcomes = prompts
+            .iter()
+            .enumerate()
+            .map(|(i, prompt)| self.outcome(i, prompt))
+            .collect();
+        Box::pin(async move { Ok(outcomes) })
+    }
+
+    fn models<'a>(
+        &'a self,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Vec<LlmModel>, LlmCallError>> + Send + 'a>,
+    > {
+        let models = self.catalog();
+        Box::pin(async move { Ok(models) })
+    }
+}
+
+/// Wire the provider and budget a given fixture wants.
+///
+/// `llm_no_provider` is the one fixture that gets *no* provider: the field stays
+/// `None`, which is the unconfigured runtime R12 describes. Everything else gets
+/// the fake; the budget fixtures additionally get a ceiling small enough to
+/// actually hit, since a default-sized budget would make their assertions
+/// unreachable.
+fn install_llm_fixture_support(data: &mut StoreData, fixture: &str) {
+    if !fixture.contains("llm_") {
+        return;
+    }
+    if fixture.contains("no_provider") {
+        return;
+    }
+
+    data.llm_provider = Some(Arc::new(FixtureLlm::new(fixture)));
+
+    // Each reserved call costs its prompt estimate plus the output cap, so
+    // these ceilings are sized to admit the first call(s) and refuse the next.
+    let limits = if fixture.contains("prompt_bounds") {
+        LlmLimits {
+            max_prompt_count: 4,
+            max_prompt_bytes: 64,
+            ..LlmLimits::default()
+        }
+    } else if fixture.contains("budget") {
+        LlmLimits {
+            per_execution_tokens: 200,
+            default_output_cap: 50,
+            ..LlmLimits::default()
+        }
+    } else {
+        return;
+    };
+
+    // `llm_budget_aggregate` shares a server-wide ceiling tighter than its own,
+    // so the refusal names the *server* budget and not this execution's.
+    let aggregate_cap = if fixture.contains("budget_aggregate") {
+        120
+    } else {
+        u64::MAX
+    };
+    data.llm_budget = Some(Arc::new(ExecutionTokenBudget::new(
+        limits,
+        SharedTokenBudget::new(aggregate_cap),
+    )));
+}
+
+/// A `model`-filtered policy: denies `llm.call` for the named models and allows
+/// everything else, keyed off the check *context* rather than the capability
+/// name.
+///
+/// `// deny-capability:` cannot express this. It matches on the capability name
+/// and ignores context, and `call`, `batch`, and `models()` all share the single
+/// `llm.call` capability — so denying by name would refuse `models()` itself
+/// before it ever reached the per-candidate filter, and the filtering this
+/// exists to test would never run. A blueprint `model` filter is precisely a
+/// context-keyed rule, so the fixture policy has to be one too.
+///
+/// This is a *policy* denial, which is the half that filters candidates. An
+/// invariant denial means the check could not be made at all and must propagate
+/// rather than silently shorten the list — `crates/submilli-server/tests/` is
+/// where filter-conditional denial gets its integration coverage.
+struct FixtureDenyLlmModel(Vec<String>);
+
+impl interpreter::runtime::SecurityCheck for FixtureDenyLlmModel {
+    fn check(
+        &self,
+        _caller: &str,
+        capability: &str,
+        context: &serde_json::Value,
+    ) -> interpreter::runtime::CheckOutcome {
+        let model = context.get("model").and_then(serde_json::Value::as_str);
+        if capability == "llm.call" && model.is_some_and(|m| self.0.iter().any(|d| d == m)) {
+            return interpreter::runtime::CheckOutcome::Deny {
+                reason: "denied by fixture model filter".to_string(),
+            };
+        }
+        interpreter::runtime::CheckOutcome::Allow
+    }
 }
 
 /// Denies every capability containing one of the `// deny-capability:` needles

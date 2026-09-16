@@ -1,0 +1,6 @@
+# A gated model call attributes to whoever's code is running: the package, not
+# the script that called into it. An operator granting `llm.call` to a library
+# must be granting it to that library, or the grant means nothing.
+# name          dir       deps           root
+@test/triage    triage    -
+main            app       @test/triage   root
