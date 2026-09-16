@@ -1,6 +1,7 @@
 //! Infrastructure shared by the `submilli-server` binary and the `submilli`
 //! CLI: the secret store, the MCP OAuth stack (auth-state, token minting,
-//! discovery, and the outbound transport), and the LLM-facing prompt renderer.
+//! discovery, and the outbound transport), the outbound model provider, and the
+//! LLM-facing prompt renderer.
 //!
 //! None of this is axum- or server-bound — the CLI uses it to run authenticated
 //! MCP servers and resolve `store:` secrets locally, with the same semantics the
@@ -8,6 +9,7 @@
 
 pub mod github;
 pub mod host;
+pub mod llm;
 pub mod mcp;
 pub mod mcp_auth;
 pub mod mcp_token;

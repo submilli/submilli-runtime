@@ -3,6 +3,7 @@
 mod auth_proxy;
 mod diag;
 mod filter;
+mod llm;
 mod mcp;
 mod permissions;
 mod secrets;
@@ -22,6 +23,7 @@ pub use auth_proxy::{
 };
 pub use diag::{Fault, PathSeg, YamlPath};
 pub use filter::{FieldMatch, FilterExpr, VarBindings};
+pub use llm::{LlmConfig, LlmModelDecl, LlmProviderDecl};
 pub use mcp::{McpAuth, McpServer};
 pub use permissions::{Action, DefaultAction, PermissionRule};
 pub use secrets::{
@@ -88,6 +90,12 @@ pub struct Blueprint {
     /// packages. Keyed by local server identifier.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub mcp: BTreeMap<String, McpServer>,
+    /// Model providers the script reaches through `submilli:llm`, and the models
+    /// it may name. Unlike `mcp:`, which discovers its sub-entities live, this
+    /// block *is* the model catalog: no provider SDK exposes a listing API, so
+    /// declaration is authoritative and gates calling.
+    #[serde(default, skip_serializing_if = "LlmConfig::is_empty")]
+    pub llm: LlmConfig,
 }
 
 impl Default for Blueprint {
@@ -104,6 +112,7 @@ impl Default for Blueprint {
             default_action: None,
             permissions: BTreeMap::new(),
             mcp: BTreeMap::new(),
+            llm: LlmConfig::default(),
         }
     }
 }
@@ -690,6 +699,7 @@ pub fn parse(yaml: &str) -> Result<Blueprint, BlueprintError> {
     permissions::validate(&blueprint.permissions)?;
     variables::validate_variables(&blueprint)?;
     mcp::validate_mcp(&blueprint)?;
+    llm::validate_llm(&blueprint)?;
     Ok(blueprint)
 }
 
@@ -942,6 +952,7 @@ pub enum BlueprintError {
     InvalidAuthProxy(Fault),
     InvalidPermissions(Fault),
     InvalidMcp(Fault),
+    InvalidLlm(Fault),
 }
 
 impl BlueprintError {
@@ -958,7 +969,8 @@ impl BlueprintError {
             | BlueprintError::InvalidVariables(fault)
             | BlueprintError::InvalidAuthProxy(fault)
             | BlueprintError::InvalidPermissions(fault)
-            | BlueprintError::InvalidMcp(fault) => Some(fault),
+            | BlueprintError::InvalidMcp(fault)
+            | BlueprintError::InvalidLlm(fault) => Some(fault),
         }
     }
 }
@@ -991,6 +1003,7 @@ impl fmt::Display for BlueprintError {
                 write!(f, "invalid permissions config: {}", fault.message)
             }
             BlueprintError::InvalidMcp(fault) => write!(f, "invalid mcp config: {}", fault.message),
+            BlueprintError::InvalidLlm(fault) => write!(f, "invalid llm config: {}", fault.message),
         }
     }
 }
