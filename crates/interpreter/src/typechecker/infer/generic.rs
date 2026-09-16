@@ -945,6 +945,11 @@ impl Inferer<'_> {
         // ordinary generic call; the two sites below are the two halves of that
         // one decision, so it is read once here.
         let checked_get = crate::stdlib::session::declaration::is_checked_get(&mangled);
+        // `llm.call<T>` / `llm.batch<T>` lower the same way and for the same
+        // reason. They differ from `session.get` only in what a bare call means
+        // — the `Completion` envelope rather than an unchecked `unknown` — and
+        // in carrying a compile-time schema into the trailing argument.
+        let checked_llm = crate::stdlib::llm::declaration::is_checked_call(&mangled);
 
         if let Some(targs) = &type_args {
             if targs.len() != generics.len() {
@@ -1099,6 +1104,18 @@ impl Inferer<'_> {
         if checked_get && !type_args_written {
             bind_remaining(&mut sub, &generics, Type::Unknown);
         }
+        // Same reasoning for `llm.call(model, prompt)`, but the untyped default
+        // is the `Completion` envelope rather than `unknown`: an untyped call
+        // is not an unchecked read, it is a different fully-typed result. `T`
+        // appears only in the return type, so it is never inferable from an
+        // argument and would otherwise always trip the unbound-parameter error.
+        if checked_llm && !type_args_written {
+            bind_remaining(
+                &mut sub,
+                &generics,
+                crate::stdlib::llm::declaration::untyped_result_type(&mangled),
+            );
+        }
 
         if let Err(unbound) = sub.resolve_all(&generics) {
             self.error_with_help(
@@ -1117,6 +1134,22 @@ impl Inferer<'_> {
 
         self.check_inferred_void_arguments(&params, &ret, &sub, span);
         let result_ty = sub.apply(&ret);
+
+        // A typed `llm.call<T>` is rewritten before the argument list is frozen,
+        // because the schema emitted from `T` has to replace the trailing
+        // `schema` argument the default filled with `null`. The rewrite can also
+        // fail (an unschemable or unverifiable `T`), in which case the whole
+        // call is already an error and no node is built.
+        let mut llm_schema = None;
+        if checked_llm {
+            match self.llm_call_schema(&result_ty, type_args_written, span) {
+                Ok(schema) => llm_schema = schema,
+                Err(()) => return (TypedExprKind::Null, Type::Error),
+            }
+        }
+        if let Some(schema) = &llm_schema {
+            self.substitute_schema_argument(&params, &mut typed_args, schema, span);
+        }
 
         let generic_args: Vec<crate::GenericArgument> = typed_args
             .into_iter()
@@ -1147,11 +1180,20 @@ impl Inferer<'_> {
         let call = TypedExprKind::GenericCall {
             mangled,
             args: generic_args,
-            return_cast: if checked_get { None } else { return_cast },
+            return_cast: if checked_get || checked_llm {
+                None
+            } else {
+                return_cast
+            },
             type_predicate,
         };
         if checked_get {
             return self.checked_session_get(call, &result_ty, type_args_written, span);
+        }
+        // An untyped `llm.call` emitted no schema and needs no check: it returns
+        // the `Completion` envelope the declaration already typed.
+        if checked_llm && llm_schema.is_some() {
+            return self.checked_llm_cast(call, &result_ty, span);
         }
         (call, result_ty)
     }

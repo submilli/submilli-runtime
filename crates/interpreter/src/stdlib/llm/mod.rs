@@ -113,8 +113,14 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let model = read_string_arg(&mut *caller, &params[0], "llm.call (model)")?;
                 let prompt = read_string_arg(&mut *caller, &params[1], "llm.call (prompt)")?;
                 let schema = read_optional_string(caller, &params[2], "llm.call (schema)")?;
+                let typed = schema.is_some();
                 let outcomes = dispatch(caller, "call", &model, vec![prompt], schema).await?;
-                results[0] = build_completion(caller, first_outcome(&model, outcomes)?)?;
+                let outcome = first_outcome(&model, outcomes)?;
+                results[0] = if typed {
+                    structured_value(caller, "llm.call", outcome)?
+                } else {
+                    build_completion(caller, outcome)?
+                };
                 Ok(())
             })
         },
@@ -127,7 +133,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(
             &engine,
             [string.clone(), array.clone(), nullable_object.clone()],
-            [array.clone()],
+            // `batch` is declared generic (`T`, defaulting to `Completion[]`),
+            // so codegen types the guest import from the erased `TypeVar` slot
+            // — the universal `(ref null $Object)` — exactly as it does for
+            // `session.get`. The array this builds is still an `$Array`; only
+            // the declared slot it travels in is wider.
+            [nullable_object.clone()],
         ),
         /* deterministic = */ false,
         |caller, params, results| {
@@ -135,10 +146,15 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let model = read_string_arg(&mut *caller, &params[0], "llm.batch (model)")?;
                 let prompts = read_prompts(caller, &params[1])?;
                 let schema = read_optional_string(caller, &params[2], "llm.batch (schema)")?;
+                let typed = schema.is_some();
                 let outcomes = dispatch(caller, "batch", &model, prompts, schema).await?;
                 let mut built = Vec::with_capacity(outcomes.len());
                 for outcome in outcomes {
-                    built.push(build_completion(caller, outcome)?);
+                    built.push(if typed {
+                        structured_value(caller, "llm.batch", outcome)?
+                    } else {
+                        build_completion(caller, outcome)?
+                    });
                 }
                 results[0] = build_array(caller, built)?;
                 Ok(())
@@ -575,6 +591,45 @@ fn model_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructTyp
             nullable_string_field(&intr),       // description
             nullable_boxed_number_field(&intr), // contextWindow
         ],
+    )
+}
+
+/// The value a *typed* `call<T>`/`batch<T>` hands back: the completion text
+/// parsed as JSON, not the `Completion` envelope.
+///
+/// The typed form trades the envelope for the checked value, so the envelope's
+/// fields have no place to go — which is also why a failed element cannot be
+/// represented here and throws instead. The structural check the typechecker
+/// wrapped around this call then verifies the parsed value really is a `T`; a
+/// provider that ignored the schema and answered in prose fails at the parse
+/// below, and one that answered with well-formed JSON of the wrong shape fails
+/// at that check. Both are catchable, and neither coerces.
+fn structured_value(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    op: &str,
+    outcome: LlmOutcome,
+) -> wasmtime::Result<Val> {
+    // A truncated or filtered completion has no complete JSON value to check,
+    // and the typed form has no `ok` for the program to branch on — so it is an
+    // error here rather than a value that would fail the structural check for a
+    // second, less informative reason. The reason is named; the text is not.
+    if let Some(failure) = &outcome.failure {
+        return Err(crate::runtime::host::type_error(format!(
+            "{op}: the model did not return a usable completion ({}) — a typed call has \
+             no `ok` to branch on, so call it without a type argument to inspect the \
+             `Completion` envelope instead",
+            failure.reason,
+        )));
+    }
+    let Some(text) = outcome.text.as_deref() else {
+        return Err(crate::runtime::host::type_error(format!(
+            "{op}: the model returned no text to check against the requested type",
+        )));
+    };
+    crate::runtime::json::parse_json_as_unknown(
+        caller,
+        text,
+        &format!("{op}: the model's response is not JSON"),
     )
 }
 
@@ -1516,5 +1571,186 @@ mod tests {
             .await
             .expect("program completes");
         assert_eq!(recorder.dispatches()[0].schema, None);
+    }
+
+    /// A program declaring `Severity` and returning one field of a typed call,
+    /// so a test only has to supply what the model "answered".
+    const TYPED_PROGRAM: &str = r#"import llm from "submilli:llm";
+           interface Severity { level: string; score: number; }
+           function main(): string {
+             const s = llm.call<Severity>("m", "p");
+             return s.level;
+           }"#;
+
+    /// R5, end to end: the schema emitted from `T` reaches the provider fully
+    /// inlined, and a conforming response comes back as `T` itself — the
+    /// checked value, not the `Completion` envelope.
+    #[tokio::test]
+    async fn a_typed_call_sends_the_schema_and_returns_the_checked_value() {
+        let (provider, recorder) = MockProvider::new(
+            vec![LlmOutcome::success(
+                r#"{"level":"high","score":3}"#.to_string(),
+            )],
+            Vec::new(),
+        );
+        let out = Harness::new()
+            .provider(provider)
+            .run(TYPED_PROGRAM)
+            .await
+            .expect("a conforming response must not throw");
+        assert_eq!(out, "high", "the typed call must return `T` itself");
+
+        let schema = recorder.dispatches()[0]
+            .schema
+            .clone()
+            .expect("a typed call sends a schema");
+        assert!(
+            !schema.contains("$ref") && !schema.contains("$defs"),
+            "the schema must be fully inlined (KTD5): {schema}",
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&schema).expect("schema is JSON");
+        assert_eq!(parsed["properties"]["level"]["type"], "string");
+        assert_eq!(parsed["properties"]["score"]["type"], "number");
+    }
+
+    /// R6: a well-formed response of the *wrong shape* throws a catchable
+    /// `TypeError` rather than coercing. `score` is a string here, which a
+    /// coercing implementation would happily accept.
+    #[tokio::test]
+    async fn a_schema_violating_response_throws_a_type_error() {
+        let (provider, _) = MockProvider::new(
+            vec![LlmOutcome::success(
+                r#"{"level":"high","score":"three"}"#.to_string(),
+            )],
+            Vec::new(),
+        );
+        let err = Harness::new()
+            .provider(provider)
+            .run(TYPED_PROGRAM)
+            .await
+            .expect_err("a wrong-shaped response must throw");
+        let message = format!("{err}");
+        assert!(
+            message.contains("TypeError"),
+            "must be a TypeError, got: {message}",
+        );
+        assert!(
+            message.contains("Severity"),
+            "the error must name the expected type: {message}",
+        );
+    }
+
+    /// R6: a provider that ignores the schema entirely and answers in prose
+    /// throws too. This is the failure the whole double construction exists for
+    /// — the schema is advisory, and only our own check is not.
+    #[tokio::test]
+    async fn a_provider_that_ignores_the_schema_throws() {
+        let (provider, _) = MockProvider::new(
+            vec![LlmOutcome::success(
+                "Sure! This ticket looks pretty severe to me.".to_string(),
+            )],
+            Vec::new(),
+        );
+        let err = Harness::new()
+            .provider(provider)
+            .run(TYPED_PROGRAM)
+            .await
+            .expect_err("prose must throw");
+        let message = format!("{err}");
+        assert!(
+            message.contains("not JSON"),
+            "the error must say the response was not JSON: {message}",
+        );
+        // And it must be catchable, not a trap.
+        assert!(
+            message.contains("SyntaxError") || message.contains("llm.call"),
+            "must be a catchable, attributed error: {message}",
+        );
+    }
+
+    /// The thrown error must carry no completion text (R13). A model that
+    /// answered with a secret must not leak it through the type error.
+    #[tokio::test]
+    async fn a_failed_check_never_quotes_the_completion() {
+        let (provider, _) = MockProvider::new(
+            vec![LlmOutcome::success(
+                r#"{"level":"high","score":"SUPERSECRETVALUE"}"#.to_string(),
+            )],
+            Vec::new(),
+        );
+        let err = Harness::new()
+            .provider(provider)
+            .run(TYPED_PROGRAM)
+            .await
+            .expect_err("must throw");
+        let message = format!("{err}");
+        assert!(
+            !message.contains("SUPERSECRETVALUE"),
+            "the completion must never reach the error: {message}",
+        );
+    }
+
+    /// A truncated completion has no complete JSON value and the typed form has
+    /// no `ok` to branch on, so it throws — naming the reason, never the text,
+    /// and pointing at the untyped form as the way to inspect it.
+    #[tokio::test]
+    async fn a_typed_call_on_a_failed_completion_throws_naming_the_reason() {
+        let (provider, _) = MockProvider::new(
+            vec![LlmOutcome::failed(
+                LlmFailure::new(
+                    FailureReason::Truncated,
+                    FailureReason::Truncated.default_message(),
+                ),
+                Some(r#"{"level":"hi"#.to_string()),
+            )],
+            Vec::new(),
+        );
+        let err = Harness::new()
+            .provider(provider)
+            .run(TYPED_PROGRAM)
+            .await
+            .expect_err("a failed completion must throw on the typed path");
+        let message = format!("{err}");
+        assert!(
+            message.contains("truncated"),
+            "must name the reason: {message}",
+        );
+        assert!(
+            message.contains("without a type argument"),
+            "must point at the untyped form: {message}",
+        );
+    }
+
+    /// The typed `batch` checks every element, so one bad element throws for
+    /// the batch rather than yielding a wrongly-typed element.
+    #[tokio::test]
+    async fn a_typed_batch_checks_every_element() {
+        let (provider, recorder) = MockProvider::new(
+            vec![
+                LlmOutcome::success(r#"{"level":"high","score":1}"#.to_string()),
+                LlmOutcome::success(r#"{"level":"low","score":"two"}"#.to_string()),
+            ],
+            Vec::new(),
+        );
+        let err = Harness::new()
+            .provider(provider)
+            .run(
+                r#"import llm from "submilli:llm";
+                   interface Severity { level: string; score: number; }
+                   function main(): string {
+                     const s = llm.batch<Severity[]>("m", ["a", "b"]);
+                     return s[0].level;
+                   }"#,
+            )
+            .await
+            .expect_err("a wrong-shaped element must throw");
+        assert!(
+            format!("{err}").contains("TypeError"),
+            "must be a TypeError, got: {err}",
+        );
+        assert!(
+            recorder.dispatches()[0].schema.is_some(),
+            "a typed batch must send a schema",
+        );
     }
 }
