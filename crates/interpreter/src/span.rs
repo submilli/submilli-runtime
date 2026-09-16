@@ -31,6 +31,7 @@ impl FileId {
     pub const SECRETS: FileId = FileId(u32::MAX - 15);
     pub const TEST: FileId = FileId(u32::MAX - 16);
     pub const SESSION: FileId = FileId(u32::MAX - 17);
+    pub const LLM: FileId = FileId(u32::MAX - 18);
 
     /// Virtual display path for a reserved (prelude/stdlib) id, e.g.
     /// `submilli:fs`. Returns `None` for ordinary user/script files, which
@@ -54,6 +55,7 @@ impl FileId {
             FileId::REGEX => "submilli:regex",
             FileId::SECRETS => "submilli:secrets",
             FileId::SESSION => "submilli:session",
+            FileId::LLM => "submilli:llm",
             FileId::TEST => "submilli:test",
             _ => return None,
         })

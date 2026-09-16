@@ -29,8 +29,8 @@ pub use host::{
 pub use json::JSON_MODULE_NAME;
 pub use limits::{DEFAULT_MAX_STORE_BYTES, MemoryCapExceeded, TenantLimits, install_tenant_limits};
 pub use llm::{
-    FailureReason, LLM_MODULE_NAME, LlmCallError, LlmFailure, LlmModel, LlmOutcome, LlmProvider,
-    PromptBoundKind,
+    ExecutionTokenBudget, FailureReason, LLM_MODULE_NAME, LlmCallError, LlmFailure, LlmLimitKind,
+    LlmLimits, LlmModel, LlmOutcome, LlmProvider, PromptBoundKind, SharedTokenBudget,
 };
 pub use mcp::{
     MCP_MODULE_NAME, McpCallError, McpTransport, install_mcp_async, mcp_call_package_declaration,
@@ -94,6 +94,13 @@ pub struct StoreData {
     /// surface reports that as a catchable configuration error
     /// ([`LlmCallError::NotConfigured`]), the same rule `session_kv` follows.
     pub llm_provider: Option<Arc<dyn LlmProvider>>,
+    /// This execution's token budget, reserving against its own ceiling and the
+    /// server-wide one together. `None` in the pure-interpreter path, where
+    /// there is no aggregate to protect and nothing to charge against; the
+    /// prompt-count and prompt-size bounds still apply there, because they
+    /// bound pathological shapes rather than spend. The embedder installs one
+    /// per execution, and dropping it is what returns the reservation.
+    pub llm_budget: Option<Arc<ExecutionTokenBudget>>,
     /// Session-scoped key-value storage, present only when the embedder wires a
     /// provider. Left `None` the store stays absent rather than silently
     /// becoming per-execution scratch state that no later `execute` can read —
@@ -164,6 +171,7 @@ impl StoreData {
             secret_provider: Arc::new(secrets::NoopSecretProvider),
             mcp_transport: None,
             llm_provider: None,
+            llm_budget: None,
             session_kv: None,
             metrics: Arc::new(metrics::NoopMetricsSink),
             tenant_limits: TenantLimits::new(max_store_bytes),

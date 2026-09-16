@@ -1,6 +1,7 @@
 //! Standard-library packages user code reaches via `import` —
-//! `submilli:crypto` / `submilli:fs` / `submilli:http` / `submilli:secrets` /
-//! `submilli:security` / `submilli:session` / `submilli:url` / `submilli:uuid`.
+//! `submilli:crypto` / `submilli:fs` / `submilli:http` / `submilli:llm` /
+//! `submilli:secrets` / `submilli:security` / `submilli:session` /
+//! `submilli:url` / `submilli:uuid`.
 //!
 //! Every package is pure Rust host functions registered directly under its
 //! package name; the linker resolves user imports with no Wasm shim modules
@@ -11,6 +12,7 @@ pub mod capabilities;
 pub mod crypto;
 pub mod fs;
 pub mod http;
+pub mod llm;
 pub mod secrets;
 pub mod security;
 pub mod session;
@@ -35,6 +37,7 @@ pub fn stdlib_package_declarations() -> Vec<PackageDeclaration> {
         crypto::package_declaration(),
         fs::package_declaration(),
         http::package_declaration(),
+        llm::package_declaration(),
         secrets::package_declaration(),
         security::package_declaration(),
         session::package_declaration(),
@@ -47,6 +50,7 @@ pub fn install_host_functions(linker: &mut Linker<StoreData>) -> wasmtime::Resul
     crypto::install(linker)?;
     fs::install(linker)?;
     http::install(linker)?;
+    llm::install(linker)?;
     secrets::install(linker)?;
     security::install(linker)?;
     session::install(linker)?;
