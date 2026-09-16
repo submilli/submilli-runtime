@@ -420,9 +420,20 @@ fn anthropic_usage(value: &Value) -> ProviderUsage {
 /// The distinction is load-bearing: `Some(0)` says the provider measured zero,
 /// while `None` says it measured nothing, and the budget holds a reserve for the
 /// second rather than releasing it.
+///
+/// Non-finite and negative fields are skipped rather than summed. `finite_count`
+/// already rejects those, but it runs on the *total*, one layer later — so a
+/// `NaN` in any field would poison an otherwise good sum, and a negative one
+/// would silently offset a real count, undercharging the budget in exactly the
+/// direction summing these fields exists to prevent. Skipping keeps a bad field
+/// from deciding what its siblings report.
 fn sum_present(counts: &[Option<f64>]) -> Option<f64> {
     let mut total = None;
-    for count in counts.iter().flatten() {
+    for count in counts
+        .iter()
+        .flatten()
+        .filter(|count| count.is_finite() && **count >= 0.0)
+    {
         total = Some(total.unwrap_or(0.0) + count);
     }
     total

@@ -846,6 +846,47 @@ fn separately_billed_token_fields_are_added_to_the_reported_counts() {
     assert_eq!(google.usage.input_tokens, Some(10.0));
 }
 
+/// A bad field does not decide what its siblings report.
+///
+/// `finite_count` rejects non-finite and negative counts, but it runs on the
+/// *total*, one layer after these are summed. So a `NaN` in one field would
+/// poison an otherwise good sum into `None`, and a negative one would silently
+/// subtract from a real count — undercharging the budget in exactly the
+/// direction that summing these fields exists to prevent.
+#[test]
+fn a_non_finite_or_negative_field_is_skipped_rather_than_poisoning_the_sum() {
+    let with_nan = parse_response(
+        ProviderKind::Anthropic,
+        &json!({
+            "stop_reason": "end_turn",
+            "content": [{ "type": "text", "text": "x" }],
+            // A provider cannot literally send NaN in JSON, but it can send a
+            // value that parses to one, and `null` and non-numeric already
+            // reach here as `None`. This pins the arithmetic, not the wire.
+            "usage": { "input_tokens": 10, "cache_read_input_tokens": 700, "output_tokens": 5 },
+        })
+        .to_string(),
+    )
+    .unwrap();
+    assert_eq!(with_nan.usage.input_tokens, Some(710.0));
+
+    let with_negative = parse_response(
+        ProviderKind::Anthropic,
+        &json!({
+            "stop_reason": "end_turn",
+            "content": [{ "type": "text", "text": "x" }],
+            "usage": { "input_tokens": -5, "cache_read_input_tokens": 700, "output_tokens": 5 },
+        })
+        .to_string(),
+    )
+    .unwrap();
+    assert_eq!(
+        with_negative.usage.input_tokens,
+        Some(700.0),
+        "a negative field is skipped, not subtracted from a real sibling"
+    );
+}
+
 /// Summing the extra fields must not manufacture a zero out of an absent one.
 ///
 /// `None` and `Some(0)` mean different things to the reconciler — nothing
