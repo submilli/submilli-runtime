@@ -346,9 +346,19 @@ impl LlmProvider for BlueprintLlmProvider {
                     // reports `null`, never zero.
                     description: declared.description.clone(),
                     context_window: declared.context_window,
+                    output_reserve: declared.output_reserve,
                 })
                 .collect())
         })
+    }
+
+    /// Answered from the blueprint this impl already holds, so the reservation
+    /// costs no round trip. Returning the declared value here is what makes the
+    /// pre-dispatch reservation an upper bound (KTD3b): the same cap is sent as
+    /// the request's output limit, so the provider cannot bill past what was
+    /// reserved.
+    fn output_reserve(&self, model: &str) -> Option<u64> {
+        self.blueprint.llm.models.get(model)?.output_reserve
     }
 }
 

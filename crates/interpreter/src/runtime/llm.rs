@@ -572,14 +572,28 @@ impl LlmOutcome {
 
 /// A model the provider serves.
 ///
-/// Both optionals may legitimately be `None`: models are blueprint-declared, and
-/// an operator may declare a name without a description or a context window.
-/// Absent means unknown, not zero.
+/// Every optional may legitimately be `None`: models are blueprint-declared, and
+/// an operator may declare a name without a description, a context window, or an
+/// output reserve. Absent means unknown, not zero.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LlmModel {
     pub name: String,
     pub description: Option<String>,
     pub context_window: Option<u64>,
+    /// The model's own output cap, when the operator declared one.
+    ///
+    /// Carried across the trait boundary because the reservation needs it
+    /// *before* dispatch: KTD3b reserves `input + (output_cap × prompt_count)`
+    /// and sends the same cap as the request's output limit, which is what makes
+    /// the reservation an upper bound rather than an estimate. Without this
+    /// field the interpreter can only reserve
+    /// [`LlmLimits::default_output_cap`] for every model, so a model declaring a
+    /// smaller reserve over-reserves — refusing calls the ceiling would
+    /// otherwise admit — and one declaring a larger reserve under-reserves,
+    /// which is the direction that actually lets spend past the ceiling.
+    ///
+    /// `None` means the operator declared none, and the default applies.
+    pub output_reserve: Option<u64>,
 }
 
 impl LlmModel {
@@ -588,6 +602,7 @@ impl LlmModel {
             name: name.into(),
             description: None,
             context_window: None,
+            output_reserve: None,
         }
     }
 }
@@ -630,6 +645,23 @@ pub trait LlmProvider: Send + Sync {
     fn models<'a>(
         &'a self,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<LlmModel>, LlmCallError>> + Send + 'a>>;
+
+    /// The output cap declared for one model, consulted *before* dispatch.
+    ///
+    /// Separate from [`Self::models`] because the reservation needs one model's
+    /// reserve on the hot path of every `call`, and `models` is an async listing
+    /// of the whole catalog — using it here would add a round trip to each
+    /// dispatch. Synchronous for the same reason: an implementor that already
+    /// holds its declarations (the blueprint case) answers from memory, and one
+    /// that does not should return `None` rather than block.
+    ///
+    /// `None` means the model declared no reserve, or the implementor cannot
+    /// answer cheaply; the caller then applies
+    /// [`LlmLimits::default_output_cap`]. Returning `None` is always safe, which
+    /// is why this defaults rather than being required of every implementor.
+    fn output_reserve(&self, _model: &str) -> Option<u64> {
+        None
+    }
 }
 
 /// An aggregate token budget several executions reserve against.

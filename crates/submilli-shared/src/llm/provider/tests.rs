@@ -685,6 +685,27 @@ async fn models_reports_the_declared_catalog_with_absent_fields_as_null() {
     assert_eq!(bare.context_window, None);
 }
 
+/// The declared `output_reserve` must reach the reservation, not just the
+/// request.
+///
+/// KTD3b reserves `input + (output_cap × prompt_count)` *before* dispatch and
+/// sends the same cap as the request's output limit — that pairing is what makes
+/// the reservation an upper bound rather than an estimate. If the interpreter
+/// reserved the configured default while the request carried the model's own
+/// larger reserve, a provider could legitimately bill past what was reserved and
+/// the ceiling would stop being preventive. A model that declared nothing
+/// answers `None`, and the caller applies the default.
+#[tokio::test]
+async fn the_declared_output_reserve_is_answerable_for_the_reservation() {
+    let provider = provider(Always(Ok(stopped("unused"))));
+
+    assert_eq!(provider.output_reserve(MODEL), Some(64_000));
+    assert_eq!(provider.output_reserve("bare"), None);
+    // An undeclared model has no reserve to report; the call is refused
+    // elsewhere, and this must not invent a cap for it.
+    assert_eq!(provider.output_reserve("never-declared"), None);
+}
+
 /// The blueprint's declared `output_reserve` is what reaches the request as its
 /// output cap, which is what makes the budget reservation an actual upper bound
 /// rather than an estimate (KTD3b).
