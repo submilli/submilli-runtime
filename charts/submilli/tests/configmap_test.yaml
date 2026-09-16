@@ -98,11 +98,12 @@ tests:
 
   - it: rolls the pod when a blueprint changes
     template: statefulset.yaml
-    # Pinned so a release bumping appVersion does not move the hash:
-    # the ConfigMap carries the version label, so the digest would
-    # otherwise change for a reason that has nothing to do with the
+    # Pinned so a release bumping either version does not move the hash: the
+    # ConfigMap carries both the chart and the appVersion label, so the digest
+    # would otherwise change for a reason that has nothing to do with the
     # property under test.
     chart:
+      version: 0.0.0-unittest
       appVersion: 0.0.0-unittest
     set:
       blueprints:
@@ -121,15 +122,16 @@ tests:
       # changes. That is the test doing its job, not a flake.
       - equal:
           path: spec.template.metadata.annotations["checksum/blueprints"]
-          value: 12f9ec959c6822fd6a403927e1cc83eb255afa571200a2639b98994ce7f11435
+          value: 91807f9ebd077d621dddd64793db7678069ed19dbc23be163dc41a8b55035bde
 
   - it: produces a different rollout trigger for different blueprint content
     template: statefulset.yaml
-    # Pinned so a release bumping appVersion does not move the hash:
-    # the ConfigMap carries the version label, so the digest would
-    # otherwise change for a reason that has nothing to do with the
+    # Pinned so a release bumping either version does not move the hash: the
+    # ConfigMap carries both the chart and the appVersion label, so the digest
+    # would otherwise change for a reason that has nothing to do with the
     # property under test.
     chart:
+      version: 0.0.0-unittest
       appVersion: 0.0.0-unittest
     set:
       blueprints:
@@ -139,4 +141,4 @@ tests:
     asserts:
       - equal:
           path: spec.template.metadata.annotations["checksum/blueprints"]
-          value: 561bbbb8e03c340bbab67e7e9fa742c1b0a45868ef90793cf8b9bb98ab982845
+          value: 5b7a710b06b1aa16b72809392b9d560abaa4597295fcab0bc0f4048aa27a23bc
