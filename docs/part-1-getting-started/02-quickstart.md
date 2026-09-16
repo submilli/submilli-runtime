@@ -19,8 +19,26 @@ familiarize yourself with the flow.
 
 **Using a coding assistant — Claude Code, Codex, Cursor?**
 
-- Install the **Submilli skill** so your assistant can write programs, packages,
-  and blueprints on your behalf.
+Install the **Submilli skill** after installing the CLI below. Choose your
+assistant:
+
+```sh
+submilli skill install --agent claude
+submilli skill install --agent codex
+submilli skill install --agent cursor
+```
+
+These are alternatives; run the command for the assistant you use. Restart
+your assistant, then ask it to help you adopt Submilli. Add `--project .` for a
+project-local installation instead of a user-wide one. The skill guides you
+through packages, blueprints, and your existing agent harness.
+
+After upgrading the CLI, refresh the same installation with
+`submilli skill update --agent claude` (substitute your assistant and include
+`--project .` if used when installing). `submilli skill status --agent claude`
+checks freshness and local edits. Updates work offline from the CLI's bundled
+skill and preserve edited copies. See [skill installation and updates](/docs/skill)
+for discovery paths and team workflows.
 
 ## Install
 
@@ -447,10 +465,6 @@ credentials behind them.
   1. Installer (SUB-612). The curl/irm commands and the submilli.ai URLs are
      provisional. Blocked on the public repo publishing signed release assets,
      and on the repo's final name.
-  2. Submilli skill. Does not exist. Promised in four places — the bullet under
-     the intro, the "not memorizing these commands" callout, the package-
-     authoring callout, and the `server packages install` note. It needs a real
-     install command.
   3. Repository references. `spec.md`, `docs/semantic-security.md`, and
      `examples/quickstart/` are cited as "in the repository" — point them at
      public URLs once the split lands.

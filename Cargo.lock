@@ -3828,6 +3828,7 @@ dependencies = [
  "submilli-wasm",
  "tempfile",
  "tokio",
+ "tower",
  "ureq",
  "url",
 ]

@@ -1,0 +1,5 @@
+{
+  "name": "support-app-fixture",
+  "private": true,
+  "dependencies": { "ai": "6.0.0", "@ai-sdk/mcp": "1.0.0" }
+}

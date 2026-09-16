@@ -28,6 +28,9 @@ jobs:
       - name: Rustfmt
         run: cargo fmt --all --check
 
+      - name: Skill evaluation harness
+        run: python3 -m unittest discover -s skills/evals -p 'test_*.py'
+
       # Gate: the deny-tier lints in [workspace.lints] plus `-D warnings` (any stray
       # default-clippy warning is an error too). The ratchet lints are not enabled
       # here, so this stays clean.
@@ -79,6 +82,9 @@ jobs:
 
       - name: VFS containment suite
         run: cargo test -p interpreter --test vfs_containment
+
+      - name: Skill installation across platforms
+        run: cargo test -p submilli --test skill
 
       # The server's MCP file tools resolve through the same handles but reach them
       # by a different route, so the interpreter suite passing says nothing about
