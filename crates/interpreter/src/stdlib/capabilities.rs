@@ -447,6 +447,28 @@ mod tests {
     }
 
     #[test]
+    fn llm_group_is_cataloged() {
+        let group = catalog()
+            .iter()
+            .find(|g| g.module == "submilli:llm")
+            .expect("submilli:llm group");
+        let names: Vec<&str> = group.capabilities.iter().map(|cap| cap.name).collect();
+        assert_eq!(names, ["llm.call"]);
+        assert_eq!(
+            find("llm.call").unwrap().field_names().collect::<Vec<_>>(),
+            ["op", "model", "prompt_count"]
+        );
+        // The double gate lives in the summary wording and the host fn, not in
+        // the struct, so an operator reading only the catalog still has to learn
+        // that narrowing `model` also shortens what `models()` returns.
+        let summary = find("llm.call").unwrap().summary;
+        assert!(
+            summary.contains("models()"),
+            "the summary must say narrowing `model` narrows discovery: {summary}"
+        );
+    }
+
+    #[test]
     fn find_and_is_template() {
         assert_eq!(find("fs.read").map(|c| c.name), Some("fs.read"));
         assert!(find("fs.nope").is_none());
