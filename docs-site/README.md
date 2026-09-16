@@ -40,7 +40,7 @@ The marketing website continues to serve `/` and `/blog/`.
 
 ### Render
 
-- Service type: Static Site, repository `submilli/submilli-public`, branch `main`.
+- Service type: Static Site, repository `submilli/submilli-runtime`, branch `main`.
 - Root Directory: leave empty (the build also reads the sibling `docs/` folder).
 - Build Command: `npm --prefix docs-site ci && npm --prefix docs-site run build`.
 - Publish Directory: `docs-site/dist`.

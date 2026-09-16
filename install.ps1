@@ -17,12 +17,12 @@ $InstallDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromP
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 $headers = @{ 'User-Agent' = 'submilli-installer' }
 if ($Version -eq 'latest') {
-    $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/submilli/submilli-public/releases/latest' -Headers $headers
+    $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/submilli/submilli-runtime/releases/latest' -Headers $headers
     $Version = $release.tag_name
 }
 if ($Version -notmatch '^[a-zA-Z0-9_][a-zA-Z0-9._-]*$') { throw 'Invalid release tag.' }
 $asset = 'submilli-x86_64-pc-windows-msvc.exe'
-$base = "https://github.com/submilli/submilli-public/releases/download/$Version"
+$base = "https://github.com/submilli/submilli-runtime/releases/download/$Version"
 $scratch = Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString())
 $staged = $null
 New-Item -ItemType Directory -Path $scratch | Out-Null

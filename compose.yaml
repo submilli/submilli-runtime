@@ -12,7 +12,7 @@
 
 services:
   submilli:
-    image: ${SUBMILLI_IMAGE:-ghcr.io/submilli/submilli:latest}
+    image: ${SUBMILLI_IMAGE:-ghcr.io/submilli/submilli-runtime:latest}
 
     # The HTTP API has no inbound authentication yet (SUB-159/160), so the
     # published port is scoped to the loopback interface. This is substantive,

@@ -25,7 +25,7 @@ import os, pathlib, shutil, sys
 args = sys.argv[1:]
 url = next(a for a in args if a.startswith('https://'))
 if '-w' in args:
-    print('https://github.com/submilli/submilli-public/releases/tag/v9.8.7', end='')
+    print('https://github.com/submilli/submilli-runtime/releases/tag/v9.8.7', end='')
 else:
     shutil.copyfile(pathlib.Path(os.environ['FIXTURES']) / url.rsplit('/', 1)[1], args[args.index('-o') + 1])
 ''')

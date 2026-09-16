@@ -25,11 +25,11 @@ export default defineConfig({
         {
           icon: "github",
           label: "GitHub",
-          href: "https://github.com/submilli/submilli-public",
+          href: "https://github.com/submilli/submilli-runtime",
         },
       ],
       editLink: {
-        baseUrl: "https://github.com/submilli/submilli-public/edit/main/docs-site/",
+        baseUrl: "https://github.com/submilli/submilli-runtime/edit/main/docs-site/",
       },
       sidebar: [
         { label: "Getting started", items: [{ autogenerate: { directory: "../docs/part-1-getting-started" } }] },

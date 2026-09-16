@@ -4,7 +4,7 @@ set -eu
 
 version=latest
 install_dir=${HOME:?HOME must be set}/.local/bin
-release_url=https://github.com/submilli/submilli-public/releases
+release_url=https://github.com/submilli/submilli-runtime/releases
 fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 while [ "$#" -gt 0 ]; do
     case "$1" in

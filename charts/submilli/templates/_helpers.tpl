@@ -9,7 +9,7 @@ DNS-1123 resource names and Kubernetes labels, both of which cap there.
 {{/*
 Fully qualified resource name. `fullnameOverride` wins; otherwise the release
 name is used alone when it already contains the chart name, so a conventional
-`helm install submilli submilli/submilli` does not produce `submilli-submilli`.
+`helm install submilli submilli/submilli-runtime` does not produce `submilli-submilli-runtime`.
 */}}
 {{- define "submilli.fullname" -}}
 {{- if .Values.fullnameOverride -}}

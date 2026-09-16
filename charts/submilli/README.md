@@ -1,6 +1,6 @@
 # submilli
 
-Runs [`submilli-server`](https://github.com/submilli/submilli) on Kubernetes — an
+Runs [`submilli-server`](https://github.com/submilli/submilli-runtime) on Kubernetes — an
 agent-native execution environment that runs a strict TypeScript subset in a WasmGC
 sandbox with capability-based security.
 

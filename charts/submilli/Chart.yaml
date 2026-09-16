@@ -9,19 +9,19 @@ version: 0.1.1
 
 # The submilli-server release this chart deploys, and the default image tag.
 #
-# The floor is v0.1.4: it is the first release carrying `--blueprint-seed-dir`,
+# The floor is v0.1.5: it is the first release carrying `--blueprint-seed-dir`,
 # which templates/configmap-blueprints.yaml depends on. Pinning an earlier tag
 # produces a server that boots clean and ignores every seeded blueprint.
-appVersion: "0.1.4"
+appVersion: "0.1.5"
 
 # `readOnlyRootFilesystem`, `seccompProfile`, and the Pod Security Standards
 # "restricted" profile the pod spec targets all stabilised by 1.25. Helm enforces
 # this at install and upgrade.
 kubeVersion: ">=1.25.0-0"
 
-home: https://github.com/submilli/submilli
+home: https://github.com/submilli/submilli-runtime
 sources:
-  - https://github.com/submilli/submilli
+  - https://github.com/submilli/submilli-runtime
 keywords:
   - submilli
   - sandbox
@@ -35,4 +35,4 @@ maintainers:
 annotations:
   # Links the published package to the repo so it inherits its permissions,
   # matching what the Dockerfile does for the image.
-  org.opencontainers.image.source: https://github.com/submilli/submilli
+  org.opencontainers.image.source: https://github.com/submilli/submilli-runtime

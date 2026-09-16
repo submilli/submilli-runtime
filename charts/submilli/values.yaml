@@ -22,7 +22,7 @@ replicaCount: 1
 image:
   # -- Image repository. The published image is private until launch; see
   # `imagePullSecrets` below.
-  repository: ghcr.io/submilli/submilli
+  repository: ghcr.io/submilli/submilli-runtime
   # -- Image tag. Empty means "use the chart's appVersion", which keeps the
   # chart version and the server version locked together. Avoid `latest`:
   # Kubernetes silently forces `imagePullPolicy: Always` for it.
