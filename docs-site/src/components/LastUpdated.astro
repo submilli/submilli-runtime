@@ -1,0 +1,32 @@
+---
+import { getNewestCommitDate } from '../lib/git-date';
+
+const { entry, lang, lastUpdated: starlightDate } = Astro.locals.starlightRoute;
+const frontmatter = entry.data.lastUpdated;
+
+let lastUpdated: Date | undefined;
+if (frontmatter instanceof Date) {
+	lastUpdated = frontmatter;
+} else if (frontmatter !== false) {
+	lastUpdated = starlightDate ?? getNewestCommitDate(entry.filePath);
+}
+---
+
+{
+	lastUpdated && (
+		<p class="last-updated">
+			{Astro.locals.t('page.lastUpdated')}{' '}
+			<time datetime={lastUpdated.toISOString()}>
+				{lastUpdated.toLocaleDateString(lang, { dateStyle: 'medium', timeZone: 'UTC' })}
+			</time>
+		</p>
+	)
+}
+
+<style>
+	.last-updated {
+		margin: 0;
+		font: 500 0.75rem/1 var(--sl-font-mono);
+		color: var(--sl-color-gray-3);
+	}
+</style>

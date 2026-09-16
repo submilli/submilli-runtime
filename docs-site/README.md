@@ -31,6 +31,27 @@ the index has an empty slug. `sidebar.hidden: true` keeps unfinished chapters
 out of navigation. Sidebar groups are configured in `astro.config.mjs`; their
 directories are relative to this application because the book lives outside it.
 
+## Theme
+
+The look follows the Submilli design system: `#131313` dark canvas (light
+optional), SF Pro Rounded with a self-hosted Nunito fallback for text, IBM Plex
+Mono for labels and code, and Light Blue as the single accent.
+
+- `src/styles/theme.css` — brand tokens mapped onto Starlight's CSS variables,
+  plus restyles for the sidebar, table of contents, search, content, and asides.
+- `src/components/` — Starlight component overrides registered in
+  `astro.config.mjs`: header, logo lockup, GitHub link with build-time star
+  count, two-state theme toggle, page title with group eyebrow, docs home hero,
+  footer, pagination, edit link, and last-updated date (read from git because
+  the book lives outside the default docs directory).
+- `src/code-themes.mjs` — the dark and light Expressive Code themes.
+- `src/plugins/satteri-security-aside.mjs` — adds `:::security` to the four
+  built-in asides for facts the runtime enforces.
+- `src/content/i18n/en.json` — UI strings such as the search placeholder.
+
+Chapters can use `:::note`, `:::tip`, `:::caution`, `:::danger`, and
+`:::security` callouts, and `title="file.ts"` on code fences for a file tab.
+
 ## Hosting
 
 The build targets `https://submilli.ai/docs/`. Astro writes directly to

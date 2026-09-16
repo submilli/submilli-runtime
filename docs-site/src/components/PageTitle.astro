@@ -1,0 +1,66 @@
+---
+/**
+ * Article header: the sidebar group as a mono eyebrow, the title, and the
+ * page description as a lead paragraph when the chapter provides one.
+ */
+const { entry, sidebar } = Astro.locals.starlightRoute;
+
+type Entries = typeof sidebar;
+
+function containsCurrent(entries: Entries): boolean {
+	return entries.some((item) =>
+		item.type === 'link' ? item.isCurrent : containsCurrent(item.entries)
+	);
+}
+
+const group = sidebar.find((item) => item.type === 'group' && containsCurrent(item.entries));
+const eyebrow = group?.label;
+const lead = entry.data.description;
+---
+
+<div class="page-title">
+	{eyebrow && <p class="page-title__eyebrow">{eyebrow}</p>}
+	<h1 id="_top">{entry.data.title}</h1>
+	{lead && <p class="page-title__lead">{lead}</p>}
+</div>
+
+<style>
+	.page-title {
+		display: flex;
+		flex-direction: column;
+		gap: 0;
+	}
+	.page-title__eyebrow {
+		margin: 0 0 0.875rem;
+		font: 500 0.75rem/1 var(--sl-font-mono);
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--sl-color-gray-3);
+	}
+	h1 {
+		margin: 0;
+		font-size: var(--sl-text-h1);
+		font-weight: 800;
+		line-height: 1.1;
+		letter-spacing: -0.02em;
+		color: var(--sl-color-white);
+		text-wrap: balance;
+	}
+	.page-title__lead {
+		margin: 1rem 0 0;
+		font-size: 1.1875rem;
+		line-height: 1.6;
+		color: var(--sl-color-gray-2);
+		text-wrap: pretty;
+	}
+	@media (max-width: 49.99rem) {
+		.page-title__eyebrow {
+			margin-bottom: 0.75rem;
+			font-size: 0.6875rem;
+		}
+		.page-title__lead {
+			margin-top: 0.75rem;
+			font-size: 1.03125rem;
+		}
+	}
+</style>

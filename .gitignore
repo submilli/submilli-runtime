@@ -21,3 +21,6 @@ node_modules/
 # Static documentation site
 /docs-site/.astro/
 /docs-site/dist/
+
+# Claude Design handoff bundle, read locally and never published
+/docs-site/design-export/

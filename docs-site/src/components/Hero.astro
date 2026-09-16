@@ -1,0 +1,265 @@
+---
+/**
+ * Documentation home. Renders the `hero` frontmatter of `docs/index.md` in the
+ * Submilli layout: mono eyebrow, display title, lead, two actions, and a
+ * "Next steps" grid built from the sidebar so it grows as chapters land.
+ */
+const { entry, sidebar } = Astro.locals.starlightRoute;
+const { data } = entry;
+const { title = data.title, tagline, actions = [] } = data.hero || {};
+
+interface Step {
+	label: string;
+	href: string;
+	group: string;
+}
+
+type Entries = typeof sidebar;
+
+function collectSteps(entries: Entries, group: string, into: Step[]): Step[] {
+	for (const item of entries) {
+		if (item.type === 'group') {
+			collectSteps(item.entries, item.label, into);
+		} else if (!item.isCurrent) {
+			into.push({ label: item.label, href: item.href, group });
+		}
+	}
+	return into;
+}
+
+const steps = collectSteps(sidebar, '', []).slice(0, 4);
+---
+
+<div class="home-hero">
+	<div class="home-hero__glow" aria-hidden="true"></div>
+	<p class="home-hero__eyebrow">Documentation</p>
+	<h1 id="_top" data-page-title set:html={title} />
+	{tagline && <p class="home-hero__lead" set:html={tagline} />}
+	{
+		actions.length > 0 && (
+			<div class="home-hero__actions">
+				{actions.map(({ attrs: { class: className, ...attrs } = {}, link: href, text, variant }) => (
+					<a
+						{href}
+						class:list={['home-hero__action', `home-hero__action--${variant}`, className]}
+						{...attrs}
+					>
+						{text}
+						{variant === 'primary' && (
+							<svg
+								width="14"
+								height="14"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2.4"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								aria-hidden="true"
+							>
+								<path d="M5 12h14M13 6l6 6-6 6" />
+							</svg>
+						)}
+					</a>
+				))}
+			</div>
+		)
+	}
+	{
+		steps.length > 0 && (
+			<section class="home-hero__steps" aria-labelledby="next-steps">
+				<h2 id="next-steps" class="home-hero__section-label">
+					Next steps
+				</h2>
+				<div class="home-hero__grid">
+					{steps.map((step, index) => (
+						<a href={step.href} class="home-hero__card">
+							<span class="home-hero__card-index">{String(index + 1).padStart(2, '0')}</span>
+							<span class="home-hero__card-title">{step.label}</span>
+							{step.group && <span class="home-hero__card-group">{step.group}</span>}
+						</a>
+					))}
+				</div>
+			</section>
+		)
+	}
+</div>
+
+<style>
+	.home-hero {
+		position: relative;
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+	}
+	/* The refraction whisper from the brand canvas, clipped by <main>. */
+	.home-hero__glow {
+		position: absolute;
+		top: -14rem;
+		left: -6rem;
+		width: 47.5rem;
+		height: 32.5rem;
+		background: radial-gradient(closest-side, rgba(107, 173, 218, 0.16), transparent 70%);
+		pointer-events: none;
+		z-index: -1;
+	}
+	.home-hero__eyebrow {
+		margin: 0 0 1.125rem;
+		font: 500 0.75rem/1 var(--sl-font-mono);
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--sl-color-gray-3);
+	}
+	h1 {
+		margin: 0 0 1.25rem;
+		font-size: 2.875rem;
+		font-weight: 800;
+		line-height: 1.06;
+		letter-spacing: -0.02em;
+		color: var(--sl-color-white);
+		text-wrap: balance;
+	}
+	.home-hero__lead {
+		margin: 0 0 1.75rem;
+		font-size: 1.1875rem;
+		line-height: 1.6;
+		color: var(--sl-color-gray-2);
+		text-wrap: pretty;
+	}
+	.home-hero__actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.75rem;
+		margin-bottom: 3rem;
+	}
+	.home-hero__action {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.5rem;
+		height: 2.625rem;
+		padding: 0 1.125rem;
+		border-radius: 12px;
+		font: 600 0.9375rem/1 var(--sl-font);
+		text-decoration: none;
+		transition:
+			filter var(--sub-dur-base) var(--sub-ease-out),
+			background-color var(--sub-dur-base) var(--sub-ease-out);
+	}
+	.home-hero__action:active {
+		transform: scale(0.98);
+	}
+	.home-hero__action--primary {
+		background: var(--sub-accent);
+		color: var(--sub-accent-ink);
+		font-weight: 700;
+	}
+	.home-hero__action--primary:hover {
+		filter: brightness(1.05);
+	}
+	.home-hero__action--secondary,
+	.home-hero__action--minimal {
+		border: 1px solid var(--sub-line-strong);
+		color: var(--sl-color-white);
+	}
+	.home-hero__action--secondary:hover,
+	.home-hero__action--minimal:hover {
+		background: var(--sub-hover);
+	}
+	.home-hero__steps {
+		width: 100%;
+	}
+	.home-hero__section-label {
+		margin: 0 0 1rem;
+		font: 700 0.875rem/1 var(--sl-font-mono);
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+		color: var(--sl-color-gray-3);
+	}
+	.home-hero__grid {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 0.75rem;
+	}
+	.home-hero__card {
+		display: flex;
+		flex-direction: column;
+		gap: 0.375rem;
+		padding: 1.25rem 1.375rem;
+		border: 1px solid var(--sub-line);
+		border-radius: 14px;
+		background: var(--sub-card);
+		text-decoration: none;
+		color: inherit;
+		transition: border-color var(--sub-dur-base) var(--sub-ease-out);
+	}
+	.home-hero__card:hover {
+		border-color: var(--sub-line-strong);
+	}
+	.home-hero__card-index {
+		font: 500 0.6875rem/1 var(--sl-font-mono);
+		letter-spacing: 0.08em;
+		color: var(--sl-color-gray-3);
+	}
+	.home-hero__card-title {
+		font: 700 1.0625rem/1.3 var(--sl-font);
+		color: var(--sl-color-white);
+	}
+	.home-hero__card-group {
+		font: 400 0.90625rem/1.5 var(--sl-font);
+		color: var(--sl-color-gray-2);
+	}
+
+	@media (max-width: 49.99rem) {
+		.home-hero__glow {
+			top: -10rem;
+			left: -4rem;
+			width: 28.75rem;
+			height: 22.5rem;
+		}
+		.home-hero__eyebrow {
+			margin-bottom: 0.875rem;
+			font-size: 0.6875rem;
+		}
+		h1 {
+			margin-bottom: 0.875rem;
+			font-size: 2rem;
+			line-height: 1.08;
+		}
+		.home-hero__lead {
+			margin-bottom: 1.375rem;
+			font-size: 1.03125rem;
+		}
+		.home-hero__actions {
+			flex-direction: column;
+			align-self: stretch;
+			gap: 0.625rem;
+			margin-bottom: 2.25rem;
+		}
+		.home-hero__action {
+			justify-content: center;
+			height: 2.875rem;
+		}
+		.home-hero__section-label {
+			font-size: 0.75rem;
+			margin-bottom: 0.75rem;
+		}
+		.home-hero__grid {
+			grid-template-columns: 1fr;
+			gap: 0.625rem;
+		}
+		.home-hero__card {
+			flex-direction: row;
+			align-items: center;
+			gap: 0.875rem;
+			padding: 0.875rem 1rem;
+			border-radius: 12px;
+		}
+		.home-hero__card-title {
+			flex: 1;
+			font-size: 0.96875rem;
+		}
+		.home-hero__card-group {
+			display: none;
+		}
+	}
+</style>

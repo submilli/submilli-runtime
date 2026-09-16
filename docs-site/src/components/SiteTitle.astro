@@ -1,0 +1,43 @@
+---
+import Logo from './Logo.astro';
+
+const { siteTitle, siteTitleHref } = Astro.locals.starlightRoute;
+---
+
+<a href={siteTitleHref} class="site-title" aria-label={siteTitle}>
+	<Logo size={18} />
+	<span class="divider" aria-hidden="true"></span>
+	<span class="docs-label" translate="no">Docs</span>
+</a>
+
+<style>
+	.site-title {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		text-decoration: none;
+		color: var(--sl-color-white);
+		white-space: nowrap;
+		min-width: 0;
+	}
+	.divider {
+		width: 1px;
+		height: 1.25rem;
+		background: var(--sub-line-strong);
+	}
+	.docs-label {
+		font: 700 0.9375rem/1 var(--sl-font);
+		color: var(--sl-color-white);
+	}
+	@media (max-width: 49.99rem) {
+		.site-title {
+			gap: 0.625rem;
+		}
+		.divider {
+			height: 1.125rem;
+		}
+		.docs-label {
+			font-size: 0.875rem;
+		}
+	}
+</style>
