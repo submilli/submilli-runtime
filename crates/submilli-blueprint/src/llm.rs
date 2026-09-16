@@ -982,7 +982,7 @@ llm:
         assert_eq!(parse(&yaml).expect("round trip"), b);
     }
 
-    /// KTD8: the SDK's own falsy default *is* the bug — schemas silently vanish
+    /// the SDK's own falsy default *is* the bug — schemas silently vanish
     /// and typed output breaks quietly. Ours defaults true so a provider that
     /// cannot honor the schema fails loudly instead.
     #[test]

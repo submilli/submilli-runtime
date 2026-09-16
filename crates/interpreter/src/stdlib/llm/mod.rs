@@ -827,7 +827,7 @@ mod tests {
                     prompts: prompts.to_vec(),
                     schema: schema_json.map(str::to_string),
                 });
-            // Declaration is authoritative (KTD9): a real provider rejects a
+            // Declaration is authoritative: a real provider rejects a
             // model it does not serve, and the rejection names the ones it
             // does. That is exactly the leak the gate ordering must prevent, so
             // the mock has to reproduce it or the ordering test is vacuous.
@@ -1067,7 +1067,7 @@ mod tests {
         }
     }
 
-    /// R12: a runtime with no provider reports a catchable configuration error
+    /// a runtime with no provider reports a catchable configuration error
     /// rather than fabricating a completion. A program that silently reasoned
     /// over text no model produced is the failure this prevents.
     #[tokio::test]
@@ -1117,7 +1117,7 @@ mod tests {
             .expect("program completes");
     }
 
-    /// R14: the prompt bounds are checked before anything is reserved and
+    /// the prompt bounds are checked before anything is reserved and
     /// before anything is dispatched. Charging a budget for a batch that was
     /// never going to be sent would make an oversized request cost real
     /// headroom — and the count and the bytes are reported, never the prompts.
@@ -1237,7 +1237,7 @@ mod tests {
         assert_eq!(out, "range");
     }
 
-    /// KTD7: the capability check runs before the provider is consulted, so a
+    /// the capability check runs before the provider is consulted, so a
     /// denied caller cannot compare error kinds to learn which models the
     /// operator configured. Without this ordering a caller denied by a `model`
     /// filter could enumerate the whole catalog — a `PermissionDeniedError` for
@@ -1283,7 +1283,7 @@ mod tests {
         assert!(messages[0].contains("permission denied"), "{}", messages[0]);
     }
 
-    /// KTD6: `models()` is double-gated — the op, then each candidate through
+    /// `models()` is double-gated — the op, then each candidate through
     /// the same `model` filter that gates calling. A listing that ignored the
     /// policy would hand the program a menu it cannot order from.
     #[tokio::test]
@@ -1411,7 +1411,7 @@ mod tests {
         );
     }
 
-    /// KTD7: `description` is operator-authored free text that flows verbatim
+    /// `description` is operator-authored free text that flows verbatim
     /// into a guest model's model-selection reasoning, so it is sanitized — not
     /// merely bounded. Line breaks and control characters are what let injected
     /// text present itself as a new instruction block, so they go first; the
@@ -1540,7 +1540,7 @@ mod tests {
         assert_eq!(dispatches[0].model, "m");
     }
 
-    /// KTD3: unreported usage is indeterminate, not free. An element the
+    /// unreported usage is indeterminate, not free. An element the
     /// provider gave no counts for keeps its share of the reservation rather
     /// than releasing it — a throttled element may still have been billed.
     #[tokio::test]
@@ -1684,7 +1684,7 @@ mod tests {
             .expect("a typed call sends a schema");
         assert!(
             !schema.contains("$ref") && !schema.contains("$defs"),
-            "the schema must be fully inlined (KTD5): {schema}",
+            "the schema must be fully inlined: {schema}",
         );
         let parsed: serde_json::Value = serde_json::from_str(&schema).expect("schema is JSON");
         assert_eq!(parsed["properties"]["level"]["type"], "string");
@@ -1746,7 +1746,7 @@ mod tests {
         );
     }
 
-    /// The thrown error must carry no completion text (R13). A model that
+    /// The thrown error must carry no completion text. A model that
     /// answered with a secret must not leak it through the type error.
     #[tokio::test]
     async fn a_failed_check_never_quotes_the_completion() {

@@ -187,7 +187,7 @@ pub enum LlmCallError {
     ///
     /// `detail` is a **fixed classification string** — "connection reset",
     /// "dns lookup failed", "tls handshake failed". It is the one free-form field
-    /// in this taxonomy, and R13 binds it: never a provider response body, and
+    /// in this taxonomy, and the no-payload rule binds it: never a provider response body, and
     /// never a request echo. The precedent this trait otherwise mirrors does
     /// interpolate a body
     /// ([`McpCallError::Upstream`](crate::runtime::mcp::McpCallError::Upstream)
@@ -369,7 +369,7 @@ impl FailureReason {
     /// A fixed classification string for this reason, suitable as an
     /// [`LlmFailure::message`] when a provider has nothing more specific that is
     /// safe to say. Drawn from a closed vocabulary precisely so it cannot carry a
-    /// response body or completion fragment (R13).
+    /// response body or completion fragment.
     pub fn default_message(&self) -> &'static str {
         match self {
             Self::Truncated => "the model stopped at the output token cap",
@@ -441,7 +441,7 @@ pub struct LlmFailure {
     ///
     /// This is the AI SDK's rule that an `error: unknown` becomes an
     /// `errorText: string` at any serialization boundary — a guest cannot receive
-    /// a Rust error object, so it receives this. **R13 binds it absolutely: it is
+    /// a Rust error object, so it receives this. **The no-payload rule binds it absolutely: it is
     /// a classification, never an echo.** No prompt, no completion fragment, and
     /// no provider response body may reach it; provider bodies carry request
     /// echoes and account identifiers, so they are dropped at this boundary.
@@ -1074,7 +1074,7 @@ mod tests {
         assert!(rendered.contains("64"), "the ceiling: {rendered}");
     }
 
-    /// R13: a budget refusal carries the numbers, never the payload.
+    /// a budget refusal carries the numbers, never the payload.
     #[test]
     fn no_budget_error_display_leaks_prompt_text() {
         const SECRET: &str = "the patient's diagnosis is";
@@ -1139,7 +1139,7 @@ mod tests {
             .expect("the released capacity is reusable");
     }
 
-    /// KTD3b: reserving only input enforces the ceiling retroactively. A
+    /// reserving only input enforces the ceiling retroactively. A
     /// 100-token prompt can legitimately produce 100k output tokens, so the
     /// output cap must be part of the reservation and the refusal must land
     /// before dispatch, not after the provider has billed.
@@ -1188,7 +1188,7 @@ mod tests {
         assert_eq!(budget.reservation_for(100, 4, Some(1_000)), 100 + 4_000);
     }
 
-    /// KTD3: held reserve releases from the per-execution budget on teardown —
+    /// held reserve releases from the per-execution budget on teardown —
     /// that execution is over — but stays charged against the aggregate.
     /// Releasing it from the aggregate would let indeterminate spend escape the
     /// server-wide ceiling: N executions each under the per-execution ceiling
@@ -1395,7 +1395,7 @@ mod tests {
         );
     }
 
-    /// R13: no prompt or completion text may reach an error `Display`.
+    /// no prompt or completion text may reach an error `Display`.
     #[test]
     fn no_dispatch_error_display_leaks_prompt_text() {
         const SECRET_PROMPT: &str = "patient SSN is 000-00-0000";
@@ -1432,7 +1432,7 @@ mod tests {
         );
     }
 
-    /// KTD2's nine, in the plan's declaration order. The spellings are the wire
+    /// nine, in the plan's declaration order. The spellings are the wire
     /// form a guest branches on, so drift here is a guest-visible break.
     #[test]
     fn nine_failure_reasons_have_stable_kebab_case_spellings() {
@@ -1459,8 +1459,8 @@ mod tests {
         }
     }
 
-    /// KTD1: `ok` keys off a natural stop, not off "didn't throw". KTD3: absent
-    /// usage is `None`, never `Some(0)`. KTD2: the failure arm keeps partial text.
+    /// `ok` keys off a natural stop, not off "didn't throw"; absent usage is
+    /// `None`, never `Some(0)`; and the failure arm keeps partial text.
     #[test]
     fn truncated_outcome_is_not_ok_but_keeps_its_text_and_indeterminate_usage() {
         let partial = LlmOutcome::failed(
@@ -1491,7 +1491,7 @@ mod tests {
         );
     }
 
-    /// KTD2: `text` is `string | null` on the failure arm specifically — a model
+    /// `text` is `string | null` on the failure arm specifically — a model
     /// that produced nothing is distinguishable from one that produced "".
     #[test]
     fn failure_text_is_nullable_and_distinct_from_empty() {
@@ -1511,12 +1511,12 @@ mod tests {
         assert_eq!(empty.text.as_deref(), Some(""), "produced an empty string");
         assert_ne!(
             nothing.text, empty.text,
-            "null and empty must not collapse — KTD1's whole point is telling \
+            "null and empty must not collapse — the whole point is telling \
              'empty because filtered' from 'empty because it said nothing'"
         );
     }
 
-    /// KTD2: the failure arm carries `message`, `retryable`, and `status`, and the
+    /// the failure arm carries `message`, `retryable`, and `status`, and the
     /// success arm structurally cannot.
     #[test]
     fn failure_arm_carries_message_retryable_and_nullable_status() {
@@ -1584,7 +1584,7 @@ mod tests {
         );
     }
 
-    /// KTD7: unlike `McpCallError::Upstream`, which renders `HTTP {status}:
+    /// unlike `McpCallError::Upstream`, which renders `HTTP {status}:
     /// {body}`, no variant here interpolates a provider response body — those
     /// carry completion fragments and request echoes.
     #[test]
@@ -1603,8 +1603,8 @@ mod tests {
         assert!(!rendered.contains('{'), "no JSON body shape: {rendered}");
     }
 
-    /// R13 / KTD7 on the degraded-error string: `message` is the AI SDK's
-    /// `error: unknown` → `errorText: string` rule, and R13 binds it absolutely.
+    /// The degraded-error string: `message` follows the AI SDK's
+    /// `error: unknown` → `errorText: string` rule, and carries no payload.
     #[test]
     fn failure_message_is_a_classification_not_a_payload_echo() {
         // Every message a provider impl is expected to produce is drawn from a
@@ -1679,7 +1679,7 @@ mod tests {
 
     #[tokio::test]
     async fn unconfigured_store_data_has_no_provider() {
-        // R12: the default runtime leaves the provider absent so an unconfigured
+        // The default runtime leaves the provider absent so an unconfigured
         // call reports a catchable configuration error rather than silently
         // succeeding — the `session_kv` rule.
         let data = crate::runtime::StoreData::with_tempdir().unwrap();

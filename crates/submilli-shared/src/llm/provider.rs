@@ -6,28 +6,13 @@
 //! impl already holds — no HTTP client, no timeout, no cache, no
 //! unreachable-provider degradation path. That is not a simplification of MCP's
 //! `discovery.rs`: no provider package exposes a model-listing API at all, so
-//! the blueprint carries what MCP gets off the wire (KTD9).
+//! the blueprint carries what MCP gets off the wire.
 //!
-//! **Classification order is load-bearing.** Each step below was verified
-//! empirically against the pinned SDK, and reordering them changes answers:
-//!
-//! 1. Unwrap a retry wrapper via its last error *before anything else*. At the
-//!    default retry count the wrapper is the normal case, not the exception, so
-//!    a classifier that inspects the outer error sees no HTTP status at all and
-//!    calls a persistent 429 a transport failure.
-//! 2. Classify an abort separately. It is a bare exception matching no SDK
-//!    error class, and it short-circuits retry — so it never appears wrapped,
-//!    and left to the structural step it would land in `transport`.
-//! 3. Map the stop reason to `ok` / `reason`, **including on structured-output
-//!    successes**, because the object path never consults the stop reason
-//!    itself: valid JSON with a `content-filter` stop resolves as a clean
-//!    success there while the same input throws on the text path.
-//! 4. Structural HTTP classification: 429, 5xx, and a missing status.
-//! 5. String/body classification for context-length-exceeded **only** — the one
-//!    class with no structural signal. A response-body error code first, prose
-//!    as the documented fallback.
-//! 6. Guard usage with a finite-number check. Non-finite and absent both mean
-//!    indeterminate, never zero.
+//! **Classification runs in a fixed order**, numbered at each step below.
+//! Reordering changes answers rather than just style: a retry wrapper hides the
+//! HTTP status until it is unwrapped, an abort never appears wrapped at all, and
+//! the structured-output path never consults the stop reason — so a step that
+//! runs too late classifies a different failure than the one that happened.
 //!
 //! **No response body and no completion text leaves this module.** Step 5 reads
 //! a response body to classify, so the body is in hand exactly where the error is
@@ -35,7 +20,7 @@
 //! (`McpCallError::Upstream` renders `HTTP {status}: {body}`). This one must not:
 //! provider bodies carry completion fragments, request echoes, and account
 //! identifiers, and a structured-output error's `text` field is raw model output
-//! by definition. Both are dropped at the taxonomy boundary (KTD7/R13).
+//! by definition. Both are dropped at the taxonomy boundary.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -61,7 +46,7 @@ const CONTEXT_LENGTH_CODE: &str = "context_length_exceeded";
 /// The fixed classification string a context-length refusal carries, in place of
 /// the generic one. Actionable where the generic one is not — "shorten it" is a
 /// different fix from "the request was malformed" — and, being a constant, it
-/// carries no part of the body or message that selected it (R13).
+/// carries no part of the body or message that selected it.
 const CONTEXT_LENGTH_MESSAGE: &str =
     "the prompt does not fit the model's context window; send less text per call";
 
@@ -117,7 +102,7 @@ impl StopReason {
         }
     }
 
-    /// Step 3. The mapping is the whole of KTD1: `ok` keys off a natural stop,
+    /// Step 3. The mapping is the whole of the `ok` rule: it keys off a natural stop,
     /// not off "nothing threw".
     fn failure_reason(&self) -> Option<FailureReason> {
         match self {
@@ -154,7 +139,7 @@ impl ProviderUsage {
     /// Step 6. A count is usable only if it is present, finite, non-negative,
     /// and integral-in-range. Everything else is indeterminate — which is not
     /// the same as free, so it becomes `None` and the reconciler holds a
-    /// conservative reserve for it (KTD3).
+    /// conservative reserve for it.
     fn resolved(self) -> (Option<u64>, Option<u64>) {
         (
             finite_count(self.input_tokens),
@@ -393,7 +378,7 @@ impl LlmProvider for BlueprintLlmProvider {
 
     /// Answered from the blueprint this impl already holds, so the reservation
     /// costs no round trip. Returning the declared value here is what makes the
-    /// pre-dispatch reservation an upper bound (KTD3b): the same cap is sent as
+    /// pre-dispatch reservation an upper bound: the same cap is sent as
     /// the request's output limit, so the provider cannot bill past what was
     /// reserved.
     fn output_reserve(&self, model: &str) -> Option<u64> {
