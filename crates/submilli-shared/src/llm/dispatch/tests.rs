@@ -287,7 +287,7 @@ fn a_redirect_is_refused_rather_than_carrying_the_key_to_another_host() {
         redirect.assert_hits(1);
         collected.assert_hits(0);
         assert!(
-            !matches!(outcome, Ok(_)),
+            outcome.is_err(),
             "{kind}: a 307 must not resolve to a completion, got {outcome:?}",
         );
     }
