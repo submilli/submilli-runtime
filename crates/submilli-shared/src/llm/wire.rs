@@ -392,12 +392,40 @@ fn parse_anthropic(value: &Value) -> Result<ProviderResponse, ProviderFailure> {
     finish(stop_reason, text, usage)
 }
 
+/// Anthropic's usage, including the cache fields.
+///
+/// `input_tokens` counts only the uncached prompt. Reading a prompt from the
+/// cache bills `cache_read_input_tokens` and writing one bills
+/// `cache_creation_input_tokens`, both *in addition* — so summing only
+/// `input_tokens` charges the budget a fraction of what was spent, and the
+/// ceiling stops bounding the thing it exists to bound.
+///
+/// Absent fields stay absent rather than becoming zero: [`sum_present`] returns
+/// `None` when every field is missing, so an unreported count is still
+/// indeterminate and keeps its held reserve.
 fn anthropic_usage(value: &Value) -> ProviderUsage {
     let usage = value.get("usage");
     ProviderUsage {
-        input_tokens: number_at(usage, "input_tokens"),
+        input_tokens: sum_present(&[
+            number_at(usage, "input_tokens"),
+            number_at(usage, "cache_creation_input_tokens"),
+            number_at(usage, "cache_read_input_tokens"),
+        ]),
         output_tokens: number_at(usage, "output_tokens"),
     }
+}
+
+/// Sum the counts a provider reported, or `None` when it reported none of them.
+///
+/// The distinction is load-bearing: `Some(0)` says the provider measured zero,
+/// while `None` says it measured nothing, and the budget holds a reserve for the
+/// second rather than releasing it.
+fn sum_present(counts: &[Option<f64>]) -> Option<f64> {
+    let mut total = None;
+    for count in counts.iter().flatten() {
+        total = Some(total.unwrap_or(0.0) + count);
+    }
+    total
 }
 
 /// Anthropic's stop reasons.
@@ -452,10 +480,19 @@ fn parse_google(value: &Value) -> Result<ProviderResponse, ProviderFailure> {
         _ => None,
     };
 
+    // `candidatesTokenCount` counts the answer only. A thinking model bills
+    // `thoughtsTokenCount` separately and does *not* fold it in — that is what
+    // `totalTokenCount` is for — so charging only the candidate count lets the
+    // expensive half of a reasoning call go unseen by both ceilings. Summing the
+    // two keeps the reservation's upper bound meaningful; a model that reports
+    // neither still reports `None` and keeps its held reserve.
     let usage = value.get("usageMetadata");
     let usage = ProviderUsage {
         input_tokens: number_at(usage, "promptTokenCount"),
-        output_tokens: number_at(usage, "candidatesTokenCount"),
+        output_tokens: sum_present(&[
+            number_at(usage, "candidatesTokenCount"),
+            number_at(usage, "thoughtsTokenCount"),
+        ]),
     };
 
     let text = candidate

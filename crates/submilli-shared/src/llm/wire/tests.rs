@@ -793,6 +793,107 @@ fn absent_usage_is_none_never_zero() {
     }
 }
 
+/// Separately-billed token fields are counted, not dropped.
+///
+/// Anthropic bills cache reads and cache writes *in addition* to
+/// `input_tokens`, and Google bills `thoughtsTokenCount` in addition to
+/// `candidatesTokenCount` — neither parent field includes the extra. Charging
+/// only the parent hands the budget a fraction of real spend, which is the same
+/// "spend the ceiling cannot see" failure as forgiving an unreported count,
+/// arriving through the reported path instead of the null one.
+#[test]
+fn separately_billed_token_fields_are_added_to_the_reported_counts() {
+    let anthropic = parse_response(
+        ProviderKind::Anthropic,
+        &json!({
+            "stop_reason": "end_turn",
+            "content": [{ "type": "text", "text": "x" }],
+            "usage": {
+                "input_tokens": 10,
+                "cache_creation_input_tokens": 300,
+                "cache_read_input_tokens": 700,
+                "output_tokens": 5,
+            },
+        })
+        .to_string(),
+    )
+    .unwrap();
+    assert_eq!(
+        anthropic.usage.input_tokens,
+        Some(1010.0),
+        "cached input is billed on top of input_tokens, so it has to be charged"
+    );
+    assert_eq!(anthropic.usage.output_tokens, Some(5.0));
+
+    let google = parse_response(
+        ProviderKind::Google,
+        &json!({
+            "candidates": [{ "finishReason": "STOP", "content": { "parts": [{ "text": "x" }] } }],
+            "usageMetadata": {
+                "promptTokenCount": 10,
+                "candidatesTokenCount": 100,
+                "thoughtsTokenCount": 5000,
+            },
+        })
+        .to_string(),
+    )
+    .unwrap();
+    assert_eq!(
+        google.usage.output_tokens,
+        Some(5100.0),
+        "a thinking model's reasoning tokens are the expensive half and are billed separately"
+    );
+    assert_eq!(google.usage.input_tokens, Some(10.0));
+}
+
+/// Summing the extra fields must not manufacture a zero out of an absent one.
+///
+/// `None` and `Some(0)` mean different things to the reconciler — nothing
+/// measured versus measured nothing — so a response carrying only the parent
+/// field reports exactly the parent, and one carrying none of them stays `None`
+/// and keeps its held reserve.
+#[test]
+fn summing_extra_usage_fields_preserves_the_absent_case() {
+    let only_parent = parse_response(
+        ProviderKind::Anthropic,
+        &json!({
+            "stop_reason": "end_turn",
+            "content": [{ "type": "text", "text": "x" }],
+            "usage": { "input_tokens": 10, "output_tokens": 5 },
+        })
+        .to_string(),
+    )
+    .unwrap();
+    assert_eq!(only_parent.usage.input_tokens, Some(10.0));
+
+    let only_cache = parse_response(
+        ProviderKind::Anthropic,
+        &json!({
+            "stop_reason": "end_turn",
+            "content": [{ "type": "text", "text": "x" }],
+            "usage": { "cache_read_input_tokens": 700, "output_tokens": 5 },
+        })
+        .to_string(),
+    )
+    .unwrap();
+    assert_eq!(
+        only_cache.usage.input_tokens,
+        Some(700.0),
+        "a fully-cached prompt reports no input_tokens, and the cache read is still real spend"
+    );
+
+    let google_no_thoughts = parse_response(
+        ProviderKind::Google,
+        &json!({
+            "candidates": [{ "finishReason": "STOP", "content": { "parts": [{ "text": "x" }] } }],
+            "usageMetadata": { "promptTokenCount": 10, "candidatesTokenCount": 100 },
+        })
+        .to_string(),
+    )
+    .unwrap();
+    assert_eq!(google_no_thoughts.usage.output_tokens, Some(100.0));
+}
+
 /// A usage object present but with null or non-numeric counts is equally
 /// indeterminate — the half-reported case, which a parser reading `as_u64()`
 /// with `unwrap_or(0)` would turn into a free call.
