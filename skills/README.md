@@ -8,17 +8,16 @@ compares the installed tree against this source tree.
 
 ## Release and update contract
 
-`skills/submilli/VERSION` holds the skill's release number, and merging is
-releasing. Any pull request that touches `skills/submilli/` must raise it;
-`.github/workflows/skill-release.yml` fails the pull request otherwise. On
-merge to `main` the same workflow builds `submilli-skill.json` with
-`scripts/build_skill_release.py` and publishes it as the GitHub release
-`skill-v<VERSION>` on the merged commit, so a release is an immutable
-snapshot and review of the pull request is the release approval. Do not push
-`skill-v*` tags by hand. The release is deliberately not marked latest,
-because `install.sh` resolves the CLI through `releases/latest`. Users receive
-it the next time their assistant runs the skill, whose first step is
-`submilli skill sync`. No CLI release is involved.
+`skills/submilli/VERSION` holds the skill's release number. To publish:
+bump it in the change, merge, then push the tag `skill-v<N>` on that commit.
+`.github/workflows/skill-release.yml` checks the tag against `VERSION`, builds
+`submilli-skill.json` with `scripts/build_skill_release.py`, and attaches it
+to a GitHub release that is deliberately not marked latest, because
+`install.sh` resolves the CLI through `releases/latest`. Users receive it the
+next time their assistant runs the skill, whose first step is
+`submilli skill sync`. No CLI release is involved. Anything merged to `main`
+without a tag reaches users only inside the next CLI's embedded copy, so bump
+`VERSION` whenever that copy should outrank the last tag.
 
 `sync` discovers the newest tag from git's ref advertisement
 (`<repo>.git/info/refs`), not the rate-limited GitHub API, at most daily, and
