@@ -42,6 +42,27 @@ and compiles/runs the examples extracted from the skill. Python tests verify
 the evaluation runner and case data. Neither is a claim that an assistant
 behaves intelligently; that requires the behavioral runs below.
 
+### Real harness adapters
+
+The per-harness checks under `evals/harnesses/` exercise installed framework
+and MCP adapter packages against a local server, without a live model or
+business service. Follow each directory's commands and tested dependency
+versions. Start their shared fixture in a separate terminal:
+
+```sh
+cargo build -p submilli -p submilli-server
+python3 skills/evals/harnesses/serve_fixture.py
+```
+
+The fixture compiles the billing example from the distributed references,
+publishes it into a temporary store, starts a loopback server on port 18128,
+and registers `support-read`. It checks allowed, denied and missing-binding
+REST responses before reporting ready. Set
+`SUBMILLI_SERVER_URL=http://127.0.0.1:18128` for the adapter checks. Stop with
+Ctrl-C to remove the server and temporary store; use `--port` if occupied.
+These checks establish transport/API behavior; they do not establish live
+model quality or successful assistant-driven implementation.
+
 ## Behavioral evaluation
 
 `evals/cases.json` contains realistic prompts, an optional application fixture,
@@ -52,6 +73,10 @@ The `build-rest-package`, `grants-from-schema`, `three-role-blueprints`,
 `filter-grammar`, `ownership-gap`, and `package-docs` cases grade the craft of
 the produced package, blueprint, or filter rather than the stance taken;
 compile and lint their artifacts with the CLI before grading them.
+The `journey-mastra`, `journey-deepagents`, `journey-vercel`, and
+`journey-langgraph` cases start from an empty workspace and require the full
+package → blueprint → real harness adapter path, with a scripted model.
+Grade actual executed artifacts and policy responses, not a proposed plan.
 
 Prepare fresh paired workspaces (three repeats per case by default):
 

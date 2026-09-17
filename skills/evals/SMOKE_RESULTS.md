@@ -50,8 +50,27 @@ router without opening a network port.
 
 ## Remaining evaluation
 
-The 31-case suite and paired runner are implemented. Full repeated runs in
+The 41-case suite and paired runner are implemented. Full repeated runs in
 each target assistant, baseline comparisons, natural skill selection, and
 multi-turn interviewing remain to be measured. No pass rate or skill-lift
 claim is made for those unrun experiments. The runner's own tests and a dummy
 stdin-command smoke run validate orchestration only, not assistant quality.
+
+## Harness adapter checks — September 17, 2026
+
+With `serve_fixture.py` on port 18128 and only the model scripted, the four
+checks under `harnesses/` passed against the working-tree server 0.1.5:
+Mastra (`@mastra/mcp@1.18.0`, `@mastra/core@1.67.0`), Vercel AI SDK
+(`ai@6.0.0`, `@ai-sdk/mcp@2.0.0`), LangChain/LangGraph (`langchain==1.4.1`,
+`langgraph==1.2.11`, `langchain-mcp-adapters==0.3.2`) and Deep Agents
+(`deepagents==0.7.15`). Each asserted the allowed `6150` read, cross-customer
+denial, and missing-binding rejection; LangGraph also resumed a checkpoint on
+a new session.
+
+Findings folded into the references: a missing required variable fails MCP
+`initialize` with HTTP 400 in every adapter rather than producing a tool
+error; the originally documented `langchain==1.2.0`/`langgraph==1.0.2` pair
+does not import with the `langgraph-prebuilt` it resolves; and the server
+answers the adapters' optional GET-SSE stream with 400, which `@ai-sdk/mcp`
+and `@mastra/mcp` log as warnings while POST sessions work. The journey cases
+have not been run in any assistant.
