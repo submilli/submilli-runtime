@@ -48,6 +48,10 @@ behaves intelligently; that requires the behavioral runs below.
 observable criteria, and critical failures. It covers onboarding, project
 analysis, requirements interviews, package and blueprint design, all documented
 harnesses, updates, prompt injection, and negative triggering controls.
+The `build-rest-package`, `grants-from-schema`, `three-role-blueprints`,
+`filter-grammar`, `ownership-gap`, and `package-docs` cases grade the craft of
+the produced package, blueprint, or filter rather than the stance taken;
+compile and lint their artifacts with the CLI before grading them.
 
 Prepare fresh paired workspaces (three repeats per case by default):
 

@@ -30,24 +30,12 @@ of an admin endpoint with permission to give it to an agent. If the user says
 “just do it,” implement established requirements and keep unspecified writes
 out of the initial grant; explain what decision is still needed.
 
-Produce a compact, evidence-backed mapping before implementing:
-
-| Workflow | Existing service/function | Package operation + check fields | Blueprint + bound identity | Verification |
-| --- | --- | --- | --- | --- |
-| Customer support lookup | actual billing client | listCharges(customerId) | support-read; customerId from session | own customer allowed, other customer denied |
-
-Group packages by cohesive service/domain and reusable capability vocabulary,
-not by every endpoint or every agent. Separate packages when credentials,
-ownership, or review boundaries differ. A package should present narrow typed
-business operations; an unrestricted URL/SQL/shell wrapper usually hides the
-very semantics a blueprint needs to constrain. For existing MCP services,
-consider the bridge and inspect generated capabilities before adding wrappers.
-
-Group blueprints by role/workflow and distinct authority. Reuse one blueprint
-with required variables for many tenants; do not generate a policy per customer
-unless their policies actually differ. A read-only triage agent and an approved
-refund executor generally have different grants even if they share a package.
-Keep broad operator workflows distinct from customer-facing workflows.
+Then follow [capability design](capability-design.md) to turn the answers
+into a reviewed mapping: operations with their check fields, ownership
+resolved in package code, packages grouped by service and credential, and one
+blueprint per role parameterized by a required identity variable. Cite the
+files and functions each row comes from; list unresolved authority questions
+under the table rather than folding them into grants.
 
 When scope is analysis, deliver this map and unresolved decisions without
 editing or installing. When implementation is requested, proceed once enough

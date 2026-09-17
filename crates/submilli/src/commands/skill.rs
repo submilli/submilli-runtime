@@ -24,6 +24,7 @@ const FILES: &[(&str, &str)] = bundle![
     "references/setup.md",
     "references/concepts.md",
     "references/discovery.md",
+    "references/capability-design.md",
     "references/packages.md",
     "references/blueprints.md",
     "references/use-cases.md",

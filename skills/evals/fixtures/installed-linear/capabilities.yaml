@@ -1,0 +1,43 @@
+namespace: submilli
+provides:
+- name: linear.app/createComment
+  description: Create a comment on an issue; returns the created comment.
+  fields: {}
+- name: linear.app/createIssue
+  description: Create an issue; returns the created issue.
+  fields:
+    teamId:
+      type: string
+- name: linear.app/getIssue
+  description: Fetch one issue by UUID; null when not found.
+  fields: {}
+- name: linear.app/getTeam
+  description: Fetch one team by UUID; null when not found.
+  fields:
+    teamId:
+      type: string
+- name: linear.app/getViewer
+  description: Fetch the authenticated user (whoever owns the API token).
+  fields: {}
+- name: linear.app/listIssues
+  description: List issues, optionally filtered and paginated.
+  fields:
+    teamId:
+      type: string
+- name: linear.app/listProjects
+  description: List projects, paginated.
+  fields: {}
+- name: linear.app/listTeams
+  description: List teams, paginated.
+  fields: {}
+- name: linear.app/listUsers
+  description: List users, paginated.
+  fields: {}
+- name: linear.app/updateIssue
+  description: Update an issue by UUID; returns the updated issue.
+  fields: {}
+requires:
+- capability: http.post
+  filter: host == "api.linear.app" and path == "/graphql" and method == "POST"
+- capability: secrets.get
+  filter: name == "LINEAR_API_KEY"

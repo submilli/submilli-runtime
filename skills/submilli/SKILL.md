@@ -14,6 +14,8 @@ Read only the references needed for the current task:
 - First explanation or comparison: [concepts](references/concepts.md).
 - Installation, new project, skill updates: [setup](references/setup.md).
 - Existing project or unclear agent requirements: [discovery](references/discovery.md).
+- Choosing operations, check fields, package and blueprint boundaries:
+  [capability design](references/capability-design.md).
 - Package implementation: [packages](references/packages.md).
 - Policy design and verification: [blueprints](references/blueprints.md).
 - Ideas or suitability: [use cases](references/use-cases.md).

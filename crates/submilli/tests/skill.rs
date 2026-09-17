@@ -182,12 +182,78 @@ fn refuses_symlinked_targets_ancestors_and_contents() {
 }
 
 fn code_block<'a>(text: &'a str, language: &str) -> &'a str {
-    text.split_once(&format!("```{language}\n"))
-        .unwrap()
-        .1
-        .split_once("\n```")
-        .unwrap()
-        .0
+    code_blocks(text, language)[0]
+}
+
+/// Every fenced block tagged exactly `language`, in document order.
+fn code_blocks<'a>(text: &'a str, language: &str) -> Vec<&'a str> {
+    text.split(&format!("```{language}\n"))
+        .skip(1)
+        .map(|rest| rest.split_once("\n```").unwrap().0)
+        .collect()
+}
+
+/// The "real service" package and blueprint documented in the references must
+/// keep compiling, deriving the host and secret filters the prose describes, and
+/// linting against each other — they are the pattern users copy.
+#[test]
+fn documented_real_service_package_and_blueprint_agree() {
+    let root = tempfile::tempdir().unwrap();
+    let store = root.path().join("store");
+    let cli = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_submilli"))
+            .args(args)
+            .current_dir(root.path())
+            .env("SUBMILLI_HOME", &store)
+            .env("SUBMILLI_TELEMETRY", "0")
+            .output()
+            .unwrap()
+    };
+    let references = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../skills/submilli/references");
+    let package_doc = fs::read_to_string(references.join("packages.md")).unwrap();
+    let blueprint_doc = fs::read_to_string(references.join("blueprints.md")).unwrap();
+    let source = code_blocks(&package_doc, "typescript")[1];
+    assert!(
+        source.contains("acme.com/orders.cancel"),
+        "second package example moved"
+    );
+    ok(cli(&["build", "init", "@acme/orders", "package"]));
+    fs::write(root.path().join("package/src/lib.ts"), source).unwrap();
+    fs::write(
+        root.path().join("package/tests/lib.test.ts"),
+        "import { buildPageQuery } from \"@acme/orders\";\nfunction main(): void { assert(buildPageQuery(null) === \"?limit=50\"); }\n",
+    )
+    .unwrap();
+    let check = cli(&["build", "check"]);
+    ok(check.clone());
+    assert!(
+        !String::from_utf8_lossy(&check.stderr).contains("cannot statically resolve the host"),
+        "the documented URL construction must derive a host filter"
+    );
+    let schema = fs::read_to_string(root.path().join("package/capabilities.yaml")).unwrap();
+    for expected in [
+        "host == \"api.acme.com\" and method == \"GET\"",
+        "host == \"api.acme.com\" and method == \"POST\"",
+        "name == \"ORDERS_API_TOKEN\"",
+        "totalCents:\n      type: number",
+    ] {
+        assert!(schema.contains(expected), "{schema}");
+    }
+    ok(cli(&["build", "test"]));
+    ok(cli(&["build", "publish-local"]));
+    let yaml = code_blocks(&blueprint_doc, "yaml")[1];
+    assert!(
+        yaml.contains("name: support-orders"),
+        "second blueprint example moved"
+    );
+    fs::write(root.path().join("blueprint.yaml"), yaml).unwrap();
+    let lint = cli(&["blueprint", "lint", "blueprint.yaml"]);
+    ok(lint.clone());
+    assert!(
+        !String::from_utf8_lossy(&lint.stderr).contains("warning:"),
+        "documented blueprint should lint clean: {}",
+        String::from_utf8_lossy(&lint.stderr)
+    );
 }
 
 #[test]
