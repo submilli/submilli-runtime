@@ -83,15 +83,18 @@ fetch the value and hand it back, not raw HTTP.
 Language deltas: no `undefined`, no `async`/`await`, no `Symbol` /
 `Proxy`, no `any` (`unknown` requires narrowing), no `Date` (use the
 `Temporal` global), `==` aliases `===`. Truthiness and `&&` / `||` /
-`??` behave exactly as in JS/TS (an `unknown` condition must be
-narrowed first). Postfix `x!` is a runtime-checked non-null assertion: it
-narrows `T | null` to `T` and throws `Error` if the value is `null`.
-Return types are mandatory on every function (including `main`).
+`??` use JS/TS truthiness and short-circuit semantics (an `unknown` condition
+must be narrowed first).
+Postfix `x!` is a runtime-checked non-null assertion: it
+narrows `T | null` to `T` and throws `TypeError` if the value is `null`.
+Return types are mandatory on function declarations (including `main`) and
+class methods; arrow functions can infer them.
 No runtime reflection: of `Object.prototype` only `.toString()` is
 available — no `.hasOwnProperty()`. The type system tells you what
-fields a value has; check optionals against `null`, and use
-`"field" in obj` (string-literal key only) to test for and narrow to
-an optional field. Identifiers follow TypeScript — `type`, `from`,
+fields a value has; narrow optional values with `obj.field !== null`.
+`"field" in obj` (string-literal key only) narrows `unknown` or unions
+distinguished by field presence.
+Identifiers follow TypeScript — `type`, `from`,
 `of`, `as`, and `is` are contextual and may name variables — with one
 exception: `namespace` is reserved here, so rename it (`ns`). Reserved
 words are fine as object keys (`{ type: "x" }`, read back as
