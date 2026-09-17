@@ -54,7 +54,9 @@ once a day with a five-second timeout, downloads that release's single
 `submilli-skill.json` asset over HTTPS, and rejects files that would land
 outside the skill directory. When offline, or when the CLI's embedded copy is
 newer, it installs the embedded copy instead. If a release needs a newer CLI,
-`sync` says so and keeps what you have. Set `SUBMILLI_SKILL_AUTOUPDATE=0` to
+`sync` says so and keeps what you have; `submilli upgrade` installs the latest
+CLI. `sync` also mentions when a newer CLI exists but never upgrades it for
+you. Set `SUBMILLI_SKILL_AUTOUPDATE=0` to
 use only the embedded copy.
 
 `submilli skill status --agent codex` checks one installation against the

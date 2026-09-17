@@ -14,3 +14,4 @@ pub mod search;
 pub mod secret;
 pub mod server;
 pub mod skill;
+pub mod upgrade;

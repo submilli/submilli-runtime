@@ -6,7 +6,6 @@
 use std::{
     collections::BTreeMap,
     fs,
-    io::Read,
     path::{Component, Path},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -15,8 +14,8 @@ use anyhow::{Context, bail};
 use serde::{Deserialize, Serialize};
 
 use super::{Bundle, VERSION_FILE};
+use crate::commands::http::{read_limited, release_source};
 
-const DEFAULT_SOURCE: &str = "https://github.com/submilli/submilli-runtime";
 const ASSET: &str = "submilli-skill.json";
 const TAG_PREFIX: &str = "refs/tags/skill-v";
 const CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
@@ -48,7 +47,7 @@ struct Cache {
 /// The network is consulted at most once per [`CHECK_INTERVAL`]; between checks
 /// the cached release answers, so every installation converges on one version.
 pub fn newest_release(bundled_version: u32) -> anyhow::Result<Option<Bundle>> {
-    if std::env::var_os("SUBMILLI_SKILL_AUTOUPDATE").is_some_and(|value| value == "0") {
+    if !super::network_allowed() {
         return Ok(None);
     }
     let cache_path = submilli_build::default_data_root().join("skill-release.json");
@@ -84,7 +83,7 @@ pub fn newest_release(bundled_version: u32) -> anyhow::Result<Option<Bundle>> {
         && parse_version(min_cli) > parse_version(env!("CARGO_PKG_VERSION"))
     {
         bail!(
-            "skill v{} needs CLI {min_cli} or newer; upgrade the CLI to receive it",
+            "skill v{} needs CLI {min_cli} or newer; run `submilli upgrade` to receive it",
             release.version
         );
     }
@@ -99,7 +98,7 @@ fn fetch_newest(
     bundled_version: u32,
     known: Option<ReleaseFile>,
 ) -> anyhow::Result<Option<ReleaseFile>> {
-    let source = source()?;
+    let source = release_source("SUBMILLI_SKILL_SOURCE")?;
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(TIMEOUT))
         .build()
@@ -134,31 +133,6 @@ fn fetch_newest(
     let release: ReleaseFile = serde_json::from_slice(&body).context("malformed skill release")?;
     validate(&release, newest)?;
     Ok(Some(release))
-}
-
-/// An override serves mirrors and tests. Plain HTTP is accepted only for
-/// loopback so skill content cannot be replaced in transit.
-fn source() -> anyhow::Result<String> {
-    let source = std::env::var("SUBMILLI_SKILL_SOURCE").unwrap_or_else(|_| DEFAULT_SOURCE.into());
-    let url = url::Url::parse(&source).context("invalid SUBMILLI_SKILL_SOURCE")?;
-    let loopback = matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"));
-    if url.scheme() != "https" && !(url.scheme() == "http" && loopback) {
-        bail!("SUBMILLI_SKILL_SOURCE must use https");
-    }
-    Ok(source.trim_end_matches('/').to_owned())
-}
-
-fn read_limited(response: ureq::http::Response<ureq::Body>, limit: u64) -> anyhow::Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    response
-        .into_body()
-        .into_reader()
-        .take(limit + 1)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > limit {
-        bail!("response exceeds {limit} bytes");
-    }
-    Ok(bytes)
 }
 
 /// Advertised refs end a tag name with a newline, or `^{}` for a peeled tag.

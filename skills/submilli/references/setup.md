@@ -14,6 +14,15 @@ curl -fsSL https://submilli.ai/install.sh | sh
 irm https://submilli.ai/install.ps1 | iex
 ```
 
+To move an installed CLI to the latest release, run `submilli upgrade`
+(`--check` only reports; `--version v0.2.0` selects a release). It verifies the
+download against the release's `SHA256SUMS`, replaces the running executable
+in place, then runs `submilli skill sync`. It never runs on its own: when
+`skill sync` mentions that a newer CLI is available, tell the user and offer
+to run it; do not upgrade silently, because teams pin CLI versions. It refuses
+executables owned by Homebrew or cargo. A CLI too old to have `upgrade`
+is updated by re-running the installer above.
+
 Use the user's preferred installation method when specified. If a download
 fails, report the actual error and consult https://submilli.ai/docs/quickstart;
 do not invent a Homebrew/npm/pip distribution. Verify both binaries afterwards.

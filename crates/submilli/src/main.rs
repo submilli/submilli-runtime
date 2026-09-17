@@ -35,6 +35,8 @@ enum Cmd {
     /// Install or update the Submilli coding-assistant skill.
     #[command(subcommand)]
     Skill(commands::skill::SkillCmd),
+    /// Replace this executable with the latest published release.
+    Upgrade(commands::upgrade::Args),
     /// Apply blueprint YAML documents to a running submilli-server.
     Apply(commands::apply::Args),
     /// Author a blueprint file locally (scaffold, edit).
@@ -68,6 +70,7 @@ fn main() -> anyhow::Result<ExitCode> {
         Cmd::Search(args) => commands::search::execute(args),
         Cmd::Builtins(args) => commands::builtins::execute(args),
         Cmd::Skill(cmd) => commands::skill::execute(cmd),
+        Cmd::Upgrade(args) => commands::upgrade::execute(args),
         Cmd::Apply(args) => commands::apply::execute(args),
         Cmd::Blueprint(cmd) => commands::blueprint::execute(cmd),
         Cmd::Secret(cmd) => commands::secret::execute(cmd),
@@ -98,6 +101,7 @@ fn invocation_attrs(cmd: &Cmd) -> (&'static str, Vec<(&'static str, bool)>) {
         Cmd::Search(a) => ("search", a.metric_flags()),
         Cmd::Builtins(a) => ("builtins", a.metric_flags()),
         Cmd::Skill(_) => ("skill", Vec::new()),
+        Cmd::Upgrade(_) => ("upgrade", Vec::new()),
         Cmd::Apply(_) => ("apply", Vec::new()),
         Cmd::Blueprint(sub) => (blueprint_label(sub), Vec::new()),
         Cmd::Secret(sub) => (secret_label(sub), Vec::new()),

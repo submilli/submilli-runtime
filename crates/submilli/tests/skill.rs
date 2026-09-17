@@ -429,7 +429,9 @@ fn sync(project: &Path, home: &Path, source: Option<&str>) -> String {
         .env("SUBMILLI_TELEMETRY", "0")
         .env("HOME", home)
         .env("USERPROFILE", home)
-        .env("SUBMILLI_HOME", home.join(".submilli"));
+        .env("SUBMILLI_HOME", home.join(".submilli"))
+        // Keep the CLI release hint off the real network.
+        .env("SUBMILLI_RELEASE_SOURCE", "http://127.0.0.1:1/repo");
     match source {
         Some(source) => command.env("SUBMILLI_SKILL_SOURCE", source),
         None => command.env("SUBMILLI_SKILL_AUTOUPDATE", "0"),

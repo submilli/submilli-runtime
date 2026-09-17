@@ -84,7 +84,7 @@ jobs:
         run: cargo test -p interpreter --test vfs_containment
 
       - name: Skill installation across platforms
-        run: cargo test -p submilli --test skill
+        run: cargo test -p submilli --test skill --test upgrade
 
       # The server's MCP file tools resolve through the same handles but reach them
       # by a different route, so the interpreter suite passing says nothing about

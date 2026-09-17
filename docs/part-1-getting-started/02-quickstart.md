@@ -57,6 +57,9 @@ Windows (PowerShell):
 irm https://submilli.ai/install.ps1 | iex
 ```
 
+Later, `submilli upgrade` moves the CLI to the latest release in place
+(`submilli upgrade --check` only reports whether one exists).
+
 ## Beyond a sandbox
 
 A sandbox gives you an on/off switch: can the agent use the filesystem, or the network, or not. But with Submilli, you can control what *argument* your agent can use. You can say your agent may take "that" action for *only this particular customer*.

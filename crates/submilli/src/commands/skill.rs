@@ -199,7 +199,17 @@ fn sync() -> anyhow::Result<ExitCode> {
             Err(error) => println!("{}: not synced: {error:#}", path.display()),
         }
     }
+    if network_allowed()
+        && let Some(tag) = super::upgrade::newer_release_hint()
+    {
+        println!("submilli {tag} is available; run `submilli upgrade` when convenient.");
+    }
     Ok(ExitCode::SUCCESS)
+}
+
+/// One switch keeps a session entirely offline.
+fn network_allowed() -> bool {
+    std::env::var_os("SUBMILLI_SKILL_AUTOUPDATE").is_none_or(|value| value != "0")
 }
 
 fn sync_one(path: &Path, target: &Bundle) -> anyhow::Result<String> {
