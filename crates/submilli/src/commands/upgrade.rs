@@ -1,4 +1,5 @@
-//! `submilli upgrade` — replace this executable with a published release.
+//! `submilli upgrade` — replace this executable, and `submilli-server` beside
+//! it, with a published release. The two are released and installed together.
 //!
 //! Explicit by design: nothing replaces the executable unless the user asks.
 //! The download follows the installer scripts: one release is resolved once,
@@ -50,9 +51,23 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::FAILURE);
     }
     let executable = replaceable_executable()?;
-    let replacement = download_verified(&source, &tag)?;
-    replace(&executable, &replacement)?;
-    println!("Upgraded {} from {current} to {tag}.", executable.display());
+    let directory = executable.parent().context("executable has no parent")?;
+    let server = directory.join(format!("submilli-server{}", std::env::consts::EXE_SUFFIX));
+    // Verify and stage both before replacing either, so a failure changes nothing.
+    let staged = [("submilli", &executable), ("submilli-server", &server)]
+        .into_iter()
+        .map(|(binary, destination)| {
+            let bytes = download_verified(&source, &tag, binary)?;
+            Ok((stage(directory, &bytes)?, destination))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    for (staged, destination) in staged {
+        install_staged(staged, destination)?;
+    }
+    println!(
+        "Upgraded submilli and submilli-server in {} from {current} to {tag}.",
+        directory.display()
+    );
     // The new executable carries a newer embedded skill; let it refresh
     // installations. Best effort: the upgrade itself has already succeeded.
     let _ = Command::new(&executable).args(["skill", "sync"]).status();
@@ -135,14 +150,15 @@ fn validated_tag(tag: String) -> anyhow::Result<String> {
     Ok(tag)
 }
 
-fn asset_name() -> anyhow::Result<&'static str> {
-    Ok(match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("linux", "x86_64") => "submilli-x86_64-unknown-linux-musl",
-        ("macos", "x86_64") => "submilli-x86_64-apple-darwin",
-        ("macos", "aarch64") => "submilli-aarch64-apple-darwin",
-        ("windows", "x86_64") => "submilli-x86_64-pc-windows-msvc.exe",
+fn asset_name(binary: &str) -> anyhow::Result<String> {
+    let target = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => "x86_64-unknown-linux-musl",
+        ("macos", "x86_64") => "x86_64-apple-darwin",
+        ("macos", "aarch64") => "aarch64-apple-darwin",
+        ("windows", "x86_64") => "x86_64-pc-windows-msvc",
         (os, arch) => bail!("no released executable for {os} {arch}; build from source"),
-    })
+    };
+    Ok(format!("{binary}-{target}{}", std::env::consts::EXE_SUFFIX))
 }
 
 /// This executable's path, unless something else owns its upgrades.
@@ -167,8 +183,8 @@ fn replaceable_executable() -> anyhow::Result<PathBuf> {
     Ok(executable)
 }
 
-fn download_verified(source: &str, tag: &str) -> anyhow::Result<Vec<u8>> {
-    let asset = asset_name()?;
+fn download_verified(source: &str, tag: &str, binary: &str) -> anyhow::Result<Vec<u8>> {
+    let asset = asset_name(binary)?;
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(300)))
         .build()
@@ -192,18 +208,19 @@ fn download_verified(source: &str, tag: &str) -> anyhow::Result<Vec<u8>> {
     let [expected] = expected[..] else {
         bail!("missing or ambiguous checksum for {asset} in {tag}");
     };
-    let bytes = fetch(asset, MAX_EXECUTABLE_BYTES)?;
+    let bytes = fetch(&asset, MAX_EXECUTABLE_BYTES)?;
     if !format!("{:x}", Sha256::digest(&bytes)).eq_ignore_ascii_case(expected) {
         bail!("checksum mismatch for {asset}; the installed executable was not changed");
     }
     Ok(bytes)
 }
 
-/// Stage beside the executable so the final step is a rename on one filesystem.
-fn replace(executable: &Path, replacement: &[u8]) -> anyhow::Result<()> {
-    let directory = executable.parent().context("executable has no parent")?;
+/// Stage in the install directory so the final step is a rename on one
+/// filesystem, and prove the download runs here before anything is replaced.
+fn stage(directory: &Path, replacement: &[u8]) -> anyhow::Result<tempfile::NamedTempFile> {
     let staged = tempfile::Builder::new()
         .prefix(".submilli-upgrade-")
+        .suffix(std::env::consts::EXE_SUFFIX)
         .tempfile_in(directory)
         .with_context(|| format!("cannot write to {}", directory.display()))?;
     fs::write(staged.path(), replacement)?;
@@ -217,19 +234,23 @@ fn replace(executable: &Path, replacement: &[u8]) -> anyhow::Result<()> {
         .output()
         .is_ok_and(|output| output.status.success());
     if !runs {
-        bail!("the downloaded executable does not run here; the installed one was not changed");
+        bail!("the downloaded executable does not run here; nothing was changed");
     }
+    Ok(staged)
+}
+
+fn install_staged(staged: tempfile::NamedTempFile, destination: &Path) -> anyhow::Result<()> {
     // Windows cannot overwrite a running executable but can rename it aside.
     #[cfg(windows)]
-    {
-        let aside = executable.with_extension("old.exe");
+    if destination.exists() {
+        let aside = destination.with_extension("old.exe");
         let _ = fs::remove_file(&aside);
-        fs::rename(executable, &aside)?;
+        fs::rename(destination, &aside)?;
     }
     staged
-        .persist(executable)
+        .persist(destination)
         .map(drop)
-        .context("replacing the executable")
+        .with_context(|| format!("replacing {}", destination.display()))
 }
 
 fn parse_version(text: &str) -> Vec<u64> {

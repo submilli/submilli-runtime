@@ -21,40 +21,52 @@ if ($Version -eq 'latest') {
     $Version = $release.tag_name
 }
 if ($Version -notmatch '^[a-zA-Z0-9_][a-zA-Z0-9._-]*$') { throw 'Invalid release tag.' }
-$asset = 'submilli-x86_64-pc-windows-msvc.exe'
+$binaries = @('submilli', 'submilli-server')
 $base = "https://github.com/submilli/submilli-runtime/releases/download/$Version"
 $scratch = Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString())
-$staged = $null
+$stagedFiles = @()
 New-Item -ItemType Directory -Path $scratch | Out-Null
 try {
-    $binary = Join-Path $scratch $asset
     $checksums = Join-Path $scratch 'SHA256SUMS'
-    Invoke-WebRequest -UseBasicParsing -Uri "$base/$asset" -Headers $headers -OutFile $binary
     Invoke-WebRequest -UseBasicParsing -Uri "$base/SHA256SUMS" -Headers $headers -OutFile $checksums
-    $matchesForAsset = @(Get-Content -LiteralPath $checksums | Where-Object { $_ -match ('^[0-9a-fA-F]{64}\s+' + [regex]::Escape($asset) + '$') })
-    if ($matchesForAsset.Count -ne 1) { throw "Missing or ambiguous checksum for $asset" }
-    $expected = ($matchesForAsset[0] -split '\s+')[0]
-    if ((Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash -ne $expected) {
-        throw 'Checksum mismatch; existing installation was not changed.'
+    # Verify every executable before installing any, so a failure changes nothing.
+    foreach ($name in $binaries) {
+        $asset = "$name-x86_64-pc-windows-msvc.exe"
+        $binary = Join-Path $scratch $asset
+        Invoke-WebRequest -UseBasicParsing -Uri "$base/$asset" -Headers $headers -OutFile $binary
+        $matchesForAsset = @(Get-Content -LiteralPath $checksums | Where-Object { $_ -match ('^[0-9a-fA-F]{64}\s+' + [regex]::Escape($asset) + '$') })
+        if ($matchesForAsset.Count -ne 1) { throw "Missing or ambiguous checksum for $asset" }
+        $expected = ($matchesForAsset[0] -split '\s+')[0]
+        if ((Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash -ne $expected) {
+            throw 'Checksum mismatch; existing installation was not changed.'
+        }
+        & $binary --version
+        if ($LASTEXITCODE -ne 0) { throw "Downloaded $name failed its version check." }
     }
-    & $binary --version
-    if ($LASTEXITCODE -ne 0) { throw 'Downloaded executable failed its version check.' }
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-    $destination = Join-Path $InstallDir 'submilli.exe'
-    if (Test-Path -LiteralPath $destination -PathType Container) { throw 'Installation target is a directory.' }
-    $staged = Join-Path $InstallDir ('.submilli-' + [Guid]::NewGuid().ToString() + '.exe')
-    Copy-Item -LiteralPath $binary -Destination $staged
-    if (Test-Path -LiteralPath $destination) {
-        [IO.File]::Replace($staged, $destination, [NullString]::Value)
-    } else {
-        [IO.File]::Move($staged, $destination)
+    foreach ($name in $binaries) {
+        if (Test-Path -LiteralPath (Join-Path $InstallDir "$name.exe") -PathType Container) { throw "Installation target $name.exe is a directory." }
     }
-    $staged = $null
-    Write-Host "Installed $Version to $destination"
+    foreach ($name in $binaries) {
+        $staged = Join-Path $InstallDir (".$name-" + [Guid]::NewGuid().ToString() + '.exe')
+        $stagedFiles += $staged
+        Copy-Item -LiteralPath (Join-Path $scratch "$name-x86_64-pc-windows-msvc.exe") -Destination $staged
+    }
+    for ($i = 0; $i -lt $binaries.Count; $i++) {
+        $destination = Join-Path $InstallDir ($binaries[$i] + '.exe')
+        if (Test-Path -LiteralPath $destination) {
+            [IO.File]::Replace($stagedFiles[$i], $destination, [NullString]::Value)
+        } else {
+            [IO.File]::Move($stagedFiles[$i], $destination)
+        }
+    }
+    Write-Host "Installed submilli and submilli-server $Version to $InstallDir"
     if ($InstallDir -notin ($env:PATH -split ';')) {
         Write-Host "Add this directory to your user PATH: $InstallDir"
     }
 } finally {
     Remove-Item -LiteralPath $scratch -Recurse -Force
-    if ($staged -and (Test-Path -LiteralPath $staged)) { Remove-Item -LiteralPath $staged -Force }
+    foreach ($staged in $stagedFiles) {
+        if (Test-Path -LiteralPath $staged) { Remove-Item -LiteralPath $staged -Force }
+    }
 }

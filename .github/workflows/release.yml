@@ -259,6 +259,10 @@ jobs:
             submilli-x86_64-pc-windows-msvc.exe
             submilli-x86_64-apple-darwin
             submilli-aarch64-apple-darwin
+            submilli-server-x86_64-unknown-linux-musl
+            submilli-server-x86_64-pc-windows-msvc.exe
+            submilli-server-x86_64-apple-darwin
+            submilli-server-aarch64-apple-darwin
             install.sh
             install.ps1
           )

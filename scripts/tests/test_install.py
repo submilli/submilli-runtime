@@ -7,6 +7,7 @@ import tempfile
 import unittest
 
 INSTALLER = Path(__file__).resolve().parents[2] / 'install.sh'
+BINARIES = ['submilli', 'submilli-server']
 
 
 class InstallTests(unittest.TestCase):
@@ -37,10 +38,13 @@ else:
         p.chmod(0o755)
 
     def seed(self, target):
-        asset = 'submilli-' + target
-        content = b'#!/bin/sh\necho "submilli test fixture"\n'
-        (self.root / asset).write_bytes(content)
-        (self.root / 'SHA256SUMS').write_text(hashlib.sha256(content).hexdigest() + '  ' + asset + '\n')
+        sums = ''
+        for binary in BINARIES:
+            asset = binary + '-' + target
+            content = ('#!/bin/sh\necho "' + binary + ' test fixture"\n').encode()
+            (self.root / asset).write_bytes(content)
+            sums += hashlib.sha256(content).hexdigest() + '  ' + asset + '\n'
+        (self.root / 'SHA256SUMS').write_text(sums)
 
     def run_installer(self, *args):
         return subprocess.run(['sh', str(INSTALLER), '--install-dir', str(self.destination), *args],
@@ -50,8 +54,11 @@ else:
         for args in [(), ('--version', 'v9.8.7')]:
             result = self.run_installer(*args)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('Installed v9.8.7', result.stdout)
-            self.assertTrue(os.access(self.destination / 'submilli', os.X_OK))
+            self.assertIn('v9.8.7', result.stdout)
+            for binary in BINARIES:
+                self.assertTrue(os.access(self.destination / binary, os.X_OK))
+                self.assertIn(binary + ' test fixture', (self.destination / binary).read_text())
+            self.assertEqual(sorted(p.name for p in self.destination.iterdir()), BINARIES)
 
     def test_mac_architectures(self):
         for arch, target in [('x86_64', 'x86_64-apple-darwin'), ('arm64', 'aarch64-apple-darwin')]:
@@ -60,27 +67,31 @@ else:
             result = self.run_installer()
             self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_bad_checksum_preserves_existing_install(self):
+    def test_bad_checksum_of_either_executable_preserves_the_existing_install(self):
         self.destination.mkdir()
-        installed = self.destination / 'submilli'
-        installed.write_text('existing installation')
-        (self.root / 'submilli-x86_64-unknown-linux-musl').write_text('corrupted')
-        result = self.run_installer()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('Checksum mismatch', result.stderr)
-        self.assertEqual(installed.read_text(), 'existing installation')
+        for binary in BINARIES:
+            (self.destination / binary).write_text('existing installation')
+        for corrupted in BINARIES:
+            self.seed('x86_64-unknown-linux-musl')
+            (self.root / (corrupted + '-x86_64-unknown-linux-musl')).write_text('corrupted')
+            result = self.run_installer()
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('Checksum mismatch', result.stderr)
+            for binary in BINARIES:
+                self.assertEqual((self.destination / binary).read_text(), 'existing installation')
 
     def test_missing_or_duplicate_checksum_refused(self):
         p = self.root / 'SHA256SUMS'
         original = p.read_text()
-        for content in ['', original * 2]:
+        server_only = ''.join(line + '\n' for line in original.splitlines() if 'submilli-server-' in line)
+        for content in ['', original * 2, server_only]:
             p.write_text(content)
             result = self.run_installer()
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(self.destination.exists())
 
     def test_failed_download_does_not_install(self):
-        (self.root / 'submilli-x86_64-unknown-linux-musl').unlink()
+        (self.root / 'submilli-server-x86_64-unknown-linux-musl').unlink()
         self.assertNotEqual(self.run_installer().returncode, 0)
         self.assertFalse(self.destination.exists())
 

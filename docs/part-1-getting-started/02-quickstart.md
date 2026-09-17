@@ -57,7 +57,7 @@ Windows (PowerShell):
 irm https://submilli.ai/install.ps1 | iex
 ```
 
-Later, `submilli upgrade` moves the CLI to the latest release in place
+Later, `submilli upgrade` moves both binaries to the latest release in place
 (`submilli upgrade --check` only reports whether one exists).
 
 ## Beyond a sandbox

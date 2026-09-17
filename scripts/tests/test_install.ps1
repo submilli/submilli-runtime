@@ -15,9 +15,18 @@ function Invoke-WebRequest {
     if ($fixtureState.FailDownload) { throw 'Simulated download failure' }
     if ($Uri.EndsWith('/SHA256SUMS')) {
         $hash = if ($fixtureState.BadChecksum) { '0' * 64 } else { $checksum }
-        Set-Content -LiteralPath $OutFile -Value "$hash  submilli-x86_64-pc-windows-msvc.exe" -Encoding ascii
+        # Only the server's checksum is corrupted: the CLI passing must not install it alone.
+        Set-Content -LiteralPath $OutFile -Encoding ascii -Value @(
+            "$checksum  submilli-x86_64-pc-windows-msvc.exe",
+            "$hash  submilli-server-x86_64-pc-windows-msvc.exe")
     } else {
         Copy-Item -LiteralPath $fixture -Destination $OutFile
+    }
+}
+function Assert-BothInstalled {
+    param([string]$Message)
+    foreach ($name in 'submilli.exe', 'submilli-server.exe') {
+        if ((Get-FileHash (Join-Path $destination $name)).Hash -ne $checksum) { throw $Message }
     }
 }
 function Assert-InstallFails {
@@ -25,14 +34,13 @@ function Assert-InstallFails {
     $failed = $false
     try { & $installer -Version $Version -InstallDir $destination } catch { $failed = $true }
     if (-not $failed) { throw 'Expected installer failure' }
-    if ((Get-FileHash (Join-Path $destination 'submilli.exe')).Hash -ne $checksum) {
-        throw 'Failed installation changed the existing executable'
-    }
+    Assert-BothInstalled 'Failed installation changed an existing executable'
+    if (@(Get-ChildItem -LiteralPath $destination -Force).Count -ne 2) { throw 'Staged files were left behind' }
 }
 try {
     & $installer -InstallDir $destination
     & $installer -Version v9.8.7 -InstallDir $destination
-    if ((Get-FileHash (Join-Path $destination 'submilli.exe')).Hash -ne $checksum) { throw 'Installed bytes differ' }
+    Assert-BothInstalled 'Installed bytes differ'
     $fixtureState.BadChecksum = $true
     Assert-InstallFails
     $fixtureState.BadChecksum = $false

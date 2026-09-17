@@ -15,35 +15,39 @@ use sha2::{Digest, Sha256};
 
 const NEW_EXECUTABLE: &str = "#!/bin/sh\necho 'submilli 99.0.0'\n";
 
-fn asset_name() -> &'static str {
-    match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("linux", "x86_64") => "submilli-x86_64-unknown-linux-musl",
-        ("macos", "x86_64") => "submilli-x86_64-apple-darwin",
-        ("macos", "aarch64") => "submilli-aarch64-apple-darwin",
+fn asset_name(binary: &str) -> String {
+    let target = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => "x86_64-unknown-linux-musl",
+        ("macos", "x86_64") => "x86_64-apple-darwin",
+        ("macos", "aarch64") => "aarch64-apple-darwin",
         other => panic!("no release asset for {other:?}"),
-    }
+    };
+    format!("{binary}-{target}")
 }
 
 /// Serves `releases/latest` as a redirect to v99.0.0 plus that release's files.
-fn serve_release(checksum_of: &str) -> String {
+/// `server_checksum_of` lets a test publish a wrong checksum for the server only.
+fn serve_release(server_checksum_of: &str) -> String {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let source = format!("http://{}/repo", listener.local_addr().unwrap());
     let sums = format!(
-        "{:x}  {}\n{:x}  install.sh\n",
-        Sha256::digest(checksum_of.as_bytes()),
-        asset_name(),
+        "{:x}  {}\n{:x}  {}\n{:x}  install.sh\n",
+        Sha256::digest(NEW_EXECUTABLE.as_bytes()),
+        asset_name("submilli"),
+        Sha256::digest(server_checksum_of.as_bytes()),
+        asset_name("submilli-server"),
         Sha256::digest(b"installer"),
     );
-    let files = HashMap::from([
-        (
-            format!("/repo/releases/download/v99.0.0/{}", asset_name()),
+    let mut files = HashMap::from([(
+        "/repo/releases/download/v99.0.0/SHA256SUMS".to_owned(),
+        sums,
+    )]);
+    for binary in ["submilli", "submilli-server"] {
+        files.insert(
+            format!("/repo/releases/download/v99.0.0/{}", asset_name(binary)),
             NEW_EXECUTABLE.to_owned(),
-        ),
-        (
-            "/repo/releases/download/v99.0.0/SHA256SUMS".to_owned(),
-            sums,
-        ),
-    ]);
+        );
+    }
     std::thread::spawn(move || {
         for stream in listener.incoming() {
             let mut stream = stream.unwrap();
@@ -120,19 +124,18 @@ fn replaces_the_running_executable_with_the_verified_release() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(fs::read_to_string(&executable).unwrap(), NEW_EXECUTABLE);
-    assert_eq!(
-        fs::metadata(&executable).unwrap().permissions().mode() & 0o777,
-        0o755
-    );
-    let leftovers: Vec<_> = fs::read_dir(executable.parent().unwrap())
-        .unwrap()
-        .collect();
-    assert_eq!(leftovers.len(), 1, "staging files must not remain");
+    // The server is installed beside the CLI even when it was not there before.
+    for installed in [&executable, &executable.with_file_name("submilli-server")] {
+        assert_eq!(fs::read_to_string(installed).unwrap(), NEW_EXECUTABLE);
+        let mode = fs::metadata(installed).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o755);
+    }
+    let installed = fs::read_dir(executable.parent().unwrap()).unwrap().count();
+    assert_eq!(installed, 2, "staging files must not remain");
 }
 
 #[test]
-fn a_checksum_mismatch_leaves_the_executable_unchanged() {
+fn a_checksum_mismatch_for_either_executable_changes_nothing() {
     let home = tempfile::tempdir().unwrap();
     let executable = private_copy(home.path());
     let before = fs::read(&executable).unwrap();
@@ -145,6 +148,8 @@ fn a_checksum_mismatch_leaves_the_executable_unchanged() {
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("checksum mismatch"));
     assert_eq!(fs::read(&executable).unwrap(), before);
+    let installed = fs::read_dir(executable.parent().unwrap()).unwrap().count();
+    assert_eq!(installed, 1, "the verified CLI must not be installed alone");
 }
 
 #[test]
