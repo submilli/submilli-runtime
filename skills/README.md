@@ -10,12 +10,16 @@ compares the installed tree against this source tree.
 
 `skills/submilli/VERSION` holds the skill's release number. To publish:
 bump it in the change, merge, then push the tag `skill-v<N>` on that commit.
-`.github/workflows/skill-release.yml` checks the tag against `VERSION`, builds
+`.github/workflows/skill-release.yml` refuses a tag that is not on `main`,
+checks it against `VERSION`, builds
 `submilli-skill.json` with `scripts/build_skill_release.py`, and attaches it
 to a GitHub release that is deliberately not marked latest, because
 `install.sh` resolves the CLI through `releases/latest`. Users receive it the
 next time their assistant runs the skill, whose first step is
-`submilli skill sync`. No CLI release is involved. Anything merged to `main`
+`submilli skill sync`. No CLI release is involved. Tagging is deliberately a
+separate act from merging: skill text reaches users' coding agents within a
+day, so a release should be read end to end, and a change documenting new CLI
+behaviour should be tagged only after that CLI ships. Anything merged to `main`
 without a tag reaches users only inside the next CLI's embedded copy, so bump
 `VERSION` whenever that copy should outrank the last tag.
 
