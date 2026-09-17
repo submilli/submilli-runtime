@@ -15,12 +15,13 @@ pub trait SecurityCheck: Send + Sync {
     fn check(&self, caller: &str, capability: &str, context: &serde_json::Value) -> CheckOutcome;
 }
 
-/// Default policy: allows all calls, logging each to stdout.
+/// Default policy: allows all calls, logging each to stderr so stdout carries
+/// only the program's result.
 pub struct AllowAllCheck;
 
 impl SecurityCheck for AllowAllCheck {
     fn check(&self, caller: &str, capability: &str, context: &serde_json::Value) -> CheckOutcome {
-        println!("[security] caller={caller} capability={capability} context={context}");
+        eprintln!("[security] caller={caller} capability={capability} context={context}");
         CheckOutcome::Allow
     }
 }

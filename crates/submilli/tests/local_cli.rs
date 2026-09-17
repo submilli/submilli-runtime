@@ -813,7 +813,7 @@ fn run_invalid_blueprint_fails_fast() {
 
 /// A project whose package exports a gated call and a thrower, with a test file
 /// that exercises both. `AllowAllCheck` logs `caller=` for every gated call, so
-/// the run's stdout is the attribution record.
+/// the run's stderr is the attribution record.
 fn attribution_test_project(test_file: &str) -> tempfile::TempDir {
     let project = tempfile::tempdir().expect("project tempdir");
     write_file(
@@ -864,7 +864,7 @@ fn build_test_attributes_a_package_test_file_to_the_package() {
     let out = run_in_with_home(&[os("build"), os("test")], project.path(), home.path());
 
     assert!(out.status.success(), "stderr: {}", stderr(&out));
-    let log = stdout(&out);
+    let log = stderr(&out);
     assert_eq!(
         log.matches("caller=@acme/probe capability=fs.stat").count(),
         2,
@@ -899,7 +899,7 @@ fn build_test_keeps_package_attribution_after_a_caught_throw() {
     let out = run_in_with_home(&[os("build"), os("test")], project.path(), home.path());
 
     assert!(out.status.success(), "stderr: {}", stderr(&out));
-    let log = stdout(&out);
+    let log = stderr(&out);
     assert_eq!(
         log.matches("caller=@acme/probe capability=fs.stat").count(),
         1,
