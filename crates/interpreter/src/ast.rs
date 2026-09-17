@@ -597,8 +597,9 @@ pub struct SwitchDefault {
     pub span: Span,
 }
 
-/// `catch (e)` is accepted as sugar for `catch (e: Error)`.
-/// When present, the typechecker verifies `ty` resolves to `Error`.
+/// `catch (e)` and bindingless `catch` are catch-all clauses.
+/// A bindingless clause uses an inaccessible compiler identifier.
+/// When present, the typechecker verifies `ty` is an Error class.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CatchClause {
     pub binding: Ident,

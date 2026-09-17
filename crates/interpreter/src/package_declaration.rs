@@ -127,7 +127,7 @@ impl PackageDeclaration {
 #[derive(Default)]
 struct PackageShapeCollector {
     shapes: Vec<Shape>,
-    seen: BTreeSet<String>,
+    seen: BTreeSet<Shape>,
 }
 
 impl PackageShapeCollector {
@@ -275,7 +275,7 @@ impl PackageShapeCollector {
         let Some(shape) = Shape::from_type(ty) else {
             return;
         };
-        if self.seen.insert(shape.canonical_display()) {
+        if self.seen.insert(shape.clone()) {
             self.shapes.push(shape);
         }
     }
@@ -648,6 +648,27 @@ mod tests {
         assert_eq!(
             object.get("y"),
             Some(&crate::ObjectField::required(Type::Number)),
+        );
+    }
+
+    #[test]
+    fn preserves_readonly_and_writable_object_shapes() {
+        let ta =
+            typed_ast("let a: { readonly x: number } = { x: 1 }; let b: { x: number } = { x: 2 };");
+        let defs = PackageDeclaration::from_typed_ast(&ta);
+        let readonly_flags: std::collections::BTreeSet<bool> = defs
+            .shapes
+            .iter()
+            .filter_map(|shape| {
+                let crate::Shape::Object { fields } = shape else {
+                    return None;
+                };
+                fields.get("x").map(|field| field.readonly)
+            })
+            .collect();
+        assert_eq!(
+            readonly_flags,
+            std::collections::BTreeSet::from([false, true])
         );
     }
 

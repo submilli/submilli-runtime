@@ -21,6 +21,7 @@ pub struct Lexer<'a> {
     template_frames: Vec<u32>,
     /// Previous non-newline token, used to disambiguate `/` as regex literal vs. division.
     last_significant_token: Option<TokenKind>,
+    last_bang_is_postfix: bool,
 }
 
 impl<'a> Lexer<'a> {
@@ -38,6 +39,7 @@ impl<'a> Lexer<'a> {
             pending_docs: Vec::new(),
             template_frames: Vec::new(),
             last_significant_token: None,
+            last_bang_is_postfix: false,
         }
     }
 
@@ -98,9 +100,23 @@ impl<'a> Lexer<'a> {
         let tok = self.attach_doc(tok);
         match &tok.kind {
             TokenKind::Newline => {}
-            other => self.last_significant_token = Some(other.clone()),
+            other => {
+                self.last_bang_is_postfix =
+                    matches!(other, TokenKind::Bang) && !self.regex_context();
+                self.last_significant_token = Some(other.clone());
+            }
         }
         tok
+    }
+
+    /// ASI knows statement boundaries and keyword property names that the raw
+    /// token table cannot distinguish. Apply its correction before lexing `/`.
+    pub(crate) fn set_bang_is_postfix(&mut self, postfix: bool) {
+        self.last_bang_is_postfix = postfix;
+    }
+
+    fn regex_context(&self) -> bool {
+        !self.last_bang_is_postfix && is_regex_context(&self.last_significant_token)
     }
 
     pub fn into_diagnostics(self) -> Vec<Diagnostic> {
@@ -800,7 +816,7 @@ impl<'a> Lexer<'a> {
             }
             b'/' => {
                 // `//` and `/*` already consumed as trivia; remaining `/` is regex or division.
-                if is_regex_context(&self.last_significant_token) {
+                if self.regex_context() {
                     return self.lex_regex_literal();
                 }
                 self.pos += 1;
@@ -1164,6 +1180,29 @@ mod tests {
             diags.is_empty(),
             "unexpected diagnostics for {source:?}: {diags:?}"
         );
+    }
+
+    #[test]
+    fn slash_after_non_null_assertion_is_division() {
+        for prefix in ["a!", "f()!", "a[0]!", "o?.b!.count!", "a!!"] {
+            for (operator, expected) in [("/", TokenKind::Slash), ("/=", TokenKind::SlashEquals)] {
+                let (tokens, diagnostics) = tokenize_all(&format!("{prefix} {operator} 10"));
+                assert!(
+                    diagnostics.is_empty(),
+                    "{prefix} {operator}: {diagnostics:?}"
+                );
+                assert!(tokens.iter().any(|token| token.kind == expected));
+            }
+        }
+        for source in ["!/x/.test(s)", "!!/x/.test(s)", "a! / /x/.test(s)"] {
+            let (tokens, diagnostics) = tokenize_all(source);
+            assert!(diagnostics.is_empty(), "{source}: {diagnostics:?}");
+            assert!(
+                tokens
+                    .iter()
+                    .any(|token| matches!(token.kind, TokenKind::RegexLiteral { .. }))
+            );
+        }
     }
 
     #[test]

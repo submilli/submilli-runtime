@@ -1,5 +1,5 @@
 //! Walks a finalized typed AST and accumulates distinct [`Shape`]s into
-//! [`crate::TypedAst::shapes`]. Dedup key is [`Shape::canonical_display`].
+//! [`crate::TypedAst::shapes`]. Deduplication preserves the full shape used by codegen lookups.
 
 use std::collections::BTreeSet;
 
@@ -12,7 +12,7 @@ use super::type_aliases::{alias_ref_names, rehydrate_alias_refs_skipping};
 
 pub(super) struct ShapeCollector<'a> {
     pub(super) shapes: Vec<Shape>,
-    emitted_shapes: BTreeSet<String>,
+    emitted_shapes: BTreeSet<Shape>,
     /// Cuts the walk of a recursive alias, which rehydration makes infinite:
     /// each expansion produces the next level's inline body rather than the
     /// back-edge that would otherwise terminate it.
@@ -67,42 +67,38 @@ impl<'a> ShapeCollector<'a> {
     fn walk(&mut self, ty: &Type) {
         match ty {
             Type::Object { fields } => {
-                if let Some(shape) = Shape::from_type(ty) {
-                    let key = shape.canonical_display();
-                    if self.emitted_shapes.insert(key) {
-                        self.shapes.push(shape);
-                    }
+                if let Some(shape) = Shape::from_type(ty)
+                    && self.emitted_shapes.insert(shape.clone())
+                {
+                    self.shapes.push(shape);
                 }
                 for inner in fields.values() {
                     self.collect(&inner.ty);
                 }
             }
             Type::Array(elem) => {
-                if let Some(shape) = Shape::from_type(ty) {
-                    let key = shape.canonical_display();
-                    if self.emitted_shapes.insert(key) {
-                        self.shapes.push(shape);
-                    }
+                if let Some(shape) = Shape::from_type(ty)
+                    && self.emitted_shapes.insert(shape.clone())
+                {
+                    self.shapes.push(shape);
                 }
                 self.collect(elem);
             }
             Type::Tuple(elements) => {
-                if let Some(shape) = Shape::from_type(ty) {
-                    let key = shape.canonical_display();
-                    if self.emitted_shapes.insert(key) {
-                        self.shapes.push(shape);
-                    }
+                if let Some(shape) = Shape::from_type(ty)
+                    && self.emitted_shapes.insert(shape.clone())
+                {
+                    self.shapes.push(shape);
                 }
                 for inner in elements {
                     self.collect(inner);
                 }
             }
             Type::Union(members) => {
-                if let Some(shape) = Shape::from_type(ty) {
-                    let key = shape.canonical_display();
-                    if self.emitted_shapes.insert(key) {
-                        self.shapes.push(shape);
-                    }
+                if let Some(shape) = Shape::from_type(ty)
+                    && self.emitted_shapes.insert(shape.clone())
+                {
+                    self.shapes.push(shape);
                 }
                 for m in members {
                     self.collect(m);

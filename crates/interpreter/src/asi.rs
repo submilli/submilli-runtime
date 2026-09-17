@@ -1,20 +1,21 @@
 use crate::{Diagnostic, FileId, Lexer, Span, Token, TokenKind};
 
-/// A `{ … }` is either a statement block (its last statement wants a `;` before the
-/// closing brace) or a value list — object literal, destructuring pattern, named-import
-/// list, or inline type literal — where a `;` before `}` is wrong (or merely optional, for
-/// type literals). ASI must not close a value list with an inserted semicolon.
+/// Statement blocks need a terminator before `}`. Value lists and type member
+/// lists do not; member lists still need separators between their entries.
 #[derive(Clone, Copy, PartialEq)]
 enum BraceKind {
     Block,
     Value,
+    /// Type members need separators even inside parentheses, but none before `}`.
+    MemberList,
 }
 
 /// An open `{` and the `(`/`[`/`${` nesting depth it was opened at. A statement block
 /// re-enters statement context even when it sits inside parentheses — the body of
 /// `arr.map(x => {` ⏎ `…` ⏎ `})` is statements, not a paren-wrapped expression — so
 /// "are we inside brackets?" is measured against the enclosing block's base, not zero.
-/// A value list carries its enclosing base forward: nothing inside it is a statement.
+/// A value list carries its enclosing base forward. Member lists reset it so type
+/// members receive separators even inside a parameter list.
 struct BraceFrame {
     kind: BraceKind,
     bracket_base: u32,
@@ -24,6 +25,7 @@ struct BraceFrame {
 pub struct Asi<'a> {
     lexer: Lexer<'a>,
     buffered: Option<Token>,
+    lookahead: std::collections::VecDeque<Token>,
     last_emitted: Option<TokenKind>,
     /// Open `(`, `[`, and template substitutions (`${`), which all suspend ASI: a
     /// newline inside one is a wrapped expression, never a statement end.
@@ -34,6 +36,7 @@ pub struct Asi<'a> {
     // body, not a statement end, so ASI must not insert a `;` after it.
     paren_is_header: Vec<bool>,
     closed_header_paren: bool,
+    closed_block_brace: bool,
     /// Set between a `class` / `interface` / `enum` keyword and the `{` opening its body.
     /// A declaration header is not a statement, so it never ends inside one — which a
     /// token table cannot see, since the header's last token is an ordinary identifier.
@@ -44,8 +47,7 @@ pub struct Asi<'a> {
     /// and therefore may end a statement, whatever the word is.
     last_is_member_name: bool,
     /// Set by `case` / `default` and held through the label's `:`, which is the only
-    /// `:` a statement block may follow. Every other `:` — an object value, a ternary's
-    /// else branch, a type annotation — is followed by a value list.
+    /// `:` a statement block may follow. Every other `:` may introduce a member list.
     in_case_label: bool,
     /// True for exactly the token *after* a label's `:` — the state `classify_brace`
     /// reads to open a block rather than a value list.
@@ -64,11 +66,13 @@ impl<'a> Asi<'a> {
         Self {
             lexer: Lexer::new(source, file),
             buffered: None,
+            lookahead: std::collections::VecDeque::new(),
             last_emitted: None,
             bracket_depth: 0,
             braces: Vec::new(),
             paren_is_header: Vec::new(),
             closed_header_paren: false,
+            closed_block_brace: false,
             last_is_member_name: false,
             in_case_label: false,
             after_case_label_colon: false,
@@ -85,7 +89,10 @@ impl<'a> Asi<'a> {
 
         let mut pending_newline = false;
         loop {
-            let tok = self.lexer.next_token();
+            let tok = self
+                .lookahead
+                .pop_front()
+                .unwrap_or_else(|| self.lexer.next_token());
             match tok.kind {
                 TokenKind::Newline => {
                     pending_newline = true;
@@ -102,13 +109,13 @@ impl<'a> Asi<'a> {
                     // (`function f() { return 1 }`); never at one closing a value list;
                     // anywhere else, only at a newline.
                     let boundary = match self.brace_closed_by(&tok.kind) {
-                        Some(BraceKind::Value) => false,
+                        Some(BraceKind::Value | BraceKind::MemberList) => false,
                         Some(BraceKind::Block) => true,
                         None => pending_newline,
                     };
                     if boundary
                         && !self.inside_brackets()
-                        && !can_continue(&tok.kind)
+                        && !self.can_continue_here(&tok.kind)
                         && self.needs_semi()
                     {
                         return self.insert_semicolon_before(tok);
@@ -118,6 +125,30 @@ impl<'a> Asi<'a> {
                 }
             }
         }
+    }
+
+    fn can_continue_here(&mut self, kind: &TokenKind) -> bool {
+        if matches!(
+            kind,
+            TokenKind::Else
+                | TokenKind::Catch
+                | TokenKind::Finally
+                | TokenKind::Extends
+                | TokenKind::Implements
+        ) {
+            // Clause keywords can also name properties. Neither a clause nor a
+            // declaration header can put `:` or `?` immediately after its keyword.
+            loop {
+                let next = self.lexer.next_token();
+                let newline = matches!(next.kind, TokenKind::Newline);
+                let member = matches!(next.kind, TokenKind::Colon | TokenKind::Question);
+                self.lookahead.push_back(next);
+                if !newline {
+                    return !member;
+                }
+            }
+        }
+        can_continue(kind)
     }
 
     pub fn into_diagnostics(self) -> Vec<Diagnostic> {
@@ -170,7 +201,7 @@ impl<'a> Asi<'a> {
         self.braces.last().map(|frame| frame.kind)
     }
 
-    /// True inside a `(`, `[`, or `${` opened since the innermost statement block.
+    /// True inside a `(`, `[`, or `${` opened since the innermost block or member list.
     fn inside_brackets(&self) -> bool {
         self.bracket_depth > self.braces.last().map_or(0, |frame| frame.bracket_base)
     }
@@ -178,7 +209,7 @@ impl<'a> Asi<'a> {
     /// Classify a `{` about to be emitted. Statement blocks follow a statement boundary;
     /// everything in expression/value position is a value list. A `:` is ambiguous, and
     /// `case`/`default` is the one label whose `:` introduces statements — an object
-    /// value, a ternary's else branch, and a type annotation all introduce a value list.
+    /// value, a ternary's else branch, and a type annotation all use a member-list base.
     fn classify_brace(&self) -> BraceKind {
         if self.brace_opens_specifier_list {
             return BraceKind::Value;
@@ -187,7 +218,9 @@ impl<'a> Asi<'a> {
             return BraceKind::Block;
         }
         match &self.last_emitted {
-            Some(TokenKind::Colon) => BraceKind::Value,
+            // A colon also introduces object values and ternary alternates. Their
+            // comma separators already suppress ASI, so the same base is safe.
+            Some(TokenKind::Colon) => BraceKind::MemberList,
             Some(kind) if opens_value_brace(kind) => BraceKind::Value,
             _ => BraceKind::Block,
         }
@@ -196,7 +229,7 @@ impl<'a> Asi<'a> {
     fn push_brace(&mut self) {
         let kind = self.classify_brace();
         let bracket_base = match kind {
-            BraceKind::Block => self.bracket_depth,
+            BraceKind::Block | BraceKind::MemberList => self.bracket_depth,
             BraceKind::Value => self.braces.last().map_or(0, |frame| frame.bracket_base),
         };
         self.braces.push(BraceFrame { kind, bracket_base });
@@ -210,6 +243,8 @@ impl<'a> Asi<'a> {
     /// Bracket tracking runs first for the same reason — `push_brace` classifies the `{`
     /// from the pre-token state.
     fn track(&mut self, kind: &TokenKind) {
+        self.correct_bang_context(kind);
+        let closed_block = self.brace_closed_by(kind) == Some(BraceKind::Block);
         let closed_header = self.track_brackets(kind);
         self.after_case_label_colon = self.next_after_case_label_colon(kind);
         self.in_case_label = self.next_in_case_label(kind);
@@ -217,7 +252,23 @@ impl<'a> Asi<'a> {
         self.brace_opens_specifier_list = self.next_brace_opens_specifier_list(kind);
         self.last_is_member_name = self.next_last_is_member_name();
         self.closed_header_paren = closed_header;
+        self.closed_block_brace = closed_block;
         self.last_emitted = Some(kind.clone());
+    }
+
+    /// Refine the lexer's prefix/postfix choice using grammatical boundary state.
+    fn correct_bang_context(&mut self, kind: &TokenKind) {
+        if !matches!(kind, TokenKind::Bang) {
+            return;
+        }
+        if self.last_is_member_name {
+            self.lexer.set_bang_is_postfix(true);
+        } else if self.closed_header_paren
+            || self.closed_block_brace
+            || matches!(self.last_emitted, Some(TokenKind::Semicolon))
+        {
+            self.lexer.set_bang_is_postfix(false);
+        }
     }
 
     /// Bracket and brace bookkeeping; returns whether `kind` closed a control-flow header.
@@ -413,7 +464,7 @@ fn awaits_operand(kind: &TokenKind) -> bool {
 fn awaits_body(kind: &TokenKind) -> bool {
     matches!(
         kind,
-        TokenKind::Try | TokenKind::Else | TokenKind::Do | TokenKind::Finally
+        TokenKind::Try | TokenKind::Else | TokenKind::Do | TokenKind::Finally | TokenKind::Catch
     )
 }
 

@@ -2517,27 +2517,18 @@ impl<'a> Parser<'a> {
     fn parse_catch_clause(&mut self) -> Option<CatchClause> {
         let kw = self.advance();
 
-        if !matches!(self.peek().kind, TokenKind::LeftParen) {
-            self.error_at_peek("expected `(` after `catch`");
-            return None;
-        }
-        self.advance();
-
-        let name_tok = self.expect_identifier("expected catch binding name")?;
-        let binding = self.ident_from_token(&name_tok);
-
-        let ty = if matches!(self.peek().kind, TokenKind::Colon) {
-            self.advance();
-            Some(self.parse_type_annotation()?)
+        let (binding, ty) = if matches!(self.peek().kind, TokenKind::LeftBrace) {
+            // This binding is inaccessible to source code, including nested catches.
+            (
+                Ident {
+                    name: "#catch".into(),
+                    span: kw.span,
+                },
+                None,
+            )
         } else {
-            None
+            self.parse_catch_binding()?
         };
-
-        if !matches!(self.peek().kind, TokenKind::RightParen) {
-            self.error_at_peek("expected `)` after catch binding");
-            return None;
-        }
-        self.advance();
 
         let body = self.parse_block()?;
         let body_end = self.ast.stmt(body).span.end;
@@ -2548,6 +2539,28 @@ impl<'a> Parser<'a> {
             body,
             span: self.span(kw.span.start, body_end),
         })
+    }
+
+    fn parse_catch_binding(&mut self) -> Option<(Ident, Option<TypeAnnotation>)> {
+        if !matches!(self.peek().kind, TokenKind::LeftParen) {
+            self.error_at_peek("expected `(` after `catch`");
+            return None;
+        }
+        self.advance();
+        let name_tok = self.expect_identifier("expected catch binding name")?;
+        let binding = self.ident_from_token(&name_tok);
+        let ty = if matches!(self.peek().kind, TokenKind::Colon) {
+            self.advance();
+            Some(self.parse_type_annotation()?)
+        } else {
+            None
+        };
+        if !matches!(self.peek().kind, TokenKind::RightParen) {
+            self.error_at_peek("expected `)` after catch binding");
+            return None;
+        }
+        self.advance();
+        Some((binding, ty))
     }
 
     fn parse_paren_condition(&mut self) -> Option<ExprId> {
