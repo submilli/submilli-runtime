@@ -52,7 +52,7 @@ Every top-level key, all optional except `name`:
 | `name` | Registered name; the REST `blueprint` field and the MCP path `/mcp/<name>` |
 | `variables` | Session variables. Each has `required: true` or `default: "value"`, never both. Referenced as `${vars.NAME}` in filters |
 | `packages` | Packages the program may import. Unlisted packages do not exist for it |
-| `secrets` | Declared secret names and sources: `{ env: VAR }`, `{ file: /path }`, `{ store: key }`, or `{ harness: { required: true } }` for a value the trusted application binds per session |
+| `secrets` | Declared secret names and sources: `{ env: VAR }`, `{ file: /path }`, `{ store: key }`, or `{ harness: { required: true } }` for a value the trusted application binds per session. A server accepts only `store` and `harness` sources in a blueprint registered over its API (see Workflow) |
 | `auth_proxy` | Host-keyed credential injection for direct HTTP: `host`, then `auth: { bearer: "${secrets.X}" }`, `auth: { basic: { username, password } }`, `headers`, or `query` |
 | `default` | Fall-through action: `deny` (the default and the norm), `allow`, or `ask-human` |
 | `permissions` | Per-caller rule lists; see below |
@@ -219,6 +219,18 @@ Register and run:
 submilli-server                                  # separate terminal
 submilli server blueprint apply blueprint.yaml   # or: submilli apply -f dir/
 submilli server run-code --blueprint support-orders program.ts
+```
+
+`apply` rejects a blueprint whose secrets use `env:` or `file:` with "not
+allowed for a blueprint registered over the API": the server has no inbound
+authentication, so those sources would let any caller read its environment or
+filesystem. They work only for local runs (`submilli run --blueprint`). For a
+server, declare the secret with `--store` and provision the value into the
+server's secret store, or use a `harness` source bound per session:
+
+```sh
+submilli blueprint secret add ORDERS_API_TOKEN --store ORDERS_API_TOKEN
+printf '%s' "$ORDERS_API_TOKEN" | submilli server secret put ORDERS_API_TOKEN
 ```
 
 REST is `POST /v1/execute` with `{ "blueprint", "code", "variables", "secrets" }`;

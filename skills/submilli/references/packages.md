@@ -286,7 +286,21 @@ not for a human onboarding.
 
 Tests import from the package name, define `function main(): void`, and use
 the global `assert(condition, message)`. `submilli:test` adds `label(text)`
-and `expectException(fn, errorType)`.
+and `expectException(fn, errorType)`. `errorType` is the error's name as a
+string, not a class: passing `Error` or `RangeError` fails to compile with
+"`Error` is a class, not a value". Omit it, or pass `""`, to accept any thrown
+error. The call returns the caught error and fails the test if `fn` returns
+normally:
+
+```typescript
+import { label, expectException } from "submilli:test";
+import { pageQuery } from "@acme/orders";
+function main(): void {
+  label("rejects a limit above 100");
+  const error = expectException(() => { pageQuery(101, null); }, "RangeError");
+  assert(error.message.includes("limit"), "message names the argument");
+}
+```
 
 - Unit-test pure builders (query strings, filter variables, error rendering)
   without network or secrets. Export them for that purpose.
