@@ -26,6 +26,9 @@ been initialized; it never replaces an existing generated configuration.
 
 ## Editing
 
+Use the [writing framework](WRITING.md) to define a chapter's purpose and reader
+outcomes before drafting, then review the draft against those outcomes.
+
 Edit pages in `docs/`. Frontmatter `slug` controls the path below `/docs/`;
 the index has an empty slug. `sidebar.hidden: true` keeps unfinished chapters
 out of navigation. Sidebar groups are configured in `astro.config.mjs`; their
