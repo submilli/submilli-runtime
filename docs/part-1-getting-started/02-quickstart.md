@@ -33,11 +33,11 @@ your assistant, then ask it to help you adopt Submilli. Add `--project .` for a
 project-local installation instead of a user-wide one. The skill guides you
 through packages, blueprints, and your existing agent harness.
 
-After upgrading the CLI, refresh the same installation with
-`submilli skill update --agent claude` (substitute your assistant and include
-`--project .` if used when installing). `submilli skill status --agent claude`
-checks freshness and local edits. Updates work offline from the CLI's bundled
-skill and preserve edited copies. See [skill installation and updates](/docs/skill)
+The skill keeps itself current. Each time your assistant uses it, it first
+runs `submilli skill sync`, which brings every unedited installation to the
+newest skill release, or to the CLI's bundled copy when offline. Edited copies
+are never overwritten. Set `SUBMILLI_SKILL_AUTOUPDATE=0` to opt out;
+`submilli skill status --agent claude` reports freshness and local edits. See [skill installation and updates](/docs/skill)
 for discovery paths and team workflows.
 
 ## Install

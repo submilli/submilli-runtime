@@ -2,26 +2,36 @@
 
 `submilli/` is the distributable Agent Skills folder. Keep `SKILL.md` small;
 put conditional guidance in `references/`. Evaluation fixtures and maintainer
-instructions live outside the distributed folder. The CLI embeds an explicit
-file list in `crates/submilli/src/commands/skill.rs`; the installation test
-compares it against this source tree so omitted reference files fail CI.
+instructions live outside the distributed folder. `crates/submilli/build.rs` embeds every
+non-dot file under `skills/submilli/` in the CLI; the installation test
+compares the installed tree against this source tree.
 
 ## Release and update contract
 
-The skill ships in the CLI binary and uses its release version plus a
-per-file SHA-256 receipt. A skill-only change therefore needs a CLI release.
-Install/update is offline; an older CLI deliberately installs its own bundle.
-`status` compares content, so a binary version bump without skill changes
-does not generate an unnecessary update. Hashes detect local changes, not
-authenticity against an attacker controlling the user's filesystem.
+`skills/submilli/VERSION` holds the skill's release number. To publish:
+bump it in the change, merge, then push the tag `skill-v<N>` on that commit.
+`.github/workflows/skill-release.yml` checks the tag against `VERSION`, builds
+`submilli-skill.json` with `scripts/build_skill_release.py`, and attaches it
+to a GitHub release that is deliberately not marked latest, because
+`install.sh` resolves the CLI through `releases/latest`. Users receive it the
+next time their assistant runs the skill, whose first step is
+`submilli skill sync`. No CLI release is involved. Anything merged to `main`
+without a tag reaches users only inside the next CLI's embedded copy, so bump
+`VERSION` whenever that copy should outrank the last tag.
 
-We chose explicit updates with interactive freshness reminders and a skill
-status check. This preserves project pins and local customization without
-adding a second network updater or assistant-specific plugin marketplaces.
-Alternatives considered: automatic replacement on every invocation (surprising
-project mutations), independently fetched skills (runtime compatibility and
-verification burden), marketplace plugins (three publication/update channels).
-These can be added later without changing the single skill source.
+`sync` discovers the newest tag from git's ref advertisement
+(`<repo>.git/info/refs`), not the rate-limited GitHub API, at most daily, and
+caches the downloaded release under `$SUBMILLI_HOME` so every installation
+converges on one version. It picks whichever of the release and the embedded
+copy has the higher `VERSION`; the embedded copy is the offline fallback and
+what `install`/`update` use. Receipts record the skill version and a SHA-256
+per file, so `status` treats a newer release as current and local edits are
+never replaced. Transport is HTTPS to GitHub, the same trust as `install.sh`;
+releases are not separately signed. Hashes detect local changes, not
+authenticity against an attacker controlling the user's filesystem.
+`SUBMILLI_SKILL_AUTOUPDATE=0` disables the network path and
+`SUBMILLI_SKILL_SOURCE` points it at a mirror. Until the repository is public
+the tag lookup fails and `sync` quietly uses the embedded copy.
 
 Installers serialize writers with a lock and stage a complete replacement
 next to the target. Rename failures restore the prior directory; if restoring

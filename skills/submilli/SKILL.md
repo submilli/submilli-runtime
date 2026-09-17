@@ -9,6 +9,12 @@ Help the developer expose useful operations and enforce their intended policy
 while keeping their chosen application and agent harness. Official website:
 https://submilli.ai; start at https://submilli.ai/docs/quickstart.
 
+Before reading any reference, if the `submilli` CLI is installed, run
+`submilli skill sync` (no flags). It refreshes this skill to the newest release
+and never overwrites local edits. If it reports that `SKILL.md` changed,
+re-read this file. If the command is missing or fails, continue with the
+installed copy; an explanation alone never needs it.
+
 Read only the references needed for the current task:
 
 - First explanation or comparison: [concepts](references/concepts.md).
@@ -37,6 +43,3 @@ Submilli is a TypeScript subset, not Node.js: no npm imports, `any`, `undefined`
 or `async`/`await` inside runtime programs/packages. The surrounding application
 uses its normal language and dependencies. Discover APIs from CLI/MCP docs.
 
-For implementation sessions with an installed CLI, check `submilli skill status`
-using this installation's `--agent` and, if applicable, `--project` target.
-If it differs, explain the update path in setup; preserve local edits.

@@ -40,25 +40,30 @@ agent look up only the signed-in customer's charges.”
 
 ## Updates
 
-Every CLI release embeds a complete skill. Installation and update do not
-download or execute a second installer. To get a published skill update:
+The skill keeps itself current. Its first instruction tells your assistant to
+run `submilli skill sync` before reading anything else. That command takes no
+flags: it finds every installation made by the CLI in your home directory and
+from the working directory up to the repository root, and brings each
+unedited one to the newest skill release. You do nothing, and you can run it
+yourself at any time.
 
-1. Upgrade the CLI using the official installer from the quickstart.
-2. Run `submilli skill update --agent codex`, substituting your assistant and
-   adding the same `--project` directory used during installation.
-3. Restart the assistant so it reads the new instructions.
+Skill releases are `skill-v<N>` tags of the
+[runtime repository](https://github.com/submilli/submilli-runtime) and ship
+independently of CLI releases. `sync` asks GitHub for the newest tag at most
+once a day with a five-second timeout, downloads that release's single
+`submilli-skill.json` asset over HTTPS, and rejects files that would land
+outside the skill directory. When offline, or when the CLI's embedded copy is
+newer, it installs the embedded copy instead. If a release needs a newer CLI,
+`sync` says so and keeps what you have. Set `SUBMILLI_SKILL_AUTOUPDATE=0` to
+use only the embedded copy.
 
-`submilli skill status --agent codex` compares an installation with the running
-binary's bundle and checks its files for edits. It returns 0 for current and 1
-for missing, different, or edited content. A different bundle can be newer
-or older; select the intended CLI version before updating. Status does not
-query the latest release on the internet.
-
-Ordinary CLI commands print a reminder in interactive terminals when a managed
-user or enclosing project installation differs from their bundle. The skill
-also directs the assistant to check status during implementation sessions.
-Neither mechanism changes files automatically. Machine-readable command
-output and noninteractive runs are unaffected by reminders.
+`submilli skill status --agent codex` checks one installation against the
+running binary and checks its files for edits. It returns 0 for current
+content, including a skill release newer than the binary's copy, and 1 for
+missing, outdated, or edited content. `submilli skill update` with the same
+target applies the binary's copy without any network access. Ordinary CLI
+commands print a reminder in interactive terminals when an installation is
+older than their bundle; machine-readable output is unaffected.
 
 Updates verify the installed file hashes before replacing anything. Edited,
 added, or missing files stop replacement. To keep custom instructions, move
@@ -68,8 +73,7 @@ paths are refused; choose a regular directory. If an installer crashes, an
 error may identify a lock or a recovery directory; confirm it is no longer
 running before removing a stale lock, and preserve any recovered files.
 
-For teams, pin the CLI version in your development setup, run status in CI,
-and update the committed skill in a dependency-update PR. This makes changes
-to the instructions reviewable along with runtime upgrades. Publishing skill
-changes requires a new CLI release; independently downloaded or automatically
-changing skills are not part of this mechanism.
+For teams, a project installation that is committed shows each skill update as
+an ordinary diff: whoever's assistant syncs first gets the change to review
+and commit. To control timing instead, set `SUBMILLI_SKILL_AUTOUPDATE=0` in
+the team's environment, pin the CLI version, and run `skill status` in CI.

@@ -383,3 +383,149 @@ async fn documented_package_and_blueprint_enforce_the_bound_customer() {
         }
     }
 }
+
+/// Serves a git ref advertisement and one release asset, as GitHub would.
+fn serve_release(version: u32, files: serde_json::Value) -> String {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let source = format!("http://{}/repo", listener.local_addr().unwrap());
+    let refs = format!("0000aaaa refs/tags/v9.9.9\nbbbb refs/tags/skill-v{version}\n");
+    let asset = serde_json::json!({"schema": 1, "version": version, "files": files}).to_string();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            let mut request = [0u8; 2048];
+            let read = stream.read(&mut request).unwrap();
+            let request = String::from_utf8_lossy(&request[..read]).into_owned();
+            let body = if request.starts_with("GET /repo.git/info/refs?service=git-upload-pack ") {
+                Some(&refs)
+            } else if request.starts_with(&format!(
+                "GET /repo/releases/download/skill-v{version}/submilli-skill.json "
+            )) {
+                Some(&asset)
+            } else {
+                None
+            };
+            let response = match body {
+                Some(body) => format!(
+                    "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                ),
+                None => "HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                    .to_owned(),
+            };
+            stream.write_all(response.as_bytes()).unwrap();
+        }
+    });
+    source
+}
+
+/// `sync` takes no target: it runs from inside the project, as an assistant would.
+fn sync(project: &Path, home: &Path, source: Option<&str>) -> String {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_submilli"));
+    command
+        .args(["skill", "sync"])
+        .current_dir(project)
+        .env("SUBMILLI_TELEMETRY", "0")
+        .env("HOME", home)
+        .env("USERPROFILE", home)
+        .env("SUBMILLI_HOME", home.join(".submilli"));
+    match source {
+        Some(source) => command.env("SUBMILLI_SKILL_SOURCE", source),
+        None => command.env("SUBMILLI_SKILL_AUTOUPDATE", "0"),
+    };
+    let output = command.output().unwrap();
+    ok(output.clone());
+    String::from_utf8(output.stdout).unwrap()
+}
+
+fn project_with_install(agent: &str) -> (tempfile::TempDir, tempfile::TempDir) {
+    let project = tempfile::tempdir().unwrap();
+    fs::create_dir(project.path().join(".git")).unwrap();
+    ok(run(project.path(), "install", agent));
+    (project, tempfile::tempdir().unwrap())
+}
+
+#[test]
+fn sync_finds_installs_without_flags_and_applies_the_bundle_offline() {
+    use sha2::{Digest, Sha256};
+    let (project, home) = project_with_install("claude");
+    let path = project.path().join(".claude/skills/submilli");
+    let receipt_path = path.join(".submilli-skill.json");
+    let mut receipt: serde_json::Value =
+        serde_json::from_slice(&fs::read(&receipt_path).unwrap()).unwrap();
+    fs::write(path.join("SKILL.md"), "old release").unwrap();
+    receipt["files"]["SKILL.md"] = format!("{:x}", Sha256::digest(b"old release")).into();
+    fs::write(&receipt_path, serde_json::to_vec(&receipt).unwrap()).unwrap();
+
+    let nested = project.path().join("src/deep");
+    fs::create_dir_all(&nested).unwrap();
+    let output = sync(&nested, home.path(), None);
+    assert!(output.contains("SKILL.md changed: re-read it"), "{output}");
+    compare_tree(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../skills/submilli"),
+        &path,
+    );
+    assert!(sync(&nested, home.path(), None).contains(": current"));
+}
+
+#[test]
+fn sync_installs_a_newer_release_then_answers_from_its_cache() {
+    let (project, home) = project_with_install("codex");
+    let path = project.path().join(".agents/skills/submilli");
+    let source = serve_release(
+        900,
+        serde_json::json!({"SKILL.md": "released", "VERSION": "900\n", "references/new.md": "new"}),
+    );
+    let output = sync(project.path(), home.path(), Some(&source));
+    assert!(
+        output.contains("updated to skill v900 from skill release v900"),
+        "{output}"
+    );
+    assert_eq!(
+        fs::read_to_string(path.join("references/new.md")).unwrap(),
+        "new"
+    );
+    assert!(!path.join("references/setup.md").exists());
+
+    // A release newer than this CLI's bundle is healthy, not drift.
+    ok(run(project.path(), "status", "codex"));
+    ok(run(project.path(), "update", "codex"));
+    assert_eq!(
+        fs::read_to_string(path.join("SKILL.md")).unwrap(),
+        "released"
+    );
+
+    // Within the check interval a second installation converges on the same
+    // release without the network: this source refuses connections.
+    ok(run(project.path(), "install", "cursor"));
+    let output = sync(project.path(), home.path(), Some("http://127.0.0.1:1/repo"));
+    assert!(
+        output.contains(".cursor/skills/submilli: updated to skill v900"),
+        "{output}"
+    );
+}
+
+#[test]
+fn sync_preserves_local_edits_and_survives_an_unreachable_source() {
+    let (project, home) = project_with_install("claude");
+    let skill_md = project.path().join(".claude/skills/submilli/SKILL.md");
+    fs::write(&skill_md, "custom").unwrap();
+    let output = sync(project.path(), home.path(), Some("http://127.0.0.1:1/repo"));
+    assert!(output.contains("Skill release check skipped"), "{output}");
+    assert!(output.contains("locally modified; preserved"), "{output}");
+    assert_eq!(fs::read_to_string(skill_md).unwrap(), "custom");
+}
+
+#[test]
+fn sync_rejects_a_release_that_writes_outside_the_skill() {
+    let (project, home) = project_with_install("claude");
+    let source = serve_release(
+        901,
+        serde_json::json!({"SKILL.md": "x", "VERSION": "901", "../../escape.md": "x"}),
+    );
+    let output = sync(project.path(), home.path(), Some(&source));
+    assert!(output.contains("unsafe path"), "{output}");
+    assert!(!project.path().join(".claude/escape.md").exists());
+    ok(run(project.path(), "status", "claude"));
+}

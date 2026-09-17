@@ -35,17 +35,29 @@ instead. Restart the assistant to discover/reload the skill. Invoke Submilli
 by name or use its skill selector (`/submilli` in Claude Code, `$submilli` in
 Codex). Cursor supports skill invocation through its slash menu.
 
-Check and update the same target:
+The skill keeps itself current: its first step is `submilli skill sync`.
+That command takes no flags. It finds every installation made by the CLI in
+the user home and from the working directory up to the repository root, and
+brings each unmodified one to the newest skill release. Releases are
+`skill-v<N>` tags of the runtime repository and ship independently of CLI
+releases. It contacts GitHub at most once a day with a five-second timeout,
+and installs the CLI's bundled copy when offline or when that copy is newer.
+Set `SUBMILLI_SKILL_AUTOUPDATE=0` to stay on the CLI's bundle. Each line of
+output names an installation and what happened: `current`,
+`updated to skill v<N> ...`, `locally modified; preserved`, or why it was
+not synced. A project installation that is committed shows the update as an
+ordinary diff for the team to review.
+
+To inspect or refresh one target against the running CLI only:
 
 ```sh
 submilli skill status --agent codex --project .
 submilli skill update --agent codex --project .
 ```
 
-Status exits 1 for missing, different, or edited content, and 0 for current.
-It compares against the running binary, not a remote release. Upgrade the CLI
-using the official installer before refreshing to a newly published skill.
-`update` replaces only an intact managed installation. If locally edited,
+Status exits 0 for current content, including a skill release newer than the
+CLI's bundle, and 1 for missing, outdated, or edited content.
+`sync` and `update` replace only an intact managed installation. If locally edited,
 move it aside deliberately, install, and review/reapply the customization.
 Do not silently delete it. Project copies can be committed and updated by a
 team's normal dependency-update PR. A pinned older CLI installs its older
