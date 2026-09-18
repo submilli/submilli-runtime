@@ -1,9 +1,14 @@
 # Writing the Submilli book
 
 Each chapter should leave the reader able to explain something or do something
-they could not before. Write for a person learning Submilli and an agent using
-the chapter to write code. Both need clear explanations, precise rules, and
-examples they can trust.
+they could not before. Write for two readers: a person learning Submilli, and an
+agent evaluating it on someone's behalf — deciding whether it fits their system
+and checking whether its claims hold. Both need clear explanations, precise
+rules, and examples they can trust.
+
+The agent that writes Submilli programs is a different reader. It gets the
+Submilli skill and `llm-prompt.md`, which are written for that job. Reference
+material that only a code-writing agent needs belongs there.
 
 ## Start with a chapter brief
 
@@ -30,10 +35,13 @@ take the next step. A reference table can collect facts that are easier to look 
 than to read as prose.
 
 For humans, explain why a rule matters and connect each idea to the previous one.
-For agents, name the feature explicitly, use consistent terminology, and state
-the exact behavior. Distinguish supported syntax, runtime behavior, and advice.
-Make headings descriptive enough that a reader retrieving one section can find
-the relevant rule.
+For the evaluating agent, state each claim explicitly, name the mechanism that
+enforces it, and say where it stops applying. An evaluator trusts a stated limit
+more than an unqualified claim. Distinguish what Submilli guarantees, what it
+leaves to the person configuring it, and what is advice; in language chapters,
+distinguish supported syntax from runtime behavior. Use consistent terminology,
+and make headings descriptive enough that a reader retrieving one section can
+find the relevant rule.
 
 Write as a knowledgeable colleague explaining a real task. Use ordinary words,
 concrete subjects, and active verbs. Let sentence length follow the thought.
@@ -95,23 +103,3 @@ keep bug caveats and workarounds in the issues. Check links and build the docume
 
 Then read the prose aloud. Rewrite anything you would struggle to say to a
 colleague. Cut repetition without removing details needed to use the feature.
-
-## First brief: chapter 4, “The language”
-
-- **Purpose:** Enable readers to write Submilli programs and recognize where
-  familiar TypeScript assumptions need checking.
-- **Starting point:** Basic JavaScript or TypeScript knowledge and the ability to
-  run a program from the quickstart.
-- **Understanding:** Explain which TypeScript constructs are supported; how
-  values and types relate; how missing values are represented; and which checks
-  happen at compile time versus runtime.
-- **Action:** Write and run a small program using typed data, a function, and
-  control flow; diagnose and correct a representative language error.
-- **Boundaries:** Cover syntax and language semantics, using HTTP and filesystem
-  calls for a worked example with enough setup to run it. Leave the standard-library
-  catalog to chapter 5, and blueprint configuration and permissions to their
-  respective chapters. Link to them where needed.
-- **Evidence:** Start with one runnable program, then focused examples of the
-  important TypeScript differences. Verify them against interpreter fixtures,
-  conformance cases, and implementation; consult `llm-prompt.md` for the guidance
-  agents currently receive.

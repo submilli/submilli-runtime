@@ -435,8 +435,9 @@ agent's control.** Not only did it enforce that an operation is called with the 
 
 You write the rules once; the agent writes the code forever, and the rules never have to trust it.
 
-Next: [how Submilli works](/docs/how-submilli-works) — the compiler, the
-in-process runtime, and the audit trail. After that, connecting Submilli to the
+Next: [how Submilli works](/docs/how-submilli-works) — why the agent's program
+can't get around the rules you just wrote, and why Submilli is a new runtime
+rather than Node in a sandbox. After that, connecting Submilli to the
 harness you already run over MCP, and writing packages of your own with real
 credentials behind them.
 

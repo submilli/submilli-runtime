@@ -191,7 +191,7 @@ its code runs. Inside it:
 - **An auth proxy** — for HTTP endpoints the blueprint explicitly grants,
   credentials are injected at the boundary, after the permission check.
 
-The compiler, the audit trail, the server — chapter 3.
+How the pieces fit, and why generated code can't get around them — chapter 3.
 
 ## Try it
 
