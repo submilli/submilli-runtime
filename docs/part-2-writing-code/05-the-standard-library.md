@@ -1,6 +1,6 @@
 ---
 title: "The standard library"
-description: The built-in globals and the submilli:* modules a program can use, with a short example of each.
+description: "The built-in globals and the submilli: modules a program can use, with a short example of each."
 slug: standard-library
 sidebar:
   order: 5

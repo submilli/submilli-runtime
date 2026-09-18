@@ -1,7 +1,8 @@
 ---
 /**
- * Article header: the sidebar group as a mono eyebrow, the title, and the
- * page description as a lead paragraph when the chapter provides one.
+ * Article header: the sidebar group as a mono eyebrow, then the title. The
+ * frontmatter description feeds the page's meta tags and search, not the
+ * header.
  */
 const { entry, sidebar } = Astro.locals.starlightRoute;
 
@@ -15,13 +16,11 @@ function containsCurrent(entries: Entries): boolean {
 
 const group = sidebar.find((item) => item.type === 'group' && containsCurrent(item.entries));
 const eyebrow = group?.label;
-const lead = entry.data.description;
 ---
 
 <div class="page-title">
 	{eyebrow && <p class="page-title__eyebrow">{eyebrow}</p>}
 	<h1 id="_top">{entry.data.title}</h1>
-	{lead && <p class="page-title__lead">{lead}</p>}
 </div>
 
 <style>
@@ -46,21 +45,10 @@ const lead = entry.data.description;
 		color: var(--sl-color-white);
 		text-wrap: balance;
 	}
-	.page-title__lead {
-		margin: 1rem 0 0;
-		font-size: 1.1875rem;
-		line-height: 1.6;
-		color: var(--sl-color-gray-2);
-		text-wrap: pretty;
-	}
 	@media (max-width: 49.99rem) {
 		.page-title__eyebrow {
 			margin-bottom: 0.75rem;
 			font-size: 0.6875rem;
-		}
-		.page-title__lead {
-			margin-top: 0.75rem;
-			font-size: 1.03125rem;
 		}
 	}
 </style>
