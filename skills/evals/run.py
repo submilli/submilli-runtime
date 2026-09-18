@@ -50,7 +50,10 @@ def prepare(args):
                     shutil.copytree(SKILL, workspace / DIRECTORIES[args.agent] / "skills/submilli")
                 # Rubrics stay outside the task workspace; never send them in
                 # the actor prompt. Natural prompts also test skill triggering.
-                (folder / "prompt.txt").write_text(case["prompt"] + "\n")
+                prompt = case["prompt"] + "\n"
+                if getattr(args, "notice", None):
+                    prompt += "\n" + args.notice.rstrip() + "\n"
+                (folder / "prompt.txt").write_text(prompt)
                 trials.append({"id": trial_id, "case": case["id"], "variant": variant,
                                "repeat": repeat + 1, "before": fingerprint(workspace)})
     (args.output / "suite.json").write_text(json.dumps({
@@ -77,10 +80,12 @@ def run(args):
         print(f'Running {trial["id"]}', flush=True)
         started = time.monotonic()
         try:
+            # Own session and process group: servers the assistant leaves
+            # running in the background are stopped with it.
             result = subprocess.run(command, cwd=folder / "workspace",
                                     input=(folder / "prompt.txt").read_text(),
                                     text=True, capture_output=True, timeout=args.timeout,
-                                    check=False)
+                                    check=False, start_new_session=True)
             stdout, stderr, code = result.stdout, result.stderr, result.returncode
         except subprocess.TimeoutExpired as error:
             stdout = error.stdout or b""
@@ -90,12 +95,26 @@ def run(args):
             code = 124
         except OSError as error:
             stdout, stderr, code = "", str(error), 127
+        stop_leftovers(folder / "workspace")
         (folder / "stdout.txt").write_text(stdout)
         (folder / "stderr.txt").write_text(stderr)
         (folder / "result.json").write_text(json.dumps({
             "command": command, "exit_code": code,
             "duration_seconds": time.monotonic() - started,
             "after": fingerprint(folder / "workspace")}, indent=2) + "\n")
+
+
+def stop_leftovers(workspace):
+    """Terminate processes still running from inside the trial workspace."""
+    listing = subprocess.run(["ps", "-axo", "pid=,command="], text=True,
+                             capture_output=True, check=False).stdout
+    for line in listing.splitlines():
+        pid, _, command = line.strip().partition(" ")
+        if str(workspace) in command or "submilli-server" in command:
+            cwd = subprocess.run(["lsof", "-a", "-p", pid, "-d", "cwd", "-Fn"], text=True,
+                                 capture_output=True, check=False).stdout
+            if str(workspace) in cwd or str(workspace) in command:
+                subprocess.run(["kill", pid], check=False)
 
 
 def score(args):
@@ -136,6 +155,9 @@ def main():
     prep.add_argument("--agent", choices=DIRECTORIES, required=True)
     prep.add_argument("--case", action="append")
     prep.add_argument("--repeats", type=int, default=3)
+    prep.add_argument("--notice", help="text appended to every prompt, identically in "
+                      "both variants (for example a tool-call budget and a request "
+                      "for a final status file)")
     execute = subs.add_parser("run")
     execute.add_argument("output", type=pathlib.Path)
     execute.add_argument("--trial", action="append")
