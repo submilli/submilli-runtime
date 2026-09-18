@@ -2,6 +2,7 @@
 
 pub mod cast;
 pub mod expr;
+mod finally;
 pub mod json;
 pub mod mcp;
 pub mod stmt;
@@ -11,7 +12,7 @@ use std::collections::BTreeMap;
 use wasm_encoder::{BlockType, Function, Instruction, ValType};
 
 use crate::codegen::CodegenCtx;
-use crate::{ExprId, Ident, Span, StmtId, Type};
+use crate::{ExprId, Ident, Span, Type};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ExprContext {
@@ -53,11 +54,8 @@ pub struct FunctionEmitter<'a> {
 
     return_target: ReturnTarget,
 
-    /// Inlined by `return`/`break`/`continue` on early exit. Innermost-last.
-    finally_stack: Vec<StmtId>,
-
-    /// Lazily allocated on the first return-with-finally; reused by all subsequent return sites.
-    return_stash: Option<(u32, ValType)>,
+    /// Pending completion targets, innermost last. Bodies are emitted once.
+    finally_stack: Vec<finally::FinallyFrame>,
 
     /// Wasm local holding `this` inside a class method (receiver param) or
     /// constructor (allocated instance). `None` outside class bodies; reading
@@ -161,7 +159,6 @@ impl<'a> FunctionEmitter<'a> {
             return_block_depth: 0,
             return_target: ReturnTarget::NoResult,
             finally_stack: Vec::new(),
-            return_stash: None,
             this_local: None,
             ctor_class: None,
             source_mappings: Vec::new(),
@@ -203,10 +200,9 @@ impl<'a> FunctionEmitter<'a> {
         self.single_evaluations.push((id, slot));
     }
 
-    /// Registrations are statement-scoped: a `finally` body is inlined at every
-    /// exit path, and the second inlining must recompute rather than read the
-    /// first one's local. Take a mark before emitting a statement that
-    /// registers, and [`Self::end_single_evaluations`] with it afterwards.
+    /// Registrations are statement-scoped: later emission of a shared expression
+    /// must compute its value again. Take a mark before emitting a statement
+    /// that registers, and [`Self::end_single_evaluations`] with it afterwards.
     pub fn single_evaluation_mark(&self) -> usize {
         self.single_evaluations.len()
     }
@@ -412,33 +408,6 @@ impl<'a> FunctionEmitter<'a> {
     /// `instruction()` (which skips depth tracking); the matching `emit_end()` decrements.
     pub fn bump_block_depth(&mut self) {
         self.wasm_block_depth += 1;
-    }
-
-    /// Any `return`/`break`/`continue` inside the try body inlines this finally before the jump.
-    pub fn push_finally(&mut self, body: StmtId) {
-        self.finally_stack.push(body);
-    }
-
-    pub fn pop_finally(&mut self) -> Option<StmtId> {
-        self.finally_stack.pop()
-    }
-
-    pub fn finally_count(&self) -> usize {
-        self.finally_stack.len()
-    }
-
-    /// Lazily allocates and reuses a single stash local; all return sites must agree on `val_type`.
-    pub fn return_stash_local(&mut self, val_type: ValType) -> u32 {
-        if let Some((idx, existing)) = self.return_stash {
-            debug_assert_eq!(
-                existing, val_type,
-                "return stash type drift — every return site in a function must agree",
-            );
-            return idx;
-        }
-        let idx = self.add_anonymous_local(val_type);
-        self.return_stash = Some((idx, val_type));
-        idx
     }
 
     /// The Wasm result this body's signature declares, or `None` when it has none.

@@ -356,17 +356,22 @@ impl Inferer<'_> {
                 );
                 let frame = self.pop_pending_join_frame();
                 self.merge_assigned_into_outer(outcome.assigned.clone(), span);
+                let tail_env = self.loop_tail_env(&outcome.back_edge);
+                self.push_narrow_frame(tail_env.clone());
                 let (typed_cond, cond_ty) = self.infer_expr(condition, None);
                 let cond_span = self.ast.expr(condition).span;
                 self.check_condition_ty(&cond_ty, cond_span);
                 let (_, cond_false_env) = self.predicate_envs(typed_cond);
-                let natural = if !outcome.reaches_back_edge || cond_is_static_true(self, typed_cond)
-                {
+                let mut post_condition = self.snapshot_active_narrowings(0).0;
+                let (_, condition_assigned) = self.pop_narrow_frame_capture();
+                self.merge_assigned_into_outer(condition_assigned, cond_span);
+                let condition_always_true = cond_is_static_true(self, typed_cond);
+                let typed_cond = self.wrap_narrow_exprs(typed_cond, &tail_env, cond_span);
+                let natural = if !outcome.reaches_back_edge || condition_always_true {
                     None
                 } else {
-                    let mut post = outcome.back_edge.clone();
-                    post.extend(cond_false_env);
-                    Some(post)
+                    post_condition.extend(cond_false_env);
+                    Some(post_condition)
                 };
                 let has_exit = self.fold_exits_into_outer(natural, frame.breaks, body_span);
                 self.reachable = entry_reachable && has_exit;
@@ -2118,12 +2123,9 @@ impl Inferer<'_> {
     ) -> LoopBodyOutcome {
         self.push_narrow_frame(entry_env.clone());
         self.loop_depth += 1;
-        let typed_body = self
-            .infer_stmt(body)
-            .expect("loop body is a Block, never a type-only decl");
+        let (typed_body, body_post) = self.infer_loop_body(body);
         self.loop_depth -= 1;
         let body_end_reachable = self.reachable;
-        let (body_post, _) = self.snapshot_active_narrowings(0);
         let (_, mut assigned) = self.pop_narrow_frame_capture();
         let (continues, continued_assignments) = self.continue_exits_since(continues_base);
         assigned.extend(continued_assignments);
@@ -2136,26 +2138,16 @@ impl Inferer<'_> {
                     narrowing::InvalidationReason::Write { span: body_span },
                 );
             }
-            self.push_rebound_root_frame(
-                back_edge.as_ref().unwrap_or(&narrowing::NarrowEnv::new()),
-            );
-            let typed = self.infer_stmt(update);
-            let mut post = self.snapshot_active_narrowings(0).0;
+            let tail_env =
+                self.loop_tail_env(back_edge.as_ref().unwrap_or(&narrowing::NarrowEnv::new()));
+            self.push_narrow_frame(tail_env.clone());
+            let typed = self
+                .infer_stmt(update)
+                .map(|body| self.wrap_narrow_regions(body, &tail_env, self.ast.stmt(update).span));
+            let post = self.snapshot_active_narrowings(0).0;
             let (_, update_assigned) = self.pop_narrow_frame_capture();
             self.pop_narrow_frame();
-            if let Some(before_update) = &back_edge {
-                // Rebinding the update's root reads must not discard field
-                // facts established by the body when the update leaves them alone.
-                post.extend(
-                    before_update
-                        .iter()
-                        .filter(|(path, _)| {
-                            !update_assigned
-                                .iter()
-                                .any(|written| written.is_prefix_of(path))
-                        })
-                        .map(|(path, view)| (path.clone(), view.clone())),
-                );
+            if back_edge.is_some() {
                 back_edge = Some(post);
             }
             assigned.extend(update_assigned);
@@ -2168,6 +2160,25 @@ impl Inferer<'_> {
             assigned,
             back_edge: back_edge.unwrap_or_default(),
         }
+    }
+
+    /// Capture the normal exit before the body's lexical frame is removed.
+    /// The loop tail needs guard facts as well as assignment facts; its own
+    /// materialization filters out names declared inside this block.
+    fn infer_loop_body(&mut self, body: StmtId) -> (StmtId, narrowing::NarrowEnv) {
+        let stmt = self.ast.stmt(body).clone();
+        let StmtKind::Block(stmts) = stmt.kind else {
+            unreachable!("loop bodies are blocks");
+        };
+        self.scopes.push();
+        let typed_stmts = self.block_stmts_with_drain(&stmts, stmt.span);
+        let post = self.snapshot_active_narrowings(0).0;
+        self.scopes.pop();
+        let typed = self.typed_ast.push_stmt(TypedStmt {
+            kind: TypedStmtKind::Block(typed_stmts),
+            span: stmt.span,
+        });
+        (typed, post)
     }
 
     fn continue_exits_since(

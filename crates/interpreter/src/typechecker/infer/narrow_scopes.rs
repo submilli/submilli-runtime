@@ -288,38 +288,25 @@ impl<'a> Inferer<'a> {
         }
     }
 
-    /// Pushes `env`'s depth-0 local narrowings onto a fresh frame, rebound to
-    /// their declaring idents — the "read the real slot, cast at use" shape
-    /// [`Self::install_joined_narrowings`] uses for root paths. For code that
-    /// runs outside any narrow region (a `for` update clause), that is the only
-    /// shape available: a `#narrow_N` shadow is defined by a region, and there
-    /// is no region here to hang one on. Field paths and global roots are
-    /// dropped for the same reason.
-    pub(super) fn push_rebound_root_frame(&mut self, env: &narrowing::NarrowEnv) {
-        let mut frame = narrowing::NarrowEnv::new();
+    /// Recreate body-exit facts in a region at a loop's condition or update.
+    /// Body-local bindings have left scope; surviving paths get fresh shadows
+    /// so the tail never refers to a region defined inside the body.
+    pub(super) fn loop_tail_env(&mut self, env: &narrowing::NarrowEnv) -> narrowing::NarrowEnv {
+        let mut tail = narrowing::NarrowEnv::new();
         for (path, view) in env {
-            if !path.chain.is_empty() || matches!(view.narrowed_ty, Type::Error) {
-                continue;
-            }
-            let narrowing::BindingId::Local { name, .. } = &path.root else {
-                continue;
-            };
-            if !self.path_root_in_scope(path) {
+            if !self.path_root_in_scope(path) || matches!(view.narrowed_ty, Type::Error) {
                 continue;
             }
             let span = self.typed_ast.expr(view.source).span;
-            frame.insert(
+            tail.insert(
                 path.clone(),
                 narrowing::NarrowedView {
-                    binding: Ident {
-                        name: name.clone(),
-                        span,
-                    },
+                    binding: self.mint_narrow_binding(span),
                     ..view.clone()
                 },
             );
         }
-        self.push_narrow_frame(frame);
+        tail
     }
 
     pub(super) fn push_narrow_frame(&mut self, env: narrowing::NarrowEnv) {

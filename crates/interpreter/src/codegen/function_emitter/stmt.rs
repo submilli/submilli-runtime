@@ -57,24 +57,7 @@ pub fn emit_statement(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: StmtI
                 emit_expr(emitter, ctx, *expr_id);
                 cast::emit_coerce_to_return_slot(emitter, ctx, &ctx.ta.expr(*expr_id).ty);
             }
-            // JS semantics: finally runs on every exit path including return.
-            if emitter.finally_count() > 0 {
-                let stash = if value.is_some() {
-                    emitter
-                        .wasm_result_type(ctx)
-                        .map(|val_ty| emitter.return_stash_local(val_ty))
-                } else {
-                    None
-                };
-                if let Some(slot) = stash {
-                    emitter.instruction(Instruction::LocalSet(slot));
-                }
-                emit_finally_chain(emitter, ctx, 0);
-                if let Some(slot) = stash {
-                    emitter.instruction(Instruction::LocalGet(slot));
-                }
-            }
-            emitter.instruction(Instruction::Return);
+            super::finally::emit_transfer(emitter, super::finally::Transfer::Return);
         }
         TypedStmtKind::Expr(expr_id) => {
             emit_expr(emitter, ctx, *expr_id);
@@ -246,18 +229,18 @@ pub fn emit_statement(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: StmtI
             emitter.emit_while_close();
         }
         TypedStmtKind::Break => {
-            // Inline every finally pushed inside the target loop / switch
-            // (the ones the `break` will unwind out of).
-            let floor = emitter.break_finally_floor();
-            emit_finally_chain(emitter, ctx, floor);
-            let label = emitter.break_label();
-            emitter.instruction(Instruction::Br(label));
+            let transfer = super::finally::Transfer::Branch {
+                depth: emitter.wasm_block_depth - emitter.break_label() - 1,
+                finally_floor: emitter.break_finally_floor(),
+            };
+            super::finally::emit_transfer(emitter, transfer);
         }
         TypedStmtKind::Continue => {
-            let floor = emitter.continue_finally_floor();
-            emit_finally_chain(emitter, ctx, floor);
-            let label = emitter.continue_label();
-            emitter.instruction(Instruction::Br(label));
+            let transfer = super::finally::Transfer::Branch {
+                depth: emitter.wasm_block_depth - emitter.continue_label() - 1,
+                finally_floor: emitter.continue_finally_floor(),
+            };
+            super::finally::emit_transfer(emitter, transfer);
         }
         TypedStmtKind::For { .. } | TypedStmtKind::ForOf { .. } | TypedStmtKind::DoWhile { .. } => {
             unreachable!(
@@ -308,7 +291,6 @@ pub fn emit_statement(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: StmtI
             catches,
             finally,
         } => {
-            // finally body is emitted up to 3 times (normal / caught / uncaught) — Wasm has no native finally construct
             emit_try(emitter, ctx, *body, catches, *finally);
         }
     }
@@ -551,160 +533,53 @@ fn emit_array_index_store(
     emitter.instruction(Instruction::ArraySet(raw_array_idx));
 }
 
-/// Inline enclosing `finally` bodies above `stop_at`, innermost first,
-/// before a control-transfer that unwinds out of those try scopes.
-/// `stop_at = 0` = all finallys (return); non-zero = skip finallys outside the target loop/switch (break/continue).
-///
-/// Popped one at a time so a `return` inside a finally body still sees the
-/// finallys outside it — JS runs every enclosing finally on the way out. A body
-/// is off the stack while it runs, so it cannot re-enter itself.
-fn emit_finally_chain(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, stop_at: usize) {
-    let mut popped = Vec::new();
-    while emitter.finally_count() > stop_at {
-        let f = emitter
-            .pop_finally()
-            .expect("finally_count() > stop_at guarantees a body to pop");
-        popped.push(f);
-        emit_statement(emitter, ctx, f);
-    }
-    // Restore so later control transfers in the same function still see these finallys.
-    for f in popped.into_iter().rev() {
-        emitter.push_finally(f);
-    }
-}
-
-/// Lowers try/catch/finally to a block/try_table topology (see interpreter.md §exception-handling).
-/// Pushes `finally` onto the finally-stack before emitting bodies so break/return inside
-/// them inlines it first; the three inline finally emissions each temporarily pop it.
-fn emit_try(
+/// Catch handlers surround only the try body. A finally gets an outer
+/// completion target shared by normal, exceptional, and early exits.
+pub(super) fn emit_try(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     body: StmtId,
     catches: &[crate::TypedCatchClause],
     finally: Option<StmtId>,
 ) {
-    use wasm_encoder::{Catch, HeapType};
+    if let Some(finally) = finally {
+        super::finally::emit_try_finally(emitter, ctx, body, catches, finally);
+        return;
+    }
+    if catches.is_empty() {
+        emit_statement(emitter, ctx, body);
+        return;
+    }
     let error_idx = ctx
         .symbols
         .intrinsic_type_indices()
-        .map(|i| i.error)
-        .expect("error intrinsic registered");
+        .expect("error intrinsic registered")
+        .error;
     let tag_idx = ctx.symbols.error_tag_idx().expect("error tag registered");
-    let error_ref = ValType::Ref(wasm_encoder::RefType {
+    emitter.emit_block(BlockType::Empty);
+    emitter.emit_block(BlockType::Result(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(error_idx),
-    });
-
-    // $end_try — outermost label; both normal and exceptional paths exit through here.
-    emitter.emit_block(BlockType::Empty);
-
-    // Push finally so return/break/continue inside the try or catch body inlines it.
-    if let Some(f) = finally {
-        emitter.push_finally(f);
-    }
-
-    match (catches.is_empty(), finally) {
-        (false, None) => {
-            // block $catch (result (ref $Error))
-            emitter.emit_block(BlockType::Result(error_ref));
-            // try_table (catch error_tag $catch=0); label 0 = $catch, label 1 = $end_try
-            emitter.instruction(Instruction::TryTable(
-                BlockType::Empty,
-                std::borrow::Cow::Owned(vec![Catch::One {
-                    tag: tag_idx,
-                    label: 0,
-                }]),
-            ));
-            // try_table's body opens a fresh block-like frame; bump
-            // manually since `instruction()` doesn't track depth.
-            emitter.bump_block_depth();
-            emit_statement(emitter, ctx, body);
-            emitter.emit_end();
-            // From inside $catch, label 1 = $end_try.
-            emitter.instruction(Instruction::Br(1));
-            emitter.emit_end(); // $catch close — caught (ref $Error) on stack
-            let err_stash = emitter.add_anonymous_local(ValType::Ref(RefType {
-                nullable: true,
-                heap_type: HeapType::Concrete(error_idx),
-            }));
-            emitter.instruction(Instruction::LocalSet(err_stash));
-            // Depth-0 label here is $end_try — the matched-arm exit.
-            emit_catch_dispatch(emitter, ctx, catches, err_stash);
-        }
-        (true, Some(finally_body)) => {
-            // block $rethrow (result exnref)
-            emitter.emit_block(BlockType::Result(ValType::EXNREF));
-            // try_table (catch_all_ref $rethrow=0); label 0 = $rethrow, label 1 = $end_try
-            emitter.instruction(Instruction::TryTable(
-                BlockType::Empty,
-                std::borrow::Cow::Owned(vec![Catch::AllRef { label: 0 }]),
-            ));
-            emitter.bump_block_depth();
-            emit_statement(emitter, ctx, body);
-            emitter.emit_end();
-            emit_finally_inline(emitter, ctx, finally_body);
-            emitter.instruction(Instruction::Br(1));
-            emitter.emit_end(); // $rethrow close — exnref on stack
-            emit_finally_inline(emitter, ctx, finally_body);
-            emitter.instruction(Instruction::ThrowRef);
-        }
-        (false, Some(finally_body)) => {
-            // block $rethrow (result exnref)
-            emitter.emit_block(BlockType::Result(ValType::EXNREF));
-            // block $catch (result (ref $Error))
-            emitter.emit_block(BlockType::Result(error_ref));
-            // try_table (catch error_tag $catch=0) (catch_all_ref $rethrow=1)
-            // label 0 = $catch, label 1 = $rethrow, label 2 = $end_try
-            emitter.instruction(Instruction::TryTable(
-                BlockType::Empty,
-                std::borrow::Cow::Owned(vec![
-                    Catch::One {
-                        tag: tag_idx,
-                        label: 0,
-                    },
-                    Catch::AllRef { label: 1 },
-                ]),
-            ));
-            emitter.bump_block_depth();
-            emit_statement(emitter, ctx, body);
-            emitter.emit_end();
-            emit_finally_inline(emitter, ctx, finally_body);
-            // From inside $catch, label 2 = $end_try.
-            emitter.instruction(Instruction::Br(2));
-            emitter.emit_end(); // $catch close — caught (ref $Error) on stack
-            emit_catch_arms_with_trailing_finally(
-                emitter,
-                ctx,
-                catches,
-                finally_body,
-                /* end_try_label */ 1,
-            );
-            emitter.emit_end(); // $rethrow close — exnref on stack
-            emit_finally_inline(emitter, ctx, finally_body);
-            emitter.instruction(Instruction::ThrowRef);
-        }
-        (true, None) => {
-            unreachable!("parser guarantees at least one of catch/finally on a try statement",)
-        }
-    }
-
-    if finally.is_some() {
-        emitter.pop_finally();
-    }
-
-    emitter.emit_end(); // $end_try close
-}
-
-/// Temporarily pops the finally from the stack while emitting its body so a `return`
-/// inside the finally doesn't re-enter it (which would be infinite recursion).
-fn emit_finally_inline(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, finally_body: StmtId) {
-    let popped = emitter.pop_finally();
-    emitter.push_scope();
-    emit_statement(emitter, ctx, finally_body);
-    emitter.pop_scope();
-    if let Some(f) = popped {
-        emitter.push_finally(f);
-    }
+    })));
+    emitter.instruction(Instruction::TryTable(
+        BlockType::Empty,
+        std::borrow::Cow::Owned(vec![wasm_encoder::Catch::One {
+            tag: tag_idx,
+            label: 0,
+        }]),
+    ));
+    emitter.bump_block_depth();
+    emit_statement(emitter, ctx, body);
+    emitter.emit_end();
+    emitter.instruction(Instruction::Br(1));
+    emitter.emit_end();
+    let err_stash = emitter.add_anonymous_local(ValType::Ref(RefType {
+        nullable: true,
+        heap_type: HeapType::Concrete(error_idx),
+    }));
+    emitter.instruction(Instruction::LocalSet(err_stash));
+    emit_catch_dispatch(emitter, ctx, catches, err_stash);
+    emitter.emit_end();
 }
 
 /// A `catch (e: MyError)` clause annotated with a proper `Error` subclass
@@ -736,10 +611,8 @@ fn catch_filter_class(ctx: &CodegenCtx, clause_ty: &Type) -> Option<(u32, u32)> 
 /// `throw_ref`) so an enclosing `catch_all_ref` wrapper still observes it and
 /// runs `finally` first.
 ///
-/// Invariant: at the emission site, relative label 0 is the matched-arm exit —
-/// `$end_try` when the try has no `finally`, or the finally-wrapper
-/// `try_table`'s own label (a forward branch out of it lands on the shared
-/// trailing finally).
+/// At the emission site, relative label 0 is `$end_try`, the matched-arm exit.
+/// When cleanup is present, the whole try/catch sits inside its wrapper.
 fn emit_catch_dispatch(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
@@ -777,57 +650,6 @@ fn emit_catch_dispatch(
     emitter.instruction(Instruction::LocalGet(err_stash));
     emitter.instruction(Instruction::RefAsNonNull);
     emitter.instruction(Instruction::Throw(tag_idx));
-}
-
-/// Catch dispatch wrapped in its own `try_table` so an exception a catch arm
-/// throws (or an unmatched re-raise) still runs `finally` — and a `return` in
-/// that finally suppresses it, per ECMA-262 §14.15.2. The finally remains on
-/// the stack during the arm bodies so `return` inside an arm inlines it;
-/// `emit_finally_inline` pops it temporarily for each trailing emission.
-///
-/// Mirrors the try-body rethrow topology: arm-matched runs the finally and
-/// branches to `$end_try`; arm-throws (or no match) runs the finally and
-/// rethrows (the rethrow is dead code if the finally returns).
-fn emit_catch_arms_with_trailing_finally(
-    emitter: &mut FunctionEmitter,
-    ctx: &CodegenCtx,
-    catches: &[crate::TypedCatchClause],
-    finally_body: StmtId,
-    end_try_label: u32,
-) {
-    use wasm_encoder::Catch;
-    let error_idx = ctx
-        .symbols
-        .intrinsic_type_indices()
-        .map(|i| i.error)
-        .expect("error intrinsic registered");
-    // Stash the caught error; the dispatch chain runs *inside* the wrapper
-    // below, so an unmatched re-raise is caught by the catch_all_ref and still
-    // runs `finally`.
-    let err_stash = emitter.add_anonymous_local(ValType::Ref(RefType {
-        nullable: true,
-        heap_type: HeapType::Concrete(error_idx),
-    }));
-    emitter.instruction(Instruction::LocalSet(err_stash));
-
-    // block $catch_rethrow (result exnref)
-    emitter.emit_block(BlockType::Result(ValType::EXNREF));
-    // try_table (catch_all_ref $catch_rethrow=0)
-    emitter.instruction(Instruction::TryTable(
-        BlockType::Empty,
-        std::borrow::Cow::Owned(vec![Catch::AllRef { label: 0 }]),
-    ));
-    emitter.bump_block_depth();
-    // The try_table's own label is the matched-arm exit: branching to it lands
-    // on the trailing finally below.
-    emit_catch_dispatch(emitter, ctx, catches, err_stash);
-    emitter.emit_end(); // try_table close — an arm matched and completed normally
-    emit_finally_inline(emitter, ctx, finally_body);
-    // $catch_rethrow adds one block between this `br` and $end_try.
-    emitter.instruction(Instruction::Br(end_try_label + 1));
-    emitter.emit_end(); // $catch_rethrow close — exnref on stack
-    emit_finally_inline(emitter, ctx, finally_body);
-    emitter.instruction(Instruction::ThrowRef);
 }
 
 /// Emit a `switch` statement as a block-stack of per-case targets.
