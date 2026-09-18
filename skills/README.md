@@ -2,7 +2,10 @@
 
 `submilli/` is the distributable Agent Skills folder. Keep `SKILL.md` small;
 put conditional guidance in `references/`. Evaluation fixtures and maintainer
-instructions live outside the distributed folder. `crates/submilli/build.rs` embeds every
+instructions live outside the distributed folder. `skills/submilli/agents/` holds the verifier subagent in the Claude/Cursor
+markdown and Codex TOML formats; the installer copies the right one to the
+assistant's agents directory and records it in the receipt as a companion.
+`crates/submilli/build.rs` embeds every
 non-dot file under `skills/submilli/` in the CLI; the installation test
 compares the installed tree against this source tree.
 

@@ -531,3 +531,53 @@ fn sync_rejects_a_release_that_writes_outside_the_skill() {
     assert!(!project.path().join(".claude/escape.md").exists());
     ok(run(project.path(), "status", "claude"));
 }
+
+#[test]
+fn installs_the_verifier_subagent_where_each_assistant_discovers_agents() {
+    let root = tempfile::tempdir().unwrap();
+    for (agent, companion) in [
+        ("claude", ".claude/agents/submilli-verifier.md"),
+        ("cursor", ".cursor/agents/submilli-verifier.md"),
+        ("codex", ".codex/agents/submilli-verifier.toml"),
+    ] {
+        ok(run(root.path(), "install", agent));
+        let installed = fs::read_to_string(root.path().join(companion)).unwrap();
+        assert!(installed.contains("submilli-verifier"), "{agent}");
+        assert!(installed.contains("verification.md"), "{agent}");
+    }
+    // Codex custom agents live under .codex even though its skills use .agents.
+    assert!(!root.path().join(".agents/agents").exists());
+}
+
+#[test]
+fn update_refreshes_an_unmodified_verifier_and_preserves_an_edited_one() {
+    use sha2::{Digest, Sha256};
+    let root = tempfile::tempdir().unwrap();
+    ok(run(root.path(), "install", "claude"));
+    let verifier = root.path().join(".claude/agents/submilli-verifier.md");
+    let bundled = fs::read_to_string(&verifier).unwrap();
+
+    // Make the skill look like an older release so update has work to do.
+    let path = root.path().join(".claude/skills/submilli");
+    let receipt_path = path.join(".submilli-skill.json");
+    let mut receipt: serde_json::Value =
+        serde_json::from_slice(&fs::read(&receipt_path).unwrap()).unwrap();
+    fs::write(path.join("SKILL.md"), "old release").unwrap();
+    receipt["files"]["SKILL.md"] = format!("{:x}", Sha256::digest(b"old release")).into();
+    // An unmodified verifier from the older release is replaced.
+    fs::write(&verifier, "older verifier").unwrap();
+    receipt["companions"][".claude/agents/submilli-verifier.md"] =
+        format!("{:x}", Sha256::digest(b"older verifier")).into();
+    fs::write(&receipt_path, serde_json::to_vec(&receipt).unwrap()).unwrap();
+    ok(run(root.path(), "update", "claude"));
+    assert_eq!(fs::read_to_string(&verifier).unwrap(), bundled);
+
+    // An edited verifier is kept, and the update still succeeds.
+    fs::write(path.join("SKILL.md"), "old release").unwrap();
+    fs::write(&receipt_path, serde_json::to_vec(&receipt).unwrap()).unwrap();
+    fs::write(&verifier, "my own verifier").unwrap();
+    let output = run(root.path(), "update", "claude");
+    ok(output.clone());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("not written"));
+    assert_eq!(fs::read_to_string(&verifier).unwrap(), "my own verifier");
+}

@@ -47,6 +47,34 @@ impl Agent {
             Self::Cursor => ".cursor",
         }
     }
+
+    /// The assistant a skill path belongs to, from its discovery directory.
+    fn from_skill_path(path: &Path) -> Option<Self> {
+        let directory = path.parent()?.parent()?.file_name()?.to_str()?;
+        [Self::Claude, Self::Codex, Self::Cursor]
+            .into_iter()
+            .find(|agent| agent.directory() == directory)
+    }
+
+    /// The verifier subagent shipped beside the skill: where the assistant
+    /// discovers custom agents (Codex keeps them under `.codex`, not
+    /// `.agents`), and which bundled file it is.
+    fn verifier(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Claude => (
+                ".claude/agents/submilli-verifier.md",
+                "agents/submilli-verifier.md",
+            ),
+            Self::Cursor => (
+                ".cursor/agents/submilli-verifier.md",
+                "agents/submilli-verifier.md",
+            ),
+            Self::Codex => (
+                ".codex/agents/submilli-verifier.toml",
+                "agents/submilli-verifier.toml",
+            ),
+        }
+    }
 }
 
 #[derive(clap::Args)]
@@ -67,6 +95,11 @@ struct Receipt {
     #[serde(default)]
     skill_version: u32,
     files: BTreeMap<String, String>,
+    /// Files installed outside the skill directory (the verifier subagent),
+    /// keyed by path relative to the install root, so an edited copy is
+    /// recognized and preserved on update.
+    #[serde(default)]
+    companions: BTreeMap<String, String>,
 }
 
 /// A complete set of skill files from one origin: this CLI or a skill release.
@@ -104,6 +137,7 @@ impl Bundle {
                 .iter()
                 .map(|(name, content)| (name.clone(), digest(content.as_bytes())))
                 .collect(),
+            companions: BTreeMap::new(),
         }
     }
 }
@@ -415,10 +449,20 @@ fn install(path: &Path, update: bool, bundle: &Bundle) -> anyhow::Result<()> {
         fs::create_dir_all(file.parent().context("bundled file needs a parent")?)?;
         fs::write(file, content)?;
     }
-    fs::write(
-        next.join(RECEIPT),
-        serde_json::to_vec_pretty(&bundle.receipt())?,
-    )?;
+    let previous_receipt = if exists {
+        read_receipt(path).ok()
+    } else {
+        None
+    };
+    let companion = Companion::plan(path, bundle, previous_receipt.as_ref())?;
+    let mut receipt = bundle.receipt();
+    if let Some(companion) = &companion {
+        receipt.companions.insert(
+            companion.relative.clone(),
+            digest(companion.content.as_bytes()),
+        );
+    }
+    fs::write(next.join(RECEIPT), serde_json::to_vec_pretty(&receipt)?)?;
     let previous = staging.path().join("previous");
     if exists {
         fs::rename(path, &previous)?;
@@ -433,7 +477,74 @@ fn install(path: &Path, update: bool, bundle: &Bundle) -> anyhow::Result<()> {
         }
         return Err(error.into());
     }
+    if let Some(companion) = companion {
+        companion.install()?;
+    }
     Ok(())
+}
+
+/// The verifier subagent file for the installation's assistant.
+struct Companion {
+    relative: String,
+    destination: PathBuf,
+    content: String,
+    /// Set when a file is already there that this CLI did not write, or that
+    /// was edited since: it is left alone and reported.
+    preserved: bool,
+}
+
+impl Companion {
+    fn plan(
+        skill_path: &Path,
+        bundle: &Bundle,
+        previous: Option<&Receipt>,
+    ) -> anyhow::Result<Option<Self>> {
+        let Some(agent) = Agent::from_skill_path(skill_path) else {
+            return Ok(None);
+        };
+        let (relative, source) = agent.verifier();
+        let Some(content) = bundle.files.get(source) else {
+            return Ok(None);
+        };
+        let root = skill_path
+            .ancestors()
+            .nth(3)
+            .context("skill path is too shallow")?;
+        let destination = root.join(relative);
+        let directory = destination.parent().context("companion needs a parent")?;
+        check_ancestors(root, directory)?;
+        let preserved = match fs::read(&destination) {
+            Ok(existing) => {
+                let recorded = previous.and_then(|receipt| receipt.companions.get(relative));
+                recorded != Some(&digest(&existing)) && existing != content.as_bytes()
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => return Err(error.into()),
+        };
+        Ok(Some(Self {
+            relative: relative.to_owned(),
+            destination,
+            content: content.clone(),
+            preserved,
+        }))
+    }
+
+    fn install(self) -> anyhow::Result<()> {
+        if self.preserved {
+            println!(
+                "{}: not written; an edited or unmanaged file is already there. Delete it to receive the bundled verifier.",
+                self.destination.display()
+            );
+            return Ok(());
+        }
+        fs::create_dir_all(
+            self.destination
+                .parent()
+                .context("companion needs a parent")?,
+        )?;
+        fs::write(&self.destination, self.content)?;
+        Ok(())
+    }
 }
 
 struct InstallLock(PathBuf);

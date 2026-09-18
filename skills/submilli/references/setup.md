@@ -38,6 +38,11 @@ submilli skill install --agent codex
 submilli skill install --agent cursor
 ```
 
+Each install also places a `submilli-verifier` subagent where that assistant
+discovers custom agents (`.claude/agents/`, `.cursor/agents/`, or
+`.codex/agents/`), so implementation work can be reviewed independently; see
+[verification](verification.md). An edited copy is never overwritten.
+
 Choose the user's assistant; these are alternatives. User installations use
 `~/.claude/skills/submilli`, `~/.agents/skills/submilli`, or
 `~/.cursor/skills/submilli`. Add `--project .` to install in the current project

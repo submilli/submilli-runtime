@@ -27,6 +27,9 @@ Read only the references needed for the current task:
 - Ideas or suitability: [use cases](references/use-cases.md).
 - Agent implementation: [harness integration](references/harnesses.md), then
   its reference for the user's harness.
+- After writing or changing a package or blueprint: [verification](references/verification.md).
+  Delegate it to the `submilli-verifier` subagent when one is installed;
+  otherwise run it yourself as a separate pass. Report its findings.
 
 Keep three authorship boundaries clear: developers own packages and blueprints;
 the trusted application binds identity and session variables; the runtime agent

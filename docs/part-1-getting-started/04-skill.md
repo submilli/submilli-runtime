@@ -38,6 +38,17 @@ Submilli in this project,” select the skill, or invoke `/submilli` in Claude
 Code or `$submilli` in Codex. Start with a real task, such as “let our support
 agent look up only the signed-in customer's charges.”
 
+## The verifier subagent
+
+Installing the skill also installs a `submilli-verifier` subagent beside it:
+`.claude/agents/submilli-verifier.md` for Claude Code, `.cursor/agents/` for
+Cursor, and `.codex/agents/submilli-verifier.toml` for Codex. After your
+assistant writes or changes a package or blueprint, the skill has it delegate
+an independent review to that subagent, which reads the policy as someone
+looking for a way around it and reports findings with evidence. Assistants
+without subagents run the same checklist themselves. Updates refresh the
+verifier unless you have edited it.
+
 ## Updates
 
 The skill keeps itself current. Its first instruction tells your assistant to
