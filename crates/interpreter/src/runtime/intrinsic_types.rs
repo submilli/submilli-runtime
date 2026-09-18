@@ -14,8 +14,9 @@
 //! `(rec $Error_vtable $Error)` pair, plus one singleton per standalone array /
 //! `$Object` subtype. Lumping them into one builder would form a different rec
 //! group and canonicalize to different indices. The
-//! `intrinsic_types_match_codegen` test pins the mirror to the codegen output for
-//! all 32 types.
+//! `intrinsic_types_match_codegen` test pins this core mirror to the first 32
+//! codegen types. Map, Set, and host backing mirrors are rebuilt by their owning
+//! runtime modules from the same canonical layouts.
 
 use wasmtime::{
     ArrayType, Engine, FieldType, Finality, FuncType, Mutability, RecGroupBuilder, RefType,

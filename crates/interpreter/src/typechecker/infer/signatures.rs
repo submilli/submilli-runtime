@@ -225,6 +225,7 @@ impl<'a> Inferer<'a> {
                             kind: TypeKind::Class {
                                 generics: generic_names,
                                 fields: BTreeMap::new(),
+                                narrowing_checks: BTreeMap::new(),
                                 methods: BTreeMap::new(),
                                 method_visibility: BTreeMap::new(),
                                 accessors: Vec::new(),

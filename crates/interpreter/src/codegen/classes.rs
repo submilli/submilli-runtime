@@ -25,7 +25,7 @@ use wasm_encoder::{
 
 use crate::codegen::CodegenCtx;
 use crate::codegen::closures::ClosureSig;
-use crate::codegen::function_emitter::{FunctionEmitter, cast};
+use crate::codegen::function_emitter::FunctionEmitter;
 use crate::codegen::imported_classes::ImportedClassLayout;
 use crate::codegen::intrinsics::IntrinsicTypeIndices;
 use crate::codegen::symbol_table::{FieldSetup, MethodSlotAbi, SymbolTable};
@@ -207,11 +207,11 @@ impl ClassPlan {
                                     .iter()
                                     .map(|name| FieldLayout {
                                         name: name.clone(),
-                                        // A package declaration carries no
-                                        // narrowing guards, so an imported
-                                        // class's narrowed field reads with the
-                                        // bare cast here.
-                                        narrowing_check: None,
+                                        narrowing_check: l
+                                            .narrowing_checks
+                                            .get(name)
+                                            .cloned()
+                                            .map(Box::new),
                                     })
                                     .collect();
                                 let methods = l
@@ -959,7 +959,12 @@ impl ClassPlan {
         for (i, ty) in slot.param_tys.iter().enumerate() {
             emitter.instruction(Instruction::LocalGet((i + 1) as u32));
             if abi.params.get(i) != Some(&object_ref_null) {
-                cast::emit_cast_to(&mut emitter, ctx, ty);
+                crate::codegen::cast_check::emit_checked_parameter_cast_on_stack(
+                    &mut emitter,
+                    ctx,
+                    &crate::Type::Unknown,
+                    ty,
+                );
             }
         }
         emitter.instruction(Instruction::Call(method_func));
@@ -1588,7 +1593,12 @@ fn rebind_erased_params(
         }
         let shadow = emitter.add_anonymous_local(own_vt);
         emitter.instruction(Instruction::LocalGet((i + 1) as u32));
-        cast::emit_cast_to(emitter, ctx, &p.ty);
+        crate::codegen::cast_check::emit_checked_parameter_cast_on_stack(
+            emitter,
+            ctx,
+            &crate::Type::Unknown,
+            &p.ty,
+        );
         emitter.instruction(Instruction::LocalSet(shadow));
         emitter.rebind_in_innermost_scope(&p.name.name, shadow, own_vt);
         param_slots[i] = shadow;
@@ -2088,8 +2098,8 @@ mod tests {
     fn field_only_class_rec_group_canonicalizes_to_intrinsic_error() {
         let mut types = TypeSection::new();
         let intrinsics = declare_intrinsic_types(&mut types);
-        let vtable_type_idx = 32;
-        let struct_type_idx = 33;
+        let vtable_type_idx = crate::codegen::intrinsics::INTRINSIC_TYPE_COUNT;
+        let struct_type_idx = vtable_type_idx + 1;
         let layout = ClassLayout {
             mangled: crate::mangle::prelude("ErrorWitness"),
             name: "ErrorWitness".to_string(),

@@ -26,7 +26,7 @@ pub struct CodegenAnalysis {
 }
 
 impl CodegenAnalysis {
-    pub fn collect(ta: &TypedAst) -> Self {
+    pub fn collect(ta: &TypedAst, dependencies: &[&crate::PackageDeclaration]) -> Self {
         let mut analysis = Self {
             string_pool: StringPool::default(),
             bigint_pool: BigIntPool::default(),
@@ -67,6 +67,10 @@ impl CodegenAnalysis {
             analysis.walk_expr(ta, expr_id);
         }
         analysis.note_narrowing_checks(ta);
+        for test in ta.runtime_type_tests.values() {
+            analysis.note_narrowing_test(test);
+        }
+        analysis.note_dependency_narrowing_checks(dependencies);
 
         analysis
     }
@@ -85,12 +89,48 @@ impl CodegenAnalysis {
                 .iter()
                 .filter_map(|f| f.narrowing_check.as_ref())
             {
-                self.string_pool.intern_text(&check.message);
-                if let crate::FieldNarrowingTest::Shape(shape) = &check.test {
-                    self.visit_type(shape);
-                    self.note_shape_member_names(shape);
+                self.note_narrowing_check(check);
+            }
+        }
+    }
+
+    fn note_dependency_narrowing_checks(&mut self, dependencies: &[&crate::PackageDeclaration]) {
+        for package in dependencies {
+            for symbol in package.types.values() {
+                let crate::TypeKind::Class {
+                    narrowing_checks, ..
+                } = &symbol.kind
+                else {
+                    continue;
+                };
+                for check in narrowing_checks.values() {
+                    self.note_narrowing_check(check);
                 }
             }
+        }
+    }
+
+    fn note_narrowing_check(&mut self, check: &crate::FieldNarrowingCheck) {
+        self.string_pool.intern_text(&check.message);
+        self.note_narrowing_test(&check.test);
+    }
+
+    fn note_narrowing_test(&mut self, test: &crate::FieldNarrowingTest) {
+        match test {
+            crate::FieldNarrowingTest::Shape(shape) => {
+                self.visit_type(shape);
+                self.note_shape_member_names(shape);
+            }
+            crate::FieldNarrowingTest::Interface(test) => {
+                let shape = Type::Object {
+                    fields: test.members.clone(),
+                };
+                self.visit_type(&shape);
+                self.note_shape_member_names(&shape);
+            }
+            crate::FieldNarrowingTest::NonNull
+            | crate::FieldNarrowingTest::Substituted
+            | crate::FieldNarrowingTest::Representation => {}
         }
     }
 
@@ -106,11 +146,11 @@ impl CodegenAnalysis {
     /// whether a value is accessor-backed is a whole-program fact, and the module
     /// running the cast need not see the class that declares the accessor.
     ///
-    /// The catch-all is complete because no `InterfaceRef` can appear in a
-    /// recorded shape at all: `typechecker::infer::classes`'s
-    /// `narrowed_type_is_testable` rejects one at every position. The arms below
-    /// are the only ones that can nest an object, so a new nesting arm in
-    /// `cast_check::emit_structural_test` needs one here too.
+    /// `runtime_type_is_testable` defines the recursively structural `Shape`
+    /// cases. Interface descriptors are registered separately by
+    /// `note_narrowing_test`, including nested member names. The arms below are
+    /// therefore the remaining shape forms that can nest an object; a new
+    /// nesting arm in `emit_structural_test` needs one here too.
     fn note_shape_member_names(&mut self, ty: &Type) {
         match ty.peel() {
             Type::Object { fields } => {

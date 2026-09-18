@@ -4,7 +4,7 @@
 //! pass ([`super::generic::Inferer::infer_functions`]) for bodies. Codegen is a
 //! later slice (SUB-480+); this pass only typechecks.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::ControlFlow;
 
 use crate::{
@@ -22,6 +22,12 @@ use super::generic::{
     erase_generic_params, erase_generic_params_in_expr, erase_generic_params_in_stmt,
     substitute_typevars,
 };
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RuntimeTestMode {
+    General,
+    AllowAliasRefs,
+}
 
 /// A static member found by [`Inferer::class_static_in_chain`].
 pub(super) enum StaticResolution {
@@ -472,6 +478,7 @@ impl<'a> Inferer<'a> {
             kind: TypeKind::Class {
                 generics: generic_names.clone(),
                 fields,
+                narrowing_checks: BTreeMap::new(),
                 methods,
                 method_visibility,
                 accessors: accessor_sigs,
@@ -1324,25 +1331,32 @@ impl<'a> Inferer<'a> {
         let child_name = self.class_name_of(&member.child_class);
         let parent_name = self.class_name_of(&widest_class);
         let field = &member.name;
-        self.field_narrowing_checks.insert(
-            (member.child_class.clone(), field.clone()),
-            crate::FieldNarrowingCheck {
-                test,
-                message: format!(
-                    "field `{field}` holds a value its declaration does not admit: \
-                     `{child_name}.{field}: {child_ty}` narrows the inherited \
-                     `{parent_name}.{field}: {parent_ty}` and the two share one storage slot, \
-                     so code that only sees the inherited declaration can write it"
-                ),
-            },
-        );
+        let check = crate::FieldNarrowingCheck {
+            test,
+            message: format!(
+                "field `{field}` holds a value its declaration does not admit: \
+                 `{child_name}.{field}: {child_ty}` narrows the inherited \
+                 `{parent_name}.{field}: {parent_ty}` and the two share one storage slot, \
+                 so code that only sees the inherited declaration can write it"
+            ),
+        };
+        self.field_narrowing_checks
+            .insert((member.child_class.clone(), field.clone()), check.clone());
+        if let Some(symbol) = self.types.lookup_mut(&child_name)
+            && let TypeKind::Class {
+                narrowing_checks, ..
+            } = &mut symbol.kind
+        {
+            narrowing_checks.insert(field.clone(), check);
+        }
     }
 
     /// What the read has to verify, or `None` when nothing it can lower would.
     /// Prefers [`crate::FieldNarrowingTest::NonNull`] when stripping `null` is the
     /// whole difference — see the variant for why that is worth a case of its own
-    /// — and otherwise tests structural conformance to the narrowed type, with
-    /// method-less interfaces flattened to their data form.
+    /// — and otherwise tests structural conformance to the narrowed type.
+    /// Interfaces retain a descriptor for both data properties and methods;
+    /// data-only interfaces simply carry an empty method set.
     ///
     /// `None` is not a safe default, only the status quo: for a leaf whose Wasm
     /// lowering the parent's value also satisfies the bare cast *succeeds* and the
@@ -1367,15 +1381,409 @@ impl<'a> Inferer<'a> {
         if child_rejects_null && super::assignable(&parent_non_null, child_ty, self.resolver()) {
             return Some(crate::FieldNarrowingTest::NonNull);
         }
-        if narrowed_type_is_testable(child_ty) {
+        if crate::typed_ast::field_runtime_type_is_testable(child_ty) {
             return Some(crate::FieldNarrowingTest::Shape(child_ty.peel().clone()));
         }
-        // Nothing structural to lower, and nothing coarser either (see
-        // `narrowed_type_is_testable`). What is left is that the ancestor can
-        // still write a `null` this declaration rejects, and presence catches
-        // that much — a wrong non-null value reaches the bare cast.
+        if let Some(test) = self.interface_narrowing_test(child_ty) {
+            return Some(crate::FieldNarrowingTest::Interface(test));
+        }
+        if type_mentions_erased_parameter(child_ty) {
+            return Some(crate::FieldNarrowingTest::Substituted);
+        }
+        // Nothing in `runtime_type_is_testable`, no interface metadata, and no
+        // erased parameter to re-ask at the read. Presence still catches the
+        // part of the narrowing that removes `null`.
         (child_rejects_null && super::expr::type_admits_null(parent_ty, self.resolver()))
             .then_some(crate::FieldNarrowingTest::NonNull)
+    }
+
+    pub(super) fn interface_narrowing_test(
+        &self,
+        child_ty: &Type,
+    ) -> Option<crate::InterfaceNarrowingTest> {
+        let (interface_ty, nullable) = match child_ty.peel() {
+            Type::InterfaceRef { .. } => (child_ty.peel(), false),
+            Type::Union(members) => {
+                let nullable = members
+                    .iter()
+                    .any(|member| matches!(member.peel(), Type::Null));
+                let mut non_null = members
+                    .iter()
+                    .filter(|member| !matches!(member.peel(), Type::Null));
+                let interface = non_null.next()?;
+                if non_null.next().is_some() {
+                    return None;
+                }
+                (interface.peel(), nullable)
+            }
+            _ => return None,
+        };
+        let Type::InterfaceRef {
+            mangled,
+            name,
+            args,
+            package,
+            ..
+        } = interface_ty
+        else {
+            return None;
+        };
+        let members = self.resolver().interface_full_form(mangled, name, args)?;
+        let crate::TypeKind::Interface {
+            methods, dispatch, ..
+        } = &self.resolver().lookup(mangled, name)?.kind
+        else {
+            return None;
+        };
+        let target = interface_ty.clone();
+        let non_shape_carriers =
+            self.non_shape_interface_carriers(&target, package, name, dispatch, &members);
+        Some(crate::InterfaceNarrowingTest {
+            members,
+            methods: methods.keys().cloned().collect(),
+            shape_allowed: *dispatch == crate::Dispatch::VTable
+                || non_shape_carriers.contains(&crate::InterfaceCarrier::ObjectShape),
+            non_shape_carriers,
+            nullable,
+        })
+    }
+
+    fn non_shape_interface_carriers(
+        &self,
+        target: &Type,
+        package: &crate::Package,
+        name: &str,
+        dispatch: &crate::Dispatch,
+        members: &std::collections::BTreeMap<String, crate::ObjectField>,
+    ) -> std::collections::BTreeSet<crate::InterfaceCarrier> {
+        let mut carriers = self.primitive_interface_carriers(target);
+        carriers.extend(self.collection_interface_carriers(target, name, members));
+        carriers.extend(self.direct_interface_carriers(package, name, dispatch));
+        carriers
+    }
+
+    fn primitive_interface_carriers(
+        &self,
+        target: &Type,
+    ) -> std::collections::BTreeSet<crate::InterfaceCarrier> {
+        let mut carriers = std::collections::BTreeSet::new();
+        for (carrier, ty) in [
+            (crate::InterfaceCarrier::Number, Type::Number),
+            (crate::InterfaceCarrier::Boolean, Type::Boolean),
+            (crate::InterfaceCarrier::String, Type::String),
+            (crate::InterfaceCarrier::BigInt, Type::BigInt),
+            (crate::InterfaceCarrier::Uint8Array, Type::Uint8Array),
+        ] {
+            if super::assignable(&ty, target, self.resolver()) {
+                carriers.insert(carrier);
+            }
+        }
+        carriers
+    }
+
+    fn collection_interface_carriers(
+        &self,
+        target: &Type,
+        name: &str,
+        members: &std::collections::BTreeMap<String, crate::ObjectField>,
+    ) -> std::collections::BTreeSet<crate::InterfaceCarrier> {
+        let target_args = match target.peel() {
+            Type::InterfaceRef { args, .. } => args.as_slice(),
+            _ => &[],
+        };
+        let candidates = runtime_carrier_candidates(members);
+        let mut carriers =
+            self.array_and_set_interface_carriers(target, name, target_args, &candidates);
+        carriers.extend(self.map_interface_carriers(target, name, target_args, &candidates));
+        carriers
+    }
+
+    fn array_and_set_interface_carriers(
+        &self,
+        target: &Type,
+        name: &str,
+        target_args: &[Type],
+        candidates: &[Type],
+    ) -> std::collections::BTreeSet<crate::InterfaceCarrier> {
+        let mut carriers = std::collections::BTreeSet::new();
+        let exact_element = matches!(name, "Iterable" | "Set")
+            .then(|| target_args.first())
+            .flatten();
+        if let Some(element) = exact_element {
+            let array = Type::Array(Box::new(element.clone()));
+            if super::assignable(&array, target, self.resolver()) {
+                carriers.insert(crate::InterfaceCarrier::Array(array));
+            }
+            let candidate = Type::prelude_interface("Set".to_string(), vec![element.clone()]);
+            if super::assignable(&candidate, target, self.resolver()) {
+                carriers.insert(crate::InterfaceCarrier::Set(element.clone()));
+            }
+        } else {
+            // Candidate instantiations only answer whether the backing's
+            // non-generic surface (for example `length`) satisfies the target.
+            // When every instantiation matches, the target leaves contents
+            // unconstrained and an `Any` carrier is sound. Otherwise retain
+            // only the matching instantiations and validate their contents.
+            let array_matches: Vec<Type> = candidates
+                .iter()
+                .filter(|element| {
+                    let array = Type::Array(Box::new((*element).clone()));
+                    let tuple = Type::Tuple(vec![(*element).clone()]);
+                    super::assignable(&array, target, self.resolver())
+                        || super::assignable(&tuple, target, self.resolver())
+                })
+                .cloned()
+                .collect();
+            if array_matches.len() == candidates.len() {
+                carriers.insert(crate::InterfaceCarrier::ArrayAny);
+            } else {
+                carriers.extend(
+                    array_matches.into_iter().map(|element| {
+                        crate::InterfaceCarrier::Array(Type::Array(Box::new(element)))
+                    }),
+                );
+            }
+            let set_matches: Vec<Type> = candidates
+                .iter()
+                .filter(|element| {
+                    let set = Type::prelude_interface("Set".to_string(), vec![(*element).clone()]);
+                    super::assignable(&set, target, self.resolver())
+                })
+                .cloned()
+                .collect();
+            if set_matches.len() == candidates.len() {
+                carriers.insert(crate::InterfaceCarrier::SetAny);
+            } else {
+                carriers.extend(set_matches.into_iter().map(crate::InterfaceCarrier::Set));
+            }
+        }
+        carriers
+    }
+
+    fn map_interface_carriers(
+        &self,
+        target: &Type,
+        name: &str,
+        target_args: &[Type],
+        candidates: &[Type],
+    ) -> std::collections::BTreeSet<crate::InterfaceCarrier> {
+        let mut carriers = std::collections::BTreeSet::new();
+        let exact_map_pair = if name == "Map" {
+            target_args.first().zip(target_args.get(1))
+        } else if name == "Iterable" {
+            target_args
+                .first()
+                .and_then(|element| match element.peel() {
+                    Type::Tuple(items) if items.len() == 2 => items.first().zip(items.get(1)),
+                    _ => None,
+                })
+        } else {
+            None
+        };
+        if let Some((key, value)) = exact_map_pair {
+            let candidate =
+                Type::prelude_interface("Map".to_string(), vec![key.clone(), value.clone()]);
+            if super::assignable(&candidate, target, self.resolver()) {
+                carriers.insert(crate::InterfaceCarrier::Map(key.clone(), value.clone()));
+            }
+        } else {
+            let map_matches: Vec<(Type, Type)> = candidates
+                .iter()
+                .flat_map(|key| {
+                    candidates.iter().filter_map(|value| {
+                        let map = Type::prelude_interface(
+                            "Map".to_string(),
+                            vec![key.clone(), value.clone()],
+                        );
+                        super::assignable(&map, target, self.resolver())
+                            .then(|| (key.clone(), value.clone()))
+                    })
+                })
+                .collect();
+            if map_matches.len() == candidates.len() * candidates.len() {
+                carriers.insert(crate::InterfaceCarrier::MapAny);
+            } else {
+                carriers.extend(
+                    map_matches
+                        .into_iter()
+                        .map(|(key, value)| crate::InterfaceCarrier::Map(key, value)),
+                );
+            }
+        }
+        carriers
+    }
+
+    fn direct_interface_carriers(
+        &self,
+        package: &crate::Package,
+        name: &str,
+        dispatch: &crate::Dispatch,
+    ) -> std::collections::BTreeSet<crate::InterfaceCarrier> {
+        let mut carriers = std::collections::BTreeSet::new();
+        if *dispatch != crate::Dispatch::VTable {
+            match name {
+                "RegExp" => {
+                    carriers.insert(crate::InterfaceCarrier::RegExp);
+                }
+                "RegExpMatch" => {
+                    carriers.insert(crate::InterfaceCarrier::RegExpMatch);
+                }
+                "Temporal.Instant" => {
+                    carriers.insert(crate::InterfaceCarrier::TemporalInstant);
+                }
+                "Temporal.Duration" => {
+                    carriers.insert(crate::InterfaceCarrier::TemporalDuration);
+                }
+                "Temporal.ZonedDateTime" => {
+                    carriers.insert(crate::InterfaceCarrier::TemporalZonedDateTime);
+                }
+                "Temporal.PlainDate" => {
+                    carriers.insert(crate::InterfaceCarrier::TemporalPlainDate);
+                }
+                "Temporal.PlainTime" => {
+                    carriers.insert(crate::InterfaceCarrier::TemporalPlainTime);
+                }
+                "Temporal.PlainDateTime" => {
+                    carriers.insert(crate::InterfaceCarrier::TemporalPlainDateTime);
+                }
+                "Temporal.PlainYearMonth" => {
+                    carriers.insert(crate::InterfaceCarrier::TemporalPlainYearMonth);
+                }
+                "Temporal.PlainMonthDay" => {
+                    carriers.insert(crate::InterfaceCarrier::TemporalPlainMonthDay);
+                }
+                "TextEncoder" | "TextDecoder" => {
+                    carriers.insert(crate::InterfaceCarrier::ObjectShape);
+                }
+                _ => {}
+            }
+            if package.as_str() == crate::stdlib::url::MODULE_NAME && name == "URL" {
+                carriers.insert(crate::InterfaceCarrier::Url);
+            }
+        }
+        carriers
+    }
+
+    pub(super) fn record_runtime_type_test(&mut self, ty: &Type) {
+        self.record_runtime_type_test_inner(ty, RuntimeTestMode::General, &mut BTreeSet::new());
+    }
+
+    fn record_runtime_type_test_inner(
+        &mut self,
+        ty: &Type,
+        mode: RuntimeTestMode,
+        active_interfaces: &mut BTreeSet<MangledName>,
+    ) {
+        let key = ty.peel().clone();
+        if let Some(existing) = self.typed_ast.runtime_type_tests.get(&key) {
+            if mode == RuntimeTestMode::AllowAliasRefs
+                && matches!(existing, crate::FieldNarrowingTest::Representation)
+                && crate::typed_ast::field_runtime_type_is_testable(&key)
+            {
+                self.typed_ast
+                    .runtime_type_tests
+                    .insert(key.clone(), crate::FieldNarrowingTest::Shape(key));
+            }
+            return;
+        }
+        // Break recursive interface discovery conservatively. A later outer
+        // call replaces this placeholder with the resolved descriptor.
+        self.typed_ast
+            .runtime_type_tests
+            .insert(key.clone(), crate::FieldNarrowingTest::Representation);
+        self.record_runtime_test_dependencies(&key, active_interfaces);
+        let testable = if mode == RuntimeTestMode::AllowAliasRefs {
+            crate::typed_ast::field_runtime_type_is_testable(&key)
+        } else {
+            crate::typed_ast::runtime_type_is_testable(&key)
+        };
+        let test = if let Some(interface) = self.interface_narrowing_test(&key) {
+            let interface_identity = match key.peel() {
+                Type::InterfaceRef { mangled, .. } => Some(mangled.clone()),
+                Type::Union(members) => members.iter().find_map(|member| match member.peel() {
+                    Type::InterfaceRef { mangled, .. } => Some(mangled.clone()),
+                    _ => None,
+                }),
+                _ => None,
+            };
+            if interface_identity
+                .as_ref()
+                .is_some_and(|identity| !active_interfaces.insert(identity.clone()))
+            {
+                self.record_polymorphic_interface_cutoffs(
+                    &interface,
+                    interface_identity.as_ref().expect("identity just matched"),
+                );
+                crate::FieldNarrowingTest::Interface(interface)
+            } else {
+                for member in interface.members.values() {
+                    self.record_runtime_type_test_inner(
+                        &member.ty,
+                        RuntimeTestMode::AllowAliasRefs,
+                        active_interfaces,
+                    );
+                }
+                if let Some(identity) = interface_identity {
+                    active_interfaces.remove(&identity);
+                }
+                crate::FieldNarrowingTest::Interface(interface)
+            }
+        } else if testable {
+            crate::FieldNarrowingTest::Shape(key.clone())
+        } else {
+            crate::FieldNarrowingTest::Representation
+        };
+        self.typed_ast.runtime_type_tests.insert(key, test);
+    }
+
+    fn record_runtime_test_dependencies(
+        &mut self,
+        ty: &Type,
+        active_interfaces: &mut BTreeSet<MangledName>,
+    ) {
+        let mut record = |dependency: &Type| {
+            self.record_runtime_type_test_inner(
+                dependency,
+                RuntimeTestMode::AllowAliasRefs,
+                active_interfaces,
+            );
+        };
+        match ty.peel() {
+            Type::Array(element) => record(element),
+            Type::Tuple(elements) | Type::Union(elements) => {
+                for element in elements {
+                    record(element);
+                }
+            }
+            Type::Object { fields } => {
+                for field in fields.values() {
+                    record(&field.ty);
+                }
+            }
+            Type::Function { params, ret, .. } => {
+                for param in params {
+                    record(param);
+                }
+                record(ret);
+            }
+            _ => {}
+        }
+    }
+
+    fn record_polymorphic_interface_cutoffs(
+        &mut self,
+        interface: &crate::InterfaceNarrowingTest,
+        identity: &MangledName,
+    ) {
+        let mut cutoffs = BTreeSet::new();
+        for member in interface.members.values() {
+            collect_interface_instantiations(&member.ty, identity, &mut cutoffs);
+        }
+        for cutoff in cutoffs {
+            self.typed_ast
+                .runtime_type_tests
+                .insert(cutoff, crate::FieldNarrowingTest::Shape(Type::Never));
+        }
     }
 
     fn narrowing_check_for(
@@ -2825,6 +3233,90 @@ impl<'a> Inferer<'a> {
     }
 }
 
+fn runtime_carrier_candidates(
+    members: &std::collections::BTreeMap<String, crate::ObjectField>,
+) -> Vec<Type> {
+    let mut candidates = vec![
+        Type::Unknown,
+        Type::Number,
+        Type::Boolean,
+        Type::String,
+        Type::BigInt,
+        Type::Uint8Array,
+    ];
+    for member in members.values() {
+        collect_runtime_carrier_candidates(&member.ty, &mut candidates);
+    }
+    candidates
+}
+
+fn collect_runtime_carrier_candidates(ty: &Type, out: &mut Vec<Type>) {
+    let ty = ty.peel();
+    if !out.contains(ty) && !matches!(ty, Type::Void | Type::Error) {
+        out.push(ty.clone());
+    }
+    match ty {
+        Type::Array(element) => collect_runtime_carrier_candidates(element, out),
+        Type::Tuple(elements) | Type::Union(elements) => {
+            for element in elements {
+                collect_runtime_carrier_candidates(element, out);
+            }
+        }
+        Type::Object { fields } => {
+            for field in fields.values() {
+                collect_runtime_carrier_candidates(&field.ty, out);
+            }
+        }
+        Type::Function { params, ret, .. } => {
+            for param in params {
+                collect_runtime_carrier_candidates(param, out);
+            }
+            collect_runtime_carrier_candidates(ret, out);
+        }
+        Type::InterfaceRef { args, .. }
+        | Type::ClassRef { args, .. }
+        | Type::AliasRef { args, .. } => {
+            for arg in args {
+                collect_runtime_carrier_candidates(arg, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_interface_instantiations(ty: &Type, identity: &MangledName, out: &mut BTreeSet<Type>) {
+    match ty.peel() {
+        Type::InterfaceRef { mangled, .. } if mangled == identity => {
+            out.insert(ty.peel().clone());
+        }
+        Type::Array(element) => collect_interface_instantiations(element, identity, out),
+        Type::Tuple(elements) | Type::Union(elements) => {
+            for element in elements {
+                collect_interface_instantiations(element, identity, out);
+            }
+        }
+        Type::Object { fields } => {
+            for field in fields.values() {
+                collect_interface_instantiations(&field.ty, identity, out);
+            }
+        }
+        Type::Function { params, ret, .. } => {
+            for param in params {
+                collect_interface_instantiations(param, identity, out);
+            }
+            collect_interface_instantiations(ret, identity, out);
+        }
+        Type::InterfaceRef { args, .. }
+        | Type::ClassRef { args, .. }
+        | Type::AliasRef { args, .. } => {
+            for arg in args {
+                collect_interface_instantiations(arg, identity, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// A method resolved somewhere up a class's `extends` chain.
 pub(super) struct ResolvedMethod {
     /// The declared signature — unsubstituted, so callers deciding physical
@@ -3177,36 +3669,20 @@ fn sym_for_export(tc: &Inferer<'_>, name: &Ident) -> TypeSymbol {
         .expect("class symbol bound in signature pass")
 }
 
-/// Mirrors `cast_check::emit_structural_test`'s arms, one leaf at a time.
-/// A recursion back-edge needs the per-alias validator only `as` allocates.
-///
-/// No interface is testable, method-bearing or not. A structural test cannot
-/// verify a vtable, and it cannot even stand in for the data half: interface
-/// assignability is wider than the `$ObjectShape` representation the test
-/// walks — a `string` satisfies `{ length: number }` — so the test would
-/// reject values the declaration admits. An object *shape* has no such gap;
-/// the typechecker refuses the same assignment.
-///
-/// `unknown` is testable because the test admits every value for it; leaving
-/// it out would cost the *enclosing* shape its guard over one leaf that was
-/// never going to constrain anything.
-fn narrowed_type_is_testable(ty: &Type) -> bool {
+fn type_mentions_erased_parameter(ty: &Type) -> bool {
     match ty.peel() {
-        Type::Null
-        | Type::Number
-        | Type::NumberLiteral(_)
-        | Type::Boolean
-        | Type::String
-        | Type::StringLiteral(_)
-        | Type::BigInt
-        | Type::Uint8Array
-        | Type::Unknown
-        | Type::Function { .. }
-        | Type::ClassRef { .. } => true,
-        Type::Array(elem) => narrowed_type_is_testable(elem),
-        Type::Tuple(elems) => elems.iter().all(narrowed_type_is_testable),
-        Type::Union(members) => members.iter().all(narrowed_type_is_testable),
-        Type::Object { fields } => fields.values().all(|f| narrowed_type_is_testable(&f.ty)),
+        Type::TypeVar(_) | Type::GenericParam { .. } => true,
+        Type::Array(elem) => type_mentions_erased_parameter(elem),
+        Type::Tuple(elems) | Type::Union(elems) => elems.iter().any(type_mentions_erased_parameter),
+        Type::Object { fields } => fields
+            .values()
+            .any(|field| type_mentions_erased_parameter(&field.ty)),
+        Type::Function { params, ret, .. } => {
+            params.iter().any(type_mentions_erased_parameter) || type_mentions_erased_parameter(ret)
+        }
+        Type::InterfaceRef { args, .. }
+        | Type::ClassRef { args, .. }
+        | Type::AliasRef { args, .. } => args.iter().any(type_mentions_erased_parameter),
         _ => false,
     }
 }

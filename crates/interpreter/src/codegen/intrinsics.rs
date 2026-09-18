@@ -40,11 +40,20 @@ pub struct IntrinsicTypeIndices {
     pub temporal_instant: u32,
     pub temporal_duration: u32,
     pub temporal_zdt: u32,
+    pub raw_index_array: u32,
+    pub map: u32,
+    pub set: u32,
+    pub url: u32,
+    pub temporal_plain_date: u32,
+    pub temporal_plain_time: u32,
+    pub temporal_plain_date_time: u32,
+    pub temporal_plain_year_month: u32,
+    pub temporal_plain_month_day: u32,
 }
 
 /// Number of types [`declare_intrinsic_types`] emits — the first free type index
 /// in every module.
-pub const INTRINSIC_TYPE_COUNT: u32 = 32;
+pub const INTRINSIC_TYPE_COUNT: u32 = 41;
 
 pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices {
     let raw_string = 0u32;
@@ -105,6 +114,15 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
     let temporal_instant = 29u32;
     let temporal_duration = 30u32;
     let temporal_zdt = 31u32;
+    let raw_index_array = 32u32;
+    let map = 33u32;
+    let set = 34u32;
+    let url = 35u32;
+    let temporal_plain_date = 36u32;
+    let temporal_plain_time = 37u32;
+    let temporal_plain_date_time = 38u32;
+    let temporal_plain_year_month = 39u32;
+    let temporal_plain_month_day = 40u32;
 
     // $rawString standalone — matches the runtime host's standalone
     // ArrayType registration so cross-module canonicalization aligns.
@@ -622,6 +640,127 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
         },
     });
 
+    // Generic collections use erased element slots but distinct backing
+    // structs. Keeping their canonical types in every module lets runtime
+    // interface guards distinguish Map and Set from unrelated host objects.
+    types.ty().array(&StorageType::Val(ValType::I32), true);
+    let bucket_field = FieldType {
+        element_type: StorageType::Val(ref_to(raw_array)),
+        mutable: true,
+    };
+    let order_field = FieldType {
+        element_type: StorageType::Val(ref_to(raw_index_array)),
+        mutable: true,
+    };
+    let mutable_i32 = FieldType {
+        element_type: StorageType::Val(ValType::I32),
+        mutable: true,
+    };
+    types.ty().subtype(&SubType {
+        is_final: false,
+        supertype_idx: Some(object),
+        composite_type: CompositeType {
+            inner: CompositeInnerType::Struct(StructType {
+                fields: vec![
+                    fieldtype_ref(vtable),
+                    bucket_field,
+                    bucket_field,
+                    mutable_i32,
+                    order_field,
+                    mutable_i32,
+                ]
+                .into_boxed_slice(),
+            }),
+            shared: false,
+            descriptor: None,
+            describes: None,
+        },
+    });
+    types.ty().subtype(&SubType {
+        is_final: false,
+        supertype_idx: Some(object),
+        composite_type: CompositeType {
+            inner: CompositeInnerType::Struct(StructType {
+                fields: vec![
+                    fieldtype_ref(vtable),
+                    bucket_field,
+                    mutable_i32,
+                    order_field,
+                    mutable_i32,
+                ]
+                .into_boxed_slice(),
+            }),
+            shared: false,
+            descriptor: None,
+            describes: None,
+        },
+    });
+
+    // `$UrlBacking` mirrors `stdlib::url::url_backing_struct`. Keeping the
+    // exact final layout here lets a checked interface read distinguish URL
+    // values from every other host-built `$Object` subtype before direct
+    // property dispatch sees the receiver.
+    types.ty().subtype(&SubType {
+        is_final: true,
+        supertype_idx: Some(object),
+        composite_type: CompositeType {
+            inner: CompositeInnerType::Struct(StructType {
+                fields: vec![
+                    fieldtype_ref(vtable),
+                    fieldtype_ref(string),
+                    fieldtype_ref(string),
+                    FieldType {
+                        element_type: StorageType::Val(ref_null(boxed_number)),
+                        mutable: false,
+                    },
+                    fieldtype_ref(string),
+                    FieldType {
+                        element_type: StorageType::Val(ref_null(object)),
+                        mutable: false,
+                    },
+                    FieldType {
+                        element_type: StorageType::Val(ref_null(string)),
+                        mutable: false,
+                    },
+                ]
+                .into_boxed_slice(),
+            }),
+            shared: false,
+            descriptor: None,
+            describes: None,
+        },
+    });
+
+    // Temporal plain-value carriers are host-created standalone `$Object`
+    // subtypes. Their immutable civil fields are all i32 values; declaring the
+    // exact layouts here gives erased interface boundaries nominally precise
+    // representation tests without exposing the backing structs to user code.
+    let temporal_i32 = FieldType {
+        element_type: StorageType::Val(ValType::I32),
+        mutable: false,
+    };
+    for civil_field_count in [3usize, 4, 7, 2] {
+        let mut fields = Vec::with_capacity(civil_field_count + 1);
+        fields.push(fieldtype_ref(vtable));
+        fields.extend(std::iter::repeat_n(temporal_i32, civil_field_count));
+        types.ty().subtype(&substruct(fields, Some(object)));
+    }
+    // PlainMonthDay would otherwise canonicalize with PlainYearMonth (both
+    // carry two i32s). A hidden immutable marker makes the host backing
+    // nominally distinct while leaving its public field indices unchanged.
+    types.ty().subtype(&substruct(
+        vec![
+            fieldtype_ref(vtable),
+            temporal_i32,
+            temporal_i32,
+            FieldType {
+                element_type: StorageType::Val(ValType::I64),
+                mutable: false,
+            },
+        ],
+        Some(object),
+    ));
+
     IntrinsicTypeIndices {
         raw_string,
         vtable,
@@ -655,6 +794,15 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
         temporal_instant,
         temporal_duration,
         temporal_zdt,
+        raw_index_array,
+        map,
+        set,
+        url,
+        temporal_plain_date,
+        temporal_plain_time,
+        temporal_plain_date_time,
+        temporal_plain_year_month,
+        temporal_plain_month_day,
     }
 }
 
@@ -686,6 +834,14 @@ pub(crate) fn intrinsic_supertypes(
         (indices.temporal_instant, indices.object),
         (indices.temporal_duration, indices.object),
         (indices.temporal_zdt, indices.object),
+        (indices.map, indices.object),
+        (indices.set, indices.object),
+        (indices.url, indices.object),
+        (indices.temporal_plain_date, indices.object),
+        (indices.temporal_plain_time, indices.object),
+        (indices.temporal_plain_date_time, indices.object),
+        (indices.temporal_plain_year_month, indices.object),
+        (indices.temporal_plain_month_day, indices.object),
     ]
 }
 
@@ -846,6 +1002,15 @@ mod tests {
         assert_eq!(indices.temporal_instant, 29);
         assert_eq!(indices.temporal_duration, 30);
         assert_eq!(indices.temporal_zdt, 31);
-        assert_eq!(super::INTRINSIC_TYPE_COUNT, 32);
+        assert_eq!(indices.raw_index_array, 32);
+        assert_eq!(indices.map, 33);
+        assert_eq!(indices.set, 34);
+        assert_eq!(indices.url, 35);
+        assert_eq!(indices.temporal_plain_date, 36);
+        assert_eq!(indices.temporal_plain_time, 37);
+        assert_eq!(indices.temporal_plain_date_time, 38);
+        assert_eq!(indices.temporal_plain_year_month, 39);
+        assert_eq!(indices.temporal_plain_month_day, 40);
+        assert_eq!(super::INTRINSIC_TYPE_COUNT, 41);
     }
 }

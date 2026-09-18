@@ -757,6 +757,10 @@ pub struct TypedAst {
     /// module. This is deliberately package-level, not symbol-level: embedders
     /// use it to install only the package modules the typed program imports.
     pub imported_packages: std::collections::BTreeSet<String>,
+    /// Concrete runtime validators resolved while inference still has access to
+    /// interface declarations and generic substitutions. Codegen consults this
+    /// for narrowed reads instead of re-deriving type structure.
+    pub runtime_type_tests: std::collections::BTreeMap<Type, FieldNarrowingTest>,
 }
 
 /// A public export: maps a package-public mangled name onto the internal symbol
@@ -922,14 +926,16 @@ pub struct TypedClassField {
 /// naming nothing the author wrote; with it, the read runs `test` first —
 /// presence for a narrowing that only strips `null`, structural conformance
 /// otherwise — and throws `message` as a catchable `TypeError`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FieldNarrowingCheck {
     pub test: FieldNarrowingTest,
     pub message: String,
 }
 
-/// What a *redeclared* field's read guard verifies before it casts.
-#[derive(Clone, Debug, PartialEq)]
+/// What a *redeclared* field's read guard verifies before it casts. The
+/// typechecker selects the most precise test codegen can lower, falling back to
+/// a read-time substituted test for erased class parameters.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum FieldNarrowingTest {
     /// The two declarations differ only in admitting `null`, so presence is the
     /// whole check. Worth its own case: the structural walk below is O(size of
@@ -944,9 +950,106 @@ pub enum FieldNarrowingTest {
     /// test when it admits `null`.
     NonNull,
     /// Structural conformance to this shape, which is restricted to what
-    /// `cast_check::emit_structural_test` can lower. A narrowing whose type falls
-    /// outside that set records no check at all and keeps the bare cast.
+    /// `cast_check::emit_structural_test` can lower.
     Shape(Type),
+    /// Runtime member check for an interface. Methods are read through the
+    /// object-shape getter (which can surface class vtable slots), while data
+    /// properties use the ordinary accessor-aware conformance walk. The method
+    /// set is empty for a data-only interface.
+    Interface(InterfaceNarrowingTest),
+    /// The declaration contains an erased class type parameter, so its concrete
+    /// runtime shape is available only at the read. Codegen tests the
+    /// substituted `result_ty` rather than silently falling back to a bare cast.
+    Substituted,
+    /// Only the target Wasm representation can be established. This still
+    /// makes the following cast safe and turns mismatches into `TypeError`.
+    Representation,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct InterfaceNarrowingTest {
+    pub members: std::collections::BTreeMap<String, crate::ObjectField>,
+    pub methods: std::collections::BTreeSet<String>,
+    pub non_shape_carriers: std::collections::BTreeSet<InterfaceCarrier>,
+    /// Whether an ordinary `$ObjectShape` may satisfy the interface. Direct
+    /// host dispatch requires its canonical carrier; vtable interfaces remain
+    /// structurally implementable by user objects.
+    #[serde(default = "interface_shape_allowed_default")]
+    pub shape_allowed: bool,
+    pub nullable: bool,
+}
+
+fn interface_shape_allowed_default() -> bool {
+    true
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+pub enum InterfaceCarrier {
+    Number,
+    Boolean,
+    String,
+    BigInt,
+    Uint8Array,
+    ArrayAny,
+    Array(Type),
+    MapAny,
+    Map(Type, Type),
+    SetAny,
+    Set(Type),
+    RegExp,
+    RegExpMatch,
+    TemporalInstant,
+    TemporalDuration,
+    TemporalZonedDateTime,
+    TemporalPlainDate,
+    TemporalPlainTime,
+    TemporalPlainDateTime,
+    TemporalPlainYearMonth,
+    TemporalPlainMonthDay,
+    ObjectShape,
+    Url,
+}
+
+/// Whether codegen can validate every value admitted by `ty` with
+/// `cast_check::emit_structural_test`. Keeping the allowlist beside the
+/// serialized narrowing-test model gives typechecking and codegen one answer.
+pub(crate) fn runtime_type_is_testable(ty: &Type) -> bool {
+    runtime_type_is_testable_inner(ty, false)
+}
+
+/// Field redeclaration guards can root generated validators at recursive alias
+/// or interface back-edges. General expression descriptors cannot: polymorphic
+/// recursion can grow its type arguments forever while enumerating every
+/// expression type.
+pub(crate) fn field_runtime_type_is_testable(ty: &Type) -> bool {
+    runtime_type_is_testable_inner(ty, true)
+}
+
+fn runtime_type_is_testable_inner(ty: &Type, allow_recursive_ref: bool) -> bool {
+    match ty.peel() {
+        Type::Null
+        | Type::Number
+        | Type::NumberLiteral(_)
+        | Type::Boolean
+        | Type::String
+        | Type::StringLiteral(_)
+        | Type::BigInt
+        | Type::Uint8Array
+        | Type::Unknown
+        | Type::Function { .. }
+        | Type::NumberEnum { .. }
+        | Type::StringEnum { .. }
+        | Type::ClassRef { .. } => true,
+        Type::AliasRef { .. } | Type::InterfaceRef { .. } => allow_recursive_ref,
+        Type::Array(elem) => runtime_type_is_testable_inner(elem, allow_recursive_ref),
+        Type::Tuple(elems) | Type::Union(elems) => elems
+            .iter()
+            .all(|elem| runtime_type_is_testable_inner(elem, allow_recursive_ref)),
+        Type::Object { fields } => fields
+            .values()
+            .all(|field| runtime_type_is_testable_inner(&field.ty, allow_recursive_ref)),
+        _ => false,
+    }
 }
 
 impl TypedClassDecl {

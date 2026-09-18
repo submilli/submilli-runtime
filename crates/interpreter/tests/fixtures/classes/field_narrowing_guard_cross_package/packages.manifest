@@ -1,0 +1,3 @@
+# name       dir  deps       root
+guard-lib    lib  -
+main         app  guard-lib  root

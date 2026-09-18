@@ -1244,6 +1244,7 @@ mod tests {
                 kind: TypeKind::Class {
                     generics: vec!["T".to_string()],
                     fields: BTreeMap::new(),
+                    narrowing_checks: BTreeMap::new(),
                     methods,
                     method_visibility: BTreeMap::new(),
                     accessors: Vec::new(),

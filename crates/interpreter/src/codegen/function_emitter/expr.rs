@@ -987,30 +987,27 @@ pub fn emit_expr(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) {
             _ => unreachable!("instanceof codegen with a non-class RHS: {class:?}"),
         },
         TypedExprKind::Narrowed {
+            path,
             source,
             binding,
             cast_info,
             inner,
-            ..
         } => {
-            // Plan 75.10 PR 1: expression-scoped narrowing. Mirrors
-            // `NarrowRegion`'s stmt-level lowering (see `stmt.rs`):
-            // allocate a shadow Wasm local of the narrowed type,
-            // bind it under the region's synthetic `#narrow_<N>`
-            // name in a fresh codegen scope, evaluate the source,
-            // apply the cast, store into the shadow, then evaluate
-            // `inner` with the binding in scope. References to the
-            // narrowed path inside `inner` resolve to the shadow via
-            // the inferer's `LocalNarrowRef` rewrite. The shadow's
-            // lifetime is the evaluation of `inner` rather than a
-            // block body — the only structural difference from the
-            // stmt path.
+            // Expression-scoped narrowing mirrors `NarrowRegion`: stable root
+            // bindings snapshot once, while field/index paths register their
+            // source for checked live reads. This scope lasts only for `inner`.
             emitter.push_scope();
-            let shadow_val = ctx.symbols.value_type(&cast_info.to_ty);
-            let shadow = emitter.define_local(binding, shadow_val);
-            emit_expr(emitter, ctx, *source);
-            crate::codegen::function_emitter::cast::emit_narrowing_cast(emitter, ctx, cast_info);
-            emitter.instruction(Instruction::LocalSet(shadow));
+            if path.chain.is_empty() {
+                let shadow_val = ctx.symbols.value_type(&cast_info.to_ty);
+                let shadow = emitter.define_local(binding, shadow_val);
+                emit_expr(emitter, ctx, *source);
+                crate::codegen::function_emitter::cast::emit_narrowing_cast(
+                    emitter, ctx, cast_info,
+                );
+                emitter.instruction(Instruction::LocalSet(shadow));
+            } else {
+                emitter.register_narrow_source(&binding.name, *source);
+            }
             emit_expr(emitter, ctx, *inner);
             emitter.pop_scope();
         }
@@ -1176,11 +1173,16 @@ pub fn emit_expr(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) {
 
 /// Read a narrowing-ref binding, bridging its slot to the narrowed type.
 ///
-/// Narrowing-ref resolution covers three shapes today:
+/// A non-empty field or index path always re-evaluates the region's saved
+/// source and applies a checked cast. The type fact may survive a call, but the
+/// referenced slot may have changed; reading the live value prevents a stale
+/// shadow from escaping and turns an incompatible mutation into `TypeError`.
 ///
-/// - **Predicate-narrowing inside a branch body**: synthetic `#narrow_<N>`
-///   shadow, materialized by the enclosing `NarrowRegion` / `Narrowed` codegen.
-///   Slot Wasm-type matches the expression's `ty` → bare `local.get`.
+/// Root-binding resolution covers three remaining shapes:
+///
+/// - **Predicate-narrowing inside a branch body**: the synthetic
+///   `#narrow_<N>` shadow materialized by `NarrowRegion` / `Narrowed`.
+///   Its slot type matches the expression's `ty`, so this is a bare `local.get`.
 /// - **Assignment-narrowing**: the `AssignLocal` codegen allocates a fresh
 ///   narrowed-type shadow + rebinds the original ident name. Slot type matches
 ///   `ty` → bare `local.get`.
@@ -1199,17 +1201,35 @@ fn emit_local_narrow_ref(
     path: &ReferencePath,
     narrowed_ty: &Type,
 ) {
+    if !path.chain.is_empty()
+        && let Some(source) = emitter.narrow_source(&binding.name)
+    {
+        // Calls preserve this typecheck-time fact but may mutate the referenced
+        // slot, so re-read and validate every use instead of caching a snapshot.
+        emit_expr(emitter, ctx, source);
+        crate::codegen::cast_check::emit_checked_cast_on_stack(
+            emitter,
+            ctx,
+            &ctx.ta.expr(source).ty,
+            narrowed_ty,
+        );
+        return;
+    }
     let Some((slot, slot_ty)) = emitter.narrowed_read_slot(&binding.name) else {
-        if let Some(source) = emitter.narrow_source(&binding.name) {
-            emit_expr(emitter, ctx, source);
-            let cast_info = cast_info_for(ctx.ta.expr(source).ty.clone(), narrowed_ty.clone());
-            cast::emit_narrowing_cast(emitter, ctx, &cast_info);
+        // A rematerialized root view can outlive the synthetic shadow named by
+        // its source (for example, an identifier narrowing carried into a
+        // nested block across a call). Read the real binding that the path
+        // identifies instead of recursively trying to emit the closed shadow.
+        if let BindingId::Local { name, .. } = &path.root
+            && let Some((slot, slot_ty)) = emitter.narrowed_read_slot(name)
+        {
+            emitter.instruction(Instruction::LocalGet(slot));
+            let stack_ty = unbox_if_boxed(emitter, ctx, slot_ty);
+            if stack_ty != ctx.symbols.value_type(narrowed_ty) {
+                cast::emit_cast_to(emitter, ctx, narrowed_ty);
+            }
             return;
         }
-        // A global has no local slot of its own, so once the scope holding its
-        // shadow closes there is nothing named `binding` left. Read the live
-        // global and cast — the same cast-at-use the local path falls back to
-        // when its shadow is out of scope, and it cannot go stale.
         if let BindingId::Global(mangled) = &path.root {
             let idx = ctx
                 .symbols
@@ -1217,6 +1237,13 @@ fn emit_local_narrow_ref(
                 .expect("Inferer guarantees the binding exists");
             emitter.instruction(Instruction::GlobalGet(idx));
             cast::emit_cast_to(emitter, ctx, narrowed_ty);
+            return;
+        }
+        if let Some(source) = emitter.narrow_source(&binding.name) {
+            emit_expr(emitter, ctx, source);
+            let source_ty = &ctx.ta.expr(source).ty;
+            let cast_info = cast_info_for(source_ty.clone(), narrowed_ty.clone());
+            cast::emit_narrowing_cast(emitter, ctx, &cast_info);
             return;
         }
         panic!(
@@ -2579,7 +2606,7 @@ pub(crate) fn emit_object_property_read(
         .expect("per-name string global recorded during field-name-strings emission");
     if !accessor_branch_emittable(ctx, &getter) {
         emit_object_field_read_by_name(emitter, ctx, object_local, name_global);
-        cast::emit_cast_to(emitter, ctx, field_ty);
+        emit_dynamic_narrowed_property_read(emitter, ctx, object_local, prop_name, field_ty);
         return;
     }
     let intrinsics = ctx
@@ -2596,7 +2623,7 @@ pub(crate) fn emit_object_property_read(
     emitter.emit_if(BlockType::Result(result_vt));
     // data slot
     emit_field_slot_get(emitter, intrinsics, object_local, index_local);
-    cast::emit_cast_to(emitter, ctx, field_ty);
+    emit_dynamic_narrowed_property_read(emitter, ctx, object_local, prop_name, field_ty);
     emitter.emit_else();
     let getter_slot_local = emit_is_accessor_backed(
         emitter,
@@ -2625,6 +2652,63 @@ pub(crate) fn emit_object_property_read(
     emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object)));
     cast::emit_cast_to(emitter, ctx, field_ty);
     emitter.emit_end();
+    emitter.emit_end();
+}
+
+fn emit_dynamic_narrowed_property_read(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    object_local: u32,
+    prop_name: &str,
+    field_ty: &Type,
+) {
+    let checks: Vec<_> = ctx
+        .symbols
+        .class_field_narrowing_checks(prop_name)
+        .filter_map(|(class, check)| {
+            ctx.symbols
+                .class_vtable_global_idx(class)
+                .map(|vtable| (vtable, check))
+        })
+        .collect();
+    if checks.is_empty() {
+        cast::emit_cast_to(emitter, ctx, field_ty);
+        return;
+    }
+
+    let intrinsics = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .expect("intrinsics declared by codegen entry");
+    let raw = emitter.add_anonymous_local(ValType::Ref(RefType {
+        nullable: true,
+        heap_type: HeapType::Concrete(intrinsics.object),
+    }));
+    emitter.instruction(Instruction::LocalSet(raw));
+    emit_dynamic_narrowing_check(emitter, ctx, object_local, raw, field_ty, &checks, 0);
+}
+
+fn emit_dynamic_narrowing_check(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    object_local: u32,
+    raw: u32,
+    field_ty: &Type,
+    checks: &[(u32, &crate::FieldNarrowingCheck)],
+    index: usize,
+) {
+    let Some((vtable, check)) = checks.get(index) else {
+        emitter.instruction(Instruction::LocalGet(raw));
+        cast::emit_cast_to(emitter, ctx, field_ty);
+        return;
+    };
+    emitter.instruction(Instruction::LocalGet(object_local));
+    crate::codegen::function_emitter::cast::emit_nominal_instance_test(emitter, ctx, *vtable);
+    emitter.emit_if(BlockType::Result(ctx.symbols.value_type(field_ty)));
+    emitter.instruction(Instruction::LocalGet(raw));
+    crate::codegen::cast_check::emit_narrowed_field_read(emitter, ctx, check, field_ty);
+    emitter.emit_else();
+    emit_dynamic_narrowing_check(emitter, ctx, object_local, raw, field_ty, checks, index + 1);
     emitter.emit_end();
 }
 
@@ -2976,9 +3060,8 @@ fn emit_direct_call(
 /// Under uniform closure ABI, every closure param and the
 /// return are erased to `(ref $Object)` at the Wasm boundary. This
 /// call site boxes each typed arg via `cast::emit_box` before
-/// `call_ref` and unboxes the typed return via `cast::emit_cast_to`
-/// after — the closure body's own prologue/epilogue performs the
-/// matching cast on the other side.
+/// `call_ref` and validates the erased return before its declared-type cast.
+/// A mismatched implementation therefore throws a catchable `TypeError`.
 fn emit_indirect_closure_call(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
@@ -3049,7 +3132,7 @@ fn emit_indirect_closure_call_with_receiver_on_stack(
         unreachable!("indirect call callee must be Type::Function");
     };
     if !ret.is_void() {
-        cast::emit_cast_to(emitter, ctx, ret);
+        crate::codegen::cast_check::emit_checked_cast_on_stack(emitter, ctx, &Type::Unknown, ret);
     }
 }
 
@@ -3491,10 +3574,15 @@ fn emit_interface_method_via_shape_with_receiver_on_stack(
     });
     emitter.instruction(Instruction::CallRef(fn_type_idx));
 
-    // 7. Unbox the return per the closure ABI. `emit_cast_to` has no lowering
-    // for `Void`, and callers hand this the declared return type verbatim.
+    // 7. Validate and unbox the erased return. Callers hand this the declared
+    // return type verbatim; a mismatched implementation throws `TypeError`.
     if !call_ret_ty.is_void() {
-        cast::emit_cast_to(emitter, ctx, call_ret_ty);
+        crate::codegen::cast_check::emit_checked_cast_on_stack(
+            emitter,
+            ctx,
+            &Type::Unknown,
+            call_ret_ty,
+        );
     }
 }
 

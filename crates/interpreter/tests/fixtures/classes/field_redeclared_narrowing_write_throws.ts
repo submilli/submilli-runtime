@@ -56,10 +56,9 @@ class ShapeNarrow extends ShapeBase {
   v: Circle | null = { area: 1, r: 2 };
 }
 
-// No interface is structurally verifiable — its assignability is wider than the
-// `$ObjectShape` the test walks, so a structural check would reject values the
-// declaration admits. What is left is the presence check, which catches the
-// `null` an ancestor can write and nothing else.
+// Shape-backed interface values are structurally verifiable. Non-shape carriers
+// have no member payload to inspect, but every non-null interface declaration
+// still rejects the `null` this ancestor can write.
 interface Plain {
   n: number;
 }

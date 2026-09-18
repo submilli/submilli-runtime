@@ -59,7 +59,12 @@ pub fn emit_bodies(metas: &[AdapterMeta], code: &mut CodeSection, ctx: &CodegenC
 
         for (i, p_ty) in params.iter().enumerate() {
             emitter.instruction(Instruction::LocalGet((i + 1) as u32));
-            cast::emit_cast_to(&mut emitter, ctx, p_ty);
+            crate::codegen::cast_check::emit_checked_parameter_cast_on_stack(
+                &mut emitter,
+                ctx,
+                &crate::Type::Unknown,
+                p_ty,
+            );
         }
         emitter.instruction(Instruction::Call(target_idx));
         if !ret.is_void() {

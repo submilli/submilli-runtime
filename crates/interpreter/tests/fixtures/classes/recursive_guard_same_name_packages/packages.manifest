@@ -1,0 +1,3 @@
+pkg-a  a    -
+pkg-b  b    -
+main   app  pkg-a,pkg-b  root

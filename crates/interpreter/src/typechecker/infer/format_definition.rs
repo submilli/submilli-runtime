@@ -918,6 +918,7 @@ mod tests {
             kind: TypeKind::Class {
                 generics: Vec::new(),
                 fields: BTreeMap::new(),
+                narrowing_checks: BTreeMap::new(),
                 methods: BTreeMap::new(),
                 method_visibility: BTreeMap::new(),
                 accessors: Vec::new(),

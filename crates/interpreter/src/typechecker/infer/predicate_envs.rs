@@ -5,6 +5,11 @@ use crate::{ExprId, Ident, Span, Type, TypedExpr};
 use super::assignable::{literal_to_type, literal_value_of};
 use super::{Inferer, narrowing};
 
+pub(super) struct ReferencePathState {
+    pub path: narrowing::ReferencePath,
+    pub contains_getter: bool,
+}
+
 impl<'a> Inferer<'a> {
     pub(super) fn expr_to_reference_path(
         &self,
@@ -17,44 +22,89 @@ impl<'a> Inferer<'a> {
         &self,
         kind: &crate::TypedExprKind,
     ) -> Option<narrowing::ReferencePath> {
+        let state = self.kind_to_reference_path_state(kind)?;
+        (!state.contains_getter).then_some(state.path)
+    }
+
+    pub(super) fn kind_to_reference_path_state(
+        &self,
+        kind: &crate::TypedExprKind,
+    ) -> Option<ReferencePathState> {
         use crate::TypedExprKind;
         match kind {
             TypedExprKind::LocalRef { ident, .. } => {
                 let entry = self.scopes.get(&ident.name)?;
-                Some(narrowing::ReferencePath::root(
-                    narrowing::BindingId::Local {
+                Some(ReferencePathState {
+                    path: narrowing::ReferencePath::root(narrowing::BindingId::Local {
                         name: ident.name.clone(),
                         decl_scope: entry.decl_scope,
-                    },
-                ))
+                    }),
+                    contains_getter: false,
+                })
             }
-            TypedExprKind::LocalNarrowRef { path, .. } => Some(path.clone()),
+            TypedExprKind::LocalNarrowRef { path, .. } => Some(ReferencePathState {
+                path: path.clone(),
+                contains_getter: false,
+            }),
             // Guarding a nullable field before use — `if (this.inner !== null)`
             // — is the most common narrowing shape in class-based code, so
             // `this` roots a path like any other binding. `current_class` gates
             // it: a `this` outside an instance member is already a diagnostic,
             // and rooting a path there would have no type to rebuild from.
-            TypedExprKind::This if self.current_class.is_some() => {
-                Some(narrowing::ReferencePath::root(narrowing::BindingId::This))
-            }
-            TypedExprKind::GlobalRef { mangled, .. } => Some(narrowing::ReferencePath::root(
-                narrowing::BindingId::Global(mangled.clone()),
-            )),
+            TypedExprKind::This if self.current_class.is_some() => Some(ReferencePathState {
+                path: narrowing::ReferencePath::root(narrowing::BindingId::This),
+                contains_getter: false,
+            }),
+            TypedExprKind::GlobalRef { mangled, .. } => Some(ReferencePathState {
+                path: narrowing::ReferencePath::root(narrowing::BindingId::Global(mangled.clone())),
+                contains_getter: false,
+            }),
             TypedExprKind::FieldAccess { receiver, name } => {
                 let receiver_expr = self.typed_ast.expr(*receiver);
-                let mut path = self.expr_to_reference_path(receiver_expr)?;
-                path.chain
+                let mut state = self.kind_to_reference_path_state(&receiver_expr.kind)?;
+                state.contains_getter |= self.receiver_type_has_getter(receiver_expr, &name.name);
+                state
+                    .path
+                    .chain
                     .push(narrowing::PathElem::Field(name.name.clone()));
-                Some(path)
+                Some(state)
             }
             TypedExprKind::IndexAccess { receiver, index } => {
                 let receiver_expr = self.typed_ast.expr(*receiver);
-                let mut path = self.expr_to_reference_path(receiver_expr)?;
+                let mut state = self.kind_to_reference_path_state(&receiver_expr.kind)?;
                 let lit = index_literal_value(&self.typed_ast.expr(*index).kind)?;
-                path.chain.push(narrowing::PathElem::Index(lit));
-                Some(path)
+                state.path.chain.push(narrowing::PathElem::Index(lit));
+                Some(state)
+            }
+            TypedExprKind::NonNullAssert { value } | TypedExprKind::Cast { value, .. } => {
+                self.kind_to_reference_path_state(&self.typed_ast.expr(*value).kind)
             }
             _ => None,
+        }
+    }
+
+    pub(super) fn type_has_getter(&self, ty: &Type, field: &str) -> bool {
+        match ty.peel() {
+            Type::ClassRef { mangled, args, .. } => {
+                self.class_getter(mangled, args, field).is_some()
+            }
+            Type::Union(members) => members
+                .iter()
+                .any(|member| self.type_has_getter(member, field)),
+            _ => false,
+        }
+    }
+
+    fn receiver_type_has_getter(&self, receiver: &TypedExpr, field: &str) -> bool {
+        if self.type_has_getter(&receiver.ty, field) {
+            return true;
+        }
+        match &receiver.kind {
+            crate::TypedExprKind::NonNullAssert { value }
+            | crate::TypedExprKind::Cast { value, .. } => {
+                self.receiver_type_has_getter(self.typed_ast.expr(*value), field)
+            }
+            _ => false,
         }
     }
 

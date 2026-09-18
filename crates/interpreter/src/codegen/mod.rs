@@ -240,10 +240,10 @@ pub struct CodegenCtx<'a> {
     pub source: &'a str,
     pub line_index: &'a LineIndex,
     /// The module being compiled; codegen-generated nodes (closure envs, adapter
-    /// params, cast validators) anchor their placeholder spans to it.
+    /// params, runtime validators) anchor their placeholder spans to it.
     pub file: crate::FileId,
-    /// Alias bodies, for expanding recursion back-edges in JSON.parse / `as` union dispatch.
-    pub aliases: &'a recursive_validators::AliasBodies,
+    /// Runtime-validator bodies for expanding recursive aliases and data interfaces.
+    pub validator_bodies: &'a recursive_validators::ValidatorBodies,
     pub type_info: &'a crate::TypeInfoTable,
     pub package_string_global_idx: Option<u32>,
 }
@@ -300,7 +300,7 @@ fn codegen_inner(
     dependencies: &[&PackageDeclaration],
     owning_package: &str,
 ) -> GeneratedModule {
-    let analysis = CodegenAnalysis::collect(ta);
+    let analysis = CodegenAnalysis::collect(ta, dependencies);
     let pool = analysis.string_pool;
     let bigint_pool = analysis.bigint_pool;
     let line_index = LineIndex::new(source);
@@ -347,12 +347,14 @@ fn codegen_inner(
     );
     symbols.set_error_tag_idx(0);
 
-    // Recursive JSON.parse / `as` targets compile to per-alias validator functions;
+    // Recursive cast and narrowed-field targets compile to validator functions;
     // discover them up front so their internal object shapes contribute field-name
     // globals even when no literal of that shape appears in the program.
     let dependency_types = dependency_usage.dependency_types(dependencies);
-    let aliases = recursive_validators::AliasBodies::collect(ta, dependency_types.iter());
-    let recursive_validators = recursive_validators::discover(ta, &aliases);
+    let validator_bodies =
+        recursive_validators::ValidatorBodies::collect(ta, dependency_types.iter());
+    let recursive_validators =
+        recursive_validators::discover(ta, dependency_types.iter(), &validator_bodies);
     let mut all_shapes = ta.shapes.clone();
     all_shapes.extend(recursive_validators.extra_shapes.iter().cloned());
 
@@ -873,21 +875,37 @@ fn codegen_inner(
     // Class method stubs + per-class getter/setter (vtable/header globals ref.func these).
     class_plan.allocate_funcs(&mut next_func_idx, &mut symbols);
 
-    // Per-alias recursive cast validators. Allocate sigs + indices and register by
-    // back-edge key so the AliasRef cast arms can `call` them.
+    // Recursive runtime validators. Allocate signatures and indices, then
+    // register each back-edge key so structural checks can call its plan.
     let object_ref_null = ValType::Ref(RefType {
         nullable: true,
         heap_type: HeapType::Concrete(intrinsics.object),
     });
-    let mut cast_validator_sigs: Vec<u32> = Vec::with_capacity(recursive_validators.cast.len());
-    for plan in &recursive_validators.cast {
+    let raw_array_ref = ValType::Ref(RefType {
+        nullable: false,
+        heap_type: HeapType::Concrete(intrinsics.raw_array),
+    });
+    let raw_index_array_ref = ValType::Ref(RefType {
+        nullable: false,
+        heap_type: HeapType::Concrete(intrinsics.raw_index_array),
+    });
+    let mut runtime_validator_sigs: Vec<u32> = Vec::with_capacity(recursive_validators.plans.len());
+    for plan in &recursive_validators.plans {
         let sig_idx = next_type_idx;
         next_type_idx += 1;
-        types.ty().function([object_ref_null], [ValType::I32]);
+        types.ty().function(
+            [
+                object_ref_null,
+                raw_array_ref,
+                raw_index_array_ref,
+                ValType::I32,
+            ],
+            [ValType::I32],
+        );
         let func_idx = next_func_idx;
         next_func_idx += 1;
-        symbols.record_cast_validator(plan.key.clone(), func_idx);
-        cast_validator_sigs.push(sig_idx);
+        symbols.record_runtime_validator(plan.key.clone(), func_idx);
+        runtime_validator_sigs.push(sig_idx);
     }
 
     // `main`'s result is encoded to its output `$string` entirely in wasm by the
@@ -957,7 +975,7 @@ fn codegen_inner(
     closure_coercions::emit_entries(&closure_coercion_targets, &mut functions, &symbols);
     user_subtypes::emit_method_function_entries(&mut functions, &user_subtypes_alloc, intrinsics);
     class_plan.emit_function_entries(&mut functions, &symbols, intrinsics);
-    for &sig_idx in &cast_validator_sigs {
+    for &sig_idx in &runtime_validator_sigs {
         functions.function(sig_idx);
     }
     if let Some((sig_idx, _)) = main_output_shim {
@@ -1208,7 +1226,7 @@ fn codegen_inner(
         source,
         line_index: &line_index,
         file,
-        aliases: &aliases,
+        validator_bodies: &validator_bodies,
         type_info: &type_info,
         package_string_global_idx: pkg_string_global_idx,
     };
@@ -1266,8 +1284,14 @@ fn codegen_inner(
 
     class_plan.emit_bodies(&mut code, &ctx);
 
-    for plan in &recursive_validators.cast {
-        code.function(&cast_check::emit_cast_validator_body(&ctx, &plan.body));
+    for (validator_id, plan) in recursive_validators.plans.iter().enumerate() {
+        code.function(&cast_check::emit_runtime_validator_body(
+            &ctx,
+            &plan.key,
+            &plan.body,
+            plan.rejects_polymorphic_edge,
+            validator_id as i32,
+        ));
     }
 
     if let (Some(_), Some(main_func_idx), Some(main_return_ty)) =
@@ -1696,8 +1720,17 @@ function main(): string {
             temporal_instant: 29,
             temporal_duration: 30,
             temporal_zdt: 31,
+            raw_index_array: 32,
+            map: 33,
+            set: 34,
+            url: 35,
+            temporal_plain_date: 36,
+            temporal_plain_time: 37,
+            temporal_plain_date_time: 38,
+            temporal_plain_year_month: 39,
+            temporal_plain_month_day: 40,
         });
-        next_type_idx += 32;
+        next_type_idx += super::intrinsics::INTRINSIC_TYPE_COUNT;
         let _ = next_type_idx;
         for defs in &dependencies {
             for value in defs.values.values() {
@@ -5272,6 +5305,15 @@ function main(): void { middle(); }
             temporal_instant: 29,
             temporal_duration: 30,
             temporal_zdt: 31,
+            raw_index_array: 32,
+            map: 33,
+            set: 34,
+            url: 35,
+            temporal_plain_date: 36,
+            temporal_plain_time: 37,
+            temporal_plain_date_time: 38,
+            temporal_plain_year_month: 39,
+            temporal_plain_month_day: 40,
         });
         map
     }
@@ -5344,7 +5386,7 @@ function main(): void { middle(); }
             }
         ";
         let ta = boxed_typed_ast(source);
-        let metas = super::analysis::CodegenAnalysis::collect(&ta).closure_metas;
+        let metas = super::analysis::CodegenAnalysis::collect(&ta, &[]).closure_metas;
         assert_eq!(metas.len(), 2);
         assert_eq!(metas[0].signature, metas[1].signature);
         let bytes = compile_with_closures(source);
@@ -5376,7 +5418,7 @@ function main(): void { middle(); }
     #[test]
     fn no_closures_no_closure_types_emitted() {
         let ta = boxed_typed_ast("function main(): void { let x: number = 1; }");
-        let metas = super::analysis::CodegenAnalysis::collect(&ta).closure_metas;
+        let metas = super::analysis::CodegenAnalysis::collect(&ta, &[]).closure_metas;
         assert!(metas.is_empty(), "{metas:?}");
     }
 
@@ -5472,7 +5514,7 @@ function main(): void { middle(); }
             "function greet(x: number): number { return x + 1; }
              function main(): void { greet(5); }",
         );
-        let metas = super::analysis::CodegenAnalysis::collect(&ta).adapter_metas;
+        let metas = super::analysis::CodegenAnalysis::collect(&ta, &[]).adapter_metas;
         assert!(metas.is_empty(), "{metas:?}");
     }
 
@@ -5489,7 +5531,7 @@ function main(): void { middle(); }
                  outer(inner());
              }",
         );
-        let metas = super::analysis::CodegenAnalysis::collect(&ta).adapter_metas;
+        let metas = super::analysis::CodegenAnalysis::collect(&ta, &[]).adapter_metas;
         assert!(
             metas.is_empty(),
             "direct-only callsites should produce no adapters, got {metas:?}",
@@ -5508,7 +5550,7 @@ function main(): void { middle(); }
                  apply(f2, 0);
              }",
         );
-        let metas = super::analysis::CodegenAnalysis::collect(&ta).adapter_metas;
+        let metas = super::analysis::CodegenAnalysis::collect(&ta, &[]).adapter_metas;
         assert_eq!(metas.len(), 2, "{metas:?}");
         let names: Vec<&str> = metas.iter().map(|m| m.name.as_str()).collect();
         assert!(names.contains(&"f1"));

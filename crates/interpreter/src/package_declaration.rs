@@ -463,6 +463,11 @@ pub enum TypeKind {
         /// `ClassRef`'s args.
         generics: Vec<String>,
         fields: BTreeMap<String, FieldSig>,
+        /// Runtime read guards for fields whose declaration narrows an inherited
+        /// slot. Carried across packages because the consumer reconstructs the
+        /// class layout and emits its reads independently.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        narrowing_checks: BTreeMap<String, crate::FieldNarrowingCheck>,
         methods: BTreeMap<String, MethodSig>,
         /// Per-method visibility, keyed alongside `methods` (kept separate so
         /// `MethodSig` stays shared with interfaces, which have no visibility).

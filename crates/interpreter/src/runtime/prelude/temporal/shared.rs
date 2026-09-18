@@ -23,6 +23,7 @@ use crate::{
 
 pub const TEMPORAL_MODULE_NAME: &str = "submilli:temporal";
 const I64_BOUND_EXCLUSIVE: f64 = 9_223_372_036_854_775_808.0;
+const PLAIN_MONTH_DAY_MARKER: i64 = 0x4d4f_4e54_4844_4159;
 
 #[derive(Clone)]
 pub(crate) struct TemporalAbi {
@@ -62,6 +63,7 @@ pub(crate) fn install_abi(
         ))),
     );
     let i32_field = FieldType::new(imm, StorageType::ValType(ValType::I32));
+    let i64_field = FieldType::new(imm, StorageType::ValType(ValType::I64));
 
     let plain_date = singleton_struct(
         store.engine(),
@@ -111,7 +113,7 @@ pub(crate) fn install_abi(
         store.engine(),
         Finality::NonFinal,
         Some(intr.object.clone()),
-        vec![vtable_field, i32_field.clone(), i32_field],
+        vec![vtable_field, i32_field.clone(), i32_field, i64_field],
     )?;
 
     let instant_slots = plain_vtable_slots(
@@ -1126,7 +1128,12 @@ pub(super) fn make_plain_month_day(
         let abi = temporal_abi(caller)?;
         (abi.plain_month_day.clone(), abi.plain_month_day_vtable)
     };
-    make_plain_struct(caller, ty, vtable, &[m, d])
+    make_temporal_struct(
+        caller,
+        ty,
+        vtable,
+        &[Val::I32(m), Val::I32(d), Val::I64(PLAIN_MONTH_DAY_MARKER)],
+    )
 }
 
 pub(super) fn plain_date_from_struct(

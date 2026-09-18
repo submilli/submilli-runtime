@@ -707,8 +707,9 @@ impl<'a> Inferer<'a> {
         }
     }
 
-    /// The source expression a `NarrowRegion`/`Narrowed` node reads at region
-    /// entry, plus the cast it applies. Rebuilt from declared types where
+    /// The source expression a `NarrowRegion`/`Narrowed` node uses, plus its
+    /// cast. A root view reads it at region entry; a field/index view retains it
+    /// as its per-use live-read recipe. Rebuilt from declared types where
     /// possible; the stored `view.source` is the fallback, and the
     /// `debug_assert` is what keeps that fallback honest — a source naming a
     /// shadow from a closed scope would otherwise surface as an opaque codegen
@@ -731,17 +732,18 @@ impl<'a> Inferer<'a> {
             "narrow source for `{}` names a shadow that is not in scope here",
             path.render(),
         );
+        self.record_runtime_type_test(&view.narrowed_ty);
         (
             source,
             narrowing::cast_info_for(from_ty, view.narrowed_ty.clone()),
         )
     }
 
-    /// Rebuilds the un-narrowed read a `NarrowRegion` evaluates at entry. `None` means the
-    /// path can't be reconstructed — e.g. a global root, a root the scope stack no longer
-    /// holds, an index step, or a field the receiver type doesn't resolve. `wrap_time_source`
-    /// turns that into a `view.source` fallback; `retain_emittable_views` drops the narrowing
-    /// outright once the stored source's shadow is dead.
+    /// Rebuilds the un-narrowed read a root region evaluates at entry or a
+    /// field/index region evaluates per use. `None` means the path can't be
+    /// reconstructed — e.g. a global root, a root the scope stack no longer
+    /// holds, an index step, or an unresolved receiver field. The caller then
+    /// falls back to `view.source` if its shadow is still live.
     pub(super) fn synthesize_wrap_time_source(
         &mut self,
         env: &narrowing::NarrowEnv,
@@ -806,30 +808,47 @@ impl<'a> Inferer<'a> {
             };
             current_path.chain.push(elem.clone());
             let field_ty = self.narrow_source_field_ty(&current_ty, field_name)?;
-            let kind = crate::TypedExprKind::FieldAccess {
-                receiver: current_id,
-                name: crate::Ident {
-                    name: field_name.clone(),
-                    span,
-                },
-            };
             // Intermediate steps use the env-narrowed type so the next
             // FieldAccess dispatches against the right shape. The final
             // element keeps the raw field type — the surrounding NarrowRegion's
             // cast widens it to `narrowed_ty`.
             let is_final = idx + 1 == chain_len;
-            let ty = if is_final {
-                field_ty
+            let (kind, ty) = if is_final {
+                (
+                    crate::TypedExprKind::FieldAccess {
+                        receiver: current_id,
+                        name: crate::Ident {
+                            name: field_name.clone(),
+                            span,
+                        },
+                    },
+                    field_ty,
+                )
             } else {
                 match env
                     .get(&current_path)
                     .or_else(|| self.lookup_narrowed_view(&current_path))
                 {
-                    Some(view) => view.narrowed_ty.clone(),
+                    Some(view) => (
+                        crate::TypedExprKind::LocalNarrowRef {
+                            binding: view.binding.clone(),
+                            path: current_path.clone(),
+                        },
+                        view.narrowed_ty.clone(),
+                    ),
                     // No enclosing region pinned this prefix, but the guard
                     // still proves it non-null here — codegen can't read a
                     // field through a nullable union.
-                    None => non_null_form(field_ty)?,
+                    None => (
+                        crate::TypedExprKind::FieldAccess {
+                            receiver: current_id,
+                            name: crate::Ident {
+                                name: field_name.clone(),
+                                span,
+                            },
+                        },
+                        non_null_form(field_ty)?,
+                    ),
                 }
             };
             current_id = self.typed_ast.push_expr(TypedExpr {

@@ -69,7 +69,7 @@ pub(crate) fn emit_stringify_value(emitter: &mut FunctionEmitter, ctx: &CodegenC
 fn host_stringify_object_type(ctx: &CodegenCtx, arg_ty: &Type) -> Option<Type> {
     let object_ty = match arg_ty.peel() {
         Type::Object { .. } => arg_ty.peel().clone(),
-        Type::InterfaceRef { .. } => ctx.aliases.expand_one(arg_ty),
+        Type::InterfaceRef { .. } => ctx.validator_bodies.expand_one(arg_ty),
         _ => return None,
     };
     ctx.type_info.object_type_id(&object_ty)?;

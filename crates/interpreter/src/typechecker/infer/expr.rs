@@ -552,6 +552,7 @@ impl Inferer<'_> {
             span,
             ty: ty.clone(),
         });
+        self.record_runtime_type_test(&ty);
         (id, ty)
     }
 

@@ -34,6 +34,7 @@ use crate::{MangledName, Param, TypeKind, TypedAst, TypedTypeDecl};
 pub struct ImportedClassLayout {
     /// Full data-field names (inherited prefix then own), object-payload order.
     pub fields: Vec<String>,
+    pub narrowing_checks: BTreeMap<String, crate::FieldNarrowingCheck>,
     /// Full vtable method slots (inherited prefix then own/override), in order.
     pub methods: Vec<ImportedSlot>,
     /// The class's own constructor params, so a local subclass with an *implicit*
@@ -62,6 +63,7 @@ struct ClassInfo<'a> {
     name: &'a str,
     extends: Option<MangledName>,
     fields: &'a BTreeMap<String, crate::FieldSig>,
+    narrowing_checks: &'a BTreeMap<String, crate::FieldNarrowingCheck>,
     methods: &'a BTreeMap<String, crate::MethodSig>,
     constructor: &'a [Param],
     /// Accessor functions; codegen reconstructs the same synthetic getter/setter
@@ -279,6 +281,7 @@ fn collect_class_info<'a>(
             if let TypeKind::Class {
                 extends,
                 fields,
+                narrowing_checks,
                 methods,
                 accessors,
                 constructor,
@@ -297,6 +300,7 @@ fn collect_class_info<'a>(
                         // matters for layout/vtable reconstruction.
                         extends: extends.as_ref().map(|e| e.parent.clone()),
                         fields,
+                        narrowing_checks,
                         methods,
                         constructor,
                         accessors,
@@ -402,6 +406,13 @@ fn reconstruct_one(
         }
         fields.push(name.clone());
     }
+    let mut narrowing_checks = class
+        .extends
+        .as_ref()
+        .and_then(|parent| layouts.get(parent))
+        .map(|layout| layout.narrowing_checks.clone())
+        .unwrap_or_default();
+    narrowing_checks.extend(class.narrowing_checks.clone());
 
     // The producer's full vtable-method set (real methods + accessor getter/setter),
     // sorted by name to match the producer's slot assignment.
@@ -566,6 +577,9 @@ fn reconstruct_one(
     for (i, name) in fields.iter().enumerate() {
         symbols.record_class_field_slot(mangled.clone(), name.clone(), i as u32);
     }
+    for (name, check) in &narrowing_checks {
+        symbols.record_class_field_narrowing_check(mangled.clone(), name.clone(), check.clone());
+    }
     for (i, slot) in slots.iter().enumerate() {
         symbols.record_class_method_slot(
             mangled.clone(),
@@ -650,6 +664,7 @@ fn reconstruct_one(
 
     ImportedClassLayout {
         fields,
+        narrowing_checks,
         methods: slots,
         ctor_params: ctor_typed_params,
     }

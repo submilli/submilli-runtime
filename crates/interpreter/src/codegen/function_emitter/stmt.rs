@@ -263,21 +263,26 @@ pub fn emit_statement(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: StmtI
             );
         }
         TypedStmtKind::NarrowRegion {
+            path,
             source,
             binding,
             cast_info,
             body,
-            ..
         } => {
-            // Region snapshots follow the same lifetime as assignment snapshots.
             emitter.push_scope();
-            let shadow_val = ctx.symbols.value_type(&cast_info.to_ty);
-            let shadow = emitter.add_anonymous_local(shadow_val);
-            emit_expr(emitter, ctx, *source);
-            cast::emit_narrowing_cast(emitter, ctx, cast_info);
-            emitter.instruction(Instruction::LocalSet(shadow));
-            emitter.install_narrow_shadow(&binding.name, shadow, shadow_val);
-            emitter.register_narrow_source(&binding.name, *source);
+            if path.chain.is_empty() {
+                let shadow_val = ctx.symbols.value_type(&cast_info.to_ty);
+                let shadow = emitter.add_anonymous_local(shadow_val);
+                emit_expr(emitter, ctx, *source);
+                cast::emit_narrowing_cast(emitter, ctx, cast_info);
+                emitter.instruction(Instruction::LocalSet(shadow));
+                emitter.install_narrow_shadow(&binding.name, shadow, shadow_val);
+            } else {
+                // The predicate proved a field-path value that may already have
+                // changed while evaluating the rest of the condition. Defer its
+                // first re-read and checked cast until an actual use in the body.
+                emitter.register_narrow_source(&binding.name, *source);
+            }
             emit_statement(emitter, ctx, *body);
             emitter.pop_scope();
         }

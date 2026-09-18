@@ -87,8 +87,8 @@ pub struct SymbolTable {
     /// The sole exception tag's index, recorded at import emission.
     error_tag_idx: Option<u32>,
     adapter_func_idx: BTreeMap<MangledName, u32>,
-    // Per-alias recursive validator helpers, keyed by the `Type::AliasRef` back-edge.
-    cast_validator_idx: BTreeMap<Type, u32>,
+    /// Runtime validator helpers keyed by recursive alias or interface back-edges.
+    runtime_validator_idx: BTreeMap<Type, u32>,
     // Closures, adapters, and direct-dispatch wrappers are NOT in this map.
     top_level_fns: BTreeMap<MangledName, TopLevelFn>,
     iface_dispatch: BTreeMap<MangledName, Dispatch>,
@@ -349,6 +349,16 @@ impl SymbolTable {
             .get(&(class.clone(), field.to_string()))
     }
 
+    pub fn class_field_narrowing_checks<'a>(
+        &'a self,
+        field: &'a str,
+    ) -> impl Iterator<Item = (&'a MangledName, &'a crate::FieldNarrowingCheck)> + 'a {
+        self.class_field_narrowing_check
+            .iter()
+            .filter(move |((_, name), _)| name == field)
+            .map(|((class, _), check)| (class, check))
+    }
+
     pub fn class_field_setup(&self, class: &MangledName) -> Option<&[FieldSetup]> {
         self.class_field_setup.get(class).map(Vec::as_slice)
     }
@@ -604,13 +614,14 @@ impl SymbolTable {
         self.adapter_func_idx.insert(mangled, idx);
     }
 
-    pub fn record_cast_validator(&mut self, key: Type, idx: u32) {
-        self.cast_validator_idx.insert(key, idx);
+    pub fn record_runtime_validator(&mut self, key: Type, idx: u32) {
+        self.runtime_validator_idx.insert(key, idx);
     }
 
-    /// Func index of the `as`-cast recursive validator for an `AliasRef` back-edge.
-    pub fn cast_validator_idx(&self, key: &Type) -> Option<u32> {
-        self.cast_validator_idx.get(key).copied()
+    /// Function index of a recursive runtime validator keyed by an alias or
+    /// interface back-edge.
+    pub fn runtime_validator_idx(&self, key: &Type) -> Option<u32> {
+        self.runtime_validator_idx.get(key).copied()
     }
 
     pub fn record_func(&mut self, mangled: MangledName, idx: u32) {

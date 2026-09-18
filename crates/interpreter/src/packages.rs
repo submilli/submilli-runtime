@@ -2314,6 +2314,7 @@ mod tests {
                 kind: TypeKind::Class {
                     generics: Vec::new(),
                     fields,
+                    narrowing_checks: BTreeMap::new(),
                     methods,
                     method_visibility,
                     accessors: Vec::new(),
@@ -2389,6 +2390,7 @@ mod tests {
                 kind: TypeKind::Class {
                     generics: Vec::new(),
                     fields,
+                    narrowing_checks: BTreeMap::new(),
                     methods: BTreeMap::new(),
                     method_visibility: BTreeMap::new(),
                     accessors,
@@ -2488,6 +2490,7 @@ mod tests {
                 kind: TypeKind::Class {
                     generics: Vec::new(),
                     fields: BTreeMap::new(),
+                    narrowing_checks: BTreeMap::new(),
                     methods: BTreeMap::new(),
                     method_visibility: BTreeMap::new(),
                     accessors: Vec::new(),

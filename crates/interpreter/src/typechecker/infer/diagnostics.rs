@@ -250,6 +250,9 @@ impl<'a> Inferer<'a> {
     /// at the same time without something else having gone wrong.
     pub(super) fn narrowing_invalidation_hint(&self, receiver: ExprId) -> Option<DiagnosticAddon> {
         let receiver_expr = self.typed_ast.expr(receiver);
+        if let Some(hint) = self.getter_narrowing_hint(&receiver_expr.kind) {
+            return Some(hint);
+        }
         let path = self.expr_to_reference_path(receiver_expr)?;
         self.narrowing_hint_for_path(&path)
     }
@@ -400,8 +403,26 @@ impl<'a> Inferer<'a> {
         if !super::assignable::assignable(&non_null, want, self.resolver()) {
             return None;
         }
+        if let Some(hint) = self.getter_narrowing_hint(kind) {
+            return Some(hint);
+        }
         let path = self.kind_to_reference_path(kind)?;
         self.narrowing_hint_for_path(&path)
+    }
+
+    fn getter_narrowing_hint(&self, kind: &crate::TypedExprKind) -> Option<DiagnosticAddon> {
+        let state = self.kind_to_reference_path_state(kind)?;
+        if !state.contains_getter {
+            return None;
+        }
+        let rendered = state.path.render();
+        let tmp = self.fresh_hint_binding();
+        Some((
+            vec![format!(
+                "`{rendered}` is getter-backed, so each read may return a different value and its guard cannot narrow later reads. Bind one read to a local `const` first: `const {tmp} = {rendered};` then guard `{tmp}`."
+            )],
+            Vec::new(),
+        ))
     }
 
     /// A binding name the suggested rewrite can introduce without colliding

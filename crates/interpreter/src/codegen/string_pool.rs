@@ -80,7 +80,7 @@ mod tests {
         capture(&mut ta);
         desugar(&mut ta, crate::FileId(0));
         assert!(diags.is_empty(), "unexpected typecheck diags: {diags:?}");
-        CodegenAnalysis::collect(&ta).string_pool
+        CodegenAnalysis::collect(&ta, &[]).string_pool
     }
 
     #[test]

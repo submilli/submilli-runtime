@@ -293,8 +293,8 @@ impl<'a> FunctionEmitter<'a> {
         }
     }
 
-    /// A region snapshot may be discarded at a branch; retain its source so a
-    /// later narrowed read can load the current value and cast it at use.
+    /// Register the deferred live-read source for a field/index narrowing.
+    /// Every narrowed use reloads this source and checks the current value.
     pub fn register_narrow_source(&mut self, name: &str, source: crate::ExprId) {
         if let Some(scope) = self.scopes.last_mut() {
             scope.narrow_sources.insert(name.to_string(), source);
@@ -689,7 +689,12 @@ pub fn emit_closure_function(
         let typed_ty = ctx.symbols.value_type(&p.ty);
         let typed_local = emitter.add_anonymous_local(typed_ty);
         emitter.instructions.push(Instruction::LocalGet(wasm_slot));
-        cast::emit_cast_to(&mut emitter, ctx, &p.ty);
+        crate::codegen::cast_check::emit_checked_parameter_cast_on_stack(
+            &mut emitter,
+            ctx,
+            &crate::Type::Unknown,
+            &p.ty,
+        );
         emitter
             .instructions
             .push(Instruction::LocalSet(typed_local));
@@ -802,7 +807,7 @@ mod tests {
         bigints: BigIntPool,
         symbols: SymbolTable,
         line_index: LineIndex,
-        aliases: crate::codegen::recursive_validators::AliasBodies,
+        validator_bodies: crate::codegen::recursive_validators::ValidatorBodies,
         type_info: crate::TypeInfoTable,
     }
 
@@ -813,7 +818,7 @@ mod tests {
             bigints: BigIntPool::default(),
             symbols: SymbolTable::default(),
             line_index: LineIndex::new(""),
-            aliases: crate::codegen::recursive_validators::AliasBodies::collect(
+            validator_bodies: crate::codegen::recursive_validators::ValidatorBodies::collect(
                 &TypedAst::new(),
                 &[],
             ),
@@ -830,7 +835,7 @@ mod tests {
             source: "",
             line_index: &f.line_index,
             file: crate::FileId(0),
-            aliases: &f.aliases,
+            validator_bodies: &f.validator_bodies,
             type_info: &f.type_info,
             package_string_global_idx: None,
         }

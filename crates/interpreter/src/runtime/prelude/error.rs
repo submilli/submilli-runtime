@@ -764,6 +764,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         },
                     ),
                 ]),
+                narrowing_checks: BTreeMap::new(),
                 methods: BTreeMap::new(),
                 method_visibility: BTreeMap::new(),
                 accessors: Vec::new(),
@@ -804,6 +805,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 generics: Vec::new(),
                 // No own fields — `message`/`name` are inherited from `Error`.
                 fields: BTreeMap::new(),
+                narrowing_checks: BTreeMap::new(),
                 methods: BTreeMap::new(),
                 method_visibility: BTreeMap::new(),
                 accessors: Vec::new(),
@@ -830,6 +832,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 generics: Vec::new(),
                 // No own fields — `message`/`name` are inherited from `Error`.
                 fields: BTreeMap::new(),
+                narrowing_checks: BTreeMap::new(),
                 methods: BTreeMap::new(),
                 method_visibility: BTreeMap::new(),
                 accessors: Vec::new(),
@@ -893,6 +896,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         },
                     ),
                 ]),
+                narrowing_checks: BTreeMap::new(),
                 methods: BTreeMap::new(),
                 method_visibility: BTreeMap::new(),
                 accessors: Vec::new(),
@@ -924,6 +928,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 generics: Vec::new(),
                 // No own fields — `message`/`name` are inherited from `Error`.
                 fields: BTreeMap::new(),
+                narrowing_checks: BTreeMap::new(),
                 methods: BTreeMap::new(),
                 method_visibility: BTreeMap::new(),
                 accessors: Vec::new(),

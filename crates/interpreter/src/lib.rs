@@ -70,13 +70,13 @@ pub use type_info::{FieldInfo, TypeInfo, TypeInfoId, TypeInfoKind, TypeInfoTable
 pub use typechecker::{capture, check, desugar, infer, infer_package};
 pub use typed_ast::{
     CapturedVar, ClosureBody, EnumVariantPayload, ExportEntry, ExportKind, FieldNarrowingCheck,
-    FieldNarrowingTest, ForOfKind, GenericArgument, GlobalKind, Intrinsic, PostfixTarget,
-    TypedArrayElement, TypedAst, TypedCatchClause, TypedChainPart, TypedClassAccessor,
-    TypedClassConstructor, TypedClassDecl, TypedClassField, TypedClassMethod, TypedExpr,
-    TypedExprKind, TypedFunction, TypedGlobal, TypedInterfaceDecl, TypedInterfaceMember,
-    TypedNumberEnumDecl, TypedNumberEnumMember, TypedObjectFieldOrigin, TypedObjectFieldSource,
-    TypedObjectLiteralField, TypedParam, TypedStmt, TypedStmtKind, TypedStringEnumDecl,
-    TypedStringEnumMember, TypedSwitchCase, TypedSwitchValue, TypedTypeAliasDecl, TypedTypeDecl,
-    TypeofTagKind,
+    FieldNarrowingTest, ForOfKind, GenericArgument, GlobalKind, InterfaceCarrier,
+    InterfaceNarrowingTest, Intrinsic, PostfixTarget, TypedArrayElement, TypedAst,
+    TypedCatchClause, TypedChainPart, TypedClassAccessor, TypedClassConstructor, TypedClassDecl,
+    TypedClassField, TypedClassMethod, TypedExpr, TypedExprKind, TypedFunction, TypedGlobal,
+    TypedInterfaceDecl, TypedInterfaceMember, TypedNumberEnumDecl, TypedNumberEnumMember,
+    TypedObjectFieldOrigin, TypedObjectFieldSource, TypedObjectLiteralField, TypedParam, TypedStmt,
+    TypedStmtKind, TypedStringEnumDecl, TypedStringEnumMember, TypedSwitchCase, TypedSwitchValue,
+    TypedTypeAliasDecl, TypedTypeDecl, TypeofTagKind,
 };
 pub use types::{ObjectField, Package, Type, TypePredicate};
