@@ -497,6 +497,37 @@ mod tests {
             .map(Option::unwrap_or_default)
     }
 
+    #[tokio::test]
+    async fn narrowed_host_carriers() {
+        let source = r#"
+import session from "submilli:session";
+import { Entry, Page } from "submilli:session";
+import { info } from "submilli:fs";
+
+class Parent { value: unknown = null; reset(value: unknown): void { this.value = value; } }
+function rejects(read: () => void): void {
+ let caught = false;
+ try { read(); } catch (e) { caught = e instanceof TypeError; }
+ assert(caught, "unrelated carrier must throw TypeError");
+}
+
+class PageField extends Parent { value: Page | null = null; }
+class EntryField extends Parent { value: Entry | null = null; }
+function main(): void {
+ session.set("key", "value");
+ const p = new PageField(); p.reset(session.list("", 10, null));
+ assert(p.value!.entries.length === 1, "Page");
+ const e = new EntryField(); e.reset(p.value!.entries[0]);
+ assert(e.value!.key === "key", "Entry");
+ p.reset(e.value); rejects(() => { const v = p.value; });
+ e.reset(info()); rejects(() => { const v = e.value; });
+}
+"#;
+        run(source, Some(Arc::new(InMemorySessionKv::default())))
+            .await
+            .expect("host guards");
+    }
+
     /// An unconfigured runtime must refuse rather than fabricate a store: a
     /// program that silently wrote into per-run state would look like it
     /// persisted and lose everything.

@@ -339,11 +339,23 @@ pub(super) fn erase_generic_params_in_expr(expr: &mut crate::TypedExpr) {
                 c.ty = erase_generic_params(&c.ty);
             }
         }
-        TypedExprKind::GenericCall { return_cast, .. }
-        | TypedExprKind::GenericMethodCall { return_cast, .. } => {
+        TypedExprKind::GenericCall {
+            type_args,
+            return_cast,
+            ..
+        } => {
+            for arg in type_args {
+                *arg = erase_generic_params(arg);
+            }
             if let Some(t) = return_cast {
                 *t = erase_generic_params(t);
             }
+        }
+        TypedExprKind::GenericMethodCall {
+            return_cast: Some(t),
+            ..
+        } => {
+            *t = erase_generic_params(t);
         }
         TypedExprKind::InstanceOf { class, .. } => {
             *class = erase_generic_params(class);
@@ -1144,8 +1156,16 @@ impl Inferer<'_> {
         // wrapped around it does the verifying. Intercepting here rather than
         // at a callsite is what covers every import form, since all four
         // callers thread the package-export mangled name through unchanged.
+        let runtime_args: Vec<_> = generics
+            .iter()
+            .map(|name| sub.apply(&Type::TypeVar(name.clone())))
+            .collect();
+        for arg in &runtime_args {
+            self.record_runtime_type_test(arg);
+        }
         let call = TypedExprKind::GenericCall {
             mangled,
+            type_args: runtime_args,
             args: generic_args,
             return_cast: if checked_get { None } else { return_cast },
             type_predicate,

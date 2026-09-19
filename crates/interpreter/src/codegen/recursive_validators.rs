@@ -27,6 +27,7 @@ use crate::{
 /// nominal identity; local declarations use their source names because the
 /// typed declaration nodes do not retain their mangled identities.
 pub struct ValidatorBodies {
+    class_fields: BTreeMap<Type, Type>,
     imported_aliases: BTreeMap<MangledName, (Vec<String>, Type)>,
     local_aliases: BTreeMap<String, (Vec<String>, Type)>,
     /// Interface identity → (generics, property field map). Method-bearing
@@ -99,6 +100,7 @@ impl ValidatorBodies {
             }
         }
         Self {
+            class_fields: ta.runtime_class_fields.clone(),
             imported_aliases,
             local_aliases,
             imported_interfaces,
@@ -111,6 +113,11 @@ impl ValidatorBodies {
     /// with generic args substituted); any other type returns `ty.peel()` cloned.
     pub fn expand_one(&self, ty: &Type) -> Type {
         match ty.peel() {
+            Type::ClassRef { .. } => self
+                .class_fields
+                .get(ty.peel())
+                .cloned()
+                .unwrap_or_else(|| ty.peel().clone()),
             Type::AliasRef {
                 mangled,
                 name,
@@ -477,6 +484,12 @@ impl<'a, 'b> Traversal<'a, 'b> {
             }
             Type::AliasRef { mangled, .. } if self.bodies.expand_one(peeled) != *peeled => {
                 self.walk_alias(peeled, mangled);
+            }
+            Type::ClassRef { mangled, args, .. } if self.bodies.expand_one(peeled) != *peeled => {
+                for arg in args {
+                    self.walk(arg);
+                }
+                self.walk_interface(peeled, mangled);
             }
             Type::InterfaceRef { mangled, .. } if self.bodies.expand_one(peeled) != *peeled => {
                 self.walk_interface(peeled, mangled);

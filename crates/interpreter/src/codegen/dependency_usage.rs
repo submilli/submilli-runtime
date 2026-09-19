@@ -43,6 +43,17 @@ impl DependencyUsage {
 
     pub(crate) fn finish(mut self, dependencies: &[&PackageDeclaration]) -> Self {
         self.collect_codegen_prelude_values();
+        for package in dependencies {
+            for symbol in package.runtime_types.values() {
+                if let TypeKind::Class {
+                    narrowing_checks, ..
+                } = &symbol.kind
+                    && !narrowing_checks.is_empty()
+                {
+                    self.note_type(symbol.mangled_name.clone());
+                }
+            }
+        }
         self.resolve_dependency_shapes(dependencies);
         self
     }
@@ -113,6 +124,21 @@ impl DependencyUsage {
         let mut types = Vec::new();
         for package in dependencies {
             collect_used_types(self, package, &package.types, &mut types);
+            for (name, symbol) in &package.runtime_types {
+                if self.is_type_reachable(symbol)
+                    && !package
+                        .types
+                        .values()
+                        .any(|public| public.mangled_name == symbol.mangled_name)
+                {
+                    types.push(DependencyType {
+                        package,
+                        name,
+                        symbol,
+                        full: self.is_type_fully_used(symbol),
+                    });
+                }
+            }
             collect_used_namespace_types(self, package, &package.namespaces, &mut types);
         }
         types
@@ -161,7 +187,7 @@ impl DependencyUsage {
         for defs in dependencies {
             collect_values(&defs.values, &mut values);
             collect_namespace_values(&defs.namespaces, &mut values);
-            for ty_sym in defs.types.values() {
+            for ty_sym in defs.runtime_types.values().chain(defs.types.values()) {
                 types.insert(ty_sym.mangled_name.clone(), ty_sym);
                 if let TypeKind::Interface {
                     methods,

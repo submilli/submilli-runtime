@@ -110,6 +110,7 @@ fn dir_entry_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<Struc
             string_field(&intr), // name
             string_field(&intr), // path
             f64_field(),         // size
+            wasmtime::FieldType::new(Mutability::Const, StorageType::ValType(ValType::I64)), // nominal marker
         ],
     )
 }
@@ -123,6 +124,7 @@ fn info_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructType
             string_field(&intr), // mode
             f64_field(),         // sizeLimit
             f64_field(),         // pathLimit
+            wasmtime::FieldType::new(Mutability::Const, StorageType::ValType(ValType::I64)), // nominal marker
         ],
     )
 }
@@ -698,6 +700,7 @@ fn build_info(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Val> {
             Val::AnyRef(Some(mode)),
             Val::F64(size_limit.to_bits()),
             Val::F64(path_limit.to_bits()),
+            Val::I64(0),
         ],
     )
 }
@@ -1026,6 +1029,7 @@ fn list_next(
             Val::AnyRef(Some(name)),
             Val::AnyRef(Some(path)),
             Val::F64(size.to_bits()),
+            Val::I64(0),
         ],
     )?;
     results[0] = iter_yield(caller, entry)?;
@@ -1381,6 +1385,44 @@ mod tests {
                 CheckOutcome::Allow
             }
         }
+    }
+
+    #[tokio::test]
+    async fn narrowed_host_carriers() {
+        let source = r#"
+import { info, stat, peek, list, writer, writeText, Info, Stat, Peek, DirEntry, FileWriter } from "submilli:fs";
+
+class Parent { value: unknown = null; reset(value: unknown): void { this.value = value; } }
+function rejects(read: () => void): void {
+ let caught = false;
+ try { read(); } catch (e) { caught = e instanceof TypeError; }
+ assert(caught, "unrelated carrier must throw TypeError");
+}
+
+class InfoField extends Parent { value: Info = info(); }
+class StatField extends Parent { value: Stat | null = null; }
+class PeekField extends Parent { value: Peek | null = null; }
+class EntryField extends Parent { value: DirEntry | null = null; }
+class WriterField extends Parent { value: FileWriter | null = null; }
+function main(): void {
+ writeText("/input.txt", "text");
+ const i = new InfoField(); assert(i.value.mode.length > 0, "Info");
+ const s = new StatField(); s.reset(stat("/input.txt")); assert(s.value!.size === 4, "Stat");
+ i.reset(s.value); rejects(() => { const v = i.value; });
+ s.reset(info()); rejects(() => { const v = s.value; });
+ const p = new PeekField(); p.reset(peek("/input.txt")); assert(p.value!.size === 4, "Peek");
+ const e = new EntryField();
+ for (const entry of list("/", false)) { e.reset(entry); }
+ assert(e.value!.name === "input.txt", "DirEntry");
+ p.reset(e.value); rejects(() => { const v = p.value; });
+ e.reset(peek("/input.txt")); rejects(() => { const v = e.value; });
+ const w = new WriterField(); w.reset(writer("/output.txt")); w.value!.close();
+ w.reset(info()); rejects(() => { const v = w.value; });
+}
+"#;
+        run_with(source, StoreData::with_vfs(Vfs::tempdir().unwrap()))
+            .await
+            .expect("host guards");
     }
 
     #[tokio::test]

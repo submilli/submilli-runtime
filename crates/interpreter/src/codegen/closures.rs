@@ -68,6 +68,7 @@ pub fn classify(sig: &Type) -> ClosureSig {
 
 #[derive(Clone, Debug)]
 pub struct ClosureMeta {
+    pub runtime_generics: Vec<String>,
     pub expr_id: ExprId,
     pub signature: Type,
     pub captured: Vec<CapturedVar>,
@@ -493,7 +494,7 @@ pub fn emit_env_types(
     next_type_idx: &mut u32,
 ) {
     for meta in metas {
-        let fields: Vec<FieldType> = meta
+        let mut fields: Vec<FieldType> = meta
             .captured
             .iter()
             .map(|c| FieldType {
@@ -501,6 +502,14 @@ pub fn emit_env_types(
                 mutable: false,
             })
             .collect();
+        if !meta.runtime_generics.is_empty() {
+            fields.push(FieldType {
+                element_type: StorageType::Val(super::runtime_descriptors::environment_type(
+                    symbols,
+                )),
+                mutable: false,
+            });
+        }
         types.ty().subtype(&SubType {
             is_final: false,
             supertype_idx: None,

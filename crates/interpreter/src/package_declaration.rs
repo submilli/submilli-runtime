@@ -24,6 +24,13 @@ pub struct PackageDeclaration {
     pub values: BTreeMap<String, ValueSymbol>,
     /// Named declarations only (interfaces, enums, aliases). Anonymous structural shapes live on `shapes`.
     pub types: BTreeMap<String, TypeSymbol>,
+    /// Compiler-only declarations used to reconstruct hidden runtime classes.
+    /// These names never enter source imports or rendered package declarations.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub runtime_types: BTreeMap<String, TypeSymbol>,
+    /// Generic functions using the hidden runtime-descriptor argument.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub runtime_generics: BTreeSet<crate::MangledName>,
     /// Anonymous structural shapes (`Object`, `Array`, `Union`) for cross-module WasmGC subtype alignment.
     pub shapes: Vec<crate::Shape>,
     /// Prelude-declared namespaces (`Math`, `Temporal`). User `namespace {}` is a parse error; always empty for user-source modules.
@@ -47,6 +54,9 @@ impl PackageDeclaration {
     pub fn from_typed_ast(ast: &TypedAst) -> Self {
         let mut defs = PackageDeclaration::with_package(ast.package_name.clone());
         for f in &ast.functions {
+            if !f.generics.is_empty() {
+                defs.runtime_generics.insert(f.mangled_name.clone());
+            }
             defs.values
                 .entry(f.name.name.clone())
                 .or_insert_with(|| ValueSymbol {

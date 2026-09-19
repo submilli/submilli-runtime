@@ -93,6 +93,7 @@ pub enum TypedExprKind {
     /// (no generic closures).
     GenericCall {
         mangled: MangledName,
+        type_args: Vec<Type>,
         args: Vec<GenericArgument>,
         /// `Some(T)` when the unsubstituted return is a bare `TypeVar`; codegen emits a
         /// cast to materialize the call-site type. `None` when return is already concrete.
@@ -186,6 +187,7 @@ pub enum TypedExprKind {
     },
     /// `captured` is empty until the capture pass runs; codegen reads entries in order as env struct slots.
     Closure {
+        runtime_generics: Vec<String>,
         params: Vec<TypedParam>,
         return_type: Type,
         body: ClosureBody,
@@ -761,6 +763,17 @@ pub struct TypedAst {
     /// interface declarations and generic substitutions. Codegen consults this
     /// for narrowed reads instead of re-deriving type structure.
     pub runtime_type_tests: std::collections::BTreeMap<Type, FieldNarrowingTest>,
+    /// Substituted data fields for generic-class runtime validation.
+    pub runtime_class_fields: std::collections::BTreeMap<Type, Type>,
+    pub runtime_class_parameters: std::collections::BTreeMap<MangledName, Vec<String>>,
+    pub runtime_class_contexts: std::collections::BTreeMap<Type, Vec<InstanceTypeContext>>,
+    pub runtime_field_guards: std::collections::BTreeMap<Type, Vec<InstantiatedFieldGuard>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct InstanceTypeContext {
+    pub declaration: MangledName,
+    pub args: Vec<Type>,
 }
 
 /// A public export: maps a package-public mangled name onto the internal symbol
@@ -928,8 +941,17 @@ pub struct TypedClassField {
 /// otherwise — and throws `message` as a catchable `TypeError`.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FieldNarrowingCheck {
+    #[serde(default)]
+    pub declaration: Option<MangledName>,
     pub test: FieldNarrowingTest,
     pub message: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct InstantiatedFieldGuard {
+    pub field: String,
+    pub target: Type,
+    pub check: FieldNarrowingCheck,
 }
 
 /// What a *redeclared* field's read guard verifies before it casts. The
@@ -1008,6 +1030,15 @@ pub enum InterfaceCarrier {
     TemporalPlainMonthDay,
     ObjectShape,
     Url,
+    FsStat,
+    FsPeek,
+    FsDirEntry,
+    FsInfo,
+    FsFileWriter,
+    HttpResponse,
+    HttpDownloadResult,
+    SessionEntry,
+    SessionPage,
 }
 
 /// Whether codegen can validate every value admitted by `ty` with

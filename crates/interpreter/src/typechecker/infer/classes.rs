@@ -1332,6 +1332,7 @@ impl<'a> Inferer<'a> {
         let parent_name = self.class_name_of(&widest_class);
         let field = &member.name;
         let check = crate::FieldNarrowingCheck {
+            declaration: Some(member.child_class.clone()),
             test,
             message: format!(
                 "field `{field}` holds a value its declaration does not admit: \
@@ -1657,9 +1658,22 @@ impl<'a> Inferer<'a> {
                 }
                 _ => {}
             }
-            if package.as_str() == crate::stdlib::url::MODULE_NAME && name == "URL" {
-                carriers.insert(crate::InterfaceCarrier::Url);
-            }
+            let host_carrier = match (package.as_str(), name) {
+                ("submilli:fs", "Stat") => Some(crate::InterfaceCarrier::FsStat),
+                ("submilli:fs", "Peek") => Some(crate::InterfaceCarrier::FsPeek),
+                ("submilli:fs", "DirEntry") => Some(crate::InterfaceCarrier::FsDirEntry),
+                ("submilli:fs", "Info") => Some(crate::InterfaceCarrier::FsInfo),
+                ("submilli:fs", "FileWriter") => Some(crate::InterfaceCarrier::FsFileWriter),
+                ("submilli:http", "Response") => Some(crate::InterfaceCarrier::HttpResponse),
+                ("submilli:http", "DownloadResult") => {
+                    Some(crate::InterfaceCarrier::HttpDownloadResult)
+                }
+                ("submilli:session", "Entry") => Some(crate::InterfaceCarrier::SessionEntry),
+                ("submilli:session", "Page") => Some(crate::InterfaceCarrier::SessionPage),
+                ("submilli:url", "URL") => Some(crate::InterfaceCarrier::Url),
+                _ => None,
+            };
+            carriers.extend(host_carrier);
         }
         carriers
     }
@@ -1674,7 +1688,7 @@ impl<'a> Inferer<'a> {
         mode: RuntimeTestMode,
         active_interfaces: &mut BTreeSet<MangledName>,
     ) {
-        let key = ty.peel().clone();
+        let key = super::generic::erase_generic_params(ty.peel());
         if let Some(existing) = self.typed_ast.runtime_type_tests.get(&key) {
             if mode == RuntimeTestMode::AllowAliasRefs
                 && matches!(existing, crate::FieldNarrowingTest::Representation)
@@ -1692,12 +1706,15 @@ impl<'a> Inferer<'a> {
             .runtime_type_tests
             .insert(key.clone(), crate::FieldNarrowingTest::Representation);
         self.record_runtime_test_dependencies(&key, active_interfaces);
+        self.record_runtime_class_fields(&key, active_interfaces);
         let testable = if mode == RuntimeTestMode::AllowAliasRefs {
             crate::typed_ast::field_runtime_type_is_testable(&key)
         } else {
             crate::typed_ast::runtime_type_is_testable(&key)
         };
-        let test = if let Some(interface) = self.interface_narrowing_test(&key) {
+        let test = if let Some(members) = self.enum_runtime_members(&key) {
+            crate::FieldNarrowingTest::Shape(members)
+        } else if let Some(interface) = self.interface_narrowing_test(&key) {
             let interface_identity = match key.peel() {
                 Type::InterfaceRef { mangled, .. } => Some(mangled.clone()),
                 Type::Union(members) => members.iter().find_map(|member| match member.peel() {
@@ -1736,6 +1753,104 @@ impl<'a> Inferer<'a> {
         self.typed_ast.runtime_type_tests.insert(key, test);
     }
 
+    fn enum_runtime_members(&self, ty: &Type) -> Option<Type> {
+        let (Type::NumberEnum { mangled, .. } | Type::StringEnum { mangled, .. }) = ty else {
+            return None;
+        };
+        let symbol = self
+            .type_registry
+            .lookup(mangled)
+            .or_else(|| self.types.lookup_by_mangled(mangled))?;
+        let members = match &symbol.kind {
+            TypeKind::NumberEnum { variants, .. } => variants
+                .iter()
+                .map(|(_, value)| Type::NumberLiteral(crate::types::LiteralF64(*value)))
+                .collect(),
+            TypeKind::StringEnum { variants, .. } => variants
+                .iter()
+                .map(|(_, value)| Type::StringLiteral(value.clone()))
+                .collect(),
+            _ => return None,
+        };
+        Some(Type::union(members))
+    }
+
+    fn record_runtime_class_fields(&mut self, ty: &Type, active: &mut BTreeSet<MangledName>) {
+        let Type::ClassRef { mangled, args, .. } = ty else {
+            return;
+        };
+        if !active.insert(mangled.clone()) {
+            self.typed_ast
+                .runtime_class_fields
+                .insert(ty.clone(), Type::Never);
+            return;
+        }
+        let mut fields = BTreeMap::new();
+        let mut guards = Vec::new();
+        let mut contexts = Vec::new();
+        for_each_class_in_chain(
+            |name| self.class_by_mangled(name),
+            mangled,
+            args,
+            |symbol, bindings| {
+                let TypeKind::Class {
+                    generics,
+                    fields: declared,
+                    narrowing_checks,
+                    accessors,
+                    ..
+                } = &symbol.kind
+                else {
+                    return;
+                };
+                if !generics.is_empty() {
+                    contexts.push(crate::typed_ast::InstanceTypeContext {
+                        declaration: symbol.mangled_name.clone(),
+                        args: generics.iter().map(|name| bindings[name].clone()).collect(),
+                    });
+                }
+                for (name, check) in narrowing_checks {
+                    if let Some(field) = declared.get(name) {
+                        guards.push(crate::typed_ast::InstantiatedFieldGuard {
+                            field: name.clone(),
+                            target: substitute_typevars(&field_read_ty(field), bindings),
+                            check: check.clone(),
+                        });
+                    }
+                }
+                for (name, field) in declared {
+                    if accessors.iter().any(|accessor| accessor.name() == name) {
+                        continue;
+                    }
+                    fields.entry(name.clone()).or_insert(crate::ObjectField {
+                        ty: substitute_typevars(&field.ty, bindings),
+                        optional: field.optional,
+                        readonly: field.readonly,
+                    });
+                }
+            },
+        );
+        self.typed_ast
+            .runtime_class_contexts
+            .insert(ty.clone(), contexts);
+        self.typed_ast
+            .runtime_field_guards
+            .insert(ty.clone(), guards.clone());
+        for guard in guards {
+            self.record_runtime_type_test_inner(
+                &guard.target,
+                RuntimeTestMode::AllowAliasRefs,
+                active,
+            );
+        }
+        let shape = Type::Object { fields };
+        self.typed_ast
+            .runtime_class_fields
+            .insert(ty.clone(), shape.clone());
+        self.record_runtime_type_test_inner(&shape, RuntimeTestMode::AllowAliasRefs, active);
+        active.remove(mangled);
+    }
+
     fn record_runtime_test_dependencies(
         &mut self,
         ty: &Type,
@@ -1750,7 +1865,9 @@ impl<'a> Inferer<'a> {
         };
         match ty.peel() {
             Type::Array(element) => record(element),
-            Type::Tuple(elements) | Type::Union(elements) => {
+            Type::Tuple(elements)
+            | Type::Union(elements)
+            | Type::ClassRef { args: elements, .. } => {
                 for element in elements {
                     record(element);
                 }
@@ -2710,6 +2827,9 @@ impl<'a> Inferer<'a> {
                 continue;
             };
             let mangled = sym.mangled_name.clone();
+            self.typed_ast
+                .runtime_class_parameters
+                .insert(mangled.clone(), class_generics.clone());
 
             // Static bodies run without an instance: checked before `current_class`
             // is set so `this`/`super` get the static-specific rejections — and

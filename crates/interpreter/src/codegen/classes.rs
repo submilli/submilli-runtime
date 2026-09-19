@@ -58,6 +58,7 @@ struct MethodSlot {
 }
 
 struct ClassLayout {
+    generics: Vec<String>,
     mangled: MangledName,
     name: String,
     parent: Option<MangledName>,
@@ -336,6 +337,11 @@ impl ClassPlan {
                 .into_iter()
                 .collect();
             classes.push(ClassLayout {
+                generics: ta
+                    .runtime_class_parameters
+                    .get(&mangled)
+                    .cloned()
+                    .unwrap_or_default(),
                 mangled: mangled.clone(),
                 name: decl.name.name.clone(),
                 parent: decl.extends.clone(),
@@ -521,6 +527,22 @@ impl ClassPlan {
 
         // Record each field's payload index inside ObjectShape.fields.
         for class in &self.classes {
+            symbols
+                .class_type_parameters
+                .insert(class.mangled.clone(), class.generics.clone());
+            symbols.record_class_guard_layout(
+                class.mangled.clone(),
+                class.parent.as_ref(),
+                class.payload_field_names().len() as u32,
+                !class.generics.is_empty()
+                    || class.parent.as_ref().is_some_and(|parent| {
+                        symbols.class_guard_layout(parent).has_instance_guards
+                    })
+                    || class
+                        .fields
+                        .iter()
+                        .any(|field| field.narrowing_check.is_some()),
+            );
             for (i, f) in class.fields.iter().enumerate() {
                 symbols.record_class_field_slot(class.mangled.clone(), f.name.clone(), i as u32);
                 if let Some(check) = &f.narrowing_check {
@@ -571,7 +593,14 @@ impl ClassPlan {
                 .collect();
             symbols.record_class_ctor_abi(class.mangled.clone(), params.clone());
             let ret = ref_to(class.struct_type_idx);
-            types.ty().function(params.clone(), vec![ret]);
+            let mut entry_params = params.clone();
+            if symbols
+                .class_guard_layout(&class.mangled)
+                .has_instance_guards
+            {
+                entry_params.push(ref_to(intrinsics.object_fields));
+            }
+            types.ty().function(entry_params, vec![ret]);
             class.ctor_sig_idx = take(next_type_idx);
 
             let mut init_params = vec![ref_to(object_idx)];
@@ -1035,6 +1064,7 @@ impl ClassPlan {
         )));
         emitter.instruction(Instruction::LocalSet(this_slot));
         emitter.set_this_local(this_slot);
+        super::field_guards::bind_receiver(&mut emitter, ctx, this_slot, &class.mangled);
 
         if !method.return_type.is_void() {
             emitter.set_return_target(ReturnTarget::Slot(
@@ -1065,7 +1095,24 @@ impl ClassPlan {
         // Parameters stay at their (possibly erased) slot types: this body only
         // forwards them to the init fn, which takes the same slots.
         let ctor_slots = ctor_slot_types(ctx, &class.mangled);
-        let wasm_params = slot_params(ctx, &class.ctor_params, &ctor_slots);
+        let mut wasm_params = slot_params(ctx, &class.ctor_params, &ctor_slots);
+        let guarded = ctx
+            .symbols
+            .class_guard_layout(&class.mangled)
+            .has_instance_guards;
+        if guarded {
+            let intr = ctx
+                .symbols
+                .intrinsic_type_indices()
+                .expect("intrinsics declared");
+            wasm_params.push((
+                crate::Ident {
+                    name: "$field_guards".into(),
+                    span: crate::Span::at(ctx.file),
+                },
+                ref_to(intr.object_fields),
+            ));
+        }
         let mut emitter = FunctionEmitter::new(ctx, &wasm_params);
 
         let this_slot = emitter.add_anonymous_local(ref_to(class.struct_type_idx));
@@ -1097,16 +1144,43 @@ impl ClassPlan {
             .symbols
             .intrinsic_type_indices()
             .expect("intrinsics declared by codegen entry");
-        for _ in 0..n_fields + dynamic_methods.len() {
+        // Instance validators live after the named payload, indexed by data
+        // slot. Keeping them out of field_names preserves object enumeration.
+        let layout = ctx.symbols.class_guard_layout(&class.mangled);
+        let depth = layout.inheritance_depth;
+        let guarded = layout.has_instance_guards;
+        let guard_slots = if guarded {
+            (depth as usize + 1) * (field_names.len() + 1)
+        } else {
+            0
+        };
+        let payload_len = field_names.len() + guard_slots;
+        for _ in 0..payload_len {
             let default = default_object_value_instr(intrinsics.object);
             emitter.instruction(default);
         }
         emitter.instruction(Instruction::ArrayNewFixed {
             array_type_index: intrinsics.object_fields,
-            array_size: (n_fields + dynamic_methods.len()) as u32,
+            array_size: payload_len as u32,
         });
         emitter.instruction(Instruction::StructNew(class.struct_type_idx));
         emitter.instruction(Instruction::LocalSet(this_slot));
+
+        if guarded {
+            emitter.instruction(Instruction::LocalGet(this_slot));
+            emitter.instruction(Instruction::StructGet {
+                struct_type_index: class.struct_type_idx,
+                field_index: 2,
+            });
+            emitter.instruction(Instruction::I32Const(field_names.len() as i32));
+            emitter.instruction(Instruction::LocalGet(class.ctor_params.len() as u32));
+            emitter.instruction(Instruction::I32Const(0));
+            emitter.instruction(Instruction::I32Const(guard_slots as i32));
+            emitter.instruction(Instruction::ArrayCopy {
+                array_type_index_dst: intrinsics.object_fields,
+                array_type_index_src: intrinsics.object_fields,
+            });
+        }
 
         // Method-closure prologue: store `$closure_<sig>{ closure_vtable, adapter,
         // this }` into each method's payload slot, so an interface-typed receiver
@@ -1193,6 +1267,7 @@ impl ClassPlan {
         )));
         emitter.instruction(Instruction::LocalSet(this_slot));
         emitter.set_this_local(this_slot);
+        super::field_guards::bind_receiver(&mut emitter, ctx, this_slot, &class.mangled);
         emitter.set_ctor_class(class.mangled.clone());
 
         if let Some(body) = class.ctor_body {
@@ -2101,6 +2176,7 @@ mod tests {
         let vtable_type_idx = crate::codegen::intrinsics::INTRINSIC_TYPE_COUNT;
         let struct_type_idx = vtable_type_idx + 1;
         let layout = ClassLayout {
+            generics: Vec::new(),
             mangled: crate::mangle::prelude("ErrorWitness"),
             name: "ErrorWitness".to_string(),
             parent: None,

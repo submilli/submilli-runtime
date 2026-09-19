@@ -59,7 +59,10 @@ pub struct ImportedSlot {
 /// (sorted) own-member order the producer assigns slots in — no order metadata
 /// has to cross the package boundary.
 struct ClassInfo<'a> {
+    generics: &'a [String],
     package: &'a str,
+    supports_instance_guards: bool,
+    runtime_generics: &'a BTreeSet<MangledName>,
     name: &'a str,
     extends: Option<MangledName>,
     fields: &'a BTreeMap<String, crate::FieldSig>,
@@ -230,11 +233,15 @@ fn import_statics(
         if !usage.is_value_used(&key) {
             continue;
         }
-        let param_types: Vec<ValType> = sig
+        let mut param_types: Vec<ValType> = sig
             .params
             .iter()
             .map(|p| symbols.value_type(&p.ty))
             .collect();
+        if class.runtime_generics.contains(&key) {
+            symbols.runtime_generic_functions.insert(key.clone());
+            param_types.push(super::runtime_descriptors::environment_type(symbols));
+        }
         let results = symbols.wasm_result(&sig.ret);
         types.ty().function(param_types, results);
         let sig_idx = take(next_type_idx);
@@ -277,8 +284,9 @@ fn collect_class_info<'a>(
 ) -> BTreeMap<MangledName, ClassInfo<'a>> {
     let mut info = BTreeMap::new();
     for defs in dependencies {
-        for sym in defs.types.values() {
+        for sym in defs.runtime_types.values().chain(defs.types.values()) {
             if let TypeKind::Class {
+                generics,
                 extends,
                 fields,
                 narrowing_checks,
@@ -294,10 +302,15 @@ fn collect_class_info<'a>(
                 info.insert(
                     sym.mangled_name.clone(),
                     ClassInfo {
+                        generics,
+                        runtime_generics: &defs.runtime_generics,
                         package: defs.package_name.as_str(),
+                        supports_instance_guards: defs
+                            .runtime_types
+                            .contains_key(sym.mangled_name.as_str()),
                         name: sym.name.as_str(),
-                        // Codegen is generics-erased — only the parent's name
-                        // matters for layout/vtable reconstruction.
+                        // Layout and vtables depend on the parent's name;
+                        // concrete arguments travel in the instance context.
                         extends: extends.as_ref().map(|e| e.parent.clone()),
                         fields,
                         narrowing_checks,
@@ -588,6 +601,22 @@ fn reconstruct_one(
         );
     }
 
+    symbols
+        .class_type_parameters
+        .insert(mangled.clone(), class.generics.to_vec());
+    symbols.record_class_guard_layout(
+        mangled.clone(),
+        class.extends.as_ref(),
+        (fields.len() + slots.iter().filter(|slot| !slot.generic).count()) as u32,
+        (!class.generics.is_empty()
+            || !narrowing_checks.is_empty()
+            || class
+                .extends
+                .as_ref()
+                .is_some_and(|parent| symbols.class_guard_layout(parent).has_instance_guards))
+            && class.supports_instance_guards,
+    );
+
     // 4. Import the constructor, ctor-init, and own method bodies.
     let ctor_params: Vec<ValType> = class
         .constructor
@@ -604,9 +633,11 @@ fn reconstruct_one(
     );
 
     // Entry constructor: `(params) -> (ref $C)`.
-    types
-        .ty()
-        .function(ctor_params.clone(), [ref_to(struct_idx)]);
+    let mut entry_params = ctor_params.clone();
+    if symbols.class_guard_layout(mangled).has_instance_guards {
+        entry_params.push(ref_to(intrinsics.object_fields));
+    }
+    types.ty().function(entry_params, [ref_to(struct_idx)]);
     let ctor_sig = take(next_type_idx);
     let ctor_mangled = crate::mangle::extend(mangled, "constructor");
     imports.import(

@@ -478,4 +478,8 @@ TypedAst {
             },
         ),
     },
+    runtime_class_fields: {},
+    runtime_class_parameters: {},
+    runtime_class_contexts: {},
+    runtime_field_guards: {},
 }

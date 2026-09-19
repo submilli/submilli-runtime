@@ -44,6 +44,16 @@ pub struct IntrinsicTypeIndices {
     pub map: u32,
     pub set: u32,
     pub url: u32,
+    pub fs_stat: u32,
+    pub fs_peek: u32,
+    pub fs_dir_entry: u32,
+    pub fs_info: u32,
+    pub fs_file_writer: u32,
+    pub http_response: u32,
+    pub http_download_result: u32,
+    pub session_entry: u32,
+    pub session_page: u32,
+
     pub temporal_plain_date: u32,
     pub temporal_plain_time: u32,
     pub temporal_plain_date_time: u32,
@@ -53,7 +63,7 @@ pub struct IntrinsicTypeIndices {
 
 /// Number of types [`declare_intrinsic_types`] emits — the first free type index
 /// in every module.
-pub const INTRINSIC_TYPE_COUNT: u32 = 41;
+pub const INTRINSIC_TYPE_COUNT: u32 = 50;
 
 pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices {
     let raw_string = 0u32;
@@ -118,6 +128,16 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
     let map = 33u32;
     let set = 34u32;
     let url = 35u32;
+    let fs_stat = 41u32;
+    let fs_peek = 42u32;
+    let fs_dir_entry = 43u32;
+    let fs_info = 44u32;
+    let fs_file_writer = 45u32;
+    let http_response = 46u32;
+    let http_download_result = 47u32;
+    let session_entry = 48u32;
+    let session_page = 49u32;
+
     let temporal_plain_date = 36u32;
     let temporal_plain_time = 37u32;
     let temporal_plain_date_time = 38u32;
@@ -761,6 +781,138 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
         Some(object),
     ));
 
+    // Exact standalone carriers for direct host interfaces. The hidden i64
+    // markers distinguish fs interfaces whose public payload layouts coincide.
+    let host_f64 = FieldType {
+        element_type: StorageType::Val(ValType::F64),
+        mutable: false,
+    };
+    let host_i64 = FieldType {
+        element_type: StorageType::Val(ValType::I64),
+        mutable: false,
+    };
+    let host_externref = FieldType {
+        element_type: StorageType::Val(ValType::EXTERNREF),
+        mutable: false,
+    };
+    let host_object = FieldType {
+        element_type: StorageType::Val(ref_null(object)),
+        mutable: false,
+    };
+    let host_string = FieldType {
+        element_type: StorageType::Val(ref_null(string)),
+        mutable: false,
+    };
+    // fs_stat
+    types.ty().subtype(&SubType {
+        is_final: true,
+        ..substruct(
+            vec![
+                fieldtype_ref(vtable),
+                fieldtype_ref(string),
+                host_f64,
+                host_f64,
+            ],
+            Some(object),
+        )
+    });
+    // fs_peek
+    types.ty().subtype(&SubType {
+        is_final: true,
+        ..substruct(
+            vec![
+                fieldtype_ref(vtable),
+                fieldtype_ref(string),
+                fieldtype_ref(string),
+                fieldtype_ref(string),
+                host_f64,
+            ],
+            Some(object),
+        )
+    });
+    // fs_dir_entry
+    types.ty().subtype(&SubType {
+        is_final: true,
+        ..substruct(
+            vec![
+                fieldtype_ref(vtable),
+                fieldtype_ref(string),
+                fieldtype_ref(string),
+                fieldtype_ref(string),
+                host_f64,
+                host_i64,
+            ],
+            Some(object),
+        )
+    });
+    // fs_info
+    types.ty().subtype(&SubType {
+        is_final: true,
+        ..substruct(
+            vec![
+                fieldtype_ref(vtable),
+                fieldtype_ref(string),
+                host_f64,
+                host_f64,
+                host_i64,
+            ],
+            Some(object),
+        )
+    });
+    // fs_file_writer
+    types.ty().subtype(&SubType {
+        is_final: true,
+        ..substruct(vec![fieldtype_ref(vtable), host_externref], Some(object))
+    });
+    // http_response
+    types.ty().subtype(&SubType {
+        is_final: true,
+        ..substruct(
+            vec![
+                fieldtype_ref(vtable),
+                fieldtype_ref(string),
+                host_object,
+                temporal_i32,
+                host_f64,
+                fieldtype_ref(string),
+                fieldtype_ref(string),
+            ],
+            Some(object),
+        )
+    });
+    // http_download_result
+    types.ty().subtype(&SubType {
+        is_final: true,
+        ..substruct(
+            vec![
+                fieldtype_ref(vtable),
+                host_f64,
+                fieldtype_ref(string),
+                host_f64,
+                fieldtype_ref(string),
+                fieldtype_ref(string),
+                host_f64,
+            ],
+            Some(object),
+        )
+    });
+    // session_entry
+    types.ty().subtype(&SubType {
+        is_final: true,
+        ..substruct(
+            vec![fieldtype_ref(vtable), fieldtype_ref(string), host_f64],
+            Some(object),
+        )
+    });
+    // session_page
+    types.ty().subtype(&SubType {
+        is_final: true,
+        ..substruct(
+            vec![fieldtype_ref(vtable), fieldtype_ref(array), host_string],
+            Some(object),
+        )
+    });
+
     IntrinsicTypeIndices {
         raw_string,
         vtable,
@@ -798,6 +950,15 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
         map,
         set,
         url,
+        fs_stat,
+        fs_peek,
+        fs_dir_entry,
+        fs_info,
+        fs_file_writer,
+        http_response,
+        http_download_result,
+        session_entry,
+        session_page,
         temporal_plain_date,
         temporal_plain_time,
         temporal_plain_date_time,
@@ -837,6 +998,15 @@ pub(crate) fn intrinsic_supertypes(
         (indices.map, indices.object),
         (indices.set, indices.object),
         (indices.url, indices.object),
+        (indices.fs_stat, indices.object),
+        (indices.fs_peek, indices.object),
+        (indices.fs_dir_entry, indices.object),
+        (indices.fs_info, indices.object),
+        (indices.fs_file_writer, indices.object),
+        (indices.http_response, indices.object),
+        (indices.http_download_result, indices.object),
+        (indices.session_entry, indices.object),
+        (indices.session_page, indices.object),
         (indices.temporal_plain_date, indices.object),
         (indices.temporal_plain_time, indices.object),
         (indices.temporal_plain_date_time, indices.object),
@@ -1011,6 +1181,6 @@ mod tests {
         assert_eq!(indices.temporal_plain_date_time, 38);
         assert_eq!(indices.temporal_plain_year_month, 39);
         assert_eq!(indices.temporal_plain_month_day, 40);
-        assert_eq!(super::INTRINSIC_TYPE_COUNT, 41);
+        assert_eq!(super::INTRINSIC_TYPE_COUNT, 50);
     }
 }

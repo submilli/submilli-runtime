@@ -259,9 +259,32 @@ pub fn infer_package<'a>(
         tc.infer_global_variables();
         tc.infer_functions();
         tc.infer_classes();
+        for f in &tc.typed_ast.functions {
+            if !f.generics.is_empty() {
+                package_declaration
+                    .runtime_generics
+                    .insert(f.mangled_name.clone());
+            }
+        }
         diagnose_package_main_since(&tc.typed_ast, starts.functions, &mut tc.diagnostics);
         tc.resolve_package_export_statements();
         let module_symbols = std::mem::take(&mut tc.current_module_symbols);
+        for symbol in module_symbols.all_types() {
+            let mut symbol = symbol.clone();
+            if let crate::TypeKind::Class {
+                statics,
+                static_fields,
+                ..
+            } = &mut symbol.kind
+            {
+                // Static entry points are source API, not instance layout metadata.
+                statics.clear();
+                static_fields.clear();
+            }
+            package_declaration
+                .runtime_types
+                .insert(symbol.mangled_name.to_string(), symbol);
+        }
         let exports = std::mem::take(&mut tc.current_module_exports);
         if module == root_module {
             package_declaration.values = module_symbols.exported_value_map();
@@ -275,6 +298,18 @@ pub fn infer_package<'a>(
     // The `&tc` borrow has to end before the `&mut tc.typed_ast` assignment.
     let shapes = shapes::collect(&tc.typed_ast, tc.resolver());
     tc.typed_ast.shapes = shapes;
+    for entry in &root_public_exports {
+        if package_declaration.runtime_generics.contains(&entry.target)
+            || tc
+                .packages_by_name
+                .values()
+                .any(|defs| defs.runtime_generics.contains(&entry.target))
+        {
+            package_declaration
+                .runtime_generics
+                .insert(entry.public_name.clone());
+        }
+    }
     tc.typed_ast.exports = root_public_exports;
     package_declaration.refresh_shapes();
     let module_surfaces = module_exports.iter().filter_map(|(module, exports)| {

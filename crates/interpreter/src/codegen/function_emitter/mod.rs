@@ -39,6 +39,7 @@ pub enum ReturnTarget {
 }
 
 pub struct FunctionEmitter<'a> {
+    pub runtime_type_params: BTreeMap<String, (u32, u32)>,
     #[allow(dead_code)]
     ctx: &'a CodegenCtx<'a>,
 
@@ -150,6 +151,7 @@ impl<'a> FunctionEmitter<'a> {
     pub fn new(ctx: &'a CodegenCtx<'a>, params: &[(Ident, ValType)]) -> Self {
         let mut emitter = Self {
             ctx,
+            runtime_type_params: BTreeMap::new(),
             next_local_index: 0,
             locals: Vec::new(),
             instructions: Vec::new(),
@@ -614,16 +616,28 @@ pub(crate) fn emit_inline_string_literal(
 }
 
 pub fn emit_function(
+    generics: &[String],
     ctx: &CodegenCtx<'_>,
     params: &[crate::TypedParam],
     body: crate::StmtId,
     return_type: &crate::Type,
 ) -> (Function, Vec<(u64, Span)>) {
-    let wasm_params: Vec<(Ident, ValType)> = params
+    let mut wasm_params: Vec<(Ident, ValType)> = params
         .iter()
         .map(|p| (p.name.clone(), ctx.symbols.value_type(&p.ty)))
         .collect();
+    if !generics.is_empty() {
+        wasm_params.push((
+            Ident {
+                name: "$types".into(),
+                span: Span::at(ctx.file),
+            },
+            crate::codegen::runtime_descriptors::environment_type(ctx.symbols),
+        ));
+    }
     let mut emitter = FunctionEmitter::new(ctx, &wasm_params);
+    crate::codegen::runtime_descriptors::bind(&mut emitter, generics, params.len() as u32);
+
     if !return_type.is_void() {
         emitter.set_return_target(ReturnTarget::Declared(return_type.clone()));
     }
@@ -683,6 +697,18 @@ pub fn emit_closure_function(
         .instructions
         .push(Instruction::LocalSet(env_typed_local));
 
+    if !meta.runtime_generics.is_empty() {
+        let types = emitter.add_anonymous_local(
+            crate::codegen::runtime_descriptors::environment_type(ctx.symbols),
+        );
+        emitter.instruction(Instruction::LocalGet(env_typed_local));
+        emitter.instruction(Instruction::StructGet {
+            struct_type_index: env_type_idx,
+            field_index: meta.captured.len() as u32,
+        });
+        emitter.instruction(Instruction::LocalSet(types));
+        crate::codegen::runtime_descriptors::bind(&mut emitter, &meta.runtime_generics, types);
+    }
     let mut typed_slots: Vec<u32> = Vec::with_capacity(meta.params.len());
     for (i, p) in meta.params.iter().enumerate() {
         let wasm_slot = (i + 1) as u32;

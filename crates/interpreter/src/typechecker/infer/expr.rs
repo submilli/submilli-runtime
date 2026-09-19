@@ -5450,6 +5450,13 @@ impl Inferer<'_> {
         };
         (
             TypedExprKind::Closure {
+                runtime_generics: self
+                    .body_instantiations
+                    .iter()
+                    .flat_map(|scope| scope.keys().cloned())
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect(),
                 params: typed_params,
                 return_type: effective_ret,
                 body: typed_body,

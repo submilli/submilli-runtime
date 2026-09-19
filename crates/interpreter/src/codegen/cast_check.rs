@@ -145,7 +145,7 @@ pub fn emit_non_null_assert_on_stack(
 /// separately registers the per-name globals an arm's field scan reads. A new
 /// arm must update that registration when it reads names, and may enter the
 /// allowlist only if every value the type admits is one this test accepts.
-fn emit_structural_test(
+pub(super) fn emit_structural_test(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     value_local: u32,
@@ -200,8 +200,23 @@ fn emit_structural_test_inner(
         Type::Number => emit_ref_test(emitter, value_local, boxed_number_idx(ctx)),
         Type::Boolean => emit_ref_test(emitter, value_local, boxed_boolean_idx(ctx)),
         Type::String => emit_ref_test(emitter, value_local, string_idx(ctx)),
-        Type::NumberEnum { .. } => emit_ref_test(emitter, value_local, boxed_number_idx(ctx)),
-        Type::StringEnum { .. } => emit_ref_test(emitter, value_local, string_idx(ctx)),
+        Type::NumberEnum { .. } | Type::StringEnum { .. } => {
+            if let Some(crate::FieldNarrowingTest::Shape(members)) =
+                ctx.ta.runtime_type_tests.get(ty.peel())
+                && members.peel() != ty.peel()
+            {
+                emit_structural_test_inner(
+                    emitter,
+                    ctx,
+                    value_local,
+                    members,
+                    interface_stack,
+                    validator_state,
+                );
+            } else {
+                emit_representation_test(emitter, ctx, value_local, ty);
+            }
+        }
         Type::BigInt => emit_ref_test(
             emitter,
             value_local,
@@ -226,11 +241,10 @@ fn emit_structural_test_inner(
                     .expect("closure signature registered during analysis"),
             );
         }
-        // Generic leaves inside a serialized interface test are erased. Their
-        // enclosing representation can still be checked; the leaf itself adds
-        // no runtime constraint.
-        Type::TypeVar(_) | Type::GenericParam { .. } => {
-            emitter.instruction(Instruction::I32Const(1));
+        // Generic leaves use the caller's concrete predicate when available.
+        // Legacy entry points without descriptors retain their erased checks.
+        Type::TypeVar(name) | Type::GenericParam { name, .. } => {
+            super::runtime_descriptors::test_parameter(emitter, ctx, name, value_local);
         }
         Type::NumberLiteral(n) => {
             let boxed = boxed_number_idx(ctx);
@@ -441,6 +455,7 @@ fn emit_structural_test_inner(
                 .expect("recursive runtime validator pre-allocated during discovery");
             emitter.instruction(Instruction::LocalGet(value_local));
             emit_validator_state(emitter, ctx, validator_state);
+            super::runtime_descriptors::capture(emitter, ctx, ty);
             emitter.instruction(Instruction::Call(func_idx));
         }
         Type::InterfaceRef { .. } => emit_interface_ref_test(
@@ -462,6 +477,16 @@ fn emit_structural_test_inner(
                 .expect("class vtable global recorded");
             emitter.instruction(Instruction::LocalGet(value_local));
             cast::emit_nominal_instance_test(emitter, ctx, vtable_global);
+            if let Some(validator) = ctx.symbols.runtime_validator_idx(ty.peel()) {
+                emitter.emit_if(BlockType::Result(ValType::I32));
+                emitter.instruction(Instruction::LocalGet(value_local));
+                emit_validator_state(emitter, ctx, validator_state);
+                super::runtime_descriptors::capture(emitter, ctx, ty);
+                emitter.instruction(Instruction::Call(validator));
+                emitter.emit_else();
+                emitter.instruction(Instruction::I32Const(0));
+                emitter.emit_end();
+            }
         }
         // Rejected at typecheck (`unsupported_cast_target_reason`); defensive 0.
         _ => emitter.instruction(Instruction::I32Const(0)),
@@ -523,6 +548,7 @@ fn emit_validator_or_representation(
     if let Some(func_idx) = ctx.symbols.runtime_validator_idx(key) {
         emitter.instruction(Instruction::LocalGet(value_local));
         emit_validator_state(emitter, ctx, validator_state);
+        super::runtime_descriptors::capture(emitter, ctx, key);
         emitter.instruction(Instruction::Call(func_idx));
     } else {
         emit_representation_test(emitter, ctx, value_local, ty);
@@ -970,6 +996,23 @@ fn emit_non_shape_interface_test(
                 emit_ref_test(emitter, value_local, intr.object_shape);
             }
             InterfaceCarrier::Url => emit_ref_test(emitter, value_local, intr.url),
+            InterfaceCarrier::FsStat => emit_ref_test(emitter, value_local, intr.fs_stat),
+            InterfaceCarrier::FsPeek => emit_ref_test(emitter, value_local, intr.fs_peek),
+            InterfaceCarrier::FsDirEntry => emit_ref_test(emitter, value_local, intr.fs_dir_entry),
+            InterfaceCarrier::FsInfo => emit_ref_test(emitter, value_local, intr.fs_info),
+            InterfaceCarrier::FsFileWriter => {
+                emit_ref_test(emitter, value_local, intr.fs_file_writer);
+            }
+            InterfaceCarrier::HttpResponse => {
+                emit_ref_test(emitter, value_local, intr.http_response);
+            }
+            InterfaceCarrier::HttpDownloadResult => {
+                emit_ref_test(emitter, value_local, intr.http_download_result);
+            }
+            InterfaceCarrier::SessionEntry => {
+                emit_ref_test(emitter, value_local, intr.session_entry);
+            }
+            InterfaceCarrier::SessionPage => emit_ref_test(emitter, value_local, intr.session_page),
         }
         emitter.instruction(Instruction::LocalGet(matches_any));
         emitter.instruction(Instruction::I32Or);
@@ -1196,7 +1239,7 @@ fn emit_validator_state(
 }
 
 /// Body of a recursive runtime validator:
-/// `(ref null $Object, ref $rawArray visited, ref $rawIndexArray ids, i32 depth) -> i32`.
+/// `(ref null $Object, ref $rawArray visited, ref $rawIndexArray ids, i32 depth, ref $ObjectFields types) -> i32`.
 /// A `(value, validator)` pair already present on the active recursion path
 /// closes a valid cycle without conflating mutually recursive shapes.
 /// The fixed-capacity path rejects an implausibly deep acyclic graph rather than
@@ -1236,7 +1279,16 @@ pub(crate) fn emit_runtime_validator_body(
             (ident("visited"), raw_array_ref),
             (ident("validator_ids"), raw_index_array_ref),
             (ident("depth"), ValType::I32),
+            (
+                ident("types"),
+                super::runtime_descriptors::environment_type(ctx.symbols),
+            ),
         ],
+    );
+    super::runtime_descriptors::bind(
+        &mut emitter,
+        &super::runtime_descriptors::parameters(key),
+        4,
     );
     if rejects_polymorphic_edge {
         emitter.instruction(Instruction::I32Const(0));

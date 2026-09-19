@@ -1003,6 +1003,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn narrowed_host_carriers() {
+        let source = r#"
+import { get, download, Response, DownloadResult } from "submilli:http";
+import { info } from "submilli:fs";
+
+class Parent { value: unknown = null; reset(value: unknown): void { this.value = value; } }
+function rejects(read: () => void): void {
+ let caught = false;
+ try { read(); } catch (e) { caught = e instanceof TypeError; }
+ assert(caught, "unrelated carrier must throw TypeError");
+}
+
+class ResponseField extends Parent { value: Response | null = null; }
+class DownloadField extends Parent { value: DownloadResult | null = null; }
+function main(): void {
+ const r = new ResponseField(); r.reset(get("https://example.test/"));
+ assert(r.value!.status === 200, "Response");
+ const d = new DownloadField(); d.reset(download("https://example.test/file", "/out.txt"));
+ assert(d.value!.bytesWritten === 5, "DownloadResult");
+ r.reset(d.value); rejects(() => { const v = r.value; });
+ d.reset(info()); rejects(() => { const v = d.value; });
+}
+"#;
+        let tmp = tempfile::tempdir().unwrap();
+        let (_, result) = run_download_with_mock(
+            source,
+            vec![ok_response(200, "hello"), ok_response(200, "hello")],
+            None,
+            tmp.path(),
+        )
+        .await;
+        result.expect("host guards");
+    }
+
+    #[tokio::test]
     async fn get_status_and_body_roundtrip() {
         let source = r#"
             import { get, Response } from "submilli:http";

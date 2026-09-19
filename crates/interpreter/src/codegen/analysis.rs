@@ -66,6 +66,11 @@ impl CodegenAnalysis {
         for expr_id in ta.class_field_initializers() {
             analysis.walk_expr(ta, expr_id);
         }
+        if !ta.runtime_class_fields.is_empty() {
+            analysis
+                .mentioned_closure_sigs
+                .push(super::field_guards::signature());
+        }
         analysis.note_narrowing_checks(ta);
         for test in ta.runtime_type_tests.values() {
             analysis.note_narrowing_test(test);
@@ -96,7 +101,7 @@ impl CodegenAnalysis {
 
     fn note_dependency_narrowing_checks(&mut self, dependencies: &[&crate::PackageDeclaration]) {
         for package in dependencies {
-            for symbol in package.types.values() {
+            for symbol in package.runtime_types.values().chain(package.types.values()) {
                 let crate::TypeKind::Class {
                     narrowing_checks, ..
                 } = &symbol.kind
@@ -325,7 +330,14 @@ impl CodegenAnalysis {
                     self.walk_expr(ta, arg);
                 }
             }
-            TypedExprKind::GenericCall { args, .. } => {
+            TypedExprKind::GenericCall {
+                args, type_args, ..
+            } => {
+                self.mentioned_closure_sigs
+                    .push(super::field_guards::signature());
+                for ty in type_args {
+                    self.visit_type(ty);
+                }
                 for arg in args {
                     self.walk_expr(ta, arg.expr);
                 }
@@ -686,6 +698,7 @@ impl CodegenAnalysis {
                 self.string_pool.intern_text(bounds::INDEX_OOB_MESSAGE);
             }
             TypedExprKind::Closure {
+                runtime_generics,
                 params,
                 captured,
                 body,
@@ -693,6 +706,7 @@ impl CodegenAnalysis {
                 ..
             } => {
                 self.closure_metas.push(ClosureMeta {
+                    runtime_generics: runtime_generics.clone(),
                     expr_id: id,
                     signature: expr.ty.clone(),
                     captured: captured.clone(),
@@ -872,6 +886,8 @@ impl CodegenAnalysis {
     /// whole-program fact, and a library that declares an interface and reads it
     /// never sees the consumer's accessor implementation.
     fn note_shaped_property_access(&mut self, receiver_ty: &Type, prop: &str, kind: AccessorKind) {
+        self.mentioned_closure_sigs
+            .push(super::field_guards::signature());
         if !is_shaped_receiver(receiver_ty) {
             return;
         }

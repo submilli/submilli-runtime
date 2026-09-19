@@ -29,8 +29,19 @@ pub enum FieldSetup {
     Reset { field: String },
 }
 
+#[derive(Default, Clone, Copy, Debug)]
+pub struct ClassGuardLayout {
+    pub inheritance_depth: u32,
+    pub named_payload_len: u32,
+    pub has_instance_guards: bool,
+}
+
 #[derive(Default, Clone, Debug)]
 pub struct SymbolTable {
+    pub class_type_parameters: BTreeMap<MangledName, Vec<String>>,
+    pub runtime_generic_functions: BTreeSet<MangledName>,
+    pub field_guard_targets: BTreeMap<u32, Type>,
+    pub type_descriptor_functions: BTreeMap<Type, u32>,
     types: BTreeMap<MangledName, u32>,
     funcs: BTreeMap<MangledName, u32>,
     globals: BTreeMap<MangledName, u32>,
@@ -89,6 +100,8 @@ pub struct SymbolTable {
     adapter_func_idx: BTreeMap<MangledName, u32>,
     /// Runtime validator helpers keyed by recursive alias or interface back-edges.
     runtime_validator_idx: BTreeMap<Type, u32>,
+    instance_field_guards: BTreeMap<(Type, MangledName, String), u32>,
+    class_guard_layout: BTreeMap<MangledName, ClassGuardLayout>,
     // Closures, adapters, and direct-dispatch wrappers are NOT in this map.
     top_level_fns: BTreeMap<MangledName, TopLevelFn>,
     iface_dispatch: BTreeMap<MangledName, Dispatch>,
@@ -612,6 +625,54 @@ impl SymbolTable {
 
     pub fn record_adapter_func_idx(&mut self, mangled: MangledName, idx: u32) {
         self.adapter_func_idx.insert(mangled, idx);
+    }
+
+    pub fn record_class_guard_layout(
+        &mut self,
+        class: MangledName,
+        parent: Option<&MangledName>,
+        named_len: u32,
+        guarded: bool,
+    ) {
+        let depth = parent.map_or(0, |parent| {
+            self.class_guard_layout(parent).inheritance_depth + 1
+        });
+        self.class_guard_layout.insert(
+            class,
+            ClassGuardLayout {
+                inheritance_depth: depth,
+                named_payload_len: named_len,
+                has_instance_guards: guarded,
+            },
+        );
+    }
+
+    pub fn class_guard_layout(&self, class: &MangledName) -> ClassGuardLayout {
+        self.class_guard_layout
+            .get(class)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    pub fn record_instance_field_guard(
+        &mut self,
+        class: Type,
+        declaration: MangledName,
+        field: String,
+        function: u32,
+    ) {
+        self.instance_field_guards
+            .insert((class, declaration, field), function);
+    }
+
+    pub fn instance_field_guards<'a>(
+        &'a self,
+        class: &'a Type,
+    ) -> impl Iterator<Item = (&'a MangledName, &'a str, u32)> + 'a {
+        self.instance_field_guards
+            .iter()
+            .filter(move |((ty, _, _), _)| ty == class)
+            .map(|((_, declaration, field), function)| (declaration, field.as_str(), *function))
     }
 
     pub fn record_runtime_validator(&mut self, key: Type, idx: u32) {

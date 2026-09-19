@@ -10,6 +10,7 @@ mod closure_coercions;
 pub mod closures;
 pub mod dependency_usage;
 pub mod dwarf;
+mod field_guards;
 pub mod field_name_strings;
 pub mod field_names;
 pub mod function_adapters;
@@ -17,6 +18,7 @@ pub mod function_emitter;
 pub mod imported_classes;
 pub mod intrinsics;
 pub mod recursive_validators;
+mod runtime_descriptors;
 pub mod string_pool;
 pub mod symbol_table;
 pub mod throw;
@@ -101,7 +103,7 @@ fn import_value_symbol(
             // Every other host package speaks the real `$string`/`$Array` ABI,
             // so it goes through the normal `value_type` path, same as user modules.
             let raw_string_abi = defs.package_name.as_str() == crate::runtime::JSON_MODULE_NAME;
-            let (param_types, result_types): (Vec<ValType>, Vec<ValType>) = if raw_string_abi {
+            let (mut param_types, result_types): (Vec<ValType>, Vec<ValType>) = if raw_string_abi {
                 json_host_signature(name, params, symbols, intrinsics)
             } else {
                 (
@@ -109,6 +111,12 @@ fn import_value_symbol(
                     symbols.wasm_result(ret),
                 )
             };
+            if defs.runtime_generics.contains(&value.mangled_name) {
+                symbols
+                    .runtime_generic_functions
+                    .insert(value.mangled_name.clone());
+                param_types.push(runtime_descriptors::environment_type(symbols));
+            }
             types.ty().function(param_types, result_types);
             import_section.import(
                 defs.package_name.as_str(),
@@ -809,10 +817,16 @@ fn codegen_inner(
     for f in &ta.functions {
         let sig_idx = next_type_idx;
         next_type_idx += 1;
-        types.ty().function(
-            f.params.iter().map(|p| symbols.value_type(&p.ty)),
-            symbols.wasm_result(&f.return_type),
-        );
+        let mut params: Vec<_> = f.params.iter().map(|p| symbols.value_type(&p.ty)).collect();
+        if !f.generics.is_empty() {
+            symbols
+                .runtime_generic_functions
+                .insert(f.mangled_name.clone());
+            params.push(runtime_descriptors::environment_type(&symbols));
+        }
+        types
+            .ty()
+            .function(params, symbols.wasm_result(&f.return_type));
         let func_idx = next_func_idx;
         next_func_idx += 1;
         let param_types: Vec<Type> = f.params.iter().map(|p| p.ty.clone()).collect();
@@ -831,6 +845,7 @@ fn codegen_inner(
             body: f.body,
             return_type: f.return_type.clone(),
             params: f.params.clone(),
+            generics: f.generics.clone(),
         });
     }
 
@@ -874,6 +889,8 @@ fn codegen_inner(
 
     // Class method stubs + per-class getter/setter (vtable/header globals ref.func these).
     class_plan.allocate_funcs(&mut next_func_idx, &mut symbols);
+    let instance_field_guards = field_guards::allocate(ta, &mut symbols, &mut next_func_idx);
+    let type_descriptors = runtime_descriptors::allocate(ta, &mut symbols, &mut next_func_idx);
 
     // Recursive runtime validators. Allocate signatures and indices, then
     // register each back-edge key so structural checks can call its plan.
@@ -899,6 +916,7 @@ fn codegen_inner(
                 raw_array_ref,
                 raw_index_array_ref,
                 ValType::I32,
+                runtime_descriptors::environment_type(&symbols),
             ],
             [ValType::I32],
         );
@@ -975,6 +993,13 @@ fn codegen_inner(
     closure_coercions::emit_entries(&closure_coercion_targets, &mut functions, &symbols);
     user_subtypes::emit_method_function_entries(&mut functions, &user_subtypes_alloc, intrinsics);
     class_plan.emit_function_entries(&mut functions, &symbols, intrinsics);
+    for _ in 0..instance_field_guards.len() + type_descriptors.len() {
+        functions.function(
+            symbols
+                .closure_func_type_idx(field_guards::signature())
+                .expect("guard signature registered"),
+        );
+    }
     for &sig_idx in &runtime_validator_sigs {
         functions.function(sig_idx);
     }
@@ -1159,11 +1184,15 @@ fn codegen_inner(
     // bodies) so another package can construct, dispatch, and `extends` it. A
     // class export is an `ExportKind::Type` entry whose target is the class's
     // mangled name (SUB-488).
+    // Hidden implementations also export their runtime entry points. Their
+    // declarations stay in compiler-only metadata, outside the source API.
     let exported_class_mangles: BTreeSet<&MangledName> = ta
-        .exports
+        .types
         .iter()
-        .filter(|e| e.kind == crate::ExportKind::Type)
-        .map(|e| &e.target)
+        .filter_map(|decl| match decl {
+            crate::TypedTypeDecl::Class(class) => Some(&class.mangled_name),
+            _ => None,
+        })
         .collect();
     for (name, func_idx) in
         class_plan.exported_funcs(&symbols, |m| exported_class_mangles.contains(m))
@@ -1204,6 +1233,8 @@ fn codegen_inner(
             .map(|&sig| symbols.closure_coercion(sig).expect("coercion allocated")),
     );
     declared.extend(class_plan.declared_funcs(&symbols));
+    declared.extend(instance_field_guards.iter().map(|guard| guard.function));
+    declared.extend(type_descriptors.iter().map(|(_, function)| *function));
     if !declared.is_empty() {
         let mut elements = wasm_encoder::ElementSection::new();
         elements.declared(wasm_encoder::Elements::Functions(Cow::Owned(declared)));
@@ -1253,8 +1284,13 @@ fn codegen_inner(
     let mut user_func_ranges: Vec<(u64, u64)> = Vec::with_capacity(user_funcs.len());
     let mut user_func_lines: Vec<Vec<(u64, crate::Span)>> = Vec::with_capacity(user_funcs.len());
     for func in &user_funcs {
-        let (built, lines) =
-            function_emitter::emit_function(&ctx, &func.params, func.body, &func.return_type);
+        let (built, lines) = function_emitter::emit_function(
+            &func.generics,
+            &ctx,
+            &func.params,
+            func.body,
+            &func.return_type,
+        );
         let body_len = built.byte_len() as u64;
         code.function(&built);
         let low_in_buf = code.byte_len() as u64 - body_len;
@@ -1283,6 +1319,12 @@ fn codegen_inner(
     );
 
     class_plan.emit_bodies(&mut code, &ctx);
+    for guard in &instance_field_guards {
+        code.function(&field_guards::body(&ctx, guard));
+    }
+    for (ty, _) in &type_descriptors {
+        code.function(&runtime_descriptors::body(&ctx, ty));
+    }
 
     for (validator_id, plan) in recursive_validators.plans.iter().enumerate() {
         code.function(&cast_check::emit_runtime_validator_body(
@@ -1372,6 +1414,7 @@ struct UserFunc {
     body: StmtId,
     return_type: Type,
     params: Vec<crate::TypedParam>,
+    generics: Vec<String>,
 }
 
 /// Converts `CodeSection::byte_len` (excludes leading vec-count) into Code-section-content offsets for DWARF.
@@ -1724,6 +1767,16 @@ function main(): string {
             map: 33,
             set: 34,
             url: 35,
+            fs_stat: 41,
+            fs_peek: 42,
+            fs_dir_entry: 43,
+            fs_info: 44,
+            fs_file_writer: 45,
+            http_response: 46,
+            http_download_result: 47,
+            session_entry: 48,
+            session_page: 49,
+
             temporal_plain_date: 36,
             temporal_plain_time: 37,
             temporal_plain_date_time: 38,
@@ -5309,6 +5362,16 @@ function main(): void { middle(); }
             map: 33,
             set: 34,
             url: 35,
+            fs_stat: 41,
+            fs_peek: 42,
+            fs_dir_entry: 43,
+            fs_info: 44,
+            fs_file_writer: 45,
+            http_response: 46,
+            http_download_result: 47,
+            session_entry: 48,
+            session_page: 49,
+
             temporal_plain_date: 36,
             temporal_plain_time: 37,
             temporal_plain_date_time: 38,

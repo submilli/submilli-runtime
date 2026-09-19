@@ -29,6 +29,13 @@ use wasm_encoder::{BlockType, HeapType, Ieee64, Instruction, RefType, ValType};
 /// DWARF wiring task can recover instruction-offset → source-position
 /// mappings later.
 pub fn emit_expr(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) {
+    emit_expr_value(emitter, ctx, id);
+    // Preserve concrete field validators while the expression still carries
+    // its class arguments, before a surrounding cast or slot erases them.
+    crate::codegen::field_guards::attach(emitter, ctx, &ctx.ta.expr(id).ty);
+}
+
+fn emit_expr_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) {
     let expr = ctx.ta.expr(id);
     emitter.record_span(expr.span);
     // A node the enclosing statement already evaluated into a local — see
@@ -196,15 +203,24 @@ pub fn emit_expr(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) {
                     mangled.as_str()
                 )
             });
-            emit_direct_call(
-                emitter,
-                ctx,
-                target.is_host,
-                target.wasm_idx,
-                &target.params,
-                &target.ret,
-                args,
-            );
+            if crate::codegen::field_guards::guarded_constructor(ctx, mangled, &expr.ty) {
+                let Type::ClassRef { mangled: class, .. } = expr.ty.peel() else {
+                    unreachable!("constructor class");
+                };
+                emit_args_into_slots(emitter, ctx, args, ctx.symbols.class_ctor_abi(class));
+                crate::codegen::field_guards::constructor_argument(emitter, ctx, &expr.ty);
+                emitter.instruction(Instruction::Call(target.wasm_idx));
+            } else {
+                emit_direct_call(
+                    emitter,
+                    ctx,
+                    target.is_host,
+                    target.wasm_idx,
+                    &target.params,
+                    &target.ret,
+                    args,
+                );
+            }
         }
         TypedExprKind::SuperCtorCall { parent, args } => {
             // Direct call of the parent's constructor *init* fn on the current
@@ -266,6 +282,7 @@ pub fn emit_expr(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) {
         }
         TypedExprKind::GenericCall {
             mangled,
+            type_args,
             args,
             return_cast,
             type_predicate: _,
@@ -304,6 +321,12 @@ pub fn emit_expr(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) {
                     let arg_ty = ctx.ta.expr(arg.expr).ty.clone();
                     cast::emit_coerce_to_slot(emitter, ctx, &arg_ty, param_ty);
                 }
+            }
+            if crate::codegen::field_guards::guarded_constructor(ctx, mangled, &expr.ty) {
+                crate::codegen::field_guards::constructor_argument(emitter, ctx, &expr.ty);
+            }
+            if ctx.symbols.runtime_generic_functions.contains(mangled) {
+                crate::codegen::runtime_descriptors::environment(emitter, ctx, type_args);
             }
             emitter.instruction(Instruction::Call(wasm_idx));
             if let Some(ty) = return_cast {
@@ -546,12 +569,21 @@ pub fn emit_expr(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) {
                     .intrinsic_type_indices()
                     .expect("intrinsics declared by codegen entry");
                 emit_expr(emitter, ctx, *receiver);
+                let object = emitter.add_anonymous_local(ctx.symbols.value_type(&receiver_ty));
+                emitter.instruction(Instruction::LocalTee(object));
                 emitter.instruction(Instruction::StructGet {
                     struct_type_index: struct_idx,
                     field_index: 2,
                 });
                 emitter.instruction(Instruction::I32Const(slot as i32));
                 emitter.instruction(Instruction::ArrayGet(intrinsics.object_fields));
+                if ctx
+                    .symbols
+                    .class_field_narrowing_check(mangled, &name.name)
+                    .is_some()
+                {
+                    crate::codegen::field_guards::check(emitter, ctx, object, mangled, &name.name);
+                }
                 emit_class_field_slot_cast(emitter, ctx, mangled, &name.name, &ctx.ta.expr(id).ty);
                 return;
             }
@@ -1011,7 +1043,11 @@ pub fn emit_expr(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) {
             emit_expr(emitter, ctx, *inner);
             emitter.pop_scope();
         }
-        TypedExprKind::Closure { captured, .. } => {
+        TypedExprKind::Closure {
+            captured,
+            runtime_generics,
+            ..
+        } => {
             // emit the closure value at the creation site.
             // `$closure_<sig>` is `(sub $Object (struct (ref $VTable)
             // (ref $fn_<sig>) (ref any)))` — three fields, consumed
@@ -1056,6 +1092,14 @@ pub fn emit_expr(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) {
             // value in order, then `struct.new`.
             for c in captured {
                 emit_captured_load(emitter, ctx, c);
+            }
+            if !runtime_generics.is_empty() {
+                let types: Vec<_> = runtime_generics
+                    .iter()
+                    .cloned()
+                    .map(Type::TypeVar)
+                    .collect();
+                crate::codegen::runtime_descriptors::environment(emitter, ctx, &types);
             }
             emitter.instruction(Instruction::StructNew(env_type_idx));
 
@@ -1518,7 +1562,9 @@ fn emit_class_field_postfix(
         heap_type: HeapType::Concrete(intrinsics.object_fields),
     }));
     let old = emitter.add_anonymous_local(ctx.symbols.value_type(target_ty));
+    let object = emitter.add_anonymous_local(ctx.symbols.value_type(&ctx.ta.expr(receiver).ty));
     emit_expr(emitter, ctx, receiver);
+    emitter.instruction(Instruction::LocalTee(object));
     emitter.instruction(Instruction::StructGet {
         struct_type_index: struct_idx,
         field_index: 2,
@@ -1527,6 +1573,13 @@ fn emit_class_field_postfix(
     emitter.instruction(Instruction::LocalGet(fields_local));
     emitter.instruction(Instruction::I32Const(slot as i32));
     emitter.instruction(Instruction::ArrayGet(intrinsics.object_fields));
+    if ctx
+        .symbols
+        .class_field_narrowing_check(mangled, field)
+        .is_some()
+    {
+        crate::codegen::field_guards::check(emitter, ctx, object, mangled, field);
+    }
     emit_class_field_slot_cast(emitter, ctx, mangled, field, target_ty);
     emitter.instruction(Instruction::LocalSet(old));
     emitter.instruction(Instruction::LocalGet(fields_local));
@@ -1815,12 +1868,24 @@ fn emit_chain_access(
                     .symbols
                     .class_struct_type_idx(mangled)
                     .expect("class struct type recorded in classes::emit");
+                let object = emitter.add_anonymous_local(ValType::Ref(RefType {
+                    nullable: false,
+                    heap_type: HeapType::Concrete(struct_idx),
+                }));
+                emitter.instruction(Instruction::LocalTee(object));
                 emitter.instruction(Instruction::StructGet {
                     struct_type_index: struct_idx,
                     field_index: 2,
                 });
                 emitter.instruction(Instruction::I32Const(slot as i32));
                 emitter.instruction(Instruction::ArrayGet(intrinsics.object_fields));
+                if ctx
+                    .symbols
+                    .class_field_narrowing_check(mangled, &name.name)
+                    .is_some()
+                {
+                    crate::codegen::field_guards::check(emitter, ctx, object, mangled, &name.name);
+                }
                 emit_class_field_slot_cast(emitter, ctx, mangled, &name.name, result_ty);
                 return;
             }
@@ -3366,6 +3431,8 @@ fn emit_method_call_with_receiver_on_stack(
     return_cast: Option<&Type>,
     call_ret_ty: &Type,
 ) {
+    let concrete_receiver = crate::typechecker::infer::narrowing::strip_null(recv_ty);
+    crate::codegen::field_guards::attach(emitter, ctx, &concrete_receiver);
     let direct_key = crate::mangle::extend(iface, method);
     if let Some(func_idx) = ctx.symbols.func_idx(&direct_key) {
         // Direct or Static dispatch. The receiver is on the stack;
@@ -3748,8 +3815,14 @@ fn emit_slot_return_cast(
         return;
     }
     if abi.and_then(|a| a.ret) != Some(ctx.symbols.value_type(call_ret_ty)) {
-        cast::emit_cast_to(emitter, ctx, call_ret_ty);
+        crate::codegen::cast_check::emit_checked_cast_on_stack(
+            emitter,
+            ctx,
+            &Type::Unknown,
+            call_ret_ty,
+        );
     }
+    crate::codegen::field_guards::attach(emitter, ctx, call_ret_ty);
 }
 
 /// Static-path class method dispatch. The receiver `(ref $Foo)` is on the stack.
