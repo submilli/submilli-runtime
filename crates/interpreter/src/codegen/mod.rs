@@ -154,7 +154,7 @@ fn import_value_symbol(
                 value.mangled_name.as_str(),
                 EntityType::Global(global_ty),
             );
-            symbols.record_global(value.mangled_name.clone(), *next_global_idx);
+            symbols.record_typed_global(value.mangled_name.clone(), *next_global_idx, ty.clone());
             *next_global_idx += 1;
         }
     }
@@ -763,7 +763,7 @@ fn codegen_inner(
                         shared: false,
                     }),
                 );
-                symbols.record_global(mangled, next_global_idx);
+                symbols.record_typed_global(mangled, next_global_idx, sig.ty.clone());
                 next_global_idx += 1;
                 continue;
             };
@@ -1035,7 +1035,7 @@ fn codegen_inner(
             },
             &default_const_expr(val_type),
         );
-        symbols.record_global(g.mangled_name.clone(), next_global_idx);
+        symbols.record_typed_global(g.mangled_name.clone(), next_global_idx, g.ty.clone());
         next_global_idx += 1;
         globals_count += 1;
     }

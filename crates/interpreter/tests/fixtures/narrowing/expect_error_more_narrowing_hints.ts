@@ -24,6 +24,7 @@ function main(): void {
   let u: number | null = 1;
   if (u !== null) {
     const g = (): number => -u;
+    u = null;
     console.log(`${g()}`);
   }
 
@@ -34,12 +35,14 @@ function main(): void {
         console.log(`${x}`);
       }
     };
+    a = null;
     h();
   }
 
   let c: (() => number) | null = (): number => 1;
   if (c !== null) {
     const i = (): number => c();
+    c = null;
     console.log(`${i()}`);
   }
 }

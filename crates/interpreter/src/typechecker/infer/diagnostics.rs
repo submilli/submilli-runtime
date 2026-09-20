@@ -441,7 +441,7 @@ impl<'a> Inferer<'a> {
     }
 
     /// The path is narrowed outside the closure we are currently inferring, but
-    /// isn't one of the `const`-rooted depth-0 narrowings that cross the
+    /// isn't one of the stable depth-0 narrowings that cross the
     /// boundary (stability rule 9).
     fn closure_boundary_hint(&self, path: &narrowing::ReferencePath) -> DiagnosticAddon {
         let rendered = path.render();
@@ -451,8 +451,8 @@ impl<'a> Inferer<'a> {
         (
             vec![format!(
                 "narrowing on `{rendered}` does not cross a closure boundary — \
-                 only a `const` binding narrowed directly (not through a field) \
-                 keeps its narrowing inside a closure body. Bind it to a `const` \
+                 only a directly narrowed binding with no later or nested-function \
+                 writes keeps its narrowing inside a closure body. Bind it to a `const` \
                  first: `const {tmp} = {rendered}; if ({tmp} !== null) {{ … }}` — or \
                  re-narrow inside the closure.",
             )],

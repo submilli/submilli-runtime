@@ -45,6 +45,7 @@ pub struct SymbolTable {
     types: BTreeMap<MangledName, u32>,
     funcs: BTreeMap<MangledName, u32>,
     globals: BTreeMap<MangledName, u32>,
+    global_types: BTreeMap<MangledName, Type>,
     intrinsic_type_indices: Option<IntrinsicTypeIndices>,
     // Per-class WasmGC artifacts, keyed by the class's mangled name. Classes are
     // nominal (one struct type each), unlike arity-shared object subtypes.
@@ -200,6 +201,10 @@ impl SymbolTable {
 
     pub fn global_idx(&self, mangled: &MangledName) -> Option<u32> {
         self.globals.get(mangled).copied()
+    }
+
+    pub fn global_type(&self, mangled: &MangledName) -> Option<&Type> {
+        self.global_types.get(mangled)
     }
 
     pub fn prelude_func_idx(&self, symbol: &str) -> Option<u32> {
@@ -691,6 +696,13 @@ impl SymbolTable {
 
     pub fn record_global(&mut self, mangled: MangledName, idx: u32) {
         self.globals.insert(mangled, idx);
+    }
+
+    /// Language globals retain their declared type for checked narrowed reads.
+    /// Runtime metadata globals only need an index.
+    pub fn record_typed_global(&mut self, mangled: MangledName, idx: u32, ty: Type) {
+        self.global_types.insert(mangled.clone(), ty);
+        self.record_global(mangled, idx);
     }
 
     /// Writes both the wasm function index and the static-call registry entry;

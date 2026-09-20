@@ -1,16 +1,18 @@
 //! Lexical binding checks and closure-write analysis before inference.
 //! Declaration spans remain stable when inference revisits a loop or generic body.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::{Ast, Diagnostic, ExprId, Ident, Severity, Span, StmtId};
 
 #[derive(Default)]
 pub(super) struct Analysis {
     pub(super) mutators: HashSet<(String, Span)>,
+    pub(super) last_assignments: HashMap<Span, u32>,
     pub(super) diagnostics: Vec<Diagnostic>,
     scopes: Vec<BTreeMap<String, Binding>>,
     function_depth: usize,
+    assignment_regions: Vec<Span>,
 }
 
 struct Binding {
@@ -33,6 +35,25 @@ pub(super) fn analyze(ast: &Ast) -> Analysis {
 /// the slot. A new statement kind should fail the build here, not go unscanned.
 fn visit_stmt(ast: &Ast, id: StmtId, out: &mut Analysis) {
     use crate::StmtKind;
+    let extends_assignment = matches!(
+        ast.stmt(id).kind,
+        StmtKind::Let { .. }
+            | StmtKind::Assign { .. }
+            | StmtKind::CompoundAssign { .. }
+            | StmtKind::Const { .. }
+            | StmtKind::Expr(_)
+            | StmtKind::If { .. }
+            | StmtKind::While { .. }
+            | StmtKind::DoWhile { .. }
+            | StmtKind::For { .. }
+            | StmtKind::ForOf { .. }
+            | StmtKind::Switch { .. }
+            | StmtKind::Try { .. }
+            | StmtKind::ClassDecl { .. }
+    );
+    if extends_assignment {
+        out.assignment_regions.push(ast.stmt(id).span);
+    }
     match &ast.stmt(id).kind {
         StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
             out.read(target);
@@ -42,6 +63,7 @@ fn visit_stmt(ast: &Ast, id: StmtId, out: &mut Analysis) {
         StmtKind::Let { name, value, .. } | StmtKind::Const { name, value, .. } => {
             visit_expr(ast, *value, out);
             out.initialize(name);
+            out.write(name);
         }
         StmtKind::ConstRest { name, source, .. } => {
             visit_expr(ast, *source, out);
@@ -194,6 +216,9 @@ fn visit_stmt(ast: &Ast, id: StmtId, out: &mut Analysis) {
         | StmtKind::TypeAliasDecl { .. }
         | StmtKind::Import { .. }
         | StmtKind::ExportFrom { .. } => {}
+    }
+    if extends_assignment {
+        out.assignment_regions.pop();
     }
 }
 
@@ -366,11 +391,27 @@ impl Analysis {
     }
 
     fn write(&mut self, ident: &Ident) {
-        if let Some(binding) = self.lookup(&ident.name)
-            && binding.function_depth < self.function_depth
-        {
-            self.mutators.insert((ident.name.clone(), binding.span));
+        let Some(binding) = self.lookup(&ident.name) else {
+            return;
+        };
+        let declaration = binding.span;
+        if binding.function_depth < self.function_depth {
+            self.mutators.insert((ident.name.clone(), declaration));
+            return;
         }
+        // A write in a branch or loop can execute after a closure elsewhere
+        // in that statement. TypeScript extends its last-assignment position
+        // to the containing statement, unless the binding was declared inside.
+        let end = self
+            .assignment_regions
+            .iter()
+            .filter(|span| span.start > declaration.start)
+            .map(|span| span.end)
+            .fold(ident.span.end, u32::max);
+        self.last_assignments
+            .entry(declaration)
+            .and_modify(|last| *last = (*last).max(end))
+            .or_insert(end);
     }
 }
 

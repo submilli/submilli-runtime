@@ -43,18 +43,13 @@ pub(in crate::typechecker) struct SuspendedNarrowing {
 }
 
 impl<'a> Inferer<'a> {
-    /// A closure body starts from a fresh narrowing stack, seeded with the one
-    /// TypeScript-compatible exception: a depth-0 narrowing on a `const`.
-    ///
-    /// The general reset is required for soundness — a closure may run after
-    /// the guard's value changed, and its shadow locals live in the *enclosing*
-    /// Wasm frame, which `capture.rs` deliberately does not capture. The `const`
-    /// exception is safe because the binding can never be reassigned, so
-    /// re-reading it inside the body yields the value the guard tested.
+    /// A closure starts with fresh narrowing state, retaining bare bindings
+    /// whose last assignment precedes its creation. Nested-function writes
+    /// disqualify mutable bindings because their execution order is unknown.
     ///
     /// Surviving views are re-minted onto a seed frame and the caller re-emits
     /// the region *inside* the body, so the closure captures the ordinary
-    /// `const` and re-checks the cast per call — narrowing is never smuggled
+    /// binding and re-checks the cast per call — narrowing is never smuggled
     /// across the frame as a shadow local. The seeded sources are plain
     /// `LocalRef`/`GlobalRef` reads, so they name no narrow binding at all.
     ///
@@ -70,7 +65,7 @@ impl<'a> Inferer<'a> {
         });
         let mut seed = narrowing::NarrowEnv::new();
         for (path, view) in active {
-            if !self.narrowing_survives_closure(&path) {
+            if !self.narrowing_survives_closure(&path, span) {
                 continue;
             }
             let Some(source_kind) = self.synthesize_unnarrowed_source(&path, span) else {
@@ -122,15 +117,10 @@ impl<'a> Inferer<'a> {
     /// value, which a write can falsify before the closure runs, and
     /// `invalidate_for_write` cannot see across the boundary.
     ///
-    /// `const` roots only. Parameters are excluded deliberately, not
-    /// conservatively: a param is mutable and can be reassigned by the
-    /// *enclosing* body after the closure is built —
-    /// `if (x !== null) { const g = () => x.length; x = null; return g(); }` —
-    /// which `captured_mutators` does not model (it scans assignments inside
-    /// closures only). Such a capture is boxed, so the body would read the
-    /// current `null` and the re-checked cast would trap at runtime. A `const`
-    /// is never boxed and never reassigned.
-    fn narrowing_survives_closure(&self, path: &narrowing::ReferencePath) -> bool {
+    /// Mutable roots must have no later assignments in the enclosing function
+    /// and no writes in nested functions. Declaration identities keep shadowed
+    /// bindings separate; statement ends account for branches and loops.
+    fn narrowing_survives_closure(&self, path: &narrowing::ReferencePath, closure: Span) -> bool {
         if !path.chain.is_empty() {
             return false;
         }
@@ -141,9 +131,14 @@ impl<'a> Inferer<'a> {
                 }
                 // `decl_scope` equality rejects a root shadowed by one of the
                 // closure's own params: same name, different binding.
-                self.scopes
-                    .get(name)
-                    .is_some_and(|e| e.is_const && e.decl_scope == *decl_scope)
+                self.scopes.get(name).is_some_and(|entry| {
+                    entry.decl_scope == *decl_scope
+                        && (entry.is_const
+                            || self
+                                .last_assignments
+                                .get(&entry.decl_span)
+                                .is_none_or(|last| *last <= closure.start))
+                })
             }
             narrowing::BindingId::Global(mangled) => self
                 .top_symbols
@@ -639,7 +634,7 @@ impl<'a> Inferer<'a> {
             // reads what is actually there. It is also what lets an assignment
             // narrowing on a global work: the two kinds would otherwise disagree
             // about where the current value lives.
-            if matches!(path.root, narrowing::BindingId::Global(_)) {
+            if path.chain.is_empty() && matches!(path.root, narrowing::BindingId::Global(_)) {
                 continue;
             }
             let (source_id, cast_info) = self.wrap_time_source(env, path, view, span);
@@ -741,7 +736,7 @@ impl<'a> Inferer<'a> {
 
     /// Rebuilds the un-narrowed read a root region evaluates at entry or a
     /// field/index region evaluates per use. `None` means the path can't be
-    /// reconstructed — e.g. a global root, a root the scope stack no longer
+    /// reconstructed — e.g. a root the scope stack no longer
     /// holds, an index step, or an unresolved receiver field. The caller then
     /// falls back to `view.source` if its shadow is still live.
     pub(super) fn synthesize_wrap_time_source(
@@ -792,7 +787,10 @@ impl<'a> Inferer<'a> {
                 narrowing::BindingId::This => {
                     (crate::TypedExprKind::This, self.current_class.clone()?)
                 }
-                narrowing::BindingId::Global(_) => return None,
+                narrowing::BindingId::Global(_) => (
+                    self.synthesize_unnarrowed_source(&current_path, span)?,
+                    self.declared_root_ty(&current_path)?,
+                ),
             },
         };
         let mut current_id = self.typed_ast.push_expr(TypedExpr {
@@ -984,6 +982,10 @@ impl<'a> Inferer<'a> {
         entries.sort_by(|(a, _), (b, _)| narrowing::wrap_order(a, b));
         for (path, view) in &entries {
             if matches!(view.narrowed_ty, Type::Error) {
+                continue;
+            }
+            // Globals use live reads in expressions as well as statements.
+            if path.chain.is_empty() && matches!(path.root, narrowing::BindingId::Global(_)) {
                 continue;
             }
             let (source_id, cast_info) = self.wrap_time_source(env, path, view, span);

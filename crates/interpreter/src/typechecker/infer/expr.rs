@@ -7981,7 +7981,7 @@ mod tests {
     fn narrowing_hint_fires_when_a_guard_would_fix_the_operator() {
         let src = "function main(): void { \
                    let v: string | null = \"a\"; \
-                   if (v !== null) { const f = (): string => v + \"!\"; } }";
+                   if (v !== null) { const f = (): string => v + \"!\"; v = null; } }";
         let (_, diags) = run(src);
         assert!(
             diags

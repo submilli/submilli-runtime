@@ -1280,7 +1280,16 @@ fn emit_local_narrow_ref(
                 .global_idx(mangled)
                 .expect("Inferer guarantees the binding exists");
             emitter.instruction(Instruction::GlobalGet(idx));
-            cast::emit_cast_to(emitter, ctx, narrowed_ty);
+            let source_ty = ctx
+                .symbols
+                .global_type(mangled)
+                .expect("language globals retain their declared type");
+            crate::codegen::cast_check::emit_checked_cast_on_stack(
+                emitter,
+                ctx,
+                source_ty,
+                narrowed_ty,
+            );
             return;
         }
         if let Some(source) = emitter.narrow_source(&binding.name) {

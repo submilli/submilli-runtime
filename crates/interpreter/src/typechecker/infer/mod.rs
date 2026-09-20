@@ -74,6 +74,7 @@ pub fn infer<'a>(
         suspended_narrow_scopes: Vec::new(),
         pending_post_if_materializations: Vec::new(),
         captured_mutators: bindings.mutators,
+        last_assignments: bindings.last_assignments,
         reachable: true,
         next_narrow_counter: 0,
         current_return: None,
@@ -204,6 +205,7 @@ pub fn infer_package<'a>(
         suspended_narrow_scopes: Vec::new(),
         pending_post_if_materializations: Vec::new(),
         captured_mutators: Default::default(),
+        last_assignments: Default::default(),
         reachable: true,
         next_narrow_counter: 0,
         current_return: None,
@@ -396,6 +398,7 @@ pub(super) struct Inferer<'a> {
     pub(super) narrow_scopes: Vec<narrowing::NarrowEnv>,
     /// Bindings reassigned inside closures; narrowings on these paths are dropped (a closure could invalidate the narrowing between check and use).
     pub(super) captured_mutators: std::collections::HashSet<(String, Span)>,
+    pub(super) last_assignments: std::collections::HashMap<Span, u32>,
     pub(super) reachable: bool,
     /// All clause writes, including terminating branches, for exceptional entry.
     pub(super) clause_write_scopes: Vec<std::collections::BTreeSet<narrowing::ReferencePath>>,
@@ -534,6 +537,7 @@ impl<'a> Inferer<'a> {
         );
         let bindings = binding_analysis::analyze(ast);
         self.captured_mutators = bindings.mutators;
+        self.last_assignments = bindings.last_assignments;
         self.diagnostics.extend(bindings.diagnostics);
         self.reachable = true;
         self.next_narrow_counter = 0;

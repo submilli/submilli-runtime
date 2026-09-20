@@ -290,8 +290,14 @@ impl State<'_> {
         let kind = self.ta.stmt(id).kind.clone();
         match kind {
             TypedStmtKind::Block(stmts) => {
+                // Blocks change lexical lookup without introducing a closure
+                // boundary. Deferred references retain their binding source.
+                let locals = self.frames.last().map(|frame| frame.locals.clone());
                 for s in stmts {
                     self.walk_stmt(s);
+                }
+                if let (Some(frame), Some(locals)) = (self.frames.last_mut(), locals) {
+                    frame.locals = locals;
                 }
             }
             TypedStmtKind::Let {

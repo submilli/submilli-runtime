@@ -275,7 +275,7 @@ fn import_statics(
                 shared: false,
             }),
         );
-        symbols.record_global(key, take(next_global_idx));
+        symbols.record_typed_global(key, take(next_global_idx), field.ty.clone());
     }
 }
 

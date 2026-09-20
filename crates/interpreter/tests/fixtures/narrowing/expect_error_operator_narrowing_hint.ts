@@ -17,6 +17,7 @@ function main(): void {
   let s: string | null = "x";
   if (s !== null) {
     const f = (): string => s + "!";
+    s = null;
     console.log(f());
   }
 
@@ -24,24 +25,28 @@ function main(): void {
   let d: string | null = "x";
   if (d !== null) {
     const both = (): string => d + d;
+    d = null;
     console.log(both());
   }
 
   let n: number | null = 1;
   if (n !== null) {
     const g = (): boolean => n > 0;
+    n = null;
     console.log(`${g()}`);
   }
 
   let a: number[] | null = [1];
   if (a !== null) {
     const h = (): number => a[0];
+    a = null;
     console.log(`${h()}`);
   }
 
   let t: string | null = "y";
   if (t !== null) {
     const i = (): string => `${t}`;
+    t = null;
     console.log(i());
   }
 }
