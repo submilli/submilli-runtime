@@ -10,9 +10,9 @@ translated into a pod spec.
 
 ## Status
 
-**Not published to a registry yet.** `appVersion` is pinned to `0.1.4`, the first
-server release carrying the blueprint seed directory this chart depends on, so
-the chart itself is complete — but it is not pushed to an OCI registry, and the
+**Not published to a registry yet.** `appVersion` is pinned to `0.1.6`; the
+floor is `0.1.5`, the first server release carrying the blueprint seed directory
+this chart depends on, so the chart itself is complete — but it is not pushed to an OCI registry, and the
 GHCR image package is private until launch.
 
 This chart has never been published, so there is no earlier revision of it in the

@@ -5,14 +5,14 @@ type: application
 
 # Chart packaging version. Bump on every chart change: OCI pushes are immutable
 # by convention, and `ct lint` fails a PR that edits the chart without it.
-version: 0.1.1
+version: 0.1.2
 
 # The submilli-server release this chart deploys, and the default image tag.
 #
 # The floor is v0.1.5: it is the first release carrying `--blueprint-seed-dir`,
 # which templates/configmap-blueprints.yaml depends on. Pinning an earlier tag
 # produces a server that boots clean and ignores every seeded blueprint.
-appVersion: "0.1.5"
+appVersion: "0.1.6"
 
 # `readOnlyRootFilesystem`, `seccompProfile`, and the Pod Security Standards
 # "restricted" profile the pod spec targets all stabilised by 1.25. Helm enforces
