@@ -8,9 +8,9 @@ node -p "require('ai/package.json').version"
 node -p "require('@ai-sdk/mcp/package.json').version"
 ```
 
-The recipe below was type-checked against Node 22, TypeScript 5.9.3, `ai@6.0.0`, `@ai-sdk/mcp@2.0.0`, `@ai-sdk/openai@2.0.0`, and `zod@4.1.8` (the `ai@6.0.0` peer range accepts Zod `^3.25.76 || ^4.1.8`). A provider package is also required in a real app; the provider and model are application choices. Current SDKs export `createMCPClient` from `@ai-sdk/mcp`. Older applications may have `experimental_createMCPClient` from `ai`; follow the declarations actually installed rather than mixing generations.
+The recipe below was verified on 2026-09-17 with Node 22, TypeScript 5.9, `ai 6.0`, `@ai-sdk/mcp 2.0` and `zod 4.1`; if an export or signature differs, the installed version's declarations win over this text. A provider package is also required in a real app; the provider and model are application choices. Current SDKs export `createMCPClient` from `@ai-sdk/mcp`. Older applications may have `experimental_createMCPClient` from `ai`; follow the declarations actually installed rather than mixing generations.
 
-The repository's older eval fixture pins `@ai-sdk/mcp@1.0.0`; that adapter did not complete against the current Submilli Streamable HTTP server in validation (it stalled on its GET-SSE path). Upgrade the adapter within the application's supported dependency range and re-check its lockfile before adopting this recipe. The current v2 client completed discovery and execution; its `onUncaughtError` callback reported a server GET-SSE `400`/empty-event warning while the POST MCP session still worked, so keep that callback wired to logs and treat the warning as an integration gap to resolve before production.
+Adapter versions differ in how they handle the server's optional GET-SSE stream, which Submilli answers with `400`: `@ai-sdk/mcp 1.0.0` stalled on it in validation, later 1.x and 2.x releases completed discovery and execution and only logged a warning through `onUncaughtError`. Keep that callback wired to logs, and if a run hangs after connecting, upgrade the adapter within the application's dependency range before debugging anything else.
 
 ## Minimal runnable server-side agent
 
@@ -19,8 +19,8 @@ Start with the [Submilli setup](setup.md), [package](packages.md), and [blueprin
 Install only the integration dependencies in the application directory:
 
 ```sh
-npm install ai@6.0.0 @ai-sdk/mcp@2.0.0 @ai-sdk/openai@2.0.0
-npm install -D typescript@5 tsx@4
+npm install ai @ai-sdk/mcp @ai-sdk/openai
+npm install -D typescript tsx
 ```
 
 `agent.ts` (server code; never browser code) can then be this complete entrypoint. `customerId` must come from the authenticated, authorized request context. A chat message must never choose it.
@@ -169,7 +169,7 @@ Use the real `@ai-sdk/mcp` client against a local Submilli server and the SDK's 
 tmp_dir=$(mktemp -d)
 cd "$tmp_dir"
 npm init -y
-npm install ai@6.0.0 @ai-sdk/mcp@2.0.0 typescript@5.9.3 tsx@4.19.2 zod@4.1.8
+npm install ai @ai-sdk/mcp typescript tsx zod   # or the app's exact versions
 # write validate.ts asserting the list below, then:
 SUBMILLI_SERVER_URL=http://127.0.0.1:8128 npx tsx validate.ts
 ```

@@ -1,11 +1,12 @@
 # LangChain and LangGraph
 
 Read [harnesses](harnesses.md) first. Submilli is the execution boundary; keep
-the application's model loop, authentication, and framework. The examples
-below use Python package versions checked on 2026-09-17:
-`langchain==1.4.1`, `langgraph==1.2.11`, and
-`langchain-mcp-adapters==0.3.2`. Pin the versions used by your application and
-re-check the official API when upgrading.
+the application's model loop, authentication, and framework. Use the
+versions the application already has; for a new project install the current
+releases. The examples below were verified on 2026-09-17 with
+`langchain 1.4.1`, `langgraph 1.2.11` and `langchain-mcp-adapters 0.3.2`; if
+an import or signature differs, the installed version's official API wins
+over this text.
 
 The official integration guide is [LangChain MCP](https://docs.langchain.com/oss/python/langchain/mcp).
 The official persistence guide is [LangGraph memory](https://docs.langchain.com/oss/python/langgraph/add-memory).
@@ -15,7 +16,7 @@ The official persistence guide is [LangGraph memory](https://docs.langchain.com/
 Install the framework and adapter into the application's environment:
 
 ```sh
-python3 -m pip install 'langchain==1.4.1' 'langchain-mcp-adapters==0.3.2' 'langchain-openai==1.6.2'
+python3 -m pip install langchain langchain-mcp-adapters langchain-openai
 ```
 
 Bind the already-authenticated customer before creating the client. The value

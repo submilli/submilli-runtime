@@ -16,37 +16,30 @@ re-read this file. If the command is missing or fails, continue with the
 installed copy; an explanation alone never needs it.
 
 Read only the references needed for the current task. Each holds mechanics
-that general knowledge gets wrong; the failure from skipping it is named.
+that general knowledge gets wrong; what goes wrong without it is named.
 
-- First explanation or comparison: [concepts](references/concepts.md) — the
-  three authorship roles; without it Submilli gets described as a sandbox.
-- Installation, new project, skill updates: [setup](references/setup.md) —
-  both binaries, `skill sync`, `upgrade`; without it the server binary is
-  missed.
+- First explanation or comparison: [concepts](references/concepts.md);
+  without it Submilli gets described as a sandbox.
+- Installation, new project, skill updates: [setup](references/setup.md);
+  without it the server binary is missed.
 - Existing project or unclear agent requirements:
-  [discovery](references/discovery.md) — what to inspect, the five questions,
-  the integration check, the decision map for users who cannot evaluate
-  policy; without it the interview becomes a questionnaire or a silent guess
-  at business limits.
+  [discovery](references/discovery.md); without it the interview becomes a
+  questionnaire or a silent guess at business limits.
 - Choosing operations, check fields, package and blueprint boundaries:
-  [capability design](references/capability-design.md) — ownership resolved
-  in package code; without it checks guard fields the model can choose.
-- Package implementation: [packages](references/packages.md) — layout,
-  commands, language subset, test API (`expectException` takes an error name
-  string); without it the package is written as Node.js and fails `build`.
-- Policy design and verification: [blueprints](references/blueprints.md) —
-  rule syntax, `${vars.*}` filters, no `env:`/`file:` secrets in registered
-  blueprints; without it the blueprint lints but the server rejects it.
+  [capability design](references/capability-design.md); without it checks
+  guard fields the model can choose.
+- Package implementation: [packages](references/packages.md); without it the
+  package is written as Node.js and fails `build`.
+- Policy design and verification: [blueprints](references/blueprints.md);
+  without it the blueprint lints but the server rejects it.
 - Ideas or suitability: [use cases](references/use-cases.md).
 - Agent implementation: [harness integration](references/harnesses.md), then
-  the user's harness reference — exact pins, the `submilli-variables` header,
-  a missing binding fails at connect (HTTP 400) not as a tool error; without
-  it the adapter or identity binding is wrong and denials are misread.
+  the user's harness reference; without it the adapter or identity binding is
+  wrong and denials are misread.
 - After writing or changing a package or blueprint:
-  [verification](references/verification.md) — eight questions with a
-  confidence scale; without it "verified" means "it ran once". Delegate to
-  the `submilli-verifier` subagent when installed; otherwise run it yourself
-  as a separate pass. Report its findings.
+  [verification](references/verification.md); without it "verified" means
+  "it ran once". Delegate to the `submilli-verifier` subagent when installed;
+  otherwise run it yourself as a separate pass. Report its findings.
 
 Keep three authorship boundaries clear: developers own packages and blueprints;
 the trusted application binds identity and session variables; the runtime agent

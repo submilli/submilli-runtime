@@ -58,10 +58,12 @@ Submilli package checks or blueprint filters.
 ## Complete minimal project
 
 This host-side skeleton uses no business SDK: the only remote tool server is
-Submilli. Pin a tested pair in the application's own package manager; the
-versions below were inspected with npm on 2026-09-17. `@mastra/mcp@1.18.0`
-declares peer compatibility with `@mastra/core >=1.64.0-0 <2.0.0-0`, and
-`@mastra/core@1.67.0` satisfies it.
+Submilli. Use the application's existing `@mastra/core` and `@mastra/mcp`,
+or the current releases for a new project; `@mastra/mcp` declares a peer
+range on `@mastra/core`, so install both together and let the package
+manager resolve the pair. The skeleton below was verified on 2026-09-17
+with `@mastra/core 1.67.0` and `@mastra/mcp 1.18.0`; the versions in it are
+what was tested, not a recommendation.
 
 ```json
 {

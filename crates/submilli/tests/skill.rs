@@ -284,6 +284,13 @@ fn skill_frontmatter_and_relative_links_are_valid() {
         for suffix in content.split("](").skip(1) {
             let target = suffix.split(')').next().unwrap();
             if !target.starts_with("https://") {
+                // Installed copies live under an assistant's directory where
+                // nothing outside the skill resolves.
+                assert!(
+                    !target.contains("..") && !target.starts_with('/'),
+                    "reference escapes the skill in {}: {target}",
+                    path.display()
+                );
                 assert!(
                     path.parent().unwrap().join(target).is_file(),
                     "broken reference in {}: {target}",
@@ -291,6 +298,16 @@ fn skill_frontmatter_and_relative_links_are_valid() {
                 );
             }
         }
+        // Claude Code expands `@path` at load time, which defeats on-demand
+        // references and breaks on other assistants.
+        let include = ["@references/", "@./", "@/", "@~"];
+        assert!(
+            !content
+                .split_whitespace()
+                .any(|word| include.iter().any(|prefix| word.starts_with(prefix))),
+            "@file include in {}",
+            path.display()
+        );
     }
 }
 

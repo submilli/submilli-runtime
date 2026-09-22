@@ -9,6 +9,37 @@ assistant's agents directory and records it in the receipt as a companion.
 non-dot file under `skills/submilli/` in the CLI; the installation test
 compares the installed tree against this source tree.
 
+## Editing the skill
+
+Every line must change what the assistant does. Before keeping one, ask
+whether removing it would change any output; if not, delete it. Assistants
+already try to be thorough and careful, so exhortations to be so are noise.
+A line earns its place by stating a falsifiable constraint (a path, format,
+threshold, ordering), countering a known default the model would otherwise
+follow, or supplying Submilli knowledge the model lacks. An adjective stays
+only when a concrete rule beside it operationalizes it.
+
+`SKILL.md` loads at session start; references load on demand. Inline the
+trigger, never the content: each pointer names when to read the reference
+and what goes wrong without it, and nothing the assistant could act on
+instead of opening the file. A paraphrase beside a pointer suppresses the
+load. Move any block that is conditional or late in the sequence into
+`references/`; the structural test caps `SKILL.md` at 650 words.
+
+References are self-contained: link only within `skills/submilli/` with
+relative paths, never `../`, absolute paths, or `@file` includes. Installed
+copies live under an assistant's own directory where nothing else resolves.
+
+Harness references name what the recipe was verified against and when. They
+do not pin install commands: a pinned adapter is stale within weeks and
+contradicts the rule to keep the application's versions. The eval fixtures
+under `evals/harnesses/` stay pinned because they must reproduce.
+
+Claude Code caches skill text at session start. Editing an installed copy and
+re-invoking the skill in the same session tests the old text; start a new
+session, or use the eval runner, which starts one per trial. Bump `VERSION`
+in any change that alters behaviour.
+
 ## Release and update contract
 
 `skills/submilli/VERSION` holds the skill's release number. To publish:

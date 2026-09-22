@@ -8,14 +8,14 @@ For a new project, follow [setup](setup.md), then [packages](packages.md), then 
 
 Bind identity from authenticated application state before constructing the MCP client. The header format is `submilli-variables: customerId=cus_northwind`; validate the value and reject semicolon, carriage return, and line-feed characters. Never derive this header from chat. Make a new client/session for every identity and keep it alive for the entire agent run.
 
-The current releases checked on 2026-09-17 are `deepagents==0.7.15`, `langchain-mcp-adapters==0.3.2`, `langchain-openai==1.6.2` (PyPI), and `deepagents@1.13.5`, `@langchain/mcp-adapters@1.1.4`, `@langchain/openai@1.5.13` (npm). Pin versions in a new harness and re-check official APIs when upgrading. Deep Agents requires a tool-calling model.
+Use the versions the application already has; for a new project install the current releases. These examples were verified on 2026-09-17 with `deepagents 0.7.15` and `langchain-mcp-adapters 0.3.2` (PyPI) and `deepagents 1.13.5` with `@langchain/mcp-adapters 1.1.4` (npm); if an import or signature differs, the installed version's official API wins over this text. Deep Agents requires a tool-calling model.
 
 ## Runnable Python harness
 
 ```sh
 python3 -m venv .venv
 . .venv/bin/activate
-python -m pip install 'deepagents==0.7.15' 'langchain-mcp-adapters==0.3.2' 'langchain-openai==1.6.2'
+python -m pip install deepagents langchain-mcp-adapters langchain-openai
 export OPENAI_API_KEY='...'
 export SUBMILLI_SERVER_URL='http://127.0.0.1:8128'
 export SUBMILLI_BLUEPRINT='support-read'
@@ -113,7 +113,7 @@ Pass `ScriptedModel(code=..., offered=[])` as `model=` inside the same `async wi
 1. Bound to `cus_northwind`, a program reading `cus_northwind` ends with `6150`.
 2. The same binding reading `cus_initech` ends with a tool result containing `permission denied` and `acme.com/balance.read`; the adapter returns it as content, the agent does not raise.
 3. Without the `submilli-variables` header the server rejects `initialize` with HTTP 400, so entering `client.session(...)` raises an exception group before any agent exists. Assert on the raised error.
-4. `offered` records the model's real tool surface. With `deepagents==0.7.15` defaults it is Submilli's eight MCP tools plus `ls`, `read_file`, `write_file`, `edit_file`, `delete`, `glob`, `grep` and `task`. There is no `execute` tool under the default StateBackend; assert that, because a backend that adds it opens a path around blueprint policy.
+4. `offered` records the model's real tool surface. With the defaults verified above it is Submilli's eight MCP tools plus `ls`, `read_file`, `write_file`, `edit_file`, `delete`, `glob`, `grep` and `task`. There is no `execute` tool under the default StateBackend; assert that, because a backend that adds it opens a path around blueprint policy.
 
 `Session termination failed: 202` in the adapter log on close is harmless. A scripted run is adapter and policy evidence, not a live model result.
 
@@ -122,7 +122,7 @@ Pass `ScriptedModel(code=..., offered=[])` as `model=` inside the same `async wi
 The current JS adapter does not expose Python's `session()` context. It keeps connections on `MultiServerMCPClient`; call `getTools()` after construction and `close()` in `finally` after the run.
 
 ```sh
-npm install deepagents@1.13.5 @langchain/mcp-adapters@1.1.4 @langchain/openai@1.5.13
+npm install deepagents @langchain/mcp-adapters @langchain/openai
 export OPENAI_API_KEY='...'
 export SUBMILLI_SERVER_URL='http://127.0.0.1:8128'
 export SUBMILLI_BLUEPRINT='support-read'
