@@ -4247,6 +4247,16 @@ impl<'a> Parser<'a> {
             }
         };
 
+        // `{ m(x: T): R { … } }` is shorthand for `{ m: (x: T): R => { … } }`. Method
+        // shorthand carries no `this` of its own here, for the same reason a function
+        // expression does not, so the arrow is an exact lowering. Checked before the
+        // `:` branch and independently of `shorthandable`, because a keyword or string
+        // key can name a method too.
+        if matches!(self.peek().kind, TokenKind::LeftParen) {
+            let value = self.parse_method_shorthand_body(name.span)?;
+            return Some(ObjectLiteralField { name, value });
+        }
+
         if !matches!(self.peek().kind, TokenKind::Colon) {
             // `{ x }` is shorthand for `{ x: x }`. Only identifier keys can use
             // it — a string key like `{ "x" }` has no binding to reference.
@@ -4264,6 +4274,47 @@ impl<'a> Parser<'a> {
 
         let value = self.parse_expression()?;
         Some(ObjectLiteralField { name, value })
+    }
+
+    /// The `(params): R { … }` tail of an object-literal method, lowered to an arrow.
+    /// `name_span` is the key's span, so the arrow spans the whole member.
+    fn parse_method_shorthand_body(&mut self, name_span: Span) -> Option<ExprId> {
+        self.advance();
+
+        let params = if matches!(self.peek().kind, TokenKind::RightParen) {
+            Vec::new()
+        } else {
+            self.parse_arrow_param_list()?
+        };
+        if !matches!(self.peek().kind, TokenKind::RightParen) {
+            self.error_at_peek("expected `)`");
+            return None;
+        }
+        self.advance();
+
+        let (return_type, type_predicate) = if matches!(self.peek().kind, TokenKind::Colon) {
+            self.advance();
+            self.parse_predicate_or_return_type(TypePos::ArrowReturn)?
+        } else {
+            (None, None)
+        };
+
+        if !matches!(self.peek().kind, TokenKind::LeftBrace) {
+            self.error_at_peek("expected `{` to open the method body");
+            return None;
+        }
+        let block = self.parse_block()?;
+        let end = self.ast.stmt(block).span.end;
+
+        Some(self.ast.push_expr(Expr {
+            kind: ExprKind::Arrow {
+                params,
+                return_type,
+                type_predicate,
+                body: ArrowBody::Block(block),
+            },
+            span: self.span(name_span.start, end),
+        }))
     }
 
     fn parse_array_literal(&mut self) -> Option<ExprId> {
@@ -8794,6 +8845,54 @@ mod tests {
     fn function_keyword_still_parses_as_an_object_key() {
         let (_ast, diags) = parse_str("let o = { function: 1 };");
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+    }
+
+    fn object_literal_member_values(source: &str) -> (Ast, Vec<crate::ExprId>) {
+        let (ast, diags) = parse_str(source);
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let stmt = ast.stmt(ast.top_level[0]);
+        let value = match &stmt.kind {
+            StmtKind::Const { value, .. } => *value,
+            other => panic!("expected a const declaration, got {other:?}"),
+        };
+        let members = match &ast.expr(value).kind {
+            ExprKind::ObjectLiteral { members } => {
+                members.iter().map(|m| m.value()).collect::<Vec<_>>()
+            }
+            other => panic!("expected ObjectLiteral, got {other:?}"),
+        };
+        (ast, members)
+    }
+
+    #[test]
+    fn parses_object_literal_method_shorthand_as_arrow() {
+        let (ast, members) =
+            object_literal_member_values("const o = { m(x: number): number { return x; } };");
+        assert_eq!(members.len(), 1);
+        match &ast.expr(members[0]).kind {
+            ExprKind::Arrow { params, body, .. } => {
+                assert_eq!(params.len(), 1);
+                assert_eq!(params[0].name.name, "x");
+                assert!(matches!(body, crate::ArrowBody::Block(_)));
+            }
+            other => panic!("expected Arrow, got {other:?}"),
+        }
+    }
+
+    /// A keyword is a valid method name, just as it is a valid property name.
+    #[test]
+    fn parses_method_shorthand_with_a_keyword_name() {
+        let (ast, members) =
+            object_literal_member_values("const o = { if(x: number): number { return x; } };");
+        assert!(matches!(ast.expr(members[0]).kind, ExprKind::Arrow { .. }));
+    }
+
+    #[test]
+    fn parses_method_shorthand_alongside_plain_and_shorthand_properties() {
+        let (ast, members) =
+            object_literal_member_values("const o = { a: 1, m(): void {}, b: 2 };");
+        assert_eq!(members.len(), 3);
+        assert!(matches!(ast.expr(members[1]).kind, ExprKind::Arrow { .. }));
     }
 
     #[test]
