@@ -241,19 +241,31 @@ fn documented_real_service_package_and_blueprint_agree() {
     }
     ok(cli(&["build", "test"]));
     ok(cli(&["build", "publish-local"]));
-    let yaml = code_blocks(&blueprint_doc, "yaml")[1];
+    // Every complete blueprint in the reference must lint clean against this
+    // CLI, so a schema or catalog change that outdates the skill fails here.
+    // The `@acme/billing` fixture blueprint is exercised end to end by
+    // `documented_package_and_blueprint_enforce_the_bound_customer` instead.
+    let blueprints: Vec<&str> = code_blocks(&blueprint_doc, "yaml")
+        .into_iter()
+        .filter(|block| block.starts_with("kind: blueprint") && !block.contains("@acme/billing"))
+        .collect();
     assert!(
-        yaml.contains("name: support-orders"),
-        "second blueprint example moved"
+        blueprints
+            .iter()
+            .any(|b| b.contains("name: support-orders")),
+        "the support-orders example moved"
     );
-    fs::write(root.path().join("blueprint.yaml"), yaml).unwrap();
-    let lint = cli(&["blueprint", "lint", "blueprint.yaml"]);
-    ok(lint.clone());
-    assert!(
-        !String::from_utf8_lossy(&lint.stderr).contains("warning:"),
-        "documented blueprint should lint clean: {}",
-        String::from_utf8_lossy(&lint.stderr)
-    );
+    for (index, yaml) in blueprints.iter().enumerate() {
+        let file = format!("blueprint-{index}.yaml");
+        fs::write(root.path().join(&file), yaml).unwrap();
+        let lint = cli(&["blueprint", "lint", &file]);
+        ok(lint.clone());
+        assert!(
+            !String::from_utf8_lossy(&lint.stderr).contains("warning:"),
+            "documented blueprint {index} should lint clean: {}",
+            String::from_utf8_lossy(&lint.stderr)
+        );
+    }
 }
 
 #[test]

@@ -57,8 +57,9 @@ Every top-level key, all optional except `name`:
 | `default` | Fall-through action: `deny` (the default and the norm), `allow`, or `ask-human` |
 | `permissions` | Per-caller rule lists; see below |
 | `mcp` | Outbound MCP servers keyed by local name: `url`, optional `transport` (`streamable_http`), `headers` with `${secrets.X}`, or `auth: { type: oauth2, ... }`. Imported as `@mcp/<name>`; gated by the `mcp.<name>` capability with a `tool` field |
-| `vfs` | `none`, `ephemeral` (default; wiped per execute), `per_session` (kept for the session), or `persistent: { volume }` |
+| `vfs` | The program's `/`: `none` (every `submilli:fs` call fails), `ephemeral` (default; a scratch directory deleted after the run), `per_session` (lasts as long as the session, like `submilli:session` state), or `persistent: { volume }` (an operator-declared volume kept across sessions and restarts). A program run outside a session gets one that closes when it returns |
 | `idle_timeout` | Session reaping window, e.g. `3600s`; default one day |
+| `llm` | Models a program may call through `submilli:llm`: `providers` (name → `type`, `api_key: ${secrets.X}`) and `models` (name → `provider`, optional `description`). A model not listed cannot be called; descriptions reach the model writing the program, so they say which model is for what |
 
 `submilli blueprint init` scaffolds a commented minimal file; `--full` lists
 every stdlib capability as a deny rule with example filters.
@@ -121,6 +122,7 @@ Stdlib gates and their fields, from `submilli blueprint capability list`:
 | `session.read` `write` `remove` `list` | `op`, `key` or `prefix` |
 | `secrets.get` (packages only) | `name` |
 | `mcp.<server>` | `tool`, `transport` |
+| `llm.call` (covers `call`, `batch`, `models()`) | `op`, `model`, `prompt_count`; narrowing `model` also narrows what `models()` lists |
 
 ## A real service
 
@@ -195,23 +197,78 @@ or a draft operation when it does not.
   rebind them. Secure ingress to the server before exposing it beyond a
   trusted network.
 
+## Direct HTTP with a credential, and model calls
+
+When there is no package, only an HTTP API, `main` may call it under an
+`http.get` rule and the auth proxy adds the credential on the way out. The
+permission check runs first; then, for a request whose host exactly matches
+an `auth_proxy` entry, the runtime adds the header. The token never enters the
+program. A model call works the same way: the provider key stays in
+`secrets`, the program names a model, and the response comes back.
+
+```yaml
+kind: blueprint
+name: support-status
+secrets:
+  STATUS_TOKEN:
+    store: status_token
+  ANTHROPIC_API_KEY:
+    store: anthropic_api_key
+auth_proxy:
+  - host: status.acme.com
+    auth:
+      bearer: STATUS_TOKEN
+llm:
+  providers:
+    anthropic:
+      type: anthropic
+      api_key: ${secrets.ANTHROPIC_API_KEY}
+  models:
+    claude-haiku-4-5:
+      provider: anthropic
+      description: "Cheap and fast; use for bulk per-item classification."
+default: deny
+permissions:
+  main:
+    - capability: http.get
+      filter: host == "status.acme.com"
+      action: allow
+    - capability: llm.call
+      filter: model glob "claude-*"
+      action: allow
+```
+
+`--bearer` and `--basic-username` with `--basic-password` cover the common
+auth-proxy cases; `--header NAME=VALUE` and `--query KEY=VALUE` with
+`${secrets.X}` values cover the rest.
+
 ## Workflow
 
 ```sh
 submilli blueprint init support-orders
-submilli blueprint secret add ORDERS_API_TOKEN --env ORDERS_API_TOKEN
-submilli blueprint add-package '@acme/orders' --capabilities acme.com/orders.list
+submilli blueprint secret add ORDERS_API_TOKEN --store ORDERS_API_TOKEN
+submilli blueprint add-package '@acme/orders' --no-capabilities   # list it; grant nothing yet
+submilli blueprint capability list '@acme/orders'                 # names and filterable fields
+submilli blueprint capability add acme.com/orders.list \
+  --filter 'customerId == ${vars.customerId}'
 submilli blueprint capability add acme.com/orders.cancel \
   --filter 'customerId == ${vars.customerId} and totalCents <= 5000' --action ask-human
+submilli blueprint auth-proxy add --host status.acme.com --bearer STATUS_TOKEN
 submilli blueprint lint blueprint.yaml          # --fix adds missing package rules
 submilli blueprint prompt                       # what the model will be told
 ```
 
-`add-package` writes the package's derived `requires` grants for you and warns
-about undeclared secrets. Add `variables` by editing the file; the CLI editors
-rewrite YAML and drop comments. Lint warns on unreachable `main` rules (an
-earlier rule shadows a later one), on `default: allow`, and on provided
-capabilities with no `main` rule.
+`add-package` lists the package so imports resolve and writes the package's
+own derived `requires` grants; it warns about undeclared secrets. With
+`--no-capabilities` it grants `main` nothing, which is the right first step:
+each operation the program may call is then one explicit `capability add`.
+`--capabilities NAME,...` and `--all-capabilities` are the shortcuts.
+`capability add` refuses a name it does not know unless `--force` is given,
+which lint cannot catch (a misspelled name is a rule that never matches). Add `variables`, `vfs`,
+`idle_timeout` and `llm` by editing the file; the CLI editors rewrite YAML
+and drop comments, so keep hand-written commentary elsewhere. Lint warns on
+unreachable `main` rules (an earlier rule shadows a later one), on
+`default: allow`, and on provided capabilities with no `main` rule.
 
 Register and run:
 
