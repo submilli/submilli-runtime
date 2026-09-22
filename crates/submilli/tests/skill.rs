@@ -610,3 +610,60 @@ fn update_refreshes_an_unmodified_verifier_and_preserves_an_edited_one() {
     assert!(String::from_utf8_lossy(&output.stdout).contains("not written"));
     assert_eq!(fs::read_to_string(&verifier).unwrap(), "my own verifier");
 }
+
+/// `build init` points a developer at `skill install`, naming the assistant
+/// the project shows signs of, and says nothing once the skill is installed.
+#[test]
+fn build_init_suggests_the_skill_for_detected_assistants() {
+    let init = |project: &Path, home: &Path| {
+        let output = Command::new(env!("CARGO_BIN_EXE_submilli"))
+            .args(["build", "init", "@acme/demo", "packages/demo"])
+            .current_dir(project)
+            .env(if cfg!(windows) { "USERPROFILE" } else { "HOME" }, home)
+            .env("SUBMILLI_HOME", home.join(".submilli"))
+            .env("SUBMILLI_TELEMETRY", "0")
+            .output()
+            .unwrap();
+        ok(output.clone());
+        String::from_utf8(output.stderr).unwrap()
+    };
+    let home = tempfile::tempdir().unwrap();
+
+    let bare = tempfile::tempdir().unwrap();
+    let stderr = init(bare.path(), home.path());
+    assert!(stderr.contains("Claude Code, Codex or Cursor"), "{stderr}");
+
+    let claude = tempfile::tempdir().unwrap();
+    fs::write(claude.path().join("CLAUDE.md"), "").unwrap();
+    let stderr = init(claude.path(), home.path());
+    assert!(
+        stderr.contains("skill install --agent claude") && stderr.contains("Claude Code"),
+        "{stderr}"
+    );
+
+    // Markers are found up to the repository root, and several assistants
+    // produce one line naming each flag.
+    let repo = tempfile::tempdir().unwrap();
+    fs::create_dir_all(repo.path().join(".git")).unwrap();
+    fs::create_dir_all(repo.path().join(".cursor")).unwrap();
+    fs::create_dir_all(repo.path().join(".codex")).unwrap();
+    let nested = repo.path().join("services/billing");
+    fs::create_dir_all(&nested).unwrap();
+    let stderr = init(&nested, home.path());
+    assert!(stderr.contains("--agent <codex|cursor>"), "{stderr}");
+
+    // An installation anywhere the CLI manages (here the user home) silences it.
+    let installed = tempfile::tempdir().unwrap();
+    fs::write(installed.path().join("CLAUDE.md"), "").unwrap();
+    ok(Command::new(env!("CARGO_BIN_EXE_submilli"))
+        .args(["skill", "install", "--agent", "claude"])
+        .env(
+            if cfg!(windows) { "USERPROFILE" } else { "HOME" },
+            home.path(),
+        )
+        .env("SUBMILLI_TELEMETRY", "0")
+        .output()
+        .unwrap());
+    let stderr = init(installed.path(), home.path());
+    assert!(!stderr.contains("skill install"), "{stderr}");
+}

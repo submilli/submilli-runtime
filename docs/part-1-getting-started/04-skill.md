@@ -21,6 +21,10 @@ Install the [CLI](/docs/quickstart), then choose your assistant:
 | Codex | `submilli skill install --agent codex` | `~/.agents/skills/submilli` |
 | Cursor | `submilli skill install --agent cursor` | `~/.cursor/skills/submilli` |
 
+If you skip this, `submilli build init` prints the command for the assistant
+your project shows signs of (a `CLAUDE.md`, a `.cursor` directory, and so on)
+until the skill is installed. It never installs anything on its own.
+
 The home directory is your OS user home (`USERPROFILE` on Windows). Add
 `--project .` to any command to use that directory instead; a different
 existing directory also works. Run project installation from the repository

@@ -48,6 +48,26 @@ impl Agent {
         }
     }
 
+    /// The `--agent` spelling and the assistant's display name.
+    fn names(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Claude => ("claude", "Claude Code"),
+            Self::Codex => ("codex", "Codex"),
+            Self::Cursor => ("cursor", "Cursor"),
+        }
+    }
+
+    /// Files a project carries when this assistant is used in it. Codex reads
+    /// `AGENTS.md`, which Cursor and others honour too, so it is not claimed
+    /// by anyone; only an assistant's own directory or instruction file counts.
+    fn project_markers(self) -> &'static [&'static str] {
+        match self {
+            Self::Claude => &[".claude", "CLAUDE.md"],
+            Self::Codex => &[".agents", ".codex"],
+            Self::Cursor => &[".cursor", ".cursorrules"],
+        }
+    }
+
     /// The assistant a skill path belongs to, from its discovery directory.
     fn from_skill_path(path: &Path) -> Option<Self> {
         let directory = path.parent()?.parent()?.file_name()?.to_str()?;
@@ -282,6 +302,55 @@ pub fn warn_if_outdated() {
             );
         }
     }
+}
+
+/// One line suggesting `skill install` to a developer who has just scaffolded
+/// a package, naming the assistants their project shows signs of. Nothing is
+/// installed: the user install writes outside the project and which assistant
+/// they use is their call. `None` when a managed installation already exists
+/// for this user or project.
+pub fn adoption_hint(project: &Path) -> Option<String> {
+    if !managed_installs().is_empty() {
+        return None;
+    }
+    let roots: Vec<&Path> = project
+        .ancestors()
+        .scan(false, |done, dir| {
+            if *done {
+                return None;
+            }
+            *done = dir.join(".git").exists();
+            Some(dir)
+        })
+        .collect();
+    let detected: Vec<Agent> = [Agent::Claude, Agent::Codex, Agent::Cursor]
+        .into_iter()
+        .filter(|agent| {
+            roots.iter().any(|root| {
+                agent
+                    .project_markers()
+                    .iter()
+                    .any(|marker| root.join(marker).exists())
+            })
+        })
+        .collect();
+    let hint = match detected.as_slice() {
+        [] => "tip: if you use Claude Code, Codex or Cursor, `submilli skill install --agent <claude|codex|cursor>` teaches it to build packages and blueprints".to_string(),
+        [agent] => {
+            let (flag, name) = agent.names();
+            format!(
+                "tip: `submilli skill install --agent {flag}` teaches {name} to build packages and blueprints here (add `--project .` to commit it with the repo)"
+            )
+        }
+        many => {
+            let flags: Vec<&str> = many.iter().map(|agent| agent.names().0).collect();
+            format!(
+                "tip: `submilli skill install --agent <{}>` teaches your assistant to build packages and blueprints here (add `--project .` to commit it with the repo)",
+                flags.join("|")
+            )
+        }
+    };
+    Some(hint)
 }
 
 /// Receipt-bearing installations under the user home and from the working

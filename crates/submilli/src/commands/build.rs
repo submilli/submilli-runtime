@@ -113,6 +113,9 @@ fn execute_init(args: InitArgs) -> anyhow::Result<ExitCode> {
     eprintln!(
         "add packages with `submilli build new <@scope/name> <path>`; compile and install with `submilli build publish-local`; run tests with `submilli build test`"
     );
+    if let Some(hint) = super::skill::adoption_hint(&dir) {
+        eprintln!("{hint}");
+    }
     Ok(ExitCode::SUCCESS)
 }
 
