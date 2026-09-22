@@ -435,6 +435,29 @@ impl Type {
         }
     }
 
+    /// This type with literal types replaced by the primitive they are a literal of.
+    ///
+    /// A literal type is only sound where the value cannot change, so inference keeps
+    /// it at a `const` binding and widens here at every position that is mutable or
+    /// whose type is inferred from its contents — a `let` binding, an array element,
+    /// an object-literal property, a generic argument. `const a = 1` is `1`, but
+    /// `let b = a` is `number`, matching TypeScript.
+    ///
+    /// Enums are left alone: `NumberEnum`/`StringEnum` are nominal types, not literals,
+    /// and widening them would discard the identity their members are checked against.
+    /// Use [`primitive_behavior`](Self::primitive_behavior) for that.
+    pub fn widen_literal(&self) -> Type {
+        match self {
+            Type::NumberLiteral(_) => Type::Number,
+            Type::StringLiteral(_) => Type::String,
+            // A union widens memberwise, which also collapses it when the members
+            // share a base: `1 | 2` is `number`, not `number | number`, because
+            // `Type::union` deduplicates.
+            Type::Union(members) => Type::union(members.iter().map(Type::widen_literal).collect()),
+            _ => self.clone(),
+        }
+    }
+
     /// Whether every part of this type is a string — a `string`, a
     /// string-literal type, or a union of those.
     ///
@@ -523,7 +546,11 @@ impl Type {
     pub fn interface_routing(&self) -> Option<(MangledName, &str, &str, Vec<Type>)> {
         let prelude = crate::mangle::PRELUDE_PACKAGE;
         match self.primitive_behavior() {
-            Type::Number => Some((
+            // A literal type routes to its base's interface: `"abc".at(0)` resolves the
+            // same members a `string` receiver does. The prelude `Number`/`String`
+            // interfaces expose no mutating members, so routing a literal there cannot
+            // invalidate it.
+            Type::Number | Type::NumberLiteral(_) => Some((
                 crate::mangle::prelude("Number"),
                 prelude,
                 "Number",
@@ -541,7 +568,7 @@ impl Type {
                 "Boolean",
                 Vec::new(),
             )),
-            Type::String => Some((
+            Type::String | Type::StringLiteral(_) => Some((
                 crate::mangle::prelude("String"),
                 prelude,
                 "String",
@@ -1108,6 +1135,39 @@ mod tests {
             Type::NumberLiteral(LiteralF64(42.0)),
         ]);
         assert_eq!(t.to_string(), "number | 42 | string | \"hi\"");
+    }
+
+    #[test]
+    fn widen_literal_replaces_a_literal_with_its_base() {
+        assert_eq!(
+            Type::NumberLiteral(LiteralF64(1.0)).widen_literal(),
+            Type::Number
+        );
+        assert_eq!(
+            Type::StringLiteral("hi".to_string()).widen_literal(),
+            Type::String
+        );
+    }
+
+    /// A union widens memberwise, and `Type::union` then deduplicates — so a union of
+    /// literals over one base collapses to that base rather than repeating it.
+    #[test]
+    fn widen_literal_collapses_a_union_of_literals() {
+        let t = Type::union(vec![
+            Type::NumberLiteral(LiteralF64(1.0)),
+            Type::NumberLiteral(LiteralF64(2.0)),
+        ]);
+        assert_eq!(t.widen_literal(), Type::Number);
+    }
+
+    /// Enums are nominal, not literal: widening one would discard the identity its
+    /// members are checked against. `primitive_behavior` is the enum-aware accessor.
+    #[test]
+    fn widen_literal_leaves_everything_else_alone() {
+        assert_eq!(Type::Number.widen_literal(), Type::Number);
+        assert_eq!(Type::Boolean.widen_literal(), Type::Boolean);
+        let arr = Type::Array(Box::new(Type::NumberLiteral(LiteralF64(1.0))));
+        assert_eq!(arr.widen_literal(), arr);
     }
 
     #[test]

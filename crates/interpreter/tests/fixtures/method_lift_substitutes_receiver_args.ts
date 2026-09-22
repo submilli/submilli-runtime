@@ -15,7 +15,9 @@ export function main(): string {
     const arr: number[] = [1];
     arr.map();
 
-    const s = "hi";
+    // Annotated, so the receiver renders as `string`; an unannotated `const`
+    // infers the literal type and would render `"hi"`.
+    const s: string = "hi";
     s.repeat();
 
     const st = new Set<number>();
