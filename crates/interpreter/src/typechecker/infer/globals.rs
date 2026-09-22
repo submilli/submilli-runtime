@@ -35,7 +35,9 @@ impl<'a> Inferer<'a> {
                     }
                     let hint = ty.as_ref().map(|a| self.resolve_type(a));
                     let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref());
-                    let bound = hint.unwrap_or(value_ty);
+                    // Reassignable, so an inferred literal widens; see the block-scoped
+                    // `Let` arm in `stmt.rs`.
+                    let bound = hint.unwrap_or_else(|| value_ty.widen_literal());
                     self.bind_top(
                         &name,
                         ValueKind::Let {
@@ -72,7 +74,11 @@ impl<'a> Inferer<'a> {
                     if self.reject_intrinsic_name(&name) {
                         continue;
                     }
-                    let hint = ty.as_ref().map(|a| self.resolve_type(a));
+                    // See `literal_type_of` for the rule.
+                    let hint = ty
+                        .as_ref()
+                        .map(|a| self.resolve_type(a))
+                        .or_else(|| super::stmt::literal_type_of(self.ast, value));
                     let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref());
                     let bound = hint.unwrap_or(value_ty);
                     self.bind_top(
@@ -201,15 +207,98 @@ mod tests {
         }
     }
 
+    /// A `const` cannot be reassigned, so the literal type stays true for the whole
+    /// program and is kept — as in TypeScript, where this is what lets a `const` be
+    /// passed to a literal-union parameter. `let` widens; see
+    /// `let_without_annotation_widens_to_the_base_primitive`.
     #[test]
-    fn const_without_annotation_infers_initializer_type() {
+    fn const_without_annotation_infers_the_literal_type() {
         let ta = run_clean(r#"const y = "hi";"#);
-        assert_eq!(nth_decl_value_ty(&ta, 0), Type::String);
+        assert_eq!(
+            nth_decl_value_ty(&ta, 0),
+            Type::StringLiteral("hi".to_string())
+        );
         let reg = PackageDeclaration::from_typed_ast(&ta);
         match &reg.values.get("y").unwrap().kind {
-            ValueKind::Const { ty, .. } => assert_eq!(*ty, Type::String),
+            ValueKind::Const { ty, .. } => {
+                assert_eq!(*ty, Type::StringLiteral("hi".to_string()));
+            }
             _ => panic!("expected Const"),
         }
+    }
+
+    /// The reason the literal is kept: a `const` reaches a literal-union parameter,
+    /// which is what `spec.md` lists literal types as being for.
+    #[test]
+    fn a_const_literal_is_accepted_by_a_literal_union_parameter() {
+        let (_ta, diags) = run(
+            "function f(t: \"a\" | \"b\"): number { return t === \"a\" ? 1 : 2; } \
+             const t = \"a\"; function main(): void { const n: number = f(t); }",
+        );
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+    }
+
+    /// A literal still reaches everything its base type does: arithmetic, methods,
+    /// template interpolation, and a base-typed parameter.
+    #[test]
+    fn a_const_literal_behaves_as_its_base_type() {
+        let (_ta, diags) = run("function g(s: string): number { return s.length; } \
+             function main(): void { const n = 1; const m = n + 1; \
+             const s = \"hi\"; const r = s.repeat(2); const t = `${n}`; \
+             const l: number = g(s); }");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn let_without_annotation_widens_to_the_base_primitive() {
+        let ta = run_clean(r#"let y = "hi";"#);
+        assert_eq!(nth_decl_value_ty(&ta, 0), Type::String);
+    }
+
+    /// Only a bare literal keeps its type; a computed initializer widens even under
+    /// `const`, matching TypeScript (`const a = 1 + 1` is `number`, not `2`).
+    #[test]
+    fn const_with_a_computed_initializer_widens() {
+        let ta = run_clean("const y = 1 + 1;");
+        assert_eq!(nth_decl_value_ty(&ta, 0), Type::Number);
+    }
+
+    /// The literal survives the `const` but not the `let`: a reassignable binding
+    /// takes the base type, or its first write would be a type error. Asserted on the
+    /// binding rather than the initializer, since the initializer expression `a` is
+    /// still `1` — it is the binding that widens.
+    #[test]
+    fn let_initialized_from_a_const_literal_widens() {
+        let ta = run_clean("const a = 1; let b = a;");
+        let reg = PackageDeclaration::from_typed_ast(&ta);
+        match &reg.values.get("b").unwrap().kind {
+            ValueKind::Let { ty, .. } => assert_eq!(*ty, Type::Number),
+            other => panic!("expected Let, got {other:?}"),
+        }
+    }
+
+    /// Parentheses group, they do not compute, so the literal survives them.
+    #[test]
+    fn const_bound_to_a_parenthesized_literal_keeps_the_literal_type() {
+        let ta = run_clean("const y = (1);");
+        assert_eq!(
+            nth_decl_value_ty(&ta, 0),
+            Type::NumberLiteral(crate::types::LiteralF64(1.0))
+        );
+    }
+
+    /// Reassigning a top-level `const` reports the reassignment and nothing else.
+    /// Inferring the new value against the const's own literal type would always
+    /// mismatch, stacking a spurious `expected 1, got 2` beneath the real error.
+    #[test]
+    fn reassigning_a_top_level_const_reports_only_the_reassignment() {
+        let (_, diags) = run("const a = 1; function main(): void { a = 2; }");
+        assert_eq!(diags.len(), 1, "unexpected diagnostics: {diags:?}");
+        assert!(
+            diags[0].message.contains("cannot assign to const binding"),
+            "got: {}",
+            diags[0].message
+        );
     }
 
     #[test]

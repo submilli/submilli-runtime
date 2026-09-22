@@ -6,6 +6,24 @@ use crate::{
 use super::classes::{FieldRw, StaticResolution};
 use super::{Inferer, assignable, narrowing};
 
+/// The literal type of a bare literal initializer, for an unannotated `const`.
+///
+/// Only a literal token qualifies, through any number of parentheses. A computed
+/// initializer widens even under `const` (`const a = 1 + 1` is `number`), matching
+/// TypeScript, and so do arrays, object literals, and call results. Booleans widen
+/// too, there being no boolean literal type — `const b = true` is `boolean` where
+/// TypeScript says `true`.
+pub(super) fn literal_type_of(ast: &crate::Ast, value: crate::ExprId) -> Option<Type> {
+    match &ast.expr(value).kind {
+        ExprKind::Number(v) => Some(Type::NumberLiteral(crate::types::LiteralF64(*v))),
+        ExprKind::String(s) => Some(Type::StringLiteral(s.clone())),
+        // `const a = (1)` is `1`, as in TypeScript: parentheses group, they do not
+        // compute.
+        ExprKind::Paren(inner) => literal_type_of(ast, *inner),
+        _ => None,
+    }
+}
+
 /// Outcome of peeking at `ClassName.member` on the left of a write.
 pub(super) enum StaticWrite {
     /// The receiver is not a bare class name; fall through to instance-field inference.
@@ -34,7 +52,10 @@ impl Inferer<'_> {
             } => {
                 let hint = ty.as_ref().map(|a| self.resolve_type(a));
                 let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref());
-                let bound = hint.unwrap_or(value_ty);
+                // A `let` is reassignable, so an inferred literal type would be wrong
+                // the moment it is written to: `const a = 1; let b = a;` binds `number`,
+                // not `1`. An explicit annotation is honoured as written.
+                let bound = hint.unwrap_or_else(|| value_ty.widen_literal());
                 // Reject a void binding; poison the slot so codegen never
                 // sees a void value-type.
                 let bound = if self.reject_void_binding(&bound, span) {
@@ -58,7 +79,14 @@ impl Inferer<'_> {
                 value,
                 doc,
             } => {
-                let hint = ty.as_ref().map(|a| self.resolve_type(a));
+                // An unannotated `const` bound to a bare literal keeps the literal type,
+                // as in TypeScript: the binding cannot be reassigned, so nothing can
+                // invalidate it. `let` widens (it is reassignable), and so does any
+                // initializer that is not itself a literal.
+                let hint = ty
+                    .as_ref()
+                    .map(|a| self.resolve_type(a))
+                    .or_else(|| literal_type_of(self.ast, value));
                 let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref());
                 let bound = hint.unwrap_or(value_ty);
                 // Reject a void binding; poison the slot so codegen never
@@ -1297,10 +1325,16 @@ impl Inferer<'_> {
                 });
             }
             let value_span = self.ast.expr(value).span;
-            let (typed_value, value_ty) = self.infer_expr(value, Some(&entry.ty));
+            // Reassigning a const is already an error. Hinting the declared type would
+            // stack a second `expected X, got Y` on top of it — and now always would,
+            // since an unannotated const's type is its own initializer's literal, which
+            // no new value can match. Infer unhinted; nested errors still surface.
+            // Paired with the `is_const` guard on the re-check below: both must stay.
+            let hint = (!entry.is_const).then(|| entry.ty.clone());
+            let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref());
             // Re-check assignability: `infer_expr` skips when the hint contains `Type::Var`,
             // but assignment is always a real semantic constraint.
-            if !assignable(&value_ty, &entry.ty, self.resolver()) {
+            if !entry.is_const && !assignable(&value_ty, &entry.ty, self.resolver()) {
                 self.error(
                     value_span,
                     format!("expected `{}`, got `{}`", entry.ty, value_ty),
@@ -1347,7 +1381,10 @@ impl Inferer<'_> {
                         notes: vec![(prev_span, "declared as `const` here".to_string())],
                     });
                     // Infer RHS so nested errors surface; the diagnostic blocks compilation.
-                    let (typed_value, _) = self.infer_expr(value, Some(&ty));
+                    // Unhinted, as in the block-scoped case above: the declared type is
+                    // the initializer's literal, so hinting it would add a redundant
+                    // `expected X, got Y` beneath the reassignment error.
+                    let (typed_value, _) = self.infer_expr(value, None);
                     TypedStmtKind::AssignGlobal {
                         ident: target,
                         mangled,
@@ -1877,15 +1914,25 @@ pub(super) fn binary_op_text(op: BinOp) -> &'static str {
 /// must ask exactly what the failure asked, or it recommends a fix that doesn't
 /// apply to the site.
 pub(super) fn compound_arith_result(op: BinOp, lt: &Type, rt: &Type) -> Option<Type> {
+    // A literal operand behaves as its base and yields the base, as in `plus_result`
+    // and `arithmetic_result`: `n += 7` where `7` is a literal type is still `number`.
     match (op, lt.primitive_behavior(), rt.primitive_behavior()) {
         (_, Type::Error, _) | (_, _, Type::Error) => Some(Type::Error),
-        (BinOp::Add, Type::Number, Type::Number) => Some(Type::Number),
-        (BinOp::Add, Type::String, Type::String) => Some(Type::String),
+        (
+            BinOp::Add,
+            Type::Number | Type::NumberLiteral(_),
+            Type::Number | Type::NumberLiteral(_),
+        ) => Some(Type::Number),
+        (
+            BinOp::Add,
+            Type::String | Type::StringLiteral(_),
+            Type::String | Type::StringLiteral(_),
+        ) => Some(Type::String),
         (BinOp::Add, Type::BigInt, Type::BigInt) => Some(Type::BigInt),
         (
             BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem | BinOp::Pow,
-            Type::Number,
-            Type::Number,
+            Type::Number | Type::NumberLiteral(_),
+            Type::Number | Type::NumberLiteral(_),
         ) => Some(Type::Number),
         (
             BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem | BinOp::Pow,

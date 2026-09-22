@@ -1106,7 +1106,18 @@ impl Inferer<'_> {
                     matches!(&self.ast.expr(lhs).kind, crate::ExprKind::Null)
                         || matches!(&self.ast.expr(rhs).kind, crate::ExprKind::Null);
                 let enum_lhs = lt.primitive_behavior() != lt.peel();
-                let rhs_hint = if matches!(lt, Type::Error) || either_is_null_literal || enum_lhs {
+                // Equality requires the operands to *overlap*, not for the right to be
+                // assignable to the left, so a literal LHS must not constrain the RHS:
+                // `const a = 1; a === f()` compares fine against `number`. Without this
+                // the check would be operand-order dependent, since `f() === a` never
+                // hinted in the first place. Same reasoning as `enum_lhs` beside it.
+                let literal_lhs =
+                    matches!(lt.peel(), Type::NumberLiteral(_) | Type::StringLiteral(_));
+                let rhs_hint = if matches!(lt, Type::Error)
+                    || either_is_null_literal
+                    || enum_lhs
+                    || literal_lhs
+                {
                     None
                 } else {
                     Some(lt.clone())
@@ -4411,7 +4422,18 @@ impl Inferer<'_> {
                         // narrower literal-return shape the inferer
                         // produced. Keeping the override shape makes
                         // the codegen field-slot lookup deterministic.
-                        let field_ty = override_sig.unwrap_or(value_ty);
+                        // An object-literal property is mutable, so an inferred literal
+                        // widens: `const a = 1; const o = { k: a };` gives `{ k: number }`
+                        // and `o.k = 5` stays legal, as in TypeScript. A field the
+                        // surrounding annotation pins keeps that annotation's type.
+                        let pinned = expected_fields
+                            .as_ref()
+                            .is_some_and(|m| m.contains_key(&field.name.name));
+                        let field_ty = override_sig.unwrap_or(if pinned {
+                            value_ty
+                        } else {
+                            value_ty.widen_literal()
+                        });
                         merged.insert(
                             field.name.name.clone(),
                             (
@@ -4707,7 +4729,12 @@ impl Inferer<'_> {
                             // First resolved value seeds the running
                             // element type. Hint did not pin it (None
                             // or unbound generic param).
-                            element_ty = Some(elem_ty);
+                            //
+                            // The seed widens: array elements are mutable, so
+                            // `const a = 1; const xs = [a, 2];` is `number[]`, not
+                            // `1[]`. An annotation that pins the element type takes
+                            // the `hint_pins_element_ty` path above instead.
+                            element_ty = Some(elem_ty.widen_literal());
                         }
                         Some(running) => {
                             if !assignable(&elem_ty, running, self.resolver()) {
@@ -4743,7 +4770,8 @@ impl Inferer<'_> {
                             format!("expected an array to spread, got `{peeled_source}`"),
                         ),
                         Some(elem_t) => match &element_ty {
-                            None => element_ty = Some(elem_t),
+                            // Widens for the same reason as the value seed above.
+                            None => element_ty = Some(elem_t.widen_literal()),
                             Some(running) if !assignable(&elem_t, running, self.resolver()) => {
                                 self.error(
                                     spread_span,
@@ -6351,6 +6379,19 @@ impl Inferer<'_> {
         let else_span = self.ast.expr(else_).span;
         let wrapped_else = self.wrap_narrow_exprs(typed_else, &false_env, else_span);
 
+        // A branch's literal type widens when the other branch is its base: TypeScript
+        // infers `number` for `cond ? someNumber : LITERAL_CONST`, not `number | 10`.
+        // Keeping the literal would leave a union with no arithmetic, so ordinary code
+        // like `size / chunkSize` would stop compiling.
+        let (then_ty, else_ty) = match (then_ty.peel(), else_ty.peel()) {
+            (Type::Number, Type::NumberLiteral(_)) | (Type::String, Type::StringLiteral(_)) => {
+                (then_ty.clone(), else_ty.widen_literal())
+            }
+            (Type::NumberLiteral(_), Type::Number) | (Type::StringLiteral(_), Type::String) => {
+                (then_ty.widen_literal(), else_ty.clone())
+            }
+            _ => (then_ty, else_ty),
+        };
         let result_ty = Type::union(vec![then_ty, else_ty]);
         (
             TypedExprKind::Ternary {
@@ -8067,8 +8108,14 @@ fn is_enum_or_enum_union(ty: &Type) -> bool {
 /// fix when the guarded pair is one this accepts.
 fn plus_result(lt: &Type, rt: &Type) -> Option<Type> {
     match (lt.primitive_behavior(), rt.primitive_behavior()) {
-        (Type::Number, Type::Number) => Some(Type::Number),
-        (Type::String, Type::String) => Some(Type::String),
+        // A literal operand behaves as its base and yields the base, never a
+        // literal: `1 + 1` is `number`, not `2`. Same rule as `ordering_accepts`.
+        (Type::Number | Type::NumberLiteral(_), Type::Number | Type::NumberLiteral(_)) => {
+            Some(Type::Number)
+        }
+        (Type::String | Type::StringLiteral(_), Type::String | Type::StringLiteral(_)) => {
+            Some(Type::String)
+        }
         // Mixed `number` ↔ `bigint` is rejected, so no widening arm here.
         (Type::BigInt, Type::BigInt) => Some(Type::BigInt),
         _ => None,
@@ -8078,7 +8125,9 @@ fn plus_result(lt: &Type, rt: &Type) -> Option<Type> {
 /// [`plus_result`] for `-`, `*`, `/`, `%`, `**` — same role, no string arm.
 fn arithmetic_result(lt: &Type, rt: &Type) -> Option<Type> {
     match (lt.primitive_behavior(), rt.primitive_behavior()) {
-        (Type::Number, Type::Number) => Some(Type::Number),
+        (Type::Number | Type::NumberLiteral(_), Type::Number | Type::NumberLiteral(_)) => {
+            Some(Type::Number)
+        }
         (Type::BigInt, Type::BigInt) => Some(Type::BigInt),
         _ => None,
     }
@@ -8122,6 +8171,7 @@ fn has_to_string(ty: &Type) -> bool {
         Type::String
             | Type::StringLiteral(_)
             | Type::Number
+            | Type::NumberLiteral(_)
             | Type::BigInt
             | Type::Boolean
             | Type::Array(_)

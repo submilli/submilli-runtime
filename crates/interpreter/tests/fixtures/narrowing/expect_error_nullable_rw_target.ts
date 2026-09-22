@@ -25,9 +25,11 @@
 // message rather than blaming the null.
 // expect-error: `+=` not defined for `boolean | null` and `boolean`
 // expect-error: `+=` not defined for `"a" | "b" | null` and `"b"`
-// A literal type is numeric-shaped and still has no `+`, so `++` on one is not a
-// nullability problem either — `lit = lit + 1` would not compile.
-// expect-error: postfix `++` expects `number` or `bigint`, found `1 | null`
+// A numeric literal type arithmetics as its base, so `++` on one IS a nullability
+// problem and gets the same rewrite as any other nullable field. tsc agrees: it
+// reports `'c.one' is possibly 'null'` here, and accepts `++` once the null is gone.
+// expect-error: `one` on `CBox` is nullable; `++` requires a non-null field
+// expect-error: write the assignment out: `if (c.one !== null) { c.one = c.one + 1; }`
 class CBox {
   f: number | null = 1;
   n: number | null = 1;
