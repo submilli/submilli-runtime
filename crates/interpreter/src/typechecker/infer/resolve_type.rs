@@ -771,6 +771,52 @@ impl<'a> Inferer<'a> {
             }
             TypeAnnotationKind::StringLiteral(s) => Type::StringLiteral(s.clone()),
             TypeAnnotationKind::NumberLiteral(v) => Type::NumberLiteral(*v),
+            TypeAnnotationKind::KeyOf(operand) => self.resolve_keyof(operand),
+        }
+    }
+
+    /// `keyof T` as the union of `T`'s member names, resolved eagerly to string literal
+    /// types. Matches TypeScript: methods count as members alongside properties, and
+    /// `keyof` of a type with no members is `never` — which `Type::union` already
+    /// produces from an empty vector.
+    ///
+    /// Only concrete operands are supported. `keyof T` for a type parameter has no
+    /// eager answer and would need a deferred type node, so it is rejected by name
+    /// rather than resolved to something narrower than it should be.
+    fn resolve_keyof(&mut self, operand: &TypeAnnotation) -> Type {
+        let resolved = self.resolve_value_type(operand, ValuePosition::UnionMember);
+        let Some(names) = self.member_names_of(&resolved) else {
+            if !matches!(resolved.peel(), Type::Error) {
+                self.error(
+                    operand.span,
+                    format!("`keyof` needs an object type or interface, got `{resolved}`"),
+                );
+            }
+            return Type::Error;
+        };
+        Type::union(names.into_iter().map(Type::StringLiteral).collect())
+    }
+
+    /// The member names `keyof` reports, or `None` if the type has no member list to
+    /// read. Interfaces flatten inherited members at declaration time, so the two maps
+    /// on the symbol are the whole surface.
+    fn member_names_of(&self, ty: &Type) -> Option<Vec<String>> {
+        match ty.peel() {
+            Type::Object { fields } => Some(fields.keys().cloned().collect()),
+            Type::InterfaceRef { .. } => {
+                let (mangled, _package, name, _args) = ty.interface_routing()?;
+                let sym = self.lookup_structural_type(&mangled, name)?;
+                let TypeKind::Interface {
+                    methods,
+                    properties,
+                    ..
+                } = &sym.kind
+                else {
+                    return None;
+                };
+                Some(properties.keys().chain(methods.keys()).cloned().collect())
+            }
+            _ => None,
         }
     }
 }
@@ -1168,6 +1214,74 @@ mod tests {
     fn self_referential_interface_resolves() {
         let (_ta, diags) = run("interface Node { value: number; next: Node | null; } \
              function main(): void { const n: Node | null = null; }");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn keyof_interface_accepts_a_member_name() {
+        let (_ta, diags) = run("interface P { a: number; b: number; } type K = keyof P; \
+             function main(): void { const k: K = \"a\"; }");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+    }
+
+    /// The point of `keyof`: a name that is not a member is rejected, so the type is
+    /// genuinely narrowed rather than widened to `string`.
+    #[test]
+    fn keyof_interface_rejects_a_name_that_is_not_a_member() {
+        let (_ta, diags) = run("interface P { a: number; b: number; } type K = keyof P; \
+             function main(): void { const k: K = \"zzz\"; }");
+        assert!(!diags.is_empty(), "`zzz` is not a key of `P`");
+    }
+
+    #[test]
+    fn keyof_object_type_accepts_a_member_name() {
+        let (_ta, diags) = run("type O = { x: number; y: string }; \
+             function main(): void { const k: keyof O = \"y\"; }");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+    }
+
+    /// TypeScript counts methods as members, and the two maps are kept separately.
+    #[test]
+    fn keyof_includes_method_names() {
+        let (_ta, diags) = run("interface I { a: number; m(): void; } \
+             function main(): void { const k: keyof I = \"m\"; }");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+    }
+
+    /// `keyof` of a type with no members is `never`, as in TypeScript.
+    #[test]
+    fn keyof_of_an_empty_interface_is_never() {
+        let (_ta, diags) = run("interface Empty {} \
+             function main(): void { const k: keyof Empty = \"x\"; }");
+        assert!(
+            diags.iter().any(|d| d.message.contains("never")),
+            "expected a `never` mismatch: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn keyof_binds_tighter_than_array_suffix() {
+        let (_ta, diags) = run("interface P { a: number; } type KS = (keyof P)[]; \
+             function main(): void { const ks: KS = [\"a\"]; }");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn keyof_rejects_an_operand_with_no_members() {
+        let (_ta, diags) = run("function main(): void { const k: keyof number = \"x\"; }");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("needs an object type or interface")),
+            "expected a `keyof` operand diagnostic: {diags:?}"
+        );
+    }
+
+    /// `keyof` is contextual, not reserved — TypeScript allows it as an identifier.
+    #[test]
+    fn keyof_is_still_usable_as_an_identifier() {
+        let (_ta, diags) = run("function main(): void { const keyof: number = 1; \
+             const o = { keyof: 2 }; }");
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
     }
 

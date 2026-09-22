@@ -695,6 +695,9 @@ pub enum TypeAnnotationKind {
     },
     /// Always ≥2 members; single-element unions are unwrapped by the parser.
     Union(Vec<TypeAnnotation>),
+    /// `keyof T` — the union of `T`'s member names as string literal types.
+    /// Resolved eagerly, so this never reaches the typed AST.
+    KeyOf(Box<TypeAnnotation>),
 }
 
 /// Reused for object-type fields and function-type parameters. `rest` is always
