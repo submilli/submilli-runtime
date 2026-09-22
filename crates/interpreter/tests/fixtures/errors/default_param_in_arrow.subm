@@ -1,4 +1,4 @@
-// expect-error: default values on arrow parameters are not yet supported
+// expect-error: default parameter values are only supported on function declarations
 
 function main(): void {
   const f = (x: number = 0): number => x;

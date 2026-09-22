@@ -8982,9 +8982,10 @@ mod tests {
             other => panic!("expected a const declaration, got {other:?}"),
         };
         let members = match &ast.expr(value).kind {
-            ExprKind::ObjectLiteral { members } => {
-                members.iter().map(|m| m.value()).collect::<Vec<_>>()
-            }
+            ExprKind::ObjectLiteral { members } => members
+                .iter()
+                .map(crate::ast::ObjectLiteralMember::value)
+                .collect::<Vec<_>>(),
             other => panic!("expected ObjectLiteral, got {other:?}"),
         };
         (ast, members)
