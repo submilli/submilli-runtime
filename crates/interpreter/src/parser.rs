@@ -3426,8 +3426,9 @@ impl<'a> Parser<'a> {
 
     /// `function (a: T): R { … }` in expression position, parsed into `ExprKind::Arrow`.
     ///
-    /// The two forms differ only in how they bind `this`, and `this` outside a class body
-    /// is rejected by `parse_this_or_super`, so nothing distinguishes them here.
+    /// The two forms differ only in how they bind `this`. The body is parsed through
+    /// `parse_outer_this_boundary`, which rejects `this` inside it, so the one case where
+    /// they would disagree cannot be written and the lowering is exact for the rest.
     ///
     /// In the named form `function f() { … }`, TypeScript binds `f` inside the function's
     /// own body, and an arrow has nowhere to record that name. The name is therefore
@@ -3480,15 +3481,10 @@ impl<'a> Parser<'a> {
             return None;
         }
         let body_start = self.pos;
-        let block = self.parse_block()?;
+        let block = self.parse_outer_this_boundary(Self::parse_block)?;
         let end = self.ast.stmt(block).span.end;
 
-        if let Some(name) = self_name.filter(|n| {
-            self.tokens[body_start..self.pos].iter().any(|t| {
-                matches!(t.kind, TokenKind::Identifier)
-                    && self.source[t.span.start as usize..t.span.end as usize] == n.name
-            })
-        }) {
+        if let Some(name) = self_name.filter(|n| self.body_mentions(body_start, &n.name)) {
             self.error_at_with_help(
                 name.span,
                 "a named function expression cannot call itself",
@@ -3509,6 +3505,39 @@ impl<'a> Parser<'a> {
             },
             span: self.span(kw.span.start, end),
         }))
+    }
+
+    /// Parses a body that gets its own `this`, so an enclosing class method's `this` does
+    /// not leak into it.
+    ///
+    /// A `function` expression and a shorthand method each rebind `this` at call time,
+    /// but both lower to `ExprKind::Arrow`, which captures `this` lexically. Inside a
+    /// class method the two disagree: TypeScript gives the receiver, an arrow gives the
+    /// enclosing instance. Zeroing the depth turns that case into the existing "`this` is
+    /// only valid inside a class method" error instead of a silently different value.
+    fn parse_outer_this_boundary<T>(
+        &mut self,
+        parse: impl FnOnce(&mut Self) -> Option<T>,
+    ) -> Option<T> {
+        let saved = self.class_member_body_depth;
+        self.class_member_body_depth = 0;
+        let parsed = parse(self);
+        self.class_member_body_depth = saved;
+        parsed
+    }
+
+    /// Whether the body starting at `body_start` spells `name` anywhere.
+    ///
+    /// Deliberately an over-approximation: it matches identifier tokens by text, with no
+    /// notion of scope, so a property (`o.bar`), an object key (`{ bar: 1 }`) or a local
+    /// that shadows the name also count. The parser has no binding information here, and
+    /// erring toward rejection is the safe direction — a missed self-reference would
+    /// silently drop a binding the body depends on.
+    fn body_mentions(&self, body_start: usize, name: &str) -> bool {
+        self.tokens[body_start..self.pos].iter().any(|t| {
+            matches!(t.kind, TokenKind::Identifier)
+                && self.source[t.span.start as usize..t.span.end as usize] == *name
+        })
     }
 
     fn parse_arrow_param_list(&mut self) -> Option<Vec<ParamDecl>> {
@@ -4303,7 +4332,7 @@ impl<'a> Parser<'a> {
             self.error_at_peek("expected `{` to open the method body");
             return None;
         }
-        let block = self.parse_block()?;
+        let block = self.parse_outer_this_boundary(Self::parse_block)?;
         let end = self.ast.stmt(block).span.end;
 
         Some(self.ast.push_expr(Expr {
@@ -8838,6 +8867,43 @@ mod tests {
                 .any(|d| d.message.contains("generic function expressions")),
             "generic function expression should be rejected: {diags:?}"
         );
+    }
+
+    /// Both forms lower to an arrow, which captures `this` lexically, while TypeScript
+    /// rebinds it per call. Inside a class method those disagree, so `this` is rejected
+    /// there rather than silently resolving to the enclosing instance.
+    #[test]
+    fn rejects_this_inside_a_function_expression_in_a_class_method() {
+        let (_ast, diags) = parse_str(
+            "class C { x: number = 1; m(): number { \
+             const f = function (): number { return this.x; }; return f(); } }",
+        );
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("`this` is only valid inside")),
+            "`this` in a function expression should be rejected: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_this_inside_method_shorthand_in_a_class_method() {
+        let (_ast, diags) = parse_str(
+            "class C { x: number = 1; m(): number { \
+             const o = { x: 2, g(): number { return this.x; } }; return o.g(); } }",
+        );
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("`this` is only valid inside")),
+            "`this` in method shorthand should be rejected: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn this_still_parses_in_an_ordinary_class_method() {
+        let (_ast, diags) = parse_str("class C { x: number = 1; m(): number { return this.x; } }");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
     }
 
     /// `function` is a valid property name; the expression form must not shadow that.
