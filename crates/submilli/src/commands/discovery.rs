@@ -3,10 +3,36 @@
 //! resolution decisions the MCP tools and REST endpoints do.
 //!
 //! The decisions themselves live in the interpreter; this module only chooses
-//! words for them. The CLI has no blueprint binding, so its catalog is
-//! stdlib-only — correct here rather than a gap.
+//! words for them. The CLI has no blueprint binding, so `@mcp/<server>`
+//! packages are out of reach here; packages installed in the local store need
+//! no blueprint and are listed alongside the stdlib.
 
 use interpreter::packages::{self, Resolution};
+use submilli_build::{Artifact, PackageStore};
+
+/// Every package in the local store whose artifact loads, in name order. A
+/// directory that fails to load is skipped: the catalog is a listing, not a
+/// diagnostic.
+pub(crate) fn installed_packages() -> Vec<Artifact> {
+    let store = PackageStore::default();
+    store
+        .available_packages()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|name| store.load(name).ok())
+        .collect()
+}
+
+/// One line for an installed package, falling back to name and version when
+/// its manifest carries no description.
+pub(crate) fn installed_summary(artifact: &Artifact) -> String {
+    let metadata = &artifact.metadata;
+    if metadata.description.trim().is_empty() {
+        format!("{} — v{}", metadata.package_name, metadata.package_version)
+    } else {
+        format!("{} — {}", metadata.package_name, metadata.description)
+    }
+}
 
 /// Report a name that resolved to neither a package nor a built-in.
 pub(crate) fn report_miss(name: &str, outcome: Resolution) {
@@ -49,6 +75,13 @@ pub(crate) fn print_catalog() {
     }
     if catalog.remaining > 0 {
         eprintln!("  … and {} more", catalog.remaining);
+    }
+    let installed = installed_packages();
+    if !installed.is_empty() {
+        eprintln!("\nInstalled packages:");
+        for artifact in &installed {
+            eprintln!("  {}", installed_summary(artifact));
+        }
     }
     eprintln!("\n{}", packages::builtins_pointer("`submilli builtins`"));
 }

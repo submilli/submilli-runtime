@@ -1,5 +1,6 @@
 //! `submilli run` — console output goes to stderr; JSON-encoded `main` return goes to stdout.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -14,7 +15,7 @@ use interpreter::runtime::{
     Vfs, install_package_modules_async, install_runtime_async, install_tenant_limits,
 };
 use interpreter::{BacktraceMode, Sources, compile_script, dispatch_main_async, render_backtrace};
-use submilli_blueprint::Blueprint;
+use submilli_blueprint::{Blueprint, VarBindings, resolve_variables};
 use submilli_build::{Artifact, PackageStore};
 use submilli_shared::llm::provider::DEFAULT_MAX_CONCURRENCY;
 use submilli_shared::llm::{BlueprintLlmProvider, HttpModelDispatch, ModelDispatch};
@@ -57,6 +58,13 @@ pub struct Args {
     /// `@mcp/<server>` servers are called in-process — no running server needed.
     #[arg(long)]
     blueprint: Option<PathBuf>,
+
+    /// Bind a blueprint variable for this run, `NAME=VALUE` (repeatable), the
+    /// way an application binds it when it opens a session. Requires
+    /// `--blueprint`; the blueprint must declare the variable, and its
+    /// `required` variables must all be bound.
+    #[arg(long = "var", value_name = "NAME=VALUE", requires = "blueprint")]
+    vars: Vec<String>,
 
     /// Tokens this run's `submilli:llm` calls may spend in total. A run that
     /// asks for more raises a catchable `RangeError` rather than being billed.
@@ -158,6 +166,7 @@ impl Args {
             ("has_timeout", self.timeout.is_some()),
             ("has_vfs", self.vfs.is_some()),
             ("has_blueprint", self.blueprint.is_some()),
+            ("has_vars", !self.vars.is_empty()),
             ("has_max_llm_tokens", self.max_llm_tokens.is_some()),
             (
                 "has_max_llm_concurrency",
@@ -204,6 +213,16 @@ pub(crate) fn execute_with_dispatch(
             }
         }
         None => None,
+    };
+    let variables = match blueprint.as_ref() {
+        Some(bp) => match bind_variables(bp, &args.vars) {
+            Ok(bindings) => Arc::new(bindings),
+            Err(err) => {
+                eprintln!("error: {err}");
+                return Ok(ExitCode::from(1));
+            }
+        },
+        None => Arc::new(VarBindings::new()),
     };
     let package_artifacts = match blueprint.as_ref() {
         Some(bp) => match load_blueprint_packages(bp) {
@@ -308,7 +327,7 @@ pub(crate) fn execute_with_dispatch(
     let mut data = StoreData::with_vfs_and_cap(vfs, cfg.max_store_bytes);
     data.install_type_info(compiled.type_info.clone());
     if let Some(bp) = &blueprint {
-        data.security_check = Arc::new(PolicyCheck::new(bp.clone()));
+        data.security_check = Arc::new(PolicyCheck::with_variables(bp.clone(), variables));
         data.auth_proxy = Arc::new(BlueprintAuthProxy::new(bp.clone(), secret_store.clone()));
         data.secret_provider = Arc::new(BlueprintSecretProvider::new(
             bp.clone(),
@@ -383,6 +402,24 @@ pub(crate) fn execute_with_dispatch(
 
 struct LocalPackageModule {
     module: Module,
+}
+
+/// Parse `--var NAME=VALUE` pairs and resolve them against the blueprint's
+/// declarations, so a run is refused for the same reasons a session would be:
+/// an undeclared name, or a required variable left unbound.
+fn bind_variables(blueprint: &Blueprint, raw: &[String]) -> anyhow::Result<VarBindings> {
+    let mut supplied = BTreeMap::new();
+    for pair in raw {
+        let (name, value) = pair
+            .split_once('=')
+            .with_context(|| format!("--var '{pair}' must be in `NAME=VALUE` form"))?;
+        if name.is_empty() {
+            anyhow::bail!("--var '{pair}' has an empty name");
+        }
+        supplied.insert(name.to_owned(), value.to_owned());
+    }
+    resolve_variables(&blueprint.variables, &supplied)
+        .map_err(|err| anyhow!("invalid variables: {err}"))
 }
 
 fn load_blueprint_packages(blueprint: &Blueprint) -> anyhow::Result<Vec<Artifact>> {
@@ -497,6 +534,7 @@ function main(): string {
                 timeout: None,
                 vfs: None,
                 blueprint: Some(blueprint),
+                vars: Vec::new(),
                 max_llm_tokens,
                 max_llm_concurrency: None,
             },
@@ -596,6 +634,32 @@ function main(): string {
             err.to_string().contains(TOKENS),
             "the error must name the variable: {err}"
         );
+    }
+
+    fn declaring(yaml: &str) -> Blueprint {
+        submilli_blueprint::parse(yaml).expect("blueprint parses")
+    }
+
+    #[test]
+    fn var_flags_bind_declared_variables_and_fill_defaults() {
+        let bp = declaring(
+            "name: t\nvariables:\n  tenant: { required: true }\n  region: { default: eu }\n",
+        );
+        let bound = bind_variables(&bp, &["tenant=acme".into()]).expect("binds");
+        assert_eq!(bound["tenant"], "acme");
+        assert_eq!(bound["region"], "eu");
+    }
+
+    #[test]
+    fn var_flags_are_checked_like_a_session() {
+        let bp = declaring("name: t\nvariables:\n  tenant: { required: true }\n");
+        let missing = bind_variables(&bp, &[]).expect_err("required variable unbound");
+        assert!(missing.to_string().contains("tenant"), "{missing}");
+        let unknown = bind_variables(&bp, &["tenant=a".into(), "nope=b".into()])
+            .expect_err("undeclared variable");
+        assert!(unknown.to_string().contains("nope"), "{unknown}");
+        let malformed = bind_variables(&bp, &["tenant".into()]).expect_err("no '='");
+        assert!(malformed.to_string().contains("NAME=VALUE"), "{malformed}");
     }
 
     /// A lookup over a fixed set of variables, so precedence is asserted without
