@@ -1,6 +1,7 @@
 //! Lowers statement-position field/index postfix to assignment. Binding postfix
 //! stays as `PostfixUnary` so codegen retains both the declared storage type and
-//! the narrowed numeric result type.
+//! the narrowed numeric result type. Byte postfix also stays an expression so
+//! its modulo wrapping is identical in statement and expression positions.
 
 use crate::{
     BinOp, PostfixOp, PostfixTarget, StmtId, Type, TypedExpr, TypedExprKind, TypedStmtKind,
@@ -19,6 +20,12 @@ pub(super) fn run(ctx: &mut DesugarCtx) {
                 PostfixTarget::Local { .. } | PostfixTarget::Global { .. }
             )
         {
+            if matches!(&target, PostfixTarget::Index { receiver, .. }
+                if ctx.ta.expr(*receiver).ty.peel() == &Type::Uint8Array)
+            {
+                i += 1;
+                continue;
+            }
             lower(ctx, id, op, target);
         }
         i += 1;

@@ -50,7 +50,7 @@ Porting adaptations used throughout (README rules):
 | `prototype/join/S15.4.4.5_A1.3_T1` | ECMA says undefined/null elements join as `""`; a null element makes `join` trap uncatchably. |
 | `prototype/push/S15.4.4.7_A1_T2` | Standard `push` is variadic; ours is `push(elem: T)` — a multi-argument push is a compile-time arity error. (`unshift` *is* variadic.) |
 | `prototype/concat/S15.4.4.4_A1_T2` | Standard `concat` appends non-array arguments as elements; ours is `concat(...others: T[][])` — a scalar argument is a compile-time type error. |
-| `prototype/find/predicate-call-parameters` | Standard HOF callbacks receive `(value, index, array)`; every Array callback type here is single-parameter (`(T) => ...`), so a multi-parameter callback is a compile error. One representative pinned; the same applies to forEach/map/filter/some/every/findIndex/findLast(Index)/flatMap, `sort`'s comparator excepted. Also `Array.from`'s `mapFn` is `(T) => T` — no index argument *and* no type-changing mappers (`U` ≠ `T` is a compile error). |
+| `prototype/find/predicate-call-parameters` | Standard HOF callbacks receive `(value, index, array)`; every Array callback type here is single-parameter (`(T) => ...`), so a multi-parameter callback is a compile error. One representative pinned; the same applies to forEach/map/filter/some/every/findIndex/findLast(Index)/flatMap, `sort`'s comparator excepted. `Array.from` now supports type-changing `(T) => U` mappers, but still has no index argument. |
 
 ## Rejected (design decisions)
 

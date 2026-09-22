@@ -4596,12 +4596,6 @@ impl Inferer<'_> {
         // inference. Tuple-ness is hint-driven — without an annotation the
         // literal still infers as `Type::Array`, matching pre-tuple behavior.
         //
-        // spread inside a tuple-typed literal is not supported.
-        // The original tuple path expects one expression per slot. If any
-        // spread is present, fall through to the array-literal path and
-        // let the assignability check produce the diagnostic (tuple ≠
-        // array). Future work could splice spreads into the tuple slot
-        // walk; out of scope here.
         let has_spread = elements
             .iter()
             .any(|e| matches!(e, crate::ArrayLiteralElement::Spread { .. }));
@@ -4611,9 +4605,10 @@ impl Inferer<'_> {
         let expected = expected
             .map(Type::peel)
             .map(|hint| sole_array_like_member(hint).unwrap_or(hint));
-        if let Some(Type::Tuple(expected_elems)) = expected
-            && !has_spread
-        {
+        if let Some(Type::Tuple(expected_elems)) = expected {
+            if has_spread {
+                return self.infer_spread_tuple_literal(elements, expected_elems, span);
+            }
             let plain: Vec<ExprId> = elements
                 .into_iter()
                 .map(|e| match e {
@@ -4761,6 +4756,64 @@ impl Inferer<'_> {
                 element_ty: element_ty.clone(),
             },
             Type::Array(Box::new(element_ty)),
+        )
+    }
+
+    fn infer_spread_tuple_literal(
+        &mut self,
+        elements: Vec<crate::ArrayLiteralElement>,
+        expected: &[Type],
+        span: Span,
+    ) -> (TypedExprKind, Type) {
+        let mut typed = Vec::with_capacity(elements.len());
+        let mut slots = Vec::new();
+        for element in &elements {
+            match element {
+                crate::ArrayLiteralElement::Value(value) => {
+                    let (id, ty) = self.infer_expr(*value, expected.get(slots.len()));
+                    slots.push(ty);
+                    typed.push(crate::TypedArrayElement::Value(id));
+                }
+                crate::ArrayLiteralElement::Spread { value, span } => {
+                    let (id, ty) = self.infer_expr(*value, None);
+                    match ty.peel() {
+                        Type::Tuple(types) => slots.extend(types.iter().cloned()),
+                        Type::Error => {},
+                        _ => self.error_with_help(*span,
+                            format!("tuple literal spread requires a fixed-length tuple, got `{ty}`"),
+                            vec!["annotate the spread source as a tuple, or use an array result type".into()]),
+                    }
+                    typed.push(crate::TypedArrayElement::Spread(id));
+                }
+            }
+        }
+        if slots.len() != expected.len() {
+            self.error(
+                span,
+                format!(
+                    "tuple literal has {} elements, but type expects {}",
+                    slots.len(),
+                    expected.len()
+                ),
+            );
+        }
+        for (actual, want) in slots.iter_mut().zip(expected) {
+            if matches!(want, Type::TypeVar(_) | Type::GenericParam { .. }) {
+                continue;
+            }
+            if !assignable(actual, want, self.resolver()) {
+                self.error(span, format!("expected `{want}`, got `{actual}`"));
+            }
+            *actual = want.clone();
+        }
+        // Both literals use erased $Array storage. Preserve the positional type
+        // on the expression while reusing spread evaluation and copying.
+        (
+            TypedExprKind::ArrayLiteral {
+                elements: typed,
+                element_ty: Type::Unknown,
+            },
+            Type::Tuple(slots),
         )
     }
 
@@ -6178,16 +6231,7 @@ impl Inferer<'_> {
         let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None);
         let elem_ty: Type = match receiver_ty.peel() {
             Type::Array(elem) => (**elem).clone(),
-            Type::Uint8Array => {
-                self.error_with_help(
-                    recv_span,
-                    "indexed write on `Uint8Array` not supported in v1".to_string(),
-                    vec![
-                        "use a typed array constructor or copy into a new `Uint8Array`".to_string(),
-                    ],
-                );
-                Type::Error
-            }
+            Type::Uint8Array => Type::Number,
             Type::Tuple(_) => {
                 self.error_with_help(
                     recv_span,
@@ -6526,6 +6570,28 @@ impl Inferer<'_> {
                 }
                 let elem_ty = match receiver_ty.peel() {
                     Type::Array(elem) => *elem.clone(),
+                    Type::Uint8Array => Type::Number,
+                    Type::Tuple(elements) => match &self.ast.expr(idx).kind {
+                        ExprKind::Number(n) if n.is_finite() && n.fract() == 0.0 && *n >= 0.0 => {
+                            elements.get(*n as usize).cloned().unwrap_or_else(|| {
+                                self.error(
+                                    idx_span,
+                                    format!(
+                                        "tuple index {n} out of bounds; tuple has {} elements",
+                                        elements.len()
+                                    ),
+                                );
+                                Type::Error
+                            })
+                        }
+                        _ => {
+                            self.error(
+                                idx_span,
+                                "tuple index must be a non-negative integer literal".into(),
+                            );
+                            Type::Error
+                        }
+                    },
                     Type::Error => Type::Error,
                     Type::Unknown => Type::Unknown,
                     other => {

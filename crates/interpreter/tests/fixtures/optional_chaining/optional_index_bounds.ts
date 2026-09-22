@@ -3,8 +3,8 @@
 // check the chain's `array.get` runs unguarded and takes the whole process down,
 // so the `catch` below never runs.
 //
-// Arrays only — a chain index step rejects `Uint8Array`, tuple, and string
-// receivers that the non-chain form accepts (SUB-778).
+// This fixture exercises array bounds; byte and tuple chain reads share the
+// corresponding non-chain index paths.
 class Bag {
   arr: number[] = [1, 2, 3];
 }

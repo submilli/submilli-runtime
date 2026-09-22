@@ -28,7 +28,6 @@ SameValueZero reference identity; `keys`/`values`/`entries` return lazy
 |:--|:--|
 | `cases/Map/prototype/get/returns-value-different-key-types.ts` | NaN keys are unfindable: key equality runs through the `equals` vtable, which uses IEEE `===` for numbers, not SameValueZero — `get(NaN)` misses, and repeated `set(NaN, …)` appends duplicate entries. |
 | `cases/Map/prototype/set/append-new-values.ts` | `null` keys trap at runtime (equals/hash vtable dispatch on a null ref); the standard appends a null-keyed entry. |
-| `cases/Map/prototype/clear/clear-map.ts` | `new Map(entries)` with mixed-type entries fails Wasm validation — a number/boolean element inside a union-typed tuple is emitted unboxed (f64/i32) where a boxed ref is expected. |
 | `cases/Map/prototype/forEach/iterates-values-added-after-foreach-begins.ts` | Entries added during a `forEach` are not visited — forEach walks a snapshot of the order ledger taken at call time; the standard visits entries appended mid-iteration. |
 
 Found while porting, but not pinned by any portable vector: a `-0` key is

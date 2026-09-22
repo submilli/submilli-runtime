@@ -644,6 +644,21 @@ impl Inferer<'_> {
     ) -> (TypedExprKind, Type) {
         use crate::typechecker::type_param_substitution::{TypeParamSubstitution, UnifyError};
 
+        // The no-mapper form preserves the source type; the mapped form has
+        // an independent result parameter, like TypeScript's two overloads.
+        let mut sig = sig;
+        if iface_mangled == crate::mangle::prelude("ArrayConstructor")
+            && name.name == "from"
+            && (args.len() == 1
+                || args
+                    .get(1)
+                    .is_some_and(|id| matches!(self.ast.expr(*id).kind, crate::ExprKind::Null)))
+        {
+            sig.generics = vec!["T".into()];
+            sig.ret = Type::Array(Box::new(Type::TypeVar("T".into())));
+            sig.params[1].ty = Type::Null;
+        }
+
         let receiver_ty = self.typed_ast.expr(typed_receiver).ty.clone();
         let mut sub = TypeParamSubstitution::new();
 
@@ -818,6 +833,20 @@ impl Inferer<'_> {
             self.pack_rest_tail(fixed_count, rest_elem_ty.clone(), span, &mut typed_args);
         }
 
+        let array_from_mapper = iface_mangled == crate::mangle::prelude("ArrayConstructor")
+            && name.name == "from"
+            && sig.generics.len() == 2;
+        let mapper_type = typed_args
+            .get(1)
+            .map(|id| self.typed_ast.expr(*id).ty.clone());
+        if array_from_mapper
+            && mapper_type
+                .as_ref()
+                .is_some_and(|ty| ty.peel() == &Type::Null)
+        {
+            sub.insert("U".into(), sub.apply(&Type::TypeVar("T".into())));
+        }
+
         if let Err(unbound) = sub.resolve_all(&sig.generics) {
             self.error_with_help(
                 span,
@@ -838,7 +867,15 @@ impl Inferer<'_> {
         }
 
         self.check_inferred_void_arguments(&sig.params, &sig.ret, &sub, span);
-        let result_ty = sub.apply(&sig.ret);
+        let mut result_ty = sub.apply(&sig.ret);
+        if array_from_mapper && mapper_type.as_ref().is_some_and(|ty| {
+            matches!(ty.peel(), Type::Union(members) if members.iter().any(|member| member.peel() == &Type::Null))
+        }) {
+            result_ty = Type::Array(Box::new(Type::union(vec![
+                sub.apply(&Type::TypeVar("T".into())),
+                sub.apply(&Type::TypeVar("U".into())),
+            ])));
+        }
 
         // TypeVar params/return need box/cast at the Wasm boundary; composite types use plain MethodCall.
         let any_generic_arg = sig.params.iter().any(|p| matches!(p.ty, Type::TypeVar(_)));

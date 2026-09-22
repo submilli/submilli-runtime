@@ -1766,7 +1766,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 methods: BTreeMap::from([(
                     "from".to_string(),
                     MethodSig {
-                        generics: vec!["T".to_string()],
+                        generics: vec!["T".to_string(), "U".to_string()],
                         params: vec![
                             Param::new(
                                 "src",
@@ -1787,7 +1787,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                                 Type::union(vec![
                                     Type::Function {
                                         params: vec![Type::TypeVar("T".to_string())],
-                                        ret: Box::new(Type::TypeVar("T".to_string())),
+                                        ret: Box::new(Type::TypeVar("U".to_string())),
                                         predicate: None,
                                         has_rest: false,
                                     },
@@ -1796,7 +1796,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                                 crate::DefaultValue::Null,
                             ),
                         ],
-                        ret: Type::Array(Box::new(Type::TypeVar("T".to_string()))),
+                        ret: Type::Array(Box::new(Type::TypeVar("U".to_string()))),
                         predicate: None,
                         doc: doc(
                             "/**\n * Materializes any iterable — an array, string (code points), `Iterator<T>`, or `Iterable<T>` — into a fresh array.\n * @param src The iterable source.\n * @param mapFn Optional per-element transform applied while collecting.\n */",

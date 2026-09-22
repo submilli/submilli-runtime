@@ -714,119 +714,7 @@ fn emit_expr_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) 
                 .any(|e| matches!(e, crate::TypedArrayElement::Spread(_)));
 
             if has_spread {
-                // Locals:
-                //   - `total`:  i32, running sum of element count
-                //   - `dst`:    (ref $rawArray), allocated storage
-                //   - `offset`: i32, write cursor
-                // Per-spread:
-                //   - `<spread_raw>`: (ref $rawArray), the source's
-                //                     raw storage extracted once
-                let raw_array_val = ValType::Ref(RefType {
-                    nullable: false,
-                    heap_type: HeapType::Concrete(raw_array_idx),
-                });
-                let total_local = emitter.add_anonymous_local(ValType::I32);
-                let dst_local = emitter.add_anonymous_local(raw_array_val);
-                let offset_local = emitter.add_anonymous_local(ValType::I32);
-
-                // Pass 1: extract each spread's raw storage into a
-                // local, summing lengths into `total`. Fixed
-                // positions contribute +1 each (folded into the
-                // initial `total` constant below).
-                let fixed_count: u32 = elements
-                    .iter()
-                    .filter(|e| matches!(e, crate::TypedArrayElement::Value(_)))
-                    .count() as u32;
-
-                // Reserve per-spread raw-storage locals up front so
-                // the pass-2 walk can read them by index.
-                let mut spread_raw_locals: Vec<u32> = Vec::new();
-                for el in elements {
-                    if let crate::TypedArrayElement::Spread(source_id) = el {
-                        let raw_local = emitter.add_anonymous_local(raw_array_val);
-                        emit_expr(emitter, ctx, *source_id);
-                        emitter.instruction(Instruction::StructGet {
-                            struct_type_index: array_idx,
-                            field_index: 1,
-                        });
-                        emitter.instruction(Instruction::LocalSet(raw_local));
-                        spread_raw_locals.push(raw_local);
-                    }
-                }
-
-                // total = fixed_count + sum(spread_raw[i].len)
-                emitter.instruction(Instruction::I32Const(fixed_count as i32));
-                emitter.instruction(Instruction::LocalSet(total_local));
-                for &raw_local in &spread_raw_locals {
-                    emitter.instruction(Instruction::LocalGet(total_local));
-                    emitter.instruction(Instruction::LocalGet(raw_local));
-                    emitter.instruction(Instruction::ArrayLen);
-                    emitter.instruction(Instruction::I32Add);
-                    emitter.instruction(Instruction::LocalSet(total_local));
-                }
-
-                // dst = array.new_default $rawArray total
-                emitter.instruction(Instruction::LocalGet(total_local));
-                emitter.instruction(Instruction::ArrayNewDefault(raw_array_idx));
-                emitter.instruction(Instruction::LocalSet(dst_local));
-
-                // offset = 0
-                emitter.instruction(Instruction::I32Const(0));
-                emitter.instruction(Instruction::LocalSet(offset_local));
-
-                // Pass 2: walk in source order. For each fixed
-                // element: array.set dst[offset] <- boxed_value;
-                // offset += 1. For each spread: array.copy
-                // dst[offset..] <- spread_raw[0..sub_len]; offset
-                // += sub_len.
-                let mut spread_cursor: usize = 0;
-                for el in elements {
-                    match el {
-                        crate::TypedArrayElement::Value(vid) => {
-                            let elem_ty = ctx.ta.expr(*vid).ty.clone();
-                            // dst, offset, value
-                            emitter.instruction(Instruction::LocalGet(dst_local));
-                            emitter.instruction(Instruction::LocalGet(offset_local));
-                            emit_expr(emitter, ctx, *vid);
-                            crate::codegen::function_emitter::cast::emit_box(
-                                emitter, ctx, &elem_ty,
-                            );
-                            emitter.instruction(Instruction::ArraySet(raw_array_idx));
-                            // offset += 1
-                            emitter.instruction(Instruction::LocalGet(offset_local));
-                            emitter.instruction(Instruction::I32Const(1));
-                            emitter.instruction(Instruction::I32Add);
-                            emitter.instruction(Instruction::LocalSet(offset_local));
-                        }
-                        crate::TypedArrayElement::Spread(_) => {
-                            let raw_local = spread_raw_locals[spread_cursor];
-                            spread_cursor += 1;
-                            // array.copy dst dst_offset src src_offset len
-                            emitter.instruction(Instruction::LocalGet(dst_local));
-                            emitter.instruction(Instruction::LocalGet(offset_local));
-                            emitter.instruction(Instruction::LocalGet(raw_local));
-                            emitter.instruction(Instruction::I32Const(0));
-                            emitter.instruction(Instruction::LocalGet(raw_local));
-                            emitter.instruction(Instruction::ArrayLen);
-                            emitter.instruction(Instruction::ArrayCopy {
-                                array_type_index_dst: raw_array_idx,
-                                array_type_index_src: raw_array_idx,
-                            });
-                            // offset += raw_local.length
-                            emitter.instruction(Instruction::LocalGet(offset_local));
-                            emitter.instruction(Instruction::LocalGet(raw_local));
-                            emitter.instruction(Instruction::ArrayLen);
-                            emitter.instruction(Instruction::I32Add);
-                            emitter.instruction(Instruction::LocalSet(offset_local));
-                        }
-                    }
-                }
-
-                // Wrap into $Array: global.get vtable; local.get dst;
-                // struct.new $Array.
-                emitter.instruction(Instruction::GlobalGet(array_vtable_global));
-                emitter.instruction(Instruction::LocalGet(dst_local));
-                emitter.instruction(Instruction::StructNew(array_idx));
+                emit_spread_array_literal(emitter, ctx, elements);
             } else {
                 emitter.instruction(Instruction::GlobalGet(array_vtable_global));
                 for el in elements {
@@ -844,14 +732,9 @@ fn emit_expr_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) 
         }
         TypedExprKind::TupleLiteral {
             elements,
-            element_types,
+            element_types: _,
         } => {
-            // Tuples lower to `$Array` at the Wasm level (
-            // follow-up). Same recipe as ArrayLiteral, but each slot
-            // is boxed by its *declared* position type — the
-            // typechecker tracks per-position element types so
-            // `emit_box` produces the right boxed shape regardless of
-            // the homogeneous-array element-type generalization.
+            // Tuple storage is erased, so box the value actually on the stack.
             let array_idx = ctx
                 .symbols
                 .array_type_idx()
@@ -865,9 +748,13 @@ fn emit_expr_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) 
                 .prelude_global_idx("array_vtable")
                 .expect("array_vtable imported from prelude");
             emitter.instruction(Instruction::GlobalGet(array_vtable_global));
-            for (&elem_id, elem_ty) in elements.iter().zip(element_types.iter()) {
+            for &elem_id in elements {
                 emit_expr(emitter, ctx, elem_id);
-                crate::codegen::function_emitter::cast::emit_box(emitter, ctx, elem_ty);
+                crate::codegen::function_emitter::cast::emit_box(
+                    emitter,
+                    ctx,
+                    &ctx.ta.expr(elem_id).ty,
+                );
             }
             emitter.instruction(Instruction::ArrayNewFixed {
                 array_type_index: raw_array_idx,
@@ -882,38 +769,8 @@ fn emit_expr_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) 
             // to `$Array` and fall through to the default arm.
             let recv_ty = ctx.ta.expr(*receiver).ty.clone();
             if recv_ty.peel() == &Type::Uint8Array {
-                // bytes[i] →
-                //   <push receiver: (ref $Uint8Array)>
-                //   struct.get $Uint8Array 1            ;; (ref $rawUint8Array)
-                //   <push index: f64>; i32.trunc_sat_f64_u
-                //   bounds-check                        ;; throws RangeError on a miss
-                //   array.get_u $rawUint8Array          ;; i32 (unsigned 0–255)
-                //   f64.convert_i32_u                   ;; number
-                let uint8_idx = ctx
-                    .symbols
-                    .uint8_array_type_idx()
-                    .expect("Type::Uint8Array requires intrinsic types declared");
-                let raw_uint8_idx = ctx
-                    .symbols
-                    .raw_uint8_array_type_idx()
-                    .expect("Type::Uint8Array requires intrinsic types declared");
-                let raw_local = emitter.add_anonymous_local(ValType::Ref(RefType {
-                    nullable: false,
-                    heap_type: HeapType::Concrete(raw_uint8_idx),
-                }));
                 emit_expr(emitter, ctx, *receiver);
-                emitter.instruction(Instruction::StructGet {
-                    struct_type_index: uint8_idx,
-                    field_index: 1,
-                });
-                emitter.instruction(Instruction::LocalSet(raw_local));
-                emit_expr(emitter, ctx, *index);
-                let idx_f64_local = stash_index_operand(emitter);
-                let idx_local = emit_checked_index(emitter, ctx, raw_local, idx_f64_local);
-                emitter.instruction(Instruction::LocalGet(raw_local));
-                emitter.instruction(Instruction::LocalGet(idx_local));
-                emitter.instruction(Instruction::ArrayGetU(raw_uint8_idx));
-                emitter.instruction(Instruction::F64ConvertI32U);
+                emit_uint8_index_with_receiver_on_stack(emitter, ctx, *index);
             } else {
                 emit_expr(emitter, ctx, *receiver);
                 emit_bounds_checked_index_with_receiver_on_stack(emitter, ctx, *index, &expr.ty);
@@ -1341,6 +1198,111 @@ fn unbox_if_boxed(
     payload
 }
 
+fn emit_spread_array_literal(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    elements: &[crate::TypedArrayElement],
+) {
+    let array = ctx.symbols.array_type_idx().expect("Array declared");
+    let raw = ctx
+        .symbols
+        .raw_array_type_idx()
+        .expect("raw Array declared");
+    let raw_type = ValType::Ref(RefType {
+        nullable: false,
+        heap_type: HeapType::Concrete(raw),
+    });
+    let total = emitter.add_anonymous_local(ValType::I32);
+    let offset = emitter.add_anonymous_local(ValType::I32);
+    let destination = emitter.add_anonymous_local(raw_type);
+    emitter.instruction(Instruction::I32Const(0));
+    emitter.instruction(Instruction::LocalSet(total));
+    // Snapshot every chunk in source order before later expressions can mutate
+    // a spread's backing storage. A plain element is a one-element chunk.
+    let mut chunks = Vec::with_capacity(elements.len());
+    for element in elements {
+        emit_literal_chunk(emitter, ctx, element, array, raw);
+        let chunk = emitter.add_anonymous_local(raw_type);
+        emitter.instruction(Instruction::LocalTee(chunk));
+        emitter.instruction(Instruction::ArrayLen);
+        emitter.instruction(Instruction::LocalGet(total));
+        emitter.instruction(Instruction::I32Add);
+        emitter.instruction(Instruction::LocalSet(total));
+        chunks.push(chunk);
+    }
+    emitter.instruction(Instruction::LocalGet(total));
+    emitter.instruction(Instruction::ArrayNewDefault(raw));
+    emitter.instruction(Instruction::LocalSet(destination));
+    emitter.instruction(Instruction::I32Const(0));
+    emitter.instruction(Instruction::LocalSet(offset));
+    for chunk in chunks {
+        emitter.instruction(Instruction::LocalGet(destination));
+        emitter.instruction(Instruction::LocalGet(offset));
+        emitter.instruction(Instruction::LocalGet(chunk));
+        emitter.instruction(Instruction::I32Const(0));
+        emitter.instruction(Instruction::LocalGet(chunk));
+        emitter.instruction(Instruction::ArrayLen);
+        emitter.instruction(Instruction::ArrayCopy {
+            array_type_index_dst: raw,
+            array_type_index_src: raw,
+        });
+        emitter.instruction(Instruction::LocalGet(offset));
+        emitter.instruction(Instruction::LocalGet(chunk));
+        emitter.instruction(Instruction::ArrayLen);
+        emitter.instruction(Instruction::I32Add);
+        emitter.instruction(Instruction::LocalSet(offset));
+    }
+    emitter.instruction(Instruction::GlobalGet(
+        ctx.symbols
+            .prelude_global_idx("array_vtable")
+            .expect("array vtable declared"),
+    ));
+    emitter.instruction(Instruction::LocalGet(destination));
+    emitter.instruction(Instruction::StructNew(array));
+}
+
+fn emit_literal_chunk(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    element: &crate::TypedArrayElement,
+    array: u32,
+    raw: u32,
+) {
+    emit_expr(emitter, ctx, element.expr_id());
+    if let crate::TypedArrayElement::Value(value) = element {
+        cast::emit_box(emitter, ctx, &ctx.ta.expr(*value).ty);
+        emitter.instruction(Instruction::ArrayNewFixed {
+            array_type_index: raw,
+            array_size: 1,
+        });
+        return;
+    }
+    let raw_type = ValType::Ref(RefType {
+        nullable: false,
+        heap_type: HeapType::Concrete(raw),
+    });
+    let source = emitter.add_anonymous_local(raw_type);
+    let snapshot = emitter.add_anonymous_local(raw_type);
+    emitter.instruction(Instruction::StructGet {
+        struct_type_index: array,
+        field_index: 1,
+    });
+    emitter.instruction(Instruction::LocalTee(source));
+    emitter.instruction(Instruction::ArrayLen);
+    emitter.instruction(Instruction::ArrayNewDefault(raw));
+    emitter.instruction(Instruction::LocalTee(snapshot));
+    emitter.instruction(Instruction::I32Const(0));
+    emitter.instruction(Instruction::LocalGet(source));
+    emitter.instruction(Instruction::I32Const(0));
+    emitter.instruction(Instruction::LocalGet(source));
+    emitter.instruction(Instruction::ArrayLen);
+    emitter.instruction(Instruction::ArrayCopy {
+        array_type_index_dst: raw,
+        array_type_index_src: raw,
+    });
+    emitter.instruction(Instruction::LocalGet(snapshot));
+}
+
 /// Read the original value, write its increment/decrement, and return the
 /// original. Binding operands are read at the narrowed result type but written
 /// back through their declared slot, including nullable and captured bindings.
@@ -1471,6 +1433,10 @@ fn emit_postfix_unary(
             index,
             elem_ty,
         } => {
+            if ctx.ta.expr(*receiver).ty.peel() == &Type::Uint8Array {
+                emit_uint8_postfix(emitter, ctx, *receiver, *index, op);
+                return;
+            }
             let raw_array_idx = ctx
                 .symbols
                 .raw_array_type_idx()
@@ -1517,6 +1483,50 @@ fn emit_postfix_unary(
             //   stack: [orig]
         }
     }
+}
+
+fn emit_uint8_postfix(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    receiver: ExprId,
+    index: ExprId,
+    op: crate::PostfixOp,
+) {
+    let array = ctx
+        .symbols
+        .uint8_array_type_idx()
+        .expect("Uint8Array declared");
+    let raw = ctx
+        .symbols
+        .raw_uint8_array_type_idx()
+        .expect("raw Uint8Array declared");
+    let backing = emitter.add_anonymous_local(ValType::Ref(RefType {
+        nullable: false,
+        heap_type: HeapType::Concrete(raw),
+    }));
+    let old = emitter.add_anonymous_local(ValType::F64);
+    emit_expr(emitter, ctx, receiver);
+    emitter.instruction(Instruction::StructGet {
+        struct_type_index: array,
+        field_index: 1,
+    });
+    emitter.instruction(Instruction::LocalSet(backing));
+    emit_expr(emitter, ctx, index);
+    let operand = stash_index_operand(emitter);
+    let index = emit_checked_index(emitter, ctx, backing, operand);
+    emitter.instruction(Instruction::LocalGet(backing));
+    emitter.instruction(Instruction::LocalGet(index));
+    emitter.instruction(Instruction::ArrayGetU(raw));
+    emitter.instruction(Instruction::F64ConvertI32U);
+    emitter.instruction(Instruction::LocalSet(old));
+    emitter.instruction(Instruction::LocalGet(backing));
+    emitter.instruction(Instruction::LocalGet(index));
+    emitter.instruction(Instruction::LocalGet(old));
+    emit_postfix_delta(emitter, ctx, op, &Type::Number);
+    // The result lies in -1..=256; signed conversion preserves -1 for i8 wrapping.
+    emitter.instruction(Instruction::I32TruncSatF64S);
+    emitter.instruction(Instruction::ArraySet(raw));
+    emitter.instruction(Instruction::LocalGet(old));
 }
 
 fn emit_postfix_delta(
@@ -1903,7 +1913,11 @@ fn emit_chain_access(
             emit_object_property_read(emitter, ctx, rcv_local, &name.name, result_ty);
         }
         crate::TypedChainPart::Index { idx, result_ty, .. } => {
-            emit_bounds_checked_index_with_receiver_on_stack(emitter, ctx, *idx, result_ty);
+            if receiver_ty.peel() == &Type::Uint8Array {
+                emit_uint8_index_with_receiver_on_stack(emitter, ctx, *idx);
+            } else {
+                emit_bounds_checked_index_with_receiver_on_stack(emitter, ctx, *idx, result_ty);
+            }
         }
         crate::TypedChainPart::InterfaceProperty { iface, name, .. } => {
             // same lookup the non-chain
@@ -2938,6 +2952,37 @@ fn emit_bounds_checked_index_with_receiver_on_stack(
     emitter.instruction(Instruction::LocalGet(idx_local));
     emitter.instruction(Instruction::ArrayGet(raw_array_idx));
     cast::emit_cast_to(emitter, ctx, result_ty);
+}
+
+fn emit_uint8_index_with_receiver_on_stack(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    index: ExprId,
+) {
+    let uint8_idx = ctx
+        .symbols
+        .uint8_array_type_idx()
+        .expect("Type::Uint8Array requires intrinsic types declared");
+    let raw_uint8_idx = ctx
+        .symbols
+        .raw_uint8_array_type_idx()
+        .expect("Type::Uint8Array requires intrinsic types declared");
+    let raw_local = emitter.add_anonymous_local(ValType::Ref(RefType {
+        nullable: false,
+        heap_type: HeapType::Concrete(raw_uint8_idx),
+    }));
+    emitter.instruction(Instruction::StructGet {
+        struct_type_index: uint8_idx,
+        field_index: 1,
+    });
+    emitter.instruction(Instruction::LocalSet(raw_local));
+    emit_expr(emitter, ctx, index);
+    let idx_f64_local = stash_index_operand(emitter);
+    let idx_local = emit_checked_index(emitter, ctx, raw_local, idx_f64_local);
+    emitter.instruction(Instruction::LocalGet(raw_local));
+    emitter.instruction(Instruction::LocalGet(idx_local));
+    emitter.instruction(Instruction::ArrayGetU(raw_uint8_idx));
+    emitter.instruction(Instruction::F64ConvertI32U);
 }
 
 /// Which accessor a write dispatches to when the data slot is missing.

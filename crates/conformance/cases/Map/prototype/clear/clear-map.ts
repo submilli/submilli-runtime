@@ -1,5 +1,4 @@
 // test262: test/built-ins/Map/prototype/clear/clear-map.js
-// expect-fail: new Map(entries) with mixed-type entries fails Wasm validation — a number/boolean element inside a union-typed tuple is emitted unboxed (f64/i32) where the entry list expects a boxed ref
 // Adapted: the Symbol-keyed entry in m2 is dropped by design.
 
 function main(): void {

@@ -739,6 +739,7 @@ impl CodegenAnalysis {
                 }
                 PostfixTarget::Index { elem_ty, .. } => {
                     self.note_postfix_target(elem_ty);
+                    self.string_pool.intern_text(bounds::INDEX_OOB_MESSAGE);
                 }
             },
             TypedExprKind::NonNullAssert { .. } => {
