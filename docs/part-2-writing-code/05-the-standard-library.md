@@ -114,6 +114,7 @@ program are capability-gated: every call is checked against the blueprint.
 | `submilli:http` | Outbound HTTP: `get`, `post`, `put`, `patch`, `delete`, `head`, `request`, `download` | `http.*` |
 | `submilli:fs` | The program's filesystem: read, write, append, list, stat, move, copy, remove | `fs.*` |
 | `submilli:session` | Key-value state that survives from one program to the next in an agent session | `session.*` |
+| `submilli:llm` | Call a model from inside the program: `call`, `batch`, `models` | `llm.call` |
 | `submilli:url` | Parse and build URLs and query strings | Nothing; pure computation |
 | `submilli:crypto` | SHA-256, SHA-512, HMAC, random bytes, timing-safe comparison | Nothing; pure computation |
 | `submilli:uuid` | UUID v4 and v7 generation and validation | Nothing; pure computation |
@@ -202,8 +203,87 @@ long input as a variable in a live REPL, and the model writes one snippet after
 another to slice it, examine a piece, or hand a piece to a sub-model, with every
 variable surviving between snippets. Submilli has no REPL: each program runs once
 and its memory is gone. Keep the input and the intermediate results in the
-session instead, and each program picks up where the last one stopped.
+session instead, and each program picks up where the last one stopped. The
+sub-model half of that pattern is the next module.
 [Crafting a blueprint](/docs/blueprints) covers session and filesystem modes.
+
+### Model calls
+
+A program can read an input far larger than any model's context and carry state
+between runs. `submilli:llm` lets it hand part of the work to a model as well:
+`call` sends one prompt, `batch` sends many at once, and `models` lists the
+models the program may use. This program classifies every ticket in a file
+without any ticket entering the agent's own context, then asks a stronger model
+for a typed verdict on the ones that matter:
+
+```typescript title="triage.ts"
+import * as fs from "submilli:fs";
+import * as llm from "submilli:llm";
+
+interface Severity {
+  level: "critical" | "high" | "low";
+  rationale: string;
+}
+
+function main(): Severity {
+  const tickets = Array.from(fs.lines("/tickets.txt"));
+  const answers = llm.batch(
+    "claude-haiku-4-5",
+    tickets.map((ticket) => `Does this ticket report a billing bug? Answer yes or no.\n\n${ticket}`)
+  );
+
+  const billing: string[] = [];
+  for (let i = 0; i < answers.length; i++) {
+    const text = answers[i].text;
+    if (text !== null && text.trim().toLowerCase().startsWith("yes")) {
+      billing.push(tickets[i]);
+    }
+  }
+
+  return llm.call<Severity>(
+    "claude-sonnet-5",
+    `Rate the overall severity of these billing tickets:\n\n${billing.join("\n---\n")}`
+  );
+}
+```
+
+The thousand prompts and answers stay inside the program; only the `Severity`
+reaches the agent. The untyped `batch` returns one `Completion` per prompt, in
+order. Check `ok` before trusting `text`: a completion cut off at the output
+limit or stopped by a content filter is `ok: false` and still carries the text
+it produced, with `reason` saying why. One failed element never fails the batch.
+
+The typed form, `call<Severity>`, sends a JSON Schema for `Severity` with the
+request and then checks the response against the type field by field, so the
+value it returns has that shape. A response that doesn't match throws a
+`TypeError`; nothing is coerced.
+
+Models are declared in the blueprint, and a program can call only those the
+blueprint's `llm.call` rule allows, within a token budget that is reserved
+before each call is sent:
+
+```yaml title="blueprint.yaml (fragment)"
+llm:
+  providers:
+    anthropic: { type: anthropic, api_key: ${secrets.ANTHROPIC_API_KEY} }
+  models:
+    claude-haiku-4-5:
+      provider: anthropic
+      description: "Cheap and fast; use for bulk per-item classification."
+    claude-sonnet-5:
+      provider: anthropic
+
+permissions:
+  main:
+  - capability: llm.call
+    filter: model glob "claude-*"
+    action: allow
+```
+
+The provider's key stays in the blueprint's secrets; the program never sees it.
+Together, session state and model calls give a program the two things the
+Recursive Language Model pattern needs: memory across steps, and sub-models to
+delegate a slice of the input to.
 
 ### Modules for packages and tests
 
