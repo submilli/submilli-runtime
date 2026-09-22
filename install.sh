@@ -48,38 +48,48 @@ fi
 case "$version" in
     ''|*[!a-zA-Z0-9._-]*|-*) fail 'Invalid release tag' ;;
 esac
-asset=submilli-$target
+binaries='submilli submilli-server'
 scratch=$(mktemp -d)
-staged=
 cleanup() {
     rm -rf "$scratch"
-    if [ -n "$staged" ]; then rm -f "$staged"; fi
+    # Staged copies exist only after the cd into the install directory.
+    for binary in $binaries; do rm -f "./.$binary.$$"; done
 }
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 base=$release_url/download/$version
-curl -fsSL --proto '=https' --proto-redir '=https' "$base/$asset" -o "$scratch/$asset"
 curl -fsSL --proto '=https' --proto-redir '=https' "$base/SHA256SUMS" -o "$scratch/SHA256SUMS"
-expected=$(awk -v name="$asset" '$2 == name { print $1 }' "$scratch/SHA256SUMS")
-[ "${#expected}" -eq 64 ] || fail "Missing or ambiguous checksum for $asset"
-case "$expected" in *[!0-9a-fA-F]*) fail 'Invalid checksum' ;; esac
-if [ "$hash_tool" = sha256sum ]; then
-    actual=$(sha256sum "$scratch/$asset" | awk '{print $1}')
-else
-    actual=$(shasum -a 256 "$scratch/$asset" | awk '{print $1}')
-fi
-[ "$actual" = "$(printf '%s' "$expected" | tr A-F a-f)" ] || fail 'Checksum mismatch; existing installation was not changed'
-chmod 755 "$scratch/$asset"
-"$scratch/$asset" --version
+# Verify every executable before installing any, so a failure changes nothing.
+for binary in $binaries; do
+    asset=$binary-$target
+    curl -fsSL --proto '=https' --proto-redir '=https' "$base/$asset" -o "$scratch/$asset"
+    expected=$(awk -v name="$asset" '$2 == name { print $1 }' "$scratch/SHA256SUMS")
+    [ "${#expected}" -eq 64 ] || fail "Missing or ambiguous checksum for $asset"
+    case "$expected" in *[!0-9a-fA-F]*) fail 'Invalid checksum' ;; esac
+    if [ "$hash_tool" = sha256sum ]; then
+        actual=$(sha256sum "$scratch/$asset" | awk '{print $1}')
+    else
+        actual=$(shasum -a 256 "$scratch/$asset" | awk '{print $1}')
+    fi
+    [ "$actual" = "$(printf '%s' "$expected" | tr A-F a-f)" ] || fail 'Checksum mismatch; existing installation was not changed'
+    chmod 755 "$scratch/$asset"
+    "$scratch/$asset" --version
+done
 mkdir -p "$install_dir"
-[ ! -d "$install_dir/submilli" ] || fail 'Installation target is a directory'
-# Stage on the destination filesystem so replacement is an atomic rename.
-staged=$(mktemp "$install_dir/.submilli.XXXXXX")
-cp "$scratch/$asset" "$staged"
-chmod 755 "$staged"
-mv -f "$staged" "$install_dir/submilli"
-staged=
-printf 'Installed %s to %s/submilli\n' "$version" "$install_dir"
+for binary in $binaries; do
+    [ ! -d "$install_dir/$binary" ] || fail "Installation target $binary is a directory"
+done
+# Stage on the destination filesystem so each replacement is an atomic rename.
+# The scratch and install paths may contain spaces; staged names never do.
+cd "$install_dir"
+for binary in $binaries; do
+    cp "$scratch/$binary-$target" "./.$binary.$$"
+    chmod 755 "./.$binary.$$"
+done
+for binary in $binaries; do
+    mv -f "./.$binary.$$" "./$binary"
+done
+printf 'Installed submilli and submilli-server %s to %s\n' "$version" "$install_dir"
 case ":${PATH:-}:" in
     *":$install_dir:"*) ;;
     *) printf 'Add this directory to your PATH: %s\n' "$install_dir" ;;

@@ -34,3 +34,32 @@ pub fn read_or_error<T: DeserializeOwned>(resp: ureq::http::Response<ureq::Body>
         .map_or_else(|_| format!("server returned HTTP {status}"), |e| e.message);
     bail!("{message}")
 }
+
+/// Where release downloads come from: the GitHub repository, or the mirror
+/// named by `env_var`. Plain HTTP is accepted only for loopback so released
+/// content cannot be replaced in transit.
+pub fn release_source(env_var: &str) -> Result<String> {
+    const DEFAULT: &str = "https://github.com/submilli/submilli-runtime";
+    let source = std::env::var(env_var).unwrap_or_else(|_| DEFAULT.into());
+    let url = url::Url::parse(&source).map_err(|_| anyhow::anyhow!("invalid {env_var}"))?;
+    let loopback = matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"));
+    if url.scheme() != "https" && !(url.scheme() == "http" && loopback) {
+        bail!("{env_var} must use https");
+    }
+    Ok(source.trim_end_matches('/').to_owned())
+}
+
+/// Read a body into memory, refusing anything larger than `limit` bytes.
+pub fn read_limited(response: ureq::http::Response<ureq::Body>, limit: u64) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    response
+        .into_body()
+        .into_reader()
+        .take(limit + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit {
+        bail!("response exceeds {limit} bytes");
+    }
+    Ok(bytes)
+}

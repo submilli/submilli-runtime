@@ -1,0 +1,31 @@
+name: Skill release
+
+# Pushing `skill-v<N>` publishes skills/submilli to every `submilli skill sync`.
+# N must equal skills/submilli/VERSION at the tagged commit.
+on:
+  push:
+    tags: ['skill-v[0-9]*']
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require the tagged commit to be on main
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - name: Build the release asset
+        run: python3 scripts/build_skill_release.py submilli-skill.json --expect-version "${GITHUB_REF_NAME#skill-v}"
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # Not "latest": install.sh resolves the CLI through releases/latest.
+        run: |
+          gh release create "$GITHUB_REF_NAME" submilli-skill.json \
+            --title "Submilli skill v${GITHUB_REF_NAME#skill-v}" \
+            --notes "Delivered automatically by \`submilli skill sync\`." \
+            --latest=false

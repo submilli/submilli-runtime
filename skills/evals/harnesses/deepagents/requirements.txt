@@ -1,0 +1,2 @@
+deepagents==0.7.15
+langchain-mcp-adapters==0.3.2

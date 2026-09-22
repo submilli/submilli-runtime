@@ -32,6 +32,11 @@ enum Cmd {
     Search(commands::search::Args),
     /// Print declarations for language built-ins, or list the catalog.
     Builtins(commands::builtins::Args),
+    /// Install or update the Submilli coding-assistant skill.
+    #[command(subcommand)]
+    Skill(commands::skill::SkillCmd),
+    /// Replace this executable with the latest published release.
+    Upgrade(commands::upgrade::Args),
     /// Apply blueprint YAML documents to a running submilli-server.
     Apply(commands::apply::Args),
     /// Author a blueprint file locally (scaffold, edit).
@@ -52,6 +57,9 @@ fn main() -> anyhow::Result<ExitCode> {
     let _guard = telemetry::init();
 
     let cli = Cli::parse();
+    if !matches!(cli.cmd, Cmd::Skill(_)) {
+        commands::skill::warn_if_outdated();
+    }
     record_invocation(&cli.cmd);
     match cli.cmd {
         Cmd::Run(args) => commands::run::execute(args),
@@ -61,6 +69,8 @@ fn main() -> anyhow::Result<ExitCode> {
         Cmd::Docs(args) => commands::docs::execute(args),
         Cmd::Search(args) => commands::search::execute(args),
         Cmd::Builtins(args) => commands::builtins::execute(args),
+        Cmd::Skill(cmd) => commands::skill::execute(cmd),
+        Cmd::Upgrade(args) => commands::upgrade::execute(args),
         Cmd::Apply(args) => commands::apply::execute(args),
         Cmd::Blueprint(cmd) => commands::blueprint::execute(cmd),
         Cmd::Secret(cmd) => commands::secret::execute(cmd),
@@ -90,6 +100,8 @@ fn invocation_attrs(cmd: &Cmd) -> (&'static str, Vec<(&'static str, bool)>) {
         Cmd::Docs(_) => ("docs", Vec::new()),
         Cmd::Search(a) => ("search", a.metric_flags()),
         Cmd::Builtins(a) => ("builtins", a.metric_flags()),
+        Cmd::Skill(_) => ("skill", Vec::new()),
+        Cmd::Upgrade(_) => ("upgrade", Vec::new()),
         Cmd::Apply(_) => ("apply", Vec::new()),
         Cmd::Blueprint(sub) => (blueprint_label(sub), Vec::new()),
         Cmd::Secret(sub) => (secret_label(sub), Vec::new()),
