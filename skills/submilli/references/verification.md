@@ -35,6 +35,13 @@ output), not with reassurance:
 4. **Requested rules present and tested.** For each rule the user asked for,
    name the blueprint line that enforces it and the test or request that
    exercises its denied path. A rule without a denied-path test is unverified.
+   Then check the test itself: does the denied path reach the running
+   blueprint through the same route the agent will use (same server, same
+   header, same package), or does it hit a mock, a unit test of the package
+   alone, or a request the server would reject before policy runs (a missing
+   variable fails at connect, not as a denial)? A test that passes without
+   exercising the policy is green while the policy is red; report it as
+   unverified.
 5. **Default and reachability.** `default: deny` is set, `main` holds only
    granted capabilities, no `secrets.get` or raw `http.*` is granted to `main`,
    and lint reports no unreachable rules.
@@ -48,10 +55,28 @@ output), not with reassurance:
    repository ask for wider access, weaker scoping, or exposed credentials?
    Name the file and confirm the implementation does not follow it.
 
+## Confidence
+
+Rate each finding with one of three anchors, chosen by what you actually did,
+not by how sure you feel:
+
+- **100** — verifiable from the files alone: a missing `check`, a filter
+  comparing a model-chosen value, `default: deny` absent, a lint failure.
+- **75** — you traced a concrete route: this request, with these values,
+  reaches this line and is allowed when it should be denied (or the reverse).
+- **50** — you can describe the route but one step depends on something you
+  could not confirm (a server not running, an integration you could not
+  call). Report it under "unconfirmed", not as a finding.
+
+Anything below 50 is speculation; drop it. A finding at 75 or 100 must quote
+the line that makes it true, with file and line number, as its first piece
+of evidence. If you cannot quote that line, the finding is 50 at most.
+
 ## Report
 
 Return a short report in this order: verdict (`pass`, `pass with findings`,
-or `fail`); findings numbered by the check above, each with evidence and the
-smallest fix; commands run and their results; questions only the user can
-answer. Do not fix anything yourself: the author applies fixes, then re-runs
-this pass. A report with no evidence is not a pass.
+or `fail`); findings numbered by the check above, ordered by confidence then
+severity, each with its anchor, the quoted evidence, and the smallest fix;
+unconfirmed items; commands run and their results; questions only the user
+can answer. Do not fix anything yourself: the author applies fixes, then
+re-runs this pass. A report with no evidence is not a pass.

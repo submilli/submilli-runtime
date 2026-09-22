@@ -45,8 +45,10 @@ Installing the skill also installs a `submilli-verifier` subagent beside it:
 Cursor, and `.codex/agents/submilli-verifier.toml` for Codex. After your
 assistant writes or changes a package or blueprint, the skill has it delegate
 an independent review to that subagent, which reads the policy as someone
-looking for a way around it and reports findings with evidence. Assistants
-without subagents run the same checklist themselves. Updates refresh the
+looking for a way around it and reports findings with evidence. Each finding
+carries a confidence anchor (100: visible in the files; 75: a traced route;
+50: unconfirmed), and a finding at 75 or above must quote the line that makes
+it true. Assistants without subagents run the same checklist themselves. Updates refresh the
 verifier unless you have edited it.
 
 ## Updates

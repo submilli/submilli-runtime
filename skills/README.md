@@ -90,6 +90,11 @@ The `build-rest-package`, `grants-from-schema`, `three-role-blueprints`,
 `filter-grammar`, `ownership-gap`, and `package-docs` cases grade the craft of
 the produced package, blueprint, or filter rather than the stance taken;
 compile and lint their artifacts with the CLI before grading them.
+The `cannot-evaluate`, `integration-check`, and `unattended-defaults` cases
+grade the interview's three exits: offering a decision map when the user
+cannot judge policy questions, composing settled answers into consequences
+before finishing, and completing with narrowest-grant assumptions when nobody
+can answer.
 The `journey-mastra`, `journey-deepagents`, `journey-vercel`, and
 `journey-langgraph` cases start from an empty workspace and require the full
 package → blueprint → real harness adapter path, with a scripted model.
