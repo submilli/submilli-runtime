@@ -9,13 +9,11 @@ sidebar:
 `submilli-server` is the process that runs the agent's programs. Your
 application sends it a program and the name of a blueprint; the server
 compiles the program, runs it under that blueprint's rules, and returns the
-result ([how Submilli works](/docs/how-submilli-works)). This chapter is about
-operating that process: starting it, where it keeps things, how it is
-configured, and how the blueprint from [crafting a
-blueprint](/docs/blueprints) and the packages from [using the CLI](/docs/cli)
-get onto it. Calling it from an application or an agent harness is the [next
-chapter](/docs/harness); running it in a container or a cluster is
-[deploying](/docs/deploying).
+result ([how Submilli works](/docs/how-submilli-works)).
+
+This chapter is about operating that process: starting it, where it keeps
+things, how it is configured, and how your blueprints, packages, and secrets
+get onto it.
 
 ## One server per application
 
@@ -83,20 +81,22 @@ config-file key, so a deployment can put each where it belongs.
 
 | Directory | Default | Holds | Survives a restart? |
 | --- | --- | --- | --- |
-| `--blueprint-dir` | `~/.submilli/blueprints` | Registered blueprints, as a revision log: `index.json` plus one `<name>.<revision>.yaml` per version | Must |
-| `--session-store-dir` | `~/.submilli/sessions` | Session bookkeeping: which blueprint and variables each open session is bound to, its idle timer, and the idempotency ledger | Must, for sessions to resume |
-| `--vfs-session-dir` | `~/.submilli/vfs/sessions` | The files of every `per_session` blueprint's sessions | Must, for sessions to resume |
-| `--secret-store-dir` | `~/.submilli/secrets` | The encrypted secret store | Must |
-| `--package-store-dir` | `~/.submilli/packages` | Installed packages | Must |
-| `--vfs-ephemeral-dir` | the OS temp dir | One scratch directory per run, deleted when the run returns | Need not |
+| `--blueprint-dir` | `~/.submilli/blueprints` | Registered blueprints, as a revision log: `index.json` plus one `<name>.<revision>.yaml` per version | Yes |
+| `--session-store-dir` | `~/.submilli/sessions` | Session bookkeeping: which blueprint and variables each open session is bound to, its idle timer, and the idempotency ledger | Yes, or open sessions are lost |
+| `--vfs-session-dir` | `~/.submilli/vfs/sessions` | The files of every `per_session` blueprint's sessions | Yes, or open sessions are lost |
+| `--secret-store-dir` | `~/.submilli/secrets` | The encrypted secret store | Yes |
+| `--package-store-dir` | `~/.submilli/packages` | Installed packages | Yes |
+| `--vfs-ephemeral-dir` | the OS temp dir | One scratch directory per run, deleted when the run returns | No |
 
-Two of these are the same directories the local CLI uses. `submilli install`
-and `submilli server packages install` write to one package store when both
-run on the same machine with default paths, which is why the quickstart's
-locally built package was visible to its server without a further step. The
-secret directory is shared too, and that one is a trap: the CLI's local store
-keeps plain files while the server's store keeps encrypted ones, so a server
-with its store enabled lists the CLI's entries but fails to read them
+Two of these are the same directories the local CLI uses. The package store
+is shared on purpose: `submilli install` and `submilli server packages
+install` write to one store when both run on the same machine with default
+paths, which is why the quickstart's locally built package was visible to its
+server without a further step.
+
+The secret directory is shared too, and that one is a trap. The CLI's local
+store keeps plain files while the server's store keeps encrypted ones, so a
+server with its store enabled lists the CLI's entries but fails to read them
 (`secret store crypto: sealed blob too short`). On a machine that runs both,
 give the server its own `--secret-store-dir`.
 
@@ -104,10 +104,15 @@ give the server its own `--secret-store-dir`.
 
 Settings come from three places: flags on the command line, `SUBMILLI_*`
 environment variables, and a YAML file named by `--config` or
-`$SUBMILLI_CONFIG`. Each key has the same name in all three, with dashes in
+`$SUBMILLI_CONFIG`. Most keys share one name across the three, with dashes in
 the flag (`--max-execution-memory`), underscores in the file
 (`max_execution_memory`), and an upper-case prefix in the environment
-(`SUBMILLI_MAX_EXECUTION_MEMORY`).
+(`SUBMILLI_MAX_EXECUTION_MEMORY`). The exceptions are the settings grouped in
+the file: the secret store's `secret_store.dir` and `secret_store.key_file`
+are the flags `--secret-store-dir` and `--secret-store-key-file`, the egress
+settings under `network:` are `--allow-localhost`, `--allow-private`, and
+`--allow-ip`, and the file's `mcp_allowed_hosts` list is the repeatable flag
+`--mcp-allowed-host`. The template below shows the file's spelling of each.
 
 When the same setting is given more than once, the most specific source
 wins: a flag, then a `SUBMILLI_*` variable, then the config file, then the
@@ -166,8 +171,12 @@ Caused by:
 Two settings exist only in the file: `volumes`, and `mcp_oauth`, the OAuth
 client registrations for MCP servers that need one. Both map a name a
 blueprint can write to something on the host, and keeping them in one
-reviewable file is the point. `telemetry` opts in to crash reporting; it is
-off unless the file or `SUBMILLI_TELEMETRY` turns it on.
+reviewable file is the point.
+
+`telemetry` is off unless the file or `SUBMILLI_TELEMETRY` turns it on. When
+on, the server sends errors and crashes to the Submilli maintainers' Sentry
+project, including request details such as client IP addresses and headers.
+Leave it off if that data must not leave your infrastructure.
 
 ## Register blueprints
 
@@ -185,9 +194,14 @@ Added blueprint 'notes'
 
 Run it again after an edit and the answer is `Updated blueprint 'notes'`.
 `list` prints the registered names, `show <name>` prints the YAML the server
-holds, `remove <name>` unregisters it. Under the hood the store is a
+holds, and `remove <name>` unregisters it. Under the hood the store is a
 revision log, so every version ever applied is on disk; `show` and
 executions use the latest.
+
+`remove` also ends every open session bound to that blueprint and deletes
+its records, so a client reconnecting to one gets `404 unknown session` rather
+than its old session back. Re-registering the name later does not bring them
+back. On a live server, removing a blueprint cuts off the people using it.
 
 Registration is where a blueprint is checked, so a mistake fails here rather
 than on the first program:
@@ -238,10 +252,12 @@ either by the directory or by the API, never both. Blueprints the directory
 doesn't name are left alone, which means removing a file doesn't remove the
 blueprint; do that with `remove`. The store keys on the `name:` inside each
 file, not the file name. Because the directory is the operator's, blueprints
-seeded from it may use `env:` and `file:` secrets. A file that fails to
-register is logged and counted in `failed` without stopping the server, so
-watch that line: a seed directory the process can't read looks like a
-healthy server that knows no blueprints.
+seeded from it may use `env:` and `file:` secrets.
+
+Watch the reconcile line after each deploy. A file that fails to register is
+logged and counted in `failed` without stopping the server, so a seed
+directory the process can't read looks like a healthy server that knows no
+blueprints.
 
 ## Install packages
 
@@ -362,9 +378,13 @@ These are the operator's knobs; a blueprint can't raise them.
 | `max_llm_concurrency` | 4 | Prompts one `llm.batch` sends at once |
 
 Strings are UTF-16 inside the runtime, so text costs two bytes per character
-against the execution memory limit: a 25 MB document needs about 50 MB. To
-size a container's memory, budget the execution limit times the number of
-programs you expect to run at once, plus the session-state limit.
+against the execution memory limit: a 25 MB document needs about 50 MB.
+
+To size a container's memory, budget at least:
+
+```text
+max_execution_memory × programs running at once + max_session_state_memory
+```
 
 Sessions themselves are bounded by the blueprint's `idle_timeout` (24 hours
 unless the blueprint says otherwise); a background sweep closes idle sessions
@@ -387,10 +407,12 @@ curl -s http://127.0.0.1:8128/v1/status
 
 For a container with no shell or `curl`, the binary probes itself:
 `submilli-server --health-check` exits 0 when the server answers and 1 with
-the reason when it doesn't. The probe is a separate process, so it finds the
-address from `SUBMILLI_BIND`/`SUBMILLI_PORT` or the config file, not from
-flags given to the serving process; a container that moves the port should
-do so through one of those.
+the reason when it doesn't. The probe is a separate process and can't see
+the flags given to the serving one. It resolves the address the same way the
+server does, from its own flags, `SUBMILLI_BIND`/`SUBMILLI_PORT`, or the
+config file. So a server started with `--port 9000` needs
+`--health-check --port 9000`; setting the port through the environment or
+the config file instead covers both processes at once.
 
 Logs go to standard error, one line per event, at `info` and above;
 `RUST_LOG=submilli_server=debug` raises the level for the server's own
