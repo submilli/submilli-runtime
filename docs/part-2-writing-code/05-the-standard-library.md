@@ -169,8 +169,8 @@ function main(): string {
 api.acme.com/v1/charges: d6c5f8584539
 ```
 
-`readText` returns `null` for a missing file or one larger than the read limit,
-so the program has to handle that case. `sha256` returns a `Uint8Array`, and
+`readText` returns `null` for a file larger than the read limit, so the program
+has to handle that case; a missing file throws. `sha256` returns a `Uint8Array`, and
 `toHex()` renders it. The digest differs on each run because the receipt
 contains a fresh UUID.
 
@@ -205,7 +205,7 @@ variable surviving between snippets. Submilli has no REPL: each program runs onc
 and its memory is gone. Keep the input and the intermediate results in the
 session instead, and each program picks up where the last one stopped. The
 sub-model half of that pattern is the next module.
-[Crafting a blueprint](/docs/blueprints) covers session and filesystem modes.
+[Crafting a blueprint](/docs/blueprints) covers sessions and filesystem modes.
 
 ### Model calls
 
@@ -258,29 +258,10 @@ request and then checks the response against the type field by field, so the
 value it returns has that shape. A response that doesn't match throws a
 `TypeError`; nothing is coerced.
 
-Models are declared in the blueprint, and a program can call only those the
-blueprint's `llm.call` rule allows, within a token budget that is reserved
-before each call is sent:
-
-```yaml title="blueprint.yaml (fragment)"
-llm:
-  providers:
-    anthropic: { type: anthropic, api_key: ${secrets.ANTHROPIC_API_KEY} }
-  models:
-    claude-haiku-4-5:
-      provider: anthropic
-      description: "Cheap and fast; use for bulk per-item classification."
-    claude-sonnet-5:
-      provider: anthropic
-
-permissions:
-  main:
-  - capability: llm.call
-    filter: model glob "claude-*"
-    action: allow
-```
-
-The provider's key stays in the blueprint's secrets; the program never sees it.
+The model names are the blueprint's: it declares the providers and models a
+program may use, holds the provider's key so the program never sees it, and
+gates every call through `llm.call`, within a token budget reserved before
+each call is sent ([crafting a blueprint](/docs/blueprints) declares them).
 Together, session state and model calls give a program the two things the
 Recursive Language Model pattern needs: memory across steps, and sub-models to
 delegate a slice of the input to.
