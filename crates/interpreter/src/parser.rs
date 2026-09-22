@@ -4021,8 +4021,35 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// `<T>expr`, TypeScript's original cast syntax, lowered to the same
+    /// [`ExprKind::As`] node `expr as T` produces — so it is checked and emitted
+    /// identically, including the runtime `ref.test` our `as` performs.
+    ///
+    /// The operand is a unary expression, which is what binds `<T>-1` as a cast of
+    /// `-1` rather than a cast of `1` that is then negated.
+    fn parse_angle_cast(&mut self) -> Option<ExprId> {
+        let open = self.advance();
+        let ty = self.parse_type_annotation()?;
+        if !matches!(self.peek().kind, TokenKind::GreaterThan) {
+            self.error_at_peek("expected `>` to close a type assertion");
+            return None;
+        }
+        self.advance();
+        let expr = self.parse_unary()?;
+        let end = self.ast.expr(expr).span.end;
+        Some(self.ast.push_expr(Expr {
+            kind: ExprKind::As { expr, ty },
+            span: self.span(open.span.start, end),
+        }))
+    }
+
     fn parse_atom(&mut self) -> Option<ExprId> {
         match self.peek().kind {
+            // `<T>expr` — the older spelling of `expr as T`, lowered to the same node.
+            // Unambiguous only because this is an atom's first token: a `<` that means
+            // comparison always has a left operand, and one that opens a generic
+            // argument list always follows a callee, so neither reaches here.
+            TokenKind::LessThan => return self.parse_angle_cast(),
             TokenKind::LeftParen => return self.parse_paren(),
             // `{` here is an object literal; statement-start `{` is dispatched to
             // `parse_block` before `parse_atom` runs, so the two stay disjoint.
@@ -5233,6 +5260,32 @@ mod tests {
             crate::ExprKind::InstanceOf { .. }
         ));
         assert!(matches!(ast.expr(rhs).kind, crate::ExprKind::Identifier(_)));
+    }
+
+    /// `<T>x` produces the same node as `x as T`, so everything downstream of the
+    /// parser sees one construct rather than two.
+    #[test]
+    fn parse_angle_cast_lowers_to_the_as_node() {
+        let (ast, diags) = parse_str("<number>x;");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let outer = expr_of_single_stmt(&ast);
+        let (inner, ty) = as_cast(outer);
+        assert!(matches!(
+            ast.expr(inner).kind,
+            crate::ExprKind::Identifier(_)
+        ));
+        assert!(matches!(ty.kind, crate::TypeAnnotationKind::Name { .. }));
+    }
+
+    /// A `<` that means comparison always has a left operand, so it never reaches
+    /// the cast branch. This is the regression the cast syntax could most easily
+    /// have caused.
+    #[test]
+    fn a_less_than_comparison_is_not_read_as_a_cast() {
+        let (ast, diags) = parse_str("a < b;");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let e = expr_of_single_stmt(&ast);
+        assert!(matches!(e.kind, crate::ExprKind::Binary { .. }));
     }
 
     #[test]
