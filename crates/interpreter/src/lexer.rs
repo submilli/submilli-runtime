@@ -7,6 +7,9 @@ use crate::{Diagnostic, FileId, RawDoc, Severity, Span, Token, TokenKind};
 const VALID_ESCAPES: &str =
     "valid escapes: \\\", \\', \\\\, \\n, \\t, \\r, \\b, \\f, \\v, \\0, \\u{HHHH}";
 
+/// UTF-8 encoding of U+FEFF, which many editors write at the start of a file.
+const BOM: &[u8] = "\u{feff}".as_bytes();
+
 pub struct Lexer<'a> {
     source: &'a str,
     bytes: &'a [u8],
@@ -34,7 +37,15 @@ impl<'a> Lexer<'a> {
             source,
             bytes: source.as_bytes(),
             file,
-            pos: 0,
+            // A leading U+FEFF is an encoding marker, not source text. It is skipped by
+            // advancing past it rather than trimming `source`, so every span stays a byte
+            // offset into the file as it exists on disk and carets remain accurate.
+            // Offset 0 only: anywhere else U+FEFF is a real character and still an error.
+            pos: if source.as_bytes().starts_with(BOM) {
+                BOM.len() as u32
+            } else {
+                0
+            },
             diagnostics: Vec::new(),
             pending_docs: Vec::new(),
             template_frames: Vec::new(),
@@ -2346,6 +2357,36 @@ mod tests {
         assert_eq!(tok.kind, TokenKind::Eof);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].message, "unterminated block comment");
+    }
+
+    /// Editors commonly prepend U+FEFF; TypeScript ignores it, and so do we.
+    #[test]
+    fn leading_bom_is_skipped() {
+        let (tokens, diags) = tokenize_all("\u{feff}const x = 1;");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        assert_eq!(tokens[0].kind, TokenKind::Const);
+    }
+
+    /// The BOM is stepped over rather than stripped, so spans stay byte offsets into
+    /// the file on disk — otherwise every caret after it would be three bytes off.
+    #[test]
+    fn leading_bom_keeps_spans_aligned_to_the_file() {
+        let source = "\u{feff}const x = 1;";
+        let (tokens, _diags) = tokenize_all(source);
+        let start = tokens[0].span.start as usize;
+        assert_eq!(&source[start..start + 5], "const");
+    }
+
+    /// Only offset 0 is an encoding marker. Elsewhere it is an ordinary invalid character.
+    #[test]
+    fn bom_after_the_first_byte_is_still_an_error() {
+        let (_tokens, diags) = tokenize_all("const \u{feff}x = 1;");
+        assert_eq!(diags.len(), 1);
+        assert!(
+            diags[0].message.contains("unexpected character"),
+            "got: {}",
+            diags[0].message
+        );
     }
 
     #[test]
