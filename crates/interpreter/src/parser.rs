@@ -3424,6 +3424,93 @@ impl<'a> Parser<'a> {
         }))
     }
 
+    /// `function (a: T): R { … }` in expression position, parsed into `ExprKind::Arrow`.
+    ///
+    /// The two forms differ only in how they bind `this`, and `this` outside a class body
+    /// is rejected by `parse_this_or_super`, so nothing distinguishes them here.
+    ///
+    /// In the named form `function f() { … }`, TypeScript binds `f` inside the function's
+    /// own body, and an arrow has nowhere to record that name. The name is therefore
+    /// accepted and dropped — it is almost always only a label — and rejected just when
+    /// the body actually references it, which is the one case where dropping it would
+    /// change meaning.
+    fn parse_function_expression(&mut self) -> Option<ExprId> {
+        let kw = self.advance();
+
+        if matches!(self.peek().kind, TokenKind::LessThan) {
+            self.error_at_peek("generic function expressions are not supported");
+            return None;
+        }
+
+        let self_name = if matches!(self.peek().kind, TokenKind::Identifier) {
+            let name_tok = self.advance();
+            Some(self.ident_from_token(&name_tok))
+        } else {
+            None
+        };
+
+        if !matches!(self.peek().kind, TokenKind::LeftParen) {
+            self.error_at_peek("expected `(` after `function`");
+            return None;
+        }
+        self.advance();
+
+        let params = if matches!(self.peek().kind, TokenKind::RightParen) {
+            Vec::new()
+        } else {
+            // Shares the arrow parameter grammar, so parameter defaults are rejected here
+            // too — only named function *declarations* accept them.
+            self.parse_arrow_param_list()?
+        };
+        if !matches!(self.peek().kind, TokenKind::RightParen) {
+            self.error_at_peek("expected `)`");
+            return None;
+        }
+        self.advance();
+
+        let (return_type, type_predicate) = if matches!(self.peek().kind, TokenKind::Colon) {
+            self.advance();
+            self.parse_predicate_or_return_type(TypePos::ArrowReturn)?
+        } else {
+            (None, None)
+        };
+
+        if !matches!(self.peek().kind, TokenKind::LeftBrace) {
+            self.error_at_peek("expected `{` to open the function body");
+            return None;
+        }
+        let body_start = self.pos;
+        let block = self.parse_block()?;
+        let end = self.ast.stmt(block).span.end;
+
+        if let Some(name) = self_name.filter(|n| {
+            self.tokens[body_start..self.pos].iter().any(|t| {
+                matches!(t.kind, TokenKind::Identifier)
+                    && self.source[t.span.start as usize..t.span.end as usize] == n.name
+            })
+        }) {
+            self.error_at_with_help(
+                name.span,
+                "a named function expression cannot call itself",
+                vec![format!(
+                    "declare it instead: `function {}(…) {{ … }}`",
+                    name.name
+                )],
+            );
+            return None;
+        }
+
+        Some(self.ast.push_expr(Expr {
+            kind: ExprKind::Arrow {
+                params,
+                return_type,
+                type_predicate,
+                body: ArrowBody::Block(block),
+            },
+            span: self.span(kw.span.start, end),
+        }))
+    }
+
     fn parse_arrow_param_list(&mut self) -> Option<Vec<ParamDecl>> {
         let mut params = Vec::new();
         loop {
@@ -3971,6 +4058,7 @@ impl<'a> Parser<'a> {
             TokenKind::TemplateHead(_) => return self.parse_template_literal(),
             TokenKind::This => return self.parse_this_or_super(true),
             TokenKind::Super => return self.parse_this_or_super(false),
+            TokenKind::Function => return self.parse_function_expression(),
             _ => {}
         }
         if !matches!(
@@ -8648,6 +8736,64 @@ mod tests {
             other => panic!("expected Arrow, got {other:?}"),
         };
         (ast, params, return_type, body)
+    }
+
+    #[test]
+    fn parses_anonymous_function_expression_as_arrow() {
+        let (ast, params, return_type, body) =
+            parse_arrow_const("const f = function (x: number): number { return x + 1; };");
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].name.name, "x");
+        assert!(return_type.is_some());
+        assert!(matches!(body, crate::ArrowBody::Block(_)));
+        let _ = ast;
+    }
+
+    #[test]
+    fn parses_function_expression_with_no_params() {
+        let (_ast, params, _return_type, body) =
+            parse_arrow_const("const f = function (): void {};");
+        assert!(params.is_empty());
+        assert!(matches!(body, crate::ArrowBody::Block(_)));
+    }
+
+    /// The name is a label with no binding of its own, so it is dropped.
+    #[test]
+    fn parses_named_function_expression_by_dropping_the_name() {
+        let (_ast, params, _return_type, _body) =
+            parse_arrow_const("const f = function named(x: number): number { return x + 1; };");
+        assert_eq!(params.len(), 1);
+    }
+
+    /// Dropping the name would change meaning here, so this one is rejected.
+    #[test]
+    fn rejects_a_named_function_expression_that_calls_itself() {
+        let (_ast, diags) =
+            parse_str("const f = function bar(x: number): number { return bar(x); };");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("cannot call itself")),
+            "self-referential named function expression should be rejected: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_generic_function_expression() {
+        let (_ast, diags) = parse_str("const f = function <T>(x: T): T { return x; };");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("generic function expressions")),
+            "generic function expression should be rejected: {diags:?}"
+        );
+    }
+
+    /// `function` is a valid property name; the expression form must not shadow that.
+    #[test]
+    fn function_keyword_still_parses_as_an_object_key() {
+        let (_ast, diags) = parse_str("let o = { function: 1 };");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
     }
 
     #[test]
