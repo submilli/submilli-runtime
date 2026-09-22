@@ -17,6 +17,7 @@ pub mod lint;
 mod package_secrets;
 pub mod prompt;
 pub mod secret;
+pub mod variable;
 
 #[derive(Subcommand)]
 pub enum BlueprintCmd {
@@ -32,7 +33,12 @@ pub enum BlueprintCmd {
     /// Add an already-installed package to a local `blueprint.yaml`.
     #[command(name = "add-package")]
     AddPackage(add_package::Args),
-    /// Declare secrets in a local `blueprint.yaml`'s `secrets:` block.
+    /// Manage the session variables declared in a local `blueprint.yaml`'s
+    /// `variables:` block.
+    #[command(subcommand)]
+    Variable(variable::VariableCmd),
+    /// Manage the secrets declared in a local `blueprint.yaml`'s `secrets:`
+    /// block.
     #[command(subcommand)]
     Secret(secret::SecretCmd),
     /// Manage host-keyed outbound-auth rules in a local `blueprint.yaml`.
@@ -54,6 +60,7 @@ pub fn execute(cmd: BlueprintCmd) -> Result<ExitCode> {
         BlueprintCmd::Lint(args) => lint::execute(args),
         BlueprintCmd::AddMcp(args) => add_mcp::execute(args),
         BlueprintCmd::AddPackage(args) => add_package::execute(args),
+        BlueprintCmd::Variable(cmd) => variable::execute(cmd),
         BlueprintCmd::Secret(cmd) => secret::execute(cmd),
         BlueprintCmd::AuthProxy(cmd) => auth_proxy::execute(cmd),
         BlueprintCmd::Capability(cmd) => capability::execute(cmd),

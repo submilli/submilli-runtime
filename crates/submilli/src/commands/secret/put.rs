@@ -1,10 +1,10 @@
 //! `submilli secret put <key>` — store a secret in the local secret store. The
-//! value is read from stdin so it never appears in the process's argument list.
+//! value is prompted for, or read from stdin, so it never appears in the
+//! process's argument list.
 
-use std::io::Read;
 use std::process::ExitCode;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
 
 use crate::commands::local;
 
@@ -14,15 +14,9 @@ pub struct Args {
 }
 
 pub fn execute(args: Args) -> Result<ExitCode> {
-    let mut value = String::new();
-    std::io::stdin()
-        .read_to_string(&mut value)
-        .context("reading secret value from stdin")?;
-    // Drop a single trailing newline so `echo secret | …` stores `secret`.
-    let value = value.strip_suffix('\n').unwrap_or(&value);
-
+    let value = local::read_secret_value(&args.key)?;
     let store = local::open_secret_store()?;
-    local::block_on(store.put(&args.key, value))?.map_err(|e| anyhow!("{e}"))?;
+    local::block_on(store.put(&args.key, &value))?.map_err(|e| anyhow!("{e}"))?;
     println!("Stored secret '{}'", args.key);
     Ok(ExitCode::SUCCESS)
 }

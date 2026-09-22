@@ -128,7 +128,7 @@ const VARIABLES_EXAMPLE: &str = "\
 # as `${vars.NAME}` — e.g. `filter: userId == ${vars.tenant_id}` to scope a
 # capability to the caller's own data. `required: true` rejects a session that
 # omits the variable; `default:` supplies a fallback (the two are mutually
-# exclusive).
+# exclusive). Declare one with `submilli blueprint variable add <name> --required`.
 # variables:
 #   tenant_id:
 #     required: true

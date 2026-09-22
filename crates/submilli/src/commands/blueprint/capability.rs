@@ -267,14 +267,11 @@ fn provided_entry(provided: &submilli_build::ProvidedCapability) -> Entry {
 
 fn render(sources: &[Source], blueprint: Option<&Blueprint>) -> String {
     let mut out = String::new();
-    if let Some(bp) = blueprint {
-        out.push_str(&format!(
-            "default: {} (rules below are first-match-wins)\n",
-            action_label(bp.default_action.unwrap_or_default().into())
-        ));
-    }
     for source in sources {
-        out.push_str(&format!("\n{}\n", source.name));
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&format!("{}\n", source.name));
         for entry in &source.entries {
             out.push_str(&format!("  {} — {}\n", entry.name, entry.summary));
             if !entry.fields.is_empty() {
@@ -543,7 +540,7 @@ mod tests {
             blueprint: Some(path.clone()),
         })
         .unwrap();
-        assert!(out.contains("default: deny"), "{out}");
+        assert!(out.starts_with("submilli:fs\n"), "{out}");
         assert!(
             out.contains("rule[main]: allow (filter: path glob \"*.csv\")"),
             "{out}"

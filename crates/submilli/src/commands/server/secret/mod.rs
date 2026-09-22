@@ -9,7 +9,7 @@ pub mod put;
 
 #[derive(Subcommand)]
 pub enum SecretCmd {
-    /// Store a secret; the value is read from stdin.
+    /// Store a secret; prompts for the value, or reads it from piped stdin.
     Put(put::Args),
     /// Delete a secret by key.
     Delete(delete::Args),

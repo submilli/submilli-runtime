@@ -1,12 +1,13 @@
 //! `submilli server secret put <key> [--server <url>]` — store a secret in the
-//! server's secret store. The value is read from stdin so it never appears in
-//! the process's argument list.
+//! server's secret store. The value is prompted for, or read from stdin, so it
+//! never appears in the process's argument list.
 
-use std::io::Read;
 use std::process::ExitCode;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::Deserialize;
+
+use crate::commands::local;
 
 #[derive(clap::Args)]
 pub struct Args {
@@ -24,12 +25,7 @@ struct ErrorResponse {
 }
 
 pub fn execute(args: Args) -> Result<ExitCode> {
-    let mut value = String::new();
-    std::io::stdin()
-        .read_to_string(&mut value)
-        .context("reading secret value from stdin")?;
-    // Drop a single trailing newline so `echo secret | …` stores `secret`.
-    let value = value.strip_suffix('\n').unwrap_or(&value);
+    let value = local::read_secret_value(&args.key)?;
 
     let base = args.server.trim_end_matches('/');
     let url = format!("{base}/v1/secrets");

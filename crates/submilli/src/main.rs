@@ -124,6 +124,7 @@ fn blueprint_label(cmd: &commands::blueprint::BlueprintCmd) -> &'static str {
         BlueprintCmd::Lint(_) => "blueprint.lint",
         BlueprintCmd::AddMcp(_) => "blueprint.add_mcp",
         BlueprintCmd::AddPackage(_) => "blueprint.add_package",
+        BlueprintCmd::Variable(_) => "blueprint.variable",
         BlueprintCmd::Secret(_) => "blueprint.secret",
         BlueprintCmd::AuthProxy(_) => "blueprint.auth_proxy",
         BlueprintCmd::Capability(_) => "blueprint.capability",
