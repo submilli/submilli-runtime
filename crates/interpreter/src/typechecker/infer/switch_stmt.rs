@@ -131,7 +131,13 @@ impl Inferer<'_> {
 
         let typed_default = if let Some(d) = default {
             let body_span = self.ast.stmt(d.body).span;
-            let env = self.build_default_narrow_env(&residual, &site, body_span);
+            let default_residual =
+                if saw_null.is_some() && matches!(site, ResidualSite::Scrutinee { .. }) {
+                    narrowing::strip_null(&residual)
+                } else {
+                    residual.clone()
+                };
+            let env = self.build_default_narrow_env(&default_residual, &site, body_span);
             self.push_narrow_frame(env.clone());
             self.switch_depth += 1;
             self.reachable = entry_reachable;

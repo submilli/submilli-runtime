@@ -307,7 +307,7 @@ fn spread_element_type(peeled_source: &Type) -> Option<Type> {
 /// a generic receiver (e.g. `new Map()` with no resolvable element types) whose
 /// parameters must be pinned by the enclosing call — from its arguments or its
 /// expected type — rather than at the receiver in isolation.
-fn type_contains_type_var(ty: &Type) -> bool {
+pub(crate) fn type_contains_type_var(ty: &Type) -> bool {
     match ty {
         Type::TypeVar(_) => true,
         Type::Array(elem) => type_contains_type_var(elem),
@@ -5491,11 +5491,6 @@ impl Inferer<'_> {
         expected: Option<&Type>,
         span: Span,
     ) -> (TypedExprKind, Type) {
-        // arrows can declare a type-guard predicate (`(x): x is T => …`).
-        // For Phase 1 the predicate is parsed but not yet resolved onto the
-        // function signature; consume the binding so the unused-var lint is
-        // happy and the parameter survives to Phase 2.
-        let _ = type_predicate;
         // Arrow parameters never reach `resolve_params`, so the duplicate check
         // has to be repeated here rather than inherited.
         self.report_duplicate_params(params.iter().map(|p| &p.name));
@@ -5593,8 +5588,19 @@ impl Inferer<'_> {
         // must NOT replace the body's inferred return type, since
         // the generic-arg unification reads the body type to bind
         // its `U`.
+        let predicate = type_predicate.as_ref().and_then(|pred| {
+            let params = typed_params
+                .iter()
+                .map(|p| crate::Param::new(p.name.name.clone(), p.ty.clone()))
+                .collect::<Vec<_>>();
+            self.resolve_type_predicate(pred, &params)
+        });
         let mut annotated_ret: Option<Type> = None;
         let ret_hint: Option<Type> = match (&return_ty_ann, hint_owned.as_ref()) {
+            _ if type_predicate.is_some() => {
+                annotated_ret = Some(Type::Boolean);
+                Some(Type::Boolean)
+            }
             (Some(ann), Some((_, hr))) => {
                 let t = self.resolve_type(ann);
                 // Skip when the hint return contains an unresolved
@@ -5629,6 +5635,18 @@ impl Inferer<'_> {
         // left alone: a `break` inside the body snapshots an empty range over
         // the fresh, shorter stack.
         let narrow_seed = self.enter_closure_narrow_boundary(span);
+        let prev_predicate = std::mem::replace(
+            &mut self.current_type_predicate,
+            predicate.as_ref().map(|pred| {
+                (
+                    pred.clone(),
+                    typed_params[pred.parameter_index as usize]
+                        .name
+                        .name
+                        .clone(),
+                )
+            }),
+        );
 
         // Save / set return-type frames. Stack-based so nested arrows
         // restore correctly.
@@ -5645,6 +5663,7 @@ impl Inferer<'_> {
         let (typed_body, body_ret) = match body {
             ArrowBody::Expr(e) => {
                 let (id, t) = self.infer_expr(e, ret_hint.as_ref());
+                self.validate_type_predicate_return(id, span);
                 // Re-emit the seeded regions inside the body, over a fresh read
                 // of the `const` — the closure then captures the ordinary
                 // binding and re-checks the cast per call.
@@ -5668,6 +5687,7 @@ impl Inferer<'_> {
 
         // Restore frames.
         self.exit_closure_narrow_boundary();
+        self.current_type_predicate = prev_predicate;
         self.inferred_returns = prev_collect;
         self.current_return = prev_return;
         self.scopes.pop();
@@ -5702,10 +5722,7 @@ impl Inferer<'_> {
         let arrow_ty = Type::Function {
             params: typed_params.iter().map(|p| p.ty.clone()).collect(),
             ret: Box::new(effective_ret.clone()),
-            // arrow predicates aren't resolved in Phase 2;
-            // they'd land here when arrow-function guards are wired
-            // through. For now, every arrow is None.
-            predicate: None,
+            predicate: predicate.map(Box::new),
             // arrows can declare rest params via
             // `(...xs: T[]) => …`; the parser lowers that into a
             // `TypedParam` with `rest: true` at the trailing slot.
@@ -7459,7 +7476,7 @@ impl Inferer<'_> {
                 .iter()
                 .any(|t| assignable(m, t, self.resolver()) || assignable(t, m, self.resolver()))
         });
-        if !related {
+        if !related && !super::narrowing::has_erased_member(&value_ty) {
             self.error_with_help(
                 span,
                 format!(

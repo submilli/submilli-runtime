@@ -455,17 +455,14 @@ impl Inferer<'_> {
                 let (inner_narrowings, inner_assigned) = self.pop_narrow_frame_capture();
                 let exits_normally = self.reachable;
                 let surviving = if exits_normally {
-                    assignment_narrowings(&inner_narrowings, &inner_assigned)
+                    inner_narrowings
                 } else {
                     narrowing::NarrowEnv::new()
                 };
                 self.scopes.pop();
                 self.merge_assigned_into_outer(inner_assigned, span);
-                // Re-installed after the merge, which would otherwise strip
-                // them: what a block assigned on its way to a normal exit is
-                // the state the enclosing flow continues with, so
-                // `{ s = "x"; }` narrows `s` for what follows exactly as the
-                // unbraced statement would.
+                // Both assignments and guards describe the block's normal exit.
+                // Installation filters out bindings whose lexical scope just ended.
                 if !surviving.is_empty() {
                     self.install_joined_narrowings(surviving, span);
                 }

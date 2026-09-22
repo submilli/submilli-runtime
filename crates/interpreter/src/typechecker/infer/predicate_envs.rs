@@ -235,6 +235,17 @@ impl<'a> Inferer<'a> {
             } => self
                 .predicate_envs_user_guard(&predicate, &args)
                 .unwrap_or_else(|| (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new())),
+            TypedExprKind::CallClosure { callee, args, .. } => {
+                let Type::Function {
+                    predicate: Some(predicate),
+                    ..
+                } = self.typed_ast.expr(callee).ty.peel().clone()
+                else {
+                    return (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new());
+                };
+                self.predicate_envs_user_guard(&predicate, &args)
+                    .unwrap_or_else(|| (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new()))
+            }
             TypedExprKind::GenericCall {
                 args,
                 type_predicate: Some(predicate),
@@ -266,6 +277,10 @@ impl<'a> Inferer<'a> {
             | TypedExprKind::GlobalRef { .. }
             | TypedExprKind::FieldAccess { .. }
             | TypedExprKind::IndexAccess { .. } => self.predicate_envs_truthiness(cond_expr_id),
+            TypedExprKind::OptionalChain { .. } => (
+                self.optional_chain_nonnull_env(cond_expr_id),
+                narrowing::NarrowEnv::new(),
+            ),
             _ => (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new()),
         }
     }
@@ -315,6 +330,24 @@ impl<'a> Inferer<'a> {
         let rhs = self.typed_ast.expr(rhs_id);
         let lhs_is_null = matches!(lhs.kind, TypedExprKind::Null);
         let rhs_is_null = matches!(rhs.kind, TypedExprKind::Null);
+        let chain_id = match (lhs_is_null, rhs_is_null) {
+            (false, true) => lhs_id,
+            (true, false) => rhs_id,
+            _ => return (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new()),
+        };
+        if matches!(
+            self.typed_ast.expr(chain_id).kind,
+            TypedExprKind::OptionalChain { .. }
+        ) {
+            let nonnull = self.optional_chain_nonnull_env(chain_id);
+            return if op == BinOp::Eq {
+                (narrowing::NarrowEnv::new(), nonnull)
+            } else {
+                (nonnull, narrowing::NarrowEnv::new())
+            };
+        }
+        let lhs = self.typed_ast.expr(lhs_id);
+        let rhs = self.typed_ast.expr(rhs_id);
         let path_expr = match (lhs_is_null, rhs_is_null) {
             (false, true) => lhs,
             (true, false) => rhs,
@@ -378,6 +411,56 @@ impl<'a> Inferer<'a> {
             BinOp::NotEq => (neq_env, eq_env),
             _ => unreachable!("matched Eq | NotEq above"),
         }
+    }
+
+    /// A non-null chain result proves every optional receiver was present.
+    /// A null result proves no individual field was null: an earlier receiver
+    /// may have short-circuited, so it deliberately contributes no false facts.
+    fn optional_chain_nonnull_env(&mut self, chain_id: ExprId) -> narrowing::NarrowEnv {
+        use crate::{BinOp, TypedChainPart, TypedExprKind};
+        let chain = self.typed_ast.expr(chain_id).clone();
+        let TypedExprKind::OptionalChain { base, parts } = chain.kind else {
+            return narrowing::NarrowEnv::new();
+        };
+        let mut env = narrowing::NarrowEnv::new();
+        let null = self.typed_ast.push_expr(TypedExpr {
+            kind: TypedExprKind::Null,
+            span: chain.span,
+            ty: Type::Null,
+        });
+        let mut receiver = base;
+        for part in parts {
+            let (TypedChainPart::Field {
+                name,
+                result_ty,
+                optional,
+                span,
+            }
+            | TypedChainPart::InterfaceProperty {
+                name,
+                result_ty,
+                optional,
+                span,
+                ..
+            }) = part
+            else {
+                return narrowing::NarrowEnv::new();
+            };
+            if optional {
+                env.extend(self.predicate_envs_eq_null(BinOp::NotEq, receiver, null).0);
+            }
+            let receiver_expr = self.typed_ast.expr(receiver);
+            if self.receiver_type_has_getter(receiver_expr, &name.name) {
+                return narrowing::NarrowEnv::new();
+            }
+            receiver = self.typed_ast.push_expr(TypedExpr {
+                kind: TypedExprKind::FieldAccess { receiver, name },
+                span,
+                ty: result_ty,
+            });
+        }
+        env.extend(self.predicate_envs_eq_null(BinOp::NotEq, receiver, null).0);
+        env
     }
 
     fn predicate_envs_in_operator(

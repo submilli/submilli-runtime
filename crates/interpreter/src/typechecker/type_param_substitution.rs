@@ -243,6 +243,12 @@ impl TypeParamSubstitution {
         arg_ty: &Type,
         types: TypeResolver<'_>,
     ) -> Result<(), UnifyError> {
+        let resolved = self.apply(param_ty);
+        if !super::infer::expr::type_contains_type_var(&resolved)
+            && assignable(arg_ty, &resolved, types)
+        {
+            return Ok(());
+        }
         let mut unifier = Unifier::new(self, Some(types));
         unifier.subtype_widening = true;
         unifier.unify(param_ty, arg_ty)
