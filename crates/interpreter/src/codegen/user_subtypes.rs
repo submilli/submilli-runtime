@@ -107,6 +107,7 @@ pub fn allocate_methods(ty: &Type, next_func_idx: &mut u32) -> UserSubtype {
     let to_json_func = take(next_func_idx);
     let equals_func = take(next_func_idx);
     let hash_func = take(next_func_idx);
+    *next_func_idx += 3; // JSON, equals, and hash implementation bodies.
     UserSubtype {
         ty: ty.clone(),
         to_string_func,
@@ -132,6 +133,9 @@ pub fn emit_method_function_entries(
 ) {
     for _ in subtypes {
         functions.function(intrinsics.to_string_fn);
+        functions.function(intrinsics.to_json_fn);
+        functions.function(intrinsics.equals_fn);
+        functions.function(intrinsics.hash_fn);
         functions.function(intrinsics.to_json_fn);
         functions.function(intrinsics.equals_fn);
         functions.function(intrinsics.hash_fn);
@@ -195,6 +199,15 @@ pub fn emit_method_bodies(
             string_vtable_global_idx,
         ));
 
+        for (body, params, result) in [
+            (subtype.hash_func + 1, 1, ref_to(intrinsics.string)),
+            (subtype.hash_func + 2, 2, ValType::I32),
+            (subtype.hash_func + 3, 1, ValType::I32),
+        ] {
+            code.function(&super::vtable_walk::guarded_body(
+                body, params, result, symbols,
+            ));
+        }
         code.function(&emit_subtype_to_json_body(
             subtype,
             intrinsics,
@@ -385,17 +398,14 @@ fn emit_subtype_to_json_vtable_body(
     let string_ref = ref_to(intrinsics.string);
     let object_null_ref = ref_null(intrinsics.object);
     let to_json_fn_ref = ref_to(intrinsics.to_json_fn);
-    let any_optional = fields.values().any(|f| f.optional);
 
-    let mut locals: Vec<(u32, ValType)> = vec![
+    let locals: Vec<(u32, ValType)> = vec![
         (1, object_shape_ref),
         (1, string_ref),
         (1, object_null_ref),
         (1, to_json_fn_ref),
+        (1, ValType::I32), // Whether any serializable field has been emitted.
     ];
-    if any_optional {
-        locals.push((1, ValType::I32));
-    }
     let mut f = Function::new(locals);
     let self_t = 1u32;
     let acc = 2u32;
@@ -430,10 +440,8 @@ fn emit_subtype_to_json_vtable_body(
     );
     f.instruction(&Instruction::LocalSet(acc));
 
-    if any_optional {
-        f.instruction(&Instruction::I32Const(1));
-        f.instruction(&Instruction::LocalSet(first_local));
-    }
+    f.instruction(&Instruction::I32Const(1));
+    f.instruction(&Instruction::LocalSet(first_local));
 
     for (idx, (field_name, field)) in fields.iter().enumerate() {
         let key_no_comma = format!("\"{}\":", json_escape_key(field_name));
@@ -449,6 +457,13 @@ fn emit_subtype_to_json_vtable_body(
         f.instruction(&Instruction::ArrayGet(intrinsics.object_fields));
         f.instruction(&Instruction::LocalSet(elem));
 
+        f.instruction(&Instruction::LocalGet(elem));
+        f.instruction(&Instruction::RefTestNonNull(HeapType::Concrete(
+            intrinsics.closure,
+        )));
+        f.instruction(&Instruction::I32Eqz);
+        f.instruction(&Instruction::If(BlockType::Empty));
+
         if field.optional {
             f.instruction(&Instruction::LocalGet(elem));
             f.instruction(&Instruction::RefIsNull);
@@ -457,42 +472,24 @@ fn emit_subtype_to_json_vtable_body(
         }
 
         f.instruction(&Instruction::LocalGet(acc));
-        if any_optional {
-            f.instruction(&Instruction::LocalGet(first_local));
-            f.instruction(&Instruction::If(BlockType::Result(string_ref)));
-            push_inline_string(
-                &mut f,
-                &key_no_comma,
-                intrinsics.string,
-                intrinsics.raw_string,
-                string_vtable_global_idx,
-            );
-            f.instruction(&Instruction::Else);
-            push_inline_string(
-                &mut f,
-                &key_with_comma,
-                intrinsics.string,
-                intrinsics.raw_string,
-                string_vtable_global_idx,
-            );
-            f.instruction(&Instruction::End);
-        } else if idx == 0 {
-            push_inline_string(
-                &mut f,
-                &key_no_comma,
-                intrinsics.string,
-                intrinsics.raw_string,
-                string_vtable_global_idx,
-            );
-        } else {
-            push_inline_string(
-                &mut f,
-                &key_with_comma,
-                intrinsics.string,
-                intrinsics.raw_string,
-                string_vtable_global_idx,
-            );
-        }
+        f.instruction(&Instruction::LocalGet(first_local));
+        f.instruction(&Instruction::If(BlockType::Result(string_ref)));
+        push_inline_string(
+            &mut f,
+            &key_no_comma,
+            intrinsics.string,
+            intrinsics.raw_string,
+            string_vtable_global_idx,
+        );
+        f.instruction(&Instruction::Else);
+        push_inline_string(
+            &mut f,
+            &key_with_comma,
+            intrinsics.string,
+            intrinsics.raw_string,
+            string_vtable_global_idx,
+        );
+        f.instruction(&Instruction::End);
         f.instruction(&Instruction::Call(string_concat_func_idx));
         f.instruction(&Instruction::LocalSet(acc));
 
@@ -517,14 +514,13 @@ fn emit_subtype_to_json_vtable_body(
         f.instruction(&Instruction::Call(string_concat_func_idx));
         f.instruction(&Instruction::LocalSet(acc));
 
-        if any_optional {
-            f.instruction(&Instruction::I32Const(0));
-            f.instruction(&Instruction::LocalSet(first_local));
-        }
+        f.instruction(&Instruction::I32Const(0));
+        f.instruction(&Instruction::LocalSet(first_local));
 
         if field.optional {
             f.instruction(&Instruction::End);
         }
+        f.instruction(&Instruction::End);
     }
 
     f.instruction(&Instruction::LocalGet(acc));

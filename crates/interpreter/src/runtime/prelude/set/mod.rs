@@ -31,6 +31,7 @@ use crate::runtime::gc_singleton::singleton_struct;
 use crate::runtime::host::{host_map_tombstone, host_object_vtable, write_submilli_array_struct};
 use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
 use crate::runtime::prelude::closure::{self, Closure};
+use crate::runtime::prelude::collection::{decode_key, encode_key, is_null_key};
 use crate::runtime::prelude::collection::{is_a, object_field, read_array_vals, unbox_bool};
 use crate::runtime::prelude::iterator::{
     IterKind, as_struct, build_iterator, iter_done, iter_yield, next_closure_type,
@@ -145,6 +146,9 @@ fn is_null(v: &Val) -> bool {
 
 /// `elem.vtable.hash(elem)` (slot 3).
 async fn hash(caller: &mut Caller<'_, StoreData>, elem: &Val) -> wasmtime::Result<i32> {
+    if is_null_key(caller, elem)? {
+        return Ok(0);
+    }
     match dispatch_vtable_slot(caller, elem, 3, &[]).await? {
         Val::I32(h) => Ok(h),
         other => Err(wasmtime::Error::msg(format!(
@@ -159,6 +163,11 @@ async fn equals(
     elem: &Val,
     slot: &Val,
 ) -> wasmtime::Result<bool> {
+    let left_null = is_null_key(caller, elem)?;
+    let right_null = is_null_key(caller, slot)?;
+    if left_null || right_null {
+        return Ok(left_null && right_null);
+    }
     match dispatch_vtable_slot(caller, elem, 2, &[*slot]).await? {
         Val::I32(b) => Ok(b != 0),
         other => Err(wasmtime::Error::msg(format!(
@@ -198,6 +207,8 @@ pub(super) async fn add(
     recv: &Val,
     value: &Val,
 ) -> wasmtime::Result<Val> {
+    let encoded_key = encode_key(caller, value)?;
+    let value = &encoded_key;
     let b = backing(caller, recv)?;
 
     let size = field_i32(caller, &b, F_SIZE)?;
@@ -242,6 +253,8 @@ pub(super) async fn has(
     recv: &Val,
     value: &Val,
 ) -> wasmtime::Result<bool> {
+    let encoded_key = encode_key(caller, value)?;
+    let value = &encoded_key;
     let b = backing(caller, recv)?;
     let elements = field_array(caller, &b, F_ELEMENTS)?;
     let cap = elements.len(&mut *caller)? as i32;
@@ -265,6 +278,8 @@ pub(super) async fn delete(
     recv: &Val,
     value: &Val,
 ) -> wasmtime::Result<bool> {
+    let encoded_key = encode_key(caller, value)?;
+    let value = &encoded_key;
     let b = backing(caller, recv)?;
     let elements = field_array(caller, &b, F_ELEMENTS)?;
     let order = field_array(caller, &b, F_ORDER)?;
@@ -415,6 +430,7 @@ pub(super) async fn for_each(
             continue;
         }
         let elem = elements.get(&mut *caller, idx as u32)?;
+        let elem = decode_key(caller, elem)?;
         f.call_void(caller, elem).await?;
     }
     Ok(())
@@ -522,6 +538,7 @@ fn set_next_step(
         pos += 1;
         if probe != -1 {
             let elem = elements.get(&mut *caller, probe as u32)?;
+            let elem = decode_key(caller, elem)?;
             let yielded = match kind {
                 IterKind::Keys | IterKind::Values => elem,
                 IterKind::Entries => {
@@ -592,6 +609,7 @@ async fn add_pass(
             continue;
         }
         let elem = elements.get(&mut *caller, idx as u32)?;
+        let elem = decode_key(caller, elem)?;
         let keep_it = match &keep {
             Keep::All => true,
             Keep::IfMember { member, want } => has(caller, member, &elem).await? == *want,
@@ -708,6 +726,7 @@ async fn relation(
             continue;
         }
         let elem = elements.get(&mut *caller, idx as u32)?;
+        let elem = decode_key(caller, elem)?;
         if has(caller, member, &elem).await? == fail_when_found {
             return Ok(false);
         }

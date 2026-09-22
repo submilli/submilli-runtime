@@ -402,6 +402,10 @@ async fn array_to_json(
         if i > 0 {
             out.push(u16::from(b','));
         }
+        if is_function(caller, elem)? {
+            out.extend("null".encode_utf16());
+            continue;
+        }
         match elem {
             Val::AnyRef(Some(_)) => {
                 let s = dispatch_vtable_slot(caller, elem, 1, &[]).await?;
@@ -556,8 +560,11 @@ async fn object_to_json(
     let entries = read_object_entries(caller, recv, "Object#toJson")?;
 
     let mut out: Vec<u16> = vec![u16::from(b'{')];
-    for (i, (name_units, value)) in entries.iter().enumerate() {
-        if i > 0 {
+    for (name_units, value) in &entries {
+        if is_function(caller, value)? {
+            continue;
+        }
+        if out.len() > 1 {
             out.push(u16::from(b','));
         }
 
@@ -1036,8 +1043,8 @@ fn uint8array_equals(
 // ---------------------------------------------------------------------------
 //
 // These mirror the Wasm vtables they replace. Closures (host-built iterator
-// closures) use the generic stub slots: both string slots render
-// `[object Object]`, `equals` is reference identity, `hash` is 0. The regex
+// closures) render `[object Object]` for toString and `null` for toJson;
+// `equals` is reference identity, `hash` is 0. The regex
 // types add a real `toString` (`/source/flags`, and a match box renders its
 // match text) over the same stub `toJson` (`{}`) / `equals` / `hash`.
 
@@ -1046,7 +1053,17 @@ fn build_closure_vtable(
     intr: &IntrinsicTypes,
 ) -> wasmtime::Result<[Func; 4]> {
     let to_string = object_object_slot(store, intr.to_string_fn.clone());
-    let to_json = object_object_slot(store, intr.to_json_fn.clone());
+    let to_json = Func::new_async(
+        &mut *store,
+        intr.to_json_fn.clone(),
+        |mut caller, _, results| {
+            Box::new(async move {
+                let value = write_submilli_string_struct(&mut caller, "null")?;
+                results[0] = Val::AnyRef(Some(value.to_anyref()));
+                Ok(())
+            })
+        },
+    );
     let equals = ref_identity_equals_slot(store, intr);
     let hash = zero_hash_slot(store, intr);
     Ok([to_string, to_json, equals, hash])
@@ -1478,6 +1495,46 @@ fn read_array_backing(
         out.push(raw.get(&mut *caller, i)?);
     }
     Ok(out)
+}
+
+/// Guest structural bodies share the host walk budget and unwind it on throws.
+pub(crate) fn install_walk_guards(
+    linker: &mut wasmtime::Linker<StoreData>,
+) -> wasmtime::Result<()> {
+    let ty = wasmtime::FuncType::new(linker.engine(), [], []);
+    linker.func_new(
+        super::MODULE_NAME,
+        crate::mangle::prelude("vtable_walk_enter").as_str(),
+        ty.clone(),
+        |mut caller, _, _| enter_walk(&mut caller),
+    )?;
+    linker.func_new(
+        super::MODULE_NAME,
+        crate::mangle::prelude("vtable_walk_leave").as_str(),
+        ty,
+        |mut caller, _, _| {
+            leave_walk(&mut caller);
+            Ok(())
+        },
+    )?;
+    Ok(())
+}
+
+pub(crate) fn declare_walk_guards(defs: &mut crate::PackageDeclaration) {
+    for name in ["vtable_walk_enter", "vtable_walk_leave"] {
+        super::declare_method(
+            defs,
+            name,
+            crate::mangle::prelude(name),
+            vec![],
+            crate::Type::Void,
+        );
+    }
+}
+
+fn is_function(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime::Result<bool> {
+    let closure = build_intrinsic_types(caller.engine())?.closure;
+    super::collection::is_a(caller, value, &closure)
 }
 
 #[cfg(test)]

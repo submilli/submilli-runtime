@@ -1105,12 +1105,26 @@ impl Inferer<'_> {
                 let either_is_null_literal =
                     matches!(&self.ast.expr(lhs).kind, crate::ExprKind::Null)
                         || matches!(&self.ast.expr(rhs).kind, crate::ExprKind::Null);
-                let rhs_hint = if matches!(lt, Type::Error) || either_is_null_literal {
+                let enum_lhs = lt.primitive_behavior() != lt.peel();
+                let rhs_hint = if matches!(lt, Type::Error) || either_is_null_literal || enum_lhs {
                     None
                 } else {
-                    Some(lt)
+                    Some(lt.clone())
                 };
                 let (typed_rhs, rt) = self.infer_expr(rhs, rhs_hint.as_ref());
+                if enum_lhs && !either_is_null_literal {
+                    let expected = if is_enum_or_enum_union(&rt) {
+                        &lt
+                    } else {
+                        lt.primitive_behavior()
+                    };
+                    if !assignable(&rt, expected, self.resolver()) {
+                        self.error(
+                            self.ast.expr(rhs).span,
+                            format!("expected `{expected}`, got `{rt}`"),
+                        );
+                    }
+                }
                 // `void` has no runtime value to compare, and the comparison
                 // otherwise typechecks clean and panics in codegen.
                 let rhs_void = rt.carries_void().then(|| rt.clone());
@@ -4031,7 +4045,7 @@ impl Inferer<'_> {
         ty: &Type,
         span: Span,
     ) -> ExprId {
-        let peeled = ty.peel();
+        let peeled = ty.primitive_behavior();
         if matches!(peeled, Type::String | Type::StringLiteral(_)) {
             return expr_id;
         }
@@ -8040,11 +8054,19 @@ fn enum_variant_help<'a>(
     }
 }
 
+fn is_enum_or_enum_union(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::NumberEnum { .. } | Type::StringEnum { .. } => true,
+        Type::Union(members) => members.iter().all(is_enum_or_enum_union),
+        _ => false,
+    }
+}
+
 /// The pairs `+` is defined for, and the result. The single source of truth for both
 /// the `+` arm and the narrowing hint it emits: a hint may only claim a guard is the
 /// fix when the guarded pair is one this accepts.
 fn plus_result(lt: &Type, rt: &Type) -> Option<Type> {
-    match (lt.peel(), rt.peel()) {
+    match (lt.primitive_behavior(), rt.primitive_behavior()) {
         (Type::Number, Type::Number) => Some(Type::Number),
         (Type::String, Type::String) => Some(Type::String),
         // Mixed `number` ↔ `bigint` is rejected, so no widening arm here.
@@ -8055,7 +8077,7 @@ fn plus_result(lt: &Type, rt: &Type) -> Option<Type> {
 
 /// [`plus_result`] for `-`, `*`, `/`, `%`, `**` — same role, no string arm.
 fn arithmetic_result(lt: &Type, rt: &Type) -> Option<Type> {
-    match (lt.peel(), rt.peel()) {
+    match (lt.primitive_behavior(), rt.primitive_behavior()) {
         (Type::Number, Type::Number) => Some(Type::Number),
         (Type::BigInt, Type::BigInt) => Some(Type::BigInt),
         _ => None,
@@ -8066,7 +8088,7 @@ fn arithmetic_result(lt: &Type, rt: &Type) -> Option<Type> {
 /// compare lexicographically, and literal types order as their widened base.
 fn ordering_accepts(lt: &Type, rt: &Type) -> bool {
     matches!(
-        (lt.peel(), rt.peel()),
+        (lt.primitive_behavior(), rt.primitive_behavior()),
         (
             Type::Number | Type::NumberLiteral(_),
             Type::Number | Type::NumberLiteral(_)
@@ -8081,7 +8103,7 @@ fn ordering_accepts(lt: &Type, rt: &Type) -> bool {
 /// [`plus_result`] for unary `-` / `+`. `unknown` is absent because the call site
 /// answers it with its own "narrow first" diagnostic before asking this.
 fn unary_arith_result(op: UnOp, ty: &Type) -> Option<Type> {
-    match ty.peel() {
+    match ty.primitive_behavior() {
         Type::BigInt => Some(Type::BigInt),
         Type::Number | Type::NumberLiteral(_) | Type::Error => Some(Type::Number),
         // `+s` is JS's explicit string→number coercion and the one TS keeps; it

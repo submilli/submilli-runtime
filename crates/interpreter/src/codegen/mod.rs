@@ -23,6 +23,7 @@ pub mod string_pool;
 pub mod symbol_table;
 pub mod throw;
 pub mod user_subtypes;
+mod vtable_walk;
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};

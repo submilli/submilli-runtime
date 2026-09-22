@@ -2036,13 +2036,13 @@ fn emit_binary(
         // by the inferer.
         BinOp::Add => match result_ty {
             Type::Number => {
-                emit_expr(emitter, ctx, lhs);
-                emit_expr(emitter, ctx, rhs);
+                emit_primitive_operand(emitter, ctx, lhs);
+                emit_primitive_operand(emitter, ctx, rhs);
                 emitter.instruction(Instruction::F64Add);
             }
             Type::String => {
-                emit_expr(emitter, ctx, lhs);
-                emit_expr(emitter, ctx, rhs);
+                emit_primitive_operand(emitter, ctx, lhs);
+                emit_primitive_operand(emitter, ctx, rhs);
                 let idx = ctx
                     .symbols
                     .prelude_func_idx("string_concat")
@@ -2066,8 +2066,8 @@ fn emit_binary(
                 return;
             }
             debug_assert!(matches!(result_ty, Type::Number));
-            emit_expr(emitter, ctx, lhs);
-            emit_expr(emitter, ctx, rhs);
+            emit_primitive_operand(emitter, ctx, lhs);
+            emit_primitive_operand(emitter, ctx, rhs);
             let inst = match op {
                 BinOp::Sub => Instruction::F64Sub,
                 BinOp::Mul => Instruction::F64Mul,
@@ -2086,8 +2086,8 @@ fn emit_binary(
                 return;
             }
             debug_assert!(matches!(result_ty, Type::Number));
-            emit_expr(emitter, ctx, lhs);
-            emit_expr(emitter, ctx, rhs);
+            emit_primitive_operand(emitter, ctx, lhs);
+            emit_primitive_operand(emitter, ctx, rhs);
             let idx = ctx
                 .symbols
                 .func_idx(&crate::runtime::prelude::math::math_key("pow"))
@@ -2105,9 +2105,9 @@ fn emit_binary(
             // is evaluated exactly once (preserves side-effect order).
             let a = emitter.add_anonymous_local(ValType::F64);
             let b = emitter.add_anonymous_local(ValType::F64);
-            emit_expr(emitter, ctx, lhs);
+            emit_primitive_operand(emitter, ctx, lhs);
             emitter.instruction(Instruction::LocalSet(a));
-            emit_expr(emitter, ctx, rhs);
+            emit_primitive_operand(emitter, ctx, rhs);
             emitter.instruction(Instruction::LocalSet(b));
             // Build `a - trunc(a/b)*b` on the stack.
             emitter.instruction(Instruction::LocalGet(a));
@@ -2122,13 +2122,13 @@ fn emit_binary(
         BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
             // bigint → inline `bigint.cmp` host call; number → f64 ops;
             // string → `string_cmp` (signed lexicographic diff) vs 0.
-            let operand_ty = ctx.ta.expr(lhs).ty.peel().clone();
+            let operand_ty = ctx.ta.expr(lhs).ty.primitive_behavior().clone();
             if matches!(operand_ty, Type::BigInt) {
                 emit_bigint_cmp_inline(emitter, ctx, lhs, rhs, op);
                 return;
             }
-            emit_expr(emitter, ctx, lhs);
-            emit_expr(emitter, ctx, rhs);
+            emit_primitive_operand(emitter, ctx, lhs);
+            emit_primitive_operand(emitter, ctx, rhs);
             if matches!(operand_ty, Type::String | Type::StringLiteral(_)) {
                 let idx = ctx
                     .symbols
@@ -2220,15 +2220,15 @@ fn emit_binary(
                 emit_bigint_cmp_eq_inline(emitter, ctx, lhs, rhs, op);
                 return;
             }
-            let operand_val = ctx.symbols.value_type(&operand_ty);
+            let operand_val = ctx.symbols.value_type(operand_ty.primitive_behavior());
             let string_idx = ctx
                 .symbols
                 .string_type_idx()
                 .expect("string type registered with intrinsics");
             match operand_val {
                 ValType::F64 => {
-                    emit_expr(emitter, ctx, lhs);
-                    emit_expr(emitter, ctx, rhs);
+                    emit_primitive_operand(emitter, ctx, lhs);
+                    emit_primitive_operand(emitter, ctx, rhs);
                     emitter.instruction(if matches!(op, BinOp::Eq) {
                         Instruction::F64Eq
                     } else {
@@ -2344,6 +2344,15 @@ fn emit_binary(
                 "BinOp::NullishCoalesce should be lifted into TypedExprKind::NullishCoalesce by infer"
             );
         }
+    }
+}
+
+fn emit_primitive_operand(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, expr: ExprId) {
+    emit_expr(emitter, ctx, expr);
+    let ty = &ctx.ta.expr(expr).ty;
+    if matches!(ty.primitive_behavior(), Type::Number) && ctx.symbols.value_type(ty) != ValType::F64
+    {
+        super::cast::emit_cast_to(emitter, ctx, &Type::Number);
     }
 }
 
@@ -3323,7 +3332,7 @@ fn emit_unary(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, op: UnOp, operand
         UnOp::Neg => {
             // bigint negation routes to inline host call.
             if matches!(ctx.ta.expr(operand).ty.peel(), Type::BigInt) {
-                emit_expr(emitter, ctx, operand);
+                emit_primitive_operand(emitter, ctx, operand);
                 emit_bigint_extract_to_stack(emitter, ctx);
                 let host_idx = ctx
                     .symbols
@@ -3335,14 +3344,14 @@ fn emit_unary(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, op: UnOp, operand
                 emit_bigint_wrap_host_result(emitter, ctx, host_idx);
                 return;
             }
-            emit_expr(emitter, ctx, operand);
+            emit_primitive_operand(emitter, ctx, operand);
             emitter.instruction(Instruction::F64Neg);
         }
         UnOp::Pos => {
             // On a string, `+` is the explicit numeric coercion and lowers to
             // the same host parse `Number(s)` calls. On a number it is the
             // identity, so the operand's value is already what we want.
-            emit_expr(emitter, ctx, operand);
+            emit_primitive_operand(emitter, ctx, operand);
             if ctx.ta.expr(operand).ty.is_string_shaped() {
                 let host_idx = ctx
                     .symbols
@@ -3444,6 +3453,11 @@ fn emit_method_call_with_receiver_on_stack(
     crate::codegen::field_guards::attach(emitter, ctx, &concrete_receiver);
     let direct_key = crate::mangle::extend(iface, method);
     if let Some(func_idx) = ctx.symbols.func_idx(&direct_key) {
+        if matches!(recv_ty.primitive_behavior(), Type::Number)
+            && ctx.symbols.value_type(recv_ty) != ValType::F64
+        {
+            super::cast::emit_cast_to(emitter, ctx, &Type::Number);
+        }
         // Direct or Static dispatch. The receiver is on the stack;
         // adjust per the interface's dispatch kind:
         // - `Dispatch::Direct` — keep it (with a defensive

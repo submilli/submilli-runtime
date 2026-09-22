@@ -1877,7 +1877,7 @@ pub(super) fn binary_op_text(op: BinOp) -> &'static str {
 /// must ask exactly what the failure asked, or it recommends a fix that doesn't
 /// apply to the site.
 pub(super) fn compound_arith_result(op: BinOp, lt: &Type, rt: &Type) -> Option<Type> {
-    match (op, lt.peel(), rt.peel()) {
+    match (op, lt.primitive_behavior(), rt.primitive_behavior()) {
         (_, Type::Error, _) | (_, _, Type::Error) => Some(Type::Error),
         (BinOp::Add, Type::Number, Type::Number) => Some(Type::Number),
         (BinOp::Add, Type::String, Type::String) => Some(Type::String),

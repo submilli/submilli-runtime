@@ -405,6 +405,36 @@ impl Type {
         }
     }
 
+    /// The primitive behavior of an enum, without changing its nominal identity.
+    pub fn primitive_behavior(&self) -> &Type {
+        match self.peel() {
+            Type::NumberEnum { .. } => &Type::Number,
+            Type::StringEnum { .. } => &Type::String,
+            Type::Union(members)
+                if members
+                    .iter()
+                    .any(|member| matches!(member.peel(), Type::NumberEnum { .. }))
+                    && members.iter().all(|member| {
+                        matches!(
+                            member.primitive_behavior(),
+                            Type::Number | Type::NumberLiteral(_)
+                        )
+                    }) =>
+            {
+                &Type::Number
+            }
+            Type::Union(members)
+                if members
+                    .iter()
+                    .any(|member| matches!(member.peel(), Type::StringEnum { .. }))
+                    && members.iter().all(Type::is_string_shaped) =>
+            {
+                &Type::String
+            }
+            ty => ty,
+        }
+    }
+
     /// Whether every part of this type is a string — a `string`, a
     /// string-literal type, or a union of those.
     ///
@@ -415,7 +445,7 @@ impl Type {
     /// asks the `any` question.
     pub fn is_string_shaped(&self) -> bool {
         match self.peel() {
-            Type::String | Type::StringLiteral(_) => true,
+            Type::String | Type::StringLiteral(_) | Type::StringEnum { .. } => true,
             Type::Union(members) => members.iter().all(Type::is_string_shaped),
             _ => false,
         }
@@ -426,7 +456,7 @@ impl Type {
     /// first" help, so `string | null` gets it.
     pub fn contains_string(&self) -> bool {
         match self.peel() {
-            Type::String | Type::StringLiteral(_) => true,
+            Type::String | Type::StringLiteral(_) | Type::StringEnum { .. } => true,
             Type::Union(members) => members.iter().any(Type::contains_string),
             _ => false,
         }
@@ -492,7 +522,7 @@ impl Type {
     /// interfaces (`Number`, `Array`, `Object`, …) live in the prelude package.
     pub fn interface_routing(&self) -> Option<(MangledName, &str, &str, Vec<Type>)> {
         let prelude = crate::mangle::PRELUDE_PACKAGE;
-        match self.peel() {
+        match self.primitive_behavior() {
             Type::Number => Some((
                 crate::mangle::prelude("Number"),
                 prelude,

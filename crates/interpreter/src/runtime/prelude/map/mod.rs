@@ -35,6 +35,7 @@ use crate::runtime::gc_singleton::{singleton_array, singleton_struct};
 use crate::runtime::host::{host_map_tombstone, host_object_vtable, write_submilli_array_struct};
 use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
 use crate::runtime::prelude::closure::{self, Closure};
+use crate::runtime::prelude::collection::{decode_key, encode_key, is_null_key};
 use crate::runtime::prelude::collection::{is_a, object_field, read_array_vals, unbox_bool};
 use crate::runtime::prelude::iterator::{
     IterKind, as_struct, build_iterator, iter_done, iter_yield, next_closure_type,
@@ -185,6 +186,9 @@ fn is_null(v: &Val) -> bool {
 
 /// `key.vtable.hash(key)` (slot 3).
 async fn hash(caller: &mut Caller<'_, StoreData>, key: &Val) -> wasmtime::Result<i32> {
+    if is_null_key(caller, key)? {
+        return Ok(0);
+    }
     match dispatch_vtable_slot(caller, key, 3, &[]).await? {
         Val::I32(h) => Ok(h),
         other => Err(wasmtime::Error::msg(format!(
@@ -199,6 +203,11 @@ async fn equals(
     key: &Val,
     slot: &Val,
 ) -> wasmtime::Result<bool> {
+    let left_null = is_null_key(caller, key)?;
+    let right_null = is_null_key(caller, slot)?;
+    if left_null || right_null {
+        return Ok(left_null && right_null);
+    }
     match dispatch_vtable_slot(caller, key, 2, &[*slot]).await? {
         Val::I32(b) => Ok(b != 0),
         other => Err(wasmtime::Error::msg(format!(
@@ -236,6 +245,8 @@ pub(super) async fn get(
     recv: &Val,
     key: &Val,
 ) -> wasmtime::Result<Val> {
+    let encoded_key = encode_key(caller, key)?;
+    let key = &encoded_key;
     let b = backing(caller, recv)?;
     let keys = field_array(caller, &b, F_KEYS)?;
     let values = field_array(caller, &b, F_VALUES)?;
@@ -259,6 +270,8 @@ pub(super) async fn has(
     recv: &Val,
     key: &Val,
 ) -> wasmtime::Result<bool> {
+    let encoded_key = encode_key(caller, key)?;
+    let key = &encoded_key;
     let b = backing(caller, recv)?;
     let keys = field_array(caller, &b, F_KEYS)?;
     let cap = keys.len(&mut *caller)? as i32;
@@ -284,6 +297,8 @@ pub(super) async fn set(
     key: &Val,
     value: &Val,
 ) -> wasmtime::Result<Val> {
+    let encoded_key = encode_key(caller, key)?;
+    let key = &encoded_key;
     let b = backing(caller, recv)?;
 
     let size = field_i32(caller, &b, F_SIZE)?;
@@ -332,6 +347,8 @@ pub(super) async fn delete(
     recv: &Val,
     key: &Val,
 ) -> wasmtime::Result<bool> {
+    let encoded_key = encode_key(caller, key)?;
+    let key = &encoded_key;
     let b = backing(caller, recv)?;
     let keys = field_array(caller, &b, F_KEYS)?;
     let values = field_array(caller, &b, F_VALUES)?;
@@ -472,6 +489,7 @@ pub(super) async fn for_each(
         }
         let value = values.get(&mut *caller, idx as u32)?;
         let key = keys.get(&mut *caller, idx as u32)?;
+        let key = decode_key(caller, key)?;
         f.call_void_args(caller, &[value, key]).await?;
     }
     Ok(())
@@ -591,6 +609,7 @@ fn map_next_step(
         pos += 1;
         if probe != -1 {
             let key = keys.get(&mut *caller, probe as u32)?;
+            let key = decode_key(caller, key)?;
             let value = values.get(&mut *caller, probe as u32)?;
             let yielded = match kind {
                 IterKind::Keys => key,
@@ -755,6 +774,7 @@ pub(crate) fn string_entries(
             continue;
         }
         let key = keys.get(&mut *caller, idx as u32)?;
+        let key = decode_key(caller, key)?;
         let value = values.get(&mut *caller, idx as u32)?;
         out.push((
             crate::runtime::host::read_string_arg(caller, &key, "map entry key")?,

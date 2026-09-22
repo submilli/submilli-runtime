@@ -1,5 +1,4 @@
 // test262: test/built-ins/Map/prototype/set/append-new-values.js
-// expect-fail: null Map keys trap at runtime (the equals/hash vtable dispatch on a null ref) — the standard appends a null-keyed entry
 // Adapted: the Symbol key is dropped by design; the mixed-entry iterable
 // constructor is replaced by set() calls (pinned separately by
 // prototype/clear/clear-map.ts); results pop() rewritten as index access over

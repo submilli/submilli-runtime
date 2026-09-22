@@ -480,10 +480,10 @@ fn assignable_rec(
         (Type::GenericParam { .. }, _) | (_, Type::GenericParam { .. }) => false,
         // Explicit before the `==` fallback, which would reject `StringLiteral("foo") <: String`.
         (Type::StringLiteral(a), Type::StringLiteral(b)) => a == b,
-        (Type::StringLiteral(_), Type::String) => true,
+        (Type::StringLiteral(_) | Type::StringEnum { .. }, Type::String) => true,
         (Type::String, Type::StringLiteral(_)) => false,
         (Type::NumberLiteral(a), Type::NumberLiteral(b)) => a == b,
-        (Type::NumberLiteral(_), Type::Number) => true,
+        (Type::NumberLiteral(_) | Type::NumberEnum { .. }, Type::Number) => true,
         (Type::Number, Type::NumberLiteral(_)) => false,
         (Type::Array(ae), Type::Array(ee)) => assignable_rec(ae, ee, types, seen),
         (Type::Tuple(aa), Type::Tuple(ae)) => {

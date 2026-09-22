@@ -665,7 +665,7 @@ pub fn emit_method_bodies(
         &mut to_json,
         intrinsics,
         string_vtable_global_idx,
-        "[object Function]",
+        "null",
     );
     to_json.instruction(&wasm_encoder::Instruction::End);
     code.function(&to_json);

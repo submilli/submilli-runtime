@@ -216,6 +216,9 @@ pub fn emit_coerce_to_wasm_slot(
         return;
     }
     match (&source_val, &target_val) {
+        (ValType::Ref(_), ValType::F64) => {
+            emit_cast_to(emitter, ctx, &Type::Number);
+        }
         // Primitive into a boxed slot.
         (ValType::F64 | ValType::I32, ValType::Ref(_)) => emit_box(emitter, ctx, source_ty),
         // Ref subtypes — WasmGC subtyping carries the value; no instruction needed.

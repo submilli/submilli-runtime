@@ -507,6 +507,8 @@ impl DependencyUsage {
             "string_cmp",
             "string_concat",
             "string_eq",
+            "vtable_walk_enter",
+            "vtable_walk_leave",
         ] {
             self.values.insert(crate::mangle::prelude(name));
         }

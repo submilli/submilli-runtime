@@ -151,3 +151,28 @@ pub(crate) fn unbox_bool(caller: &mut Caller<'_, StoreData>, val: &Val) -> wasmt
         ))),
     }
 }
+
+/// Empty buckets use null, so a stored null key needs a private sentinel.
+pub(crate) fn encode_key(caller: &mut Caller<'_, StoreData>, key: &Val) -> wasmtime::Result<Val> {
+    if matches!(key, Val::AnyRef(None)) {
+        crate::runtime::host::host_collection_null(caller)
+    } else {
+        Ok(*key)
+    }
+}
+
+pub(crate) fn decode_key(caller: &mut Caller<'_, StoreData>, key: Val) -> wasmtime::Result<Val> {
+    if is_null_key(caller, &key)? {
+        Ok(Val::null_any_ref())
+    } else {
+        Ok(key)
+    }
+}
+
+pub(crate) fn is_null_key(caller: &mut Caller<'_, StoreData>, key: &Val) -> wasmtime::Result<bool> {
+    let sentinel = crate::runtime::host::host_collection_null(caller)?;
+    match (key, sentinel) {
+        (Val::AnyRef(Some(a)), Val::AnyRef(Some(b))) => wasmtime::Rooted::ref_eq(&*caller, a, &b),
+        _ => Ok(false),
+    }
+}

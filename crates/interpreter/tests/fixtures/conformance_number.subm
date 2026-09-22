@@ -15,7 +15,7 @@ function main(): void {
 
   assert((255).toString(2) === "11111111", "binary toString");
   assert((0.1 + 0.2).toFixed(1) === "0.3", "toFixed rounds the famous sum");
-  assert((1e21).toFixed(2) === "1000000000000000000000", "huge values fall back to toString (full decimal — documented divergence from JS exponential)");
+  assert((1e21).toFixed(2) === "1e+21", "huge values fall back to exponential toString");
 
   assert(Number.MAX_SAFE_INTEGER + 1 === Number.MAX_SAFE_INTEGER + 2, "precision loss past 2^53");
   assert(Number.isSafeInteger(Number.MAX_SAFE_INTEGER), "max safe integer is safe");

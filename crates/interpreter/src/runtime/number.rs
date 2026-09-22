@@ -15,6 +15,8 @@ pub fn format_number_js(n: f64) -> String {
         }
     } else if n == 0.0 {
         "0".to_string()
+    } else if n.abs() >= 1e21 || n.abs() < 1e-6 {
+        jsify_exponent(&format!("{n:e}"))
     } else {
         n.to_string()
     }

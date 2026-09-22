@@ -744,6 +744,7 @@ impl ClassPlan {
             class.to_string_func_idx = take(next_func_idx);
             class.to_json_func_idx = take(next_func_idx);
             class.hash_func_idx = take(next_func_idx);
+            *next_func_idx += 3; // Guarded equals, JSON, and hash implementation bodies.
         }
     }
 
@@ -784,6 +785,9 @@ impl ClassPlan {
             functions.function(intrinsics.field_setter);
             functions.function(intrinsics.equals_fn);
             functions.function(intrinsics.to_string_fn);
+            functions.function(intrinsics.to_json_fn);
+            functions.function(intrinsics.hash_fn);
+            functions.function(intrinsics.equals_fn);
             functions.function(intrinsics.to_json_fn);
             functions.function(intrinsics.hash_fn);
         }
@@ -891,9 +895,11 @@ impl ClassPlan {
                 .symbols
                 .intrinsic_type_indices()
                 .expect("intrinsics declared by codegen entry");
-            code.function(&emit_class_equals_body(
-                class.fields.len() as u32,
-                intrinsics,
+            code.function(&super::vtable_walk::guarded_body(
+                class.hash_func_idx + 1,
+                2,
+                ValType::I32,
+                ctx.symbols,
             ));
             let string_vtable_global_idx = ctx
                 .symbols
@@ -918,6 +924,22 @@ impl ClassPlan {
             code.function(&user_method_thunk("toString").unwrap_or_else(|| {
                 emit_class_to_string_body(intrinsics, string_vtable_global_idx)
             }));
+            code.function(&super::vtable_walk::guarded_body(
+                class.hash_func_idx + 2,
+                1,
+                ref_to(intrinsics.string),
+                ctx.symbols,
+            ));
+            code.function(&super::vtable_walk::guarded_body(
+                class.hash_func_idx + 3,
+                1,
+                ValType::I32,
+                ctx.symbols,
+            ));
+            code.function(&emit_class_equals_body(
+                class.fields.len() as u32,
+                intrinsics,
+            ));
             code.function(&user_method_thunk("toJson").unwrap_or_else(|| {
                 emit_class_to_json_body(
                     &class.fields,
@@ -1924,6 +1946,7 @@ fn emit_class_to_json_body(
             }),
         ),
         (1, ref_to(intrinsics.to_json_fn)),
+        (1, ValType::I32),
     ];
     let mut f = Function::new(locals);
     let (fields_arr, acc, elem, tj_fn) = (1u32, 2u32, 3u32, 4u32);
@@ -1941,25 +1964,30 @@ fn emit_class_to_json_body(
     push_str(&mut f, "{");
     f.instruction(&Instruction::LocalSet(acc));
 
-    for (i, (slot, name)) in sorted.iter().enumerate() {
-        let key = if i == 0 {
-            format!(
-                "\"{}\":",
-                crate::codegen::user_subtypes::json_escape_key(name)
-            )
-        } else {
-            format!(
-                ",\"{}\":",
-                crate::codegen::user_subtypes::json_escape_key(name)
-            )
-        };
-
+    for (slot, name) in &sorted {
+        let key = format!(
+            "\"{}\":",
+            crate::codegen::user_subtypes::json_escape_key(name)
+        );
         f.instruction(&Instruction::LocalGet(fields_arr));
         f.instruction(&Instruction::I32Const(*slot as i32));
         f.instruction(&Instruction::ArrayGet(intrinsics.object_fields));
         f.instruction(&Instruction::LocalSet(elem));
 
+        f.instruction(&Instruction::LocalGet(elem));
+        f.instruction(&Instruction::RefTestNonNull(HeapType::Concrete(
+            intrinsics.closure,
+        )));
+        f.instruction(&Instruction::I32Eqz);
+        f.instruction(&Instruction::If(BlockType::Empty));
         f.instruction(&Instruction::LocalGet(acc));
+        f.instruction(&Instruction::LocalGet(5));
+        f.instruction(&Instruction::If(BlockType::Result(string_ref)));
+        push_str(&mut f, ",");
+        f.instruction(&Instruction::Else);
+        push_str(&mut f, "");
+        f.instruction(&Instruction::End);
+        f.instruction(&Instruction::Call(string_concat_func_idx));
         push_str(&mut f, &key);
         f.instruction(&Instruction::Call(string_concat_func_idx));
         f.instruction(&Instruction::LocalSet(acc));
@@ -1988,6 +2016,9 @@ fn emit_class_to_json_body(
         f.instruction(&Instruction::End);
         f.instruction(&Instruction::Call(string_concat_func_idx));
         f.instruction(&Instruction::LocalSet(acc));
+        f.instruction(&Instruction::I32Const(1));
+        f.instruction(&Instruction::LocalSet(5));
+        f.instruction(&Instruction::End);
     }
 
     f.instruction(&Instruction::LocalGet(acc));

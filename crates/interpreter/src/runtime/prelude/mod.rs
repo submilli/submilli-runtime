@@ -46,6 +46,7 @@ pub use declaration::{
 /// call time, not here. The store-bound vtable globals install separately via
 /// [`install_vtables`].
 pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    vtable::install_walk_guards(linker)?;
     console::install(linker)?;
     error::install(linker)?;
     string::install(linker)?;
@@ -84,6 +85,7 @@ pub(crate) fn install_vtables(
 /// to their Rust impls (see the module doc).
 pub fn package_declaration() -> PackageDeclaration {
     let mut defs = PackageDeclaration::with_package(MODULE_NAME);
+    vtable::declare_walk_guards(&mut defs);
     console::declare(&mut defs);
     string::declare(&mut defs);
     array::declare(&mut defs);

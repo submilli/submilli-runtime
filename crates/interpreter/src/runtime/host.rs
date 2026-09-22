@@ -61,6 +61,8 @@ fn install_prelude(
     let intr = build_intrinsic_types(store.engine())?;
     let map_tombstone =
         super::prelude::map::build_tombstone(store, intr.object.clone(), vtables.object)?;
+    let collection_null =
+        super::prelude::map::build_tombstone(store, intr.object.clone(), vtables.object)?;
     let temporal = super::prelude::temporal::install_abi(linker, store, &intr)?;
     let error_subclass_type =
         super::prelude::error::build_error_subclass_types(store.engine(), &intr)?.1;
@@ -91,6 +93,7 @@ fn install_prelude(
         opaque_vtable: vtables.opaque,
         temporal,
         map_tombstone,
+        collection_null,
         error_type: intr.error,
         error_subclass_type,
         error_vtable: error_host.vtable,
@@ -619,6 +622,7 @@ pub struct HostAbi {
     // The host-owned `Map`/`Set` tombstone sentinel — a bare `$Object` marking a
     // deleted probe slot. Compared by reference identity during probing.
     pub(crate) map_tombstone: Global,
+    pub(crate) collection_null: Global,
     pub(crate) error_type: StructType,
     /// The one struct type shared by every built-in `Error` subclass —
     /// identical shape, so they canonicalize together; the vtables carry the
@@ -757,6 +761,13 @@ pub(crate) fn host_map_tombstone(
 ) -> wasmtime::Result<Val> {
     host_vtable(ctx, |abi| abi.map_tombstone)
 }
+/// Private non-null representation of a null collection key.
+pub(crate) fn host_collection_null(
+    ctx: &mut impl AsContextMut<Data = StoreData>,
+) -> wasmtime::Result<Val> {
+    host_vtable(ctx, |abi| abi.collection_null)
+}
+
 /// Build a real `$string` (vtable + packed-UTF-16 payload). Requires
 /// `StoreData::host_abi`, set once the prelude instantiates.
 pub fn write_submilli_string_struct(
