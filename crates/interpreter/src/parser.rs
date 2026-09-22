@@ -3533,10 +3533,25 @@ impl<'a> Parser<'a> {
     /// that shadows the name also count. The parser has no binding information here, and
     /// erring toward rejection is the safe direction — a missed self-reference would
     /// silently drop a binding the body depends on.
+    ///
+    /// Two positions are excluded because they can never be a reference to the function
+    /// and are common in ordinary code: a member name after `.`, and a key before `:`.
+    /// A local, parameter, or type that merely shares the name is still caught.
     fn body_mentions(&self, body_start: usize, name: &str) -> bool {
-        self.tokens[body_start..self.pos].iter().any(|t| {
-            matches!(t.kind, TokenKind::Identifier)
-                && self.source[t.span.start as usize..t.span.end as usize] == *name
+        let body = &self.tokens[body_start..self.pos];
+        body.iter().enumerate().any(|(i, t)| {
+            if !matches!(t.kind, TokenKind::Identifier)
+                || self.source[t.span.start as usize..t.span.end as usize] != *name
+            {
+                return false;
+            }
+            let after_dot = i
+                .checked_sub(1)
+                .is_some_and(|p| matches!(body[p].kind, TokenKind::Dot));
+            let before_colon = body
+                .get(i + 1)
+                .is_some_and(|n| matches!(n.kind, TokenKind::Colon));
+            !after_dot && !before_colon
         })
     }
 
@@ -3582,7 +3597,9 @@ impl<'a> Parser<'a> {
                 // from a contextual function-type hint if available.
                 None
             };
-            // Arrow params don't support defaults; only named function declarations do.
+            // Only named function declarations support parameter defaults. This list also
+            // serves function expressions and shorthand methods, so the message names the
+            // parameter rather than the construct the user wrote.
             if matches!(self.peek().kind, TokenKind::Equals) {
                 if rest {
                     self.error_at_peek_with_help(
@@ -3590,7 +3607,13 @@ impl<'a> Parser<'a> {
                         vec!["omit the `= …`; an unspecified rest defaults to `[]`".to_string()],
                     );
                 } else {
-                    self.error_at_peek("default values on arrow parameters are not yet supported");
+                    self.error_at_peek_with_help(
+                        "default parameter values are only supported on function declarations",
+                        vec![
+                            "declare the function, or drop the default and use `??` in the body"
+                                .to_string(),
+                        ],
+                    );
                 }
                 return None;
             }
@@ -8855,6 +8878,43 @@ mod tests {
                 .iter()
                 .any(|d| d.message.contains("cannot call itself")),
             "self-referential named function expression should be rejected: {diags:?}"
+        );
+    }
+
+    /// A member name after `.` is never a reference to the function itself.
+    #[test]
+    fn accepts_a_named_function_expression_using_the_name_as_a_property() {
+        let (_ast, diags) = parse_str("const f = function bar(o: O): number { return o.bar; };");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+    }
+
+    /// Nor is a key before `:`.
+    #[test]
+    fn accepts_a_named_function_expression_using_the_name_as_an_object_key() {
+        let (_ast, diags) = parse_str(
+            "const f = function bar(x: number): number { const o = { bar: 1 }; return o.bar + x; };",
+        );
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+    }
+
+    /// A string that happens to spell the name is not a reference.
+    #[test]
+    fn accepts_a_named_function_expression_with_its_name_in_a_string() {
+        let (_ast, diags) =
+            parse_str("const f = function bar(x: number): string { return \"bar\"; };");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+    }
+
+    /// A template substitution holds real identifier tokens, so a call there is caught.
+    #[test]
+    fn rejects_a_self_call_inside_a_template_substitution() {
+        let (_ast, diags) =
+            parse_str("const f = function bar(x: number): string { return `${bar(0)}`; };");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("cannot call itself")),
+            "a self-call in a template substitution should be rejected: {diags:?}"
         );
     }
 
