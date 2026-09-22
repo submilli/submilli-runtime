@@ -1600,6 +1600,32 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Whether the cursor sits on `keyof` used as the type operator.
+    ///
+    /// `keyof` is a contextual keyword — valid as an ordinary identifier in both
+    /// TypeScript and Submilli — so it is only the operator when a type follows. A bare
+    /// type name is never followed by another type name, so requiring one separates
+    /// `keyof T` from a type literally named `keyof`.
+    fn at_contextual_keyof(&self) -> bool {
+        let tok = self.peek();
+        if !matches!(tok.kind, TokenKind::Identifier)
+            || &self.source[tok.span.start as usize..tok.span.end as usize] != "keyof"
+        {
+            return false;
+        }
+        matches!(
+            self.peek_at(1).kind,
+            TokenKind::Identifier
+                | TokenKind::Void
+                | TokenKind::LeftBrace
+                | TokenKind::LeftParen
+                | TokenKind::LeftBracket
+                | TokenKind::StringLiteral(_)
+                | TokenKind::NumberLiteral(_)
+                | TokenKind::NullLiteral
+        )
+    }
+
     fn parse_type_argument_list(&mut self) -> Option<(Vec<TypeAnnotation>, u32)> {
         let lt = self.advance();
         if matches!(self.peek().kind, TokenKind::GreaterThan) {
@@ -2631,6 +2657,19 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_type_array(&mut self, type_pos: TypePos) -> Option<TypeAnnotation> {
+        // `keyof` is contextual, not reserved: TypeScript allows it as an ordinary
+        // identifier, and so does Submilli. It is an operator only when another type
+        // follows it, which an identifier in type position never does.
+        if self.at_contextual_keyof() {
+            let kw = self.advance();
+            let operand = self.parse_type_array(type_pos)?;
+            let span = self.span(kw.span.start, operand.span.end);
+            return Some(TypeAnnotation {
+                kind: TypeAnnotationKind::KeyOf(Box::new(operand)),
+                span,
+            });
+        }
+
         let mut ty = match self.peek().kind {
             TokenKind::Identifier | TokenKind::Void => {
                 // `void` never starts a qualified path.
