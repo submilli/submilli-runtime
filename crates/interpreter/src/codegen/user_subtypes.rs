@@ -327,7 +327,10 @@ fn emit_subtype_to_json_body(
         return emit_subtype_to_json_override_body(subtype, intrinsics, symbols);
     }
 
-    let Some(type_id) = type_info.object_type_id(&subtype.ty) else {
+    let type_id = type_info
+        .object_type_id(&subtype.ty)
+        .filter(|_| type_info.supports_host_json_object(&subtype.ty));
+    let Some(type_id) = type_id else {
         return emit_subtype_to_json_vtable_body(
             subtype,
             intrinsics,

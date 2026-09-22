@@ -82,7 +82,8 @@ pub struct SymbolTable {
     /// initializers) emitted at the post-`super()` field-setup point.
     class_field_setup: BTreeMap<MangledName, Vec<FieldSetup>>,
     vtable_global_idx: BTreeMap<Type, u32>,
-    field_names_global_idx: BTreeMap<Vec<String>, u32>,
+    field_names_global_idx: BTreeMap<Vec<super::field_names::FieldName>, u32>,
+    optional_field_name_type: Option<u32>,
     field_name_string_global_idx: BTreeMap<String, u32>,
     // Keyed by ValType so language types sharing a Wasm representation share one box.
     box_type_idx: HashMap<ValType, u32>,
@@ -385,7 +386,19 @@ impl SymbolTable {
         self.vtable_global_idx.get(ty).copied()
     }
 
-    pub fn field_names_global_idx(&self, field_names: &[String]) -> Option<u32> {
+    pub fn record_optional_field_name_type(&mut self, index: u32) {
+        self.optional_field_name_type = Some(index);
+    }
+
+    pub fn optional_field_name_type(&self) -> u32 {
+        self.optional_field_name_type
+            .expect("optional field-name type declared")
+    }
+
+    pub fn field_names_global_idx(
+        &self,
+        field_names: &[super::field_names::FieldName],
+    ) -> Option<u32> {
         self.field_names_global_idx.get(field_names).copied()
     }
 
@@ -587,7 +600,11 @@ impl SymbolTable {
         self.vtable_global_idx.insert(ty, idx);
     }
 
-    pub fn record_field_names_global(&mut self, field_names: Vec<String>, idx: u32) {
+    pub fn record_field_names_global(
+        &mut self,
+        field_names: Vec<super::field_names::FieldName>,
+        idx: u32,
+    ) {
         self.field_names_global_idx.insert(field_names, idx);
     }
 

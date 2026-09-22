@@ -34,6 +34,7 @@ use crate::{MangledName, Param, TypeKind, TypedAst, TypedTypeDecl};
 pub struct ImportedClassLayout {
     /// Full data-field names (inherited prefix then own), object-payload order.
     pub fields: Vec<String>,
+    pub optional_fields: std::collections::BTreeSet<String>,
     pub narrowing_checks: BTreeMap<String, crate::FieldNarrowingCheck>,
     /// Full vtable method slots (inherited prefix then own/override), in order.
     pub methods: Vec<ImportedSlot>,
@@ -419,6 +420,19 @@ fn reconstruct_one(
         }
         fields.push(name.clone());
     }
+    let mut optional_fields = class
+        .extends
+        .as_ref()
+        .and_then(|parent| layouts.get(parent))
+        .map(|layout| layout.optional_fields.clone())
+        .unwrap_or_default();
+    for (name, field) in class.fields {
+        if field.optional {
+            optional_fields.insert(name.clone());
+        } else {
+            optional_fields.remove(name);
+        }
+    }
     let mut narrowing_checks = class
         .extends
         .as_ref()
@@ -695,6 +709,7 @@ fn reconstruct_one(
 
     ImportedClassLayout {
         fields,
+        optional_fields,
         narrowing_checks,
         methods: slots,
         ctor_params: ctor_typed_params,

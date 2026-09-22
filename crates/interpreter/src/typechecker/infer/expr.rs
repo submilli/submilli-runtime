@@ -1231,7 +1231,8 @@ impl Inferer<'_> {
         }
         let (typed_rhs, rhs_ty) = self.infer_expr(rhs, None);
         let receiver_ok = match rhs_ty.peel() {
-            Type::Unknown | Type::Object { .. } | Type::Error => true,
+            Type::Unknown | Type::Error => true,
+            ty if Self::is_field_bearing(ty) => true,
             // A union discriminated by field presence is the reason `in` exists;
             // its members are as often named (interfaces, classes) as inline.
             Type::Union(members) => members.iter().all(Self::is_field_bearing),
@@ -4518,6 +4519,11 @@ impl Inferer<'_> {
             for (name, want_field) in want {
                 if let Some((existing_field, _)) = merged.get_mut(name) {
                     existing_field.optional = want_field.optional;
+                    if interface_target.is_some() {
+                        // Interface writes can replace the initializer with any declared
+                        // value. Vtable serialization/equality must use that same type.
+                        existing_field.ty = want_field.ty.clone();
+                    }
                 } else if want_field.optional {
                     // Optional field declared but not provided —
                     // codegen will fill it with `ref.null`. We don't

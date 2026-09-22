@@ -327,6 +327,12 @@ fn codegen_inner(
     let intrinsics = intrinsics::declare_intrinsic_types(&mut types);
     symbols.set_intrinsic_type_indices(intrinsics);
     next_type_idx += intrinsics::INTRINSIC_TYPE_COUNT;
+    field_names::declare_optional_name_type(
+        &mut types,
+        &mut symbols,
+        &mut next_type_idx,
+        intrinsics,
+    );
 
     // The exception tag — host-owned (created per store, linker-defined under
     // `submilli:prelude`) and imported unconditionally: every module can
@@ -1111,7 +1117,7 @@ fn codegen_inner(
     // Class field names need per-name `$string` globals for the getter's `ref.eq`/
     // `string_eq` comparisons.
     for class_fields in class_plan.field_name_lists() {
-        extra_field_names.extend(class_fields);
+        extra_field_names.extend(class_fields.into_iter().map(|field| field.name));
     }
     // Accessor property names are scanned at runtime by the dynamic property path
     // even though they back no data slot, so they need their own `$string` globals.

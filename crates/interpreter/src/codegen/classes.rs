@@ -124,9 +124,19 @@ impl ClassLayout {
     /// folded in by [`ClassPlan::collect`]) followed by the payload method
     /// names. Single source of truth for the payload built in
     /// [`ClassPlan::emit_ctor_body`] and the field-names global that indexes it.
-    fn payload_field_names(&self) -> Vec<String> {
-        let mut names: Vec<String> = self.fields.iter().map(|f| f.name.clone()).collect();
-        names.extend(self.payload_slots().map(|s| s.name.clone()));
+    fn payload_field_names(&self) -> Vec<super::field_names::FieldName> {
+        let mut names: Vec<_> = self
+            .fields
+            .iter()
+            .map(|f| super::field_names::FieldName {
+                name: f.name.clone(),
+                optional: f.optional,
+            })
+            .collect();
+        names.extend(self.payload_slots().map(|s| super::field_names::FieldName {
+            name: s.name.clone(),
+            optional: false,
+        }));
         names
     }
 }
@@ -134,6 +144,7 @@ impl ClassLayout {
 #[derive(Clone)]
 struct FieldLayout {
     name: String,
+    optional: bool,
     /// Inherited along the layout prefix, so a subclass that does not redeclare
     /// still reads at the narrowed type. See [`crate::FieldNarrowingCheck`].
     narrowing_check: Option<Box<crate::FieldNarrowingCheck>>,
@@ -208,6 +219,7 @@ impl ClassPlan {
                                     .iter()
                                     .map(|name| FieldLayout {
                                         name: name.clone(),
+                                        optional: l.optional_fields.contains(name),
                                         narrowing_check: l
                                             .narrowing_checks
                                             .get(name)
@@ -258,6 +270,7 @@ impl ClassPlan {
                 // type as the parent narrows nothing and records none, and the
                 // guard the ancestor installed still describes this slot.
                 if let Some(slot) = fields.iter_mut().find(|e| e.name == f.name.name) {
+                    slot.optional = f.optional;
                     if let Some(check) = f.narrowing_check.clone() {
                         slot.narrowing_check = Some(check);
                     }
@@ -265,6 +278,7 @@ impl ClassPlan {
                 }
                 fields.push(FieldLayout {
                     name: f.name.name.clone(),
+                    optional: f.optional,
                     narrowing_check: f.narrowing_check.clone(),
                 });
             }
@@ -398,7 +412,7 @@ impl ClassPlan {
     /// The ordered list of class field-name vectors, for the shared
     /// field-names-array global emission (`field_names::emit`). Built from the
     /// same helper the instance payload is, so the two cannot drift.
-    pub fn field_name_lists(&self) -> Vec<Vec<String>> {
+    pub fn field_name_lists(&self) -> Vec<Vec<super::field_names::FieldName>> {
         self.classes
             .iter()
             .map(ClassLayout::payload_field_names)
@@ -2183,10 +2197,12 @@ mod tests {
             fields: vec![
                 FieldLayout {
                     name: "message".to_string(),
+                    optional: false,
                     narrowing_check: None,
                 },
                 FieldLayout {
                     name: "name".to_string(),
+                    optional: false,
                     narrowing_check: None,
                 },
             ],

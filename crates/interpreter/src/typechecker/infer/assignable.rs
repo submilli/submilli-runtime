@@ -38,10 +38,20 @@ pub(super) enum ImplementsFailure {
     /// getter with no setter) while the interface declares it settable. Reported
     /// apart from [`Incompatible`] because both sides render the same type there,
     /// naming no fix.
-    NotWritable { member: String, ty: String },
+    NotWritable {
+        member: String,
+        ty: String,
+    },
+    NotReadable {
+        member: String,
+        ty: String,
+    },
     /// `member` is optional on the class where the interface requires it. Same
     /// identical-types problem as [`NotWritable`].
-    OptionalityMismatch { member: String, ty: String },
+    OptionalityMismatch {
+        member: String,
+        ty: String,
+    },
 }
 
 impl<'a> TypeResolver<'a> {
@@ -263,15 +273,20 @@ impl<'a> TypeResolver<'a> {
             match class_form.get(member) {
                 Some(act) => {
                     let mut seen = Vec::new();
-                    // Type first: it subsumes the other two, and reporting a
-                    // mutability fix for a member whose type is also wrong sends
-                    // the reader after the smaller of two problems.
+                    // A setter's parameter is not a readable value. Check for a
+                    // getter before comparing types, then report mutability or
+                    // optionality only when the readable type is compatible.
                     //
                     // `readonly` is shallow, so the type check stays covariant. But a
                     // writable interface member can be written through the interface
                     // reference, so a `readonly`/get-only class member can't satisfy
                     // it. Methods are modelled as `readonly`, so they're unaffected.
-                    if !assignable_rec(&act.ty, &exp.ty, *self, &mut seen) {
+                    if self.class_property_is_write_only(class_mangled, class_args, member) {
+                        failures.push(ImplementsFailure::NotReadable {
+                            member: member.clone(),
+                            ty: exp.ty.to_string(),
+                        });
+                    } else if !assignable_rec(&act.ty, &exp.ty, *self, &mut seen) {
                         failures.push(ImplementsFailure::Incompatible {
                             member: member.clone(),
                             expected: exp.ty.to_string(),
@@ -294,6 +309,32 @@ impl<'a> TypeResolver<'a> {
             }
         }
         failures
+    }
+
+    fn class_property_is_write_only(
+        &self,
+        mangled: &MangledName,
+        args: &[Type],
+        member: &str,
+    ) -> bool {
+        let mut has_setter = false;
+        let mut has_getter = false;
+        super::classes::for_each_class_in_chain(
+            |m| self.sym_by_mangled(m).cloned(),
+            mangled,
+            args,
+            |sym, _| {
+                if let TypeKind::Class { accessors, .. } = &sym.kind {
+                    for accessor in accessors.iter().filter(|a| a.name() == member) {
+                        match accessor {
+                            crate::AccessorSig::Getter { .. } => has_getter = true,
+                            crate::AccessorSig::Setter { .. } => has_setter = true,
+                        }
+                    }
+                }
+            },
+        );
+        has_setter && !has_getter
     }
 
     /// Structural object shape of a **data-only** interface's properties, with
@@ -541,7 +582,8 @@ fn assignable_rec(
                 .iter()
                 .all(|(member, exp)| match class_form.get(member) {
                     Some(act) => {
-                        (exp.optional || !act.optional)
+                        !types.class_property_is_write_only(ma, aa, member)
+                            && (exp.optional || !act.optional)
                             && assignable_rec(&act.ty, &exp.ty, types, seen)
                     }
                     None => exp.optional,

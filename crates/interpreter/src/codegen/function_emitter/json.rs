@@ -73,7 +73,9 @@ fn host_stringify_object_type(ctx: &CodegenCtx, arg_ty: &Type) -> Option<Type> {
         _ => return None,
     };
     ctx.type_info.object_type_id(&object_ty)?;
-    Some(object_ty)
+    ctx.type_info
+        .supports_host_json_object(&object_ty)
+        .then_some(object_ty)
 }
 
 fn emit_stringify_typed_object_host(

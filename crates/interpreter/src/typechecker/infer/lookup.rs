@@ -452,12 +452,6 @@ impl<'a> Inferer<'a> {
         super::narrowing::discriminant_from_shapes(&shapes)
     }
 
-    /// Whether one union member carries `field`, by the same authority the read
-    /// itself uses. Backs `in`-operator narrowing over nominal members.
-    pub(super) fn member_has_field(&self, member: &Type, field: &str) -> bool {
-        self.union_member_field_read_ty(member, field).is_ok()
-    }
-
     /// Whether a type carries readable fields at all — the shapes
     /// [`Self::union_member_field_read_ty`] resolves, whatever their names. A
     /// `null` member fails here, which is what keeps `T | null` reporting "may

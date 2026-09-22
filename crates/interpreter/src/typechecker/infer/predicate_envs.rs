@@ -404,7 +404,7 @@ impl<'a> Inferer<'a> {
 
         let (true_ty, false_ty) =
             narrowing::narrow_field_presence(&path_ty, &field_name, &|member, field| {
-                self.member_has_field(member, field)
+                self.member_shape(member)?.get(field).cloned()
             });
 
         let source_kind = self
@@ -425,13 +425,14 @@ impl<'a> Inferer<'a> {
         true_env.insert(
             path.clone(),
             narrowing::NarrowedView {
-                narrowed_ty: true_ty,
+                narrowed_ty: true_ty.clone(),
                 facts: narrowing::TypeFacts::EMPTY,
                 excluded_literals: std::collections::BTreeSet::new(),
                 binding: self.mint_narrow_binding(path_span),
                 source: source_true,
             },
         );
+        self.narrow_present_field(&mut true_env, &path, &true_ty, &field_name, path_span);
         false_env.insert(
             path,
             narrowing::NarrowedView {
@@ -443,6 +444,60 @@ impl<'a> Inferer<'a> {
             },
         );
         (true_env, false_env)
+    }
+
+    fn narrow_present_field(
+        &mut self,
+        env: &mut narrowing::NarrowEnv,
+        receiver_path: &narrowing::ReferencePath,
+        receiver_ty: &Type,
+        field_name: &str,
+        span: Span,
+    ) {
+        let members = match receiver_ty.peel() {
+            Type::Union(members) => members.clone(),
+            _ => vec![receiver_ty.clone()],
+        };
+        let Some(fields): Option<Vec<_>> = members
+            .iter()
+            .map(|member| self.member_shape(member)?.get(field_name).cloned())
+            .collect()
+        else {
+            return;
+        };
+        let narrowed_ty = Type::union(fields.iter().map(|field| field.ty.clone()).collect());
+        let mut path = receiver_path.clone();
+        path.chain
+            .push(narrowing::PathElem::Field(field_name.to_string()));
+        let Some(receiver_kind) = self.synthesize_unnarrowed_source(receiver_path, span) else {
+            return;
+        };
+        let receiver = self.typed_ast.push_expr(TypedExpr {
+            kind: receiver_kind,
+            span,
+            ty: receiver_ty.clone(),
+        });
+        let source = self.typed_ast.push_expr(TypedExpr {
+            kind: crate::TypedExprKind::FieldAccess {
+                receiver,
+                name: Ident {
+                    name: field_name.to_string(),
+                    span,
+                },
+            },
+            span,
+            ty: Type::union(fields.iter().map(crate::ObjectField::read_ty).collect()),
+        });
+        env.insert(
+            path,
+            narrowing::NarrowedView {
+                narrowed_ty,
+                facts: narrowing::TypeFacts::EMPTY,
+                excluded_literals: std::collections::BTreeSet::new(),
+                binding: self.mint_narrow_binding(span),
+                source,
+            },
+        );
     }
 
     fn try_predicate_envs_literal_equality(

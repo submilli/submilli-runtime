@@ -403,65 +403,54 @@ pub fn strip_null(ty: &Type) -> Type {
     }
 }
 
-/// Whether a union member carries `field`. Nominal members need the type
-/// registry to answer, so the caller supplies the test.
-pub type MemberHasField<'a> = &'a dyn Fn(&Type, &str) -> bool;
-
-/// `"field" in x` narrowing. Returns `(true_ty, false_ty)`
-/// for the receiver `x: receiver_ty` under the assertion that the
-/// `in` predicate holds (true) or doesn't (false).
-///
-/// - **`Unknown`** — true: synthesize `Object { field: unknown }`
-///   (a single-field shape; the predicate adds only this constraint);
-///   false: stays `Unknown` (we can't prove what an `unknown` lacks
-///   structurally).
-/// - **`Object` with field present** — true: unchanged; false: `Error`
-///   (statically unreachable; `wrap_narrow_regions` already skips
-///   `Error` narrowings so no shadow is emitted).
-/// - **`Object` without field** — true: clone the field map and add
-///   `field: unknown`; false: unchanged.
-/// - **`Union(members)`** — true / false: filter members by the caller-supplied
-///   `has_field`, then re-`Type::union`. Singleton-collapse falls out of the
-///   constructor.
-/// - **Anything else** — both `Error` (typecheck rejected; defensive).
+/// `in` retains optional members in both branches: declaring a property does
+/// not prove that its value is present. The true branch removes optionality,
+/// preserving any null explicitly included in the declared field type.
 pub fn narrow_field_presence(
     receiver_ty: &Type,
     field: &str,
-    has_field: MemberHasField<'_>,
+    lookup: &dyn Fn(&Type, &str) -> Option<crate::ObjectField>,
 ) -> (Type, Type) {
     match receiver_ty.peel() {
         Type::Unknown => {
-            let mut fields: BTreeMap<String, crate::types::ObjectField> = BTreeMap::new();
-            fields.insert(
+            let fields = BTreeMap::from([(
                 field.to_string(),
-                crate::types::ObjectField::required(Type::Unknown),
-            );
+                crate::ObjectField::required(Type::Unknown),
+            )]);
             (Type::Object { fields }, Type::Unknown)
         }
         Type::Object { fields } => {
-            if fields.contains_key(field) {
-                (receiver_ty.clone(), Type::Error)
-            } else {
-                let mut extended = fields.clone();
-                extended.insert(
-                    field.to_string(),
-                    crate::types::ObjectField::required(Type::Unknown),
-                );
-                (Type::Object { fields: extended }, receiver_ty.clone())
-            }
+            let mut present = fields.clone();
+            let entry = present
+                .entry(field.to_string())
+                .or_insert_with(|| crate::ObjectField::required(Type::Unknown));
+            entry.optional = false;
+            let absent = match fields.get(field) {
+                Some(f) if !f.optional => Type::Error,
+                _ => receiver_ty.clone(),
+            };
+            (Type::Object { fields: present }, absent)
         }
         Type::Union(members) => {
-            let has: Vec<Type> = members
+            let has = members
                 .iter()
-                .filter(|m| has_field(m, field))
+                .filter(|m| lookup(m, field).is_some())
                 .cloned()
                 .collect();
-            let lacks: Vec<Type> = members
+            let lacks = members
                 .iter()
-                .filter(|m| !has_field(m, field))
+                .filter(|m| lookup(m, field).is_none_or(|f| f.optional))
                 .cloned()
                 .collect();
             (Type::union(has), Type::union(lacks))
+        }
+        Type::InterfaceRef { .. } | Type::ClassRef { .. } => {
+            let absent = if lookup(receiver_ty, field).is_some_and(|f| !f.optional) {
+                Type::Error
+            } else {
+                receiver_ty.clone()
+            };
+            (receiver_ty.clone(), absent)
         }
         _ => (Type::Error, Type::Error),
     }

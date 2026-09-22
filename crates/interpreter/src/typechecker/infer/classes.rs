@@ -596,6 +596,13 @@ impl<'a> Inferer<'a> {
                         "`{class_name}.{member}` is `{actual}`, but `{iface_ty}` declares it as `{expected}`"
                     ));
                 }
+                ImplementsFailure::NotReadable { member, ty } => {
+                    clauses.push(format!("member `{member}` is write-only (no getter)"));
+                    help.push(format!(
+                        "`{iface_ty}` requires a readable `{member}: {ty}`; add a \
+                         `get {member}(): {ty}` accessor to `{class_name}`"
+                    ));
+                }
                 ImplementsFailure::NotWritable { member, ty } => {
                     clauses.push(format!("member `{member}` is not writable"));
                     // The interface-side fix leads because it is the one that always

@@ -1289,25 +1289,22 @@ fn fnv_combine(acc: u32, element_hash: u32) -> u32 {
 }
 
 /// JSON-escape UTF-16 code units into a quoted `"…"` unit sequence — the exact
-/// escapes of `prelude::string::to_json_body` (named control escapes, `\u00XX`
-/// for other controls, `\"` and `\\`, all other units verbatim).
+/// escapes for controls, quotes, backslashes, and unpaired surrogates.
+/// Valid surrogate pairs stay intact; lone halves use well-formed JSON escapes.
 pub(super) fn json_escape_units(units: &[u16]) -> Vec<u16> {
     let mut out: Vec<u16> = Vec::with_capacity(units.len() + 2);
     out.push(u16::from(b'"'));
-    for &c in units {
+    for (index, &c) in units.iter().enumerate() {
         match c {
             0x08 => out.extend([u16::from(b'\\'), u16::from(b'b')]),
             0x09 => out.extend([u16::from(b'\\'), u16::from(b't')]),
             0x0A => out.extend([u16::from(b'\\'), u16::from(b'n')]),
             0x0C => out.extend([u16::from(b'\\'), u16::from(b'f')]),
             0x0D => out.extend([u16::from(b'\\'), u16::from(b'r')]),
-            c if c < 0x20 => {
-                out.extend([
-                    u16::from(b'\\'),
-                    u16::from(b'u'),
-                    u16::from(b'0'),
-                    u16::from(b'0'),
-                ]);
+            c if c < 0x20 || is_unpaired_surrogate(units, index) => {
+                out.extend([u16::from(b'\\'), u16::from(b'u')]);
+                out.push(hex_nibble((c >> 12) & 0xf));
+                out.push(hex_nibble((c >> 8) & 0xf));
                 out.push(hex_nibble((c >> 4) & 0xf));
                 out.push(hex_nibble(c & 0xf));
             }
@@ -1318,6 +1315,16 @@ pub(super) fn json_escape_units(units: &[u16]) -> Vec<u16> {
     }
     out.push(u16::from(b'"'));
     out
+}
+
+fn is_unpaired_surrogate(units: &[u16], index: usize) -> bool {
+    match units[index] {
+        0xd800..=0xdbff => !units
+            .get(index + 1)
+            .is_some_and(|next| (0xdc00..=0xdfff).contains(next)),
+        0xdc00..=0xdfff => index == 0 || !(0xd800..=0xdbff).contains(&units[index - 1]),
+        _ => false,
+    }
 }
 
 fn hex_nibble(nibble: u16) -> u16 {

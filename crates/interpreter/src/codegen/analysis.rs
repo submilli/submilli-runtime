@@ -620,6 +620,14 @@ impl CodegenAnalysis {
                     && let TypedExprKind::String(name) = &ta.expr(*lhs).kind
                 {
                     self.extra_field_names.push(name.clone());
+                    self.extra_field_names
+                        .push(crate::codegen::classes::accessor_getter_name(name));
+                    self.extra_field_names
+                        .push(crate::codegen::classes::accessor_setter_name(name));
+                    for kind in [AccessorKind::Get, AccessorKind::Set] {
+                        self.mentioned_closure_sigs
+                            .push(crate::codegen::classes::accessor_closure_sig(kind));
+                    }
                 }
             }
             TypedExprKind::Unary { op, operand } => {
@@ -734,8 +742,11 @@ impl CodegenAnalysis {
                     self.dependency_usage.note_value(mangled.clone());
                     self.note_postfix_target(&expr.ty);
                 }
-                PostfixTarget::Field { .. } => {
+                PostfixTarget::Field { receiver, name, .. } => {
                     self.note_postfix_target(&expr.ty);
+                    let receiver_ty = &ta.expr(*receiver).ty;
+                    self.note_shaped_property_access(receiver_ty, &name.name, AccessorKind::Get);
+                    self.note_shaped_property_access(receiver_ty, &name.name, AccessorKind::Set);
                 }
                 PostfixTarget::Index { elem_ty, .. } => {
                     self.note_postfix_target(elem_ty);

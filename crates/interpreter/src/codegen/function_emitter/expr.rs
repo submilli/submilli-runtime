@@ -432,7 +432,13 @@ fn emit_expr_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) 
             else {
                 unreachable!("structural_ty is Type::Object by construction above");
             };
-            let shape_key: Vec<String> = declared_fields.keys().cloned().collect();
+            let shape_key: Vec<_> = declared_fields
+                .iter()
+                .map(|(name, field)| crate::codegen::field_names::FieldName {
+                    name: name.clone(),
+                    optional: field.optional,
+                })
+                .collect();
             let field_names_idx = ctx
                 .symbols
                 .field_names_global_idx(&shape_key)
@@ -1406,18 +1412,13 @@ fn emit_postfix_unary(
                 .symbols
                 .intrinsic_type_indices()
                 .expect("intrinsics declared by codegen entry");
-            let name_global = ctx
-                .symbols
-                .field_name_string_global_idx(&name.name)
-                .expect("per-name string global recorded during field-name-strings emission");
             let is_bigint = matches!(target_ty.peel(), Type::BigInt);
             let tmp = emitter.add_anonymous_local(ctx.symbols.value_type(target_ty));
             emit_expr(emitter, ctx, *receiver);
             let rcv_local =
                 stash_receiver_as_object_shape(emitter, &receiver_ty, intrinsics.object_shape);
-            emit_object_field_read_by_name(emitter, ctx, rcv_local, name_global);
-            crate::codegen::function_emitter::cast::emit_cast_to(emitter, ctx, target_ty);
-            emitter.instruction(Instruction::LocalTee(tmp));
+            emit_object_property_read(emitter, ctx, rcv_local, &name.name, target_ty);
+            emitter.instruction(Instruction::LocalSet(tmp));
             emitter.instruction(Instruction::LocalGet(tmp));
             if is_bigint {
                 emit_bigint_pm_one(emitter, ctx, op);
@@ -1425,8 +1426,19 @@ fn emit_postfix_unary(
                 emitter.instruction(Instruction::F64Const(Ieee64::from(1.0)));
                 emitter.instruction(delta_op);
             }
-            crate::codegen::function_emitter::cast::emit_box(emitter, ctx, target_ty);
-            emit_object_field_write_by_name(emitter, ctx, rcv_local, name_global);
+            let updated = emitter.add_anonymous_local(ctx.symbols.value_type(target_ty));
+            emitter.instruction(Instruction::LocalSet(updated));
+            emit_object_property_write_value(
+                emitter,
+                ctx,
+                rcv_local,
+                name,
+                &ShapeArgument::Local {
+                    slot: updated,
+                    ty: target_ty.clone(),
+                },
+            );
+            emitter.instruction(Instruction::LocalGet(tmp));
         }
         crate::PostfixTarget::Index {
             receiver,
@@ -1841,7 +1853,7 @@ fn coerce_field_receiver_to_object_shape(
     object_shape: u32,
 ) {
     let universal = match receiver_ty.peel() {
-        Type::InterfaceRef { .. } => true,
+        Type::InterfaceRef { .. } | Type::Unknown => true,
         Type::Union(members) => members
             .iter()
             .any(|m| !matches!(m.peel(), Type::Object { .. })),
@@ -2341,117 +2353,50 @@ fn emit_binary(
 /// once with the prelude `$string_eq` (the cross-module slow path).
 /// Returns an i32 boolean (0/1) on the stack.
 ///
-/// The check is inlined at every callsite rather than threaded
-/// through a prelude helper, keeping the surface small while matching
-/// the inline field-name scan used by object field access.
+/// Presence uses the same slot scan as reads, without invoking accessors.
 fn emit_in_operator(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, lhs: ExprId, rhs: ExprId) {
-    let lhs_name = match &ctx.ta.expr(lhs).kind {
-        crate::TypedExprKind::String(s) => s.clone(),
-        other => unreachable!("typechecker enforces string-literal LHS for `in`, got {other:?}"),
+    let crate::TypedExprKind::String(name) = &ctx.ta.expr(lhs).kind else {
+        unreachable!("typechecker enforces string-literal LHS for `in`");
     };
-    // Push receiver; cast to (ref $ObjectShape) so `struct.get
-    // $ObjectShape 1` is well-typed when the slot is wider
-    // (`unknown`).
-    emit_expr(emitter, ctx, rhs);
-    crate::codegen::function_emitter::cast::emit_cast_to(
-        emitter,
-        ctx,
-        &Type::Object {
-            fields: std::collections::BTreeMap::new(),
-        },
-    );
-    let object_shape_idx = ctx
+    let intrinsics = ctx
         .symbols
-        .object_shape_type_idx()
-        .expect("ObjectShape type registered");
-    let field_names_type_idx = ctx
-        .symbols
-        .field_names_type_idx()
-        .expect("field_names type registered");
-    // struct.get $ObjectShape 1 → (ref $field_names).
-    emitter.instruction(Instruction::StructGet {
-        struct_type_index: object_shape_idx,
-        field_index: 1,
-    });
-    // Cache the array in a fresh anonymous local; allocate i / len
-    // scratch slots for the loop.
-    let field_names_ref_ty = ValType::Ref(RefType {
-        nullable: false,
-        heap_type: HeapType::Concrete(field_names_type_idx),
-    });
-    let names_local = emitter.add_anonymous_local(field_names_ref_ty);
-    let i_local = emitter.add_anonymous_local(ValType::I32);
-    let len_local = emitter.add_anonymous_local(ValType::I32);
-    emitter.instruction(Instruction::LocalSet(names_local));
-    emitter.instruction(Instruction::LocalGet(names_local));
-    emitter.instruction(Instruction::ArrayLen);
-    emitter.instruction(Instruction::LocalSet(len_local));
+        .intrinsic_type_indices()
+        .expect("intrinsics declared");
     let name_global = ctx
         .symbols
-        .field_name_string_global_idx(&lhs_name)
-        .expect("field-name string global allocated before in-operator codegen");
-    let string_eq_idx = ctx
-        .symbols
-        .prelude_func_idx("string_eq")
-        .expect("submilli:prelude.string_eq imported");
-    // Result block — `br <n>` from inside the loops carries an i32
-    // back to this frame; the fall-through at the bottom pushes 0.
-    emitter.emit_block(BlockType::Result(ValType::I32));
-    // Pass 1 — ref.eq fast path. Same-module callers share the
-    // per-name string global with the shape's array entries, so
-    // ref.eq matches in one instruction.
+        .field_name_string_global_idx(name)
+        .expect("in property interned");
+    let receiver_ty = &ctx.ta.expr(rhs).ty;
+    emit_expr(emitter, ctx, rhs);
+    let object = stash_receiver_as_object_shape(emitter, receiver_ty, intrinsics.object_shape);
+    let index = emitter.add_anonymous_local(ValType::I32);
+    emit_object_field_index_by_name(emitter, ctx, object, name_global);
+    emitter.instruction(Instruction::LocalTee(index));
     emitter.instruction(Instruction::I32Const(0));
-    emitter.instruction(Instruction::LocalSet(i_local));
-    emitter.emit_block(BlockType::Empty);
-    emitter.emit_loop(BlockType::Empty);
-    emitter.instruction(Instruction::LocalGet(i_local));
-    emitter.instruction(Instruction::LocalGet(len_local));
-    emitter.instruction(Instruction::I32Eq);
-    emitter.instruction(Instruction::BrIf(1));
-    emitter.instruction(Instruction::LocalGet(names_local));
-    emitter.instruction(Instruction::LocalGet(i_local));
-    emitter.instruction(Instruction::ArrayGet(field_names_type_idx));
-    emitter.instruction(Instruction::GlobalGet(name_global));
-    emitter.instruction(Instruction::RefEq);
-    emitter.emit_if(BlockType::Empty);
-    emitter.instruction(Instruction::I32Const(1));
-    emitter.instruction(Instruction::Br(3));
-    emitter.emit_end(); // end if
-    emitter.instruction(Instruction::LocalGet(i_local));
-    emitter.instruction(Instruction::I32Const(1));
-    emitter.instruction(Instruction::I32Add);
-    emitter.instruction(Instruction::LocalSet(i_local));
-    emitter.instruction(Instruction::Br(0));
-    emitter.emit_end(); // end loop
-    emitter.emit_end(); // end pass-1 outer block
-    // Pass 2 — string_eq slow path.
-    emitter.instruction(Instruction::I32Const(0));
-    emitter.instruction(Instruction::LocalSet(i_local));
-    emitter.emit_block(BlockType::Empty);
-    emitter.emit_loop(BlockType::Empty);
-    emitter.instruction(Instruction::LocalGet(i_local));
-    emitter.instruction(Instruction::LocalGet(len_local));
-    emitter.instruction(Instruction::I32Eq);
-    emitter.instruction(Instruction::BrIf(1));
-    emitter.instruction(Instruction::LocalGet(names_local));
-    emitter.instruction(Instruction::LocalGet(i_local));
-    emitter.instruction(Instruction::ArrayGet(field_names_type_idx));
-    emitter.instruction(Instruction::GlobalGet(name_global));
-    emitter.instruction(Instruction::Call(string_eq_idx));
-    emitter.emit_if(BlockType::Empty);
-    emitter.instruction(Instruction::I32Const(1));
-    emitter.instruction(Instruction::Br(3));
-    emitter.emit_end(); // end if
-    emitter.instruction(Instruction::LocalGet(i_local));
-    emitter.instruction(Instruction::I32Const(1));
-    emitter.instruction(Instruction::I32Add);
-    emitter.instruction(Instruction::LocalSet(i_local));
-    emitter.instruction(Instruction::Br(0));
-    emitter.emit_end(); // end loop
-    emitter.emit_end(); // end pass-2 outer block
-    // No match in either pass.
-    emitter.instruction(Instruction::I32Const(0));
-    emitter.emit_end(); // end result block
+    emitter.instruction(Instruction::I32GeS);
+    emitter.emit_if(BlockType::Result(ValType::I32));
+    emitter.instruction(Instruction::LocalGet(object));
+    emitter.instruction(Instruction::StructGet {
+        struct_type_index: intrinsics.object_shape,
+        field_index: 1,
+    });
+    emitter.instruction(Instruction::LocalGet(index));
+    emitter.instruction(Instruction::ArrayGet(intrinsics.field_names));
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
+        ctx.symbols.optional_field_name_type(),
+    )));
+    emitter.instruction(Instruction::I32Eqz);
+    emit_field_slot_get(emitter, intrinsics, object, index);
+    emitter.instruction(Instruction::RefIsNull);
+    emitter.instruction(Instruction::I32Eqz);
+    emitter.instruction(Instruction::I32Or);
+    emitter.emit_else();
+    let getter = crate::codegen::classes::accessor_getter_name(name);
+    let setter = crate::codegen::classes::accessor_setter_name(name);
+    emit_is_accessor_backed(emitter, ctx, object, &getter, crate::AccessorKind::Get);
+    emit_is_accessor_backed(emitter, ctx, object, &setter, crate::AccessorKind::Set);
+    emitter.instruction(Instruction::I32Or);
+    emitter.emit_end();
 }
 
 /// Emit the constructor field-setup sequence for `mangled`: each own-field
@@ -2815,6 +2760,22 @@ pub(crate) fn emit_object_property_write(
     prop: &Ident,
     value: ExprId,
 ) {
+    emit_object_property_write_value(
+        emitter,
+        ctx,
+        object_local,
+        prop,
+        &ShapeArgument::Expression(value),
+    );
+}
+
+fn emit_object_property_write_value(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    object_local: u32,
+    prop: &Ident,
+    value: &ShapeArgument,
+) {
     let prop_name = prop.name.as_str();
     let intrinsics = ctx
         .symbols
@@ -2832,8 +2793,8 @@ pub(crate) fn emit_object_property_write(
     // reaching here means analysis classified the access, which interns both
     // accessor names — so neither name can actually be missing.
     if !has_setter_name && !has_getter_name {
-        let value_ty = ctx.ta.expr(value).ty.clone();
-        emit_expr(emitter, ctx, value);
+        let value_ty = value.ty(ctx);
+        value.emit(emitter, ctx);
         cast::emit_box(emitter, ctx, &value_ty);
         emit_object_field_write_by_name(emitter, ctx, object_local, name_global);
         return;
@@ -2852,8 +2813,8 @@ pub(crate) fn emit_object_property_write(
         field_index: 2,
     });
     emitter.instruction(Instruction::LocalGet(index_local));
-    let value_ty = ctx.ta.expr(value).ty.clone();
-    emit_expr(emitter, ctx, value);
+    let value_ty = value.ty(ctx);
+    value.emit(emitter, ctx);
     cast::emit_box(emitter, ctx, &value_ty);
     emitter.instruction(Instruction::ArraySet(intrinsics.object_fields));
     emitter.emit_else();
@@ -2875,11 +2836,11 @@ pub(crate) fn emit_object_property_write(
         match arm {
             AccessorWrite::Setter => {
                 emitter.instruction(Instruction::LocalGet(object_local));
-                emit_interface_method_via_shape_with_receiver_on_stack(
+                emit_shape_method_with_arguments(
                     emitter,
                     ctx,
                     accessor,
-                    std::slice::from_ref(&value),
+                    std::slice::from_ref(value),
                     &Type::Void,
                     Some(slot_index_local),
                 );
@@ -2887,7 +2848,8 @@ pub(crate) fn emit_object_property_write(
             // A getter with no setter: the property is there and is read-only.
             // Discarding the write here would lose it silently.
             AccessorWrite::ReadOnly => {
-                emit_value_for_effect(emitter, ctx, value);
+                value.emit(emitter, ctx);
+                emitter.instruction(Instruction::Drop);
                 // The value's own span was recorded last; point the backtrace at
                 // the property instead, which is what the write failed on.
                 emitter.record_span(prop.span);
@@ -2902,7 +2864,8 @@ pub(crate) fn emit_object_property_write(
     }
     // No slot of any kind: an absent optional member, so the store has nowhere
     // to go.
-    emit_value_for_effect(emitter, ctx, value);
+    value.emit(emitter, ctx);
+    emitter.instruction(Instruction::Drop);
     for _ in &arms {
         emitter.emit_end();
     }
@@ -3001,14 +2964,6 @@ impl AccessorWrite {
             AccessorWrite::ReadOnly => crate::AccessorKind::Get,
         }
     }
-}
-
-/// Run `value` for its side effects and discard the result. A write that never
-/// reaches a slot still has to evaluate its right-hand side, so that every
-/// branch of a property write evaluates it exactly once.
-fn emit_value_for_effect(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, value: ExprId) {
-    emit_expr(emitter, ctx, value);
-    emitter.instruction(Instruction::Drop);
 }
 
 pub(crate) fn emit_object_field_index_by_name(
@@ -3606,6 +3561,45 @@ fn emit_interface_method_via_shape_with_receiver_on_stack(
     call_ret_ty: &Type,
     slot_index_local: Option<u32>,
 ) {
+    let args: Vec<_> = args
+        .iter()
+        .copied()
+        .map(ShapeArgument::Expression)
+        .collect();
+    emit_shape_method_with_arguments(emitter, ctx, method, &args, call_ret_ty, slot_index_local);
+}
+
+enum ShapeArgument {
+    Expression(ExprId),
+    Local { slot: u32, ty: Type },
+}
+
+impl ShapeArgument {
+    fn ty(&self, ctx: &CodegenCtx) -> Type {
+        match self {
+            Self::Expression(id) => ctx.ta.expr(*id).ty.clone(),
+            Self::Local { ty, .. } => ty.clone(),
+        }
+    }
+
+    fn emit(&self, emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
+        match self {
+            Self::Expression(id) => emit_expr(emitter, ctx, *id),
+            Self::Local { slot, .. } => {
+                emitter.instruction(Instruction::LocalGet(*slot));
+            }
+        }
+    }
+}
+
+fn emit_shape_method_with_arguments(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    method: &str,
+    args: &[ShapeArgument],
+    call_ret_ty: &Type,
+    slot_index_local: Option<u32>,
+) {
     let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
@@ -3613,7 +3607,7 @@ fn emit_interface_method_via_shape_with_receiver_on_stack(
 
     // Build the closure signature from the arg types and the
     // call's return type. `classify` reduces to (arity, is_void).
-    let arg_tys: Vec<Type> = args.iter().map(|a| ctx.ta.expr(*a).ty.clone()).collect();
+    let arg_tys: Vec<Type> = args.iter().map(|a| a.ty(ctx)).collect();
     let fn_ty = Type::Function {
         params: arg_tys,
         ret: Box::new(call_ret_ty.clone()),
@@ -3681,9 +3675,9 @@ fn emit_interface_method_via_shape_with_receiver_on_stack(
 
     // 5. Emit each user arg, boxing to `(ref $Object)` per the
     // closure ABI's erasure.
-    for &arg_id in args {
-        emit_expr(emitter, ctx, arg_id);
-        let arg_ty = ctx.ta.expr(arg_id).ty.clone();
+    for arg in args {
+        arg.emit(emitter, ctx);
+        let arg_ty = arg.ty(ctx);
         cast::emit_box(emitter, ctx, &arg_ty);
     }
 
