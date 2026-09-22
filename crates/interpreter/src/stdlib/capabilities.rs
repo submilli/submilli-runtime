@@ -248,6 +248,38 @@ const MCP: &[Capability] = &[Capability {
     example_filter: "tool == \"create_issue\"",
 }];
 
+const LLM: &[Capability] = &[Capability {
+    name: "llm.call",
+    // No `main_denial`: main-module access is the point. A model call is not a
+    // secret read — the program names a model and supplies a prompt, and the
+    // credential is resolved inside the provider and never returned.
+    main_denial: None,
+    summary: "Call a model (call, batch) and enumerate the models it may call (models). \
+              Narrowing `model` also narrows what `models()` reveals: every candidate is \
+              filtered through this same rule, so a listing never offers a model the \
+              caller would be denied at call time",
+    filter_fields: &[
+        field(
+            "op",
+            "string",
+            "Which operation: \"call\", \"batch\", or \"models\"",
+        ),
+        field(
+            "model",
+            "string",
+            "Model name the call targets; \"\" on the `models` op itself, then each \
+             candidate's own name as the listing is filtered",
+        ),
+        field(
+            "prompt_count",
+            "number",
+            "Prompts in this dispatch — 1 for call, N for batch, 0 for models. Prompt text \
+             is never in this context",
+        ),
+    ],
+    example_filter: "model glob \"claude-*\"",
+}];
+
 const SECRETS: &[Capability] = &[Capability {
     name: "secrets.get",
     main_denial: Some(
@@ -299,6 +331,10 @@ const CATALOG: &[CapabilityGroup] = &[
     CapabilityGroup {
         module: "submilli:http",
         capabilities: HTTP,
+    },
+    CapabilityGroup {
+        module: "submilli:llm",
+        capabilities: LLM,
     },
     CapabilityGroup {
         module: "@mcp",
@@ -407,6 +443,28 @@ mod tests {
                 .field_names()
                 .collect::<Vec<_>>(),
             ["op", "prefix"]
+        );
+    }
+
+    #[test]
+    fn llm_group_is_cataloged() {
+        let group = catalog()
+            .iter()
+            .find(|g| g.module == "submilli:llm")
+            .expect("submilli:llm group");
+        let names: Vec<&str> = group.capabilities.iter().map(|cap| cap.name).collect();
+        assert_eq!(names, ["llm.call"]);
+        assert_eq!(
+            find("llm.call").unwrap().field_names().collect::<Vec<_>>(),
+            ["op", "model", "prompt_count"]
+        );
+        // The double gate lives in the summary wording and the host fn, not in
+        // the struct, so an operator reading only the catalog still has to learn
+        // that narrowing `model` also shortens what `models()` returns.
+        let summary = find("llm.call").unwrap().summary;
+        assert!(
+            summary.contains("models()"),
+            "the summary must say narrowing `model` narrows discovery: {summary}"
         );
     }
 

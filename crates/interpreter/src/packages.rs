@@ -762,6 +762,7 @@ fn module_description(name: &str) -> &'static str {
         "submilli:crypto" => "Hashing, HMAC, and random bytes.",
         "submilli:fs" => "Sandbox filesystem: read/write/list/stat/remove/exists/info.",
         "submilli:http" => "Outbound HTTP: get/post/put/patch/delete/head.",
+        "submilli:llm" => "Gated model calls: call/batch, and models() to discover them.",
         "submilli:secrets" => "Policy-gated access to blueprint-declared secrets.",
         "submilli:session" => "Session-scoped key-value state: get/has/set/remove/list.",
         "submilli:url" => "URL parse/build and query-string handling. Pure compute.",

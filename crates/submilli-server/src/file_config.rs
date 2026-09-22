@@ -37,7 +37,8 @@ use submilli_server::config::{
     default_session_store_dir, validate_volumes,
 };
 use submilli_server::{
-    DEFAULT_MAX_STORE_BYTES, FileSecretStore, KeySource, NetworkPolicy, RuntimeConfig, ServerConfig,
+    DEFAULT_MAX_EXECUTION_TOKENS, DEFAULT_MAX_STORE_BYTES, FileSecretStore, KeySource, LlmLimits,
+    NetworkPolicy, RuntimeConfig, ServerConfig,
 };
 use submilli_shared::secret_store::SecretStore;
 
@@ -77,6 +78,14 @@ pub struct FileConfig {
     /// total. Bounds the process against session count, where
     /// `max_execution_memory` bounds a single execution.
     pub max_session_state_memory: Option<u64>,
+    /// Tokens every live execution's `submilli:llm` calls may spend in total.
+    /// Bounds the process against the operator's provider credential, where
+    /// `max_execution_llm_tokens` bounds a single run.
+    pub max_llm_tokens: Option<u64>,
+    /// Tokens a single execution's `submilli:llm` calls may spend.
+    pub max_execution_llm_tokens: Option<u64>,
+    /// Prompts one `llm.batch` dispatches at once.
+    pub max_llm_concurrency: Option<usize>,
     #[serde(default)]
     pub network: NetworkFileConfig,
     #[serde(default)]
@@ -163,6 +172,9 @@ pub(crate) struct EnvConfig {
     shutdown_grace: Option<String>,
     max_execution_memory: Option<String>,
     max_session_state_memory: Option<String>,
+    max_llm_tokens: Option<String>,
+    max_execution_llm_tokens: Option<String>,
+    max_llm_concurrency: Option<String>,
     blueprint_dir: Option<PathBuf>,
     blueprint_seed_dir: Option<PathBuf>,
     session_store_dir: Option<PathBuf>,
@@ -226,6 +238,9 @@ impl EnvConfig {
             shutdown_grace: var("SUBMILLI_SHUTDOWN_GRACE"),
             max_execution_memory: var("SUBMILLI_MAX_EXECUTION_MEMORY"),
             max_session_state_memory: var("SUBMILLI_MAX_SESSION_STATE_MEMORY"),
+            max_llm_tokens: var("SUBMILLI_MAX_LLM_TOKENS"),
+            max_execution_llm_tokens: var("SUBMILLI_MAX_EXECUTION_LLM_TOKENS"),
+            max_llm_concurrency: var("SUBMILLI_MAX_LLM_CONCURRENCY"),
             blueprint_dir: path("SUBMILLI_BLUEPRINT_DIR"),
             blueprint_seed_dir: path("SUBMILLI_BLUEPRINT_SEED_DIR"),
             session_store_dir: path("SUBMILLI_SESSION_STORE_DIR"),
@@ -428,6 +443,69 @@ fn max_session_state_memory(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Re
     Ok(Some(mb.saturating_mul(1024 * 1024)))
 }
 
+/// `None` leaves [`ServerConfig::max_llm_tokens`] unset, so the session
+/// manager's own default applies rather than being baked in twice.
+///
+/// Tokens, not megabytes: the unit the provider bills in and the refusal message
+/// names, so there is no boundary conversion to get wrong.
+fn max_llm_tokens(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<Option<u64>> {
+    let env_tokens = parse_env(
+        "SUBMILLI_MAX_LLM_TOKENS",
+        "a whole number of tokens",
+        env.max_llm_tokens.as_ref(),
+    )?;
+    let Some(tokens) = explicit(cli.max_llm_tokens, env_tokens, file.max_llm_tokens) else {
+        return Ok(None);
+    };
+    if tokens == 0 {
+        anyhow::bail!("max llm tokens must be at least 1, got 0");
+    }
+    Ok(Some(tokens))
+}
+
+/// The per-execution token ceiling. Unlike the aggregate this has no `Option` in
+/// [`ServerConfig`] — it lives inside `llm_limits`, whose other fields are
+/// embedder-only — so an unset value resolves to the runtime's own default here
+/// rather than at the construction site.
+fn max_execution_llm_tokens(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<u64> {
+    let env_tokens = parse_env(
+        "SUBMILLI_MAX_EXECUTION_LLM_TOKENS",
+        "a whole number of tokens",
+        env.max_execution_llm_tokens.as_ref(),
+    )?;
+    let Some(tokens) = explicit(
+        cli.max_execution_llm_tokens,
+        env_tokens,
+        file.max_execution_llm_tokens,
+    ) else {
+        return Ok(DEFAULT_MAX_EXECUTION_TOKENS);
+    };
+    if tokens == 0 {
+        anyhow::bail!("max execution llm tokens must be at least 1, got 0");
+    }
+    Ok(tokens)
+}
+
+/// The batch fan-out bound (KTD4).
+///
+/// `0` is rejected rather than clamped: it would read as "no concurrency", but a
+/// zero-permit semaphore is a deadlock, and silently treating it as `1` hides an
+/// operator's mistake behind a serial dispatch they did not ask for.
+fn max_llm_concurrency(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<Option<usize>> {
+    let env_limit = parse_env(
+        "SUBMILLI_MAX_LLM_CONCURRENCY",
+        "a whole number of prompts",
+        env.max_llm_concurrency.as_ref(),
+    )?;
+    let Some(limit) = explicit(cli.max_llm_concurrency, env_limit, file.max_llm_concurrency) else {
+        return Ok(None);
+    };
+    if limit == 0 {
+        anyhow::bail!("max llm concurrency must be at least 1, got 0");
+    }
+    Ok(Some(limit))
+}
+
 /// Telemetry requires an explicit opt-in. A config-file opt-out always wins;
 /// a supplied environment value must also explicitly enable telemetry.
 fn combine_telemetry(env_setting: Option<&str>, file_setting: Option<bool>) -> bool {
@@ -463,6 +541,15 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
         ..RuntimeConfig::default()
     };
     let max_session_state_memory = max_session_state_memory(&cli, &file, &env)?;
+    let max_llm_tokens = max_llm_tokens(&cli, &file, &env)?;
+    let max_llm_concurrency = max_llm_concurrency(&cli, &file, &env)?;
+    // The other `LlmLimits` fields are embedder-only, the way `session_kv_limits`
+    // is: the per-execution ceiling is the one an operator tunes alongside the
+    // aggregate, so it is the only one that gets a rung on the ladder.
+    let llm_limits = LlmLimits {
+        per_execution_tokens: max_execution_llm_tokens(&cli, &file, &env)?,
+        ..LlmLimits::default()
+    };
 
     let blueprint_dir = explicit(cli.blueprint_dir, env.blueprint_dir, file.blueprint_dir)
         .unwrap_or_else(default_blueprint_dir);
@@ -540,6 +627,9 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
         mcp_allowed_hosts,
         mcp_oauth_providers,
         max_session_state_memory,
+        llm_limits,
+        max_llm_tokens,
+        max_llm_concurrency,
         volumes: file.volumes,
         ..ServerConfig::default()
     };
@@ -672,6 +762,9 @@ mod tests {
             shutdown_grace: None,
             max_execution_memory: None,
             max_session_state_memory: None,
+            max_llm_tokens: None,
+            max_execution_llm_tokens: None,
+            max_llm_concurrency: None,
             health_check: false,
         }
     }
@@ -1721,6 +1814,152 @@ network:
             let bytes = max_session_state_memory(&cli, &file, &env).unwrap();
             assert_eq!(bytes, expected, "{tier} should have won");
         }
+    }
+
+    /// The aggregate LLM ceiling walks the same rungs, in tokens rather than
+    /// megabytes — no unit conversion, so the number an operator writes is the
+    /// number the refusal names.
+    #[test]
+    fn max_llm_tokens_walks_the_ladder() {
+        let file = || FileConfig {
+            max_llm_tokens: Some(300),
+            ..FileConfig::default()
+        };
+        let with_flag = Cli {
+            max_llm_tokens: Some(400),
+            ..empty_cli()
+        };
+        let env = || env_from(&[("SUBMILLI_MAX_LLM_TOKENS", "200")]);
+
+        for (cli, file, env, expected, tier) in [
+            (with_flag, file(), env(), Some(400), "the flag"),
+            (empty_cli(), file(), env(), Some(200), "the env var"),
+            (
+                empty_cli(),
+                file(),
+                EnvConfig::default(),
+                Some(300),
+                "the config file",
+            ),
+            (
+                empty_cli(),
+                FileConfig::default(),
+                EnvConfig::default(),
+                None,
+                "unset",
+            ),
+        ] {
+            let tokens = max_llm_tokens(&cli, &file, &env).unwrap();
+            assert_eq!(tokens, expected, "{tier} should have won");
+        }
+    }
+
+    /// The per-execution ceiling is the one rung of `LlmLimits` an operator
+    /// tunes, and unlike the aggregate it resolves to a concrete default rather
+    /// than to `None` — so "unset" asserts the runtime's own constant.
+    #[test]
+    fn max_execution_llm_tokens_walks_the_ladder() {
+        let file = || FileConfig {
+            max_execution_llm_tokens: Some(300),
+            ..FileConfig::default()
+        };
+        let with_flag = Cli {
+            max_execution_llm_tokens: Some(400),
+            ..empty_cli()
+        };
+        let env = || env_from(&[("SUBMILLI_MAX_EXECUTION_LLM_TOKENS", "200")]);
+
+        for (cli, file, env, expected, tier) in [
+            (with_flag, file(), env(), 400, "the flag"),
+            (empty_cli(), file(), env(), 200, "the env var"),
+            (
+                empty_cli(),
+                file(),
+                EnvConfig::default(),
+                300,
+                "the config file",
+            ),
+            (
+                empty_cli(),
+                FileConfig::default(),
+                EnvConfig::default(),
+                DEFAULT_MAX_EXECUTION_TOKENS,
+                "unset",
+            ),
+        ] {
+            let tokens = max_execution_llm_tokens(&cli, &file, &env).unwrap();
+            assert_eq!(tokens, expected, "{tier} should have won");
+        }
+    }
+
+    /// The batch fan-out bound (KTD4) walks the same ladder.
+    #[test]
+    fn max_llm_concurrency_walks_the_ladder() {
+        let file = || FileConfig {
+            max_llm_concurrency: Some(3),
+            ..FileConfig::default()
+        };
+        let with_flag = Cli {
+            max_llm_concurrency: Some(9),
+            ..empty_cli()
+        };
+        let env = || env_from(&[("SUBMILLI_MAX_LLM_CONCURRENCY", "6")]);
+
+        for (cli, file, env, expected, tier) in [
+            (with_flag, file(), env(), Some(9), "the flag"),
+            (empty_cli(), file(), env(), Some(6), "the env var"),
+            (
+                empty_cli(),
+                file(),
+                EnvConfig::default(),
+                Some(3),
+                "the config file",
+            ),
+            (
+                empty_cli(),
+                FileConfig::default(),
+                EnvConfig::default(),
+                None,
+                "unset",
+            ),
+        ] {
+            let limit = max_llm_concurrency(&cli, &file, &env).unwrap();
+            assert_eq!(limit, expected, "{tier} should have won");
+        }
+    }
+
+    /// Zero is rejected on all three, rather than meaning "unlimited" (the
+    /// budgets) or "no concurrency" (the bound, where it would deadlock).
+    #[test]
+    fn zero_llm_settings_are_rejected() {
+        for (name, value) in [
+            ("SUBMILLI_MAX_LLM_TOKENS", "0"),
+            ("SUBMILLI_MAX_EXECUTION_LLM_TOKENS", "0"),
+            ("SUBMILLI_MAX_LLM_CONCURRENCY", "0"),
+        ] {
+            let env = env_from(&[(name, value)]);
+            let cli = empty_cli();
+            let file = FileConfig::default();
+            let failed = max_llm_tokens(&cli, &file, &env).is_err()
+                || max_execution_llm_tokens(&cli, &file, &env).is_err()
+                || max_llm_concurrency(&cli, &file, &env).is_err();
+            assert!(failed, "${name}=0 should have failed boot");
+        }
+    }
+
+    /// A set-but-unparseable value fails boot naming the variable, rather than
+    /// falling through to a weaker source — a silently-ignored ceiling is how a
+    /// server ends up spending more than the operator asked.
+    #[test]
+    fn malformed_llm_settings_fail_boot_naming_the_variable() {
+        let env = env_from(&[("SUBMILLI_MAX_LLM_TOKENS", "lots")]);
+        let Err(err) = max_llm_tokens(&empty_cli(), &FileConfig::default(), &env) else {
+            panic!("a malformed SUBMILLI_MAX_LLM_TOKENS should have failed boot");
+        };
+        assert!(
+            err.to_string().contains("SUBMILLI_MAX_LLM_TOKENS"),
+            "the error must name the variable: {err}"
+        );
     }
 
     #[test]

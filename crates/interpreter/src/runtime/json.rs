@@ -406,6 +406,31 @@ fn boxed_array_raw(
     }
 }
 
+/// Parse `text` as JSON and materialize it as an `unknown`-shaped guest value,
+/// the same construction `JSON.parse` performs.
+///
+/// Shared so a host package that hands back model-authored JSON — `llm.call<T>`,
+/// whose typed lowering then verifies the result structurally — builds the same
+/// object representation a program would get from `JSON.parse`, rather than a
+/// second, subtly different one. `context` prefixes the error so a malformed
+/// response is attributed to the call that produced it, not to `JSON.parse`.
+pub(crate) fn parse_json_as_unknown(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    text: &str,
+    context: &str,
+) -> wasmtime::Result<Val> {
+    let value: serde_json::Value = serde_json::from_str(text).map_err(|e| {
+        let msg = format!("{context}: {e}");
+        if e.to_string().starts_with("number out of range") {
+            crate::runtime::host::range_error(msg)
+        } else {
+            crate::runtime::host::syntax_error(msg)
+        }
+    })?;
+    let allocator = JsonUnknownAllocator::new(&mut *caller)?;
+    allocator.allocate(&mut *caller, &value)
+}
+
 pub(crate) fn boxed_struct(
     ctx: &mut impl AsContextMut<Data = StoreData>,
     val: Val,

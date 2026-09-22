@@ -25,7 +25,7 @@ async fn get(uri: &str) -> (StatusCode, Value) {
 async fn search_lists_all_and_filters_by_symbol() {
     let (status, all) = get("/v1/packages/search").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(all["results"].as_array().unwrap().len(), 7, "got: {all}");
+    assert_eq!(all["results"].as_array().unwrap().len(), 8, "got: {all}");
 
     let (_, hit) = get("/v1/packages/search?q=sha256").await;
     let names: Vec<&str> = hit["results"]

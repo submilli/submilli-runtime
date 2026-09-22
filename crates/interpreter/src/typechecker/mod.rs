@@ -1,6 +1,7 @@
 pub mod capture;
 pub mod desugar;
 pub mod infer;
+pub mod json_schema;
 pub mod json_strategy;
 pub mod rules;
 pub mod type_param_substitution;

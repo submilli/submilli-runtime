@@ -90,6 +90,7 @@ fn parse_blueprint(yaml: &str) -> Result<Blueprint, (StatusCode, Json<ErrorRespo
             BlueprintError::InvalidAuthProxy(_) => "invalid_auth_proxy",
             BlueprintError::InvalidPermissions(_) => "invalid_permissions",
             BlueprintError::InvalidMcp(_) => "invalid_mcp",
+            BlueprintError::InvalidLlm(_) => "invalid_llm",
         };
         let diagnostics = err.fault().map(|fault| {
             vec![Diagnostic {

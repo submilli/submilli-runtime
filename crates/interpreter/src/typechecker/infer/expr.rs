@@ -2821,6 +2821,210 @@ impl Inferer<'_> {
         }
     }
 
+    /// Rewrite `llm.call<T>(model, prompt)` into a runtime-checked cast, and
+    /// emit the JSON Schema for `T` that rides along to the provider.
+    ///
+    /// Mirrors [`Self::checked_session_get`] — same soundness argument, same
+    /// `checked_cast_around` — with one addition: the schema gate. A typed call
+    /// must pass **both** gates, because the schema surface is strictly
+    /// narrower than what the cast machinery can test (KTD5). `Function`,
+    /// `bigint`, `Uint8Array`, and `unknown` are all castable and none has a
+    /// JSON Schema in the safe subset, so a type that cleared only the cast
+    /// gate would reach a provider as a schema that constrained nothing.
+    ///
+    /// Both gates run here rather than at the wrap, because the emitted schema
+    /// has to replace the trailing `schema` argument before the call node's
+    /// argument list is frozen. `Ok(None)` is the untyped form, which sends no
+    /// schema and gets no check; `Ok(Some(schema))` means both gates passed and
+    /// the caller must wrap the call in [`Self::checked_llm_cast`]; `Err(())`
+    /// means a diagnostic was reported (or deliberately suppressed) and the
+    /// call is an error.
+    ///
+    /// Call only for a [`crate::stdlib::llm::declaration::is_checked_call`]
+    /// mangled name. `type_args_written` separates an explicit `call<unknown>`
+    /// from a bare `call(...)`, whose result is the `Completion` envelope and
+    /// needs no check.
+    pub(super) fn llm_call_schema(
+        &mut self,
+        result_ty: &Type,
+        type_args_written: bool,
+        span: Span,
+    ) -> Result<Option<String>, ()> {
+        // No type argument: the call keeps its pre-generic meaning and returns
+        // the `Completion` envelope, which the declaration already typed. There
+        // is nothing to check and no schema to send.
+        if !type_args_written {
+            return Ok(None);
+        }
+        // Written `<unknown>` asks for a check that cannot exist. Unlike
+        // `session.get`, there is no honest unchecked reading to fall back on —
+        // the untyped form is a different, fully-typed result — so this is
+        // caught here as well as by the schema gate, which would also reject it.
+        if matches!(result_ty.peel(), Type::Unknown) {
+            self.error_with_help(
+                span,
+                "`llm.call<unknown>` would not verify anything: `unknown` admits every \
+                 value, so no runtime check is possible and its JSON Schema could only \
+                 be `{}`, which constrains the model to nothing"
+                    .to_string(),
+                vec![
+                    "name the shape you expect — `llm.call<Severity>(model, prompt)` — \
+                     or drop the type argument and read the `Completion` envelope's \
+                     `ok` and `text` yourself."
+                        .to_string(),
+                ],
+            );
+            return Err(());
+        }
+
+        // An erased `T` — a type parameter of the *calling* function — is
+        // reported against the cast gate rather than the schema gate. Both
+        // reject it, but only this diagnostic says what to do about it, and it
+        // is the wording `as` and MCP already use for the same mistake
+        // (`unsupported_cast_target_reason`'s `TypeVar | GenericParam` arm), so
+        // a program hitting it under `llm.call` reads the same advice it would
+        // hit under `as`.
+        let shape = self.reduce_interfaces_to_shapes(result_ty, &mut Vec::new());
+        if matches!(shape.peel(), Type::TypeVar(_) | Type::GenericParam { .. })
+            && let Some(reason) =
+                unsupported_cast_target_reason(&shape, self.resolver(), &mut Vec::new())
+        {
+            self.error_with_help(
+                span,
+                format!("`llm.call<{result_ty}>` cannot be verified at runtime: {reason}"),
+                vec![format!(
+                    "`llm.call` checks the model's response against its type argument, so \
+                     that argument must be one the runtime can test, and the schema is \
+                     emitted at compile time where `{result_ty}` is not yet known. Call it \
+                     at a concrete type — `llm.call<Severity>(model, prompt)` — inside the \
+                     generic function, or drop the type argument and read the `Completion` \
+                     envelope yourself."
+                )],
+            );
+            return Err(());
+        }
+
+        // The schema gate runs before the cast gate, because it is strictly
+        // narrower (KTD5) *and* its rejections name the offending field. A
+        // recursive type fails both; the schema reason points at the field that
+        // closes the cycle, which is the one the author has to change.
+        match self.llm_schema_for(result_ty) {
+            Ok(schema) => {
+                // The cast gate still has to pass: it is what `checked_cast_around`
+                // will re-run, and the two surfaces agree everywhere except the
+                // arms handled above.
+                if let Some(reason) =
+                    unsupported_cast_target_reason(&shape, self.resolver(), &mut Vec::new())
+                {
+                    self.error_with_help(
+                        span,
+                        format!("`llm.call<{result_ty}>` cannot be verified at runtime: {reason}"),
+                        vec![format!(
+                            "`llm.call` checks the model's response against its type \
+                             argument, so that argument must be one the runtime can test: \
+                             an object, array, tuple, union, or primitive shape. Call it \
+                             at a concrete type instead of `{result_ty}` — \
+                             `llm.call<Severity>(model, prompt)` — or drop the type \
+                             argument and read the `Completion` envelope yourself."
+                        )],
+                    );
+                    return Err(());
+                }
+                Ok(Some(schema))
+            }
+            Err(reject) => {
+                // A `Type::Error` already reported its own diagnostic; a second
+                // one here would blame the same mistake twice.
+                if !reject.cascading {
+                    self.error_with_help(
+                        span,
+                        format!(
+                            "`llm.call<{result_ty}>` has no JSON Schema: {}",
+                            reject.describe()
+                        ),
+                        vec![
+                            "the schema sent to the model is fully inlined and carries no \
+                             `$ref`, so every field must be an object, array, tuple, union, \
+                             enum, or primitive shape. Replace that field with one — a \
+                             `string` for bytes or a big number, a named shape in place of \
+                             `unknown` — or drop the type argument and parse the \
+                             `Completion` text yourself."
+                                .to_string(),
+                        ],
+                    );
+                }
+                Err(())
+            }
+        }
+    }
+
+    /// Wrap a gated `llm.call<T>` in its checked cast. Split from
+    /// [`Self::llm_call_schema`] because the gates must run before the call
+    /// node's arguments are frozen and this must run after. `checked_cast_around`
+    /// cannot fail here: `llm_call_schema` already ran the same cast gate on the
+    /// same type, and passing it is what produced the schema that got us here.
+    pub(super) fn checked_llm_cast(
+        &mut self,
+        call: TypedExprKind,
+        result_ty: &Type,
+        span: Span,
+    ) -> (TypedExprKind, Type) {
+        match self.checked_cast_around(call, result_ty, span) {
+            Ok(checked) => checked,
+            Err(reason) => unreachable!(
+                "llm.call<{result_ty}> passed the cast gate in llm_call_schema \
+                 but failed it here: {reason}"
+            ),
+        }
+    }
+
+    /// Replace the trailing `schema` argument — which the declaration's `null`
+    /// default just filled — with the compile-time schema string, the way
+    /// `McpCall` carries its `server` and `tool` as constants.
+    ///
+    /// The slot is found by name rather than by index so the declaration can
+    /// grow a parameter without silently overwriting the wrong argument; a
+    /// program that passed a schema by hand has it replaced, which is why the
+    /// parameter is documented as not being surface a program writes.
+    pub(super) fn substitute_schema_argument(
+        &mut self,
+        params: &[crate::Param],
+        typed_args: &mut [ExprId],
+        schema: &str,
+        span: Span,
+    ) {
+        let Some(slot) = params.iter().position(|p| p.name == "schema") else {
+            return;
+        };
+        let Some(arg) = typed_args.get_mut(slot) else {
+            return;
+        };
+        *arg = self.typed_ast.push_expr(TypedExpr {
+            kind: TypedExprKind::String(schema.to_string()),
+            span,
+            ty: Type::String,
+        });
+    }
+
+    /// The inlined JSON Schema for `target_ty`, as the compact string the host
+    /// function takes.
+    ///
+    /// Reduces interfaces to shapes first, as [`Self::checked_cast_around`]
+    /// does, so the emitter sees the same structural type the check will, and
+    /// resolves alias back-edges through the type namespace — without that
+    /// expander every `AliasRef` survives the walk and is rejected as
+    /// unresolvable.
+    fn llm_schema_for(
+        &mut self,
+        target_ty: &Type,
+    ) -> Result<String, crate::typechecker::json_schema::SchemaReject> {
+        let shape = self.reduce_interfaces_to_shapes(target_ty, &mut Vec::new());
+        let types = self.resolver();
+        let expand = |ty: &Type| assignable::expand_alias_ref(ty, types);
+        let value = crate::typechecker::json_schema::json_schema_with(&shape, &expand)?;
+        Ok(value.to_string())
+    }
+
     /// Wrap `call` in the runtime-checked cast that verifies its result is
     /// really a `target_ty`. The call node is pushed typed `unknown` — so
     /// nothing downstream believes its static type before the check runs — and
@@ -9385,6 +9589,396 @@ function main(): void { if (result < 10) { } }
                 .iter()
                 .any(|d| d.message.contains("argument(s), got 0")),
             "expected arity diagnostic, got: {diags:?}",
+        );
+    }
+
+    /// Typecheck `source` against the real `submilli:llm` declaration.
+    fn run_with_llm(source: &str) -> (TypedAst, Vec<crate::Diagnostic>) {
+        let llm = crate::stdlib::llm::declaration::package_declaration();
+        run_with_packages(source, &[&llm])
+    }
+
+    /// Every `llm.call`/`llm.batch` in `ta` that was wrapped in a `Cast`, as
+    /// (has a structural `check`, the inner call's `return_cast`). Mirrors
+    /// `session_get_shapes`.
+    fn llm_call_shapes(ta: &TypedAst) -> Vec<(bool, Option<Type>)> {
+        let mut out = Vec::new();
+        for i in 0..ta.exprs_len() {
+            let expr = ta.expr(crate::ExprId(i as u32));
+            let TypedExprKind::Cast { value, check, .. } = &expr.kind else {
+                continue;
+            };
+            let TypedExprKind::GenericCall {
+                mangled,
+                return_cast,
+                ..
+            } = &ta.expr(*value).kind
+            else {
+                continue;
+            };
+            if crate::stdlib::llm::declaration::is_checked_call(mangled) {
+                out.push((check.is_some(), return_cast.clone()));
+            }
+        }
+        out
+    }
+
+    /// Every schema string that reached an `llm.call`/`llm.batch` argument
+    /// list, in call order. The schema rides in the trailing `schema` slot,
+    /// which the untyped form leaves as the `null` default.
+    fn llm_schemas(ta: &TypedAst) -> Vec<Option<String>> {
+        let mut out = Vec::new();
+        for i in 0..ta.exprs_len() {
+            let expr = ta.expr(crate::ExprId(i as u32));
+            let TypedExprKind::GenericCall { mangled, args, .. } = &expr.kind else {
+                continue;
+            };
+            if !crate::stdlib::llm::declaration::is_checked_call(mangled) {
+                continue;
+            }
+            let schema = args.last().and_then(|a| match &ta.expr(a.expr).kind {
+                TypedExprKind::String(s) => Some(s.clone()),
+                _ => None,
+            });
+            out.push(schema);
+        }
+        out
+    }
+
+    const SEVERITY: &str = "interface Severity { level: string; score: number; }";
+
+    /// R5: a typed call emits a structural test, and the schema for `T` reaches
+    /// the argument list as a compile-time constant.
+    #[test]
+    fn typed_llm_call_emits_a_structural_test_and_a_schema() {
+        let src = format!(
+            "import llm from \"submilli:llm\"; {SEVERITY} \
+             function main(): void {{ const s = llm.call<Severity>(\"m\", \"p\"); }}"
+        );
+        let (ta, diags) = run_with_llm(&src);
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
+
+        let shapes = llm_call_shapes(&ta);
+        assert_eq!(shapes.len(), 1, "expected one wrapped call, got {shapes:?}");
+        assert!(shapes[0].0, "call<Severity> lost its structural check");
+
+        let schemas = llm_schemas(&ta);
+        assert_eq!(schemas.len(), 1, "expected one call, got {schemas:?}");
+        let schema = schemas[0].as_deref().expect("a typed call sends a schema");
+        let parsed: serde_json::Value = serde_json::from_str(schema).expect("schema is JSON");
+        assert_eq!(parsed["type"], "object", "schema: {schema}");
+        assert_eq!(parsed["properties"]["level"]["type"], "string");
+        assert_eq!(parsed["properties"]["score"]["type"], "number");
+        assert!(
+            !schema.contains("$ref") && !schema.contains("$defs"),
+            "the schema must be fully inlined (KTD5): {schema}",
+        );
+    }
+
+    /// Nested and optional fields are carried into the schema and into the
+    /// check, rather than being flattened to a bare `object`.
+    #[test]
+    fn nested_and_optional_fields_reach_the_schema_and_the_check() {
+        let src = "import llm from \"submilli:llm\"; \
+                   interface Inner { tag: string; } \
+                   interface Outer { inner: Inner; note?: string; } \
+                   function main(): void { const o = llm.call<Outer>(\"m\", \"p\"); }";
+        let (ta, diags) = run_with_llm(src);
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
+
+        let schema = llm_schemas(&ta)[0].clone().expect("schema emitted");
+        let parsed: serde_json::Value = serde_json::from_str(&schema).expect("schema is JSON");
+        // The nested interface is inlined in full, not referenced.
+        assert_eq!(
+            parsed["properties"]["inner"]["properties"]["tag"]["type"], "string",
+            "nested field lost its shape: {schema}",
+        );
+        // An optional field is present but not required; a required-only
+        // `inner` is what distinguishes the two.
+        let required: Vec<&str> = parsed["required"]
+            .as_array()
+            .expect("required list")
+            .iter()
+            .map(|v| v.as_str().expect("string"))
+            .collect();
+        assert!(required.contains(&"inner"), "schema: {schema}");
+        assert!(
+            !required.contains(&"note"),
+            "an optional field must not be required: {schema}",
+        );
+
+        // And the check walks the same nested shape rather than stopping at the
+        // outer object.
+        let shapes = llm_call_shapes(&ta);
+        assert_eq!(shapes, vec![(true, None)], "shapes: {shapes:?}");
+    }
+
+    /// The soundness invariant, and the one most at risk of silently
+    /// regressing: a `call<T>` must lower to a `Cast` carrying a structural
+    /// check, and the call it wraps must NOT carry a `return_cast` — that is a
+    /// `ref.cast`, a representation-only narrow that verifies nothing and traps
+    /// uncatchably on a null response. A shape mismatch throws either way, so
+    /// only this assertion distinguishes them.
+    #[test]
+    fn typed_llm_call_is_a_checked_cast_and_never_a_return_cast() {
+        let src = format!(
+            "import llm from \"submilli:llm\"; {SEVERITY} \
+             function main(): void {{ const s = llm.call<Severity>(\"m\", \"p\"); }}"
+        );
+        let (ta, diags) = run_with_llm(&src);
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
+
+        let shapes = llm_call_shapes(&ta);
+        assert_eq!(shapes.len(), 1, "expected one wrapped call, got {shapes:?}");
+        assert!(shapes[0].0, "call<Severity> lost its structural check");
+        assert_eq!(
+            shapes[0].1, None,
+            "call<Severity> kept an unsound return_cast: {shapes:?}",
+        );
+    }
+
+    /// The same invariant across every import form. Interception matches the
+    /// package-export mangled name, so an alias, a named import, and a
+    /// namespace import must all land on the checked path identically —
+    /// mirroring `fixtures/imports/session_*`.
+    #[test]
+    fn no_import_form_of_llm_call_keeps_a_return_cast() {
+        let src = format!(
+            "import llm from \"submilli:llm\"; \
+             import ai from \"submilli:llm\"; \
+             import {{ call }} from \"submilli:llm\"; \
+             import * as everything from \"submilli:llm\"; {SEVERITY} \
+             function main(): void {{ \
+               const a = llm.call<Severity>(\"m\", \"p\"); \
+               const b = ai.call<Severity>(\"m\", \"p\"); \
+               const c = call<Severity>(\"m\", \"p\"); \
+               const d = everything.call<Severity>(\"m\", \"p\"); }}"
+        );
+        let (ta, diags) = run_with_llm(&src);
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
+        assert_eq!(
+            llm_call_shapes(&ta),
+            vec![(true, None), (true, None), (true, None), (true, None)],
+            "every import form must produce a checked, uncast call",
+        );
+
+        // And no raw `GenericCall` on the symbol survives with a `return_cast`,
+        // whichever form produced it.
+        for i in 0..ta.exprs_len() {
+            let expr = ta.expr(crate::ExprId(i as u32));
+            if let TypedExprKind::GenericCall {
+                mangled,
+                return_cast,
+                ..
+            } = &expr.kind
+                && crate::stdlib::llm::declaration::is_checked_call(mangled)
+            {
+                assert_eq!(*return_cast, None, "an llm call kept a return_cast");
+            }
+        }
+    }
+
+    /// Every import form also emits the same schema — the interception is not
+    /// keyed on the receiver, so an aliased or namespace import must not
+    /// silently fall through to the untyped path.
+    #[test]
+    fn every_import_form_emits_the_same_schema() {
+        let src = format!(
+            "import llm from \"submilli:llm\"; \
+             import ai from \"submilli:llm\"; \
+             import {{ call }} from \"submilli:llm\"; \
+             import * as everything from \"submilli:llm\"; {SEVERITY} \
+             function main(): void {{ \
+               const a = llm.call<Severity>(\"m\", \"p\"); \
+               const b = ai.call<Severity>(\"m\", \"p\"); \
+               const c = call<Severity>(\"m\", \"p\"); \
+               const d = everything.call<Severity>(\"m\", \"p\"); }}"
+        );
+        let (ta, diags) = run_with_llm(&src);
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
+
+        let schemas = llm_schemas(&ta);
+        assert_eq!(schemas.len(), 4, "expected four calls, got {schemas:?}");
+        let first = schemas[0].as_deref().expect("a typed call sends a schema");
+        for (i, s) in schemas.iter().enumerate() {
+            assert_eq!(
+                s.as_deref(),
+                Some(first),
+                "import form {i} emitted a different schema",
+            );
+        }
+    }
+
+    /// `batch<T[]>` takes the same path: a checked cast, no `return_cast`, and
+    /// a schema for the whole result.
+    #[test]
+    fn typed_llm_batch_is_a_checked_cast_too() {
+        let src = format!(
+            "import llm from \"submilli:llm\"; {SEVERITY} \
+             function main(): void {{ const s = llm.batch<Severity[]>(\"m\", [\"p\"]); }}"
+        );
+        let (ta, diags) = run_with_llm(&src);
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
+        assert_eq!(llm_call_shapes(&ta), vec![(true, None)]);
+
+        let schema = llm_schemas(&ta)[0].clone().expect("schema emitted");
+        let parsed: serde_json::Value = serde_json::from_str(&schema).expect("schema is JSON");
+        assert_eq!(parsed["type"], "array", "schema: {schema}");
+        assert_eq!(parsed["items"]["properties"]["level"]["type"], "string");
+    }
+
+    /// R7, and the distinction the `type_args_written` flag exists for: a bare
+    /// `call(...)` is not an error — it keeps its pre-generic meaning and
+    /// returns the `Completion` envelope, unwrapped and unschema'd.
+    #[test]
+    fn untyped_llm_call_returns_the_completion_envelope_without_erroring() {
+        let src = "import llm from \"submilli:llm\"; \
+                   function main(): void { const c = llm.call(\"m\", \"p\"); \
+                                           const t = c.text; }";
+        let (ta, diags) = run_with_llm(src);
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
+        assert!(
+            llm_call_shapes(&ta).is_empty(),
+            "an untyped call must not be wrapped in a checked cast",
+        );
+        assert_eq!(
+            llm_schemas(&ta),
+            vec![None],
+            "an untyped call must send no schema",
+        );
+    }
+
+    /// The untyped `batch` likewise keeps its `Completion[]` envelope, so a
+    /// per-element `ok` is still readable.
+    #[test]
+    fn untyped_llm_batch_returns_completion_array() {
+        let src = "import llm from \"submilli:llm\"; \
+                   function main(): void { const r = llm.batch(\"m\", [\"p\"]); \
+                                           const ok = r[0].ok; }";
+        let (_, diags) = run_with_llm(src);
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
+    }
+
+    /// R7: a *written* `<unknown>` is the error, because it asks for a check
+    /// that cannot exist and a schema that would constrain nothing.
+    #[test]
+    fn written_unknown_type_argument_is_rejected() {
+        let src = "import llm from \"submilli:llm\"; \
+                   function main(): void { const v = llm.call<unknown>(\"m\", \"p\"); }";
+        let (_, diags) = run_with_llm(src);
+        let d = diags
+            .iter()
+            .find(|d| d.message.contains("llm.call<unknown>"))
+            .unwrap_or_else(|| panic!("expected an unknown rejection, got: {diags:?}"));
+        assert!(
+            d.message.contains("admits every value"),
+            "message must say why: {}",
+            d.message,
+        );
+        assert!(
+            d.help.iter().any(|h| h.contains("llm.call<Severity>")),
+            "help must show the fix: {:?}",
+            d.help,
+        );
+    }
+
+    /// R7: `call<T>` inside a user generic. The reason is
+    /// `unsupported_cast_target_reason`'s erasure arm verbatim — the same text
+    /// `as` and MCP produce — and the `help:` names the fix.
+    #[test]
+    fn type_argument_erased_by_a_user_generic_is_rejected() {
+        let src = "import llm from \"submilli:llm\"; \
+                   function pick<T>(): T { return llm.call<T>(\"m\", \"p\"); } \
+                   function main(): void { const n = pick<number>(); }";
+        let (_, diags) = run_with_llm(src);
+        let d = diags
+            .iter()
+            .find(|d| d.message.contains("cannot be verified at runtime"))
+            .unwrap_or_else(|| panic!("expected an erasure rejection, got: {diags:?}"));
+        assert!(
+            d.message
+                .contains("generic type parameters are erased at runtime"),
+            "must reuse the shared erasure reason verbatim: {}",
+            d.message,
+        );
+        assert!(
+            d.help
+                .iter()
+                .any(|h| h.contains("emitted at compile time") && h.contains("llm.call<Severity>")),
+            "help must explain the erasure and name the fix: {:?}",
+            d.help,
+        );
+    }
+
+    /// KTD5: the schema surface is strictly narrower than the cast surface. A
+    /// `Uint8Array` field is a legal `as` target and has no JSON form, so only
+    /// the schema gate catches it — and the diagnostic names the field.
+    #[test]
+    fn a_type_outside_the_schema_surface_is_rejected_naming_the_field() {
+        let src = "import llm from \"submilli:llm\"; \
+                   interface Blob { blob: Uint8Array; } \
+                   function main(): void { const b = llm.call<Blob>(\"m\", \"p\"); }";
+        let (_, diags) = run_with_llm(src);
+        let d = diags
+            .iter()
+            .find(|d| d.message.contains("has no JSON Schema"))
+            .unwrap_or_else(|| panic!("expected a schema rejection, got: {diags:?}"));
+        assert!(
+            d.message.contains("field `blob`"),
+            "the diagnostic must name the offending field: {}",
+            d.message,
+        );
+
+        // Control: the same type IS accepted by the cast gate, which is what
+        // makes the second gate load-bearing rather than redundant.
+        let cast_src = "interface Blob { blob: Uint8Array; } \
+                        function main(): void { const v: unknown = null; const b = v as Blob; }";
+        let (_, cast_diags) = run(cast_src);
+        assert!(
+            cast_diags.is_empty(),
+            "`as Blob` must still be legal — otherwise the schema gate proves nothing: \
+             {cast_diags:?}",
+        );
+    }
+
+    /// A recursive type has no finite inlining, and the reject names the field
+    /// that closes the cycle rather than only the type.
+    #[test]
+    fn a_recursive_type_is_rejected_naming_the_closing_field() {
+        let src = "import llm from \"submilli:llm\"; \
+                   interface Node { value: string; next: Node | null; } \
+                   function main(): void { const n = llm.call<Node>(\"m\", \"p\"); }";
+        let (_, diags) = run_with_llm(src);
+        let d = diags
+            .iter()
+            .find(|d| d.message.contains("has no JSON Schema"))
+            .unwrap_or_else(|| panic!("expected a schema rejection, got: {diags:?}"));
+        assert!(
+            d.message.contains("field `next`"),
+            "must name the field that closes the cycle: {}",
+            d.message,
+        );
+    }
+
+    /// A `Type::Error` has already reported its own diagnostic. The schema
+    /// emitter still rejects it — there is no schema — but the rejection is
+    /// `cascading` and must stay silent rather than blame the same mistake
+    /// twice.
+    #[test]
+    fn a_cascading_schema_reject_emits_no_second_diagnostic() {
+        let src = "import llm from \"submilli:llm\"; \
+                   function main(): void { const x = llm.call<NoSuchType>(\"m\", \"p\"); }";
+        let (_, diags) = run_with_llm(src);
+        assert!(
+            !diags
+                .iter()
+                .any(|d| d.message.contains("has no JSON Schema")),
+            "an already-failed type must not cascade a schema diagnostic: {diags:?}",
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "exactly the original unresolved-type diagnostic: {diags:?}",
         );
     }
 }
