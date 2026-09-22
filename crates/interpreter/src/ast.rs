@@ -698,6 +698,12 @@ pub enum TypeAnnotationKind {
     /// `keyof T` — the union of `T`'s member names as string literal types.
     /// Resolved eagerly, so this never reaches the typed AST.
     KeyOf(Box<TypeAnnotation>),
+    /// `typeof x` — the type of the *value* `x`, looked up in the value namespace
+    /// rather than the type namespace. `path` is the dotted reference, one span per
+    /// segment (`typeof o.k` has two). Resolved eagerly, like [`KeyOf`](Self::KeyOf).
+    TypeOf {
+        path: Vec<Span>,
+    },
 }
 
 /// Reused for object-type fields and function-type parameters. `rest` is always

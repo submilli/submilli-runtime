@@ -772,6 +772,7 @@ impl<'a> Inferer<'a> {
             TypeAnnotationKind::StringLiteral(s) => Type::StringLiteral(s.clone()),
             TypeAnnotationKind::NumberLiteral(v) => Type::NumberLiteral(*v),
             TypeAnnotationKind::KeyOf(operand) => self.resolve_keyof(operand),
+            TypeAnnotationKind::TypeOf { path } => self.resolve_typeof(path),
         }
     }
 
@@ -783,6 +784,72 @@ impl<'a> Inferer<'a> {
     /// Only concrete operands are supported. `keyof T` for a type parameter has no
     /// eager answer and would need a deferred type node, so it is rejected by name
     /// rather than resolved to something narrower than it should be.
+    /// `typeof x` — the type of the value `x`, read from the value namespace.
+    ///
+    /// Locals shadow globals, as everywhere else. A dotted path walks object fields
+    /// from the root value, which is what makes `typeof o.k` work.
+    fn resolve_typeof(&mut self, path: &[crate::Span]) -> Type {
+        let Some((root_span, rest)) = path.split_first() else {
+            return Type::Error;
+        };
+        let name = self.source[root_span.start as usize..root_span.end as usize].to_string();
+
+        let Some(mut ty) = self.lookup_value_type(&name) else {
+            self.error(*root_span, format!("unresolved identifier `{name}`"));
+            return Type::Error;
+        };
+
+        for seg in rest {
+            let field = self.source[seg.start as usize..seg.end as usize].to_string();
+            let Some(next) = self.field_type_of(&ty, &field) else {
+                self.error(*seg, format!("`{field}` is not a field of `{ty}`"));
+                return Type::Error;
+            };
+            ty = next;
+        }
+        ty
+    }
+
+    /// The declared type of a value, locals shadowing globals.
+    fn lookup_value_type(&self, name: &str) -> Option<Type> {
+        if let Some(local) = self.scopes.get(name) {
+            return Some(local.ty.clone());
+        }
+        Some(match &self.top_symbols.get(name)?.kind {
+            crate::ValueKind::Let { ty, .. } | crate::ValueKind::Const { ty, .. } => ty.clone(),
+            crate::ValueKind::Function {
+                params,
+                ret,
+                type_predicate,
+                ..
+            } => Type::Function {
+                params: params.iter().map(|p| p.ty.clone()).collect(),
+                ret: Box::new(ret.clone()),
+                predicate: type_predicate.clone().map(Box::new),
+                has_rest: params.last().is_some_and(|p| p.rest),
+            },
+        })
+    }
+
+    /// One field read for a `typeof a.b` path. Object types carry their fields
+    /// directly; an interface reference resolves through its declaring symbol.
+    fn field_type_of(&self, ty: &Type, field: &str) -> Option<Type> {
+        match ty.peel() {
+            Type::Object { fields } => fields.get(field).map(crate::types::ObjectField::read_ty),
+            Type::InterfaceRef { .. } => {
+                let (mangled, _package, name, _args) = ty.interface_routing()?;
+                let sym = self.lookup_structural_type(&mangled, name)?;
+                let TypeKind::Interface { properties, .. } = &sym.kind else {
+                    return None;
+                };
+                properties
+                    .get(field)
+                    .map(|p| crate::ObjectField::widen_optional(p.optional, p.ty.clone()))
+            }
+            _ => None,
+        }
+    }
+
     fn resolve_keyof(&mut self, operand: &TypeAnnotation) -> Type {
         let resolved = self.resolve_value_type(operand, ValuePosition::UnionMember);
         let Some(names) = self.member_names_of(&resolved) else {

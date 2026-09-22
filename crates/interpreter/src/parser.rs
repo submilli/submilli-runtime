@@ -2671,6 +2671,27 @@ impl<'a> Parser<'a> {
         }
 
         let mut ty = match self.peek().kind {
+            // `typeof x` names the type of a *value*. Unlike `keyof` this is already a
+            // reserved word (the `typeof x === "string"` guard uses it), so it needs no
+            // contextual check — in type position it is only ever the operator. Built
+            // here rather than returned early so the `[]` suffix loop below still runs,
+            // making `typeof a[]` an array of it, as TypeScript parses it too.
+            TokenKind::Typeof => {
+                let kw = self.advance();
+                let first = self.expect_identifier("expected a value name after `typeof`")?;
+                let mut path = vec![first.span];
+                let mut end = first.span.end;
+                while matches!(self.peek().kind, TokenKind::Dot) {
+                    self.advance();
+                    let seg = self.expect_identifier("expected a property name after `.`")?;
+                    end = seg.span.end;
+                    path.push(seg.span);
+                }
+                TypeAnnotation {
+                    kind: TypeAnnotationKind::TypeOf { path },
+                    span: self.span(kw.span.start, end),
+                }
+            }
             TokenKind::Identifier | TokenKind::Void => {
                 // `void` never starts a qualified path.
                 let leading_is_identifier = matches!(self.peek().kind, TokenKind::Identifier);
@@ -5212,6 +5233,18 @@ mod tests {
             crate::ExprKind::InstanceOf { .. }
         ));
         assert!(matches!(ast.expr(rhs).kind, crate::ExprKind::Identifier(_)));
+    }
+
+    #[test]
+    fn parse_typeof_in_type_position() {
+        let (_ast, diags) = parse_str("let a: typeof b = 1;");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn parse_typeof_with_a_dotted_path() {
+        let (_ast, diags) = parse_str("let a: typeof b.c.d = 1;");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
     }
 
     #[test]
