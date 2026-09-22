@@ -3424,6 +3424,137 @@ impl<'a> Parser<'a> {
         }))
     }
 
+    /// `function (a: T): R { … }` in expression position, parsed into `ExprKind::Arrow`.
+    ///
+    /// The two forms differ only in how they bind `this`. The body is parsed through
+    /// `parse_outer_this_boundary`, which rejects `this` inside it, so the one case where
+    /// they would disagree cannot be written and the lowering is exact for the rest.
+    ///
+    /// In the named form `function f() { … }`, TypeScript binds `f` inside the function's
+    /// own body, and an arrow has nowhere to record that name. The name is therefore
+    /// accepted and dropped — it is almost always only a label — and rejected just when
+    /// the body actually references it, which is the one case where dropping it would
+    /// change meaning.
+    fn parse_function_expression(&mut self) -> Option<ExprId> {
+        let kw = self.advance();
+
+        if matches!(self.peek().kind, TokenKind::LessThan) {
+            self.error_at_peek("generic function expressions are not supported");
+            return None;
+        }
+
+        let self_name = if matches!(self.peek().kind, TokenKind::Identifier) {
+            let name_tok = self.advance();
+            Some(self.ident_from_token(&name_tok))
+        } else {
+            None
+        };
+
+        if !matches!(self.peek().kind, TokenKind::LeftParen) {
+            self.error_at_peek("expected `(` after `function`");
+            return None;
+        }
+        self.advance();
+
+        let params = if matches!(self.peek().kind, TokenKind::RightParen) {
+            Vec::new()
+        } else {
+            // Shares the arrow parameter grammar, so parameter defaults are rejected here
+            // too — only named function *declarations* accept them.
+            self.parse_arrow_param_list()?
+        };
+        if !matches!(self.peek().kind, TokenKind::RightParen) {
+            self.error_at_peek("expected `)`");
+            return None;
+        }
+        self.advance();
+
+        let (return_type, type_predicate) = if matches!(self.peek().kind, TokenKind::Colon) {
+            self.advance();
+            self.parse_predicate_or_return_type(TypePos::ArrowReturn)?
+        } else {
+            (None, None)
+        };
+
+        if !matches!(self.peek().kind, TokenKind::LeftBrace) {
+            self.error_at_peek("expected `{` to open the function body");
+            return None;
+        }
+        let body_start = self.pos;
+        let block = self.parse_outer_this_boundary(Self::parse_block)?;
+        let end = self.ast.stmt(block).span.end;
+
+        if let Some(name) = self_name.filter(|n| self.body_mentions(body_start, &n.name)) {
+            self.error_at_with_help(
+                name.span,
+                "a named function expression cannot call itself",
+                vec![format!(
+                    "declare it instead: `function {}(…) {{ … }}`",
+                    name.name
+                )],
+            );
+            return None;
+        }
+
+        Some(self.ast.push_expr(Expr {
+            kind: ExprKind::Arrow {
+                params,
+                return_type,
+                type_predicate,
+                body: ArrowBody::Block(block),
+            },
+            span: self.span(kw.span.start, end),
+        }))
+    }
+
+    /// Parses a body that gets its own `this`, so an enclosing class method's `this` does
+    /// not leak into it.
+    ///
+    /// A `function` expression and a shorthand method each rebind `this` at call time,
+    /// but both lower to `ExprKind::Arrow`, which captures `this` lexically. Inside a
+    /// class method the two disagree: TypeScript gives the receiver, an arrow gives the
+    /// enclosing instance. Zeroing the depth turns that case into the existing "`this` is
+    /// only valid inside a class method" error instead of a silently different value.
+    fn parse_outer_this_boundary<T>(
+        &mut self,
+        parse: impl FnOnce(&mut Self) -> Option<T>,
+    ) -> Option<T> {
+        let saved = self.class_member_body_depth;
+        self.class_member_body_depth = 0;
+        let parsed = parse(self);
+        self.class_member_body_depth = saved;
+        parsed
+    }
+
+    /// Whether the body starting at `body_start` spells `name` anywhere.
+    ///
+    /// Deliberately an over-approximation: it matches identifier tokens by text, with no
+    /// notion of scope, so a property (`o.bar`), an object key (`{ bar: 1 }`) or a local
+    /// that shadows the name also count. The parser has no binding information here, and
+    /// erring toward rejection is the safe direction — a missed self-reference would
+    /// silently drop a binding the body depends on.
+    ///
+    /// Two positions are excluded because they can never be a reference to the function
+    /// and are common in ordinary code: a member name after `.`, and a key before `:`.
+    /// A local, parameter, or type that merely shares the name is still caught.
+    fn body_mentions(&self, body_start: usize, name: &str) -> bool {
+        let body = &self.tokens[body_start..self.pos];
+        body.iter().enumerate().any(|(i, t)| {
+            if !matches!(t.kind, TokenKind::Identifier)
+                || self.source[t.span.start as usize..t.span.end as usize] != *name
+            {
+                return false;
+            }
+            let after_dot = i
+                .checked_sub(1)
+                .is_some_and(|p| matches!(body[p].kind, TokenKind::Dot));
+            let before_colon = body
+                .get(i + 1)
+                .is_some_and(|n| matches!(n.kind, TokenKind::Colon));
+            !after_dot && !before_colon
+        })
+    }
+
     fn parse_arrow_param_list(&mut self) -> Option<Vec<ParamDecl>> {
         let mut params = Vec::new();
         loop {
@@ -3466,7 +3597,9 @@ impl<'a> Parser<'a> {
                 // from a contextual function-type hint if available.
                 None
             };
-            // Arrow params don't support defaults; only named function declarations do.
+            // Only named function declarations support parameter defaults. This list also
+            // serves function expressions and shorthand methods, so the message names the
+            // parameter rather than the construct the user wrote.
             if matches!(self.peek().kind, TokenKind::Equals) {
                 if rest {
                     self.error_at_peek_with_help(
@@ -3474,7 +3607,13 @@ impl<'a> Parser<'a> {
                         vec!["omit the `= …`; an unspecified rest defaults to `[]`".to_string()],
                     );
                 } else {
-                    self.error_at_peek("default values on arrow parameters are not yet supported");
+                    self.error_at_peek_with_help(
+                        "default parameter values are only supported on function declarations",
+                        vec![
+                            "declare the function, or drop the default and use `??` in the body"
+                                .to_string(),
+                        ],
+                    );
                 }
                 return None;
             }
@@ -3971,6 +4110,7 @@ impl<'a> Parser<'a> {
             TokenKind::TemplateHead(_) => return self.parse_template_literal(),
             TokenKind::This => return self.parse_this_or_super(true),
             TokenKind::Super => return self.parse_this_or_super(false),
+            TokenKind::Function => return self.parse_function_expression(),
             _ => {}
         }
         if !matches!(
@@ -4159,6 +4299,16 @@ impl<'a> Parser<'a> {
             }
         };
 
+        // `{ m(x: T): R { … } }` is shorthand for `{ m: (x: T): R => { … } }`. Method
+        // shorthand carries no `this` of its own here, for the same reason a function
+        // expression does not, so the arrow is an exact lowering. Checked before the
+        // `:` branch and independently of `shorthandable`, because a keyword or string
+        // key can name a method too.
+        if matches!(self.peek().kind, TokenKind::LeftParen) {
+            let value = self.parse_method_shorthand_body(name.span)?;
+            return Some(ObjectLiteralField { name, value });
+        }
+
         if !matches!(self.peek().kind, TokenKind::Colon) {
             // `{ x }` is shorthand for `{ x: x }`. Only identifier keys can use
             // it — a string key like `{ "x" }` has no binding to reference.
@@ -4176,6 +4326,47 @@ impl<'a> Parser<'a> {
 
         let value = self.parse_expression()?;
         Some(ObjectLiteralField { name, value })
+    }
+
+    /// The `(params): R { … }` tail of an object-literal method, lowered to an arrow.
+    /// `name_span` is the key's span, so the arrow spans the whole member.
+    fn parse_method_shorthand_body(&mut self, name_span: Span) -> Option<ExprId> {
+        self.advance();
+
+        let params = if matches!(self.peek().kind, TokenKind::RightParen) {
+            Vec::new()
+        } else {
+            self.parse_arrow_param_list()?
+        };
+        if !matches!(self.peek().kind, TokenKind::RightParen) {
+            self.error_at_peek("expected `)`");
+            return None;
+        }
+        self.advance();
+
+        let (return_type, type_predicate) = if matches!(self.peek().kind, TokenKind::Colon) {
+            self.advance();
+            self.parse_predicate_or_return_type(TypePos::ArrowReturn)?
+        } else {
+            (None, None)
+        };
+
+        if !matches!(self.peek().kind, TokenKind::LeftBrace) {
+            self.error_at_peek("expected `{` to open the method body");
+            return None;
+        }
+        let block = self.parse_outer_this_boundary(Self::parse_block)?;
+        let end = self.ast.stmt(block).span.end;
+
+        Some(self.ast.push_expr(Expr {
+            kind: ExprKind::Arrow {
+                params,
+                return_type,
+                type_predicate,
+                body: ArrowBody::Block(block),
+            },
+            span: self.span(name_span.start, end),
+        }))
     }
 
     fn parse_array_literal(&mut self) -> Option<ExprId> {
@@ -8648,6 +8839,186 @@ mod tests {
             other => panic!("expected Arrow, got {other:?}"),
         };
         (ast, params, return_type, body)
+    }
+
+    #[test]
+    fn parses_anonymous_function_expression_as_arrow() {
+        let (ast, params, return_type, body) =
+            parse_arrow_const("const f = function (x: number): number { return x + 1; };");
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].name.name, "x");
+        assert!(return_type.is_some());
+        assert!(matches!(body, crate::ArrowBody::Block(_)));
+        let _ = ast;
+    }
+
+    #[test]
+    fn parses_function_expression_with_no_params() {
+        let (_ast, params, _return_type, body) =
+            parse_arrow_const("const f = function (): void {};");
+        assert!(params.is_empty());
+        assert!(matches!(body, crate::ArrowBody::Block(_)));
+    }
+
+    /// The name is a label with no binding of its own, so it is dropped.
+    #[test]
+    fn parses_named_function_expression_by_dropping_the_name() {
+        let (_ast, params, _return_type, _body) =
+            parse_arrow_const("const f = function named(x: number): number { return x + 1; };");
+        assert_eq!(params.len(), 1);
+    }
+
+    /// Dropping the name would change meaning here, so this one is rejected.
+    #[test]
+    fn rejects_a_named_function_expression_that_calls_itself() {
+        let (_ast, diags) =
+            parse_str("const f = function bar(x: number): number { return bar(x); };");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("cannot call itself")),
+            "self-referential named function expression should be rejected: {diags:?}"
+        );
+    }
+
+    /// A member name after `.` is never a reference to the function itself.
+    #[test]
+    fn accepts_a_named_function_expression_using_the_name_as_a_property() {
+        let (_ast, diags) = parse_str("const f = function bar(o: O): number { return o.bar; };");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+    }
+
+    /// Nor is a key before `:`.
+    #[test]
+    fn accepts_a_named_function_expression_using_the_name_as_an_object_key() {
+        let (_ast, diags) = parse_str(
+            "const f = function bar(x: number): number { const o = { bar: 1 }; return o.bar + x; };",
+        );
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+    }
+
+    /// A string that happens to spell the name is not a reference.
+    #[test]
+    fn accepts_a_named_function_expression_with_its_name_in_a_string() {
+        let (_ast, diags) =
+            parse_str("const f = function bar(x: number): string { return \"bar\"; };");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+    }
+
+    /// A template substitution holds real identifier tokens, so a call there is caught.
+    #[test]
+    fn rejects_a_self_call_inside_a_template_substitution() {
+        let (_ast, diags) =
+            parse_str("const f = function bar(x: number): string { return `${bar(0)}`; };");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("cannot call itself")),
+            "a self-call in a template substitution should be rejected: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_generic_function_expression() {
+        let (_ast, diags) = parse_str("const f = function <T>(x: T): T { return x; };");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("generic function expressions")),
+            "generic function expression should be rejected: {diags:?}"
+        );
+    }
+
+    /// Both forms lower to an arrow, which captures `this` lexically, while TypeScript
+    /// rebinds it per call. Inside a class method those disagree, so `this` is rejected
+    /// there rather than silently resolving to the enclosing instance.
+    #[test]
+    fn rejects_this_inside_a_function_expression_in_a_class_method() {
+        let (_ast, diags) = parse_str(
+            "class C { x: number = 1; m(): number { \
+             const f = function (): number { return this.x; }; return f(); } }",
+        );
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("`this` is only valid inside")),
+            "`this` in a function expression should be rejected: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_this_inside_method_shorthand_in_a_class_method() {
+        let (_ast, diags) = parse_str(
+            "class C { x: number = 1; m(): number { \
+             const o = { x: 2, g(): number { return this.x; } }; return o.g(); } }",
+        );
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("`this` is only valid inside")),
+            "`this` in method shorthand should be rejected: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn this_still_parses_in_an_ordinary_class_method() {
+        let (_ast, diags) = parse_str("class C { x: number = 1; m(): number { return this.x; } }");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+    }
+
+    /// `function` is a valid property name; the expression form must not shadow that.
+    #[test]
+    fn function_keyword_still_parses_as_an_object_key() {
+        let (_ast, diags) = parse_str("let o = { function: 1 };");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+    }
+
+    fn object_literal_member_values(source: &str) -> (Ast, Vec<crate::ExprId>) {
+        let (ast, diags) = parse_str(source);
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let stmt = ast.stmt(ast.top_level[0]);
+        let value = match &stmt.kind {
+            StmtKind::Const { value, .. } => *value,
+            other => panic!("expected a const declaration, got {other:?}"),
+        };
+        let members = match &ast.expr(value).kind {
+            ExprKind::ObjectLiteral { members } => {
+                members.iter().map(|m| m.value()).collect::<Vec<_>>()
+            }
+            other => panic!("expected ObjectLiteral, got {other:?}"),
+        };
+        (ast, members)
+    }
+
+    #[test]
+    fn parses_object_literal_method_shorthand_as_arrow() {
+        let (ast, members) =
+            object_literal_member_values("const o = { m(x: number): number { return x; } };");
+        assert_eq!(members.len(), 1);
+        match &ast.expr(members[0]).kind {
+            ExprKind::Arrow { params, body, .. } => {
+                assert_eq!(params.len(), 1);
+                assert_eq!(params[0].name.name, "x");
+                assert!(matches!(body, crate::ArrowBody::Block(_)));
+            }
+            other => panic!("expected Arrow, got {other:?}"),
+        }
+    }
+
+    /// A keyword is a valid method name, just as it is a valid property name.
+    #[test]
+    fn parses_method_shorthand_with_a_keyword_name() {
+        let (ast, members) =
+            object_literal_member_values("const o = { if(x: number): number { return x; } };");
+        assert!(matches!(ast.expr(members[0]).kind, ExprKind::Arrow { .. }));
+    }
+
+    #[test]
+    fn parses_method_shorthand_alongside_plain_and_shorthand_properties() {
+        let (ast, members) =
+            object_literal_member_values("const o = { a: 1, m(): void {}, b: 2 };");
+        assert_eq!(members.len(), 3);
+        assert!(matches!(ast.expr(members[1]).kind, ExprKind::Arrow { .. }));
     }
 
     #[test]
