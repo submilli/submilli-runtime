@@ -449,6 +449,58 @@ impl<'a> Inferer<'a> {
         }
     }
 
+    /// The type a binding declared `declared` narrows to after a write of a
+    /// `written` value. As in TypeScript, a value of a reference type narrows to
+    /// the declared members that accept it, not to its own type: the declaration
+    /// decides what may be written through the binding, so a `readonly` array,
+    /// field, or property it declares stays readonly after `o = { xs: [1] }`.
+    /// A primitive narrows to its own type, as does a value written into
+    /// `unknown` or a type parameter, which name no members to keep.
+    pub(super) fn assignment_narrowed_ty(&self, declared: &Type, written: Type) -> Type {
+        let members: Vec<&Type> = match declared.peel_preserving_readonly() {
+            Type::Union(members) => members.iter().collect(),
+            other => vec![other],
+        };
+        let parts: Vec<Type> = match written.peel() {
+            Type::Union(parts) => parts.clone(),
+            _ => vec![written.clone()],
+        };
+        let narrowed = parts
+            .into_iter()
+            .map(|part| self.declared_members_accepting(&members, part))
+            .collect();
+        Type::union(narrowed)
+    }
+
+    fn declared_members_accepting(&self, members: &[&Type], part: Type) -> Type {
+        if narrows_to_itself(&part) {
+            return part;
+        }
+        let accepting: Vec<&Type> = members
+            .iter()
+            .copied()
+            .filter(|member| super::assignable(&part, member, self.resolver()))
+            .collect();
+        let names_nothing = accepting.is_empty()
+            || accepting.iter().any(|member| {
+                matches!(
+                    member.peel(),
+                    Type::Unknown | Type::TypeVar(_) | Type::GenericParam { .. } | Type::Error
+                )
+            });
+        if names_nothing {
+            return part;
+        }
+        // Members that differ only in `readonly` (`readonly T[] | T[]`) narrow to
+        // the readonly one: it permits every read either does, and no write.
+        if let Some(readonly) = accepting.iter().find(|m| m.is_readonly_array())
+            && accepting.iter().all(|m| m.peel() == readonly.peel())
+        {
+            return (*readonly).clone();
+        }
+        Type::union(accepting.into_iter().cloned().collect())
+    }
+
     /// Uses `ident` as `NarrowedView.binding` so `LocalNarrowRef` reads the existing Wasm slot
     /// with a cast-at-use, rather than allocating a shadow. Records `path` in
     /// `assigned_scopes` so branch joins can invalidate it.
@@ -1023,4 +1075,24 @@ impl<'a> Inferer<'a> {
         }
         wrapped
     }
+}
+
+/// A value whose own type is the narrowing a write gives its binding: a
+/// primitive carries nothing a declaration could restrict.
+fn narrows_to_itself(ty: &Type) -> bool {
+    matches!(
+        ty.peel(),
+        Type::Number
+            | Type::NumberLiteral(_)
+            | Type::BigInt
+            | Type::String
+            | Type::StringLiteral(_)
+            | Type::Boolean
+            | Type::BooleanLiteral(_)
+            | Type::Null
+            | Type::NumberEnum { .. }
+            | Type::StringEnum { .. }
+            | Type::Error
+            | Type::Never
+    )
 }

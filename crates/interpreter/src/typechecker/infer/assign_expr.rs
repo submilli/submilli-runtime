@@ -67,7 +67,7 @@ impl Inferer<'_> {
         else {
             return value_ty;
         };
-        narrowing::keep_declared_readonly(target_ty, value_ty)
+        self.assignment_narrowed_ty(target_ty, value_ty)
     }
 
     /// A field or index assignment, with its receiver, index, and value held.

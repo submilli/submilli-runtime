@@ -952,7 +952,7 @@ impl Inferer<'_> {
             return;
         }
         let path = narrowing::ReferencePath::root(narrowing::BindingId::Global(mangled.clone()));
-        let written_ty = narrowing::keep_declared_readonly(declared_ty, written_ty);
+        let written_ty = self.assignment_narrowed_ty(declared_ty, written_ty);
         if written_ty == *declared_ty {
             self.invalidate_for_reassignment(path, ident.span);
             return;
@@ -1332,7 +1332,7 @@ impl Inferer<'_> {
             name: target.name.clone(),
             decl_scope,
         });
-        let written_ty = narrowing::keep_declared_readonly(declared_ty, written_ty);
+        let written_ty = self.assignment_narrowed_ty(declared_ty, written_ty);
         if written_ty == *declared_ty {
             self.invalidate_for_reassignment(path, target.span);
             return None;
