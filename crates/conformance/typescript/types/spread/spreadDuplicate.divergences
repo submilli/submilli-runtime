@@ -1,20 +1,4 @@
-types: 48 of 80 tsc entries compared, 16 differ
-
-line 15: b1
-  tsc:  { a: string | number; }
-  ours: { a?: string }
-
-line 15: { a: 123, ...b }
-  tsc:  { a: string | number; }
-  ours: { a?: string }
-
-line 17: d1
-  tsc:  { a: string | number | null; }
-  ours: { a?: string | null }
-
-line 17: { a: 123, ...d }
-  tsc:  { a: string | number | null; }
-  ours: { a?: string | null }
+types: 48 of 80 tsc entries compared, 12 differ
 
 line 19: a2
   tsc:  { a: string | number; }

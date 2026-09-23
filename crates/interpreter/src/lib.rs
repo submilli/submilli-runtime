@@ -75,8 +75,8 @@ pub use typed_ast::{
     TypedCatchClause, TypedChainPart, TypedClassAccessor, TypedClassConstructor, TypedClassDecl,
     TypedClassField, TypedClassMethod, TypedExpr, TypedExprKind, TypedFunction, TypedGlobal,
     TypedInterfaceDecl, TypedInterfaceMember, TypedNumberEnumDecl, TypedNumberEnumMember,
-    TypedObjectFieldOrigin, TypedObjectFieldSource, TypedObjectLiteralField, TypedParam, TypedStmt,
-    TypedStmtKind, TypedStringEnumDecl, TypedStringEnumMember, TypedSwitchCase, TypedSwitchValue,
-    TypedTypeAliasDecl, TypedTypeDecl, TypeofTagKind,
+    TypedObjectFieldOrigin, TypedObjectFieldSource, TypedObjectLiteralField, TypedObjectMember,
+    TypedParam, TypedStmt, TypedStmtKind, TypedStringEnumDecl, TypedStringEnumMember,
+    TypedSwitchCase, TypedSwitchValue, TypedTypeAliasDecl, TypedTypeDecl, TypeofTagKind,
 };
 pub use types::{ObjectField, Package, Type, TypePredicate};

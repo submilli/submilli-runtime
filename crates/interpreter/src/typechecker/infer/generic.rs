@@ -1578,17 +1578,9 @@ mod tests {
                 collect_expr_types(ta, *receiver, out);
                 collect_expr_types(ta, *index, out);
             }
-            crate::TypedExprKind::ObjectLiteral {
-                spread_sources,
-                fields,
-            } => {
-                for &s in spread_sources {
-                    collect_expr_types(ta, s, out);
-                }
-                for f in fields {
-                    if let Some(vid) = f.source.literal_expr_id() {
-                        collect_expr_types(ta, vid, out);
-                    }
+            crate::TypedExprKind::ObjectLiteral { members, .. } => {
+                for member in members {
+                    collect_expr_types(ta, member.expr_id(), out);
                 }
             }
             crate::TypedExprKind::ArrayLiteral { elements, .. } => {

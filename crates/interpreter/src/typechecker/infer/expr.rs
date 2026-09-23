@@ -2391,7 +2391,7 @@ impl Inferer<'_> {
             }
             crate::DefaultValue::EmptyObject => (
                 TypedExprKind::ObjectLiteral {
-                    spread_sources: Vec::new(),
+                    members: Vec::new(),
                     fields: Vec::new(),
                 },
                 param_ty.clone(),
@@ -4297,10 +4297,11 @@ impl Inferer<'_> {
 
         // walk members in source order, applying last-writer-wins
         // for both literal-position fields and spread sources. `merged`
-        // tracks the resolved field shape + origin per output field. A
-        // spread source is registered once in `spread_sources` and reused
-        // by every `Spread` origin that reads from it.
-        let mut spread_sources: Vec<ExprId> = Vec::new();
+        // tracks the resolved field shape + origin per output field.
+        // `evaluated` records every member's expression in that same order,
+        // including values a later member overwrites, which still run.
+        let mut evaluated: Vec<crate::TypedObjectMember> = Vec::new();
+        let mut spread_count = 0;
         let mut merged: std::collections::BTreeMap<
             String,
             (crate::ObjectField, crate::TypedObjectFieldSource),
@@ -4332,6 +4333,7 @@ impl Inferer<'_> {
                     });
                     let errors_before = self.error_count();
                     let (typed_value, value_ty) = self.infer_expr(field.value, hint.as_ref());
+                    evaluated.push(crate::TypedObjectMember::Value(typed_value));
                     let value_span = self.ast.expr(field.value).span;
                     // A hinted slot already reported the mismatch against its
                     // hint; screening again gives one mistake two errors.
@@ -4433,23 +4435,39 @@ impl Inferer<'_> {
                         Type::Object {
                             fields: source_fields,
                         } => {
-                            let source_index = spread_sources.len();
-                            spread_sources.push(typed_source);
+                            let source_index = spread_count;
+                            spread_count += 1;
+                            evaluated.push(crate::TypedObjectMember::Spread(typed_source));
                             let source_ty_for_origin = Type::Object {
                                 fields: source_fields.clone(),
                             };
                             for (name, field) in source_fields {
-                                merged.insert(
-                                    name.clone(),
-                                    (
-                                        field,
-                                        crate::TypedObjectFieldSource::Spread {
-                                            source_index,
-                                            field_name: name,
-                                            source_ty: source_ty_for_origin.clone(),
+                                let earlier = merged.remove(&name);
+                                let spread = |fallback| crate::TypedObjectFieldSource::Spread {
+                                    source_index,
+                                    field_name: name.clone(),
+                                    source_ty: source_ty_for_origin.clone(),
+                                    fallback,
+                                };
+                                let entry = match earlier {
+                                    // An optional field may be absent, and then the
+                                    // earlier value stays: `{ a: 1, ...{} }` keeps
+                                    // `a: 1`. So the field holds either one, and is
+                                    // optional only if the earlier one was.
+                                    Some((earlier_field, earlier_source)) if field.optional => (
+                                        crate::ObjectField {
+                                            ty: Type::union(vec![
+                                                earlier_field.ty,
+                                                field.ty.clone(),
+                                            ]),
+                                            optional: earlier_field.optional,
+                                            readonly: false,
                                         },
+                                        spread(Some(Box::new(earlier_source))),
                                     ),
-                                );
+                                    _ => (field, spread(None)),
+                                };
+                                merged.insert(name.clone(), entry);
                             }
                         }
                         Type::InterfaceRef { name, .. } => {
@@ -4550,6 +4568,7 @@ impl Inferer<'_> {
                         span,
                         ty: Type::Null,
                     });
+                    evaluated.push(crate::TypedObjectMember::Value(null_id));
                     merged.insert(
                         name.clone(),
                         (
@@ -4589,7 +4608,7 @@ impl Inferer<'_> {
         if let Some((iface_package, iface_name, iface_mangled, iface_args)) = interface_target {
             return (
                 TypedExprKind::ObjectLiteral {
-                    spread_sources,
+                    members: evaluated,
                     fields: field_origins,
                 },
                 Type::interface_ref(iface_package, iface_name, iface_mangled, iface_args),
@@ -4597,7 +4616,7 @@ impl Inferer<'_> {
         }
         (
             TypedExprKind::ObjectLiteral {
-                spread_sources,
+                members: evaluated,
                 fields: field_origins,
             },
             Type::Object { fields: resolved },

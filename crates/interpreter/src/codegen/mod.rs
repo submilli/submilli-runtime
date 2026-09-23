@@ -5082,17 +5082,9 @@ function main(): void { middle(); }
                     box_walk_expr(ta, a, names);
                 }
             }
-            TypedExprKind::ObjectLiteral {
-                spread_sources,
-                fields,
-            } => {
-                for s in spread_sources {
-                    box_walk_expr(ta, s, names);
-                }
-                for f in fields {
-                    if let Some(vid) = f.source.literal_expr_id() {
-                        box_walk_expr(ta, vid, names);
-                    }
+            TypedExprKind::ObjectLiteral { members, .. } => {
+                for member in members {
+                    box_walk_expr(ta, member.expr_id(), names);
                 }
             }
             TypedExprKind::ArrayLiteral { elements, .. } => {

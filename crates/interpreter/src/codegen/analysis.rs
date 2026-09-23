@@ -370,17 +370,9 @@ impl CodegenAnalysis {
                     self.walk_expr(ta, arg.expr);
                 }
             }
-            TypedExprKind::ObjectLiteral {
-                spread_sources,
-                fields,
-            } => {
-                for &source in spread_sources {
-                    self.walk_expr(ta, source);
-                }
-                for field in fields {
-                    if let Some(expr) = field.source.literal_expr_id() {
-                        self.walk_expr(ta, expr);
-                    }
+            TypedExprKind::ObjectLiteral { members, .. } => {
+                for member in members {
+                    self.walk_expr(ta, member.expr_id());
                 }
             }
             TypedExprKind::ArrayLiteral { elements, .. } => {
@@ -681,8 +673,15 @@ impl CodegenAnalysis {
             }
             TypedExprKind::ObjectLiteral { fields, .. } => {
                 for field in fields {
-                    if let TypedObjectFieldSource::Spread { source_ty, .. } = &field.source {
+                    let mut source = Some(&field.source);
+                    while let Some(TypedObjectFieldSource::Spread {
+                        source_ty,
+                        fallback,
+                        ..
+                    }) = source
+                    {
                         self.visit_type(source_ty);
+                        source = fallback.as_deref();
                     }
                 }
             }

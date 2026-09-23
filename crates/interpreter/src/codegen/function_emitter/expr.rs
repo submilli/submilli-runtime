@@ -374,10 +374,7 @@ fn emit_expr_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) 
                 &expr.ty,
             );
         }
-        TypedExprKind::ObjectLiteral {
-            spread_sources,
-            fields,
-        } => {
+        TypedExprKind::ObjectLiteral { members, fields } => {
             // Push the object header, then the boxed user-field values in
             // canonical order. `array.new_fixed` leaves the payload array as
             // `$ObjectShape` slot 2.
@@ -448,38 +445,11 @@ fn emit_expr_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) 
                 .intrinsic_type_indices()
                 .expect("intrinsics declared by codegen entry");
 
-            // materialize spread sources before the
-            // header-globals push. Each source is ref-cast to the
-            // arity-N concrete struct type so subsequent
-            // `struct.get` instructions know the slot layout.
-            // Locals stay alive for the rest of the literal's
-            // emission — no scoping needed since the literal's
-            // code emits sequentially with no nested binding.
-            let mut spread_locals: Vec<(u32, u32, Vec<String>)> =
-                Vec::with_capacity(spread_sources.len());
-            for &source_id in spread_sources {
-                let source_ty = ctx.ta.expr(source_id).ty.clone();
-                let source_struct_ty = source_ty.peel().clone();
-                let source_object_shape_idx = ctx
-                    .symbols
-                    .object_subtype_idx(&source_struct_ty)
-                    .expect("object shape type recorded for spread source's structural type");
-                let source_fields: Vec<String> = match &source_struct_ty {
-                    Type::Object { fields: src_fields } => src_fields.keys().cloned().collect(),
-                    other => panic!("spread source must peel to Type::Object, got {other:?}",),
-                };
-                let source_val = ValType::Ref(RefType {
-                    nullable: false,
-                    heap_type: HeapType::Concrete(source_object_shape_idx),
-                });
-                let local = emitter.add_anonymous_local(source_val);
-                emit_expr(emitter, ctx, source_id);
-                emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
-                    source_object_shape_idx,
-                )));
-                emitter.instruction(Instruction::LocalSet(local));
-                spread_locals.push((local, source_object_shape_idx, source_fields));
-            }
+            // Evaluate every member in source order, as JavaScript does, before
+            // any slot is filled: a value is boxed into a local, a spread source
+            // is ref-cast to its arity-N struct type so its slots can be read
+            // with `struct.get`. A value a later member overwrites still runs.
+            let evaluated = evaluate_object_members(emitter, ctx, members);
 
             emitter.instruction(Instruction::GlobalGet(vtable_idx));
             emitter.instruction(Instruction::GlobalGet(field_names_idx));
@@ -492,39 +462,7 @@ fn emit_expr_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) 
                 fields.iter().map(|f| (f.name.name.as_str(), f)).collect();
             for (name, field) in declared_fields {
                 if let Some(origin) = by_name.get(name.as_str()) {
-                    match &origin.source {
-                        crate::TypedObjectFieldSource::Literal(vid) => {
-                            // emit_box dispatches on the
-                            // value expression's static type, not
-                            // the declared field type — see the
-                            // long-form comment that previously sat
-                            // here for the boxed-union argument.
-                            let value_ty = ctx.ta.expr(*vid).ty.clone();
-                            emit_expr(emitter, ctx, *vid);
-                            crate::codegen::function_emitter::cast::emit_box(
-                                emitter, ctx, &value_ty,
-                            );
-                        }
-                        crate::TypedObjectFieldSource::Spread {
-                            source_index,
-                            field_name,
-                            ..
-                        } => {
-                            let (local, source_object_shape_idx, source_keys) =
-                                &spread_locals[*source_index];
-                            let slot = source_keys
-                                .iter()
-                                .position(|k| k == field_name)
-                                .expect("spread origin's field_name is in source's field set");
-                            emitter.instruction(Instruction::LocalGet(*local));
-                            emitter.instruction(Instruction::StructGet {
-                                struct_type_index: *source_object_shape_idx,
-                                field_index: 2,
-                            });
-                            emitter.instruction(Instruction::I32Const(slot as i32));
-                            emitter.instruction(Instruction::ArrayGet(intrinsics.object_fields));
-                        }
-                    }
+                    emit_object_field_source(emitter, &evaluated, &origin.source);
                 } else {
                     debug_assert!(
                         field.optional,
@@ -4555,4 +4493,119 @@ fn emit_bigint_cmp_call(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, lhs: Ex
         ))
         .expect("submilli:bigint.cmp import recorded by codegen bootstrap");
     emitter.instruction(Instruction::Call(cmp_idx));
+}
+
+/// An object literal's members, evaluated into locals.
+struct EvaluatedMembers {
+    object: u32,
+    object_fields: u32,
+    /// Each field value's boxed `$Object` reference, by its expression.
+    values: std::collections::HashMap<crate::ExprId, u32>,
+    /// Each spread source, in order: its local, its struct type, and its field
+    /// names in slot order.
+    spreads: Vec<(u32, u32, Vec<String>)>,
+}
+
+fn evaluate_object_members(
+    emitter: &mut FunctionEmitter<'_>,
+    ctx: &CodegenCtx<'_>,
+    members: &[crate::TypedObjectMember],
+) -> EvaluatedMembers {
+    let intrinsics = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .expect("intrinsics declared by codegen entry");
+    let mut evaluated = EvaluatedMembers {
+        object: intrinsics.object,
+        object_fields: intrinsics.object_fields,
+        values: std::collections::HashMap::new(),
+        spreads: Vec::new(),
+    };
+    for member in members {
+        match *member {
+            crate::TypedObjectMember::Value(value_id) => {
+                // Boxed by the value's own static type, not the declared field
+                // type, so a union-typed field holds the boxed variant.
+                let value_ty = ctx.ta.expr(value_id).ty.clone();
+                emit_expr(emitter, ctx, value_id);
+                crate::codegen::function_emitter::cast::emit_box(emitter, ctx, &value_ty);
+                let local = emitter.add_anonymous_local(ValType::Ref(RefType {
+                    nullable: true,
+                    heap_type: HeapType::Concrete(intrinsics.object),
+                }));
+                emitter.instruction(Instruction::LocalSet(local));
+                evaluated.values.insert(value_id, local);
+            }
+            crate::TypedObjectMember::Spread(source_id) => {
+                let source_struct_ty = ctx.ta.expr(source_id).ty.peel().clone();
+                let shape_idx = ctx
+                    .symbols
+                    .object_subtype_idx(&source_struct_ty)
+                    .expect("object shape type recorded for spread source's structural type");
+                let Type::Object { fields } = &source_struct_ty else {
+                    panic!("spread source must peel to Type::Object, got {source_struct_ty:?}");
+                };
+                let local = emitter.add_anonymous_local(ValType::Ref(RefType {
+                    nullable: false,
+                    heap_type: HeapType::Concrete(shape_idx),
+                }));
+                emit_expr(emitter, ctx, source_id);
+                emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(shape_idx)));
+                emitter.instruction(Instruction::LocalSet(local));
+                evaluated
+                    .spreads
+                    .push((local, shape_idx, fields.keys().cloned().collect()));
+            }
+        }
+    }
+    evaluated
+}
+
+/// Pushes one field's value, read from its evaluated member.
+fn emit_object_field_source(
+    emitter: &mut FunctionEmitter<'_>,
+    evaluated: &EvaluatedMembers,
+    source: &crate::TypedObjectFieldSource,
+) {
+    match source {
+        crate::TypedObjectFieldSource::Literal(value_id) => {
+            let local = evaluated.values[value_id];
+            emitter.instruction(Instruction::LocalGet(local));
+        }
+        crate::TypedObjectFieldSource::Spread {
+            source_index,
+            field_name,
+            fallback,
+            ..
+        } => {
+            let (local, shape_idx, keys) = &evaluated.spreads[*source_index];
+            let slot = keys
+                .iter()
+                .position(|k| k == field_name)
+                .expect("spread origin's field_name is in source's field set");
+            emitter.instruction(Instruction::LocalGet(*local));
+            emitter.instruction(Instruction::StructGet {
+                struct_type_index: *shape_idx,
+                field_index: 2,
+            });
+            emitter.instruction(Instruction::I32Const(slot as i32));
+            emitter.instruction(Instruction::ArrayGet(evaluated.object_fields));
+            let Some(fallback) = fallback else {
+                return;
+            };
+            // An absent optional field reads as null; the earlier value stays.
+            let object_ref = ValType::Ref(RefType {
+                nullable: true,
+                heap_type: HeapType::Concrete(evaluated.object),
+            });
+            let read = emitter.add_anonymous_local(object_ref);
+            emitter.instruction(Instruction::LocalTee(read));
+            emitter.instruction(Instruction::RefIsNull);
+            emitter.instruction(Instruction::If(wasm_encoder::BlockType::Result(object_ref)));
+            emit_object_field_source(emitter, evaluated, fallback);
+            emitter.instruction(Instruction::Else);
+            emitter.instruction(Instruction::LocalGet(read));
+            emitter.instruction(Instruction::End);
+        }
+    }
 }

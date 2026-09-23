@@ -144,7 +144,11 @@ pub enum TypedExprKind {
     /// `fields` is in `Type::Object` BTreeMap order; all spread resolution happened at
     /// typecheck time, no merge logic in codegen.
     ObjectLiteral {
-        spread_sources: Vec<ExprId>,
+        /// Every expression the literal evaluates, in source order, as JavaScript
+        /// evaluates them. A value a later member overwrites is still here: it is
+        /// evaluated for its effects and then discarded. Each field's source
+        /// refers to one of these.
+        members: Vec<TypedObjectMember>,
         fields: Vec<TypedObjectFieldOrigin>,
     },
     /// `element_ty` lets codegen pick the wrapper struct's element type without re-running inference.
@@ -408,11 +412,16 @@ pub struct TypedObjectFieldOrigin {
 #[derive(Clone, Debug, PartialEq)]
 pub enum TypedObjectFieldSource {
     Literal(ExprId),
-    /// `source_ty` is the spread's `Type::Object` so codegen can index by BTreeMap order.
+    /// `source_index` counts the literal's `Spread` members; `source_ty` is the
+    /// spread's `Type::Object` so codegen can index by BTreeMap order.
     Spread {
         source_index: usize,
         field_name: String,
         source_ty: Type,
+        /// Set when the source's field is optional and an earlier member wrote
+        /// the same field: an absent field leaves that earlier value in place,
+        /// as in JavaScript, where `{ a: 1, ...{} }` keeps `a: 1`.
+        fallback: Option<Box<TypedObjectFieldSource>>,
     },
 }
 
@@ -421,6 +430,23 @@ impl TypedObjectFieldSource {
         match self {
             TypedObjectFieldSource::Literal(id) => Some(*id),
             TypedObjectFieldSource::Spread { .. } => None,
+        }
+    }
+}
+
+/// One member of an object literal, in source order.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TypedObjectMember {
+    /// A field's value.
+    Value(ExprId),
+    /// A spread's source object.
+    Spread(ExprId),
+}
+
+impl TypedObjectMember {
+    pub fn expr_id(self) -> ExprId {
+        match self {
+            TypedObjectMember::Value(id) | TypedObjectMember::Spread(id) => id,
         }
     }
 }
