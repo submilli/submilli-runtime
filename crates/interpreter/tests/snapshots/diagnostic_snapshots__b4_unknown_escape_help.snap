@@ -10,5 +10,5 @@ error: unknown escape sequence `\q`
   |              ^^
 3 | }
   |
-help: valid escapes: \", \', \\, \n, \t, \r, \b, \f, \v, \0, \u{HHHH}
+help: valid escapes: \", \', \\, \/, \n, \t, \r, \b, \f, \v, \0, \u{HHHH}
 ---
