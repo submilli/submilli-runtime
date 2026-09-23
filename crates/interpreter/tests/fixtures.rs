@@ -1,3 +1,5 @@
+//! `// expect-error-count: N` checks the total compiler diagnostic count, including
+//! warnings. Declare it once per fixture, including multi-file fixtures.
 //! Fixture harness: pass if no trap; `// expect-error: <substring>` and
 //! `// expect-warning: <substring>` header directives check expected diagnostics.
 //! `// deny-capability: <substring>` installs a security policy denying every
@@ -358,17 +360,20 @@ fn run_one(
     }
     let src = fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
     let filename = rel(path);
-    let expectations = parse_expectations(&src);
+    let expectations = parse_expectations(&src)?;
 
-    match (
-        compile_script(&src, &filename, interpreter::FileId(0), &[], &[]),
-        expectations.errors.as_slice(),
-    ) {
+    let compiled = compile_script(&src, &filename, interpreter::FileId(0), &[], &[]);
+    let diags = match &compiled {
+        Ok(compiled) => &compiled.warnings,
+        Err(diags) => diags,
+    };
+    assert_diagnostic_count(expectations.diagnostic_count, diags)?;
+    match (compiled, expectations.errors.as_slice()) {
         (Ok(_), n) if !n.is_empty() => Err(format!(
             "expected compile error(s) {n:?}, but compilation succeeded",
         )),
 
-        (Err(diags), n) if !n.is_empty() => {
+        (Err(diags), n) if !n.is_empty() || expectations.diagnostic_count.is_some() => {
             assert_diagnostics(&diags, n, &filename, &src)?;
             assert_diagnostics(&diags, &expectations.warnings, &filename, &src)?;
             Ok(())
@@ -413,12 +418,14 @@ fn run_multi(path: &Path) -> Result<(), String> {
     let mut owned_asts = Vec::new();
     let mut all_diags = Vec::new();
     let mut error_needles = Vec::new();
+    let mut diagnostic_count = None;
     let mut warning_needles = Vec::new();
     let mut seen = std::collections::BTreeMap::new();
 
     for file_path in files {
         let src = fs::read_to_string(&file_path).map_err(|e| format!("read: {e}"))?;
-        let expectations = parse_expectations(&src);
+        let expectations = parse_expectations(&src)?;
+        merge_diagnostic_count(&mut diagnostic_count, expectations.diagnostic_count)?;
         error_needles.extend(expectations.errors);
         warning_needles.extend(expectations.warnings);
         let module = module_path_for_fixture(path, &file_path)?;
@@ -468,6 +475,7 @@ fn run_multi(path: &Path) -> Result<(), String> {
     );
     all_diags.append(&mut infer_diags);
 
+    assert_diagnostic_count(diagnostic_count, &all_diags)?;
     match (
         all_diags
             .iter()
@@ -477,7 +485,7 @@ fn run_multi(path: &Path) -> Result<(), String> {
         (false, n) if !n.is_empty() => Err(format!(
             "expected compile error(s) {n:?}, but package inference succeeded",
         )),
-        (true, n) if !n.is_empty() => {
+        (true, n) if !n.is_empty() || diagnostic_count.is_some() => {
             assert_multi_diagnostics(&all_diags, n, &sources)?;
             assert_multi_diagnostics(&all_diags, &warning_needles, &sources)?;
             Ok(())
@@ -603,6 +611,7 @@ fn run_packages_fixture(
     let mut sources_by_pkg: std::collections::BTreeMap<String, Vec<(ModulePath, String)>> =
         std::collections::BTreeMap::new();
     let mut error_needles: Vec<String> = Vec::new();
+    let mut diagnostic_count = None;
     let mut deny_capabilities: Vec<String> = Vec::new();
     for pkg in &manifest {
         let dir = path.join(&pkg.dir);
@@ -612,7 +621,8 @@ fn run_packages_fixture(
         let mut modules = Vec::new();
         for file in files {
             let src = fs::read_to_string(&file).map_err(|e| format!("read: {e}"))?;
-            let expectations = parse_expectations(&src);
+            let expectations = parse_expectations(&src)?;
+            merge_diagnostic_count(&mut diagnostic_count, expectations.diagnostic_count)?;
             error_needles.extend(expectations.errors);
             deny_capabilities.extend(expectations.deny_capabilities);
             let module = module_path_for_fixture(&dir, &file)?;
@@ -623,6 +633,7 @@ fn run_packages_fixture(
 
     // Compile the library packages (dependency-first); the root is compiled as a
     // script afterward against every package declaration.
+    let mut compile_diagnostics = Vec::new();
     let mut compiled: std::collections::BTreeMap<String, CompiledPackage> =
         std::collections::BTreeMap::new();
     for name in order.iter().filter(|n| **n != root_entry.name) {
@@ -656,9 +667,18 @@ fn run_packages_fixture(
             &transitive_decls,
         ) {
             Ok(cp) => {
+                compile_diagnostics.extend(cp.warnings.iter().cloned());
                 compiled.insert(name.clone(), cp);
             }
-            Err(diags) => return finish_with_expected_errors(&error_needles, &diags, name),
+            Err(diags) => {
+                compile_diagnostics.extend(diags);
+                return finish_with_expected_errors(
+                    &error_needles,
+                    diagnostic_count,
+                    &compile_diagnostics,
+                    name,
+                );
+            }
         }
     }
 
@@ -681,9 +701,19 @@ fn run_packages_fixture(
         &[],
     ) {
         Ok(script) => script,
-        Err(diags) => return finish_with_expected_errors(&error_needles, &diags, &root_entry.name),
+        Err(diags) => {
+            compile_diagnostics.extend(diags);
+            return finish_with_expected_errors(
+                &error_needles,
+                diagnostic_count,
+                &compile_diagnostics,
+                &root_entry.name,
+            );
+        }
     };
 
+    compile_diagnostics.extend(root_script.warnings.iter().cloned());
+    assert_diagnostic_count(diagnostic_count, &compile_diagnostics)?;
     if !error_needles.is_empty() {
         return Err(format!(
             "expected compile error(s) {error_needles:?}, but everything compiled",
@@ -707,10 +737,12 @@ fn run_packages_fixture(
 /// otherwise report the unexpected compile failure.
 fn finish_with_expected_errors(
     needles: &[String],
+    diagnostic_count: Option<usize>,
     diags: &[Diagnostic],
     entry: &str,
 ) -> Result<(), String> {
-    if !needles.is_empty()
+    assert_diagnostic_count(diagnostic_count, diags)?;
+    if (!needles.is_empty() || diagnostic_count.is_some())
         && needles
             .iter()
             .all(|needle| diags.iter().any(|d| d.message.contains(needle)))
@@ -725,6 +757,30 @@ fn finish_with_expected_errors(
             .collect::<Vec<_>>()
             .join("\n"),
     ))
+}
+
+/// A count applies to the whole fixture; declare it once, including in multi-file fixtures.
+fn merge_diagnostic_count(target: &mut Option<usize>, count: Option<usize>) -> Result<(), String> {
+    if let Some(count) = count {
+        if target.is_some() {
+            return Err("declare expect-error-count only once per fixture".into());
+        }
+        *target = Some(count);
+    }
+    Ok(())
+}
+
+fn assert_diagnostic_count(expected: Option<usize>, diags: &[Diagnostic]) -> Result<(), String> {
+    if let Some(expected) = expected
+        && diags.len() != expected
+    {
+        return Err(format!(
+            "expected {expected} diagnostic(s), got {}: {:?}",
+            diags.len(),
+            diags.iter().map(|d| &d.message).collect::<Vec<_>>()
+        ));
+    }
+    Ok(())
 }
 
 fn parse_source(src: &str, file: interpreter::FileId) -> (interpreter::Ast, Vec<Diagnostic>) {
@@ -747,17 +803,25 @@ fn parse_source(src: &str, file: interpreter::FileId) -> (interpreter::Ast, Vec<
 #[derive(Default)]
 struct Expectations {
     errors: Vec<String>,
+    diagnostic_count: Option<usize>,
     warnings: Vec<String>,
     deny_capabilities: Vec<String>,
     deny_llm_models: Vec<String>,
 }
 
-fn parse_expectations(src: &str) -> Expectations {
+fn parse_expectations(src: &str) -> Result<Expectations, String> {
     let mut expectations = Expectations::default();
     for line in src.lines().take_while(|l| {
         let t = l.trim_start();
         t.is_empty() || t.starts_with("//")
     }) {
+        if let Some((_, s)) = line.split_once("// expect-error-count:") {
+            let count = s
+                .trim()
+                .parse::<usize>()
+                .map_err(|_| format!("invalid expect-error-count: {s:?}"))?;
+            merge_diagnostic_count(&mut expectations.diagnostic_count, Some(count))?;
+        }
         if let Some((_, s)) = line.split_once("// expect-error:") {
             let needle = s.trim();
             if !needle.is_empty() {
@@ -783,7 +847,7 @@ fn parse_expectations(src: &str) -> Expectations {
             }
         }
     }
-    expectations
+    Ok(expectations)
 }
 
 /// The canned model provider the `llm_*` fixtures dispatch against.
@@ -1212,4 +1276,49 @@ fn rel(p: &Path) -> String {
         .unwrap_or(p)
         .display()
         .to_string()
+}
+
+#[test]
+fn diagnostic_count_directive_rejects_missing_and_duplicate_reports() {
+    let expectations = parse_expectations(
+        "// expect-error-count: 2\n// expect-error: mismatch\n// expect-error: mismatch\n",
+    )
+    .unwrap();
+    let diagnostic = Diagnostic {
+        severity: interpreter::Severity::Error,
+        span: interpreter::Span::at(interpreter::FileId(0)),
+        message: "mismatch".into(),
+        help: vec![],
+        notes: vec![],
+    };
+    assert!(
+        assert_diagnostic_count(
+            expectations.diagnostic_count,
+            std::slice::from_ref(&diagnostic)
+        )
+        .is_err()
+    );
+    assert!(
+        assert_diagnostic_count(
+            expectations.diagnostic_count,
+            &[diagnostic.clone(), diagnostic.clone()]
+        )
+        .is_ok()
+    );
+    assert!(assert_diagnostic_count(Some(1), &[diagnostic.clone(), diagnostic]).is_err());
+    assert!(assert_diagnostic_count(Some(0), &[]).is_ok());
+}
+
+#[test]
+fn diagnostic_count_directive_rejects_malformed_and_ambiguous_counts() {
+    for source in [
+        "// expect-error-count: nope",
+        "// expect-error-count: -1",
+        "// expect-error-count:",
+        "// expect-error-count: 1\n// expect-error-count: 1",
+    ] {
+        assert!(parse_expectations(source).is_err(), "{source}");
+    }
+    let mut count = Some(1);
+    assert!(merge_diagnostic_count(&mut count, Some(1)).is_err());
 }

@@ -455,7 +455,7 @@ fn emit_structural_test_inner(
                 .expect("recursive runtime validator pre-allocated during discovery");
             emitter.instruction(Instruction::LocalGet(value_local));
             emit_validator_state(emitter, ctx, validator_state);
-            super::runtime_descriptors::capture(emitter, ctx, ty);
+            super::runtime_descriptors::validator_environment(emitter, ctx, ty);
             emitter.instruction(Instruction::Call(func_idx));
         }
         Type::InterfaceRef { .. } => emit_interface_ref_test(
@@ -481,7 +481,7 @@ fn emit_structural_test_inner(
                 emitter.emit_if(BlockType::Result(ValType::I32));
                 emitter.instruction(Instruction::LocalGet(value_local));
                 emit_validator_state(emitter, ctx, validator_state);
-                super::runtime_descriptors::capture(emitter, ctx, ty);
+                super::runtime_descriptors::validator_environment(emitter, ctx, ty);
                 emitter.instruction(Instruction::Call(validator));
                 emitter.emit_else();
                 emitter.instruction(Instruction::I32Const(0));
@@ -502,6 +502,10 @@ fn emit_interface_ref_test(
     validator_state: Option<ValidatorState>,
 ) {
     let key = ty.peel().clone();
+    if ctx.symbols.generic_runtime_validator(&key).is_some() {
+        emit_validator_or_representation(emitter, ctx, value_local, ty, &key, validator_state);
+        return;
+    }
     match ctx.ta.runtime_type_tests.get(&key) {
         Some(crate::FieldNarrowingTest::Shape(shape)) => emit_structural_test_inner(
             emitter,
@@ -548,7 +552,7 @@ fn emit_validator_or_representation(
     if let Some(func_idx) = ctx.symbols.runtime_validator_idx(key) {
         emitter.instruction(Instruction::LocalGet(value_local));
         emit_validator_state(emitter, ctx, validator_state);
-        super::runtime_descriptors::capture(emitter, ctx, key);
+        super::runtime_descriptors::validator_environment(emitter, ctx, key);
         emitter.instruction(Instruction::Call(func_idx));
     } else {
         emit_representation_test(emitter, ctx, value_local, ty);
@@ -1225,7 +1229,7 @@ fn emit_validator_state(
             .intrinsic_type_indices()
             .expect("intrinsics declared")
             .raw_array;
-        emitter.instruction(Instruction::I32Const(RECURSIVE_VALIDATOR_CAPACITY));
+        emitter.instruction(Instruction::I32Const(RECURSIVE_VALIDATOR_CAPACITY * 2));
         emitter.instruction(Instruction::ArrayNewDefault(raw_array));
         let raw_index_array = ctx
             .symbols
@@ -1294,6 +1298,7 @@ pub(crate) fn emit_runtime_validator_body(
         emitter.instruction(Instruction::I32Const(0));
         return emitter.build();
     }
+    let parameters = super::runtime_descriptors::parameters(key);
     let seen = emitter.add_anonymous_local(ValType::I32);
     let index = emitter.add_anonymous_local(ValType::I32);
     emitter.instruction(Instruction::I32Const(0));
@@ -1308,6 +1313,8 @@ pub(crate) fn emit_runtime_validator_body(
     emitter.instruction(Instruction::BrIf(1));
     emitter.instruction(Instruction::LocalGet(1));
     emitter.instruction(Instruction::LocalGet(index));
+    emitter.instruction(Instruction::I32Const(2));
+    emitter.instruction(Instruction::I32Mul);
     emitter.instruction(Instruction::ArrayGet(intr.raw_array));
     emitter.instruction(Instruction::LocalGet(0));
     emitter.instruction(Instruction::RefEq);
@@ -1318,9 +1325,12 @@ pub(crate) fn emit_runtime_validator_body(
     emitter.instruction(Instruction::I32Eq);
     emitter.instruction(Instruction::I32And);
     emitter.emit_if(BlockType::Empty);
-    emitter.instruction(Instruction::I32Const(1));
+    emit_same_validator_environment(&mut emitter, ctx, index, parameters.len());
     emitter.instruction(Instruction::LocalSet(seen));
-    emitter.instruction(Instruction::Br(2));
+    emitter.instruction(Instruction::LocalGet(seen));
+    emitter.emit_if(BlockType::Empty);
+    emitter.instruction(Instruction::Br(3));
+    emitter.emit_end();
     emitter.emit_end();
     emitter.instruction(Instruction::LocalGet(index));
     emitter.instruction(Instruction::I32Const(1));
@@ -1341,8 +1351,13 @@ pub(crate) fn emit_runtime_validator_body(
     emitter.emit_else();
     emitter.instruction(Instruction::LocalGet(1));
     emitter.instruction(Instruction::LocalGet(3));
+    emitter.instruction(Instruction::I32Const(2));
+    emitter.instruction(Instruction::I32Mul);
     emitter.instruction(Instruction::LocalGet(0));
     emitter.instruction(Instruction::ArraySet(intr.raw_array));
+    if !parameters.is_empty() {
+        emit_store_validator_environment(&mut emitter, ctx);
+    }
     emitter.instruction(Instruction::LocalGet(2));
     emitter.instruction(Instruction::LocalGet(3));
     emitter.instruction(Instruction::I32Const(validator_id));
@@ -1531,4 +1546,72 @@ fn emit_runtime_type_string(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, scr
     for _ in 0..5 {
         emitter.emit_end();
     }
+}
+
+/// Visited entries pair the value with its effective type arguments. Forwarded
+/// predicates preserve identity; growing arguments construct fresh predicates.
+fn emit_same_validator_environment(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    index: u32,
+    count: usize,
+) {
+    emitter.instruction(Instruction::I32Const(1));
+    if count == 0 {
+        return;
+    }
+    let intr = ctx.symbols.intrinsic_type_indices().expect("intrinsics");
+    let closure = ctx
+        .symbols
+        .closure_struct_type_idx(super::field_guards::signature())
+        .expect("descriptor closure");
+    for slot in 0..count {
+        emitter.instruction(Instruction::LocalGet(1));
+        emitter.instruction(Instruction::LocalGet(index));
+        emitter.instruction(Instruction::I32Const(2));
+        emitter.instruction(Instruction::I32Mul);
+        emitter.instruction(Instruction::I32Const(1));
+        emitter.instruction(Instruction::I32Add);
+        emitter.instruction(Instruction::ArrayGet(intr.raw_array));
+        emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(closure)));
+        emitter.instruction(Instruction::StructGet {
+            struct_type_index: closure,
+            field_index: 2,
+        });
+        emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
+            intr.object_fields,
+        )));
+        emitter.instruction(Instruction::I32Const(slot as i32));
+        emitter.instruction(Instruction::ArrayGet(intr.object_fields));
+        emitter.instruction(Instruction::LocalGet(4));
+        emitter.instruction(Instruction::I32Const(slot as i32));
+        emitter.instruction(Instruction::ArrayGet(intr.object_fields));
+        emitter.instruction(Instruction::RefEq);
+        emitter.instruction(Instruction::I32And);
+    }
+}
+
+fn emit_store_validator_environment(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
+    let intr = ctx.symbols.intrinsic_type_indices().expect("intrinsics");
+    let closure = ctx
+        .symbols
+        .closure_struct_type_idx(super::field_guards::signature())
+        .expect("descriptor closure");
+    emitter.instruction(Instruction::LocalGet(1));
+    emitter.instruction(Instruction::LocalGet(3));
+    emitter.instruction(Instruction::I32Const(2));
+    emitter.instruction(Instruction::I32Mul);
+    emitter.instruction(Instruction::I32Const(1));
+    emitter.instruction(Instruction::I32Add);
+    emitter.instruction(Instruction::GlobalGet(
+        ctx.symbols
+            .closure_vtable_global_idx()
+            .expect("closure vtable"),
+    ));
+    emitter.instruction(Instruction::RefFunc(
+        ctx.symbols.type_descriptor_functions[&Type::Unknown],
+    ));
+    emitter.instruction(Instruction::LocalGet(4));
+    emitter.instruction(Instruction::StructNew(closure));
+    emitter.instruction(Instruction::ArraySet(intr.raw_array));
 }

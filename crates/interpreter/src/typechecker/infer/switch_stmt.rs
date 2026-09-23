@@ -41,6 +41,7 @@ impl Inferer<'_> {
             );
         }
 
+        let label_hint = switch_label_hint(&disc_ty);
         let entry_reachable = self.reachable;
         self.push_pending_join_frame(narrowing::PendingJoinKind::Switch);
         let mut typed_cases: Vec<TypedSwitchCase> = Vec::new();
@@ -54,11 +55,11 @@ impl Inferer<'_> {
             let mut typed_values: Vec<TypedSwitchValue> = Vec::new();
             for value_expr in &case.values {
                 let value_span = self.ast.expr(*value_expr).span;
-                let (typed_val, val_ty) = self.infer_expr(*value_expr, Some(&disc_ty));
+                let (typed_val, val_ty) = self.infer_expr(*value_expr, Some(&label_hint));
                 let val_kind = self.typed_ast.expr(typed_val).kind.clone();
                 if !matches!(disc_ty, Type::Error)
                     && !matches!(val_ty, Type::Error)
-                    && !assignable(&val_ty, &disc_ty, self.resolver())
+                    && !assignable(&val_ty, &label_hint, self.resolver())
                 {
                     self.error(
                         value_span,
@@ -269,7 +270,8 @@ impl Inferer<'_> {
                     })
                     .map(|(_, m)| m.clone())
                     .collect();
-                let residual = Type::union(kept);
+                let residual =
+                    narrowing::with_source_refinement(&receiver_expr.ty, Type::union(kept));
                 if let Some(receiver_path) = self.expr_to_reference_path(receiver_expr) {
                     return (
                         residual,
@@ -300,7 +302,8 @@ impl Inferer<'_> {
                     })
                     .map(|(_, m)| m.clone())
                     .collect();
-                let residual = Type::union(kept);
+                let residual =
+                    narrowing::with_source_refinement(&receiver_expr.ty, Type::union(kept));
                 if let Some(receiver_path) = self.expr_to_reference_path(receiver_expr) {
                     return (
                         residual,
@@ -497,5 +500,15 @@ fn index_position(kind: &TypedExprKind) -> Option<usize> {
             Some(*n as usize)
         }
         _ => None,
+    }
+}
+
+/// Labels compare runtime values; they do not need the generic identity carried
+/// by the discriminant's refinement.
+fn switch_label_hint(ty: &Type) -> Type {
+    match ty.without_aliases() {
+        Type::Refined { ty, .. } => switch_label_hint(ty),
+        Type::Union(members) => Type::union(members.iter().map(switch_label_hint).collect()),
+        _ => ty.clone(),
     }
 }

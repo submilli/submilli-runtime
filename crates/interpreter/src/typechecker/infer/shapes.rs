@@ -123,7 +123,7 @@ impl<'a> ShapeCollector<'a> {
                 }
             }
             // aliases have no shape of their own — recurse into the body
-            Type::Alias { ty: inner, .. } => self.collect(inner),
+            Type::Alias { ty: inner, .. } | Type::Refined { ty: inner, .. } => self.collect(inner),
             Type::Number
             | Type::BigInt
             | Type::NumberLiteral(_)

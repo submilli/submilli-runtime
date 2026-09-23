@@ -75,6 +75,10 @@ use crate::Param;
 
 pub(super) fn substitute_typevars(ty: &Type, bindings: &BTreeMap<String, Type>) -> Type {
     match ty {
+        Type::Refined { original, ty } => Type::Refined {
+            original: Box::new(substitute_typevars(original, bindings)),
+            ty: Box::new(substitute_typevars(ty, bindings)),
+        },
         Type::TypeVar(name) => bindings.get(name).cloned().unwrap_or_else(|| ty.clone()),
         Type::Array(elem) => Type::Array(Box::new(substitute_typevars(elem, bindings))),
         Type::Tuple(elements) => Type::Tuple(
@@ -203,6 +207,10 @@ pub(super) fn substitute_typevars(ty: &Type, bindings: &BTreeMap<String, Type>) 
 
 pub(super) fn erase_generic_params(ty: &Type) -> Type {
     match ty {
+        Type::Refined { original, ty } => Type::Refined {
+            original: Box::new(erase_generic_params(original)),
+            ty: Box::new(erase_generic_params(ty)),
+        },
         Type::GenericParam { name, .. } => Type::TypeVar(name.clone()),
         Type::Object { fields } => Type::Object {
             fields: fields

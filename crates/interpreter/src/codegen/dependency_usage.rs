@@ -427,7 +427,7 @@ impl DependencyUsage {
             Type::NumberEnum { mangled, .. } | Type::StringEnum { mangled, .. } => {
                 self.types.insert(mangled.clone());
             }
-            Type::Alias { ty, .. } => self.collect_type(ty),
+            Type::Alias { ty, .. } | Type::Refined { ty, .. } => self.collect_type(ty),
             Type::BigInt => {
                 self.uses_bigint = true;
             }

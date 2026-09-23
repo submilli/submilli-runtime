@@ -188,6 +188,12 @@ pub enum Type {
         id: u32,
         name: String,
     },
+    /// A generic value with a proven runtime shape. Member access and lowering
+    /// use `ty`; assignability also preserves the original generic identity.
+    Refined {
+        original: Box<Type>,
+        ty: Box<Type>,
+    },
     /// `args` carries already-substituted type arguments; empty for non-generic interfaces.
     /// `mangled` is the declaring symbol's mangled name — the **nominal identity** (two
     /// modules' same-named interfaces have distinct mangled names). `package`/`name` are
@@ -366,9 +372,17 @@ impl Type {
         )
     }
 
+    /// Remove display aliases while retaining generic guard identity.
+    pub fn without_aliases(&self) -> &Type {
+        match self {
+            Type::Alias { ty, .. } => ty.without_aliases(),
+            _ => self,
+        }
+    }
+
     pub fn peel(&self) -> &Type {
         let mut t = self;
-        while let Type::Alias { ty, .. } = t {
+        while let Type::Alias { ty, .. } | Type::Refined { ty, .. } = t {
             t = ty;
         }
         t
@@ -516,7 +530,7 @@ impl Type {
             .collect();
         let mut flat: Vec<Type> = Vec::new();
         for m in members {
-            match m.peel() {
+            match m.without_aliases() {
                 Type::Union(inner) => flat.extend(inner.iter().cloned()),
                 _ => flat.push(m),
             }
@@ -526,11 +540,11 @@ impl Type {
         // `dedup_by` keeps the earlier element — the name the user wrote.
         let alias_rank = |t: &Type| u8::from(!matches!(t, Type::Alias { .. }));
         flat.sort_by(|a, b| {
-            a.peel()
-                .cmp(b.peel())
+            a.without_aliases()
+                .cmp(b.without_aliases())
                 .then_with(|| alias_rank(a).cmp(&alias_rank(b)))
         });
-        flat.dedup_by(|a, b| a.peel() == b.peel());
+        flat.dedup_by(|a, b| a.without_aliases() == b.without_aliases());
         match flat.len() {
             // All members were Never → return Never (the bottom type), not Error.
             0 => Type::Never,
@@ -723,6 +737,7 @@ impl fmt::Display for Type {
             Type::Never => f.write_str("never"),
             Type::TypeVar(name) => f.write_str(name),
             Type::GenericParam { name, .. } => f.write_str(name),
+            Type::Refined { original, ty } => write!(f, "{original} & {ty}"),
             Type::InterfaceRef { name, args, .. } | Type::ClassRef { name, args, .. } => {
                 f.write_str(name)?;
                 if !args.is_empty() {

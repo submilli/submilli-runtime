@@ -384,6 +384,13 @@ fn unit_literal_value(ty: &Type) -> Option<LiteralValue> {
 /// Strip `Type::Null` from a union. Returns `Type::Error` for `Type::Null`
 /// itself (empty union has no representation).
 pub fn strip_null(ty: &Type) -> Type {
+    if let Type::Refined {
+        original,
+        ty: shape,
+    } = ty.without_aliases()
+    {
+        return preserve_refinement(original, strip_null(shape));
+    }
     match ty.peel() {
         Type::Null => Type::Error,
         Type::Union(members) => {
@@ -411,6 +418,17 @@ pub fn narrow_field_presence(
     field: &str,
     lookup: &dyn Fn(&Type, &str) -> Option<crate::ObjectField>,
 ) -> (Type, Type) {
+    if let Type::Refined {
+        original,
+        ty: shape,
+    } = receiver_ty.without_aliases()
+    {
+        let (present, absent) = narrow_field_presence(shape, field, lookup);
+        return (
+            preserve_refinement(original, present),
+            preserve_refinement(original, absent),
+        );
+    }
     match receiver_ty.peel() {
         Type::Unknown => {
             let fields = BTreeMap::from([(
@@ -551,6 +569,13 @@ fn union_members(ty: &Type) -> Vec<&Type> {
 /// types per member. Falsy-capable base types stay whole (matching TS, which
 /// doesn't invent a "non-empty string" type).
 pub fn truthy_part(ty: &Type) -> Type {
+    if let Type::Refined {
+        original,
+        ty: shape,
+    } = ty.without_aliases()
+    {
+        return preserve_refinement(original, truthy_part(shape));
+    }
     let kept: Vec<Type> = union_members(ty)
         .into_iter()
         .filter(|m| truthiness_class(m) != TruthinessClass::AlwaysFalsy)
@@ -563,6 +588,13 @@ pub fn truthy_part(ty: &Type) -> Type {
 /// collapse `string` to `""`, drop never-falsy reference types. `number` stays
 /// `number` — a `0` literal would be unsound for `NaN`/`-0`.
 pub fn falsy_part(ty: &Type) -> Type {
+    if let Type::Refined {
+        original,
+        ty: shape,
+    } = ty.without_aliases()
+    {
+        return preserve_refinement(original, falsy_part(shape));
+    }
     let kept: Vec<Type> = union_members(ty)
         .into_iter()
         .filter_map(|m| match truthiness_class(m) {
@@ -680,39 +712,55 @@ fn is_typeof_object(ty: &Type) -> bool {
         | Type::AliasRef { .. } => false,
 
         // Peeled by the caller.
-        Type::Alias { .. } => false,
+        Type::Alias { .. } | Type::Refined { .. } => false,
     }
 }
 
 /// Keep only the union members of `ty` that match `facts`. For a
 /// non-union `ty`, returns `ty` if matched or [`Type::Error`] if not.
 pub fn intersect_with(ty: &Type, facts: TypeFacts) -> Type {
-    // Peel aliases so an aliased union (e.g. `type NS = number | string`) is
-    // filtered member-by-member rather than treated as an opaque nominal type.
-    let peeled = ty.peel();
-    if matches!(peeled, Type::Unknown)
-        && let Some(asserted) = asserted_type_for_facts(facts)
+    if let Type::Refined {
+        original,
+        ty: shape,
+    } = ty.without_aliases()
     {
-        return asserted;
+        return preserve_refinement(original, intersect_with(shape, facts));
+    }
+    let peeled = ty.peel();
+    if let Some(asserted) = asserted_type_for_facts(facts) {
+        match peeled {
+            Type::Unknown => return asserted,
+            Type::GenericParam { .. } => {
+                return Type::Refined {
+                    original: Box::new(ty.clone()),
+                    ty: Box::new(asserted),
+                };
+            }
+            _ => {}
+        }
     }
     match peeled {
-        Type::Union(members) => {
-            let kept: Vec<Type> = members
+        Type::Union(members) => Type::union(
+            members
                 .iter()
-                .filter(|m| type_matches_facts(m, facts))
-                .cloned()
-                .collect();
-            Type::union(kept)
-        }
+                .map(|m| intersect_with(m, facts))
+                .filter(|ty| !matches!(ty, Type::Error))
+                .collect(),
+        ),
         _ if type_matches_facts(peeled, facts) => ty.clone(),
-        // `unknown` never narrows to `Error` — a failed predicate doesn't
-        // prove the value isn't `unknown`.
         _ if matches!(peeled, Type::Unknown) => Type::Unknown,
         _ => Type::Error,
     }
 }
 
 pub fn subtract(ty: &Type, facts: TypeFacts) -> Type {
+    if let Type::Refined {
+        original,
+        ty: shape,
+    } = ty.without_aliases()
+    {
+        return preserve_refinement(original, subtract(shape, facts));
+    }
     let peeled = ty.peel();
     // false-branch on `unknown` is still `unknown` — we can't pin
     // down "unknown minus T" statically.
@@ -733,6 +781,23 @@ pub fn subtract(ty: &Type, facts: TypeFacts) -> Type {
     }
 }
 
+pub(super) fn with_source_refinement(source: &Type, shape: Type) -> Type {
+    match source.without_aliases() {
+        Type::Refined { original, .. } => preserve_refinement(original, shape),
+        _ => shape,
+    }
+}
+
+pub(super) fn preserve_refinement(original: &Type, shape: Type) -> Type {
+    if matches!(shape, Type::Error | Type::Never) {
+        return shape;
+    }
+    Type::Refined {
+        original: Box::new(original.clone()),
+        ty: Box::new(shape),
+    }
+}
+
 /// Strip covered literal values from `ty`. When the residual is `Type::Never`,
 /// all discriminant values were covered by `case` labels.
 ///
@@ -740,6 +805,13 @@ pub fn subtract(ty: &Type, facts: TypeFacts) -> Type {
 /// - **Single literal**: `Never` if covered, unchanged otherwise.
 /// - **Anything else**: returned unchanged.
 pub fn subtract_literals(ty: &Type, covered: &BTreeSet<LiteralValue>) -> Type {
+    if let Type::Refined {
+        original,
+        ty: shape,
+    } = ty.without_aliases()
+    {
+        return preserve_refinement(original, subtract_literals(shape, covered));
+    }
     match ty.peel() {
         Type::Union(members) => {
             // Only fire when every member is a unit-literal type; a
@@ -893,6 +965,24 @@ pub fn facts_for_target_type(target: &Type) -> TypeFacts {
 #[cfg(test)]
 mod analyzer_tests {
     use super::*;
+
+    #[test]
+    fn refined_literal_residual_retains_generic_identity() {
+        let original = Type::GenericParam {
+            id: 1,
+            name: "T".into(),
+        };
+        let shape = Type::union(vec![
+            Type::StringLiteral("a".into()),
+            Type::StringLiteral("b".into()),
+        ]);
+        let refined = preserve_refinement(&original, shape);
+        let covered = BTreeSet::from([LiteralValue::String("a".into())]);
+        assert_eq!(
+            subtract_literals(&refined, &covered),
+            preserve_refinement(&original, Type::StringLiteral("b".into()))
+        );
+    }
 
     #[test]
     fn strip_null_from_nullable_string() {

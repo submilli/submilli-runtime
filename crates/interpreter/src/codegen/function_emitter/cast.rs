@@ -157,7 +157,9 @@ pub fn emit_box(emitter: &mut FunctionEmitter<'_>, ctx: &CodegenCtx<'_>, ty: &Ty
         // A recursion back-edge lowers to `(ref null $Object)` — already
         // an `$Object` subtype, so the upcast is implicit. No-op.
         Type::AliasRef { .. } => {}
-        Type::Alias { .. } => unreachable!("peel guarantees no alias here (SUB-242)"),
+        Type::Alias { .. } | Type::Refined { .. } => {
+            unreachable!("peel guarantees no alias here (SUB-242)")
+        }
     }
 }
 
@@ -665,7 +667,9 @@ pub fn emit_cast_to(emitter: &mut FunctionEmitter<'_>, ctx: &CodegenCtx<'_>, ty:
             // may list flows through. Field reads go through the shape
             // field-name scan, same as `InterfaceRef`; no per-shape cast.
         }
-        Type::Alias { .. } => unreachable!("peel guarantees no alias here (SUB-242)"),
+        Type::Alias { .. } | Type::Refined { .. } => {
+            unreachable!("peel guarantees no alias here (SUB-242)")
+        }
     }
 }
 

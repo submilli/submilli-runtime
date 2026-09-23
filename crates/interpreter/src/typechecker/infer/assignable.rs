@@ -408,6 +408,14 @@ fn assignable_rec(
     types: TypeResolver,
     seen: &mut Vec<(Type, Type)>,
 ) -> bool {
+    if let Type::Refined { original, ty } = expected.without_aliases() {
+        return assignable_rec(actual, original, types, seen)
+            && assignable_rec(actual, ty, types, seen);
+    }
+    if let Type::Refined { original, ty } = actual.without_aliases() {
+        return assignable_rec(original, expected, types, seen)
+            || assignable_rec(ty, expected, types, seen);
+    }
     if same_alias_instance(actual, expected) {
         return true;
     }

@@ -4,7 +4,10 @@ use super::function_emitter::{FunctionEmitter, cast};
 use super::{CodegenCtx, field_guards, symbol_table::SymbolTable};
 use crate::{Ident, Span, Type, TypedAst, TypedExprKind};
 use std::collections::BTreeSet;
-use wasm_encoder::{Function, HeapType, Instruction, RefType, ValType};
+use wasm_encoder::{
+    BlockType, ConstExpr, Function, GlobalSection, GlobalType, HeapType, Instruction, RefType,
+    ValType,
+};
 
 pub fn environment_type(symbols: &SymbolTable) -> ValType {
     ValType::Ref(RefType {
@@ -65,8 +68,14 @@ pub fn bind(emitter: &mut FunctionEmitter, names: &[String], local: u32) {
     }
 }
 
-pub fn allocate(ta: &TypedAst, symbols: &mut SymbolTable, next: &mut u32) -> Vec<(Type, u32)> {
+pub fn allocate(
+    ta: &TypedAst,
+    extra: &BTreeSet<Type>,
+    symbols: &mut SymbolTable,
+    next: &mut u32,
+) -> Vec<(Type, u32)> {
     let mut targets = BTreeSet::from([Type::Unknown]);
+    targets.extend(extra.iter().cloned());
     for index in 0..ta.exprs_len() {
         if let TypedExprKind::GenericCall { type_args, .. } =
             &ta.expr(crate::ExprId(index as u32)).kind
@@ -101,6 +110,42 @@ pub fn allocate(ta: &TypedAst, symbols: &mut SymbolTable, next: &mut u32) -> Vec
     descriptors
 }
 
+/// Closed predicates are singletons so recursive calls retain effective type identity.
+pub fn allocate_globals(
+    globals: &mut GlobalSection,
+    symbols: &mut SymbolTable,
+    next: &mut u32,
+) -> u32 {
+    let closed: Vec<_> = symbols
+        .type_descriptor_functions
+        .keys()
+        .filter(|ty| parameters(ty).is_empty())
+        .cloned()
+        .collect();
+    if closed.is_empty() {
+        return 0;
+    }
+    let closure = symbols
+        .closure_struct_type_idx(field_guards::signature())
+        .expect("descriptor closure");
+    for ty in &closed {
+        symbols.type_descriptor_globals.insert(ty.clone(), *next);
+        *next += 1;
+        globals.global(
+            GlobalType {
+                val_type: ValType::Ref(RefType {
+                    nullable: true,
+                    heap_type: HeapType::Concrete(closure),
+                }),
+                mutable: true,
+                shared: false,
+            },
+            &ConstExpr::ref_null(HeapType::Concrete(closure)),
+        );
+    }
+    closed.len() as u32
+}
+
 pub fn environment(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, types: &[Type]) {
     for ty in types {
         emit(emitter, ctx, ty);
@@ -118,6 +163,28 @@ pub fn environment(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, types: &[Typ
 pub fn capture(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, ty: &Type) {
     let types: Vec<_> = parameters(ty).into_iter().map(Type::TypeVar).collect();
     environment(emitter, ctx, &types);
+}
+
+/// A generic helper binds declaration parameters, rather than free variables in
+/// this particular instantiation. Pair arguments in declaration order, then sort
+/// by parameter name to match `parameters()` and the helper's binding slots.
+pub fn validator_environment(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, key: &Type) {
+    if let Some((names, _)) = ctx.symbols.generic_runtime_validator(key)
+        && let Type::AliasRef { args, .. } | Type::InterfaceRef { args, .. } = key.peel()
+    {
+        let mut pairs: Vec<_> = names.iter().zip(args).collect();
+        pairs.sort_by_key(|(name, _)| *name);
+        environment(
+            emitter,
+            ctx,
+            &pairs
+                .into_iter()
+                .map(|(_, arg)| arg.clone())
+                .collect::<Vec<_>>(),
+        );
+        return;
+    }
+    capture(emitter, ctx, key);
 }
 
 fn emit(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, ty: &Type) {
@@ -143,6 +210,21 @@ fn emit(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, ty: &Type) {
         emit(emitter, ctx, &Type::Unknown);
         return;
     }
+    if let Some(&global) = ctx.symbols.type_descriptor_globals.get(ty) {
+        emitter.instruction(Instruction::GlobalGet(global));
+        emitter.instruction(Instruction::RefIsNull);
+        emitter.emit_if(BlockType::Empty);
+        emit_new_descriptor(emitter, ctx, ty);
+        emitter.instruction(Instruction::GlobalSet(global));
+        emitter.emit_end();
+        emitter.instruction(Instruction::GlobalGet(global));
+        emitter.instruction(Instruction::RefAsNonNull);
+        return;
+    }
+    emit_new_descriptor(emitter, ctx, ty);
+}
+
+fn emit_new_descriptor(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, ty: &Type) {
     let function = ctx
         .symbols
         .type_descriptor_functions

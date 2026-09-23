@@ -42,6 +42,7 @@ pub struct SymbolTable {
     pub runtime_generic_functions: BTreeSet<MangledName>,
     pub field_guard_targets: BTreeMap<u32, Type>,
     pub type_descriptor_functions: BTreeMap<Type, u32>,
+    pub type_descriptor_globals: BTreeMap<Type, u32>,
     types: BTreeMap<MangledName, u32>,
     funcs: BTreeMap<MangledName, u32>,
     globals: BTreeMap<MangledName, u32>,
@@ -102,6 +103,7 @@ pub struct SymbolTable {
     adapter_func_idx: BTreeMap<MangledName, u32>,
     /// Runtime validator helpers keyed by recursive alias or interface back-edges.
     runtime_validator_idx: BTreeMap<Type, u32>,
+    generic_runtime_validators: BTreeMap<MangledName, (Vec<String>, u32)>,
     instance_field_guards: BTreeMap<(Type, MangledName, String), u32>,
     class_guard_layout: BTreeMap<MangledName, ClassGuardLayout>,
     // Closures, adapters, and direct-dispatch wrappers are NOT in this map.
@@ -698,13 +700,53 @@ impl SymbolTable {
     }
 
     pub fn record_runtime_validator(&mut self, key: Type, idx: u32) {
+        match &key {
+            Type::AliasRef { mangled, args, .. } | Type::InterfaceRef { mangled, args, .. }
+                if !args.is_empty() && args.iter().all(|arg| matches!(arg, Type::TypeVar(_))) =>
+            {
+                let names = args
+                    .iter()
+                    .map(|arg| match arg {
+                        Type::TypeVar(name) => name.clone(),
+                        _ => unreachable!(),
+                    })
+                    .collect();
+                self.generic_runtime_validators
+                    .insert(mangled.clone(), (names, idx));
+            }
+            _ => {}
+        }
         self.runtime_validator_idx.insert(key, idx);
     }
 
     /// Function index of a recursive runtime validator keyed by an alias or
     /// interface back-edge.
     pub fn runtime_validator_idx(&self, key: &Type) -> Option<u32> {
-        self.runtime_validator_idx.get(key).copied()
+        self.runtime_validator_idx
+            .get(key)
+            .copied()
+            .or_else(|| self.generic_runtime_validator(key).map(|(_, idx)| idx))
+    }
+
+    pub fn generic_runtime_validator(&self, key: &Type) -> Option<(&[String], u32)> {
+        let (Type::AliasRef {
+            mangled: identity, ..
+        }
+        | Type::InterfaceRef {
+            mangled: identity, ..
+        }) = key.peel()
+        else {
+            return None;
+        };
+        let (names, index) = self.generic_runtime_validators.get(identity)?;
+        if self
+            .runtime_validator_idx
+            .get(key)
+            .is_some_and(|exact| exact != index)
+        {
+            return None;
+        }
+        Some((names.as_slice(), *index))
     }
 
     pub fn record_func(&mut self, mangled: MangledName, idx: u32) {
@@ -1010,7 +1052,9 @@ impl SymbolTable {
                     heap_type: HeapType::Concrete(idx),
                 })
             }
-            Type::Alias { .. } => unreachable!("peel guarantees no alias here (SUB-242)"),
+            Type::Alias { .. } | Type::Refined { .. } => {
+                unreachable!("peel guarantees no alias here (SUB-242)")
+            }
         }
     }
 

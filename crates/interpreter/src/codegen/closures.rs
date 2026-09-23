@@ -321,6 +321,7 @@ fn inherited_dependency_sigs(
 /// Every function-typed position reachable from `ty`.
 pub(crate) fn walk_type(ty: &Type, out: &mut Vec<ClosureSig>) {
     match ty {
+        Type::Refined { ty, .. } => walk_type(ty, out),
         Type::Function { params, ret, .. } => {
             out.push(classify(ty));
             for p in params {

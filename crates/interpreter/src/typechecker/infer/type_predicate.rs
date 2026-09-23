@@ -102,39 +102,8 @@ impl Inferer<'_> {
             .unwrap_or(fallback_kind);
 
         // Intersect to keep element-type precision: Array.isArray(x: number[] | string) → number[], not Array<unknown>.
-        let true_ty = match from_ty.peel() {
-            Type::Union(members) => {
-                let keep: Vec<Type> = members
-                    .iter()
-                    .filter(|m| assignable(m, asserted, self.resolver()))
-                    .cloned()
-                    .collect();
-                if keep.is_empty() {
-                    if assignable(asserted, from_ty.peel(), self.resolver()) {
-                        asserted.clone()
-                    } else {
-                        Type::Error
-                    }
-                } else {
-                    Type::union(keep)
-                }
-            }
-            ty if assignable(ty, asserted, self.resolver()) => ty.clone(),
-            ty if assignable(asserted, ty, self.resolver()) => asserted.clone(),
-            _ => Type::Error,
-        };
-        let false_ty = match from_ty.peel() {
-            Type::Union(members) => {
-                let keep: Vec<Type> = members
-                    .iter()
-                    .filter(|m| !assignable(m, asserted, self.resolver()))
-                    .cloned()
-                    .collect();
-                Type::union(keep)
-            }
-            ty if assignable(ty, asserted, self.resolver()) => Type::Error,
-            ty => ty.clone(),
-        };
+        let true_ty = self.intersect_asserted(&from_ty, asserted);
+        let false_ty = self.subtract_asserted(&from_ty, asserted);
 
         let source_true = self.typed_ast.push_expr(TypedExpr {
             kind: arg_kind.clone(),
@@ -169,6 +138,59 @@ impl Inferer<'_> {
             },
         );
         Some((true_env, false_env))
+    }
+
+    fn intersect_asserted(&self, ty: &Type, asserted: &Type) -> Type {
+        if let Type::Refined {
+            original,
+            ty: shape,
+        } = ty.without_aliases()
+        {
+            return narrowing::preserve_refinement(
+                original,
+                self.intersect_asserted(shape, asserted),
+            );
+        }
+        match ty.peel() {
+            Type::Union(members) => Type::union(
+                members
+                    .iter()
+                    .map(|member| self.intersect_asserted(member, asserted))
+                    .filter(|ty| !matches!(ty, Type::Error))
+                    .collect(),
+            ),
+            Type::GenericParam { .. } => Type::Refined {
+                original: Box::new(ty.clone()),
+                ty: Box::new(asserted.clone()),
+            },
+            _ if assignable(ty, asserted, self.resolver()) => ty.clone(),
+            _ if assignable(asserted, ty, self.resolver()) => asserted.clone(),
+            _ => Type::Error,
+        }
+    }
+
+    fn subtract_asserted(&self, ty: &Type, asserted: &Type) -> Type {
+        if let Type::Refined {
+            original,
+            ty: shape,
+        } = ty.without_aliases()
+        {
+            return narrowing::preserve_refinement(
+                original,
+                self.subtract_asserted(shape, asserted),
+            );
+        }
+        match ty.peel() {
+            Type::Union(members) => Type::union(
+                members
+                    .iter()
+                    .filter(|member| !assignable(member, asserted, self.resolver()))
+                    .cloned()
+                    .collect(),
+            ),
+            shape if assignable(shape, asserted, self.resolver()) => Type::Error,
+            _ => ty.clone(),
+        }
     }
 
     pub(super) fn validate_type_predicate_return(&mut self, value_id: ExprId, span: crate::Span) {

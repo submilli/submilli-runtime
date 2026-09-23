@@ -717,6 +717,8 @@ impl<'a> Inferer<'a> {
             _ => unreachable!("matched Eq | NotEq at the predicate_envs dispatch"),
         };
 
+        let true_root_ty = narrowing::with_source_refinement(&root_ty, true_root_ty);
+        let false_root_ty = narrowing::with_source_refinement(&root_ty, false_root_ty);
         let source_true = self.typed_ast.push_expr(TypedExpr {
             kind: root_kind.clone(),
             span: root_span,
@@ -778,7 +780,7 @@ impl<'a> Inferer<'a> {
         literal: narrowing::LiteralValue,
     ) -> Option<(narrowing::NarrowEnv, narrowing::NarrowEnv)> {
         use crate::BinOp;
-        let Type::Union(members) = &path_ty else {
+        let Type::Union(members) = path_ty.peel() else {
             return None;
         };
         let literal_ty = literal_to_type(&literal);
@@ -804,6 +806,8 @@ impl<'a> Inferer<'a> {
             _ => unreachable!(),
         };
 
+        let true_ty = narrowing::with_source_refinement(&path_ty, true_ty);
+        let false_ty = narrowing::with_source_refinement(&path_ty, false_ty);
         let source_true = self.typed_ast.push_expr(TypedExpr {
             kind: path_kind.clone(),
             span: path_span,
@@ -904,6 +908,8 @@ impl<'a> Inferer<'a> {
             .unwrap_or(fallback_kind);
         let true_root_ty = Type::union(matching);
         let false_root_ty = Type::union(non_matching);
+        let true_root_ty = narrowing::with_source_refinement(&root_ty, true_root_ty);
+        let false_root_ty = narrowing::with_source_refinement(&root_ty, false_root_ty);
         let source_true = self.typed_ast.push_expr(TypedExpr {
             kind: root_kind.clone(),
             span: receiver_span,

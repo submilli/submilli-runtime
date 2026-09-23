@@ -1266,6 +1266,7 @@ fn ts_return_type(params: &[Param], ret: &Type, predicate: Option<&TypePredicate
 
 fn ts_type(ty: &Type) -> String {
     match ty {
+        Type::Refined { original, ty } => format!("({} & {})", ts_type(original), ts_type(ty)),
         Type::Number => "number".to_string(),
         Type::NumberLiteral(n) => n.0.to_string(),
         Type::BigInt => "bigint".to_string(),

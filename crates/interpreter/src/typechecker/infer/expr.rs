@@ -4364,12 +4364,15 @@ impl Inferer<'_> {
                             .and_then(|m| m.get(&field.name.name))
                         && !assignable(&value_ty, &expected_field.ty, self.resolver())
                     {
-                        self.error(
-                            self.ast.expr(field.value).span,
+                        self.report_contextual_mismatch(
+                            value_span,
+                            &expected_field.ty,
+                            &value_ty,
                             format!(
                                 "field `{}`: expected `{}`, got `{}`",
                                 field.name.name, expected_field.ty, value_ty,
                             ),
+                            already_errored,
                         );
                     }
                     // validate override-field signature.
@@ -4714,11 +4717,12 @@ impl Inferer<'_> {
                         }
                         Some(running) => {
                             if !assignable(&elem_ty, running, self.resolver()) {
-                                self.error(
+                                self.report_array_element_mismatch(
                                     elem_span,
-                                    format!(
-                                        "expected `{running}` (matching first element), got `{elem_ty}`"
-                                    ),
+                                    running,
+                                    &elem_ty,
+                                    hint_pins_element_ty,
+                                    already_errored,
                                 );
                             }
                         }
@@ -4732,7 +4736,9 @@ impl Inferer<'_> {
                     let source_hint = element_ty
                         .as_ref()
                         .map(|t| Type::Array(Box::new(t.clone())));
+                    let errors_before = self.error_count();
                     let (typed_source, source_ty) = self.infer_expr(value, source_hint.as_ref());
+                    let already_errored = self.error_count() > errors_before;
                     // The spread source must be an array — or a tuple, which is one at
                     // runtime and contributes the union of its positions. Reject other
                     // shapes (primitive, object, unknown, union, function) with a typed
@@ -4749,12 +4755,22 @@ impl Inferer<'_> {
                             // Widens for the same reason as the value seed above.
                             None => element_ty = Some(elem_t.widen_literal()),
                             Some(running) if !assignable(&elem_t, running, self.resolver()) => {
-                                self.error(
-                                    spread_span,
-                                    format!(
-                                        "expected `{running}` (matching first element), got `{elem_t}`",
-                                    ),
-                                );
+                                if !hint_pins_element_ty {
+                                    self.report_contextual_mismatch(
+                                        self.ast.expr(value).span,
+                                        &Type::Array(Box::new(running.clone())),
+                                        &source_ty,
+                                        format!(
+                                            "expected `{running}` (matching first element), got `{elem_t}`",
+                                        ),
+                                        already_errored,
+                                    );
+                                } else if !already_errored {
+                                    self.error(
+                                        spread_span,
+                                        format!("expected `{running}`, got `{elem_t}`"),
+                                    );
+                                }
                             }
                             Some(_) => {}
                         },
@@ -4783,6 +4799,46 @@ impl Inferer<'_> {
         )
     }
 
+    fn report_array_element_mismatch(
+        &mut self,
+        span: Span,
+        expected: &Type,
+        actual: &Type,
+        external_hint: bool,
+        already_errored: bool,
+    ) {
+        if !external_hint || !already_errored {
+            self.report_contextual_mismatch(
+                span,
+                expected,
+                actual,
+                format!("expected `{expected}` (matching first element), got `{actual}`"),
+                already_errored,
+            );
+        }
+    }
+
+    fn report_contextual_mismatch(
+        &mut self,
+        span: Span,
+        expected: &Type,
+        actual: &Type,
+        message: String,
+        already_errored: bool,
+    ) {
+        if !already_errored {
+            self.error(span, message);
+            return;
+        }
+        // Keep the inner diagnostic's help and location while adding slot context.
+        if let Some(diagnostic) = self.diagnostics.last_mut()
+            && diagnostic.span == span
+            && diagnostic.message == format!("expected `{expected}`, got `{actual}`")
+        {
+            diagnostic.message = message;
+        }
+    }
+
     fn infer_spread_tuple_literal(
         &mut self,
         elements: Vec<crate::ArrayLiteralElement>,
@@ -4791,17 +4847,20 @@ impl Inferer<'_> {
     ) -> (TypedExprKind, Type) {
         let mut typed = Vec::with_capacity(elements.len());
         let mut slots = Vec::new();
+        let mut diagnosed = Vec::new();
         for element in &elements {
             match element {
                 crate::ArrayLiteralElement::Value(value) => {
+                    let errors_before = self.error_count();
                     let (id, ty) = self.infer_expr(*value, expected.get(slots.len()));
+                    diagnosed.push(self.error_count() > errors_before);
                     slots.push(ty);
                     typed.push(crate::TypedArrayElement::Value(id));
                 }
                 crate::ArrayLiteralElement::Spread { value, span } => {
                     let (id, ty) = self.infer_expr(*value, None);
                     match ty.peel() {
-                        Type::Tuple(types) => slots.extend(types.iter().cloned()),
+                        Type::Tuple(types) => { slots.extend(types.iter().cloned()); diagnosed.extend(std::iter::repeat_n(false, types.len())); },
                         Type::Error => {},
                         _ => self.error_with_help(*span,
                             format!("tuple literal spread requires a fixed-length tuple, got `{ty}`"),
@@ -4821,11 +4880,11 @@ impl Inferer<'_> {
                 ),
             );
         }
-        for (actual, want) in slots.iter_mut().zip(expected) {
+        for ((actual, want), already_errored) in slots.iter_mut().zip(expected).zip(diagnosed) {
             if matches!(want, Type::TypeVar(_) | Type::GenericParam { .. }) {
                 continue;
             }
-            if !assignable(actual, want, self.resolver()) {
+            if !already_errored && !assignable(actual, want, self.resolver()) {
                 self.error(span, format!("expected `{want}`, got `{actual}`"));
             }
             *actual = want.clone();
@@ -4886,6 +4945,7 @@ impl Inferer<'_> {
         let mut slot_types: Vec<Type> = Vec::with_capacity(elements.len());
         for (elem_id, expected_ty) in elements.iter().zip(expected_elems.iter()) {
             let elem_span = self.ast.expr(*elem_id).span;
+            let errors_before = self.error_count();
             let (typed_id, elem_ty) = self.infer_expr(*elem_id, Some(expected_ty));
             // Unbound generic-param slots take the inferred element type —
             // `new Map([["a", 1]])` must report `[string, number]`, not
@@ -4893,7 +4953,9 @@ impl Inferer<'_> {
             let slot = if matches!(expected_ty, Type::TypeVar(_) | Type::GenericParam { .. }) {
                 elem_ty.clone()
             } else {
-                if !assignable(&elem_ty, expected_ty, self.resolver()) {
+                if self.error_count() == errors_before
+                    && !assignable(&elem_ty, expected_ty, self.resolver())
+                {
                     self.error(
                         elem_span,
                         format!("expected `{expected_ty}`, got `{elem_ty}`"),
@@ -8043,7 +8105,7 @@ fn unsupported_cast_target_reason(
         Type::Never => Some("`never` has no runtime values"),
         Type::Void => Some("`void` is not a value type"),
         Type::Error => None,
-        Type::Alias { .. } => unreachable!("peel guarantees no alias here"),
+        Type::Alias { .. } | Type::Refined { .. } => unreachable!("peel guarantees no alias here"),
     }
 }
 

@@ -74,6 +74,10 @@ impl TypeParamSubstitution {
     /// from two nested generics sharing a name, which re-enters at depth zero.
     fn apply_rec(&self, ty: &Type, substituting: &mut Vec<String>) -> Type {
         match ty {
+            Type::Refined { original, ty } => Type::Refined {
+                original: Box::new(self.apply_rec(original, substituting)),
+                ty: Box::new(self.apply_rec(ty, substituting)),
+            },
             Type::TypeVar(name) => match self.bindings.get(name) {
                 Some(bound) => {
                     if substituting.iter().any(|open| open == name) {

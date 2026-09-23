@@ -1734,7 +1734,7 @@ impl<'a> Inferer<'a> {
                 .as_ref()
                 .is_some_and(|identity| !active_interfaces.insert(identity.clone()))
             {
-                self.record_polymorphic_interface_cutoffs(
+                self.record_generic_interface_validators(
                     &interface,
                     interface_identity.as_ref().expect("identity just matched"),
                 );
@@ -1894,19 +1894,43 @@ impl<'a> Inferer<'a> {
         }
     }
 
-    fn record_polymorphic_interface_cutoffs(
+    fn record_generic_interface_validators(
         &mut self,
         interface: &crate::InterfaceNarrowingTest,
         identity: &MangledName,
     ) {
-        let mut cutoffs = BTreeSet::new();
+        let mut references = BTreeSet::new();
         for member in interface.members.values() {
-            collect_interface_instantiations(&member.ty, identity, &mut cutoffs);
+            collect_interface_instantiations(&member.ty, identity, &mut references);
         }
-        for cutoff in cutoffs {
-            self.typed_ast
-                .runtime_type_tests
-                .insert(cutoff, crate::FieldNarrowingTest::Shape(Type::Never));
+        for reference in references {
+            let Type::InterfaceRef {
+                mangled,
+                name,
+                args,
+                ..
+            } = &reference
+            else {
+                continue;
+            };
+            let Some(symbol) = self.resolver().lookup(mangled, name) else {
+                continue;
+            };
+            let TypeKind::Interface { generics, .. } = &symbol.kind else {
+                continue;
+            };
+            if args.is_empty() {
+                continue;
+            }
+            let mut key = reference.clone();
+            if let Type::InterfaceRef { args, .. } = &mut key {
+                *args = generics.iter().cloned().map(Type::TypeVar).collect();
+            }
+            self.record_runtime_type_test_inner(
+                &key,
+                RuntimeTestMode::AllowAliasRefs,
+                &mut BTreeSet::new(),
+            );
         }
     }
 
@@ -3270,6 +3294,7 @@ impl<'a> Inferer<'a> {
             let ClassMember::Accessor {
                 name,
                 kind,
+                modifiers,
                 param,
                 return_type,
                 body,
@@ -3278,10 +3303,11 @@ impl<'a> Inferer<'a> {
             else {
                 continue;
             };
-            let Some(sig) = field_sigs.get(&name.name) else {
-                continue; // errored accessor — no property registered
-            };
-            let visibility = sig.visibility;
+            // Duplicate members may have no property signature. Their annotations
+            // and bodies still need checking to report independent errors.
+            let visibility = field_sigs
+                .get(&name.name)
+                .map_or(modifiers.visibility, |sig| sig.visibility);
             match kind {
                 AccessorKind::Get => {
                     // Annotations resolve inside the class's body-generics

@@ -261,7 +261,7 @@ impl PackageShapeCollector {
                     self.collect_type(arg);
                 }
             }
-            Type::Alias { ty, .. } => self.collect_type(ty),
+            Type::Alias { ty, .. } | Type::Refined { ty, .. } => self.collect_type(ty),
             Type::Number
             | Type::BigInt
             | Type::NumberLiteral(_)

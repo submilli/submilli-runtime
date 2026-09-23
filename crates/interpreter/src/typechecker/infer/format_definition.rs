@@ -125,7 +125,7 @@ pub(super) fn format_definition(
         Type::StringEnum { mangled, name, .. } => {
             format_string_enum_definition(types, registry, mangled, name)
         }
-        Type::Alias { .. } => unreachable!("peel guarantees no alias here"),
+        Type::Alias { .. } | Type::Refined { .. } => unreachable!("peel guarantees no alias here"),
     }
 }
 

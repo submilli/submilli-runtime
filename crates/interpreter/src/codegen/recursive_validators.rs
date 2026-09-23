@@ -108,6 +108,38 @@ impl ValidatorBodies {
         }
     }
 
+    /// One helper per generic declaration, with its arguments supplied as predicates.
+    pub fn generic_key(&self, ty: &Type) -> Option<Type> {
+        let generics = match ty.peel() {
+            Type::AliasRef { mangled, name, .. } => {
+                &self
+                    .imported_aliases
+                    .get(mangled)
+                    .or_else(|| self.local_aliases.get(name))?
+                    .0
+            }
+            Type::InterfaceRef { mangled, name, .. } => {
+                &self
+                    .imported_interfaces
+                    .get(mangled)
+                    .or_else(|| self.local_interfaces.get(name))?
+                    .0
+            }
+            _ => return None,
+        };
+        if generics.is_empty() {
+            return None;
+        }
+        let mut key = ty.peel().clone();
+        match &mut key {
+            Type::AliasRef { args, .. } | Type::InterfaceRef { args, .. } => {
+                *args = generics.iter().cloned().map(Type::TypeVar).collect();
+            }
+            _ => unreachable!(),
+        }
+        Some(key)
+    }
+
     /// Expand one level: a `Type::AliasRef` becomes its alias body, a
     /// `Type::InterfaceRef` becomes its data-only property shape (both peeled,
     /// with generic args substituted); any other type returns `ty.peel()` cloned.
@@ -218,6 +250,7 @@ pub struct ValidatorPlan {
 pub struct RecursiveValidators {
     pub plans: Vec<ValidatorPlan>,
     pub extra_shapes: Vec<Shape>,
+    pub descriptor_types: BTreeSet<Type>,
 }
 
 pub fn discover<'a>(
@@ -238,6 +271,7 @@ struct Discovery<'a> {
     shapes: BTreeSet<Shape>,
     expanded_keys: BTreeSet<Type>,
     rejected_keys: BTreeSet<Type>,
+    descriptor_types: BTreeSet<Type>,
 }
 
 impl<'a> Discovery<'a> {
@@ -247,10 +281,12 @@ impl<'a> Discovery<'a> {
             shapes: BTreeSet::new(),
             expanded_keys: BTreeSet::new(),
             rejected_keys: BTreeSet::new(),
+            descriptor_types: BTreeSet::new(),
         }
     }
 
     fn walk(&mut self, ty: &Type) {
+        collect_descriptor_arguments(ty, &mut self.descriptor_types);
         Traversal::new(
             self.bodies,
             &mut self.expanded_keys,
@@ -280,7 +316,9 @@ impl<'a> Discovery<'a> {
                     for member in interface.members.values() {
                         self.walk(&member.ty);
                     }
-                    if interface_test_is_recursive(ta, key, interface) {
+                    if is_generic_interface_key(key)
+                        || interface_test_is_recursive(ta, key, interface)
+                    {
                         self.expanded_keys.insert(key.clone());
                     }
                     self.scan_interface_carriers(interface);
@@ -346,7 +384,7 @@ impl<'a> Discovery<'a> {
     fn finish(self) -> RecursiveValidators {
         let mut all_keys = self.expanded_keys.clone();
         all_keys.extend(self.rejected_keys.iter().cloned());
-        let plans = all_keys
+        let plans: Vec<_> = all_keys
             .into_iter()
             .map(|key| {
                 let rejects_polymorphic_edge =
@@ -359,7 +397,19 @@ impl<'a> Discovery<'a> {
                 }
             })
             .collect();
+        let mut descriptor_types = self.descriptor_types;
+        for plan in &plans {
+            collect_descriptor_arguments(&plan.body, &mut descriptor_types);
+        }
+        for shape in &self.shapes {
+            if let Shape::Object { fields } = shape {
+                for field in fields.values() {
+                    collect_descriptor_arguments(&field.ty, &mut descriptor_types);
+                }
+            }
+        }
         RecursiveValidators {
+            descriptor_types,
             plans,
             extra_shapes: self.shapes.into_iter().collect(),
         }
@@ -517,7 +567,14 @@ impl<'a, 'b> Traversal<'a, 'b> {
 
     fn walk_expanded_reference(&mut self, ty: &Type, identity: &MangledName) {
         if !self.active_declarations.insert(identity.clone()) {
-            self.rejected.insert(ty.clone());
+            if let Some(key) = self.bodies.generic_key(ty) {
+                if self.validators.insert(key.clone()) {
+                    let body = self.bodies.expand_one(&key);
+                    self.walk(&body);
+                }
+            } else {
+                self.rejected.insert(ty.clone());
+            }
             return;
         }
         self.validators.insert(ty.clone());
@@ -525,4 +582,33 @@ impl<'a, 'b> Traversal<'a, 'b> {
         self.walk(&body);
         self.active_declarations.remove(identity);
     }
+}
+
+fn collect_descriptor_arguments(ty: &Type, out: &mut BTreeSet<Type>) {
+    match ty.peel() {
+        Type::AliasRef { args, .. }
+        | Type::InterfaceRef { args, .. }
+        | Type::ClassRef { args, .. } => {
+            for arg in args {
+                out.insert(arg.clone());
+                collect_descriptor_arguments(arg, out);
+            }
+        }
+        Type::Array(ty) => collect_descriptor_arguments(ty, out),
+        Type::Union(types) | Type::Tuple(types) => {
+            for ty in types {
+                collect_descriptor_arguments(ty, out);
+            }
+        }
+        Type::Object { fields } => {
+            for field in fields.values() {
+                collect_descriptor_arguments(&field.ty, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_generic_interface_key(ty: &Type) -> bool {
+    matches!(ty, Type::InterfaceRef { args, .. } if !args.is_empty() && args.iter().all(|arg| matches!(arg, Type::TypeVar(_))))
 }

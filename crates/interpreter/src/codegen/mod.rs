@@ -388,7 +388,12 @@ fn codegen_inner(
     // Env structs come after boxes since their fields may reference (ref $box_T).
     let closure_metas = analysis.closure_metas;
     let adapter_metas = analysis.adapter_metas;
-    let mentioned_closure_sigs = analysis.mentioned_closure_sigs;
+    let mut mentioned_closure_sigs = analysis.mentioned_closure_sigs;
+    // Validator discovery can require predicate closures even when source
+    // expressions never construct or call a closure of this signature.
+    if !recursive_validators.descriptor_types.is_empty() {
+        mentioned_closure_sigs.push(field_guards::signature());
+    }
     let dependency_values = dependency_usage.dependency_values(dependencies);
     let hof_dependency_sigs = closures::collect_from_dependencies(
         dependency_values.iter().map(|value| value.symbol),
@@ -897,7 +902,12 @@ fn codegen_inner(
     // Class method stubs + per-class getter/setter (vtable/header globals ref.func these).
     class_plan.allocate_funcs(&mut next_func_idx, &mut symbols);
     let instance_field_guards = field_guards::allocate(ta, &mut symbols, &mut next_func_idx);
-    let type_descriptors = runtime_descriptors::allocate(ta, &mut symbols, &mut next_func_idx);
+    let type_descriptors = runtime_descriptors::allocate(
+        ta,
+        &recursive_validators.descriptor_types,
+        &mut symbols,
+        &mut next_func_idx,
+    );
 
     // Recursive runtime validators. Allocate signatures and indices, then
     // register each back-edge key so structural checks can call its plan.
@@ -1148,7 +1158,10 @@ fn codegen_inner(
     } else {
         0
     };
-    if globals_count
+    let descriptor_globals_count =
+        runtime_descriptors::allocate_globals(&mut globals, &mut symbols, &mut next_global_idx);
+    if descriptor_globals_count
+        + globals_count
         + vtable_globals_count
         + field_names_globals_count
         + field_name_strings_count
