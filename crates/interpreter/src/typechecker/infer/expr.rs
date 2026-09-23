@@ -470,6 +470,12 @@ impl Inferer<'_> {
                 self.infer_optional_chain(base, parts, expected, span)
             }
             ExprKind::PostfixUnary { op, operand } => self.infer_postfix_unary(op, operand, span),
+            ExprKind::Assign {
+                target,
+                op,
+                op_span,
+                value,
+            } => self.infer_assign_expr(target, op.map(|op| (op, op_span)), value, span),
             ExprKind::As { expr: inner, ty } => self.infer_as(inner, ty, span),
             ExprKind::InstanceOf { value, ty } => self.infer_instanceof(value, ty, span),
             ExprKind::Regex { source, flags } => self.infer_regex(source, flags, span),
@@ -1173,9 +1179,7 @@ impl Inferer<'_> {
                     BinOp::Or => false_env,
                     _ => unreachable!("matched And | Or above"),
                 };
-                self.push_narrow_frame(rhs_env.clone());
-                let (typed_rhs, rhs_ty) = self.infer_expr(rhs, expected);
-                self.pop_narrow_frame();
+                let (typed_rhs, rhs_ty) = self.infer_conditional_operand(rhs, &rhs_env, expected);
                 if matches!(rhs_ty.peel(), Type::Void | Type::Never) {
                     condition_error = true;
                     let rhs_span = self.ast.expr(rhs).span;
@@ -6521,15 +6525,11 @@ impl Inferer<'_> {
 
         let (true_env, false_env) = self.predicate_envs(typed_cond);
 
-        self.push_narrow_frame(true_env.clone());
-        let (typed_then, then_ty) = self.infer_expr(then_, expected);
-        self.pop_narrow_frame();
+        let (typed_then, then_ty) = self.infer_conditional_operand(then_, &true_env, expected);
         let then_span = self.ast.expr(then_).span;
         let wrapped_then = self.wrap_narrow_exprs(typed_then, &true_env, then_span);
 
-        self.push_narrow_frame(false_env.clone());
-        let (typed_else, else_ty) = self.infer_expr(else_, expected);
-        self.pop_narrow_frame();
+        let (typed_else, else_ty) = self.infer_conditional_operand(else_, &false_env, expected);
         let else_span = self.ast.expr(else_).span;
         let wrapped_else = self.wrap_narrow_exprs(typed_else, &false_env, else_span);
 
@@ -6554,7 +6554,8 @@ impl Inferer<'_> {
         span: Span,
     ) -> (TypedExprKind, Type) {
         let (typed_lhs, lhs_ty) = self.infer_expr(lhs, None);
-        let (typed_rhs, rhs_ty) = self.infer_expr(rhs, None);
+        let (typed_rhs, rhs_ty) =
+            self.infer_conditional_operand(rhs, &super::narrowing::NarrowEnv::new(), None);
 
         // A poisoned operand has no knowable nullability, and naming it in the
         // message would print `<error>` at the user.

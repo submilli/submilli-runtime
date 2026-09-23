@@ -179,6 +179,12 @@ fn walk_expr(ta: &TypedAst, expr_id: ExprId, diags: &mut Vec<Diagnostic>) {
             walk_expr(ta, *effect, diags);
             walk_expr(ta, *result, diags);
         }
+        TypedExprKind::Sequence { stmts, result } => {
+            for &stmt in stmts {
+                walk_stmt(ta, stmt, diags);
+            }
+            walk_expr(ta, *result, diags);
+        }
         TypedExprKind::Unary { operand, .. } => walk_expr(ta, *operand, diags),
         TypedExprKind::TypeofTag { value, .. } | TypedExprKind::InstanceOf { value, .. } => {
             walk_expr(ta, *value, diags);

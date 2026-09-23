@@ -56,6 +56,13 @@ pub enum TypedExprKind {
         effect: ExprId,
         result: ExprId,
     },
+    /// Run `stmts` in order, then yield `result`. An assignment used as a value
+    /// lowers to this: its assignment statement, then a read of what it assigned.
+    /// `stmts` declares no binding that outlives the expression.
+    Sequence {
+        stmts: Vec<StmtId>,
+        result: ExprId,
+    },
     Binary {
         op: BinOp,
         lhs: ExprId,

@@ -115,114 +115,74 @@ impl<'a> Parser<'a> {
             TokenKind::Throw => self.parse_throw(),
             TokenKind::Try => self.parse_try(),
             TokenKind::LeftBrace => self.parse_block(),
-            TokenKind::Identifier if is_assign_lookahead(&self.peek_at(1).kind) => {
-                self.parse_assign()
-            }
             _ => self.parse_expression_statement(),
         }
-    }
-
-    fn parse_assign(&mut self) -> Option<StmtId> {
-        let name_tok = self.advance();
-        let target = self.ident_from_token(&name_tok);
-        let op_tok = self.advance();
-        let value = self.parse_expression()?;
-
-        if !matches!(self.peek().kind, TokenKind::Semicolon) {
-            self.error_at_peek("expected `;` after assignment");
-            return None;
-        }
-        let semi = self.advance();
-
-        let span = self.span(target.span.start, semi.span.end);
-        let kind = if let Some(op) = compound_op_for_token(&op_tok.kind) {
-            StmtKind::CompoundAssign {
-                target,
-                op,
-                op_span: op_tok.span,
-                value,
-            }
-        } else {
-            StmtKind::Assign { target, value }
-        };
-        Some(self.ast.push_stmt(Stmt { kind, span }))
     }
 
     fn parse_expression_statement(&mut self) -> Option<StmtId> {
         let expr_id = self.parse_expression()?;
         let expr_span = self.ast.expr(expr_id).span;
-
-        if is_assign_lookahead(&self.peek().kind) {
-            return self.parse_assign_tail(expr_id, expr_span);
-        }
-
         if !matches!(self.peek().kind, TokenKind::Semicolon) {
-            self.error_at_peek("expected `;` after expression");
+            if matches!(self.ast.expr(expr_id).kind, ExprKind::Assign { .. }) {
+                self.error_at_peek("expected `;` after assignment");
+            } else {
+                self.error_at_peek("expected `;` after expression");
+            }
             return None;
         }
         let semi = self.advance();
-
         let span = self.span(expr_span.start, semi.span.end);
-        Some(self.ast.push_stmt(Stmt {
-            kind: StmtKind::Expr(expr_id),
-            span,
-        }))
+        let kind = self.statement_kind_for(expr_id);
+        Some(self.ast.push_stmt(Stmt { kind, span }))
     }
 
-    fn parse_assign_tail(&mut self, lhs_id: ExprId, lhs_span: Span) -> Option<StmtId> {
-        let op_tok = self.advance();
-        let value_id = self.parse_expression()?;
-
-        if !matches!(self.peek().kind, TokenKind::Semicolon) {
-            self.error_at_peek("expected `;` after assignment");
-            return None;
-        }
-        let semi = self.advance();
-        let span = self.span(lhs_span.start, semi.span.end);
-        let compound = compound_op_for_token(&op_tok.kind);
-
-        let lhs_kind = self.ast.expr(lhs_id).kind.clone();
-        match lhs_kind {
-            ExprKind::FieldAccess { receiver, name } => {
-                let kind = if let Some(op) = compound {
-                    StmtKind::CompoundAssignField {
-                        receiver,
-                        field_name: name,
-                        op,
-                        op_span: op_tok.span,
-                        value: value_id,
-                    }
-                } else {
-                    StmtKind::AssignField {
-                        receiver,
-                        field_name: name,
-                        value: value_id,
-                    }
-                };
-                Some(self.ast.push_stmt(Stmt { kind, span }))
+    /// An assignment in statement position becomes an assignment statement;
+    /// only one used as a value stays an `ExprKind::Assign`.
+    fn statement_kind_for(&self, expr_id: ExprId) -> StmtKind {
+        let ExprKind::Assign {
+            target,
+            op,
+            op_span,
+            value,
+        } = self.ast.expr(expr_id).kind.clone()
+        else {
+            return StmtKind::Expr(expr_id);
+        };
+        match (self.ast.expr(target).kind.clone(), op) {
+            (ExprKind::Identifier(target), None) => StmtKind::Assign { target, value },
+            (ExprKind::Identifier(target), Some(op)) => StmtKind::CompoundAssign {
+                target,
+                op,
+                op_span,
+                value,
+            },
+            (ExprKind::FieldAccess { receiver, name }, None) => StmtKind::AssignField {
+                receiver,
+                field_name: name,
+                value,
+            },
+            (ExprKind::FieldAccess { receiver, name }, Some(op)) => StmtKind::CompoundAssignField {
+                receiver,
+                field_name: name,
+                op,
+                op_span,
+                value,
+            },
+            (ExprKind::IndexAccess { receiver, index }, None) => StmtKind::AssignIndex {
+                receiver,
+                index,
+                value,
+            },
+            (ExprKind::IndexAccess { receiver, index }, Some(op)) => {
+                StmtKind::CompoundAssignIndex {
+                    receiver,
+                    index,
+                    op,
+                    op_span,
+                    value,
+                }
             }
-            ExprKind::IndexAccess { receiver, index } => {
-                let kind = if let Some(op) = compound {
-                    StmtKind::CompoundAssignIndex {
-                        receiver,
-                        index,
-                        op,
-                        op_span: op_tok.span,
-                        value: value_id,
-                    }
-                } else {
-                    StmtKind::AssignIndex {
-                        receiver,
-                        index,
-                        value: value_id,
-                    }
-                };
-                Some(self.ast.push_stmt(Stmt { kind, span }))
-            }
-            _ => {
-                self.error_at(lhs_span, "invalid assignment target");
-                None
-            }
+            _ => unreachable!("parse_expression only builds assignments to valid targets"),
         }
     }
 
@@ -2139,9 +2099,6 @@ impl<'a> Parser<'a> {
             let init_id = match self.peek().kind {
                 TokenKind::Let => self.parse_let_or_const(false)?,
                 TokenKind::Const => self.parse_let_or_const(true)?,
-                TokenKind::Identifier if is_assign_lookahead(&self.peek_at(1).kind) => {
-                    self.parse_assign()?
-                }
                 _ => self.parse_expression_statement()?,
             };
             Some(init_id)
@@ -2183,81 +2140,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_for_update_stmt(&mut self) -> Option<StmtId> {
-        if matches!(self.peek().kind, TokenKind::Identifier)
-            && is_assign_lookahead(&self.peek_at(1).kind)
-        {
-            let name_tok = self.advance();
-            let target = self.ident_from_token(&name_tok);
-            let op_tok = self.advance();
-            let value = self.parse_expression()?;
-            let span = self.span(target.span.start, self.ast.expr(value).span.end);
-            let kind = if let Some(op) = compound_op_for_token(&op_tok.kind) {
-                StmtKind::CompoundAssign {
-                    target,
-                    op,
-                    op_span: op_tok.span,
-                    value,
-                }
-            } else {
-                StmtKind::Assign { target, value }
-            };
-            return Some(self.ast.push_stmt(Stmt { kind, span }));
-        }
         let expr_id = self.parse_expression()?;
-        let expr_span = self.ast.expr(expr_id).span;
-        if is_assign_lookahead(&self.peek().kind) {
-            let op_tok = self.advance();
-            let value_id = self.parse_expression()?;
-            let span = self.span(expr_span.start, self.ast.expr(value_id).span.end);
-            let compound = compound_op_for_token(&op_tok.kind);
-            let lhs_kind = self.ast.expr(expr_id).kind.clone();
-            return match lhs_kind {
-                ExprKind::FieldAccess { receiver, name } => {
-                    let kind = if let Some(op) = compound {
-                        StmtKind::CompoundAssignField {
-                            receiver,
-                            field_name: name,
-                            op,
-                            op_span: op_tok.span,
-                            value: value_id,
-                        }
-                    } else {
-                        StmtKind::AssignField {
-                            receiver,
-                            field_name: name,
-                            value: value_id,
-                        }
-                    };
-                    Some(self.ast.push_stmt(Stmt { kind, span }))
-                }
-                ExprKind::IndexAccess { receiver, index } => {
-                    let kind = if let Some(op) = compound {
-                        StmtKind::CompoundAssignIndex {
-                            receiver,
-                            index,
-                            op,
-                            op_span: op_tok.span,
-                            value: value_id,
-                        }
-                    } else {
-                        StmtKind::AssignIndex {
-                            receiver,
-                            index,
-                            value: value_id,
-                        }
-                    };
-                    Some(self.ast.push_stmt(Stmt { kind, span }))
-                }
-                _ => {
-                    self.error_at(expr_span, "invalid assignment target");
-                    None
-                }
-            };
-        }
-        Some(self.ast.push_stmt(Stmt {
-            kind: StmtKind::Expr(expr_id),
-            span: expr_span,
-        }))
+        let span = self.ast.expr(expr_id).span;
+        let kind = self.statement_kind_for(expr_id);
+        Some(self.ast.push_stmt(Stmt { kind, span }))
     }
 
     fn parse_for_of_tail(&mut self, kw: Token) -> Option<StmtId> {
@@ -3311,7 +3197,41 @@ impl<'a> Parser<'a> {
             && matches!(self.peek_at(1).kind, TokenKind::Identifier)
     }
 
+    /// Assignment is the lowest-precedence expression and right-associative:
+    /// `a = b = c` assigns `c` to both, and yields it.
     fn parse_expression(&mut self) -> Option<ExprId> {
+        let written = self.parse_conditional()?;
+        if !is_assign_lookahead(&self.peek().kind) {
+            return Some(written);
+        }
+        let target_span = self.ast.expr(written).span;
+        // `(a) = 1` assigns `a`, as in JavaScript.
+        let mut target = written;
+        while let ExprKind::Paren(inner) = self.ast.expr(target).kind {
+            target = inner;
+        }
+        if !matches!(
+            self.ast.expr(target).kind,
+            ExprKind::Identifier(_) | ExprKind::FieldAccess { .. } | ExprKind::IndexAccess { .. }
+        ) {
+            self.error_at(target_span, "invalid assignment target");
+            return None;
+        }
+        let op_tok = self.advance();
+        let value = self.parse_expression()?;
+        let value_span = self.ast.expr(value).span;
+        Some(self.ast.push_expr(Expr {
+            kind: ExprKind::Assign {
+                target,
+                op: compound_op_for_token(&op_tok.kind),
+                op_span: op_tok.span,
+                value,
+            },
+            span: self.span(target_span.start, value_span.end),
+        }))
+    }
+
+    fn parse_conditional(&mut self) -> Option<ExprId> {
         if self.is_arrow_start() {
             return self.parse_arrow();
         }

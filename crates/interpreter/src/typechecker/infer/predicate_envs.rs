@@ -32,6 +32,10 @@ impl<'a> Inferer<'a> {
     ) -> Option<ReferencePathState> {
         use crate::TypedExprKind;
         match kind {
+            // `(m = next()) !== null` tests `m`: the sequence yields a read of it.
+            TypedExprKind::Sequence { result, .. } => {
+                self.kind_to_reference_path_state(&self.typed_ast.expr(*result).kind)
+            }
             TypedExprKind::LocalRef { ident, .. } => {
                 let entry = self.scopes.get(&ident.name)?;
                 Some(ReferencePathState {

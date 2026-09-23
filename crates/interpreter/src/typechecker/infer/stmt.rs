@@ -985,7 +985,7 @@ impl Inferer<'_> {
         }
     }
 
-    fn infer_assign_field(
+    pub(super) fn infer_assign_field(
         &mut self,
         receiver: ExprId,
         name: Ident,
@@ -1220,7 +1220,7 @@ impl Inferer<'_> {
         result
     }
 
-    fn infer_assign_index(
+    pub(super) fn infer_assign_index(
         &mut self,
         receiver: ExprId,
         index: ExprId,
@@ -1310,7 +1310,12 @@ impl Inferer<'_> {
         Some(written_ty)
     }
 
-    fn infer_assign(&mut self, target: Ident, value: ExprId, span: Span) -> TypedStmtKind {
+    pub(super) fn infer_assign(
+        &mut self,
+        target: Ident,
+        value: ExprId,
+        span: Span,
+    ) -> TypedStmtKind {
         if let Some(entry) = self.scopes.get(&target.name).cloned() {
             if entry.is_const {
                 self.diagnostics.push(Diagnostic {
@@ -1434,7 +1439,7 @@ impl Inferer<'_> {
 
     /// `x += y` lowers to `x = x + y`; the synthesized LHS reads through any active
     /// narrowing so the binary type rule sees the narrowed view.
-    fn infer_compound_assign(
+    pub(super) fn infer_compound_assign(
         &mut self,
         target: Ident,
         op: BinOp,
@@ -1588,7 +1593,7 @@ impl Inferer<'_> {
         }
     }
 
-    fn infer_compound_assign_field(
+    pub(super) fn infer_compound_assign_field(
         &mut self,
         receiver: ExprId,
         name: Ident,
@@ -1790,7 +1795,7 @@ impl Inferer<'_> {
         }
     }
 
-    fn infer_compound_assign_index(
+    pub(super) fn infer_compound_assign_index(
         &mut self,
         receiver: ExprId,
         index: ExprId,

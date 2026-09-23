@@ -5177,6 +5177,12 @@ function main(): void { middle(); }
                 box_walk_expr(ta, effect, names);
                 box_walk_expr(ta, result, names);
             }
+            TypedExprKind::Sequence { stmts, result } => {
+                for stmt in stmts {
+                    box_walk_stmt(ta, stmt, names);
+                }
+                box_walk_expr(ta, result, names);
+            }
             TypedExprKind::Number(_)
             | TypedExprKind::BigInt(_)
             | TypedExprKind::String(_)

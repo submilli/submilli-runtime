@@ -355,6 +355,12 @@ fn collect_checks_in_expr(
             collect_checks_in_expr(ta, *effect, security_check, out);
             collect_checks_in_expr(ta, *result, security_check, out);
         }
+        TypedExprKind::Sequence { stmts, result } => {
+            for &stmt in stmts {
+                collect_checks_in_stmt(ta, stmt, security_check, out);
+            }
+            collect_checks_in_expr(ta, *result, security_check, out);
+        }
         TypedExprKind::Unary { operand, .. }
         | TypedExprKind::FieldAccess {
             receiver: operand, ..

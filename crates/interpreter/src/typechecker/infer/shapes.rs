@@ -333,6 +333,12 @@ pub(super) fn collect_from_expr(
             collect_from_expr(ast, *effect, c);
             collect_from_expr(ast, *result, c);
         }
+        TypedExprKind::Sequence { stmts, result } => {
+            for &stmt in stmts {
+                collect_from_stmt(ast, stmt, c);
+            }
+            collect_from_expr(ast, *result, c);
+        }
         TypedExprKind::Unary { operand, .. } => collect_from_expr(ast, *operand, c),
         TypedExprKind::TypeofTag { value, .. } | TypedExprKind::InstanceOf { value, .. } => {
             collect_from_expr(ast, *value, c);

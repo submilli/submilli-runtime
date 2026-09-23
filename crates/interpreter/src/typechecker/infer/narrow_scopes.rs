@@ -317,6 +317,25 @@ impl<'a> Inferer<'a> {
         self.tombstone_scopes.pop();
     }
 
+    /// Infers an operand that may not run — the right side of `&&`, `||`, or
+    /// `??`, or a ternary branch — under `env`. A write in it may have happened,
+    /// so it still invalidates outer narrowings, but the narrowing the write
+    /// installs does not outlive the operand: `c && (x = null)` leaves `x` at its
+    /// declared type, not `null`, and not the view it had before.
+    pub(super) fn infer_conditional_operand(
+        &mut self,
+        operand: ExprId,
+        env: &narrowing::NarrowEnv,
+        expected: Option<&Type>,
+    ) -> (ExprId, Type) {
+        self.push_narrow_frame(env.clone());
+        let inferred = self.infer_expr(operand, expected);
+        let (_, assigned) = self.pop_narrow_frame_capture();
+        let span = self.ast.expr(operand).span;
+        self.merge_assigned_into_outer(assigned, span);
+        inferred
+    }
+
     pub(super) fn pop_narrow_frame_capture(
         &mut self,
     ) -> (

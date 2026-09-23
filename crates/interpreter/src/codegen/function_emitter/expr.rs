@@ -92,6 +92,12 @@ fn emit_expr_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) 
         TypedExprKind::Regex { source, flags } => {
             emit_regex_literal(emitter, ctx, source, flags);
         }
+        TypedExprKind::Sequence { stmts, result } => {
+            for &stmt in stmts {
+                super::stmt::emit_statement(emitter, ctx, stmt);
+            }
+            emit_expr(emitter, ctx, *result);
+        }
         TypedExprKind::EffectThen { effect, result } => {
             emit_expr(emitter, ctx, *effect);
             // A `void` call leaves nothing on the stack, so there is nothing to drop.
