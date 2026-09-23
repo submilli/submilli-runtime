@@ -1,0 +1,13 @@
+=== ES5For-ofTypeCheck1.ts ===
+for (let v of "") { }
+>v : string
+>  : ^^^^^^
+>"" : ""
+>   : ^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -195,17 +195,9 @@ fn walk_expr(ta: &TypedAst, expr_id: ExprId, diags: &mut Vec<Diagnostic>) {
                 walk_expr(ta, a, diags);
             }
         }
-        TypedExprKind::ObjectLiteral {
-            spread_sources,
-            fields,
-        } => {
-            for &s in spread_sources {
-                walk_expr(ta, s, diags);
-            }
-            for f in fields {
-                if let Some(vid) = f.source.literal_expr_id() {
-                    walk_expr(ta, vid, diags);
-                }
+        TypedExprKind::ObjectLiteral { members, .. } => {
+            for member in members {
+                walk_expr(ta, member.expr_id(), diags);
             }
         }
         TypedExprKind::ArrayLiteral { elements, .. } => {

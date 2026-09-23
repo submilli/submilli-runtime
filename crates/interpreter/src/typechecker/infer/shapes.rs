@@ -373,10 +373,7 @@ pub(super) fn collect_from_expr(
                 collect_from_expr(ast, *a, c);
             }
         }
-        TypedExprKind::ObjectLiteral {
-            spread_sources,
-            fields,
-        } => {
+        TypedExprKind::ObjectLiteral { members, fields } => {
             // when expr.ty is InterfaceRef, codegen still needs the structural shape registered
             if matches!(&ast.expr(expr_id).ty, Type::InterfaceRef { .. }) {
                 let field_map: std::collections::BTreeMap<String, crate::ObjectField> = fields
@@ -394,13 +391,8 @@ pub(super) fn collect_from_expr(
                     .collect();
                 c.collect(&Type::Object { fields: field_map });
             }
-            for s in spread_sources {
-                collect_from_expr(ast, *s, c);
-            }
-            for f in fields {
-                if let crate::TypedObjectFieldSource::Literal(vid) = &f.source {
-                    collect_from_expr(ast, *vid, c);
-                }
+            for member in members {
+                collect_from_expr(ast, member.expr_id(), c);
             }
         }
         TypedExprKind::ArrayLiteral {

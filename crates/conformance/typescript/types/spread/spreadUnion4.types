@@ -1,0 +1,43 @@
+=== spreadUnion4.ts ===
+const a: { x: () => void } = null as unknown as ({ x: () => void });
+>a : { x: () => void; }
+>  : ^^^^^^^^^^^^^^^^^^
+>x : () => void
+>  : ^^^^^^^^^^
+>null as unknown as ({ x: () => void }) : { x: () => void; }
+>                                       : ^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>x : () => void
+>  : ^^^^^^^^^^
+
+const b: { x?: () => void } = null as unknown as ({ x?: () => void });
+>b : { x?: () => void; }
+>  : ^^^^^^^^^^^^^^^^^^^
+>x : (() => void) | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as ({ x?: () => void }) : { x?: () => void; }
+>                                        : ^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>x : (() => void) | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+const c = { ...a, ...b };
+>c : { x: () => void; }
+>  : ^^^^^^^^^^^^^^^^^^
+>{ ...a, ...b } : { x: () => void; }
+>               : ^^^^^^^^^^^^^^^^^^
+>a : { x: () => void; }
+>  : ^^^^^^^^^^^^^^^^^^
+>b : { x?: () => void; }
+>  : ^^^^^^^^^^^^^^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

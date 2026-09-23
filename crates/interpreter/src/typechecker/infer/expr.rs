@@ -2392,7 +2392,7 @@ impl Inferer<'_> {
             }
             crate::DefaultValue::EmptyObject => (
                 TypedExprKind::ObjectLiteral {
-                    spread_sources: Vec::new(),
+                    members: Vec::new(),
                     fields: Vec::new(),
                 },
                 param_ty.clone(),
@@ -4298,10 +4298,11 @@ impl Inferer<'_> {
 
         // walk members in source order, applying last-writer-wins
         // for both literal-position fields and spread sources. `merged`
-        // tracks the resolved field shape + origin per output field. A
-        // spread source is registered once in `spread_sources` and reused
-        // by every `Spread` origin that reads from it.
-        let mut spread_sources: Vec<ExprId> = Vec::new();
+        // tracks the resolved field shape + origin per output field.
+        // `object_members` records every member's expression in that same order,
+        // including values a later member overwrites, which still run.
+        let mut object_members: Vec<crate::TypedObjectMember> = Vec::new();
+        let mut spread_count = 0;
         let mut merged: std::collections::BTreeMap<
             String,
             (crate::ObjectField, crate::TypedObjectFieldSource),
@@ -4333,6 +4334,7 @@ impl Inferer<'_> {
                     });
                     let errors_before = self.error_count();
                     let (typed_value, value_ty) = self.infer_expr(field.value, hint.as_ref());
+                    object_members.push(crate::TypedObjectMember::Value(typed_value));
                     let value_span = self.ast.expr(field.value).span;
                     // A hinted slot already reported the mismatch against its
                     // hint; screening again gives one mistake two errors.
@@ -4428,52 +4430,29 @@ impl Inferer<'_> {
                     span: spread_span,
                 } => {
                     let (typed_source, source_ty) = self.infer_expr(value, None);
-                    // peel through aliases. Only structural
-                    // `Type::Object` sources are accepted in v1 —
-                    // `InterfaceRef` (nominal interfaces) and every
-                    // other type get rejected with a typed diagnostic.
-                    let peeled_source = source_ty.peel().clone();
-                    match peeled_source {
-                        Type::Object {
-                            fields: source_fields,
-                        } => {
-                            let source_index = spread_sources.len();
-                            spread_sources.push(typed_source);
-                            let source_ty_for_origin = Type::Object {
-                                fields: source_fields.clone(),
-                            };
-                            for (name, field) in source_fields {
-                                merged.insert(
-                                    name.clone(),
-                                    (
-                                        field,
-                                        crate::TypedObjectFieldSource::Spread {
-                                            source_index,
-                                            field_name: name,
-                                            source_ty: source_ty_for_origin.clone(),
-                                        },
-                                    ),
-                                );
-                            }
-                        }
-                        Type::InterfaceRef { name, .. } => {
-                            self.error(
-                                spread_span,
-                                format!(
-                                    "cannot spread interface `{name}` into an object literal — only structural object types are accepted",
-                                ),
-                            );
-                        }
-                        Type::Error => {
-                            // Inner inference already produced a
-                            // diagnostic; don't pile a second one on.
-                        }
-                        other => {
-                            self.error(
-                                spread_span,
-                                format!("cannot spread `{other}` into an object literal",),
-                            );
-                        }
+                    let Some(SpreadFields { fields, by_name }) =
+                        self.spread_source_fields(typed_source, &source_ty, spread_span)
+                    else {
+                        continue;
+                    };
+                    let source_index = spread_count;
+                    spread_count += 1;
+                    object_members.push(crate::TypedObjectMember::Spread {
+                        source: typed_source,
+                        by_name,
+                    });
+                    let source_ty_for_origin = Type::Object {
+                        fields: fields.clone(),
+                    };
+                    for (name, field) in fields {
+                        let origin = crate::TypedObjectFieldSource::Spread {
+                            source_index,
+                            field_name: name.clone(),
+                            source_ty: source_ty_for_origin.clone(),
+                            fallback: None,
+                        };
+                        let earlier = merged.remove(&name);
+                        merged.insert(name, merge_spread_field(earlier, field, origin, by_name));
                     }
                 }
             }
@@ -4533,7 +4512,32 @@ impl Inferer<'_> {
         // field that codegen will null-fill into the constructed struct.
         if let Some(want) = expected_fields.as_ref() {
             for (name, want_field) in want {
-                if let Some((existing_field, _)) = merged.get_mut(name) {
+                if let Some((existing_field, existing_origin)) = merged.get_mut(name) {
+                    // A literal field was checked against the target where it was
+                    // written; a spread's field is checked here, before the target's
+                    // optionality (and an interface's type) replaces its own.
+                    let from_spread = matches!(
+                        existing_origin,
+                        crate::TypedObjectFieldSource::Spread { .. }
+                    );
+                    if from_spread && existing_field.optional && !want_field.optional {
+                        self.error_with_help(
+                            span,
+                            format!(
+                                "spread field `{name}` may be absent, but the target requires it"
+                            ),
+                            vec![format!("give `{name}` a value after the spread")],
+                        );
+                    } else if from_spread
+                        && interface_target.is_some()
+                        && !assignable(&existing_field.ty, &want_field.ty, self.resolver())
+                    {
+                        let message = format!(
+                            "spread field `{name}`: expected `{}`, got `{}`",
+                            want_field.ty, existing_field.ty,
+                        );
+                        self.error(span, message);
+                    }
                     existing_field.optional = want_field.optional;
                     if interface_target.is_some() {
                         // Interface writes can replace the initializer with any declared
@@ -4554,6 +4558,7 @@ impl Inferer<'_> {
                         span,
                         ty: Type::Null,
                     });
+                    object_members.push(crate::TypedObjectMember::Value(null_id));
                     merged.insert(
                         name.clone(),
                         (
@@ -4593,7 +4598,7 @@ impl Inferer<'_> {
         if let Some((iface_package, iface_name, iface_mangled, iface_args)) = interface_target {
             return (
                 TypedExprKind::ObjectLiteral {
-                    spread_sources,
+                    members: object_members,
                     fields: field_origins,
                 },
                 Type::interface_ref(iface_package, iface_name, iface_mangled, iface_args),
@@ -4601,11 +4606,76 @@ impl Inferer<'_> {
         }
         (
             TypedExprKind::ObjectLiteral {
-                spread_sources,
+                members: object_members,
                 fields: field_origins,
             },
             Type::Object { fields: resolved },
         )
+    }
+
+    /// The fields a spread copies, and whether they must be found by name at
+    /// run time (`by_name`). A conditional contributes each branch rather than
+    /// their join — `c ? a : {}` joins to `{}`, which would copy nothing when `a`
+    /// is chosen — and a union contributes each member. Over more than one alternative, a
+    /// field some lack is optional and its type is the union of theirs, as in
+    /// TypeScript. Only structural object types spread; anything else is reported.
+    fn spread_source_fields(
+        &mut self,
+        typed_source: ExprId,
+        source_ty: &Type,
+        span: Span,
+    ) -> Option<SpreadFields> {
+        let mut alternatives = Vec::new();
+        self.collect_spread_alternatives(typed_source, source_ty, &mut alternatives);
+        let mut objects: Vec<ObjectFields> = Vec::new();
+        for alternative in alternatives {
+            match alternative {
+                Type::Object { fields } => {
+                    if !objects.contains(&fields) {
+                        objects.push(fields);
+                    }
+                }
+                Type::InterfaceRef { name, .. } => {
+                    self.error(
+                        span,
+                        format!(
+                            "cannot spread interface `{name}` into an object literal — only structural object types are accepted",
+                        ),
+                    );
+                    return None;
+                }
+                // Inner inference already reported it.
+                Type::Error => return None,
+                other => {
+                    self.error(
+                        span,
+                        format!("cannot spread `{other}` into an object literal"),
+                    );
+                    return None;
+                }
+            }
+        }
+        Some(match objects.as_slice() {
+            [only] => SpreadFields {
+                fields: only.clone(),
+                by_name: false,
+            },
+            _ => SpreadFields {
+                fields: merge_spread_alternatives(&objects),
+                by_name: true,
+            },
+        })
+    }
+
+    fn collect_spread_alternatives(&self, id: ExprId, ty: &Type, out: &mut Vec<Type>) {
+        if let TypedExprKind::Ternary { then_, else_, .. } = self.typed_ast.expr(id).kind {
+            for branch in [then_, else_] {
+                let branch_ty = self.typed_ast.expr(branch).ty.clone();
+                self.collect_spread_alternatives(branch, &branch_ty, out);
+            }
+            return;
+        }
+        collect_union_members(ty, out);
     }
 
     fn infer_array_literal(
@@ -8326,6 +8396,95 @@ fn has_to_string(ty: &Type) -> bool {
             | Type::Unknown
             | Type::Error
     )
+}
+
+type ObjectFields = std::collections::BTreeMap<String, crate::ObjectField>;
+
+/// The fields a spread copies. `by_name`: the source has no one layout, so each
+/// field is found by name at run time.
+struct SpreadFields {
+    fields: ObjectFields,
+    by_name: bool,
+}
+
+/// A spread's field, merged over what an earlier member wrote to the same name.
+///
+/// An optional field may be absent, and then the earlier value stays: `{ a: 1,
+/// ...{} }` keeps `a: 1`. So the field holds either value, and is optional only
+/// if the earlier one was. Absence has to be observable for that: a by-name read
+/// finds whether the object has the field, but a fixed-layout slot holds null
+/// for an absent field, so there a field whose type admits `null` can't tell a
+/// present `null` from absence, and the spread's value is taken as written.
+fn merge_spread_field(
+    earlier: Option<(crate::ObjectField, crate::TypedObjectFieldSource)>,
+    field: crate::ObjectField,
+    origin: crate::TypedObjectFieldSource,
+    by_name: bool,
+) -> (crate::ObjectField, crate::TypedObjectFieldSource) {
+    let keeps_earlier = field.optional && (by_name || !admits_null(&field.ty));
+    let Some((earlier_field, earlier_origin)) = earlier.filter(|_| keeps_earlier) else {
+        return (field, origin);
+    };
+    let mut origin = origin;
+    if let crate::TypedObjectFieldSource::Spread { fallback, .. } = &mut origin {
+        *fallback = Some(Box::new(earlier_origin));
+    }
+    (
+        crate::ObjectField {
+            ty: Type::union(vec![earlier_field.ty, field.ty]),
+            optional: earlier_field.optional,
+            readonly: false,
+        },
+        origin,
+    )
+}
+
+fn admits_null(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Null | Type::Unknown => true,
+        Type::Union(members) => members.iter().any(admits_null),
+        _ => false,
+    }
+}
+
+fn collect_union_members(ty: &Type, out: &mut Vec<Type>) {
+    match ty.peel() {
+        Type::Union(members) => {
+            for member in members {
+                collect_union_members(member, out);
+            }
+        }
+        other => out.push(other.clone()),
+    }
+}
+
+/// The fields of a spread whose source is one of several object types: every
+/// field any of them has, optional where some lack it or have it optional.
+fn merge_spread_alternatives(alternatives: &[ObjectFields]) -> ObjectFields {
+    let names: std::collections::BTreeSet<&String> = alternatives
+        .iter()
+        .flat_map(|fields| fields.keys())
+        .collect();
+    names
+        .into_iter()
+        .map(|name| {
+            let present: Vec<&crate::ObjectField> = alternatives
+                .iter()
+                .filter_map(|fields| fields.get(name))
+                .collect();
+            let optional =
+                present.len() < alternatives.len() || present.iter().any(|field| field.optional);
+            let ty = Type::union(present.iter().map(|field| field.ty.clone()).collect());
+            (
+                name.clone(),
+                crate::ObjectField {
+                    ty,
+                    optional,
+                    readonly: false,
+                },
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]

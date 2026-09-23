@@ -1,0 +1,77 @@
+=== controlFlowIteration.ts ===
+
+let cond: boolean = null as unknown as (boolean);
+>cond : boolean
+>     : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+function ff(): void {
+>ff : () => void
+>   : ^^^^^^^^^^
+
+    let x: string | null = null as unknown as (string | null);
+>x : string | null
+>  : ^^^^^^^^^^^^^
+>null as unknown as (string | null) : string | null
+>                                   : ^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    while (true) {
+>true : true
+>     : ^^^^
+
+        if (cond) {
+>cond : boolean
+>     : ^^^^^^^
+
+            x = "";
+>x = "" : ""
+>       : ^^
+>x : string | null
+>  : ^^^^^^^^^^^^^
+>"" : ""
+>   : ^^
+
+        }
+        else {
+            if (x) {
+>x : string | null
+>  : ^^^^^^^^^^^^^
+
+                x.length;
+>x.length : number
+>         : ^^^^^^
+>x : string
+>  : ^^^^^^
+>length : number
+>       : ^^^^^^
+
+            }
+            if (x) {
+>x : string | null
+>  : ^^^^^^^^^^^^^
+
+                x.length;
+>x.length : number
+>         : ^^^^^^
+>x : string
+>  : ^^^^^^
+>length : number
+>       : ^^^^^^
+
+            }
+        }
+    }
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

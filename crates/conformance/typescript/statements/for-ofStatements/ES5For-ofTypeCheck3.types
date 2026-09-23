@@ -1,0 +1,23 @@
+=== ES5For-ofTypeCheck3.ts ===
+let tuple: [string, number] = ["", 0];
+>tuple : [string, number]
+>      : ^^^^^^^^^^^^^^^^
+>["", 0] : [string, number]
+>        : ^^^^^^^^^^^^^^^^
+>"" : ""
+>   : ^^
+>0 : 0
+>  : ^
+
+for (let v of tuple) { }
+>v : string | number
+>  : ^^^^^^^^^^^^^^^
+>tuple : [string, number]
+>      : ^^^^^^^^^^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

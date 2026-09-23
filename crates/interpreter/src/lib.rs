@@ -44,7 +44,7 @@ pub use codegen::{SymbolTable, codegen};
 pub use compile::{
     CompiledPackage, CompiledScript, PackageSourceModule, ParsedScript, PhaseTimings,
     ScriptImports, compile_package, compile_package_with_transitive, compile_parsed_script_timed,
-    compile_script, compile_script_owned_by, parse_script, typecheck,
+    compile_script, compile_script_owned_by, parse_script, typecheck, typecheck_to_typed_ast,
 };
 pub use diagnostics::{Diagnostic, Severity};
 pub use doc_comment::{
@@ -75,8 +75,8 @@ pub use typed_ast::{
     TypedCatchClause, TypedChainPart, TypedClassAccessor, TypedClassConstructor, TypedClassDecl,
     TypedClassField, TypedClassMethod, TypedExpr, TypedExprKind, TypedFunction, TypedGlobal,
     TypedInterfaceDecl, TypedInterfaceMember, TypedNumberEnumDecl, TypedNumberEnumMember,
-    TypedObjectFieldOrigin, TypedObjectFieldSource, TypedObjectLiteralField, TypedParam, TypedStmt,
-    TypedStmtKind, TypedStringEnumDecl, TypedStringEnumMember, TypedSwitchCase, TypedSwitchValue,
-    TypedTypeAliasDecl, TypedTypeDecl, TypeofTagKind,
+    TypedObjectFieldOrigin, TypedObjectFieldSource, TypedObjectLiteralField, TypedObjectMember,
+    TypedParam, TypedStmt, TypedStmtKind, TypedStringEnumDecl, TypedStringEnumMember,
+    TypedSwitchCase, TypedSwitchValue, TypedTypeAliasDecl, TypedTypeDecl, TypeofTagKind,
 };
 pub use types::{ObjectField, Package, Type, TypePredicate};

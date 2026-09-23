@@ -1,0 +1,77 @@
+=== controlFlowWithTemplateLiterals.ts ===
+const envVar: string | null = null as unknown as (string | null);
+>envVar : string | null
+>       : ^^^^^^^^^^^^^
+>null as unknown as (string | null) : string | null
+>                                   : ^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+if (typeof envVar === `string`) {
+>typeof envVar === `string` : boolean
+>                           : ^^^^^^^
+>typeof envVar : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>envVar : string | null
+>       : ^^^^^^^^^^^^^
+>`string` : "string"
+>         : ^^^^^^^^
+
+  envVar.slice(0)
+>envVar.slice(0) : string
+>                : ^^^^^^
+>envVar.slice : (start?: number, end?: number) => string
+>             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>envVar : string
+>       : ^^^^^^
+>slice : (start?: number, end?: number) => string
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>0 : 0
+>  : ^
+
+}
+
+const obj: {test: string} | {} = null as unknown as ({test: string} | {});
+>obj : {} | { test: string; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^
+>test : string
+>     : ^^^^^^
+>null as unknown as ({test: string} | {}) : {} | { test: string; }
+>                                         : ^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>test : string
+>     : ^^^^^^
+
+if (`test` in obj) {
+>`test` in obj : boolean
+>              : ^^^^^^^
+>`test` : "test"
+>       : ^^^^^^
+>obj : {} | { test: string; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^
+
+  obj.test.slice(0)
+>obj.test.slice(0) : string
+>                  : ^^^^^^
+>obj.test.slice : (start?: number, end?: number) => string
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>obj.test : string
+>         : ^^^^^^
+>obj : { test: string; }
+>    : ^^^^^^^^^^^^^^^^^
+>test : string
+>     : ^^^^^^
+>slice : (start?: number, end?: number) => string
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>0 : 0
+>  : ^
+
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

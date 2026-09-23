@@ -1,0 +1,69 @@
+=== typeGuardTautologicalConsistiency.ts ===
+let stringOrNumber: string | number = null as unknown as (string | number);
+>stringOrNumber : string | number
+>               : ^^^^^^^^^^^^^^^
+>null as unknown as (string | number) : string | number
+>                                     : ^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+if (typeof stringOrNumber === "number") {
+>typeof stringOrNumber === "number" : boolean
+>                                   : ^^^^^^^
+>typeof stringOrNumber : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>stringOrNumber : string | number
+>               : ^^^^^^^^^^^^^^^
+>"number" : "number"
+>         : ^^^^^^^^
+
+    if (typeof stringOrNumber !== "number") {
+>typeof stringOrNumber !== "number" : boolean
+>                                   : ^^^^^^^
+>typeof stringOrNumber : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>stringOrNumber : number
+>               : ^^^^^^
+>"number" : "number"
+>         : ^^^^^^^^
+
+        stringOrNumber;
+>stringOrNumber : never
+>               : ^^^^^
+
+    }
+}
+
+if (typeof stringOrNumber === "number" && typeof stringOrNumber !== "number") {
+>typeof stringOrNumber === "number" && typeof stringOrNumber !== "number" : boolean
+>                                                                         : ^^^^^^^
+>typeof stringOrNumber === "number" : boolean
+>                                   : ^^^^^^^
+>typeof stringOrNumber : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>stringOrNumber : string | number
+>               : ^^^^^^^^^^^^^^^
+>"number" : "number"
+>         : ^^^^^^^^
+>typeof stringOrNumber !== "number" : boolean
+>                                   : ^^^^^^^
+>typeof stringOrNumber : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>stringOrNumber : number
+>               : ^^^^^^
+>"number" : "number"
+>         : ^^^^^^^^
+
+    stringOrNumber;
+>stringOrNumber : never
+>               : ^^^^^
+
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

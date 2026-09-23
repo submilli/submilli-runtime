@@ -1,0 +1,5 @@
+types: 8 of 16 tsc entries compared, 1 differ
+
+line 12: foo
+  tsc:  S[]
+  ours: T

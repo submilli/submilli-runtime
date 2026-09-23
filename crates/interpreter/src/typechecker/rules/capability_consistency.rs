@@ -372,11 +372,9 @@ fn collect_checks_in_expr(
             collect_checks_in_expr(ta, *receiver, security_check, out);
             collect_checks_in_expr(ta, *index, security_check, out);
         }
-        TypedExprKind::ObjectLiteral { fields, .. } => {
-            for field in fields {
-                if let Some(value) = field.source.literal_expr_id() {
-                    collect_checks_in_expr(ta, value, security_check, out);
-                }
+        TypedExprKind::ObjectLiteral { members, .. } => {
+            for member in members {
+                collect_checks_in_expr(ta, member.expr_id(), security_check, out);
             }
         }
         TypedExprKind::ArrayLiteral { elements, .. } => {

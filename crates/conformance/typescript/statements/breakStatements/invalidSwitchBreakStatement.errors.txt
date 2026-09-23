@@ -1,0 +1,1 @@
+invalidSwitchBreakStatement.ts(5,10): error TS2678: Type '5' is not comparable to type '12'.

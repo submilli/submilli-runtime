@@ -1,0 +1,106 @@
+=== nullishCoalescingOperator8.ts ===
+
+const a: { p: string | null, m(): string | null } = null as unknown as ({ p: string | null, m(): string | null });
+>a : { p: string | null; m(): string | null; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>p : string | null
+>  : ^^^^^^^^^^^^^
+>m : () => string | null
+>  : ^^^^^^^^^^^^^^^^^^^
+>null as unknown as ({ p: string | null, m(): string | null }) : { p: string | null; m(): string | null; }
+>                                                              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>p : string | null
+>  : ^^^^^^^^^^^^^
+>m : () => string | null
+>  : ^^^^^^^^^^^^^^^^^^^
+
+const b: { p: string | null, m(): string | null } = null as unknown as ({ p: string | null, m(): string | null });
+>b : { p: string | null; m(): string | null; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>p : string | null
+>  : ^^^^^^^^^^^^^
+>m : () => string | null
+>  : ^^^^^^^^^^^^^^^^^^^
+>null as unknown as ({ p: string | null, m(): string | null }) : { p: string | null; m(): string | null; }
+>                                                              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>p : string | null
+>  : ^^^^^^^^^^^^^
+>m : () => string | null
+>  : ^^^^^^^^^^^^^^^^^^^
+
+
+const n1 = a.p ?? "default";
+>n1 : string
+>   : ^^^^^^
+>a.p ?? "default" : string
+>                 : ^^^^^^
+>a.p : string | null
+>    : ^^^^^^^^^^^^^
+>a : { p: string | null; m(): string | null; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>p : string | null
+>  : ^^^^^^^^^^^^^
+>"default" : "default"
+>          : ^^^^^^^^^
+
+const n2 = a.m() ?? "default";
+>n2 : string
+>   : ^^^^^^
+>a.m() ?? "default" : string
+>                   : ^^^^^^
+>a.m() : string | null
+>      : ^^^^^^^^^^^^^
+>a.m : () => string | null
+>    : ^^^^^^^^^^^^^^^^^^^
+>a : { p: string | null; m(): string | null; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>m : () => string | null
+>  : ^^^^^^^^^^^^^^^^^^^
+>"default" : "default"
+>          : ^^^^^^^^^
+
+const n3 = a.m() ?? b.p ?? b.m() ?? "default";;
+>n3 : string
+>   : ^^^^^^
+>a.m() ?? b.p ?? b.m() ?? "default" : string
+>                                   : ^^^^^^
+>a.m() ?? b.p ?? b.m() : string | null
+>                      : ^^^^^^^^^^^^^
+>a.m() ?? b.p : string | null
+>             : ^^^^^^^^^^^^^
+>a.m() : string | null
+>      : ^^^^^^^^^^^^^
+>a.m : () => string | null
+>    : ^^^^^^^^^^^^^^^^^^^
+>a : { p: string | null; m(): string | null; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>m : () => string | null
+>  : ^^^^^^^^^^^^^^^^^^^
+>b.p : string | null
+>    : ^^^^^^^^^^^^^
+>b : { p: string | null; m(): string | null; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>p : string | null
+>  : ^^^^^^^^^^^^^
+>b.m() : string | null
+>      : ^^^^^^^^^^^^^
+>b.m : () => string | null
+>    : ^^^^^^^^^^^^^^^^^^^
+>b : { p: string | null; m(): string | null; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>m : () => string | null
+>  : ^^^^^^^^^^^^^^^^^^^
+>"default" : "default"
+>          : ^^^^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -1,0 +1,13 @@
+types: 13 of 62 tsc entries compared, 3 differ
+
+line 18: { method1(arg) { arg.numProp = 10; }, method2(arg) { arg.strProp = "hello"; } }
+  tsc:  { method1(arg: A): void; method2(arg: B): void; }
+  ours: Foo
+
+line 29: { method1: (arg) => { arg.numProp = 10; }, method2: (arg) => { arg.strProp = "hello"; } }
+  tsc:  { method1: (arg: A) => void; method2: (arg: B) => void; }
+  ours: Foo
+
+line 40: { method1: function (arg) { arg.numProp = 10; }, method2: function (arg) { arg.strProp = "hello"; } }
+  tsc:  { method1: (arg: A) => void; method2: (arg: B) => void; }
+  ours: Foo

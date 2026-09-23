@@ -1,0 +1,71 @@
+=== nullOrUndefinedTypeGuardIsOrderIndependent.ts ===
+function test(strOrNull: string | null, strOrUndefined: string | null): void {
+>test : (strOrNull: string | null, strOrUndefined: string | null) => void
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>strOrNull : string | null
+>          : ^^^^^^^^^^^^^
+>strOrUndefined : string | null
+>               : ^^^^^^^^^^^^^
+
+    let str: string = "original";
+>str : string
+>    : ^^^^^^
+>"original" : "original"
+>           : ^^^^^^^^^^
+
+    let nil: null = null as unknown as (null);
+>nil : null
+>    : ^^^^
+>null as unknown as (null) : null
+>                          : ^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    if (null === strOrNull) {
+>null === strOrNull : boolean
+>                   : ^^^^^^^
+>strOrNull : string | null
+>          : ^^^^^^^^^^^^^
+
+        nil = strOrNull;
+>nil = strOrNull : null
+>                : ^^^^
+>nil : null
+>    : ^^^^
+>strOrNull : null
+>          : ^^^^
+
+    }
+    else {
+        str = strOrNull;
+>str = strOrNull : string
+>                : ^^^^^^
+>str : string
+>    : ^^^^^^
+>strOrNull : string
+>          : ^^^^^^
+
+    }
+    if (null !== strOrUndefined) {
+>null !== strOrUndefined : boolean
+>                        : ^^^^^^^
+>strOrUndefined : string | null
+>               : ^^^^^^^^^^^^^
+
+        str = strOrUndefined;
+>str = strOrUndefined : string
+>                     : ^^^^^^
+>str : string
+>    : ^^^^^^
+>strOrUndefined : string
+>               : ^^^^^^
+
+    }
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

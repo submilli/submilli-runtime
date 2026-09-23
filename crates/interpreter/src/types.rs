@@ -678,6 +678,33 @@ pub(crate) fn write_synthetic_params(
     out.write_str(")")
 }
 
+/// `s` escaped for a double-quoted string the way `tsc` prints a string literal
+/// type (`escapeString` in TypeScript's `utilities.ts`): `"G\"HI"`, `"a\nb"`.
+pub(crate) fn escape_string_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{8}' => out.push_str("\\b"),
+            '\u{b}' => out.push_str("\\v"),
+            '\u{c}' => out.push_str("\\f"),
+            // `\0` before a digit would read as an octal escape.
+            '\0' if chars.peek().is_some_and(char::is_ascii_digit) => out.push_str("\\x00"),
+            '\0' => out.push_str("\\0"),
+            '\u{0}'..='\u{1f}' | '\u{85}' | '\u{2028}' | '\u{2029}' => {
+                out.push_str(&format!("\\u{:04X}", u32::from(c)));
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -687,7 +714,7 @@ impl fmt::Display for Type {
                 f.write_str(&crate::runtime::number::format_number_js(*v))
             }
             Type::String => f.write_str("string"),
-            Type::StringLiteral(s) => write!(f, "\"{s}\""),
+            Type::StringLiteral(s) => write!(f, "\"{}\"", escape_string_literal(s)),
             Type::Uint8Array => f.write_str("Uint8Array"),
             Type::Boolean => f.write_str("boolean"),
             Type::Null => f.write_str("null"),
@@ -814,6 +841,24 @@ mod tests {
         assert_eq!(Type::Null.to_string(), "null");
         assert_eq!(Type::Void.to_string(), "void");
         assert_eq!(Type::Error.to_string(), "<error>");
+    }
+
+    #[test]
+    fn string_literal_display_escapes_like_typescript() {
+        // Each expectation is what `tsc` 5.9 prints for the same literal type.
+        let cases = [
+            ("G\"HI\\", r#""G\"HI\\""#),
+            ("a\nb\r\t", r#""a\nb\r\t""#),
+            ("\u{8}\u{b}\u{c}", r#""\b\v\f""#),
+            ("\0x", r#""\0x""#),
+            ("\u{0}1", r#""\x001""#),
+            ("\u{7}\u{1b}", r#""\u0007\u001B""#),
+            ("\u{85}\u{2028}\u{2029}", r#""\u0085\u2028\u2029""#),
+            ("\u{7f}é", "\"\u{7f}é\""),
+        ];
+        for (value, printed) in cases {
+            assert_eq!(Type::StringLiteral(value.into()).to_string(), printed);
+        }
     }
 
     #[test]

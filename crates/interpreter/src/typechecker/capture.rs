@@ -559,17 +559,9 @@ impl State<'_> {
                     self.walk_expr(a);
                 }
             }
-            TypedExprKind::ObjectLiteral {
-                spread_sources,
-                fields,
-            } => {
-                for s in spread_sources {
-                    self.walk_expr(s);
-                }
-                for f in fields {
-                    if let Some(vid) = f.source.literal_expr_id() {
-                        self.walk_expr(vid);
-                    }
+            TypedExprKind::ObjectLiteral { members, .. } => {
+                for member in members {
+                    self.walk_expr(member.expr_id());
                 }
             }
             TypedExprKind::ArrayLiteral { elements, .. } => {
@@ -1066,17 +1058,9 @@ mod tests {
                     walk_expr(ta, a, out);
                 }
             }
-            TypedExprKind::ObjectLiteral {
-                spread_sources,
-                fields,
-            } => {
-                for &s in spread_sources {
-                    walk_expr(ta, s, out);
-                }
-                for f in fields {
-                    if let Some(vid) = f.source.literal_expr_id() {
-                        walk_expr(ta, vid, out);
-                    }
+            TypedExprKind::ObjectLiteral { members, .. } => {
+                for member in members {
+                    walk_expr(ta, member.expr_id(), out);
                 }
             }
             TypedExprKind::ArrayLiteral { elements, .. } => {
@@ -1276,19 +1260,9 @@ mod tests {
             TypedExprKind::IntrinsicCall { args, .. } => {
                 args.iter().find_map(|&a| scan_expr(ta, a))
             }
-            TypedExprKind::ObjectLiteral {
-                spread_sources,
-                fields,
-            } => spread_sources
+            TypedExprKind::ObjectLiteral { members, .. } => members
                 .iter()
-                .find_map(|&s| scan_expr(ta, s))
-                .or_else(|| {
-                    fields.iter().find_map(|f| {
-                        f.source
-                            .literal_expr_id()
-                            .and_then(|vid| scan_expr(ta, vid))
-                    })
-                }),
+                .find_map(|member| scan_expr(ta, member.expr_id())),
             TypedExprKind::ArrayLiteral { elements, .. } => {
                 elements.iter().find_map(|e| scan_expr(ta, e.expr_id()))
             }

@@ -1,0 +1,29 @@
+types: 48 of 80 tsc entries compared, 6 differ
+
+line 17: d1
+  tsc:  { a: string | number | null; }
+  ours: { a?: string | null }
+
+line 17: { a: 123, ...d }
+  tsc:  { a: string | number | null; }
+  ours: { a?: string | null }
+
+line 19: t ? a : {}
+  tsc:  { a: string; } | {}
+  ours: {}
+
+line 20: t ? b : {}
+  tsc:  { a?: string; }
+  ours: {}
+
+line 21: t ? c : {}
+  tsc:  { a: string | null; } | {}
+  ours: {}
+
+line 22: t ? d : {}
+  tsc:  { a?: string | null; }
+  ours: {}
+
+errors:
+line 14: tsc TS2783: 'a' is specified more than once, so this usage will be overwritten. (we accept)
+line 16: tsc TS2783: 'a' is specified more than once, so this usage will be overwritten. (we accept)

@@ -1,0 +1,138 @@
+=== logicalAndOperatorWithTypeParameters.ts ===
+// The && operator permits the operands to be of any type and produces a result of the same
+// type as the second operand.
+
+function foo<T, U, V/* extends T*/>(t: T, u: U, v: V): void {
+>foo : <T, U, V>(t: T, u: U, v: V) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>V : V
+>  : ^
+>t : T
+>  : ^
+>u : U
+>  : ^
+>v : V
+>  : ^
+
+    let r1 = t && t;
+>r1 : NonNullable<T>
+>   : ^^^^^^^^^^^^^^
+>t && t : NonNullable<T>
+>       : ^^^^^^^^^^^^^^
+>t : T
+>  : ^
+>t : NonNullable<T>
+>  : ^^^^^^^^^^^^^^
+
+    let r2 = u && t;
+>r2 : T
+>   : ^
+>u && t : T
+>       : ^
+>u : U
+>  : ^
+>t : T
+>  : ^
+
+    let r3 = v && t;
+>r3 : T
+>   : ^
+>v && t : T
+>       : ^
+>v : V
+>  : ^
+>t : T
+>  : ^
+
+
+    let r4 = t && u;
+>r4 : U
+>   : ^
+>t && u : U
+>       : ^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+    let r5 = u && u;
+>r5 : NonNullable<U>
+>   : ^^^^^^^^^^^^^^
+>u && u : NonNullable<U>
+>       : ^^^^^^^^^^^^^^
+>u : U
+>  : ^
+>u : NonNullable<U>
+>  : ^^^^^^^^^^^^^^
+
+    let r6 = v && u;
+>r6 : U
+>   : ^
+>v && u : U
+>       : ^
+>v : V
+>  : ^
+>u : U
+>  : ^
+
+
+    let r7 = t && v;
+>r7 : V
+>   : ^
+>t && v : V
+>       : ^
+>t : T
+>  : ^
+>v : V
+>  : ^
+
+    let r8 = u && v;
+>r8 : V
+>   : ^
+>u && v : V
+>       : ^
+>u : U
+>  : ^
+>v : V
+>  : ^
+
+    let r9 = v && v;
+>r9 : NonNullable<V>
+>   : ^^^^^^^^^^^^^^
+>v && v : NonNullable<V>
+>       : ^^^^^^^^^^^^^^
+>v : V
+>  : ^
+>v : NonNullable<V>
+>  : ^^^^^^^^^^^^^^
+
+
+    let a: number = null as unknown as (number);
+>a : number
+>  : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    let r10 = t && a;
+>r10 : number
+>    : ^^^^^^
+>t && a : number
+>       : ^^^^^^
+>t : T
+>  : ^
+>a : number
+>  : ^^^^^^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

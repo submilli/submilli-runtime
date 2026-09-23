@@ -1,0 +1,115 @@
+=== stringLiteralTypesInVariableDeclarations01.ts ===
+
+let a: "" = null as unknown as ("");
+>a : ""
+>  : ^^
+>null as unknown as ("") : ""
+>                        : ^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let b: "foo" = null as unknown as ("foo");
+>b : "foo"
+>  : ^^^^^
+>null as unknown as ("foo") : "foo"
+>                           : ^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let c: "bar" = null as unknown as ("bar");
+>c : "bar"
+>  : ^^^^^
+>null as unknown as ("bar") : "bar"
+>                           : ^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+const d: "baz" = null as unknown as ("baz");
+>d : "baz"
+>  : ^^^^^
+>null as unknown as ("baz") : "baz"
+>                           : ^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+a = "";
+>a = "" : ""
+>       : ^^
+>a : ""
+>  : ^^
+>"" : ""
+>   : ^^
+
+b = "foo";
+>b = "foo" : "foo"
+>          : ^^^^^
+>b : "foo"
+>  : ^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+
+c = "bar";
+>c = "bar" : "bar"
+>          : ^^^^^
+>c : "bar"
+>  : ^^^^^
+>"bar" : "bar"
+>      : ^^^^^
+
+
+let e: "" = "";
+>e : ""
+>  : ^^
+>"" : ""
+>   : ^^
+
+let f: "foo" = "foo";
+>f : "foo"
+>  : ^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+
+let g: "bar" = "bar";
+>g : "bar"
+>  : ^^^^^
+>"bar" : "bar"
+>      : ^^^^^
+
+const h: "baz" = "baz";
+>h : "baz"
+>  : ^^^^^
+>"baz" : "baz"
+>      : ^^^^^
+
+
+e = "";
+>e = "" : ""
+>       : ^^
+>e : ""
+>  : ^^
+>"" : ""
+>   : ^^
+
+f = "foo";
+>f = "foo" : "foo"
+>          : ^^^^^
+>f : "foo"
+>  : ^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+
+g = "bar";
+>g = "bar" : "bar"
+>          : ^^^^^
+>g : "bar"
+>  : ^^^^^
+>"bar" : "bar"
+>      : ^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -279,17 +279,9 @@ impl Collector<'_> {
                     self.walk_expr(a);
                 }
             }
-            TypedExprKind::ObjectLiteral {
-                spread_sources,
-                fields,
-            } => {
-                for &s in spread_sources {
-                    self.walk_expr(s);
-                }
-                for f in fields {
-                    if let Some(vid) = f.source.literal_expr_id() {
-                        self.walk_expr(vid);
-                    }
+            TypedExprKind::ObjectLiteral { members, .. } => {
+                for member in members {
+                    self.walk_expr(member.expr_id());
                 }
             }
             TypedExprKind::ArrayLiteral { elements, .. } => {

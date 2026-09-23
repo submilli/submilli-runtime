@@ -1,0 +1,189 @@
+=== typeGuardOfFormTypeOfIsOrderIndependent.ts ===
+let strOrNum: string | number = null as unknown as (string | number);
+>strOrNum : string | number
+>         : ^^^^^^^^^^^^^^^
+>null as unknown as (string | number) : string | number
+>                                     : ^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let strOrBool: string | boolean = null as unknown as (string | boolean);
+>strOrBool : string | boolean
+>          : ^^^^^^^^^^^^^^^^
+>null as unknown as (string | boolean) : string | boolean
+>                                      : ^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let strOrFunc: string | (() => void) = null as unknown as (string | (() => void));
+>strOrFunc : string | (() => void)
+>          : ^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (string | (() => void)) : string | (() => void)
+>                                           : ^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let numOrBool: number | boolean = null as unknown as (number | boolean);
+>numOrBool : number | boolean
+>          : ^^^^^^^^^^^^^^^^
+>null as unknown as (number | boolean) : number | boolean
+>                                      : ^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let str: string = null as unknown as (string);
+>str : string
+>    : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let num: number = null as unknown as (number);
+>num : number
+>    : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let bool: boolean = null as unknown as (boolean);
+>bool : boolean
+>     : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let func: () => void = null as unknown as (() => void);
+>func : () => void
+>     : ^^^^^^^^^^
+>null as unknown as (() => void) : () => void
+>                                : ^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+if ("string" === typeof strOrNum) {
+>"string" === typeof strOrNum : boolean
+>                             : ^^^^^^^
+>"string" : "string"
+>         : ^^^^^^^^
+>typeof strOrNum : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>strOrNum : string | number
+>         : ^^^^^^^^^^^^^^^
+
+    str = strOrNum;
+>str = strOrNum : string
+>               : ^^^^^^
+>str : string
+>    : ^^^^^^
+>strOrNum : string
+>         : ^^^^^^
+
+}
+else {
+    num = strOrNum;
+>num = strOrNum : number
+>               : ^^^^^^
+>num : number
+>    : ^^^^^^
+>strOrNum : number
+>         : ^^^^^^
+
+}
+if ("function" === typeof strOrFunc) {
+>"function" === typeof strOrFunc : boolean
+>                                : ^^^^^^^
+>"function" : "function"
+>           : ^^^^^^^^^^
+>typeof strOrFunc : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>strOrFunc : string | (() => void)
+>          : ^^^^^^^^^^^^^^^^^^^^^
+
+    func = strOrFunc;
+>func = strOrFunc : () => void
+>                 : ^^^^^^^^^^
+>func : () => void
+>     : ^^^^^^^^^^
+>strOrFunc : () => void
+>          : ^^^^^^^^^^
+
+}
+else {
+    str = strOrFunc;
+>str = strOrFunc : string
+>                : ^^^^^^
+>str : string
+>    : ^^^^^^
+>strOrFunc : string
+>          : ^^^^^^
+
+}
+if ("number" === typeof numOrBool) {
+>"number" === typeof numOrBool : boolean
+>                              : ^^^^^^^
+>"number" : "number"
+>         : ^^^^^^^^
+>typeof numOrBool : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>numOrBool : number | boolean
+>          : ^^^^^^^^^^^^^^^^
+
+    num = numOrBool;
+>num = numOrBool : number
+>                : ^^^^^^
+>num : number
+>    : ^^^^^^
+>numOrBool : number
+>          : ^^^^^^
+
+}
+else {
+    bool = numOrBool;
+>bool = numOrBool : boolean
+>                 : ^^^^^^^
+>bool : boolean
+>     : ^^^^^^^
+>numOrBool : boolean
+>          : ^^^^^^^
+
+}
+if ("boolean" === typeof strOrBool) {
+>"boolean" === typeof strOrBool : boolean
+>                               : ^^^^^^^
+>"boolean" : "boolean"
+>          : ^^^^^^^^^
+>typeof strOrBool : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>strOrBool : string | boolean
+>          : ^^^^^^^^^^^^^^^^
+
+    bool = strOrBool;
+>bool = strOrBool : boolean
+>                 : ^^^^^^^
+>bool : boolean
+>     : ^^^^^^^
+>strOrBool : boolean
+>          : ^^^^^^^
+
+}
+else {
+    str = strOrBool;
+>str = strOrBool : string
+>                : ^^^^^^
+>str : string
+>    : ^^^^^^
+>strOrBool : string
+>          : ^^^^^^
+
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

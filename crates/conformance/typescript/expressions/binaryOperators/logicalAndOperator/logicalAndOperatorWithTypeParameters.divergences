@@ -1,0 +1,93 @@
+types: 46 of 51 tsc entries compared, 23 differ
+
+line 6: r1
+  tsc:  NonNullable<T>
+  ours: T
+
+line 6: t && t
+  tsc:  NonNullable<T>
+  ours: T
+
+line 6: t
+  tsc:  NonNullable<T>
+  ours: T
+
+line 7: r2
+  tsc:  T
+  ours: T | U
+
+line 7: u && t
+  tsc:  T
+  ours: T | U
+
+line 8: r3
+  tsc:  T
+  ours: T | V
+
+line 8: v && t
+  tsc:  T
+  ours: T | V
+
+line 10: r4
+  tsc:  U
+  ours: T | U
+
+line 10: t && u
+  tsc:  U
+  ours: T | U
+
+line 11: r5
+  tsc:  NonNullable<U>
+  ours: U
+
+line 11: u && u
+  tsc:  NonNullable<U>
+  ours: U
+
+line 11: u
+  tsc:  NonNullable<U>
+  ours: U
+
+line 12: r6
+  tsc:  U
+  ours: U | V
+
+line 12: v && u
+  tsc:  U
+  ours: U | V
+
+line 14: r7
+  tsc:  V
+  ours: T | V
+
+line 14: t && v
+  tsc:  V
+  ours: T | V
+
+line 15: r8
+  tsc:  V
+  ours: U | V
+
+line 15: u && v
+  tsc:  V
+  ours: U | V
+
+line 16: r9
+  tsc:  NonNullable<V>
+  ours: V
+
+line 16: v && v
+  tsc:  NonNullable<V>
+  ours: V
+
+line 16: v
+  tsc:  NonNullable<V>
+  ours: V
+
+line 19: r10
+  tsc:  number
+  ours: number | T
+
+line 19: t && a
+  tsc:  number
+  ours: number | T
