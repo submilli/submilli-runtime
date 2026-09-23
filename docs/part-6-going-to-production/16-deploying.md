@@ -89,10 +89,11 @@ both binaries with the latest release; restart the server afterwards.
 ## With Docker Compose
 
 If your application runs in containers on one host, run the server as one
-more container. The repository ships a `compose.yaml` at its root that does
-the hard parts; copy it next to your own. Start it:
+more container. Submilli publishes a `compose.yaml` that does the hard parts.
+Download it next to your own and start it:
 
 ```sh
+curl -fsSLO https://raw.githubusercontent.com/submilli/submilli-runtime/main/compose.yaml
 docker compose up -d
 docker compose ps
 ```
@@ -269,17 +270,16 @@ docker compose start submilli
 
 ## On Kubernetes
 
-If your application runs on Kubernetes, install the server with the Helm
-chart in `charts/submilli`. The chart isn't published to a registry yet, and
-the image is private until launch, so for now install from a checkout of the
-repository with a pull secret:
+If your application runs on Kubernetes, install the server with the Submilli
+Helm chart:
 
 ```sh
-kubectl create secret docker-registry ghcr-creds \
-  --docker-server=ghcr.io --docker-username=YOUR_USER --docker-password="$GITHUB_TOKEN"
-
-helm install submilli ./charts/submilli --set 'imagePullSecrets[0].name=ghcr-creds'
+helm install submilli oci://ghcr.io/submilli/charts/submilli -f values.yaml
 ```
+
+`values.yaml` holds your settings; the sections below build it up, and an
+empty file is a valid start. Add `--version` to pin a chart version, so
+upgrades happen when you choose them.
 
 This gives you one server pod, a Service called `submilli`, a persistent
 volume for its state, and a network policy that lets nothing reach it yet.
@@ -447,9 +447,10 @@ submilli-0.submilli-headless.<namespace>.svc:8128
 
 Leave it at 1 unless your application does that.
 
-To upgrade, `helm upgrade submilli ./charts/submilli` with the new chart. The
-image tag follows the chart's version unless you set `image.tag`, and the
-pod restarts onto the same volume. To back up, snapshot the claims
+To upgrade, run `helm upgrade submilli oci://ghcr.io/submilli/charts/submilli
+-f values.yaml --version <new version>`. Each chart version deploys a
+matching server version unless you set `image.tag`, and the pod restarts onto
+the same volume. The same command applies changes to your values file. To back up, snapshot the claims
 (`state-submilli-0`, …) with your cluster's VolumeSnapshot support.
 
 ## Before you go live
