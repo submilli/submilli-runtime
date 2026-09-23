@@ -69,7 +69,7 @@ ENV SUBMILLI_HOME=/var/lib/submilli \
 
 # 0.0.0.0 inside the container is required for the container network to reach the
 # server; host exposure is controlled at publish time. The API has no inbound
-# authentication yet (SUB-159/160), so every documented example publishes as
+# authentication yet (SUB-950), so every documented example publishes as
 # `127.0.0.1:8128:8128` on a dedicated user-defined network.
 EXPOSE 8128
 

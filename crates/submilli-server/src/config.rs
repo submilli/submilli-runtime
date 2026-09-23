@@ -174,7 +174,9 @@ pub fn warn_if_external_bind(addr: IpAddr) {
     }
     tracing::warn!(
         %addr,
-        "binding outside loopback exposes the server publicly; auth/blueprint is not yet implemented (SUB-159/160)"
+        "bound outside loopback: this server has no inbound authentication, so anything that \
+         can reach this port can run code, manage blueprints, and stop the server; make sure \
+         only your application can reach it (https://submilli.ai/docs/deploying/)"
     );
 }
 
