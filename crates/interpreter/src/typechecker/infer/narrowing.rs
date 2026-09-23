@@ -753,6 +753,9 @@ pub fn intersect_with(ty: &Type, facts: TypeFacts) -> Type {
                 .filter(|ty| !matches!(ty, Type::Error))
                 .collect(),
         ),
+        // `boolean` is `true | false`, and truthiness splits it.
+        Type::Boolean if facts == TypeFacts::TRUTHY => Type::BooleanLiteral(true),
+        Type::Boolean if facts == TypeFacts::FALSY => Type::BooleanLiteral(false),
         _ if type_matches_facts(peeled, facts) => ty.clone(),
         _ if matches!(peeled, Type::Unknown) => Type::Unknown,
         _ => Type::Error,
@@ -822,18 +825,16 @@ pub fn subtract_literals(ty: &Type, covered: &BTreeSet<LiteralValue>) -> Type {
         Type::Union(members) => {
             // Only fire when every member is a unit-literal type; a
             // mixed union (e.g., `"a" | number`) can't be exhaustively
-            // covered by literal `case` labels, so return as-is.
-            let all_literal = members.iter().all(|m| unit_literal_value(m).is_some());
-            if !all_literal {
+            // covered by literal `case` labels, so return as-is. A
+            // `boolean` member counts: it is `true | false`.
+            let is_unit =
+                |m: &Type| unit_literal_value(m).is_some() || matches!(m.peel(), Type::Boolean);
+            if !members.iter().all(is_unit) {
                 return ty.clone();
             }
             let kept: Vec<Type> = members
                 .iter()
-                .filter(|m| match unit_literal_value(m.peel()) {
-                    Some(lit) => !covered.contains(&lit),
-                    None => true,
-                })
-                .cloned()
+                .map(|m| subtract_literals(m, covered))
                 .collect();
             Type::union(kept)
         }

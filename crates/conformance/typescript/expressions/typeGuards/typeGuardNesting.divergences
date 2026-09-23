@@ -1,73 +1,17 @@
-types: 59 of 102 tsc entries compared, 18 differ
-
-line 3: strOrBool
-  tsc:  string | true
-  ours: string | boolean
-
-line 4: strOrBool
-  tsc:  string | false
-  ours: string | boolean
+types: 59 of 102 tsc entries compared, 4 differ
 
 line 5: (typeof strOrBool === 'boolean') ? strOrBool : false
   tsc:  false
   ours: boolean
 
-line 5: strOrBool
-  tsc:  string | false
-  ours: string | boolean
-
-line 5: strOrBool
-  tsc:  false
-  ours: boolean
-
-line 6: strOrBool
-  tsc:  string | false
-  ours: string | boolean
-
 line 7: (typeof strOrBool !== 'string') ? strOrBool : false
   tsc:  false
   ours: boolean
-
-line 7: strOrBool
-  tsc:  string | false
-  ours: string | boolean
-
-line 7: strOrBool
-  tsc:  false
-  ours: boolean
-
-line 10: strOrBool
-  tsc:  string | true
-  ours: string | boolean
-
-line 11: strOrBool
-  tsc:  string | false
-  ours: string | boolean
 
 line 12: (typeof strOrBool === 'boolean') ? strOrBool : false
   tsc:  false
   ours: boolean
 
-line 12: strOrBool
-  tsc:  string | false
-  ours: string | boolean
-
-line 12: strOrBool
-  tsc:  false
-  ours: boolean
-
-line 13: strOrBool
-  tsc:  string | false
-  ours: string | boolean
-
 line 14: (typeof strOrBool !== 'string') ? strOrBool : false
-  tsc:  false
-  ours: boolean
-
-line 14: strOrBool
-  tsc:  string | false
-  ours: string | boolean
-
-line 14: strOrBool
   tsc:  false
   ours: boolean

@@ -33,6 +33,10 @@ function next(): number | null {
   return null;
 }
 
+function maybeName(present: boolean): string | null {
+  return present ? "ok" : null;
+}
+
 function main(): void {
   let a = 0;
   let b = 0;
@@ -90,6 +94,22 @@ function main(): void {
     sum += step;
   }
   assert(sum === 6, "in a for condition");
+  let pending: number | null = null;
+  const fill = (): number => (pending = 5);
+  assert(fill() === 5 && pending === 5, "typed by the value, not the binding");
+  let name: string | null = null;
+  if ((name = maybeName(true))) {
+    assert(name.length === 2, "truthiness narrows the assigned binding");
+  }
+  let polled: number | null = 0;
+  let polledTotal = 0;
+  position = 0;
+  do {
+    if (polled !== null) {
+      polledTotal += polled;
+    }
+  } while ((polled = next()) !== null);
+  assert(polledTotal === 6, "a do-while condition can assign");
   i = (i = 2) + i;
   assert(i === 4, "the target is read after the inner write");
 }

@@ -95,41 +95,15 @@ impl ChainField {
     }
 }
 
-/// True if `expected` is `Type::StringLiteral` or a union containing
-/// at least one `Type::StringLiteral` member. Used by `infer_expr`'s
-/// `ExprKind::String` arm to decide whether to narrow the inferred
-/// type to the specific literal value or widen to `Type::String`.
-/// Peels through aliases so `type Status = "a" | "b"` and a plain
-/// `"a" | "b"` hint behave identically
-fn expects_string_literal(expected: Option<&Type>) -> bool {
+/// Whether `expected` asks for a literal type: it is one `is_literal` accepts,
+/// or a union with such a member. Decides whether a literal expression keeps
+/// its literal type or widens to its primitive. Peels through aliases so
+/// `type Status = "a" | "b"` and a plain `"a" | "b"` hint behave identically.
+fn expects_literal(expected: Option<&Type>, is_literal: fn(&Type) -> bool) -> bool {
     match expected.map(crate::types::Type::peel) {
-        Some(Type::StringLiteral(_)) => true,
-        Some(Type::Union(ms)) => ms
-            .iter()
-            .any(|m| matches!(m.peel(), Type::StringLiteral(_))),
-        _ => false,
-    }
-}
-
-/// Mirror of `expects_string_literal` for number literals.
-fn expects_number_literal(expected: Option<&Type>) -> bool {
-    match expected.map(crate::types::Type::peel) {
-        Some(Type::NumberLiteral(_)) => true,
-        Some(Type::Union(ms)) => ms
-            .iter()
-            .any(|m| matches!(m.peel(), Type::NumberLiteral(_))),
-        _ => false,
-    }
-}
-
-/// Mirror of `expects_string_literal` for `true` and `false`.
-fn expects_boolean_literal(expected: Option<&Type>) -> bool {
-    match expected.map(crate::types::Type::peel) {
-        Some(Type::BooleanLiteral(_)) => true,
-        Some(Type::Union(ms)) => ms
-            .iter()
-            .any(|m| matches!(m.peel(), Type::BooleanLiteral(_))),
-        _ => false,
+        Some(Type::Union(ms)) => ms.iter().any(|m| is_literal(m.peel())),
+        Some(ty) => is_literal(ty),
+        None => false,
     }
 }
 
@@ -400,7 +374,7 @@ impl Inferer<'_> {
             // to the base primitive — `let x = "hi"` stays
             // `x: string`, not `x: "hi"`.
             ExprKind::Number(v) => {
-                let ty = if expects_number_literal(expected) {
+                let ty = if expects_literal(expected, |t| matches!(t, Type::NumberLiteral(_))) {
                     let canonical = if v == 0.0 { 0.0 } else { v };
                     Type::NumberLiteral(crate::types::LiteralF64(canonical))
                 } else {
@@ -412,7 +386,7 @@ impl Inferer<'_> {
             // (no `Type::BigIntLiteral` narrowing variant in v1).
             ExprKind::BigInt(digits) => (TypedExprKind::BigInt(digits), Type::BigInt),
             ExprKind::String(s) => {
-                let ty = if expects_string_literal(expected) {
+                let ty = if expects_literal(expected, |t| matches!(t, Type::StringLiteral(_))) {
                     Type::StringLiteral(s.clone())
                 } else {
                     Type::String
@@ -420,7 +394,7 @@ impl Inferer<'_> {
                 (TypedExprKind::String(s), ty)
             }
             ExprKind::Boolean(b) => {
-                let ty = if expects_boolean_literal(expected) {
+                let ty = if expects_literal(expected, |t| matches!(t, Type::BooleanLiteral(_))) {
                     Type::BooleanLiteral(b)
                 } else {
                     Type::Boolean
@@ -4173,6 +4147,7 @@ impl Inferer<'_> {
                         crate::ExprKind::String(s) => {
                             Some(narrowing::LiteralValue::String(s.clone()))
                         }
+                        crate::ExprKind::Boolean(b) => Some(narrowing::LiteralValue::Boolean(*b)),
                         crate::ExprKind::Number(n) => {
                             // Mirror the number-literal inference's -0.0 → 0.0.
                             let canonical = if *n == 0.0 { 0.0 } else { *n };
@@ -6673,8 +6648,16 @@ impl Inferer<'_> {
         // Set by a `Field` step that resolved to a method, consumed by the
         // `Call` step that lifts the pair into a `MethodCall`.
         let mut pending_method: Option<ChainMethod> = None;
+        // Every step from the first `?.` on may be skipped, so a write in one
+        // (`c?.m(x = 5)`) must not narrow what follows the chain; see
+        // `infer_conditional_operand`.
+        let mut short_circuit_span: Option<Span> = None;
 
         for part in parts {
+            if part.is_optional() && short_circuit_span.is_none() {
+                short_circuit_span = Some(part.span());
+                self.push_narrow_frame(super::narrowing::NarrowEnv::new());
+            }
             // A method step is only legal as the callee of the `Call` that
             // follows it; anything else means the user wrote a bare method
             // reference, which is not a value here. Poisoning the receiver stops
@@ -6729,6 +6712,10 @@ impl Inferer<'_> {
                 next_ty,
             );
             typed_parts.push(typed_part);
+        }
+        if let Some(span) = short_circuit_span {
+            let (_, assigned) = self.pop_narrow_frame_capture();
+            self.merge_assigned_into_outer(assigned, span);
         }
         // A method named by the chain's last step never sees a `Call` at all.
         if let Some(dangling) = pending_method.take() {

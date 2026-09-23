@@ -2,11 +2,11 @@ types: 18 of 27 tsc entries compared, 7 differ
 
 line 5: (x = "") && (x = 0)
   tsc:  ""
-  ours: number | "" | boolean
+  ours: number | ""
 
 line 5: x = ""
   tsc:  ""
-  ours: number | string | boolean
+  ours: string
 
 line 5: x = 0
   tsc:  0

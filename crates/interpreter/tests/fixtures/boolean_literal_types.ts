@@ -46,6 +46,26 @@ function describe(b: boolean): string {
   return `${f}`;
 }
 
+function narrowsByTruthiness(b: boolean): string {
+  if (b) {
+    const t: true = b;
+    return `${t}`;
+  }
+  const f: false = b;
+  return `${f}`;
+}
+
+function exhaustive(v: boolean | "maybe"): number {
+  switch (v) {
+    case true:
+      return 1;
+    case false:
+      return 0;
+    case "maybe":
+      return 2;
+  }
+}
+
 function main(): void {
   assert(byTruthiness(parse("12")) === "value 12", "truthy tag narrows to Ok");
   assert(byTruthiness(parse("x")) === "error bad x", "falsy tag narrows to Failure");
@@ -62,6 +82,13 @@ function main(): void {
   const plain: boolean = annotated;
   assert(!both && plain, "true | false is boolean");
 
+  assert(narrowsByTruthiness(true) === "true", "if (b) narrows b to true");
+  assert(narrowsByTruthiness(false) === "false", "and to false otherwise");
+  assert(exhaustive(false) + exhaustive("maybe") === 2, "a switch over boolean | \"maybe\"");
+  const failure = { ok: false, error: "e" };
+  const retagged: Result = { ...failure, ok: true, value: 2 };
+  assert(byTruthiness(retagged) === "value 2", "a boolean tag after a spread picks the variant");
+  assert(JSON.stringify(annotated) === "true", "stringify a `true`-typed value");
   assert(JSON.stringify(parse("7")) === "{\"ok\":true,\"value\":7}", "stringify");
   const parsed = JSON.parse("{\"ok\":true,\"value\":4}") as Result;
   assert(byTruthiness(parsed) === "value 4", "JSON.parse into a tagged union");

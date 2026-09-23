@@ -715,11 +715,12 @@ fn fold_boolean_literals(members: &mut Vec<Type>) {
     let is_boolean = |m: &Type| matches!(m.without_aliases(), Type::Boolean);
     let is_literal = |m: &Type| matches!(m.without_aliases(), Type::BooleanLiteral(_));
     let literals = members.iter().filter(|m| is_literal(m)).count();
-    if literals == 0 || (literals == 1 && !members.iter().any(is_boolean)) {
+    let has_boolean = members.iter().any(is_boolean);
+    if literals == 0 || (literals == 1 && !has_boolean) {
         return;
     }
     members.retain(|m| !is_literal(m));
-    if !members.iter().any(is_boolean) {
+    if !has_boolean {
         let at = members.partition_point(|m| m.without_aliases() < &Type::Boolean);
         members.insert(at, Type::Boolean);
     }

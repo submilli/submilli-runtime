@@ -32,10 +32,10 @@ impl<'a> Inferer<'a> {
     ) -> Option<ReferencePathState> {
         use crate::TypedExprKind;
         match kind {
-            // `(m = next()) !== null` tests `m`: the sequence yields a read of it.
-            TypedExprKind::Sequence { result, .. } => {
-                self.kind_to_reference_path_state(&self.typed_ast.expr(*result).kind)
-            }
+            TypedExprKind::Sequence { stmts, .. } => Some(ReferencePathState {
+                path: self.sequence_binding_path(stmts)?,
+                contains_getter: false,
+            }),
             TypedExprKind::LocalRef { ident, .. } => {
                 let entry = self.scopes.get(&ident.name)?;
                 Some(ReferencePathState {
@@ -178,11 +178,16 @@ impl<'a> Inferer<'a> {
         let cond_kind = cond.kind.clone();
         match cond_kind {
             TypedExprKind::Binary { op, lhs, rhs } if matches!(op, BinOp::Eq | BinOp::NotEq) => {
-                if let Some(envs) = self.try_predicate_envs_literal_equality(op, lhs, rhs) {
-                    envs
-                } else {
-                    self.predicate_envs_eq_null(op, lhs, rhs)
+                let (mut t, mut f) = self
+                    .try_predicate_envs_literal_equality(op, lhs, rhs)
+                    .unwrap_or_else(|| self.predicate_envs_eq_null(op, lhs, rhs));
+                // A constant on the left leaves the right as the tested path,
+                // read after anything it writes.
+                if !self.is_constant_operand(lhs) {
+                    self.forget_later_writes(&mut t, lhs, rhs);
+                    self.forget_later_writes(&mut f, lhs, rhs);
                 }
+                (t, f)
             }
             TypedExprKind::Binary {
                 op: BinOp::And,
@@ -236,9 +241,7 @@ impl<'a> Inferer<'a> {
                 args,
                 type_predicate: Some(predicate),
                 ..
-            } => self
-                .predicate_envs_user_guard(&predicate, &args)
-                .unwrap_or_else(|| (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new())),
+            } => self.guard_envs(&predicate, &args, cond_expr_id),
             TypedExprKind::CallClosure { callee, args, .. } => {
                 let Type::Function {
                     predicate: Some(predicate),
@@ -247,8 +250,7 @@ impl<'a> Inferer<'a> {
                 else {
                     return (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new());
                 };
-                self.predicate_envs_user_guard(&predicate, &args)
-                    .unwrap_or_else(|| (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new()))
+                self.guard_envs(&predicate, &args, cond_expr_id)
             }
             TypedExprKind::GenericCall {
                 args,
@@ -257,30 +259,27 @@ impl<'a> Inferer<'a> {
             } => {
                 // `asserted_type` already substituted with type-arg bindings during inference.
                 let exprs: Vec<ExprId> = args.iter().map(|a| a.expr).collect();
-                self.predicate_envs_user_guard(&predicate, &exprs)
-                    .unwrap_or_else(|| (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new()))
+                self.guard_envs(&predicate, &exprs, cond_expr_id)
             }
             TypedExprKind::MethodCall {
                 args,
                 type_predicate: Some(predicate),
                 ..
-            } => self
-                .predicate_envs_user_guard(&predicate, &args)
-                .unwrap_or_else(|| (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new())),
+            } => self.guard_envs(&predicate, &args, cond_expr_id),
             TypedExprKind::GenericMethodCall {
                 args,
                 type_predicate: Some(predicate),
                 ..
             } => {
                 let exprs: Vec<ExprId> = args.iter().map(|a| a.expr).collect();
-                self.predicate_envs_user_guard(&predicate, &exprs)
-                    .unwrap_or_else(|| (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new()))
+                self.guard_envs(&predicate, &exprs, cond_expr_id)
             }
             TypedExprKind::LocalRef { .. }
             | TypedExprKind::LocalNarrowRef { .. }
             | TypedExprKind::GlobalRef { .. }
             | TypedExprKind::FieldAccess { .. }
-            | TypedExprKind::IndexAccess { .. } => self.predicate_envs_truthiness(cond_expr_id),
+            | TypedExprKind::IndexAccess { .. }
+            | TypedExprKind::Sequence { .. } => self.predicate_envs_truthiness(cond_expr_id),
             TypedExprKind::OptionalChain { .. } => (
                 self.optional_chain_nonnull_env(cond_expr_id),
                 narrowing::NarrowEnv::new(),
@@ -289,12 +288,38 @@ impl<'a> Inferer<'a> {
         }
     }
 
+    /// A user-defined guard's narrowing of its argument, without what a later
+    /// argument writes.
+    fn guard_envs(
+        &mut self,
+        predicate: &crate::TypePredicate,
+        args: &[ExprId],
+        call: ExprId,
+    ) -> (narrowing::NarrowEnv, narrowing::NarrowEnv) {
+        let Some((mut t, mut f)) = self.predicate_envs_user_guard(predicate, args) else {
+            return (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new());
+        };
+        if let Some(&arg) = args.get(predicate.parameter_index as usize) {
+            self.forget_later_writes(&mut t, arg, call);
+            self.forget_later_writes(&mut f, arg, call);
+        }
+        (t, f)
+    }
+
+    /// A literal or `null`: an operand that reads no reference path.
+    fn is_constant_operand(&self, id: ExprId) -> bool {
+        matches!(self.typed_ast.expr(id).kind, crate::TypedExprKind::Null)
+            || comparison_literal(&self.typed_ast, id).is_some()
+    }
+
     fn predicate_envs_and(
         &mut self,
         lhs: ExprId,
         rhs: ExprId,
     ) -> (narrowing::NarrowEnv, narrowing::NarrowEnv) {
-        let (lhs_true, lhs_false) = self.predicate_envs_unfiltered(lhs);
+        let (mut lhs_true, lhs_false) = self.predicate_envs_unfiltered(lhs);
+        // The right side runs only when the left is true.
+        self.forget_later_writes(&mut lhs_true, lhs, rhs);
         self.push_narrow_frame(lhs_true.clone());
         let (rhs_true, rhs_false) = self.predicate_envs_unfiltered(rhs);
         self.pop_narrow_frame();
@@ -319,7 +344,9 @@ impl<'a> Inferer<'a> {
         lhs: ExprId,
         rhs: ExprId,
     ) -> (narrowing::NarrowEnv, narrowing::NarrowEnv) {
-        let (lhs_true, lhs_false) = self.predicate_envs_unfiltered(lhs);
+        let (lhs_true, mut lhs_false) = self.predicate_envs_unfiltered(lhs);
+        // The right side runs only when the left is false.
+        self.forget_later_writes(&mut lhs_false, lhs, rhs);
         self.push_narrow_frame(lhs_false.clone());
         let (rhs_true, rhs_false) = self.predicate_envs_unfiltered(rhs);
         self.pop_narrow_frame();

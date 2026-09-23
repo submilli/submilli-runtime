@@ -40,7 +40,7 @@ pub(crate) fn emit_stringify_value(emitter: &mut FunctionEmitter, ctx: &CodegenC
             emitter.instruction(Instruction::Drop);
             super::emit_inline_string_literal(emitter, ctx, "null");
         }
-        Type::Boolean => emit_to_json_direct(emitter, ctx, "Boolean"),
+        Type::Boolean | Type::BooleanLiteral(_) => emit_to_json_direct(emitter, ctx, "Boolean"),
         Type::Number | Type::NumberLiteral(_) => {
             emit_to_json_direct(emitter, ctx, "Number");
         }
@@ -273,7 +273,7 @@ fn emit_main_output_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, arg_t
     match arg_ty {
         Type::String | Type::StringLiteral(_) => {}
         Type::Number | Type::NumberLiteral(_) => emit_number_to_string_radix10(emitter, ctx),
-        Type::Boolean => emit_to_string_direct(emitter, ctx, "Boolean"),
+        Type::Boolean | Type::BooleanLiteral(_) => emit_to_string_direct(emitter, ctx, "Boolean"),
         // A nullable primitive (`string | null`, the type of `readText` & friends)
         // follows the primitive rule, not JSON: the string flows through verbatim.
         Type::Union(members) if is_nullable_primitive(members) => {

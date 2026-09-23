@@ -123,11 +123,12 @@ impl<'a> Parser<'a> {
         let expr_id = self.parse_expression()?;
         let expr_span = self.ast.expr(expr_id).span;
         if !matches!(self.peek().kind, TokenKind::Semicolon) {
-            if matches!(self.ast.expr(expr_id).kind, ExprKind::Assign { .. }) {
-                self.error_at_peek("expected `;` after assignment");
+            let what = if matches!(self.ast.expr(expr_id).kind, ExprKind::Assign { .. }) {
+                "assignment"
             } else {
-                self.error_at_peek("expected `;` after expression");
-            }
+                "expression"
+            };
+            self.error_at_peek(format!("expected `;` after {what}"));
             return None;
         }
         let semi = self.advance();
@@ -3213,18 +3214,7 @@ impl<'a> Parser<'a> {
             return Some(written);
         }
         let target_span = self.ast.expr(written).span;
-        // `(a) = 1` assigns `a`, as in JavaScript.
-        let mut target = written;
-        while let ExprKind::Paren(inner) = self.ast.expr(target).kind {
-            target = inner;
-        }
-        if !matches!(
-            self.ast.expr(target).kind,
-            ExprKind::Identifier(_) | ExprKind::FieldAccess { .. } | ExprKind::IndexAccess { .. }
-        ) {
-            self.error_at(target_span, "invalid assignment target");
-            return None;
-        }
+        let target = self.assignment_target(written)?;
         let op_tok = self.advance();
         let value = self.parse_expression()?;
         let value_span = self.ast.expr(value).span;
@@ -3237,6 +3227,29 @@ impl<'a> Parser<'a> {
             },
             span: self.span(target_span.start, value_span.end),
         }))
+    }
+
+    /// The binding, field, or element `written` names, through any parentheses:
+    /// `(a) = 1` assigns `a`, as in JavaScript.
+    fn assignment_target(&mut self, written: ExprId) -> Option<ExprId> {
+        let mut target = written;
+        while let ExprKind::Paren(inner) = self.ast.expr(target).kind {
+            target = inner;
+        }
+        if matches!(
+            self.ast.expr(target).kind,
+            ExprKind::Identifier(_) | ExprKind::FieldAccess { .. } | ExprKind::IndexAccess { .. }
+        ) {
+            return Some(target);
+        }
+        self.error_at_with_help(
+            self.ast.expr(written).span,
+            "invalid assignment target",
+            vec![
+                "assign to a variable, a field (`o.f = …`), or an element (`a[i] = …`)".to_string(),
+            ],
+        );
+        None
     }
 
     fn parse_conditional(&mut self) -> Option<ExprId> {
