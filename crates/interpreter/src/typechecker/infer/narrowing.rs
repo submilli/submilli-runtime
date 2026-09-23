@@ -409,7 +409,8 @@ pub fn strip_null(ty: &Type) -> Type {
         // subset. The NE_NULL fact attached by the caller carries the
         // load-bearing information; the narrowed type stays dynamic.
         Type::Unknown => Type::Unknown,
-        other => other.clone(),
+        // `ty` itself, not its peel: peeling drops a `readonly` wrapper.
+        _ => ty.clone(),
     }
 }
 
@@ -563,10 +564,29 @@ pub fn truthiness_class(member: &Type) -> TruthinessClass {
     }
 }
 
+/// The type a binding declared `declared` has after a write of a `written`
+/// value. Writing a fresh array into a `readonly T[]` binding leaves it
+/// `readonly`: the binding's type, not the value's, decides what may be
+/// written through it.
+pub fn keep_declared_readonly(declared: &Type, written: Type) -> Type {
+    let declares_readonly = match declared.peel_preserving_readonly() {
+        Type::Union(members) => members.iter().any(Type::is_readonly_array),
+        other => other.is_readonly_array(),
+    };
+    if !declares_readonly || written.is_readonly_array() {
+        return written;
+    }
+    match written.peel() {
+        Type::Array(_) | Type::Tuple(_) => Type::Readonly(Box::new(written.peel().clone())),
+        _ => written,
+    }
+}
+
 fn union_members(ty: &Type) -> Vec<&Type> {
     match ty.peel() {
         Type::Union(members) => members.iter().collect(),
-        single => vec![single],
+        // `ty` itself, not its peel: peeling drops a `readonly` wrapper.
+        _ => vec![ty],
     }
 }
 
@@ -827,9 +847,9 @@ pub fn subtract_literals(ty: &Type, covered: &BTreeSet<LiteralValue>) -> Type {
             // mixed union (e.g., `"a" | number`) can't be exhaustively
             // covered by literal `case` labels, so return as-is. A
             // `boolean` member counts: it is `true | false`.
-            let is_unit =
+            let coverable_by_cases =
                 |m: &Type| unit_literal_value(m).is_some() || matches!(m.peel(), Type::Boolean);
-            if !members.iter().all(is_unit) {
+            if !members.iter().all(coverable_by_cases) {
                 return ty.clone();
             }
             let kept: Vec<Type> = members

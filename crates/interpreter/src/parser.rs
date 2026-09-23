@@ -2805,11 +2805,18 @@ impl<'a> Parser<'a> {
     /// `readonly T[] | null` a union with a readonly member.
     fn parse_readonly_type(&mut self, type_pos: TypePos) -> Option<TypeAnnotation> {
         let kw = self.advance();
+        let opens_group = matches!(self.peek().kind, TokenKind::LeftParen);
         let operand = self.parse_type_array(type_pos)?;
-        if !matches!(
-            operand.kind,
-            TypeAnnotationKind::Array(_) | TypeAnnotationKind::Tuple(_)
-        ) {
+        // `readonly (T[])` is rejected as TypeScript rejects it: the operand must be
+        // written as an array or tuple type, not grouped into one.
+        let grouped =
+            opens_group && matches!(self.tokens[self.pos - 1].kind, TokenKind::RightParen);
+        if grouped
+            || !matches!(
+                operand.kind,
+                TypeAnnotationKind::Array(_) | TypeAnnotationKind::Tuple(_)
+            )
+        {
             self.error_at_with_help(
                 kw.span,
                 "`readonly` only applies to array and tuple types",

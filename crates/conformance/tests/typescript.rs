@@ -723,10 +723,14 @@ impl TypeText<'_> {
     fn tuple_element(&mut self) -> Option<String> {
         let start = self.pos;
         let mut optional = "";
-        if self.word().is_none() || !self.eat(": ") && !self.eat("?: ") {
+        if self.word().is_some() {
+            if self.eat("?: ") {
+                optional = "?";
+            } else if !self.eat(": ") {
+                self.pos = start;
+            }
+        } else {
             self.pos = start;
-        } else if self.text[..self.pos].ends_with("?: ") {
-            optional = "?";
         }
         Some(format!("{}{optional}", self.union_text()?))
     }

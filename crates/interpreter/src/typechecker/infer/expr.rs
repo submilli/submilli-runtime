@@ -142,11 +142,6 @@ fn excess_field_fix_help(
     }
 }
 
-/// post-increment/-decrement result type for a slot of
-/// `operand_ty`. Bigint operands round-trip as `bigint`; everything
-/// else (`Number`, `NumberLiteral`, and the typechecker-fallthrough
-/// `Error`) widens to `Number` — a narrowed slot like `1 | 2 | 3`
-/// doesn't constrain the post-add value.
 /// Array methods that mutate the receiver. Rejected on tuple-typed and `readonly`
 /// receivers: tuples are fixed-length, so mutation would break their arity and
 /// per-position types, and a `readonly` array only permits reading.

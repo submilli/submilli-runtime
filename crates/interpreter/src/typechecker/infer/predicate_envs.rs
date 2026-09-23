@@ -178,16 +178,16 @@ impl<'a> Inferer<'a> {
         let cond_kind = cond.kind.clone();
         match cond_kind {
             TypedExprKind::Binary { op, lhs, rhs } if matches!(op, BinOp::Eq | BinOp::NotEq) => {
-                let (mut t, mut f) = self
+                let (mut true_env, mut false_env) = self
                     .try_predicate_envs_literal_equality(op, lhs, rhs)
                     .unwrap_or_else(|| self.predicate_envs_eq_null(op, lhs, rhs));
                 // A constant on the left leaves the right as the tested path,
                 // read after anything it writes.
                 if !self.is_constant_operand(lhs) {
-                    self.forget_later_writes(&mut t, lhs, rhs);
-                    self.forget_later_writes(&mut f, lhs, rhs);
+                    self.forget_later_writes(&mut true_env, lhs, rhs);
+                    self.forget_later_writes(&mut false_env, lhs, rhs);
                 }
-                (t, f)
+                (true_env, false_env)
             }
             TypedExprKind::Binary {
                 op: BinOp::And,
@@ -296,14 +296,15 @@ impl<'a> Inferer<'a> {
         args: &[ExprId],
         call: ExprId,
     ) -> (narrowing::NarrowEnv, narrowing::NarrowEnv) {
-        let Some((mut t, mut f)) = self.predicate_envs_user_guard(predicate, args) else {
+        let Some((mut true_env, mut false_env)) = self.predicate_envs_user_guard(predicate, args)
+        else {
             return (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new());
         };
         if let Some(&arg) = args.get(predicate.parameter_index as usize) {
-            self.forget_later_writes(&mut t, arg, call);
-            self.forget_later_writes(&mut f, arg, call);
+            self.forget_later_writes(&mut true_env, arg, call);
+            self.forget_later_writes(&mut false_env, arg, call);
         }
-        (t, f)
+        (true_env, false_env)
     }
 
     /// A literal or `null`: an operand that reads no reference path.

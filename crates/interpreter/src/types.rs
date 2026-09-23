@@ -412,14 +412,7 @@ impl Type {
     /// Whether writes through a value of this type are forbidden because it is a
     /// `readonly` array or tuple, looking through aliases and refinements.
     pub fn is_readonly_array(&self) -> bool {
-        let mut t = self;
-        loop {
-            match t {
-                Type::Readonly(_) => return true,
-                Type::Alias { ty, .. } | Type::Refined { ty, .. } => t = ty,
-                _ => return false,
-            }
-        }
+        matches!(self.peel_preserving_readonly(), Type::Readonly(_))
     }
 
     /// Whether this type is `void`, through any depth of alias.

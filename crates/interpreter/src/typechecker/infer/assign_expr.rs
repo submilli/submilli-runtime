@@ -36,57 +36,44 @@ impl Inferer<'_> {
             return (TypedExprKind::Sequence { stmts, result }, Type::Error);
         }
         let mut stmts = Vec::new();
-        let held_value = match assignment {
-            TypedStmtKind::AssignLocal {
-                ident,
-                target_ty,
-                value,
-                boxed,
-                narrowed_shadow_ty,
-            } => {
-                let held_value = self.hold_in_temp(value, "value", &mut stmts);
-                let assignment = TypedStmtKind::AssignLocal {
-                    ident,
-                    target_ty,
-                    value: held_value,
-                    boxed,
-                    narrowed_shadow_ty,
-                };
-                stmts.push(self.push_typed_stmt(assignment, span));
-                held_value
-            }
-            TypedStmtKind::AssignGlobal {
-                ident,
-                mangled,
-                target_ty,
-                value,
-            } => {
-                let held_value = self.hold_in_temp(value, "value", &mut stmts);
-                let assignment = TypedStmtKind::AssignGlobal {
-                    ident,
-                    mangled,
-                    target_ty,
-                    value: held_value,
-                };
-                stmts.push(self.push_typed_stmt(assignment, span));
-                held_value
-            }
+        let mut assignment = assignment;
+        let held_value = if let TypedStmtKind::AssignLocal { value, .. }
+        | TypedStmtKind::AssignGlobal { value, .. } = &mut assignment
+        {
+            let held_value = self.hold_in_temp(*value, "value", &mut stmts);
+            *value = held_value;
+            stmts.push(self.push_typed_stmt(assignment, span));
+            held_value
+        } else {
+            self.sequence_target_assignment(assignment, span, &mut stmts)
+        };
+        let result = self.reread_temp(held_value);
+        let ty = self.typed_ast.expr(result).ty.clone();
+        (TypedExprKind::Sequence { stmts, result }, ty)
+    }
+
+    /// A field or index assignment, with its receiver, index, and value held.
+    /// Returns the temporary holding the value.
+    fn sequence_target_assignment(
+        &mut self,
+        assignment: TypedStmtKind,
+        span: Span,
+        stmts: &mut Vec<StmtId>,
+    ) -> ExprId {
+        match assignment {
             TypedStmtKind::AssignField {
                 receiver,
                 name,
                 value,
-            } => self.sequence_field_assignment(receiver, name, value, span, &mut stmts),
+            } => self.sequence_field_assignment(receiver, name, value, span, stmts),
             TypedStmtKind::AssignIndex {
                 receiver,
                 index,
                 value,
                 elem_ty,
-            } => self.sequence_index_assignment(receiver, index, value, elem_ty, span, &mut stmts),
+            } => self.sequence_index_assignment(receiver, index, value, elem_ty, span, stmts),
             other => unreachable!("an assignment infers to an assignment statement, got {other:?}"),
-        };
-        let result = self.reread_temp(held_value);
-        let ty = self.typed_ast.expr(result).ty.clone();
-        (TypedExprKind::Sequence { stmts, result }, ty)
+        }
     }
 
     fn infer_assignment(

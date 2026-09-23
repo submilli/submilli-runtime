@@ -952,6 +952,7 @@ impl Inferer<'_> {
             return;
         }
         let path = narrowing::ReferencePath::root(narrowing::BindingId::Global(mangled.clone()));
+        let written_ty = narrowing::keep_declared_readonly(declared_ty, written_ty);
         if written_ty == *declared_ty {
             self.invalidate_for_reassignment(path, ident.span);
             return;
@@ -1331,6 +1332,7 @@ impl Inferer<'_> {
             name: target.name.clone(),
             decl_scope,
         });
+        let written_ty = narrowing::keep_declared_readonly(declared_ty, written_ty);
         if written_ty == *declared_ty {
             self.invalidate_for_reassignment(path, target.span);
             return None;
@@ -1986,8 +1988,6 @@ fn apply_finally_to_transfers(
     }
 }
 
-/// The typed body/update and the state returning to the condition. For a
-/// classic `for`, `back_edge` includes the update's effects.
 /// What runs on a loop's back edge, after the body and before the next pass.
 #[derive(Clone, Copy)]
 pub(super) enum LoopTail {
@@ -1998,6 +1998,17 @@ pub(super) enum LoopTail {
     Condition(ExprId),
 }
 
+impl LoopTail {
+    fn update(self) -> Option<StmtId> {
+        match self {
+            LoopTail::Update(update) => Some(update),
+            LoopTail::None | LoopTail::Condition(_) => None,
+        }
+    }
+}
+
+/// The typed body/update and the state returning to the condition. For a
+/// classic `for`, `back_edge` includes the update's effects.
 pub(super) struct LoopBodyOutcome {
     pub body: StmtId,
     pub update: Option<StmtId>,
@@ -2180,15 +2191,13 @@ impl Inferer<'_> {
         if let LoopTail::Condition(condition) = tail
             && let Some(edge) = back_edge.as_mut()
         {
-            let writes = self.do_while_condition_writes(condition, &assigned, edge, body_span);
+            let (writes, continues) =
+                self.do_while_condition_effects(condition, &assigned, edge, body_span);
             edge.retain(|path, _| !writes.iter().any(|w| w.is_prefix_of(path)));
+            edge.extend(continues);
             assigned.extend(writes);
         }
-        let update = match tail {
-            LoopTail::Update(update) => Some(update),
-            LoopTail::None | LoopTail::Condition(_) => None,
-        };
-        let typed_update = update.and_then(|update| {
+        let typed_update = tail.update().and_then(|update| {
             self.push_narrow_frame(narrowing::NarrowEnv::new());
             for path in &assigned {
                 self.drop_narrowings_under(
@@ -2220,17 +2229,21 @@ impl Inferer<'_> {
         }
     }
 
-    /// The paths a `do … while` condition writes. It runs on the back edge, so a
-    /// write there reaches the next pass through the body just as a `for`
-    /// update's does. Only the writes are kept: the condition is inferred again,
-    /// for real, after the loop, so this pass's diagnostics are discarded.
-    fn do_while_condition_writes(
+    /// The paths a `do … while` condition writes, and what it proves when it
+    /// holds. It runs on the back edge, so both reach the next pass through the
+    /// body, as a `for` update's writes do: `while ((x = next()) !== null)`
+    /// re-narrows `x` for that pass. The condition is inferred again, for real,
+    /// after the loop, so this pass's diagnostics are discarded.
+    fn do_while_condition_effects(
         &mut self,
         condition: ExprId,
         body_writes: &std::collections::BTreeSet<narrowing::ReferencePath>,
         back_edge: &narrowing::NarrowEnv,
         body_span: Span,
-    ) -> std::collections::BTreeSet<narrowing::ReferencePath> {
+    ) -> (
+        std::collections::BTreeSet<narrowing::ReferencePath>,
+        narrowing::NarrowEnv,
+    ) {
         let diag_len = self.diagnostics.len();
         let mats_len = self.pending_post_if_materializations.len();
         self.push_narrow_frame(narrowing::NarrowEnv::new());
@@ -2242,12 +2255,13 @@ impl Inferer<'_> {
         }
         let tail_env = self.loop_tail_env(back_edge);
         self.push_narrow_frame(tail_env);
-        self.infer_expr(condition, None);
+        let (typed_condition, _) = self.infer_expr(condition, None);
+        let (continues, _) = self.predicate_envs(typed_condition);
         let (_, writes) = self.pop_narrow_frame_capture();
         self.pop_narrow_frame();
         self.diagnostics.truncate(diag_len);
         self.pending_post_if_materializations.truncate(mats_len);
-        writes
+        (writes, continues)
     }
 
     /// Capture the normal exit before the body's lexical frame is removed.
