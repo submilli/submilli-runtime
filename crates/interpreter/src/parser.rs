@@ -1929,17 +1929,49 @@ impl<'a> Parser<'a> {
         }))
     }
 
+    /// A loop body may also be a lone `;`: `while (advance());` does all its work in
+    /// the header. Branches do not accept it; see `parse_branch_body`.
+    fn parse_loop_body(&mut self) -> Option<StmtId> {
+        if !matches!(self.peek().kind, TokenKind::Semicolon) {
+            return self.parse_control_body();
+        }
+        Some(self.empty_body_at_semicolon())
+    }
+
+    /// An `if` or `else` body. Unlike a loop, a branch cannot be a lone `;`: `if (c);`
+    /// silently detaches the block meant to follow it. The `;` is reported, then
+    /// consumed as an empty body so an `else` after it doesn't cascade into a second error.
+    fn parse_branch_body(&mut self, keyword: &str) -> Option<StmtId> {
+        if !matches!(self.peek().kind, TokenKind::Semicolon) {
+            return self.parse_control_body();
+        }
+        self.error_at_peek_with_help(
+            format!("`{keyword}` has an empty body"),
+            vec![format!("remove the `;` after `{keyword}`")],
+        );
+        Some(self.empty_body_at_semicolon())
+    }
+
+    /// Consumes a lone `;` as an empty block spanning it.
+    fn empty_body_at_semicolon(&mut self) -> StmtId {
+        let semi = self.advance();
+        self.ast.push_stmt(Stmt {
+            kind: StmtKind::Block(vec![]),
+            span: semi.span,
+        })
+    }
+
     fn parse_if(&mut self) -> Option<StmtId> {
         let kw = self.advance();
         let condition = self.parse_paren_condition()?;
-        let then_block = self.parse_control_body()?;
+        let then_block = self.parse_branch_body("if")?;
 
         let else_block = if matches!(self.peek().kind, TokenKind::Else) {
             self.advance();
             if matches!(self.peek().kind, TokenKind::If) {
                 Some(self.parse_if()?)
             } else {
-                Some(self.parse_control_body()?)
+                Some(self.parse_branch_body("else")?)
             }
         } else {
             None
@@ -1963,7 +1995,7 @@ impl<'a> Parser<'a> {
     fn parse_while(&mut self) -> Option<StmtId> {
         let kw = self.advance();
         let condition = self.parse_paren_condition()?;
-        let body = self.parse_control_body()?;
+        let body = self.parse_loop_body()?;
         let body_end = self.ast.stmt(body).span.end;
 
         Some(self.ast.push_stmt(Stmt {
@@ -2073,7 +2105,7 @@ impl<'a> Parser<'a> {
         }
         self.advance();
 
-        let body = self.parse_control_body()?;
+        let body = self.parse_loop_body()?;
         let body_end = self.ast.stmt(body).span.end;
         Some(self.ast.push_stmt(Stmt {
             kind: StmtKind::For {
@@ -2209,7 +2241,7 @@ impl<'a> Parser<'a> {
         }
         self.advance();
 
-        let body = self.parse_control_body()?;
+        let body = self.parse_loop_body()?;
         let body_end = self.ast.stmt(body).span.end;
         let kind = match (binding, name) {
             (Some(binding), _) => StmtKind::ForOfPattern {
@@ -2236,7 +2268,7 @@ impl<'a> Parser<'a> {
 
     fn parse_do_while(&mut self) -> Option<StmtId> {
         let kw = self.advance();
-        let body = self.parse_control_body()?;
+        let body = self.parse_loop_body()?;
         self.eat_asi_semicolon_before(TokenKind::While);
         if !matches!(self.peek().kind, TokenKind::While) {
             self.error_at_peek("expected `while` after `do` body");
@@ -7260,6 +7292,57 @@ mod tests {
             ast.stmt(body).kind,
             crate::StmtKind::Block(ref v) if v.len() == 1
         ));
+    }
+
+    #[test]
+    fn parse_loop_with_empty_body() {
+        for src in [
+            "while (a());",
+            "for (const x of xs);",
+            "for (let i = 0; i < 3; i++);",
+            "do ; while (a());",
+        ] {
+            let (ast, diags) = parse_str(src);
+            assert!(diags.is_empty(), "{src}: {diags:?}");
+            let body = match single_stmt(&ast).kind {
+                crate::StmtKind::While { body, .. }
+                | crate::StmtKind::DoWhile { body, .. }
+                | crate::StmtKind::For { body, .. }
+                | crate::StmtKind::ForOf { body, .. } => body,
+                ref other => panic!("{src}: expected a loop, got {other:?}"),
+            };
+            assert!(
+                matches!(ast.stmt(body).kind, crate::StmtKind::Block(ref v) if v.is_empty()),
+                "{src}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_if_with_empty_body_is_an_error() {
+        let (_ast, diags) = parse_str("if (a);");
+        assert_eq!(diags[0].message, "`if` has an empty body");
+    }
+
+    #[test]
+    fn parse_empty_branch_body_reports_once() {
+        let (_ast, diags) = parse_str("if (a) ; else b();");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].message, "`if` has an empty body");
+        let (_ast, diags) = parse_str("if (a) b(); else ;");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].message, "`else` has an empty body");
+        // One diagnostic per stray `;`, and the `else if` chain still parses.
+        let (_ast, diags) = parse_str("if (a) ; else if (b) ; else ;");
+        let messages: Vec<_> = diags.iter().map(|d| d.message.as_str()).collect();
+        assert_eq!(
+            messages,
+            [
+                "`if` has an empty body",
+                "`if` has an empty body",
+                "`else` has an empty body"
+            ]
+        );
     }
 
     #[test]
