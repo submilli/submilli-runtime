@@ -35,48 +35,15 @@ fn typescript_baselines() {
     let update = std::env::var("UPDATE_TYPESCRIPT_EXPECTED").is_ok_and(|v| v != "0");
     let mut failures = orphaned_case_files(&root, update);
 
-    let mut cases = Vec::new();
-    collect_files(
-        &root,
-        &mut |p| p.extension().is_some_and(|e| e == "ts"),
-        &mut cases,
-    );
-    cases.sort();
-    if let Ok(filter) = std::env::var("CONFORMANCE_FILTER") {
-        cases.retain(|p| rel(p).contains(&filter));
-        assert!(
-            !cases.is_empty(),
-            "no case matches CONFORMANCE_FILTER={filter}"
-        );
-    }
-    assert!(!cases.is_empty(), "no cases under {}", root.display());
-
+    let cases = find_cases(&root);
     let mut totals = Totals::default();
     for case in &cases {
-        let report = match compare_case(case) {
-            Ok(report) => report,
-            Err(message) => {
-                failures.push(format!("--- {} ---\n{message}", rel(case)));
-                continue;
+        match compare_case(case) {
+            Ok(report) => {
+                totals.add(&report);
+                failures.extend(check_divergences(case, &report, update));
             }
-        };
-        totals.add(&report);
-        let rendered = report.render();
-        let expected_path = case.with_extension("divergences");
-        let expected = fs::read_to_string(&expected_path).unwrap_or_default();
-        if rendered == expected {
-            continue;
-        }
-        if update {
-            fs::write(&expected_path, &rendered)
-                .unwrap_or_else(|e| panic!("write {}: {e}", expected_path.display()));
-        } else {
-            failures.push(format!(
-                "--- {} ---\ndiverges differently from its committed file \
-                 (rerun with UPDATE_TYPESCRIPT_EXPECTED=1 if the change is intended)\n\
-                 expected:\n{expected}\nactual:\n{rendered}",
-                rel(&expected_path)
-            ));
+            Err(message) => failures.push(format!("--- {} ---\n{message}", rel(case))),
         }
     }
 
@@ -96,6 +63,48 @@ fn typescript_baselines() {
         failures.len(),
         failures.join("\n\n"),
     );
+}
+
+/// Every case under `root`, narrowed by `CONFORMANCE_FILTER` when it is set.
+fn find_cases(root: &Path) -> Vec<PathBuf> {
+    let mut cases = Vec::new();
+    collect_files(
+        root,
+        &mut |p| p.extension().is_some_and(|e| e == "ts"),
+        &mut cases,
+    );
+    cases.sort();
+    if let Ok(filter) = std::env::var("CONFORMANCE_FILTER") {
+        cases.retain(|p| rel(p).contains(&filter));
+        assert!(
+            !cases.is_empty(),
+            "no case matches CONFORMANCE_FILTER={filter}"
+        );
+    }
+    assert!(!cases.is_empty(), "no cases under {}", root.display());
+    cases
+}
+
+/// A failure when `report` differs from the case's committed `.divergences`;
+/// in update mode, the file is rewritten instead.
+fn check_divergences(case: &Path, report: &Report, update: bool) -> Option<String> {
+    let rendered = report.render();
+    let expected_path = case.with_extension("divergences");
+    let expected = fs::read_to_string(&expected_path).unwrap_or_default();
+    if rendered == expected {
+        return None;
+    }
+    if update {
+        fs::write(&expected_path, &rendered)
+            .unwrap_or_else(|e| panic!("write {}: {e}", expected_path.display()));
+        return None;
+    }
+    Some(format!(
+        "--- {} ---\ndiverges differently from its committed file \
+         (rerun with UPDATE_TYPESCRIPT_EXPECTED=1 if the change is intended)\n\
+         expected:\n{expected}\nactual:\n{rendered}",
+        rel(&expected_path)
+    ))
 }
 
 /// Baselines and `.divergences` left behind by a case that no longer exists.
@@ -284,38 +293,25 @@ fn compare_errors(
 /// Our type for every expression and every name a declaration or assignment
 /// binds.
 fn entries_by_line(typed: &TypedAst, source: &str) -> EntriesByLine {
-    let mut nodes: Vec<(Span, Claim, Type)> = (0..typed.exprs_len())
-        .map(|i| {
-            let e = typed.expr(ExprId(i as u32));
-            (
-                e.span,
-                Claim::of(&e.kind, i, span_text(source, e.span)),
-                e.ty.clone(),
-            )
-        })
-        .collect();
-    nodes.extend(
-        bindings(typed)
-            .into_iter()
-            .map(|(span, ty)| (span, Claim::Binding, ty)),
-    );
-    nodes.retain(|(span, _, _)| span_text(source, *span).is_some());
-    nodes.sort_by(|(a, a_claim, _), (b, b_claim, _)| {
-        (a.start, Reverse(a.end), Reverse(a_claim)).cmp(&(
-            b.start,
-            Reverse(b.end),
-            Reverse(b_claim),
-        ))
+    let expressions = (0..typed.exprs_len()).filter_map(|i| {
+        let e = typed.expr(ExprId(i as u32));
+        let text = span_text(source, e.span)?;
+        Some((e.span, text, Claim::of(&e.kind, i, text), e.ty.clone()))
     });
+    let names = bindings(typed)
+        .into_iter()
+        .filter_map(|(span, ty)| Some((span, span_text(source, span)?, Claim::Binding, ty)));
+    let mut nodes: Vec<(Span, &str, Claim, Type)> = expressions.chain(names).collect();
+    nodes.sort_by_key(|(span, _, claim, _)| (span.start, Reverse(span.end), Reverse(*claim)));
     nodes.dedup_by(|a, b| a.0.start == b.0.start && a.0.end == b.0.end);
 
     let mut by_line = EntriesByLine::new();
-    for (span, _, ty) in nodes {
+    for (span, text, _, ty) in nodes {
         by_line
             .entry(line_of(source, span.start as usize))
             .or_default()
             .push(Entry {
-                text: collapse_whitespace(span_text(source, span).unwrap_or_default()),
+                text: collapse_whitespace(text),
                 ty: ty.to_string(),
             });
     }
@@ -326,7 +322,7 @@ fn entries_by_line(typed: &TypedAst, source: &str) -> EntriesByLine {
 /// wins. The typechecker gives each node it synthesizes (a default argument, a
 /// rest parameter's array, the comparisons a `switch` expands to, a narrowed or
 /// captured read) the span of the construct it belongs to.
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Claim {
     /// A variable reference whose span is not a name: a closure's capture.
     SynthesizedReference,
@@ -341,7 +337,7 @@ enum Claim {
 }
 
 impl Claim {
-    fn of(kind: &TypedExprKind, index: usize, text: Option<&str>) -> Self {
+    fn of(kind: &TypedExprKind, index: usize, text: &str) -> Self {
         let is_reference = matches!(
             kind,
             TypedExprKind::LocalRef { .. }
@@ -349,7 +345,7 @@ impl Claim {
                 | TypedExprKind::GlobalRef { .. }
                 | TypedExprKind::FunctionRef { .. }
         );
-        match (is_reference, text.is_some_and(is_identifier)) {
+        match (is_reference, is_identifier(text)) {
             (true, true) => Claim::Reference(Reverse(index)),
             (true, false) => Claim::SynthesizedReference,
             (false, _) => Claim::Expression(index),
@@ -412,30 +408,43 @@ fn read_baseline_types(path: &Path, source: &str) -> Result<EntriesByLine, Strin
     let mut entries = EntriesByLine::new();
     let mut source_index: Option<usize> = None;
     for (i, line) in lines.iter().enumerate().skip(body_start) {
-        let Some(entry) = line.strip_prefix('>') else {
+        if is_caret_line(line) {
+            continue;
+        }
+        // A `>` line is an entry only with its caret line under it; otherwise it is
+        // an echoed source line that happens to start with `>`.
+        let entry = line
+            .strip_prefix('>')
+            .zip(lines.get(i + 1).filter(|next| is_caret_line(next)))
+            .and_then(|(entry, caret_line)| split_entry(entry, &caret_line[1..]));
+        let Some(entry) = entry else {
             if !line.trim().is_empty() {
                 source_index = Some(source_index.map_or(0, |n| n + 1));
             }
             continue;
         };
-        let Some(caret_line) = lines.get(i + 1).and_then(|l| l.strip_prefix('>')) else {
-            continue;
-        };
-        let Some(parsed) = split_entry(entry, caret_line) else {
-            continue;
-        };
-        let Some(&line_no) = source_index.and_then(|n| case_lines.get(n)) else {
-            continue;
-        };
-        entries.entry(line_no).or_default().push(parsed);
+        if let Some(&line_no) = source_index.and_then(|n| case_lines.get(n)) {
+            entries.entry(line_no).or_default().push(entry);
+        }
     }
     Ok(entries)
 }
 
+/// The line under an entry: `>`, a space per UTF-16 unit of the text and one
+/// more, then `: ` and the carets under the type.
+fn is_caret_line(line: &str) -> bool {
+    line.strip_prefix('>')
+        .filter(|rest| rest.starts_with(' '))
+        .and_then(|rest| rest.trim_start_matches(' ').strip_prefix(": "))
+        .is_some_and(|carets| carets.chars().all(|c| matches!(c, '^' | ' ')))
+}
+
 /// The 1-based numbers of the case's lines a baseline echoes: the non-blank lines
-/// that are not `// @option:` lines.
+/// that are not `// @option:` lines. `tsc` drops a leading byte-order mark.
 fn countable_line_numbers(source: &str) -> Vec<usize> {
     source
+        .strip_prefix('\u{feff}')
+        .unwrap_or(source)
         .lines()
         .enumerate()
         .filter(|(_, l)| !l.trim().is_empty() && !is_option_line(l))
@@ -445,8 +454,7 @@ fn countable_line_numbers(source: &str) -> Vec<usize> {
 
 /// Splits a `>text : type` entry at the column of the ` : ` in the caret line
 /// under it — the only reliable split, since the text can itself contain ` : `.
-/// That column counts UTF-16 units of the text, as `tsc` measures strings. `None`
-/// for the caret line itself, whose text is blank.
+/// That column counts UTF-16 units of the text, as `tsc` measures strings.
 fn split_entry(entry: &str, caret_line: &str) -> Option<Entry> {
     let text_units = caret_line.find(" : ")?;
     let mut units = 0;
@@ -458,12 +466,8 @@ fn split_entry(entry: &str, caret_line: &str) -> Option<Entry> {
             at
         })
         .filter(|&byte| entry[byte..].starts_with(" : "))?;
-    let text = &entry[..colon];
-    if text.trim().is_empty() {
-        return None;
-    }
     Some(Entry {
-        text: collapse_whitespace(text),
+        text: collapse_whitespace(&entry[..colon]),
         ty: entry[colon + " : ".len()..].to_string(),
     })
 }
@@ -547,14 +551,21 @@ fn is_literal(text: &str) -> bool {
         || is_string_literal(text)
 }
 
-/// `1`, `1.5`, `.5`, `1e3`, `0x10`, `1_000`, `10n`. Not `NaN` or `Infinity`, which
-/// are names.
+/// `1`, `1.5`, `.5`, `1e-3`, `0x10`, `1_000`, `10n`. Not `NaN` or `Infinity`,
+/// which are names.
 fn is_number_literal(text: &str) -> bool {
     let digits = text.strip_prefix('.').unwrap_or(text);
+    let is_hex = text.starts_with("0x") || text.starts_with("0X");
+    let mut previous = ' ';
     digits.starts_with(|c: char| c.is_ascii_digit())
-        && text
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_'))
+        && text.chars().all(|c| {
+            // A sign belongs to an exponent, `1e-3`, and `e` is a digit in hex.
+            let ok = c.is_ascii_alphanumeric()
+                || matches!(c, '.' | '_')
+                || (matches!(c, '+' | '-') && matches!(previous, 'e' | 'E') && !is_hex);
+            previous = c;
+            ok
+        })
 }
 
 /// One quoted string with nothing after its closing quote, so `"a" + "b"` is not
@@ -616,16 +627,16 @@ struct TypeText<'a> {
     pos: usize,
 }
 
-/// A type read by `TypeText`. A function type is marked, because as a union
+/// A type as `TypeText` reads it, in canonical text. A function type is marked, because as a union
 /// member it needs parentheses: `(() => A) | B` is not `() => A | B`.
-struct Read {
+struct CanonicalType {
     text: String,
     is_function: bool,
 }
 
-impl Read {
+impl CanonicalType {
     fn plain(text: String) -> Self {
-        Read {
+        CanonicalType {
             text,
             is_function: false,
         }
@@ -633,7 +644,7 @@ impl Read {
 }
 
 impl TypeText<'_> {
-    fn union(&mut self) -> Option<Read> {
+    fn union(&mut self) -> Option<CanonicalType> {
         let mut members = vec![self.postfix()?];
         while self.eat(" | ") {
             members.push(self.postfix()?);
@@ -653,57 +664,57 @@ impl TypeText<'_> {
             .collect();
         texts.sort();
         texts.dedup();
-        Some(Read::plain(texts.join(" | ")))
+        Some(CanonicalType::plain(texts.join(" | ")))
     }
 
     fn union_text(&mut self) -> Option<String> {
         self.union().map(|read| read.text)
     }
 
-    fn postfix(&mut self) -> Option<Read> {
+    fn postfix(&mut self) -> Option<CanonicalType> {
         let mut ty = self.primary()?;
         while self.eat("[]") {
-            ty = Read::plain(format!("({})[]", ty.text));
+            ty = CanonicalType::plain(format!("({})[]", ty.text));
         }
         Some(ty)
     }
 
-    fn primary(&mut self) -> Option<Read> {
+    fn primary(&mut self) -> Option<CanonicalType> {
         if self.rest().starts_with('(') {
             return self.function_or_group();
         }
         if self.eat("{") {
-            return self.object().map(Read::plain);
+            return self.object().map(CanonicalType::plain);
         }
         if self.eat("[") {
             let elements = self.list("]", Self::union_text)?;
-            return Some(Read::plain(format!("[{}]", elements.join(", "))));
+            return Some(CanonicalType::plain(format!("[{}]", elements.join(", "))));
         }
         if self.rest().starts_with('"') {
-            return self.string_literal().map(Read::plain);
+            return self.string_literal().map(CanonicalType::plain);
         }
         let name = self.word()?;
         // The port spells `undefined` as `null`, so `tsc`'s `undefined` is ours.
         if name == "undefined" {
-            return Some(Read::plain("null".to_string()));
+            return Some(CanonicalType::plain("null".to_string()));
         }
         if self.eat("<") {
             let args = self.list(">", Self::union_text)?;
-            return Some(Read::plain(format!("{name}<{}>", args.join(", "))));
+            return Some(CanonicalType::plain(format!("{name}<{}>", args.join(", "))));
         }
-        Some(Read::plain(name))
+        Some(CanonicalType::plain(name))
     }
 
     /// `(a: T, b?: U) => R` reads as `(T, U?) => R`; anything else in
     /// parentheses is a grouped type, read as what it groups.
-    fn function_or_group(&mut self) -> Option<Read> {
+    fn function_or_group(&mut self) -> Option<CanonicalType> {
         let start = self.pos;
         self.eat("(");
         if let Some(params) = self.list(")", Self::parameter)
             && self.eat(" => ")
         {
             let ret = self.union_text()?;
-            return Some(Read {
+            return Some(CanonicalType {
                 text: format!("({}) => {ret}", params.join(", ")),
                 is_function: true,
             });
@@ -869,6 +880,10 @@ fn normalizing_keeps_a_function_union_member_distinct() {
         normalize_type("(() => number) | string"),
         normalize_type("() => number | string")
     );
+}
+
+#[test]
+fn normalizing_equates_equivalent_spellings() {
     assert_eq!(
         normalize_type("string | (() => number)"),
         normalize_type("(() => number) | string")
@@ -890,6 +905,8 @@ fn normalizing_keeps_a_function_union_member_distinct() {
 #[test]
 fn only_a_single_literal_is_skipped() {
     for literal in [
+        "1e-5",
+        "-1E+5",
         "1",
         "-1",
         "1.5",
@@ -905,6 +922,7 @@ fn only_a_single_literal_is_skipped() {
         assert!(is_literal(literal), "{literal}");
     }
     for expression in [
+        "0xe-1",
         r#""a" + "b""#,
         "'a' == 'b'",
         "`a${b}`",
@@ -933,8 +951,10 @@ fn an_entry_splits_at_its_caret_column_in_utf16_units() {
     let ternary = split_entry("a ? b : c : string", &caret("a ? b : c", "string")).expect("entry");
     assert_eq!(ternary.text, "a ? b : c");
 
-    let caret_line = caret("a ? b : c", "string");
-    assert!(split_entry(&caret_line, &caret_line).is_none());
+    let caret_line = format!(">{}", caret("a ? b : c", "string"));
+    assert!(is_caret_line(&caret_line));
+    assert!(!is_caret_line(">a ? b : c : string"));
+    assert!(!is_caret_line("> 0;"), "a source line that starts with `>`");
 }
 
 #[test]

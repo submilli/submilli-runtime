@@ -1962,18 +1962,18 @@ impl<'a> Parser<'a> {
         }
         // A binding here would go out of scope as soon as it was made. TypeScript
         // rejects it too, so it is reported and then parsed as usual. Only a
-        // declaration is: a `let` followed by anything else already fails to parse.
+        // declaration is reported: a `let` followed by anything else already fails
+        // to parse.
         let keyword = match self.peek().kind {
             TokenKind::Let => Some("let"),
             TokenKind::Const => Some("const"),
             _ => None,
         };
-        let declares = matches!(
-            self.peek_at(1).kind,
-            TokenKind::Identifier | TokenKind::LeftBracket | TokenKind::LeftBrace
-        );
         if let Some(keyword) = keyword
-            && declares
+            && matches!(
+                self.peek_at(1).kind,
+                TokenKind::Identifier | TokenKind::LeftBracket | TokenKind::LeftBrace
+            )
         {
             self.error_at_peek_with_help(
                 format!(

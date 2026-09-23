@@ -12,8 +12,8 @@ let x: {
 >    : ^^^^^^
 
 } = null as unknown as ({
->null as unknown as ({    foo: string;    bar: string;}) : { foo: string; bar: string; }
->                                                        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as ({     foo: string;     bar: string; }) : { foo: string; bar: string; }
+>                                                           : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
 
@@ -40,8 +40,8 @@ let y: {
 >    : ^^^^^^
 
 } = null as unknown as ({
->null as unknown as ({    foo: string;    bar: string}) : { foo: string; bar: string; }
->                                                       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as ({     foo: string;     bar: string }) : { foo: string; bar: string; }
+>                                                          : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
 

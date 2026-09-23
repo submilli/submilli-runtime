@@ -43,8 +43,8 @@ function getFoo1(): Foo {
 >        : ^^^^^^^^^
 
     return {
->{        method1(arg) {            arg.numProp = 10;        },        method2(arg) {            arg.strProp = "hello";        }    } : { method1(arg: A): void; method2(arg: B): void; }
->                                                                                                                                     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{         method1(arg) {             arg.numProp = 10;         },         method2(arg) {             arg.strProp = "hello";         }     } : { method1(arg: A): void; method2(arg: B): void; }
+>                                                                                                                                            : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
         method1(arg) {
 >method1 : (arg: A) => void
@@ -92,14 +92,14 @@ function getFoo2(): Foo {
 >        : ^^^^^^^^^
 
     return {
->{        method1: (arg) => {            arg.numProp = 10;        },        method2: (arg) => {            arg.strProp = "hello";        }    } : { method1: (arg: A) => void; method2: (arg: B) => void; }
->                                                                                                                                               : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{         method1: (arg) => {             arg.numProp = 10;         },         method2: (arg) => {             arg.strProp = "hello";         }     } : { method1: (arg: A) => void; method2: (arg: B) => void; }
+>                                                                                                                                                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
         method1: (arg) => {
 >method1 : (arg: A) => void
 >        : ^^^^^^^^^^^^^^^^
->(arg) => {            arg.numProp = 10;        } : (arg: A) => void
->                                                 : ^^^^^^^^^^^^^^^^
+>(arg) => {             arg.numProp = 10;         } : (arg: A) => void
+>                                                   : ^^^^^^^^^^^^^^^^
 >arg : A
 >    : ^
 
@@ -119,8 +119,8 @@ function getFoo2(): Foo {
         method2: (arg) => {
 >method2 : (arg: B) => void
 >        : ^^^^^^^^^^^^^^^^
->(arg) => {            arg.strProp = "hello";        } : (arg: B) => void
->                                                      : ^^^^^^^^^^^^^^^^
+>(arg) => {             arg.strProp = "hello";         } : (arg: B) => void
+>                                                        : ^^^^^^^^^^^^^^^^
 >arg : B
 >    : ^
 
@@ -145,14 +145,14 @@ function getFoo3(): Foo {
 >        : ^^^^^^^^^
 
     return {
->{        method1: function (arg) {            arg.numProp = 10;        },        method2: function (arg) {            arg.strProp = "hello";        }    } : { method1: (arg: A) => void; method2: (arg: B) => void; }
->                                                                                                                                                           : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{         method1: function (arg) {             arg.numProp = 10;         },         method2: function (arg) {             arg.strProp = "hello";         }     } : { method1: (arg: A) => void; method2: (arg: B) => void; }
+>                                                                                                                                                                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
         method1: function (arg) {
 >method1 : (arg: A) => void
 >        : ^^^^^^^^^^^^^^^^
->function (arg) {            arg.numProp = 10;        } : (arg: A) => void
->                                                       : ^^^^^^^^^^^^^^^^
+>function (arg) {             arg.numProp = 10;         } : (arg: A) => void
+>                                                         : ^^^^^^^^^^^^^^^^
 >arg : A
 >    : ^
 
@@ -172,8 +172,8 @@ function getFoo3(): Foo {
         method2: function (arg) {
 >method2 : (arg: B) => void
 >        : ^^^^^^^^^^^^^^^^
->function (arg) {            arg.strProp = "hello";        } : (arg: B) => void
->                                                            : ^^^^^^^^^^^^^^^^
+>function (arg) {             arg.strProp = "hello";         } : (arg: B) => void
+>                                                              : ^^^^^^^^^^^^^^^^
 >arg : B
 >    : ^
 

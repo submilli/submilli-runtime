@@ -9,8 +9,8 @@ let ABC: "ABC" = `ABC`;
 let DE_NEWLINE_F: "DE\nF" = `DE
 >DE_NEWLINE_F : "DE\nF"
 >             : ^^^^^^^
->`DEF` : "DE\nF"
->      : ^^^^^^^
+>`DE F` : "DE\nF"
+>       : ^^^^^^^
 
 F`;
 let G_QUOTE_HI: 'G"HI' = null as unknown as ('G"HI');

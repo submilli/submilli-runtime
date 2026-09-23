@@ -114,7 +114,9 @@ function typeEntry(node, sourceFile, checker) {
     return undefined;
   }
   const line = lineIndex(sourceFile, ts.skipTrivia(sourceFile.text, node.pos));
-  const text = ts.getSourceTextOfNodeFromSourceFile(sourceFile, node).replace(/\r?\n/g, "");
+  // A line break becomes a space, where TypeScript's harness drops it, so that
+  // `a` ⏎ `>= 1` reads `a >= 1` as the runner reads our side.
+  const text = ts.getSourceTextOfNodeFromSourceFile(sourceFile, node).replace(/\r?\n/g, " ");
   let type = ts.isExpressionWithTypeArgumentsInClassExtendsClause(node.parent)
     ? checker.getTypeAtLocation(node.parent)
     : undefined;
@@ -128,9 +130,10 @@ function errorLines(program, sourceFile) {
   return [...program.getSyntacticDiagnostics(sourceFile), ...program.getSemanticDiagnostics(sourceFile)]
     .filter((d) => d.category === ts.DiagnosticCategory.Error && d.file === sourceFile)
     .map((d) => {
+      const line = lineIndex(sourceFile, d.start) + 1;
       const { character } = sourceFile.getLineAndCharacterOfPosition(d.start);
       const message = ts.flattenDiagnosticMessageText(d.messageText, " ");
-      return `${name}(${lineIndex(sourceFile, d.start) + 1},${character + 1}): error TS${d.code}: ${message}`;
+      return `${name}(${line},${character + 1}): error TS${d.code}: ${message}`;
     });
 }
 

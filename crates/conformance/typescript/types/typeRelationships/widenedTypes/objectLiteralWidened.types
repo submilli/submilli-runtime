@@ -4,8 +4,8 @@
 let x1 = {
 >x1 : { foo: null; bar: null; }
 >   : ^^^^^^^^^^^^^^^^^^^^^^^^^
->{    foo: null,    bar: null} : { foo: null; bar: null; }
->                              : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>{     foo: null,     bar: null } : { foo: null; bar: null; }
+>                                 : ^^^^^^^^^^^^^^^^^^^^^^^^^
 
     foo: null,
 >foo : null
@@ -20,8 +20,8 @@ let x1 = {
 let y1 = {
 >y1 : { foo: null; bar: { baz: null; boo: null; }; }
 >   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
->{    foo: null,    bar: {        baz: null,        boo: null    }} : { foo: null; bar: { baz: null; boo: null; }; }
->                                                                   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{     foo: null,     bar: {         baz: null,         boo: null     } } : { foo: null; bar: { baz: null; boo: null; }; }
+>                                                                         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     foo: null,
 >foo : null
@@ -30,8 +30,8 @@ let y1 = {
     bar: {
 >bar : { baz: null; boo: null; }
 >    : ^^^^^^^^^^^^^^^^^^^^^^^^^
->{        baz: null,        boo: null    } : { baz: null; boo: null; }
->                                          : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>{         baz: null,         boo: null     } : { baz: null; boo: null; }
+>                                             : ^^^^^^^^^^^^^^^^^^^^^^^^^
 
         baz: null,
 >baz : null
@@ -58,8 +58,8 @@ let n: null = null;
 let x2 = {
 >x2 : { foo: null; bar: null; }
 >   : ^^^^^^^^^^^^^^^^^^^^^^^^^
->{    foo: n,    bar: u} : { foo: null; bar: null; }
->                        : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>{     foo: n,     bar: u } : { foo: null; bar: null; }
+>                           : ^^^^^^^^^^^^^^^^^^^^^^^^^
 
     foo: n,
 >foo : null
@@ -78,8 +78,8 @@ let x2 = {
 let y2 = {
 >y2 : { foo: null; bar: { baz: null; boo: null; }; }
 >   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
->{    foo: n,    bar: {        baz: n,        boo: u    }} : { foo: null; bar: { baz: null; boo: null; }; }
->                                                          : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{     foo: n,     bar: {         baz: n,         boo: u     } } : { foo: null; bar: { baz: null; boo: null; }; }
+>                                                                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     foo: n,
 >foo : null
@@ -90,8 +90,8 @@ let y2 = {
     bar: {
 >bar : { baz: null; boo: null; }
 >    : ^^^^^^^^^^^^^^^^^^^^^^^^^
->{        baz: n,        boo: u    } : { baz: null; boo: null; }
->                                    : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>{         baz: n,         boo: u     } : { baz: null; boo: null; }
+>                                       : ^^^^^^^^^^^^^^^^^^^^^^^^^
 
         baz: n,
 >baz : null
