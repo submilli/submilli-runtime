@@ -368,5 +368,5 @@ function up before relying on it, so it never has to know this chapter, or a
 package, in advance. Both surfaces read the same source, so what you see with
 `submilli docs` is what the agent sees.
 
-Next: [crafting a blueprint](/docs/blueprints), where the capabilities in the
-table above become rules.
+Next: [curated packages](/docs/curated-packages), for maintained clients that
+connect programs to services such as GitHub, Slack, and Google Drive.
