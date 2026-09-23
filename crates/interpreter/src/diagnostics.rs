@@ -140,12 +140,12 @@ pub(crate) fn render_source_block(
 
     let start_text = line_index.line_text(source, start_line);
     writeln!(out, "{start_line:>gutter_width$} | {start_text}").unwrap();
-    let caret_indent = (start_col - 1) as usize;
+    let caret_indent = chars_in_byte_range(start_text, 0, start_col - 1);
     let caret_len = if start_line == end_line {
-        (end_col.saturating_sub(start_col) as usize).max(1)
+        chars_in_byte_range(start_text, start_col - 1, end_col - 1).max(1)
     } else {
         // Multi-line: extend to end of line.
-        start_text.len().saturating_sub(caret_indent).max(1)
+        chars_in_byte_range(start_text, start_col - 1, u32::MAX).max(1)
     };
     writeln!(
         out,
@@ -160,12 +160,12 @@ pub(crate) fn render_source_block(
         for mid_line in (start_line + 1)..end_line {
             let mid_text = line_index.line_text(source, mid_line);
             writeln!(out, "{mid_line:>gutter_width$} | {mid_text}").unwrap();
-            let mid_carets = mid_text.len().max(1);
+            let mid_carets = mid_text.chars().count().max(1);
             writeln!(out, "{} | {}", gutter_blank, "^".repeat(mid_carets)).unwrap();
         }
         let end_text = line_index.line_text(source, end_line);
         writeln!(out, "{end_line:>gutter_width$} | {end_text}").unwrap();
-        let end_carets = (end_col.saturating_sub(1) as usize).max(1);
+        let end_carets = chars_in_byte_range(end_text, 0, end_col.saturating_sub(1)).max(1);
         writeln!(out, "{} | {}", gutter_blank, "^".repeat(end_carets)).unwrap();
     }
 
@@ -181,6 +181,22 @@ pub(crate) fn render_source_block(
         )
         .unwrap();
     }
+}
+
+/// Characters in `line[from..to]`, where `from`/`to` are byte columns as
+/// `LineIndex::line_col` reports them, clamped to the line. Carets are drawn one per
+/// character, so a multi-byte character before or inside the span counts once. (A
+/// double-width character such as CJK or emoji still takes two terminal columns.)
+fn chars_in_byte_range(line: &str, from: u32, to: u32) -> usize {
+    let clamp = |col: u32| {
+        let mut at = (col as usize).min(line.len());
+        while !line.is_char_boundary(at) {
+            at -= 1;
+        }
+        at
+    };
+    let (from, to) = (clamp(from), clamp(to));
+    line[from..to.max(from)].chars().count()
 }
 
 #[cfg(test)]
@@ -236,6 +252,29 @@ mod tests {
             notes: vec![],
         };
         insta::assert_snapshot!(render(&diag, &sources(source)));
+    }
+
+    #[test]
+    fn carets_count_characters_not_bytes() {
+        // `é` and `—` are 2 and 3 bytes; the carets must still sit under `bad`.
+        let source = "let s = \"é—\"; bad;\n";
+        let start = source.find("bad").unwrap() as u32;
+        let diag = Diagnostic {
+            severity: Severity::Error,
+            span: Span::new(F, start, start + 3),
+            message: "unresolved identifier `bad`".to_string(),
+            help: vec![],
+            notes: vec![],
+        };
+        let rendered = render(&diag, &sources(source));
+        let caret_line = rendered.lines().find(|l| l.contains('^')).unwrap();
+        let source_line = rendered.lines().find(|l| l.contains("bad;")).unwrap();
+        let caret_col = caret_line.chars().position(|c| c == '^').unwrap();
+        let bad_col = source_line[..source_line.find("bad").unwrap()]
+            .chars()
+            .count();
+        assert_eq!(caret_col, bad_col, "{rendered}");
+        assert_eq!(caret_line.matches('^').count(), 3, "{rendered}");
     }
 
     #[test]
