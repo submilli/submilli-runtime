@@ -450,12 +450,11 @@ impl<'a> Inferer<'a> {
     }
 
     /// The type a binding declared `declared` narrows to after a write of a
-    /// `written` value. As in TypeScript, a value of a reference type narrows to
-    /// the declared members that accept it, not to its own type: the declaration
-    /// decides what may be written through the binding, so a `readonly` array,
-    /// field, or property it declares stays readonly after `o = { xs: [1] }`.
-    /// A primitive narrows to its own type, as does a value written into
-    /// `unknown` or a type parameter, which name no members to keep.
+    /// `written` value. It is the value's own type, as for any write, unless a
+    /// declared member that accepts the value declares something `readonly`: a
+    /// `readonly` array, field, or property the declaration names must survive
+    /// `o = { xs: [1] }`. Then the binding narrows to the most specific such
+    /// member, as TypeScript's assignment narrowing picks declared members.
     pub(super) fn assignment_narrowed_ty(&self, declared: &Type, written: Type) -> Type {
         let members: Vec<&Type> = match declared.peel_preserving_readonly() {
             Type::Union(members) => members.iter().collect(),
@@ -467,13 +466,13 @@ impl<'a> Inferer<'a> {
         };
         let narrowed = parts
             .into_iter()
-            .map(|part| self.declared_members_accepting(&members, part))
+            .map(|part| self.narrow_written_part(&members, part))
             .collect();
         Type::union(narrowed)
     }
 
-    fn declared_members_accepting(&self, members: &[&Type], part: Type) -> Type {
-        if narrows_to_itself(&part) {
+    fn narrow_written_part(&self, members: &[&Type], part: Type) -> Type {
+        if narrows_to_itself(&part) || part.is_readonly_array() {
             return part;
         }
         let accepting: Vec<&Type> = members
@@ -481,14 +480,10 @@ impl<'a> Inferer<'a> {
             .copied()
             .filter(|member| super::assignable(&part, member, self.resolver()))
             .collect();
-        let names_nothing = accepting.is_empty()
-            || accepting.iter().any(|member| {
-                matches!(
-                    member.peel(),
-                    Type::Unknown | Type::TypeVar(_) | Type::GenericParam { .. } | Type::Error
-                )
-            });
-        if names_nothing {
+        if !accepting
+            .iter()
+            .any(|member| self.declares_readonly(member, 0))
+        {
             return part;
         }
         // Members that differ only in `readonly` (`readonly T[] | T[]`) narrow to
@@ -498,7 +493,54 @@ impl<'a> Inferer<'a> {
         {
             return (*readonly).clone();
         }
-        Type::union(accepting.into_iter().cloned().collect())
+        let most_specific = accepting.iter().find(|candidate| {
+            accepting
+                .iter()
+                .all(|other| super::assignable(candidate, other, self.resolver()))
+        });
+        match most_specific {
+            Some(member) => (*member).clone(),
+            None => Type::union(accepting.into_iter().cloned().collect()),
+        }
+    }
+
+    /// Whether `ty` forbids a write somewhere a value of it can reach: a
+    /// `readonly` array or tuple, or a `readonly` field or property, at any depth.
+    fn declares_readonly(&self, ty: &Type, depth: u8) -> bool {
+        // A recursive type repeats what it declares; a few levels see all of it.
+        if depth > 8 {
+            return false;
+        }
+        let nested = |t: &Type| self.declares_readonly(t, depth + 1);
+        // A method is a read-only member of a structural form, but not data a
+        // write could reach.
+        let readonly_data = |f: &ObjectField| {
+            (f.readonly && !matches!(f.ty.peel(), Type::Function { .. })) || nested(&f.ty)
+        };
+        match ty.peel_preserving_readonly() {
+            Type::Readonly(_) => true,
+            Type::Array(element) => nested(element),
+            Type::Tuple(elements) | Type::Union(elements) => elements.iter().any(nested),
+            Type::Object { fields } => fields.values().any(readonly_data),
+            Type::InterfaceRef {
+                mangled,
+                name,
+                args,
+                ..
+            }
+            | Type::ClassRef {
+                mangled,
+                name,
+                args,
+                ..
+            } => {
+                args.iter().any(nested)
+                    || self
+                        .structural_form(mangled, name, args)
+                        .is_some_and(|fields| fields.values().any(readonly_data))
+            }
+            _ => false,
+        }
     }
 
     /// Uses `ident` as `NarrowedView.binding` so `LocalNarrowRef` reads the existing Wasm slot
