@@ -370,11 +370,15 @@ unique local), and link-local, which covers the metadata endpoint. It checks
 where a host name actually resolves, so a public name pointing at an internal
 address is caught too. The local CLI applies no such floor, which means a
 program that fetched a local URL fine under `submilli run` fails on the
-server:
+server. The error doesn't yet say why; it looks like any other connection
+failure:
 
 ```text
-blocked by network policy: internal.example resolves only to private/loopback IP space; allow-list it on the server with --allow-ip / --allow-localhost / --allow-private
+error: Error: http GET http://localhost:9000/v1/status: network error: error sending request for url (http://localhost:9000/v1/status)
 ```
+
+If a program fails like this against an internal or local address that you
+know is up, the block is the likely cause.
 
 When a package legitimately needs an internal service, open the smallest
 hole that works:
