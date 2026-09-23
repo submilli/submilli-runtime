@@ -4301,6 +4301,9 @@ impl Inferer<'_> {
         // tracks the resolved field shape + origin per output field.
         // `object_members` records every member's expression in that same order,
         // including values a later member overwrites, which still run.
+        let has_spread = members
+            .iter()
+            .any(|member| matches!(member, crate::ObjectLiteralMember::Spread { .. }));
         let mut object_members: Vec<crate::TypedObjectMember> = Vec::new();
         let mut spread_count = 0;
         let mut merged: std::collections::BTreeMap<
@@ -4334,7 +4337,9 @@ impl Inferer<'_> {
                     });
                     let errors_before = self.error_count();
                     let (typed_value, value_ty) = self.infer_expr(field.value, hint.as_ref());
-                    object_members.push(crate::TypedObjectMember::Value(typed_value));
+                    if !has_spread {
+                        object_members.push(crate::TypedObjectMember::Value(typed_value));
+                    }
                     let value_span = self.ast.expr(field.value).span;
                     // A hinted slot already reported the mismatch against its
                     // hint; screening again gives one mistake two errors.
@@ -4416,12 +4421,35 @@ impl Inferer<'_> {
                         } else {
                             value_ty.widen_literal()
                         });
+                        if has_spread {
+                            let source_ty = Type::Object {
+                                fields: std::collections::BTreeMap::from([(
+                                    field.name.name.clone(),
+                                    crate::ObjectField::required(field_ty.clone()),
+                                )]),
+                            };
+                            let source = self.typed_ast.push_expr(TypedExpr {
+                                kind: TypedExprKind::ObjectLiteral {
+                                    members: vec![crate::TypedObjectMember::Value(typed_value)],
+                                    fields: vec![crate::TypedObjectFieldOrigin {
+                                        name: field.name.clone(),
+                                        source: crate::TypedObjectFieldSource::Literal(typed_value),
+                                        optional: false,
+                                        ty: field_ty.clone(),
+                                    }],
+                                },
+                                span: value_span,
+                                ty: source_ty,
+                            });
+                            object_members.push(crate::TypedObjectMember::Spread {
+                                source,
+                                by_name: false,
+                            });
+                        }
+                        let source = crate::TypedObjectFieldSource::Literal(typed_value);
                         merged.insert(
                             field.name.name.clone(),
-                            (
-                                crate::ObjectField::required(field_ty),
-                                crate::TypedObjectFieldSource::Literal(typed_value),
-                            ),
+                            (crate::ObjectField::required(field_ty), source),
                         );
                     }
                 }
@@ -4452,7 +4480,7 @@ impl Inferer<'_> {
                             fallback: None,
                         };
                         let earlier = merged.remove(&name);
-                        merged.insert(name, merge_spread_field(earlier, field, origin, by_name));
+                        merged.insert(name, merge_spread_field(earlier, field, origin));
                     }
                 }
             }
@@ -4558,7 +4586,9 @@ impl Inferer<'_> {
                         span,
                         ty: Type::Null,
                     });
-                    object_members.push(crate::TypedObjectMember::Value(null_id));
+                    if !has_spread {
+                        object_members.push(crate::TypedObjectMember::Value(null_id));
+                    }
                     merged.insert(
                         name.clone(),
                         (
@@ -6063,7 +6093,7 @@ impl Inferer<'_> {
                 .lookup_narrowed_view(&path)
                 .map_or_else(|| entry.ty.clone(), |view| view.narrowed_ty.clone());
             if !matches!(
-                operand_ty.peel(),
+                operand_ty.primitive_behavior(),
                 Type::Number | Type::NumberLiteral(_) | Type::BigInt | Type::Error
             ) {
                 self.error(
@@ -6091,7 +6121,7 @@ impl Inferer<'_> {
             }
             // Re-install assignment narrowing: result reads see the
             // post-increment type.
-            if !matches!(entry.ty, Type::Error) && entry.ty != result_ty {
+            if !matches!(entry.ty, Type::Error) {
                 let path = narrowing::ReferencePath::root(narrowing::BindingId::Local {
                     name: target.name.clone(),
                     decl_scope: entry.decl_scope,
@@ -6287,7 +6317,7 @@ impl Inferer<'_> {
             Type::Error
         };
         if !matches!(
-            target_ty.peel(),
+            target_ty.primitive_behavior(),
             Type::Number | Type::NumberLiteral(_) | Type::BigInt | Type::Error
         ) {
             self.error(
@@ -6302,6 +6332,11 @@ impl Inferer<'_> {
                 name.span,
                 format!("expected `{target_ty}`, got `{result_ty}`"),
             );
+        }
+        if let Some(mut path) = self.expr_to_reference_path(self.typed_ast.expr(typed_receiver)) {
+            path.chain
+                .push(narrowing::PathElem::Field(name.name.clone()));
+            self.invalidate_for_write(path, name.span);
         }
         (
             TypedExprKind::PostfixUnary {
@@ -6336,7 +6371,7 @@ impl Inferer<'_> {
             .lookup_narrowed_view(&path)
             .map_or_else(|| ty.clone(), |view| view.narrowed_ty.clone());
         if !matches!(
-            operand_ty.peel(),
+            operand_ty.primitive_behavior(),
             Type::Number | Type::NumberLiteral(_) | Type::BigInt | Type::Error
         ) {
             self.error(
@@ -6437,7 +6472,7 @@ impl Inferer<'_> {
         };
         let (typed_index, _) = self.infer_expr(index, Some(&Type::Number));
         if !matches!(
-            elem_ty.peel(),
+            elem_ty.primitive_behavior(),
             Type::Number | Type::NumberLiteral(_) | Type::BigInt | Type::Error
         ) {
             self.error(
@@ -8246,7 +8281,12 @@ fn string_key_as_field(ast: &crate::Ast, part: ChainPart) -> ChainPart {
 }
 
 fn branch_result_type(left: Type, right: Type, types: super::assignable::TypeResolver<'_>) -> Type {
-    if assignable(&left, &right, types) {
+    if matches!(left.peel(), Type::Object { .. })
+        && matches!(right.peel(), Type::Object { .. })
+        && left.peel() != right.peel()
+    {
+        Type::union(vec![left, right])
+    } else if assignable(&left, &right, types) {
         right
     } else if assignable(&right, &left, types) {
         left
@@ -8265,7 +8305,7 @@ fn equality_operand_needs_context(ast: &crate::Ast, id: ExprId) -> bool {
     }
 }
 
-fn literal_comparison_type(ast: &crate::TypedAst, expr: &TypedExpr) -> Type {
+pub(super) fn literal_comparison_type(ast: &crate::TypedAst, expr: &TypedExpr) -> Type {
     match &expr.kind {
         TypedExprKind::String(value) => Type::StringLiteral(value.clone()),
         TypedExprKind::Number(value) => Type::NumberLiteral(crate::types::LiteralF64(*value)),
@@ -8411,17 +8451,13 @@ struct SpreadFields {
 ///
 /// An optional field may be absent, and then the earlier value stays: `{ a: 1,
 /// ...{} }` keeps `a: 1`. So the field holds either value, and is optional only
-/// if the earlier one was. Absence has to be observable for that: a by-name read
-/// finds whether the object has the field, but a fixed-layout slot holds null
-/// for an absent field, so there a field whose type admits `null` can't tell a
-/// present `null` from absence, and the spread's value is taken as written.
+/// if the earlier one was. Optional null slots count as absent, matching `in`.
 fn merge_spread_field(
     earlier: Option<(crate::ObjectField, crate::TypedObjectFieldSource)>,
     field: crate::ObjectField,
     origin: crate::TypedObjectFieldSource,
-    by_name: bool,
 ) -> (crate::ObjectField, crate::TypedObjectFieldSource) {
-    let keeps_earlier = field.optional && (by_name || !admits_null(&field.ty));
+    let keeps_earlier = field.optional;
     let Some((earlier_field, earlier_origin)) = earlier.filter(|_| keeps_earlier) else {
         return (field, origin);
     };
@@ -8437,14 +8473,6 @@ fn merge_spread_field(
         },
         origin,
     )
-}
-
-fn admits_null(ty: &Type) -> bool {
-    match ty.peel() {
-        Type::Null | Type::Unknown => true,
-        Type::Union(members) => members.iter().any(admits_null),
-        _ => false,
-    }
 }
 
 fn collect_union_members(ty: &Type, out: &mut Vec<Type>) {

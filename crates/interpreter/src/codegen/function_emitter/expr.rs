@@ -381,24 +381,8 @@ fn emit_expr_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) 
             );
         }
         TypedExprKind::ObjectLiteral { members, fields } => {
-            // Push the object header, then the boxed user-field values in
-            // canonical order. `array.new_fixed` leaves the payload array as
-            // `$ObjectShape` slot 2.
-            //
-            // when the literal is flowing into an
-            // `InterfaceRef` slot, `expr.ty` is the interface, not
-            // the structural shape. Derive the structural Object
-            // form from each output field origin — for `Literal`
-            // origins use the value expression's static type, for
-            // `Spread` origins read the source's declared field
-            // type out of the recorded `source_ty`.
-            //
-            // each output field's origin (`Literal` or
-            // `Spread`) carries everything codegen needs to emit one
-            // slot. Spread sources are materialized once into a
-            // local of the source's concrete arity-N struct type and
-            // every spread-origin field reads from it via direct
-            // `struct.get` — no vtable dispatch.
+            // Interface contextual typing keeps the result nominal; recover the
+            // structural shape from the literal's field metadata for allocation.
             let structural_ty: Type = match &expr.ty {
                 Type::Object { .. } => expr.ty.clone(),
                 Type::InterfaceRef { .. } => {
@@ -421,6 +405,13 @@ fn emit_expr_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) 
                     panic!("ObjectLiteral expr.ty must be Object or InterfaceRef, got {other:?}",)
                 }
             };
+            if members
+                .iter()
+                .any(|member| matches!(member, TypedObjectMember::Spread { .. }))
+            {
+                emit_object_spread(emitter, ctx, members, &structural_ty);
+                return;
+            }
             let vtable_idx = ctx
                 .symbols
                 .vtable_global_idx(&structural_ty)
@@ -451,10 +442,7 @@ fn emit_expr_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) 
                 .intrinsic_type_indices()
                 .expect("intrinsics declared by codegen entry");
 
-            // Evaluate every member in source order, as JavaScript does, before
-            // any slot is filled: a value is boxed into a local, a spread source
-            // is ref-cast to its arity-N struct type so its slots can be read
-            // with `struct.get`. A value a later member overwrites still runs.
+            // Plain literals still evaluate overwritten values in source order.
             let evaluated = evaluate_object_members(emitter, ctx, members);
 
             emitter.instruction(Instruction::GlobalGet(vtable_idx));
@@ -468,7 +456,10 @@ fn emit_expr_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) 
                 fields.iter().map(|f| (f.name.name.as_str(), f)).collect();
             for (name, field) in declared_fields {
                 if let Some(origin) = by_name.get(name.as_str()) {
-                    emit_object_field_source(emitter, ctx, &evaluated, &origin.source);
+                    let TypedObjectFieldSource::Literal(value) = &origin.source else {
+                        unreachable!("spreads use the runtime merge path");
+                    };
+                    emitter.instruction(Instruction::LocalGet(evaluated[value]));
                 } else {
                     debug_assert!(
                         field.optional,
@@ -1760,6 +1751,155 @@ fn emit_class_field_slot_cast(
         }
         None => crate::codegen::function_emitter::cast::emit_cast_to(emitter, ctx, result_ty),
     }
+}
+
+fn emit_object_spread(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    sources: &[TypedObjectMember],
+    shape: &Type,
+) {
+    let intrinsics = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .expect("intrinsics declared");
+    let merge = ctx
+        .symbols
+        .prelude_func_idx("ObjectConstructor##spread")
+        .expect("spread helper collected");
+    emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object)));
+    for (index, source) in sources.iter().enumerate() {
+        emit_expr(emitter, ctx, source.expr_id());
+        let source_ty = &ctx.ta.expr(source.expr_id()).ty;
+        let source_local =
+            stash_receiver_as_object_shape(emitter, source_ty, intrinsics.object_shape);
+        emitter.instruction(Instruction::LocalGet(source_local));
+        if index + 1 == sources.len() {
+            emit_spread_shape(emitter, ctx, shape);
+        } else {
+            emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object)));
+        }
+        if matches!(source, TypedObjectMember::Spread { by_name: true, .. }) {
+            emit_spread_mask(emitter, ctx, source_local, source_ty, shape);
+        } else {
+            emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object)));
+        }
+        emitter.instruction(Instruction::Call(merge));
+    }
+}
+
+/// Union sources may carry a known field with an incompatible hidden value.
+/// Preserve the checked-field contract for those names without discarding
+/// runtime fields outside the source's static view.
+fn emit_spread_mask(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    source: u32,
+    source_ty: &Type,
+    shape: &Type,
+) {
+    let mut fields = std::collections::BTreeMap::new();
+    collect_spread_field_types(source_ty, &mut fields);
+    let intrinsics = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .expect("intrinsics declared");
+    let vtable = ctx
+        .symbols
+        .vtable_global_idx(shape)
+        .expect("spread shape vtable collected");
+    emitter.instruction(Instruction::GlobalGet(vtable));
+    for name in fields.keys() {
+        let global = ctx
+            .symbols
+            .field_name_string_global_idx(name)
+            .expect("spread name collected");
+        emitter.instruction(Instruction::GlobalGet(global));
+    }
+    emitter.instruction(Instruction::ArrayNewFixed {
+        array_type_index: intrinsics.field_names,
+        array_size: fields.len() as u32,
+    });
+    for (name, ty) in &fields {
+        let global = ctx
+            .symbols
+            .field_name_string_global_idx(name)
+            .expect("spread name collected");
+        let index = emitter.add_anonymous_local(ValType::I32);
+        let value = emitter.add_anonymous_local(object_ref(intrinsics.object));
+        emit_object_field_index_by_name(emitter, ctx, source, global);
+        emitter.instruction(Instruction::LocalTee(index));
+        emitter.instruction(Instruction::I32Const(0));
+        emitter.instruction(Instruction::I32GeS);
+        emitter.emit_if(BlockType::Result(ValType::I32));
+        emit_field_slot_get(emitter, intrinsics, source, index);
+        emitter.instruction(Instruction::LocalSet(value));
+        emit_field_holds_value_of(emitter, ctx, source, index, value, ty);
+        emitter.emit_else();
+        emitter.instruction(Instruction::I32Const(0));
+        emitter.emit_end();
+        emitter.emit_if(BlockType::Result(object_ref(intrinsics.object)));
+        emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object)));
+        emitter.emit_else();
+        emitter.instruction(Instruction::GlobalGet(global));
+        emitter.emit_end();
+    }
+    emitter.instruction(Instruction::ArrayNewFixed {
+        array_type_index: intrinsics.object_fields,
+        array_size: fields.len() as u32,
+    });
+    emitter.instruction(Instruction::StructNew(intrinsics.object_shape));
+}
+
+fn collect_spread_field_types(ty: &Type, fields: &mut std::collections::BTreeMap<String, Type>) {
+    match ty.peel() {
+        Type::Object { fields: source } => {
+            for (name, field) in source {
+                fields
+                    .entry(name.clone())
+                    .and_modify(|ty| *ty = Type::union(vec![ty.clone(), field.ty.clone()]))
+                    .or_insert_with(|| field.ty.clone());
+            }
+        }
+        Type::Union(members) => {
+            for member in members {
+                collect_spread_field_types(member, fields);
+            }
+        }
+        _ => unreachable!("spread source must be structural"),
+    }
+}
+
+/// The final merge restores optional markers and writable absent slots from
+/// the inferred result shape, while retaining unnamed runtime fields.
+fn emit_spread_shape(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, shape: &Type) {
+    let Type::Object { fields } = shape else {
+        unreachable!("structural spread shape")
+    };
+    let intrinsics = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .expect("intrinsics declared");
+    let names: Vec<_> = fields
+        .iter()
+        .map(|(name, field)| crate::codegen::field_names::FieldName {
+            name: name.clone(),
+            optional: field.optional,
+        })
+        .collect();
+    let names_global = ctx
+        .symbols
+        .field_names_global_idx(&names)
+        .expect("spread shape names collected");
+    let vtable = ctx
+        .symbols
+        .vtable_global_idx(shape)
+        .expect("spread shape vtable collected");
+    emitter.instruction(Instruction::GlobalGet(vtable));
+    emitter.instruction(Instruction::GlobalGet(names_global));
+    emitter.instruction(Instruction::I32Const(fields.len() as i32));
+    emitter.instruction(Instruction::ArrayNewDefault(intrinsics.object_fields));
+    emitter.instruction(Instruction::StructNew(intrinsics.object_shape));
 }
 
 /// Coerces a field-read receiver already on the stack to `(ref $ObjectShape)`,
@@ -4501,215 +4641,29 @@ fn emit_bigint_cmp_call(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, lhs: Ex
     emitter.instruction(Instruction::Call(cmp_idx));
 }
 
-/// An object literal's members, evaluated into locals.
-struct EvaluatedMembers {
-    /// Each field value's boxed `$Object` reference, by its expression.
-    values: HashMap<ExprId, u32>,
-    /// Each spread source, in order.
-    spreads: Vec<SpreadSource>,
-}
-
-enum SpreadSource {
-    /// A source of one known layout, ref-cast to its struct type, with its field
-    /// names in slot order.
-    Layout {
-        local: u32,
-        shape_idx: u32,
-        field_names: Vec<String>,
-    },
-    /// A source whose fields are found by name, held as an `$ObjectShape`.
-    ByName { local: u32 },
-}
-
+/// Evaluate plain literal values once, including overwritten expressions.
 fn evaluate_object_members(
     emitter: &mut FunctionEmitter<'_>,
     ctx: &CodegenCtx<'_>,
     members: &[TypedObjectMember],
-) -> EvaluatedMembers {
+) -> HashMap<ExprId, u32> {
     let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
-        .expect("intrinsics declared by codegen entry");
-    let mut evaluated = EvaluatedMembers {
-        values: HashMap::new(),
-        spreads: Vec::new(),
-    };
+        .expect("intrinsics declared");
+    let mut values = HashMap::new();
     for member in members {
-        match *member {
-            TypedObjectMember::Value(value_id) => {
-                // Boxed by the value's own static type, not the declared field
-                // type, so a union-typed field holds the boxed variant.
-                let value_ty = ctx.ta.expr(value_id).ty.clone();
-                emit_expr(emitter, ctx, value_id);
-                cast::emit_box(emitter, ctx, &value_ty);
-                let local = emitter.add_anonymous_local(object_ref(intrinsics.object));
-                emitter.instruction(Instruction::LocalSet(local));
-                evaluated.values.insert(value_id, local);
-            }
-            TypedObjectMember::Spread {
-                source,
-                by_name: true,
-            } => {
-                let source_ty = ctx.ta.expr(source).ty.clone();
-                emit_expr(emitter, ctx, source);
-                let local =
-                    stash_receiver_as_object_shape(emitter, &source_ty, intrinsics.object_shape);
-                evaluated.spreads.push(SpreadSource::ByName { local });
-            }
-            TypedObjectMember::Spread {
-                source,
-                by_name: false,
-            } => {
-                let source_struct_ty = ctx.ta.expr(source).ty.peel().clone();
-                let shape_idx = ctx
-                    .symbols
-                    .object_subtype_idx(&source_struct_ty)
-                    .expect("object shape type recorded for spread source's structural type");
-                let Type::Object { fields } = &source_struct_ty else {
-                    panic!("spread source must peel to Type::Object, got {source_struct_ty:?}");
-                };
-                let local = emitter.add_anonymous_local(ValType::Ref(RefType {
-                    nullable: false,
-                    heap_type: HeapType::Concrete(shape_idx),
-                }));
-                emit_expr(emitter, ctx, source);
-                emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(shape_idx)));
-                emitter.instruction(Instruction::LocalSet(local));
-                evaluated.spreads.push(SpreadSource::Layout {
-                    local,
-                    shape_idx,
-                    field_names: fields.keys().cloned().collect(),
-                });
-            }
-        }
+        let TypedObjectMember::Value(value_id) = *member else {
+            unreachable!("spreads use the runtime merge path");
+        };
+        let value_ty = &ctx.ta.expr(value_id).ty;
+        emit_expr(emitter, ctx, value_id);
+        cast::emit_box(emitter, ctx, value_ty);
+        let local = emitter.add_anonymous_local(object_ref(intrinsics.object));
+        emitter.instruction(Instruction::LocalSet(local));
+        values.insert(value_id, local);
     }
-    evaluated
-}
-
-/// Pushes one field's value, read from its evaluated member.
-fn emit_object_field_source(
-    emitter: &mut FunctionEmitter<'_>,
-    ctx: &CodegenCtx<'_>,
-    evaluated: &EvaluatedMembers,
-    source: &TypedObjectFieldSource,
-) {
-    let (source_index, field_name, source_ty, fallback) = match source {
-        TypedObjectFieldSource::Literal(value_id) => {
-            emitter.instruction(Instruction::LocalGet(evaluated.values[value_id]));
-            return;
-        }
-        TypedObjectFieldSource::Spread {
-            source_index,
-            field_name,
-            source_ty,
-            fallback,
-        } => (*source_index, field_name, source_ty, fallback.as_deref()),
-    };
-    match &evaluated.spreads[source_index] {
-        SpreadSource::Layout {
-            local,
-            shape_idx,
-            field_names,
-        } => {
-            let slot = field_names
-                .iter()
-                .position(|k| k == field_name)
-                .expect("spread origin's field_name is in source's field set");
-            emit_layout_field_read(emitter, ctx, evaluated, *local, *shape_idx, slot, fallback);
-        }
-        SpreadSource::ByName { local } => {
-            let Type::Object { fields } = source_ty else {
-                unreachable!("a spread origin records its source's object type");
-            };
-            let field_ty = &fields[field_name].ty;
-            emit_by_name_field_read(
-                emitter, ctx, evaluated, *local, field_name, field_ty, fallback,
-            );
-        }
-    }
-}
-
-/// Reads slot `slot` of a spread source of one known layout, or else the
-/// `fallback`: a fixed-layout slot holds null for an absent field.
-fn emit_layout_field_read(
-    emitter: &mut FunctionEmitter<'_>,
-    ctx: &CodegenCtx<'_>,
-    evaluated: &EvaluatedMembers,
-    local: u32,
-    shape_idx: u32,
-    slot: usize,
-    fallback: Option<&TypedObjectFieldSource>,
-) {
-    let object_fields = ctx
-        .symbols
-        .intrinsic_type_indices()
-        .expect("intrinsics declared by codegen entry")
-        .object_fields;
-    emitter.instruction(Instruction::LocalGet(local));
-    emitter.instruction(Instruction::StructGet {
-        struct_type_index: shape_idx,
-        field_index: 2,
-    });
-    emitter.instruction(Instruction::I32Const(slot as i32));
-    emitter.instruction(Instruction::ArrayGet(object_fields));
-    let Some(fallback) = fallback else {
-        return;
-    };
-    let object_ty = object_ref(object_type_idx(ctx));
-    let read = emitter.add_anonymous_local(object_ty);
-    emitter.instruction(Instruction::LocalTee(read));
-    emitter.instruction(Instruction::RefIsNull);
-    emitter.emit_if(BlockType::Result(object_ty));
-    emit_object_field_source(emitter, ctx, evaluated, fallback);
-    emitter.emit_else();
-    emitter.instruction(Instruction::LocalGet(read));
-    emitter.emit_end();
-}
-
-/// Reads `field_name` from a spread source of no one layout, or else the
-/// `fallback` (or null). The field counts only if the object has it, as `in`
-/// decides, and its value is of the field's type: through width subtyping an
-/// object can carry a field its static type doesn't declare, of any type, and
-/// reading that as the declared type would trap.
-fn emit_by_name_field_read(
-    emitter: &mut FunctionEmitter<'_>,
-    ctx: &CodegenCtx<'_>,
-    evaluated: &EvaluatedMembers,
-    object: u32,
-    field_name: &str,
-    field_ty: &Type,
-    fallback: Option<&TypedObjectFieldSource>,
-) {
-    let intrinsics = ctx
-        .symbols
-        .intrinsic_type_indices()
-        .expect("intrinsics declared by codegen entry");
-    let name_global = ctx
-        .symbols
-        .field_name_string_global_idx(field_name)
-        .expect("spread field name interned by the analysis pass");
-    let index = emitter.add_anonymous_local(ValType::I32);
-    let value = emitter.add_anonymous_local(object_ref(intrinsics.object));
-    emit_object_field_index_by_name(emitter, ctx, object, name_global);
-    emitter.instruction(Instruction::LocalTee(index));
-    emitter.instruction(Instruction::I32Const(0));
-    emitter.instruction(Instruction::I32GeS);
-    emitter.emit_if(BlockType::Result(ValType::I32));
-    emit_field_slot_get(emitter, intrinsics, object, index);
-    emitter.instruction(Instruction::LocalSet(value));
-    emit_field_holds_value_of(emitter, ctx, object, index, value, field_ty);
-    emitter.emit_else();
-    emitter.instruction(Instruction::I32Const(0));
-    emitter.emit_end();
-
-    emitter.emit_if(BlockType::Result(object_ref(intrinsics.object)));
-    emitter.instruction(Instruction::LocalGet(value));
-    emitter.emit_else();
-    match fallback {
-        Some(fallback) => emit_object_field_source(emitter, ctx, evaluated, fallback),
-        None => emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object))),
-    }
-    emitter.emit_end();
+    values
 }
 
 /// Pushes whether the field at `index`, whose slot holds `value`, is present
@@ -4753,11 +4707,4 @@ fn object_ref(object_type: u32) -> ValType {
         nullable: true,
         heap_type: HeapType::Concrete(object_type),
     })
-}
-
-fn object_type_idx(ctx: &CodegenCtx<'_>) -> u32 {
-    ctx.symbols
-        .intrinsic_type_indices()
-        .expect("intrinsics declared by codegen entry")
-        .object
 }

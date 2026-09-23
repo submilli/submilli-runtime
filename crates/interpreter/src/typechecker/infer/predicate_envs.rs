@@ -285,22 +285,29 @@ impl<'a> Inferer<'a> {
         }
     }
 
-    /// False-env is empty: `a && b` fails two ways, neither safe to narrow.
     fn predicate_envs_and(
         &mut self,
         lhs: ExprId,
         rhs: ExprId,
     ) -> (narrowing::NarrowEnv, narrowing::NarrowEnv) {
-        let (lhs_true, _lhs_false) = self.predicate_envs_unfiltered(lhs);
+        let (lhs_true, lhs_false) = self.predicate_envs_unfiltered(lhs);
         self.push_narrow_frame(lhs_true.clone());
-        let (rhs_true, _rhs_false) = self.predicate_envs_unfiltered(rhs);
+        let (rhs_true, rhs_false) = self.predicate_envs_unfiltered(rhs);
         self.pop_narrow_frame();
+        let mut rhs_failure = lhs_true.clone();
+        rhs_failure.extend(rhs_false);
+        let (false_env, _) = narrowing::union_envs(
+            lhs_false,
+            Default::default(),
+            rhs_failure,
+            Default::default(),
+        );
         // RHS supersedes LHS — ran under LHS narrowing, so its view is at least as specific.
         let mut composed = lhs_true;
         for (path, view) in rhs_true.into_iter() {
             composed.insert(path, view);
         }
-        (composed, narrowing::NarrowEnv::new())
+        (composed, false_env)
     }
 
     fn predicate_envs_or(
@@ -308,15 +315,23 @@ impl<'a> Inferer<'a> {
         lhs: ExprId,
         rhs: ExprId,
     ) -> (narrowing::NarrowEnv, narrowing::NarrowEnv) {
-        let (_lhs_true, lhs_false) = self.predicate_envs_unfiltered(lhs);
+        let (lhs_true, lhs_false) = self.predicate_envs_unfiltered(lhs);
         self.push_narrow_frame(lhs_false.clone());
-        let (_rhs_true, rhs_false) = self.predicate_envs_unfiltered(rhs);
+        let (rhs_true, rhs_false) = self.predicate_envs_unfiltered(rhs);
         self.pop_narrow_frame();
+        let mut rhs_success = lhs_false.clone();
+        rhs_success.extend(rhs_true);
+        let (true_env, _) = narrowing::union_envs(
+            lhs_true,
+            Default::default(),
+            rhs_success,
+            Default::default(),
+        );
         let mut composed = lhs_false;
         for (path, view) in rhs_false.into_iter() {
             composed.insert(path, view);
         }
-        (narrowing::NarrowEnv::new(), composed)
+        (true_env, composed)
     }
 
     fn predicate_envs_eq_null(
@@ -589,13 +604,8 @@ impl<'a> Inferer<'a> {
         lhs_id: ExprId,
         rhs_id: ExprId,
     ) -> Option<(narrowing::NarrowEnv, narrowing::NarrowEnv)> {
-        use crate::{BinOp, TypedExprKind};
-        enum DiscKey {
-            Field(String),
-            Position(usize),
-        }
-        let lhs_lit = literal_value_of(&self.typed_ast.expr(lhs_id).kind);
-        let rhs_lit = literal_value_of(&self.typed_ast.expr(rhs_id).kind);
+        let lhs_lit = comparison_literal(&self.typed_ast, lhs_id);
+        let rhs_lit = comparison_literal(&self.typed_ast, rhs_id);
         let (path_id, literal) = match (lhs_lit, rhs_lit) {
             (None, Some(lit)) => (lhs_id, lit),
             (Some(lit), None) => (rhs_id, lit),
@@ -627,6 +637,33 @@ impl<'a> Inferer<'a> {
             );
         }
 
+        self.narrow_literal_discriminant(
+            op,
+            path.clone(),
+            path_ty.clone(),
+            path_kind,
+            path_span,
+            literal.clone(),
+        )
+        .or_else(|| {
+            self.narrow_direct_literal(op, path, path_ty, direct_source_kind, path_span, literal)
+        })
+    }
+
+    fn narrow_literal_discriminant(
+        &mut self,
+        op: crate::BinOp,
+        path: narrowing::ReferencePath,
+        path_ty: Type,
+        path_kind: crate::TypedExprKind,
+        path_span: Span,
+        literal: narrowing::LiteralValue,
+    ) -> Option<(narrowing::NarrowEnv, narrowing::NarrowEnv)> {
+        use crate::{BinOp, TypedExprKind};
+        enum DiscKey {
+            Field(String),
+            Position(usize),
+        }
         let (root_path, root_ty, root_span, root_kind, disc_key_from_path) = match &path_kind {
             TypedExprKind::FieldAccess { receiver, name } => {
                 let receiver_expr = self.typed_ast.expr(*receiver);
@@ -780,16 +817,23 @@ impl<'a> Inferer<'a> {
         literal: narrowing::LiteralValue,
     ) -> Option<(narrowing::NarrowEnv, narrowing::NarrowEnv)> {
         use crate::BinOp;
-        let Type::Union(members) = path_ty.peel() else {
-            return None;
+        let members = match path_ty.peel() {
+            Type::Union(members) => members.as_slice(),
+            ty => std::slice::from_ref(ty),
         };
         let literal_ty = literal_to_type(&literal);
+        if path_ty.peel() == &literal_ty {
+            return None;
+        }
         let mut matched: Vec<Type> = Vec::new();
         let mut remaining: Vec<Type> = Vec::new();
         for m in members {
-            if m == &literal_ty {
+            if m.peel() == &literal_ty {
                 matched.push(m.clone());
             } else {
+                if matches!(m.peel(), Type::Unknown) || m.peel() == &literal_ty.widen_literal() {
+                    matched.push(literal_ty.clone());
+                }
                 remaining.push(m.clone());
             }
         }
@@ -822,12 +866,17 @@ impl<'a> Inferer<'a> {
         let mut false_env = narrowing::NarrowEnv::new();
         let mut false_excluded = std::collections::BTreeSet::new();
         false_excluded.insert(literal);
+        let (true_excluded, false_excluded) = if op == BinOp::NotEq {
+            (false_excluded, std::collections::BTreeSet::new())
+        } else {
+            (std::collections::BTreeSet::new(), false_excluded)
+        };
         true_env.insert(
             path.clone(),
             narrowing::NarrowedView {
                 narrowed_ty: true_ty,
                 facts: narrowing::TypeFacts::EMPTY,
-                excluded_literals: std::collections::BTreeSet::new(),
+                excluded_literals: true_excluded,
                 binding: self.mint_narrow_binding(path_span),
                 source: source_true,
             },
@@ -1279,4 +1328,13 @@ fn index_position(kind: &crate::TypedExprKind) -> Option<usize> {
         }
         _ => None,
     }
+}
+
+fn comparison_literal(ast: &crate::TypedAst, id: ExprId) -> Option<narrowing::LiteralValue> {
+    let expr = ast.expr(id);
+    literal_value_of(&expr.kind).or_else(|| match super::expr::literal_comparison_type(ast, expr) {
+        Type::NumberLiteral(value) => Some(narrowing::LiteralValue::Number(value)),
+        Type::StringLiteral(value) => Some(narrowing::LiteralValue::String(value)),
+        _ => None,
+    })
 }

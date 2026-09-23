@@ -671,7 +671,16 @@ impl CodegenAnalysis {
                 self.dependency_usage
                     .note_member(crate::mangle::extend(iface, &name.name));
             }
-            TypedExprKind::ObjectLiteral { fields, .. } => {
+            TypedExprKind::ObjectLiteral { fields, members } => {
+                if members
+                    .iter()
+                    .any(|member| matches!(member, crate::TypedObjectMember::Spread { .. }))
+                {
+                    self.dependency_usage.note_member(crate::mangle::extend(
+                        &crate::mangle::prelude("ObjectConstructor"),
+                        "#spread",
+                    ));
+                }
                 for field in fields {
                     let mut source = Some(&field.source);
                     while let Some(TypedObjectFieldSource::Spread {

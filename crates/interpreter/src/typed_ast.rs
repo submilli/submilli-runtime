@@ -141,8 +141,9 @@ pub enum TypedExprKind {
         /// Guard predicate after type-arg substitution; codegen ignores it.
         type_predicate: Option<Box<crate::TypePredicate>>,
     },
-    /// `fields` is in `Type::Object` BTreeMap order; all spread resolution happened at
-    /// typecheck time, no merge logic in codegen.
+    /// `fields` records the static shape in canonical order. `members` retains
+    /// source evaluation order. In a spread literal, ordinary properties become
+    /// singleton object sources so each source can be copied immediately.
     ObjectLiteral {
         /// Every expression the literal evaluates, in source order, as JavaScript
         /// evaluates them. A value a later member overwrites is still here: it is

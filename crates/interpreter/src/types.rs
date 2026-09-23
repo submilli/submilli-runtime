@@ -419,15 +419,14 @@ impl Type {
         }
     }
 
-    /// The primitive behavior of an enum, without changing its nominal identity.
+    /// Primitive operations shared by enums and homogeneous literal unions,
+    /// without widening their type identity or changing assignability.
     pub fn primitive_behavior(&self) -> &Type {
         match self.peel() {
             Type::NumberEnum { .. } => &Type::Number,
             Type::StringEnum { .. } => &Type::String,
             Type::Union(members)
-                if members
-                    .iter()
-                    .any(|member| matches!(member.peel(), Type::NumberEnum { .. }))
+                if !members.is_empty()
                     && members.iter().all(|member| {
                         matches!(
                             member.primitive_behavior(),
@@ -438,10 +437,7 @@ impl Type {
                 &Type::Number
             }
             Type::Union(members)
-                if members
-                    .iter()
-                    .any(|member| matches!(member.peel(), Type::StringEnum { .. }))
-                    && members.iter().all(Type::is_string_shaped) =>
+                if !members.is_empty() && members.iter().all(Type::is_string_shaped) =>
             {
                 &Type::String
             }

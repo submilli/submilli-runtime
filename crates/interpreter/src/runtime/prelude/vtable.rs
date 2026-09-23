@@ -489,8 +489,12 @@ fn build_object_vtable(
     let to_string = Func::new_async(
         &mut *store,
         intr.to_string_fn.clone(),
-        |mut caller, _params, results| {
+        |mut caller, params, results| {
             Box::new(async move {
+                if let Some(value) = object_override(&mut caller, &params[0], "toString").await? {
+                    results[0] = value;
+                    return Ok(());
+                }
                 let st = write_submilli_string_struct(&mut caller, "[object Object]")?;
                 results[0] = Val::AnyRef(Some(st.to_anyref()));
                 Ok(())
@@ -541,9 +545,28 @@ fn build_object_vtable(
     Ok([to_string, to_json, equals, hash])
 }
 
+async fn object_override(
+    caller: &mut Caller<'_, StoreData>,
+    recv: &Val,
+    name: &str,
+) -> wasmtime::Result<Option<Val>> {
+    let intr = build_intrinsic_types(caller.engine())?;
+    if !super::collection::is_a(caller, recv, &intr.object_shape)? {
+        return Ok(None);
+    }
+    let wanted: Vec<u16> = name.encode_utf16().collect();
+    for (key, value) in read_object_entries(caller, recv, name)? {
+        if key == wanted && is_function(caller, &value)? {
+            let closure = super::closure::read(caller, &value, name)?;
+            return closure.call(caller, &[]).await.map(Some);
+        }
+    }
+    Ok(None)
+}
+
 /// `$ObjectShape#toJson`: serialize the dynamic field-name and field-value arrays
 /// stored on host-built objects. Each value re-enters its own `toJson` slot.
-async fn object_to_json(
+pub(crate) async fn object_to_json(
     caller: &mut Caller<'_, StoreData>,
     recv: &Val,
     raw_string: &ArrayType,
@@ -557,6 +580,9 @@ async fn object_to_json(
              `JSON.stringify(Array.from(x))` serializes the entries, or build a plain object"
         ));
         return Err(crate::runtime::host::throw_host_error(caller, err));
+    }
+    if let Some(value) = object_override(caller, recv, "toJson").await? {
+        return Ok(value);
     }
     let entries = read_object_entries(caller, recv, "Object#toJson")?;
 
@@ -699,8 +725,15 @@ pub(crate) fn read_object_entries(
     let mut entries = Vec::with_capacity(name_count as usize);
     for i in 0..name_count {
         let field_name = names.get(&mut *caller, i)?;
-        let field_name = read_units_val(caller, &field_name, name)?;
         let value = values.get(&mut *caller, i)?;
+        if matches!(value, Val::AnyRef(None)) {
+            let name_object = as_struct(caller, &field_name, name)?;
+            let string_type = build_intrinsic_types(caller.engine())?.string;
+            if !StructType::eq(&name_object.ty(&*caller)?, &string_type) {
+                continue;
+            }
+        }
+        let field_name = read_units_val(caller, &field_name, name)?;
         entries.push((field_name, value));
     }
     Ok(entries)

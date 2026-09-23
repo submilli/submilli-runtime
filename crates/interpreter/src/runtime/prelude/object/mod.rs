@@ -7,14 +7,15 @@
 //! `codegen/prelude/object_shape.rs`.
 
 use wasmtime::{
-    ArrayRef, Caller, FuncType, HeapType, Linker, RefType, Rooted, StructRef, Val, ValType,
+    ArrayRef, ArrayRefPre, Caller, FuncType, HeapType, Linker, RefType, Rooted, StructRef,
+    StructRefPre, StructType, Val, ValType,
 };
 
 use crate::MangledName;
 use crate::runtime::StoreData;
 use crate::runtime::host::{
-    intrinsic_array_type, intrinsic_string_type, register_host_fn, register_host_fn_async,
-    write_submilli_array_struct,
+    host_object_vtable, intrinsic_array_type, intrinsic_string_type, register_host_fn,
+    register_host_fn_async, write_submilli_array_struct,
 };
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::prelude::collection::{is_a, string_units};
@@ -109,6 +110,83 @@ fn enumerate(
     }
     let arr = write_submilli_array_struct(caller, &elems)?;
     Ok(Val::AnyRef(Some(arr.to_anyref())))
+}
+
+/// Copy present own fields while preserving UTF-16 names and boxed values.
+/// Each call snapshots its source before the next literal member is evaluated.
+fn spread(
+    caller: &mut Caller<'_, StoreData>,
+    target: &Val,
+    source: &Val,
+    shape: &Val,
+    mask: &Val,
+) -> wasmtime::Result<Val> {
+    let intr = build_intrinsic_types(caller.engine())?;
+    let mut entries = std::collections::BTreeMap::new();
+    let omitted = spread_omitted_fields(caller, mask)?;
+    for (source_index, object) in [target, source].into_iter().enumerate() {
+        let Some((names, values)) = shape_arrays(caller, object)? else {
+            continue;
+        };
+        for index in 0..names.len(&mut *caller)? {
+            let name = names.get(&mut *caller, index)?;
+            let value = values.get(&mut *caller, index)?;
+            let name_object = as_struct(caller, &name, "object spread field name")?;
+            let optional = !StructType::eq(&name_object.ty(&*caller)?, &intr.string);
+            if optional && matches!(value, Val::AnyRef(None)) {
+                continue;
+            }
+            let units = string_units(caller, &name)?;
+            if source_index == 1 && omitted.contains(&units) {
+                continue;
+            }
+            entries.insert(units, (name, value));
+        }
+    }
+    if let Some((names, _)) = shape_arrays(caller, shape)? {
+        for index in 0..names.len(&mut *caller)? {
+            let name = names.get(&mut *caller, index)?;
+            let units = string_units(caller, &name)?;
+            entries
+                .entry(units)
+                .and_modify(|(existing, _)| *existing = name)
+                .or_insert((name, Val::AnyRef(None)));
+        }
+    }
+    let (names, values): (Vec<_>, Vec<_>) = entries.into_values().unzip();
+    let names_pre = ArrayRefPre::new(&mut *caller, intr.field_names);
+    let values_pre = ArrayRefPre::new(&mut *caller, intr.object_fields);
+    let shape_pre = StructRefPre::new(&mut *caller, intr.object_shape);
+    let names = ArrayRef::new_fixed(&mut *caller, &names_pre, &names)?;
+    let values = ArrayRef::new_fixed(&mut *caller, &values_pre, &values)?;
+    let vtable = host_object_vtable(caller)?;
+    let object = StructRef::new(
+        &mut *caller,
+        &shape_pre,
+        &[
+            vtable,
+            Val::AnyRef(Some(names.to_anyref())),
+            Val::AnyRef(Some(values.to_anyref())),
+        ],
+    )?;
+    Ok(Val::AnyRef(Some(object.to_anyref())))
+}
+
+/// The compiler marks rejected known fields with non-null mask slots.
+fn spread_omitted_fields(
+    caller: &mut Caller<'_, StoreData>,
+    mask: &Val,
+) -> wasmtime::Result<std::collections::BTreeSet<Vec<u16>>> {
+    let mut omitted = std::collections::BTreeSet::new();
+    if let Some((names, values)) = shape_arrays(caller, mask)? {
+        for index in 0..names.len(&mut *caller)? {
+            if !matches!(values.get(&mut *caller, index)?, Val::AnyRef(None)) {
+                let name = names.get(&mut *caller, index)?;
+                omitted.insert(string_units(caller, &name)?);
+            }
+        }
+    }
+    Ok(omitted)
 }
 
 fn has_own(caller: &mut Caller<'_, StoreData>, obj: &Val, key: &Val) -> wasmtime::Result<bool> {
@@ -215,6 +293,24 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         },
     )?;
 
+    let shape = ValType::Ref(RefType::new(
+        false,
+        HeapType::ConcreteStruct(intr.object_shape.clone()),
+    ));
+    register_host_fn(
+        linker,
+        MODULE_NAME,
+        ctor_key("#spread"),
+        ft(
+            vec![obj.clone(), obj.clone(), obj.clone(), obj.clone()],
+            vec![shape],
+        ),
+        true,
+        |caller, params, results| {
+            results[0] = spread(caller, &params[0], &params[1], &params[2], &params[3])?;
+            Ok(())
+        },
+    )?;
     register_host_fn_async(
         linker,
         MODULE_NAME,
@@ -231,6 +327,21 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
 }
 
 pub fn declare(defs: &mut PackageDeclaration) {
+    // Compiler-only helper: deliberately absent from ObjectConstructor's public surface.
+    declare_method(
+        defs,
+        "#spread",
+        ctor_key("#spread"),
+        vec![
+            Param::new("target", Type::Unknown),
+            Param::new("source", Type::Unknown),
+            Param::new("shape", Type::Unknown),
+            Param::new("mask", Type::Unknown),
+        ],
+        Type::Object {
+            fields: Default::default(),
+        },
+    );
     // `Dispatch::Static` drops the constructor receiver, so no receiver param.
     // Types mirror the prelude MethodSigs: `Type::Array`/`Type::Tuple` lower to
     // `(ref $Array)`, matching the registered FuncTypes above.

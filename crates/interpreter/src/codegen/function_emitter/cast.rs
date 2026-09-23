@@ -446,6 +446,11 @@ pub fn emit_narrowing_cast(
     cast_info: &crate::typechecker::infer::narrowing::CastInfo,
 ) {
     use crate::typechecker::infer::narrowing::CastKind;
+    if matches!(cast_info.to_ty.peel(), Type::Never) {
+        emitter.instruction(Instruction::Drop);
+        emitter.instruction(Instruction::Unreachable);
+        return;
+    }
     let from_val = ctx.symbols.value_type(&cast_info.from_ty);
     let to_val = ctx.symbols.value_type(&cast_info.to_ty);
     // Same Wasm repr → no instructions. Happens when the inferer

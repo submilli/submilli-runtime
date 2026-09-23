@@ -120,10 +120,11 @@ impl RwOp {
     fn accepts(self, ty: &Type) -> bool {
         // Arithmetic widens literals; the result cannot be stored back into
         // a literal-only field, even after a null guard.
-        if matches!(
-            ty.primitive_behavior(),
-            Type::NumberLiteral(_) | Type::StringLiteral(_)
-        ) {
+        let is_literal =
+            |ty: &Type| matches!(ty.peel(), Type::NumberLiteral(_) | Type::StringLiteral(_));
+        if is_literal(ty)
+            || matches!(ty.peel(), Type::Union(members) if members.iter().all(is_literal))
+        {
             return false;
         }
         match self {
@@ -825,6 +826,14 @@ impl<'a> Inferer<'a> {
                 ),
                 vec![fix],
             ),
+            None if receiver_ty.interface_routing().is_some()
+                && !matches!(receiver_ty.peel(), Type::Number | Type::Boolean) =>
+            {
+                (
+                    format!("field `{name}` does not exist on `{receiver_ty}`"),
+                    self.interface_member_miss_help(receiver_ty, name),
+                )
+            }
             None => (
                 format!("cannot read field `{name}` on non-object type `{receiver_ty}`"),
                 self.definition_help(receiver_ty),

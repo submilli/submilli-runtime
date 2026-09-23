@@ -890,8 +890,7 @@ pub fn union_envs(
     let mut joined_narrowings = NarrowEnv::new();
     for (path, a_view) in &a_narrowings {
         if let Some(b_view) = b_narrowings.get(path) {
-            let joined_ty =
-                Type::union(vec![a_view.narrowed_ty.clone(), b_view.narrowed_ty.clone()]);
+            let joined_ty = join_flow_types(&a_view.narrowed_ty, &b_view.narrowed_ty);
             joined_narrowings.insert(
                 path.clone(),
                 NarrowedView {
@@ -924,6 +923,27 @@ pub fn union_envs(
     });
 
     (joined_narrowings, joined_assigned)
+}
+
+/// Flow joins collapse a literal already covered by a broad primitive. Keep
+/// authored unions unchanged: their overlap is meaningful to JSON diagnostics.
+fn join_flow_types(left: &Type, right: &Type) -> Type {
+    let joined = Type::union(vec![left.clone(), right.clone()]);
+    let Type::Union(mut members) = joined else {
+        return joined;
+    };
+    let has_number = members
+        .iter()
+        .any(|ty| matches!(ty.without_aliases(), Type::Number));
+    let has_string = members
+        .iter()
+        .any(|ty| matches!(ty.without_aliases(), Type::String));
+    members.retain(|ty| match ty.without_aliases() {
+        Type::NumberLiteral(_) => !has_number,
+        Type::StringLiteral(_) => !has_string,
+        _ => true,
+    });
+    Type::union(members)
 }
 
 /// Recurses into `Type::Union` members only — composite slots have fixed runtime

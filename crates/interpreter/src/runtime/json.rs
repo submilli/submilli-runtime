@@ -16,7 +16,8 @@ use serde::Serialize;
 use crate::runtime::StoreData;
 use crate::runtime::host::{
     host_array_vtable, host_boxed_boolean_vtable, host_boxed_number_vtable, host_object_vtable,
-    host_string_vtable, read_string_arg, register_host_fn, write_submilli_string,
+    host_string_vtable, read_string_arg, register_host_fn, register_host_fn_async,
+    write_submilli_string,
 };
 use crate::{PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
 
@@ -146,41 +147,100 @@ pub(super) fn install_json_module(
         [raw_string_param.clone(), ValType::I32, object_ref],
         [raw_string_param.clone()],
     );
-    register_host_fn(
+    register_host_fn_async(
         linker,
         JSON_MODULE_NAME,
         crate::mangle::host(JSON_MODULE_NAME, "stringifyTypedObject"),
         stringify_typed_object_ty,
         /* deterministic = */ true,
-        |mut caller, params, results| -> wasmtime::Result<()> {
-            let package = read_string_arg(caller, &params[0], "json.stringifyTypedObject")?;
-            let type_id = crate::TypeInfoId(
-                params[1]
-                    .i32()
-                    .ok_or_else(|| wasmtime::Error::msg("json.stringifyTypedObject type id"))?
-                    as u32,
-            );
-            let value = match &params[2] {
-                Val::AnyRef(Some(any)) => any.unwrap_struct(&mut caller)?,
-                Val::AnyRef(None) => {
-                    return Err(wasmtime::Error::msg(
-                        "json.stringifyTypedObject value is null",
-                    ));
-                }
-                other => {
-                    return Err(wasmtime::Error::msg(format!(
-                        "json.stringifyTypedObject expects object, got {other:?}"
-                    )));
-                }
-            };
-            let json = stringify_typed_object(caller, &package, type_id, value)?;
-            let raw = write_submilli_string(&mut caller, &json)?;
-            results[0] = Val::AnyRef(Some(raw.to_anyref()));
-            Ok(())
+        |mut caller, params, results| {
+            Box::pin(async move {
+                let package = read_string_arg(caller, &params[0], "json.stringifyTypedObject")?;
+                let type_id = crate::TypeInfoId(
+                    params[1]
+                        .i32()
+                        .ok_or_else(|| wasmtime::Error::msg("json.stringifyTypedObject type id"))?
+                        as u32,
+                );
+                let value = match &params[2] {
+                    Val::AnyRef(Some(any)) => any.unwrap_struct(&mut caller)?,
+                    Val::AnyRef(None) => {
+                        return Err(wasmtime::Error::msg(
+                            "json.stringifyTypedObject value is null",
+                        ));
+                    }
+                    other => {
+                        return Err(wasmtime::Error::msg(format!(
+                            "json.stringifyTypedObject expects object, got {other:?}"
+                        )));
+                    }
+                };
+                let intr = crate::runtime::intrinsic_types::build_intrinsic_types(caller.engine())?;
+                let json = if contains_dynamic_object(caller, &params[2], &intr, 0)? {
+                    let serialized = crate::runtime::prelude::vtable::object_to_json(
+                        caller,
+                        &params[2],
+                        &intr.raw_string,
+                        &intr.string,
+                    )
+                    .await?;
+                    read_string_arg(caller, &serialized, "JSON.stringify dynamic object")?
+                } else {
+                    stringify_typed_object(caller, &package, type_id, value)?
+                };
+                let raw = write_submilli_string(&mut caller, &json)?;
+                results[0] = Val::AnyRef(Some(raw.to_anyref()));
+                Ok(())
+            })
         },
     )?;
 
     Ok(())
+}
+
+/// TypeInfo describes a static view. A spread can retain fields and values
+/// outside that view, including inside a statically shaped parent or array.
+fn contains_dynamic_object(
+    caller: &mut Caller<'_, StoreData>,
+    value: &Val,
+    intr: &crate::runtime::intrinsic_types::IntrinsicTypes,
+    depth: u32,
+) -> wasmtime::Result<bool> {
+    // Let the existing bounded vtable walker report cycles or excessive depth.
+    if depth >= crate::runtime::MAX_VTABLE_WALK_DEPTH {
+        return Ok(true);
+    }
+    let Val::AnyRef(Some(value)) = value else {
+        return Ok(false);
+    };
+    let Some(object) = value.as_struct(&mut *caller)? else {
+        return Ok(false);
+    };
+    let values = if object.matches_ty(&*caller, &intr.object_shape)? {
+        let actual = object.field(&mut *caller, 0)?;
+        let dynamic = host_object_vtable(caller)?;
+        if let (Val::AnyRef(Some(actual)), Val::AnyRef(Some(dynamic))) = (actual, dynamic)
+            && Rooted::ref_eq(&*caller, &actual, &dynamic)?
+        {
+            return Ok(true);
+        }
+        object.field(&mut *caller, 2)?
+    } else if object.matches_ty(&*caller, &intr.array)? {
+        object.field(&mut *caller, 1)?
+    } else {
+        return Ok(false);
+    };
+    let Val::AnyRef(Some(values)) = values else {
+        return Ok(false);
+    };
+    let values = values.unwrap_array(&mut *caller)?;
+    for index in 0..values.len(&mut *caller)? {
+        let value = values.get(&mut *caller, index)?;
+        if contains_dynamic_object(caller, &value, intr, depth + 1)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn stringify_typed_object(
