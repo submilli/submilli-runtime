@@ -1,0 +1,5 @@
+types: 10 of 27 tsc entries compared, 0 differ
+
+errors:
+line 8: tsc TS2774: This condition will always return true since this function is always defined. Did you mean to call it instead? (we accept)
+line 9: tsc TS2774: This condition will always return true since this function is always defined. Did you mean to call it instead? (we accept)

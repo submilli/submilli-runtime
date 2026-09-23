@@ -1,0 +1,9 @@
+types: 10 of 16 tsc entries compared, 2 differ
+
+line 5: c
+  tsc:  { x: () => void; }
+  ours: { x?: () => void }
+
+line 5: { ...a, ...b }
+  tsc:  { x: () => void; }
+  ours: { x?: () => void }

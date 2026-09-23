@@ -1,0 +1,49 @@
+=== partiallyAnnotatedFunctionWitoutTypeParameter.ts ===
+
+// simple case
+function simple(f: (a: number, b: number) => void): {} { return null as unknown as ({}); }
+>simple : (f: (a: number, b: number) => void) => {}
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>f : (a: number, b: number) => void
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+>null as unknown as ({}) : {}
+>                        : ^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+simple((a: number, b) => {})
+>simple((a: number, b) => {}) : {}
+>                             : ^^
+>simple : (f: (a: number, b: number) => void) => {}
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(a: number, b) => {} : (a: number, b: number) => void
+>                     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+
+simple((a, b: number) => {})
+>simple((a, b: number) => {}) : {}
+>                             : ^^
+>simple : (f: (a: number, b: number) => void) => {}
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(a, b: number) => {} : (a: number, b: number) => void
+>                     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

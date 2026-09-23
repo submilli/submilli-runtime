@@ -1,0 +1,4 @@
+types: 4 of 8 tsc entries compared, 0 differ
+
+errors:
+line 4: tsc TS1156: 'let' declarations can only be declared inside a block. (we accept)

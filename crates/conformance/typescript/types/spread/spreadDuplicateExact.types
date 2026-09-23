@@ -1,0 +1,198 @@
+=== spreadDuplicateExact.ts ===
+
+// Repro from #44438
+
+let a: { a: string } = null as unknown as ({ a: string });
+>a : { a: string; }
+>  : ^^^^^^^^^^^^^^
+>a : string
+>  : ^^^^^^
+>null as unknown as ({ a: string }) : { a: string; }
+>                                   : ^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>a : string
+>  : ^^^^^^
+
+let b: { a?: string } = null as unknown as ({ a?: string });
+>b : { a?: string; }
+>  : ^^^^^^^^^^^^^^^
+>a : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>null as unknown as ({ a?: string }) : { a?: string; }
+>                                    : ^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>a : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+let c: { a: string | null } = null as unknown as ({ a: string | null });
+>c : { a: string | null; }
+>  : ^^^^^^^^^^^^^^^^^^^^^
+>a : string | null
+>  : ^^^^^^^^^^^^^
+>null as unknown as ({ a: string | null }) : { a: string | null; }
+>                                          : ^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>a : string | null
+>  : ^^^^^^^^^^^^^
+
+let d: { a?: string | null } = null as unknown as ({ a?: string | null });
+>d : { a?: string | null; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^
+>a : string | null | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as ({ a?: string | null }) : { a?: string | null; }
+>                                           : ^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>a : string | null | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+let t: boolean = null as unknown as (boolean);
+>t : boolean
+>  : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+let a1 = { a: 123, ...a };  // string (Error)
+>a1 : { a: string; }
+>   : ^^^^^^^^^^^^^^
+>{ a: 123, ...a } : { a: string; }
+>                 : ^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>123 : 123
+>    : ^^^
+>a : { a: string; }
+>  : ^^^^^^^^^^^^^^
+
+let b1 = { a: 123, ...b };  // string | number
+>b1 : { a: string | number; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^
+>{ a: 123, ...b } : { a: string | number; }
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>123 : 123
+>    : ^^^
+>b : { a?: string; }
+>  : ^^^^^^^^^^^^^^^
+
+let c1 = { a: 123, ...c };  // string | null (Error)
+>c1 : { a: string | null; }
+>   : ^^^^^^^^^^^^^^^^^^^^^
+>{ a: 123, ...c } : { a: string | null; }
+>                 : ^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>123 : 123
+>    : ^^^
+>c : { a: string | null; }
+>  : ^^^^^^^^^^^^^^^^^^^^^
+
+let d1 = { a: 123, ...d };  // string | number | null
+>d1 : { a: string | number | null; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ a: 123, ...d } : { a: string | number | null; }
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>123 : 123
+>    : ^^^
+>d : { a?: string | null; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^
+
+
+let a2 = { a: 123, ...(t ? a : {}) };  // string | number
+>a2 : { a: string | number; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^
+>{ a: 123, ...(t ? a : {}) } : { a: string | number; }
+>                            : ^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>123 : 123
+>    : ^^^
+>(t ? a : {}) : { a: string; } | {}
+>             : ^^^^^^^^^^^^^^^^^^^
+>t ? a : {} : { a: string; } | {}
+>           : ^^^^^^^^^^^^^^^^^^^
+>t : boolean
+>  : ^^^^^^^
+>a : { a: string; }
+>  : ^^^^^^^^^^^^^^
+>{} : {}
+>   : ^^
+
+let b2 = { a: 123, ...(t ? b : {}) };  // string | number
+>b2 : { a: string | number; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^
+>{ a: 123, ...(t ? b : {}) } : { a: string | number; }
+>                            : ^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>123 : 123
+>    : ^^^
+>(t ? b : {}) : { a?: string; }
+>             : ^^^^^^^^^^^^^^^
+>t ? b : {} : { a?: string; }
+>           : ^^^^^^^^^^^^^^^
+>t : boolean
+>  : ^^^^^^^
+>b : { a?: string; }
+>  : ^^^^^^^^^^^^^^^
+>{} : {}
+>   : ^^
+
+let c2 = { a: 123, ...(t ? c : {}) };  // string | number | null
+>c2 : { a: string | number | null; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ a: 123, ...(t ? c : {}) } : { a: string | number | null; }
+>                            : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>123 : 123
+>    : ^^^
+>(t ? c : {}) : { a: string | null; } | {}
+>             : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>t ? c : {} : { a: string | null; } | {}
+>           : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>t : boolean
+>  : ^^^^^^^
+>c : { a: string | null; }
+>  : ^^^^^^^^^^^^^^^^^^^^^
+>{} : {}
+>   : ^^
+
+let d2 = { a: 123, ...(t ? d : {}) };  // string | number | null
+>d2 : { a: string | number | null; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ a: 123, ...(t ? d : {}) } : { a: string | number | null; }
+>                            : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>123 : 123
+>    : ^^^
+>(t ? d : {}) : { a?: string | null; }
+>             : ^^^^^^^^^^^^^^^^^^^^^^
+>t ? d : {} : { a?: string | null; }
+>           : ^^^^^^^^^^^^^^^^^^^^^^
+>t : boolean
+>  : ^^^^^^^
+>d : { a?: string | null; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^
+>{} : {}
+>   : ^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

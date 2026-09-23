@@ -1,0 +1,2 @@
+spreadDuplicateExact.ts(15,12): error TS2783: 'a' is specified more than once, so this usage will be overwritten.
+spreadDuplicateExact.ts(17,12): error TS2783: 'a' is specified more than once, so this usage will be overwritten.

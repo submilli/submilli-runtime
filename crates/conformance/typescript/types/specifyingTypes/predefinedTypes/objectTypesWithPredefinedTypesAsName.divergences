@@ -1,0 +1,7 @@
+types: 0 of 6 tsc entries compared, 0 differ
+
+errors:
+line 4: tsc TS2414: Class name cannot be 'any'. (we accept)
+line 6: tsc TS2414: Class name cannot be 'number'. (we accept)
+line 8: tsc TS2414: Class name cannot be 'boolean'. (we accept)
+line 11: tsc TS2414: Class name cannot be 'string'. (we accept)

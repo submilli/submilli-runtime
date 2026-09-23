@@ -180,6 +180,17 @@ pub fn typecheck(source: &str, file: FileId) -> Result<Vec<Diagnostic>, Vec<Diag
     Ok(warnings_only(diags))
 }
 
+/// Typecheck and return the typed AST together with every diagnostic, errors
+/// included. For tools that inspect what the typechecker inferred — the
+/// TypeScript baseline comparison in `crates/conformance` — rather than compile.
+/// The typed AST is only meaningful where the diagnostics are error-free.
+pub fn typecheck_to_typed_ast(source: &str, file: FileId) -> (TypedAst, Vec<Diagnostic>) {
+    let parsed = parse_script(source, file);
+    let stdlib_defs = runtime::stdlib_package_declarations();
+    let (ta, diags, _timings) = front_end(source, &parsed, &stdlib_defs, &[]);
+    (ta, diags)
+}
+
 /// Compile a script module. `filename` is the DWARF compile-unit name for
 /// backtrace source mapping; `file` is this source's [`FileId`] in the caller's
 /// [`Sources`](crate::Sources) registry. `packages` are real package

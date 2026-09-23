@@ -1,0 +1,61 @@
+=== typeGuardsInGlobal.ts ===
+// Note that type guards affect types of variables and parameters only and 
+// have no effect on members of objects such as properties. 
+
+// variables in global
+let num: number = null as unknown as (number);
+>num : number
+>    : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let var1: string | number = null as unknown as (string | number);
+>var1 : string | number
+>     : ^^^^^^^^^^^^^^^
+>null as unknown as (string | number) : string | number
+>                                     : ^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+if (typeof var1 === "string") {
+>typeof var1 === "string" : boolean
+>                         : ^^^^^^^
+>typeof var1 : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>var1 : string | number
+>     : ^^^^^^^^^^^^^^^
+>"string" : "string"
+>         : ^^^^^^^^
+
+    num = var1.length; // string
+>num = var1.length : number
+>                  : ^^^^^^
+>num : number
+>    : ^^^^^^
+>var1.length : number
+>            : ^^^^^^
+>var1 : string
+>     : ^^^^^^
+>length : number
+>       : ^^^^^^
+
+}
+else {
+    num = var1; // number
+>num = var1 : number
+>           : ^^^^^^
+>num : number
+>    : ^^^^^^
+>var1 : number
+>     : ^^^^^^
+
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

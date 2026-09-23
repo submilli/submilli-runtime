@@ -1,0 +1,2 @@
+stringLiteralTypesAndParenthesizedExpressions01.ts(8,17): error TS2774: This condition will always return true since this function is always defined. Did you mean to call it instead?
+stringLiteralTypesAndParenthesizedExpressions01.ts(9,25): error TS2774: This condition will always return true since this function is always defined. Did you mean to call it instead?

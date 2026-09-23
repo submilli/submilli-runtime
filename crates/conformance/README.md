@@ -1,4 +1,12 @@
-# test262 conformance suite
+# Conformance suites
+
+Two suites live here:
+
+- **test262** (this document): runtime behavior against the ECMAScript standard.
+- **TypeScript** ([`typescript/README.md`](typescript/README.md)): what the
+  typechecker infers, against what `tsc` infers for the same program.
+
+## test262
 
 Hand-ported, vendored subset of [tc39/test262](https://github.com/tc39/test262),
 the official ECMA-262 conformance suite, adapted to our strict TypeScript

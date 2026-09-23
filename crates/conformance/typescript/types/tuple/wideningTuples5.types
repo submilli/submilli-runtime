@@ -1,0 +1,15 @@
+=== wideningTuples5.ts ===
+let [a, b] = [null, null];
+>a : null
+>  : ^^^^
+>b : null
+>  : ^^^^
+>[null, null] : [null, null]
+>             : ^^^^^^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

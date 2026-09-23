@@ -1,0 +1,11 @@
+{
+  "name": "typescript-baselines",
+  "private": true,
+  "description": "Writes the tsc baselines for crates/conformance/typescript",
+  "scripts": {
+    "write": "node write-baselines.cjs"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

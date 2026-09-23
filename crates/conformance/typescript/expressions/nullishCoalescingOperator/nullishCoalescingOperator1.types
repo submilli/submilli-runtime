@@ -1,0 +1,408 @@
+=== nullishCoalescingOperator1.ts ===
+
+const a1: string | null | null = null as unknown as (string | null | null);
+>a1 : string | null
+>   : ^^^^^^^^^^^^^
+>null as unknown as (string | null | null) : string | null
+>                                          : ^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+const a2: string | null | null = null as unknown as (string | null | null);
+>a2 : string | null
+>   : ^^^^^^^^^^^^^
+>null as unknown as (string | null | null) : string | null
+>                                          : ^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+const a3: string | null | null = null as unknown as (string | null | null);
+>a3 : string | null
+>   : ^^^^^^^^^^^^^
+>null as unknown as (string | null | null) : string | null
+>                                          : ^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+const a4: string | null | null = null as unknown as (string | null | null);
+>a4 : string | null
+>   : ^^^^^^^^^^^^^
+>null as unknown as (string | null | null) : string | null
+>                                          : ^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+const b1: number | null | null = null as unknown as (number | null | null);
+>b1 : number | null
+>   : ^^^^^^^^^^^^^
+>null as unknown as (number | null | null) : number | null
+>                                          : ^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+const b2: number | null | null = null as unknown as (number | null | null);
+>b2 : number | null
+>   : ^^^^^^^^^^^^^
+>null as unknown as (number | null | null) : number | null
+>                                          : ^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+const b3: number | null | null = null as unknown as (number | null | null);
+>b3 : number | null
+>   : ^^^^^^^^^^^^^
+>null as unknown as (number | null | null) : number | null
+>                                          : ^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+const b4: number | null | null = null as unknown as (number | null | null);
+>b4 : number | null
+>   : ^^^^^^^^^^^^^
+>null as unknown as (number | null | null) : number | null
+>                                          : ^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+const c1: boolean | null | null = null as unknown as (boolean | null | null);
+>c1 : boolean | null
+>   : ^^^^^^^^^^^^^^
+>null as unknown as (boolean | null | null) : boolean | null
+>                                           : ^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+const c2: boolean | null | null = null as unknown as (boolean | null | null);
+>c2 : boolean | null
+>   : ^^^^^^^^^^^^^^
+>null as unknown as (boolean | null | null) : boolean | null
+>                                           : ^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+const c3: boolean | null | null = null as unknown as (boolean | null | null);
+>c3 : boolean | null
+>   : ^^^^^^^^^^^^^^
+>null as unknown as (boolean | null | null) : boolean | null
+>                                           : ^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+const c4: boolean | null | null = null as unknown as (boolean | null | null);
+>c4 : boolean | null
+>   : ^^^^^^^^^^^^^^
+>null as unknown as (boolean | null | null) : boolean | null
+>                                           : ^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+interface I { a: string }
+>I : I
+>  : ^
+>a : string
+>  : ^^^^^^
+
+const d1: I | null | null = null as unknown as (I | null | null);
+>d1 : I | null
+>   : ^^^^^^^^
+>null as unknown as (I | null | null) : I | null
+>                                     : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+const d2: I | null | null = null as unknown as (I | null | null);
+>d2 : I | null
+>   : ^^^^^^^^
+>null as unknown as (I | null | null) : I | null
+>                                     : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+const d3: I | null | null = null as unknown as (I | null | null);
+>d3 : I | null
+>   : ^^^^^^^^
+>null as unknown as (I | null | null) : I | null
+>                                     : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+const d4: I | null | null = null as unknown as (I | null | null);
+>d4 : I | null
+>   : ^^^^^^^^
+>null as unknown as (I | null | null) : I | null
+>                                     : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+const aa1 = a1 ?? 'whatever';
+>aa1 : string
+>    : ^^^^^^
+>a1 ?? 'whatever' : string
+>                 : ^^^^^^
+>a1 : string | null
+>   : ^^^^^^^^^^^^^
+>'whatever' : "whatever"
+>           : ^^^^^^^^^^
+
+const aa2 = a2 ?? 'whatever';
+>aa2 : string
+>    : ^^^^^^
+>a2 ?? 'whatever' : string
+>                 : ^^^^^^
+>a2 : string | null
+>   : ^^^^^^^^^^^^^
+>'whatever' : "whatever"
+>           : ^^^^^^^^^^
+
+const aa3 = a3 ?? 'whatever';
+>aa3 : string
+>    : ^^^^^^
+>a3 ?? 'whatever' : string
+>                 : ^^^^^^
+>a3 : string | null
+>   : ^^^^^^^^^^^^^
+>'whatever' : "whatever"
+>           : ^^^^^^^^^^
+
+const aa4 = a4 ?? 'whatever';
+>aa4 : string
+>    : ^^^^^^
+>a4 ?? 'whatever' : string
+>                 : ^^^^^^
+>a4 : string | null
+>   : ^^^^^^^^^^^^^
+>'whatever' : "whatever"
+>           : ^^^^^^^^^^
+
+
+const bb1 = b1 ?? 1;
+>bb1 : number
+>    : ^^^^^^
+>b1 ?? 1 : number
+>        : ^^^^^^
+>b1 : number | null
+>   : ^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+const bb2 = b2 ?? 1;
+>bb2 : number
+>    : ^^^^^^
+>b2 ?? 1 : number
+>        : ^^^^^^
+>b2 : number | null
+>   : ^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+const bb3 = b3 ?? 1;
+>bb3 : number
+>    : ^^^^^^
+>b3 ?? 1 : number
+>        : ^^^^^^
+>b3 : number | null
+>   : ^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+const bb4 = b4 ?? 1;
+>bb4 : number
+>    : ^^^^^^
+>b4 ?? 1 : number
+>        : ^^^^^^
+>b4 : number | null
+>   : ^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+
+const cc1 = c1 ?? true;
+>cc1 : boolean
+>    : ^^^^^^^
+>c1 ?? true : boolean
+>           : ^^^^^^^
+>c1 : boolean | null
+>   : ^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+
+const cc2 = c2 ?? true;
+>cc2 : boolean
+>    : ^^^^^^^
+>c2 ?? true : boolean
+>           : ^^^^^^^
+>c2 : boolean | null
+>   : ^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+
+const cc3 = c3 ?? true;
+>cc3 : boolean
+>    : ^^^^^^^
+>c3 ?? true : boolean
+>           : ^^^^^^^
+>c3 : boolean | null
+>   : ^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+
+const cc4 = c4 ?? true;
+>cc4 : boolean
+>    : ^^^^^^^
+>c4 ?? true : boolean
+>           : ^^^^^^^
+>c4 : boolean | null
+>   : ^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+
+
+const dd1 = d1 ?? {b: 1};
+>dd1 : I | { b: number; }
+>    : ^^^^^^^^^^^^^^^^^^
+>d1 ?? {b: 1} : I | { b: number; }
+>             : ^^^^^^^^^^^^^^^^^^
+>d1 : I | null
+>   : ^^^^^^^^
+>{b: 1} : { b: number; }
+>       : ^^^^^^^^^^^^^^
+>b : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+const dd2 = d2 ?? {b: 1};
+>dd2 : I | { b: number; }
+>    : ^^^^^^^^^^^^^^^^^^
+>d2 ?? {b: 1} : I | { b: number; }
+>             : ^^^^^^^^^^^^^^^^^^
+>d2 : I | null
+>   : ^^^^^^^^
+>{b: 1} : { b: number; }
+>       : ^^^^^^^^^^^^^^
+>b : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+const dd3 = d3 ?? {b: 1};
+>dd3 : I | { b: number; }
+>    : ^^^^^^^^^^^^^^^^^^
+>d3 ?? {b: 1} : I | { b: number; }
+>             : ^^^^^^^^^^^^^^^^^^
+>d3 : I | null
+>   : ^^^^^^^^
+>{b: 1} : { b: number; }
+>       : ^^^^^^^^^^^^^^
+>b : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+const dd4 = d4 ?? {b: 1};
+>dd4 : I | { b: number; }
+>    : ^^^^^^^^^^^^^^^^^^
+>d4 ?? {b: 1} : I | { b: number; }
+>             : ^^^^^^^^^^^^^^^^^^
+>d4 : I | null
+>   : ^^^^^^^^
+>{b: 1} : { b: number; }
+>       : ^^^^^^^^^^^^^^
+>b : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+
+// Repro from #34635
+
+function foo(): void { }
+>foo : () => void
+>    : ^^^^^^^^^^
+
+
+const maybeBool = false;
+>maybeBool : false
+>          : ^^^^^
+>false : false
+>      : ^^^^^
+
+
+if (!(maybeBool ?? true)) {
+>!(maybeBool ?? true) : true
+>                     : ^^^^
+>(maybeBool ?? true) : false
+>                    : ^^^^^
+>maybeBool ?? true : false
+>                  : ^^^^^
+>maybeBool : false
+>          : ^^^^^
+>true : true
+>     : ^^^^
+
+    foo();
+>foo() : void
+>      : ^^^^
+>foo : () => void
+>    : ^^^^^^^^^^
+
+}
+
+if (maybeBool ?? true) {
+>maybeBool ?? true : false
+>                  : ^^^^^
+>maybeBool : false
+>          : ^^^^^
+>true : true
+>     : ^^^^
+
+    foo();
+>foo() : void
+>      : ^^^^
+>foo : () => void
+>    : ^^^^^^^^^^
+
+}
+else {
+    foo();
+>foo() : void
+>      : ^^^^
+>foo : () => void
+>    : ^^^^^^^^^^
+
+}
+
+if (false ?? true) {
+>false ?? true : false
+>              : ^^^^^
+>false : false
+>      : ^^^^^
+>true : true
+>     : ^^^^
+
+    foo();
+>foo() : void
+>      : ^^^^
+>foo : () => void
+>    : ^^^^^^^^^^
+
+}
+else {
+    foo();
+>foo() : void
+>      : ^^^^
+>foo : () => void
+>    : ^^^^^^^^^^
+
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

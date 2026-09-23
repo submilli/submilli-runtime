@@ -1,0 +1,15 @@
+=== ES3For-ofTypeCheck2.ts ===
+for (let v of [true]) { }
+>v : boolean
+>  : ^^^^^^^
+>[true] : boolean[]
+>       : ^^^^^^^^^
+>true : true
+>     : ^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

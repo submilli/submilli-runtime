@@ -1,0 +1,69 @@
+types: 48 of 100 tsc entries compared, 16 differ
+
+line 16: b1
+  tsc:  { a: string | number; }
+  ours: { a?: string }
+
+line 16: { a: 123, ...b }
+  tsc:  { a: string | number; }
+  ours: { a?: string }
+
+line 18: d1
+  tsc:  { a: string | number | null; }
+  ours: { a?: string | null }
+
+line 18: { a: 123, ...d }
+  tsc:  { a: string | number | null; }
+  ours: { a?: string | null }
+
+line 20: a2
+  tsc:  { a: string | number; }
+  ours: { a: number }
+
+line 20: { a: 123, ...(t ? a : {}) }
+  tsc:  { a: string | number; }
+  ours: { a: number }
+
+line 20: t ? a : {}
+  tsc:  { a: string; } | {}
+  ours: {}
+
+line 21: b2
+  tsc:  { a: string | number; }
+  ours: { a: number }
+
+line 21: { a: 123, ...(t ? b : {}) }
+  tsc:  { a: string | number; }
+  ours: { a: number }
+
+line 21: t ? b : {}
+  tsc:  { a?: string; }
+  ours: {}
+
+line 22: c2
+  tsc:  { a: string | number | null; }
+  ours: { a: number }
+
+line 22: { a: 123, ...(t ? c : {}) }
+  tsc:  { a: string | number | null; }
+  ours: { a: number }
+
+line 22: t ? c : {}
+  tsc:  { a: string | null; } | {}
+  ours: {}
+
+line 23: d2
+  tsc:  { a: string | number | null; }
+  ours: { a: number }
+
+line 23: { a: 123, ...(t ? d : {}) }
+  tsc:  { a: string | number | null; }
+  ours: { a: number }
+
+line 23: t ? d : {}
+  tsc:  { a?: string | null; }
+  ours: {}
+
+errors:
+line 15: tsc TS2783: 'a' is specified more than once, so this usage will be overwritten. (we accept)
+line 17: tsc TS2783: 'a' is specified more than once, so this usage will be overwritten. (we accept)

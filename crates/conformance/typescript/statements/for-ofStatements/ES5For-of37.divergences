@@ -1,0 +1,5 @@
+types: 14 of 34 tsc entries compared, 1 differ
+
+line 15: err
+  tsc:  unknown
+  ours: Error

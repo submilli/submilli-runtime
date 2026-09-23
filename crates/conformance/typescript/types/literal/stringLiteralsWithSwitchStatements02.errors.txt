@@ -1,0 +1,2 @@
+stringLiteralsWithSwitchStatements02.ts(9,5): error TS2367: This comparison appears to be unintentional because the types '"foo"' and '"bar"' have no overlap.
+stringLiteralsWithSwitchStatements02.ts(14,5): error TS2367: This comparison appears to be unintentional because the types '"foo"' and '"bar"' have no overlap.

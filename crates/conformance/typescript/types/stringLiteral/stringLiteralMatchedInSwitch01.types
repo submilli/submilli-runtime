@@ -1,0 +1,57 @@
+=== stringLiteralMatchedInSwitch01.ts ===
+
+type S = "a" | "b";
+>S : S
+>  : ^
+
+type T = S[] | S;
+>T : T
+>  : ^
+
+
+let foo: T = null as unknown as (T);
+>foo : T
+>    : ^
+>null as unknown as (T) : T
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+switch (foo) {
+>foo : T
+>    : ^
+
+    case "a":
+>"a" : "a"
+>    : ^^^
+
+    case "b":
+>"b" : "b"
+>    : ^^^
+
+        break;
+    default:
+        foo = (foo as S[])[0];
+>foo = (foo as S[])[0] : S
+>                      : ^
+>foo : T
+>    : ^
+>(foo as S[])[0] : S
+>                : ^
+>(foo as S[]) : S[]
+>             : ^^^
+>foo as S[] : S[]
+>           : ^^^
+>foo : S[]
+>    : ^^^
+>0 : 0
+>  : ^
+
+        break;
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

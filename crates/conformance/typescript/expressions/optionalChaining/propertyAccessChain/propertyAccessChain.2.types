@@ -1,0 +1,87 @@
+=== propertyAccessChain.2.ts ===
+
+const o1: null | { b: string } = null as unknown as (null | { b: string });
+>o1 : { b: string; } | null
+>   : ^^^^^^^^^^^^^^^^^^^^^
+>b : string
+>  : ^^^^^^
+>null as unknown as (null | { b: string }) : { b: string; } | null
+>                                          : ^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>b : string
+>  : ^^^^^^
+
+o1?.b;
+>o1?.b : string | undefined
+>      : ^^^^^^^^^^^^^^^^^^
+>o1 : { b: string; } | null
+>   : ^^^^^^^^^^^^^^^^^^^^^
+>b : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+
+const o2: null | { b: { c: string } } = null as unknown as (null | { b: { c: string } });
+>o2 : { b: { c: string; }; } | null
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : { c: string; }
+>  : ^^^^^^^^^^^^^^
+>c : string
+>  : ^^^^^^
+>null as unknown as (null | { b: { c: string } }) : { b: { c: string; }; } | null
+>                                                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>b : { c: string; }
+>  : ^^^^^^^^^^^^^^
+>c : string
+>  : ^^^^^^
+
+o2?.b.c;
+>o2?.b.c : string | undefined
+>        : ^^^^^^^^^^^^^^^^^^
+>o2?.b : { c: string; } | undefined
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>o2 : { b: { c: string; }; } | null
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : { c: string; } | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>c : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+
+const o3: { b: null | { c: string } } = null as unknown as ({ b: null | { c: string } });
+>o3 : { b: null | { c: string; }; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : { c: string; } | null
+>  : ^^^^^^^^^^^^^^^^^^^^^
+>c : string
+>  : ^^^^^^
+>null as unknown as ({ b: null | { c: string } }) : { b: null | { c: string; }; }
+>                                                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>b : { c: string; } | null
+>  : ^^^^^^^^^^^^^^^^^^^^^
+>c : string
+>  : ^^^^^^
+
+o3.b?.c;
+>o3.b?.c : string | undefined
+>        : ^^^^^^^^^^^^^^^^^^
+>o3.b : { c: string; } | null
+>     : ^^^^^^^^^^^^^^^^^^^^^
+>o3 : { b: null | { c: string; }; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : { c: string; } | null
+>  : ^^^^^^^^^^^^^^^^^^^^^
+>c : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

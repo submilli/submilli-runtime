@@ -1,0 +1,108 @@
+=== typeGuardsInExternalModule.ts ===
+// Note that type guards affect types of variables and parameters only and 
+// have no effect on members of objects such as properties. 
+
+// local variable in external module
+let num: number = null as unknown as (number);
+>num : number
+>    : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let var1: string | number = null as unknown as (string | number);
+>var1 : string | number
+>     : ^^^^^^^^^^^^^^^
+>null as unknown as (string | number) : string | number
+>                                     : ^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+if (typeof var1 === "string") {
+>typeof var1 === "string" : boolean
+>                         : ^^^^^^^
+>typeof var1 : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>var1 : string | number
+>     : ^^^^^^^^^^^^^^^
+>"string" : "string"
+>         : ^^^^^^^^
+
+    num = var1.length; // string
+>num = var1.length : number
+>                  : ^^^^^^
+>num : number
+>    : ^^^^^^
+>var1.length : number
+>            : ^^^^^^
+>var1 : string
+>     : ^^^^^^
+>length : number
+>       : ^^^^^^
+
+}
+else {
+    num = var1; // number
+>num = var1 : number
+>           : ^^^^^^
+>num : number
+>    : ^^^^^^
+>var1 : number
+>     : ^^^^^^
+
+}
+
+// exported variable in external module
+let strOrNum: string | number = null as unknown as (string | number);
+>strOrNum : string | number
+>         : ^^^^^^^^^^^^^^^
+>null as unknown as (string | number) : string | number
+>                                     : ^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let var2: string | number = null as unknown as (string | number);
+>var2 : string | number
+>     : ^^^^^^^^^^^^^^^
+>null as unknown as (string | number) : string | number
+>                                     : ^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+if (typeof var2 === "string") {
+>typeof var2 === "string" : boolean
+>                         : ^^^^^^^
+>typeof var2 : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>var2 : string | number
+>     : ^^^^^^^^^^^^^^^
+>"string" : "string"
+>         : ^^^^^^^^
+
+    // export makes the var property and not variable
+    strOrNum = var2; // string | number
+>strOrNum = var2 : string
+>                : ^^^^^^
+>strOrNum : string | number
+>         : ^^^^^^^^^^^^^^^
+>var2 : string
+>     : ^^^^^^
+
+}
+else {
+    strOrNum = var2; // number | string
+>strOrNum = var2 : number
+>                : ^^^^^^
+>strOrNum : string | number
+>         : ^^^^^^^^^^^^^^^
+>var2 : number
+>     : ^^^^^^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+
