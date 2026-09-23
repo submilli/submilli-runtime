@@ -84,6 +84,52 @@ Use a dedicated `.cursor` copy only when needed, such as Cursor cloud sync;
 check the assistant's current discovery settings for duplicates. Local home
 installs do not automatically propagate to remote/cloud machines.
 
+## Deploying the server
+
+The server does not authenticate callers, so every deployment has one rule:
+run one server per application and make sure only that application can
+reach it. Read https://submilli.ai/docs/deploying/ before advising on
+production; the mechanics that matter most:
+
+| The application runs | Server setup | How only the application reaches it |
+| --- | --- | --- |
+| As a process on a machine | `submilli-server --config server.yaml` with `SUBMILLI_HOME` on durable disk | `bind: 127.0.0.1` (the default); the app calls `http://127.0.0.1:8128` |
+| In containers on one host | The published `compose.yaml` (`curl -fsSLO https://raw.githubusercontent.com/submilli/submilli-runtime/main/compose.yaml`) | Port published as `127.0.0.1:8128:8128`, never `8128:8128` (Docker bypasses host firewalls such as ufw); the app joins the `submilli-net` network and calls `http://submilli:8128` |
+| On Kubernetes | `helm install submilli oci://ghcr.io/submilli/charts/submilli -f values.yaml` | Default-deny NetworkPolicy; list the app's pods in `networkPolicy.allowFrom`, and the app calls `http://submilli.<namespace>.svc:8128` |
+
+In every setup, blueprints come from source control through the seed
+directory (`blueprint_seed_dir`; in the chart, the `blueprints:` values map),
+which the server reconciles on every start. Only seeded blueprints may use
+`env:` or `file:` secrets; over the API they are refused with
+`forbidden_secret_source`, so runtime-registered blueprints use `store:`.
+
+Mistakes to avoid:
+
+- In a container or pod, the startup warning "bound outside loopback" is
+  expected: the server must listen on all addresses inside it, and the port
+  publish, network, or NetworkPolicy is the boundary. On a plain machine the
+  same warning means the bind is wrong.
+- In `allowFrom`, a `namespaceSelector` and `podSelector` in the same list
+  item mean both must match; as separate items either one admits, which is
+  far wider. Run `helm test submilli` after every install and upgrade: it
+  fails when the cluster doesn't enforce NetworkPolicy and when a blueprint's
+  `file:` secret path doesn't match what the chart's `secrets:` map mounts
+  (`/etc/submilli/secrets/<name>/<key>`).
+- The Compose store key file must be mode `0444`: the server runs as uid
+  65532, and on a Linux host a `0600` file makes it refuse to start with
+  `Permission denied`. Docker Desktop hides this, so it works locally first.
+- A package that calls the user's internal service works under `submilli run`
+  and fails on the server with a generic `network error: error sending
+  request`: the server blocks loopback, private, and link-local addresses.
+  Allow the narrowest address with `SUBMILLI_ALLOW_IP` (comma-separated;
+  `extraEnv` in the chart) or `network.allow_ip` in the config file.
+- Chart `replicaCount` above 1 gives independent servers that share nothing;
+  a client must stay on one pod through the headless Service
+  (`submilli-0.submilli-headless.<namespace>.svc:8128`). Don't suggest it for
+  scale unless the application does that.
+- Never put secret values in `values.yaml`, on command lines, or in Compose
+  environment variables; use Kubernetes Secrets or files.
+
 ## New project
 
 Establish the first agent workflow and trusted user identity source using

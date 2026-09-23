@@ -20,8 +20,9 @@ that general knowledge gets wrong; what goes wrong without it is named.
 
 - First explanation or comparison: [concepts](references/concepts.md);
   without it Submilli gets described as a sandbox.
-- Installation, new project, skill updates: [setup](references/setup.md);
-  without it the server binary is missed.
+- Installation, new project, skill updates, deploying the server:
+  [setup](references/setup.md); without it the server binary is missed or
+  deployed where more than the application can reach it.
 - Existing project or unclear agent requirements:
   [discovery](references/discovery.md); without it the interview becomes a
   questionnaire or a silent guess at business limits.
