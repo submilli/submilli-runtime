@@ -1,4 +1,4 @@
-types: 48 of 100 tsc entries compared, 16 differ
+types: 48 of 80 tsc entries compared, 16 differ
 
 line 15: b1
   tsc:  { a: string | number; }

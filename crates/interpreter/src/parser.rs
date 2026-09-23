@@ -578,7 +578,7 @@ impl<'a> Parser<'a> {
     fn parse_class_decl(&mut self) -> Option<StmtId> {
         let doc = self.take_leading_doc();
         let kw = self.advance();
-        let name = self.parse_type_decl_name("expected class name", "class")?;
+        let name = self.parse_type_decl_name("a", "class")?;
 
         let generics = if matches!(self.peek().kind, TokenKind::LessThan) {
             self.parse_generic_param_list()?
@@ -970,7 +970,7 @@ impl<'a> Parser<'a> {
     fn parse_interface_decl(&mut self) -> Option<StmtId> {
         let doc = self.take_leading_doc();
         let kw = self.advance();
-        let name = self.parse_type_decl_name("expected interface name", "interface")?;
+        let name = self.parse_type_decl_name("an", "interface")?;
 
         let generics = if matches!(self.peek().kind, TokenKind::LessThan) {
             self.parse_generic_param_list()?
@@ -1113,7 +1113,7 @@ impl<'a> Parser<'a> {
     fn parse_type_alias_decl(&mut self) -> Option<StmtId> {
         let doc = self.take_leading_doc();
         let kw = self.advance();
-        let name = self.parse_type_decl_name("expected type alias name", "type alias")?;
+        let name = self.parse_type_decl_name("a", "type alias")?;
 
         let generics: Vec<Ident> = if matches!(self.peek().kind, TokenKind::LessThan) {
             self.parse_generic_param_list()?
@@ -1155,7 +1155,7 @@ impl<'a> Parser<'a> {
         }
         let doc = self.take_leading_doc();
         let kw = self.advance();
-        let name = self.parse_type_decl_name("expected enum name", "enum")?;
+        let name = self.parse_type_decl_name("an", "enum")?;
 
         if !matches!(self.peek().kind, TokenKind::LeftBrace) {
             self.error_at_peek("expected `{` after enum name");
@@ -1669,25 +1669,20 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// The name a `class`, `interface`, `type` or `enum` declares. A built-in type's
-    /// name is reported, as in TypeScript: `class number {}` would read as the
-    /// built-in in some positions and the class in others.
-    fn parse_type_decl_name(&mut self, missing: &str, what: &str) -> Option<Ident> {
-        let name_tok = self.expect_identifier(missing)?;
+    /// The name a `class`, `interface`, `type` or `enum` declares, `noun` naming
+    /// which. A built-in type's name is reported, as in TypeScript: `class number {}`
+    /// would read as the built-in in some positions and the class in others.
+    fn parse_type_decl_name(&mut self, article: &str, noun: &str) -> Option<Ident> {
+        let name_tok = self.expect_identifier(&format!("expected {noun} name"))?;
         let name = self.ident_from_token(&name_tok);
         if BUILT_IN_TYPE_NAMES.contains(&name.name.as_str()) {
             self.error_at_with_help(
                 name.span,
                 format!(
-                    "`{}` is a built-in type and can't be used as {} {what} name",
-                    name.name,
-                    if what.starts_with(['a', 'e', 'i', 'o', 'u']) {
-                        "an"
-                    } else {
-                        "a"
-                    },
+                    "`{}` is a built-in type and can't be used as {article} {noun} name",
+                    name.name
                 ),
-                vec![format!("rename the {what}")],
+                vec![format!("rename the {noun}")],
             );
         }
         Some(name)
@@ -1703,16 +1698,18 @@ impl<'a> Parser<'a> {
         loop {
             let name_tok = self.expect_identifier("expected generic parameter name")?;
             let name = self.ident_from_token(&name_tok);
-            // Kept even when duplicated, so the parameter count still matches the
-            // type arguments a caller passes.
+            // A duplicate is reported and dropped, as `tsc` drops it: the first
+            // parameter keeps the name, and the type arguments count against the
+            // parameters that remain.
             if generics.iter().any(|g: &Ident| g.name == name.name) {
                 self.error_at_with_help(
                     name.span,
                     format!("duplicate type parameter `{}`", name.name),
                     vec!["give each type parameter its own name".to_string()],
                 );
+            } else {
+                generics.push(name);
             }
-            generics.push(name);
             match self.peek().kind {
                 TokenKind::Comma => {
                     self.advance();
@@ -1964,13 +1961,20 @@ impl<'a> Parser<'a> {
             return self.parse_block();
         }
         // A binding here would go out of scope as soon as it was made. TypeScript
-        // rejects it too, so it is reported and then parsed as usual.
-        if matches!(self.peek().kind, TokenKind::Let | TokenKind::Const) {
-            let keyword = if matches!(self.peek().kind, TokenKind::Let) {
-                "let"
-            } else {
-                "const"
-            };
+        // rejects it too, so it is reported and then parsed as usual. Only a
+        // declaration is: a `let` followed by anything else already fails to parse.
+        let keyword = match self.peek().kind {
+            TokenKind::Let => Some("let"),
+            TokenKind::Const => Some("const"),
+            _ => None,
+        };
+        let declares = matches!(
+            self.peek_at(1).kind,
+            TokenKind::Identifier | TokenKind::LeftBracket | TokenKind::LeftBrace
+        );
+        if let Some(keyword) = keyword
+            && declares
+        {
             self.error_at_peek_with_help(
                 format!(
                     "a `{keyword}` declaration can't be the body of a statement without braces"

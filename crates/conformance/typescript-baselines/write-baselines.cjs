@@ -20,6 +20,11 @@ const path = require("path");
 const casesDir = path.join(__dirname, "..", "typescript");
 const filter = process.argv[2] ?? "";
 
+// A `// @name: value` compiler-option line. `is_option_line` in
+// tests/typescript.rs must agree with it: the runner maps baseline lines back to
+// the case by skipping the same lines.
+const OPTION_LINE = /^\s*\/\/\s*@(\w+)\s*:\s*([^\r\n]*)/;
+
 // The case options that change what `tsc` infers. Submilli is always strict, so
 // every case is checked strictly; the port rewrites any `@strict: false`.
 const BOOLEAN_OPTIONS = {
@@ -58,7 +63,7 @@ function compilerOptions(file) {
     noEmit: true,
   };
   const text = fs.readFileSync(file, "utf8");
-  for (const [, name, value] of text.matchAll(/^\s*\/\/\s*@(\w+)\s*:\s*([^\r\n]*)/gm)) {
+  for (const [, name, value] of text.matchAll(new RegExp(OPTION_LINE.source, "gm"))) {
     const key = BOOLEAN_OPTIONS[name.toLowerCase()];
     if (key) options[key] = value.split(",")[0].trim().toLowerCase() === "true";
   }
@@ -81,9 +86,10 @@ function typesBaseline(sourceFile, checker) {
   visit(sourceFile);
 
   const out = [`=== ${path.basename(sourceFile.fileName)} ===`];
-  sourceFile.text.split(/\r?\n/).forEach((line, i) => {
+  sourceFile.text.split("\n").forEach((rawLine, i) => {
+    const line = rawLine.replace(/\r$/, "");
     // The harness leaves out the `// @option:` lines; so does this.
-    if (/^\s*\/\/\s*@\w+\s*:/.test(line)) return;
+    if (OPTION_LINE.test(line)) return;
     out.push(line);
     for (const [text, type] of entries.get(i) ?? []) {
       out.push(`>${text} : ${type}`);
@@ -107,8 +113,7 @@ function typeEntry(node, sourceFile, checker) {
   ) {
     return undefined;
   }
-  const start = ts.skipTrivia(sourceFile.text, node.pos);
-  const line = sourceFile.getLineAndCharacterOfPosition(start).line;
+  const line = lineIndex(sourceFile, ts.skipTrivia(sourceFile.text, node.pos));
   const text = ts.getSourceTextOfNodeFromSourceFile(sourceFile, node).replace(/\r?\n/g, "");
   let type = ts.isExpressionWithTypeArgumentsInClassExtendsClause(node.parent)
     ? checker.getTypeAtLocation(node.parent)
@@ -123,10 +128,16 @@ function errorLines(program, sourceFile) {
   return [...program.getSyntacticDiagnostics(sourceFile), ...program.getSemanticDiagnostics(sourceFile)]
     .filter((d) => d.category === ts.DiagnosticCategory.Error && d.file === sourceFile)
     .map((d) => {
-      const { line, character } = sourceFile.getLineAndCharacterOfPosition(d.start);
+      const { character } = sourceFile.getLineAndCharacterOfPosition(d.start);
       const message = ts.flattenDiagnosticMessageText(d.messageText, " ");
-      return `${name}(${line + 1},${character + 1}): error TS${d.code}: ${message}`;
+      return `${name}(${lineIndex(sourceFile, d.start) + 1},${character + 1}): error TS${d.code}: ${message}`;
     });
+}
+
+// The 0-based line `pos` is on, counted in `\n`s as the runner counts them.
+// `tsc`'s own line map also breaks at U+2028, U+2029 and a lone `\r`.
+function lineIndex(sourceFile, pos) {
+  return sourceFile.text.slice(0, pos).split("\n").length - 1;
 }
 
 function findCases(dir) {

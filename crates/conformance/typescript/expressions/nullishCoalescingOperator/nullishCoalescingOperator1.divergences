@@ -1,4 +1,4 @@
-types: 117 of 171 tsc entries compared, 7 differ
+types: 117 of 147 tsc entries compared, 7 differ
 
 line 50: maybeBool
   tsc:  false

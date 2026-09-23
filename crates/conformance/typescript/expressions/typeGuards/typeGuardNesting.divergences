@@ -1,4 +1,4 @@
-types: 59 of 103 tsc entries compared, 18 differ
+types: 59 of 102 tsc entries compared, 18 differ
 
 line 3: strOrBool
   tsc:  string | true

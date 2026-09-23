@@ -1,4 +1,4 @@
-types: 32 of 56 tsc entries compared, 4 differ
+types: 32 of 47 tsc entries compared, 4 differ
 
 line 8: foo1
   tsc:  1 | 2

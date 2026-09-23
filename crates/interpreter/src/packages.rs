@@ -12,6 +12,7 @@ use std::fmt::Write;
 
 use crate::runtime::prelude::declaration::prelude_package_declaration;
 use crate::stdlib::stdlib_package_declarations;
+use crate::types::escape_string_literal;
 use crate::{
     DocCapabilityBindingKind, DocCapabilityLiteral, DocComment, FileId, NamespaceSymbol,
     PackageDeclaration, Param, Span, Type, TypeKind, TypePredicate, TypeSymbol, ValueKind,
@@ -1050,11 +1051,7 @@ fn render_ts_type(
         TypeKind::StringEnum { variants, .. } => {
             let _ = writeln!(out, "{indent}{export_prefix}enum {name} {{");
             for (v, value) in variants {
-                let _ = writeln!(
-                    out,
-                    "{inner}{v} = \"{}\",",
-                    crate::types::escape_string_literal(value)
-                );
+                let _ = writeln!(out, "{inner}{v} = \"{}\",", escape_string_literal(value));
             }
             let _ = writeln!(out, "{indent}}}\n");
         }
@@ -1274,7 +1271,7 @@ fn ts_type(ty: &Type) -> String {
         Type::NumberLiteral(n) => n.0.to_string(),
         Type::BigInt => "bigint".to_string(),
         Type::String => "string".to_string(),
-        Type::StringLiteral(s) => format!("\"{}\"", crate::types::escape_string_literal(s)),
+        Type::StringLiteral(s) => format!("\"{}\"", escape_string_literal(s)),
         Type::Uint8Array => "Uint8Array".to_string(),
         Type::Boolean => "boolean".to_string(),
         Type::Null => "null".to_string(),

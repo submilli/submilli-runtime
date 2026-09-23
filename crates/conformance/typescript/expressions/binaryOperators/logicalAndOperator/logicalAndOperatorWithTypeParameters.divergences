@@ -1,4 +1,4 @@
-types: 46 of 55 tsc entries compared, 23 differ
+types: 46 of 51 tsc entries compared, 23 differ
 
 line 6: r1
   tsc:  NonNullable<T>

@@ -47,6 +47,10 @@ UPDATE_TYPESCRIPT_EXPECTED=1 cargo test -p conformance --test typescript
 
 `CONFORMANCE_FILTER=<path substring>` limits the run to matching cases.
 
+The test also fails when a case has no `.types` file, since nothing would be compared,
+and when a baseline or `.divergences` file has no case beside it. Update mode removes
+such leftovers.
+
 ### How types are compared
 
 `tsc` and we print some types differently, so both sides are read into a canonical form

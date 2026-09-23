@@ -664,18 +664,27 @@ pub(crate) fn write_synthetic_params(
     out.write_str(")")
 }
 
-/// `s` escaped for a double-quoted TypeScript string, as a string literal type is
-/// printed: `"G\"HI"`, `"a\nb"`.
+/// `s` escaped for a double-quoted string the way `tsc` prints a string literal
+/// type (`escapeString` in TypeScript's `utilities.ts`): `"G\"HI"`, `"a\nb"`.
 pub(crate) fn escape_string_literal(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
         match c {
             '"' => out.push_str("\\\""),
             '\\' => out.push_str("\\\\"),
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if c.is_control() => out.push_str(&format!("\\u{:04x}", u32::from(c))),
+            '\u{8}' => out.push_str("\\b"),
+            '\u{b}' => out.push_str("\\v"),
+            '\u{c}' => out.push_str("\\f"),
+            // `\0` before a digit would read as an octal escape.
+            '\0' if chars.peek().is_some_and(char::is_ascii_digit) => out.push_str("\\x00"),
+            '\0' => out.push_str("\\0"),
+            '\u{0}'..='\u{1f}' | '\u{85}' | '\u{2028}' | '\u{2029}' => {
+                out.push_str(&format!("\\u{:04X}", u32::from(c)));
+            }
             c => out.push(c),
         }
     }
@@ -821,8 +830,20 @@ mod tests {
 
     #[test]
     fn string_literal_display_escapes_like_typescript() {
-        let ty = Type::StringLiteral("G\"HI\\\nx\u{7}".into());
-        assert_eq!(ty.to_string(), r#""G\"HI\\\nx\u0007""#);
+        // Each expectation is what `tsc` 5.9 prints for the same literal type.
+        let cases = [
+            ("G\"HI\\", r#""G\"HI\\""#),
+            ("a\nb\r\t", r#""a\nb\r\t""#),
+            ("\u{8}\u{b}\u{c}", r#""\b\v\f""#),
+            ("\0x", r#""\0x""#),
+            ("\u{0}1", r#""\x001""#),
+            ("\u{7}\u{1b}", r#""\u0007\u001B""#),
+            ("\u{85}\u{2028}\u{2029}", r#""\u0085\u2028\u2029""#),
+            ("\u{7f}é", "\"\u{7f}é\""),
+        ];
+        for (value, printed) in cases {
+            assert_eq!(Type::StringLiteral(value.into()).to_string(), printed);
+        }
     }
 
     #[test]
