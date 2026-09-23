@@ -102,7 +102,7 @@ pub fn emit_box(emitter: &mut FunctionEmitter<'_>, ctx: &CodegenCtx<'_>, ty: &Ty
             emitter.instruction(Instruction::LocalGet(scratch));
             emitter.instruction(Instruction::StructNew(boxed_idx));
         }
-        Type::Boolean => {
+        Type::Boolean | Type::BooleanLiteral(_) => {
             let boxed_idx = ctx
                 .symbols
                 .boxed_boolean_type_idx()
@@ -340,7 +340,7 @@ fn emit_ref_truthiness(
     };
     let test_string = needs(StringLike, |m| matches!(m, Type::StringLiteral(_)));
     let test_number = needs(NumberLike, |m| matches!(m, Type::NumberLiteral(_)));
-    let test_boolean = needs(BooleanLike, |_| false);
+    let test_boolean = needs(BooleanLike, |m| matches!(m, Type::BooleanLiteral(_)));
     let test_bigint = needs(BigIntLike, |_| false);
 
     let slot = ctx.symbols.value_type(cond_ty);
@@ -543,7 +543,7 @@ pub fn emit_cast_to(emitter: &mut FunctionEmitter<'_>, ctx: &CodegenCtx<'_>, ty:
                 field_index: 1,
             });
         }
-        Type::Boolean => {
+        Type::Boolean | Type::BooleanLiteral(_) => {
             let boxed_idx = ctx
                 .symbols
                 .boxed_boolean_type_idx()

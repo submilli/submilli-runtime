@@ -1099,6 +1099,7 @@ fn runtime_type_is_testable_inner(ty: &Type, allow_recursive_ref: bool) -> bool 
         | Type::Number
         | Type::NumberLiteral(_)
         | Type::Boolean
+        | Type::BooleanLiteral(_)
         | Type::String
         | Type::StringLiteral(_)
         | Type::BigInt

@@ -122,6 +122,17 @@ fn expects_number_literal(expected: Option<&Type>) -> bool {
     }
 }
 
+/// Mirror of `expects_string_literal` for `true` and `false`.
+fn expects_boolean_literal(expected: Option<&Type>) -> bool {
+    match expected.map(crate::types::Type::peel) {
+        Some(Type::BooleanLiteral(_)) => true,
+        Some(Type::Union(ms)) => ms
+            .iter()
+            .any(|m| matches!(m.peel(), Type::BooleanLiteral(_))),
+        _ => false,
+    }
+}
+
 /// Whether an object literal providing exactly `lit_names` could only be
 /// constructing the variant whose fields are `fields`: every required field
 /// is present and no provided field is foreign to the variant.
@@ -408,7 +419,14 @@ impl Inferer<'_> {
                 };
                 (TypedExprKind::String(s), ty)
             }
-            ExprKind::Boolean(b) => (TypedExprKind::Boolean(b), Type::Boolean),
+            ExprKind::Boolean(b) => {
+                let ty = if expects_boolean_literal(expected) {
+                    Type::BooleanLiteral(b)
+                } else {
+                    Type::Boolean
+                };
+                (TypedExprKind::Boolean(b), ty)
+            }
             ExprKind::Null => (TypedExprKind::Null, Type::Null),
             ExprKind::Identifier(ident) => self.resolve_ident(ident, span),
             ExprKind::Binary { op, lhs, rhs } => self.infer_binary(op, lhs, rhs, expected, span),
@@ -8171,6 +8189,7 @@ fn unsupported_cast_target_reason(
         | Type::String
         | Type::StringLiteral(_)
         | Type::Boolean
+        | Type::BooleanLiteral(_)
         | Type::Null
         | Type::Uint8Array
         | Type::Function { .. }
@@ -8313,6 +8332,7 @@ pub(super) fn literal_comparison_type(ast: &crate::TypedAst, expr: &TypedExpr) -
     match &expr.kind {
         TypedExprKind::String(value) => Type::StringLiteral(value.clone()),
         TypedExprKind::Number(value) => Type::NumberLiteral(crate::types::LiteralF64(*value)),
+        TypedExprKind::Boolean(value) => Type::BooleanLiteral(*value),
         TypedExprKind::Unary {
             op: UnOp::Neg | UnOp::Pos,
             operand,
@@ -8430,6 +8450,7 @@ fn has_to_string(ty: &Type) -> bool {
             | Type::NumberLiteral(_)
             | Type::BigInt
             | Type::Boolean
+            | Type::BooleanLiteral(_)
             | Type::Array(_)
             | Type::Object { .. }
             // Class instances answer `toString` through vtable slot 0

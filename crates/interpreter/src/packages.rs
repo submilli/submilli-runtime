@@ -1306,6 +1306,7 @@ fn ts_type(ty: &Type) -> String {
         Type::StringLiteral(s) => format!("\"{}\"", escape_string_literal(s)),
         Type::Uint8Array => "Uint8Array".to_string(),
         Type::Boolean => "boolean".to_string(),
+        Type::BooleanLiteral(value) => value.to_string(),
         Type::Null => "null".to_string(),
         Type::Void => "void".to_string(),
         Type::Unknown => "unknown".to_string(),

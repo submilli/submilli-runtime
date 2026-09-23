@@ -10,13 +10,12 @@ use super::{Inferer, assignable, narrowing};
 ///
 /// Only a literal token qualifies, through any number of parentheses. A computed
 /// initializer widens even under `const` (`const a = 1 + 1` is `number`), matching
-/// TypeScript, and so do arrays, object literals, and call results. Booleans widen
-/// too, there being no boolean literal type — `const b = true` is `boolean` where
-/// TypeScript says `true`.
+/// TypeScript, and so do arrays, object literals, and call results.
 pub(super) fn literal_type_of(ast: &crate::Ast, value: crate::ExprId) -> Option<Type> {
     match &ast.expr(value).kind {
         ExprKind::Number(v) => Some(Type::NumberLiteral(crate::types::LiteralF64(*v))),
         ExprKind::String(s) => Some(Type::StringLiteral(s.clone())),
+        ExprKind::Boolean(b) => Some(Type::BooleanLiteral(*b)),
         // `const a = (1)` is `1`, as in TypeScript: parentheses group, they do not
         // compute.
         ExprKind::Paren(inner) => literal_type_of(ast, *inner),

@@ -827,7 +827,10 @@ impl<'a> Inferer<'a> {
                 vec![fix],
             ),
             None if receiver_ty.interface_routing().is_some()
-                && !matches!(receiver_ty.peel(), Type::Number | Type::Boolean) =>
+                && !matches!(
+                    receiver_ty.peel(),
+                    Type::Number | Type::Boolean | Type::BooleanLiteral(_)
+                ) =>
             {
                 (
                     format!("field `{name}` does not exist on `{receiver_ty}`"),

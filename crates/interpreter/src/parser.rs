@@ -1593,6 +1593,7 @@ impl<'a> Parser<'a> {
                 | TokenKind::LeftBracket
                 | TokenKind::StringLiteral(_)
                 | TokenKind::NumberLiteral(_)
+                | TokenKind::BooleanLiteral(_)
                 | TokenKind::NullLiteral
         )
     }
@@ -2757,6 +2758,13 @@ impl<'a> Parser<'a> {
                     span,
                 }
             }
+            TokenKind::BooleanLiteral(value) => {
+                let span = self.advance().span;
+                TypeAnnotation {
+                    kind: TypeAnnotationKind::BooleanLiteral(value),
+                    span,
+                }
+            }
             TokenKind::LeftBrace => self.parse_object_type_annotation()?,
             TokenKind::LeftParen if self.paren_at_opens_function_type(self.pos, type_pos) => {
                 self.parse_function_type_annotation()?
@@ -3356,7 +3364,10 @@ impl<'a> Parser<'a> {
                     )?;
                 }
             }
-            TokenKind::NullLiteral | TokenKind::StringLiteral(_) | TokenKind::NumberLiteral(_) => {
+            TokenKind::NullLiteral
+            | TokenKind::StringLiteral(_)
+            | TokenKind::NumberLiteral(_)
+            | TokenKind::BooleanLiteral(_) => {
                 i += 1;
             }
             TokenKind::LeftBrace => {

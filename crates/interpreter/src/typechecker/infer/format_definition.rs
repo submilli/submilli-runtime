@@ -42,7 +42,7 @@ pub(super) fn format_definition(
             "BigInt",
             &[],
         ),
-        Type::Boolean => format_named_interface(
+        Type::Boolean | Type::BooleanLiteral(_) => format_named_interface(
             types,
             registry,
             &crate::mangle::prelude("Boolean"),

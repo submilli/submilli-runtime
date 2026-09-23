@@ -101,6 +101,7 @@ fn walk(
         Type::String => Ok(json!({ "type": "string" })),
         Type::StringLiteral(s) => Ok(json!({ "const": s })),
         Type::Boolean => Ok(json!({ "type": "boolean" })),
+        Type::BooleanLiteral(b) => Ok(json!({ "const": b })),
         Type::Null => Ok(json!({ "type": "null" })),
         Type::Object { fields } => {
             // `BTreeMap` iteration is field-name order, so `properties` and

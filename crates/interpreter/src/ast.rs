@@ -693,6 +693,7 @@ pub enum TypeAnnotationKind {
     StringLiteral(String),
     /// Parser canonicalizes `-0.0` to `0.0`.
     NumberLiteral(crate::types::LiteralF64),
+    BooleanLiteral(bool),
     Array(Box<TypeAnnotation>),
     Tuple(Vec<TypeAnnotation>),
     Object {

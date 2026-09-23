@@ -263,6 +263,23 @@ fn emit_structural_test_inner(
             emitter.instruction(Instruction::I32Const(0));
             emitter.emit_end();
         }
+        Type::BooleanLiteral(value) => {
+            let boxed = boxed_boolean_idx(ctx);
+            emitter.instruction(Instruction::LocalGet(value_local));
+            emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(boxed)));
+            emitter.emit_if(i32_block);
+            emitter.instruction(Instruction::LocalGet(value_local));
+            emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(boxed)));
+            emitter.instruction(Instruction::StructGet {
+                struct_type_index: boxed,
+                field_index: 1,
+            });
+            emitter.instruction(Instruction::I32Const(i32::from(*value)));
+            emitter.instruction(Instruction::I32Eq);
+            emitter.emit_else();
+            emitter.instruction(Instruction::I32Const(0));
+            emitter.emit_end();
+        }
         Type::StringLiteral(s) => {
             let str_idx = string_idx(ctx);
             let intr = ctx

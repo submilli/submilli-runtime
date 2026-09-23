@@ -771,6 +771,7 @@ impl<'a> Inferer<'a> {
             }
             TypeAnnotationKind::StringLiteral(s) => Type::StringLiteral(s.clone()),
             TypeAnnotationKind::NumberLiteral(v) => Type::NumberLiteral(*v),
+            TypeAnnotationKind::BooleanLiteral(b) => Type::BooleanLiteral(*b),
             TypeAnnotationKind::KeyOf(operand) => self.resolve_keyof(operand),
             TypeAnnotationKind::TypeOf { path } => self.resolve_typeof(path),
         }

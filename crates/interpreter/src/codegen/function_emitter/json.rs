@@ -296,7 +296,8 @@ fn is_nullable_primitive(members: &[Type]) -> bool {
             | Type::StringLiteral(_)
             | Type::Number
             | Type::NumberLiteral(_)
-            | Type::Boolean => has_primitive = true,
+            | Type::Boolean
+            | Type::BooleanLiteral(_) => has_primitive = true,
             _ => return false,
         }
     }

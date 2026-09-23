@@ -131,6 +131,7 @@ impl<'a> ShapeCollector<'a> {
             | Type::StringLiteral(_)
             | Type::Uint8Array
             | Type::Boolean
+            | Type::BooleanLiteral(_)
             | Type::Null
             | Type::Void
             | Type::Never

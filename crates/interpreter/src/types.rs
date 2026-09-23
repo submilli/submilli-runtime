@@ -153,6 +153,10 @@ pub enum Type {
     StringLiteral(String),
     Uint8Array,
     Boolean,
+    /// `true` or `false`. Like the other literal types it has no runtime
+    /// representation of its own: it lowers exactly as `boolean`. `Type::union`
+    /// folds `true | false` into `boolean`, which is what `boolean` means.
+    BooleanLiteral(bool),
     Null,
     Void,
     /// Unlike TypeScript's `any`, requires explicit narrowing before use.
@@ -425,6 +429,7 @@ impl Type {
         match self.peel() {
             Type::NumberEnum { .. } => &Type::Number,
             Type::StringEnum { .. } => &Type::String,
+            Type::BooleanLiteral(_) => &Type::Boolean,
             Type::Union(members)
                 if !members.is_empty()
                     && members.iter().all(|member| {
@@ -460,6 +465,7 @@ impl Type {
         match self {
             Type::NumberLiteral(_) => Type::Number,
             Type::StringLiteral(_) => Type::String,
+            Type::BooleanLiteral(_) => Type::Boolean,
             // A union widens memberwise, which also collapses it when the members
             // share a base: `1 | 2` is `number`, not `number | number`, because
             // `Type::union` deduplicates.
@@ -541,6 +547,7 @@ impl Type {
                 .then_with(|| alias_rank(a).cmp(&alias_rank(b)))
         });
         flat.dedup_by(|a, b| a.without_aliases() == b.without_aliases());
+        fold_boolean_literals(&mut flat);
         match flat.len() {
             // All members were Never → return Never (the bottom type), not Error.
             0 => Type::Never,
@@ -701,6 +708,23 @@ pub(crate) fn escape_string_literal(s: &str) -> String {
     out
 }
 
+/// `boolean` is `true | false`: a union holding both literals, or `boolean`
+/// and either literal, holds exactly `boolean`. `members` is sorted and
+/// deduplicated, and stays so.
+fn fold_boolean_literals(members: &mut Vec<Type>) {
+    let is_boolean = |m: &Type| matches!(m.without_aliases(), Type::Boolean);
+    let is_literal = |m: &Type| matches!(m.without_aliases(), Type::BooleanLiteral(_));
+    let literals = members.iter().filter(|m| is_literal(m)).count();
+    if literals == 0 || (literals == 1 && !members.iter().any(is_boolean)) {
+        return;
+    }
+    members.retain(|m| !is_literal(m));
+    if !members.iter().any(is_boolean) {
+        let at = members.partition_point(|m| m.without_aliases() < &Type::Boolean);
+        members.insert(at, Type::Boolean);
+    }
+}
+
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -713,6 +737,7 @@ impl fmt::Display for Type {
             Type::StringLiteral(s) => write!(f, "\"{}\"", escape_string_literal(s)),
             Type::Uint8Array => f.write_str("Uint8Array"),
             Type::Boolean => f.write_str("boolean"),
+            Type::BooleanLiteral(value) => write!(f, "{value}"),
             Type::Null => f.write_str("null"),
             Type::Void => f.write_str("void"),
             Type::Unknown => f.write_str("unknown"),

@@ -211,7 +211,9 @@ pub enum CastKind {
 /// Keep in sync with `emit_narrowing_cast` in `codegen/function_emitter/cast.rs`.
 pub fn cast_info_for(from_ty: Type, narrowed_ty: Type) -> CastInfo {
     let cast_kind = match &narrowed_ty {
-        Type::Number | Type::NumberLiteral(_) | Type::Boolean => CastKind::Unbox,
+        Type::Number | Type::NumberLiteral(_) | Type::Boolean | Type::BooleanLiteral(_) => {
+            CastKind::Unbox
+        }
         Type::Object { .. } | Type::InterfaceRef { .. } | Type::ClassRef { .. } => {
             CastKind::RefSubtype
         }
@@ -377,6 +379,7 @@ fn unit_literal_value(ty: &Type) -> Option<LiteralValue> {
     match ty.peel() {
         Type::StringLiteral(s) => Some(LiteralValue::String(s.clone())),
         Type::NumberLiteral(n) => Some(LiteralValue::Number(*n)),
+        Type::BooleanLiteral(b) => Some(LiteralValue::Boolean(*b)),
         _ => None,
     }
 }
@@ -528,6 +531,8 @@ pub fn truthiness_class(member: &Type) -> TruthinessClass {
     match member.peel() {
         Type::Null => AlwaysFalsy,
         Type::Boolean => BooleanLike,
+        Type::BooleanLiteral(true) => AlwaysTruthy,
+        Type::BooleanLiteral(false) => AlwaysFalsy,
         Type::Number => NumberLike,
         Type::NumberLiteral(n) => {
             if n.0 == 0.0 || n.0.is_nan() {
@@ -651,7 +656,7 @@ pub fn type_matches_facts(ty: &Type, facts: TypeFacts) -> bool {
         );
     }
     if facts.contains(TypeFacts::IS_BOOLEAN) {
-        return matches!(ty, Type::Boolean);
+        return matches!(ty, Type::Boolean | Type::BooleanLiteral(_));
     }
     if facts.contains(TypeFacts::IS_ARRAY) {
         return matches!(ty, Type::Array(_));
@@ -694,6 +699,7 @@ fn is_typeof_object(ty: &Type) -> bool {
         | Type::StringLiteral(_)
         | Type::StringEnum { .. }
         | Type::Boolean
+        | Type::BooleanLiteral(_)
         | Type::BigInt
         | Type::Function { .. } => false,
 
@@ -817,9 +823,7 @@ pub fn subtract_literals(ty: &Type, covered: &BTreeSet<LiteralValue>) -> Type {
             // Only fire when every member is a unit-literal type; a
             // mixed union (e.g., `"a" | number`) can't be exhaustively
             // covered by literal `case` labels, so return as-is.
-            let all_literal = members
-                .iter()
-                .all(|m| matches!(m.peel(), Type::StringLiteral(_) | Type::NumberLiteral(_)));
+            let all_literal = members.iter().all(|m| unit_literal_value(m).is_some());
             if !all_literal {
                 return ty.clone();
             }
@@ -833,7 +837,16 @@ pub fn subtract_literals(ty: &Type, covered: &BTreeSet<LiteralValue>) -> Type {
                 .collect();
             Type::union(kept)
         }
-        single @ (Type::StringLiteral(_) | Type::NumberLiteral(_)) => {
+        // `boolean` is `true | false`, so `case true:` leaves `false`.
+        Type::Boolean => {
+            let remaining: Vec<Type> = [false, true]
+                .into_iter()
+                .filter(|b| !covered.contains(&LiteralValue::Boolean(*b)))
+                .map(Type::BooleanLiteral)
+                .collect();
+            Type::union(remaining)
+        }
+        single @ (Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_)) => {
             match unit_literal_value(single) {
                 Some(lit) if covered.contains(&lit) => Type::Never,
                 _ => ty.clone(),
@@ -975,7 +988,7 @@ pub fn facts_for_target_type(target: &Type) -> TypeFacts {
     match target.peel() {
         Type::Number | Type::NumberLiteral(_) => TypeFacts::IS_NUMBER,
         Type::String | Type::StringLiteral(_) => TypeFacts::IS_STRING,
-        Type::Boolean => TypeFacts::IS_BOOLEAN,
+        Type::Boolean | Type::BooleanLiteral(_) => TypeFacts::IS_BOOLEAN,
         Type::Null => TypeFacts::EQ_NULL,
         Type::Array(_) => TypeFacts::IS_ARRAY,
         _ => TypeFacts::EMPTY,

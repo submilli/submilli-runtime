@@ -364,6 +364,7 @@ pub(crate) fn walk_type(ty: &Type, out: &mut Vec<ClosureSig>) {
         | Type::NumberLiteral(_)
         | Type::BigInt
         | Type::Boolean
+        | Type::BooleanLiteral(_)
         | Type::String
         | Type::StringLiteral(_)
         | Type::Uint8Array

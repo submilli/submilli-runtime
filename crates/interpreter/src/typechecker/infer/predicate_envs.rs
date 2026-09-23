@@ -834,6 +834,12 @@ impl<'a> Inferer<'a> {
         for m in members {
             if m.peel() == &literal_ty {
                 matched.push(m.clone());
+            } else if let (Type::Boolean, narrowing::LiteralValue::Boolean(value)) =
+                (m.peel(), &literal)
+            {
+                // `boolean` is `true | false`: `b === true` leaves `false`.
+                matched.push(literal_ty.clone());
+                remaining.push(Type::BooleanLiteral(!value));
             } else {
                 if matches!(m.peel(), Type::Unknown) || m.peel() == &literal_ty.widen_literal() {
                     matched.push(literal_ty.clone());
@@ -1077,6 +1083,22 @@ impl<'a> Inferer<'a> {
         let from_ty = path_expr.ty.clone();
         let span = path_expr.span;
         let fallback_kind = path_expr.kind.clone();
+
+        // `if (r.ok)` on a union tagged `ok: true` / `ok: false` tests the tag
+        // exactly as `r.ok === true` does, and narrows `r` the same way.
+        if !path.chain.is_empty()
+            && matches!(from_ty.peel(), Type::Boolean)
+            && let Some(envs) = self.narrow_literal_discriminant(
+                crate::BinOp::Eq,
+                path.clone(),
+                from_ty.clone(),
+                fallback_kind.clone(),
+                span,
+                narrowing::LiteralValue::Boolean(true),
+            )
+        {
+            return envs;
+        }
 
         let true_ty = narrowing::intersect_with(&from_ty, narrowing::TypeFacts::TRUTHY);
         let false_ty = narrowing::intersect_with(&from_ty, narrowing::TypeFacts::FALSY);
@@ -1339,6 +1361,7 @@ fn comparison_literal(ast: &crate::TypedAst, id: ExprId) -> Option<narrowing::Li
     literal_value_of(&expr.kind).or_else(|| match super::expr::literal_comparison_type(ast, expr) {
         Type::NumberLiteral(value) => Some(narrowing::LiteralValue::Number(value)),
         Type::StringLiteral(value) => Some(narrowing::LiteralValue::String(value)),
+        Type::BooleanLiteral(value) => Some(narrowing::LiteralValue::Boolean(value)),
         _ => None,
     })
 }

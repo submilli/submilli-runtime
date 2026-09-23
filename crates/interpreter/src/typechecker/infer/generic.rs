@@ -194,6 +194,7 @@ pub(super) fn substitute_typevars(ty: &Type, bindings: &BTreeMap<String, Type>) 
         | Type::StringLiteral(_)
         | Type::Uint8Array
         | Type::Boolean
+        | Type::BooleanLiteral(_)
         | Type::Null
         | Type::Void
         | Type::Never
@@ -300,6 +301,7 @@ pub(super) fn erase_generic_params(ty: &Type) -> Type {
         | Type::StringLiteral(_)
         | Type::Uint8Array
         | Type::Boolean
+        | Type::BooleanLiteral(_)
         | Type::Null
         | Type::Void
         | Type::Never

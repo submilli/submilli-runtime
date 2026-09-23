@@ -526,6 +526,9 @@ fn assignable_rec(
         (Type::NumberLiteral(a), Type::NumberLiteral(b)) => a == b,
         (Type::NumberLiteral(_) | Type::NumberEnum { .. }, Type::Number) => true,
         (Type::Number, Type::NumberLiteral(_)) => false,
+        (Type::BooleanLiteral(a), Type::BooleanLiteral(b)) => a == b,
+        (Type::BooleanLiteral(_), Type::Boolean) => true,
+        (Type::Boolean, Type::BooleanLiteral(_)) => false,
         (Type::Array(ae), Type::Array(ee)) => assignable_rec(ae, ee, types, seen),
         (Type::Tuple(aa), Type::Tuple(ae)) => {
             aa.len() == ae.len()
@@ -867,12 +870,11 @@ pub(super) fn literal_value_of(kind: &crate::TypedExprKind) -> Option<narrowing:
     }
 }
 
-/// Boolean maps to `Type::Boolean` — no `BooleanLiteral`, booleans aren't refined by value.
 pub(super) fn literal_to_type(lit: &narrowing::LiteralValue) -> Type {
     match lit {
         narrowing::LiteralValue::Number(n) => Type::NumberLiteral(*n),
         narrowing::LiteralValue::String(s) => Type::StringLiteral(s.clone()),
-        narrowing::LiteralValue::Boolean(_) => Type::Boolean,
+        narrowing::LiteralValue::Boolean(b) => Type::BooleanLiteral(*b),
     }
 }
 
