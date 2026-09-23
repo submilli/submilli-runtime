@@ -114,7 +114,7 @@ returns `unknown`. Validate and type the result with a runtime cast:
 rely on `const x: T = JSON.parse(s)`.
 `T` can be a primitive (`string`, `number`, `boolean`), an object type,
 an array, or a data-only `interface` you declare (no methods) — and
-combinations like `Issue[]`.{mcp_packages}
+combinations like `Issue[]`.{mcp_packages}{git_package}
 
 Sandbox: File system {vfs_mode}.
 Network (`submilli:http`): {http_access}.
@@ -157,6 +157,7 @@ resolved values.
 | `{http_access}` | per-method host reachability (`GET → api.example.com; …`), `any host`, or `none` when blocked | policy `permissions:` `http.*` `allow` rules for `main` |
 | `{builtins}` | comma-separated catalog of in-scope built-in types + namespaces | prelude (`interpreter::packages::builtins`) |
 | `{mcp_packages}` | empty when no MCP servers; else a note on the available `@mcp/<server>` packages | policy `mcp:` block |
+| `{git_package}` | empty unless Git is configured; otherwise a pointer to its package docs | policy `git:` block |
 
 Add new placeholders here when the resolved value is policy-dependent
 and the LLM needs it during planning. Keep the list short — most

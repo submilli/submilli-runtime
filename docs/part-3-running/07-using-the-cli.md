@@ -31,7 +31,8 @@ uncaught exception, printed to standard error with source context.
 
 Without a blueprint the run is unrestricted: every capability is allowed, but
 only the standard library is importable, since packages arrive through a
-blueprint. With one, the run behaves as a session would:
+blueprint. `submilli:git` additionally needs [Git configuration](/docs/blueprints#let-the-program-commit).
+With a blueprint, the run behaves as a session would:
 
 ```sh
 submilli run --blueprint blueprint.yaml --var customerId=cus_northwind credit.ts
@@ -63,7 +64,7 @@ a session store, which only a server provides, so `session.set` throws a
 
 | Flag | Effect |
 | --- | --- |
-| `--blueprint <file>` | Apply a blueprint; required for packages, secrets, MCP servers, and models |
+| `--blueprint <file>` | Apply a blueprint; required for packages, secrets, MCP servers, models, and Git |
 | `--var NAME=VALUE` | Bind a blueprint variable; repeatable, requires `--blueprint` |
 | `--vfs <dir>` | Use this directory as the program's `/`; the default is a temporary directory deleted after the run |
 | `--timeout <ms>` | Stop the program after this long with `timeout exceeded`; there is no deadline by default |
@@ -143,6 +144,7 @@ don't survive.
 | `blueprint add-mcp <name> <url> [--oauth …]` | Declare an MCP server, importable as `@mcp/<name>` |
 | `blueprint variable add\|list\|remove` | The `variables` block |
 | `blueprint secret add\|list\|remove` | The `secrets` block: `--store`, `--harness`, `--env`, or `--file` |
+| `blueprint git set\|show\|remove` | Manage the blueprint's [Git configuration](#configure-git) |
 | `blueprint auth-proxy add\|list\|remove` | Credentials the runtime adds to outbound requests by host |
 | `blueprint capability list [library]` | Every capability a rule can name, with its filter fields and any rules already present |
 | `blueprint capability add <name> [--filter …] [--action allow\|deny] [--caller <id>]` | Append a rule; refuses a capability name nothing provides unless `--force` |
@@ -151,6 +153,21 @@ don't survive.
 
 `lint` exits 1 on an error, such as a package that requires an operation its
 own rules don't allow, and 0 on warnings, so it can gate a commit.
+
+### Configure Git
+
+[Let the program commit](/docs/blueprints#let-the-program-commit) walks through
+the identity, variables, secrets, and grants. These commands manage that
+configuration:
+
+| Command | Behavior |
+| --- | --- |
+| `blueprint git set --name <name> --email <email> [--username <username>]` | Requires both identity fields; omitting `--username` preserves its previous value. Use `--clear-username` to remove it. |
+| `blueprint git show` | Prints configuration templates and whether `GIT_TOKEN` is declared, without resolving or displaying credentials. |
+| `blueprint git remove` | Removes only the Git block; succeeds if it is already absent. Secrets, variables, and permission rules remain. |
+
+Single-quote variable templates to prevent shell expansion. The [`run --var`
+bindings](#run-a-program) apply to both Git identity and capability filters.
 
 ## Keep secrets locally
 

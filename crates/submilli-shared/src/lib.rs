@@ -20,3 +20,22 @@ pub mod secret_store;
 pub use github::{FetchedRepo, GithubError, GithubSpec, ResolvedRepo};
 pub use host::{BlueprintAuthProxy, BlueprintSecretProvider, EnvFileSecretResolver, PolicyCheck};
 pub use oauth_provider::OAuthProvider;
+
+/// Resolve operator-owned Git identity against the session's variable bindings.
+pub fn resolve_git(
+    blueprint: &submilli_blueprint::Blueprint,
+    variables: &submilli_blueprint::VarBindings,
+) -> Result<Option<interpreter::stdlib::git::GitConfig>, submilli_blueprint::BlueprintError> {
+    blueprint
+        .git
+        .as_ref()
+        .map(|config| {
+            let config = config.resolve(variables)?;
+            Ok(interpreter::stdlib::git::GitConfig {
+                name: config.identity.name,
+                email: config.identity.email,
+                username: config.username,
+            })
+        })
+        .transpose()
+}

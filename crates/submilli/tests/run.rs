@@ -58,6 +58,61 @@ fn write_blueprint(path: &Path, source: &str) {
     fs::write(path, source).expect("write blueprint");
 }
 
+#[test]
+fn git_identity_and_permissions_use_cli_variable_bindings() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let script = tmp.path().join("git.ts");
+    fs::write(
+        &script,
+        r#"import { Repository } from "submilli:git";
+import { writeText } from "submilli:fs";
+function main(): string {
+    const repo = Repository.init("/repo", { branch: "main" });
+    writeText("/repo/note.txt", "hello");
+    repo.add(["note.txt"]);
+    repo.commit("CLI variables");
+    const author = repo.log().commits[0];
+    return author.authorName + " <" + author.authorEmail + ">";
+}"#,
+    )
+    .expect("write script");
+    let blueprint = tmp.path().join("blueprint.yaml");
+    write_blueprint(
+        &blueprint,
+        r#"name: git-cli
+variables:
+  author: { default: Default Author }
+  branch: { required: true }
+git:
+  identity:
+    name: '${vars.author}'
+    email: cli@example.com
+permissions:
+  main:
+    - { capability: git.init, action: allow }
+    - { capability: fs.write, action: allow }
+    - capability: git.commit
+      action: allow
+      filter: branch == ${vars.branch}
+"#,
+    );
+    let out = run_with_submilli_home(
+        &[
+            "run".as_ref(),
+            "--blueprint".as_ref(),
+            blueprint.as_os_str(),
+            "--var".as_ref(),
+            "author=CLI Author".as_ref(),
+            "--var".as_ref(),
+            "branch=main".as_ref(),
+            script.as_os_str(),
+        ],
+        tmp.path(),
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out), "CLI Author <cli@example.com>\n");
+}
+
 fn write_acme_util_package(home: &Path) {
     const SOURCE: &str = "export function answer(): number { return 41; }\nexport function plusOne(n: number): number { return n + 1; }\nexport function explode(): void { assert(false, \"pkg boom\"); }";
     let package = compile_package(

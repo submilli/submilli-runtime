@@ -1,5 +1,6 @@
 //! Wasmtime engine configuration for Submilli.
 
+pub mod blocking;
 pub mod exec;
 pub mod fs;
 pub mod gc_singleton;
@@ -76,6 +77,10 @@ pub struct VfsInfo {
 }
 
 pub struct StoreData {
+    /// After cancelling a host call, the execution owner drains this before
+    /// reusing or releasing the store. Blocking work may still be cleaning up.
+    pub blocking_work: blocking::BlockingWork,
+    pub git: Option<crate::stdlib::git::GitConfig>,
     pub console: Box<dyn Write + Send>,
     pub vfs: Vfs,
     pub vfs_info: VfsInfo,
@@ -165,6 +170,8 @@ impl StoreData {
             vfs,
             vfs_info,
             security_check: security::default_check(),
+            git: None,
+            blocking_work: blocking::BlockingWork::default(),
             fs_max_read_size: DEFAULT_FS_MAX_READ_SIZE,
             http_client: crate::stdlib::http::default_http_client(),
             http_max_response_size: DEFAULT_HTTP_MAX_RESPONSE_SIZE,
@@ -199,6 +206,16 @@ pub async fn install_package_modules_async(
 ) -> wasmtime::Result<()> {
     for package in packages {
         let name = package.declaration.package_name.as_str();
+        if store.data().git.is_none()
+            && package
+                .module
+                .imports()
+                .any(|import| import.module() == "submilli:git")
+        {
+            wasmtime::bail!(
+                "package `{name}` imports submilli:git; configure the blueprint git block"
+            );
+        }
         // The module's declared name *is* its principal at every gated call, so bind it to the
         // name the package is being linked under. Without this, a prebuilt `pkg.wasm` naming
         // itself `main` — or naming another package — would be granted that principal's

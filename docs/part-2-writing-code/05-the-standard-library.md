@@ -113,6 +113,7 @@ program are capability-gated: every call is checked against the blueprint.
 | --- | --- | --- |
 | `submilli:http` | Outbound HTTP: `get`, `post`, `put`, `patch`, `delete`, `head`, `request`, `download` | `http.*` |
 | `submilli:fs` | The program's filesystem: read, write, append, list, stat, move, copy, remove | `fs.*` |
+| `submilli:git` | VFS repositories: history, staging, commits, branches, and HTTPS clone/fetch/pull; requires a Git identity in the blueprint | `git.*` |
 | `submilli:session` | Key-value state that survives from one program to the next in an agent session | `session.*` |
 | `submilli:llm` | Call a model from inside the program: `call`, `batch`, `models` | `llm.call` |
 | `submilli:url` | Parse and build URLs and query strings | Nothing; pure computation |
@@ -173,6 +174,74 @@ api.acme.com/v1/charges: d6c5f8584539
 has to handle that case; a missing file throws. `sha256` returns a `Uint8Array`, and
 `toHex()` renders it. The digest differs on each run because the receipt
 contains a fresh UUID.
+
+### Git repositories
+
+`submilli:git` works on ordinary Git repositories under the VFS root. It is
+available only when the blueprint configures a Git identity.
+
+```ts
+import { Repository } from "submilli:git";
+import { writeText } from "submilli:fs";
+
+function main(): string {
+  const repo = Repository.init("/notes", { branch: "main" });
+  writeText("/notes/summary.md", "Customer issue resolved.\n");
+  repo.add(["summary.md"]);
+  return repo.commit("Record resolution");
+}
+```
+
+The [blueprint walkthrough](/docs/blueprints#let-the-program-commit) configures
+the identity and Git grants for this example; `writeText` also needs `fs.write`.
+The `Repository` class has static `init`, `clone`, and `open` factories.
+Use `new Repository("/notes")` or `Repository.open("/notes")` to open an existing
+repository. Instances support `instanceof Repository`. JSON preserves field
+data, not class identity; reopen by path across executions.
+
+| Repository method | What it does |
+| --- | --- |
+| `status()` | Reports the branch, staged and unstaged changes, untracked files, and whether the tree is clean |
+| `log({ limit: 50, offset: 0 })` | Returns commits and `nextOffset` for pagination |
+| `diff({ mode: "working" })` | Returns a patch and binary paths; use `"staged"` or `"refs"` with `from` and `to` for other comparisons |
+| `show("HEAD", "summary.md")` | Returns a committed file as `Uint8Array` |
+| `branches()` / `remotes()` | Lists local branches or named remotes |
+| `add(["summary.md"])` | Stages files or directories, including deletions; `"."` selects the working tree |
+| `commit("message")` | Commits staged changes and returns the commit ID |
+| `createBranch("topic", "HEAD")` | Creates a branch without overwriting an existing one |
+| `switchBranch("topic")` | Switches to a local branch with a clean working tree |
+| `addRemote("origin", url)` / `setRemoteUrl("origin", url)` | Adds or updates a named HTTPS remote |
+| `fetch("origin", "main")` | Updates a remote-tracking branch |
+| `pull("origin", "main")` | Fetches and fast-forwards the current branch; refuses divergence |
+
+Switching and pulling require a clean working tree, including untracked files,
+so local work is preserved.
+Revision arguments accept `HEAD`, named branches or tags, full refs, and full
+commit IDs. Revision expressions such as `HEAD~2` or `HEAD^{/message}` are not
+supported; use a commit ID returned by `log()` instead.
+The current branch must be a direct local branch. Symbolic branch aliases and
+`HEAD` pointing into the tag namespace are refused for branch mutations.
+
+For an HTTPS repository, use `Repository.clone(url, "/repo", { branch: "main" })`.
+The destination must be empty. Without `options.branch`, clone follows the
+remote default branch. Fetch and pull default to the remote `origin`; an
+omitted fetch branch requests all branches, while an omitted pull branch uses
+the current branch. HTTPS remotes must support Git's smart HTTP protocol v0 or v1.
+For private repositories, use the [blueprint's authentication
+setup](/docs/blueprints#let-the-program-commit). The [permission
+reference](/docs/security#git-capabilities) lists each operation's grants and
+explains branch and remote filters.
+
+This version has no push, SSH, merge, force checkout, submodule, or linked
+worktree support. Finish or abort any native Git merge, rebase, or other
+in-progress operation before changing a repository through this API.
+Native indexes must use version 2 or 3, without split indexes, sparse entries,
+or intent-to-add entries. Convert a version 4 index with native Git's
+`git update-index --index-version=2` before handing it to Submilli.
+Native packfiles must be self-contained; partial-clone and cruft-pack metadata
+are unsupported. See [Git security](/docs/security#git-capabilities) for
+metadata protection and handing repositories to native Git, and [resource
+limits](/docs/resource-limits#git-work) for repository sizes and timeouts.
 
 ### Session state
 

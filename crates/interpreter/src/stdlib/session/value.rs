@@ -29,7 +29,7 @@ const TO_JSON_SLOT: usize = 1;
 
 /// Serialize a guest value to a stored payload, refusing anything that is not
 /// JSON-compatible data.
-pub(super) async fn serialize(
+pub(crate) async fn serialize(
     caller: &mut Caller<'_, StoreData>,
     value: &Val,
 ) -> wasmtime::Result<Vec<u16>> {
@@ -45,7 +45,7 @@ pub(super) async fn serialize(
 
 /// Rebuild a guest value from a stored payload. The payload is text this module
 /// wrote, so a parse failure is a corrupt store rather than guest input.
-pub(super) fn deserialize(
+pub(crate) fn deserialize(
     caller: &mut Caller<'_, StoreData>,
     payload: &[u16],
 ) -> wasmtime::Result<Val> {

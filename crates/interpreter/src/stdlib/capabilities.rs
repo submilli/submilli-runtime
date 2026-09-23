@@ -143,6 +143,40 @@ const FS: &[Capability] = &[
     },
 ];
 
+const BRANCH: FilterField = field("branch", "string", "Local or requested remote branch name");
+const REMOTE: FilterField = field("remote", "string", "Exact HTTPS repository URL");
+const REMOTE_NAME: FilterField = field("remoteName", "string", "Named remote, for example origin");
+const GIT: &[Capability] = &[
+    Capability {
+        name: "git.init",
+        main_denial: None,
+        summary: "Create a local repository and its VFS directory",
+        filter_fields: &[OP, PATH],
+        example_filter: "path == \"/repo\"",
+    },
+    Capability {
+        name: "git.clone",
+        main_denial: None,
+        summary: "Clone an HTTPS repository into a VFS directory",
+        filter_fields: &[OP, PATH, REMOTE_NAME, REMOTE, BRANCH],
+        example_filter: "path == \"/repo\" and remote == \"https://github.com/acme/project.git\"",
+    },
+    Capability {
+        name: "git.fetch",
+        main_denial: None,
+        summary: "Fetch or pull HTTPS remote branches into an existing repository",
+        filter_fields: &[OP, PATH, REMOTE_NAME, REMOTE, BRANCH],
+        example_filter: "path == \"/repo\" and remote == \"https://github.com/acme/project.git\"",
+    },
+    Capability {
+        name: "git.commit",
+        main_denial: None,
+        summary: "Commit staged changes with blueprint identity",
+        filter_fields: &[OP, PATH, BRANCH],
+        example_filter: "path == \"/repo\" and branch == \"main\"",
+    },
+];
+
 const HTTP_VERB_FIELDS: &[FilterField] = &[
     field("host", "string", "Destination host, without port"),
     field("path", "string", "URL path component"),
@@ -327,6 +361,10 @@ const CATALOG: &[CapabilityGroup] = &[
     CapabilityGroup {
         module: "submilli:fs",
         capabilities: FS,
+    },
+    CapabilityGroup {
+        module: "submilli:git",
+        capabilities: GIT,
     },
     CapabilityGroup {
         module: "submilli:http",

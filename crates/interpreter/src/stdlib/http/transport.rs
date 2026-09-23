@@ -83,6 +83,14 @@ impl std::error::Error for HttpError {}
 pub trait HttpClient: Send + Sync {
     async fn send(&self, req: &HttpRequest) -> Result<HttpResponse, HttpError>;
 
+    /// Git requires an exact destination: never follow redirects, even on the same host.
+    /// Embedders must opt in to this contract before Git can use their transport.
+    async fn send_without_redirects(&self, _req: &HttpRequest) -> Result<HttpResponse, HttpError> {
+        Err(HttpError::Other(
+            "transport does not support requests without redirects".into(),
+        ))
+    }
+
     /// No default impl: the obvious "buffer via `send` then `write_all`" fallback
     /// would silently break the bounded-memory guarantee `http.download` advertises.
     async fn download(
@@ -98,6 +106,7 @@ pub trait HttpClient: Send + Sync {
 /// builds one per session (see `submilli-server`) for tenant isolation.
 pub struct ReqwestHttpClient {
     client: reqwest::Client,
+    no_redirect_client: reqwest::Client,
     /// Also kept here (not just in the DNS resolver) so a **literal-IP** URL —
     /// which reqwest connects to without ever calling the resolver — is still
     /// checked. Without this, `http://127.0.0.1` would bypass the SSRF guard.
@@ -121,7 +130,18 @@ impl ReqwestHttpClient {
             ))
             .build()
             .expect("reqwest client builds with static config");
-        Self { client, policy }
+        let no_redirect_client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .dns_resolver(Arc::new(crate::stdlib::http::policy::PolicyResolver::new(
+                Arc::clone(&policy),
+            )))
+            .build()
+            .expect("reqwest client builds with static config");
+        Self {
+            client,
+            no_redirect_client,
+            policy,
+        }
     }
 
     /// Block a literal-IP host the policy forbids. Hostnames go through the DNS
@@ -147,11 +167,18 @@ impl ReqwestHttpClient {
 
     /// Shared request setup: method, URL, per-call timeout, headers.
     fn request(&self, req: &HttpRequest) -> Result<reqwest::RequestBuilder, HttpError> {
+        self.request_with_client(req, &self.client)
+    }
+
+    fn request_with_client(
+        &self,
+        req: &HttpRequest,
+        client: &reqwest::Client,
+    ) -> Result<reqwest::RequestBuilder, HttpError> {
         self.check_literal_ip(&req.url)?;
         let method = reqwest::Method::from_bytes(req.method.to_ascii_uppercase().as_bytes())
             .map_err(|_| HttpError::UnsupportedMethod(req.method.clone()))?;
-        let mut rb = self
-            .client
+        let mut rb = client
             .request(method, &req.url)
             .timeout(Duration::from_millis(req.timeout_ms));
         for (name, value) in &req.headers {
@@ -164,36 +191,11 @@ impl ReqwestHttpClient {
 #[async_trait::async_trait]
 impl HttpClient for ReqwestHttpClient {
     async fn send(&self, req: &HttpRequest) -> Result<HttpResponse, HttpError> {
-        let mut rb = self.request(req)?;
-        if !req.body.is_empty() {
-            rb = rb.body(req.body.clone());
-        }
-        let resp = rb.send().await.map_err(map_reqwest_error)?;
+        self.send_with_client(req, &self.client).await
+    }
 
-        let status = resp.status().as_u16();
-        let status_text = resp.status().canonical_reason().unwrap_or("").to_string();
-        let final_url = resp.url().to_string();
-        let headers = collect_headers(resp.headers());
-
-        // Bound host memory: stop reading once the wire body exceeds the cap.
-        let limit = req.max_response_size;
-        let mut body_bytes: Vec<u8> = Vec::new();
-        let mut stream = resp.bytes_stream();
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(map_reqwest_error)?;
-            if body_bytes.len() as u64 + chunk.len() as u64 > limit {
-                return Err(HttpError::TooLarge { limit });
-            }
-            body_bytes.extend_from_slice(&chunk);
-        }
-
-        Ok(HttpResponse {
-            status,
-            status_text,
-            headers,
-            body: body_bytes,
-            final_url,
-        })
+    async fn send_without_redirects(&self, req: &HttpRequest) -> Result<HttpResponse, HttpError> {
+        self.send_with_client(req, &self.no_redirect_client).await
     }
 
     async fn download(
@@ -239,6 +241,45 @@ impl HttpClient for ReqwestHttpClient {
             headers,
             final_url,
             bytes_written,
+        })
+    }
+}
+
+impl ReqwestHttpClient {
+    async fn send_with_client(
+        &self,
+        req: &HttpRequest,
+        client: &reqwest::Client,
+    ) -> Result<HttpResponse, HttpError> {
+        let mut rb = self.request_with_client(req, client)?;
+        if !req.body.is_empty() {
+            rb = rb.body(req.body.clone());
+        }
+        let resp = rb.send().await.map_err(map_reqwest_error)?;
+
+        let status = resp.status().as_u16();
+        let status_text = resp.status().canonical_reason().unwrap_or("").to_string();
+        let final_url = resp.url().to_string();
+        let headers = collect_headers(resp.headers());
+
+        // Bound host memory: stop reading once the wire body exceeds the cap.
+        let limit = req.max_response_size;
+        let mut body_bytes: Vec<u8> = Vec::new();
+        let mut stream = resp.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(map_reqwest_error)?;
+            if body_bytes.len() as u64 + chunk.len() as u64 > limit {
+                return Err(HttpError::TooLarge { limit });
+            }
+            body_bytes.extend_from_slice(&chunk);
+        }
+
+        Ok(HttpResponse {
+            status,
+            status_text,
+            headers,
+            body: body_bytes,
+            final_url,
         })
     }
 }

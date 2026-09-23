@@ -14,7 +14,7 @@
 
 mod cursor;
 pub mod declaration;
-mod value;
+pub(crate) mod value;
 
 use std::sync::Arc;
 

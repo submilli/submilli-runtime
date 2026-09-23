@@ -295,6 +295,8 @@ impl SubmilliMcp {
             .with_harness_secrets(Arc::clone(&harness_secrets)),
         );
         let services = runner::HostServices {
+            git: submilli_shared::resolve_git(&blueprint, &variables)
+                .map_err(|error| error.to_string()),
             auth_proxy: Arc::new(BlueprintAuthProxy::with_harness(
                 Arc::clone(&blueprint),
                 self.state.secret_store().cloned(),

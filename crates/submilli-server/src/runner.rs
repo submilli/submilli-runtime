@@ -65,6 +65,7 @@ pub(crate) fn parse(code: &str) -> ParsedExecute {
 /// injection, the semantic-security policy, and the HTTP client. Grouped so the
 /// run signature stays readable as the set grows.
 pub struct HostServices {
+    pub git: Result<Option<interpreter::stdlib::git::GitConfig>, String>,
     pub auth_proxy: Arc<dyn AuthProxy>,
     pub secret_provider: Arc<dyn SecretProvider>,
     pub security_check: Arc<dyn SecurityCheck>,
@@ -85,8 +86,8 @@ pub struct HostServices {
 }
 
 pub(crate) struct RunnerImports<'a> {
-    pub packages: &'a PreparedBlueprintPackages,
-    pub mcps: &'a McpCatalog,
+    pub packages: &'a Arc<PreparedBlueprintPackages>,
+    pub mcps: &'a Arc<McpCatalog>,
 }
 
 pub(crate) struct RunnerRuntime<'a> {
@@ -108,7 +109,39 @@ pub(crate) async fn run(
     services: HostServices,
     imports: RunnerImports<'_>,
 ) -> RunOutcome {
-    let outcome = run_inner(code, parsed, runtime, vfs, vfs_info, services, imports).await;
+    let owned_code = code.to_owned();
+    let engine = runtime.engine.clone();
+    let linker = runtime.base_linker.clone();
+    let config = runtime.config.clone();
+    let packages = Arc::clone(imports.packages);
+    let mcps = Arc::clone(imports.mcps);
+    let (request, cancelled) = tokio::sync::oneshot::channel();
+    // This task owns the store independently of the request. Dropping the
+    // request signals cancellation; the owner drains workers before exiting.
+    let owner = tokio::spawn(async move {
+        run_inner(
+            &owned_code,
+            parsed,
+            RunnerRuntime {
+                engine: &engine,
+                base_linker: &linker,
+                config: &config,
+            },
+            (vfs, vfs_info),
+            services,
+            RunnerImports {
+                packages: &packages,
+                mcps: &mcps,
+            },
+            cancelled,
+        )
+        .await
+    });
+    let outcome = match owner.await {
+        Ok(outcome) => outcome,
+        Err(error) => internal_failure(&format!("execution task failed: {error}")),
+    };
+    drop(request);
     crate::metrics::execution(match &outcome.error {
         None => "success",
         Some(error) => error_kind_tag(error.kind),
@@ -123,11 +156,15 @@ async fn run_inner(
     code: &str,
     mut parsed: ParsedExecute,
     runtime: RunnerRuntime<'_>,
-    vfs: Vfs,
-    vfs_info: VfsInfo,
+    (vfs, vfs_info): (Vfs, VfsInfo),
     services: HostServices,
     imports: RunnerImports<'_>,
+    mut cancelled: tokio::sync::oneshot::Receiver<()>,
 ) -> RunOutcome {
+    let git = match services.git {
+        Ok(git) => git,
+        Err(error) => return internal_failure(&error),
+    };
     let discovery_warnings: Vec<String> = imports
         .mcps
         .warnings()
@@ -164,6 +201,7 @@ async fn run_inner(
 
     let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
     let mut data = StoreData::with_vfs_and_cap(vfs, runtime.config.max_store_bytes);
+    data.git = git;
     data.vfs_info = vfs_info;
     data.auth_proxy = services.auth_proxy;
     data.secret_provider = services.secret_provider;
@@ -184,73 +222,83 @@ async fn run_inner(
         Ok(s) => s,
         Err(err) => return internal_failure(&format!("store init failed: {err}")),
     };
-    // Without this the store has no `ResourceLimiter`, and the engine falls back
-    // to its 1 GiB abort-safety cap — which exists to avoid an OOM-abort, not to
-    // bound a tenant. Every other embedder installs it; the server is the one
-    // that must.
-    install_tenant_limits(&mut store);
-    rt.store_init = phase_start.elapsed();
+    let execution = async {
+        // Without this the store has no `ResourceLimiter`, and the engine falls back
+        // to its 1 GiB abort-safety cap — which exists to avoid an OOM-abort, not to
+        // bound a tenant. Every other embedder installs it; the server is the one
+        // that must.
+        install_tenant_limits(&mut store);
+        rt.store_init = phase_start.elapsed();
 
-    let phase_start = Instant::now();
-    let module = match Module::new(runtime.engine, &compiled.wasm) {
-        Ok(m) => m,
-        Err(err) => return internal_failure(&format!("module load failed: {err}")),
+        let phase_start = Instant::now();
+        let module = match Module::new(runtime.engine, &compiled.wasm) {
+            Ok(m) => m,
+            Err(err) => return internal_failure(&format!("module load failed: {err}")),
+        };
+        rt.module_compile = phase_start.elapsed();
+
+        let mut linker = runtime.base_linker.clone();
+        let package_modules: Vec<_> = imports
+            .packages
+            .modules
+            .iter()
+            .map(|package| LinkedPackageModule {
+                module: &package.module,
+                declaration: &package.declaration,
+                type_info: &package.type_info,
+            })
+            .collect();
+        let phase_start = Instant::now();
+        if let Err(err) = install_runtime_store_bound(&mut linker, &mut store) {
+            return internal_failure(&format!("install runtime failed: {err}"));
+        }
+        rt.link_runtime = phase_start.elapsed();
+
+        let phase_start = Instant::now();
+        if let Err(err) =
+            install_package_modules_async(&mut linker, &mut store, &package_modules).await
+        {
+            return internal_failure(&format!("install packages failed: {err}"));
+        }
+        rt.link_packages = phase_start.elapsed();
+
+        let phase_start = Instant::now();
+        let instance = match linker.instantiate_async(&mut store, &module).await {
+            Ok(i) => i,
+            Err(err) => return internal_failure(&format!("instantiate_async failed: {err}")),
+        };
+        rt.instantiate = phase_start.elapsed();
+
+        let _watchdog = runtime.config.arm_timeout(runtime.engine);
+        let phase_start = Instant::now();
+        let dispatch = dispatch_main_async(&mut store, &instance).await;
+        rt.execute = phase_start.elapsed();
+        crate::metrics::runtime_phases(&rt);
+        log_phase_breakdown(&compiled.timings, &rt);
+        let console_raw = String::from_utf8_lossy(&buf.lock().unwrap()).into_owned();
+
+        match dispatch {
+            Ok(value) => RunOutcome {
+                value,
+                console_raw,
+                error: None,
+                discovery_warnings,
+            },
+            Err(err) => RunOutcome {
+                value: None,
+                error: Some(classify_runtime_error(&err, &parsed.sources, parsed.file)),
+                console_raw,
+                discovery_warnings,
+            },
+        }
     };
-    rt.module_compile = phase_start.elapsed();
-
-    let mut linker = runtime.base_linker.clone();
-    let package_modules: Vec<_> = imports
-        .packages
-        .modules
-        .iter()
-        .map(|package| LinkedPackageModule {
-            module: &package.module,
-            declaration: &package.declaration,
-            type_info: &package.type_info,
-        })
-        .collect();
-    let phase_start = Instant::now();
-    if let Err(err) = install_runtime_store_bound(&mut linker, &mut store) {
-        return internal_failure(&format!("install runtime failed: {err}"));
-    }
-    rt.link_runtime = phase_start.elapsed();
-
-    let phase_start = Instant::now();
-    if let Err(err) = install_package_modules_async(&mut linker, &mut store, &package_modules).await
-    {
-        return internal_failure(&format!("install packages failed: {err}"));
-    }
-    rt.link_packages = phase_start.elapsed();
-
-    let phase_start = Instant::now();
-    let instance = match linker.instantiate_async(&mut store, &module).await {
-        Ok(i) => i,
-        Err(err) => return internal_failure(&format!("instantiate_async failed: {err}")),
+    let outcome = tokio::select! {
+        biased;
+        _ = &mut cancelled => internal_failure("execution cancelled"),
+        outcome = execution => outcome,
     };
-    rt.instantiate = phase_start.elapsed();
-
-    let _watchdog = runtime.config.arm_timeout(runtime.engine);
-    let phase_start = Instant::now();
-    let dispatch = dispatch_main_async(&mut store, &instance).await;
-    rt.execute = phase_start.elapsed();
-    crate::metrics::runtime_phases(&rt);
-    log_phase_breakdown(&compiled.timings, &rt);
-    let console_raw = String::from_utf8_lossy(&buf.lock().unwrap()).into_owned();
-
-    match dispatch {
-        Ok(value) => RunOutcome {
-            value,
-            console_raw,
-            error: None,
-            discovery_warnings,
-        },
-        Err(err) => RunOutcome {
-            value: None,
-            error: Some(classify_runtime_error(&err, &parsed.sources, parsed.file)),
-            console_raw,
-            discovery_warnings,
-        },
-    }
+    store.data_mut().blocking_work.finish().await;
+    outcome
 }
 
 fn compile_failure(
@@ -423,5 +471,144 @@ impl Write for Sink {
     }
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use interpreter::runtime::security::CheckOutcome;
+    use interpreter::runtime::{InMemorySessionKv, install_runtime_host_functions};
+    use std::time::Duration;
+
+    struct PausedGit {
+        started: tokio::sync::Notify,
+        resumed: std::sync::atomic::AtomicBool,
+        finish: Mutex<std::sync::mpsc::Receiver<()>>,
+    }
+
+    impl SecurityCheck for PausedGit {
+        fn check(&self, _: &str, capability: &str, _: &serde_json::Value) -> CheckOutcome {
+            if capability == "fs.write" {
+                self.resumed
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            if capability == "git.init" {
+                self.started.notify_one();
+                self.finish
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap();
+            }
+            CheckOutcome::Allow
+        }
+    }
+
+    struct UnusedMcp;
+
+    impl McpTransport for UnusedMcp {
+        fn call<'a>(
+            &'a self,
+            _: &'a str,
+            _: &'a str,
+            _: &'a str,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<serde_json::Value, interpreter::runtime::mcp::McpCallError>,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async { panic!("test must not call MCP") })
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_request_waits_for_git_before_releasing_store_and_vfs() {
+        let vfs = Vfs::tempdir().unwrap();
+        let root = vfs.root().to_owned();
+        let defaults = StoreData::with_vfs(Vfs::none());
+        let (finish, cleanup) = std::sync::mpsc::channel();
+        let security = Arc::new(PausedGit {
+            started: tokio::sync::Notify::new(),
+            resumed: std::sync::atomic::AtomicBool::new(false),
+            finish: Mutex::new(cleanup),
+        });
+        let services = HostServices {
+            git: Ok(Some(interpreter::stdlib::git::GitConfig {
+                name: "Agent".into(),
+                email: "agent@example.com".into(),
+                username: None,
+            })),
+            auth_proxy: defaults.auth_proxy,
+            secret_provider: defaults.secret_provider,
+            security_check: security.clone(),
+            http_client: defaults.http_client,
+            mcp_transport: Arc::new(UnusedMcp),
+            session_kv: Arc::new(InMemorySessionKv::default()),
+            llm_provider: None,
+            llm_budget: None,
+        };
+        let config = RuntimeConfig::default();
+        let engine = config.engine().unwrap();
+        let mut linker = Linker::new(&engine);
+        install_runtime_host_functions(&mut linker).unwrap();
+        let packages = Arc::new(PreparedBlueprintPackages {
+            stdlib_declarations: interpreter::runtime::stdlib_package_declarations(),
+            ..Default::default()
+        });
+        let mcps = Arc::new(McpCatalog::empty());
+        let code = r#"
+            import { Repository } from "submilli:git";
+            import * as fs from "submilli:fs";
+            function main(): void {
+                try { Repository.init("/repo"); } catch (error) {}
+                fs.writeText("/continued", "must not run");
+            }
+        "#;
+        let mut request = Box::pin(run(
+            code,
+            parse(code),
+            RunnerRuntime {
+                engine: &engine,
+                base_linker: &linker,
+                config: &config,
+            },
+            vfs,
+            defaults.vfs_info,
+            services,
+            RunnerImports {
+                packages: &packages,
+                mcps: &mcps,
+            },
+        ));
+        tokio::select! {
+            _ = security.started.notified() => {},
+            outcome = &mut request => panic!("worker never started: {:?}", outcome.error),
+            _ = tokio::time::sleep(Duration::from_secs(5)) => panic!("worker never started"),
+        }
+        drop(request);
+        tokio::task::yield_now().await;
+        assert!(root.exists(), "VFS must survive while the worker is active");
+        assert!(!root.join("continued").exists());
+        assert_eq!(
+            Arc::strong_count(&security),
+            3,
+            "test, store, and worker must retain the policy until cleanup completes"
+        );
+        finish.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while root.exists() {
+                assert!(!root.join("continued").exists(), "cancelled guest resumed");
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("execution owner must finish cleanup");
+        // The owner's store and worker both release their policy references.
+        assert_eq!(Arc::strong_count(&security), 1);
+        assert!(!security.resumed.load(std::sync::atomic::Ordering::Relaxed));
     }
 }

@@ -483,12 +483,22 @@ impl AppState {
         if registry_roots.is_empty() && imports.stdlib.is_empty() {
             return Ok(Arc::new(PreparedBlueprintPackages::default()));
         }
-        let key = prepared_packages_cache_key(blueprint_name, &registry_roots, &imports.stdlib);
+        let key = format!(
+            "{}:git={}",
+            prepared_packages_cache_key(blueprint_name, &registry_roots, &imports.stdlib),
+            blueprint.git.is_some()
+        );
         if let Some(cached) = self.cached_prepared_packages(&key) {
             return Ok(cached);
         }
         let generation = self.inner.prepared_generation.load(Ordering::Acquire);
-        let prepared = Arc::new(self.prepare_selected_packages(&registry_roots, &imports.stdlib)?);
+        let mut selected = self.prepare_selected_packages(&registry_roots, &imports.stdlib)?;
+        if blueprint.git.is_none() {
+            selected
+                .stdlib_declarations
+                .retain(|decl| decl.package_name != "submilli:git");
+        }
+        let prepared = Arc::new(selected);
         let mut cache = self
             .inner
             .prepared_packages

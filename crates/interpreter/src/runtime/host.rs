@@ -47,7 +47,8 @@ pub fn install_store_bound(
     linker: &mut Linker<StoreData>,
     store: &mut Store<StoreData>,
 ) -> wasmtime::Result<()> {
-    install_prelude(linker, store)
+    install_prelude(linker, store)?;
+    crate::stdlib::install_store_bound(linker, store)
 }
 
 /// Install the store-bound prelude state: the host-owned vtable globals, the

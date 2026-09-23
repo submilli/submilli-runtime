@@ -28,13 +28,13 @@ pub enum VfsMode {
     Persistent,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Vfs {
     root: PathBuf,
     mode: VfsMode,
     /// `None` only for [`VfsMode::None`], which backs no directory.
     dir: Option<Arc<Dir>>,
-    _owned: Option<TempDir>,
+    _owned: Option<Arc<TempDir>>,
 }
 
 impl Vfs {
@@ -95,7 +95,7 @@ impl Vfs {
             root,
             mode: VfsMode::Ephemeral,
             dir: Some(dir),
-            _owned: Some(td),
+            _owned: Some(Arc::new(td)),
         })
     }
 

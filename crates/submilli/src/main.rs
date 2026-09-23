@@ -140,6 +140,7 @@ fn blueprint_label(cmd: &commands::blueprint::BlueprintCmd) -> &'static str {
         BlueprintCmd::Secret(_) => "blueprint.secret",
         BlueprintCmd::AuthProxy(_) => "blueprint.auth_proxy",
         BlueprintCmd::Capability(_) => "blueprint.capability",
+        BlueprintCmd::Git(_) => "blueprint.git",
         BlueprintCmd::Prompt(_) => "blueprint.prompt",
     }
 }

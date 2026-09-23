@@ -685,3 +685,84 @@ async fn session_id_generated_when_omitted() {
     let id = body["session_id"].as_str().expect("session_id present");
     Uuid::parse_str(id).expect("session_id is a valid UUID");
 }
+
+#[tokio::test]
+async fn git_configuration_controls_imports_and_resolves_identity_variables() {
+    let router = router();
+    let code = r#"
+        import { Repository } from "submilli:git";
+        import * as fs from "submilli:fs";
+        function main(): string {
+            const repo = Repository.init("/repo");
+            fs.writeText("/repo/note", "note");
+            repo.add(["note"]);
+            repo.commit("note");
+            return repo.log().commits[0].authorName;
+        }
+    "#;
+    let (_, disabled) = execute_on(&router, code).await;
+    assert!(!disabled["error"].is_null(), "{disabled}");
+    let yaml = "name: test\ndefault: allow\nvariables:\n  author: {default: Support}\ngit:\n  identity:\n    name: '${vars.author}'\n    email: agent@example.com\n";
+    let (status, applied) = apply_blueprint_on(&router, yaml).await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    let (_, enabled) = execute_on(&router, code).await;
+    assert!(enabled["error"].is_null(), "{enabled}");
+    assert_eq!(enabled["result"], "Support");
+    apply_blueprint_on(&router, "name: test\ndefault: allow\n").await;
+    let (_, disabled_again) = execute_on(&router, code).await;
+    assert!(!disabled_again["error"].is_null(), "{disabled_again}");
+}
+
+#[tokio::test]
+async fn git_transitive_imports_require_configuration_and_keep_package_attribution() {
+    let directory = tempfile::tempdir().unwrap();
+    let package = compile_package(
+        "@acme/util",
+        ModulePath::from("lib"),
+        &[PackageSourceModule {
+            path: ModulePath::from("lib"),
+            source: "import { Repository } from \"submilli:git\"; export function answer(): string { const repo = Repository.init(\"/repo\"); return repo.commit(\"initial\"); }",
+        }],
+        &[],
+    ).unwrap();
+    write_package_artifact(
+        directory.path().join("@acme/util"),
+        &package.wasm,
+        &package.type_info,
+        &submilli_build::derive_capability_schema(
+            &package.declaration,
+            &package.required_capabilities,
+        ),
+        &package.declaration,
+        &ArtifactMetadata::new("@acme/util", "1.0.0", vec![]),
+    )
+    .unwrap();
+    let router = router_with_package_store(directory.path().to_owned());
+    let code =
+        "import { answer } from \"@acme/util\"; function main(): string { return answer(); }";
+    let (_, disabled) = execute_on(&router, code).await;
+    assert!(
+        disabled["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("blueprint git block"),
+        "{disabled}"
+    );
+    let yaml = "name: test\npackages: ['@acme/util']\ngit:\n  identity: {name: Agent, email: agent@example.com}\npermissions:\n  main:\n    - {capability: git.init, action: allow}\n";
+    let (status, applied) = apply_blueprint_on(&router, yaml).await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    let (_, denied) = execute_on(&router, code).await;
+    let message = denied["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("caller=@acme/util") && message.contains("git.init"),
+        "{denied}"
+    );
+    let yaml = "name: test\npackages: ['@acme/util']\ngit:\n  identity: {name: Agent, email: agent@example.com}\npermissions:\n  main:\n    - {capability: git.commit, action: allow}\n  '@acme/util':\n    - {capability: git.init, action: allow}\n";
+    apply_blueprint_on(&router, yaml).await;
+    let (_, denied) = execute_on(&router, code).await;
+    let message = denied["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("caller=@acme/util") && message.contains("git.commit"),
+        "{denied}"
+    );
+}

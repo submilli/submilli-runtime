@@ -12,6 +12,7 @@ pub mod add_package;
 pub mod auth_proxy;
 pub mod capability;
 mod file;
+pub mod git;
 pub mod init;
 pub mod lint;
 mod package_secrets;
@@ -25,6 +26,9 @@ pub enum BlueprintCmd {
     /// directory (`--full` lists every stdlib capability). Offline — no
     /// server needed.
     Init(init::Args),
+    /// Configure Git identity and HTTPS username in a local blueprint.
+    #[command(subcommand)]
+    Git(git::GitCmd),
     /// Validate a blueprint file's syntax and references. Offline.
     Lint(lint::Args),
     /// Add an outbound MCP server to a local `blueprint.yaml`.
@@ -57,6 +61,7 @@ pub enum BlueprintCmd {
 pub fn execute(cmd: BlueprintCmd) -> Result<ExitCode> {
     match cmd {
         BlueprintCmd::Init(args) => init::execute(args),
+        BlueprintCmd::Git(cmd) => git::execute(cmd),
         BlueprintCmd::Lint(args) => lint::execute(args),
         BlueprintCmd::AddMcp(args) => add_mcp::execute(args),
         BlueprintCmd::AddPackage(args) => add_package::execute(args),

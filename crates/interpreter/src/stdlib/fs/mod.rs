@@ -1340,8 +1340,8 @@ fn copy_recursive(
             let entry =
                 entry.map_err(|e| contain_trap("fs.copy", &pair, &ContainError::from(e)))?;
             let name = entry.file_name();
-            let child_from = LinkPath::new(Arc::clone(&from_dir), name.clone());
-            let child_to = LinkPath::new(Arc::clone(&to_dir), name);
+            let child_from = from.child(Arc::clone(&from_dir), name.clone());
+            let child_to = to.child(Arc::clone(&to_dir), name);
             if entry.file_type().is_ok_and(|ft| ft.is_symlink()) {
                 // A `.venv/bin/python -> /usr/bin/python3` is one the platform may refuse to
                 // reproduce, and that must not fail a whole checkout copy. Scoped to the link

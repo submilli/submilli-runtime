@@ -14,7 +14,7 @@ use interpreter::runtime::{
     McpTransport, NetworkPolicy, ReqwestHttpClient, RuntimeConfig, SharedTokenBudget, StoreData,
     Vfs, install_package_modules_async, install_runtime_async, install_tenant_limits,
 };
-use interpreter::{BacktraceMode, Sources, compile_script, dispatch_main_async, render_backtrace};
+use interpreter::{BacktraceMode, Sources, dispatch_main_async, render_backtrace};
 use submilli_blueprint::{Blueprint, VarBindings, resolve_variables};
 use submilli_build::{Artifact, PackageStore};
 use submilli_shared::llm::provider::DEFAULT_MAX_CONCURRENCY;
@@ -292,7 +292,18 @@ pub(crate) fn execute_with_dispatch(
         None => McpCatalog::empty(),
     };
     let mcp_defs = mcp_catalog.defs_refs();
-    let compiled = compile_script(&source, &filename, file, &package_refs, &mcp_defs);
+    let git_enabled = blueprint.as_ref().is_some_and(|bp| bp.git.is_some());
+    let parsed = interpreter::parse_script(&source, file);
+    let mut stdlib = interpreter::runtime::stdlib_package_declarations();
+    stdlib.retain(|decl| git_enabled || decl.package_name != "submilli:git");
+    let compiled = interpreter::compile_parsed_script_timed(
+        &source,
+        &filename,
+        &parsed,
+        &stdlib,
+        &package_refs,
+        &mcp_defs,
+    );
     let compiled = match compiled {
         Ok(compiled) => {
             for d in &compiled.warnings {
@@ -327,6 +338,7 @@ pub(crate) fn execute_with_dispatch(
     let mut data = StoreData::with_vfs_and_cap(vfs, cfg.max_store_bytes);
     data.install_type_info(compiled.type_info.clone());
     if let Some(bp) = &blueprint {
+        data.git = submilli_shared::resolve_git(bp, &variables)?;
         data.security_check = Arc::new(PolicyCheck::with_variables(bp.clone(), variables));
         data.auth_proxy = Arc::new(BlueprintAuthProxy::new(bp.clone(), secret_store.clone()));
         data.secret_provider = Arc::new(BlueprintSecretProvider::new(

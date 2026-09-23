@@ -77,7 +77,7 @@ pub(crate) fn lookup(name: &str) -> DocLookup {
     if name.starts_with("@mcp/") {
         return DocLookup::McpUnknown;
     }
-    host_lookup(name).unwrap_or_else(|| builtin_fallback(name, &[]))
+    host_lookup(name, false).unwrap_or_else(|| builtin_fallback(name, &[], false))
 }
 
 /// Like [`lookup`], but resolves `@mcp/<server>` names against a blueprint's
@@ -92,7 +92,8 @@ pub(crate) fn lookup_with_catalog(name: &str, catalog: &McpCatalog) -> DocLookup
             None => DocLookup::McpUnknown,
         };
     }
-    host_lookup(name).unwrap_or_else(|| builtin_fallback(name, &catalog_names(catalog)))
+    host_lookup(name, false)
+        .unwrap_or_else(|| builtin_fallback(name, &catalog_names(catalog), false))
 }
 
 /// Like [`lookup_with_catalog`], but also resolves registry packages declared
@@ -107,7 +108,7 @@ pub(crate) fn lookup_with_blueprint(
     if name.starts_with("@mcp/") {
         return lookup_with_catalog(name, catalog);
     }
-    if let Some(found) = host_lookup(name) {
+    if let Some(found) = host_lookup(name, blueprint.git.is_some()) {
         return found;
     }
     if blueprint.packages.contains(name) {
@@ -124,11 +125,15 @@ pub(crate) fn lookup_with_blueprint(
             },
         };
     }
-    builtin_fallback(name, &union_candidates(catalog, blueprint))
+    builtin_fallback(
+        name,
+        &union_candidates(catalog, blueprint),
+        blueprint.git.is_some(),
+    )
 }
 
-fn host_lookup(name: &str) -> Option<DocLookup> {
-    interpreter::packages::docs(name).map(|doc| DocLookup::Host {
+fn host_lookup(name: &str, git_enabled: bool) -> Option<DocLookup> {
+    interpreter::packages::docs_with_git(name, git_enabled).map(|doc| DocLookup::Host {
         description: doc.description,
         declarations: doc.declarations,
     })
@@ -137,7 +142,7 @@ fn host_lookup(name: &str) -> Option<DocLookup> {
 /// A name no package source claims. Check the built-in catalog before erroring
 /// — a built-in needs no `import`, so serving it here costs the caller nothing
 /// — and carry a suggestion drawn from every catalog this call site can see.
-fn builtin_fallback(name: &str, extra: &[String]) -> DocLookup {
+fn builtin_fallback(name: &str, extra: &[String], git_enabled: bool) -> DocLookup {
     use interpreter::packages::BuiltinLookup;
     match interpreter::packages::builtin_lookup(name) {
         BuiltinLookup::Found(declarations) => DocLookup::Builtin { declarations },
@@ -151,7 +156,7 @@ fn builtin_fallback(name: &str, extra: &[String]) -> DocLookup {
         },
         BuiltinLookup::Unknown => DocLookup::Unknown {
             message: format!("unknown package: {name}"),
-            suggestion: interpreter::packages::suggest(name, extra),
+            suggestion: interpreter::packages::suggest_with_git(name, extra, git_enabled),
         },
     }
 }
@@ -355,8 +360,8 @@ pub(crate) fn search_json_with_catalog(
     catalog: &McpCatalog,
     fetch_with: Fetch,
 ) -> Value {
-    let results = search_json_results(query, catalog);
-    search_body(results, fetch_with, || mcp_entries(catalog))
+    let results = search_json_results(query, catalog, false);
+    search_body(results, fetch_with, false, || mcp_entries(catalog))
 }
 
 pub(crate) fn search_json_with_blueprint(
@@ -373,9 +378,9 @@ pub(crate) fn search_json_with_blueprint(
         .iter()
         .filter_map(|name| store.load(name).ok())
         .collect();
-    let mut results = search_json_results(query, catalog);
+    let mut results = search_json_results(query, catalog, blueprint.git.is_some());
     results.extend(registry_search(query, &artifacts));
-    search_body(results, fetch_with, || {
+    search_body(results, fetch_with, blueprint.git.is_some(), || {
         let mut entries = mcp_entries(catalog);
         entries.extend(registry_entries(&artifacts));
         entries
@@ -394,12 +399,13 @@ pub(crate) fn search_json_with_blueprint(
 fn search_body(
     results: Vec<Value>,
     fetch_with: Fetch,
+    git_enabled: bool,
     available: impl FnOnce() -> Vec<CatalogEntry>,
 ) -> Value {
     if !results.is_empty() {
         return json!({ "results": results });
     }
-    let catalog = interpreter::packages::catalog(available());
+    let catalog = interpreter::packages::catalog_with_git(available(), git_enabled);
     let listing: Vec<Value> = catalog
         .entries
         .iter()
@@ -439,8 +445,8 @@ fn registry_entries(artifacts: &[submilli_build::Artifact]) -> Vec<CatalogEntry>
         .collect()
 }
 
-fn search_json_results(query: &str, catalog: &McpCatalog) -> Vec<Value> {
-    let mut results: Vec<Value> = interpreter::packages::search(query)
+fn search_json_results(query: &str, catalog: &McpCatalog, git_enabled: bool) -> Vec<Value> {
+    let mut results: Vec<Value> = interpreter::packages::search_with_git(query, git_enabled)
         .into_iter()
         .map(|m| json!({ "name": m.name, "source": "host", "description": m.description }))
         .collect();
@@ -520,4 +526,57 @@ fn docs_body_markdown(intro: &str, declarations: &str) -> String {
     out.push_str(declarations.trim());
     out.push_str("\n```\n");
     out
+}
+
+#[cfg(test)]
+mod git_discovery_tests {
+    use super::*;
+
+    #[test]
+    fn git_is_visible_only_with_a_configured_blueprint() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = PackageStore::new(directory.path());
+        let catalog = McpCatalog::empty();
+        let mut blueprint = submilli_blueprint::parse("name: test").unwrap();
+        for query in ["", "git", "not-a-package"] {
+            let response =
+                search_json_with_blueprint(query, &catalog, &blueprint, &store, Fetch::Mcp);
+            assert!(!response.to_string().contains("submilli:git"));
+        }
+        assert!(matches!(
+            lookup_with_blueprint("submilli:git", &catalog, &blueprint, &store),
+            DocLookup::Unknown { .. }
+        ));
+        assert!(
+            !docs_json(
+                "submilli:gi",
+                lookup_with_blueprint("submilli:gi", &catalog, &blueprint, &store)
+            )
+            .to_string()
+            .contains("submilli:git")
+        );
+        blueprint.git = Some(submilli_blueprint::GitConfig {
+            identity: submilli_blueprint::GitIdentity {
+                name: "Agent".into(),
+                email: "agent@example.com".into(),
+            },
+            username: None,
+        });
+        for query in ["", "git", "not-a-package"] {
+            assert!(
+                search_json_with_blueprint(query, &catalog, &blueprint, &store, Fetch::Mcp)
+                    .to_string()
+                    .contains("submilli:git")
+            );
+        }
+        assert!(matches!(
+            lookup_with_blueprint("submilli:git", &catalog, &blueprint, &store),
+            DocLookup::Host { .. }
+        ));
+        assert!(
+            !search_json("", Fetch::Rest)
+                .to_string()
+                .contains("submilli:git")
+        );
+    }
 }

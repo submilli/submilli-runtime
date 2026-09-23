@@ -100,6 +100,12 @@ pub async fn handle(
             );
         }
     };
+    if let Err(error) = submilli_shared::resolve_git(&blueprint, &variables) {
+        return with_session_header(
+            &session_id,
+            error_response(&session_id, ErrorKind::InvalidRequest, error.to_string()),
+        );
+    }
     let supplied_secrets = req.secrets.clone().unwrap_or_default();
     let harness_secrets = match resolve_harness_secrets(&blueprint.secrets, &supplied_secrets) {
         Ok(resolved) => Arc::new(resolved),
@@ -240,6 +246,8 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
         .with_harness_secrets(Arc::clone(&harness_secrets)),
     );
     let services = runner::HostServices {
+        git: submilli_shared::resolve_git(&blueprint, &variables)
+            .map_err(|error| error.to_string()),
         auth_proxy: Arc::new(BlueprintAuthProxy::with_harness(
             Arc::clone(&blueprint),
             state.secret_store().cloned(),

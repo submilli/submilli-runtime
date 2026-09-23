@@ -38,9 +38,14 @@ pub struct ModuleSummary {
 /// Documentation for a stdlib module, or `None` if `name` isn't one (callers
 /// handle `@mcp/*` and unknown names).
 pub fn docs(name: &str) -> Option<ModuleDoc> {
+    docs_with_git(name, false)
+}
+
+/// Blueprint-scoped variant; Git is visible only when configured.
+pub fn docs_with_git(name: &str, git_enabled: bool) -> Option<ModuleDoc> {
     user_modules()
         .into_iter()
-        .find(|d| d.package_name == name)
+        .find(|d| d.package_name == name && (git_enabled || name != "submilli:git"))
         .map(|defs| ModuleDoc {
             name: defs.package_name.clone(),
             description: module_description(&defs.package_name).to_string(),
@@ -51,10 +56,17 @@ pub fn docs(name: &str) -> Option<ModuleDoc> {
 /// Modules whose name, description, or an exported symbol contains `query`
 /// (case-insensitive). An empty query lists every module.
 pub fn search(query: &str) -> Vec<ModuleSummary> {
+    search_with_git(query, false)
+}
+
+/// Blueprint-scoped variant; Git is visible only when configured.
+pub fn search_with_git(query: &str, git_enabled: bool) -> Vec<ModuleSummary> {
     let q = query.trim().to_lowercase();
     user_modules()
         .iter()
-        .filter(|defs| matches_query(defs, &q))
+        .filter(|defs| {
+            (git_enabled || defs.package_name != "submilli:git") && matches_query(defs, &q)
+        })
         .map(|defs| ModuleSummary {
             name: defs.package_name.clone(),
             description: module_description(&defs.package_name).to_string(),
@@ -567,7 +579,15 @@ pub fn resolve(name: &str) -> Resolution {
 const OMITTED_GLOBALS: &[(&str, &str)] = &[("Date", "Temporal")];
 
 pub fn suggest(name: &str, extra: &[String]) -> Option<String> {
-    let mut candidates: Vec<String> = search("").into_iter().map(|m| m.name).collect();
+    suggest_with_git(name, extra, false)
+}
+
+/// Blueprint-scoped variant; Git is visible only when configured.
+pub fn suggest_with_git(name: &str, extra: &[String], git_enabled: bool) -> Option<String> {
+    let mut candidates: Vec<String> = search_with_git("", git_enabled)
+        .into_iter()
+        .map(|m| m.name)
+        .collect();
     let builtins = builtins();
     candidates.extend(builtins.types);
     candidates.extend(builtins.namespaces);
@@ -678,7 +698,12 @@ pub const SOURCE_STDLIB: &str = "stdlib";
 
 /// The stdlib catalog plus whatever `extra` sources the caller can see, capped.
 pub fn catalog(extra: Vec<CatalogEntry>) -> Catalog {
-    let mut entries: Vec<CatalogEntry> = search("")
+    catalog_with_git(extra, false)
+}
+
+/// Blueprint-scoped variant; Git is visible only when configured.
+pub fn catalog_with_git(extra: Vec<CatalogEntry>, git_enabled: bool) -> Catalog {
+    let mut entries: Vec<CatalogEntry> = search_with_git("", git_enabled)
         .into_iter()
         .map(|m| CatalogEntry {
             name: m.name,
@@ -761,6 +786,9 @@ fn module_description(name: &str) -> &'static str {
     match name {
         "submilli:crypto" => "Hashing, HMAC, and random bytes.",
         "submilli:fs" => "Sandbox filesystem: read/write/list/stat/remove/exists/info.",
+        "submilli:git" => {
+            "Capability-controlled VFS repositories: history, staging, commits, branches and HTTPS fetch."
+        }
         "submilli:http" => "Outbound HTTP: get/post/put/patch/delete/head.",
         "submilli:llm" => "Gated model calls: call/batch, and models() to discover them.",
         "submilli:secrets" => "Policy-gated access to blueprint-declared secrets.",

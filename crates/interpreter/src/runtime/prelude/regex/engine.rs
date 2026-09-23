@@ -258,9 +258,11 @@ impl ChargedRegex {
 
 impl Drop for ChargedRegex {
     fn drop(&mut self) {
-        let current = self.host_attached.load(Ordering::Relaxed);
-        self.host_attached
-            .store(current.saturating_sub(self.bytes), Ordering::Relaxed);
+        let _ = self
+            .host_attached
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                Some(current.saturating_sub(self.bytes))
+            });
     }
 }
 

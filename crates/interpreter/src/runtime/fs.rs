@@ -148,23 +148,34 @@ impl ContentPath {
         Self { dir, rel }
     }
 
+    fn check_mutation(&self, recursive: bool) -> Result<(), ContainError> {
+        check_metadata_mutation(&self.dir, &self.rel, recursive, true)
+    }
+
+    fn check_link_mutation(&self, recursive: bool) -> Result<(), ContainError> {
+        check_metadata_mutation(&self.dir, &self.rel, recursive, false)
+    }
+
     pub fn open(&self) -> Result<File, ContainError> {
         Ok(self.dir.open(&self.rel)?)
     }
 
     pub fn create(&self) -> Result<File, ContainError> {
+        self.check_mutation(false)?;
         Ok(self.dir.create(&self.rel)?)
     }
 
     /// Create, refusing if the path already exists. Race-free replacement for an
     /// `exists()` check followed by `create()`.
     pub fn create_new(&self) -> Result<File, ContainError> {
+        self.check_mutation(false)?;
         let mut opts = OpenOptions::new();
         opts.write(true).create_new(true);
         Ok(self.dir.open_with(&self.rel, &opts)?)
     }
 
     pub fn append(&self) -> Result<File, ContainError> {
+        self.check_mutation(false)?;
         let mut opts = OpenOptions::new();
         opts.create(true).append(true);
         Ok(self.dir.open_with(&self.rel, &opts)?)
@@ -191,10 +202,12 @@ impl ContentPath {
     }
 
     pub fn create_dir(&self) -> Result<(), ContainError> {
+        self.check_mutation(false)?;
         Ok(self.dir.create_dir(&self.rel)?)
     }
 
     pub fn create_dir_all(&self) -> Result<(), ContainError> {
+        self.check_mutation(false)?;
         Ok(self.dir.create_dir_all(&self.rel)?)
     }
 
@@ -207,12 +220,15 @@ impl ContentPath {
     }
 
     pub fn remove_file(&self) -> Result<(), ContainError> {
+        self.check_mutation(false)?;
         Ok(self.dir.remove_file(&self.rel)?)
     }
 
     /// Rename onto `dest`. Neither side's final component is followed, so this cannot
     /// be redirected by a link swapped in after resolution.
     pub fn rename_to(&self, dest: &Self) -> Result<(), ContainError> {
+        self.check_mutation(true)?;
+        dest.check_mutation(true)?;
         Ok(self.dir.rename(&self.rel, &dest.dir, &dest.rel)?)
     }
 
@@ -253,6 +269,7 @@ impl ContentPath {
 pub struct LinkPath {
     parent: Arc<Dir>,
     name: OsString,
+    guard: ContentPath,
 }
 
 impl fmt::Debug for LinkPath {
@@ -273,7 +290,21 @@ pub enum LinkKind {
 
 impl LinkPath {
     pub(crate) fn new(parent: Arc<Dir>, name: OsString) -> Self {
-        Self { parent, name }
+        let guard = ContentPath::new(Arc::clone(&parent), PathBuf::from(&name));
+        Self {
+            parent,
+            name,
+            guard,
+        }
+    }
+
+    pub(crate) fn child(&self, parent: Arc<Dir>, name: OsString) -> Self {
+        let guard = ContentPath::new(Arc::clone(&self.guard.dir), self.guard.rel.join(&name));
+        Self {
+            parent,
+            name,
+            guard,
+        }
     }
 
     /// Whether this names the VFS root itself rather than an entry inside it.
@@ -327,6 +358,7 @@ impl LinkPath {
     /// link instead ([`link_kind`](Self::link_kind)), which is a property of the link and
     /// needs no access to what it points at.
     pub fn symlink(&self, target: &Path, kind: LinkKind) -> Result<(), ContainError> {
+        self.guard.check_link_mutation(false)?;
         #[cfg(not(windows))]
         {
             let _ = kind;
@@ -342,20 +374,24 @@ impl LinkPath {
     }
 
     pub fn remove_file(&self) -> Result<(), ContainError> {
+        self.guard.check_link_mutation(false)?;
         // Windows directory symlinks require directory removal; the extension
         // inspects the link without following it and retains its handle while deleting.
         Ok(self.parent.remove_file_or_symlink(&self.name)?)
     }
 
     pub fn remove_dir(&self) -> Result<(), ContainError> {
+        self.guard.check_link_mutation(true)?;
         Ok(self.parent.remove_dir(&self.name)?)
     }
 
     pub fn remove_dir_all(&self) -> Result<(), ContainError> {
+        self.guard.check_link_mutation(true)?;
         Ok(self.parent.remove_dir_all(&self.name)?)
     }
 
     pub fn create_dir_all(&self) -> Result<(), ContainError> {
+        self.guard.check_link_mutation(false)?;
         match self.parent.create_dir(&self.name) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(()),
@@ -377,6 +413,7 @@ impl LinkPath {
     /// only after establishing it is not a symlink — dereferencing one here is what
     /// would turn a copy into an exfiltration.
     pub fn copy_to(&self, dest: &Self) -> Result<(), ContainError> {
+        dest.guard.check_mutation(true)?;
         self.parent.copy(&self.name, &dest.parent, &dest.name)?;
         Ok(())
     }
@@ -384,6 +421,8 @@ impl LinkPath {
     /// Rename onto `dest`. Neither final component is followed, so this relocates a
     /// link rather than its target.
     pub fn rename_to(&self, dest: &Self) -> Result<(), ContainError> {
+        self.guard.check_link_mutation(true)?;
+        dest.guard.check_link_mutation(true)?;
         Ok(self.parent.rename(&self.name, &dest.parent, &dest.name)?)
     }
 }
@@ -435,7 +474,11 @@ pub fn resolve_link(vfs: &Vfs, cwd: &str, guest_path: &str) -> Result<LinkPath, 
     } else {
         Arc::new(root.open_dir(parent_rel)?)
     };
-    Ok(LinkPath::new(parent, name.to_os_string()))
+    Ok(LinkPath {
+        parent,
+        name: name.to_os_string(),
+        guard: ContentPath::new(Arc::clone(root), rel),
+    })
 }
 
 /// The guest-visible absolute form of a path, with `.` and `..` collapsed.
@@ -478,6 +521,104 @@ fn relative(cwd: &str, guest_path: &str) -> Result<PathBuf, ResolveError> {
         out.push(name);
     }
     Ok(out)
+}
+
+fn protected_metadata(path: &Path) -> bool {
+    path.components().any(|part| {
+        let name = part.as_os_str().to_string_lossy();
+        let options = gix::validate::path::component::Options {
+            protect_windows: false,
+            ..Default::default()
+        };
+        let reserved_alias = matches!(
+            gix::validate::path::component(name.as_bytes().into(), None, options),
+            Err(gix::validate::path::component::Error::DotGitDir)
+        );
+        reserved_alias
+            || name
+                .trim_end_matches([' ', '.'])
+                .eq_ignore_ascii_case(".git")
+            || name.to_ascii_lowercase().starts_with(".git-submilli-")
+    })
+}
+
+fn metadata_denied() -> ContainError {
+    ContainError::Io(io::Error::other(
+        "Git metadata is protected; use submilli:git with Git capabilities",
+    ))
+}
+
+fn check_metadata_mutation(
+    root: &Dir,
+    path: &Path,
+    recursive: bool,
+    follow_final: bool,
+) -> Result<(), ContainError> {
+    if protected_metadata(path) {
+        return Err(metadata_denied());
+    }
+    // Check existing prefixes as well as the full path: a new file can be below
+    // an alias into .git even though canonicalizing that file returns NotFound.
+    for prefix in path.ancestors() {
+        if prefix == path && !follow_final {
+            continue;
+        }
+        if prefix.as_os_str().is_empty() {
+            continue;
+        }
+        match root.canonicalize(prefix) {
+            Ok(resolved) if protected_metadata(&resolved) => return Err(metadata_denied()),
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    match root.symlink_metadata(path) {
+        Ok(meta) => {
+            #[cfg(unix)]
+            {
+                use cap_std::fs::MetadataExt;
+                if meta.is_file() && meta.nlink() > 1 {
+                    return Err(metadata_denied());
+                }
+            }
+            if recursive && meta.is_dir() {
+                reject_metadata_descendants(&root.open_dir(path)?, &mut 0, 0)?;
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(())
+}
+
+fn reject_metadata_descendants(
+    dir: &Dir,
+    count: &mut usize,
+    depth: usize,
+) -> Result<(), ContainError> {
+    if depth > 64 {
+        return Err(ContainError::Io(io::Error::other(
+            "directory nesting limit exceeded",
+        )));
+    }
+    for entry in dir.entries()? {
+        *count += 1;
+        if *count > 10000 {
+            return Err(ContainError::Io(io::Error::other(
+                "directory scan limit exceeded",
+            )));
+        }
+        let entry = entry?;
+        let name = entry.file_name();
+        if protected_metadata(Path::new(&name)) {
+            return Err(metadata_denied());
+        }
+        if dir.symlink_metadata(&name)?.is_dir() {
+            reject_metadata_descendants(&dir.open_dir(name)?, count, depth + 1)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -97,6 +97,13 @@ pub async fn create(
         }
     };
 
+    if let Err(error) = submilli_shared::resolve_git(&blueprint, &variables) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": error.to_string()})),
+        )
+            .into_response();
+    }
     let supplied_secrets = req.secrets.clone().unwrap_or_default();
     let secrets = match resolve_harness_secrets(&blueprint.secrets, &supplied_secrets) {
         Ok(resolved) => Arc::new(resolved),

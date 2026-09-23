@@ -87,6 +87,7 @@ pub fn execute_tool_description(blueprint: &Blueprint) -> String {
         .replace("{http_access}", &http_access_phrase(blueprint))
         .replace("{builtins}", &builtins_phrase())
         .replace("{mcp_packages}", &mcp_packages_phrase(blueprint))
+        .replace("{git_package}", if blueprint.git.is_some() { "\n\nGit is available as `submilli:git`. Read its package docs before use; init, clone, fetch/pull, and commit require their respective Git capabilities. Other local operations need no Git capability. Push is not available." } else { "" })
 }
 
 /// A worked example of using a *typed* MCP tool result directly — narrowing an

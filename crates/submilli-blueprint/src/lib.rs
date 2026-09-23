@@ -3,6 +3,7 @@
 mod auth_proxy;
 mod diag;
 mod filter;
+mod git;
 mod llm;
 mod mcp;
 mod permissions;
@@ -23,6 +24,7 @@ pub use auth_proxy::{
 };
 pub use diag::{Fault, PathSeg, YamlPath};
 pub use filter::{FieldMatch, FilterExpr, VarBindings};
+pub use git::{GitConfig, GitIdentity};
 pub use llm::{LlmConfig, LlmModelDecl, LlmProviderDecl};
 pub use mcp::{McpAuth, McpServer};
 pub use permissions::{Action, DefaultAction, PermissionRule};
@@ -74,6 +76,9 @@ pub struct Blueprint {
     /// Host-keyed outbound-auth injection rules.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub auth_proxy: Vec<AuthProxyRule>,
+    /// Opt in to Git operations with an operator-controlled commit identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git: Option<GitConfig>,
     /// Fall-through capability action when no `permissions` rule matches.
     /// Present (even just `default: deny`) means the operator configured a
     /// policy. Absent, it resolves to `deny` — a policy-free blueprint denies
@@ -101,6 +106,7 @@ pub struct Blueprint {
 impl Default for Blueprint {
     fn default() -> Self {
         Blueprint {
+            git: None,
             kind: None,
             name: String::new(),
             idle_timeout: DEFAULT_IDLE_TIMEOUT,
@@ -698,6 +704,7 @@ pub fn parse(yaml: &str) -> Result<Blueprint, BlueprintError> {
     auth_proxy::validate_auth_proxy(&blueprint)?;
     permissions::validate(&blueprint.permissions)?;
     variables::validate_variables(&blueprint)?;
+    git::validate(&blueprint)?;
     mcp::validate_mcp(&blueprint)?;
     llm::validate_llm(&blueprint)?;
     Ok(blueprint)
@@ -949,6 +956,7 @@ pub enum BlueprintError {
     InvalidPackages(Fault),
     InvalidSecrets(Fault),
     InvalidVariables(Fault),
+    InvalidGit(Fault),
     InvalidAuthProxy(Fault),
     InvalidPermissions(Fault),
     InvalidMcp(Fault),
@@ -967,6 +975,7 @@ impl BlueprintError {
             | BlueprintError::InvalidPackages(fault)
             | BlueprintError::InvalidSecrets(fault)
             | BlueprintError::InvalidVariables(fault)
+            | BlueprintError::InvalidGit(fault)
             | BlueprintError::InvalidAuthProxy(fault)
             | BlueprintError::InvalidPermissions(fault)
             | BlueprintError::InvalidMcp(fault)
@@ -996,6 +1005,7 @@ impl fmt::Display for BlueprintError {
             BlueprintError::InvalidVariables(fault) => {
                 write!(f, "invalid variables config: {}", fault.message)
             }
+            BlueprintError::InvalidGit(fault) => write!(f, "invalid git config: {}", fault.message),
             BlueprintError::InvalidAuthProxy(fault) => {
                 write!(f, "invalid auth_proxy config: {}", fault.message)
             }

@@ -286,7 +286,9 @@ session finds neither.
 
 `submilli:git` works on repositories inside the program's filesystem. Every
 commit it makes is authored by the blueprint, not the program, so the module
-stays disabled until the blueprint gives it an identity:
+stays disabled until the blueprint gives it an identity. Without a `git` block,
+direct and transitive imports are disabled, and agent-facing search and docs
+omit the module. Configure the identity with:
 
 ```sh
 submilli blueprint git set --name "Support Agent" --email agent@acme.example
@@ -304,22 +306,33 @@ git:
 ```
 
 A value may include `${vars.NAME}`, so `--name 'Support Agent (${vars.customerId})'`
-records the session in the author. The operations are capabilities like any
-other, each reporting the repository `path`; this agent keeps its notes under
-version control and nothing else:
+records the session in the author. Repository initialization and commits have
+separate capabilities, each reporting the repository `path`. This agent may
+initialize and commit only its notes repository:
 
 ```sh
 submilli blueprint capability add git.init --filter 'path == "/notes"'
-submilli blueprint capability add git.stage --filter 'path == "/notes"'
 submilli blueprint capability add git.commit --filter 'path == "/notes"'
-submilli blueprint capability add git.read --filter 'path == "/notes"'
 ```
 
-Remotes are HTTPS only, under `git.remote`, `git.fetch`, and `git.checkout`,
-whose `remote` field lets a rule pin the hosts a program may clone from or
-fetch. A private repository needs two more things: `--username` on `git set`,
-and a secret named `GIT_TOKEN`. The token is sent only under
-`git.authenticate`, and the program never sees it.
+For a private repository, add `--username agent` to the `git set` command
+above and declare the fixed secret name `GIT_TOKEN`. Grant cloning for
+the repository the agent may access:
+
+```sh
+submilli blueprint secret add GIT_TOKEN --env GIT_TOKEN
+submilli blueprint capability add git.clone \
+  --filter 'path == "/repo" and remote == "https://github.com/acme/project.git"'
+```
+
+Public reads need no token. The clone grant includes authentication when
+needed; grant `git.fetch` separately for later fetches and pulls. The
+[Git permission reference](/docs/security#git-capabilities) explains the four
+grants and their filter fields.
+
+The [standard library](/docs/standard-library#git-repositories) shows programs
+using this configuration. The [CLI reference](/docs/cli#configure-git) covers
+updating, inspecting, and removing it.
 
 ## Let the program call a model
 
@@ -453,13 +466,7 @@ permissions:
   - capability: git.init
     filter: path == "/notes"
     action: allow
-  - capability: git.stage
-    filter: path == "/notes"
-    action: allow
   - capability: git.commit
-    filter: path == "/notes"
-    action: allow
-  - capability: git.read
     filter: path == "/notes"
     action: allow
   - capability: llm.call

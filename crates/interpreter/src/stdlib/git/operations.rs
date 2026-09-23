@@ -1,0 +1,840 @@
+use super::storage::{Files, MAX_PATHS, Snapshot, validate_branch, validate_path};
+use gix::bstr::ByteSlice;
+use serde_json::{Value, json};
+use std::collections::BTreeSet;
+use wasmtime::{Result, bail};
+
+pub fn read(snapshot: &Snapshot, op: &str, args: &[Value]) -> Result<Value> {
+    match op {
+        "status" => status(snapshot),
+        "log" => log(snapshot, args.first().unwrap_or(&Value::Null)),
+        "diff" => diff(snapshot, args.first().unwrap_or(&Value::Null)),
+        "branches" => branches(snapshot),
+        "remotes" => Ok(json!(
+            snapshot
+                .remotes()?
+                .into_iter()
+                .map(|(name, url)| json!({"name":name,"url":url}))
+                .collect::<Vec<_>>()
+        )),
+        _ => bail!("git: unknown read operation"),
+    }
+}
+
+pub fn text_arg(args: &[Value], index: usize) -> Result<&str> {
+    args.get(index)
+        .and_then(Value::as_str)
+        .ok_or_else(|| wasmtime::Error::msg("git: expected a string argument"))
+}
+
+pub fn head_files(snapshot: &Snapshot) -> Result<Files> {
+    let tree = if snapshot.repo.head()?.is_unborn() {
+        gix::ObjectId::empty_tree(gix::hash::Kind::Sha1)
+    } else {
+        super::history::resolve_commit(snapshot, "HEAD")?
+            .tree_id()?
+            .detach()
+    };
+    tree_files(snapshot, tree)
+}
+
+pub fn tree_files(snapshot: &Snapshot, id: gix::ObjectId) -> Result<Files> {
+    let mut files = Files::new();
+    walk_tree(snapshot, id, "", &mut files, &mut 0, 0)?;
+    Ok(files)
+}
+
+fn walk_tree(
+    snapshot: &Snapshot,
+    id: gix::ObjectId,
+    prefix: &str,
+    files: &mut Files,
+    bytes: &mut usize,
+    depth: usize,
+) -> Result<()> {
+    snapshot.check_cancelled()?;
+    if depth > 64 {
+        bail!("git: tree nesting limit exceeded");
+    }
+    let tree = snapshot.repo.find_tree(id)?;
+    // Ancestor tree buffers remain alive during recursion. Charge each whole
+    // decoded tree before descending, including entries not yet visited.
+    *bytes += tree.data.len();
+    if *bytes > snapshot.max_bytes as usize {
+        bail!("git: tree memory limit exceeded");
+    }
+    for entry in tree.iter() {
+        snapshot.check_cancelled()?;
+        let entry = entry?;
+        let path = format!("{prefix}{}", entry.filename().to_str()?);
+        validate_path(&path)?;
+        *bytes += path.len() + 128;
+        if *bytes > snapshot.max_bytes as usize {
+            bail!("git: tree path memory limit exceeded");
+        }
+        if entry.mode().is_tree() {
+            walk_tree(
+                snapshot,
+                entry.object_id(),
+                &format!("{path}/"),
+                files,
+                bytes,
+                depth + 1,
+            )?;
+        } else {
+            let mode: u32 = entry.mode().value() as u32;
+            if ![0o100644, 0o100755, 0o120000].contains(&mode) {
+                bail!("git: submodules and special tree modes are unsupported");
+            }
+            let data = snapshot.repo.find_blob(entry.object_id())?.data.clone();
+            *bytes += data.len();
+            if *bytes > snapshot.max_bytes as usize || files.len() >= MAX_PATHS {
+                bail!("git: tree resource limit exceeded");
+            }
+            if files.insert(path, (mode, data)).is_some() {
+                bail!("git: duplicate tree path");
+            }
+        }
+    }
+    validate_file_set(files)
+}
+
+pub(super) fn validate_file_set(files: &Files) -> Result<()> {
+    let mut folded = BTreeSet::new();
+    for path in files.keys() {
+        if !folded.insert(path.to_lowercase()) {
+            bail!("git: case-colliding tree paths are unsupported");
+        }
+    }
+    let mut directories = std::collections::BTreeMap::new();
+    for path in files.keys() {
+        for (offset, _) in path.match_indices('/') {
+            let directory = &path[..offset];
+            let key = directory.to_lowercase();
+            if folded.contains(&key) {
+                bail!("git: overlapping file and directory paths");
+            }
+            if directories
+                .insert(key, directory)
+                .is_some_and(|previous| previous != directory)
+            {
+                bail!("git: case-colliding tree directories are unsupported");
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn index_files(snapshot: &Snapshot) -> Result<Files> {
+    read_index(snapshot, false)
+}
+
+fn read_index(snapshot: &Snapshot, allow_conflicts: bool) -> Result<Files> {
+    let index = snapshot.repo.index_or_empty()?;
+    let mut files = Files::new();
+    let mut bytes = 0;
+    for entry in index.entries() {
+        if entry.stage() != gix::index::entry::Stage::Unconflicted {
+            if allow_conflicts {
+                continue;
+            }
+            bail!("git: resolve index conflicts with native Git before continuing");
+        }
+        let path = entry.path(&index).to_str()?.to_owned();
+        validate_path(&path)?;
+        let mode = entry.mode.bits();
+        if ![0o100644, 0o100755, 0o120000].contains(&mode) {
+            bail!("git: unsupported index mode");
+        }
+        let data = snapshot.repo.find_blob(entry.id)?.data.clone();
+        bytes += data.len() + path.len() + 128;
+        if bytes > snapshot.max_bytes as usize || files.len() >= MAX_PATHS {
+            bail!("git: index resource limit exceeded");
+        }
+        files.insert(path, (mode, data));
+    }
+    validate_file_set(&files)?;
+    Ok(files)
+}
+
+pub fn write_index(snapshot: &Snapshot, files: &Files) -> Result<()> {
+    let mut state = gix::index::State::new(gix::hash::Kind::Sha1);
+    for (path, (mode, bytes)) in files {
+        validate_path(path)?;
+        let id = snapshot.repo.write_blob(bytes)?.detach();
+        state.dangerously_push_entry(
+            Default::default(),
+            id,
+            gix::index::entry::Flags::empty(),
+            gix::index::entry::Mode::from_bits_truncate(*mode),
+            path.as_bytes().as_bstr(),
+        );
+    }
+    state.sort_entries();
+    gix::index::File::from_state(state, snapshot.repo.index_path()).write(Default::default())?;
+    Ok(())
+}
+
+fn change(before: Option<&(u32, Vec<u8>)>, after: Option<&(u32, Vec<u8>)>) -> &'static str {
+    match (before, after) {
+        (None, Some(_)) => "added",
+        (Some(_), None) => "deleted",
+        (Some(a), Some(b)) if a != b => "modified",
+        _ => "unchanged",
+    }
+}
+
+fn status(snapshot: &Snapshot) -> Result<Value> {
+    let raw_index = snapshot.repo.index_or_empty()?;
+    let conflicts: BTreeSet<String> = raw_index
+        .entries()
+        .iter()
+        .filter(|entry| entry.stage() != gix::index::entry::Stage::Unconflicted)
+        .map(|entry| entry.path(&raw_index).to_str().map(str::to_owned))
+        .collect::<std::result::Result<_, _>>()?;
+    let head = head_files(snapshot)?;
+    let index = read_index(snapshot, true)?;
+    let mut work = snapshot.worktree()?;
+    remove_ignored(snapshot, &mut work, &index)?;
+    let paths: BTreeSet<_> = head
+        .keys()
+        .chain(index.keys())
+        .chain(work.keys())
+        .chain(conflicts.iter())
+        .collect();
+    let mut entries = Vec::new();
+    for path in paths {
+        let staged = if conflicts.contains(path) {
+            "conflicted"
+        } else {
+            change(head.get(path), index.get(path))
+        };
+        let unstaged = change(index.get(path), work.get(path));
+        if staged != "unchanged" || unstaged != "unchanged" {
+            entries.push(json!({"path":path,"staged":staged,"unstaged":unstaged,"untracked":!index.contains_key(path) && !conflicts.contains(path) && work.contains_key(path)}));
+        }
+    }
+    Ok(json!({"branch": current_branch(snapshot)?, "entries":entries, "clean":entries.is_empty()}))
+}
+
+pub fn current_branch(snapshot: &Snapshot) -> Result<Option<String>> {
+    let head = snapshot.repo.head()?;
+    let Some(name) = head.referent_name() else {
+        return Ok(None);
+    };
+    snapshot.validate_reference_spelling(name.as_bstr().to_str()?)?;
+    let branch = name
+        .as_bstr()
+        .to_str()?
+        .strip_prefix("refs/heads/")
+        .ok_or_else(|| wasmtime::Error::msg("git: HEAD must target a local branch"))?;
+    if !head.is_unborn() && snapshot.repo.find_reference(name)?.try_id().is_none() {
+        bail!(
+            "git: symbolic local branch aliases are unsupported; select a direct branch with native Git"
+        );
+    }
+    Ok(Some(branch.to_owned()))
+}
+
+fn log(snapshot: &Snapshot, opts: &Value) -> Result<Value> {
+    let limit = page_number(opts, "limit", 50)?;
+    let offset = page_number(opts, "offset", 0)?;
+    if limit == 0 || limit > 1000 {
+        bail!("git.log: limit must be 1..1000");
+    }
+    let mut commits = Vec::new();
+    if snapshot.repo.head()?.is_unborn() {
+        return Ok(json!({"commits":[],"nextOffset":null}));
+    }
+    let head = super::history::resolve_commit(snapshot, "HEAD")?.id;
+    let mut history = super::history::Ancestors::new(snapshot, head)?;
+    let mut skipped = 0;
+    while let Some(commit) = history.next()? {
+        if skipped < offset {
+            skipped += 1;
+            continue;
+        }
+        if commits.len() == limit as usize {
+            let next_offset = offset
+                .checked_add(limit)
+                .ok_or_else(|| wasmtime::Error::msg("git.log: pagination offset overflow"))?;
+            return Ok(json!({"commits":commits,"nextOffset":next_offset}));
+        }
+        let decoded = commit.decode()?;
+        commits.push(json!({"id":commit.id.to_string(),"message":decoded.message.to_str_lossy(),"authorName":decoded.author()?.name.to_str_lossy(),"authorEmail":decoded.author()?.email.to_str_lossy()}));
+    }
+    Ok(json!({"commits":commits,"nextOffset":null}))
+}
+
+fn page_number(options: &Value, name: &str, default: u64) -> Result<u64> {
+    match options.get(name).filter(|value| !value.is_null()) {
+        None => Ok(default),
+        Some(value) => value.as_u64().ok_or_else(|| {
+            wasmtime::Error::msg(format!("git.log: {name} must be a nonnegative integer"))
+        }),
+    }
+}
+
+pub fn resolve_tree(snapshot: &Snapshot, revision: &str) -> Result<Files> {
+    let commit = super::history::resolve_commit(snapshot, revision)?;
+    tree_files(snapshot, commit.tree_id()?.detach())
+}
+
+pub fn show(snapshot: &Snapshot, revision: &str, path: &str) -> Result<Vec<u8>> {
+    validate_path(path)?;
+    resolve_tree(snapshot, revision)?
+        .remove(path)
+        .map(|(_, data)| data)
+        .ok_or_else(|| wasmtime::Error::msg("git.show: path not found"))
+}
+
+fn diff(snapshot: &Snapshot, options: &Value) -> Result<Value> {
+    let mode = options
+        .get("mode")
+        .and_then(Value::as_str)
+        .unwrap_or("working");
+    let (before, after) = match mode {
+        "working" => (index_files(snapshot)?, snapshot.worktree()?),
+        "staged" => (head_files(snapshot)?, index_files(snapshot)?),
+        "refs" => (
+            resolve_tree(
+                snapshot,
+                options["from"]
+                    .as_str()
+                    .ok_or_else(|| wasmtime::Error::msg("git.diff: from is required"))?,
+            )?,
+            resolve_tree(
+                snapshot,
+                options["to"]
+                    .as_str()
+                    .ok_or_else(|| wasmtime::Error::msg("git.diff: to is required"))?,
+            )?,
+        ),
+        _ => bail!("git.diff: mode must be working, staged, or refs"),
+    };
+    let paths: BTreeSet<_> = before.keys().chain(after.keys()).collect();
+    let mut patch = String::new();
+    let mut binary = Vec::new();
+    for path in paths {
+        if before.get(path) == after.get(path) {
+            continue;
+        }
+        if mode == "working" && !before.contains_key(path) {
+            continue;
+        }
+        let a = before.get(path).map(|v| v.1.as_slice()).unwrap_or_default();
+        let b = after.get(path).map(|v| v.1.as_slice()).unwrap_or_default();
+        if a.contains(&0)
+            || b.contains(&0)
+            || std::str::from_utf8(a).is_err()
+            || std::str::from_utf8(b).is_err()
+        {
+            binary.push(path);
+            continue;
+        }
+        let a = std::str::from_utf8(a)?;
+        let b = std::str::from_utf8(b)?;
+        append_patch(
+            &mut patch,
+            path,
+            before.get(path).map(|v| v.0),
+            after.get(path).map(|v| v.0),
+            a,
+            b,
+        );
+        if patch.len() > snapshot.max_bytes as usize {
+            bail!("git.diff: output limit exceeded");
+        }
+    }
+    Ok(json!({"patch":patch,"binaryPaths":binary}))
+}
+
+fn append_patch(
+    patch: &mut String,
+    path: &str,
+    before: Option<u32>,
+    after: Option<u32>,
+    a: &str,
+    b: &str,
+) {
+    if before
+        .zip(after)
+        .is_some_and(|(old, new)| old & 0o170000 != new & 0o170000)
+    {
+        append_patch(patch, path, before, None, a, "");
+        append_patch(patch, path, None, after, "", b);
+        return;
+    }
+    let old_path = format!("a/{path}");
+    let new_path = format!("b/{path}");
+    let old_path = gix::quote::ansi_c::quote(old_path.as_bytes().as_bstr());
+    let new_path = gix::quote::ansi_c::quote(new_path.as_bytes().as_bstr());
+    patch.push_str(&format!("diff --git {old_path} {new_path}\n"));
+    match (before, after) {
+        (None, Some(mode)) => patch.push_str(&format!("new file mode {mode:06o}\n")),
+        (Some(mode), None) => patch.push_str(&format!("deleted file mode {mode:06o}\n")),
+        (Some(old), Some(new)) if old != new => {
+            patch.push_str(&format!("old mode {old:06o}\nnew mode {new:06o}\n"));
+        }
+        _ => {}
+    }
+    // Empty additions/deletions and mode-only changes are completely described by headers.
+    if a == b {
+        return;
+    }
+    append_patch_hunk(
+        patch,
+        if before.is_some() {
+            old_path.as_ref()
+        } else {
+            b"/dev/null".as_bstr()
+        },
+        if after.is_some() {
+            new_path.as_ref()
+        } else {
+            b"/dev/null".as_bstr()
+        },
+        a,
+        b,
+    );
+}
+
+fn append_patch_hunk(
+    patch: &mut String,
+    old_path: &gix::bstr::BStr,
+    new_path: &gix::bstr::BStr,
+    a: &str,
+    b: &str,
+) {
+    patch.push_str(&format!(
+        "--- {old_path}\n+++ {new_path}\n@@ -{},{} +{},{} @@\n",
+        usize::from(!a.is_empty()),
+        a.split_inclusive('\n').count(),
+        usize::from(!b.is_empty()),
+        b.split_inclusive('\n').count()
+    ));
+    for (sign, text) in [('-', a), ('+', b)] {
+        for line in text.split_inclusive('\n') {
+            patch.push(sign);
+            patch.push_str(line);
+            if !line.ends_with('\n') {
+                patch.push_str("\n\\ No newline at end of file\n");
+            }
+        }
+    }
+}
+
+fn branches(snapshot: &Snapshot) -> Result<Value> {
+    let current = current_branch(snapshot)?;
+    let mut branches = Vec::new();
+    let mut bytes = 0;
+    for reference in snapshot.repo.references()?.local_branches()? {
+        snapshot.check_cancelled()?;
+        let reference = reference.map_err(|error| wasmtime::Error::msg(error.to_string()))?;
+        let name = reference.name().shorten().to_str()?.to_owned();
+        bytes += name.len() as u64 + 256;
+        if bytes > snapshot.max_bytes || branches.len() >= MAX_PATHS {
+            bail!("git: branch listing resource limit exceeded");
+        }
+        let id = super::history::follow_reference(snapshot, reference)?;
+        branches.push(json!({"name":name,"id":id.to_string(),"current":current.as_deref() == Some(name.as_str())}));
+    }
+    Ok(json!(branches))
+}
+
+pub fn add(snapshot: &Snapshot, paths: &[String]) -> Result<()> {
+    if paths.is_empty() {
+        bail!("git.add: supply at least one path");
+    }
+    if paths.len() > MAX_PATHS {
+        bail!("git.add: too many paths; stage a containing directory instead");
+    }
+    let mut work = snapshot.worktree()?;
+    let mut index = index_files(snapshot)?;
+    remove_ignored(snapshot, &mut work, &index)?;
+    let mut selected = BTreeSet::new();
+    for path in paths.iter().collect::<BTreeSet<_>>() {
+        snapshot.check_cancelled()?;
+        if path != "." {
+            validate_path(path)?;
+        }
+        let prefix = format!("{path}/");
+        let mut matched = false;
+        for candidate in index.keys().chain(work.keys()) {
+            snapshot.check_cancelled()?;
+            if path == "." || candidate == path || candidate.starts_with(&prefix) {
+                selected.insert(candidate.clone());
+                matched = true;
+            }
+        }
+        if !matched {
+            bail!("git.add: path does not match a file");
+        }
+    }
+    for selected in selected {
+        snapshot.check_cancelled()?;
+        match work.get(&selected) {
+            Some(value) => {
+                index.insert(selected, value.clone());
+            }
+            None => {
+                index.remove(&selected);
+            }
+        }
+    }
+    validate_file_set(&index)?;
+    write_index(snapshot, &index)
+}
+
+pub fn commit(snapshot: &Snapshot, message: &str, identity: &super::GitConfig) -> Result<String> {
+    if message.trim().is_empty() {
+        bail!("git.commit: message must not be empty");
+    }
+    let files = index_files(snapshot)?;
+    if files == head_files(snapshot)? {
+        bail!("git.commit: no staged changes");
+    }
+    let mut editor = snapshot
+        .repo
+        .edit_tree(gix::ObjectId::empty_tree(gix::hash::Kind::Sha1))?;
+    for (path, (mode, bytes)) in &files {
+        snapshot.check_cancelled()?;
+        let kind = match mode {
+            0o100755 => gix::objs::tree::EntryKind::BlobExecutable,
+            0o120000 => gix::objs::tree::EntryKind::Link,
+            _ => gix::objs::tree::EntryKind::Blob,
+        };
+        editor.upsert(
+            path.as_str(),
+            kind,
+            snapshot.repo.write_blob(bytes)?.detach(),
+        )?;
+    }
+    let tree = editor.write()?.detach();
+    let signature = gix::actor::Signature {
+        name: identity.name.clone().into(),
+        email: identity.email.clone().into(),
+        time: gix::date::Time::now_utc(),
+    };
+    let parents = if snapshot.repo.head()?.is_unborn() {
+        None
+    } else {
+        Some(super::history::resolve_commit(snapshot, "HEAD")?.id)
+    };
+    let mut time = Default::default();
+    let signature = signature.to_ref(&mut time);
+    Ok(snapshot
+        .repo
+        .commit_as(signature, signature, "HEAD", message, tree, parents)?
+        .to_string())
+}
+
+pub fn create_branch(snapshot: &Snapshot, name: &str, start: &str) -> Result<()> {
+    validate_branch(name)?;
+    snapshot.validate_reference_spelling(&format!("refs/heads/{name}"))?;
+    let id = super::history::resolve_commit(snapshot, start)?.id;
+    snapshot.repo.reference(
+        format!("refs/heads/{name}"),
+        id,
+        gix::refs::transaction::PreviousValue::MustNotExist,
+        "branch: created",
+    )?;
+    Ok(())
+}
+
+pub fn checkout(snapshot: &Snapshot, branch: &str) -> Result<()> {
+    validate_branch(branch)?;
+    snapshot.validate_reference_spelling(&format!("refs/heads/{branch}"))?;
+    if snapshot
+        .repo
+        .find_reference(format!("refs/heads/{branch}").as_str())?
+        .try_id()
+        .is_none()
+    {
+        bail!(
+            "git: symbolic local branch aliases are unsupported; select a direct branch with native Git"
+        );
+    }
+    let next = resolve_tree(snapshot, &format!("refs/heads/{branch}"))?;
+    replace_worktree(snapshot, &next)?;
+    std::fs::write(
+        snapshot.repo.git_dir().join("HEAD"),
+        format!("ref: refs/heads/{branch}\n"),
+    )?;
+    Ok(())
+}
+
+pub fn replace_worktree(snapshot: &Snapshot, next: &Files) -> Result<()> {
+    let previous = index_files(snapshot)?;
+    let work = snapshot.worktree()?;
+    if previous != head_files(snapshot)? || previous != work {
+        bail!("git: switching and pulling require a clean working tree, including untracked files");
+    }
+    validate_file_set(next)?;
+    write_index(snapshot, next)?;
+    *snapshot.pending_worktree.borrow_mut() = Some(next.clone());
+    Ok(())
+}
+
+pub fn set_remote(snapshot: &mut Snapshot, name: &str, url: &str, add: bool) -> Result<()> {
+    validate_branch(name)?;
+    let url = super::transport::canonical_url(url)?;
+    let remotes = snapshot.remotes()?;
+    if add == remotes.contains_key(name) {
+        bail!(
+            "git: remote already exists or was not found; use addRemote or setRemoteUrl appropriately"
+        );
+    }
+    let mut config = gix::config::File::from_bytes_no_includes(
+        &snapshot.original_config,
+        gix::config::file::Metadata::default(),
+        Default::default(),
+    )?;
+    // URLs are multivalued in native Git: replacing only the last one leaves
+    // native fetch using the old first URL. Preserve every unrelated setting.
+    if !add {
+        config
+            .raw_values_mut_by("remote", Some(name.as_bytes().as_bstr()), "url")?
+            .delete_all();
+    }
+    config.set_raw_value_by("remote", Some(name.as_bytes().as_bstr()), "url", url)?;
+    if add {
+        config.set_raw_value_by(
+            "remote",
+            Some(name.as_bytes().as_bstr()),
+            "fetch",
+            format!("+refs/heads/*:refs/remotes/{name}/*"),
+        )?;
+    }
+    snapshot.original_config = config.to_bstring().into();
+    Ok(())
+}
+
+fn remove_ignored(snapshot: &Snapshot, work: &mut Files, index: &Files) -> Result<()> {
+    snapshot.check_cancelled()?;
+    let mut search = gix::ignore::Search::default();
+    let mut budget = IgnoreBudget::default();
+    let excludes = snapshot.repo.git_dir().join("info/exclude");
+    if let Ok(bytes) = std::fs::read(&excludes) {
+        budget.add(snapshot, &mut search, &bytes, ".gitignore")?;
+    }
+    for (path, (mode, bytes)) in work.iter() {
+        snapshot.check_cancelled()?;
+        if *mode != 0o120000 && (path == ".gitignore" || path.ends_with("/.gitignore")) {
+            budget.add(snapshot, &mut search, bytes, path)?;
+        }
+    }
+    let mut remaining_work = snapshot.max_bytes.saturating_mul(16).min(50_000_000);
+    let mut ignored = Vec::new();
+    for path in work.keys() {
+        snapshot.check_cancelled()?;
+        if index.contains_key(path) {
+            continue;
+        }
+        for (offset, _) in path
+            .match_indices('/')
+            .chain(std::iter::once((path.len(), "/")))
+        {
+            snapshot.check_cancelled()?;
+            let cost = budget.pattern_bytes + budget.patterns * (offset as u64 + 1);
+            remaining_work = remaining_work.checked_sub(cost).ok_or_else(|| {
+                wasmtime::Error::msg("git: ignore matching resource limit exceeded")
+            })?;
+            if search
+                .pattern_matching_relative_path(
+                    path.as_bytes()[..offset].as_bstr(),
+                    Some(offset < path.len()),
+                    gix::glob::pattern::Case::Sensitive,
+                )
+                .is_some_and(|matched| !matched.pattern.is_negative())
+            {
+                ignored.push(path.clone());
+                break;
+            }
+        }
+    }
+    for path in ignored {
+        work.remove(&path);
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct IgnoreBudget {
+    patterns: u64,
+    pattern_bytes: u64,
+}
+
+impl IgnoreBudget {
+    fn add(
+        &mut self,
+        snapshot: &Snapshot,
+        search: &mut gix::ignore::Search,
+        bytes: &[u8],
+        source: &str,
+    ) -> Result<()> {
+        // Count before parsing: a two-byte line allocates an entire pattern
+        // record, and all parsed lists stay alive throughout matching.
+        for line in bytes.split(|byte| *byte == b'\n') {
+            snapshot.check_cancelled()?;
+            if line.is_empty() || line.starts_with(b"#") {
+                continue;
+            }
+            self.patterns += 1;
+            self.pattern_bytes += line.len() as u64;
+            if line.len() > 4096
+                || self.patterns > 10_000
+                || self.pattern_bytes + self.patterns * 128 > snapshot.max_bytes
+            {
+                bail!("git: ignore pattern resource limit exceeded");
+            }
+        }
+        search.add_patterns_buffer(
+            bytes,
+            source,
+            Some(std::path::Path::new("")),
+            Default::default(),
+        );
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn log_accepts_large_offsets_and_returns_followable_pages() {
+        let vfs = crate::runtime::Vfs::tempdir().unwrap();
+        let snapshot = Snapshot::init(
+            vfs.dir().unwrap().clone(),
+            "main",
+            Default::default(),
+            16_384,
+        )
+        .unwrap();
+        let exhausted = json!({"commits":[],"nextOffset":null});
+        assert_eq!(
+            log(&snapshot, &json!({"offset":10_001})).unwrap(),
+            exhausted
+        );
+        let identity = super::super::GitConfig {
+            name: "Test".into(),
+            email: "test@example.com".into(),
+            username: None,
+        };
+        let mut ids = Vec::new();
+        for contents in ["first", "second"] {
+            snapshot.dir.write("file", contents).unwrap();
+            add(&snapshot, &["file".into()]).unwrap();
+            ids.push(commit(&snapshot, contents, &identity).unwrap());
+        }
+        let first = log(&snapshot, &json!({"limit":1})).unwrap();
+        assert_eq!(first["commits"][0]["id"], ids[1]);
+        assert_eq!(first["nextOffset"], 1);
+        let second = log(&snapshot, &json!({"limit":1,"offset":first["nextOffset"]})).unwrap();
+        assert_eq!(second["commits"][0]["id"], ids[0]);
+        assert_eq!(second["nextOffset"], Value::Null);
+        for offset in [10_001, u64::MAX] {
+            assert_eq!(
+                log(&snapshot, &json!({"offset":offset})).unwrap(),
+                exhausted
+            );
+        }
+    }
+
+    #[test]
+    fn ignore_patterns_bound_decoded_memory_matching_work_and_cancellation() {
+        let vfs = crate::runtime::Vfs::tempdir().unwrap();
+        let snapshot =
+            Snapshot::init(vfs.dir().unwrap().clone(), "main", Default::default(), 4096).unwrap();
+        let mut work = Files::from([(".gitignore".into(), (0o100644, b"a\n".repeat(2048)))]);
+        assert!(
+            remove_ignored(&snapshot, &mut work, &Files::new())
+                .unwrap_err()
+                .to_string()
+                .contains("ignore pattern resource")
+        );
+        let mut work = Files::from([(".gitignore".into(), (0o100644, b"a\n".repeat(20)))]);
+        for number in 0..1000 {
+            work.insert(format!("file{number:04}"), (0o100644, Vec::new()));
+        }
+        assert!(
+            remove_ignored(&snapshot, &mut work, &Files::new())
+                .unwrap_err()
+                .to_string()
+                .contains("ignore matching resource")
+        );
+        snapshot
+            .cancelled
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(
+            remove_ignored(&snapshot, &mut work, &Files::new())
+                .unwrap_err()
+                .to_string()
+                .contains("cancelled")
+        );
+    }
+
+    #[test]
+    fn staging_bounds_requests_and_unions_duplicate_selections() {
+        let vfs = crate::runtime::Vfs::tempdir().unwrap();
+        let snapshot =
+            Snapshot::init(vfs.dir().unwrap().clone(), "main", Default::default(), 4096).unwrap();
+        snapshot.dir.write("file", "contents").unwrap();
+        assert!(
+            add(&snapshot, &vec![".".to_owned(); MAX_PATHS + 1])
+                .unwrap_err()
+                .to_string()
+                .contains("too many paths")
+        );
+        assert!(add(&snapshot, &[".".into(), "missing".into()]).is_err());
+        assert!(index_files(&snapshot).unwrap().is_empty());
+        add(&snapshot, &vec![".".to_owned(); MAX_PATHS]).unwrap();
+        assert_eq!(index_files(&snapshot).unwrap()["file"].1, b"contents");
+        snapshot
+            .cancelled
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(
+            add(&snapshot, &[".".into()])
+                .unwrap_err()
+                .to_string()
+                .contains("cancelled")
+        );
+    }
+
+    #[test]
+    fn nested_trees_charge_unvisited_entries_before_descending() {
+        let vfs = crate::runtime::Vfs::tempdir().unwrap();
+        let snapshot =
+            Snapshot::init(vfs.dir().unwrap().clone(), "main", Default::default(), 4096).unwrap();
+        let blob = snapshot.repo.write_blob([]).unwrap().detach();
+        let mut child = None;
+        for _ in 0..30 {
+            let mut entries = Vec::new();
+            if let Some(oid) = child {
+                entries.push(gix::objs::tree::Entry {
+                    mode: gix::objs::tree::EntryKind::Tree.into(),
+                    filename: "a".into(),
+                    oid,
+                });
+            }
+            for number in 0..70 {
+                entries.push(gix::objs::tree::Entry {
+                    mode: gix::objs::tree::EntryKind::Blob.into(),
+                    filename: format!("z{number:03}").into(),
+                    oid: blob,
+                });
+            }
+            child = Some(
+                snapshot
+                    .repo
+                    .write_object(&gix::objs::Tree { entries })
+                    .unwrap()
+                    .detach(),
+            );
+        }
+        let error = tree_files(&snapshot, child.unwrap()).unwrap_err();
+        assert!(error.to_string().contains("tree memory limit exceeded"));
+    }
+}

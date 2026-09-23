@@ -60,28 +60,29 @@ impl TenantLimits {
         Arc::clone(&self.host_attached_bytes)
     }
 
-    /// Atomic for borrow-checker compatibility with the externref `Drop` path,
-    /// not cross-thread coordination — Submilli stores are single-threaded.
+    /// Charges happen on the store thread, but cancelled Git workers can refund
+    /// their reservations concurrently during execution cleanup.
     pub fn charge_host_bytes(&self, n: u64) -> Result<(), MemoryCapExceeded> {
-        let current = self.host_attached_bytes.load(Ordering::Relaxed);
-        let next = current.saturating_add(n);
-        let total = self.observed_bytes.saturating_add(next);
-        if total > self.max_total_bytes {
-            return Err(MemoryCapExceeded {
+        self.host_attached_bytes
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                let next = current.checked_add(n)?;
+                (self.observed_bytes.saturating_add(next) <= self.max_total_bytes).then_some(next)
+            })
+            .map(|_| ())
+            .map_err(|current| MemoryCapExceeded {
                 requested: n,
                 already_observed: self.observed_bytes,
                 already_host_attached: current,
                 cap: self.max_total_bytes,
-            });
-        }
-        self.host_attached_bytes.store(next, Ordering::Relaxed);
-        Ok(())
+            })
     }
 
     pub fn release_host_bytes(&self, n: u64) {
-        let current = self.host_attached_bytes.load(Ordering::Relaxed);
-        self.host_attached_bytes
-            .store(current.saturating_sub(n), Ordering::Relaxed);
+        let _ = self.host_attached_bytes.fetch_update(
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |current| Some(current.saturating_sub(n)),
+        );
     }
 }
 

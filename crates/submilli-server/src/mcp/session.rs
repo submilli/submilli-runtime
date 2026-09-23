@@ -205,8 +205,12 @@ pub(crate) fn initialize_binding_error(
         Ok(vars) => vars,
         Err(err) => return Some(err),
     };
-    if let Err(err) = resolve_variables(&blueprint.variables, &supplied) {
-        return Some(format!("invalid variables: {err}"));
+    let resolved = match resolve_variables(&blueprint.variables, &supplied) {
+        Ok(resolved) => resolved,
+        Err(error) => return Some(format!("invalid variables: {error}")),
+    };
+    if let Err(error) = submilli_shared::resolve_git(blueprint, &resolved) {
+        return Some(error.to_string());
     }
     let secrets = match supplied_secrets_raw(&parts.headers, &message) {
         Ok(secrets) => secrets,
@@ -297,6 +301,8 @@ impl SessionManager for VfsSessionManager {
         let supplied = supplied_variables(&message).map_err(init_error)?;
         let resolved = resolve_variables(&blueprint.variables, &supplied)
             .map_err(|err| init_error(format!("invalid variables: {err}")))?;
+        submilli_shared::resolve_git(&blueprint, &resolved)
+            .map_err(|error| init_error(error.to_string()))?;
         let supplied_secrets = supplied_secrets(&message).map_err(init_error)?;
         let secrets = resolve_harness_secrets(&blueprint.secrets, &supplied_secrets)
             .map_err(|err| init_error(format!("invalid secrets: {err}")))?;

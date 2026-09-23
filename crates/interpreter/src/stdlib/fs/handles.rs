@@ -48,9 +48,11 @@ impl ByteCharge {
         if n == 0 {
             return;
         }
-        let current = self.counter.load(Ordering::Relaxed);
-        self.counter
-            .store(current.saturating_sub(n), Ordering::Relaxed);
+        let _ = self
+            .counter
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                Some(current.saturating_sub(n))
+            });
     }
 }
 
