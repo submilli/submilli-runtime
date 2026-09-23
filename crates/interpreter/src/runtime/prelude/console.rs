@@ -62,6 +62,9 @@ async fn to_string_units(
             let s = dispatch_vtable_slot(caller, val, 0, &[]).await?;
             read_units_val(caller, &s, "console.log")
         }
+        // `console.log` takes `unknown`, so a nullable value holding `null` reaches here.
+        // It has no vtable to dispatch through; it prints as `null`, as in JavaScript.
+        Val::AnyRef(None) => Ok("null".encode_utf16().collect()),
         other => Err(wasmtime::Error::msg(format!(
             "console.log: null/invalid value {other:?}"
         ))),

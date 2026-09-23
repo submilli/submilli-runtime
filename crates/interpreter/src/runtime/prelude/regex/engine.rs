@@ -127,9 +127,16 @@ pub fn translate_js_pattern(pattern: &str, flags: &str) -> Result<TranslatedRege
                     i += 2;
                     continue;
                 }
-                translated.push(b as char);
-                translated.push(next as char);
-                i += 2;
+                let escaped = char_at(pattern, i + 1);
+                // Without `u`, JS reads `\é` as `é` (an identity escape); the `regex`
+                // crate rejects escaping a non-ASCII character, so drop the backslash.
+                // With `u`, JS rejects it too, and the crate's error stands.
+                let is_identity_escape = !escaped.is_ascii() && !flag_set.has(FlagSet::U);
+                if !is_identity_escape {
+                    translated.push('\\');
+                }
+                translated.push(escaped);
+                i += 1 + escaped.len_utf8();
                 continue;
             }
             b'[' if !in_class => {
@@ -164,9 +171,13 @@ pub fn translate_js_pattern(pattern: &str, flags: &str) -> Result<TranslatedRege
                     }
                 }
             }
+            // Every byte the cases above inspect is ASCII; anything else is copied as
+            // the whole character it starts, so `/é/` stays `é` rather than two
+            // Latin-1 characters built from its UTF-8 bytes.
             _ => {
-                translated.push(b as char);
-                i += 1;
+                let c = char_at(pattern, i);
+                translated.push(c);
+                i += c.len_utf8();
             }
         }
     }
@@ -175,6 +186,15 @@ pub fn translate_js_pattern(pattern: &str, flags: &str) -> Result<TranslatedRege
         pattern: translated,
         flags: flag_set,
     })
+}
+
+/// The character starting at byte `i`, which the scan in `translate_js_pattern`
+/// only ever positions on a character boundary.
+fn char_at(pattern: &str, i: usize) -> char {
+    pattern[i..]
+        .chars()
+        .next()
+        .expect("index is inside the pattern")
 }
 
 fn parse_flags(flags: &str) -> Result<FlagSet, TranslateError> {
@@ -541,6 +561,21 @@ mod tests {
             other => panic!("expected Memory, got {other}"),
         }
         assert_eq!(limits.host_attached_bytes(), 0);
+    }
+
+    #[test]
+    fn translate_keeps_non_ascii_characters_whole() {
+        let t = translate_js_pattern("café[éè]—", "").expect("translates");
+        assert_eq!(t.pattern, "café[éè]—");
+    }
+
+    #[test]
+    fn translate_reads_an_escaped_non_ascii_character_as_itself() {
+        let t = translate_js_pattern("\\é[\\è]", "").expect("translates");
+        assert_eq!(t.pattern, "é[è]");
+        // With `u` the escape is kept, and compiling it fails as JS's parse does.
+        let t = translate_js_pattern("\\é", "u").expect("translates");
+        assert_eq!(t.pattern, "\\é");
     }
 
     #[test]

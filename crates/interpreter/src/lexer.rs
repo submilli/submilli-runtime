@@ -5,7 +5,7 @@ use unicode_ident::{is_xid_continue, is_xid_start};
 use crate::{Diagnostic, FileId, RawDoc, Severity, Span, Token, TokenKind};
 
 const VALID_ESCAPES: &str =
-    "valid escapes: \\\", \\', \\\\, \\n, \\t, \\r, \\b, \\f, \\v, \\0, \\u{HHHH}";
+    "valid escapes: \\\", \\', \\\\, \\/, \\n, \\t, \\r, \\b, \\f, \\v, \\0, \\u{HHHH}";
 
 /// UTF-8 encoding of U+FEFF, which many editors write at the start of a file.
 const BOM: &[u8] = "\u{feff}".as_bytes();
@@ -191,7 +191,9 @@ impl<'a> Lexer<'a> {
     fn skip_trivia(&mut self) {
         loop {
             match self.peek() {
-                Some(b' ' | b'\t') => self.pos += 1,
+                // Space, tab, vertical tab, form feed.
+                Some(b' ' | b'\t' | 0x0B | 0x0C) => self.pos += 1,
+                Some(0x80..) if self.skip_space_separator() => {}
                 Some(b'/') => match self.peek_at(1) {
                     Some(b'/') => self.skip_line_comment(),
                     Some(b'*') => {
@@ -207,6 +209,15 @@ impl<'a> Lexer<'a> {
                 _ => return,
             }
         }
+    }
+
+    /// Skips one non-ASCII space separator; false when the next character is not one.
+    fn skip_space_separator(&mut self) -> bool {
+        let Some(c) = self.peek_char().filter(|&c| is_space_separator(c)) else {
+            return false;
+        };
+        self.pos += c.len_utf8() as u32;
+        true
     }
 
     fn skip_line_comment(&mut self) {
@@ -518,6 +529,11 @@ impl<'a> Lexer<'a> {
             }
             Some(b'\\') => {
                 out.push('\\');
+                self.pos += 1;
+            }
+            // JSON's escape set includes `\/`, so strings pasted from JSON carry it.
+            Some(b'/') => {
+                out.push('/');
                 self.pos += 1;
             }
             Some(b'n') => {
@@ -1047,6 +1063,16 @@ impl Radix {
     }
 }
 
+/// Unicode space separators (category Zs) beyond ASCII space, which JavaScript treats
+/// as whitespace. A no-break space pasted from a web page or word processor is the
+/// usual source.
+fn is_space_separator(c: char) -> bool {
+    matches!(
+        c,
+        '\u{a0}' | '\u{1680}' | '\u{2000}'..='\u{200a}' | '\u{202f}' | '\u{205f}' | '\u{3000}'
+    )
+}
+
 /// Numeric value of an ASCII hex digit; non-digits (never passed by `Radix::accepts`)
 /// map to `0`.
 fn hex_digit_value(b: u8) -> u32 {
@@ -1265,6 +1291,27 @@ mod tests {
         assert_eq!(tok.kind, TokenKind::NumberLiteral(42.0));
         assert_eq!(lx.next_token().kind, TokenKind::Eof);
         assert!(lx.into_diagnostics().is_empty());
+    }
+
+    #[test]
+    fn unicode_space_separators_are_whitespace() {
+        let source = "a\u{a0}b\u{1680}c\u{2000}d\u{200a}e\u{202f}f\u{205f}g\u{3000}h\u{0b}i\u{0c}j";
+        let (tokens, diags) = tokenize_all(source);
+        let names: Vec<_> = tokens
+            .iter()
+            .filter(|t| t.kind == TokenKind::Identifier)
+            .map(|t| &source[t.span.start as usize..t.span.end as usize])
+            .collect();
+        assert_eq!(names, ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"]);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn zero_width_space_is_not_whitespace() {
+        // U+200B is a format character (Cf), not a space separator, in JavaScript too.
+        let (_tokens, diags) = tokenize_all("a\u{200b}b");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.starts_with("unexpected character"));
     }
 
     #[test]
@@ -1581,6 +1628,13 @@ mod tests {
         assert!(matches!(tok.kind, TokenKind::StringLiteral(ref s) if s == "q"));
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].message, "unknown escape sequence `\\q`");
+    }
+
+    #[test]
+    fn string_escaped_slash_is_a_slash() {
+        let (tok, _eof, diags) = tokenize_one("\"a\\/b\"");
+        assert!(matches!(tok.kind, TokenKind::StringLiteral(ref s) if s == "a/b"));
+        assert!(diags.is_empty());
     }
 
     #[test]

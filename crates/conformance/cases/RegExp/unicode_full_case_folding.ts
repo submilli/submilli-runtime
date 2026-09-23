@@ -1,5 +1,4 @@
 // test262: test/built-ins/RegExp/unicode_full_case_folding.js
-// expect-fail: ECMA-262 Canonicalize applies simple/common case folding under /iu (e.g. U+0390 and U+1FD3 fold to each other); the engine's case-insensitive matching does not map these pairs
 
 function main(): void {
   assert(/[ΐ]/iu.test("ΐ"), "\\u0390 matches \\u1FD3");

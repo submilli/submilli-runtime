@@ -5,7 +5,7 @@ Source: `test/built-ins/RegExp/**` (~1900 files) plus the regex-arm
 methods were ported with the String area). The engine is the Rust `regex`
 crate behind `submilli:regex` (docs/regex.md), so this area carries the
 engine-divergence pins alongside the conformance port: 45 cases under
-`cases/RegExp/` (2 `expect-error` divergence pins, 14 `expect-fail` known
+`cases/RegExp/` (2 `expect-error` divergence pins, 12 `expect-fail` known
 gaps) + 7 regex-arm cases under `cases/String/prototype/{split,replaceAll}/`
 (1 `expect-fail`). Representative rejected originals under `rejected/RegExp/`.
 
@@ -58,7 +58,6 @@ asserting the JS behavior would be a permanent failure by design):
 | `S15.10.2.10_A5.1_T1` | `\<` and `\>` should be identity escapes; the engine parses them as start/end word-boundary assertions, so they never match the literal character. All other punctuation identity escapes pass (probed). |
 | `S15.10.2.5_A1_T4` | Captures inside a quantified group are not cleared on iterations where they don't participate (ECMA RepeatMatcher zeroes them): capture 4 of `/(z)((a+)?(b+)?(c))*/` on `"zaacbbbcac"` is `"bbb"`, JS says undefined. |
 | `nullable-quantifier` | `/(a?b??)*/` on `"ab"` matches only `"a"`; ECMA's RepeatMatcher empty-iteration rule lets JS match `"ab"`. |
-| `unicode_full_case_folding` | `/iu` does not apply the simple/common case foldings ECMA Canonicalize requires (U+0390↔U+1FD3, U+03B0↔U+1FE3, U+FB05↔U+FB06 don't match). |
 | `dotall/with-dotall`, `dotall/without-dotall` | `.` excludes only LF, not CR/U+2028/U+2029, and matches whole astral code points (see the divergence pins; the LineTerminator exclusions are an unpinned, undocumented gap). |
 | `named-groups/non-unicode-match` | `(?<$>...)` — `$` is a valid ECMA GroupName character; the engine rejects it ("invalid capture group character"). The non-`$` rows are covered by the passing `unicode-match` port. |
 | `named-groups/groups-object-unmatched` | Reading `namedGroups` **traps** when any named capture is unmatched — the `Map<string, string>` builder can't represent the null value. Makes optional named groups (`/(?<a>a)|(?<x>x)/`) unusable with `namedGroups`. |
