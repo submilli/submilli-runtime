@@ -76,6 +76,11 @@ at startup, the server is listening on a public address:
 WARN submilli_server::config: bound outside loopback: this server has no inbound authentication, so anything that can reach this port can run code, manage blueprints, and stop the server; make sure only your application can reach it (https://submilli.ai/docs/deploying/)
 ```
 
+If a package needs to call a service on your private network, allow just
+that address in the same file (`network: { allow_ip: ["10.0.12.7"] }`);
+[Outbound network](/docs/server#outbound-network) explains why the server
+blocks private addresses until you do.
+
 Back up `/var/lib/submilli` with the rest of the machine. Keep the store key
 out of that backup, or store it separately: keeping the two apart is what
 makes the encryption worth having. `submilli upgrade` replaces
@@ -216,6 +221,30 @@ works there and then fails on the Linux server you deploy to. Set `0444`
 everywhere. Keep the key out of source control and out of your volume
 backups.
 
+### Calling your internal services
+
+The server blocks programs from calling private addresses, which includes
+other containers on your Docker networks. So a package that calls one of your
+own services, say an inventory API in another container, fails with a
+generic network error until you allow that service's address:
+
+```yaml title="compose.override.yaml"
+services:
+  submilli:
+    environment:
+      SUBMILLI_ALLOW_IP: 172.21.0.3
+```
+
+`SUBMILLI_ALLOW_IP` takes an address or a range, comma-separated for more
+than one. Allow the narrowest thing that works: a container's address can
+change when it's recreated, so for a service that moves, give its network a
+fixed subnet and allow that. Expect this line in the log once you do; it's
+there so that a setting like this never goes unnoticed:
+
+```text
+WARN submilli_server: the outbound egress guard was widened by environment variables; the config file cannot revoke these vars="SUBMILLI_ALLOW_IP"
+```
+
 ### Upgrading and backing up
 
 To upgrade, point the image at a new tag and recreate the container:
@@ -342,6 +371,32 @@ protects the volume only if the key lives somewhere the volume doesn't, and
 a Kubernetes Secret in the same namespace usually doesn't qualify. Turn it on
 (`secretStore.enabled`) when the key comes from a KMS or a CSI secrets
 driver.
+
+### Calling your internal services
+
+Pod and Service addresses in a cluster are private addresses, so the server
+blocks programs from calling them until you allow them. For a package that
+calls one of your own services, find the Service's cluster IP and pass it
+through the chart's `extraEnv`:
+
+```sh
+kubectl -n internal get svc inventory -o jsonpath='{.spec.clusterIP}'
+```
+
+```yaml title="values.yaml"
+extraEnv:
+  - name: SUBMILLI_ALLOW_IP
+    value: 10.96.45.205
+```
+
+Programs keep calling the service by name (`http://inventory.internal.svc/`);
+the server checks the address the name resolves to. A Service keeps its
+cluster IP until it's deleted, so allow that one address rather than the
+cluster's whole Service range. As with Compose, the server logs a warning
+naming `SUBMILLI_ALLOW_IP` at startup, to keep the setting visible.
+
+The chart's NetworkPolicy only controls who can call the server, not what
+the server calls. The address check above is what limits outbound calls.
 
 ### Memory
 
