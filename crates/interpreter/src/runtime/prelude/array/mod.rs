@@ -135,17 +135,52 @@ fn read_string_units(caller: &mut Caller<'_, StoreData>, val: &Val) -> wasmtime:
 }
 
 /// The element's `toString()` (vtable slot 0) as code units — `join` and the
-/// default `sort` order.
+/// default `sort` order. `null` has no vtable, so each caller decides its text:
+/// JavaScript joins it as `""` but sorts it as `"null"`.
 async fn element_to_string(
     caller: &mut Caller<'_, StoreData>,
     elem: Val,
 ) -> wasmtime::Result<Vec<u16>> {
+    if is_null(&elem) {
+        return Err(wasmtime::Error::msg("array element toString: null element"));
+    }
     let s = dispatch_vtable_slot(caller, &elem, 0, &[]).await?;
     read_string_units(caller, &s)
 }
 
-/// Whether `slot` equals `target` via `slot`'s `equals` (vtable slot 2) —
-/// `indexOf`/`lastIndexOf`/`includes`.
+/// An element's text in `join`: `null` joins as the empty string, as in JavaScript
+/// (`[1, null].join()` is `"1,"`).
+async fn join_text(caller: &mut Caller<'_, StoreData>, elem: Val) -> wasmtime::Result<Vec<u16>> {
+    if is_null(&elem) {
+        return Ok(Vec::new());
+    }
+    element_to_string(caller, elem).await
+}
+
+/// An element's key in the default `sort` order: `null` sorts as the string
+/// `"null"`, as in JavaScript (`[null, "a"].sort()` is `["a", null]`).
+async fn sort_key(caller: &mut Caller<'_, StoreData>, elem: Val) -> wasmtime::Result<Vec<u16>> {
+    if is_null(&elem) {
+        return Ok("null".encode_utf16().collect());
+    }
+    element_to_string(caller, elem).await
+}
+
+/// Whether `slot` holds `target` — `indexOf`/`lastIndexOf`/`includes`. `null`
+/// equals only `null` (`[1, null].indexOf(null)` is `1`) and is decided here: a null
+/// slot has no vtable, and a class's `equals` cannot take a null argument.
+async fn element_matches(
+    caller: &mut Caller<'_, StoreData>,
+    slot: Val,
+    target: Val,
+) -> wasmtime::Result<bool> {
+    if is_null(&slot) || is_null(&target) {
+        return Ok(is_null(&slot) && is_null(&target));
+    }
+    element_equals(caller, slot, target).await
+}
+
+/// Whether `slot` equals `target` via `slot`'s `equals` (vtable slot 2).
 async fn element_equals(
     caller: &mut Caller<'_, StoreData>,
     slot: Val,
@@ -254,7 +289,7 @@ async fn index_of(
     let mut i = fwd_from(from, len);
     while i < len {
         let e = elements[i as usize];
-        if !is_null(&e) && element_equals(caller, e, target).await? {
+        if element_matches(caller, e, target).await? {
             return Ok(i as f64);
         }
         i += 1;
@@ -274,7 +309,7 @@ async fn last_index_of(
     };
     while i >= 0 {
         let e = elements[i as usize];
-        if !is_null(&e) && element_equals(caller, e, target).await? {
+        if element_matches(caller, e, target).await? {
             return Ok(i as f64);
         }
         i -= 1;
@@ -292,7 +327,7 @@ async fn includes(
     let mut i = fwd_from(from, len);
     while i < len {
         let e = elements[i as usize];
-        if !is_null(&e) && element_equals(caller, e, target).await? {
+        if element_matches(caller, e, target).await? {
             return Ok(true);
         }
         i += 1;
@@ -308,10 +343,10 @@ async fn join(
     if elements.is_empty() {
         return Ok(Vec::new());
     }
-    let mut acc = element_to_string(caller, elements[0]).await?;
+    let mut acc = join_text(caller, elements[0]).await?;
     for &e in &elements[1..] {
         acc.extend_from_slice(&sep);
-        let s = element_to_string(caller, e).await?;
+        let s = join_text(caller, e).await?;
         acc.extend_from_slice(&s);
     }
     Ok(acc)
@@ -481,8 +516,8 @@ async fn sort_elems(
             let greater = if let Some(c) = cmp {
                 c.call_number(caller, a, b).await? > 0.0
             } else {
-                let sa = element_to_string(caller, a).await?;
-                let sb = element_to_string(caller, b).await?;
+                let sa = sort_key(caller, a).await?;
+                let sb = sort_key(caller, b).await?;
                 sa > sb
             };
             if !greater {

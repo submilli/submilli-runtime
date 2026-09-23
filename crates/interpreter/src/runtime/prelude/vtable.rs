@@ -364,7 +364,7 @@ fn build_array_vtable(
 }
 
 /// `Array#toString` == `join(",")`: each element's `toString` slot, joined by `,`.
-/// Matches `prelude::array::join_body`, which traps on a null element.
+/// Matches `prelude::array::join`: a null element contributes the empty string.
 async fn array_to_string(
     caller: &mut Caller<'_, StoreData>,
     recv: &Val,
@@ -382,7 +382,8 @@ async fn array_to_string(
                 let s = dispatch_vtable_slot(caller, elem, 0, &[]).await?;
                 out.extend(read_units_val(caller, &s, "Array#toString element")?);
             }
-            other => wasmtime::bail!("Array#toString: null/invalid element {other:?}"),
+            Val::AnyRef(None) => {}
+            other => wasmtime::bail!("Array#toString: invalid element {other:?}"),
         }
     }
     let vtable = host_string_vtable(caller)?;

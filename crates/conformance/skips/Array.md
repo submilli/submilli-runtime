@@ -6,7 +6,7 @@ unshift/splice, at/slice/concat, indexOf/lastIndexOf/includes, the find
 family, map/filter/reduce/reduceRight/forEach/some/every, join/reverse/sort,
 fill/copyWithin, flat/flatMap, keys/values/entries, toReversed/toSorted/
 toSpliced/with) and the statics `Array.from`/`Array.of`/`Array.isArray` with
-at least one behavioral case each. 71 ported (62 passing, 6 `expect-fail`,
+at least one behavioral case each. 71 ported (64 passing, 4 `expect-fail`,
 3 `expect-error` incl. `cases/Array/divergence/`), plus the pre-existing
 `includes/using-fromindex`. Representative rejected originals under
 `rejected/Array/`.
@@ -46,8 +46,6 @@ Porting adaptations used throughout (README rules):
 | Case | Gap |
 |:--|:--|
 | `prototype/includes/samevaluezero` | `includes` dispatches through the `equals` vtable (NaN !== NaN) instead of SameValueZero — `[NaN].includes(NaN)` returns `false`, standard says `true`. (`indexOf`'s StrictEquality NaN behavior is correct — `indexOf/15.4.4.14-9-10` passes.) |
-| `prototype/indexOf/15.4.4.14-9-6` | Searching for `null` in a `(T \| null)[]` array traps **uncatchably** (null dereference in the equals dispatch) instead of returning the matching index. Affects `indexOf`/`includes` (probed); the null rows of the includes search-found/not-found ports are dropped and pinned here. Scanning *over* null elements with a non-null needle works. |
-| `prototype/join/S15.4.4.5_A1.3_T1` | ECMA says undefined/null elements join as `""`; a null element makes `join` trap uncatchably. |
 | `prototype/push/S15.4.4.7_A1_T2` | Standard `push` is variadic; ours is `push(elem: T)` — a multi-argument push is a compile-time arity error. (`unshift` *is* variadic.) |
 | `prototype/concat/S15.4.4.4_A1_T2` | Standard `concat` appends non-array arguments as elements; ours is `concat(...others: T[][])` — a scalar argument is a compile-time type error. |
 | `prototype/find/predicate-call-parameters` | Standard HOF callbacks receive `(value, index, array)`; every Array callback type here is single-parameter (`(T) => ...`), so a multi-parameter callback is a compile error. One representative pinned; the same applies to forEach/map/filter/some/every/findIndex/findLast(Index)/flatMap, `sort`'s comparator excepted. `Array.from` now supports type-changing `(T) => U` mappers, but still has no index argument. |
@@ -85,7 +83,7 @@ Porting adaptations used throughout (README rules):
 | `concat` remainder (Symbol.isConcatSpreadable, array-likes, large-index rows) | Spreadability is type-determined here (arrays spread, nothing else accepted); the scalar-argument gap is pinned by the expect-fail `S15.4.4.4_A1_T2`. |
 | `sort` remainder (other `stability-*` sizes, `bug_596_*` ToString-call counts, comparator-throws ordering) | `stability-5-elements` pins stability; default lexicographic order is pinned by `toSorted/comparefn-default` (ours matches JS); comparator-abrupt cases are getter/this-coercion territory. |
 | `splice`/`slice` Sputnik clamp tables (`S15.4.4.12_A1.*`, `S15.4.4.10_A1.*` remainder) | One-assert files repeating the same negative/clamp table; the ported start/negative/fractional/at-length cases plus `conformance_array.subm` cover the table corners. |
-| `join` separator-coercion rows (`S15.4.4.5_A2_T*`, `A3.*`, `join(true)`, `join(Infinity)`) | Separator is `string?` — non-string separators are type errors. Default/custom/empty-array rows are ported; the null-element row is the expect-fail `A1.3_T1`. |
+| `join` separator-coercion rows (`S15.4.4.5_A2_T*`, `A3.*`, `join(true)`, `join(Infinity)`) | Separator is `string?` — non-string separators are type errors. Default/custom/empty-array rows are ported; the null-element row is `A1.3_T1`. |
 | `from`/`of` remainder (`iter-*` ctor/err protocol cases, `mapfn-is-not-callable`, `sets-length.js`, custom-`this` construction) | Iterator-protocol error paths and custom constructors are Symbol/species territory; the behavioral copy/string/iterable/mapper cases are ported. `Array.of` over mixed types needs an explicit union annotation (ported case). |
 | `isArray` remainder (wrapper objects, proxies, host realms) | No wrapper objects/proxies/realms; true/false primitive cases ported. |
 | `with` remainder (`index-casted-to-number`, `negative-fractional-index-truncated-to-zero`, `holes-not-preserved`, `ignores-species`, frozen) | Casting/holes/species/frozen are rejected categories; negative/OOB-throw cases are ported (ours throws the base `Error`, not `RangeError` — no error subclasses yet). |
@@ -99,5 +97,3 @@ Porting adaptations used throughout (README rules):
 - A call nested directly in `assertSameValue(...)` receives an `unknown`
   expected-type hint that pins generic returns (`reduce`'s `U` infers as
   `unknown` and then conflicts); ports assign to a `const` first.
-- `console.log(null)` and `join` on a null element trap — `show()` in
-  harness.ts handles null explicitly, so shim messages are safe.
