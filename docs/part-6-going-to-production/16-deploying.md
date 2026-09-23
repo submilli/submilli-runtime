@@ -25,13 +25,12 @@ changes is how each setup handles the same three jobs.
 
 ## What every deployment has to get right
 
-**Only your application can reach the server.** The server doesn't
-authenticate callers yet. Anything that can connect to its port can run
-programs, register or replace blueprints, and stop it. So the server should
-sit where your application can reach it and nothing else can: loopback on a
-single machine, a private network in Compose, a network policy in
-Kubernetes. Each section below shows how its setup does this, and where it
-stops protecting you.
+**Only your application can reach the server.** Your application is the
+server's one client, and the server doesn't check credentials of its own yet,
+so where it sits on the network decides who can use it. Each setup below
+places it where your application can reach it and nothing else can: loopback
+on a single machine, a private network in Compose, a network policy in
+Kubernetes. Each section shows how, and how to confirm it's working.
 
 **State lives on storage that outlasts the process.** Registered blueprints,
 open sessions, installed packages, and secrets all live under
@@ -78,8 +77,8 @@ WARN submilli_server::config: bound outside loopback: this server has no inbound
 ```
 
 Back up `/var/lib/submilli` with the rest of the machine. Keep the store key
-out of that backup, or store it separately: a backup that holds both the
-sealed secrets and their key protects nothing. `submilli upgrade` replaces
+out of that backup, or store it separately: keeping the two apart is what
+makes the encryption worth having. `submilli upgrade` replaces
 both binaries with the latest release; restart the server afterwards.
 
 ## With Docker Compose
@@ -140,12 +139,11 @@ requests time out.
   `tmpfs` at `/tmp`, so it never grows the container's disk.
 - **A locked-down container.** The server runs as a non-root user on a
   read-only filesystem with every Linux capability dropped. The image has no
-  shell. If a program ever escaped the sandbox, there would be little inside
-  the container to use.
+  shell. These are extra layers beneath the sandbox itself.
 - **A health check** using `submilli-server --health-check`, which is why
   `docker compose ps` can say `healthy`.
-- **Ten seconds to stop.** Docker waits that long before killing the
-  container, which covers the server's own five-second drain. If you raise
+- **Ten seconds to stop.** Docker waits that long before forcing the
+  container to stop, which covers the server's own five-second drain. If you raise
   `--shutdown-grace`, raise `stop_grace_period` with it.
 
 ### Blueprints and packages
@@ -290,9 +288,9 @@ The policy has three limits worth knowing:
   starts a pod that shouldn't get through and fails if it does.
 - **It admits pods, not requests.** Every pod you allow gets the whole API,
   including replacing blueprints.
-- **`kubectl port-forward` goes around it.** Anyone allowed to port-forward
-  into the namespace can reach the server. That's fine for debugging, but
-  it's worth knowing who has that permission.
+- **`kubectl port-forward` is a separate way in.** It's handy for
+  debugging, and it's worth deciding who on your team should have that
+  permission.
 
 ### Blueprints and secrets
 
@@ -359,8 +357,8 @@ The multiplier is large because the limit counts memory a program holds,
 not memory the process uses on the way. One execution near its limit has
 been measured at more than 12 times that in process memory, all released
 when it finishes. The formula covers one such execution at a time; several
-at once can still exceed it and get the pod killed for running out of memory.
-If your programs handle large data, measure your own peak usage.
+at once can use more, so if your programs handle large data, measure your own
+peak.
 
 ### Storage, replicas, and upgrades
 
@@ -370,8 +368,8 @@ claim by hand when you mean to.
 
 The chart runs the server as a StatefulSet, and its volume uses the
 `ReadWriteOncePod` access mode (Kubernetes 1.29 and later). Both exist for
-the same reason: the server's stores assume one process at a time, and two
-pods writing the same volume would silently corrupt them. On an older
+the same reason: the server's stores assume one process at a time, and the
+chart makes sure only one pod ever writes to a volume. On an older
 cluster, set `persistence.accessMode: ReadWriteOnce`.
 
 Choose the storage settings before installing. Access mode, storage class,
