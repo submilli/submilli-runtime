@@ -37,6 +37,15 @@ pub struct Asi<'a> {
     paren_is_header: Vec<bool>,
     closed_header_paren: bool,
     closed_block_brace: bool,
+    /// `<`/`>` nesting inside the type of a `<T>expr` cast, or 0 outside one. A cast's
+    /// `<` stands where an operand is expected; every other `<` follows an operand (a
+    /// comparison) or a name (`Array<`, `f<`, `class Box<`), so the position alone
+    /// tells them apart.
+    cast_angle_depth: u32,
+    /// Did `last_emitted` close a cast's type? The `{` after it is the cast's operand —
+    /// an object literal — where after any other `>` it opens a body
+    /// (`function f(): Array<number> {`).
+    closed_cast_angle: bool,
     /// Set between a `class` / `interface` / `enum` keyword and the `{` opening its body.
     /// A declaration header is not a statement, so it never ends inside one — which a
     /// token table cannot see, since the header's last token is an ordinary identifier.
@@ -78,6 +87,8 @@ impl<'a> Asi<'a> {
             after_case_label_colon: false,
             in_decl_header: false,
             brace_opens_specifier_list: false,
+            cast_angle_depth: 0,
+            closed_cast_angle: false,
         }
     }
 
@@ -217,6 +228,9 @@ impl<'a> Asi<'a> {
         if self.after_case_label_colon {
             return BraceKind::Block;
         }
+        if self.closed_cast_angle {
+            return BraceKind::Value;
+        }
         match &self.last_emitted {
             // A colon also introduces object values and ternary alternates. Their
             // comma separators already suppress ASI, so the same base is safe.
@@ -246,6 +260,7 @@ impl<'a> Asi<'a> {
         self.correct_bang_context(kind);
         let closed_block = self.brace_closed_by(kind) == Some(BraceKind::Block);
         let closed_header = self.track_brackets(kind);
+        let closed_cast = self.track_cast_angles(kind);
         self.after_case_label_colon = self.next_after_case_label_colon(kind);
         self.in_case_label = self.next_in_case_label(kind);
         self.in_decl_header = self.next_in_decl_header(kind);
@@ -253,7 +268,34 @@ impl<'a> Asi<'a> {
         self.last_is_member_name = self.next_last_is_member_name();
         self.closed_header_paren = closed_header;
         self.closed_block_brace = closed_block;
+        self.closed_cast_angle = closed_cast;
         self.last_emitted = Some(kind.clone());
+    }
+
+    /// Angle-bracket bookkeeping for `<T>expr` casts; returns whether `kind` closed one.
+    fn track_cast_angles(&mut self, kind: &TokenKind) -> bool {
+        match kind {
+            TokenKind::LessThan if self.cast_angle_depth > 0 => self.cast_angle_depth += 1,
+            TokenKind::LessThan if self.expects_operand() => self.cast_angle_depth = 1,
+            TokenKind::GreaterThan if self.cast_angle_depth > 0 => {
+                self.cast_angle_depth -= 1;
+                return self.cast_angle_depth == 0;
+            }
+            _ => {}
+        }
+        false
+    }
+
+    /// Is the next token an operand — the start of an expression rather than something
+    /// continuing one?
+    fn expects_operand(&self) -> bool {
+        self.at_statement_start()
+            || self
+                .last_emitted
+                .as_ref()
+                // `=>` stays out of `opens_value_brace` because `=> {` opens a body, but
+                // what follows it is still an operand: `x => <Foo>{ … }`.
+                .is_some_and(|kind| opens_value_brace(kind) || matches!(kind, TokenKind::Arrow))
     }
 
     /// Refine the lexer's prefix/postfix choice using grammatical boundary state.
@@ -485,6 +527,8 @@ fn opens_value_brace(kind: &TokenKind) -> bool {
             TokenKind::LeftParen
                 | TokenKind::LeftBracket
                 | TokenKind::Comma
+                // A spread's operand: `{ ...{ a: 1 } }`, `[...{ … }]`.
+                | TokenKind::DotDotDot
                 | TokenKind::Return
                 | TokenKind::Throw
                 | TokenKind::Const
@@ -1410,6 +1454,37 @@ mod tests {
         assert_eq!(
             asi_marked("class Box<T> {\nv: number = 1\n}"),
             "class Box<T> {\nv: number = 1\n<;>}<;>"
+        );
+    }
+
+    #[test]
+    fn a_cast_is_followed_by_an_object_literal() {
+        // A `<` in operand position opens a cast, so its `>` leaves a value next.
+        assert_eq!(
+            asi_marked("x = <Foo>{ a: 1 }\ny()"),
+            "x = <Foo>{ a: 1 }\n<;>y()<;>"
+        );
+        assert_eq!(asi_marked("<Foo>{ a: 1 }\ny()"), "<Foo>{ a: 1 }\n<;>y()<;>");
+        assert_eq!(
+            asi_marked("f = x => <Foo>{ a: x }\ny()"),
+            "f = x => <Foo>{ a: x }\n<;>y()<;>"
+        );
+        assert_eq!(
+            asi_marked("x = <Box<Array<number>>>{ v: [] }\ny()"),
+            "x = <Box<Array<number>>>{ v: [] }\n<;>y()<;>"
+        );
+        // After a comparison the next `<` follows an operand, so no cast is tracked.
+        assert_eq!(
+            asi_marked("if (a < b) {\nreturn a\n}"),
+            "if (a < b) {\nreturn a\n<;>}<;>"
+        );
+    }
+
+    #[test]
+    fn a_spread_operand_is_an_object_literal() {
+        assert_eq!(
+            asi_marked("x = { ...{ a: 1 }, b: 2 }\ny()"),
+            "x = { ...{ a: 1 }, b: 2 }\n<;>y()<;>"
         );
     }
 
