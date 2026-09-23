@@ -4509,13 +4509,23 @@ impl Inferer<'_> {
         if let Some(want) = expected_fields.as_ref() {
             for (name, want_field) in want {
                 if let Some((existing_field, existing_origin)) = merged.get_mut(name) {
-                    // A literal field was checked against the interface where it
-                    // was written; a spread's field is checked here.
-                    if interface_target.is_some()
-                        && matches!(
-                            existing_origin,
-                            crate::TypedObjectFieldSource::Spread { .. }
-                        )
+                    // A literal field was checked against the target where it was
+                    // written; a spread's field is checked here, before the target's
+                    // optionality (and an interface's type) replaces its own.
+                    let from_spread = matches!(
+                        existing_origin,
+                        crate::TypedObjectFieldSource::Spread { .. }
+                    );
+                    if from_spread && existing_field.optional && !want_field.optional {
+                        self.error_with_help(
+                            span,
+                            format!(
+                                "spread field `{name}` may be absent, but the target requires it"
+                            ),
+                            vec![format!("give `{name}` a value after the spread")],
+                        );
+                    } else if from_spread
+                        && interface_target.is_some()
                         && !assignable(&existing_field.ty, &want_field.ty, self.resolver())
                     {
                         let message = format!(
@@ -4599,10 +4609,10 @@ impl Inferer<'_> {
         )
     }
 
-    /// The fields a spread copies, and whether they must be found by name at run
-    /// time (`by_name`). A conditional contributes each branch rather than their join —
-    /// `c ? a : {}` joins to `{}`, which would copy nothing when `a` is chosen —
-    /// and a union contributes each member. Over more than one alternative, a
+    /// The fields a spread copies, and whether they must be found by name at
+    /// run time (`by_name`). A conditional contributes each branch rather than
+    /// their join — `c ? a : {}` joins to `{}`, which would copy nothing when `a`
+    /// is chosen — and a union contributes each member. Over more than one alternative, a
     /// field some lack is optional and its type is the union of theirs, as in
     /// TypeScript. Only structural object types spread; anything else is reported.
     fn spread_source_fields(
@@ -8305,27 +8315,17 @@ fn merge_spread_field(
     let Some((earlier_field, earlier_origin)) = earlier.filter(|_| keeps_earlier) else {
         return (field, origin);
     };
-    let crate::TypedObjectFieldSource::Spread {
-        source_index,
-        field_name,
-        source_ty,
-        ..
-    } = origin
-    else {
-        unreachable!("a spread field's origin is a spread");
-    };
+    let mut origin = origin;
+    if let crate::TypedObjectFieldSource::Spread { fallback, .. } = &mut origin {
+        *fallback = Some(Box::new(earlier_origin));
+    }
     (
         crate::ObjectField {
             ty: Type::union(vec![earlier_field.ty, field.ty]),
             optional: earlier_field.optional,
             readonly: false,
         },
-        crate::TypedObjectFieldSource::Spread {
-            source_index,
-            field_name,
-            source_ty,
-            fallback: Some(Box::new(earlier_origin)),
-        },
+        origin,
     )
 }
 

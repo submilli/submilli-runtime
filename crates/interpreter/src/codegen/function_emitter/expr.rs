@@ -17,10 +17,12 @@
 
 use crate::codegen::CodegenCtx;
 use crate::codegen::bounds::{emit_checked_index, stash_index_operand};
+use crate::codegen::cast_check::emit_structural_test;
 use crate::codegen::function_emitter::FunctionEmitter;
 use crate::codegen::function_emitter::cast;
 use crate::codegen::symbol_table::{MethodSlotAbi, may_hold_null};
 use crate::typechecker::infer::narrowing::{BindingId, ReferencePath, cast_info_for};
+use crate::typed_ast::field_runtime_type_is_testable;
 use crate::{
     BinOp, ExprId, Ident, Intrinsic, Type, TypedExprKind, TypedObjectFieldSource,
     TypedObjectMember, UnOp,
@@ -4591,38 +4593,29 @@ fn emit_object_field_source(
     evaluated: &EvaluatedMembers,
     source: &TypedObjectFieldSource,
 ) {
-    let TypedObjectFieldSource::Spread {
-        source_index,
-        field_name,
-        source_ty,
-        fallback,
-    } = source
-    else {
-        let TypedObjectFieldSource::Literal(value_id) = source else {
-            unreachable!("a field's source is a literal or a spread");
-        };
-        emitter.instruction(Instruction::LocalGet(evaluated.values[value_id]));
-        return;
+    let (source_index, field_name, source_ty, fallback) = match source {
+        TypedObjectFieldSource::Literal(value_id) => {
+            emitter.instruction(Instruction::LocalGet(evaluated.values[value_id]));
+            return;
+        }
+        TypedObjectFieldSource::Spread {
+            source_index,
+            field_name,
+            source_ty,
+            fallback,
+        } => (*source_index, field_name, source_ty, fallback.as_deref()),
     };
-    let fallback = fallback.as_deref();
-    match &evaluated.spreads[*source_index] {
+    match &evaluated.spreads[source_index] {
         SpreadSource::Layout {
             local,
             shape_idx,
             field_names,
         } => {
-            emit_layout_field_read(emitter, ctx, *local, *shape_idx, field_names, field_name);
-            if let Some(fallback) = fallback {
-                // A fixed-layout slot holds null for an absent field.
-                let read = emitter.add_anonymous_local(object_ref(object_type_idx(ctx)));
-                emitter.instruction(Instruction::LocalTee(read));
-                emitter.instruction(Instruction::RefIsNull);
-                emitter.emit_if(BlockType::Result(object_ref(object_type_idx(ctx))));
-                emit_object_field_source(emitter, ctx, evaluated, fallback);
-                emitter.emit_else();
-                emitter.instruction(Instruction::LocalGet(read));
-                emitter.emit_end();
-            }
+            let slot = field_names
+                .iter()
+                .position(|k| k == field_name)
+                .expect("spread origin's field_name is in source's field set");
+            emit_layout_field_read(emitter, ctx, evaluated, *local, *shape_idx, slot, fallback);
         }
         SpreadSource::ByName { local } => {
             let Type::Object { fields } = source_ty else {
@@ -4636,29 +4629,41 @@ fn emit_object_field_source(
     }
 }
 
+/// Reads slot `slot` of a spread source of one known layout, or else the
+/// `fallback`: a fixed-layout slot holds null for an absent field.
 fn emit_layout_field_read(
     emitter: &mut FunctionEmitter<'_>,
     ctx: &CodegenCtx<'_>,
+    evaluated: &EvaluatedMembers,
     local: u32,
     shape_idx: u32,
-    field_names: &[String],
-    field_name: &str,
+    slot: usize,
+    fallback: Option<&TypedObjectFieldSource>,
 ) {
-    let slot = field_names
-        .iter()
-        .position(|k| k == field_name)
-        .expect("spread origin's field_name is in source's field set");
-    let intrinsics = ctx
+    let object_fields = ctx
         .symbols
         .intrinsic_type_indices()
-        .expect("intrinsics declared by codegen entry");
+        .expect("intrinsics declared by codegen entry")
+        .object_fields;
     emitter.instruction(Instruction::LocalGet(local));
     emitter.instruction(Instruction::StructGet {
         struct_type_index: shape_idx,
         field_index: 2,
     });
     emitter.instruction(Instruction::I32Const(slot as i32));
-    emitter.instruction(Instruction::ArrayGet(intrinsics.object_fields));
+    emitter.instruction(Instruction::ArrayGet(object_fields));
+    let Some(fallback) = fallback else {
+        return;
+    };
+    let object_ty = object_ref(object_type_idx(ctx));
+    let read = emitter.add_anonymous_local(object_ty);
+    emitter.instruction(Instruction::LocalTee(read));
+    emitter.instruction(Instruction::RefIsNull);
+    emitter.emit_if(BlockType::Result(object_ty));
+    emit_object_field_source(emitter, ctx, evaluated, fallback);
+    emitter.emit_else();
+    emitter.instruction(Instruction::LocalGet(read));
+    emitter.emit_end();
 }
 
 /// Reads `field_name` from a spread source of no one layout, or else the
@@ -4692,7 +4697,36 @@ fn emit_by_name_field_read(
     emitter.emit_if(BlockType::Result(ValType::I32));
     emit_field_slot_get(emitter, intrinsics, object, index);
     emitter.instruction(Instruction::LocalSet(value));
-    // An optional slot holding null is absent, as `in` has it (SUB-961).
+    emit_field_holds_value_of(emitter, ctx, object, index, value, field_ty);
+    emitter.emit_else();
+    emitter.instruction(Instruction::I32Const(0));
+    emitter.emit_end();
+
+    emitter.emit_if(BlockType::Result(object_ref(intrinsics.object)));
+    emitter.instruction(Instruction::LocalGet(value));
+    emitter.emit_else();
+    match fallback {
+        Some(fallback) => emit_object_field_source(emitter, ctx, evaluated, fallback),
+        None => emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object))),
+    }
+    emitter.emit_end();
+}
+
+/// Pushes whether the field at `index`, whose slot holds `value`, is present
+/// with a value of `field_ty`. An optional slot holding null is absent, as `in`
+/// has it (SUB-961).
+fn emit_field_holds_value_of(
+    emitter: &mut FunctionEmitter<'_>,
+    ctx: &CodegenCtx<'_>,
+    object: u32,
+    index: u32,
+    value: u32,
+    field_ty: &Type,
+) {
+    let intrinsics = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .expect("intrinsics declared by codegen entry");
     emitter.instruction(Instruction::LocalGet(object));
     emitter.instruction(Instruction::StructGet {
         struct_type_index: intrinsics.object_shape,
@@ -4708,22 +4742,10 @@ fn emit_by_name_field_read(
     emitter.instruction(Instruction::RefIsNull);
     emitter.instruction(Instruction::I32Eqz);
     emitter.instruction(Instruction::I32Or);
-    if crate::typed_ast::runtime_type_is_testable(field_ty) {
-        crate::codegen::cast_check::emit_structural_test(emitter, ctx, value, field_ty);
+    if field_runtime_type_is_testable(field_ty) {
+        emit_structural_test(emitter, ctx, value, field_ty);
         emitter.instruction(Instruction::I32And);
     }
-    emitter.emit_else();
-    emitter.instruction(Instruction::I32Const(0));
-    emitter.emit_end();
-
-    emitter.emit_if(BlockType::Result(object_ref(intrinsics.object)));
-    emitter.instruction(Instruction::LocalGet(value));
-    emitter.emit_else();
-    match fallback {
-        Some(fallback) => emit_object_field_source(emitter, ctx, evaluated, fallback),
-        None => emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object))),
-    }
-    emitter.emit_end();
 }
 
 fn object_ref(object_type: u32) -> ValType {
