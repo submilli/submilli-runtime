@@ -26,6 +26,19 @@ pub(super) fn non_null_form(ty: Type) -> Option<Type> {
     }
 }
 
+/// A named alias, class, or interface instance's name and type arguments.
+fn named_instance(ty: &Type) -> Option<(&crate::MangledName, &[Type])> {
+    if let Type::Alias { mangled, args, .. } | Type::AliasRef { mangled, args, .. } = ty {
+        return Some((mangled, args));
+    }
+    match ty.peel() {
+        Type::InterfaceRef { mangled, args, .. } | Type::ClassRef { mangled, args, .. } => {
+            Some((mangled, args))
+        }
+        _ => None,
+    }
+}
+
 fn field_member_ty(fields: &BTreeMap<String, ObjectField>, field_name: &str) -> Option<Type> {
     Some(fields.get(field_name)?.read_ty())
 }
@@ -450,12 +463,16 @@ impl<'a> Inferer<'a> {
     }
 
     /// The type a binding declared `declared` narrows to after a write of a
-    /// `written` value. It is the value's own type, as for any write, unless a
-    /// declared member that accepts the value declares something `readonly`: a
-    /// `readonly` array, field, or property the declaration names must survive
-    /// `o = { xs: [1] }`. Then the binding narrows to the most specific such
-    /// member, as TypeScript's assignment narrowing picks declared members.
+    /// `written` value. It is the value's own type, as for any write, unless the
+    /// declaration has something `readonly` in it: a `readonly` array, field, or
+    /// property the declaration names must survive `o = { xs: [1] }`. Then the
+    /// binding narrows to the most specific declared member that accepts the
+    /// value, as TypeScript's assignment narrowing picks declared members, or
+    /// stays at its declared type when no member can stand for the value.
     pub(super) fn assignment_narrowed_ty(&self, declared: &Type, written: Type) -> Type {
+        if !self.declares_readonly(declared) {
+            return written;
+        }
         let members: Vec<&Type> = match declared.peel_preserving_readonly() {
             Type::Union(members) => members.iter().collect(),
             other => vec![other],
@@ -464,62 +481,185 @@ impl<'a> Inferer<'a> {
             Type::Union(parts) => parts.clone(),
             _ => vec![written.clone()],
         };
-        let narrowed = parts
+        let narrowed: Option<Vec<Type>> = parts
             .into_iter()
-            .map(|part| self.narrow_written_part(&members, part))
+            .map(|part| self.declared_member_for(&members, part))
             .collect();
-        Type::union(narrowed)
+        narrowed.map_or_else(|| declared.clone(), Type::union)
     }
 
-    fn narrow_written_part(&self, members: &[&Type], part: Type) -> Type {
-        // A value that forbids writes itself keeps its own type: narrowing it to a
-        // mutable member would give back what it does not allow.
-        if narrows_to_itself(&part) || self.declares_readonly(&part, 0) {
-            return part;
+    /// The declared member a written `part` narrows its binding to, or `None`
+    /// when no single member can stand for it.
+    fn declared_member_for(&self, members: &[&Type], part: Type) -> Option<Type> {
+        if narrows_to_itself(&part) {
+            return Some(part);
         }
         let accepting: Vec<&Type> = members
             .iter()
             .copied()
             .filter(|member| super::assignable(&part, member, self.resolver()))
             .collect();
-        if !accepting
-            .iter()
-            .any(|member| self.declares_readonly(member, 0))
-        {
-            return part;
-        }
         // Members that differ only in `readonly` (`readonly T[] | T[]`) narrow to
         // the readonly one: it permits every read either does, and no write.
         if let Some(readonly) = accepting.iter().find(|m| m.is_readonly_array())
             && accepting.iter().all(|m| m.peel() == readonly.peel())
         {
-            return (*readonly).clone();
+            return Some((*readonly).clone());
         }
         let most_specific = accepting.iter().find(|candidate| {
             accepting
                 .iter()
                 .all(|other| super::assignable(candidate, other, self.resolver()))
         });
-        match most_specific {
+        let member = match most_specific {
             Some(member) => (*member).clone(),
-            None => Type::union(accepting.into_iter().cloned().collect()),
+            None if !accepting.is_empty() => Type::union(accepting.into_iter().cloned().collect()),
+            None => return None,
+        };
+        if self.may_lose_readonly(&part, &member) {
+            return None;
+        }
+        Some(member)
+    }
+
+    /// Whether seeing a `part` value as `member` could make writable something
+    /// the value's own type forbids writing: a `readonly` of the value's, at a
+    /// place the member reaches, that the member does not repeat there.
+    fn may_lose_readonly(&self, part: &Type, member: &Type) -> bool {
+        self.may_lose_readonly_within(part, member, &mut Vec::new())
+    }
+
+    /// `compared` holds the pairs already met. Meeting one again adds nothing,
+    /// which keeps a recursive type finite.
+    fn may_lose_readonly_within(
+        &self,
+        part: &Type,
+        member: &Type,
+        compared: &mut Vec<(Type, Type)>,
+    ) -> bool {
+        if part.peel() == member.peel() || !self.declares_readonly(part) {
+            return false;
+        }
+        let pair = (part.clone(), member.clone());
+        if compared.contains(&pair) {
+            return false;
+        }
+        compared.push(pair);
+        // Two instances of one generic type differ only in their arguments.
+        if let (Some((part_name, part_args)), Some((member_name, member_args))) =
+            (named_instance(part), named_instance(member))
+            && part_name == member_name
+        {
+            return part_args
+                .iter()
+                .zip(member_args)
+                .any(|(p, m)| self.may_lose_readonly_within(p, m, compared));
+        }
+        let part = super::assignable::expand_alias_ref(part, self.resolver());
+        let member = super::assignable::expand_alias_ref(member, self.resolver());
+        match (
+            part.peel_preserving_readonly(),
+            member.peel_preserving_readonly(),
+        ) {
+            (Type::Union(parts), _) => parts
+                .iter()
+                .any(|p| self.may_lose_readonly_within(p, &member, compared)),
+            (_, Type::Union(_)) => match non_null_form(member.clone()) {
+                Some(only) if !matches!(only.peel(), Type::Union(_)) => {
+                    self.may_lose_readonly_within(&part, &only, compared)
+                }
+                _ => true,
+            },
+            (Type::Readonly(p), Type::Readonly(m)) | (Type::Array(p), Type::Array(m)) => {
+                self.may_lose_readonly_within(p, m, compared)
+            }
+            (Type::Readonly(_), _) => true,
+            (_, Type::Readonly(m)) => self.may_lose_readonly_within(&part, m, compared),
+            (Type::Tuple(ps), Type::Tuple(ms)) => {
+                ps.len() != ms.len()
+                    || ps
+                        .iter()
+                        .zip(ms)
+                        .any(|(p, m)| self.may_lose_readonly_within(p, m, compared))
+            }
+            (Type::Function { ret: p, .. }, Type::Function { ret: m, .. }) => {
+                self.may_lose_readonly_within(p, m, compared)
+            }
+            // A class instance seen as an ancestor class keeps what it
+            // inherits, and what it adds is out of the ancestor's reach.
+            (Type::ClassRef { .. }, Type::ClassRef { .. }) => false,
+            _ => self.fields_lose_readonly(&part, &member, compared),
+        }
+    }
+
+    /// [`Self::may_lose_readonly_within`] over the fields `member` reaches,
+    /// assuming the worst for a shape it cannot list.
+    fn fields_lose_readonly(
+        &self,
+        part: &Type,
+        member: &Type,
+        compared: &mut Vec<(Type, Type)>,
+    ) -> bool {
+        let (Some(part_fields), Some(member_fields)) =
+            (self.fields_of(part), self.fields_of(member))
+        else {
+            return true;
+        };
+        member_fields.iter().any(|(name, m)| {
+            part_fields.get(name).is_some_and(|p| {
+                let method = matches!(p.ty.peel(), Type::Function { .. });
+                (p.readonly && !m.readonly && !method)
+                    || self.may_lose_readonly_within(&p.ty, &m.ty, compared)
+            })
+        })
+    }
+
+    fn fields_of(&self, ty: &Type) -> Option<BTreeMap<String, ObjectField>> {
+        match ty.peel() {
+            Type::Object { fields } => Some(fields.clone()),
+            Type::InterfaceRef {
+                mangled,
+                name,
+                args,
+                ..
+            }
+            | Type::ClassRef {
+                mangled,
+                name,
+                args,
+                ..
+            } => self.structural_form(mangled, name, args),
+            _ => None,
         }
     }
 
     /// Whether `ty` forbids a write somewhere a value of it can reach: a
     /// `readonly` array or tuple, or a `readonly` field or property, at any depth.
-    /// `expansions` counts the named types opened on the way; a recursive type
-    /// repeats what it declares, so a few expansions see all of it.
-    fn declares_readonly(&self, ty: &Type, expansions: u8) -> bool {
+    fn declares_readonly(&self, ty: &Type) -> bool {
+        self.declares_readonly_within(ty, &mut Vec::new())
+    }
+
+    /// `opened` holds the named types already examined: each is looked into
+    /// once, which keeps a recursive or widely shared type graph linear.
+    fn declares_readonly_within(&self, ty: &Type, opened: &mut Vec<crate::MangledName>) -> bool {
         match ty.peel_preserving_readonly() {
             Type::Readonly(_) => true,
-            Type::Array(element) => self.declares_readonly(element, expansions),
+            Type::Array(element) => self.declares_readonly_within(element, opened),
             Type::Tuple(elements) | Type::Union(elements) => elements
                 .iter()
-                .any(|element| self.declares_readonly(element, expansions)),
+                .any(|element| self.declares_readonly_within(element, opened)),
             Type::Object { fields } => fields
                 .values()
-                .any(|f| f.readonly || self.declares_readonly(&f.ty, expansions)),
+                .any(|f| f.readonly || self.declares_readonly_within(&f.ty, opened)),
+            Type::Function { params, ret, .. } => params
+                .iter()
+                .chain(std::iter::once(ret.as_ref()))
+                .any(|part| self.declares_readonly_within(part, opened)),
+            // A recursion back-edge's body is examined where the alias is
+            // expanded; only what it is instantiated with is new here.
+            Type::AliasRef { args, .. } => args
+                .iter()
+                .any(|arg| self.declares_readonly_within(arg, opened)),
             Type::InterfaceRef {
                 mangled,
                 name,
@@ -532,21 +672,25 @@ impl<'a> Inferer<'a> {
                 args,
                 ..
             } => {
-                if expansions >= MAX_READONLY_EXPANSIONS {
+                if args
+                    .iter()
+                    .any(|arg| self.declares_readonly_within(arg, opened))
+                {
+                    return true;
+                }
+                if opened.contains(mangled) {
                     return false;
                 }
-                let deeper = expansions + 1;
-                args.iter().any(|arg| self.declares_readonly(arg, deeper))
-                    || self
-                        .structural_form(mangled, name, args)
-                        .is_some_and(|fields| {
-                            fields.values().any(|f| {
-                                // A method is a read-only member of a structural
-                                // form, but not data a write could reach.
-                                let method = matches!(f.ty.peel(), Type::Function { .. });
-                                (f.readonly && !method) || self.declares_readonly(&f.ty, deeper)
-                            })
+                opened.push(mangled.clone());
+                self.structural_form(mangled, name, args)
+                    .is_some_and(|fields| {
+                        fields.values().any(|f| {
+                            // A method is a read-only member of a structural
+                            // form, but not data a write could reach.
+                            let method = matches!(f.ty.peel(), Type::Function { .. });
+                            (f.readonly && !method) || self.declares_readonly_within(&f.ty, opened)
                         })
+                    })
             }
             _ => false,
         }
@@ -1127,9 +1271,6 @@ impl<'a> Inferer<'a> {
         wrapped
     }
 }
-
-/// How many named interfaces or classes `declares_readonly` opens along one path.
-const MAX_READONLY_EXPANSIONS: u8 = 16;
 
 /// A value whose own type is the narrowing a write gives its binding: a
 /// primitive carries nothing a declaration could restrict.
