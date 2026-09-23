@@ -6570,7 +6570,7 @@ impl Inferer<'_> {
         typed_parts: &mut Vec<TypedChainPart>,
         pending_method: &mut Option<ChainMethod>,
     ) -> (TypedChainPart, Type) {
-        match part {
+        match string_key_as_field(self.ast, part) {
             ChainPart::NonNull { .. } => {
                 unreachable!("`!` steps never reach the member-dispatch path")
             }
@@ -8062,6 +8062,31 @@ fn enum_variant_help<'a>(
         Vec::new()
     } else {
         vec![format!("variants: {}", list.join(", "))]
+    }
+}
+
+/// `o?.["content-type"]` reads a field, exactly as `o["content-type"]` does in
+/// `infer_index_access`: a string-literal key names a member, not an index.
+fn string_key_as_field(ast: &crate::Ast, part: ChainPart) -> ChainPart {
+    let ChainPart::Index {
+        idx,
+        optional,
+        span,
+    } = part
+    else {
+        return part;
+    };
+    let key = ast.expr(idx);
+    let ExprKind::String(name) = &key.kind else {
+        return part;
+    };
+    ChainPart::Field {
+        name: Ident {
+            name: name.clone(),
+            span: key.span,
+        },
+        optional,
+        span,
     }
 }
 
