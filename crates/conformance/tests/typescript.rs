@@ -558,6 +558,14 @@ fn is_literal(text: &str) -> bool {
 /// One numeric literal token: `1`, `1.5`, `.5`, `1e-3`, `0x10`, `1_000`, `10n`.
 /// Not `NaN` or `Infinity`, which are names, and not `1.5.toFixed`.
 fn is_number_literal(text: &str) -> bool {
+    // `_` separates digits but can't lead, or `_1` would read as a number.
+    if !text
+        .strip_prefix('.')
+        .unwrap_or(text)
+        .starts_with(|c: char| c.is_ascii_digit())
+    {
+        return false;
+    }
     let rest = text.strip_suffix('n').unwrap_or(text);
     for prefix in ["0x", "0X", "0o", "0O", "0b", "0B"] {
         if let Some(body) = rest.strip_prefix(prefix) {
@@ -948,6 +956,10 @@ fn only_a_single_literal_is_skipped() {
         assert!(is_literal(literal), "{literal}");
     }
     for expression in [
+        "_",
+        "_1",
+        "-_1",
+        "_e1",
         "0xe-1",
         "1.5.toFixed",
         "1e3.toFixed",
