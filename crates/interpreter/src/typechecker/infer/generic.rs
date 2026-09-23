@@ -81,6 +81,7 @@ pub(super) fn substitute_typevars(ty: &Type, bindings: &BTreeMap<String, Type>) 
         },
         Type::TypeVar(name) => bindings.get(name).cloned().unwrap_or_else(|| ty.clone()),
         Type::Array(elem) => Type::Array(Box::new(substitute_typevars(elem, bindings))),
+        Type::Readonly(inner) => Type::Readonly(Box::new(substitute_typevars(inner, bindings))),
         Type::Tuple(elements) => Type::Tuple(
             elements
                 .iter()
@@ -229,6 +230,7 @@ pub(super) fn erase_generic_params(ty: &Type) -> Type {
                 .collect(),
         },
         Type::Array(elem) => Type::Array(Box::new(erase_generic_params(elem))),
+        Type::Readonly(inner) => Type::Readonly(Box::new(erase_generic_params(inner))),
         Type::Tuple(elements) => Type::Tuple(elements.iter().map(erase_generic_params).collect()),
         Type::Function {
             params,

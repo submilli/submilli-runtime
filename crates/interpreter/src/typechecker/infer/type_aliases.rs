@@ -44,7 +44,7 @@ fn walk_alias_refs(ty: &Type, visit: &mut dyn FnMut(&MangledName)) {
                 walk_alias_refs(m, visit);
             }
         }
-        Type::Array(e) => walk_alias_refs(e, visit),
+        Type::Array(e) | Type::Readonly(e) => walk_alias_refs(e, visit),
         Type::Object { fields } => {
             for f in fields.values() {
                 walk_alias_refs(&f.ty, visit);
@@ -298,6 +298,7 @@ fn rehydrate_reachable(ty: &Type, types: TypeResolver<'_>, skip: &BTreeSet<Mangl
                 .collect(),
         ),
         Type::Array(e) => Type::Array(Box::new(rehydrate_reachable(e, types, skip))),
+        Type::Readonly(e) => Type::Readonly(Box::new(rehydrate_reachable(e, types, skip))),
         Type::Tuple(es) => Type::Tuple(
             es.iter()
                 .map(|e| rehydrate_reachable(e, types, skip))

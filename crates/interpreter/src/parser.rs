@@ -1572,30 +1572,33 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Whether the cursor sits on `keyof` used as the type operator.
+    /// Whether the token at `index` is `operator` (`keyof`, `readonly`) used as a
+    /// prefix type operator.
     ///
-    /// `keyof` is a contextual keyword — valid as an ordinary identifier in both
-    /// TypeScript and Submilli — so it is only the operator when a type follows. A bare
-    /// type name is never followed by another type name, so requiring one separates
-    /// `keyof T` from a type literally named `keyof`.
-    fn at_contextual_keyof(&self) -> bool {
-        let tok = self.peek();
-        if !matches!(tok.kind, TokenKind::Identifier)
-            || &self.source[tok.span.start as usize..tok.span.end as usize] != "keyof"
-        {
+    /// Both are contextual keywords — valid as ordinary identifiers in TypeScript and
+    /// Submilli — so they are only operators when a type follows. A bare type name is
+    /// never followed by another type name, so requiring one separates `keyof T` from
+    /// a type literally named `keyof`.
+    fn is_contextual_type_operator(&self, index: usize, operator: &str) -> bool {
+        let Some(tok) = self.tokens.get(index) else {
+            return false;
+        };
+        if !self.token_is_word(tok, operator) {
             return false;
         }
         matches!(
-            self.peek_at(1).kind,
-            TokenKind::Identifier
-                | TokenKind::Void
-                | TokenKind::LeftBrace
-                | TokenKind::LeftParen
-                | TokenKind::LeftBracket
-                | TokenKind::StringLiteral(_)
-                | TokenKind::NumberLiteral(_)
-                | TokenKind::BooleanLiteral(_)
-                | TokenKind::NullLiteral
+            self.tokens.get(index + 1).map(|t| &t.kind),
+            Some(
+                TokenKind::Identifier
+                    | TokenKind::Void
+                    | TokenKind::LeftBrace
+                    | TokenKind::LeftParen
+                    | TokenKind::LeftBracket
+                    | TokenKind::StringLiteral(_)
+                    | TokenKind::NumberLiteral(_)
+                    | TokenKind::BooleanLiteral(_)
+                    | TokenKind::NullLiteral
+            )
         )
     }
 
@@ -2644,7 +2647,7 @@ impl<'a> Parser<'a> {
         // `keyof` is contextual, not reserved: TypeScript allows it as an ordinary
         // identifier, and so does Submilli. It is an operator only when another type
         // follows it, which an identifier in type position never does.
-        if self.at_contextual_keyof() {
+        if self.is_contextual_type_operator(self.pos, "keyof") {
             let kw = self.advance();
             let operand = self.parse_type_array(type_pos)?;
             let span = self.span(kw.span.start, operand.span.end);
@@ -2652,6 +2655,9 @@ impl<'a> Parser<'a> {
                 kind: TypeAnnotationKind::KeyOf(Box::new(operand)),
                 span,
             });
+        }
+        if self.is_contextual_type_operator(self.pos, "readonly") {
+            return self.parse_readonly_type(type_pos);
         }
 
         let mut ty = match self.peek().kind {
@@ -2792,6 +2798,34 @@ impl<'a> Parser<'a> {
             };
         }
         Some(ty)
+    }
+
+    /// `readonly T[]` or `readonly [A, B]`. The operand binds like `keyof`'s, so
+    /// `readonly T[][]` is a readonly array of mutable arrays and
+    /// `readonly T[] | null` a union with a readonly member.
+    fn parse_readonly_type(&mut self, type_pos: TypePos) -> Option<TypeAnnotation> {
+        let kw = self.advance();
+        let operand = self.parse_type_array(type_pos)?;
+        if !matches!(
+            operand.kind,
+            TypeAnnotationKind::Array(_) | TypeAnnotationKind::Tuple(_)
+        ) {
+            self.error_at_with_help(
+                kw.span,
+                "`readonly` only applies to array and tuple types",
+                vec![
+                    "write `readonly T[]` or `readonly [A, B]`; to protect an object's \
+                     properties, mark each one `readonly` instead"
+                        .to_string(),
+                ],
+            );
+            return Some(operand);
+        }
+        let span = self.span(kw.span.start, operand.span.end);
+        Some(TypeAnnotation {
+            kind: TypeAnnotationKind::Readonly(Box::new(operand)),
+            span,
+        })
     }
 
     /// In type position `(` is ambiguous: a function type's parameter list, or a
@@ -2992,7 +3026,22 @@ impl<'a> Parser<'a> {
         }
         let mut elements: Vec<TypeAnnotation> = Vec::new();
         loop {
+            if matches!(self.peek().kind, TokenKind::DotDotDot) {
+                self.error_at_with_help(
+                    self.peek().span,
+                    "rest elements in tuple types are not supported",
+                    vec!["use an array type `T[]` for a list of varying length".to_string()],
+                );
+                return None;
+            }
+            // Labels may be mixed with unlabeled elements, as TypeScript allows
+            // since 5.2.
+            self.skip_tuple_element_label()?;
             let ty = self.parse_type_annotation()?;
+            if matches!(self.peek().kind, TokenKind::Question) {
+                self.reject_optional_tuple_element(self.peek().span);
+                return None;
+            }
             elements.push(ty);
             match self.peek().kind {
                 TokenKind::Comma => {
@@ -3017,6 +3066,39 @@ impl<'a> Parser<'a> {
             kind: TypeAnnotationKind::Tuple(elements),
             span: self.span(open.span.start, close.span.end),
         })
+    }
+
+    /// Consumes a tuple element's `name:` label, if it has one. Labels only document
+    /// the positions — `[x: number]` is the type `[number]` — so nothing of them is
+    /// kept. `None` after reporting an optional element (`name?:`), which tuples do
+    /// not support.
+    fn skip_tuple_element_label(&mut self) -> Option<()> {
+        if !is_property_name(&self.peek().kind) {
+            return Some(());
+        }
+        match self.peek_at(1).kind {
+            TokenKind::Colon => {
+                self.advance();
+                self.advance();
+            }
+            TokenKind::Question if matches!(self.peek_at(2).kind, TokenKind::Colon) => {
+                self.reject_optional_tuple_element(self.peek_at(1).span);
+                return None;
+            }
+            _ => {}
+        }
+        Some(())
+    }
+
+    fn reject_optional_tuple_element(&mut self, question: Span) {
+        self.error_at_with_help(
+            question,
+            "optional tuple elements are not supported",
+            vec![
+                "give the element a nullable type (`T | null`) and pass `null` where it is absent"
+                    .to_string(),
+            ],
+        );
     }
 
     fn parse_object_type_annotation(&mut self) -> Option<TypeAnnotation> {
@@ -3353,6 +3435,11 @@ impl<'a> Parser<'a> {
     }
 
     fn scan_past_single_type_member(&self, start: usize, type_pos: TypePos) -> Option<usize> {
+        if self.is_contextual_type_operator(start, "keyof")
+            || self.is_contextual_type_operator(start, "readonly")
+        {
+            return self.scan_past_single_type_member(start + 1, type_pos);
+        }
         let mut i = start;
         match self.tokens.get(i)?.kind {
             TokenKind::Identifier | TokenKind::Void => {
@@ -4888,6 +4975,13 @@ mod tests {
             "| number | string",
             "(n: number) => number",
             "(n: number) => [number, number]",
+            "readonly number[]",
+            "readonly number[][]",
+            "readonly [number, string]",
+            "readonly number[] | null",
+            "[first: number, second: string]",
+            "[new: number, string]",
+            "keyof { a: number }",
         ] {
             let annotation = format!("function f(): void {{ const a: {ty} = x; }}");
             let (_ast, diags) = parse_str(&annotation);
@@ -8685,6 +8779,58 @@ mod tests {
                 .contains("tuple types must have at least one element")),
             "expected empty-tuple diagnostic, got: {diags:?}"
         );
+    }
+
+    #[test]
+    fn parse_labeled_tuple_drops_labels() {
+        let (ast, diags) = parse_str("let p: [first: number, string] = null;");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let ty = type_of_let(single_stmt(&ast));
+        let crate::TypeAnnotationKind::Tuple(ref elems) = ty.kind else {
+            panic!("expected Tuple, got {:?}", ty.kind);
+        };
+        assert_eq!(elems.len(), 2);
+        assert!(
+            elems
+                .iter()
+                .all(|e| matches!(e.kind, crate::TypeAnnotationKind::Name { .. }))
+        );
+    }
+
+    #[test]
+    fn parse_labeled_optional_tuple_element_rejected() {
+        let (_ast, diags) = parse_str("let p: [first: number, second?: string] = null;");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message == "optional tuple elements are not supported"),
+            "expected optional-element diagnostic, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn parse_readonly_binds_to_the_postfix_type() {
+        let (ast, diags) = parse_str("let p: readonly number[][] | null = null;");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let ty = type_of_let(single_stmt(&ast));
+        let crate::TypeAnnotationKind::Union(ref members) = ty.kind else {
+            panic!("expected Union, got {:?}", ty.kind);
+        };
+        let crate::TypeAnnotationKind::Readonly(ref operand) = members[0].kind else {
+            panic!("expected Readonly, got {:?}", members[0].kind);
+        };
+        let crate::TypeAnnotationKind::Array(ref inner) = operand.kind else {
+            panic!("expected Array, got {:?}", operand.kind);
+        };
+        assert!(matches!(inner.kind, crate::TypeAnnotationKind::Array(_)));
+    }
+
+    #[test]
+    fn parse_readonly_as_a_type_name_is_not_the_operator() {
+        let (ast, diags) = parse_str("let p: readonly = null;");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let ty = type_of_let(single_stmt(&ast));
+        assert!(matches!(ty.kind, crate::TypeAnnotationKind::Name { .. }));
     }
 
     #[test]

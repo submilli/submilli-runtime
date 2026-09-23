@@ -164,6 +164,18 @@ impl Inferer<'_> {
                 ty: Box::new(asserted.clone()),
             },
             _ if assignable(ty, asserted, self.resolver()) => ty.clone(),
+            // A readonly array is still an array at runtime, so a guard for `T[]`
+            // (`Array.isArray`) keeps it, readonly. The false branch keeps it too,
+            // as `tsc` does: it is not assignable to the asserted mutable type.
+            _ if assignable::drops_readonly(ty, asserted)
+                && assignable(
+                    ty,
+                    &Type::Readonly(Box::new(asserted.peel().clone())),
+                    self.resolver(),
+                ) =>
+            {
+                ty.clone()
+            }
             _ if assignable(asserted, ty, self.resolver()) => asserted.clone(),
             _ => Type::Error,
         }

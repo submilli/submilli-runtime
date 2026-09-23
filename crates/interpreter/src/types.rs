@@ -179,6 +179,13 @@ pub enum Type {
     /// Parser rejects empty tuples. Index access requires an integer literal; out-of-range and
     /// non-literal indices are rejected at typecheck time. Lowers to `(ref $Array)` at runtime.
     Tuple(Vec<Type>),
+    /// `readonly T[]` (also spelled `ReadonlyArray<T>`) or `readonly [A, B]`. The inner
+    /// type is always a [`Type::Array`] or [`Type::Tuple`]: the wrapper only forbids
+    /// writes, so [`Type::peel`] strips it and every read path sees the plain array.
+    /// Write paths (index assignment, mutating methods) must ask
+    /// [`Type::is_readonly_array`] before peeling. `Eq`/`Ord` keep it distinct from the
+    /// mutable type because a readonly array is not assignable to a mutable one.
+    Readonly(Box<Type>),
     /// Diagnostic already reported; downstream code must not emit cascading errors.
     Error,
     /// No Wasm representation — never values never reach codegen.
@@ -386,10 +393,33 @@ impl Type {
 
     pub fn peel(&self) -> &Type {
         let mut t = self;
+        while let Type::Alias { ty, .. } | Type::Refined { ty, .. } | Type::Readonly(ty) = t {
+            t = ty;
+        }
+        t
+    }
+
+    /// [`peel`](Self::peel), but stopping at a [`Type::Readonly`] wrapper, for
+    /// sites that carry a type onward and must not drop its readonly-ness.
+    pub fn peel_preserving_readonly(&self) -> &Type {
+        let mut t = self;
         while let Type::Alias { ty, .. } | Type::Refined { ty, .. } = t {
             t = ty;
         }
         t
+    }
+
+    /// Whether writes through a value of this type are forbidden because it is a
+    /// `readonly` array or tuple, looking through aliases and refinements.
+    pub fn is_readonly_array(&self) -> bool {
+        let mut t = self;
+        loop {
+            match t {
+                Type::Readonly(_) => return true,
+                Type::Alias { ty, .. } | Type::Refined { ty, .. } => t = ty,
+                _ => return false,
+            }
+        }
     }
 
     /// Whether this type is `void`, through any depth of alias.
@@ -769,9 +799,12 @@ impl fmt::Display for Type {
             // element of either shape has to be parenthesised or the rendering
             // re-parses as a different type.
             Type::Array(elem) => match &**elem {
-                Type::Union(_) | Type::Function { .. } => write!(f, "({elem})[]"),
+                Type::Union(_) | Type::Function { .. } | Type::Readonly(_) => {
+                    write!(f, "({elem})[]")
+                }
                 _ => write!(f, "{elem}[]"),
             },
+            Type::Readonly(inner) => write!(f, "readonly {inner}"),
             Type::Tuple(elements) => {
                 f.write_str("[")?;
                 for (i, t) in elements.iter().enumerate() {
@@ -863,6 +896,27 @@ mod tests {
         assert_eq!(Type::Null.to_string(), "null");
         assert_eq!(Type::Void.to_string(), "void");
         assert_eq!(Type::Error.to_string(), "<error>");
+    }
+
+    #[test]
+    fn readonly_display_matches_typescript() {
+        let numbers = Type::Array(Box::new(Type::Number));
+        let readonly = Type::Readonly(Box::new(numbers.clone()));
+        assert_eq!(readonly.to_string(), "readonly number[]");
+        assert_eq!(
+            Type::Array(Box::new(readonly.clone())).to_string(),
+            "(readonly number[])[]"
+        );
+        assert_eq!(
+            Type::Readonly(Box::new(Type::Array(Box::new(numbers)))).to_string(),
+            "readonly number[][]"
+        );
+        assert_eq!(
+            Type::Readonly(Box::new(Type::Tuple(vec![Type::Number, Type::String]))).to_string(),
+            "readonly [number, string]"
+        );
+        assert!(readonly.is_readonly_array());
+        assert_eq!(readonly.peel(), &Type::Array(Box::new(Type::Number)));
     }
 
     #[test]

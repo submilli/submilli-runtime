@@ -147,9 +147,9 @@ fn excess_field_fix_help(
 /// else (`Number`, `NumberLiteral`, and the typechecker-fallthrough
 /// `Error`) widens to `Number` — a narrowed slot like `1 | 2 | 3`
 /// doesn't constrain the post-add value.
-/// Array methods that mutate the receiver. Rejected on tuple-typed receivers,
-/// which are fixed-length and read-only — mutation would break their arity and
-/// per-position types.
+/// Array methods that mutate the receiver. Rejected on tuple-typed and `readonly`
+/// receivers: tuples are fixed-length, so mutation would break their arity and
+/// per-position types, and a `readonly` array only permits reading.
 fn is_mutating_array_method(name: &str) -> bool {
     matches!(
         name,
@@ -163,6 +163,17 @@ fn is_mutating_array_method(name: &str) -> bool {
             | "fill"
             | "copyWithin"
     )
+}
+
+/// The copying counterpart of a mutating array method, where the prelude has one.
+fn non_mutating_alternative(name: &str) -> Option<&'static str> {
+    match name {
+        "push" | "unshift" => Some("concat"),
+        "sort" => Some("toSorted"),
+        "reverse" => Some("toReversed"),
+        "splice" => Some("toSpliced"),
+        _ => None,
+    }
 }
 
 /// Whether `null` is one of the values `ty` can hold. `unknown` counts: it may
@@ -295,7 +306,7 @@ fn spread_element_type(peeled_source: &Type) -> Option<Type> {
 pub(crate) fn type_contains_type_var(ty: &Type) -> bool {
     match ty {
         Type::TypeVar(_) => true,
-        Type::Array(elem) => type_contains_type_var(elem),
+        Type::Array(elem) | Type::Readonly(elem) => type_contains_type_var(elem),
         Type::Tuple(elems) => elems.iter().any(type_contains_type_var),
         Type::Function { params, ret, .. } => {
             params.iter().any(type_contains_type_var) || type_contains_type_var(ret)
@@ -1509,6 +1520,47 @@ impl Inferer<'_> {
         }
     }
 
+    /// Reports a call of a mutating array method (`push`, `sort`, …) on a receiver
+    /// that must not change: a `readonly` array or tuple, or any tuple. Returns
+    /// whether it reported, in which case the caller poisons the call.
+    fn reject_mutating_array_call(&mut self, recv_ty: &Type, name: &crate::Ident) -> bool {
+        if !is_mutating_array_method(&name.name) {
+            return false;
+        }
+        if recv_ty.is_readonly_array() {
+            let mut help = vec![format!(
+                "`{}` mutates the array, and a `readonly` array or tuple only permits reading",
+                name.name
+            )];
+            if let Some(alternative) = non_mutating_alternative(&name.name) {
+                help.push(format!(
+                    "`{alternative}` returns a new array instead of modifying this one"
+                ));
+            }
+            help.push(
+                "or copy it first (`[...xs]` or `xs.slice()`) and modify the copy".to_string(),
+            );
+            self.error_with_help(
+                name.span,
+                format!("cannot call `{}` on `{}`", name.name, recv_ty),
+                help,
+            );
+            return true;
+        }
+        if matches!(recv_ty.peel(), Type::Tuple(_)) {
+            self.error_with_help(
+                name.span,
+                format!("cannot call `{}` on tuple `{}`", name.name, recv_ty),
+                vec![
+                    "tuples are fixed-length and read-only; assign to an array-typed binding first to mutate"
+                        .to_string(),
+                ],
+            );
+            return true;
+        }
+        false
+    }
+
     fn infer_call(
         &mut self,
         callee: ExprId,
@@ -1747,15 +1799,7 @@ impl Inferer<'_> {
                     }
                 }
             }
-            if matches!(recv_ty.peel(), Type::Tuple(_)) && is_mutating_array_method(&name.name) {
-                self.error_with_help(
-                    name.span,
-                    format!("cannot call `{}` on tuple `{}`", name.name, recv_ty),
-                    vec![
-                        "tuples are fixed-length and read-only; assign to an array-typed binding first to mutate"
-                            .to_string(),
-                    ],
-                );
+            if self.reject_mutating_array_call(&recv_ty, name) {
                 return (TypedExprKind::Null, Type::Error);
             }
             if let Some((sig, interface_bindings, iface_mangled, _dispatch)) =
@@ -4834,12 +4878,16 @@ impl Inferer<'_> {
                     value,
                     span: spread_span,
                 } => {
+                    // A spread only reads its source, so a readonly one qualifies.
                     let source_hint = element_ty
                         .as_ref()
-                        .map(|t| Type::Array(Box::new(t.clone())));
+                        .map(|t| Type::Readonly(Box::new(Type::Array(Box::new(t.clone())))));
                     let errors_before = self.error_count();
                     let (typed_source, source_ty) = self.infer_expr(value, source_hint.as_ref());
                     let already_errored = self.error_count() > errors_before;
+                    if let Some(hint) = &source_hint {
+                        self.drop_readonly_from_hint_mismatch(value, hint, &source_ty);
+                    }
                     // The spread source must be an array — or a tuple, which is one at
                     // runtime and contributes the union of its positions. Reject other
                     // shapes (primitive, object, unknown, union, function) with a typed
@@ -4916,6 +4964,19 @@ impl Inferer<'_> {
                 format!("expected `{expected}` (matching first element), got `{actual}`"),
                 already_errored,
             );
+        }
+    }
+
+    /// A spread source is hinted `readonly T[]` only so a readonly source is
+    /// accepted; any mismatch left is in the elements, so the diagnostic names the
+    /// `T[]` the writer thinks in rather than a `readonly` they never wrote.
+    fn drop_readonly_from_hint_mismatch(&mut self, source: ExprId, hint: &Type, actual: &Type) {
+        let span = self.ast.expr(source).span;
+        if let Some(diagnostic) = self.diagnostics.last_mut()
+            && diagnostic.span == span
+            && diagnostic.message == format!("expected `{hint}`, got `{actual}`")
+        {
+            diagnostic.message = format!("expected `{}`, got `{actual}`", hint.peel());
         }
     }
 
@@ -6445,31 +6506,7 @@ impl Inferer<'_> {
     ) -> (TypedExprKind, Type) {
         let recv_span = self.ast.expr(receiver).span;
         let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None);
-        let elem_ty: Type = match receiver_ty.peel() {
-            Type::Array(elem) => (**elem).clone(),
-            Type::Uint8Array => Type::Number,
-            Type::Tuple(_) => {
-                self.error_with_help(
-                    recv_span,
-                    "indexed write on tuple not supported".to_string(),
-                    vec![
-                        "tuples are read-only; reconstruct the tuple with the updated element"
-                            .to_string(),
-                    ],
-                );
-                Type::Error
-            }
-            Type::Error => Type::Error,
-            _ => {
-                let help = vec![self.format_definition(&receiver_ty)];
-                self.error_with_help(
-                    span,
-                    format!("cannot assign to index of `{receiver_ty}`"),
-                    help,
-                );
-                Type::Error
-            }
-        };
+        let elem_ty = self.indexed_write_elem_ty(&receiver_ty, recv_span, span);
         let (typed_index, _) = self.infer_expr(index, Some(&Type::Number));
         if !matches!(
             elem_ty.primitive_behavior(),
@@ -6760,6 +6797,16 @@ impl Inferer<'_> {
                 optional,
                 span,
             } => {
+                if self.reject_mutating_array_call(receiver_ty, &name) {
+                    *pending_method = None;
+                    let typed_part = TypedChainPart::Field {
+                        name,
+                        optional,
+                        result_ty: Type::Error,
+                        span,
+                    };
+                    return (typed_part, Type::Error);
+                }
                 let resolved = self.lookup_chain_field(receiver_ty, receiver_path, &name, span);
                 *pending_method = resolved.method;
                 let result_ty = resolved.ty;
@@ -8225,7 +8272,9 @@ fn unsupported_cast_target_reason(
         Type::Never => Some("`never` has no runtime values"),
         Type::Void => Some("`void` is not a value type"),
         Type::Error => None,
-        Type::Alias { .. } | Type::Refined { .. } => unreachable!("peel guarantees no alias here"),
+        Type::Alias { .. } | Type::Refined { .. } | Type::Readonly(_) => {
+            unreachable!("peel guarantees no alias here")
+        }
     }
 }
 

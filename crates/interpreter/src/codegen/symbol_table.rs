@@ -1052,7 +1052,7 @@ impl SymbolTable {
                     heap_type: HeapType::Concrete(idx),
                 })
             }
-            Type::Alias { .. } | Type::Refined { .. } => {
+            Type::Alias { .. } | Type::Refined { .. } | Type::Readonly(_) => {
                 unreachable!("peel guarantees no alias here (SUB-242)")
             }
         }

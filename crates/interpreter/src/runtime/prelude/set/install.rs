@@ -345,7 +345,7 @@ pub fn declare(defs: &mut PackageDeclaration) {
         vec![Param::new(
             "values",
             Type::union(vec![
-                Type::Array(Box::new(t())),
+                Type::Readonly(Box::new(Type::Array(Box::new(t())))),
                 Type::prelude_interface("Iterable".to_string(), vec![t()]),
                 Type::prelude_interface("Iterator".to_string(), vec![t()]),
                 Type::Null,
@@ -669,7 +669,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         params: vec![Param::with_default(
                             "values",
                             Type::union(vec![
-                                Type::Array(Box::new(Type::TypeVar("T".to_string()))),
+                                Type::Readonly(Box::new(Type::Array(Box::new(Type::TypeVar("T".to_string()))))),
                                 Type::prelude_interface(
                                     "Iterable".to_string(),
                                     vec![Type::TypeVar("T".to_string())],

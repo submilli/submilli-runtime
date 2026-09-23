@@ -59,6 +59,8 @@ before comparing:
 - Union members and object fields are sorted.
 - Parameter names are dropped: `tsc` prints `(value: number) => string`, we print
   `(arg0: number) => string`.
+- Tuple element labels are dropped: `tsc` prints `[x: number, y: number]`, we print
+  `[number, number]`. Labels are documentation and do not change the type.
 - A method signature `m(): R` reads as the field `m: () => R`.
 - `tsc`'s `undefined` reads as `null`, because the port spells it that way.
 

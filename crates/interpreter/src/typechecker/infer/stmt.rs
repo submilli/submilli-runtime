@@ -1229,34 +1229,7 @@ impl Inferer<'_> {
         let recv_span = self.ast.expr(receiver).span;
         let value_span = self.ast.expr(value).span;
         let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None);
-        // Peel to match the read path: an alias of an array or `Uint8Array` is
-        // assignable on the same terms as the type it names.
-        let elem_ty = match receiver_ty.peel() {
-            Type::Array(elem) => (**elem).clone(),
-            // codegen truncates RHS to the low 8 bits for storage in `$rawUint8Array`.
-            Type::Uint8Array => Type::Number,
-            Type::Tuple(_) => {
-                self.error_with_help(
-                    recv_span,
-                    "indexed write on tuple not supported".to_string(),
-                    vec![
-                        "tuples are read-only; reconstruct the tuple with the updated element"
-                            .to_string(),
-                    ],
-                );
-                Type::Error
-            }
-            Type::Error => Type::Error,
-            _ => {
-                let help = vec![self.format_definition(&receiver_ty)];
-                self.error_with_help(
-                    recv_span,
-                    format!("cannot assign to index of `{receiver_ty}`"),
-                    help,
-                );
-                Type::Error
-            }
-        };
+        let elem_ty = self.indexed_write_elem_ty(&receiver_ty, recv_span, recv_span);
         let (typed_index, _) = self.infer_expr(index, Some(&Type::Number));
         let (typed_value, value_ty) = self.infer_expr(value, Some(&elem_ty));
         if !matches!(elem_ty, Type::Error)
@@ -1275,6 +1248,63 @@ impl Inferer<'_> {
             index: typed_index,
             value: typed_value,
             elem_ty,
+        }
+    }
+
+    /// The element type a write through `receiver_ty[i]` stores, or `Type::Error`
+    /// after reporting why the receiver cannot be written through. Shared by plain,
+    /// compound, and postfix index writes so all three reject the same receivers.
+    /// `fallback_span` is where a receiver of the wrong kind altogether is reported.
+    pub(super) fn indexed_write_elem_ty(
+        &mut self,
+        receiver_ty: &Type,
+        recv_span: Span,
+        fallback_span: Span,
+    ) -> Type {
+        if receiver_ty.is_readonly_array() {
+            let copy_help = if matches!(receiver_ty.peel(), Type::Tuple(_)) {
+                "reconstruct the tuple with the updated element"
+            } else {
+                "copy it first (`[...xs]` or `xs.slice()`) and write to the copy, \
+                 or drop `readonly` from the declared type"
+            };
+            self.error_with_help(
+                recv_span,
+                format!("cannot assign to an element of `{receiver_ty}`"),
+                vec![
+                    "a `readonly` array or tuple only permits reading".to_string(),
+                    copy_help.to_string(),
+                ],
+            );
+            return Type::Error;
+        }
+        // Peel to match the read path: an alias of an array or `Uint8Array` is
+        // assignable on the same terms as the type it names.
+        match receiver_ty.peel() {
+            Type::Array(elem) => (**elem).clone(),
+            // codegen truncates RHS to the low 8 bits for storage in `$rawUint8Array`.
+            Type::Uint8Array => Type::Number,
+            Type::Tuple(_) => {
+                self.error_with_help(
+                    recv_span,
+                    "indexed write on tuple not supported".to_string(),
+                    vec![
+                        "tuples are read-only; reconstruct the tuple with the updated element"
+                            .to_string(),
+                    ],
+                );
+                Type::Error
+            }
+            Type::Error => Type::Error,
+            _ => {
+                let help = vec![self.format_definition(receiver_ty)];
+                self.error_with_help(
+                    fallback_span,
+                    format!("cannot assign to index of `{receiver_ty}`"),
+                    help,
+                );
+                Type::Error
+            }
         }
     }
 
@@ -1807,31 +1837,7 @@ impl Inferer<'_> {
         let value_span = self.ast.expr(value).span;
         let stmt_span = recv_span.merge(value_span);
         let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None);
-        let elem_ty = match receiver_ty.peel() {
-            Type::Array(elem) => (**elem).clone(),
-            Type::Uint8Array => Type::Number,
-            Type::Tuple(_) => {
-                self.error_with_help(
-                    recv_span,
-                    "indexed write on tuple not supported".to_string(),
-                    vec![
-                        "tuples are read-only; reconstruct the tuple with the updated element"
-                            .to_string(),
-                    ],
-                );
-                Type::Error
-            }
-            Type::Error => Type::Error,
-            _ => {
-                let help = vec![self.format_definition(&receiver_ty)];
-                self.error_with_help(
-                    recv_span,
-                    format!("cannot assign to index of `{receiver_ty}`"),
-                    help,
-                );
-                Type::Error
-            }
-        };
+        let elem_ty = self.indexed_write_elem_ty(&receiver_ty, recv_span, recv_span);
         let (typed_index, _) = self.infer_expr(index, Some(&Type::Number));
         let (typed_value, value_ty) = self.infer_expr(value, Some(&elem_ty));
         // Built before the operator check so the check can name it as the

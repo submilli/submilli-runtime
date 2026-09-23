@@ -24,6 +24,12 @@ pub(super) fn format_type_diff(expected: &Type, got: &Type) -> Option<String> {
     if matches!(got.peel(), Type::Void) && !matches!(expected.peel(), Type::Void) {
         return Some(VOID_IS_NOT_A_VALUE.to_string());
     }
+    if super::assignable::drops_readonly(got, expected) {
+        return Some(format!(
+            "`{got}` is `readonly` and cannot be assigned to the mutable type `{expected}`; \
+             copy it with `[...value]`, or make the target type `readonly` too"
+        ));
+    }
     match (expected, got) {
         (Type::Object { fields: a }, Type::Object { fields: b }) => Some(format_object_diff(a, b)),
         (

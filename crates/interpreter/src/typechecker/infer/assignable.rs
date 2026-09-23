@@ -435,6 +435,9 @@ fn assignable_rec(
     if let Type::Union(ms) = expected.peel() {
         return ms.iter().any(|m| assignable_rec(actual, m, types, seen));
     }
+    if drops_readonly(actual, expected) {
+        return false;
+    }
     if matches!(actual, Type::Alias { .. }) || matches!(expected, Type::Alias { .. }) {
         let pair = (actual.clone(), expected.clone());
         seen.push(pair);
@@ -720,6 +723,15 @@ fn assignable_rec(
         }
         _ => actual == expected,
     }
+}
+
+/// Whether `actual` is a `readonly` array or tuple and `expected` a mutable one.
+/// The element types still decide assignability everywhere else: `readonly` is
+/// shallow and otherwise covariant, like the array it wraps.
+pub(super) fn drops_readonly(actual: &Type, expected: &Type) -> bool {
+    actual.is_readonly_array()
+        && !expected.is_readonly_array()
+        && matches!(expected.peel(), Type::Array(_) | Type::Tuple(_))
 }
 
 fn same_alias_instance(left: &Type, right: &Type) -> bool {
@@ -1055,6 +1067,31 @@ mod tests {
         let narrow_arr = Type::Array(Box::new(Type::Number));
         assert!(assignable(&narrow_arr, &union_arr));
         assert!(!assignable(&union_arr, &narrow_arr));
+    }
+
+    #[test]
+    fn readonly_accepts_mutable_but_not_the_reverse() {
+        let array = |elem: Type| Type::Array(Box::new(elem));
+        let readonly = |ty: Type| Type::Readonly(Box::new(ty));
+        let numbers = array(Type::Number);
+        let either = array(Type::union(vec![Type::Number, Type::String]));
+        assert!(assignable(&numbers, &readonly(numbers.clone())));
+        assert!(!assignable(&readonly(numbers.clone()), &numbers));
+        // Covariant in the element, like the array it wraps.
+        assert!(assignable(
+            &readonly(numbers.clone()),
+            &readonly(either.clone())
+        ));
+        assert!(!assignable(&readonly(either), &readonly(numbers.clone())));
+        let pair = Type::Tuple(vec![Type::Number, Type::Number]);
+        assert!(assignable(&pair, &readonly(pair.clone())));
+        assert!(!assignable(&readonly(pair.clone()), &pair));
+        assert!(assignable(
+            &readonly(pair.clone()),
+            &readonly(numbers.clone())
+        ));
+        assert!(!assignable(&readonly(pair), &numbers));
+        assert!(assignable(&readonly(numbers), &Type::Unknown));
     }
 
     #[test]

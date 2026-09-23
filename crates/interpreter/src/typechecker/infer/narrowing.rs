@@ -718,7 +718,7 @@ fn is_typeof_object(ty: &Type) -> bool {
         | Type::AliasRef { .. } => false,
 
         // Peeled by the caller.
-        Type::Alias { .. } | Type::Refined { .. } => false,
+        Type::Alias { .. } | Type::Refined { .. } | Type::Readonly(_) => false,
     }
 }
 

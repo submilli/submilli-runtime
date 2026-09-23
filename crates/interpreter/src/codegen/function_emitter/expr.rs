@@ -4294,7 +4294,7 @@ fn type_mentions_alias_ref(ty: &Type) -> bool {
     match ty {
         Type::AliasRef { .. } => true,
         Type::Union(ms) => ms.iter().any(type_mentions_alias_ref),
-        Type::Array(e) => type_mentions_alias_ref(e),
+        Type::Array(e) | Type::Readonly(e) => type_mentions_alias_ref(e),
         Type::Tuple(es) => es.iter().any(type_mentions_alias_ref),
         Type::Object { fields } => fields.values().any(|f| type_mentions_alias_ref(&f.ty)),
         Type::Function { params, ret, .. } => {

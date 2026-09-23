@@ -695,7 +695,12 @@ pub enum TypeAnnotationKind {
     NumberLiteral(crate::types::LiteralF64),
     BooleanLiteral(bool),
     Array(Box<TypeAnnotation>),
+    /// Element labels (`[x: number, y: number]`) are documentation only, so the
+    /// parser checks and drops them.
     Tuple(Vec<TypeAnnotation>),
+    /// `readonly T[]` / `readonly [A, B]`. The parser only builds this around an
+    /// [`Array`](Self::Array) or [`Tuple`](Self::Tuple) operand.
+    Readonly(Box<TypeAnnotation>),
     Object {
         fields: Vec<TypeAnnotationField>,
     },
