@@ -1914,21 +1914,14 @@ pub(super) fn binary_op_text(op: BinOp) -> &'static str {
 /// must ask exactly what the failure asked, or it recommends a fix that doesn't
 /// apply to the site.
 pub(super) fn compound_arith_result(op: BinOp, lt: &Type, rt: &Type) -> Option<Type> {
-    match (op, lt.primitive_behavior(), rt.primitive_behavior()) {
-        (_, Type::Error, _) | (_, _, Type::Error) => Some(Type::Error),
-        (BinOp::Add, Type::Number, Type::Number) => Some(Type::Number),
-        (BinOp::Add, Type::String, Type::String) => Some(Type::String),
-        (BinOp::Add, Type::BigInt, Type::BigInt) => Some(Type::BigInt),
-        (
-            BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem | BinOp::Pow,
-            Type::Number,
-            Type::Number,
-        ) => Some(Type::Number),
-        (
-            BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem | BinOp::Pow,
-            Type::BigInt,
-            Type::BigInt,
-        ) => Some(Type::BigInt),
+    if matches!(lt.peel(), Type::Error) || matches!(rt.peel(), Type::Error) {
+        return Some(Type::Error);
+    }
+    match op {
+        BinOp::Add => super::expr::plus_result(lt, rt),
+        BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem | BinOp::Pow => {
+            super::expr::arithmetic_result(lt, rt)
+        }
         _ => None,
     }
 }

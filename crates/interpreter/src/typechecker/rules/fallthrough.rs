@@ -85,22 +85,7 @@ fn walk(ta: &TypedAst, id: StmtId, diags: &mut Vec<Diagnostic>) {
 }
 
 fn body_terminates(ta: &TypedAst, id: StmtId) -> bool {
-    match &ta.stmt(id).kind {
-        TypedStmtKind::Break
-        | TypedStmtKind::Return(_)
-        | TypedStmtKind::Continue
-        | TypedStmtKind::Throw { .. } => true,
-        TypedStmtKind::Block(stmts) => stmts.last().is_some_and(|&s| body_terminates(ta, s)),
-        TypedStmtKind::If {
-            then_block,
-            else_block,
-            ..
-        } => {
-            else_block.is_some_and(|eb| body_terminates(ta, *then_block) && body_terminates(ta, eb))
-        }
-        TypedStmtKind::NarrowRegion { body, .. } => body_terminates(ta, *body),
-        _ => false,
-    }
+    super::control_flow::case_terminates(ta, id)
 }
 
 #[cfg(test)]

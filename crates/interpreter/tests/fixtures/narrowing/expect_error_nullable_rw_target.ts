@@ -25,8 +25,8 @@
 // message rather than blaming the null.
 // expect-error: `+=` not defined for `boolean | null` and `boolean`
 // expect-error: `+=` not defined for `"a" | "b" | null` and `"b"`
-// A literal type is numeric-shaped and still has no `+`, so `++` on one is not a
-// nullability problem either — `lit = lit + 1` would not compile.
+// A numeric literal's arithmetic result widens to number, which cannot be stored
+// back into a literal-only field — `lit = lit + 1` would not compile.
 // expect-error: postfix `++` expects `number` or `bigint`, found `1 | null`
 class CBox {
   f: number | null = 1;

@@ -408,6 +408,32 @@ fn assignable_rec(
     types: TypeResolver,
     seen: &mut Vec<(Type, Type)>,
 ) -> bool {
+    if same_alias_instance(actual, expected) {
+        return true;
+    }
+    // Keep named pairs on the active proof path: expanding a back-edge can
+    // change its inline spelling without changing the alias instantiation.
+    if seen
+        .iter()
+        .any(|(a, e)| same_alias_instance(actual, a) && same_alias_instance(expected, e))
+    {
+        return true;
+    }
+    // Distribute unions, including named unions, before expanding back-edges.
+    // Non-union members retain their names and can reuse the active comparison.
+    if let Type::Union(ms) = actual.peel() {
+        return ms.iter().all(|m| assignable_rec(m, expected, types, seen));
+    }
+    if let Type::Union(ms) = expected.peel() {
+        return ms.iter().any(|m| assignable_rec(actual, m, types, seen));
+    }
+    if matches!(actual, Type::Alias { .. }) || matches!(expected, Type::Alias { .. }) {
+        let pair = (actual.clone(), expected.clone());
+        seen.push(pair);
+        let result = assignable_rec(actual.peel(), expected.peel(), types, seen);
+        seen.pop();
+        return result;
+    }
     let actual = actual.peel();
     let expected = expected.peel();
     if matches!(actual, Type::Error) || matches!(expected, Type::Error) {
@@ -464,16 +490,23 @@ fn assignable_rec(
         if seen.iter().any(|(a, e)| a == &key.0 && e == &key.1) {
             return true;
         }
+        // Different instantiations of a type-growing alias may never repeat
+        // a pair. Bound that proof rather than overflowing the compiler stack.
+        let recursive_expansions = seen
+            .iter()
+            .filter(|(actual, expected)| {
+                matches!(actual, Type::AliasRef { .. }) || matches!(expected, Type::AliasRef { .. })
+            })
+            .count();
+        if recursive_expansions >= 32 {
+            return false;
+        }
         seen.push(key);
         let a = expand_alias_ref(actual, types);
         let e = expand_alias_ref(expected, types);
-        return assignable_rec(&a, &e, types, seen);
-    }
-    if let Type::Union(ms) = actual {
-        return ms.iter().all(|m| assignable_rec(m, expected, types, seen));
-    }
-    if let Type::Union(ms) = expected {
-        return ms.iter().any(|m| assignable_rec(actual, m, types, seen));
+        let result = assignable_rec(&a, &e, types, seen);
+        seen.pop();
+        return result;
     }
     match (actual, expected) {
         (Type::GenericParam { id: a, .. }, Type::GenericParam { id: b, .. }) => a == b,
@@ -631,7 +664,8 @@ fn assignable_rec(
                     .iter()
                     .zip(pe.iter())
                     .all(|(a, e)| assignable_rec(e, a, types, seen))
-                && ((ra.is_void() && matches!(re.peel(), Type::TypeVar(_)))
+                && (re.is_void()
+                    || (ra.is_void() && matches!(re.peel(), Type::TypeVar(_)))
                     || assignable_rec(ra, re, types, seen))
         }
         // `readonly` is shallow (TS-faithful): it gates direct writes, not
@@ -669,9 +703,37 @@ fn assignable_rec(
                 return true;
             }
             seen.push(key);
-            assignable_rec(&a, &e, types, seen)
+            let result = assignable_rec(&a, &e, types, seen);
+            seen.pop();
+            result
         }
         _ => actual == expected,
+    }
+}
+
+fn same_alias_instance(left: &Type, right: &Type) -> bool {
+    if left == right {
+        return true;
+    }
+    let (Some((left_name, left_args)), Some((right_name, right_args))) =
+        (alias_identity(left), alias_identity(right))
+    else {
+        return false;
+    };
+    left_name == right_name
+        && left_args.len() == right_args.len()
+        && left_args
+            .iter()
+            .zip(right_args)
+            .all(|(left, right)| same_alias_instance(left, right))
+}
+
+fn alias_identity(ty: &Type) -> Option<(&MangledName, &[Type])> {
+    match ty {
+        Type::Alias { mangled, args, .. } | Type::AliasRef { mangled, args, .. } => {
+            Some((mangled, args))
+        }
+        _ => None,
     }
 }
 

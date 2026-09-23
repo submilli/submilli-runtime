@@ -1,4 +1,4 @@
-//! Control-flow analysis for the `missing_return` and `unreachable` rules.
+//! Completion analysis shared by return, reachability, and switch-fallthrough rules.
 
 use crate::{
     EnumVariantPayload, StmtId, Type, TypedAst, TypedExprKind, TypedStmtKind, TypedSwitchCase,
@@ -12,93 +12,84 @@ pub(super) enum ControlFlow {
 }
 
 pub(super) fn control_flow(ta: &TypedAst, id: StmtId) -> ControlFlow {
-    match &ta.stmt(id).kind {
-        TypedStmtKind::Return(_) => ControlFlow::Returns,
-        TypedStmtKind::Block(stmts) => {
-            if stmts
-                .iter()
-                .any(|&s| control_flow(ta, s) == ControlFlow::Returns)
-            {
-                ControlFlow::Returns
-            } else {
-                ControlFlow::Falls
-            }
+    let flow = completion(ta, id);
+    if flow.falls || flow.breaks || flow.continues {
+        ControlFlow::Falls
+    } else {
+        ControlFlow::Returns
+    }
+}
+
+pub(super) fn case_terminates(ta: &TypedAst, id: StmtId) -> bool {
+    !completion(ta, id).falls
+}
+
+#[derive(Clone, Copy, Default)]
+struct Completion {
+    falls: bool,
+    breaks: bool,
+    continues: bool,
+}
+
+impl Completion {
+    fn union(self, other: Self) -> Self {
+        Self {
+            falls: self.falls || other.falls,
+            breaks: self.breaks || other.breaks,
+            continues: self.continues || other.continues,
         }
+    }
+
+    fn then(self, next: Self) -> Self {
+        Self {
+            falls: self.falls && next.falls,
+            breaks: self.breaks || (self.falls && next.breaks),
+            continues: self.continues || (self.falls && next.continues),
+        }
+    }
+}
+
+fn completion(ta: &TypedAst, id: StmtId) -> Completion {
+    let falls = Completion {
+        falls: true,
+        ..Default::default()
+    };
+    match &ta.stmt(id).kind {
+        TypedStmtKind::Break => Completion {
+            breaks: true,
+            ..Default::default()
+        },
+        TypedStmtKind::Return(_) | TypedStmtKind::Throw { .. } => Completion::default(),
+        TypedStmtKind::Continue => Completion {
+            continues: true,
+            ..Default::default()
+        },
+        TypedStmtKind::Block(stmts) => stmts
+            .iter()
+            .fold(falls, |flow, &stmt| flow.then(completion(ta, stmt))),
         TypedStmtKind::If {
             then_block,
             else_block,
             ..
-        } => match else_block {
-            Some(eb) => {
-                if control_flow(ta, *then_block) == ControlFlow::Returns
-                    && control_flow(ta, *eb) == ControlFlow::Returns
-                {
-                    ControlFlow::Returns
-                } else {
-                    ControlFlow::Falls
-                }
-            }
-            None => ControlFlow::Falls,
-        },
-        TypedStmtKind::NarrowRegion { body, .. } => control_flow(ta, *body),
+        } => {
+            completion(ta, *then_block).union(else_block.map_or(falls, |body| completion(ta, body)))
+        }
+        TypedStmtKind::Try {
+            body,
+            catches,
+            finally,
+        } => try_completion(ta, *body, catches, *finally),
         TypedStmtKind::Switch {
             discriminant,
             cases,
             default,
             ..
-        } => {
-            let all_cases_return = cases
-                .iter()
-                .all(|c| control_flow(ta, c.body) == ControlFlow::Returns);
-            if !all_cases_return {
-                return ControlFlow::Falls;
-            }
-            match default {
-                Some(d) => {
-                    if control_flow(ta, *d) == ControlFlow::Returns {
-                        ControlFlow::Returns
-                    } else {
-                        ControlFlow::Falls
-                    }
-                }
-                None => {
-                    if switch_is_exhaustive(ta, *discriminant, cases) {
-                        ControlFlow::Returns
-                    } else {
-                        ControlFlow::Falls
-                    }
-                }
-            }
-        }
-        // Modelled as Returns so throw-based guards contribute to reachability.
-        TypedStmtKind::Throw { .. } => ControlFlow::Returns,
-        TypedStmtKind::Try {
-            body,
-            catches,
-            finally,
-        } => {
-            if let Some(f) = finally
-                && control_flow(ta, *f) == ControlFlow::Returns
-            {
-                return ControlFlow::Returns;
-            }
-            let body_returns = control_flow(ta, *body) == ControlFlow::Returns;
-            let catch_returns = catches
-                .iter()
-                .all(|c| control_flow(ta, c.body) == ControlFlow::Returns);
-            if body_returns && catch_returns {
-                ControlFlow::Returns
-            } else {
-                ControlFlow::Falls
-            }
-        }
-        // Conservative: a `break` may exit before the body completes.
+        } => switch_completion(ta, *discriminant, cases, *default),
+        TypedStmtKind::NarrowRegion { body, .. } => completion(ta, *body),
         TypedStmtKind::While { .. }
         | TypedStmtKind::For { .. }
         | TypedStmtKind::ForOf { .. }
         | TypedStmtKind::DoWhile { .. }
-        | TypedStmtKind::Break
-        | TypedStmtKind::Continue
         | TypedStmtKind::ReboxLocal { .. }
         | TypedStmtKind::Let { .. }
         | TypedStmtKind::Const { .. }
@@ -106,7 +97,54 @@ pub(super) fn control_flow(ta: &TypedAst, id: StmtId) -> ControlFlow {
         | TypedStmtKind::AssignGlobal { .. }
         | TypedStmtKind::AssignField { .. }
         | TypedStmtKind::AssignIndex { .. }
-        | TypedStmtKind::Expr(_) => ControlFlow::Falls,
+        | TypedStmtKind::Expr(_) => falls,
+    }
+}
+
+fn try_completion(
+    ta: &TypedAst,
+    body: StmtId,
+    catches: &[crate::TypedCatchClause],
+    finally: Option<StmtId>,
+) -> Completion {
+    let flow = catches.iter().fold(completion(ta, body), |flow, catch| {
+        flow.union(completion(ta, catch.body))
+    });
+    let Some(finally) = finally else {
+        return flow;
+    };
+    let cleanup = completion(ta, finally);
+    // A control transfer from finally replaces the pending completion.
+    let preserved = if cleanup.falls {
+        flow
+    } else {
+        Completion::default()
+    };
+    preserved.union(Completion {
+        falls: false,
+        ..cleanup
+    })
+}
+
+fn switch_completion(
+    ta: &TypedAst,
+    discriminant: crate::ExprId,
+    cases: &[crate::TypedSwitchCase],
+    default: Option<StmtId>,
+) -> Completion {
+    let mut flow = cases.iter().fold(Completion::default(), |flow, case| {
+        flow.union(completion(ta, case.body))
+    });
+    if let Some(default) = default {
+        flow = flow.union(completion(ta, default));
+    } else if !switch_is_exhaustive(ta, discriminant, cases) {
+        flow.falls = true;
+    }
+    // A break exits this nested switch, not the containing case.
+    Completion {
+        falls: flow.falls || flow.breaks,
+        breaks: false,
+        continues: flow.continues,
     }
 }
 

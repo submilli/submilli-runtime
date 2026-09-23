@@ -118,12 +118,18 @@ impl RwOp {
     /// regardless of `null` is not a nullability problem, and saying otherwise
     /// sends the reader after a guard that changes nothing.
     fn accepts(self, ty: &Type) -> bool {
+        // Arithmetic widens literals; the result cannot be stored back into
+        // a literal-only field, even after a null guard.
+        if matches!(
+            ty.primitive_behavior(),
+            Type::NumberLiteral(_) | Type::StringLiteral(_)
+        ) {
+            return false;
+        }
         match self {
             RwOp::Compound(binary) => super::stmt::compound_arith_result(binary, ty, ty).is_some(),
             // `++` / `--` write `x.f ± 1` back, so they need what that binary
-            // form needs — not merely a numeric-shaped type. A literal type like
-            // `1` is numeric and still has no `+`, so accepting it here would
-            // name a rewrite that doesn't compile.
+            // form needs, including a compatible write-back type.
             RwOp::Postfix(_) => {
                 super::stmt::compound_arith_result(crate::BinOp::Add, ty, &Type::Number).is_some()
                     || super::stmt::compound_arith_result(crate::BinOp::Add, ty, &Type::BigInt)

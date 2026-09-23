@@ -1094,47 +1094,23 @@ impl Inferer<'_> {
                 }
                 let (typed_lhs, lt) = self.infer_expr(lhs, None);
                 let lhs_void = lt.carries_void().then(|| lt.clone());
-                // Plan 75.10 PR 2: `x === null` / `null === x` is
-                // always permissible — even when the LHS has been
-                // narrowed (or assigned) to a non-nullable type.
-                // The comparison just becomes statically false at
-                // that point; it's not a type error. Suppress
-                // hint propagation when either operand is the
-                // `null` literal so the RHS's `Null` type doesn't
-                // get reshaped against the LHS's narrowed view.
                 let either_is_null_literal =
                     matches!(&self.ast.expr(lhs).kind, crate::ExprKind::Null)
                         || matches!(&self.ast.expr(rhs).kind, crate::ExprKind::Null);
-                let enum_lhs = lt.primitive_behavior() != lt.peel();
-                // Equality requires the operands to *overlap*, not for the right to be
-                // assignable to the left, so a literal LHS must not constrain the RHS:
-                // `const a = 1; a === f()` compares fine against `number`. Without this
-                // the check would be operand-order dependent, since `f() === a` never
-                // hinted in the first place. Same reasoning as `enum_lhs` beside it.
-                let literal_lhs =
-                    matches!(lt.peel(), Type::NumberLiteral(_) | Type::StringLiteral(_));
-                let rhs_hint = if matches!(lt, Type::Error)
-                    || either_is_null_literal
-                    || enum_lhs
-                    || literal_lhs
+                // Contextual types help literals and callbacks, but an equality
+                // operand is not an assignment into the other operand's type.
+                let contextual_rhs = equality_operand_needs_context(self.ast, rhs);
+                let rhs_hint = contextual_rhs.then_some(&lt);
+                let (typed_rhs, rt) = self.infer_expr(rhs, rhs_hint);
+                let comparison_rhs =
+                    literal_comparison_type(&self.typed_ast, self.typed_ast.expr(typed_rhs));
+                if !either_is_null_literal
+                    && !equality_types_overlap(&lt, &comparison_rhs, self.resolver())
                 {
-                    None
-                } else {
-                    Some(lt.clone())
-                };
-                let (typed_rhs, rt) = self.infer_expr(rhs, rhs_hint.as_ref());
-                if enum_lhs && !either_is_null_literal {
-                    let expected = if is_enum_or_enum_union(&rt) {
-                        &lt
-                    } else {
-                        lt.primitive_behavior()
-                    };
-                    if !assignable(&rt, expected, self.resolver()) {
-                        self.error(
-                            self.ast.expr(rhs).span,
-                            format!("expected `{expected}`, got `{rt}`"),
-                        );
-                    }
+                    self.error(
+                        self.ast.expr(rhs).span,
+                        format!("expected `{lt}`, got `{rt}`"),
+                    );
                 }
                 // `void` has no runtime value to compare, and the comparison
                 // otherwise typechecks clean and panics in codegen.
@@ -1214,7 +1190,7 @@ impl Inferer<'_> {
                 let result_ty = if condition_error {
                     Type::Error
                 } else {
-                    Type::union(vec![lhs_kept, rhs_ty])
+                    branch_result_type(lhs_kept, rhs_ty, self.resolver())
                 };
                 (
                     TypedExprKind::Binary {
@@ -5649,7 +5625,10 @@ impl Inferer<'_> {
                 // generic — same logic as the param contravariance
                 // check above. The closure's annotation is the truth;
                 // the call site's unify binds the var.
-                if !type_contains_type_var(hr) && !assignable(&t, hr, self.resolver()) {
+                if !hr.is_void()
+                    && !type_contains_type_var(hr)
+                    && !assignable(&t, hr, self.resolver())
+                {
                     self.error(ann.span, format!("return type: expected `{hr}`, got `{t}`"));
                 }
                 annotated_ret = Some(t.clone());
@@ -5660,7 +5639,7 @@ impl Inferer<'_> {
                 annotated_ret = Some(t.clone());
                 Some(t)
             }
-            (None, Some((_, hr))) if matches!(hr.peel(), Type::TypeVar(_)) => None,
+            (None, Some((_, hr))) if matches!(hr.peel(), Type::TypeVar(_) | Type::Void) => None,
             (None, Some((_, hr))) => Some(hr.clone()),
             (None, None) => None,
         };
@@ -6379,7 +6358,7 @@ impl Inferer<'_> {
         let else_span = self.ast.expr(else_).span;
         let wrapped_else = self.wrap_narrow_exprs(typed_else, &false_env, else_span);
 
-        let result_ty = Type::union(vec![then_ty, else_ty]);
+        let result_ty = branch_result_type(then_ty, else_ty, self.resolver());
         (
             TypedExprKind::Ternary {
                 cond: typed_cond,
@@ -6423,7 +6402,11 @@ impl Inferer<'_> {
         let result_ty = if matches!(lhs_ty.peel(), Type::Null) {
             rhs_ty
         } else {
-            Type::union(vec![super::narrowing::strip_null(&lhs_ty), rhs_ty])
+            branch_result_type(
+                super::narrowing::strip_null(&lhs_ty),
+                rhs_ty,
+                self.resolver(),
+            )
         };
         (
             TypedExprKind::NullishCoalesce {
@@ -8082,18 +8065,80 @@ fn enum_variant_help<'a>(
     }
 }
 
-fn is_enum_or_enum_union(ty: &Type) -> bool {
-    match ty.peel() {
-        Type::NumberEnum { .. } | Type::StringEnum { .. } => true,
-        Type::Union(members) => members.iter().all(is_enum_or_enum_union),
+fn branch_result_type(left: Type, right: Type, types: super::assignable::TypeResolver<'_>) -> Type {
+    if assignable(&left, &right, types) {
+        right
+    } else if assignable(&right, &left, types) {
+        left
+    } else {
+        Type::union(vec![left, right])
+    }
+}
+
+fn equality_operand_needs_context(ast: &crate::Ast, id: ExprId) -> bool {
+    match &ast.expr(id).kind {
+        ExprKind::Paren(inner) => equality_operand_needs_context(ast, *inner),
+        ExprKind::Arrow { .. } | ExprKind::ObjectLiteral { .. } | ExprKind::ArrayLiteral { .. } => {
+            true
+        }
         _ => false,
     }
+}
+
+fn literal_comparison_type(ast: &crate::TypedAst, expr: &TypedExpr) -> Type {
+    match &expr.kind {
+        TypedExprKind::String(value) => Type::StringLiteral(value.clone()),
+        TypedExprKind::Number(value) => Type::NumberLiteral(crate::types::LiteralF64(*value)),
+        TypedExprKind::Unary {
+            op: UnOp::Neg | UnOp::Pos,
+            operand,
+        } => {
+            let TypedExprKind::Number(value) = ast.expr(*operand).kind else {
+                return expr.ty.clone();
+            };
+            let negative = matches!(expr.kind, TypedExprKind::Unary { op: UnOp::Neg, .. });
+            let signed = if negative { -value } else { value };
+            let canonical = if signed == 0.0 { 0.0 } else { signed };
+            Type::NumberLiteral(crate::types::LiteralF64(canonical))
+        }
+        _ => expr.ty.clone(),
+    }
+}
+
+fn equality_types_overlap(
+    left: &Type,
+    right: &Type,
+    types: super::assignable::TypeResolver<'_>,
+) -> bool {
+    if let Type::Union(members) = left.peel() {
+        return members
+            .iter()
+            .any(|member| equality_types_overlap(member, right, types));
+    }
+    if let Type::Union(members) = right.peel() {
+        return members
+            .iter()
+            .any(|member| equality_types_overlap(left, member, types));
+    }
+    let both_enums = matches!(
+        left.peel(),
+        Type::NumberEnum { .. } | Type::StringEnum { .. }
+    ) && matches!(
+        right.peel(),
+        Type::NumberEnum { .. } | Type::StringEnum { .. }
+    );
+    let (left, right) = if both_enums {
+        (left, right)
+    } else {
+        (left.primitive_behavior(), right.primitive_behavior())
+    };
+    assignable(left, right, types) || assignable(right, left, types)
 }
 
 /// The pairs `+` is defined for, and the result. The single source of truth for both
 /// the `+` arm and the narrowing hint it emits: a hint may only claim a guard is the
 /// fix when the guarded pair is one this accepts.
-fn plus_result(lt: &Type, rt: &Type) -> Option<Type> {
+pub(super) fn plus_result(lt: &Type, rt: &Type) -> Option<Type> {
     match (lt.primitive_behavior(), rt.primitive_behavior()) {
         // A literal operand behaves as its base and yields the base, never a
         // literal: `1 + 1` is `number`, not `2`. Same rule as `ordering_accepts`.
@@ -8110,7 +8155,7 @@ fn plus_result(lt: &Type, rt: &Type) -> Option<Type> {
 }
 
 /// [`plus_result`] for `-`, `*`, `/`, `%`, `**` — same role, no string arm.
-fn arithmetic_result(lt: &Type, rt: &Type) -> Option<Type> {
+pub(super) fn arithmetic_result(lt: &Type, rt: &Type) -> Option<Type> {
     match (lt.primitive_behavior(), rt.primitive_behavior()) {
         (Type::Number | Type::NumberLiteral(_), Type::Number | Type::NumberLiteral(_)) => {
             Some(Type::Number)

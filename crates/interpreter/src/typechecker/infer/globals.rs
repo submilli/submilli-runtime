@@ -221,7 +221,7 @@ mod tests {
         let reg = PackageDeclaration::from_typed_ast(&ta);
         match &reg.values.get("y").unwrap().kind {
             ValueKind::Const { ty, .. } => {
-                assert_eq!(*ty, Type::StringLiteral("hi".to_string()))
+                assert_eq!(*ty, Type::StringLiteral("hi".to_string()));
             }
             _ => panic!("expected Const"),
         }
