@@ -153,10 +153,10 @@ impl<'a> Ancestors<'a> {
         // Charge even skipped log entries: compact native objects can otherwise
         // expand into enormous parent frontiers or consume unbounded decode work.
         self.charge(commit.data.len() as u64)?;
-        if !self
+        if self
             .shallow
             .as_ref()
-            .is_some_and(|boundary| boundary.binary_search(&id).is_ok())
+            .is_none_or(|boundary| boundary.binary_search(&id).is_err())
         {
             self.enqueue_parents(&commit)?;
         }
