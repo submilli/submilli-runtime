@@ -1,14 +1,1 @@
-types: 6 of 11 tsc entries compared, 3 differ
-
-line 5: DE_NEWLINE_F
-  tsc:  "DE\nF"
-  ours: "DE
-F"
-
-line 7: G_QUOTE_HI
-  tsc:  "G\"HI"
-  ours: "G"HI"
-
-line 7: null as unknown as ('G"HI')
-  tsc:  "G\"HI"
-  ours: "G"HI"
+types: 6 of 11 tsc entries compared, 0 differ

@@ -8,6 +8,21 @@ use crate::{
 
 const MAX_ERRORS: usize = 20;
 
+/// Names a type declaration may not take, as in TypeScript.
+const BUILT_IN_TYPE_NAMES: &[&str] = &[
+    "any",
+    "bigint",
+    "boolean",
+    "never",
+    "number",
+    "object",
+    "string",
+    "symbol",
+    "undefined",
+    "unknown",
+    "void",
+];
+
 /// Where a type is being parsed. Only one production depends on it: `(T)`, spelled
 /// identically as a grouped type and as v1's rejected bare parameter list, is decided by
 /// whether a `=>` follows the matching `)`. In an arrow's return annotation that `=>` is
@@ -563,8 +578,7 @@ impl<'a> Parser<'a> {
     fn parse_class_decl(&mut self) -> Option<StmtId> {
         let doc = self.take_leading_doc();
         let kw = self.advance();
-        let name_tok = self.expect_identifier("expected class name")?;
-        let name = self.ident_from_token(&name_tok);
+        let name = self.parse_type_decl_name("expected class name", "class")?;
 
         let generics = if matches!(self.peek().kind, TokenKind::LessThan) {
             self.parse_generic_param_list()?
@@ -956,8 +970,7 @@ impl<'a> Parser<'a> {
     fn parse_interface_decl(&mut self) -> Option<StmtId> {
         let doc = self.take_leading_doc();
         let kw = self.advance();
-        let name_tok = self.expect_identifier("expected interface name")?;
-        let name = self.ident_from_token(&name_tok);
+        let name = self.parse_type_decl_name("expected interface name", "interface")?;
 
         let generics = if matches!(self.peek().kind, TokenKind::LessThan) {
             self.parse_generic_param_list()?
@@ -1100,8 +1113,7 @@ impl<'a> Parser<'a> {
     fn parse_type_alias_decl(&mut self) -> Option<StmtId> {
         let doc = self.take_leading_doc();
         let kw = self.advance();
-        let name_tok = self.expect_identifier("expected type alias name")?;
-        let name = self.ident_from_token(&name_tok);
+        let name = self.parse_type_decl_name("expected type alias name", "type alias")?;
 
         let generics: Vec<Ident> = if matches!(self.peek().kind, TokenKind::LessThan) {
             self.parse_generic_param_list()?
@@ -1143,8 +1155,7 @@ impl<'a> Parser<'a> {
         }
         let doc = self.take_leading_doc();
         let kw = self.advance();
-        let name_tok = self.expect_identifier("expected enum name")?;
-        let name = self.ident_from_token(&name_tok);
+        let name = self.parse_type_decl_name("expected enum name", "enum")?;
 
         if !matches!(self.peek().kind, TokenKind::LeftBrace) {
             self.error_at_peek("expected `{` after enum name");
@@ -1658,6 +1669,30 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// The name a `class`, `interface`, `type` or `enum` declares. A built-in type's
+    /// name is reported, as in TypeScript: `class number {}` would read as the
+    /// built-in in some positions and the class in others.
+    fn parse_type_decl_name(&mut self, missing: &str, what: &str) -> Option<Ident> {
+        let name_tok = self.expect_identifier(missing)?;
+        let name = self.ident_from_token(&name_tok);
+        if BUILT_IN_TYPE_NAMES.contains(&name.name.as_str()) {
+            self.error_at_with_help(
+                name.span,
+                format!(
+                    "`{}` is a built-in type and can't be used as {} {what} name",
+                    name.name,
+                    if what.starts_with(['a', 'e', 'i', 'o', 'u']) {
+                        "an"
+                    } else {
+                        "a"
+                    },
+                ),
+                vec![format!("rename the {what}")],
+            );
+        }
+        Some(name)
+    }
+
     fn parse_generic_param_list(&mut self) -> Option<Vec<Ident>> {
         let lt = self.advance();
         if matches!(self.peek().kind, TokenKind::GreaterThan) {
@@ -1667,7 +1702,17 @@ impl<'a> Parser<'a> {
         let mut generics = Vec::new();
         loop {
             let name_tok = self.expect_identifier("expected generic parameter name")?;
-            generics.push(self.ident_from_token(&name_tok));
+            let name = self.ident_from_token(&name_tok);
+            // Kept even when duplicated, so the parameter count still matches the
+            // type arguments a caller passes.
+            if generics.iter().any(|g: &Ident| g.name == name.name) {
+                self.error_at_with_help(
+                    name.span,
+                    format!("duplicate type parameter `{}`", name.name),
+                    vec!["give each type parameter its own name".to_string()],
+                );
+            }
+            generics.push(name);
             match self.peek().kind {
                 TokenKind::Comma => {
                     self.advance();
@@ -1917,6 +1962,21 @@ impl<'a> Parser<'a> {
     fn parse_control_body(&mut self) -> Option<StmtId> {
         if matches!(self.peek().kind, TokenKind::LeftBrace) {
             return self.parse_block();
+        }
+        // A binding here would go out of scope as soon as it was made. TypeScript
+        // rejects it too, so it is reported and then parsed as usual.
+        if matches!(self.peek().kind, TokenKind::Let | TokenKind::Const) {
+            let keyword = if matches!(self.peek().kind, TokenKind::Let) {
+                "let"
+            } else {
+                "const"
+            };
+            self.error_at_peek_with_help(
+                format!(
+                    "a `{keyword}` declaration can't be the body of a statement without braces"
+                ),
+                vec![format!("wrap it in braces: `{{ {keyword} … }}`")],
+            );
         }
         self.block_depth += 1;
         let stmt = self.parse_statement();

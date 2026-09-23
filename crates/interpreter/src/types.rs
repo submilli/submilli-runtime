@@ -664,6 +664,24 @@ pub(crate) fn write_synthetic_params(
     out.write_str(")")
 }
 
+/// `s` escaped for a double-quoted TypeScript string, as a string literal type is
+/// printed: `"G\"HI"`, `"a\nb"`.
+pub(crate) fn escape_string_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04x}", u32::from(c))),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -673,7 +691,7 @@ impl fmt::Display for Type {
                 f.write_str(&crate::runtime::number::format_number_js(*v))
             }
             Type::String => f.write_str("string"),
-            Type::StringLiteral(s) => write!(f, "\"{s}\""),
+            Type::StringLiteral(s) => write!(f, "\"{}\"", escape_string_literal(s)),
             Type::Uint8Array => f.write_str("Uint8Array"),
             Type::Boolean => f.write_str("boolean"),
             Type::Null => f.write_str("null"),
@@ -799,6 +817,12 @@ mod tests {
         assert_eq!(Type::Null.to_string(), "null");
         assert_eq!(Type::Void.to_string(), "void");
         assert_eq!(Type::Error.to_string(), "<error>");
+    }
+
+    #[test]
+    fn string_literal_display_escapes_like_typescript() {
+        let ty = Type::StringLiteral("G\"HI\\\nx\u{7}".into());
+        assert_eq!(ty.to_string(), r#""G\"HI\\\nx\u0007""#);
     }
 
     #[test]
