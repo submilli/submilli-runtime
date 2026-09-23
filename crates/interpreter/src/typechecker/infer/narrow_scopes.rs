@@ -472,7 +472,9 @@ impl<'a> Inferer<'a> {
     }
 
     fn narrow_written_part(&self, members: &[&Type], part: Type) -> Type {
-        if narrows_to_itself(&part) || part.is_readonly_array() {
+        // A value that forbids writes itself keeps its own type: narrowing it to a
+        // mutable member would give back what it does not allow.
+        if narrows_to_itself(&part) || self.declares_readonly(&part, 0) {
             return part;
         }
         let accepting: Vec<&Type> = members
@@ -506,22 +508,18 @@ impl<'a> Inferer<'a> {
 
     /// Whether `ty` forbids a write somewhere a value of it can reach: a
     /// `readonly` array or tuple, or a `readonly` field or property, at any depth.
-    fn declares_readonly(&self, ty: &Type, depth: u8) -> bool {
-        // A recursive type repeats what it declares; a few levels see all of it.
-        if depth > 8 {
-            return false;
-        }
-        let nested = |t: &Type| self.declares_readonly(t, depth + 1);
-        // A method is a read-only member of a structural form, but not data a
-        // write could reach.
-        let readonly_data = |f: &ObjectField| {
-            (f.readonly && !matches!(f.ty.peel(), Type::Function { .. })) || nested(&f.ty)
-        };
+    /// `expansions` counts the named types opened on the way; a recursive type
+    /// repeats what it declares, so a few expansions see all of it.
+    fn declares_readonly(&self, ty: &Type, expansions: u8) -> bool {
         match ty.peel_preserving_readonly() {
             Type::Readonly(_) => true,
-            Type::Array(element) => nested(element),
-            Type::Tuple(elements) | Type::Union(elements) => elements.iter().any(nested),
-            Type::Object { fields } => fields.values().any(readonly_data),
+            Type::Array(element) => self.declares_readonly(element, expansions),
+            Type::Tuple(elements) | Type::Union(elements) => elements
+                .iter()
+                .any(|element| self.declares_readonly(element, expansions)),
+            Type::Object { fields } => fields
+                .values()
+                .any(|f| f.readonly || self.declares_readonly(&f.ty, expansions)),
             Type::InterfaceRef {
                 mangled,
                 name,
@@ -534,10 +532,21 @@ impl<'a> Inferer<'a> {
                 args,
                 ..
             } => {
-                args.iter().any(nested)
+                if expansions >= MAX_READONLY_EXPANSIONS {
+                    return false;
+                }
+                let deeper = expansions + 1;
+                args.iter().any(|arg| self.declares_readonly(arg, deeper))
                     || self
                         .structural_form(mangled, name, args)
-                        .is_some_and(|fields| fields.values().any(readonly_data))
+                        .is_some_and(|fields| {
+                            fields.values().any(|f| {
+                                // A method is a read-only member of a structural
+                                // form, but not data a write could reach.
+                                let method = matches!(f.ty.peel(), Type::Function { .. });
+                                (f.readonly && !method) || self.declares_readonly(&f.ty, deeper)
+                            })
+                        })
             }
             _ => false,
         }
@@ -1118,6 +1127,9 @@ impl<'a> Inferer<'a> {
         wrapped
     }
 }
+
+/// How many named interfaces or classes `declares_readonly` opens along one path.
+const MAX_READONLY_EXPANSIONS: u8 = 16;
 
 /// A value whose own type is the narrowing a write gives its binding: a
 /// primitive carries nothing a declaration could restrict.
