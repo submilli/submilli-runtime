@@ -25,4 +25,20 @@ function main(): void {
   const copied = { ...either };
   assert(copied.x === 1, "a field every member has is copied");
   assert((copied.y ?? "absent") === "absent", "a field this member lacks is absent");
+
+  // A field that is present with the value null overwrites; only absence keeps
+  // the earlier value.
+  const nulled: { k: number } | { k: number; m: string | null } = pick(false)
+    ? { k: 1 }
+    : { k: 2, m: null };
+  const overwritten = { m: "keep" as string | null, ...nulled };
+  assert(overwritten.m === null, "a present null is copied");
+
+  // Width subtyping lets an object carry a field its static type doesn't
+  // declare, of another type. A field whose value isn't of the declared type
+  // reads as absent, rather than as a value of the wrong type.
+  const wide = { a: 1, b: 5 };
+  const narrow: { a: number } | { a: number; b: string } = wide;
+  const spreadWide = { ...narrow };
+  assert((spreadWide.b ?? "absent") === "absent", "a field of another type is absent");
 }

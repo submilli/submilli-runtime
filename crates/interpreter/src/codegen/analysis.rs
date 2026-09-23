@@ -682,8 +682,10 @@ impl CodegenAnalysis {
                     }) = source
                     {
                         self.visit_type(source_ty);
-                        // A spread read by name looks the field up by its string.
+                        // A spread read by name looks its field up by name and tests
+                        // the value against the field's type, which reads names too.
                         self.extra_field_names.push(field_name.clone());
+                        self.note_shape_member_names(source_ty);
                         source = fallback.as_deref();
                     }
                 }

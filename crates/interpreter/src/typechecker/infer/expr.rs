@@ -4298,9 +4298,9 @@ impl Inferer<'_> {
         // walk members in source order, applying last-writer-wins
         // for both literal-position fields and spread sources. `merged`
         // tracks the resolved field shape + origin per output field.
-        // `evaluated` records every member's expression in that same order,
+        // `object_members` records every member's expression in that same order,
         // including values a later member overwrites, which still run.
-        let mut evaluated: Vec<crate::TypedObjectMember> = Vec::new();
+        let mut object_members: Vec<crate::TypedObjectMember> = Vec::new();
         let mut spread_count = 0;
         let mut merged: std::collections::BTreeMap<
             String,
@@ -4333,7 +4333,7 @@ impl Inferer<'_> {
                     });
                     let errors_before = self.error_count();
                     let (typed_value, value_ty) = self.infer_expr(field.value, hint.as_ref());
-                    evaluated.push(crate::TypedObjectMember::Value(typed_value));
+                    object_members.push(crate::TypedObjectMember::Value(typed_value));
                     let value_span = self.ast.expr(field.value).span;
                     // A hinted slot already reported the mismatch against its
                     // hint; screening again gives one mistake two errors.
@@ -4426,43 +4426,29 @@ impl Inferer<'_> {
                     span: spread_span,
                 } => {
                     let (typed_source, source_ty) = self.infer_expr(value, None);
-                    if let Some((source_fields, by_name)) =
+                    let Some(SpreadFields { fields, by_name }) =
                         self.spread_source_fields(typed_source, &source_ty, spread_span)
-                    {
-                        let source_index = spread_count;
-                        spread_count += 1;
-                        evaluated.push(crate::TypedObjectMember::Spread {
-                            source: typed_source,
-                            by_name,
-                        });
-                        let source_ty_for_origin = Type::Object {
-                            fields: source_fields.clone(),
+                    else {
+                        continue;
+                    };
+                    let source_index = spread_count;
+                    spread_count += 1;
+                    object_members.push(crate::TypedObjectMember::Spread {
+                        source: typed_source,
+                        by_name,
+                    });
+                    let source_ty_for_origin = Type::Object {
+                        fields: fields.clone(),
+                    };
+                    for (name, field) in fields {
+                        let origin = crate::TypedObjectFieldSource::Spread {
+                            source_index,
+                            field_name: name.clone(),
+                            source_ty: source_ty_for_origin.clone(),
+                            fallback: None,
                         };
-                        for (name, field) in source_fields {
-                            let earlier = merged.remove(&name);
-                            let spread = |fallback| crate::TypedObjectFieldSource::Spread {
-                                source_index,
-                                field_name: name.clone(),
-                                source_ty: source_ty_for_origin.clone(),
-                                fallback,
-                            };
-                            let entry = match earlier {
-                                // An optional field may be absent, and then the
-                                // earlier value stays: `{ a: 1, ...{} }` keeps
-                                // `a: 1`. So the field holds either one, and is
-                                // optional only if the earlier one was.
-                                Some((earlier_field, earlier_source)) if field.optional => (
-                                    crate::ObjectField {
-                                        ty: Type::union(vec![earlier_field.ty, field.ty.clone()]),
-                                        optional: earlier_field.optional,
-                                        readonly: false,
-                                    },
-                                    spread(Some(Box::new(earlier_source))),
-                                ),
-                                _ => (field, spread(None)),
-                            };
-                            merged.insert(name.clone(), entry);
-                        }
+                        let earlier = merged.remove(&name);
+                        merged.insert(name, merge_spread_field(earlier, field, origin, by_name));
                     }
                 }
             }
@@ -4522,7 +4508,22 @@ impl Inferer<'_> {
         // field that codegen will null-fill into the constructed struct.
         if let Some(want) = expected_fields.as_ref() {
             for (name, want_field) in want {
-                if let Some((existing_field, _)) = merged.get_mut(name) {
+                if let Some((existing_field, existing_origin)) = merged.get_mut(name) {
+                    // A literal field was checked against the interface where it
+                    // was written; a spread's field is checked here.
+                    if interface_target.is_some()
+                        && matches!(
+                            existing_origin,
+                            crate::TypedObjectFieldSource::Spread { .. }
+                        )
+                        && !assignable(&existing_field.ty, &want_field.ty, self.resolver())
+                    {
+                        let message = format!(
+                            "spread field `{name}`: expected `{}`, got `{}`",
+                            want_field.ty, existing_field.ty,
+                        );
+                        self.error(span, message);
+                    }
                     existing_field.optional = want_field.optional;
                     if interface_target.is_some() {
                         // Interface writes can replace the initializer with any declared
@@ -4543,7 +4544,7 @@ impl Inferer<'_> {
                         span,
                         ty: Type::Null,
                     });
-                    evaluated.push(crate::TypedObjectMember::Value(null_id));
+                    object_members.push(crate::TypedObjectMember::Value(null_id));
                     merged.insert(
                         name.clone(),
                         (
@@ -4583,7 +4584,7 @@ impl Inferer<'_> {
         if let Some((iface_package, iface_name, iface_mangled, iface_args)) = interface_target {
             return (
                 TypedExprKind::ObjectLiteral {
-                    members: evaluated,
+                    members: object_members,
                     fields: field_origins,
                 },
                 Type::interface_ref(iface_package, iface_name, iface_mangled, iface_args),
@@ -4591,7 +4592,7 @@ impl Inferer<'_> {
         }
         (
             TypedExprKind::ObjectLiteral {
-                members: evaluated,
+                members: object_members,
                 fields: field_origins,
             },
             Type::Object { fields: resolved },
@@ -4599,7 +4600,7 @@ impl Inferer<'_> {
     }
 
     /// The fields a spread copies, and whether they must be found by name at run
-    /// time. A conditional contributes each branch rather than their join —
+    /// time (`by_name`). A conditional contributes each branch rather than their join —
     /// `c ? a : {}` joins to `{}`, which would copy nothing when `a` is chosen —
     /// and a union contributes each member. Over more than one alternative, a
     /// field some lack is optional and its type is the union of theirs, as in
@@ -4609,10 +4610,10 @@ impl Inferer<'_> {
         typed_source: ExprId,
         source_ty: &Type,
         span: Span,
-    ) -> Option<(std::collections::BTreeMap<String, crate::ObjectField>, bool)> {
+    ) -> Option<SpreadFields> {
         let mut alternatives = Vec::new();
         self.collect_spread_alternatives(typed_source, source_ty, &mut alternatives);
-        let mut objects: Vec<std::collections::BTreeMap<String, crate::ObjectField>> = Vec::new();
+        let mut objects: Vec<ObjectFields> = Vec::new();
         for alternative in alternatives {
             match alternative {
                 Type::Object { fields } => {
@@ -4640,10 +4641,16 @@ impl Inferer<'_> {
                 }
             }
         }
-        match objects.as_slice() {
-            [only] => Some((only.clone(), false)),
-            _ => Some((merge_spread_alternatives(&objects), true)),
-        }
+        Some(match objects.as_slice() {
+            [only] => SpreadFields {
+                fields: only.clone(),
+                by_name: false,
+            },
+            _ => SpreadFields {
+                fields: merge_spread_alternatives(&objects),
+                by_name: true,
+            },
+        })
     }
 
     fn collect_spread_alternatives(&self, id: ExprId, ty: &Type, out: &mut Vec<Type>) {
@@ -8271,6 +8278,65 @@ fn has_to_string(ty: &Type) -> bool {
     )
 }
 
+type ObjectFields = std::collections::BTreeMap<String, crate::ObjectField>;
+
+/// The fields a spread copies. `by_name`: the source has no one layout, so each
+/// field is found by name at run time.
+struct SpreadFields {
+    fields: ObjectFields,
+    by_name: bool,
+}
+
+/// A spread's field, merged over what an earlier member wrote to the same name.
+///
+/// An optional field may be absent, and then the earlier value stays: `{ a: 1,
+/// ...{} }` keeps `a: 1`. So the field holds either value, and is optional only
+/// if the earlier one was. Absence has to be observable for that: a by-name read
+/// finds whether the object has the field, but a fixed-layout slot holds null
+/// for an absent field, so there a field whose type admits `null` can't tell a
+/// present `null` from absence, and the spread's value is taken as written.
+fn merge_spread_field(
+    earlier: Option<(crate::ObjectField, crate::TypedObjectFieldSource)>,
+    field: crate::ObjectField,
+    origin: crate::TypedObjectFieldSource,
+    by_name: bool,
+) -> (crate::ObjectField, crate::TypedObjectFieldSource) {
+    let keeps_earlier = field.optional && (by_name || !admits_null(&field.ty));
+    let Some((earlier_field, earlier_origin)) = earlier.filter(|_| keeps_earlier) else {
+        return (field, origin);
+    };
+    let crate::TypedObjectFieldSource::Spread {
+        source_index,
+        field_name,
+        source_ty,
+        ..
+    } = origin
+    else {
+        unreachable!("a spread field's origin is a spread");
+    };
+    (
+        crate::ObjectField {
+            ty: Type::union(vec![earlier_field.ty, field.ty]),
+            optional: earlier_field.optional,
+            readonly: false,
+        },
+        crate::TypedObjectFieldSource::Spread {
+            source_index,
+            field_name,
+            source_ty,
+            fallback: Some(Box::new(earlier_origin)),
+        },
+    )
+}
+
+fn admits_null(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Null | Type::Unknown => true,
+        Type::Union(members) => members.iter().any(admits_null),
+        _ => false,
+    }
+}
+
 fn collect_union_members(ty: &Type, out: &mut Vec<Type>) {
     match ty.peel() {
         Type::Union(members) => {
@@ -8284,9 +8350,7 @@ fn collect_union_members(ty: &Type, out: &mut Vec<Type>) {
 
 /// The fields of a spread whose source is one of several object types: every
 /// field any of them has, optional where some lack it or have it optional.
-fn merge_spread_alternatives(
-    alternatives: &[std::collections::BTreeMap<String, crate::ObjectField>],
-) -> std::collections::BTreeMap<String, crate::ObjectField> {
+fn merge_spread_alternatives(alternatives: &[ObjectFields]) -> ObjectFields {
     let names: std::collections::BTreeSet<&String> = alternatives
         .iter()
         .flat_map(|fields| fields.keys())
