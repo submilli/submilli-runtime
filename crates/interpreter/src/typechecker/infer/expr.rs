@@ -4130,22 +4130,22 @@ impl Inferer<'_> {
     /// Field values aren't inferred yet, so the discriminant tag is read
     /// straight from the AST and matched against the union's discriminant
     /// table; failing that, the unique variant whose fields the literal
-    /// exactly satisfies wins. `None` (defer to the caller's single-shape
-    /// scan) for spreads, ambiguity, or no match.
+    /// exactly satisfies wins. A spread's fields aren't known here, so with a
+    /// spread only the tag selects. A later spread that overwrites the tag is
+    /// still checked against the selected variant's field, so it is rejected
+    /// rather than mistyped. `None` (defer to the caller's single-shape scan)
+    /// for ambiguity or no match.
     fn select_union_variant<'a>(
         &self,
         members: &'a [Type],
         literal: &[crate::ObjectLiteralMember],
     ) -> Option<&'a Type> {
-        if literal
+        let has_spread = literal
             .iter()
-            .any(|m| matches!(m, crate::ObjectLiteralMember::Spread { .. }))
-        {
-            return None;
-        }
+            .any(|m| matches!(m, crate::ObjectLiteralMember::Spread { .. }));
 
         if let Some((key, table)) = self.union_discriminant_with_nominals(members) {
-            let tag_value = literal.iter().find_map(|m| match m {
+            let tag_value = literal.iter().rev().find_map(|m| match m {
                 crate::ObjectLiteralMember::Field(f) if f.name.name == key => {
                     match &self.ast.expr(f.value).kind {
                         crate::ExprKind::String(s) => {
@@ -4168,6 +4168,9 @@ impl Inferer<'_> {
             {
                 return members.get(idx.0 as usize);
             }
+        }
+        if has_spread {
+            return None;
         }
 
         let lit_names: std::collections::BTreeSet<&str> = literal
