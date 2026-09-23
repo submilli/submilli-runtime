@@ -406,7 +406,7 @@ impl<'a> Inferer<'a> {
         if self.path_root_is_captured_mutator(&path) {
             return (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new());
         }
-        let path_ty = path_expr.ty.clone();
+        let path_ty = self.narrowing_source_ty(path_expr);
         // Never introduce a null alternative that the operand cannot hold.
         // Keep the non-null fact even when already proven: loop rechecking
         // needs it after invalidating the enclosing guard at a back edge.
@@ -528,7 +528,7 @@ impl<'a> Inferer<'a> {
         if self.path_root_is_captured_mutator(&path) {
             return (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new());
         }
-        let path_ty = rhs.ty.clone();
+        let path_ty = self.narrowing_source_ty(rhs);
         let path_span = rhs.span;
         let fallback_kind = rhs.kind.clone();
 
@@ -649,7 +649,7 @@ impl<'a> Inferer<'a> {
         if self.path_root_is_captured_mutator(&path) {
             return None;
         }
-        let path_ty = path_expr.ty.clone();
+        let path_ty = self.narrowing_source_ty(path_expr);
         let path_span = path_expr.span;
         let path_kind = path_expr.kind.clone();
 
@@ -1041,7 +1041,7 @@ impl<'a> Inferer<'a> {
         if self.path_root_is_captured_mutator(&path) {
             return (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new());
         }
-        let from_ty = value_expr.ty.clone();
+        let from_ty = self.narrowing_source_ty(value_expr);
         let value_span = value_expr.span;
         let fallback_kind = value_expr.kind.clone();
 
@@ -1108,7 +1108,7 @@ impl<'a> Inferer<'a> {
         if self.path_root_is_captured_mutator(&path) {
             return (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new());
         }
-        let from_ty = path_expr.ty.clone();
+        let from_ty = self.narrowing_source_ty(path_expr);
         let span = path_expr.span;
         let fallback_kind = path_expr.kind.clone();
 

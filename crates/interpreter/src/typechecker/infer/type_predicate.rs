@@ -92,7 +92,7 @@ impl Inferer<'_> {
         if self.path_root_is_captured_mutator(&path) {
             return Some((narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new()));
         }
-        let from_ty = arg_expr.ty.clone();
+        let from_ty = self.narrowing_source_ty(arg_expr);
         let arg_span = arg_expr.span;
         let fallback_kind = arg_expr.kind.clone();
 

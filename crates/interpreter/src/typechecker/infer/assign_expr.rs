@@ -47,16 +47,19 @@ impl Inferer<'_> {
             self.sequence_member_assignment(assignment, span, &mut stmts)
         };
         let result = self.reread_temp(held_value);
-        let ty = self.binding_view_of_value(&stmts, result);
+        let ty = self.typed_ast.expr(result).ty.clone();
         (TypedExprKind::Sequence { stmts, result }, ty)
     }
 
-    /// The type the assignment yields: the value's, except that a binding
-    /// declared `readonly` keeps it. A condition over the sequence narrows the
-    /// binding from this type, so `(a = [0]) !== null` must not hand `a` a
-    /// mutable array.
-    fn binding_view_of_value(&self, stmts: &[StmtId], result: ExprId) -> Type {
-        let value_ty = self.typed_ast.expr(result).ty.clone();
+    /// The type a condition narrows from when it tests `expr`. An assignment
+    /// used as a value has the value's type, as TypeScript gives it, but the
+    /// narrowing lands on the binding, which a `readonly` declaration keeps
+    /// readonly: `(a = [0]) !== null` must not hand `a` a mutable array.
+    pub(super) fn narrowing_source_ty(&self, expr: &TypedExpr) -> Type {
+        let TypedExprKind::Sequence { stmts, .. } = &expr.kind else {
+            return expr.ty.clone();
+        };
+        let value_ty = expr.ty.clone();
         let Some(
             TypedStmtKind::AssignLocal { target_ty, .. }
             | TypedStmtKind::AssignGlobal { target_ty, .. },

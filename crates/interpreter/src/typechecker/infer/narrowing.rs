@@ -565,29 +565,50 @@ pub fn truthiness_class(member: &Type) -> TruthinessClass {
 }
 
 /// The type a binding declared `declared` has after a write of a `written`
-/// value. Writing a fresh array into a `readonly T[]` binding leaves it
-/// `readonly`: the binding's type, not the value's, decides what may be
-/// written through it. A declared mutable member of exactly the written type
-/// takes the value as it is (`xs = ["a"]` into `readonly number[] | string[]`).
+/// value: the binding's type, not the value's, decides what may be written
+/// through it. Like TypeScript's assignment narrowing, each written array or
+/// tuple takes the declared members it could be: when one of them is
+/// `readonly`, the binding stays readonly (`xs = [1]` into `readonly number[]`),
+/// and when only mutable ones are, it stays mutable (`xs = ["a"]` into
+/// `readonly number[] | string[]`). A value no member names exactly is kept
+/// readonly when any member is.
 pub fn keep_declared_readonly(declared: &Type, written: Type) -> Type {
-    if written.is_readonly_array() {
-        return written;
-    }
-    let peeled = written.peel();
-    if !matches!(peeled, Type::Array(_) | Type::Tuple(_)) {
-        return written;
-    }
-    let members = match declared.peel_preserving_readonly() {
+    let members: Vec<&Type> = match declared.peel_preserving_readonly() {
         Type::Union(members) => members.iter().collect(),
         other => vec![other],
     };
-    let fits_mutable = members
-        .iter()
-        .any(|m| !m.is_readonly_array() && m.peel() == peeled);
-    if fits_mutable || !members.iter().any(|m| m.is_readonly_array()) {
+    if !members.iter().any(|m| m.is_readonly_array()) {
         return written;
     }
-    Type::Readonly(Box::new(peeled.clone()))
+    match written.peel() {
+        Type::Union(parts) => Type::union(
+            parts
+                .iter()
+                .map(|part| readonly_if_declared(&members, part.clone()))
+                .collect(),
+        ),
+        _ => readonly_if_declared(&members, written),
+    }
+}
+
+fn readonly_if_declared(members: &[&Type], written: Type) -> Type {
+    if written.is_readonly_array() {
+        return written;
+    }
+    let peeled = written.peel().clone();
+    if !matches!(peeled, Type::Array(_) | Type::Tuple(_)) {
+        return written;
+    }
+    let names_readonly = members
+        .iter()
+        .any(|m| m.is_readonly_array() && m.peel() == &peeled);
+    let names_mutable = members
+        .iter()
+        .any(|m| !m.is_readonly_array() && m.peel() == &peeled);
+    if names_mutable && !names_readonly {
+        return written;
+    }
+    Type::Readonly(Box::new(peeled))
 }
 
 fn union_members(ty: &Type) -> Vec<&Type> {

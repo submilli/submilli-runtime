@@ -53,6 +53,12 @@ function main(): void {
   mixed = ["a"];
   mixed.push("b");
   assert(mixed.join(",") === "a,b", "the written string[] stays mutable");
+  // An assignment used as a value has the value's type, as in TypeScript,
+  // though the binding it writes is readonly.
+  let held: readonly number[] = [];
+  const fresh = (held = [1]);
+  fresh.push(2);
+  assert(fresh.length === 2 && held.length === 2, "the value stays mutable");
   const mutable: number[] = [3, 1, 2];
   const ro: readonly number[] = mutable;
   assert(sum(ro) === 6, "readonly parameter");
