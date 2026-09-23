@@ -34,6 +34,11 @@ pub(super) fn extract_chain(ast: &Ast, expr: ExprId) -> Option<(Ident, Vec<Ident
                 segments.push(name.clone());
                 current = *receiver;
             }
+            // `Math["floor"]` names the same member as `Math.floor`.
+            ExprKind::IndexAccess { receiver, index } => {
+                segments.push(super::expr::string_key_name(ast, *index)?);
+                current = *receiver;
+            }
             ExprKind::Identifier(ident) => {
                 segments.reverse();
                 return Some((ident.clone(), segments));

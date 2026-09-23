@@ -586,8 +586,9 @@ impl Inferer<'_> {
         // (`JSON.stringify(x)` / `JSON.parse(s)`). Bare `JSON` and
         // partial `JSON.stringify` / `JSON.parse` references fall here
         // because the member-access expression infers its receiver via
-        // `infer_expr` first.
-        if ident.name == "JSON" {
+        // `infer_expr` first. A top-level `JSON` of the user's own is an
+        // ordinary value and resolves below.
+        if ident.name == "JSON" && !self.top_symbols.contains_key("JSON") {
             self.error_with_help(
                 span,
                 "`JSON` is a compiler intrinsic, not a value".to_string(),
@@ -1520,7 +1521,7 @@ impl Inferer<'_> {
         expected: Option<&Type>,
         span: Span,
     ) -> (TypedExprKind, Type) {
-        let callee_kind = self.ast.expr(callee).kind.clone();
+        let callee_kind = string_key_callee_as_field(self.ast, callee);
 
         // Intrinsic dispatch — when the callee is a bare identifier
         // matching a reserved intrinsic name, we skip the normal
@@ -1554,7 +1555,7 @@ impl Inferer<'_> {
         // never resolves as a user-imported namespace.
         if let ExprKind::FieldAccess { receiver, name } = &callee_kind
             && let ExprKind::Identifier(recv_ident) = &self.ast.expr(*receiver).kind.clone()
-            && self.scopes.get(&recv_ident.name).is_none()
+            && !self.shadows_namespace(&recv_ident.name)
             && recv_ident.name == "JSON"
         {
             return self.infer_json_namespace_call(name, args, type_args, expected, span);
@@ -1583,7 +1584,7 @@ impl Inferer<'_> {
         if let ExprKind::FieldAccess { .. } = &callee_kind
             && let Some((root, segments)) = namespace_symbol::extract_chain(self.ast, callee)
             && !segments.is_empty()
-            && self.scopes.get(&root.name).is_none()
+            && !self.shadows_namespace(&root.name)
             && self.namespace_symbols.contains_key(&root.name)
         {
             return self
@@ -4914,6 +4915,14 @@ impl Inferer<'_> {
         )
     }
 
+    /// Whether a user binding named `name` — local or top-level — hides the prelude
+    /// namespace of that name (`const Math = { … }` makes `Math.floor` the user's).
+    /// Only for namespaces the prelude does not itself bind at top level: `BigInt` is a
+    /// top-level constructor binding, so it would always read as shadowed.
+    fn shadows_namespace(&self, name: &str) -> bool {
+        self.scopes.get(name).is_some() || self.top_symbols.contains_key(name)
+    }
+
     fn infer_field_access(
         &mut self,
         receiver: ExprId,
@@ -4929,7 +4938,7 @@ impl Inferer<'_> {
         // the chain root must be in `namespace_symbols` for the
         // dispatch to engage.
         if let Some((root, mut segments)) = namespace_symbol::extract_chain(self.ast, receiver)
-            && self.scopes.get(&root.name).is_none()
+            && !self.shadows_namespace(&root.name)
             && self.namespace_symbols.contains_key(&root.name)
         {
             segments.push(name.clone());
@@ -5253,12 +5262,8 @@ impl Inferer<'_> {
         span: Span,
         expr_id: ExprId,
     ) -> (TypedExprKind, Type) {
-        if let ExprKind::String(name) = &self.ast.expr(index).kind {
-            let field = Ident {
-                name: name.clone(),
-                span: self.ast.expr(index).span,
-            };
-            return self.infer_property_access(receiver, field, span);
+        if let Some(field) = string_key_name(self.ast, index) {
+            return self.infer_field_access(receiver, field, span);
         }
 
         // detect when this IndexAccess was synthesised by the
@@ -8065,29 +8070,47 @@ fn enum_variant_help<'a>(
     }
 }
 
-/// `o?.["content-type"]` reads a field, exactly as `o["content-type"]` does in
-/// `infer_index_access`: a string-literal key names a member, not an index.
+/// The member a string-literal key names: `o["content-type"]` reads field
+/// `content-type` wherever `o.name` would read `name`. `None` for any other key.
+pub(super) fn string_key_name(ast: &crate::Ast, key: ExprId) -> Option<Ident> {
+    let key = ast.expr(key);
+    let ExprKind::String(name) = &key.kind else {
+        return None;
+    };
+    Some(Ident {
+        name: name.clone(),
+        span: key.span,
+    })
+}
+
+/// `o["m"](…)` calls method `m`, exactly as `o.m(…)` does: every call path in
+/// `infer_call` dispatches on a `FieldAccess` callee.
+fn string_key_callee_as_field(ast: &crate::Ast, callee: ExprId) -> ExprKind {
+    let kind = ast.expr(callee).kind.clone();
+    if let ExprKind::IndexAccess { receiver, index } = kind
+        && let Some(name) = string_key_name(ast, index)
+    {
+        return ExprKind::FieldAccess { receiver, name };
+    }
+    kind
+}
+
+/// `o?.["content-type"]` reads a field, exactly as `o["content-type"]` does.
 fn string_key_as_field(ast: &crate::Ast, part: ChainPart) -> ChainPart {
-    let ChainPart::Index {
+    if let ChainPart::Index {
         idx,
         optional,
         span,
     } = part
-    else {
-        return part;
-    };
-    let key = ast.expr(idx);
-    let ExprKind::String(name) = &key.kind else {
-        return part;
-    };
-    ChainPart::Field {
-        name: Ident {
-            name: name.clone(),
-            span: key.span,
-        },
-        optional,
-        span,
+        && let Some(name) = string_key_name(ast, idx)
+    {
+        return ChainPart::Field {
+            name,
+            optional,
+            span,
+        };
     }
+    part
 }
 
 fn branch_result_type(left: Type, right: Type, types: super::assignable::TypeResolver<'_>) -> Type {
