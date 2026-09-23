@@ -94,9 +94,15 @@ docker compose ps
 ```
 
 ```text
-NAME                  IMAGE                                      STATUS                    PORTS
-submilli-submilli-1   ghcr.io/submilli/submilli-runtime:latest   Up 12 seconds (healthy)   127.0.0.1:8128->8128/tcp
+NAME                   IMAGE                                      COMMAND                  SERVICE    CREATED          STATUS                    PORTS
+myproject-submilli-1   ghcr.io/submilli/submilli-runtime:latest   "/usr/local/bin/subm…"   submilli   12 seconds ago   Up 12 seconds (healthy)   127.0.0.1:8128->8128/tcp
 ```
+
+The log opens with the warning about binding outside loopback. In a
+container that's expected: the server has to listen on every address inside
+the container, or nothing outside the container could reach it at all. What
+decides who can actually reach it is how the port is published and which
+network it's on, which is the next part.
 
 ### How it keeps other callers out
 
@@ -122,7 +128,8 @@ services:
 ```
 
 Any container on `submilli-net` gets the full API, so don't put anything else
-there.
+there. A container on Docker's default network can't connect at all; its
+requests time out.
 
 ### What else the file sets up
 
@@ -185,7 +192,7 @@ head -c 32 /dev/urandom | base64 > submilli-store-key
 chmod 0444 submilli-store-key
 ```
 
-```yaml title="compose.override.yaml"
+```yaml title="compose.override.yaml (added to the same file)"
 services:
   submilli:
     environment:
@@ -198,10 +205,18 @@ secrets:
     file: ./submilli-store-key
 ```
 
-The `0444` is required. Outside Docker Swarm, Compose mounts the file with
-its original owner and mode, and the server runs as user 65532, so a
-`0600` file owned by you is unreadable and the server refuses to start. Keep
-the key out of source control and out of your volume backups.
+The `0444` matters on a Linux host. Outside Docker Swarm, Compose mounts the
+file with its original owner and mode, and the server runs as user 65532, so
+a `0600` file owned by you is unreadable and the server refuses to start:
+
+```text
+Error: opening secret store: secret store key: reading key file `/run/secrets/submilli-store-key`: Permission denied (os error 13)
+```
+
+Docker Desktop on macOS and Windows hides file ownership, so a `0600` key
+works there and then fails on the Linux server you deploy to. Set `0444`
+everywhere. Keep the key out of source control and out of your volume
+backups.
 
 ### Upgrading and backing up
 
@@ -311,9 +326,18 @@ may do that; a blueprint registered over the API can't read files. Never put
 secret values in `values.yaml` itself: Helm stores them in plain text and
 prints them in `helm get values`.
 
-The two maps have to agree on the path, and the server won't catch a
-mismatch at startup: it registers the blueprint and fails on the first
-request that needs the secret. `helm test` cross-checks them.
+The two maps have to agree on the path, and the server won't stop you if
+they don't. It registers the blueprint anyway, logs a warning, and counts it
+in `unresolved_secrets=1` on the reconcile line; the first program that needs
+the secret fails. `helm test` catches it before that:
+
+```text
+FAIL: a blueprint declares a secret at /etc/submilli/secrets/stripe/apikey, but the chart does not mount anything there. Paths the chart mounts: /etc/submilli/secrets/stripe/api-key
+```
+
+Run `helm test submilli` after every install and upgrade. It registers a
+small blueprint of its own, `submilli-helmtest-exec`, to run a program
+through the server, so expect to see it in `submilli server blueprint list`.
 
 The server's own encrypted secret store is off in the chart. Its encryption
 protects the volume only if the key lives somewhere the volume doesn't, and
@@ -354,6 +378,10 @@ Choose the storage settings before installing. Access mode, storage class,
 and size are fixed when the claim is created, and `helm upgrade` can't change
 them.
 
+The pod's log also opens with the warning about binding outside loopback,
+for the same reason as in Compose: a Service can only reach a pod that
+listens on every address. The NetworkPolicy is what keeps it private.
+
 `replicaCount` above 1 gives you several independent servers, not one
 bigger server. Blueprints from the values file reach all of them, but
 anything done over the API (registered blueprints, sessions, packages,
@@ -373,8 +401,10 @@ pod restarts onto the same volume. To back up, snapshot the claims
 
 ## Before you go live
 
-- Only your application can reach the server. `helm test` passes on
-  Kubernetes, and there's no bind warning in the log anywhere else.
+- Only your application can reach the server. On one machine, the log has no
+  warning about binding outside loopback. With Compose, the port is published
+  on `127.0.0.1` and only your application shares `submilli-net`. On
+  Kubernetes, `helm test` passes.
 - `$SUBMILLI_HOME` is on storage that survives a redeploy, and it's backed
   up.
 - Blueprints come from source control through the seed directory, and the
