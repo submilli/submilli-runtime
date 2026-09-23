@@ -551,7 +551,7 @@ fn group_by_text(entries: &[Entry]) -> Vec<(&str, Vec<&str>)> {
 /// binding, so the literal's own entry is skipped.
 fn is_literal(text: &str) -> bool {
     matches!(text, "true" | "false" | "null")
-        || is_number_literal(text.strip_prefix('-').unwrap_or(text))
+        || is_number_literal(text.strip_prefix(['-', '+']).unwrap_or(text))
         || is_string_literal(text)
 }
 
@@ -939,6 +939,7 @@ fn normalizing_equates_equivalent_spellings() {
 #[test]
 fn only_a_single_literal_is_skipped() {
     for literal in [
+        "+1",
         "1e-5",
         "-1E+5",
         "1",
