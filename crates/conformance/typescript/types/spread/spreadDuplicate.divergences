@@ -1,48 +1,16 @@
-types: 48 of 80 tsc entries compared, 12 differ
-
-line 19: a2
-  tsc:  { a: string | number; }
-  ours: { a: number }
-
-line 19: { a: 123, ...(t ? a : {}) }
-  tsc:  { a: string | number; }
-  ours: { a: number }
+types: 48 of 80 tsc entries compared, 4 differ
 
 line 19: t ? a : {}
   tsc:  { a: string; } | {}
   ours: {}
 
-line 20: b2
-  tsc:  { a: string | number; }
-  ours: { a: number }
-
-line 20: { a: 123, ...(t ? b : {}) }
-  tsc:  { a: string | number; }
-  ours: { a: number }
-
 line 20: t ? b : {}
   tsc:  { a?: string; }
   ours: {}
 
-line 21: c2
-  tsc:  { a: string | number | null; }
-  ours: { a: number }
-
-line 21: { a: 123, ...(t ? c : {}) }
-  tsc:  { a: string | number | null; }
-  ours: { a: number }
-
 line 21: t ? c : {}
   tsc:  { a: string | null; } | {}
   ours: {}
-
-line 22: d2
-  tsc:  { a: string | number | null; }
-  ours: { a: number }
-
-line 22: { a: 123, ...(t ? d : {}) }
-  tsc:  { a: string | number | null; }
-  ours: { a: number }
 
 line 22: t ? d : {}
   tsc:  { a?: string | null; }

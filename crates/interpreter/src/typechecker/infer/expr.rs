@@ -4426,67 +4426,42 @@ impl Inferer<'_> {
                     span: spread_span,
                 } => {
                     let (typed_source, source_ty) = self.infer_expr(value, None);
-                    // peel through aliases. Only structural
-                    // `Type::Object` sources are accepted in v1 —
-                    // `InterfaceRef` (nominal interfaces) and every
-                    // other type get rejected with a typed diagnostic.
-                    let peeled_source = source_ty.peel().clone();
-                    match peeled_source {
-                        Type::Object {
-                            fields: source_fields,
-                        } => {
-                            let source_index = spread_count;
-                            spread_count += 1;
-                            evaluated.push(crate::TypedObjectMember::Spread(typed_source));
-                            let source_ty_for_origin = Type::Object {
-                                fields: source_fields.clone(),
+                    if let Some((source_fields, by_name)) =
+                        self.spread_source_fields(typed_source, &source_ty, spread_span)
+                    {
+                        let source_index = spread_count;
+                        spread_count += 1;
+                        evaluated.push(crate::TypedObjectMember::Spread {
+                            source: typed_source,
+                            by_name,
+                        });
+                        let source_ty_for_origin = Type::Object {
+                            fields: source_fields.clone(),
+                        };
+                        for (name, field) in source_fields {
+                            let earlier = merged.remove(&name);
+                            let spread = |fallback| crate::TypedObjectFieldSource::Spread {
+                                source_index,
+                                field_name: name.clone(),
+                                source_ty: source_ty_for_origin.clone(),
+                                fallback,
                             };
-                            for (name, field) in source_fields {
-                                let earlier = merged.remove(&name);
-                                let spread = |fallback| crate::TypedObjectFieldSource::Spread {
-                                    source_index,
-                                    field_name: name.clone(),
-                                    source_ty: source_ty_for_origin.clone(),
-                                    fallback,
-                                };
-                                let entry = match earlier {
-                                    // An optional field may be absent, and then the
-                                    // earlier value stays: `{ a: 1, ...{} }` keeps
-                                    // `a: 1`. So the field holds either one, and is
-                                    // optional only if the earlier one was.
-                                    Some((earlier_field, earlier_source)) if field.optional => (
-                                        crate::ObjectField {
-                                            ty: Type::union(vec![
-                                                earlier_field.ty,
-                                                field.ty.clone(),
-                                            ]),
-                                            optional: earlier_field.optional,
-                                            readonly: false,
-                                        },
-                                        spread(Some(Box::new(earlier_source))),
-                                    ),
-                                    _ => (field, spread(None)),
-                                };
-                                merged.insert(name.clone(), entry);
-                            }
-                        }
-                        Type::InterfaceRef { name, .. } => {
-                            self.error(
-                                spread_span,
-                                format!(
-                                    "cannot spread interface `{name}` into an object literal — only structural object types are accepted",
+                            let entry = match earlier {
+                                // An optional field may be absent, and then the
+                                // earlier value stays: `{ a: 1, ...{} }` keeps
+                                // `a: 1`. So the field holds either one, and is
+                                // optional only if the earlier one was.
+                                Some((earlier_field, earlier_source)) if field.optional => (
+                                    crate::ObjectField {
+                                        ty: Type::union(vec![earlier_field.ty, field.ty.clone()]),
+                                        optional: earlier_field.optional,
+                                        readonly: false,
+                                    },
+                                    spread(Some(Box::new(earlier_source))),
                                 ),
-                            );
-                        }
-                        Type::Error => {
-                            // Inner inference already produced a
-                            // diagnostic; don't pile a second one on.
-                        }
-                        other => {
-                            self.error(
-                                spread_span,
-                                format!("cannot spread `{other}` into an object literal",),
-                            );
+                                _ => (field, spread(None)),
+                            };
+                            merged.insert(name.clone(), entry);
                         }
                     }
                 }
@@ -4621,6 +4596,65 @@ impl Inferer<'_> {
             },
             Type::Object { fields: resolved },
         )
+    }
+
+    /// The fields a spread copies, and whether they must be found by name at run
+    /// time. A conditional contributes each branch rather than their join —
+    /// `c ? a : {}` joins to `{}`, which would copy nothing when `a` is chosen —
+    /// and a union contributes each member. Over more than one alternative, a
+    /// field some lack is optional and its type is the union of theirs, as in
+    /// TypeScript. Only structural object types spread; anything else is reported.
+    fn spread_source_fields(
+        &mut self,
+        typed_source: ExprId,
+        source_ty: &Type,
+        span: Span,
+    ) -> Option<(std::collections::BTreeMap<String, crate::ObjectField>, bool)> {
+        let mut alternatives = Vec::new();
+        self.collect_spread_alternatives(typed_source, source_ty, &mut alternatives);
+        let mut objects: Vec<std::collections::BTreeMap<String, crate::ObjectField>> = Vec::new();
+        for alternative in alternatives {
+            match alternative {
+                Type::Object { fields } => {
+                    if !objects.contains(&fields) {
+                        objects.push(fields);
+                    }
+                }
+                Type::InterfaceRef { name, .. } => {
+                    self.error(
+                        span,
+                        format!(
+                            "cannot spread interface `{name}` into an object literal — only structural object types are accepted",
+                        ),
+                    );
+                    return None;
+                }
+                // Inner inference already reported it.
+                Type::Error => return None,
+                other => {
+                    self.error(
+                        span,
+                        format!("cannot spread `{other}` into an object literal"),
+                    );
+                    return None;
+                }
+            }
+        }
+        match objects.as_slice() {
+            [only] => Some((only.clone(), false)),
+            _ => Some((merge_spread_alternatives(&objects), true)),
+        }
+    }
+
+    fn collect_spread_alternatives(&self, id: ExprId, ty: &Type, out: &mut Vec<Type>) {
+        if let TypedExprKind::Ternary { then_, else_, .. } = self.typed_ast.expr(id).kind {
+            for branch in [then_, else_] {
+                let branch_ty = self.typed_ast.expr(branch).ty.clone();
+                self.collect_spread_alternatives(branch, &branch_ty, out);
+            }
+            return;
+        }
+        collect_union_members(ty, out);
     }
 
     fn infer_array_literal(
@@ -8235,6 +8269,48 @@ fn has_to_string(ty: &Type) -> bool {
             | Type::Unknown
             | Type::Error
     )
+}
+
+fn collect_union_members(ty: &Type, out: &mut Vec<Type>) {
+    match ty.peel() {
+        Type::Union(members) => {
+            for member in members {
+                collect_union_members(member, out);
+            }
+        }
+        other => out.push(other.clone()),
+    }
+}
+
+/// The fields of a spread whose source is one of several object types: every
+/// field any of them has, optional where some lack it or have it optional.
+fn merge_spread_alternatives(
+    alternatives: &[std::collections::BTreeMap<String, crate::ObjectField>],
+) -> std::collections::BTreeMap<String, crate::ObjectField> {
+    let names: std::collections::BTreeSet<&String> = alternatives
+        .iter()
+        .flat_map(|fields| fields.keys())
+        .collect();
+    names
+        .into_iter()
+        .map(|name| {
+            let present: Vec<&crate::ObjectField> = alternatives
+                .iter()
+                .filter_map(|fields| fields.get(name))
+                .collect();
+            let optional =
+                present.len() < alternatives.len() || present.iter().any(|field| field.optional);
+            let ty = Type::union(present.iter().map(|field| field.ty.clone()).collect());
+            (
+                name.clone(),
+                crate::ObjectField {
+                    ty,
+                    optional,
+                    readonly: false,
+                },
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]

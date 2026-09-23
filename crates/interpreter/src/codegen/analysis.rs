@@ -676,11 +676,14 @@ impl CodegenAnalysis {
                     let mut source = Some(&field.source);
                     while let Some(TypedObjectFieldSource::Spread {
                         source_ty,
+                        field_name,
                         fallback,
                         ..
                     }) = source
                     {
                         self.visit_type(source_ty);
+                        // A spread read by name looks the field up by its string.
+                        self.extra_field_names.push(field_name.clone());
                         source = fallback.as_deref();
                     }
                 }

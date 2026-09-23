@@ -439,14 +439,17 @@ impl TypedObjectFieldSource {
 pub enum TypedObjectMember {
     /// A field's value.
     Value(ExprId),
-    /// A spread's source object.
-    Spread(ExprId),
+    /// A spread's source object. `by_name` is set when the source has no one
+    /// layout — its type is a union of object types, or it is a conditional
+    /// whose branches differ — so each field is found by name at run time, and
+    /// one the object lacks reads as absent.
+    Spread { source: ExprId, by_name: bool },
 }
 
 impl TypedObjectMember {
     pub fn expr_id(self) -> ExprId {
         match self {
-            TypedObjectMember::Value(id) | TypedObjectMember::Spread(id) => id,
+            TypedObjectMember::Value(id) | TypedObjectMember::Spread { source: id, .. } => id,
         }
     }
 }

@@ -462,7 +462,7 @@ fn emit_expr_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) 
                 fields.iter().map(|f| (f.name.name.as_str(), f)).collect();
             for (name, field) in declared_fields {
                 if let Some(origin) = by_name.get(name.as_str()) {
-                    emit_object_field_source(emitter, &evaluated, &origin.source);
+                    emit_object_field_source(emitter, ctx, &evaluated, &origin.source);
                 } else {
                     debug_assert!(
                         field.optional,
@@ -4501,9 +4501,16 @@ struct EvaluatedMembers {
     object_fields: u32,
     /// Each field value's boxed `$Object` reference, by its expression.
     values: std::collections::HashMap<crate::ExprId, u32>,
-    /// Each spread source, in order: its local, its struct type, and its field
+    /// Each spread source, in order.
+    spreads: Vec<SpreadSource>,
+}
+
+enum SpreadSource {
+    /// A source of one known layout: its local, its struct type, and its field
     /// names in slot order.
-    spreads: Vec<(u32, u32, Vec<String>)>,
+    Layout(u32, u32, Vec<String>),
+    /// A source whose fields are found by name: its local, as an `$ObjectShape`.
+    ByName(u32),
 }
 
 fn evaluate_object_members(
@@ -4536,7 +4543,20 @@ fn evaluate_object_members(
                 emitter.instruction(Instruction::LocalSet(local));
                 evaluated.values.insert(value_id, local);
             }
-            crate::TypedObjectMember::Spread(source_id) => {
+            crate::TypedObjectMember::Spread {
+                source: source_id,
+                by_name: true,
+            } => {
+                let source_ty = ctx.ta.expr(source_id).ty.clone();
+                emit_expr(emitter, ctx, source_id);
+                let local =
+                    stash_receiver_as_object_shape(emitter, &source_ty, intrinsics.object_shape);
+                evaluated.spreads.push(SpreadSource::ByName(local));
+            }
+            crate::TypedObjectMember::Spread {
+                source: source_id,
+                by_name: false,
+            } => {
                 let source_struct_ty = ctx.ta.expr(source_id).ty.peel().clone();
                 let shape_idx = ctx
                     .symbols
@@ -4552,9 +4572,11 @@ fn evaluate_object_members(
                 emit_expr(emitter, ctx, source_id);
                 emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(shape_idx)));
                 emitter.instruction(Instruction::LocalSet(local));
-                evaluated
-                    .spreads
-                    .push((local, shape_idx, fields.keys().cloned().collect()));
+                evaluated.spreads.push(SpreadSource::Layout(
+                    local,
+                    shape_idx,
+                    fields.keys().cloned().collect(),
+                ));
             }
         }
     }
@@ -4564,6 +4586,7 @@ fn evaluate_object_members(
 /// Pushes one field's value, read from its evaluated member.
 fn emit_object_field_source(
     emitter: &mut FunctionEmitter<'_>,
+    ctx: &CodegenCtx<'_>,
     evaluated: &EvaluatedMembers,
     source: &crate::TypedObjectFieldSource,
 ) {
@@ -4578,18 +4601,29 @@ fn emit_object_field_source(
             fallback,
             ..
         } => {
-            let (local, shape_idx, keys) = &evaluated.spreads[*source_index];
-            let slot = keys
-                .iter()
-                .position(|k| k == field_name)
-                .expect("spread origin's field_name is in source's field set");
-            emitter.instruction(Instruction::LocalGet(*local));
-            emitter.instruction(Instruction::StructGet {
-                struct_type_index: *shape_idx,
-                field_index: 2,
-            });
-            emitter.instruction(Instruction::I32Const(slot as i32));
-            emitter.instruction(Instruction::ArrayGet(evaluated.object_fields));
+            match &evaluated.spreads[*source_index] {
+                SpreadSource::Layout(local, shape_idx, keys) => {
+                    let slot = keys
+                        .iter()
+                        .position(|k| k == field_name)
+                        .expect("spread origin's field_name is in source's field set");
+                    emitter.instruction(Instruction::LocalGet(*local));
+                    emitter.instruction(Instruction::StructGet {
+                        struct_type_index: *shape_idx,
+                        field_index: 2,
+                    });
+                    emitter.instruction(Instruction::I32Const(slot as i32));
+                    emitter.instruction(Instruction::ArrayGet(evaluated.object_fields));
+                }
+                // A field the object lacks reads as null, like an absent optional.
+                SpreadSource::ByName(local) => {
+                    let name_global = ctx
+                        .symbols
+                        .field_name_string_global_idx(field_name)
+                        .expect("spread field name interned by the analysis pass");
+                    emit_object_field_read_by_name(emitter, ctx, *local, name_global);
+                }
+            }
             let Some(fallback) = fallback else {
                 return;
             };
@@ -4602,7 +4636,7 @@ fn emit_object_field_source(
             emitter.instruction(Instruction::LocalTee(read));
             emitter.instruction(Instruction::RefIsNull);
             emitter.instruction(Instruction::If(wasm_encoder::BlockType::Result(object_ref)));
-            emit_object_field_source(emitter, evaluated, fallback);
+            emit_object_field_source(emitter, ctx, evaluated, fallback);
             emitter.instruction(Instruction::Else);
             emitter.instruction(Instruction::LocalGet(read));
             emitter.instruction(Instruction::End);
