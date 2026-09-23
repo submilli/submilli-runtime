@@ -17,7 +17,6 @@ pub(crate) fn installed_packages() -> Vec<Artifact> {
     let store = PackageStore::default();
     store
         .available_packages()
-        .unwrap_or_default()
         .iter()
         .filter_map(|name| store.load(name).ok())
         .collect()

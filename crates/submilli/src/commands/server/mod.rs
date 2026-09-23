@@ -16,7 +16,7 @@ pub enum ServerCmd {
     /// Execute a Submilli script on a running submilli-server.
     #[command(name = "run-code")]
     RunCode(run_code::Args),
-    /// Manage the packages installed in the server's store.
+    /// Manage the server's package store and list the packages it can resolve.
     #[command(subcommand)]
     Packages(packages::PackagesCmd),
     /// Report a running server's status (pid, bind, sessions, blueprints).

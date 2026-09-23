@@ -42,8 +42,8 @@ LABEL org.opencontainers.image.title="submilli-server" \
       org.opencontainers.image.revision="${REVISION}"
 
 # Both binaries ship. In a shell-less image the CLI is the only diagnostic an
-# operator has over `docker exec` (`submilli secret put`, `submilli server
-# status`), and it is how blueprints are managed from outside the API.
+# operator has over `docker exec` (`submilli server secret put`, `submilli
+# server status`), and it is how blueprints are managed from outside the API.
 COPY dist/${TARGETARCH}/ /usr/local/bin/
 
 # uid 65532 and /var/lib/submilli are part of this image's public contract, not
@@ -52,11 +52,15 @@ COPY dist/${TARGETARCH}/ /usr/local/bin/
 # image release.
 COPY --from=scaffold --chown=65532:65532 /state /var/lib/submilli
 
-# Relocates five of the six state directories via `default_data_root()` —
-# blueprints, sessions, vfs/sessions, secrets, packages. The sixth, the ephemeral
-# VFS root, is a separate setting that defaults to the system temp dir; left
-# alone it grows the container's writable layer instead of the volume. Mount /tmp
-# as a tmpfs (see compose.yaml) or set SUBMILLI_VFS_EPHEMERAL_DIR.
+# Relocates five of the six state directories via `default_data_root()`; the
+# server keeps them under `$SUBMILLI_HOME/server/` — blueprints, sessions,
+# vfs/sessions, secrets, packages — beside the CLI's own packages/ and secrets/.
+# A volume from a release that kept them directly under $SUBMILLI_HOME is moved
+# into that shape on the first boot, except packages/: it stays at the top level
+# as the read-only fallback the server searches after its own store. The sixth,
+# the ephemeral VFS root, is a separate setting that defaults to the system temp
+# dir; left alone it grows the container's writable layer instead of the volume.
+# Mount /tmp as a tmpfs (see compose.yaml) or set SUBMILLI_VFS_EPHEMERAL_DIR.
 ENV SUBMILLI_HOME=/var/lib/submilli \
     HOST=0.0.0.0 \
     TZ=Etc/UTC \

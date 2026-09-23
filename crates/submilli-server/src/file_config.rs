@@ -33,14 +33,15 @@ use ipnet::IpNet;
 use serde::Deserialize;
 use submilli_server::config::{
     OAuthProvider, ServerDirectories, VolumeTable, default_blueprint_dir,
-    default_package_store_dir, default_secret_store_dir, default_session_storage_root,
-    default_session_store_dir, validate_volumes,
+    default_cli_package_store_dir, default_package_store_dir, default_secret_store_dir,
+    default_session_storage_root, default_session_store_dir, validate_volumes,
 };
 use submilli_server::{
     DEFAULT_MAX_EXECUTION_TOKENS, DEFAULT_MAX_STORE_BYTES, FileSecretStore, KeySource, LlmLimits,
     NetworkPolicy, RuntimeConfig, ServerConfig,
 };
 use submilli_shared::secret_store::SecretStore;
+use submilli_shared::secret_store::check_key;
 
 use crate::Cli;
 
@@ -319,22 +320,198 @@ fn load(path: &Path) -> Result<FileConfig> {
 
 /// Resolve the address + [`ServerConfig`] the server runs with, plus whether
 /// telemetry is enabled, reading the `--config` file (when given) and layering
-/// the CLI flags on top.
+/// the CLI flags on top. Also runs the one-way boot migration of a legacy
+/// state layout (see [`crate::migrate`]), once every check that needs no disk
+/// has passed.
 pub(crate) fn resolve(cli: Cli) -> Result<Resolved> {
     let env = EnvConfig::from_env();
     let file = load_config_file(&cli, &env)?;
+    // The migration is one-way, so every setting that can be refused without
+    // touching the disk is checked first: a boot that is going to fail on a
+    // bad port, limit, key, or volume must not reshape the volume on its way
+    // out. `resolve` and `merge` repeat these cheaply; only opening the secret
+    // store, which creates its directory, has to wait.
+    preflight(&cli, &file, &env)?;
+    let migration = crate::migrate::run(&legacy_layout(&cli, &file, &env))?;
     let telemetry = combine_telemetry(
         std::env::var("SUBMILLI_TELEMETRY").ok().as_deref(),
         file.telemetry,
     );
-    let shutdown_grace = shutdown_grace(&cli, &file, &env)?;
-    let (addr, config) = merge(cli, file, env)?;
+    // A failure from here on exits before any subscriber exists to log the
+    // migration, so what it moved is said on stderr before the error goes out.
+    let resolved = shutdown_grace(&cli, &file, &env).and_then(|shutdown_grace| {
+        merge(cli, file, env).map(|(addr, config)| (addr, config, shutdown_grace))
+    });
+    if resolved.is_err()
+        && let Some(migration) = &migration
+    {
+        note_migration_before_exit(migration);
+    }
+    let (addr, config, shutdown_grace) = resolved?;
     Ok(Resolved {
         addr,
         config,
         telemetry,
         shutdown_grace,
+        migration,
     })
+}
+
+/// The settings this boot can refuse without touching any state directory.
+fn preflight(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<()> {
+    bind_addr(cli, file, env)?;
+    shutdown_grace(cli, file, env)?;
+    resolve_network_policy(cli, file, env)?;
+    max_execution_memory(cli, file, env)?;
+    max_session_state_memory(cli, file, env)?;
+    max_llm_tokens(cli, file, env)?;
+    max_execution_llm_tokens(cli, file, env)?;
+    max_llm_concurrency(cli, file, env)?;
+    if let Some(key) = secret_key_source(cli, file, env) {
+        check_key(&key).map_err(|e| anyhow::anyhow!("checking the secret-store key: {e}"))?;
+    }
+    // The guarded paths are the same before and after the migration: every
+    // default it moves sits under the server root either way.
+    let directories = guarded_directories(cli, file, env);
+    validate_volumes(&file.volumes, &directories)?;
+    crate::migrate::validate_dependencies(
+        &legacy_layout(cli, file, env),
+        &directories,
+        &file.volumes,
+    )?;
+    Ok(())
+}
+
+/// Every directory the volume check guards, with defaults applied, resolved
+/// without opening anything.
+fn guarded_directories(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> ServerDirectories {
+    ServerDirectories {
+        blueprint_dir: Some(
+            explicit(
+                cli.blueprint_dir.clone(),
+                env.blueprint_dir.clone(),
+                file.blueprint_dir.clone(),
+            )
+            .unwrap_or_else(default_blueprint_dir),
+        ),
+        blueprint_seed_dir: explicit(
+            cli.blueprint_seed_dir.clone(),
+            env.blueprint_seed_dir.clone(),
+            file.blueprint_seed_dir.clone(),
+        ),
+        package_store_root: Some(
+            explicit(
+                cli.package_store_dir.clone(),
+                env.package_store_dir.clone(),
+                file.package_store_dir.clone(),
+            )
+            .unwrap_or_else(default_package_store_dir),
+        ),
+        package_fallback_root: Some(default_cli_package_store_dir()),
+        secret_store_dir: Some(secret_store_dir(cli, file, env)),
+        secret_store_key_file: secret_key_file(cli, file, env),
+        session_storage_root: Some(
+            explicit(
+                cli.vfs_session_dir.clone(),
+                env.vfs_session_dir.clone(),
+                file.vfs_session_dir.clone(),
+            )
+            .unwrap_or_else(default_session_storage_root),
+        ),
+        session_store_dir: Some(
+            explicit(
+                cli.session_store_dir.clone(),
+                env.session_store_dir.clone(),
+                file.session_store_dir.clone(),
+            )
+            .unwrap_or_else(default_session_store_dir),
+        ),
+        ephemeral_storage_root: explicit(
+            cli.vfs_ephemeral_dir.clone(),
+            env.vfs_ephemeral_dir.clone(),
+            file.vfs_ephemeral_dir.clone(),
+        ),
+        // The path the config was read from, so a volume cannot be declared
+        // over the file that declares volumes. Resolution consumes the file and
+        // `ServerConfig` never carries the path, so this is where it is known.
+        config_file: cli.config.clone().or_else(|| env.config.clone()),
+    }
+}
+
+/// What the migration relocated, for an operator who sees this boot fail and
+/// then finds the top-level directories gone. Nothing was lost; it says where.
+fn note_migration_before_exit(migration: &crate::migrate::MigrationReport) {
+    let server = migration.server_dir();
+    if !migration.moved.is_empty() {
+        eprintln!(
+            "note: the state directories {} were already moved under `{}` by this boot; they \
+             are intact there",
+            migration.moved.join(", "),
+            server.display()
+        );
+    }
+    if !migration.published.is_empty() {
+        eprintln!(
+            "note: the state directories {} an earlier boot had staged were already published \
+             under `{}` by this boot; they are intact there",
+            migration.published.join(", "),
+            server.display()
+        );
+    }
+    let server_secrets = server.join(crate::migrate::SECRETS);
+    if let Some(secrets) = &migration.secrets
+        && !secrets.moved.is_empty()
+    {
+        eprintln!(
+            "note: {} sealed secret(s) were already moved from `{}` to `{}` by this boot; they \
+             are intact there",
+            secrets.moved.len(),
+            migration.legacy_secrets_dir().display(),
+            server_secrets.display()
+        );
+    }
+    if let Some(staged) = &migration.staged_secrets
+        && !staged.moved.is_empty()
+    {
+        eprintln!(
+            "note: {} staged sealed secret(s) were already moved from `{}` to `{}` by this \
+             boot; they are intact there",
+            staged.moved.len(),
+            migration.staged_secrets_dir().display(),
+            server_secrets.display()
+        );
+    }
+}
+
+/// Which of the server's state directories resolved from their defaults, and
+/// so may be relocated by the boot migration. Provenance is only visible here,
+/// before the defaults are applied in `merge`.
+fn legacy_layout(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> crate::migrate::LegacyLayout {
+    let is_default = |cli: &Option<PathBuf>, env: &Option<PathBuf>, file: &Option<PathBuf>| {
+        explicit(cli.as_ref(), env.as_ref(), file.as_ref()).is_none()
+    };
+    let secrets_default = is_default(
+        &cli.secret_store_dir,
+        &env.secret_store_dir,
+        &file.secret_store.dir,
+    );
+    let key = secret_key_source(cli, file, env);
+    crate::migrate::LegacyLayout {
+        root: submilli_build::default_data_root(),
+        key_configured: key.is_some(),
+        blueprints: is_default(&cli.blueprint_dir, &env.blueprint_dir, &file.blueprint_dir),
+        sessions: is_default(
+            &cli.session_store_dir,
+            &env.session_store_dir,
+            &file.session_store_dir,
+        ),
+        vfs_sessions: is_default(
+            &cli.vfs_session_dir,
+            &env.vfs_session_dir,
+            &file.vfs_session_dir,
+        ),
+        secrets: secrets_default.then_some(key).flatten(),
+    }
 }
 
 /// Everything the binary needs from the three configuration sources.
@@ -343,6 +520,8 @@ pub(crate) struct Resolved {
     pub config: ServerConfig,
     pub telemetry: bool,
     pub shutdown_grace: Duration,
+    /// What the boot migration did, if it ran. Logged once a subscriber exists.
+    pub migration: Option<crate::migrate::MigrationReport>,
 }
 
 /// The `SUBMILLI_ALLOW_*` variables that widened the outbound egress guard.
@@ -529,12 +708,9 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
     // Borrow for the address, policy, and store before the `.or()` chains below
     // move fields out.
     let addr = bind_addr(&cli, &file, &env)?;
-    // The path the config was read from, so a volume cannot be declared over the file
-    // that declares volumes. Resolution consumes the file and `ServerConfig` never
-    // carries the path, so this is the only point it is in scope.
-    let config_file = cli.config.clone().or_else(|| env.config.clone());
+    validate_volumes(&file.volumes, &guarded_directories(&cli, &file, &env))?;
     let network_policy = resolve_network_policy(&cli, &file, &env)?;
-    let secrets = resolve_secret_store(&cli, &file, &env)?;
+    let secret_store = resolve_secret_store(&cli, &file, &env)?;
     let mcp_allowed_hosts = resolve_mcp_allowed_hosts(&cli, &file, &env);
     let runtime = RuntimeConfig {
         max_store_bytes: max_execution_memory(&cli, &file, &env)?,
@@ -583,25 +759,6 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
         file.package_store_dir,
     );
 
-    validate_volumes(
-        &file.volumes,
-        &ServerDirectories {
-            blueprint_dir: Some(blueprint_dir.clone()),
-            blueprint_seed_dir: blueprint_seed_dir.clone(),
-            package_store_root: Some(
-                package_store_root
-                    .clone()
-                    .unwrap_or_else(default_package_store_dir),
-            ),
-            secret_store_dir: Some(secrets.dir),
-            secret_store_key_file: secrets.key_file,
-            session_storage_root: Some(session_storage_root.clone()),
-            session_store_dir: Some(session_store_dir.clone()),
-            ephemeral_storage_root: ephemeral_storage_root.clone(),
-            config_file: config_file.clone(),
-        },
-    )?;
-
     let mcp_oauth_providers = file
         .mcp_oauth
         .providers
@@ -622,8 +779,12 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
         session_storage_root: Some(session_storage_root),
         ephemeral_storage_root,
         package_store_root,
+        // The CLI's store is always readable as a fallback; there is no knob for
+        // it because a locally published package resolving on the dev server is
+        // the point, and production stores are simply empty there.
+        package_fallback_root: Some(default_cli_package_store_dir()),
         network_policy,
-        secret_store: secrets.store,
+        secret_store,
         mcp_allowed_hosts,
         mcp_oauth_providers,
         max_session_state_memory,
@@ -659,51 +820,54 @@ fn resolve_mcp_allowed_hosts(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> O
 /// environment. An unset key env var leaves the store disabled (`Ok(None)`)
 /// rather than failing boot; an explicit but unreadable `key_file` is an error.
 /// CLI flags take precedence over the config file.
-fn resolve_secret_store(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<SecretStoreSetup> {
-    let dir = explicit(
+fn resolve_secret_store(
+    cli: &Cli,
+    file: &FileConfig,
+    env: &EnvConfig,
+) -> Result<Option<Arc<dyn SecretStore>>> {
+    // No key file and the env var isn't set: leave the store off.
+    let Some(key_source) = secret_key_source(cli, file, env) else {
+        return Ok(None);
+    };
+    let store = FileSecretStore::open(secret_store_dir(cli, file, env), &key_source)
+        .map_err(|e| anyhow::anyhow!("opening secret store: {e}"))?;
+    Ok(Some(Arc::new(store)))
+}
+
+fn secret_store_dir(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> PathBuf {
+    explicit(
         cli.secret_store_dir.clone(),
         env.secret_store_dir.clone(),
         file.secret_store.dir.clone(),
     )
-    .unwrap_or_else(default_secret_store_dir);
+    .unwrap_or_else(default_secret_store_dir)
+}
 
-    let key_file = explicit(
-        cli.secret_store_key_file.clone(),
-        env.secret_store_key_file.clone(),
-        file.secret_store.key_file.clone(),
-    );
+/// Where the store's key comes from, or `None` when no key is configured and
+/// the store therefore stays off. A configured key file wins over the env var;
+/// the env var counts only when it is actually set. The migration asks the
+/// same question, so keyed-ness is decided in exactly one place.
+fn secret_key_source(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Option<KeySource> {
+    if let Some(path) = secret_key_file(cli, file, env) {
+        return Some(KeySource::File(path));
+    }
     let key_env = explicit(
         cli.secret_store_key_env.clone(),
         env.secret_store_key_env.clone(),
         file.secret_store.key_env.clone(),
     )
     .unwrap_or_else(|| DEFAULT_SECRET_KEY_ENV.into());
-
-    let mut setup = SecretStoreSetup {
-        store: None,
-        dir: dir.clone(),
-        key_file: key_file.clone(),
-    };
-    let key_source = match key_file {
-        Some(path) => KeySource::File(path),
-        None if std::env::var_os(&key_env).is_some() => KeySource::Env(key_env),
-        // No key file and the env var isn't set: leave the store off.
-        None => return Ok(setup),
-    };
-
-    let store = FileSecretStore::open(dir, &key_source)
-        .map_err(|e| anyhow::anyhow!("opening secret store: {e}"))?;
-    setup.store = Some(Arc::new(store));
-    Ok(setup)
+    std::env::var_os(&key_env)
+        .is_some()
+        .then_some(KeySource::Env(key_env))
 }
 
-/// The secret store plus the paths it was resolved from. `ServerConfig` carries
-/// only the opened store, but the volume-overlap check has to know which
-/// directory and key file to keep a volume away from.
-struct SecretStoreSetup {
-    store: Option<Arc<dyn SecretStore>>,
-    dir: PathBuf,
-    key_file: Option<PathBuf>,
+fn secret_key_file(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Option<PathBuf> {
+    explicit(
+        cli.secret_store_key_file.clone(),
+        env.secret_store_key_file.clone(),
+        file.secret_store.key_file.clone(),
+    )
 }
 
 /// The `allow_*` settings are additive across all three sources: a permission
@@ -854,6 +1018,7 @@ network:
             blueprint_dir: Some(root.join("blueprints")),
             blueprint_seed_dir: Some(root.join("seed")),
             package_store_root: Some(root.join("packages")),
+            package_fallback_root: Some(root.join("cli-packages")),
             secret_store_dir: Some(root.join("secrets")),
             secret_store_key_file: Some(root.join("keys/secret.b64")),
             session_storage_root: Some(root.join("vfs/sessions")),
@@ -872,6 +1037,7 @@ network:
             blueprint_dir,
             blueprint_seed_dir,
             package_store_root,
+            package_fallback_root,
             secret_store_dir,
             secret_store_key_file,
             session_storage_root,
@@ -883,6 +1049,7 @@ network:
             (blueprint_dir, "blueprint store"),
             (blueprint_seed_dir, "blueprint seed directory"),
             (package_store_root, "package store"),
+            (package_fallback_root, "fallback package store"),
             (secret_store_dir, "secret store"),
             (secret_store_key_file, "secret-store key file"),
             (session_storage_root, "per-session VFS root"),
@@ -1192,7 +1359,6 @@ network:
         assert!(
             resolve_secret_store(&cli, &FileConfig::default(), &EnvConfig::default())
                 .unwrap()
-                .store
                 .is_none()
         );
     }
@@ -1218,7 +1384,7 @@ network:
         };
         let store =
             resolve_secret_store(&cli, &FileConfig::default(), &EnvConfig::default()).unwrap();
-        assert!(store.store.is_some());
+        assert!(store.is_some());
     }
 
     #[test]
@@ -1234,7 +1400,7 @@ network:
         };
         let store =
             resolve_secret_store(&cli, &FileConfig::default(), &EnvConfig::default()).unwrap();
-        assert!(store.store.is_some());
+        assert!(store.is_some());
     }
 
     #[test]
@@ -1256,7 +1422,7 @@ network:
         };
         let store =
             resolve_secret_store(&cli, &FileConfig::default(), &EnvConfig::default()).unwrap();
-        assert!(store.store.is_some());
+        assert!(store.is_some());
         unsafe { std::env::remove_var(var) };
     }
 
@@ -2062,7 +2228,6 @@ network:
         // Env over file: the env dir is the one that gets created.
         resolve_secret_store(&empty_cli(), &file, &env)
             .unwrap()
-            .store
             .expect("store enabled");
         assert!(env_dir.exists(), "env dir should have won over the file's");
 
@@ -2073,7 +2238,6 @@ network:
         };
         resolve_secret_store(&cli, &file, &env)
             .unwrap()
-            .store
             .expect("store enabled");
         assert!(cli_dir.exists(), "cli dir should have won over the env's");
     }
@@ -2095,7 +2259,7 @@ network:
         ]);
         let store = resolve_secret_store(&empty_cli(), &FileConfig::default(), &env).unwrap();
         assert!(
-            store.store.is_some(),
+            store.is_some(),
             "the key file should have enabled the store"
         );
     }
@@ -2137,5 +2301,95 @@ network:
                 "SUBMILLI_ALLOW_IP"
             ]
         );
+    }
+
+    #[test]
+    fn legacy_layout_marks_only_the_directories_left_at_their_defaults() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cli = Cli {
+            vfs_session_dir: Some(tmp.path().join("vfs")),
+            // A key is configured, so only the explicit dir can keep `secrets`
+            // out of the migration.
+            secret_store_key_file: Some(write_key_file(tmp.path(), 3)),
+            ..empty_cli()
+        };
+        let env = env_from(&[("SUBMILLI_BLUEPRINT_DIR", tmp.path().to_str().unwrap())]);
+        let file = FileConfig {
+            secret_store: SecretStoreFileConfig {
+                dir: Some(tmp.path().join("secrets")),
+                ..SecretStoreFileConfig::default()
+            },
+            ..FileConfig::default()
+        };
+
+        let layout = legacy_layout(&cli, &file, &env);
+
+        assert!(!layout.blueprints, "env var names the blueprint dir");
+        assert!(layout.sessions, "nothing names the session store");
+        assert!(!layout.vfs_sessions, "flag names the VFS root");
+        assert!(
+            layout.secrets.is_none(),
+            "an explicit secret dir is never migrated, key or no key"
+        );
+    }
+
+    #[test]
+    fn legacy_layout_marks_secrets_only_when_a_key_is_configured() {
+        let tmp = tempfile::tempdir().unwrap();
+        let unset = Cli {
+            secret_store_key_env: Some("SUB_TEST_LEGACY_KEY_UNSET".into()),
+            ..empty_cli()
+        };
+        let keyless = legacy_layout(&unset, &FileConfig::default(), &EnvConfig::default());
+        assert!(keyless.secrets.is_none());
+        assert!(!keyless.key_configured);
+        assert!(
+            keyless.blueprints,
+            "the other directories are still eligible"
+        );
+
+        let key = write_key_file(tmp.path(), 3);
+        let keyed_cli = Cli {
+            secret_store_key_file: Some(key.clone()),
+            ..empty_cli()
+        };
+        let keyed = legacy_layout(&keyed_cli, &FileConfig::default(), &EnvConfig::default());
+        assert!(keyed.key_configured);
+        assert!(matches!(keyed.secrets, Some(KeySource::File(path)) if path == key));
+    }
+
+    #[test]
+    fn secret_key_source_prefers_a_key_file_over_the_env_var() {
+        let tmp = tempfile::tempdir().unwrap();
+        let key = write_key_file(tmp.path(), 5);
+        let env = env_from(&[("SUBMILLI_SECRET_STORE_KEY_FILE", key.to_str().unwrap())]);
+        let cli = Cli {
+            // Even a key env var that is set loses to a configured key file.
+            secret_store_key_env: Some("PATH".into()),
+            ..empty_cli()
+        };
+
+        let source = secret_key_source(&cli, &FileConfig::default(), &env);
+
+        assert!(matches!(source, Some(KeySource::File(path)) if path == key));
+    }
+
+    #[test]
+    fn secret_key_source_uses_the_env_var_only_when_it_is_set() {
+        // SAFETY (test-only): a name no other test reads, set and removed
+        // within this test, matching `secret_store_constructs_from_env_key`.
+        let var = "SUB_TEST_KEY_SOURCE_ENV";
+        let cli = Cli {
+            secret_store_key_env: Some(var.into()),
+            ..empty_cli()
+        };
+
+        unsafe { std::env::remove_var(var) };
+        assert!(secret_key_source(&cli, &FileConfig::default(), &EnvConfig::default()).is_none());
+
+        unsafe { std::env::set_var(var, "anything") };
+        let source = secret_key_source(&cli, &FileConfig::default(), &EnvConfig::default());
+        unsafe { std::env::remove_var(var) };
+        assert!(matches!(source, Some(KeySource::Env(name)) if name == var));
     }
 }

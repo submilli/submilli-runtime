@@ -268,6 +268,40 @@ async fn blueprint_package_dependency_runs() {
 }
 
 #[tokio::test]
+async fn blueprint_package_resolves_from_the_fallback_store() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let owned = tmp.path().join("server-packages");
+    let fallback = tmp.path().join("cli-packages");
+    write_acme_util_package(&fallback);
+    let blueprints = Arc::new(InMemoryBlueprintStore::seed([Blueprint {
+        name: BLUEPRINT_NAME.into(),
+        packages: ["@acme/util".to_string()].into_iter().collect(),
+        ..Default::default()
+    }]));
+    let router = app(AppState::new(ServerConfig {
+        blueprints: Some(blueprints),
+        package_store_root: Some(owned.clone()),
+        package_fallback_root: Some(fallback),
+        ..ServerConfig::default()
+    })
+    .expect("build AppState"));
+    let code = r#"
+        import { answer, plusOne } from "@acme/util";
+        function main(): number { return plusOne(answer()); }
+    "#;
+
+    let (status, body) = execute_on(&router, code).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["result"], json!("42"), "got: {body:#}");
+    assert_eq!(body["error"], Value::Null);
+    assert!(
+        !owned.exists(),
+        "reading through the fallback writes nothing"
+    );
+}
+
+#[tokio::test]
 async fn package_error_renders_package_source_context() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let store_root = tmp.path().join("packages");
@@ -402,6 +436,37 @@ vfs: none
         after_package_update["error"]["kind"],
         json!("package_resolution"),
         "got: {after_package_update:#}"
+    );
+}
+
+#[tokio::test]
+async fn uninstalling_a_package_takes_effect_on_the_next_execute() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let store_root = tmp.path().join("packages");
+    write_acme_util_package(&store_root);
+    let router = router_with_package_store(store_root);
+    let code = r#"
+        import { answer } from "@acme/util";
+        function main(): number { return answer(); }
+    "#;
+    let (_, before) = execute_on(&router, code).await;
+    assert_eq!(before["result"], json!("41"), "got: {before:#}");
+
+    let req = Request::builder()
+        .method("DELETE")
+        .uri("/v1/packages/@acme/util")
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let (status, after) = execute_on(&router, code).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        after["error"]["kind"],
+        json!("package_resolution"),
+        "the cached module set must not outlive the package: {after:#}"
     );
 }
 

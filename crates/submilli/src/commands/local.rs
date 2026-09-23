@@ -34,10 +34,15 @@ pub fn read_secret_value(key: &str) -> Result<String> {
 }
 
 /// Open the per-user local secret store at `$SUBMILLI_HOME/secrets` (default
-/// `~/.submilli/secrets`) — the same default directory and key scheme the server
-/// uses, so `store:` secrets and MCP credentials resolve identically. Plaintext
+/// `~/.submilli/secrets`): what `submilli run --blueprint` resolves `store:`
+/// secrets from and where `mcp authenticate` keeps credentials. Plaintext
 /// `0600` files: an encryption key kept on the same machine protects nothing, so
 /// the store is honest about being readable by its owner.
+///
+/// The server's encrypted store lives apart, under `$SUBMILLI_HOME/server/`.
+/// The two share a file-name scheme, so sharing a directory would let each
+/// overwrite the other's entries; `submilli server secret put` is how a value
+/// reaches a running server.
 pub fn open_secret_store() -> Result<Arc<dyn SecretStore>> {
     let dir = submilli_build::default_data_root().join("secrets");
     let store = PlaintextFileSecretStore::open(dir).context("opening the local secret store")?;

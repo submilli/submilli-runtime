@@ -87,8 +87,9 @@ tests:
 
   - it: gives the ephemeral VFS somewhere writable to live
     asserts:
-      # SUBMILLI_HOME relocates five of the server's six state directories; the
-      # ephemeral VFS root is the sixth and still defaults to the OS temp dir.
+      # SUBMILLI_HOME relocates five of the server's six state directories (under
+      # its server/ subdirectory); the ephemeral VFS root is the sixth and still
+      # defaults to the OS temp dir.
       # Under readOnlyRootFilesystem, omitting this breaks /v1/execute — the
       # product — while /v1/status stays green.
       - contains:

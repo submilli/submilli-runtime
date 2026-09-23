@@ -34,7 +34,10 @@ services:
 
     # Five of the six state directories resolve under SUBMILLI_HOME, which the
     # image sets to /var/lib/submilli — blueprints, sessions, vfs/sessions,
-    # secrets, packages. Blueprints are part of that state: the store is a
+    # secrets, packages, all in its server/ subdirectory (a volume from a
+    # release that kept them at the top level is moved on the first boot;
+    # a top-level packages/ stays and is read as a fallback).
+    # Blueprints are part of that state: the store is a
     # revision log (index.json plus <name>.<rev>.yaml), not a directory of
     # hand-written files, so it is registered over the API and persists here.
     volumes:

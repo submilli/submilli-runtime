@@ -6,47 +6,142 @@ use std::path::{Path, PathBuf};
 
 use crate::{Artifact, ArtifactError, read_package_artifact};
 
+/// An on-disk package store: one `@scope/name` directory per artifact under a
+/// root the store owns, optionally layered over read-only fallback roots.
+///
+/// Writes (`package_dir`) always target the owned root. Reads search the owned
+/// root first, then each fallback in order, so an owned copy shadows a fallback
+/// copy. The server uses this to read packages the CLI published locally
+/// without ever writing into the CLI's store.
 #[derive(Clone, Debug)]
 pub struct PackageStore {
     root: PathBuf,
+    fallbacks: Vec<PathBuf>,
+}
+
+/// A package directory found by a search across the store's roots.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocatedPackage {
+    pub name: String,
+    /// The root it was found under: the owned root or one of the fallbacks.
+    pub root: PathBuf,
+    pub dir: PathBuf,
 }
 
 impl PackageStore {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            fallbacks: Vec::new(),
+        }
     }
 
+    /// Add a read-only root searched after the owned root (and any fallback
+    /// added earlier). Nothing is ever written under it. A root spelled
+    /// identically to one the store already searches is ignored, so an
+    /// operator who points the owned store at the fallback's path does not get
+    /// every lookup and listing doubled.
+    pub fn with_fallback(mut self, root: impl Into<PathBuf>) -> Self {
+        let root = root.into();
+        if !self.roots().any(|known| known == root) {
+            self.fallbacks.push(root);
+        }
+        self
+    }
+
+    /// The root writes go to.
     pub fn root(&self) -> &Path {
         &self.root
     }
 
-    pub fn package_dir(&self, name: &str) -> Result<PathBuf, PackageStoreError> {
-        let (scope, package) =
-            split_scoped_name(name).ok_or_else(|| PackageStoreError::InvalidPackageName {
-                name: name.to_string(),
-            })?;
-        Ok(self.root.join(scope).join(package))
+    /// Every root in search order: the owned root, then the fallbacks.
+    pub fn roots(&self) -> impl Iterator<Item = &Path> {
+        std::iter::once(self.root.as_path()).chain(self.fallbacks.iter().map(PathBuf::as_path))
     }
 
-    pub fn load(&self, name: &str) -> Result<Artifact, PackageStoreError> {
-        let dir = self.package_dir(name)?;
-        let artifact = read_package_artifact(&dir).map_err(|source| {
-            if source.is_missing_file() {
-                PackageStoreError::MissingPackage {
+    /// Whether `root` is the owned root rather than a fallback.
+    pub fn owns(&self, root: &Path) -> bool {
+        root == self.root
+    }
+
+    /// The directory `name` is written to — always under the owned root.
+    pub fn package_dir(&self, name: &str) -> Result<PathBuf, PackageStoreError> {
+        package_dir_under(&self.root, name)
+    }
+
+    /// The first root, in search order, holding a directory for `name`.
+    /// An inaccessible or non-directory entry is an error, not a fallback miss.
+    pub fn locate(&self, name: &str) -> Result<Option<LocatedPackage>, PackageStoreError> {
+        for root in self.roots() {
+            let dir = package_dir_under(root, name)?;
+            if package_directory_exists(name, &dir)? {
+                return Ok(Some(LocatedPackage {
                     name: name.to_string(),
-                    store_root: self.root.clone(),
-                    package_dir: dir.clone(),
-                    available: self.available_packages().unwrap_or_default(),
-                }
-            } else {
-                PackageStoreError::Artifact {
-                    name: name.to_string(),
-                    package_dir: dir.clone(),
-                    source,
-                }
+                    root: root.to_path_buf(),
+                    dir,
+                }));
             }
-        })?;
-        validate_artifact_name(name, &dir, artifact)
+        }
+        Ok(None)
+    }
+
+    /// Load `name` from the first root that has it. A copy that exists but
+    /// fails to load is an error, never a reason to fall through to the next
+    /// root: silently running a different copy than the one on disk would be
+    /// worse than refusing.
+    pub fn load(&self, name: &str) -> Result<Artifact, PackageStoreError> {
+        for root in self.roots() {
+            if let Some(artifact) = self.load_from(root, name)? {
+                return Ok(artifact);
+            }
+        }
+        Err(self.missing(name, self.roots().map(Path::to_path_buf).collect()))
+    }
+
+    /// Load `name` from the owned root only, ignoring fallbacks. Install-time
+    /// decisions (conflicts, upgrades, lockfile satisfaction) use this so the
+    /// owned store stays self-contained.
+    pub fn load_owned(&self, name: &str) -> Result<Artifact, PackageStoreError> {
+        match self.load_from(&self.root, name)? {
+            Some(artifact) => Ok(artifact),
+            None => Err(self.missing(name, vec![self.root.clone()])),
+        }
+    }
+
+    /// Read `name` under one root. `Ok(None)` only when that root has no
+    /// directory for the package at all — the same test [`Self::locate`]
+    /// applies. A directory that exists but is missing files (an interrupted
+    /// install, a hand-deleted artifact) is the artifact's own error, so a
+    /// half-written owned copy is never silently replaced by a fallback one.
+    fn load_from(&self, root: &Path, name: &str) -> Result<Option<Artifact>, PackageStoreError> {
+        let dir = package_dir_under(root, name)?;
+        if !package_directory_exists(name, &dir)? {
+            return Ok(None);
+        }
+        let artifact =
+            read_package_artifact(&dir).map_err(|source| PackageStoreError::Artifact {
+                name: name.to_string(),
+                package_dir: dir.clone(),
+                source,
+            })?;
+        validate_artifact_name(name, &dir, artifact).map(Some)
+    }
+
+    /// The hint lists only what the failed lookup could have found: an
+    /// owned-only lookup must not advertise fallback packages.
+    fn missing(&self, name: &str, searched_roots: Vec<PathBuf>) -> PackageStoreError {
+        let available = searched_roots
+            .iter()
+            .flat_map(|root| packages_under(root))
+            .map(|(name, _)| name)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        PackageStoreError::MissingPackage {
+            name: name.to_string(),
+            searched_roots,
+            available,
+        }
     }
 
     pub fn load_many<'a>(
@@ -94,16 +189,21 @@ impl PackageStore {
             }
             None => {}
         }
-        let artifact = self.load(name).map_err(|err| match (&err, required_by) {
-            (PackageStoreError::MissingPackage { .. }, Some((dependent, _))) => {
-                PackageStoreError::MissingDependency {
-                    name: name.to_string(),
-                    required_by: dependent.to_string(),
-                    store_root: self.root.clone(),
-                    available: self.available_packages().unwrap_or_default(),
-                }
-            }
-            _ => err,
+        let artifact = self.load(name).map_err(|err| match (err, required_by) {
+            (
+                PackageStoreError::MissingPackage {
+                    searched_roots,
+                    available,
+                    ..
+                },
+                Some((dependent, _)),
+            ) => PackageStoreError::MissingDependency {
+                name: name.to_string(),
+                required_by: dependent.to_string(),
+                searched_roots,
+                available,
+            },
+            (err, _) => err,
         })?;
         check_edge_version(name, required_by, &artifact.metadata.package_version)?;
         marks.insert(name.to_string(), ClosureMark::Visiting);
@@ -122,33 +222,92 @@ impl PackageStore {
         Ok(())
     }
 
-    pub fn available_packages(&self) -> io::Result<Vec<String>> {
-        let mut packages = Vec::new();
-        let Ok(scopes) = fs::read_dir(&self.root) else {
-            return Ok(packages);
-        };
-        for scope in scopes {
-            let scope = scope?;
-            if !scope.file_type()?.is_dir() {
-                continue;
-            }
-            let scope_name = scope.file_name().to_string_lossy().into_owned();
-            if !scope_name.starts_with('@') {
-                continue;
-            }
-            for package in fs::read_dir(scope.path())? {
-                let package = package?;
-                if package.file_type()?.is_dir() {
-                    packages.push(format!(
-                        "{scope_name}/{}",
-                        package.file_name().to_string_lossy()
-                    ));
-                }
+    /// Every package name present under any root, in name order, each once.
+    pub fn available_packages(&self) -> Vec<String> {
+        self.locate_all()
+            .into_iter()
+            .map(|located| located.name)
+            .collect()
+    }
+
+    /// Every package with the root it resolves from, in name order. A name
+    /// present under several readable roots is reported once, from the first
+    /// root in search order. Unlike [`Self::load`], this listing is best-effort: a root or
+    /// scope directory that cannot be read contributes nothing rather than
+    /// hiding the rest: the fallback is a directory the server does not own,
+    /// and one bad entry there must not empty the listing.
+    pub fn locate_all(&self) -> Vec<LocatedPackage> {
+        let mut located: BTreeMap<String, LocatedPackage> = BTreeMap::new();
+        for root in self.roots() {
+            for (name, dir) in packages_under(root) {
+                located
+                    .entry(name.clone())
+                    .or_insert_with(|| LocatedPackage {
+                        name,
+                        root: root.to_path_buf(),
+                        dir,
+                    });
             }
         }
-        packages.sort();
-        Ok(packages)
+        located.into_values().collect()
     }
+}
+
+/// The `@scope/leaf` directory for `name` under `root`, validating the name.
+fn package_dir_under(root: &Path, name: &str) -> Result<PathBuf, PackageStoreError> {
+    let (scope, package) =
+        split_scoped_name(name).ok_or_else(|| PackageStoreError::InvalidPackageName {
+            name: name.to_string(),
+        })?;
+    Ok(root.join(scope).join(package))
+}
+
+/// Only an absent package permits searching the next root. Keep metadata
+/// errors visible so an inaccessible owned copy cannot select fallback code.
+fn package_directory_exists(name: &str, dir: &Path) -> Result<bool, PackageStoreError> {
+    let source = match fs::metadata(dir) {
+        Ok(metadata) if metadata.is_dir() => return Ok(true),
+        Ok(_) => io::Error::new(
+            io::ErrorKind::NotADirectory,
+            "package path is not a directory",
+        ),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => error,
+    };
+    Err(PackageStoreError::Artifact {
+        name: name.to_string(),
+        package_dir: dir.to_path_buf(),
+        source: ArtifactError::Io {
+            path: dir.to_path_buf(),
+            source,
+        },
+    })
+}
+
+/// Package names and directories laid out as `@scope/leaf` under one root.
+/// Anything unreadable — the root itself (typically absent), a scope, or an
+/// entry — is skipped rather than reported.
+fn packages_under(root: &Path) -> Vec<(String, PathBuf)> {
+    let mut packages = Vec::new();
+    let Ok(scopes) = fs::read_dir(root) else {
+        return packages;
+    };
+    for scope in scopes.flatten() {
+        let scope_name = scope.file_name().to_string_lossy().into_owned();
+        if !scope_name.starts_with('@') || !scope.path().is_dir() {
+            continue;
+        }
+        let Ok(entries) = fs::read_dir(scope.path()) else {
+            continue;
+        };
+        for package in entries.flatten() {
+            if package.path().is_dir() {
+                let name = format!("{scope_name}/{}", package.file_name().to_string_lossy());
+                packages.push((name, package.path()));
+            }
+        }
+    }
+    packages
 }
 
 impl Default for PackageStore {
@@ -187,8 +346,8 @@ pub enum PackageStoreError {
     },
     MissingPackage {
         name: String,
-        store_root: PathBuf,
-        package_dir: PathBuf,
+        /// Every root the lookup searched, in search order.
+        searched_roots: Vec<PathBuf>,
         available: Vec<String>,
     },
     Artifact {
@@ -205,7 +364,7 @@ pub enum PackageStoreError {
     MissingDependency {
         name: String,
         required_by: String,
-        store_root: PathBuf,
+        searched_roots: Vec<PathBuf>,
         available: Vec<String>,
     },
     DependencyCycle {
@@ -227,21 +386,15 @@ impl fmt::Display for PackageStoreError {
             }
             PackageStoreError::MissingPackage {
                 name,
-                store_root,
-                package_dir,
+                searched_roots,
                 available,
             } => {
                 write!(
                     f,
-                    "package `{name}` was not found in {} (looked in {})",
-                    store_root.display(),
-                    package_dir.display()
+                    "package `{name}` was not found in {}",
+                    join_roots(searched_roots)
                 )?;
-                if available.is_empty() {
-                    write!(f, "; no packages are available")
-                } else {
-                    write!(f, "; available packages: {}", available.join(", "))
-                }
+                write_available(f, available)
             }
             PackageStoreError::Artifact {
                 name,
@@ -265,19 +418,15 @@ impl fmt::Display for PackageStoreError {
             PackageStoreError::MissingDependency {
                 name,
                 required_by,
-                store_root,
+                searched_roots,
                 available,
             } => {
                 write!(
                     f,
                     "package `{name}` (required by `{required_by}`) was not found in {}; run `submilli build` in the project that provides `{name}`",
-                    store_root.display()
+                    join_roots(searched_roots)
                 )?;
-                if available.is_empty() {
-                    write!(f, "; no packages are available")
-                } else {
-                    write!(f, "; available packages: {}", available.join(", "))
-                }
+                write_available(f, available)
             }
             PackageStoreError::DependencyCycle { cycle } => write!(
                 f,
@@ -294,6 +443,40 @@ impl fmt::Display for PackageStoreError {
                 "package `{required_by}` requires `{name}` {required}, but the store has {found}; rebuild `{name}` at {required} or rebuild `{required_by}` against {found}"
             ),
         }
+    }
+}
+
+/// `a`, `a or b`, `a, b, or c` — the roots a failed lookup searched.
+fn join_roots(roots: &[PathBuf]) -> String {
+    let shown: Vec<String> = roots.iter().map(|r| r.display().to_string()).collect();
+    match shown.as_slice() {
+        [] => "no package store".to_string(),
+        [one] => one.clone(),
+        [first, second] => format!("{first} or {second}"),
+        [init @ .., last] => format!("{}, or {last}", init.join(", ")),
+    }
+}
+
+fn write_available(f: &mut fmt::Formatter<'_>, available: &[String]) -> fmt::Result {
+    if available.is_empty() {
+        write!(f, "; no packages are available")
+    } else {
+        write!(f, "; available packages: {}", available.join(", "))
+    }
+}
+
+impl PackageStoreError {
+    /// Whether the package directory exists but lacks one of the artifact's
+    /// files: what an interrupted install leaves behind. A fresh install may
+    /// overwrite such a directory as if the package were absent.
+    pub fn is_incomplete_artifact(&self) -> bool {
+        matches!(
+            self,
+            PackageStoreError::Artifact {
+                source: ArtifactError::Io { source, .. },
+                ..
+            } if source.kind() == io::ErrorKind::NotFound
+        )
     }
 }
 
@@ -350,19 +533,6 @@ pub(crate) fn split_scoped_name(name: &str) -> Option<(&str, &str)> {
     let (org, leaf) = submilli_blueprint::validate_scoped_name(name).ok()?;
     // Keep the `@` prefix on the scope so the layout stays `@org/leaf` on disk.
     Some((&name[..org.len() + 1], leaf))
-}
-
-trait ArtifactErrorExt {
-    fn is_missing_file(&self) -> bool;
-}
-
-impl ArtifactErrorExt for ArtifactError {
-    fn is_missing_file(&self) -> bool {
-        matches!(
-            self,
-            ArtifactError::Io { source, .. } if source.kind() == io::ErrorKind::NotFound
-        )
-    }
 }
 
 #[cfg(test)]
@@ -446,6 +616,274 @@ mod tests {
             &ArtifactMetadata::new(package_name, version, dependencies),
         )
         .expect("write package artifact");
+    }
+
+    /// An owned root and one fallback root, each a fresh temp dir.
+    fn layered() -> (tempfile::TempDir, tempfile::TempDir, PackageStore) {
+        let owned = tempdir().expect("tempdir");
+        let fallback = tempdir().expect("tempdir");
+        let store = PackageStore::new(owned.path()).with_fallback(fallback.path());
+        (owned, fallback, store)
+    }
+
+    #[test]
+    fn fallback_root_is_searched_after_the_owned_root() {
+        let (owned, fallback, store) = layered();
+        write_package(fallback.path(), "@acme/util", "@acme/util");
+
+        let artifact = store.load("@acme/util").expect("loads from fallback");
+        let located = store.locate("@acme/util").expect("locate").expect("found");
+
+        assert_eq!(artifact.metadata.package_name, "@acme/util");
+        assert_eq!(located.root, fallback.path());
+        assert_eq!(located.dir, fallback.path().join("@acme").join("util"));
+        assert!(!store.owns(&located.root));
+        assert_eq!(
+            store.package_dir("@acme/util").unwrap(),
+            owned.path().join("@acme").join("util"),
+            "writes still target the owned root"
+        );
+    }
+
+    #[test]
+    fn owned_copy_shadows_the_fallback_copy() {
+        let (owned, fallback, store) = layered();
+        write_package_with_deps(owned.path(), "@acme/util", "@acme/util", "2.0.0", &[]);
+        write_package_with_deps(fallback.path(), "@acme/util", "@acme/util", "1.0.0", &[]);
+
+        let artifact = store.load("@acme/util").expect("loads");
+        let located = store.locate("@acme/util").unwrap().unwrap();
+
+        assert_eq!(artifact.metadata.package_version, "2.0.0");
+        assert_eq!(located.root, owned.path());
+        assert!(store.owns(&located.root));
+    }
+
+    #[test]
+    fn load_owned_ignores_the_fallback() {
+        let (owned, fallback, store) = layered();
+        write_package(fallback.path(), "@acme/util", "@acme/util");
+
+        let err = store.load_owned("@acme/util").expect_err("not owned");
+
+        let PackageStoreError::MissingPackage { searched_roots, .. } = &err else {
+            panic!("expected MissingPackage, got {err:?}");
+        };
+        assert_eq!(searched_roots, &vec![owned.path().to_path_buf()]);
+    }
+
+    #[test]
+    fn an_owned_only_miss_does_not_advertise_fallback_packages() {
+        let (_owned, fallback, store) = layered();
+        write_package(fallback.path(), "@acme/other", "@acme/other");
+
+        let err = store.load_owned("@acme/util").expect_err("not owned");
+
+        let PackageStoreError::MissingPackage { available, .. } = &err else {
+            panic!("expected MissingPackage, got {err:?}");
+        };
+        assert!(available.is_empty(), "got: {available:?}");
+    }
+
+    #[test]
+    fn a_broken_owned_copy_does_not_fall_through() {
+        let (owned, fallback, store) = layered();
+        write_package(fallback.path(), "@acme/util", "@acme/util");
+        let broken = owned.path().join("@acme").join("util");
+        fs::create_dir_all(&broken).unwrap();
+        fs::write(broken.join("metadata.json"), b"{ not json").unwrap();
+
+        let err = store.load("@acme/util").expect_err("owned copy is broken");
+
+        assert!(
+            !matches!(err, PackageStoreError::MissingPackage { .. }),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn an_empty_owned_package_dir_does_not_fall_through() {
+        let (owned, fallback, store) = layered();
+        write_package(fallback.path(), "@acme/util", "@acme/util");
+        // An interrupted install: the directory exists, the files do not.
+        fs::create_dir_all(owned.path().join("@acme").join("util")).unwrap();
+
+        let err = store
+            .load("@acme/util")
+            .expect_err("owned copy is incomplete");
+
+        assert!(
+            matches!(err, PackageStoreError::Artifact { .. }),
+            "got: {err}"
+        );
+        let located = store.locate("@acme/util").unwrap().unwrap();
+        assert!(store.owns(&located.root), "locate agrees with load");
+    }
+
+    #[test]
+    fn a_non_directory_owned_package_does_not_fall_through() {
+        let (owned, fallback, store) = layered();
+        write_package(fallback.path(), "@acme/util", "@acme/util");
+        let package = owned.path().join("@acme/util");
+        fs::create_dir_all(package.parent().unwrap()).unwrap();
+        fs::write(&package, b"not a directory").unwrap();
+
+        assert_package_probe_error(
+            store.locate("@acme/util").unwrap_err(),
+            &package,
+            io::ErrorKind::NotADirectory,
+        );
+        assert_package_probe_error(
+            store.load("@acme/util").unwrap_err(),
+            &package,
+            io::ErrorKind::NotADirectory,
+        );
+        assert_package_probe_error(
+            store.load_owned("@acme/util").unwrap_err(),
+            &package,
+            io::ErrorKind::NotADirectory,
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_inaccessible_owned_scope_does_not_fall_through() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (owned, fallback, store) = layered();
+        write_package(owned.path(), "@acme/util", "@acme/util");
+        write_package(fallback.path(), "@acme/util", "@acme/util");
+        let scope = owned.path().join("@acme");
+        let package = scope.join("util");
+        let permissions = fs::metadata(&scope).unwrap().permissions();
+        fs::set_permissions(&scope, fs::Permissions::from_mode(0o000)).unwrap();
+        let denied = fs::metadata(&package)
+            .is_err_and(|error| error.kind() == io::ErrorKind::PermissionDenied);
+        let located = store.locate("@acme/util");
+        let loaded = store.load("@acme/util");
+        let loaded_owned = store.load_owned("@acme/util");
+        // Restore before asserting so failed tests can clean up their directories.
+        fs::set_permissions(&scope, permissions).unwrap();
+        if !denied {
+            return; // Root and some filesystems bypass mode-based access checks.
+        }
+        assert_package_probe_error(
+            located.unwrap_err(),
+            &package,
+            io::ErrorKind::PermissionDenied,
+        );
+        assert_package_probe_error(
+            loaded.unwrap_err(),
+            &package,
+            io::ErrorKind::PermissionDenied,
+        );
+        assert_package_probe_error(
+            loaded_owned.unwrap_err(),
+            &package,
+            io::ErrorKind::PermissionDenied,
+        );
+    }
+
+    fn assert_package_probe_error(error: PackageStoreError, package: &Path, kind: io::ErrorKind) {
+        assert!(!error.is_incomplete_artifact(), "{error}");
+        let PackageStoreError::Artifact {
+            package_dir,
+            source: ArtifactError::Io { path, source },
+            ..
+        } = error
+        else {
+            panic!("expected package I/O error, got {error}");
+        };
+        assert_eq!(package_dir, package);
+        assert_eq!(path, package);
+        assert_eq!(source.kind(), kind);
+    }
+
+    #[test]
+    fn a_fallback_equal_to_the_owned_root_is_not_searched_twice() {
+        let owned = tempdir().expect("tempdir");
+        let store = PackageStore::new(owned.path()).with_fallback(owned.path());
+
+        assert_eq!(store.roots().count(), 1);
+    }
+
+    #[test]
+    fn a_scope_that_is_not_a_directory_hides_only_itself() {
+        let (owned, fallback, store) = layered();
+        write_package(owned.path(), "@acme/util", "@acme/util");
+        // A file where a scope directory is expected.
+        fs::write(fallback.path().join("@broken"), b"not a directory").unwrap();
+        write_package(fallback.path(), "@zed/extra", "@zed/extra");
+
+        let available = store.available_packages();
+
+        assert_eq!(available, vec!["@acme/util", "@zed/extra"]);
+    }
+
+    #[test]
+    fn missing_package_names_every_searched_root() {
+        let (owned, fallback, store) = layered();
+        write_package(fallback.path(), "@acme/other", "@acme/other");
+
+        let err = store.load("@acme/util").expect_err("missing");
+
+        let text = err.to_string();
+        assert!(text.contains(owned.path().to_str().unwrap()), "got: {text}");
+        assert!(
+            text.contains(fallback.path().to_str().unwrap()),
+            "got: {text}"
+        );
+        assert!(
+            text.contains("available packages: @acme/other"),
+            "got: {text}"
+        );
+    }
+
+    #[test]
+    fn available_packages_unions_roots_without_duplicates() {
+        let (owned, fallback, store) = layered();
+        write_package(owned.path(), "@acme/util", "@acme/util");
+        write_package(owned.path(), "@acme/shared", "@acme/shared");
+        write_package(fallback.path(), "@acme/shared", "@acme/shared");
+        write_package(fallback.path(), "@zed/extra", "@zed/extra");
+
+        let available = store.available_packages();
+        let located = store.locate_all();
+
+        assert_eq!(available, vec!["@acme/shared", "@acme/util", "@zed/extra"]);
+        let origins: Vec<(&str, bool)> = located
+            .iter()
+            .map(|l| (l.name.as_str(), store.owns(&l.root)))
+            .collect();
+        assert_eq!(
+            origins,
+            vec![
+                ("@acme/shared", true),
+                ("@acme/util", true),
+                ("@zed/extra", false)
+            ]
+        );
+    }
+
+    #[test]
+    fn load_closure_resolves_a_dependency_from_the_fallback() {
+        let (owned, fallback, store) = layered();
+        write_package_with_deps(
+            owned.path(),
+            "@acme/app",
+            "@acme/app",
+            "1.0.0",
+            &[("@acme/util", "1.0.0")],
+        );
+        write_package_with_deps(fallback.path(), "@acme/util", "@acme/util", "1.0.0", &[]);
+
+        let closure = store.load_closure(["@acme/app"]).expect("closure loads");
+
+        let names: Vec<&str> = closure
+            .iter()
+            .map(|a| a.metadata.package_name.as_str())
+            .collect();
+        assert_eq!(names, vec!["@acme/util", "@acme/app"]);
     }
 
     #[test]

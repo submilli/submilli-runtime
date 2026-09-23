@@ -196,6 +196,12 @@ Everything above lives under one directory, `~/.submilli` by default, or
 | `packages/` | Installed packages, one directory per `@org/name` |
 | `secrets/` | The local secret store |
 | `mcp_oauth.yaml` | OAuth provider registrations |
+| `server/` | A local `submilli-server`'s own state; the CLI never touches it |
+
+A server reads the packages in `packages/` too, so a package you publish
+locally is available to it without a second install. Its secrets are separate:
+`submilli secret put` fills the local store that `run --blueprint` reads, and
+`submilli server secret put` fills the server's.
 
 Pointing `SUBMILLI_HOME` at an empty directory gives you a clean slate for
 trying something out.

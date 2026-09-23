@@ -2,16 +2,17 @@
 //! conventional image smoke test, `--health-check` for the Docker `HEALTHCHECK`
 //! (a distroless image has no shell and no `curl`).
 
+mod common;
+
 use std::net::SocketAddr;
 use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
+use common::{BIN, free_port};
 use submilli_server::blueprint::InMemoryBlueprintStore;
 use submilli_server::{ServerConfig, serve};
 use tokio::net::TcpStream;
-
-const BIN: &str = env!("CARGO_BIN_EXE_submilli-server");
 
 #[test]
 fn version_flag_prints_the_crate_version() {
@@ -166,12 +167,4 @@ async fn wait_ready(addr: SocketAddr) {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     panic!("server never accepted a connection on {addr}");
-}
-
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .expect("bind probe listener")
-        .local_addr()
-        .expect("probe local_addr")
-        .port()
 }

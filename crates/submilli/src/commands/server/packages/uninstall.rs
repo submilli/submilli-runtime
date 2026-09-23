@@ -16,6 +16,12 @@ pub struct Args {
 }
 
 #[derive(Debug, Deserialize)]
+struct UninstallResponse {
+    #[serde(default)]
+    still_available_from: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct ErrorResponse {
     #[allow(dead_code)]
     error: String,
@@ -41,6 +47,13 @@ pub fn execute(args: Args) -> Result<ExitCode> {
     let status = resp.status().as_u16();
     if status == 200 {
         println!("uninstalled {}", args.name);
+        let body = resp.into_body().read_json::<UninstallResponse>();
+        if let Ok(UninstallResponse {
+            still_available_from: Some(root),
+        }) = body
+        {
+            eprintln!("note: {} is still readable from {root}", args.name);
+        }
         Ok(ExitCode::SUCCESS)
     } else {
         match resp.into_body().read_json::<ErrorResponse>() {

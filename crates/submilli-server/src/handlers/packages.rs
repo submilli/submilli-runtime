@@ -37,42 +37,63 @@ pub struct InstalledPackage {
     pub name: String,
     pub version: String,
     pub description: String,
+    /// The store root this package resolves from.
+    pub root: String,
+    /// Whether that root is the server's own store (installs and uninstalls
+    /// through this API act on it) rather than a read-only fallback.
+    pub managed: bool,
 }
 
 #[derive(Debug, Serialize)]
 pub struct InstalledResponse {
+    /// Every root the server searches, in search order: its own store first.
+    pub roots: Vec<String>,
     pub packages: Vec<InstalledPackage>,
 }
 
-/// `GET /v1/packages` — the registry packages installed in this server's store,
-/// i.e. the names a blueprint's `packages:` block may declare. An artifact that
-/// fails to load is skipped rather than failing the listing.
+/// `GET /v1/packages` — the registry packages the server can resolve, i.e. the
+/// names a blueprint's `packages:` block may declare, each with the root it
+/// comes from. An artifact that fails to load is skipped rather than failing
+/// the listing.
 pub async fn installed(State(state): State<AppState>) -> Json<InstalledResponse> {
     let store = state.package_store();
+    let roots = store
+        .roots()
+        .map(|root| root.display().to_string())
+        .collect();
     let packages = store
-        .available_packages()
-        .unwrap_or_default()
+        .locate_all()
         .into_iter()
-        .filter_map(|name| {
-            let artifact = store.load(&name).ok()?;
+        .filter_map(|located| {
+            let artifact = store.load(&located.name).ok()?;
             Some(InstalledPackage {
-                name,
+                name: located.name,
                 version: artifact.metadata.package_version,
                 description: artifact.metadata.description,
+                root: located.root.display().to_string(),
+                managed: store.owns(&located.root),
             })
         })
         .collect();
-    Json(InstalledResponse { packages })
+    Json(InstalledResponse { roots, packages })
 }
 
 #[derive(Debug, Serialize)]
 pub struct UninstallResponse {
     pub name: String,
+    /// Set when a read-only fallback root still holds a copy, which blueprints
+    /// resolve from their next prepare on. The removal itself succeeded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub still_available_from: Option<String>,
 }
 
-/// `DELETE /v1/packages/{name}` — remove an installed package from the store.
-/// Blueprints that declare it keep working until their next prepare, which will
-/// fail to load the package — same admin posture as the other package routes.
+/// `DELETE /v1/packages/{name}` — remove an installed package from the server's
+/// own store. A package that only exists in a read-only fallback root is
+/// refused rather than deleted: the API manages the server's store, not the
+/// CLI's. Blueprints that declare it keep working until their next prepare,
+/// which then fails to load the package — or, when a fallback copy exists,
+/// loads that one; the response says which. Same admin posture as the other
+/// package routes.
 pub async fn uninstall(
     State(state): State<AppState>,
     axum::extract::Path(name): axum::extract::Path<String>,
@@ -88,27 +109,47 @@ pub async fn uninstall(
         .package_dir(&name)
         .map_err(|err| error(StatusCode::BAD_REQUEST, "invalid_name", err.to_string()))?;
     if !dir.is_dir() {
+        if let Ok(Some(elsewhere)) = store.locate(&name) {
+            return Err(error(
+                StatusCode::CONFLICT,
+                "not_managed",
+                format!(
+                    "package '{name}' is served from the read-only fallback store {}; this API \
+                     only manages {}, so remove it from that store on the host",
+                    elsewhere.root.display(),
+                    store.root().display()
+                ),
+            ));
+        }
         return Err(error(
             StatusCode::NOT_FOUND,
             "not_found",
             format!("package '{name}' is not installed"),
         ));
     }
-    std::fs::remove_dir_all(&dir).map_err(|err| {
+    let removed = std::fs::remove_dir_all(&dir);
+    // Drop every cached module set so the removal takes effect without a
+    // restart, even a partial one that left the directory incomplete.
+    // Blueprints that declare the package are not the only ones affected: it
+    // may have been a transitive dependency, or the owned copy that shadowed a
+    // fallback one.
+    state.evict_all_prepared_packages();
+    removed.map_err(|err| {
         error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
             format!("removing package '{name}': {err}"),
         )
     })?;
-    // Drop any compiled module cached for a blueprint that declared it, so the
-    // removal takes effect without a restart.
-    for blueprint in state.blueprints().list_blueprints().await {
-        if blueprint.packages.contains(&name) {
-            state.evict_prepared_packages(&blueprint.name);
-        }
-    }
-    Ok(Json(UninstallResponse { name }))
+    let still_available_from = store
+        .locate(&name)
+        .ok()
+        .flatten()
+        .map(|located| located.root.display().to_string());
+    Ok(Json(UninstallResponse {
+        name,
+        still_available_from,
+    }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -260,16 +301,27 @@ pub async fn install(
     Json(req): Json<InstallRequest>,
 ) -> Result<Json<InstallResponse>, InstallFailure> {
     let store = state.package_store().clone();
-    tokio::task::spawn_blocking(move || install_blocking(&store, req))
-        .await
-        .map_err(|err| {
-            install_err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                err.to_string(),
-            )
-        })?
-        .map(Json)
+    let installer_state = state.clone();
+    tokio::task::spawn_blocking(move || {
+        let outcome = install_blocking(&store, req);
+        // Anything prepared before this install may now resolve differently:
+        // a dependency the closure installed (which the response's `installed`
+        // field does not list), or an owned copy now shadowing a fallback one.
+        // A failed install can have written dependencies before it failed,
+        // and a client that hangs up does not stop this task, so the eviction
+        // rides with the install rather than with the request.
+        installer_state.evict_all_prepared_packages();
+        outcome
+    })
+    .await
+    .map_err(|err| {
+        install_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            err.to_string(),
+        )
+    })?
+    .map(Json)
 }
 
 fn install_blocking(

@@ -2,6 +2,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -87,6 +88,10 @@ struct AppStateInner {
     mcp_catalogs: Mutex<HashMap<String, Arc<McpCatalog>>>,
     package_store: PackageStore,
     prepared_packages: Mutex<HashMap<String, Arc<PreparedBlueprintPackages>>>,
+    /// Bumped by every eviction. A prepare snapshots it before reading the
+    /// store and only caches its result if no eviction happened in between:
+    /// the artifacts it read may otherwise be the ones the eviction retired.
+    prepared_generation: AtomicU64,
     /// Signalled by `POST /v1/shutdown`; awaited by `serve` to drain gracefully.
     shutdown: Arc<Notify>,
     /// Bound address, set by `serve` once the listener is up. Reported by status.
@@ -206,12 +211,12 @@ impl AppState {
                 mcp_oauth_providers,
                 oauth_http,
                 mcp_catalogs: Mutex::new(HashMap::new()),
-                package_store: PackageStore::new(
-                    config
-                        .package_store_root
-                        .unwrap_or_else(crate::config::default_package_store_dir),
+                package_store: layered_package_store(
+                    config.package_store_root,
+                    config.package_fallback_root,
                 ),
                 prepared_packages: Mutex::new(HashMap::new()),
+                prepared_generation: AtomicU64::new(0),
                 shutdown: Arc::new(Notify::new()),
                 bind_addr: OnceLock::new(),
                 llm_dispatch: config.llm_dispatch,
@@ -482,12 +487,19 @@ impl AppState {
         if let Some(cached) = self.cached_prepared_packages(&key) {
             return Ok(cached);
         }
+        let generation = self.inner.prepared_generation.load(Ordering::Acquire);
         let prepared = Arc::new(self.prepare_selected_packages(&registry_roots, &imports.stdlib)?);
         let mut cache = self
             .inner
             .prepared_packages
             .lock()
             .expect("prepared package cache poisoned");
+        if self.inner.prepared_generation.load(Ordering::Acquire) != generation {
+            // An eviction (install, uninstall, or a blueprint change) landed
+            // while the store was being read; serve this set once and let the
+            // next call rebuild from disk.
+            return Ok(prepared);
+        }
         Ok(Arc::clone(cache.entry(key).or_insert(prepared)))
     }
 
@@ -504,8 +516,15 @@ impl AppState {
         let mut modules = Vec::with_capacity(artifacts.len());
         for artifact in artifacts {
             let name = artifact.metadata.package_name.clone();
-            let package_dir = self.package_store().package_dir(&name)?;
             let module = package_module(&self.inner.engine, &artifact.wasm).map_err(|source| {
+                // The artifact came from whichever root holds it, so name that
+                // directory rather than the owned root's would-be path.
+                let package_dir = self
+                    .package_store()
+                    .locate(&name)
+                    .ok()
+                    .flatten()
+                    .map(|located| located.dir);
                 PreparePackagesError::Module {
                     name: name.clone(),
                     package_dir,
@@ -552,12 +571,34 @@ impl AppState {
             .retain(|key, _| !cache_key_belongs_to_blueprint(key, name));
     }
 
-    pub(crate) fn evict_prepared_packages(&self, name: &str) {
-        self.inner
+    /// Drop every cached module set. An install can change what any blueprint
+    /// resolves — a new transitive dependency, or an owned copy now shadowing a
+    /// fallback one — and no cache key records which files a set came from, so
+    /// the only sound eviction after an install is a full one.
+    pub(crate) fn evict_all_prepared_packages(&self) {
+        let mut cache = self
+            .inner
             .prepared_packages
             .lock()
-            .expect("prepared package cache poisoned")
-            .retain(|key, _| !cache_key_belongs_to_blueprint(key, name));
+            .expect("prepared package cache poisoned");
+        // Under the lock, so a prepare that checks the generation while
+        // holding it sees the bump and the cleared map together.
+        self.inner
+            .prepared_generation
+            .fetch_add(1, Ordering::AcqRel);
+        cache.clear();
+    }
+
+    pub(crate) fn evict_prepared_packages(&self, name: &str) {
+        let mut cache = self
+            .inner
+            .prepared_packages
+            .lock()
+            .expect("prepared package cache poisoned");
+        self.inner
+            .prepared_generation
+            .fetch_add(1, Ordering::AcqRel);
+        cache.retain(|key, _| !cache_key_belongs_to_blueprint(key, name));
     }
 
     pub(crate) async fn wipe_blueprint_sessions(&self, name: &str) {
@@ -608,7 +649,8 @@ pub enum PreparePackagesError {
     Store(PackageStoreError),
     Module {
         name: String,
-        package_dir: PathBuf,
+        /// Where the artifact was read from, when the store could still say.
+        package_dir: Option<PathBuf>,
         source: wasmtime::Error,
     },
 }
@@ -619,13 +661,18 @@ impl fmt::Display for PreparePackagesError {
             PreparePackagesError::Store(err) => err.fmt(f),
             PreparePackagesError::Module {
                 name,
-                package_dir,
+                package_dir: Some(package_dir),
                 source,
             } => write!(
                 f,
                 "failed to compile package `{name}` wasm from {}: {source}",
                 package_dir.display()
             ),
+            PreparePackagesError::Module {
+                name,
+                package_dir: None,
+                source,
+            } => write!(f, "failed to compile package `{name}` wasm: {source}"),
         }
     }
 }
@@ -642,6 +689,16 @@ impl std::error::Error for PreparePackagesError {
 impl From<PackageStoreError> for PreparePackagesError {
     fn from(value: PackageStoreError) -> Self {
         Self::Store(value)
+    }
+}
+
+/// The server's package store: the owned root (defaulted when unset) layered
+/// over the optional read-only fallback.
+fn layered_package_store(root: Option<PathBuf>, fallback: Option<PathBuf>) -> PackageStore {
+    let store = PackageStore::new(root.unwrap_or_else(crate::config::default_package_store_dir));
+    match fallback {
+        Some(fallback) => store.with_fallback(fallback),
+        None => store,
     }
 }
 

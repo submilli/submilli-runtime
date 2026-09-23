@@ -57,7 +57,7 @@ fn capabilities_json(store: &PackageStore) -> Value {
         })
         .collect();
 
-    for name in store.available_packages().unwrap_or_default() {
+    for name in store.available_packages() {
         let Ok(artifact) = store.load(&name) else {
             continue;
         };

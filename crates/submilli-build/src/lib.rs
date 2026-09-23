@@ -39,7 +39,7 @@ pub use install::{
 };
 pub use lockfile::{LOCKFILE_NAME, LockedPackage, Lockfile, LockfileError};
 pub use package_store::{
-    PackageStore, PackageStoreError, default_data_root, default_package_store_dir,
+    LocatedPackage, PackageStore, PackageStoreError, default_data_root, default_package_store_dir,
 };
 pub use resolve::{
     FetchError, FetchedRepo, GithubClosure, PlannedInstall, RepoFetcher, ResolveError,

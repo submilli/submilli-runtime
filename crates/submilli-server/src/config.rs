@@ -68,9 +68,13 @@ pub struct ServerConfig {
     /// by session id, so a client that reconnects with the same id after a
     /// restart finds its files intact.
     pub session_storage_root: Option<PathBuf>,
-    /// Root of the local package artifact store. Defaults to
-    /// [`default_package_store_dir`].
+    /// Root of the package store the server owns: installs and uninstalls go
+    /// here, and reads check it first. Defaults to [`default_package_store_dir`].
     pub package_store_root: Option<PathBuf>,
+    /// A read-only package root searched after [`Self::package_store_root`].
+    /// The binary points it at the CLI's store so a locally published package
+    /// resolves without a second install; `None` means no fallback.
+    pub package_fallback_root: Option<PathBuf>,
     /// `Host` headers the MCP streamable-HTTP endpoint accepts (rmcp's
     /// DNS-rebinding guard). `None` keeps rmcp's loopback-only default; `Some`
     /// replaces it wholesale, so the binary boundary pre-composes the loopback
@@ -143,28 +147,51 @@ pub fn default_data_root() -> PathBuf {
     submilli_build::default_data_root()
 }
 
+/// The subtree of the data root that belongs to the server: `<root>/server`.
+/// Every state directory the server defaults lands under it — the ephemeral
+/// VFS root, which defaults to the system temp dir, is the exception — so the
+/// CLI's own `packages/`, `secrets/`, and `mcp_oauth.yaml` siblings are never
+/// written by a running server (`packages/` is read, as the fallback package
+/// store) and the two never share a directory (the CLI's plaintext secret
+/// store and the server's sealed one share a file-name scheme, so a shared
+/// directory would let each overwrite the other's entries).
+pub fn default_server_root() -> PathBuf {
+    default_data_root().join("server")
+}
+
 /// Default directory the file-backed blueprint store persists to.
 pub fn default_blueprint_dir() -> PathBuf {
-    default_data_root().join("blueprints")
+    default_server_root().join("blueprints")
 }
 
 /// Default durable root for `per_session` VFS directories.
 pub fn default_session_storage_root() -> PathBuf {
-    default_data_root().join("vfs/sessions")
+    default_server_root().join("vfs/sessions")
 }
 
 /// Default directory the file-backed session store persists lifecycle metadata
-/// to — sibling to the VFS directories under `~/.submilli`.
+/// to — sibling to the VFS directories under the server root.
 pub fn default_session_store_dir() -> PathBuf {
-    default_data_root().join("sessions")
+    default_server_root().join("sessions")
 }
 
 /// Default directory backing the encrypted secret store.
 pub fn default_secret_store_dir() -> PathBuf {
-    default_data_root().join("secrets")
+    default_server_root().join("secrets")
 }
 
+/// Default root of the package store the server writes to. Not the CLI's
+/// store (`submilli_build::default_package_store_dir`), which the server only
+/// reads through [`default_cli_package_store_dir`].
 pub fn default_package_store_dir() -> PathBuf {
+    default_server_root().join("packages")
+}
+
+/// The CLI's package store, `<root>/packages`: where `submilli build
+/// publish-local` and `submilli install` put artifacts. The server reads it as
+/// a fallback so locally published packages resolve without a second install,
+/// and never writes to it.
+pub fn default_cli_package_store_dir() -> PathBuf {
     submilli_build::default_package_store_dir()
 }
 
@@ -185,7 +212,8 @@ pub fn warn_if_external_bind(addr: IpAddr) {
 /// blueprint never names a host directory of its own.
 pub type VolumeTable = BTreeMap<String, PathBuf>;
 
-/// The server-owned directories [`validate_volumes`] guards. Callers pass
+/// The directories the server reads or writes that [`validate_volumes`]
+/// guards. Callers pass
 /// *effective* values — after defaults are applied — because a volume that
 /// overlaps the directory the server actually uses is the hazard, not one that
 /// overlaps the value the operator happened to type.
@@ -199,6 +227,9 @@ pub struct ServerDirectories {
     pub blueprint_dir: Option<PathBuf>,
     pub blueprint_seed_dir: Option<PathBuf>,
     pub package_store_root: Option<PathBuf>,
+    /// The read-only package root the server falls back to; executable
+    /// artifacts are loaded from it just like from the owned store.
+    pub package_fallback_root: Option<PathBuf>,
     pub secret_store_dir: Option<PathBuf>,
     pub secret_store_key_file: Option<PathBuf>,
     pub session_storage_root: Option<PathBuf>,
@@ -235,6 +266,7 @@ impl ServerDirectories {
                     .clone()
                     .unwrap_or_else(default_package_store_dir),
             ),
+            package_fallback_root: config.package_fallback_root.clone(),
             secret_store_dir: None,
             secret_store_key_file: None,
             // Neither the secret store's paths nor the config file's survive into
@@ -566,7 +598,7 @@ struct GuardedDir {
     reason: &'static str,
 }
 
-/// The refusal table: one row per server-owned directory, with the *one*
+/// The refusal table: one row per guarded directory, with the *one*
 /// direction that is unsafe for it and why. Ordered so the most damaging
 /// collisions are reported first; leave the order alone.
 ///
@@ -578,7 +610,7 @@ fn guarded_dirs(dirs: &ServerDirectories) -> Vec<GuardedDir> {
         .ephemeral_storage_root
         .clone()
         .unwrap_or_else(std::env::temp_dir);
-    let rows: [(&'static str, Option<PathBuf>, Direction, &'static str); 12] = [
+    let rows: [(&'static str, Option<PathBuf>, Direction, &'static str); 14] = [
         (
             "secret store",
             dirs.secret_store_dir.clone(),
@@ -617,6 +649,20 @@ fn guarded_dirs(dirs: &ServerDirectories) -> Vec<GuardedDir> {
             Direction::VolumeInside,
             "the store nests artifacts under <scope>/<package>, so a volume one level down still \
              reaches executable package artifacts, running code as another package",
+        ),
+        (
+            "fallback package store",
+            dirs.package_fallback_root.clone(),
+            Direction::VolumeContains,
+            "a guest write would reach executable package artifacts the server loads, running \
+             code as another package",
+        ),
+        (
+            "fallback package store",
+            dirs.package_fallback_root.clone(),
+            Direction::VolumeInside,
+            "the store nests artifacts under <scope>/<package>, so a volume one level down still \
+             reaches executable package artifacts the server loads",
         ),
         (
             "durable session store",

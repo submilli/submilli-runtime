@@ -345,3 +345,31 @@ fn satisfied_lock_skips_fetching() {
         "no additional fetch when the lock is satisfied"
     );
 }
+
+#[test]
+fn a_lock_is_not_satisfied_by_a_fallback_copy() {
+    let repo_a = package("@acme/a", "1.0.0", &[]);
+    let root = format!(
+        "[dependencies]\n{}\n{}",
+        dep("@acme/a", "github.com/acme/a", SHA_A),
+        package("@me/app", "0.1.0", &["@acme/a"])
+    );
+    let world = world(&[("github.com/acme/a", "acme", "a", &repo_a)], &root);
+    let closure = resolve(&world, None).expect("first resolve");
+    let lock = Lockfile::new(closure);
+
+    // Re-resolve through a store that only *reads* the populated one: the
+    // locked package is visible but not owned, so it must be fetched again.
+    let owned_dir = tempfile::tempdir().expect("owned tempdir");
+    let layered = PackageStore::new(owned_dir.path()).with_fallback(world.store.root());
+    let manifest = load_manifest(&world.root_dir.join("submilli.toml")).expect("root manifest");
+    let again = resolve_github_closure(&layered, &manifest, &world.fetcher, Some(&lock))
+        .expect("second resolve");
+
+    assert_eq!(names(&again.locked), vec!["@acme/a"]);
+    assert_eq!(
+        world.fetcher.fetches.load(Ordering::SeqCst),
+        2,
+        "the fallback copy does not satisfy the lock"
+    );
+}

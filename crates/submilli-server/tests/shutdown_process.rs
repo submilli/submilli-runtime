@@ -19,12 +19,15 @@
 
 #![cfg(unix)]
 
+mod common;
+
 use std::io::Write;
 use std::net::{SocketAddr, TcpStream};
-use std::process::{Child, Command, Stdio};
+use std::process::Child;
 use std::time::{Duration, Instant};
 
-const BIN: &str = env!("CARGO_BIN_EXE_submilli-server");
+use common::{free_port, signal, spawn_server, wait_for_exit, wait_ready};
+
 const GRACE_SECS: u64 = 2;
 
 /// The two post-drain stages the binary bounds internally, plus room for
@@ -115,18 +118,7 @@ fn a_second_sigterm_skips_the_remaining_grace() {
 fn an_idle_server_exits_immediately_regardless_of_the_grace() {
     let home = tempfile::tempdir().expect("temp home");
     let port = free_port();
-    let mut server = Command::new(BIN)
-        .args(["--bind", "127.0.0.1", "--port"])
-        .arg(port.to_string())
-        .args(["--shutdown-grace", "60"])
-        .env("SUBMILLI_HOME", home.path())
-        .env("SUBMILLI_TELEMETRY", "0")
-        .env_remove("HOST")
-        .env_remove("PORT")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn server");
+    let mut server = spawn_server(home.path(), port, 60, &[]);
     wait_ready(port);
 
     let start = Instant::now();
@@ -143,65 +135,5 @@ fn an_idle_server_exits_immediately_regardless_of_the_grace() {
 }
 
 fn spawn(home: &tempfile::TempDir, port: u16) -> Child {
-    Command::new(BIN)
-        .args(["--bind", "127.0.0.1", "--port"])
-        .arg(port.to_string())
-        .args(["--shutdown-grace", &GRACE_SECS.to_string()])
-        .env("SUBMILLI_HOME", home.path())
-        // Keep the telemetry flush out of the measurement; its budget is
-        // asserted by the total, not by reaching sentry.io from a test.
-        .env("SUBMILLI_TELEMETRY", "0")
-        .env_remove("HOST")
-        .env_remove("PORT")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn server")
-}
-
-fn signal(child: &Child, sig: libc::c_int) {
-    // SAFETY: the pid belongs to a child this test spawned and has not reaped.
-    let rc = unsafe { libc::kill(child.id() as libc::pid_t, sig) };
-    assert_eq!(rc, 0, "kill({sig}) failed");
-}
-
-fn wait_for_exit(child: &mut Child, timeout: Duration) -> std::process::ExitStatus {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if let Some(status) = child.try_wait().expect("try_wait") {
-            return status;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    let _ = child.kill();
-    panic!("server did not exit within {timeout:?} of the signal");
-}
-
-/// Readiness via the server's own probe, so it proves our binary answered
-/// rather than that *something* accepted a connection on the port.
-fn wait_ready(port: u16) {
-    for _ in 0..600 {
-        let probed = Command::new(BIN)
-            .args(["--health-check", "--bind", "127.0.0.1", "--port"])
-            .arg(port.to_string())
-            .env_remove("HOST")
-            .env_remove("PORT")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .expect("spawn health check");
-        if probed.success() {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    panic!("server never became healthy on port {port}");
-}
-
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .expect("bind probe listener")
-        .local_addr()
-        .expect("probe local_addr")
-        .port()
+    spawn_server(home.path(), port, GRACE_SECS, &[])
 }

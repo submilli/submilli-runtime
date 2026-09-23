@@ -186,3 +186,70 @@ fn missing_manifest_is_an_error() {
     );
     assert!(matches!(result, Err(InstallError::NoManifest { .. })));
 }
+
+#[test]
+fn an_interrupted_install_is_replaced_rather_than_refused() {
+    let repo = write_repo("@acme/widget");
+    let store_root = TempDir::new().unwrap();
+    let store = PackageStore::new(store_root.path());
+    // The directory exists, the artifact files do not: a write that died early.
+    fs::create_dir_all(store.package_dir("@acme/widget").unwrap()).unwrap();
+
+    let report = install_from_dir(
+        &store,
+        repo.path(),
+        None,
+        &github("acme", "widget", SHA_A),
+        false,
+    )
+    .expect("install over the partial directory");
+
+    assert_eq!(report.installed.len(), 1);
+    assert!(read_package_artifact(store.package_dir("@acme/widget").unwrap()).is_ok());
+}
+
+#[test]
+fn a_fallback_copy_neither_conflicts_nor_satisfies() {
+    let repo = write_repo("@acme/widget");
+    let fallback_root = TempDir::new().unwrap();
+    let fallback = PackageStore::new(fallback_root.path());
+    install_from_dir(
+        &fallback,
+        repo.path(),
+        None,
+        &github("acme", "widget", SHA_A),
+        false,
+    )
+    .expect("install into the fallback");
+
+    // A layered store whose owned root is empty: the fallback copy is visible
+    // to reads but is not this store's install.
+    let owned_root = TempDir::new().unwrap();
+    let store = PackageStore::new(owned_root.path()).with_fallback(fallback_root.path());
+    assert!(
+        store.load("@acme/widget").is_ok(),
+        "readable through the fallback"
+    );
+
+    let report = install_from_dir(
+        &store,
+        repo.path(),
+        None,
+        &github("acme", "widget", SHA_B),
+        false,
+    )
+    .expect("a different sha in the fallback is not a conflict");
+
+    assert_eq!(report.installed.len(), 1, "installed into the owned root");
+    assert!(report.up_to_date.is_empty());
+    let owned = read_package_artifact(store.package_dir("@acme/widget").unwrap()).unwrap();
+    match owned.metadata.source {
+        Some(PackageSource::Github(gh)) => assert_eq!(gh.sha, SHA_B),
+        other => panic!("expected GitHub provenance, got {other:?}"),
+    }
+    let untouched = read_package_artifact(fallback.package_dir("@acme/widget").unwrap()).unwrap();
+    match untouched.metadata.source {
+        Some(PackageSource::Github(gh)) => assert_eq!(gh.sha, SHA_A, "fallback copy is untouched"),
+        other => panic!("expected GitHub provenance, got {other:?}"),
+    }
+}

@@ -11,7 +11,8 @@ pub mod uninstall;
 pub enum PackagesCmd {
     /// Install a GitHub package into the server's store.
     Install(install::Args),
-    /// List the packages installed in the server's store.
+    /// List the packages the server can resolve, marking any read from a
+    /// fallback store.
     List(list::Args),
     /// Remove an installed package from the server's store.
     Uninstall(uninstall::Args),

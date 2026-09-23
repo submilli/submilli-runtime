@@ -129,7 +129,9 @@ spec:
               value: {{ .Values.server.bind | quote }}
             - name: SUBMILLI_PORT
               value: {{ .Values.server.port | quote }}
-            # SUBMILLI_HOME relocates five of the server's six state directories.
+            # SUBMILLI_HOME relocates five of the server's six state directories
+            # (kept under its server/ subdirectory; an older volume is moved into
+            # that shape on the first boot).
             # The ephemeral VFS root is the sixth and still defaults to the OS
             # temp dir, so under readOnlyRootFilesystem it must be pointed at a
             # writable volume. Omitting this breaks /v1/execute — the product —

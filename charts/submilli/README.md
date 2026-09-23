@@ -185,9 +185,18 @@ default — and measure steady-state RSS under sustained load, not RSS at startu
 ## Storage
 
 `persistence.enabled` defaults to **true**. Blueprints registered through the API,
-sessions, installed packages, and secrets all live on the volume, and the failure
-mode of `false` is silent data loss on reschedule while the failure mode of `true`
-is a loud unbound-PVC error at install. Prefer the loud one.
+sessions, installed packages, and secrets all live on the volume, under its
+`server/` subdirectory, and the failure mode of `false` is silent data loss on
+reschedule while the failure mode of `true` is a loud unbound-PVC error at
+install. Prefer the loud one.
+
+A volume written by a server that kept those directories at the top level of the
+volume is moved under `server/` on the first boot of a server that does not,
+before it opens any of them. `packages/` is the exception: it stays at the top
+level and the server reads it as a fallback after its own `server/packages`, so
+packages installed there earlier keep resolving but count as unmanaged (they
+cannot be uninstalled through the API). The move is one-way, so rolling that
+server back means moving the directories up again by hand.
 
 The PVC survives `helm uninstall` by design; delete it by hand when you want the
 data gone. Node-local volumes cannot follow a pod to another node, so surviving a

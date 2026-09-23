@@ -117,8 +117,12 @@ pub fn install_from_dir(
     let mut up_to_date = Vec::new();
     let mut to_install = Vec::new();
     for package in built {
-        match store.load(package.name.as_str()) {
+        // Only the owned root counts: a copy in a read-only fallback store is
+        // not this store's install, so it neither conflicts nor satisfies.
+        match store.load_owned(package.name.as_str()) {
             Err(PackageStoreError::MissingPackage { .. }) => to_install.push(package),
+            // An interrupted earlier install: the incoming write replaces it.
+            Err(err) if err.is_incomplete_artifact() => to_install.push(package),
             Err(err) => return Err(InstallError::Store(err)),
             Ok(artifact) => match artifact.metadata.source {
                 Some(PackageSource::Github(existing)) if existing.sha == github.sha => {

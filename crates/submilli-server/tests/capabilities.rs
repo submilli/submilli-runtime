@@ -224,10 +224,78 @@ async fn installed_packages_are_listed() {
 
     let (status, body) = get_with_state(state, "/v1/packages").await;
     assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["roots"], json!([root.path().display().to_string()]));
     assert_eq!(
         body["packages"],
-        json!([{ "name": "@acme/tool", "version": "0.1.0", "description": "test package" }])
+        json!([{
+            "name": "@acme/tool",
+            "version": "0.1.0",
+            "description": "test package",
+            "root": root.path().display().to_string(),
+            "managed": true,
+        }])
     );
+}
+
+#[tokio::test]
+async fn fallback_packages_are_listed_as_unmanaged() {
+    let owned = tempfile::tempdir().expect("owned root");
+    let fallback = tempfile::tempdir().expect("fallback root");
+    installed_package(fallback.path(), "@acme/tool", &CapabilitySchema::default());
+    let state = AppState::new(ServerConfig {
+        package_store_root: Some(owned.path().to_path_buf()),
+        package_fallback_root: Some(fallback.path().to_path_buf()),
+        ..ServerConfig::default()
+    })
+    .expect("AppState");
+
+    let (status, body) = get_with_state(state, "/v1/packages").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["roots"],
+        json!([
+            owned.path().display().to_string(),
+            fallback.path().display().to_string()
+        ])
+    );
+    assert_eq!(body["packages"][0]["name"], json!("@acme/tool"));
+    assert_eq!(
+        body["packages"][0]["root"],
+        json!(fallback.path().display().to_string())
+    );
+    assert_eq!(body["packages"][0]["managed"], json!(false));
+}
+
+#[tokio::test]
+async fn uninstall_refuses_a_package_that_only_the_fallback_holds() {
+    let owned = tempfile::tempdir().expect("owned root");
+    let fallback = tempfile::tempdir().expect("fallback root");
+    installed_package(fallback.path(), "@acme/tool", &CapabilitySchema::default());
+    let state = AppState::new(ServerConfig {
+        package_store_root: Some(owned.path().to_path_buf()),
+        package_fallback_root: Some(fallback.path().to_path_buf()),
+        ..ServerConfig::default()
+    })
+    .expect("AppState");
+    let router = app(state.clone());
+
+    let req = Request::builder()
+        .method("DELETE")
+        .uri("/v1/packages/@acme/tool")
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["error"], json!("not_managed"));
+    assert!(
+        fallback.path().join("@acme").join("tool").is_dir(),
+        "the fallback copy is left in place"
+    );
+    let (_, listing) = get_with_state(state, "/v1/packages").await;
+    assert_eq!(listing["packages"][0]["name"], json!("@acme/tool"));
 }
 
 #[tokio::test]
