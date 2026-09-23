@@ -368,13 +368,13 @@ So the server blocks private addresses on its own, whatever the blueprint
 allows: loopback, the private ranges (RFC 1918, carrier-grade NAT, IPv6
 unique local), and link-local, which covers the metadata endpoint. It checks
 where a host name actually resolves, so a public name pointing at an internal
-address is caught too. The local CLI applies no such floor, which means a
+address is caught too. The local CLI doesn't block these addresses, which means a
 program that fetched a local URL fine under `submilli run` fails on the
 server. The error doesn't yet say why; it looks like any other connection
 failure:
 
 ```text
-error: Error: http GET http://localhost:9000/v1/status: network error: error sending request for url (http://localhost:9000/v1/status)
+error: Error: http GET http://localhost:8128/v1/status: network error: error sending request for url (http://localhost:8128/v1/status)
 ```
 
 If a program fails like this against an internal or local address that you
