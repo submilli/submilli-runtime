@@ -722,16 +722,14 @@ impl TypeText<'_> {
     /// `[x: number]`, we print `[number]`, and labels do not change the type.
     fn tuple_element(&mut self) -> Option<String> {
         let start = self.pos;
-        let mut optional = "";
-        if self.word().is_some() {
-            if self.eat("?: ") {
-                optional = "?";
-            } else if !self.eat(": ") {
+        let optional = match self.word() {
+            Some(_) if self.eat("?: ") => "?",
+            Some(_) if self.eat(": ") => "",
+            _ => {
                 self.pos = start;
+                ""
             }
-        } else {
-            self.pos = start;
-        }
+        };
         Some(format!("{}{optional}", self.union_text()?))
     }
 

@@ -567,19 +567,27 @@ pub fn truthiness_class(member: &Type) -> TruthinessClass {
 /// The type a binding declared `declared` has after a write of a `written`
 /// value. Writing a fresh array into a `readonly T[]` binding leaves it
 /// `readonly`: the binding's type, not the value's, decides what may be
-/// written through it.
+/// written through it. A declared mutable member of exactly the written type
+/// takes the value as it is (`xs = ["a"]` into `readonly number[] | string[]`).
 pub fn keep_declared_readonly(declared: &Type, written: Type) -> Type {
-    let declares_readonly = match declared.peel_preserving_readonly() {
-        Type::Union(members) => members.iter().any(Type::is_readonly_array),
-        other => other.is_readonly_array(),
-    };
-    if !declares_readonly || written.is_readonly_array() {
+    if written.is_readonly_array() {
         return written;
     }
-    match written.peel() {
-        Type::Array(_) | Type::Tuple(_) => Type::Readonly(Box::new(written.peel().clone())),
-        _ => written,
+    let peeled = written.peel();
+    if !matches!(peeled, Type::Array(_) | Type::Tuple(_)) {
+        return written;
     }
+    let members = match declared.peel_preserving_readonly() {
+        Type::Union(members) => members.iter().collect(),
+        other => vec![other],
+    };
+    let fits_mutable = members
+        .iter()
+        .any(|m| !m.is_readonly_array() && m.peel() == peeled);
+    if fits_mutable || !members.iter().any(|m| m.is_readonly_array()) {
+        return written;
+    }
+    Type::Readonly(Box::new(peeled.clone()))
 }
 
 fn union_members(ty: &Type) -> Vec<&Type> {

@@ -1,12 +1,16 @@
 // A binding declared `readonly` stays readonly through every narrowing: a
 // null check or `!` on a non-nullable one, `??` and `||`, and a write of a
-// fresh mutable array into it. Each line matches a `tsc --strict` error.
-// expect-error-count: 7
+// fresh mutable array into it, as a statement or inside a condition. Each line matches a `tsc --strict` error.
+// expect-error-count: 9
 // expect-error: cannot call `push` on `readonly number[]`
 // expect-error: cannot assign to an element of `readonly number[]`
 // expect-error: expected `number[]`, got `readonly number[]`
 
 let shared: readonly number[] = [];
+
+function isNumbers(v: readonly number[] | string): v is readonly number[] {
+  return typeof v !== "string";
+}
 
 function main(): void {
   const ro: readonly number[] = [1, 2, 3];
@@ -24,5 +28,13 @@ function main(): void {
   rebound.push(3);
   shared = [1];
   shared.push(2);
+  let maybe: readonly number[] | null = null;
+  if ((maybe = [0, 1]) !== null) {
+    maybe.push(1);
+  }
+  let either2: readonly number[] | string = "s";
+  if (isNumbers((either2 = [3]))) {
+    either2.push(4);
+  }
   console.log(mutable.length, rebound.length);
 }

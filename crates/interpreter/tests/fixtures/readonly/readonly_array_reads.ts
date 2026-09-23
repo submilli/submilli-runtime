@@ -47,6 +47,12 @@ function lengthOf(value: readonly number[] | string): number {
 }
 
 function main(): void {
+  // A write of a mutable array into a union with a matching mutable member
+  // leaves it mutable.
+  let mixed: readonly number[] | string[] = [1];
+  mixed = ["a"];
+  mixed.push("b");
+  assert(mixed.join(",") === "a,b", "the written string[] stays mutable");
   const mutable: number[] = [3, 1, 2];
   const ro: readonly number[] = mutable;
   assert(sum(ro) === 6, "readonly parameter");

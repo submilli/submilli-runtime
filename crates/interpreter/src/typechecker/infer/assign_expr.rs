@@ -24,7 +24,7 @@ impl Inferer<'_> {
         value: ExprId,
         span: Span,
     ) -> (TypedExprKind, Type) {
-        let assignment = self.infer_assignment(target, op, value, span);
+        let mut assignment = self.infer_assignment(target, op, value, span);
         if let TypedStmtKind::AssignLocal {
             target_ty: Type::Error,
             ..
@@ -36,7 +36,6 @@ impl Inferer<'_> {
             return (TypedExprKind::Sequence { stmts, result }, Type::Error);
         }
         let mut stmts = Vec::new();
-        let mut assignment = assignment;
         let held_value = if let TypedStmtKind::AssignLocal { value, .. }
         | TypedStmtKind::AssignGlobal { value, .. } = &mut assignment
         {
@@ -45,16 +44,32 @@ impl Inferer<'_> {
             stmts.push(self.push_typed_stmt(assignment, span));
             held_value
         } else {
-            self.sequence_target_assignment(assignment, span, &mut stmts)
+            self.sequence_member_assignment(assignment, span, &mut stmts)
         };
         let result = self.reread_temp(held_value);
-        let ty = self.typed_ast.expr(result).ty.clone();
+        let ty = self.binding_view_of_value(&stmts, result);
         (TypedExprKind::Sequence { stmts, result }, ty)
+    }
+
+    /// The type the assignment yields: the value's, except that a binding
+    /// declared `readonly` keeps it. A condition over the sequence narrows the
+    /// binding from this type, so `(a = [0]) !== null` must not hand `a` a
+    /// mutable array.
+    fn binding_view_of_value(&self, stmts: &[StmtId], result: ExprId) -> Type {
+        let value_ty = self.typed_ast.expr(result).ty.clone();
+        let Some(
+            TypedStmtKind::AssignLocal { target_ty, .. }
+            | TypedStmtKind::AssignGlobal { target_ty, .. },
+        ) = stmts.last().map(|&s| &self.typed_ast.stmt(s).kind)
+        else {
+            return value_ty;
+        };
+        narrowing::keep_declared_readonly(target_ty, value_ty)
     }
 
     /// A field or index assignment, with its receiver, index, and value held.
     /// Returns the temporary holding the value.
-    fn sequence_target_assignment(
+    fn sequence_member_assignment(
         &mut self,
         assignment: TypedStmtKind,
         span: Span,
