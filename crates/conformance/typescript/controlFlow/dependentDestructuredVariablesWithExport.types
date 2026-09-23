@@ -1,0 +1,113 @@
+=== dependentDestructuredVariablesWithExport.ts ===
+
+// https://github.com/microsoft/TypeScript/issues/59652
+
+function mutuallyEnabledPair(): {
+>mutuallyEnabledPair : () => { discriminator: true; value: string; } | { discriminator: false; value: null | null; }
+>                    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    discriminator: true,
+>discriminator : true
+>              : ^^^^
+>true : true
+>     : ^^^^
+
+    value: string,
+>value : string
+>      : ^^^^^^
+
+  } | {
+    discriminator: false,
+>discriminator : false
+>              : ^^^^^
+>false : false
+>      : ^^^^^
+
+    value: null | null,
+>value : null
+>      : ^^^^
+
+  } { return null as unknown as ({
+>null as unknown as ({     discriminator: true,     value: string,   } | {     discriminator: false,     value: null | null,   }) : { discriminator: true; value: string; } | { discriminator: false; value: null | null; }
+>                                                                                                                                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    discriminator: true,
+>discriminator : true
+>              : ^^^^
+>true : true
+>     : ^^^^
+
+    value: string,
+>value : string
+>      : ^^^^^^
+
+  } | {
+    discriminator: false,
+>discriminator : false
+>              : ^^^^^
+>false : false
+>      : ^^^^^
+
+    value: null | null,
+>value : null
+>      : ^^^^
+
+  }); }
+
+const { discriminator: discriminator1, value: value1 } = mutuallyEnabledPair()
+>discriminator : any
+>              : ^^^
+>discriminator1 : boolean
+>               : ^^^^^^^
+>value : any
+>      : ^^^
+>value1 : string | null
+>       : ^^^^^^^^^^^^^
+>mutuallyEnabledPair() : { discriminator: true; value: string; } | { discriminator: false; value: null | null; }
+>                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>mutuallyEnabledPair : () => { discriminator: true; value: string; } | { discriminator: false; value: null | null; }
+>                    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+if (discriminator1) {
+>discriminator1 : boolean
+>               : ^^^^^^^
+
+  value1;
+>value1 : string
+>       : ^^^^^^
+
+}
+
+export const { discriminator: discriminator2, value: value2 } = mutuallyEnabledPair()
+>discriminator : any
+>              : ^^^
+>discriminator2 : boolean
+>               : ^^^^^^^
+>value : any
+>      : ^^^
+>value2 : string | null
+>       : ^^^^^^^^^^^^^
+>mutuallyEnabledPair() : { discriminator: true; value: string; } | { discriminator: false; value: null | null; }
+>                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>mutuallyEnabledPair : () => { discriminator: true; value: string; } | { discriminator: false; value: null | null; }
+>                    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+if (discriminator2) {
+>discriminator2 : boolean
+>               : ^^^^^^^
+
+  value2;
+>value2 : string
+>       : ^^^^^^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

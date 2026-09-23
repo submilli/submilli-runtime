@@ -1,0 +1,76 @@
+=== controlFlowBinaryAndExpression.ts ===
+let x: string | number | boolean = null as unknown as (string | number | boolean);
+>x : string | number | boolean
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (string | number | boolean) : string | number | boolean
+>                                               : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let cond: boolean = null as unknown as (boolean);
+>cond : boolean
+>     : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+(x = "") && (x = 0);
+>(x = "") && (x = 0) : ""
+>                    : ^^
+>(x = "") : ""
+>         : ^^
+>x = "" : ""
+>       : ^^
+>x : string | number | boolean
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>"" : ""
+>   : ^^
+>(x = 0) : 0
+>        : ^
+>x = 0 : 0
+>      : ^
+>x : string | number | boolean
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>0 : 0
+>  : ^
+
+x; // string | number
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+
+x = "";
+>x = "" : ""
+>       : ^^
+>x : string | number | boolean
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>"" : ""
+>   : ^^
+
+cond && (x = 0);
+>cond && (x = 0) : false | 0
+>                : ^^^^^^^^^
+>cond : boolean
+>     : ^^^^^^^
+>(x = 0) : 0
+>        : ^
+>x = 0 : 0
+>      : ^
+>x : string | number | boolean
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>0 : 0
+>  : ^
+
+x; // string | number
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

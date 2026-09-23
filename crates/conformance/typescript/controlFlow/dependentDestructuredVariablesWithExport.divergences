@@ -1,0 +1,9 @@
+types: 14 of 32 tsc entries compared, 2 differ
+
+line 24: value1
+  tsc:  string
+  ours: string | null
+
+line 30: value2
+  tsc:  string
+  ours: string | null
