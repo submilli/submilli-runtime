@@ -407,8 +407,11 @@ fn read_baseline_types(path: &Path, source: &str) -> Result<EntriesByLine, Strin
 
     let mut entries = EntriesByLine::new();
     let mut source_index: Option<usize> = None;
+    let mut after_entry = false;
     for (i, line) in lines.iter().enumerate().skip(body_start) {
-        if is_caret_line(line) {
+        // Only the line under an entry is skipped as its caret line: an echoed
+        // source line can look like one, inside a template literal or a comment.
+        if std::mem::take(&mut after_entry) && is_caret_line(line) {
             continue;
         }
         // A `>` line is an entry only with its caret line under it; otherwise it is
@@ -423,6 +426,7 @@ fn read_baseline_types(path: &Path, source: &str) -> Result<EntriesByLine, Strin
             }
             continue;
         };
+        after_entry = true;
         if let Some(&line_no) = source_index.and_then(|n| case_lines.get(n)) {
             entries.entry(line_no).or_default().push(entry);
         }
@@ -551,21 +555,42 @@ fn is_literal(text: &str) -> bool {
         || is_string_literal(text)
 }
 
-/// `1`, `1.5`, `.5`, `1e-3`, `0x10`, `1_000`, `10n`. Not `NaN` or `Infinity`,
-/// which are names.
+/// One numeric literal token: `1`, `1.5`, `.5`, `1e-3`, `0x10`, `1_000`, `10n`.
+/// Not `NaN` or `Infinity`, which are names, and not `1.5.toFixed`.
 fn is_number_literal(text: &str) -> bool {
-    let digits = text.strip_prefix('.').unwrap_or(text);
-    let is_hex = text.starts_with("0x") || text.starts_with("0X");
-    let mut previous = ' ';
-    digits.starts_with(|c: char| c.is_ascii_digit())
-        && text.chars().all(|c| {
-            // A sign belongs to an exponent, `1e-3`, and `e` is a digit in hex.
-            let ok = c.is_ascii_alphanumeric()
-                || matches!(c, '.' | '_')
-                || (matches!(c, '+' | '-') && matches!(previous, 'e' | 'E') && !is_hex);
-            previous = c;
-            ok
-        })
+    let rest = text.strip_suffix('n').unwrap_or(text);
+    for prefix in ["0x", "0X", "0o", "0O", "0b", "0B"] {
+        if let Some(body) = rest.strip_prefix(prefix) {
+            let radix = match prefix.as_bytes()[1].to_ascii_lowercase() {
+                b'x' => 16,
+                b'o' => 8,
+                _ => 2,
+            };
+            let (len, after) = digits(body, radix);
+            return len > 0 && after.is_empty();
+        }
+    }
+    let (whole, rest) = digits(rest, 10);
+    let (fraction, rest) = match rest.strip_prefix('.') {
+        Some(after_dot) => digits(after_dot, 10),
+        None => (0, rest),
+    };
+    if whole + fraction == 0 {
+        return false;
+    }
+    let Some(exponent) = rest.strip_prefix(['e', 'E']) else {
+        return rest.is_empty();
+    };
+    let (len, after) = digits(exponent.strip_prefix(['+', '-']).unwrap_or(exponent), 10);
+    len > 0 && after.is_empty()
+}
+
+/// How many leading digits of `radix` (or `_` separators) `s` has, and what follows.
+fn digits(s: &str, radix: u32) -> (usize, &str) {
+    let end = s
+        .find(|c: char| !(c.is_digit(radix) || c == '_'))
+        .unwrap_or(s.len());
+    (end, &s[end..])
 }
 
 /// One quoted string with nothing after its closing quote, so `"a" + "b"` is not
@@ -627,8 +652,9 @@ struct TypeText<'a> {
     pos: usize,
 }
 
-/// A type as `TypeText` reads it, in canonical text. A function type is marked, because as a union
-/// member it needs parentheses: `(() => A) | B` is not `() => A | B`.
+/// A type as `TypeText` reads it, in canonical text. A function type is marked,
+/// because as a union member it needs parentheses: `(() => A) | B` is not
+/// `() => A | B`.
 struct CanonicalType {
     text: String,
     is_function: bool,
@@ -668,7 +694,7 @@ impl TypeText<'_> {
     }
 
     fn union_text(&mut self) -> Option<String> {
-        self.union().map(|read| read.text)
+        self.union().map(|ty| ty.text)
     }
 
     fn postfix(&mut self) -> Option<CanonicalType> {
@@ -923,6 +949,10 @@ fn only_a_single_literal_is_skipped() {
     }
     for expression in [
         "0xe-1",
+        "1.5.toFixed",
+        "1e3.toFixed",
+        "1e",
+        ".",
         r#""a" + "b""#,
         "'a' == 'b'",
         "`a${b}`",
@@ -950,9 +980,11 @@ fn an_entry_splits_at_its_caret_column_in_utf16_units() {
 
     let ternary = split_entry("a ? b : c : string", &caret("a ? b : c", "string")).expect("entry");
     assert_eq!(ternary.text, "a ? b : c");
+}
 
-    let caret_line = format!(">{}", caret("a ? b : c", "string"));
-    assert!(is_caret_line(&caret_line));
+#[test]
+fn caret_lines_are_told_from_echoed_source() {
+    assert!(is_caret_line(">          : ^^^^^^"));
     assert!(!is_caret_line(">a ? b : c : string"));
     assert!(!is_caret_line("> 0;"), "a source line that starts with `>`");
 }
