@@ -1114,7 +1114,7 @@ impl Inferer<'_> {
                 {
                     self.error(
                         self.ast.expr(rhs).span,
-                        format!("expected `{lt}`, got `{rt}`"),
+                        format!("expected `{lt}`, got `{comparison_rhs}`"),
                     );
                 }
                 // `void` has no runtime value to compare, and the comparison
@@ -8906,7 +8906,7 @@ mod tests {
     fn equality_different_type_diagnoses() {
         let (_, d) = run(r#"let x: boolean = 1 === "a";"#);
         assert_eq!(d.len(), 1);
-        assert_eq!(d[0].message, "expected `number`, got `string`");
+        assert_eq!(d[0].message, "expected `number`, got `\"a\"`");
     }
 
     #[test]
