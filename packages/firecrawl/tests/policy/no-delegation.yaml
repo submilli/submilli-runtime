@@ -1,0 +1,16 @@
+kind: blueprint
+name: firecrawl-no-delegation-test
+packages:
+  - '@submilli/firecrawl'
+default: deny
+permissions:
+  main:
+    - capability: firecrawl.dev/scrape
+      action: allow
+    - capability: firecrawl.dev/map
+      action: allow
+    - capability: firecrawl.dev/batch.start
+      action: allow
+    - capability: firecrawl.dev/crawl.start
+      action: allow
+  '@submilli/firecrawl': []

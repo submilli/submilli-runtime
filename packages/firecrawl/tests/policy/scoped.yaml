@@ -1,0 +1,33 @@
+kind: blueprint
+name: firecrawl-scoped-test
+packages:
+  - '@submilli/firecrawl'
+default: deny
+permissions:
+  main:
+    - capability: firecrawl.dev/scrape
+      filter: host == "example.com"
+      action: allow
+    - capability: firecrawl.dev/map
+      filter: host == "example.com" and limit <= 5 and includeSubdomains == false
+      action: allow
+    - capability: firecrawl.dev/batch.start
+      filter: host == "example.com" and count <= 2
+      action: allow
+    - capability: firecrawl.dev/crawl.start
+      filter: host == "example.com" and limit <= 2 and allowSubdomains == false and allowExternalLinks == false and crawlEntireDomain == false
+      action: allow
+    - capability: firecrawl.dev/delegatedFetch
+      action: allow
+    - capability: firecrawl.dev/jobs.read
+      filter: kind == "crawl" and jobId == "22222222-2222-4222-8222-222222222222"
+      action: allow
+    - capability: firecrawl.dev/jobs.cancel
+      filter: kind == "batch" and jobId == "33333333-3333-4333-8333-333333333333"
+      action: allow
+    - capability: fs.write
+      filter: op == "download" and path == "/approved.json" and max_bytes <= 1000
+      action: allow
+  # Deliberate sentinel: permitted operations must reach secrets.get, which is
+  # denied here before a key can be read or a network request can happen.
+  '@submilli/firecrawl': []

@@ -19,13 +19,14 @@ standard-library calls: the program gets a value back without `await`.
 
 ## Choose a package
 
-The repository currently contains twelve packages. Each name links to its setup
+The repository currently contains thirteen packages. Each name links to its setup
 instructions, including the credentials and service permissions it needs.
 
 | Package | Use it for |
 | --- | --- |
 | [`@submilli/brave-search`](https://github.com/submilli/submilli-runtime/tree/main/packages/brave-search) | Web search with pagination and extracted LLM context with source URLs |
 | [`@submilli/exa`](https://github.com/submilli/submilli-runtime/tree/main/packages/exa) | Web search with highlights and known-URL extraction with per-URL outcomes |
+| [`@submilli/firecrawl`](https://github.com/submilli/submilli-runtime/tree/main/packages/firecrawl) | Scrape, map, and explicit batch/crawl jobs with paginated results and per-page failures |
 | [`@submilli/github`](https://github.com/submilli/submilli-runtime/tree/main/packages/github) | Repositories, files, commits, issues, pull requests, teams, releases, and search |
 | [`@submilli/gmail`](https://github.com/submilli/submilli-runtime/tree/main/packages/gmail) | Search and triage mail, read messages and threads, manage drafts and labels, send mail, and download attachments |
 | [`@submilli/google-calendar`](https://github.com/submilli/submilli-runtime/tree/main/packages/google-calendar) | Calendars, events, agendas, free/busy queries, and bounded free-time searches |
@@ -200,6 +201,25 @@ when the task needs broad page context. Additional count, domain, publication,
 character-budget, and cache-freshness controls are opt-in. Always inspect
 `getContents().statuses`: a successful HTTP response can include failed URLs.
 Keep source URLs with passages for attribution.
+
+## Firecrawl: retrieval and explicit crawl jobs
+
+`@submilli/firecrawl` supports Scrape, Map, Batch Scrape and Crawl using the v2
+HTTP API. It reads `FIRECRAWL_API_KEY` internally. Scrape returns Markdown,
+HTML, or optional structured JSON with source URLs and metadata. Job submission
+returns an ID immediately; callers explicitly retrieve status/results pages,
+inspect per-page failures, download large envelopes to VFS, or cancel.
+
+Submitted-host checks do not constrain Firecrawl's remote redirects or crawl
+expansion. All retrieval/submission operations additionally require the
+`firecrawl.dev/delegatedFetch` capability. Job reads and cancellation use
+separate `{ kind, jobId }` grants; an unfiltered grant covers existing jobs
+accessible to the bound credential. Use a different retrieval boundary when
+strict downstream-domain isolation is required.
+
+See the [package setup](https://github.com/submilli/submilli-runtime/tree/main/packages/firecrawl)
+and [agent API guide](https://github.com/submilli/submilli-runtime/blob/main/packages/firecrawl/docs/readme.md)
+for bounded crawl examples, explicit pagination, and the full capability table.
 
 ## Supply credentials outside the program
 

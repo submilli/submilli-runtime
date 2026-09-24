@@ -1,0 +1,543 @@
+import { get, post, delete as del, download, Response, DownloadResult } from "submilli:http";
+import secrets from "submilli:secrets";
+import { check } from "submilli:security";
+import { parse } from "submilli:url";
+
+const BASE = "https://api.firecrawl.dev/v2";
+
+/** Select the batch-scrape or crawl job family. */
+export type JobKind = "batch" | "crawl";
+/** Control sitemap discovery. */
+export type SitemapMode = "include" | "skip" | "only";
+/** Ordinary retrieval formats, without provider synthesis. */
+export type Format = "markdown" | "html";
+
+/** Optional provider-generated extraction. Ordinary markdown/HTML needs no LLM. */
+export interface JsonOptions {
+    /** JSON Schema object; preserved as JSON, not interpreted by this package. */
+    schema?: unknown;
+    /** Instructions for optional provider extraction. */
+    prompt?: string;
+}
+
+/** Deliberately excludes headers, actions, webhooks and browser sessions. */
+export interface ScrapeOptions {
+    /** Default ["markdown"]. Use [] with json for JSON-only extraction. */
+    formats?: Format[];
+    /** Optional structured extraction; absent by default. */
+    json?: JsonOptions;
+    /** Select main content, excluding page boilerplate when true. */
+    onlyMainContent?: boolean;
+    /** CSS selectors to include. */
+    includeTags?: string[];
+    /** CSS selectors to exclude. */
+    excludeTags?: string[];
+    /** Cache age in milliseconds; 0 requests fresh content. Omit for provider default. */
+    maxAge?: number;
+    /** Whether the provider may cache the result. */
+    storeInCache?: boolean;
+    /** Provider timeout, milliseconds; transport has its own timeout. */
+    timeout?: number;
+}
+
+/** Bounded URL-discovery controls. */
+export interface MapOptions {
+    /** Explicit ceiling, default 100. Map has no pagination or completeness guarantee. */
+    limit?: number;
+    /** Order discovered URLs by relevance to this text. */
+    search?: string;
+    /** Sitemap discovery mode; omitted uses provider default. */
+    sitemap?: SitemapMode;
+    /** Default false (narrower than Firecrawl's default). */
+    includeSubdomains?: boolean;
+    /** Whether the provider should deduplicate query variants. */
+    ignoreQueryParameters?: boolean;
+    /** Bypass the provider sitemap cache. */
+    ignoreCache?: boolean;
+}
+
+/** Required page ceiling and optional provider crawl scope. */
+export interface CrawlOptions {
+    /** Required explicit page ceiling, 1–10000. */
+    limit: number;
+    /** Link discovery depth; sitemap entries count as depth zero. */
+    maxDiscoveryDepth?: number;
+    /** Provider Rust-regex pathname allowlist; also applies to seed. */
+    includePaths?: string[];
+    /** Provider Rust-regex pathname exclusions. */
+    excludePaths?: string[];
+    /** Sitemap discovery mode; omitted uses provider default. */
+    sitemap?: SitemapMode;
+    /** Whether the provider should deduplicate query variants. */
+    ignoreQueryParameters?: boolean;
+    /** Allow sibling and parent paths; default false. */
+    crawlEntireDomain?: boolean;
+    /** Follow subdomain links; default false. */
+    allowSubdomains?: boolean;
+    /** Follow external links; default false. */
+    allowExternalLinks?: boolean;
+    /** Content controls applied to every crawled page. */
+    scrapeOptions?: ScrapeOptions;
+}
+
+/** Typed common metadata plus the complete provider object in Page.metadata. */
+export interface PageMetadata {
+    /** Provider source URL when available; retain for attribution. */
+    sourceURL?: string;
+    /** Provider URL; for page metadata this can be the resolved URL. */
+    url?: string;
+    /** Page title when provided. */
+    title?: string;
+    /** Page description when provided. */
+    description?: string;
+    /** Provider-reported page language. */
+    language?: string;
+    /** Source HTTP status, including per-page failures. */
+    statusCode?: number;
+    /** Provider-reported error detail when available. */
+    error?: string;
+}
+
+/** Page content with source attribution and complete metadata. */
+export interface Page {
+    /** Provider source URL when available; retain for attribution. */
+    sourceURL: string | null;
+    /** Provider URL; for page metadata this can be the resolved URL. */
+    url: string | null;
+    /** Page title when provided. */
+    title: string | null;
+    /** Page description when provided. */
+    description: string | null;
+    /** Provider-reported page language. */
+    language: string | null;
+    /** Source HTTP status, including per-page failures. */
+    statusCode: number | null;
+    /** Provider-reported error detail when available. */
+    error: string | null;
+    /** Provider warning, such as incomplete content. */
+    warning: string | null;
+    /** Complete returned markdown, or null when absent. */
+    markdown: string | null;
+    /** Complete returned HTML, or null when absent. */
+    html: string | null;
+    /** Optional structured extraction; absent by default. */
+    json: unknown;
+    /** All provider metadata, including fields outside the typed projection. */
+    metadata: unknown;
+}
+
+/** One discovered source URL. */
+export interface MapLink {
+    /** Provider URL; for page metadata this can be the resolved URL. */
+    url: string;
+    /** Page title when provided. */
+    title?: string;
+    /** Page description when provided. */
+    description?: string;
+}
+/** A bounded discovery response, without a pagination cursor. */
+export interface MapResponse {
+    /** Discovered URLs in provider order; never locally truncated. */
+    links: MapLink[];
+    /** Echo of the requested limit; reaching it may mean more URLs exist. */
+    limit: number;
+}
+/** Asynchronous submission acknowledgement. */
+export interface Job {
+    /** Provider-issued identifier. */
+    id: string;
+    /** Provider rejects retained even though submissions request strict URL validation. */
+    invalidURLs: string[];
+}
+/** One explicit status/results page. */
+export interface JobPage {
+    /** Preserve future states; normally scraping, completed, failed or cancelled. */
+    status: string;
+    /** Provider total counter; not proof that every discovered page succeeded. */
+    total: number;
+    /** Provider successful-page counter. */
+    completed: number;
+    /** Provider-reported credits used, or null. */
+    creditsUsed: number | null;
+    /** Provider result expiry timestamp, or null. */
+    expiresAt: string | null;
+    /** Provider start timestamp, or null. */
+    createdAt: string | null;
+    /** Provider terminal timestamp, or null. */
+    completedAt: string | null;
+    /** Provider duration in seconds, or null. */
+    duration: number | null;
+    /** Provider-reported error detail when available. */
+    error: string | null;
+    /** Validated same-job URL, or null. Fetch explicitly; never automatically followed. */
+    next: string | null;
+    /** All pages in this response, including available partial results. */
+    data: Page[];
+}
+/** One provider-reported failed source. */
+export interface PageFailure {
+    /** Provider-issued identifier. */
+    id?: string;
+    /** Provider failure timestamp, or null when absent. */
+    timestamp?: string;
+    /** Provider URL; for page metadata this can be the resolved URL. */
+    url: string;
+    /** Provider-reported error detail when available. */
+    error: string;
+}
+/** Failures and robots exclusions returned by the errors endpoint. */
+export interface JobErrors {
+    /** Provider-reported page failures; may not cover all failure classes. */
+    errors: PageFailure[];
+    /** URLs reported blocked by robots.txt. */
+    robotsBlocked: string[];
+}
+/** Acknowledgement of a cancellation request. */
+export interface Cancellation {
+    /** Cancellation acknowledgement: cancelled. */
+    status: string;
+}
+/** VFS download controls; no arbitrary HTTP options. */
+export interface SaveOptions {
+    /** Default false. */
+    overwrite?: boolean;
+    /** Explicit byte cap; default 20000000. Oversize downloads fail, never truncate. */
+    maxBytes?: number;
+}
+
+/** API/validation error; runtime permission and transport errors pass through. */
+export class FirecrawlError extends Error {
+    code: string;
+    status: number;
+    retryAfter: string | null;
+    constructor(code: string, message: string, status: number = 0, retryAfter: string | null = null) {
+        super(message);
+        this.name = "FirecrawlError";
+        this.code = code;
+        this.status = status;
+        this.retryAfter = retryAfter;
+    }
+}
+
+/** Retrieve one page. Host constrains the submitted URL, not provider redirects/subresources.
+ * @capability firecrawl.dev/scrape { host: string }
+ * @capability firecrawl.dev/delegatedFetch {}
+ */
+export function scrape(url: string, options: ScrapeOptions | null = null): Page {
+    const body = buildScrapeBody(url, options);
+    check("firecrawl.dev/scrape", { host: urlHost(url) });
+    check("firecrawl.dev/delegatedFetch", {});
+    return normalizeScrapeJson(requireOk(post(BASE + "/scrape", body, authHeaders())));
+}
+
+/** Discover URLs; the seed host is not a downstream network allowlist.
+ * @capability firecrawl.dev/map { host: string, limit: number, includeSubdomains: boolean }
+ * @capability firecrawl.dev/delegatedFetch {}
+ */
+export function map(url: string, options: MapOptions | null = null): MapResponse {
+    const opts: MapOptions = options === null ? {} : options;
+    const body = buildMapBody(url, opts);
+    const limit = opts.limit ?? 100;
+    check("firecrawl.dev/map", { host: urlHost(url), limit: limit, includeSubdomains: opts.includeSubdomains ?? false });
+    check("firecrawl.dev/delegatedFetch", {});
+    return normalizeMapJson(requireOk(post(BASE + "/map", body, authHeaders())), limit);
+}
+
+/** Submit once and return promptly. Every requested host is checked before any HTTP request.
+ * @capability firecrawl.dev/batch.start { host: string, count: number }
+ * @capability firecrawl.dev/delegatedFetch {}
+ */
+export function startBatch(urls: string[], options: ScrapeOptions | null = null): Job {
+    const body = buildBatchBody(urls, options);
+    for (const url of urls) check("firecrawl.dev/batch.start", { host: urlHost(url), count: urls.length });
+    check("firecrawl.dev/delegatedFetch", {});
+    return normalizeJobJson(requireOk(post(BASE + "/batch/scrape", body, authHeaders())));
+}
+
+/** Submit a bounded crawl. Scope flags are provider instructions, not a network sandbox.
+ * @capability firecrawl.dev/crawl.start { host: string, limit: number, allowSubdomains: boolean, allowExternalLinks: boolean, crawlEntireDomain: boolean }
+ * @capability firecrawl.dev/delegatedFetch {}
+ */
+export function startCrawl(url: string, options: CrawlOptions): Job {
+    const body = buildCrawlBody(url, options);
+    check("firecrawl.dev/crawl.start", { host: urlHost(url), limit: options.limit,
+        allowSubdomains: options.allowSubdomains ?? false, allowExternalLinks: options.allowExternalLinks ?? false,
+        crawlEntireDomain: options.crawlEntireDomain ?? false });
+    check("firecrawl.dev/delegatedFetch", {});
+    return normalizeJobJson(requireOk(post(BASE + "/crawl", body, authHeaders())));
+}
+
+/** Read status and exactly one results page, including partial results. No polling or pagination loop.
+ * @capability firecrawl.dev/jobs.read { kind: string, jobId: string }
+ */
+export function getJob(kind: JobKind, jobId: string, next: string | null = null): JobPage {
+    const path = jobPagePath(kind, jobId, next);
+    check("firecrawl.dev/jobs.read", { kind: kind, jobId: jobId });
+    return normalizeJobPageJson(requireOk(get(BASE + path, authHeaders())), kind, jobId);
+}
+
+/** Retrieve failures omitted from results. Provider error accounting is not guaranteed complete.
+ * @capability firecrawl.dev/jobs.read { kind: string, jobId: string }
+ */
+export function getJobErrors(kind: JobKind, jobId: string): JobErrors {
+    const path = jobPagePath(kind, jobId) + "/errors";
+    check("firecrawl.dev/jobs.read", { kind: kind, jobId: jobId });
+    return normalizeJobErrorsJson(requireOk(get(BASE + path, authHeaders())));
+}
+
+/** Cancel one existing job; reading permission does not grant cancellation.
+ * @capability firecrawl.dev/jobs.cancel { kind: string, jobId: string }
+ */
+export function cancelJob(kind: JobKind, jobId: string): Cancellation {
+    const path = jobPagePath(kind, jobId);
+    check("firecrawl.dev/jobs.cancel", { kind: kind, jobId: jobId });
+    return normalizeCancellationJson(requireOk(del(BASE + path, authHeaders())));
+}
+
+/** Save one raw status/results envelope to VFS. Inspect status and JSON next explicitly.
+ * @capability firecrawl.dev/jobs.read { kind: string, jobId: string }
+ * @capability fs.write { op: "download", path: string, max_bytes: number }
+ */
+export function downloadJobPage(kind: JobKind, jobId: string, path: string, next: string | null = null,
+    options: SaveOptions | null = null): DownloadResult {
+    const endpoint = jobPagePath(kind, jobId, next);
+    const opts: SaveOptions = options === null ? {} : options;
+    const maxBytes = opts.maxBytes ?? 20000000;
+    integerRange(maxBytes, 1, 9007199254740991, "maxBytes");
+    check("firecrawl.dev/jobs.read", { kind: kind, jobId: jobId });
+    check("fs.write", { op: "download", path: path, max_bytes: maxBytes });
+    return download(BASE + endpoint, path, { headers: authHeaders(), maxBytes: maxBytes, overwrite: opts.overwrite ?? false });
+}
+
+/** Pure builder used by offline tests. */
+export function buildScrapeBody(url: string, options: ScrapeOptions | null = null): string {
+    urlHost(url);
+    const fields = scrapeFields(options);
+    fields.push(field("url", JSON.stringify(url)));
+    return objectJson(fields);
+}
+
+/** Build a strict batch request without network access. */
+export function buildBatchBody(urls: string[], options: ScrapeOptions | null = null): string {
+    integerRange(urls.length, 1, 1000, "URL count");
+    for (const url of urls) urlHost(url);
+    const fields = scrapeFields(options);
+    fields.push(field("urls", JSON.stringify(urls)));
+    fields.push('"ignoreInvalidURLs":false');
+    return objectJson(fields);
+}
+
+/** Build a bounded map request without network access. */
+export function buildMapBody(url: string, options: MapOptions | null = null): string {
+    urlHost(url);
+    const opts: MapOptions = options === null ? {} : options;
+    const limit = opts.limit ?? 100;
+    integerRange(limit, 1, 100000, "limit");
+    const fields = [field("url", JSON.stringify(url)), field("limit", JSON.stringify(limit)),
+        field("includeSubdomains", JSON.stringify(opts.includeSubdomains ?? false))];
+    if (opts.search !== null) { requireText(opts.search, "search"); fields.push(field("search", JSON.stringify(opts.search))); }
+    addSitemap(fields, opts.sitemap);
+    addBoolean(fields, "ignoreQueryParameters", opts.ignoreQueryParameters);
+    addBoolean(fields, "ignoreCache", opts.ignoreCache);
+    return objectJson(fields);
+}
+
+/** Build a bounded crawl request without network access. */
+export function buildCrawlBody(url: string, options: CrawlOptions): string {
+    urlHost(url);
+    integerRange(options.limit, 1, 10000, "limit");
+    const fields = [field("url", JSON.stringify(url)), field("limit", JSON.stringify(options.limit)),
+        field("allowSubdomains", JSON.stringify(options.allowSubdomains ?? false)),
+        field("allowExternalLinks", JSON.stringify(options.allowExternalLinks ?? false)),
+        field("crawlEntireDomain", JSON.stringify(options.crawlEntireDomain ?? false)),
+        field("scrapeOptions", objectJson(scrapeFields(options.scrapeOptions)))];
+    if (options.maxDiscoveryDepth !== null) {
+        integerRange(options.maxDiscoveryDepth, 0, 1000, "maxDiscoveryDepth");
+        fields.push(field("maxDiscoveryDepth", JSON.stringify(options.maxDiscoveryDepth)));
+    }
+    addStrings(fields, "includePaths", options.includePaths);
+    addStrings(fields, "excludePaths", options.excludePaths);
+    addSitemap(fields, options.sitemap);
+    addBoolean(fields, "ignoreQueryParameters", options.ignoreQueryParameters);
+    return objectJson(fields);
+}
+
+/** Strict same-origin, same-kind, same-job pagination. Rebuild the destination from trusted parts. */
+export function jobPagePath(kind: JobKind, jobId: string, next: string | null = null): string {
+    if (kind !== "batch" && kind !== "crawl") throw invalidArgument("kind must be batch or crawl");
+    if (!/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(jobId)) throw invalidArgument("Expected a Firecrawl UUID job ID");
+    const path = (kind === "batch" ? "/batch/scrape/" : "/crawl/") + jobId;
+    if (next === null) return path;
+    // Exact prefix avoids userinfo, ports, fragments, encoded paths, normalization and lookalike hosts.
+    const prefix = BASE + path + "?";
+    if (!next.startsWith(prefix)) throw invalidArgument("Pagination URL must target the same Firecrawl job");
+    const query = next.slice(prefix.length);
+    if (!/^skip=[0-9]+(&limit=[0-9]+)?$/.test(query)) throw invalidArgument("Unsupported pagination query; expected skip and optional limit");
+    return path + "?" + query;
+}
+
+/** Validate a submitted URL and return its canonical permission host. */
+export function urlHost(url: string): string {
+    try {
+        if (url.length > 8192 || url.trim() !== url || /[\s\\]/.test(url)) throw invalidArgument("Invalid URL");
+        if (!/^https?:\/\/[^/?#@]+([/?#]|$)/.test(url)) throw invalidArgument("Invalid URL");
+        const parts = parse(url);
+        if ((parts.protocol !== "https" && parts.protocol !== "http") || parts.host.length === 0) throw invalidArgument("Invalid URL");
+        return parts.host;
+    } catch (cause) { throw invalidArgument("Expected an absolute HTTP(S) URL without credentials or whitespace"); }
+}
+
+interface ApiPage { markdown?: string; html?: string; json?: unknown; metadata: unknown; warning?: string; }
+interface ApiScrape { success: boolean; data: ApiPage; }
+interface ApiMap { success: boolean; links: MapLink[]; }
+interface ApiJob { success: boolean; id: string; invalidURLs?: string[]; }
+interface ApiJobPage {
+    status: string; total: number; completed: number; creditsUsed?: number;
+    expiresAt?: string; createdAt?: string; completedAt?: string; duration?: number;
+    error?: string; next?: string; data: ApiPage[];
+}
+
+/** Validate and normalize a scrape envelope. */
+export function normalizeScrapeJson(body: string): Page {
+    try {
+        const data = JSON.parse(body) as ApiScrape;
+        if (!data.success) throw invalidResponse();
+        return pageFrom(data.data);
+    } catch (cause) { throw invalidResponse(); }
+}
+/** Validate URL discovery without trimming results. */
+export function normalizeMapJson(body: string, limit: number): MapResponse {
+    try {
+        const data = JSON.parse(body) as ApiMap;
+        if (!data.success) throw invalidResponse();
+        for (const link of data.links) requireText(link.url, "url");
+        return { links: data.links, limit: limit };
+    } catch (cause) { throw invalidResponse(); }
+}
+/** Validate a submission acknowledgement. */
+export function normalizeJobJson(body: string): Job {
+    try {
+        const data = JSON.parse(body) as ApiJob;
+        if (!data.success) throw invalidResponse();
+        jobPagePath("batch", data.id);
+        const invalidURLs: string[] = data.invalidURLs === null ? [] : data.invalidURLs;
+        return { id: data.id, invalidURLs: invalidURLs };
+    } catch (cause) { throw invalidResponse(); }
+}
+/** Preserve partial results and validate any next-page destination. */
+export function normalizeJobPageJson(body: string, kind: JobKind, jobId: string): JobPage {
+    try {
+        const data = JSON.parse(body) as ApiJobPage;
+        requireText(data.status, "status");
+        integerRange(data.total, 0, 9007199254740991, "total");
+        integerRange(data.completed, 0, 9007199254740991, "completed");
+        if (data.next !== null) jobPagePath(kind, jobId, data.next);
+        const pages: Page[] = [];
+        for (const page of data.data) pages.push(pageFrom(page));
+        return { status: data.status, total: data.total, completed: data.completed,
+            creditsUsed: data.creditsUsed, expiresAt: data.expiresAt, createdAt: data.createdAt,
+            completedAt: data.completedAt, duration: data.duration, error: data.error, next: data.next, data: pages };
+    } catch (cause) { throw invalidResponse(); }
+}
+/** Validate provider page failures and robots exclusions. */
+export function normalizeJobErrorsJson(body: string): JobErrors {
+    try {
+        const data = JSON.parse(body) as JobErrors;
+        for (const error of data.errors) { requireText(error.url, "url"); requireText(error.error, "error"); }
+        return data;
+    } catch (cause) { throw invalidResponse(); }
+}
+/** Validate the current v2 cancellation acknowledgement. */
+export function normalizeCancellationJson(body: string): Cancellation {
+    try {
+        const data = JSON.parse(body) as Cancellation;
+        if (data.status !== "cancelled") throw invalidResponse();
+        return data;
+    } catch (cause) { throw invalidResponse(); }
+}
+
+/** HTTP errors never include response bodies or credentials. Retry-After is advisory only. */
+export function firecrawlHttpError(status: number, retryAfter: string | null = null): FirecrawlError {
+    let code = "http_error";
+    if (status === 400 || status === 422) code = "invalid_request";
+    else if (status === 401) code = "unauthorized";
+    else if (status === 402) code = "quota_exceeded";
+    else if (status === 403) code = "forbidden";
+    else if (status === 404) code = "not_found";
+    else if (status === 429) code = "rate_limited";
+    return new FirecrawlError(code, "Firecrawl request failed: HTTP " + status.toString() + " (" + code + ")", status, retryAfter);
+}
+
+function scrapeFields(options: ScrapeOptions | null): string[] {
+    const opts: ScrapeOptions = options === null ? {} : options;
+    const formats = opts.formats ?? ["markdown"];
+    const encoded: string[] = [];
+    for (const format of formats) {
+        if (format !== "markdown" && format !== "html") throw invalidArgument("formats supports markdown and html");
+        encoded.push(JSON.stringify(format));
+    }
+    const json = opts.json;
+    if (json !== null) {
+        const fields = ['"type":"json"'];
+        if (json.schema !== null) {
+            const schema = JSON.stringify(json.schema);
+            if (!schema.startsWith("{")) throw invalidArgument("json.schema must be an object");
+            fields.push(field("schema", schema));
+        }
+        if (json.prompt !== null) { requireText(json.prompt, "json.prompt"); fields.push(field("prompt", JSON.stringify(json.prompt))); }
+        encoded.push(objectJson(fields));
+    }
+    if (encoded.length === 0) throw invalidArgument("Request at least one output format");
+    const fields = [field("formats", "[" + encoded.join(",") + "]")];
+    addBoolean(fields, "onlyMainContent", opts.onlyMainContent);
+    addBoolean(fields, "storeInCache", opts.storeInCache);
+    addStrings(fields, "includeTags", opts.includeTags);
+    addStrings(fields, "excludeTags", opts.excludeTags);
+    if (opts.maxAge !== null) { integerRange(opts.maxAge, 0, 9007199254740991, "maxAge"); fields.push(field("maxAge", JSON.stringify(opts.maxAge))); }
+    if (opts.timeout !== null) { integerRange(opts.timeout, 1, 300000, "timeout"); fields.push(field("timeout", JSON.stringify(opts.timeout))); }
+    return fields;
+}
+function pageFrom(data: ApiPage): Page {
+    const metadata = data.metadata as PageMetadata;
+    return { sourceURL: metadata.sourceURL, url: metadata.url, title: metadata.title,
+        description: metadata.description, language: metadata.language, statusCode: metadata.statusCode,
+        error: metadata.error, warning: data.warning, markdown: data.markdown, html: data.html,
+        json: data.json, metadata: data.metadata };
+}
+function authHeaders(): Map<string, string> {
+    const key = secrets.get("FIRECRAWL_API_KEY");
+    if (key === null || key.trim().length === 0) throw new FirecrawlError("missing_credentials", "Bind FIRECRAWL_API_KEY before using Firecrawl");
+    const headers = new Map<string, string>();
+    headers.set("Authorization", "Bearer " + key);
+    headers.set("Content-Type", "application/json");
+    headers.set("Accept", "application/json");
+    return headers;
+}
+function requireOk(response: Response): string {
+    if (!response.ok) throw firecrawlHttpError(response.status, response.headers.get("retry-after"));
+    return response.body;
+}
+function addSitemap(fields: string[], mode: SitemapMode | null): void {
+    if (mode === null) return;
+    if (mode !== "include" && mode !== "skip" && mode !== "only") throw invalidArgument("Invalid sitemap mode");
+    fields.push(field("sitemap", JSON.stringify(mode)));
+}
+function addStrings(fields: string[], name: string, values: string[] | null): void {
+    if (values === null) return;
+    integerRange(values.length, 0, 1000, name + " count");
+    for (const value of values) requireText(value, name);
+    fields.push(field(name, JSON.stringify(values)));
+}
+function addBoolean(fields: string[], name: string, value: boolean | null): void {
+    if (value !== null) fields.push(field(name, JSON.stringify(value)));
+}
+function integerRange(value: number, min: number, max: number, name: string): void {
+    if (!Number.isFinite(value) || value !== Math.floor(value) || value < min || value > max) throw invalidArgument(name + " is outside its integer range");
+}
+function requireText(value: string, name: string): void {
+    if (value.trim().length === 0) throw invalidArgument(name + " cannot be empty");
+}
+function field(name: string, json: string): string { return JSON.stringify(name) + ":" + json; }
+function objectJson(fields: string[]): string { return "{" + fields.join(",") + "}"; }
+function invalidArgument(message: string): FirecrawlError { return new FirecrawlError("invalid_argument", message); }
+function invalidResponse(): FirecrawlError { return new FirecrawlError("invalid_response", "Firecrawl returned an invalid response"); }

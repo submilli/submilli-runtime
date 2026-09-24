@@ -1,0 +1,81 @@
+namespace: submilli
+provides:
+- name: firecrawl.dev/batch.start
+  description: Submit once and return promptly. Every requested host is checked before any HTTP request.
+  fields:
+    count:
+      type: number
+    host:
+      type: string
+- name: firecrawl.dev/crawl.start
+  description: Submit a bounded crawl. Scope flags are provider instructions, not a network sandbox.
+  fields:
+    allowExternalLinks:
+      type: boolean
+    allowSubdomains:
+      type: boolean
+    crawlEntireDomain:
+      type: boolean
+    host:
+      type: string
+    limit:
+      type: number
+- name: firecrawl.dev/delegatedFetch
+  description: Discover URLs; the seed host is not a downstream network allowlist.
+  fields: {}
+- name: firecrawl.dev/jobs.cancel
+  description: Cancel one existing job; reading permission does not grant cancellation.
+  fields:
+    jobId:
+      type: string
+    kind:
+      type: string
+- name: firecrawl.dev/jobs.read
+  description: Save one raw status/results envelope to VFS. Inspect status and JSON next explicitly.
+  fields:
+    jobId:
+      type: string
+    kind:
+      type: string
+- name: firecrawl.dev/map
+  description: Discover URLs; the seed host is not a downstream network allowlist.
+  fields:
+    host:
+      type: string
+    includeSubdomains:
+      type: boolean
+    limit:
+      type: number
+- name: firecrawl.dev/scrape
+  description: Retrieve one page. Host constrains the submitted URL, not provider redirects/subresources.
+  fields:
+    host:
+      type: string
+- name: fs.write
+  description: Save one raw status/results envelope to VFS. Inspect status and JSON next explicitly.
+  fields:
+    max_bytes:
+      type: number
+    op:
+      type: string
+    path:
+      type: string
+requires:
+- capability: fs.write
+  filter: op == "download"
+- capability: http.delete
+  filter: host == "api.firecrawl.dev"
+- capability: http.download
+  filter: host == "api.firecrawl.dev"
+- capability: http.get
+  filter: host == "api.firecrawl.dev"
+- capability: http.post
+  filter: host == "api.firecrawl.dev" and path == "/v2/batch/scrape"
+- capability: http.post
+  filter: host == "api.firecrawl.dev" and path == "/v2/crawl"
+- capability: http.post
+  filter: host == "api.firecrawl.dev" and path == "/v2/map"
+- capability: http.post
+  filter: host == "api.firecrawl.dev" and path == "/v2/scrape"
+- capability: secrets.get
+  filter: name == "FIRECRAWL_API_KEY"

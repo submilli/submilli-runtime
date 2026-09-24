@@ -81,3 +81,10 @@ version = "0.1.0"
 description = "Exa web search and known-URL extraction with highlights, typed sources, and per-URL crawl statuses."
 keywords = ["exa", "search", "web", "contents", "research", "llm"]
 path = "packages/exa"
+
+[[package]]
+name = "@submilli/firecrawl"
+version = "0.1.0"
+description = "Firecrawl v2 scraping, URL discovery, and explicit batch/crawl jobs with paginated results and failures."
+keywords = ["firecrawl", "scrape", "map", "crawl", "markdown", "web"]
+path = "packages/firecrawl"

@@ -50,7 +50,8 @@ scaffolding reads this catalog.
 
 ## Verification
 
-Run from the repository root:
+Scope verification to the files changed. Run the full workspace suite only when
+Rust code changes. For Rust changes, run from the repository root:
 
 ```sh
 cargo fmt --all --check
@@ -58,6 +59,18 @@ cargo clippy --workspace --all-targets -- -D warnings
 SUBMILLI_FULL_TEST=1 cargo test --workspace
 cargo run -p submilli -- build test
 ```
+
+For TypeScript package-only changes, run the affected packages' tests and
+documentation examples instead:
+
+```sh
+cargo run -p submilli -- build test -p @submilli/<package>
+```
+
+Run any additional package-specific checks documented by those packages, such as
+blueprint policy tests. Do not run Rust formatting, clippy, or the workspace test
+suite for changes confined to TypeScript packages or documentation. For public
+book changes, use the documentation-site checks below.
 
 Use focused tests while iterating. Interpreter fixtures use assertions to verify
 runtime behavior; compile-error fixtures use `// expect-error: <substring>`.
