@@ -384,6 +384,22 @@ impl<'a> TypeResolver<'a> {
         )
     }
 
+    /// The names of a class's methods, its ancestors' included.
+    pub(super) fn class_method_names(&self, mangled: &MangledName, args: &[Type]) -> Vec<String> {
+        let mut names = Vec::new();
+        super::classes::for_each_class_in_chain(
+            |m| self.sym_by_mangled(m).cloned(),
+            mangled,
+            args,
+            |sym, _| {
+                if let TypeKind::Class { methods, .. } = &sym.kind {
+                    names.extend(methods.keys().cloned());
+                }
+            },
+        );
+        names
+    }
+
     /// True when `name` resolves to an interface that declares methods — the
     /// nominal-only interfaces `interface_data_shape` refuses to expand.
     pub(super) fn interface_has_methods(&self, mangled: &MangledName, name: &str) -> bool {

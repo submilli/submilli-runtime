@@ -66,6 +66,21 @@ class Pt {
   y: number = 2;
 }
 
+interface Guarded {
+  readonly cb: () => number;
+  m(): number;
+}
+interface Open {
+  cb: () => number;
+  m(): number;
+}
+class Impl implements Guarded {
+  cb: () => number = (): number => 1;
+  m(): number {
+    return 2;
+  }
+}
+
 class Square {
   side: number = 2;
   get area(): number {
@@ -120,6 +135,10 @@ function readonlyDeclarations(): void {
   twin = { a: [1], n: 1 };
   twin.n = 5;
   assert(twin.n === 5, "members with the same readonly narrow to one of them");
+
+  let guarded: Guarded | Open | null = null;
+  guarded = new Impl();
+  assert(guarded.m() === 2, "equally specific members narrow to the one keeping the other's readonly");
 
   let shape: HasArea | null = null;
   shape = new Square();

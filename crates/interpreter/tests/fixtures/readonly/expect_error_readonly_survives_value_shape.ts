@@ -2,16 +2,19 @@
 // member, so the declaration's `readonly` survives wherever the value's type
 // puts its own: in a different field, inside a type argument, in a function
 // type's return, inside a recursive or mutually recursive alias, or in a
-// function-valued interface property. A value's own `readonly` survives too: a
-// subclass that makes an inherited field `readonly` keeps it, and of two members
-// differing only in a field's `readonly` neither stands for the value alone.
-// Each of the twelve writes below matches a `tsc --strict` error.
-// expect-error-count: 12
+// function-valued property of an object type, an interface (with or without
+// methods), or a class. A value's own `readonly` survives too: a subclass that
+// makes an inherited field `readonly` keeps it. Of two members differing only in
+// a field's `readonly`, or listing different fields, neither stands for the
+// value alone. Each of the fourteen writes below matches a `tsc --strict` error.
+// expect-error-count: 14
 // expect-error: cannot call `push` on `readonly number[]`
 // expect-error: cannot assign to readonly property `xs`
 // expect-error: cannot assign to readonly property `val`
 // expect-error: cannot assign to readonly field `x` on `Sub`
 // expect-error: cannot assign to readonly property `cb`
+// expect-error: cannot assign to readonly field `f` on `Gadget`
+// expect-error: field `extra` does not exist on all members
 
 interface Record1 {
   readonly id: number;
@@ -48,6 +51,17 @@ class Runner implements Handler {
   }
 }
 type Wrapped = { readonly f: (n: number) => number; tag: number };
+
+class Gadget {
+  readonly f: () => number = (): number => 1;
+  n: number = 0;
+}
+class Widget extends Gadget {
+  f: () => number = (): number => 2;
+  readonly n: number = 3;
+}
+type WithExtra = { readonly id: number; extra?: number };
+type IdOnly = { readonly id: number };
 
 interface Mutable {
   a: number;
@@ -117,4 +131,12 @@ function main(): void {
   let wrapped: Wrapped = { f: (n: number): number => n + 1, tag: 0 };
   wrapped = tagged;
   wrapped.f = (n: number): number => n * 2;
+
+  let gadget: Gadget | null = null;
+  gadget = new Widget();
+  gadget.f = (): number => 5;
+
+  let ids: WithExtra | IdOnly | string = "s";
+  ids = { id: 1 };
+  ids.extra = 5;
 }
