@@ -26,19 +26,6 @@ pub(super) fn non_null_form(ty: Type) -> Option<Type> {
     }
 }
 
-/// A named alias, class, or interface instance's name and type arguments.
-fn named_instance(ty: &Type) -> Option<(&crate::MangledName, &[Type])> {
-    if let Type::Alias { mangled, args, .. } | Type::AliasRef { mangled, args, .. } = ty {
-        return Some((mangled, args));
-    }
-    match ty.peel() {
-        Type::InterfaceRef { mangled, args, .. } | Type::ClassRef { mangled, args, .. } => {
-            Some((mangled, args))
-        }
-        _ => None,
-    }
-}
-
 fn field_member_ty(fields: &BTreeMap<String, ObjectField>, field_name: &str) -> Option<Type> {
     Some(fields.get(field_name)?.read_ty())
 }
@@ -466,9 +453,8 @@ impl<'a> Inferer<'a> {
     /// `written` value. It is the value's own type, as for any write, unless the
     /// declaration has something `readonly` in it: a `readonly` array, field, or
     /// property the declaration names must survive `o = { xs: [1] }`. Then the
-    /// binding narrows to the most specific declared member that accepts the
-    /// value, as TypeScript's assignment narrowing picks declared members, or
-    /// stays at its declared type when no member can stand for the value.
+    /// binding narrows to declared members, as TypeScript's assignment narrowing
+    /// does (see [`Self::declared_member_for`]).
     pub(super) fn assignment_narrowed_ty(&self, declared: &Type, written: Type) -> Type {
         if !self.declares_readonly(declared) {
             return written;
@@ -488,8 +474,11 @@ impl<'a> Inferer<'a> {
         narrowed.map_or_else(|| declared.clone(), Type::union)
     }
 
-    /// The declared member a written `part` narrows its binding to, or `None`
-    /// when no single member can stand for it.
+    /// The declared members a written `part` narrows its binding to: the most
+    /// specific member that accepts it, when that member keeps every `readonly`
+    /// of the value's own, and otherwise all the members that accept it, which is
+    /// TypeScript's answer. `None` when no member accepts it, which only a write
+    /// already reported as an error reaches.
     fn declared_member_for(&self, members: &[&Type], part: Type) -> Option<Type> {
         if narrows_to_itself(&part) {
             return Some(part);
@@ -499,6 +488,9 @@ impl<'a> Inferer<'a> {
             .copied()
             .filter(|member| super::assignable(&part, member, self.resolver()))
             .collect();
+        if accepting.is_empty() {
+            return None;
+        }
         // Members that differ only in `readonly` (`readonly T[] | T[]`) narrow to
         // the readonly one: it permits every read either does, and no write.
         if let Some(readonly) = accepting.iter().find(|m| m.is_readonly_array())
@@ -511,15 +503,10 @@ impl<'a> Inferer<'a> {
                 .iter()
                 .all(|other| super::assignable(candidate, other, self.resolver()))
         });
-        let member = match most_specific {
-            Some(member) => (*member).clone(),
-            None if !accepting.is_empty() => Type::union(accepting.into_iter().cloned().collect()),
-            None => return None,
-        };
-        if self.may_lose_readonly(&part, &member) {
-            return None;
+        match most_specific {
+            Some(member) if !self.may_lose_readonly(&part, member) => Some((*member).clone()),
+            _ => Some(Type::union(accepting.into_iter().cloned().collect())),
         }
-        Some(member)
     }
 
     /// Whether seeing a `part` value as `member` could make writable something
@@ -564,12 +551,11 @@ impl<'a> Inferer<'a> {
             (Type::Union(parts), _) => parts
                 .iter()
                 .any(|p| self.may_lose_readonly_within(p, &member, compared)),
-            (_, Type::Union(_)) => match non_null_form(member.clone()) {
-                Some(only) if !matches!(only.peel(), Type::Union(_)) => {
-                    self.may_lose_readonly_within(&part, &only, compared)
-                }
-                _ => true,
-            },
+            // A write through a union is refused where any member refuses it,
+            // so one member that keeps the `readonly` is enough.
+            (_, Type::Union(members)) => members
+                .iter()
+                .all(|m| self.may_lose_readonly_within(&part, m, compared)),
             (Type::Readonly(p), Type::Readonly(m)) | (Type::Array(p), Type::Array(m)) => {
                 self.may_lose_readonly_within(p, m, compared)
             }
@@ -601,36 +587,16 @@ impl<'a> Inferer<'a> {
         compared: &mut Vec<(Type, Type)>,
     ) -> bool {
         let (Some(part_fields), Some(member_fields)) =
-            (self.fields_of(part), self.fields_of(member))
+            (self.member_shape(part), self.member_shape(member))
         else {
             return true;
         };
         member_fields.iter().any(|(name, m)| {
             part_fields.get(name).is_some_and(|p| {
-                let method = matches!(p.ty.peel(), Type::Function { .. });
-                (p.readonly && !m.readonly && !method)
+                (forbids_data_write(p) && !m.readonly)
                     || self.may_lose_readonly_within(&p.ty, &m.ty, compared)
             })
         })
-    }
-
-    fn fields_of(&self, ty: &Type) -> Option<BTreeMap<String, ObjectField>> {
-        match ty.peel() {
-            Type::Object { fields } => Some(fields.clone()),
-            Type::InterfaceRef {
-                mangled,
-                name,
-                args,
-                ..
-            }
-            | Type::ClassRef {
-                mangled,
-                name,
-                args,
-                ..
-            } => self.structural_form(mangled, name, args),
-            _ => None,
-        }
     }
 
     /// Whether `ty` forbids a write somewhere a value of it can reach: a
@@ -660,40 +626,38 @@ impl<'a> Inferer<'a> {
             Type::AliasRef { args, .. } => args
                 .iter()
                 .any(|arg| self.declares_readonly_within(arg, opened)),
-            Type::InterfaceRef {
-                mangled,
-                name,
-                args,
-                ..
-            }
-            | Type::ClassRef {
-                mangled,
-                name,
-                args,
-                ..
-            } => {
-                if args
-                    .iter()
-                    .any(|arg| self.declares_readonly_within(arg, opened))
-                {
-                    return true;
-                }
-                if opened.contains(mangled) {
-                    return false;
-                }
-                opened.push(mangled.clone());
-                self.structural_form(mangled, name, args)
-                    .is_some_and(|fields| {
-                        fields.values().any(|f| {
-                            // A method is a read-only member of a structural
-                            // form, but not data a write could reach.
-                            let method = matches!(f.ty.peel(), Type::Function { .. });
-                            (f.readonly && !method) || self.declares_readonly_within(&f.ty, opened)
-                        })
-                    })
+            Type::InterfaceRef { .. } | Type::ClassRef { .. } => {
+                self.named_type_declares_readonly(ty.peel(), opened)
             }
             _ => false,
         }
+    }
+
+    fn named_type_declares_readonly(
+        &self,
+        named: &Type,
+        opened: &mut Vec<crate::MangledName>,
+    ) -> bool {
+        let (Type::InterfaceRef { mangled, args, .. } | Type::ClassRef { mangled, args, .. }) =
+            named
+        else {
+            return false;
+        };
+        if args
+            .iter()
+            .any(|arg| self.declares_readonly_within(arg, opened))
+        {
+            return true;
+        }
+        if opened.contains(mangled) {
+            return false;
+        }
+        opened.push(mangled.clone());
+        self.member_shape(named).is_some_and(|fields| {
+            fields
+                .values()
+                .any(|f| forbids_data_write(f) || self.declares_readonly_within(&f.ty, opened))
+        })
     }
 
     /// Uses `ident` as `NarrowedView.binding` so `LocalNarrowRef` reads the existing Wasm slot
@@ -1290,4 +1254,20 @@ fn narrows_to_itself(ty: &Type) -> bool {
             | Type::Error
             | Type::Never
     )
+}
+
+/// A named alias, class, or interface instance's name and type arguments.
+fn named_instance(ty: &Type) -> Option<(&crate::MangledName, &[Type])> {
+    super::assignable::alias_identity(ty).or_else(|| match ty.peel() {
+        Type::InterfaceRef { mangled, args, .. } | Type::ClassRef { mangled, args, .. } => {
+            Some((mangled, args.as_slice()))
+        }
+        _ => None,
+    })
+}
+
+/// Whether a field forbids writing data through it. A method is a read-only
+/// member of a structural form, but not data a write could reach.
+fn forbids_data_write(field: &ObjectField) -> bool {
+    field.readonly && !matches!(field.ty.peel(), Type::Function { .. })
 }

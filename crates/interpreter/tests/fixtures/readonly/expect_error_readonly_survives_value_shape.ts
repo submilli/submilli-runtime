@@ -1,8 +1,8 @@
 // A write narrows a binding with `readonly` in its declaration to the declared
 // member, so the declaration's `readonly` survives wherever the value's type
 // puts its own: in a different field, inside a type argument, in a function
-// type's return, or inside a recursive alias. Each line matches a
-// `tsc --strict` error.
+// type's return, or inside a recursive alias. Each of the six writes below
+// matches a `tsc --strict` error.
 // expect-error-count: 6
 // expect-error: cannot call `push` on `readonly number[]`
 // expect-error: cannot assign to readonly property `xs`

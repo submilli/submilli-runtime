@@ -751,7 +751,7 @@ fn same_alias_instance(left: &Type, right: &Type) -> bool {
             .all(|(left, right)| same_alias_instance(left, right))
 }
 
-fn alias_identity(ty: &Type) -> Option<(&MangledName, &[Type])> {
+pub(super) fn alias_identity(ty: &Type) -> Option<(&MangledName, &[Type])> {
     match ty {
         Type::Alias { mangled, args, .. } | Type::AliasRef { mangled, args, .. } => {
             Some((mangled, args))

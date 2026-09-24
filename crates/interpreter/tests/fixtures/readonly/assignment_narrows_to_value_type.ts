@@ -52,6 +52,29 @@ class TreeNode {
 type Tree = { readonly val: number; kids: Tree[] };
 type Left = { readonly a: number; b: string };
 type Right = { readonly a: number; c: number };
+type Both = { readonly a: number; b: string; c: number };
+type Pair = { readonly id: number; xs: number[] };
+
+class Pt {
+  readonly x: number = 1;
+  y: number = 2;
+}
+
+class Square {
+  side: number = 2;
+  get area(): number {
+    return this.side * this.side;
+  }
+}
+
+interface HasArea {
+  area: number;
+}
+
+interface HasX {
+  x: number;
+  readonly y: number;
+}
 
 function readonlyDeclarations(): void {
   let p: Point | null = null;
@@ -70,6 +93,29 @@ function readonlyDeclarations(): void {
   let o: Left | Right | null = null;
   o = { a: 4, b: "b", c: 5 };
   assert(o.a === 4, "a value both members accept narrows to their union");
+
+  const both: Both = { a: 5, b: "b", c: 6 };
+  let o2: Left | Right | null = null;
+  o2 = both;
+  assert(o2.a === 5, "a value with readonly of its own narrows to the accepting members");
+
+  const frozen: { readonly id: number; readonly xs: number[] } = { id: 7, xs: [] };
+  let pair: Pair | null = null;
+  pair = frozen;
+  assert(pair.id === 7, "a readonly the member drops still narrows away null");
+
+  let hx: HasX | null = null;
+  hx = new Pt();
+  assert(hx.x + hx.y === 3, "a class instance narrows to the interface it is written to");
+
+  let shape: HasArea | null = null;
+  shape = new Square();
+  assert(shape.area === 4, "a getter-only property narrows to the interface");
+
+  const one: { readonly a: number } = { a: 1 };
+  let either: { a: number } | readonly string[] = [];
+  either = one;
+  assert(!Array.isArray(either) && either.a === 1, "an object narrows away a readonly array member");
 
   let node: TreeNode | null = null;
   node = new TreeNode(6);
