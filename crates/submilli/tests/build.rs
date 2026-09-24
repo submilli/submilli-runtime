@@ -823,6 +823,54 @@ fn build_test(project: &Path, home: &Path, extra: &[&str]) -> Output {
 }
 
 #[test]
+fn build_commands_report_unresolved_http_hosts() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = tmp.path().join("project");
+    write_file(
+        &project.join("submilli.toml"),
+        "[[package]]\nname = \"@acme/http\"\nversion = \"0.1.0\"\ndescription = \"HTTP client.\"\n",
+    );
+    for prefix in ["https://api.example.com", "https://api.example.com/"] {
+        write_file(
+            &project.join("src/lib.ts"),
+            &format!(
+                "import {{ get }} from \"submilli:http\";\n\
+                 /** Fetch a relative API path. */\n\
+                 export function fetch(path: string): string {{\n\
+                     return get(\"{prefix}\" + path).body;\n\
+                 }}\n"
+            ),
+        );
+        let host_is_fixed = prefix.ends_with('/');
+        for command in ["check", "publish-local", "test"] {
+            let out = build_subcommand(command, &project, tmp.path(), &[]);
+            assert!(out.status.success(), "{command}: {}", stderr(&out));
+            let diagnostics = stderr(&out);
+            let warning = "cannot statically resolve the host in the URL passed to `http.get`";
+            assert_eq!(
+                diagnostics.matches(warning).count(),
+                usize::from(!host_is_fixed),
+                "{command} with {prefix}: {diagnostics}"
+            );
+            if !host_is_fixed {
+                assert!(diagnostics.contains("src/lib.ts:4:"), "{diagnostics}");
+                assert!(diagnostics.contains("no host capability filter was derived"));
+                assert!(diagnostics.contains("call the HTTP function directly"));
+                assert!(diagnostics.contains("include `/` after the host in the constant prefix"));
+                assert!(diagnostics.contains("`\"https://api.example.com/\" + path`"));
+            }
+            let capabilities = fs::read_to_string(project.join("capabilities.yaml"))
+                .expect("generated capabilities");
+            assert_eq!(
+                capabilities.contains("host == \"api.example.com\""),
+                host_is_fixed,
+                "{command}: {capabilities}"
+            );
+        }
+    }
+}
+
+#[test]
 fn build_test_runs_segments_and_reports_summary() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let project = tmp.path().join("project");

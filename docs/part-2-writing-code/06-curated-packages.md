@@ -19,11 +19,12 @@ standard-library calls: the program gets a value back without `await`.
 
 ## Choose a package
 
-The repository currently contains ten packages. Each name links to its setup
+The repository currently contains eleven packages. Each name links to its setup
 instructions, including the credentials and service permissions it needs.
 
 | Package | Use it for |
 | --- | --- |
+| [`@submilli/brave-search`](https://github.com/submilli/submilli-runtime/tree/main/packages/brave-search) | Web search with pagination and extracted LLM context with source URLs |
 | [`@submilli/github`](https://github.com/submilli/submilli-runtime/tree/main/packages/github) | Repositories, files, commits, issues, pull requests, teams, releases, and search |
 | [`@submilli/gmail`](https://github.com/submilli/submilli-runtime/tree/main/packages/gmail) | Search and triage mail, read messages and threads, manage drafts and labels, send mail, and download attachments |
 | [`@submilli/google-calendar`](https://github.com/submilli/submilli-runtime/tree/main/packages/google-calendar) | Calendars, events, agendas, free/busy queries, and bounded free-time searches |
@@ -121,6 +122,45 @@ with `PermissionDeniedError` for caller `main` and capability `jina.ai/read`,
 before the package sends the request. Installing the package did not make all
 its operations available: search remains denied too, because there is no
 `jina.ai/search` rule.
+
+## Search with Brave
+
+Use `@submilli/brave-search` to discover web pages or retrieve extracted passages
+with source URLs. `search` returns one page of titles, descriptions, and snippets;
+`context` returns passages for grounding an answer. Use Jina's `read` or
+`readJson` when you already have a specific URL to read.
+
+Brave requires an API key. In an existing blueprint directory, install and
+configure the package:
+
+```sh
+submilli install submilli/submilli-runtime @submilli/brave-search
+submilli blueprint add-package @submilli/brave-search --no-capabilities
+submilli blueprint secret add BRAVE_SEARCH_API_KEY --store brave_search_api_key
+submilli secret put brave_search_api_key
+submilli blueprint capability add brave.com/search
+submilli blueprint capability add brave.com/context
+```
+
+Enter the key at the hidden `secret put` prompt. The package reads it internally;
+programs pass only queries and options. Grant only the operations your program
+needs. `add-package` configures the package's underlying HTTP and secret access.
+
+```typescript title="brave-search.ts"
+import { search, context } from "@submilli/brave-search";
+
+function main(): string {
+  const page = search("WasmGC garbage collection", { count: 5 });
+  const passages = context("WasmGC garbage collection", { maxTokens: 2048 });
+  return JSON.stringify({ results: page.items, sources: passages.items });
+}
+```
+
+Search results include a nullable `nextOffset`: pass it as `offset` with the same
+query and count to fetch another page. Offsets count pages, not individual
+results, and pages may overlap. Context token budgets are approximate
+provider-side limits. Keep source URLs with extracted passages for attribution.
+Both operations default to moderate safe search and make no automatic retries.
 
 ## Supply credentials outside the program
 

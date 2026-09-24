@@ -86,6 +86,10 @@ fn unresolved_http_url_warning(span: Span, capability: &str) -> Diagnostic {
             "call the HTTP function directly with a URL literal or a concatenation of \
              string literals and top-level string constants"
                 .to_string(),
+            "when appending a dynamic path, include `/` after the host in the constant prefix, \
+             e.g. `\"https://api.example.com/\" + path` where `path` has no leading slash; \
+             this makes the host boundary statically known"
+                .to_string(),
         ],
         notes: vec![],
     }

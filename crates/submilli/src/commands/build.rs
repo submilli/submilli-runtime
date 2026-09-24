@@ -456,6 +456,7 @@ mod test_runner {
                 return Ok(ExitCode::from(1));
             }
         };
+        super::report_package_warnings(&built);
         super::write_local_capabilities(&manifest, &manifest_dir, &built);
 
         // External (registry) dependencies aren't in `built`; load their wasm

@@ -67,3 +67,10 @@ version = "0.1.0"
 description = "Native Sentry Cloud client for organizations, projects, issues, events, and core issue triage."
 keywords = ["sentry", "errors", "issues", "events", "observability", "api"]
 path = "packages/sentry"
+
+[[package]]
+name = "@submilli/brave-search"
+version = "0.1.0"
+description = "Synchronous Brave web search and extracted LLM context with typed results and source URLs."
+keywords = ["brave", "search", "web", "context", "research", "llm"]
+path = "packages/brave-search"
