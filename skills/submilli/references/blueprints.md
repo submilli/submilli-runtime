@@ -116,7 +116,7 @@ Stdlib gates and their fields, from `submilli blueprint capability list`:
 
 | Capability | Fields |
 | --- | --- |
-| `http.get` `post` `put` `patch` `delete` `head` `options` | `host`, `path`, `method`, `body_size`, `timeout_ms` |
+| `http.get` `post` `put` `patch` `delete` `head` `options` | `host`, `path`, `body_size`, `timeout_ms` |
 | `http.download` | `host`, `url_path`, `vfs_path`, `max_bytes`, `overwrite`, `decompress` |
 | `fs.read` `write` `stat` `list` `mkdir` `remove` `move` `copy` | `op`, `path` (or `from`, `to`), `recursive` |
 | `session.read` `write` `remove` `list` | `op`, `key` or `prefix` |
@@ -158,10 +158,10 @@ permissions:
 
   '@acme/orders':
     - capability: http.get
-      filter: host == "api.acme.com" and method == "GET"
+      filter: host == "api.acme.com"
       action: allow
     - capability: http.post
-      filter: host == "api.acme.com" and method == "POST"
+      filter: host == "api.acme.com"
       action: allow
     - capability: secrets.get
       filter: name == "ORDERS_API_TOKEN"

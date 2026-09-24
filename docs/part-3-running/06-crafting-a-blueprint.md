@@ -62,7 +62,7 @@ warning: blueprint.yaml: package `@acme/billing` requires secret `BILLING_API_KE
 ✓ added @acme/billing to blueprint.yaml
   2 provided capabilities not selected — denied by `default: deny`
   added 2 rules to caller `@acme/billing` (default allow):
-    allow http.get (filter: host == "billing.internal.example.com" and method == "GET")
+    allow http.get (filter: host == "billing.internal.example.com")
     allow secrets.get (filter: name == "BILLING_API_KEY")
 ```
 
@@ -72,7 +72,7 @@ packages:
 permissions:
   '@acme/billing':
   - capability: http.get
-    filter: host == "billing.internal.example.com" and method == "GET"
+    filter: host == "billing.internal.example.com"
     action: allow
   - capability: secrets.get
     filter: name == "BILLING_API_KEY"
@@ -210,6 +210,14 @@ program first needs it.
 to the package, and the program gets what the package returns.
 
 ## Call an endpoint with a credential
+
+HTTP capability filters expose `host`, `path`, `body_size`, and `timeout_ms`.
+The verb is encoded in the capability name (`http.get`, `http.post`, etc.),
+including calls through `http.request(method, …)`. There is no `method` field
+in the capability context. When upgrading an existing blueprint, remove
+redundant `method == "GET"` / `method == "POST"` clauses (and equivalents for
+other verbs), and rebuild packages to refresh their generated capabilities.
+Filters referencing the removed field will no longer match.
 
 Sometimes there is no package, only an HTTP API. The program may call it under
 an `http.get` rule, and the **auth proxy** adds the credential on the way out:
@@ -437,7 +445,7 @@ default: deny
 permissions:
   '@acme/billing':
   - capability: http.get
-    filter: host == "billing.internal.example.com" and method == "GET"
+    filter: host == "billing.internal.example.com"
     action: allow
   - capability: secrets.get
     filter: name == "BILLING_API_KEY"

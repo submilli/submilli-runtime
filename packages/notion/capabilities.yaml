@@ -213,10 +213,10 @@ requires:
 - capability: fs.stat
   filter: op == "stat"
 - capability: http.get
-  filter: host == "api.notion.com" and method == "GET"
+  filter: host == "api.notion.com"
 - capability: http.patch
-  filter: host == "api.notion.com" and method == "PATCH"
+  filter: host == "api.notion.com"
 - capability: http.post
-  filter: host == "api.notion.com" and method == "POST"
+  filter: host == "api.notion.com"
 - capability: secrets.get
   filter: name == "NOTION_ACCESS_TOKEN"

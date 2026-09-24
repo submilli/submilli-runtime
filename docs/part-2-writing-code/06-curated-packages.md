@@ -19,12 +19,13 @@ standard-library calls: the program gets a value back without `await`.
 
 ## Choose a package
 
-The repository currently contains eleven packages. Each name links to its setup
+The repository currently contains twelve packages. Each name links to its setup
 instructions, including the credentials and service permissions it needs.
 
 | Package | Use it for |
 | --- | --- |
 | [`@submilli/brave-search`](https://github.com/submilli/submilli-runtime/tree/main/packages/brave-search) | Web search with pagination and extracted LLM context with source URLs |
+| [`@submilli/exa`](https://github.com/submilli/submilli-runtime/tree/main/packages/exa) | Web search with highlights and known-URL extraction with per-URL outcomes |
 | [`@submilli/github`](https://github.com/submilli/submilli-runtime/tree/main/packages/github) | Repositories, files, commits, issues, pull requests, teams, releases, and search |
 | [`@submilli/gmail`](https://github.com/submilli/submilli-runtime/tree/main/packages/gmail) | Search and triage mail, read messages and threads, manage drafts and labels, send mail, and download attachments |
 | [`@submilli/google-calendar`](https://github.com/submilli/submilli-runtime/tree/main/packages/google-calendar) | Calendars, events, agendas, free/busy queries, and bounded free-time searches |
@@ -161,6 +162,44 @@ query and count to fetch another page. Offsets count pages, not individual
 results, and pages may overlap. Context token budgets are approximate
 provider-side limits. Keep source URLs with extracted passages for attribution.
 Both operations default to moderate safe search and make no automatic retries.
+
+## Retrieve sources with Exa
+
+Use `@submilli/exa` for semantic web search with highlights or batch extraction
+of known URLs. It returns sources for the agent's own reasoning. Brave offers
+web search and query-based context; Jina reads individual pages as Markdown.
+
+In an existing blueprint directory, install the package and bind an Exa key:
+
+```sh
+submilli install submilli/submilli-runtime @submilli/exa
+submilli blueprint add-package @submilli/exa --no-capabilities
+submilli blueprint secret add EXA_API_KEY --store exa_api_key
+submilli secret put exa_api_key
+submilli blueprint capability add exa.ai/search
+submilli blueprint capability add exa.ai/contents --filter 'host == "exa.ai"'
+```
+
+The key is entered at the hidden prompt and read only inside the package.
+The contents grant above permits requested URLs on `exa.ai`; each URL in a
+batch is checked before the request is sent. Adjust it for the hosts the task
+needs. The search grant permits web discovery and does not restrict result hosts.
+
+```typescript title="exa-search.ts"
+import { search, getContents } from "@submilli/exa";
+
+function main(): string {
+  const found = search("WebAssembly garbage collection design");
+  const pages = getContents(["https://exa.ai/docs"]);
+  return JSON.stringify({ results: found.results, pages: pages });
+}
+```
+
+Both calls default to highlights. Request `mode: "text"` for extraction only
+when the task needs broad page context. Additional count, domain, publication,
+character-budget, and cache-freshness controls are opt-in. Always inspect
+`getContents().statuses`: a successful HTTP response can include failed URLs.
+Keep source URLs with passages for attribution.
 
 ## Supply credentials outside the program
 

@@ -1,0 +1,17 @@
+namespace: submilli
+provides:
+- name: exa.ai/contents
+  description: Extract known URLs. Every host must be allowed before any request is sent.
+  fields:
+    host:
+      type: string
+- name: exa.ai/search
+  description: Retrieve web sources with highlights for the calling agent to use.
+  fields: {}
+requires:
+- capability: http.post
+  filter: host == "api.exa.ai" and path == "/contents"
+- capability: http.post
+  filter: host == "api.exa.ai" and path == "/search"
+- capability: secrets.get
+  filter: name == "EXA_API_KEY"

@@ -300,10 +300,7 @@ path = "app"
     let app = built.first().expect("app package built");
 
     assert_eq!(app.capabilities.requires.len(), 1);
-    assert_eq!(
-        app.capabilities.requires[0].filter.as_deref(),
-        Some("method == \"GET\"")
-    );
+    assert_eq!(app.capabilities.requires[0].filter.as_deref(), None);
     assert!(
         app.warnings.iter().any(|warning| warning
             .contains("cannot statically resolve the host in the URL passed to `http.get`")),

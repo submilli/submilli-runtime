@@ -16,8 +16,8 @@ requires:
 - capability: http.download
   filter: host == "s.jina.ai"
 - capability: http.post
-  filter: host == "r.jina.ai" and path == "/" and method == "POST"
+  filter: host == "r.jina.ai" and path == "/"
 - capability: http.post
-  filter: host == "s.jina.ai" and path == "/" and method == "POST"
+  filter: host == "s.jina.ai" and path == "/"
 - capability: secrets.get
   filter: name == "JINA_API_KEY"

@@ -313,16 +313,16 @@ provides:
   fields: {}
 requires:
 - capability: http.delete
-  filter: host == "api.github.com" and method == "DELETE"
+  filter: host == "api.github.com"
 - capability: http.get
-  filter: host == "api.github.com" and method == "GET"
+  filter: host == "api.github.com"
 - capability: http.patch
-  filter: host == "api.github.com" and method == "PATCH"
+  filter: host == "api.github.com"
 - capability: http.post
-  filter: host == "api.github.com" and method == "POST"
+  filter: host == "api.github.com"
 - capability: http.post
-  filter: host == "api.github.com" and path == "/graphql" and method == "POST"
+  filter: host == "api.github.com" and path == "/graphql"
 - capability: http.put
-  filter: host == "api.github.com" and method == "PUT"
+  filter: host == "api.github.com"
 - capability: secrets.get
   filter: name == "GITHUB_TOKEN"

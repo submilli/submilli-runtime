@@ -74,18 +74,18 @@ requires:
 - capability: fs.write
   filter: op == "write"
 - capability: http.delete
-  filter: host == "gmail.googleapis.com" and method == "DELETE"
+  filter: host == "gmail.googleapis.com"
 - capability: http.get
-  filter: host == "gmail.googleapis.com" and method == "GET"
+  filter: host == "gmail.googleapis.com"
 - capability: http.post
-  filter: host == "gmail.googleapis.com" and method == "POST"
+  filter: host == "gmail.googleapis.com"
 - capability: http.post
-  filter: host == "gmail.googleapis.com" and path == "/gmail/v1/users/me/drafts" and method == "POST"
+  filter: host == "gmail.googleapis.com" and path == "/gmail/v1/users/me/drafts"
 - capability: http.post
-  filter: host == "gmail.googleapis.com" and path == "/gmail/v1/users/me/drafts/send" and method == "POST"
+  filter: host == "gmail.googleapis.com" and path == "/gmail/v1/users/me/drafts/send"
 - capability: http.post
-  filter: host == "gmail.googleapis.com" and path == "/gmail/v1/users/me/labels" and method == "POST"
+  filter: host == "gmail.googleapis.com" and path == "/gmail/v1/users/me/labels"
 - capability: http.post
-  filter: host == "gmail.googleapis.com" and path == "/gmail/v1/users/me/messages/send" and method == "POST"
+  filter: host == "gmail.googleapis.com" and path == "/gmail/v1/users/me/messages/send"
 - capability: secrets.get
   filter: name == "GOOGLE_ACCESS_TOKEN"

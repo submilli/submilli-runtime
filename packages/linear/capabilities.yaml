@@ -38,6 +38,6 @@ provides:
   fields: {}
 requires:
 - capability: http.post
-  filter: host == "api.linear.app" and path == "/graphql" and method == "POST"
+  filter: host == "api.linear.app" and path == "/graphql"
 - capability: secrets.get
   filter: name == "LINEAR_API_KEY"

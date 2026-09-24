@@ -74,3 +74,10 @@ version = "0.1.0"
 description = "Synchronous Brave web search and extracted LLM context with typed results and source URLs."
 keywords = ["brave", "search", "web", "context", "research", "llm"]
 path = "packages/brave-search"
+
+[[package]]
+name = "@submilli/exa"
+version = "0.1.0"
+description = "Exa web search and known-URL extraction with highlights, typed sources, and per-URL crawl statuses."
+keywords = ["exa", "search", "web", "contents", "research", "llm"]
+path = "packages/exa"

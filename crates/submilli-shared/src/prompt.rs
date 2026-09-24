@@ -394,11 +394,11 @@ mod tests {
             "    - capability: http.get\n      filter: host glob \"*\"\n      action: allow\n",
         );
         assert_eq!(http_access_phrase(&star), "GET → any host");
-        // a filter that constrains only the method leaves the host unbounded
-        let method_only = blueprint_with(
-            "    - capability: http.post\n      filter: method == \"POST\"\n      action: allow\n",
+        // a filter that constrains only the body size leaves the host unbounded
+        let body_size_only = blueprint_with(
+            "    - capability: http.post\n      filter: body_size < 1000\n      action: allow\n",
         );
-        assert_eq!(http_access_phrase(&method_only), "POST → any host");
+        assert_eq!(http_access_phrase(&body_size_only), "POST → any host");
     }
 
     #[test]

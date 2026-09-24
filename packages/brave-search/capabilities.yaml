@@ -8,6 +8,6 @@ provides:
   fields: {}
 requires:
 - capability: http.get
-  filter: host == "api.search.brave.com" and method == "GET"
+  filter: host == "api.search.brave.com"
 - capability: secrets.get
   filter: name == "BRAVE_SEARCH_API_KEY"

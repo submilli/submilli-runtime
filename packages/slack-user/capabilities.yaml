@@ -77,8 +77,8 @@ requires:
 - capability: http.download
   filter: host == "files.slack.com"
 - capability: http.get
-  filter: host == "slack.com" and method == "GET"
+  filter: host == "slack.com"
 - capability: http.post
-  filter: host == "slack.com" and method == "POST"
+  filter: host == "slack.com"
 - capability: secrets.get
   filter: name == "SLACK_USER_TOKEN"

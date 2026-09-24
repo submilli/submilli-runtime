@@ -50,14 +50,14 @@ provides:
       type: string
 requires:
 - capability: http.delete
-  filter: host == "www.googleapis.com" and method == "DELETE"
+  filter: host == "www.googleapis.com"
 - capability: http.get
-  filter: host == "www.googleapis.com" and method == "GET"
+  filter: host == "www.googleapis.com"
 - capability: http.patch
-  filter: host == "www.googleapis.com" and method == "PATCH"
+  filter: host == "www.googleapis.com"
 - capability: http.post
-  filter: host == "www.googleapis.com" and method == "POST"
+  filter: host == "www.googleapis.com"
 - capability: http.post
-  filter: host == "www.googleapis.com" and path == "/calendar/v3/freeBusy" and method == "POST"
+  filter: host == "www.googleapis.com" and path == "/calendar/v3/freeBusy"
 - capability: secrets.get
   filter: name == "GOOGLE_ACCESS_TOKEN"

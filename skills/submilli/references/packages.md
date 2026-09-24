@@ -63,7 +63,7 @@ Each binding inside `{ }` becomes a field in the schema:
 | `customerId` | Field named after a parameter; its type is the parameter's type |
 | `orderId: $ref` or `owner: $input.teamId` | Bound to a parameter or a path inside it; type is taken from there |
 | `amount: number`, `tags: string[]` | Declared by type when the value is computed, not a parameter |
-| `method: "POST"` | Literal, for fixed context values |
+| `kind: "order"` | Literal, for fixed context values |
 
 Type aliases are peeled to their primitive so filters see `string`, `number`,
 `boolean`, or `string[]`. Name capabilities `<domain>/<resource>.<verb>` or

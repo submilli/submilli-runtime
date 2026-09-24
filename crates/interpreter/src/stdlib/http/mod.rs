@@ -356,7 +356,6 @@ async fn perform_request(
         serde_json::json!({
             "host": host_str.clone(),
             "path": path_str,
-            "method": method,
             "body_size": body.len(),
             "timeout_ms": DEFAULT_TIMEOUT_MS,
         }),
@@ -1397,6 +1396,77 @@ function main(): void {
         assert_eq!(seen[3].method, "DELETE");
         assert_eq!(seen[4].method, "HEAD");
         assert_eq!(seen[5].method, "OPTIONS");
+    }
+
+    struct VerbContextCheck {
+        capability: String,
+    }
+
+    impl SecurityCheck for VerbContextCheck {
+        fn check(
+            &self,
+            caller: &str,
+            capability: &str,
+            context: &serde_json::Value,
+        ) -> CheckOutcome {
+            assert_eq!(caller, "main");
+            assert_eq!(capability, self.capability);
+            assert_eq!(
+                context,
+                &serde_json::json!({
+                    "host": "example.test",
+                    "path": "/resource",
+                    "body_size": 0,
+                    "timeout_ms": super::DEFAULT_TIMEOUT_MS,
+                })
+            );
+            CheckOutcome::Allow
+        }
+    }
+
+    #[tokio::test]
+    async fn direct_and_generic_requests_use_verb_capabilities_without_method_field() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        for verb in ["get", "post", "put", "patch", "delete", "head", "options"] {
+            for call in [
+                format!("{verb}(\"https://example.test/resource\")"),
+                format!("request(\"{verb}\", \"https://example.test/resource\")"),
+            ] {
+                let source = format!(
+                    "import {{ {verb}, request }} from \"submilli:http\";\n\
+                     function main(): void {{ {call}; }}"
+                );
+                let (mock, result) = run_download_with_mock(
+                    &source,
+                    vec![ok_response(200, "")],
+                    Some(Arc::new(VerbContextCheck {
+                        capability: format!("http.{verb}"),
+                    })),
+                    tmp.path(),
+                )
+                .await;
+                result.expect("request allowed");
+                let seen = mock.seen.lock().unwrap();
+                assert_eq!(seen.len(), 1);
+                assert_eq!(seen[0].method, verb.to_ascii_uppercase());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn generic_request_checks_normalized_verb_before_transport() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let source = r#"
+            import { request } from "submilli:http";
+            function main(): void {
+                request("pOsT", "https://example.test/resource");
+            }
+        "#;
+        let (mock, result) =
+            run_download_with_mock(source, vec![], Some(Arc::new(DenyAllHttp)), tmp.path()).await;
+        let error = result.expect_err("request denied");
+        assert!(error.contains("http.post"), "{error}");
+        assert!(mock.seen.lock().unwrap().is_empty());
     }
 
     struct RecordingCheck {

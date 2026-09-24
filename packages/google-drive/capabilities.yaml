@@ -85,16 +85,16 @@ requires:
 - capability: fs.write
   filter: op == "download"
 - capability: http.delete
-  filter: host == "www.googleapis.com" and method == "DELETE"
+  filter: host == "www.googleapis.com"
 - capability: http.download
   filter: host == "www.googleapis.com"
 - capability: http.get
-  filter: host == "www.googleapis.com" and method == "GET"
+  filter: host == "www.googleapis.com"
 - capability: http.patch
-  filter: host == "www.googleapis.com" and method == "PATCH"
+  filter: host == "www.googleapis.com"
 - capability: http.post
-  filter: host == "www.googleapis.com" and method == "POST"
+  filter: host == "www.googleapis.com"
 - capability: http.put
-  filter: host == "www.googleapis.com" and method == "PUT"
+  filter: host == "www.googleapis.com"
 - capability: secrets.get
   filter: name == "GOOGLE_ACCESS_TOKEN"

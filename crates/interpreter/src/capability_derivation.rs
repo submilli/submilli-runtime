@@ -374,14 +374,14 @@ mod tests {
     #[test]
     fn url_host_and_path_extracted_from_literal() {
         let (ta, tag, params, args) = first_doc_capability(
-            "/** @capability http.post { host: $url.host, path: $url.path, method: \"POST\" } */\n\
+            "/** @capability http.post { host: $url.host, path: $url.path } */\n\
              function callee(url: string): void { }\n\
              function main(): void { callee(\"https://r.jina.ai/read\"); }\n",
         );
         let derived = derive_call_site_capability(&tag, &params, &ta, &args);
         assert_eq!(
             derived.filter.as_deref(),
-            Some("host == \"r.jina.ai\" and path == \"/read\" and method == \"POST\"")
+            Some("host == \"r.jina.ai\" and path == \"/read\"")
         );
         assert!(derived.warnings.is_empty(), "{:?}", derived.warnings);
     }
@@ -419,7 +419,7 @@ mod tests {
     #[test]
     fn constant_url_prefix_folds_only_the_host_filter() {
         let (ta, tag, params, args) = first_doc_capability(
-            "/** @capability http.get { host: $url.host, path: $url.path, method: \"GET\" } */\n\
+            "/** @capability http.get { host: $url.host, path: $url.path } */\n\
              function callee(url: string): void { }\n\
              const API: string = \"https://api.example.com/v1/\";\n\
              function main(path: string): void { callee(API + path); }\n",
@@ -427,7 +427,7 @@ mod tests {
         let derived = derive_call_site_capability(&tag, &params, &ta, &args);
         assert_eq!(
             derived.filter.as_deref(),
-            Some("host == \"api.example.com\" and method == \"GET\"")
+            Some("host == \"api.example.com\"")
         );
         assert!(derived.warnings.is_empty(), "{:?}", derived.warnings);
     }
@@ -448,14 +448,14 @@ mod tests {
     #[test]
     fn http_helper_result_is_not_folded_and_gets_one_targeted_warning() {
         let (ta, tag, params, args) = first_doc_capability(
-            "/** @capability http.get { host: $url.host, path: $url.path, method: \"GET\" } */\n\
+            "/** @capability http.get { host: $url.host, path: $url.path } */\n\
              function callee(url: string): void { }\n\
              const ORIGIN: string = \"https://api.example.com\";\n\
              function endpoint(): string { return ORIGIN + \"/v1/items\"; }\n\
              function main(): void { callee(endpoint()); }\n",
         );
         let derived = derive_call_site_capability(&tag, &params, &ta, &args);
-        assert_eq!(derived.filter.as_deref(), Some("method == \"GET\""));
+        assert_eq!(derived.filter.as_deref(), None);
         assert_eq!(derived.warnings.len(), 1);
         assert!(
             derived.warnings[0]

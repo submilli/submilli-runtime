@@ -232,8 +232,9 @@ fn documented_real_service_package_and_blueprint_agree() {
     );
     let schema = fs::read_to_string(root.path().join("package/capabilities.yaml")).unwrap();
     for expected in [
-        "host == \"api.acme.com\" and method == \"GET\"",
-        "host == \"api.acme.com\" and method == \"POST\"",
+        "host == \"api.acme.com\"",
+        "capability: http.get",
+        "capability: http.post",
         "name == \"ORDERS_API_TOKEN\"",
         "totalCents:\n      type: number",
     ] {

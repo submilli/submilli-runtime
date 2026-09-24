@@ -180,7 +180,6 @@ const GIT: &[Capability] = &[
 const HTTP_VERB_FIELDS: &[FilterField] = &[
     field("host", "string", "Destination host, without port"),
     field("path", "string", "URL path component"),
-    field("method", "string", "HTTP method, uppercase"),
     field("body_size", "number", "Request body size in bytes"),
     field("timeout_ms", "number", "Request timeout in milliseconds"),
 ];
@@ -191,7 +190,7 @@ const HTTP: &[Capability] = &[
         main_denial: None,
         summary: "HTTP GET",
         filter_fields: HTTP_VERB_FIELDS,
-        example_filter: "host == \"api.example.com\" and method == \"GET\"",
+        example_filter: "host == \"api.example.com\"",
     },
     Capability {
         name: "http.post",

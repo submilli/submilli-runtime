@@ -89,8 +89,8 @@ provides:
       type: string
 requires:
 - capability: http.get
-  filter: host == "slack.com" and method == "GET"
+  filter: host == "slack.com"
 - capability: http.post
-  filter: host == "slack.com" and method == "POST"
+  filter: host == "slack.com"
 - capability: secrets.get
   filter: name == "SLACK_BOT_TOKEN"
