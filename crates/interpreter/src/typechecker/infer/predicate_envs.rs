@@ -167,6 +167,16 @@ impl<'a> Inferer<'a> {
                 operand,
             } => self.condition_can_be(operand, !outcome),
             TypedExprKind::Narrowed { inner, .. } => self.condition_can_be(inner, outcome),
+            // A type guard proves its predicate only when it returns true.
+            TypedExprKind::Call { .. }
+            | TypedExprKind::CallClosure { .. }
+            | TypedExprKind::GenericCall { .. }
+            | TypedExprKind::MethodCall { .. }
+            | TypedExprKind::GenericMethodCall { .. }
+                if !outcome =>
+            {
+                true
+            }
             _ => {
                 // Unfiltered: dropping unemittable views could drop the empty one.
                 let (true_env, false_env) = self.predicate_envs_unfiltered(cond_expr_id);

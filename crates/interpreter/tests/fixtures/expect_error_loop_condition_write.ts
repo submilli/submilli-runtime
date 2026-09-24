@@ -1,7 +1,7 @@
 // A loop condition is checked where the state before the loop meets every
 // back edge, so a read it makes before its own write sees what the body left.
 // Each line below is an error `tsc --strict` reports too.
-// expect-error-count: 10
+// expect-error-count: 11
 // expect-error: cannot read field `toFixed` on non-object type `number | string`
 // expect-error: cannot read field `length` on non-object type `5 | string`
 // expect-error: expected `number`, got `string`
@@ -105,8 +105,26 @@ function eitherSideHolds(): void {
   }
 }
 
+function isWord(u: string | number): u is string {
+  return typeof u === "string" && u.length > 0;
+}
+
+// A type guard that returns false proves nothing, so `!isWord(v)` can hold again.
+function negatedGuardCanHoldAgain(): void {
+  let x: string | number | null = "a";
+  x = "a";
+  let v: string | number = 1;
+  v = 1;
+  while (!isWord(v)) {
+    const s: string = x;
+    x = 5;
+    v = "";
+  }
+}
+
 function main(): void {
   noReset();
+  negatedGuardCanHoldAgain();
   eitherSideHolds();
   guardSeesWhatTheBodyLeft();
   readBeforeWriteWithoutBackEdge();
