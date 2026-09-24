@@ -2059,7 +2059,9 @@ fn widen_entry_to_cover_next_pass(
             continue;
         }
         let single = |view: &narrowing::NarrowedView| {
-            narrowing::NarrowEnv::from([(path.clone(), view.clone())])
+            let mut env = narrowing::NarrowEnv::new();
+            env.insert(path.clone(), view.clone());
+            env
         };
         let joined = narrowing::union_envs(
             single(&view),
@@ -2068,7 +2070,7 @@ fn widen_entry_to_cover_next_pass(
             Default::default(),
         )
         .0;
-        entry_env.extend(joined);
+        entry_env.extend_env(joined);
     }
     !falsified.is_empty()
 }
@@ -2273,7 +2275,7 @@ impl Inferer<'_> {
         let (true_env, _) = self.predicate_envs(typed_condition);
         let after = self.condition_can_hold(typed_condition).then(|| {
             let mut after = self.snapshot_active_narrowings(0).0;
-            after.extend(true_env);
+            after.extend_env(true_env);
             after
         });
         let writes = self.leave_loop_head();
@@ -2406,7 +2408,7 @@ impl Inferer<'_> {
         self.check_condition_ty(&ty, cond_span);
         let (_, false_env) = self.predicate_envs(typed);
         let mut exit = self.snapshot_active_narrowings(0).0;
-        exit.extend(false_env);
+        exit.extend_env(false_env);
         let condition_assigned = self.leave_loop_head();
         self.merge_assigned_into_outer(condition_assigned, cond_span);
         let natural = (!cond_is_static_true(self, typed)).then_some(exit);

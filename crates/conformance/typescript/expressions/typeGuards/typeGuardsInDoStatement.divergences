@@ -1,4 +1,4 @@
-types: 26 of 45 tsc entries compared, 7 differ
+types: 26 of 45 tsc entries compared, 8 differ
 
 line 6: x
   tsc:  string | true
@@ -27,3 +27,7 @@ line 18: x
 line 26: x
   tsc:  string | number
   ours: null
+
+line 27: x
+  tsc:  string | number
+  ours: string | null
