@@ -446,6 +446,19 @@ impl Inferer<'_> {
                 type_predicate,
                 body,
             } => self.infer_arrow(params, return_type, type_predicate, body, expected, span),
+            ExprKind::Delete { operand } => {
+                // An object can't record one of its fields as absent unless it
+                // was built with that field optional: other objects share one
+                // immutable names array per shape (SUB-971). The operand is still
+                // inferred, so its own errors surface.
+                self.infer_expr(operand, None);
+                self.error_with_help(
+                    span,
+                    "the `delete` operator is not supported".into(),
+                    vec!["type the field `T | null` and assign `null` to clear it".into()],
+                );
+                (TypedExprKind::Null, Type::Error)
+            }
             ExprKind::Typeof { operand: _ } => {
                 // Reaching `Typeof` here means it didn't get folded by
                 // `try_typeof_fold` in `infer_binary` — i.e. it's used

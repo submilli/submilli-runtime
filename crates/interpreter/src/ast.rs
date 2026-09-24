@@ -71,6 +71,11 @@ pub enum ExprKind {
     Typeof {
         operand: ExprId,
     },
+    /// `delete o.x` — parsed so the typechecker can reject it by name rather than
+    /// as a stray identifier; never appears in the typed AST.
+    Delete {
+        operand: ExprId,
+    },
     /// `new Foo(args)`. Lowered to `TypedExprKind::MethodCall` by the typechecker; codegen never sees this variant.
     New {
         callee: ExprId,
