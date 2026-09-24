@@ -96,8 +96,8 @@ class Item {
     return "item";
   }
 }
-type Point2 = { readonly a: number; b: number };
-type Point3 = { readonly a: number; b: number };
+type PointTwinA = { readonly a: number; b: number };
+type PointTwinB = { readonly a: number; b: number };
 
 class Square {
   side: number = 2;
@@ -162,7 +162,7 @@ function readonlyDeclarations(): void {
   item = new Item();
   assert(item.describe() === "item" && item.id === 7, "a member listing fewer fields stands for the others");
 
-  let points: Point2[] | Point3[] | string = "s";
+  let points: PointTwinA[] | PointTwinB[] | string = "s";
   points = [{ a: 1, b: 2 }];
   points.push({ a: 3, b: 4 });
   assert(points.length === 2 && points[1].b === 4, "array twins narrow to one of them");

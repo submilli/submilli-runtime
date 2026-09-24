@@ -540,20 +540,60 @@ impl<'a> Inferer<'a> {
         })
     }
 
-    /// Whether every field `narrow` lists, `wide` lists too, looking through
-    /// arrays, tuples, and what a function returns.
-    fn fields_within(&self, narrow: &Type, wide: &Type) -> bool {
-        match (narrow.peel(), wide.peel()) {
-            (Type::Array(n), Type::Array(w))
-            | (Type::Function { ret: n, .. }, Type::Function { ret: w, .. }) => {
-                self.fields_within(n, w)
+    /// Whether every field `candidate` lists, `other` lists too, at any depth:
+    /// inside each shared field, array element, tuple element, and function
+    /// return.
+    fn fields_within(&self, candidate: &Type, other: &Type) -> bool {
+        self.fields_within_compared(candidate, other, &mut Vec::new())
+    }
+
+    /// `compared` holds the pairs already met; meeting one again adds nothing,
+    /// which keeps a recursive type finite.
+    fn fields_within_compared(
+        &self,
+        candidate: &Type,
+        other: &Type,
+        compared: &mut Vec<(Type, Type)>,
+    ) -> bool {
+        let pair = (candidate.clone(), other.clone());
+        if compared.contains(&pair) {
+            return true;
+        }
+        compared.push(pair);
+        match (candidate.peel(), other.peel()) {
+            (Type::Array(c), Type::Array(o))
+            | (Type::Function { ret: c, .. }, Type::Function { ret: o, .. }) => {
+                self.fields_within_compared(c, o, compared)
             }
-            (Type::Tuple(ns), Type::Tuple(ws)) => {
-                ns.len() == ws.len() && ns.iter().zip(ws).all(|(n, w)| self.fields_within(n, w))
+            (Type::Tuple(cs), Type::Tuple(os)) => {
+                cs.len() == os.len()
+                    && cs
+                        .iter()
+                        .zip(os)
+                        .all(|(c, o)| self.fields_within_compared(c, o, compared))
             }
-            _ => match (self.member_shape(narrow), self.member_shape(wide)) {
-                (Some(narrow), Some(wide)) => narrow.keys().all(|name| wide.contains_key(name)),
-                (narrow, wide) => narrow.is_none() && wide.is_none(),
+            // Each alternative on either side must meet one on the other that
+            // it lists no more fields than, or that lists no more than it.
+            (Type::Union(cs), Type::Union(os)) => {
+                cs.iter().all(|c| {
+                    os.iter()
+                        .any(|o| self.fields_within_compared(c, o, compared))
+                }) && os.iter().all(|o| {
+                    cs.iter()
+                        .any(|c| self.fields_within_compared(c, o, compared))
+                })
+            }
+            (Type::Union(_), _) | (_, Type::Union(_)) => false,
+            _ => match (self.member_shape(candidate), self.member_shape(other)) {
+                (Some(candidate_fields), Some(other_fields)) => {
+                    candidate_fields.iter().all(|(name, field)| {
+                        other_fields.get(name).is_some_and(|other_field| {
+                            self.fields_within_compared(&field.ty, &other_field.ty, compared)
+                        })
+                    })
+                }
+                (None, None) => true,
+                _ => false,
             },
         }
     }

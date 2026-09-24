@@ -6,9 +6,10 @@
 // methods), or a class. A value's own `readonly` survives too: a subclass that
 // makes an inherited field `readonly` keeps it. Of two members differing only in
 // a field's `readonly`, neither stands for the value alone, and of two differing
-// in their fields, the one listing fewer does. Each of the fourteen writes below
+// in their fields, the one listing fewer does, at any depth: inside a field's
+// object type and inside a nullable element. Each of the sixteen writes below
 // matches a `tsc --strict` error.
-// expect-error-count: 14
+// expect-error-count: 16
 // expect-error: cannot call `push` on `readonly number[]`
 // expect-error: cannot assign to readonly property `xs`
 // expect-error: cannot assign to readonly property `val`
@@ -16,6 +17,7 @@
 // expect-error: cannot assign to readonly property `cb`
 // expect-error: cannot assign to readonly field `f` on `Gadget`
 // expect-error: no field `extra` on type `IdOnly`
+// expect-error: no field `y`
 
 interface Record1 {
   readonly id: number;
@@ -63,6 +65,17 @@ class Widget extends Gadget {
 }
 type WithExtra = { readonly id: number; extra?: number };
 type IdOnly = { readonly id: number };
+
+interface Roomy {
+  readonly id: number;
+  p: { x: number; y?: number };
+}
+interface Tight {
+  readonly id: number;
+  p: { x: number };
+}
+type Wide = { x: number; y?: number };
+type Narrow = { x: number };
 
 interface Mutable {
   a: number;
@@ -140,4 +153,17 @@ function main(): void {
   let ids: WithExtra | IdOnly | string = "s";
   ids = { id: 1 };
   ids.extra = 5;
+
+  let nested: Tight | Roomy | string = "s";
+  nested = { id: 1, p: { x: 1 } };
+  nested.p.y = 41;
+
+  const wideList: readonly (Wide | null)[] = [{ x: 1 }];
+  let lists: readonly (Wide | null)[] | readonly (Narrow | null)[] = wideList;
+  const narrowList: readonly (Narrow | null)[] = [{ x: 3 }];
+  lists = narrowList;
+  const first = lists[0];
+  if (first !== null) {
+    first.y = 4;
+  }
 }
