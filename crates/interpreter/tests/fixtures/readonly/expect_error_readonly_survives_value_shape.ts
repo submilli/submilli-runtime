@@ -5,8 +5,8 @@
 // function-valued interface property. A value's own `readonly` survives too: a
 // subclass that makes an inherited field `readonly` keeps it, and of two members
 // differing only in a field's `readonly` neither stands for the value alone.
-// Each of the ten writes below matches a `tsc --strict` error.
-// expect-error-count: 10
+// Each of the twelve writes below matches a `tsc --strict` error.
+// expect-error-count: 12
 // expect-error: cannot call `push` on `readonly number[]`
 // expect-error: cannot assign to readonly property `xs`
 // expect-error: cannot assign to readonly property `val`
@@ -37,6 +37,18 @@ class Sub extends Base {
 interface Callback {
   readonly cb: () => number;
 }
+interface Handler {
+  readonly f: () => number;
+  run(): number;
+}
+class Runner implements Handler {
+  f: () => number = (): number => 1;
+  run(): number {
+    return 2;
+  }
+}
+type Wrapped = { readonly f: (n: number) => number; tag: number };
+
 interface Mutable {
   a: number;
 }
@@ -93,4 +105,16 @@ function main(): void {
   let either: Mutable | Frozen | null = null;
   either = plain;
   either.a = 5;
+
+  let handler: Handler | null = null;
+  handler = new Runner();
+  handler.f = (): number => 5;
+
+  const tagged: { f: (n: number) => number; readonly tag: number } = {
+    f: (n: number): number => n,
+    tag: 1,
+  };
+  let wrapped: Wrapped = { f: (n: number): number => n + 1, tag: 0 };
+  wrapped = tagged;
+  wrapped.f = (n: number): number => n * 2;
 }

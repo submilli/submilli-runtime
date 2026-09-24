@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    ExprId, Ident, MangledName, ObjectField, Span, StmtId, Type, TypedExpr, TypedStmt,
+    ExprId, Ident, MangledName, ObjectField, Span, StmtId, Type, TypeKind, TypedExpr, TypedStmt,
     TypedStmtKind, ValueKind,
 };
 
@@ -475,12 +475,14 @@ impl<'a> Inferer<'a> {
         narrowed.map_or_else(|| declared.clone(), Type::union)
     }
 
-    /// What a written `part` narrows its binding to: the value itself for a
-    /// primitive or literal, and otherwise the one most specific declared
-    /// member that accepts it, when that member keeps every `readonly` of the
-    /// value's own. Failing that, the value's own type when it keeps every
-    /// `readonly` of the member's, and otherwise all the members that accept
-    /// it, which is TypeScript's answer.
+    /// What a written `part` narrows its binding to, in order:
+    /// - a primitive or literal: itself;
+    /// - members differing only in `readonly` (`readonly T[] | T[]`): the readonly one;
+    /// - the most specific accepting member, when it keeps every `readonly` of
+    ///   the value's own;
+    /// - a subclass instance's own class, when an ancestor class is that member;
+    /// - otherwise every accepting member, which is TypeScript's answer.
+    ///
     /// `None` when no member accepts it, which only a write already reported as
     /// an error reaches.
     fn narrowed_part(&self, members: &[&Type], part: Type) -> Option<Type> {
@@ -502,20 +504,37 @@ impl<'a> Inferer<'a> {
         {
             return Some((*readonly).clone());
         }
-        // Two members assignable to each other (`{ a } | { readonly a }`) are
-        // equally specific, and neither may stand for the value alone.
-        let mut most_specific = accepting.iter().filter(|candidate| {
-            accepting
-                .iter()
-                .all(|other| super::assignable(candidate, other, self.resolver()))
+        let most_specific: Vec<&Type> = accepting
+            .iter()
+            .copied()
+            .filter(|candidate| {
+                accepting
+                    .iter()
+                    .all(|other| super::assignable(candidate, other, self.resolver()))
+            })
+            .collect();
+        // Members assignable to each other are equally specific. One may stand
+        // for the rest only when their `readonly` agrees (`{ a } | { readonly a }`
+        // cannot pick either).
+        let first = most_specific.first().copied();
+        let unique = first.filter(|first| {
+            most_specific.iter().all(|other| {
+                !self.may_lose_readonly(first, other) && !self.may_lose_readonly(other, first)
+            })
         });
-        match (most_specific.next(), most_specific.next()) {
-            (Some(member), None) if !self.may_lose_readonly(&part, member) => {
-                Some((*member).clone())
+        match unique {
+            Some(member) if !self.may_lose_readonly(&part, member) => Some((*member).clone()),
+            // A subclass instance seen as an ancestor keeps what it makes
+            // `readonly` of the ancestor's fields only as its own class, which
+            // has every field and method of the ancestor.
+            Some(member)
+                if matches!(
+                    (part.peel(), member.peel()),
+                    (Type::ClassRef { .. }, Type::ClassRef { .. })
+                ) && !self.may_lose_readonly(member, &part) =>
+            {
+                Some(part)
             }
-            // The value's own type keeps every `readonly` the member has, and
-            // its own besides.
-            (Some(member), None) if !self.may_lose_readonly(member, &part) => Some(part),
             _ => Some(Type::union(accepting.into_iter().cloned().collect())),
         }
     }
@@ -599,9 +618,10 @@ impl<'a> Inferer<'a> {
         else {
             return true;
         };
+        let part_methods = self.interface_method_names(part.peel());
         member_fields.iter().any(|(name, m)| {
             part_fields.get(name).is_some_and(|p| {
-                (forbids_data_write(p) && !m.readonly)
+                (field_forbids_write(part.peel(), &part_methods, name, p) && !m.readonly)
                     || self.may_lose_readonly_within(&p.ty, &m.ty, compared)
             })
         })
@@ -629,18 +649,12 @@ impl<'a> Inferer<'a> {
                 .iter()
                 .chain(std::iter::once(ret.as_ref()))
                 .any(|part| self.declares_readonly_within(part, opened)),
-            Type::AliasRef { mangled, args, .. } => {
+            Type::AliasRef { mangled, args, .. }
+            | Type::InterfaceRef { mangled, args, .. }
+            | Type::ClassRef { mangled, args, .. } => {
                 self.args_declare_readonly(args, opened)
                     || (self.open_once(mangled, opened)
-                        && self.declares_readonly_within(
-                            &super::assignable::expand_alias_ref(ty, self.resolver()),
-                            opened,
-                        ))
-            }
-            Type::InterfaceRef { mangled, args, .. } | Type::ClassRef { mangled, args, .. } => {
-                self.args_declare_readonly(args, opened)
-                    || (self.open_once(mangled, opened)
-                        && self.named_type_declares_readonly(ty.peel(), opened))
+                        && self.body_declares_readonly(ty.peel_preserving_readonly(), opened))
             }
             _ => false,
         }
@@ -661,29 +675,34 @@ impl<'a> Inferer<'a> {
         true
     }
 
-    /// Whether a named class or interface instance's members forbid a write.
-    fn named_type_declares_readonly(&self, named: &Type, opened: &mut Vec<MangledName>) -> bool {
+    /// Whether a named type's body forbids a write: a recursive alias's
+    /// expansion, or a class's or interface's members.
+    fn body_declares_readonly(&self, named: &Type, opened: &mut Vec<MangledName>) -> bool {
+        if let Type::AliasRef { .. } = named {
+            let body = super::assignable::expand_alias_ref(named, self.resolver());
+            return self.declares_readonly_within(&body, opened);
+        }
         let Some(fields) = self.member_shape(named) else {
             return false;
         };
-        // An interface lists its properties apart from its methods, so a
-        // `readonly` function-valued property forbids writes as any other does.
-        let interface_properties = match named {
-            Type::InterfaceRef {
-                mangled,
-                name,
-                args,
-                ..
-            } => self.interface_data_shape(mangled, name, args),
-            _ => None,
-        };
+        let interface_methods = self.interface_method_names(named);
         fields.iter().any(|(field_name, field)| {
-            let readonly = match &interface_properties {
-                Some(properties) => properties.get(field_name).is_some_and(|p| p.readonly),
-                None => forbids_data_write(field),
-            };
-            readonly || self.declares_readonly_within(&field.ty, opened)
+            field_forbids_write(named, &interface_methods, field_name, field)
+                || self.declares_readonly_within(&field.ty, opened)
         })
+    }
+
+    /// An interface lists its methods apart from its properties, so a
+    /// `readonly` function-valued property forbids writes as any other does.
+    /// `None` for anything but an interface.
+    fn interface_method_names(&self, named: &Type) -> Option<Vec<String>> {
+        let Type::InterfaceRef { mangled, name, .. } = named else {
+            return None;
+        };
+        match &self.lookup_structural_type(mangled, name)?.kind {
+            TypeKind::Interface { methods, .. } => Some(methods.keys().cloned().collect()),
+            _ => None,
+        }
     }
 
     /// Uses `ident` as `NarrowedView.binding` so `LocalNarrowRef` reads the existing Wasm slot
@@ -1292,8 +1311,23 @@ fn named_instance(ty: &Type) -> Option<(&MangledName, &[Type])> {
     })
 }
 
-/// Whether a field forbids writing data through it. A method is a read-only
-/// member of a structural form, but not data a write could reach.
-fn forbids_data_write(field: &ObjectField) -> bool {
-    field.readonly && !matches!(field.ty.peel(), Type::Function { .. })
+/// Whether `owner`'s field `name` forbids writing data through it. A method is
+/// a read-only member of a structural form, but not data a write could reach.
+/// An object type has no methods, and an interface lists its methods (in
+/// `interface_methods`) apart from its properties, so only a class's
+/// function-typed members are taken for methods.
+fn field_forbids_write(
+    owner: &Type,
+    interface_methods: &Option<Vec<String>>,
+    name: &str,
+    field: &ObjectField,
+) -> bool {
+    if !field.readonly {
+        return false;
+    }
+    match (owner, interface_methods) {
+        (Type::Object { .. }, _) => true,
+        (_, Some(methods)) => !methods.iter().any(|method| method == name),
+        _ => !matches!(field.ty.peel(), Type::Function { .. }),
+    }
 }

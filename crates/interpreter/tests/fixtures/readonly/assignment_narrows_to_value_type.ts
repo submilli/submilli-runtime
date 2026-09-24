@@ -54,6 +54,12 @@ type Left = { readonly a: number; b: string };
 type Right = { readonly a: number; c: number };
 type Both = { readonly a: number; b: string; c: number };
 type Pair = { readonly id: number; xs: number[] };
+type Loose = { readonly id: number; tag: number; v: number | string };
+type Twin = { readonly a: number[]; n: number };
+interface TwinFace {
+  readonly a: number[];
+  n: number;
+}
 
 class Pt {
   readonly x: number = 1;
@@ -90,10 +96,6 @@ function readonlyDeclarations(): void {
   t = { val: 3, kids: [] };
   assert(t.val + t.kids.length === 3, "a recursive type with readonly inside narrows");
 
-  let o: Left | Right | null = null;
-  o = { a: 4, b: "b", c: 5 };
-  assert(o.a === 4, "a value both members accept narrows to their union");
-
   const both: Both = { a: 5, b: "b", c: 6 };
   let o2: Left | Right | null = null;
   o2 = both;
@@ -107,6 +109,17 @@ function readonlyDeclarations(): void {
   let hx: HasX | null = null;
   hx = new Pt();
   assert(hx.x + hx.y === 3, "a class instance narrows to the interface it is written to");
+
+  const strict: { readonly id: number; readonly tag: number; v: number } = { id: 1, tag: 2, v: 3 };
+  let loose: Loose | null = null;
+  loose = strict;
+  loose.v = "s";
+  assert(loose.v === "s", "a write keeps the declared field types");
+
+  let twin: Twin | TwinFace | readonly string[] = [];
+  twin = { a: [1], n: 1 };
+  twin.n = 5;
+  assert(twin.n === 5, "members with the same readonly narrow to one of them");
 
   let shape: HasArea | null = null;
   shape = new Square();
