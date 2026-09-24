@@ -25,7 +25,7 @@ async fn get(uri: &str) -> (StatusCode, Value) {
 async fn search_lists_all_and_filters_by_symbol() {
     let (status, all) = get("/v1/packages/search").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(all["results"].as_array().unwrap().len(), 8, "got: {all}");
+    assert_eq!(all["results"].as_array().unwrap().len(), 9, "got: {all}");
 
     let (_, hit) = get("/v1/packages/search?q=sha256").await;
     let names: Vec<&str> = hit["results"]
@@ -48,6 +48,15 @@ async fn docs_host_unknown_and_mcp() {
             .unwrap_or("")
             .contains("function get("),
         "got: {doc}"
+    );
+
+    let (status, code) = get("/v1/packages/docs?name=submilli:code").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        code["declarations"]
+            .as_str()
+            .unwrap()
+            .contains("function diffText(")
     );
 
     let (status, body) = get("/v1/packages/docs?name=nope").await;

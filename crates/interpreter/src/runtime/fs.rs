@@ -13,7 +13,7 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-use cap_fs_ext::DirExt;
+use cap_fs_ext::{DirExt, OpenOptionsSyncExt};
 use cap_std::fs::{Dir, File, Metadata, OpenOptions, ReadDir};
 
 use crate::runtime::Vfs;
@@ -160,6 +160,18 @@ impl ContentPath {
         Ok(self.dir.open(&self.rel)?)
     }
 
+    /// Refuse special files without waiting for a FIFO writer. The descriptor check
+    /// also covers a regular path replaced between metadata inspection and open.
+    pub(crate) fn open_regular(&self) -> Result<(File, Metadata), ContainError> {
+        require_regular_file(&self.metadata()?)?;
+        let mut options = OpenOptions::new();
+        options.read(true).nonblock(true);
+        let file = self.dir.open_with(&self.rel, &options)?;
+        let metadata = file.metadata()?;
+        require_regular_file(&metadata)?;
+        Ok((file, metadata))
+    }
+
     pub fn create(&self) -> Result<File, ContainError> {
         self.check_mutation(false)?;
         Ok(self.dir.create(&self.rel)?)
@@ -254,6 +266,13 @@ impl ContentPath {
             rel,
         }
     }
+}
+
+fn require_regular_file(metadata: &Metadata) -> Result<(), ContainError> {
+    if metadata.is_file() {
+        return Ok(());
+    }
+    Err(io::Error::new(io::ErrorKind::InvalidInput, "not a regular file").into())
 }
 
 /// A guest path resolved for an operation that acts on the *link itself*.

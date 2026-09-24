@@ -37,8 +37,8 @@ use crate::stdlib::abi::{
     self, backing_struct, externref_field, f64_field, install_field_getters, string_field,
 };
 use crate::stdlib::shared::{
-    DEFAULT_CWD, check_security, contain_trap, resolve_content_or_trap, resolve_link_or_trap,
-    write_target_trap,
+    DEFAULT_CWD, atomic_write, check_security, contain_trap, resolve_content_or_trap,
+    resolve_link_or_trap, write_target_trap,
 };
 use handles::{
     ChargedByteReader, ChargedDirIter, ChargedFileWriter, ChargedLineReader, ContainedWalk, kind_of,
@@ -403,7 +403,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     wasmtime::bail!("{ctx} {}: the VFS root is a directory, not a file", path);
                 }
                 if atomic {
-                    atomic_write(&resolved, &bytes, &path, &ctx)
+                    atomic_write(&resolved, &bytes, None, &path, &ctx)
                 } else {
                     append_bytes(&resolved, &bytes, &path, &ctx)
                 }
@@ -1256,32 +1256,6 @@ fn i32_flag(val: &Val, ctx: &str) -> wasmtime::Result<bool> {
             "{ctx}: expected i32 flag, got {other:?}"
         ))),
     }
-}
-
-/// No `parent.is_dir()` pre-check: `Dir` reports a missing parent as `NotFound` the way
-/// `std` does, and the old gate turned an escape into "parent directory does not exist" —
-/// costing an LLM a turn on a `mkdir` that could never succeed.
-fn atomic_write(
-    final_path: &ContentPath,
-    bytes: &[u8],
-    guest_path: &str,
-    op: &str,
-) -> wasmtime::Result<()> {
-    let tmp = final_path.temp_sibling();
-    {
-        let mut f = tmp
-            .create_new()
-            .map_err(|e| write_target_trap(op, guest_path, &e))?;
-        f.write_all(bytes)
-            .map_err(|e| wasmtime::Error::msg(format!("{op} {guest_path}: {e}")))?;
-        f.sync_all()
-            .map_err(|e| wasmtime::Error::msg(format!("{op} {guest_path}: fsync: {e}")))?;
-    }
-    tmp.rename_to(final_path).map_err(|e| {
-        let _ = tmp.remove_file();
-        contain_trap(op, guest_path, &e)
-    })?;
-    Ok(())
 }
 
 fn append_bytes(

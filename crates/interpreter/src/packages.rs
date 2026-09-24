@@ -786,6 +786,9 @@ fn user_modules() -> Vec<PackageDeclaration> {
 fn module_description(name: &str) -> &'static str {
     match name {
         "submilli:crypto" => "Hashing, HMAC, and random bytes.",
+        "submilli:code" => {
+            "Workspace tools: numbered reads, search, glob, tree, anchored edits and unified diffs."
+        }
         "submilli:fs" => "Sandbox filesystem: read/write/list/stat/remove/exists/info.",
         "submilli:git" => {
             "Capability-controlled VFS repositories: history, staging, commits, branches and HTTPS fetch."

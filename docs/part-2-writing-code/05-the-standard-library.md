@@ -368,5 +368,71 @@ function up before relying on it, so it never has to know this chapter, or a
 package, in advance. Both surfaces read the same source, so what you see with
 `submilli docs` is what the agent sees.
 
+## Coding-agent workspace tools
+
+`submilli:code` provides structured reads, search results, directory navigation,
+and anchored edits within the configured filesystem. It uses the existing
+filesystem capabilities; there are no separate `code.*` grants.
+
+```ts
+import { writeText } from "submilli:fs";
+import { read, edit, diffText, applyPatch } from "submilli:code";
+
+export function main(): string {
+  writeText("example.ts", "const count = 1;\n");
+  const first = read("example.ts").lines[0];
+  assert(first.line === 1);
+  const result = edit("example.ts", "count = 1", "count = 2");
+  assert(result.success);
+  const patch = diffText("const count = 2;\n", "const count = 3;\n");
+  assert(applyPatch("example.ts", patch).success);
+  return read("example.ts").lines[0].text;
+}
+```
+
+| Function | Behavior |
+| --- | --- |
+| `read(path, offset = 1, limit = 200)` | Returns `{path, lines, truncated}`. Lines contain one-based `line` and `text`; reading beyond EOF is empty. |
+| `search(pattern, options?)` | Regex search with `path` (default `/`), `include`/`exclude` glob arrays, `caseSensitive` (true), `context` (0), `limit` (1000), and `mode` (`matches`, `files`, or `counts`). Only the selected result array is populated. Counts are matching lines. |
+| `glob(pattern)` | Returns `{entries, truncated}` with files sorted newest first, then by path. Patterns are relative to `/`. |
+| `tree(path, depth = 3)` | Returns `{entries, truncated}` sorted by path, with `path`, `kind`, `depth`, and `modifiedAt` (Unix milliseconds). |
+| `edit(path, oldString, newString, replaceAll = false, nearLine = 0)` | Replaces a unique anchor, every non-overlapping occurrence, or the uniquely nearest occurrence. Equal-distance hints reject; a hint never substitutes for an anchor. |
+| `insertAt(path, line, text)` | Inserts literally before a one-based line; one past the last line appends. Empty files accept line 1. No newline is added. |
+| `diffText(a, b)` / `diffFiles(a, b)` | Unified diff with three context lines, comparing text values or file paths respectively. |
+| `applyPatch(path, patch)` | Applies a single-file unified diff by unique context, ignoring header positions. Every hunk must succeed. |
+
+Mutations return `{success, changed, diff, diagnostics}`. Each diagnostic contains
+`hunk` (one-based for patch rejects, otherwise 0), `line` (0 if unavailable), and
+repair guidance in `message`. An ambiguous edit lists occurrences; missing
+anchors show a candidate without applying it. A unique whole-line match that
+only differs in edge whitespace may apply if its indentation adjustment is
+consistent. Other fuzzy matches require a corrected anchor. `replaceAll` and
+`nearLine` cannot be combined. More than 1000 ambiguous occurrences raises a
+resource error asking for a more specific anchor.
+
+Traversal respects nested `.gitignore` and `.ignore` files, excludes hidden
+entries, and never follows discovered symlinks. Ignore files themselves require
+read permission. Global host ignore configuration is not consulted. Search
+skips NUL-containing binary files and rejects invalid UTF-8. Includes/excludes
+are relative to the search root; `*` stays within one directory and `**` crosses
+directories. Results default to at most 1000 records;
+search accepts a smaller limit and at most 1000 context lines. Traversal refuses
+more than 20,000 entries, and inputs/results obey `fs.maxReadSize()` and runtime
+memory/work limits. Native workspace work deducts directly from the same fuel
+budget as guest execution. Diff comparisons additionally refuse more than four million
+old-line/new-line pairs. Narrow the root or compare smaller sections on a limit
+error. Check `truncated` before assuming discovery is complete.
+
+Reads use `fs.read`; navigation uses `fs.list` and `fs.stat`; mutations require
+both `fs.read` and `fs.write`. Capability contexts use operation names such as
+`code.edit`, with path, resulting byte length, and a diff on writes. Denied
+access fails the operation. Pure `diffText` needs no permission and preserves
+UTF-16 code units, including lone surrogates. Files must be valid UTF-8; edits
+preserve bytes outside replaced regions, including BOMs and line endings.
+
+Edits target existing files. A rejected patch writes nothing; a successful edit
+uses atomic file replacement. This does not provide isolation from concurrent
+external writers. Use `submilli:fs` to create or remove files.
+
 Next: [curated packages](/docs/curated-packages), for maintained clients that
 connect programs to services such as GitHub, Slack, and Google Drive.

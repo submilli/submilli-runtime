@@ -32,6 +32,7 @@ impl FileId {
     pub const TEST: FileId = FileId(u32::MAX - 16);
     pub const SESSION: FileId = FileId(u32::MAX - 17);
     pub const LLM: FileId = FileId(u32::MAX - 18);
+    pub const CODE: FileId = FileId(u32::MAX - 20);
     pub const GIT: FileId = FileId(u32::MAX - 19);
 
     /// Virtual display path for a reserved (prelude/stdlib) id, e.g.
@@ -40,6 +41,7 @@ impl FileId {
     pub fn reserved_path(self) -> Option<&'static str> {
         Some(match self {
             FileId::PRELUDE => "<prelude>",
+            FileId::CODE => "submilli:code",
             FileId::GIT => "submilli:git",
             FileId::FS => "submilli:fs",
             FileId::HTTP => "submilli:http",

@@ -1,5 +1,7 @@
 //! Helpers shared across stdlib libraries.
 
+use std::io::Write;
+
 use crate::runtime::StoreData;
 use crate::runtime::fs::{ContainError, ContentPath, LinkPath, resolve_content, resolve_link};
 use crate::runtime::host::{permission_denied, permission_denied_invariant};
@@ -133,4 +135,38 @@ pub fn write_target_trap(op: &str, guest_path: &str, err: &ContainError) -> wasm
         }
         _ => contain_trap(op, guest_path, err),
     }
+}
+
+/// No `parent.is_dir()` pre-check: `Dir` reports a missing parent as `NotFound` the way
+/// `std` does, and the old gate turned an escape into "parent directory does not exist" —
+/// costing an LLM a turn on a `mkdir` that could never succeed.
+pub(crate) fn atomic_write(
+    final_path: &ContentPath,
+    bytes: &[u8],
+    permissions: Option<cap_std::fs::Permissions>,
+    guest_path: &str,
+    op: &str,
+) -> wasmtime::Result<()> {
+    let tmp = final_path.temp_sibling();
+    let mut f = tmp
+        .create_new()
+        .map_err(|e| write_target_trap(op, guest_path, &e))?;
+    let result = (|| {
+        if let Some(permissions) = permissions {
+            f.set_permissions(permissions).map_err(|e| {
+                wasmtime::Error::msg(format!("{op} {guest_path}: permissions: {e}"))
+            })?;
+        }
+        f.write_all(bytes)
+            .map_err(|e| wasmtime::Error::msg(format!("{op} {guest_path}: {e}")))?;
+        f.sync_all()
+            .map_err(|e| wasmtime::Error::msg(format!("{op} {guest_path}: fsync: {e}")))?;
+        drop(f);
+        tmp.rename_to(final_path)
+            .map_err(|e| contain_trap(op, guest_path, &e))
+    })();
+    if result.is_err() {
+        let _ = tmp.remove_file();
+    }
+    result
 }

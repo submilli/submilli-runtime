@@ -1463,7 +1463,16 @@ async fn packages_search_by_symbol_and_list_all() {
     // Empty query lists every user-facing module (security excluded).
     let (_, _, all) = h.post(EPH, search(2, ""), Some(&session)).await;
     let count = output(&all)["results"].as_array().unwrap().len();
-    assert_eq!(count, 8, "expected 8 stdlib modules: {all}");
+    assert_eq!(count, 9, "expected 9 stdlib modules: {all}");
+    assert!(
+        output(&all)["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["name"] == "submilli:code")
+    );
+    let (_, _, code) = h.post(EPH, search(3, "applyPatch"), Some(&session)).await;
+    assert_eq!(output(&code)["results"][0]["name"], "submilli:code");
 }
 
 #[tokio::test]

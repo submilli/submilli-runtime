@@ -10,6 +10,7 @@
 
 pub(crate) mod abi;
 pub mod capabilities;
+pub mod code;
 pub mod crypto;
 pub mod fs;
 pub mod git;
@@ -36,6 +37,7 @@ use crate::runtime::StoreData;
 pub fn stdlib_package_declarations() -> Vec<PackageDeclaration> {
     vec![
         // Alphabetical by package name; codegen import-emission relies on this order.
+        code::package_declaration(),
         crypto::package_declaration(),
         fs::package_declaration(),
         git::package_declaration(),
@@ -50,6 +52,7 @@ pub fn stdlib_package_declarations() -> Vec<PackageDeclaration> {
 }
 
 pub fn install_host_functions(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    code::install(linker)?;
     crypto::install(linker)?;
     fs::install(linker)?;
     git::install(linker)?;

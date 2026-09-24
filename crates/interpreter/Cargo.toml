@@ -37,6 +37,9 @@ num-traits = { workspace = true }
 flate2 = { workspace = true }
 zstd = { workspace = true }
 regex = { workspace = true }
+ignore = "0.4"
+globset = "0.4"
+similar = "2.7"
 jiff = { workspace = true }
 # SUB-279: `Math.random()` entropy source. Already a transitive dep
 # through uuid; calling it directly avoids pulling in `rand`.

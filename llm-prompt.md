@@ -40,7 +40,7 @@ WebAssembly.
 
 You do NOT have access to Node.js APIs, browser globals, or NPM
 packages. Submilli ships its own standard library — modules are:
-`submilli:fs`, `submilli:http`, `submilli:url`, `submilli:crypto`,
+`submilli:code`, `submilli:fs`, `submilli:http`, `submilli:url`, `submilli:crypto`,
 `submilli:uuid`, `submilli:session`, `submilli:llm`. Submilli native
 packages (e.g., `@stripe.com/sdk`, `@mcp/linear`) are also available;
 use the `packages.search` and `packages.docs` tools to discover them.
@@ -211,3 +211,16 @@ keeps appearing despite the existing prose. Record:
   truthiness with value-returning `&&`/`||` (SUB-706/SUB-707). The
   "no truthy/falsy coercion" delta paragraph was deleted; fighting the
   prior with prose had already failed.
+
+### Workspace editing
+
+Use `submilli:code` for numbered reads, regex search, glob/tree discovery, and
+anchor-based edits. Results are structured: `read(path).lines` carries `line`
+and `text`; search returns `matches`, `files`, or `counts` according to `mode`.
+Check `truncated` before treating a result as complete. `edit` uses exact text,
+with `nearLine` only disambiguating repeated anchors. Check mutation `success`
+and `diagnostics`; rejected patches leave the file unchanged. `insertAt` is the
+only line-addressed write. Use `diffText(a,b)` for text or `diffFiles(a,b)` for
+paths; `applyPatch(path,patch)` locates unified hunks by context, not header
+positions. These tools use existing `fs.read`, `fs.list`, `fs.stat`, and
+`fs.write` grants, and never expose host paths.
