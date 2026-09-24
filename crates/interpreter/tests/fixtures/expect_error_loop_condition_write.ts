@@ -1,10 +1,12 @@
 // A loop condition is checked where the state before the loop meets every
 // back edge, so a read it makes before its own write sees what the body left.
 // Each line below is an error `tsc --strict` reports too.
-// expect-error-count: 5
+// expect-error-count: 9
 // expect-error: cannot read field `toFixed` on non-object type `number | string`
 // expect-error: cannot read field `length` on non-object type `5 | string`
 // expect-error: expected `number`, got `string`
+// expect-error: cannot read field `length` on non-object type `number | string`
+// expect-error: expected `string`, got `number | string`
 
 function flag(): boolean {
   return false;
@@ -46,8 +48,54 @@ function bodyReadsTheConditionsWrite(): void {
   }
 }
 
+function mixed(): string | number {
+  return 5;
+}
+
+// With no back edge, the condition's own write still comes after its read.
+function readBeforeWriteWithoutBackEdge(): void {
+  let x: string | number = mixed();
+  while (x.length + (x = "s").length > 0) {
+    break;
+  }
+}
+
+// The condition's true branch narrows `y` to what `x` is, which the body changes.
+function conditionDependsOnTheBody(): void {
+  let x: string | number = "a";
+  x = "a";
+  let y: string | number = "b";
+  while ((y = x) !== "zz") {
+    const s: string = y;
+    x = 5;
+  }
+}
+
+function conditionWriteDependsOnTheBody(): void {
+  let x: string | number = "a";
+  x = "a";
+  while ((x = [x][0]) !== "zz") {
+    const s: string = x;
+    x = 5;
+  }
+}
+
+// A guard holds again on each pass, but narrows what the body left.
+function guardSeesWhatTheBodyLeft(): void {
+  let x: string | number | null = "a";
+  x = "a";
+  while (x !== null) {
+    const s: string = x;
+    x = 5;
+  }
+}
+
 function main(): void {
   noReset();
+  guardSeesWhatTheBodyLeft();
+  readBeforeWriteWithoutBackEdge();
+  conditionDependsOnTheBody();
+  conditionWriteDependsOnTheBody();
   readBeforeWrite();
   continueSkipsReset();
   updateWritesTheWrongType();

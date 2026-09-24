@@ -131,10 +131,24 @@ impl<'a> Inferer<'a> {
         &mut self,
         cond_expr_id: ExprId,
     ) -> (narrowing::NarrowEnv, narrowing::NarrowEnv) {
+        let (true_env, false_env, _) = self.predicate_envs_and_feasibility(cond_expr_id);
+        (true_env, false_env)
+    }
+
+    /// `predicate_envs`, and whether the condition's true branch can be taken:
+    /// not when it narrows a path to nothing, as `s !== null` does where `s`
+    /// can only be `null`.
+    pub(super) fn predicate_envs_and_feasibility(
+        &mut self,
+        cond_expr_id: ExprId,
+    ) -> (narrowing::NarrowEnv, narrowing::NarrowEnv, bool) {
         let (mut true_env, mut false_env) = self.predicate_envs_unfiltered(cond_expr_id);
+        let true_possible = !true_env
+            .values()
+            .any(|view| matches!(view.narrowed_ty.peel(), Type::Never | Type::Error));
         self.retain_emittable_views(&mut true_env);
         self.retain_emittable_views(&mut false_env);
-        (true_env, false_env)
+        (true_env, false_env, true_possible)
     }
 
     fn retain_emittable_views(&mut self, env: &mut narrowing::NarrowEnv) {

@@ -22,7 +22,7 @@ line 17: x
 
 line 18: x
   tsc:  number | boolean
-  ours: never
+  ours: boolean | null
 
 line 26: x
   tsc:  string | number

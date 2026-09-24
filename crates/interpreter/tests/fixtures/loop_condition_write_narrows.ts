@@ -47,4 +47,14 @@ function main(): void {
     w = kept;
   }
   assert(kept === 4, "a `continue` returns to the condition");
+
+  let v: string | null = "s";
+  v = "s";
+  let polls = 0;
+  do {
+    polls++;
+    v = polls < 3 ? "more" : null;
+  } while (v !== null);
+  const gone: null = v;
+  assert(gone === null && polls === 3, "a `do … while` exits where its condition fails");
 }
