@@ -1,0 +1,118 @@
+=== spreadOverwritesProperty.ts ===
+// without strict null checks, none of these should be an error
+let ab: { a: number, b: number } = null as unknown as ({ a: number, b: number });
+>ab : { a: number; b: number; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+>null as unknown as ({ a: number, b: number }) : { a: number; b: number; }
+>                                              : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+
+let abq: { a: number, b?: number } = null as unknown as ({ a: number, b?: number });
+>abq : { a: number; b?: number; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>null as unknown as ({ a: number, b?: number }) : { a: number; b?: number; }
+>                                               : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+let unused1 = { b: 1, ...ab }
+>unused1 : { a: number; b: number; }
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ b: 1, ...ab } : { a: number; b: number; }
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>ab : { a: number; b: number; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+let unused2 = { ...ab, ...ab }
+>unused2 : { a: number; b: number; }
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ ...ab, ...ab } : { a: number; b: number; }
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>ab : { a: number; b: number; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>ab : { a: number; b: number; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+let unused3 = { b: 1, ...abq }
+>unused3 : { a: number; b: number; }
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ b: 1, ...abq } : { a: number; b: number; }
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>abq : { a: number; b?: number; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+function g(obj: { x: number | null }): { x: number | null; } {
+>g : (obj: { x: number | null; }) => { x: number | null; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>obj : { x: number | null; }
+>    : ^^^^^^^^^^^^^^^^^^^^^
+>x : number | null
+>  : ^^^^^^^^^^^^^
+>x : number | null
+>  : ^^^^^^^^^^^^^
+
+    return { x: 1, ...obj };
+>{ x: 1, ...obj } : { x: number | null; }
+>                 : ^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>obj : { x: number | null; }
+>    : ^^^^^^^^^^^^^^^^^^^^^
+
+}
+function h(obj: { x: number }): { x: number; } {
+>h : (obj: { x: number; }) => { x: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>obj : { x: number; }
+>    : ^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>x : number
+>  : ^^^^^^
+
+    return { x: 1, ...obj };
+>{ x: 1, ...obj } : { x: number; }
+>                 : ^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>obj : { x: number; }
+>    : ^^^^^^^^^^^^^^
+
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

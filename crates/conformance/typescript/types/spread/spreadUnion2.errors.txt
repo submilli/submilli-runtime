@@ -1,0 +1,11 @@
+spreadUnion2.ts(7,5): error TS2451: Cannot redeclare block-scoped variable 'o1'.
+spreadUnion2.ts(8,5): error TS2451: Cannot redeclare block-scoped variable 'o1'.
+spreadUnion2.ts(10,5): error TS2451: Cannot redeclare block-scoped variable 'o2'.
+spreadUnion2.ts(11,5): error TS2451: Cannot redeclare block-scoped variable 'o2'.
+spreadUnion2.ts(13,5): error TS2451: Cannot redeclare block-scoped variable 'o3'.
+spreadUnion2.ts(14,5): error TS2451: Cannot redeclare block-scoped variable 'o3'.
+spreadUnion2.ts(15,5): error TS2451: Cannot redeclare block-scoped variable 'o3'.
+spreadUnion2.ts(17,5): error TS2451: Cannot redeclare block-scoped variable 'o4'.
+spreadUnion2.ts(18,5): error TS2451: Cannot redeclare block-scoped variable 'o4'.
+spreadUnion2.ts(20,5): error TS2451: Cannot redeclare block-scoped variable 'o5'.
+spreadUnion2.ts(21,5): error TS2451: Cannot redeclare block-scoped variable 'o5'.

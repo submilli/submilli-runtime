@@ -1,0 +1,17 @@
+=== tupleElementTypes3.ts ===
+let [a, b] = [0, null];
+>a : number
+>  : ^^^^^^
+>b : null
+>  : ^^^^
+>[0, null] : [number, null]
+>          : ^^^^^^^^^^^^^^
+>0 : 0
+>  : ^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

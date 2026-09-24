@@ -1,0 +1,9 @@
+types: 8 of 30 tsc entries compared, 2 differ
+
+line 18: { method(p) { p.length; } }
+  tsc:  { method(p: string): void; }
+  ours: ContextualType<string>
+
+line 26: { method(p) { p.length; } }
+  tsc:  { method(p: string): void; }
+  ours: ContextualType<string>

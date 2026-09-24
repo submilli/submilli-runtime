@@ -1,0 +1,38 @@
+=== ES5For-of7.ts ===
+for (let w of []) {
+>w : never
+>  : ^^^^^
+>[] : never[]
+>   : ^^^^^^^
+
+    let x = w;
+>x : never
+>  : ^^^^^
+>w : never
+>  : ^^^^^
+
+}
+
+for (let v of []) {
+>v : never
+>  : ^^^^^
+>[] : never[]
+>   : ^^^^^^^
+
+    let x = [w, v];
+>x : any[]
+>  : ^^^^^
+>[w, v] : any[]
+>       : ^^^^^
+>w : any
+>  : ^^^
+>v : never
+>  : ^^^^^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

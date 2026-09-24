@@ -1,0 +1,11 @@
+types: 70 of 76 tsc entries compared, 0 differ
+
+errors:
+line 15: ours: `<` not defined for `I` and `J` (tsc accepts)
+line 16: ours: `<` not defined for `J` and `I` (tsc accepts)
+line 19: ours: `>` not defined for `I` and `J` (tsc accepts)
+line 20: ours: `>` not defined for `J` and `I` (tsc accepts)
+line 23: ours: `<=` not defined for `I` and `J` (tsc accepts)
+line 24: ours: `<=` not defined for `J` and `I` (tsc accepts)
+line 27: ours: `>=` not defined for `I` and `J` (tsc accepts)
+line 28: ours: `>=` not defined for `J` and `I` (tsc accepts)

@@ -1,0 +1,120 @@
+=== typeGuardsInWhileStatement.ts ===
+let cond: boolean = null as unknown as (boolean);
+>cond : boolean
+>     : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+function a(x: string | number): void {
+>a : (x: string | number) => void
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+    while (typeof x === "string") {
+>typeof x === "string" : boolean
+>                      : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>"string" : "string"
+>         : ^^^^^^^^
+
+        x; // string
+>x : string
+>  : ^^^^^^
+
+        x = null;
+>x = null : null
+>         : ^^^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+    }
+    x; // number
+>x : number
+>  : ^^^^^^
+
+}
+function b(x: string | number): void {
+>b : (x: string | number) => void
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+    while (typeof x === "string") {
+>typeof x === "string" : boolean
+>                      : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>"string" : "string"
+>         : ^^^^^^^^
+
+        if (cond) continue;
+>cond : boolean
+>     : ^^^^^^^
+
+        x; // string
+>x : string
+>  : ^^^^^^
+
+        x = null;
+>x = null : null
+>         : ^^^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+    }
+    x; // number
+>x : number
+>  : ^^^^^^
+
+}
+function c(x: string | number): void {
+>c : (x: string | number) => void
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+    while (typeof x === "string") {
+>typeof x === "string" : boolean
+>                      : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>"string" : "string"
+>         : ^^^^^^^^
+
+        if (cond) break;
+>cond : boolean
+>     : ^^^^^^^
+
+        x; // string
+>x : string
+>  : ^^^^^^
+
+        x = null;
+>x = null : null
+>         : ^^^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+    }
+    x; // string | number
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

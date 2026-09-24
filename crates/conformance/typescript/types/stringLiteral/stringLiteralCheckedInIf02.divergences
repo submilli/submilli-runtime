@@ -1,0 +1,9 @@
+types: 13 of 21 tsc entries compared, 2 differ
+
+line 11: isS
+  tsc:  (t: T) => t is S
+  ours: (arg0: T) => boolean
+
+line 12: foo
+  tsc:  S
+  ours: "a" | "b"

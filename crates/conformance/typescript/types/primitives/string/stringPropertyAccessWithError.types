@@ -1,0 +1,27 @@
+=== stringPropertyAccessWithError.ts ===
+let x = '';
+>x : string
+>  : ^^^^^^
+>'' : ""
+>   : ^^
+
+let d = x['charAt']('invalid'); // error
+>d : string
+>  : ^^^^^^
+>x['charAt']('invalid') : string
+>                       : ^^^^^^
+>x['charAt'] : (pos: number) => string
+>            : ^^^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>'charAt' : "charAt"
+>         : ^^^^^^^^
+>'invalid' : "invalid"
+>          : ^^^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

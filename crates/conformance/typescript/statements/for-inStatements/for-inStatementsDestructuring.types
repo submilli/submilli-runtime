@@ -1,0 +1,15 @@
+=== for-inStatementsDestructuring.ts ===
+for (let [a, b] in []) {}
+>a : string
+>  : ^^^^^^
+>b : string
+>  : ^^^^^^
+>[] : never[]
+>   : ^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

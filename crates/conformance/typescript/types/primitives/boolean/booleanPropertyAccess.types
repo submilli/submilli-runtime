@@ -1,0 +1,38 @@
+=== booleanPropertyAccess.ts ===
+let x = true;
+>x : boolean
+>  : ^^^^^^^
+>true : true
+>     : ^^^^
+
+
+let a = x.toString();
+>a : string
+>  : ^^^^^^
+>x.toString() : string
+>             : ^^^^^^
+>x.toString : () => string
+>           : ^^^^^^^^^^^^
+>x : true
+>  : ^^^^
+>toString : () => string
+>         : ^^^^^^^^^^^^
+
+let b = x['toString']();
+>b : string
+>  : ^^^^^^
+>x['toString']() : string
+>                : ^^^^^^
+>x['toString'] : () => string
+>              : ^^^^^^^^^^^^
+>x : true
+>  : ^^^^
+>'toString' : "toString"
+>           : ^^^^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

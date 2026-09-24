@@ -1,0 +1,36 @@
+=== asOperatorNames.ts ===
+let a = 20;
+>a : number
+>  : ^^^^^^
+>20 : 20
+>   : ^^
+
+let b = a as string;
+>b : string
+>  : ^^^^^^
+>a as string : string
+>            : ^^^^^^
+>a : number
+>  : ^^^^^^
+
+let as = "hello";
+>as : string
+>   : ^^^^^^
+>"hello" : "hello"
+>        : ^^^^^^^
+
+let as1 = as as string;
+>as1 : string
+>    : ^^^^^^
+>as as string : string
+>             : ^^^^^^
+>as : string
+>   : ^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

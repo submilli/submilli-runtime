@@ -1,0 +1,33 @@
+types: 36 of 42 tsc entries compared, 8 differ
+
+line 11: a
+  tsc:  ""
+  ours: string
+
+line 15: b
+  tsc:  "foo"
+  ours: string
+
+line 19: c
+  tsc:  ""
+  ours: string
+
+line 23: d
+  tsc:  "foo"
+  ours: string
+
+line 27: e
+  tsc:  "foo"
+  ours: string
+
+line 31: f
+  tsc:  ""
+  ours: string
+
+line 35: g
+  tsc:  "foo"
+  ours: string
+
+line 39: h
+  tsc:  ""
+  ours: string

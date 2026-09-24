@@ -1,0 +1,24 @@
+types: 19 of 50 tsc entries compared, 5 differ
+
+line 6: array1
+  tsc:  (number | boolean)[]
+  ours: boolean[]
+
+line 6: [true, 2, 3]
+  tsc:  (number | boolean)[]
+  ours: boolean[]
+
+line 7: [1, 2, 3, 4]
+  tsc:  [number, number, number, number]
+  ours: [number, number, number]
+
+line 8: [1, 2, 3, "string"]
+  tsc:  [number, number, number, string]
+  ours: [number | string, number | string, number | string]
+
+line 9: [1, 2, 3, "string"]
+  tsc:  [number, number, number, string]
+  ours: [number, number, number]
+
+errors:
+line 6: ours: expected `boolean` (matching first element), got `number` (tsc accepts)

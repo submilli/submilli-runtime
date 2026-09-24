@@ -1,0 +1,20 @@
+=== ES5For-of5.ts ===
+for (let _a of []) {
+>_a : never
+>   : ^^^^^
+>[] : never[]
+>   : ^^^^^^^
+
+    let x = _a;
+>x : never
+>  : ^^^^^
+>_a : never
+>   : ^^^^^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

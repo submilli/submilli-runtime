@@ -1,0 +1,20 @@
+=== ES5For-of14.ts ===
+for (const v of []) {
+>v : never
+>  : ^^^^^
+>[] : never[]
+>   : ^^^^^^^
+
+    let x = v;
+>x : never
+>  : ^^^^^
+>v : never
+>  : ^^^^^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

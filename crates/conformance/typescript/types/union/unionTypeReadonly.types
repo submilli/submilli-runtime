@@ -1,0 +1,154 @@
+=== unionTypeReadonly.ts ===
+interface Base {
+>Base : Base
+>     : ^^^^
+
+    readonly value: number;
+>value : number
+>      : ^^^^^^
+
+}
+interface Identical {
+>Identical : Identical
+>          : ^^^^^^^^^
+
+    readonly value: number;
+>value : number
+>      : ^^^^^^
+
+}
+interface Mutable {
+>Mutable : Mutable
+>        : ^^^^^^^
+
+    value: number;
+>value : number
+>      : ^^^^^^
+
+}
+interface DifferentType {
+>DifferentType : DifferentType
+>              : ^^^^^^^^^^^^^
+
+    readonly value: string;
+>value : string
+>      : ^^^^^^
+
+}
+interface DifferentName {
+>DifferentName : DifferentName
+>              : ^^^^^^^^^^^^^
+
+    readonly other: number;
+>other : number
+>      : ^^^^^^
+
+}
+let base: Base = null as unknown as (Base);
+>base : Base
+>     : ^^^^
+>null as unknown as (Base) : Base
+>                          : ^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+base.value = 12 // error, lhs can't be a readonly property
+>base.value = 12 : 12
+>                : ^^
+>base.value : any
+>           : ^^^
+>base : Base
+>     : ^^^^
+>value : any
+>      : ^^^
+>12 : 12
+>   : ^^
+
+let identical: Base | Identical = null as unknown as (Base | Identical);
+>identical : Base | Identical
+>          : ^^^^^^^^^^^^^^^^
+>null as unknown as (Base | Identical) : Base | Identical
+>                                      : ^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+identical.value = 12; // error, lhs can't be a readonly property
+>identical.value = 12 : 12
+>                     : ^^
+>identical.value : any
+>                : ^^^
+>identical : Base | Identical
+>          : ^^^^^^^^^^^^^^^^
+>value : any
+>      : ^^^
+>12 : 12
+>   : ^^
+
+let mutable: Base | Mutable = null as unknown as (Base | Mutable);
+>mutable : Base | Mutable
+>        : ^^^^^^^^^^^^^^
+>null as unknown as (Base | Mutable) : Base | Mutable
+>                                    : ^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+mutable.value = 12; // error, lhs can't be a readonly property
+>mutable.value = 12 : 12
+>                   : ^^
+>mutable.value : any
+>              : ^^^
+>mutable : Base | Mutable
+>        : ^^^^^^^^^^^^^^
+>value : any
+>      : ^^^
+>12 : 12
+>   : ^^
+
+let differentType: Base | DifferentType = null as unknown as (Base | DifferentType);
+>differentType : Base | DifferentType
+>              : ^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (Base | DifferentType) : Base | DifferentType
+>                                          : ^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+differentType.value = 12; // error, lhs can't be a readonly property
+>differentType.value = 12 : 12
+>                         : ^^
+>differentType.value : any
+>                    : ^^^
+>differentType : Base | DifferentType
+>              : ^^^^^^^^^^^^^^^^^^^^
+>value : any
+>      : ^^^
+>12 : 12
+>   : ^^
+
+let differentName: Base | DifferentName = null as unknown as (Base | DifferentName);
+>differentName : Base | DifferentName
+>              : ^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (Base | DifferentName) : Base | DifferentName
+>                                          : ^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+differentName.value = 12; // error, property 'value' doesn't exist
+>differentName.value = 12 : 12
+>                         : ^^
+>differentName.value : any
+>                    : ^^^
+>differentName : Base | DifferentName
+>              : ^^^^^^^^^^^^^^^^^^^^
+>value : any
+>      : ^^^
+>12 : 12
+>   : ^^
+
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

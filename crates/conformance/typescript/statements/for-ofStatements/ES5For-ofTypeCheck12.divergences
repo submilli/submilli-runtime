@@ -1,0 +1,5 @@
+types: 1 of 3 tsc entries compared, 1 differ
+
+line 2: v
+  tsc:  any
+  ours: <error>

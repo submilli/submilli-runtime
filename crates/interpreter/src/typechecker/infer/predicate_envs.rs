@@ -137,6 +137,56 @@ impl<'a> Inferer<'a> {
         (true_env, false_env)
     }
 
+    /// Whether `cond` can be true. A comparison cannot when it narrows a path
+    /// to nothing, as `s !== null` does where `s` can only be `null`; `&&`,
+    /// `||` and `!` combine their operands' answers. Anything else can.
+    pub(super) fn condition_can_hold(&mut self, cond_expr_id: ExprId) -> bool {
+        self.condition_can_be(cond_expr_id, true)
+    }
+
+    fn condition_can_be(&mut self, cond_expr_id: ExprId, outcome: bool) -> bool {
+        use crate::{BinOp, TypedExprKind, UnOp};
+        match self.typed_ast.expr(cond_expr_id).kind.clone() {
+            TypedExprKind::Binary {
+                op: op @ (BinOp::And | BinOp::Or),
+                lhs,
+                rhs,
+            } => {
+                // `a && b` is true only if both are, and false if either is.
+                let needs_both = (op == BinOp::And) == outcome;
+                let lhs_can = self.condition_can_be(lhs, outcome);
+                let rhs_can = self.condition_can_be(rhs, outcome);
+                if needs_both {
+                    lhs_can && rhs_can
+                } else {
+                    lhs_can || rhs_can
+                }
+            }
+            TypedExprKind::Unary {
+                op: UnOp::Not,
+                operand,
+            } => self.condition_can_be(operand, !outcome),
+            TypedExprKind::Narrowed { inner, .. } => self.condition_can_be(inner, outcome),
+            // A type guard proves its predicate only when it returns true.
+            TypedExprKind::Call { .. }
+            | TypedExprKind::CallClosure { .. }
+            | TypedExprKind::GenericCall { .. }
+            | TypedExprKind::MethodCall { .. }
+            | TypedExprKind::GenericMethodCall { .. }
+                if !outcome =>
+            {
+                true
+            }
+            _ => {
+                // Unfiltered: dropping unemittable views could drop the empty one.
+                let (true_env, false_env) = self.predicate_envs_unfiltered(cond_expr_id);
+                let env = if outcome { true_env } else { false_env };
+                !env.values()
+                    .any(|view| matches!(view.narrowed_ty.peel(), Type::Never | Type::Error))
+            }
+        }
+    }
+
     fn retain_emittable_views(&mut self, env: &mut narrowing::NarrowEnv) {
         let candidates: Vec<(narrowing::ReferencePath, ExprId)> =
             env.iter().map(|(p, v)| (p.clone(), v.source)).collect();

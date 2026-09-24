@@ -1,0 +1,32 @@
+=== additionOperatorWithOnlyNullValueOrUndefinedValue.ts ===
+// bug 819721
+let r1 = null + null;
+>r1 : any
+>   : ^^^
+>null + null : any
+>            : ^^^
+
+let r2 = null + null;
+>r2 : any
+>   : ^^^
+>null + null : any
+>            : ^^^
+
+let r3 = null + null;
+>r3 : any
+>   : ^^^
+>null + null : any
+>            : ^^^
+
+let r4 = null + null;
+>r4 : any
+>   : ^^^
+>null + null : any
+>            : ^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

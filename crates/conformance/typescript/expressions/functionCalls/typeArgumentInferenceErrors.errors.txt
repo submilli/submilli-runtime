@@ -1,0 +1,4 @@
+typeArgumentInferenceErrors.ts(4,31): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+typeArgumentInferenceErrors.ts(8,35): error TS2345: Argument of type '(x: string) => string' is not assignable to parameter of type '(x: number) => void'.   Types of parameters 'x' and 'x' are incompatible.     Type 'number' is not assignable to type 'string'.
+typeArgumentInferenceErrors.ts(12,35): error TS2345: Argument of type '(x: string) => string' is not assignable to parameter of type '(x: number) => void'.   Types of parameters 'x' and 'x' are incompatible.     Type 'number' is not assignable to type 'string'.
+typeArgumentInferenceErrors.ts(16,41): error TS2345: Argument of type '(n: string) => string' is not assignable to parameter of type '(b: number) => number'.   Types of parameters 'n' and 'b' are incompatible.     Type 'number' is not assignable to type 'string'.

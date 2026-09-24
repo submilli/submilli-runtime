@@ -1,0 +1,2 @@
+typeParameterAssignability.ts(5,5): error TS2322: Type 'U' is not assignable to type 'T'.   'T' could be instantiated with an arbitrary type which could be unrelated to 'U'.
+typeParameterAssignability.ts(6,5): error TS2322: Type 'T' is not assignable to type 'U'.   'U' could be instantiated with an arbitrary type which could be unrelated to 'T'.

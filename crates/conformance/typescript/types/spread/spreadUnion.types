@@ -1,0 +1,116 @@
+=== spreadUnion.ts ===
+let union: { a: number } | { b: string } = null as unknown as ({ a: number } | { b: string });
+>union : { a: number; } | { b: string; }
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>b : string
+>  : ^^^^^^
+>null as unknown as ({ a: number } | { b: string }) : { a: number; } | { b: string; }
+>                                                   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>a : number
+>  : ^^^^^^
+>b : string
+>  : ^^^^^^
+
+
+let o3: { a: number } | { b: string } = null as unknown as ({ a: number } | { b: string });
+>o3 : { a: number; } | { b: string; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>b : string
+>  : ^^^^^^
+>null as unknown as ({ a: number } | { b: string }) : { a: number; } | { b: string; }
+>                                                   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>a : number
+>  : ^^^^^^
+>b : string
+>  : ^^^^^^
+
+let o3 =  { ...union };
+>o3 : { a: number; } | { b: string; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ ...union } : { a: number; } | { b: string; }
+>             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>union : { a: number; } | { b: string; }
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+let o4: { a: boolean } | { b: string , a: boolean} = null as unknown as ({ a: boolean } | { b: string , a: boolean});
+>o4 : { a: boolean; } | { b: string; a: boolean; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>b : string
+>  : ^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>null as unknown as ({ a: boolean } | { b: string , a: boolean}) : { a: boolean; } | { b: string; a: boolean; }
+>                                                                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>b : string
+>  : ^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+let o4 =  { ...union, a: false };
+>o4 : { a: boolean; } | { a: boolean; b: string; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ ...union, a: false } : { a: boolean; } | { a: boolean; b: string; }
+>                       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>union : { a: number; } | { b: string; }
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>false : false
+>      : ^^^^^
+
+
+let o5: { a: number } | { b: string } | { a: number, b: string } = null as unknown as ({ a: number } | { b: string } | { a: number, b: string });
+>o5 : { a: number; } | { b: string; } | { a: number; b: string; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>b : string
+>  : ^^^^^^
+>a : number
+>  : ^^^^^^
+>b : string
+>  : ^^^^^^
+>null as unknown as ({ a: number } | { b: string } | { a: number, b: string }) : { a: number; } | { b: string; } | { a: number; b: string; }
+>                                                                              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>a : number
+>  : ^^^^^^
+>b : string
+>  : ^^^^^^
+>a : number
+>  : ^^^^^^
+>b : string
+>  : ^^^^^^
+
+let o5 =  { ...union, ...union };
+>o5 : { a: number; } | { b: string; a: number; } | { a: number; b: string; } | { b: string; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ ...union, ...union } : { a: number; } | { b: string; a: number; } | { a: number; b: string; } | { b: string; }
+>                       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>union : { a: number; } | { b: string; }
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>union : { a: number; } | { b: string; }
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

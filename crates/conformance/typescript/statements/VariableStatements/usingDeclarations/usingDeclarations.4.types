@@ -1,0 +1,20 @@
+=== usingDeclarations.4.ts ===
+
+{
+    using [a] = null;
+>using [a] = null : null
+>                 : ^^^^
+>using [a] : any
+>          : ^^^
+>using : any
+>      : ^^^
+>a : any
+>  : ^^^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

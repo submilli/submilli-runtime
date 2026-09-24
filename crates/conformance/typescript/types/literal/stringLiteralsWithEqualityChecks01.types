@@ -1,0 +1,227 @@
+=== stringLiteralsWithEqualityChecks01.ts ===
+let x: "foo" = null as unknown as ("foo");
+>x : "foo"
+>  : ^^^^^
+>null as unknown as ("foo") : "foo"
+>                           : ^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let y: "foo" | "bar" = null as unknown as ("foo" | "bar");
+>y : "foo" | "bar"
+>  : ^^^^^^^^^^^^^
+>null as unknown as ("foo" | "bar") : "foo" | "bar"
+>                                   : ^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+let b: boolean = null as unknown as (boolean);
+>b : boolean
+>  : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+b = x === y;
+>b = x === y : boolean
+>            : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>x === y : boolean
+>        : ^^^^^^^
+>x : "foo"
+>  : ^^^^^
+>y : "foo" | "bar"
+>  : ^^^^^^^^^^^^^
+
+b = "foo" === y
+>b = "foo" === y : boolean
+>                : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>"foo" === y : boolean
+>            : ^^^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+>y : "foo" | "bar"
+>  : ^^^^^^^^^^^^^
+
+b = y === "foo";
+>b = y === "foo" : boolean
+>                : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>y === "foo" : boolean
+>            : ^^^^^^^
+>y : "foo" | "bar"
+>  : ^^^^^^^^^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+
+b = "foo" === "bar";
+>b = "foo" === "bar" : boolean
+>                    : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>"foo" === "bar" : boolean
+>                : ^^^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+>"bar" : "bar"
+>      : ^^^^^
+
+b = "bar" === x;
+>b = "bar" === x : boolean
+>                : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>"bar" === x : boolean
+>            : ^^^^^^^
+>"bar" : "bar"
+>      : ^^^^^
+>x : "foo"
+>  : ^^^^^
+
+b = x === "bar";
+>b = x === "bar" : boolean
+>                : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>x === "bar" : boolean
+>            : ^^^^^^^
+>x : "foo"
+>  : ^^^^^
+>"bar" : "bar"
+>      : ^^^^^
+
+b = y === "bar";
+>b = y === "bar" : boolean
+>                : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>y === "bar" : boolean
+>            : ^^^^^^^
+>y : "foo" | "bar"
+>  : ^^^^^^^^^^^^^
+>"bar" : "bar"
+>      : ^^^^^
+
+b = "bar" === y;
+>b = "bar" === y : boolean
+>                : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>"bar" === y : boolean
+>            : ^^^^^^^
+>"bar" : "bar"
+>      : ^^^^^
+>y : "foo" | "bar"
+>  : ^^^^^^^^^^^^^
+
+
+b = x !== y;
+>b = x !== y : boolean
+>            : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>x !== y : boolean
+>        : ^^^^^^^
+>x : "foo"
+>  : ^^^^^
+>y : "foo" | "bar"
+>  : ^^^^^^^^^^^^^
+
+b = "foo" !== y
+>b = "foo" !== y : boolean
+>                : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>"foo" !== y : boolean
+>            : ^^^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+>y : "foo" | "bar"
+>  : ^^^^^^^^^^^^^
+
+b = y !== "foo";
+>b = y !== "foo" : boolean
+>                : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>y !== "foo" : boolean
+>            : ^^^^^^^
+>y : "foo" | "bar"
+>  : ^^^^^^^^^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+
+b = "foo" !== "bar";
+>b = "foo" !== "bar" : boolean
+>                    : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>"foo" !== "bar" : boolean
+>                : ^^^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+>"bar" : "bar"
+>      : ^^^^^
+
+b = "bar" !== x;
+>b = "bar" !== x : boolean
+>                : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>"bar" !== x : boolean
+>            : ^^^^^^^
+>"bar" : "bar"
+>      : ^^^^^
+>x : "foo"
+>  : ^^^^^
+
+b = x !== "bar";
+>b = x !== "bar" : boolean
+>                : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>x !== "bar" : boolean
+>            : ^^^^^^^
+>x : "foo"
+>  : ^^^^^
+>"bar" : "bar"
+>      : ^^^^^
+
+b = y !== "bar";
+>b = y !== "bar" : boolean
+>                : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>y !== "bar" : boolean
+>            : ^^^^^^^
+>y : "foo" | "bar"
+>  : ^^^^^^^^^^^^^
+>"bar" : "bar"
+>      : ^^^^^
+
+b = "bar" !== y;
+>b = "bar" !== y : boolean
+>                : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>"bar" !== y : boolean
+>            : ^^^^^^^
+>"bar" : "bar"
+>      : ^^^^^
+>y : "foo" | "bar"
+>  : ^^^^^^^^^^^^^
+
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

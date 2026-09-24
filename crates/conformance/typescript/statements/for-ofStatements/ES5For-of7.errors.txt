@@ -1,0 +1,1 @@
+ES5For-of7.ts(7,14): error TS2304: Cannot find name 'w'.

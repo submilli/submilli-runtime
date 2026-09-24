@@ -1,0 +1,3 @@
+objectTypeWithRecursiveWrappedProperty2.ts(5,5): error TS2564: Property 'data' has no initializer and is not definitely assigned in the constructor.
+objectTypeWithRecursiveWrappedProperty2.ts(6,5): error TS2564: Property 'next' has no initializer and is not definitely assigned in the constructor.
+objectTypeWithRecursiveWrappedProperty2.ts(14,1): error TS2322: Type 'List<string>' is not assignable to type 'List<number>'.   Type 'string' is not assignable to type 'number'.

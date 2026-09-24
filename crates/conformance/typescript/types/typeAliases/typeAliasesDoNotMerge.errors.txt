@@ -1,0 +1,2 @@
+typeAliasesDoNotMerge.ts(3,13): error TS2395: Individual declarations in merged declaration 'A' must be all exported or all local.
+typeAliasesDoNotMerge.ts(4,6): error TS2395: Individual declarations in merged declaration 'A' must be all exported or all local.

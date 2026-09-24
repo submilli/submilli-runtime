@@ -1,0 +1,1 @@
+nullishCoalescingOperator11.ts(6,18): error TS18047: 'f11' is possibly 'null'.

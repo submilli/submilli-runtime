@@ -1,0 +1,69 @@
+types: 24 of 32 tsc entries compared, 17 differ
+
+line 7: x
+  tsc:  string
+  ours: string | "bar" | "baz" | "foo"
+
+line 8: y
+  tsc:  string
+  ours: T
+
+line 10: x
+  tsc:  string
+  ours: string | "bar" | "baz" | "foo"
+
+line 13: x
+  tsc:  string
+  ours: string | "bar" | "baz"
+
+line 14: b
+  tsc:  string
+  ours: T
+
+line 14: x || y
+  tsc:  string
+  ours: T
+
+line 14: x
+  tsc:  string
+  ours: string | "baz"
+
+line 14: y
+  tsc:  string
+  ours: T
+
+line 18: d
+  tsc:  string
+  ours: T
+
+line 18: y
+  tsc:  string
+  ours: T
+
+line 19: e
+  tsc:  string
+  ours: string | "bar" | "baz" | "foo"
+
+line 19: c || d
+  tsc:  string
+  ours: T
+
+line 19: d
+  tsc:  string
+  ours: T
+
+line 22: x
+  tsc:  string
+  ours: string | "bar" | "baz" | "foo"
+
+line 22: y
+  tsc:  string
+  ours: T
+
+line 23: y
+  tsc:  string
+  ours: T
+
+line 23: x
+  tsc:  string
+  ours: string | "bar" | "baz" | "foo"

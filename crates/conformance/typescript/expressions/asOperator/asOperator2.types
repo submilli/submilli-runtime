@@ -1,0 +1,16 @@
+=== asOperator2.ts ===
+let x = 23 as string;
+>x : string
+>  : ^^^^^^
+>23 as string : string
+>             : ^^^^^^
+>23 : 23
+>   : ^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -1,0 +1,8 @@
+types: 6 of 12 tsc entries compared, 1 differ
+
+line 6: t
+  tsc:  T
+  ours: U
+
+errors:
+line 6: tsc TS2322: Type 'T' is not assignable to type 'U'.   'U' could be instantiated with an arbitrary type which could be unrelated to 'T'. (we accept)

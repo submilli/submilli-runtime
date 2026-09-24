@@ -1,0 +1,32 @@
+types: 18 of 23 tsc entries compared, 7 differ
+
+line 4: a
+  tsc:  "bar"
+  ours: string
+
+line 5: b
+  tsc:  "foo"
+  ours: string
+
+line 6: c
+  tsc:  "foo"
+  ours: string
+
+line 7: d
+  tsc:  "bar"
+  ours: string
+
+line 8: e
+  tsc:  "baz"
+  ours: <error>
+
+line 8: fooOrBar as "baz"
+  tsc:  "baz"
+  ours: <error>
+
+line 9: f
+  tsc:  "foo" | "bar"
+  ours: string
+
+errors:
+line 8: ours: cannot cast `"bar" | "foo"` to `"baz"`: no assignable direction between these types (tsc accepts)
