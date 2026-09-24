@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    ExprId, Ident, ObjectField, Span, StmtId, Type, TypedExpr, TypedStmt, TypedStmtKind, ValueKind,
+    ExprId, Ident, MangledName, ObjectField, Span, StmtId, Type, TypedExpr, TypedStmt,
+    TypedStmtKind, ValueKind,
 };
 
 use super::{Inferer, narrowing};
@@ -454,7 +455,7 @@ impl<'a> Inferer<'a> {
     /// declaration has something `readonly` in it: a `readonly` array, field, or
     /// property the declaration names must survive `o = { xs: [1] }`. Then the
     /// binding narrows to declared members, as TypeScript's assignment narrowing
-    /// does (see [`Self::declared_member_for`]).
+    /// does (see [`Self::narrowed_part`]).
     pub(super) fn assignment_narrowed_ty(&self, declared: &Type, written: Type) -> Type {
         if !self.declares_readonly(declared) {
             return written;
@@ -469,17 +470,20 @@ impl<'a> Inferer<'a> {
         };
         let narrowed: Option<Vec<Type>> = parts
             .into_iter()
-            .map(|part| self.declared_member_for(&members, part))
+            .map(|part| self.narrowed_part(&members, part))
             .collect();
         narrowed.map_or_else(|| declared.clone(), Type::union)
     }
 
-    /// The declared members a written `part` narrows its binding to: the most
-    /// specific member that accepts it, when that member keeps every `readonly`
-    /// of the value's own, and otherwise all the members that accept it, which is
-    /// TypeScript's answer. `None` when no member accepts it, which only a write
-    /// already reported as an error reaches.
-    fn declared_member_for(&self, members: &[&Type], part: Type) -> Option<Type> {
+    /// What a written `part` narrows its binding to: the value itself for a
+    /// primitive or literal, and otherwise the one most specific declared
+    /// member that accepts it, when that member keeps every `readonly` of the
+    /// value's own. Failing that, the value's own type when it keeps every
+    /// `readonly` of the member's, and otherwise all the members that accept
+    /// it, which is TypeScript's answer.
+    /// `None` when no member accepts it, which only a write already reported as
+    /// an error reaches.
+    fn narrowed_part(&self, members: &[&Type], part: Type) -> Option<Type> {
         if narrows_to_itself(&part) {
             return Some(part);
         }
@@ -498,13 +502,20 @@ impl<'a> Inferer<'a> {
         {
             return Some((*readonly).clone());
         }
-        let most_specific = accepting.iter().find(|candidate| {
+        // Two members assignable to each other (`{ a } | { readonly a }`) are
+        // equally specific, and neither may stand for the value alone.
+        let mut most_specific = accepting.iter().filter(|candidate| {
             accepting
                 .iter()
                 .all(|other| super::assignable(candidate, other, self.resolver()))
         });
-        match most_specific {
-            Some(member) if !self.may_lose_readonly(&part, member) => Some((*member).clone()),
+        match (most_specific.next(), most_specific.next()) {
+            (Some(member), None) if !self.may_lose_readonly(&part, member) => {
+                Some((*member).clone())
+            }
+            // The value's own type keeps every `readonly` the member has, and
+            // its own besides.
+            (Some(member), None) if !self.may_lose_readonly(member, &part) => Some(part),
             _ => Some(Type::union(accepting.into_iter().cloned().collect())),
         }
     }
@@ -571,9 +582,6 @@ impl<'a> Inferer<'a> {
             (Type::Function { ret: p, .. }, Type::Function { ret: m, .. }) => {
                 self.may_lose_readonly_within(p, m, compared)
             }
-            // A class instance seen as an ancestor class keeps what it
-            // inherits, and what it adds is out of the ancestor's reach.
-            (Type::ClassRef { .. }, Type::ClassRef { .. }) => false,
             _ => self.fields_lose_readonly(&part, &member, compared),
         }
     }
@@ -607,7 +615,7 @@ impl<'a> Inferer<'a> {
 
     /// `opened` holds the named types already examined: each is looked into
     /// once, which keeps a recursive or widely shared type graph linear.
-    fn declares_readonly_within(&self, ty: &Type, opened: &mut Vec<crate::MangledName>) -> bool {
+    fn declares_readonly_within(&self, ty: &Type, opened: &mut Vec<MangledName>) -> bool {
         match ty.peel_preserving_readonly() {
             Type::Readonly(_) => true,
             Type::Array(element) => self.declares_readonly_within(element, opened),
@@ -621,42 +629,60 @@ impl<'a> Inferer<'a> {
                 .iter()
                 .chain(std::iter::once(ret.as_ref()))
                 .any(|part| self.declares_readonly_within(part, opened)),
-            // A recursion back-edge's body is examined where the alias is
-            // expanded; only what it is instantiated with is new here.
-            Type::AliasRef { args, .. } => args
-                .iter()
-                .any(|arg| self.declares_readonly_within(arg, opened)),
-            Type::InterfaceRef { .. } | Type::ClassRef { .. } => {
-                self.named_type_declares_readonly(ty.peel(), opened)
+            Type::AliasRef { mangled, args, .. } => {
+                self.args_declare_readonly(args, opened)
+                    || (self.open_once(mangled, opened)
+                        && self.declares_readonly_within(
+                            &super::assignable::expand_alias_ref(ty, self.resolver()),
+                            opened,
+                        ))
+            }
+            Type::InterfaceRef { mangled, args, .. } | Type::ClassRef { mangled, args, .. } => {
+                self.args_declare_readonly(args, opened)
+                    || (self.open_once(mangled, opened)
+                        && self.named_type_declares_readonly(ty.peel(), opened))
             }
             _ => false,
         }
     }
 
-    fn named_type_declares_readonly(
-        &self,
-        named: &Type,
-        opened: &mut Vec<crate::MangledName>,
-    ) -> bool {
-        let (Type::InterfaceRef { mangled, args, .. } | Type::ClassRef { mangled, args, .. }) =
-            named
-        else {
-            return false;
-        };
-        if args
-            .iter()
+    fn args_declare_readonly(&self, args: &[Type], opened: &mut Vec<MangledName>) -> bool {
+        args.iter()
             .any(|arg| self.declares_readonly_within(arg, opened))
-        {
-            return true;
-        }
+    }
+
+    /// Records `mangled` as opened; false when it already was, since its body
+    /// is being examined further up.
+    fn open_once(&self, mangled: &MangledName, opened: &mut Vec<MangledName>) -> bool {
         if opened.contains(mangled) {
             return false;
         }
         opened.push(mangled.clone());
-        self.member_shape(named).is_some_and(|fields| {
-            fields
-                .values()
-                .any(|f| forbids_data_write(f) || self.declares_readonly_within(&f.ty, opened))
+        true
+    }
+
+    /// Whether a named class or interface instance's members forbid a write.
+    fn named_type_declares_readonly(&self, named: &Type, opened: &mut Vec<MangledName>) -> bool {
+        let Some(fields) = self.member_shape(named) else {
+            return false;
+        };
+        // An interface lists its properties apart from its methods, so a
+        // `readonly` function-valued property forbids writes as any other does.
+        let interface_properties = match named {
+            Type::InterfaceRef {
+                mangled,
+                name,
+                args,
+                ..
+            } => self.interface_data_shape(mangled, name, args),
+            _ => None,
+        };
+        fields.iter().any(|(field_name, field)| {
+            let readonly = match &interface_properties {
+                Some(properties) => properties.get(field_name).is_some_and(|p| p.readonly),
+                None => forbids_data_write(field),
+            };
+            readonly || self.declares_readonly_within(&field.ty, opened)
         })
     }
 
@@ -1257,7 +1283,7 @@ fn narrows_to_itself(ty: &Type) -> bool {
 }
 
 /// A named alias, class, or interface instance's name and type arguments.
-fn named_instance(ty: &Type) -> Option<(&crate::MangledName, &[Type])> {
+fn named_instance(ty: &Type) -> Option<(&MangledName, &[Type])> {
     super::assignable::alias_identity(ty).or_else(|| match ty.peel() {
         Type::InterfaceRef { mangled, args, .. } | Type::ClassRef { mangled, args, .. } => {
             Some((mangled, args.as_slice()))
