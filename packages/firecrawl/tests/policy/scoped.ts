@@ -1,5 +1,5 @@
 // Run through `submilli run --blueprint scoped.yaml`, not the allow-all build test runner.
-import { scrape, map, startBatch, startCrawl, getJob, getJobErrors, cancelJob, downloadJobPage } from "@submilli/firecrawl";
+import { search, scrape, map, startBatch, startCrawl, getJob, getJobErrors, cancelJob, downloadJobPage } from "@submilli/firecrawl";
 
 function deniedAt(capability: string, caller: string, action: () => void): void {
     let caught = false;
@@ -13,6 +13,10 @@ function reachesCredentialBoundary(action: () => void): void {
     deniedAt("secrets.get", "@submilli/firecrawl", action);
 }
 function main(): string {
+    deniedAt("firecrawl.dev/search", "main", () => { search("q", { limit: 3 }); });
+    reachesCredentialBoundary(() => { search("q", { limit: 2 }); });
+    // An allowed domain filter and an ordinary host-scoped scrape grant do not authorize native search scraping.
+    deniedAt("firecrawl.dev/search.scrape", "main", () => { search("q", { limit: 2, includeDomains: ["example.com"], scrapeOptions: {} }); });
     deniedAt("firecrawl.dev/scrape", "main", () => { scrape("https://blocked.example"); });
     reachesCredentialBoundary(() => { scrape("https://EXAMPLE.com/a"); });
 

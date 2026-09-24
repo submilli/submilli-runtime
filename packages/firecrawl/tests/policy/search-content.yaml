@@ -1,20 +1,15 @@
 kind: blueprint
-name: firecrawl-no-delegation-test
+name: firecrawl-search-content-test
 packages:
   - '@submilli/firecrawl'
 default: deny
 permissions:
   main:
     - capability: firecrawl.dev/search
+      filter: limit <= 2
       action: allow
     - capability: firecrawl.dev/search.scrape
       action: allow
-    - capability: firecrawl.dev/scrape
-      action: allow
-    - capability: firecrawl.dev/map
-      action: allow
-    - capability: firecrawl.dev/batch.start
-      action: allow
-    - capability: firecrawl.dev/crawl.start
+    - capability: firecrawl.dev/delegatedFetch
       action: allow
   '@submilli/firecrawl': []

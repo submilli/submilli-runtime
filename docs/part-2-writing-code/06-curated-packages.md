@@ -26,7 +26,7 @@ instructions, including the credentials and service permissions it needs.
 | --- | --- |
 | [`@submilli/brave-search`](https://github.com/submilli/submilli-runtime/tree/main/packages/brave-search) | Web search with pagination and extracted LLM context with source URLs |
 | [`@submilli/exa`](https://github.com/submilli/submilli-runtime/tree/main/packages/exa) | Web search with highlights and known-URL extraction with per-URL outcomes |
-| [`@submilli/firecrawl`](https://github.com/submilli/submilli-runtime/tree/main/packages/firecrawl) | Scrape, map, and explicit batch/crawl jobs with paginated results and per-page failures |
+| [`@submilli/firecrawl`](https://github.com/submilli/submilli-runtime/tree/main/packages/firecrawl) | Web search, scrape, map, and explicit batch/crawl jobs with paginated results and per-page failures |
 | [`@submilli/github`](https://github.com/submilli/submilli-runtime/tree/main/packages/github) | Repositories, files, commits, issues, pull requests, teams, releases, and search |
 | [`@submilli/gmail`](https://github.com/submilli/submilli-runtime/tree/main/packages/gmail) | Search and triage mail, read messages and threads, manage drafts and labels, send mail, and download attachments |
 | [`@submilli/google-calendar`](https://github.com/submilli/submilli-runtime/tree/main/packages/google-calendar) | Calendars, events, agendas, free/busy queries, and bounded free-time searches |
@@ -202,16 +202,23 @@ character-budget, and cache-freshness controls are opt-in. Always inspect
 `getContents().statuses`: a successful HTTP response can include failed URLs.
 Keep source URLs with passages for attribution.
 
-## Firecrawl: retrieval and explicit crawl jobs
+## Firecrawl: search, retrieval and explicit crawl jobs
 
-`@submilli/firecrawl` supports Scrape, Map, Batch Scrape and Crawl using the v2
+`@submilli/firecrawl` supports Search, Scrape, Map, Batch Scrape and Crawl using the v2
 HTTP API. It reads `FIRECRAWL_API_KEY` internally. Scrape returns Markdown,
 HTML, or optional structured JSON with source URLs and metadata. Job submission
 returns an ID immediately; callers explicitly retrieve status/results pages,
 inspect per-page failures, download large envelopes to VFS, or cancel.
 
+Search defaults to discovery only. Explicit `scrapeOptions` adds page content,
+latency, and credits. Discovery requires `firecrawl.dev/search`; native result
+scraping also requires `firecrawl.dev/search.scrape` and
+`firecrawl.dev/delegatedFetch`, which authorize unknown result hosts. To enforce
+submitted-host checks, search first and scrape selected URLs separately. Search
+domain filters are not a security boundary.
+
 Submitted-host checks do not constrain Firecrawl's remote redirects or crawl
-expansion. All retrieval/submission operations additionally require the
+expansion. Scrape, Map, Batch and Crawl submission additionally require the
 `firecrawl.dev/delegatedFetch` capability. Job reads and cancellation use
 separate `{ kind, jobId }` grants; an unfiltered grant covers existing jobs
 accessible to the bound credential. Use a different retrieval boundary when

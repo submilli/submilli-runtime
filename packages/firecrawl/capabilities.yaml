@@ -51,6 +51,14 @@ provides:
   fields:
     host:
       type: string
+- name: firecrawl.dev/search
+  description: Search web sources. Native result scraping authorizes unknown hosts via an explicit separate grant.
+  fields:
+    limit:
+      type: number
+- name: firecrawl.dev/search.scrape
+  description: Search web sources. Native result scraping authorizes unknown hosts via an explicit separate grant.
+  fields: {}
 - name: fs.write
   description: Save one raw status/results envelope to VFS. Inspect status and JSON next explicitly.
   fields:
@@ -77,5 +85,7 @@ requires:
   filter: host == "api.firecrawl.dev" and path == "/v2/map"
 - capability: http.post
   filter: host == "api.firecrawl.dev" and path == "/v2/scrape"
+- capability: http.post
+  filter: host == "api.firecrawl.dev" and path == "/v2/search"
 - capability: secrets.get
   filter: name == "FIRECRAWL_API_KEY"

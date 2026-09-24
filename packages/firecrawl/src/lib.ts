@@ -40,6 +40,58 @@ export interface ScrapeOptions {
     timeout?: number;
 }
 
+/** Web discovery controls. Scraping is opt-in and requires separate authorization. */
+export interface SearchOptions {
+    /** Maximum web results, 1–100; default 10. There is no pagination parameter. */
+    limit?: number;
+    /** Hostnames only; mutually exclusive with excludeDomains. Not a security boundary. */
+    includeDomains?: string[];
+    /** Hostnames only; mutually exclusive with includeDomains. */
+    excludeDomains?: string[];
+    /** Provider time filter, e.g. qdr:w, sbd:1, or cdr:1,cd_min:MM/DD/YYYY,cd_max:MM/DD/YYYY. */
+    tbs?: string;
+    /** Provider geo-targeting location, e.g. San Francisco,California,United States. */
+    location?: string;
+    /** Two-letter country code, e.g. US or UK. */
+    country?: string;
+    /** Apply SafeSearch when true; omitted preserves provider behavior. */
+    safe?: boolean;
+    /** Provider timeout in milliseconds; the HTTP transport has its own timeout. */
+    timeout?: number;
+    /** Explicit native result scraping; adds latency/credits and needs search.scrape plus delegatedFetch. */
+    scrapeOptions?: ScrapeOptions;
+}
+
+/** One web result, preserving discovery details even when extraction fails. */
+export interface SearchResult {
+    /** Search source URL; independent of any redirected content URL. */
+    url: string;
+    /** Search title, empty when absent. */
+    title: string;
+    /** Provider description/snippet, empty when absent. */
+    description: string;
+    /** Provider result position when available. */
+    position: number | null;
+    /** Available extraction and metadata, or null for bare discovery results. */
+    content: Page | null;
+    /** Per-result error outside metadata, when supplied by the provider. */
+    error: string | null;
+}
+
+/** One bounded search response. No invented cursor or completeness guarantee. */
+export interface SearchResponse {
+    /** Provider search request/job ID when returned; not a crawl or batch job handle. */
+    id: string | null;
+    /** All returned web results in provider order; never locally truncated. */
+    results: SearchResult[];
+    /** Provider-reported credits, or null when absent. */
+    creditsUsed: number | null;
+    /** Provider warning when present. */
+    warning: string | null;
+    /** Additional provider warning details, preserved without assuming their shape. */
+    warnings: unknown;
+}
+
 /** Bounded URL-discovery controls. */
 export interface MapOptions {
     /** Explicit ceiling, default 100. Map has no pagination or completeness guarantee. */
@@ -219,6 +271,51 @@ export class FirecrawlError extends Error {
     }
 }
 
+/** Search web sources. Native result scraping authorizes unknown hosts via an explicit separate grant.
+ * @capability firecrawl.dev/search { limit: number }
+ * @capability firecrawl.dev/search.scrape {}
+ * @capability firecrawl.dev/delegatedFetch {}
+ */
+export function search(query: string, options: SearchOptions | null = null): SearchResponse {
+    const opts: SearchOptions = options === null ? {} : options;
+    const body = buildSearchBody(query, opts);
+    check("firecrawl.dev/search", { limit: opts.limit ?? 10 });
+    if (opts.scrapeOptions !== null) {
+        // Search results are unknown before submission. This grant deliberately
+        // authorizes native extraction across result hosts; it is not a host-scoped scrape grant.
+        check("firecrawl.dev/search.scrape", {});
+        check("firecrawl.dev/delegatedFetch", {});
+    }
+    return normalizeSearchJson(requireOk(post(BASE + "/search", body, authHeaders())));
+}
+
+/** Build a web-only search request. No extraction or generated highlights by default. */
+export function buildSearchBody(query: string, options: SearchOptions | null = null): string {
+    requireText(query, "query");
+    if (query.length > 500) throw invalidArgument("query must be at most 500 characters");
+    const opts: SearchOptions = options === null ? {} : options;
+    const limit = opts.limit ?? 10;
+    integerRange(limit, 1, 100, "limit");
+    const fields = [field("query", JSON.stringify(query)), field("limit", JSON.stringify(limit)),
+        '"sources":["web"]', '"highlights":false', '"domainTools":false'];
+    if (opts.includeDomains !== null && opts.excludeDomains !== null) throw invalidArgument("includeDomains and excludeDomains are mutually exclusive");
+    addSearchDomains(fields, "includeDomains", opts.includeDomains);
+    addSearchDomains(fields, "excludeDomains", opts.excludeDomains);
+    if (opts.tbs !== null) { requireText(opts.tbs, "tbs"); fields.push(field("tbs", JSON.stringify(opts.tbs))); }
+    if (opts.location !== null) { requireText(opts.location, "location"); fields.push(field("location", JSON.stringify(opts.location))); }
+    if (opts.country !== null) {
+        if (!/^[a-zA-Z]{2}$/.test(opts.country)) throw invalidArgument("country must be a two-letter code");
+        fields.push(field("country", JSON.stringify(opts.country.toUpperCase())));
+    }
+    addBoolean(fields, "safe", opts.safe);
+    if (opts.timeout !== null) {
+        integerRange(opts.timeout, 1, 300000, "timeout");
+        fields.push(field("timeout", JSON.stringify(opts.timeout)));
+    }
+    if (opts.scrapeOptions !== null) fields.push(field("scrapeOptions", objectJson(scrapeFields(opts.scrapeOptions))));
+    return objectJson(fields);
+}
+
 /** Retrieve one page. Host constrains the submitted URL, not provider redirects/subresources.
  * @capability firecrawl.dev/scrape { host: string }
  * @capability firecrawl.dev/delegatedFetch {}
@@ -387,7 +484,50 @@ export function urlHost(url: string): string {
     } catch (cause) { throw invalidArgument("Expected an absolute HTTP(S) URL without credentials or whitespace"); }
 }
 
-interface ApiPage { markdown?: string; html?: string; json?: unknown; metadata: unknown; warning?: string; }
+interface ApiSearchResult {
+    url: string; title?: string; description?: string; position?: number;
+    markdown?: string; html?: string; json?: unknown; metadata?: unknown; warning?: string; error?: string;
+}
+interface ApiSearchData { web: ApiSearchResult[]; }
+interface ApiSearch { success: boolean; data: ApiSearchData; id?: string; creditsUsed?: number; warning?: string; warnings?: unknown; }
+
+/** Validate v2 data.web and retain available extraction, metadata, warnings and partial failures. */
+export function normalizeSearchJson(body: string): SearchResponse {
+    try {
+        const data = JSON.parse(body) as ApiSearch;
+        if (!data.success) throw invalidResponse();
+        const results: SearchResult[] = [];
+        for (const item of data.data.web) {
+            requireText(item.url, "result URL");
+            results.push({ url: item.url, title: item.title ?? "", description: item.description ?? "",
+                position: item.position, content: searchContent(item), error: item.error });
+        }
+        return { id: data.id, results: results, creditsUsed: data.creditsUsed, warning: data.warning, warnings: data.warnings };
+    } catch (cause) { throw invalidResponse(); }
+}
+
+function searchContent(item: ApiSearchResult): Page | null {
+    if (item.markdown === null && item.html === null && item.json === null && item.metadata === null && item.warning === null) return null;
+    return pageFrom({ markdown: item.markdown, html: item.html, json: item.json,
+        metadata: item.metadata === null ? {} : item.metadata, warning: item.warning });
+}
+
+function addSearchDomains(fields: string[], name: string, domains: string[] | null): void {
+    if (domains === null) return;
+    const normalized: string[] = [];
+    for (const domain of domains) {
+        if (domain.length > 253 || !/^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)*[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$/.test(domain)) {
+            throw invalidArgument(name + " entries must be hostnames without a protocol, path, port or wildcard");
+        }
+        for (const part of domain.split(".")) {
+            if (part.length > 63) throw invalidArgument(name + " hostname labels must be at most 63 characters");
+        }
+        normalized.push(domain.toLowerCase());
+    }
+    fields.push(field(name, JSON.stringify(normalized)));
+}
+
+interface ApiPage { markdown?: string | null; html?: string | null; json?: unknown; metadata: unknown; warning?: string | null; }
 interface ApiScrape { success: boolean; data: ApiPage; }
 interface ApiMap { success: boolean; links: MapLink[]; }
 interface ApiJob { success: boolean; id: string; invalidURLs?: string[]; }

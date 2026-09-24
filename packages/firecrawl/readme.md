@@ -1,6 +1,6 @@
 # @submilli/firecrawl
 
-A typed Firecrawl v2 client using Submilli HTTP directly: Scrape, Map, Batch
+A typed Firecrawl v2 client using Submilli HTTP directly: Search, Scrape, Map, Batch
 Scrape and Crawl in one package. Jobs are explicit: submit, inspect one result
 page, retrieve errors, download a page to VFS, or cancel. Nothing polls or
 retries automatically. See [agent documentation](docs/readme.md) for the API,
@@ -31,6 +31,23 @@ secrets:
 operation grants remain separate. Never put credentials in generated programs.
 The runtime/build test runner reads the repository-root `.env` internally for
 tests; a production blueprint still needs its own secret binding.
+
+## Search
+
+`search(query)` defaults to web discovery: URLs, titles and descriptions. To
+include page content explicitly, pass `scrapeOptions`, for example
+`search(query, { limit: 2, scrapeOptions: { formats: ["markdown"] } })`.
+Scraping adds latency and credits. Search supports result limits of 1–100,
+domain inclusion/exclusion, provider time filters, location/country and
+SafeSearch. The current v2 endpoint has no documented pagination parameter.
+See the [agent guide](docs/readme.md) for compiled examples and result types.
+
+Grant `firecrawl.dev/search` for discovery. Native search with content also
+requires `firecrawl.dev/search.scrape` and `firecrawl.dev/delegatedFetch`:
+these explicitly authorize provider scraping of unknown result hosts. An
+ordinary host-filtered scrape grant does not authorize this mode. For per-host
+checks, discover first and use `scrape` on selected result URLs instead. Search
+domain filters are not an authorization boundary.
 
 ## Authority
 
@@ -83,12 +100,13 @@ firecrawl_test_home=$(mktemp -d)
 SUBMILLI_HOME="$firecrawl_test_home" cargo run -p submilli -- build publish-local -p @submilli/firecrawl
 SUBMILLI_HOME="$firecrawl_test_home" cargo run -p submilli -- run packages/firecrawl/tests/policy/scoped.ts --blueprint packages/firecrawl/tests/policy/scoped.yaml
 SUBMILLI_HOME="$firecrawl_test_home" cargo run -p submilli -- run packages/firecrawl/tests/policy/no-delegation.ts --blueprint packages/firecrawl/tests/policy/no-delegation.yaml
+SUBMILLI_HOME="$firecrawl_test_home" cargo run -p submilli -- run packages/firecrawl/tests/policy/search-content.ts --blueprint packages/firecrawl/tests/policy/search-content.yaml
 ```
 
 These are separate commands because `build test` uses an unrestricted policy;
 its ordinary unit tests cannot prove a `main` caller is constrained.
 
-Live retrieval tests skip without `FIRECRAWL_API_KEY`. For disposable live
+Live retrieval and search tests (discovery and explicit page scraping) skip without `FIRECRAWL_API_KEY`. For disposable live
 job tests, also set `FIRECRAWL_TEST_URL` to an approved public test page in the
 root `.env` or environment. These tests create a one-URL batch and a one-page
 crawl, explicitly inspect results/errors, and cancel only their own jobs. They
@@ -96,6 +114,7 @@ make no polling loop or waits, and cannot require completion before the first
 inspection. Live tests consume provider quota. Never commit `.env`.
 
 Official v2 references researched for this implementation:
+[Search](https://docs.firecrawl.dev/api-reference/endpoint/search),
 [Scrape](https://docs.firecrawl.dev/api-reference/endpoint/scrape),
 [Map](https://docs.firecrawl.dev/api-reference/endpoint/map),
 [Batch Scrape](https://docs.firecrawl.dev/api-reference/endpoint/batch-scrape),

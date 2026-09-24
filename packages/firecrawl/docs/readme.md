@@ -1,9 +1,100 @@
 # Firecrawl
 
-Use `@submilli/firecrawl` for known-page retrieval, site URL discovery, and
+Use `@submilli/firecrawl` for web search, known-page retrieval, site URL discovery, and
 explicit Batch Scrape or Crawl jobs. Named imports and the default package
 namespace are supported. `FIRECRAWL_API_KEY` is supplied internally: never ask
 for it, pass it in a call, or print it.
+
+## Search: discovery first, content only when requested
+
+`search(query, options?)` searches web sources and defaults to discovery only:
+URLs, titles and descriptions/snippets. It sends `sources: ["web"]`, disables
+generated highlights and domain tool discovery, and omits `scrapeOptions`.
+
+```ts
+import { search } from "@submilli/firecrawl";
+
+function main(): string {
+    const found = search("WebAssembly garbage collection", { limit: 5 });
+    return JSON.stringify(found.results);
+}
+```
+
+`SearchOptions` supports `limit` (1–100, default 10), `includeDomains` or
+`excludeDomains` (mutually exclusive hostname arrays), `tbs` for provider time
+filters, `location`, a two-letter `country`, `safe` for SafeSearch, and provider
+`timeout` in milliseconds. Time-filter examples: `qdr:w` for the past week,
+`sbd:1,qdr:w` to combine sorting and a time window, or
+`cdr:1,cd_min:01/01/2026,cd_max:01/31/2026` for a custom date range.
+Filters are opt-in; ordinary search uses provider defaults. Domain lists take
+hostnames, not URLs, paths, ports or wildcards. Country codes are uppercased.
+Queries must be nonempty and at most 500 characters.
+
+The current v2 Search API documents no offset, page number, or continuation
+cursor. This package does not invent pagination or promise completeness. The
+limit is a ceiling, and all returned web results are retained. For more coverage,
+make an explicit new query. Images, news, category-specific indexes and tool
+search are outside this web-search surface.
+
+To explicitly request page content in the same provider call:
+
+```ts
+import { search } from "@submilli/firecrawl";
+
+function main(): string {
+    const found = search("Firecrawl scrape documentation", {
+        limit: 2,
+        includeDomains: ["docs.firecrawl.dev"],
+        scrapeOptions: { formats: ["markdown", "html"] }
+    });
+    return JSON.stringify(found);
+}
+```
+
+`SearchResponse` returns `results`, optional provider `id`, `creditsUsed`,
+`warning`, and complete `warnings`. The ID is informational, not a Crawl/Batch
+job handle. Each result retains its search `url`, `title`, `description`,
+optional `position`, per-result `error`, and nullable `content: Page`.
+Available content includes Markdown, HTML, optional structured JSON, complete
+metadata, original/final URLs, warnings and page errors. Discovery-only hits
+usually have null content. Extraction can fail or be absent on individual hits;
+inspect errors and retain the discovery details. HTTP success is not a promise
+that every page was extracted.
+
+Supplying `scrapeOptions` (even `{}`) explicitly enables native result scraping
+and increases latency/credit usage. It uses the same controls as `scrape`;
+`{}` requests Markdown. JSON extraction remains separately opt-in through
+`scrapeOptions.json`. Large synchronous search results can hit transport/memory
+limits rather than being truncated. For large pages, discover first, then use
+a bounded batch and explicit VFS result downloads.
+
+**Authorization:** discovery needs `firecrawl.dev/search { limit }` only.
+Native result scraping additionally needs `firecrawl.dev/search.scrape {}`
+and `firecrawl.dev/delegatedFetch {}`. The former deliberately grants scraping
+of unknown result hosts: the provider fetches them before the package can check
+their URLs. It is separate from host-filtered `firecrawl.dev/scrape` grants.
+Do not grant it to roles requiring per-result host checks. Domain query filters
+are provider search operators, not an authorization boundary; returning only
+permitted results afterward would be too late to authorize the fetches.
+
+For host-restricted retrieval, search first and explicitly scrape selected URLs;
+each `scrape` then checks its submitted host before requesting content:
+
+```ts
+import { search, scrape } from "@submilli/firecrawl";
+
+function main(): string {
+    const found = search("Firecrawl documentation", { limit: 1 });
+    if (found.results.length === 0) return "No results";
+    const page = scrape(found.results[0].url);
+    return JSON.stringify({ source: found.results[0], page: page });
+}
+```
+
+This two-step version requires the ordinary host-scoped scrape permission and
+`delegatedFetch`, but not `search.scrape`. Provider-side redirects and
+subresources still have the same limits described under permissions below.
+Official reference: [v2 Search](https://docs.firecrawl.dev/api-reference/endpoint/search).
 
 ## Retrieve a page or discover URLs
 
@@ -169,11 +260,13 @@ Provider format/content selection and page limits still apply.
 
 | Operation | Caller capability and truthful fields |
 | --- | --- |
+| Search discovery | `firecrawl.dev/search { limit }` |
+| Native search with content | Also `firecrawl.dev/search.scrape {}` and `firecrawl.dev/delegatedFetch {}` |
 | Scrape | `firecrawl.dev/scrape { host }` |
 | Map | `firecrawl.dev/map { host, limit, includeSubdomains }` |
 | Batch submission | `firecrawl.dev/batch.start { host, count }`, checked for every URL |
 | Crawl submission | `firecrawl.dev/crawl.start { host, limit, allowSubdomains, allowExternalLinks, crawlEntireDomain }` |
-| All four above | Also `firecrawl.dev/delegatedFetch {}` |
+| Scrape, Map, Batch and Crawl submission | Also `firecrawl.dev/delegatedFetch {}` |
 | Read status/results/errors or download | `firecrawl.dev/jobs.read { kind, jobId }` |
 | Cancel | `firecrawl.dev/jobs.cancel { kind, jobId }` |
 | Download destination | Also caller `fs.write { op: "download", path, max_bytes }` |
@@ -211,6 +304,6 @@ job; never blindly retry a charged submission. Pure exported `build*`,
 `normalize*`, `urlHost`, `jobPagePath`, and `firecrawlHttpError` helpers perform
 no protected effects and are intended for testing.
 
-Search, Agent, legacy Extract, Parse, Monitor, browser sessions, actions,
+Agent, legacy Extract, Parse, Monitor, browser sessions, actions,
 webhooks, arbitrary HTTP overrides and automatic retries are outside this
 package. No LLM-generated extraction is requested unless `json` is supplied.
