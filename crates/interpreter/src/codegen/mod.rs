@@ -4,6 +4,7 @@ pub mod analysis;
 pub mod bigint_pool;
 pub mod bounds;
 pub mod box_types;
+mod call_arguments;
 pub mod cast_check;
 pub mod classes;
 mod closure_coercions;
@@ -19,6 +20,7 @@ pub mod imported_classes;
 pub mod intrinsics;
 pub mod recursive_validators;
 mod runtime_descriptors;
+mod runtime_values;
 pub mod string_pool;
 pub mod symbol_table;
 pub mod throw;
@@ -124,6 +126,15 @@ fn import_value_symbol(
                 value.mangled_name.as_str(),
                 EntityType::Function(sig_idx),
             );
+            if let Some(metadata) = call_arguments::metadata(
+                params
+                    .iter()
+                    .map(|param| (param.default.as_ref(), param.rest)),
+            ) {
+                symbols
+                    .function_argument_metadata
+                    .insert(value.mangled_name.clone(), metadata);
+            }
             symbols.record_imported_fn(
                 value.mangled_name.clone(),
                 *next_func_idx,
@@ -289,6 +300,8 @@ pub fn codegen_owned_by(
 pub struct GeneratedModule {
     pub wasm: Vec<u8>,
     pub type_info: crate::TypeInfoTable,
+    pub runtime_functions: BTreeMap<crate::MangledName, crate::RuntimeFunction>,
+    pub runtime_globals: BTreeMap<crate::MangledName, Type>,
 }
 
 pub fn codegen_with_type_info(
@@ -309,6 +322,19 @@ fn codegen_inner(
     dependencies: &[&PackageDeclaration],
     owning_package: &str,
 ) -> GeneratedModule {
+    let source_main_return_ty = ta
+        .functions
+        .iter()
+        .find(|function| function.name.name == "main")
+        .map(|function| function.return_type.clone());
+    let lowered = runtime_values::lower(ta, dependencies);
+    let ta = &lowered;
+    let lowered_dependencies: Vec<_> = dependencies
+        .iter()
+        .map(|defs| runtime_values::lower_declaration(defs))
+        .collect();
+    let dependencies: Vec<_> = lowered_dependencies.iter().collect();
+    let dependencies = dependencies.as_slice();
     let analysis = CodegenAnalysis::collect(ta, dependencies);
     let pool = analysis.string_pool;
     let bigint_pool = analysis.bigint_pool;
@@ -842,6 +868,11 @@ fn codegen_inner(
         let func_idx = next_func_idx;
         next_func_idx += 1;
         let param_types: Vec<Type> = f.params.iter().map(|p| p.ty.clone()).collect();
+        if let Some(metadata) = call_arguments::typed_metadata(&f.params) {
+            symbols
+                .function_argument_metadata
+                .insert(f.mangled_name.clone(), metadata);
+        }
         symbols.record_local_fn(
             f.mangled_name.clone(),
             func_idx,
@@ -1363,6 +1394,7 @@ fn codegen_inner(
             &ctx,
             main_func_idx,
             main_return_ty,
+            source_main_return_ty.as_ref().unwrap_or(main_return_ty),
         ));
     }
 
@@ -1422,6 +1454,8 @@ fn codegen_inner(
     GeneratedModule {
         wasm: module.finish(),
         type_info,
+        runtime_functions: runtime_values::signatures(ta),
+        runtime_globals: runtime_values::global_types(ta),
     }
 }
 
@@ -1663,7 +1697,7 @@ pub(crate) mod tests {
         for defs in packages {
             external_packages.insert(defs.package_name.clone(), (*defs).clone());
         }
-        let (mut ta, package, diags) = infer_package(
+        let (mut ta, mut package, diags) = infer_package(
             package_name,
             ModulePath::from("lib"),
             module_refs,
@@ -1694,6 +1728,8 @@ pub(crate) mod tests {
             .unwrap_or_default();
         let generated =
             codegen_with_type_info(root_source, "lib.subm", root_file, &ta, &dependencies);
+        package.runtime_functions = generated.runtime_functions;
+        package.runtime_globals = generated.runtime_globals;
         (generated.wasm, package, generated.type_info)
     }
 
@@ -2529,12 +2565,30 @@ function main(): string {
     }
 
     fn run_main_f64(source: &str) -> f64 {
-        let bytes = compile(source);
-        let (mut store, inst) = link_consumer(&bytes);
-        let main = inst
-            .get_typed_func::<(), f64>(&mut store, "main")
-            .expect("main is exported as `() -> f64`");
-        pollster::block_on(main.call_async(&mut store, ())).expect("main does not trap")
+        run_main_number(&compile(source))
+    }
+
+    fn run_main_number(bytes: &[u8]) -> f64 {
+        let (mut store, inst) = link_consumer(bytes);
+        let main = inst.get_func(&mut store, "main").expect("main export");
+        let mut results = [wasmtime::Val::F64(0)];
+        pollster::block_on(main.call_async(&mut store, &[], &mut results))
+            .expect("main does not trap");
+        match &results[0] {
+            wasmtime::Val::F64(bits) => f64::from_bits(*bits),
+            wasmtime::Val::AnyRef(Some(value)) => {
+                let boxed = value
+                    .as_struct(&mut store)
+                    .expect("read result")
+                    .expect("boxed number");
+                boxed
+                    .field(&mut store, 1)
+                    .expect("number payload")
+                    .f64()
+                    .expect("f64 payload")
+            }
+            other => panic!("expected numeric result, got {other:?}"),
+        }
     }
 
     fn run_main_i32(source: &str) -> i32 {
@@ -5212,12 +5266,7 @@ function main(): void { middle(); }
     }
 
     fn run_main_f64_boxed(source: &str, names: &[&str]) -> f64 {
-        let bytes = compile_with_boxed(source, names);
-        let (mut store, inst) = link_consumer(&bytes);
-        let main = inst
-            .get_typed_func::<(), f64>(&mut store, "main")
-            .expect("main: () -> f64");
-        pollster::block_on(main.call_async(&mut store, ())).expect("main does not trap")
+        run_main_number(&compile_with_boxed(source, names))
     }
 
     fn run_main_string_boxed(source: &str, names: &[&str]) -> String {

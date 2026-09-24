@@ -771,6 +771,12 @@ pub struct TypedParam {
 
 #[derive(Default, Clone, Debug)]
 pub struct TypedAst {
+    /// Arguments before omitted defaults and rest packing, keyed by call span.
+    pub authored_arguments: std::collections::BTreeMap<(u32, u32, u32), Vec<ExprId>>,
+    /// Authored expression types retained by runtime-value lowering for member
+    /// selection. Physical slot types live on the lowered expressions.
+    pub runtime_source_types: std::collections::BTreeMap<ExprId, Type>,
+    pub runtime_chain_types: std::collections::BTreeMap<ExprId, Vec<Type>>,
     /// Module name used for mangling. Defaults to `USER_PACKAGE` (`"main"`).
     pub package_name: String,
     exprs: Vec<TypedExpr>,
@@ -1230,6 +1236,16 @@ impl TypedAst {
         }
     }
 
+    pub fn record_authored_arguments(&mut self, span: Span, args: Vec<ExprId>) {
+        self.authored_arguments
+            .insert((span.file.0, span.start, span.end), args);
+    }
+
+    pub fn authored_call_arguments(&self, span: Span) -> Option<&Vec<ExprId>> {
+        self.authored_arguments
+            .get(&(span.file.0, span.start, span.end))
+    }
+
     pub fn push_expr(&mut self, expr: TypedExpr) -> ExprId {
         let id = self.exprs.len();
         debug_assert!(id < u32::MAX as usize, "TypedAst expr index overflow");
@@ -1275,6 +1291,12 @@ impl TypedAst {
 
     pub fn expr(&self, id: ExprId) -> &TypedExpr {
         &self.exprs[id.0 as usize]
+    }
+
+    pub fn source_type(&self, id: ExprId) -> &Type {
+        self.runtime_source_types
+            .get(&id)
+            .unwrap_or(&self.expr(id).ty)
     }
 
     pub fn stmt(&self, id: StmtId) -> &TypedStmt {

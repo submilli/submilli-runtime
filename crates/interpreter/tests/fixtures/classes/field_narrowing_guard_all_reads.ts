@@ -424,17 +424,18 @@ export function main(): void {
 
   const wrongMethodReturn = new ShapeChild();
   wrongMethodReturn.resetWrongMethodReturn();
-  assert(catchesTypeError(() => {
-    const value = wrongMethodReturn.value;
-    if (value !== null) { value.go(); }
-  }), "method return representation");
+  const methodValue = wrongMethodReturn.value;
+  assert(methodValue !== null, "method-bearing value is present");
+  if (methodValue !== null) {
+    const actual: unknown = methodValue.go();
+    assert(actual === "wrong", "method calls preserve their actual return value");
+  }
 
   const wrongGetterReturn = new GetterInterfaceChild();
   wrongGetterReturn.reset(new WrongGetterReturn());
-  assert(catchesTypeError(() => {
-    const value = wrongGetterReturn.value;
-    const n = value.n;
-  }), "getter return representation");
+  const getterValue = wrongGetterReturn.value;
+  const getterActual: unknown = getterValue.n;
+  assert(getterActual === "wrong", "getter calls preserve their actual return value");
 
   const primitiveInterface = new PrimitiveInterfaceChild();
   assert(primitiveInterface.value.toString() === "ok", "primitive interface value");
@@ -522,7 +523,8 @@ export function main(): void {
 
   const maker = new NodeMakerChild();
   maker.reset({ make: (): unknown => ({ wrong: 1 }) });
-  assert(catchesTypeError(() => { maker.value.make(); }), "recursive alias return guard");
+  const made: unknown = maker.value.make();
+  assert(JSON.stringify(made) === '{"wrong":1}', "recursive alias annotations preserve actual returns");
 
   const mutual = new MutualInterfaceChild();
   const wrongMutual = new WrongMutualCycle();

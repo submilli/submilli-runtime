@@ -1244,6 +1244,7 @@ impl Inferer<'_> {
                 help,
             );
         }
+        self.invalidate_index_write(typed_receiver, typed_index, self.ast.expr(index).span);
         TypedStmtKind::AssignIndex {
             receiver: typed_receiver,
             index: typed_index,
@@ -1841,6 +1842,7 @@ impl Inferer<'_> {
         let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None);
         let elem_ty = self.indexed_write_elem_ty(&receiver_ty, recv_span, recv_span);
         let (typed_index, _) = self.infer_expr(index, Some(&Type::Number));
+        let read_ty = self.index_read_ty(typed_receiver, typed_index, &elem_ty);
         let (typed_value, value_ty) = self.infer_expr(value, Some(&elem_ty));
         // Built before the operator check so the check can name it as the
         // narrowing culprit.
@@ -1850,10 +1852,10 @@ impl Inferer<'_> {
                 index: typed_index,
             },
             span: recv_span,
-            ty: elem_ty.clone(),
+            ty: read_ty.clone(),
         });
         let result_ty =
-            self.check_compound_arith(op, (synth_lhs, &elem_ty), (typed_value, &value_ty), op_span);
+            self.check_compound_arith(op, (synth_lhs, &read_ty), (typed_value, &value_ty), op_span);
         if !matches!(result_ty, Type::Error)
             && !matches!(elem_ty, Type::Error)
             && !assignable(&result_ty, &elem_ty, self.resolver())
@@ -1872,6 +1874,7 @@ impl Inferer<'_> {
             span: stmt_span,
             ty: result_ty,
         });
+        self.invalidate_index_write(typed_receiver, typed_index, self.ast.expr(index).span);
         TypedStmtKind::AssignIndex {
             receiver: typed_receiver,
             index: typed_index,
@@ -2050,7 +2053,7 @@ fn loop_exit_env(
     } else {
         entry.clone()
     };
-    post.extend(condition_false);
+    post.extend_env(condition_false);
     post
 }
 

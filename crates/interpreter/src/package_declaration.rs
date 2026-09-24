@@ -14,6 +14,12 @@ use serde::{Deserialize, Serialize};
 /// Maps are `BTreeMap` for deterministic iteration order; codegen derives stable function-index assignments from it.
 #[derive(Default, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PackageDeclaration {
+    /// Physical user-code signatures, separate from the source API. Inferred
+    /// refinements may not describe the values crossing a runtime boundary.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub runtime_functions: BTreeMap<crate::MangledName, RuntimeFunction>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub runtime_globals: BTreeMap<crate::MangledName, Type>,
     /// Also used as the Wasm import-module name when codegen imports symbols from this package.
     pub package_name: String,
     /// `Some(server)` for a `@mcp/<server>` virtual package. Tools resolve to
@@ -35,6 +41,12 @@ pub struct PackageDeclaration {
     pub shapes: Vec<crate::Shape>,
     /// Prelude-declared namespaces (`Math`, `Temporal`). User `namespace {}` is a parse error; always empty for user-source modules.
     pub namespaces: BTreeMap<String, NamespaceSymbol>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RuntimeFunction {
+    pub params: Vec<Type>,
+    pub ret: Type,
 }
 
 impl PackageDeclaration {

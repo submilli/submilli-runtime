@@ -10,6 +10,7 @@
 //! selected top-level bindings (`isNaN`, `NaN`, …) are loaded into user scope by
 //! the typechecker.
 
+mod arguments;
 pub mod array;
 pub mod bigint;
 pub mod boolean;
@@ -21,6 +22,7 @@ pub(crate) mod error;
 pub(crate) mod iterator;
 pub mod map;
 pub mod math;
+pub(crate) mod member;
 pub mod number;
 pub mod object;
 pub mod regex;
@@ -30,6 +32,7 @@ pub mod temporal;
 pub mod textcodec;
 pub mod uint8array;
 pub(crate) mod uri;
+pub(crate) mod value;
 pub(crate) mod vtable;
 
 use wasmtime::{Linker, Store};
@@ -62,7 +65,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     math::install(linker)?;
     temporal::install(linker)?;
     uri::install(linker)?;
-    regex::install(linker)
+    regex::install(linker)?;
+    value::install(linker)?;
+    member::install(linker)
 }
 
 /// Define the host-owned object vtable globals. Unlike [`install`], this is
@@ -101,6 +106,8 @@ pub fn package_declaration() -> PackageDeclaration {
     temporal::declare(&mut defs);
     uri::declare(&mut defs);
     regex::declare(&mut defs);
+    value::declare(&mut defs);
+    member::declare(&mut defs);
     defs
 }
 

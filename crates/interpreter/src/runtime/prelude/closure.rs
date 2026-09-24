@@ -63,6 +63,27 @@ impl Closure {
         Ok(result)
     }
 
+    pub(crate) async fn call_dynamic(
+        &self,
+        caller: &mut Caller<'_, StoreData>,
+        args: &[Val],
+    ) -> wasmtime::Result<Val> {
+        let signature = self.func.ty(&*caller);
+        let inputs = if let Some(params) = super::arguments::metadata(caller, &self.env)? {
+            super::arguments::bind(caller, &params, args)?
+        } else {
+            let count = signature.params().len().saturating_sub(1);
+            let mut inputs = args.iter().take(count).copied().collect::<Vec<_>>();
+            inputs.resize(count, Val::null_any_ref());
+            inputs
+        };
+        if signature.results().len() == 0 {
+            self.invoke(caller, &inputs, &mut []).await?;
+            return Ok(Val::null_any_ref());
+        }
+        self.call(caller, &inputs).await
+    }
+
     /// Invoke a comparator closure `(_, _) => number` and unbox its
     /// `$boxed_number` result to `f64`. Consumed by `Array#sort`.
     #[allow(dead_code)]
@@ -74,16 +95,7 @@ impl Closure {
     ) -> wasmtime::Result<f64> {
         let mut out = [Val::null_any_ref()];
         self.invoke(caller, &[a, b], &mut out).await?;
-        let Val::AnyRef(Some(any)) = &out[0] else {
-            wasmtime::bail!("comparator returned {:?}, expected a number", out[0]);
-        };
-        let st = any
-            .as_struct(&mut *caller)?
-            .ok_or_else(|| wasmtime::Error::msg("comparator result is not a $boxed_number"))?;
-        let Val::F64(bits) = st.field(&mut *caller, 1)? else {
-            wasmtime::bail!("comparator result field was not f64");
-        };
-        Ok(f64::from_bits(bits))
+        super::value::to_number(caller, &out[0]).await
     }
 
     /// Invoke a predicate closure `(_) => boolean` and unbox its
@@ -96,16 +108,7 @@ impl Closure {
     ) -> wasmtime::Result<bool> {
         let mut out = [Val::null_any_ref()];
         self.invoke(caller, &[arg], &mut out).await?;
-        let Val::AnyRef(Some(any)) = &out[0] else {
-            wasmtime::bail!("predicate returned {:?}, expected a boolean", out[0]);
-        };
-        let st = any
-            .as_struct(&mut *caller)?
-            .ok_or_else(|| wasmtime::Error::msg("predicate result is not a $boxed_boolean"))?;
-        let Val::I32(raw) = st.field(&mut *caller, 1)? else {
-            wasmtime::bail!("predicate result field was not i32");
-        };
-        Ok(raw != 0)
+        super::value::truthy(caller, &out[0])
     }
 }
 

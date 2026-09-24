@@ -8,9 +8,6 @@ function main(): void {
     if (text !== null && clearText()) { text.length; }
   } catch (error: TypeError) { caught = true; }
   assert(caught, "&& guard mutation must throw TypeError");
-  caught = false;
-  try {
-    if (count === null || clearCount()) {} else { count + 1; }
-  } catch (error: TypeError) { caught = true; }
-  assert(caught, "|| guard mutation must throw TypeError");
+  if (count === null || clearCount()) { assert(false); }
+  else { assert(count + 1 === 1, "arithmetic converts the actual null value"); }
 }

@@ -495,6 +495,25 @@ pub fn emit_env_types(
     symbols: &mut SymbolTable,
     next_type_idx: &mut u32,
 ) {
+    let string = symbols.string_type_idx().expect("string intrinsic");
+    types.ty().struct_([
+        FieldType {
+            element_type: StorageType::Val(ValType::Ref(RefType {
+                nullable: true,
+                heap_type: HeapType::ANY,
+            })),
+            mutable: false,
+        },
+        FieldType {
+            element_type: StorageType::Val(ValType::Ref(RefType {
+                nullable: false,
+                heap_type: HeapType::Concrete(string),
+            })),
+            mutable: false,
+        },
+    ]);
+    symbols.call_metadata_type = Some(*next_type_idx);
+    *next_type_idx += 1;
     for meta in metas {
         let mut fields: Vec<FieldType> = meta
             .captured

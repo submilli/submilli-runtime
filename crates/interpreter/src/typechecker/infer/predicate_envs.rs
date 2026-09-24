@@ -158,11 +158,10 @@ impl<'a> Inferer<'a> {
             }
             doomed.push(path);
         }
-        // Dropped silently. Telling a later diagnostic *why* needs the drop to
-        // reach the region this env installs, and nothing here knows which of
-        // the two envs the caller will push — see `unpreserved_shape_hint`.
         for path in doomed {
-            env.remove(&path);
+            if let Some(view) = env.remove(&path) {
+                env.dropped.insert(path, view.narrowed_ty);
+            }
         }
     }
 
@@ -1337,11 +1336,11 @@ impl<'a> Inferer<'a> {
                 // to the un-narrowed type rather than naming a binding that has none.
                 return (!matches!(view.narrowed_ty, Type::Error)).then_some(view);
             }
-            if self
-                .tombstone_scopes
-                .get(frame_idx)
-                .is_some_and(|tombs| tombstone_covering(tombs, path).is_some())
-            {
+            if self.tombstone_scopes.get(frame_idx).is_some_and(|tombs| {
+                tombs
+                    .iter()
+                    .any(|(written, reason)| reason.invalidates() && written.is_prefix_of(path))
+            }) {
                 return None;
             }
         }

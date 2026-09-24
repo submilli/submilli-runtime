@@ -1,9 +1,12 @@
 ---
 source: crates/interpreter/src/typechecker/infer/expr.rs
-assertion_line: 8557
+assertion_line: 9201
 expression: ta
 ---
 TypedAst {
+    authored_arguments: {},
+    runtime_source_types: {},
+    runtime_chain_types: {},
     package_name: "main",
     exprs: [
         TypedExpr {

@@ -48,6 +48,8 @@ pub struct SymbolTable {
     globals: BTreeMap<MangledName, u32>,
     global_types: BTreeMap<MangledName, Type>,
     intrinsic_type_indices: Option<IntrinsicTypeIndices>,
+    pub(crate) call_metadata_type: Option<u32>,
+    pub(crate) function_argument_metadata: BTreeMap<MangledName, String>,
     // Per-class WasmGC artifacts, keyed by the class's mangled name. Classes are
     // nominal (one struct type each), unlike arity-shared object subtypes.
     class_struct_type_idx: BTreeMap<MangledName, u32>,

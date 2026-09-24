@@ -690,6 +690,9 @@ pub fn emit_closure_function(
     });
     let env_typed_local = emitter.add_anonymous_local(env_typed_val);
     emitter.instructions.push(Instruction::LocalGet(0));
+    if crate::codegen::call_arguments::typed_metadata(&meta.params).is_some() {
+        crate::codegen::call_arguments::unwrap(&mut emitter, ctx);
+    }
     emitter.instructions.push(Instruction::RefCastNonNull(
         wasm_encoder::HeapType::Concrete(env_type_idx),
     ));

@@ -69,7 +69,9 @@ fn install_prelude(
         super::prelude::error::build_error_subclass_types(store.engine(), &intr)?.1;
     let map_backing_type = super::prelude::map::map_backing_struct(store.engine(), &intr)?;
     let set_backing_type = super::prelude::set::set_backing_struct(store.engine(), &intr)?;
+    let member_functions = super::prelude::member::functions(linker, store);
     store.data_mut().host_abi = Some(HostAbi {
+        member_functions,
         string_type: intr.string,
         uint8_type: intr.uint8_array,
         array_type: intr.array,
@@ -588,6 +590,7 @@ pub fn write_submilli_string(
 /// (see [`build_intrinsic_types`]); the vtable value is read from the prelude
 /// instance per call.
 pub struct HostAbi {
+    pub(crate) member_functions: std::collections::BTreeMap<String, wasmtime::Func>,
     pub(crate) string_type: StructType,
     pub(crate) uint8_type: StructType,
     pub(crate) array_type: StructType,

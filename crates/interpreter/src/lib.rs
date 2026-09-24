@@ -57,8 +57,8 @@ pub use lower_patterns::lower as lower_patterns;
 pub use mangle::MangledName;
 pub use package_declaration::{
     AccessorSig, ClassExtends, DefaultValue, Dispatch, EnumVariantValue, FieldSig, MethodSig,
-    NamespaceSymbol, PackageDeclaration, Param, PropertySig, TypeKind, TypeSymbol, ValueKind,
-    ValueSymbol,
+    NamespaceSymbol, PackageDeclaration, Param, PropertySig, RuntimeFunction, TypeKind, TypeSymbol,
+    ValueKind, ValueSymbol,
 };
 pub use parser::parse;
 pub use runtime::{RunResult, RuntimeConfig, dispatch_main_async};

@@ -111,7 +111,10 @@ fn is_null(v: &Val) -> bool {
 }
 
 /// Read a `$string` `Val`'s packed UTF-16 backing into code units.
-fn read_string_units(caller: &mut Caller<'_, StoreData>, val: &Val) -> wasmtime::Result<Vec<u16>> {
+pub(super) fn read_string_units(
+    caller: &mut Caller<'_, StoreData>,
+    val: &Val,
+) -> wasmtime::Result<Vec<u16>> {
     let st = as_struct(caller, val, "array element toString result")?;
     let raw = match st.field(&mut *caller, 1)? {
         Val::AnyRef(Some(arr)) => arr.unwrap_array(&mut *caller)?,

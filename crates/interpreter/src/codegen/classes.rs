@@ -52,6 +52,7 @@ struct MethodSlot {
     /// *owner's*). Needed to pick the closure signature for the slot's payload
     /// adapter; its body uses the recorded ABI for physical representations.
     param_tys: Vec<crate::Type>,
+    argument_metadata: Option<String>,
     ret_ty: crate::Type,
     /// A generic method has no adapter and never enters the instance payload.
     generic: bool,
@@ -234,6 +235,7 @@ impl ClassPlan {
                                         name: s.name.clone(),
                                         owner: s.owner.clone(),
                                         param_tys: s.param_tys.clone(),
+                                        argument_metadata: s.argument_metadata.clone(),
                                         ret_ty: s.ret_ty.clone(),
                                         generic: s.generic,
                                     })
@@ -286,11 +288,13 @@ impl ClassPlan {
             let mut methods: Vec<SlotDraft> = parent_methods;
             for m in &sorted_methods {
                 let param_tys: Vec<crate::Type> = m.params.iter().map(|p| p.ty.clone()).collect();
+                let argument_metadata = super::call_arguments::typed_metadata(&m.params);
                 if let Some(slot) = methods.iter_mut().find(|s| s.name == m.name.name) {
                     // Override: same slot, body now supplied by this class — so
                     // the slot must describe *this* body, not the ancestor's.
                     slot.owner = decl.mangled_name.clone();
                     slot.param_tys = param_tys;
+                    slot.argument_metadata = argument_metadata;
                     slot.ret_ty = m.return_type.clone();
                     slot.generic = !m.generics.is_empty();
                 } else {
@@ -298,6 +302,7 @@ impl ClassPlan {
                         name: m.name.name.clone(),
                         owner: decl.mangled_name.clone(),
                         param_tys,
+                        argument_metadata,
                         ret_ty: m.return_type.clone(),
                         generic: !m.generics.is_empty(),
                     });
@@ -369,6 +374,7 @@ impl ClassPlan {
                         owner: d.owner,
                         sig_idx: 0, // filled in reserve_types
                         param_tys: d.param_tys,
+                        argument_metadata: d.argument_metadata,
                         ret_ty: d.ret_ty,
                         generic: d.generic,
                     })
@@ -910,15 +916,15 @@ impl ClassPlan {
                 .prelude_func_idx("string_concat")
                 .expect("string_concat imported from prelude");
             // A user `toString`/`toJson` method fills the universal slot (the
-            // typechecker pins both to `(): string`, so the method body's Wasm
-            // signature matches the slot's funcref type modulo a direct call).
+            // universal slots require strings even when the authored method's
+            // physical return has widened to preserve live values).
             let user_method_thunk = |name: &str| {
                 class.methods.iter().find(|s| s.name == name).map(|slot| {
                     let idx = ctx
                         .symbols
                         .class_method_func_idx(&slot.owner, &slot.name)
                         .expect("slot owner's method func allocated");
-                    emit_universal_slot_thunk(idx)
+                    emit_universal_slot_thunk(ctx, idx)
                 })
             };
             code.function(&user_method_thunk("toString").unwrap_or_else(|| {
@@ -1018,6 +1024,9 @@ impl ClassPlan {
             .cloned()
             .unwrap_or_default();
         emitter.instruction(Instruction::LocalGet(0));
+        if slot.argument_metadata.is_some() {
+            super::call_arguments::unwrap(&mut emitter, ctx);
+        }
         emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
             intrinsics.object,
         )));
@@ -1244,6 +1253,9 @@ impl ClassPlan {
                 emitter.instruction(Instruction::GlobalGet(closure_vtable));
                 emitter.instruction(Instruction::RefFunc(adapter));
                 emitter.instruction(Instruction::LocalGet(this_slot));
+                if let Some(metadata) = &method.argument_metadata {
+                    super::call_arguments::wrap(&mut emitter, ctx, metadata);
+                }
                 emitter.instruction(Instruction::StructNew(closure_struct));
                 emitter.instruction(Instruction::ArraySet(intrinsics.object_fields));
             }
@@ -1465,7 +1477,7 @@ fn field_setup_steps(decl: &TypedClassDecl, inherited: &BTreeSet<String>) -> Vec
                 steps.push(FieldSetup::ParamCopy {
                     field: field.name.name.clone(),
                     param_local: pos as u32 + 1,
-                    ty: field.ty.clone(),
+                    ty: ctor.params[pos].ty.clone(),
                 });
             }
         }
@@ -1604,6 +1616,7 @@ struct SlotDraft {
     name: String,
     owner: MangledName,
     param_tys: Vec<crate::Type>,
+    argument_metadata: Option<String>,
     ret_ty: crate::Type,
     generic: bool,
 }
@@ -1867,16 +1880,28 @@ fn emit_payload_slot_equals(f: &mut Function, slot: u32, intrinsics: IntrinsicTy
     f.instruction(&Instruction::End);
 }
 
-/// A universal-slot body that forwards to a user-declared `toString`/`toJson`
-/// method. The typechecker pins those methods to `(): string`, so the method
-/// body's signature — `(self: (ref $Object)) -> (ref $string)` — matches the
-/// slot's shape and the thunk is a plain pass-through call.
-fn emit_universal_slot_thunk(method_func_idx: u32) -> Function {
-    let mut f = Function::new([]);
-    f.instruction(&Instruction::LocalGet(0));
-    f.instruction(&Instruction::Call(method_func_idx));
-    f.instruction(&Instruction::End);
-    f
+/// Bridge an authored conversion method to the universal string-returning slot.
+/// Direct user calls still preserve the method's actual return value.
+fn emit_universal_slot_thunk(ctx: &CodegenCtx, method_func_idx: u32) -> Function {
+    let mut emitter = super::function_emitter::FunctionEmitter::new(
+        ctx,
+        &[(
+            crate::Ident {
+                name: "self".into(),
+                span: crate::Span::at(crate::FileId(0)),
+            },
+            ctx.symbols.value_type(&crate::Type::Unknown),
+        )],
+    );
+    emitter.instruction(Instruction::LocalGet(0));
+    emitter.instruction(Instruction::Call(method_func_idx));
+    super::cast_check::emit_operation_cast_on_stack(
+        &mut emitter,
+        ctx,
+        &crate::Type::Unknown,
+        &crate::Type::String,
+    );
+    emitter.build()
 }
 
 fn emit_class_to_string_body(

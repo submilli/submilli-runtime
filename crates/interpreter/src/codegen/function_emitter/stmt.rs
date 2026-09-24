@@ -316,15 +316,6 @@ fn emit_operand_once(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, expr: Expr
     slot
 }
 
-/// [`emit_operand_once`] for an index expression, which every indexing path
-/// stashes as a bare `f64` rather than at its own value type.
-fn emit_index_once(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, index: ExprId) -> u32 {
-    emit_expr(emitter, ctx, index);
-    let slot = stash_index_operand(emitter);
-    emitter.record_single_evaluation(index, slot);
-    slot
-}
-
 fn emit_assign_field(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
@@ -333,12 +324,24 @@ fn emit_assign_field(
     value: ExprId,
 ) {
     let mark = emitter.single_evaluation_mark();
-    let receiver_ty = ctx.ta.expr(receiver).ty.clone();
+    let receiver_ty = ctx.ta.source_type(receiver).clone();
     // The receiver runs before the value in both arms, which is both the
     // left-to-right order the language guarantees and the order
     // `emit_operand_once` needs: a read inside `value` can only reuse a slot
     // that is already filled.
     let recv = emit_operand_once(emitter, ctx, receiver);
+    emit_operand_once(emitter, ctx, value);
+    emitter.instruction(Instruction::LocalGet(recv));
+    if ctx.ta.expr(receiver).ty != receiver_ty {
+        crate::codegen::cast_check::emit_operation_cast_on_stack(
+            emitter,
+            ctx,
+            &ctx.ta.expr(receiver).ty,
+            &receiver_ty,
+        );
+    }
+    let recv = emitter.add_anonymous_local(ctx.symbols.value_type(&receiver_ty));
+    emitter.instruction(Instruction::LocalSet(recv));
     match receiver_ty.peel() {
         // Class instance: nominal receiver, array-backed object payload.
         Type::ClassRef { mangled, .. } => {
@@ -424,7 +427,7 @@ fn emit_assign_index(
     elem_ty: &Type,
 ) {
     let mark = emitter.single_evaluation_mark();
-    if matches!(ctx.ta.expr(receiver).ty.peel(), Type::Uint8Array) {
+    if matches!(ctx.ta.source_type(receiver).peel(), Type::Uint8Array) {
         emit_uint8_index_store(emitter, ctx, receiver, index, value);
     } else {
         emit_array_index_store(emitter, ctx, receiver, index, value, elem_ty);
@@ -449,15 +452,10 @@ fn emit_uint8_index_store(
         .uint8_array_type_idx()
         .expect("Type::Uint8Array requires intrinsic types declared");
     let recv_local = emit_operand_once(emitter, ctx, receiver);
-    let idx_f64_local = emit_index_once(emitter, ctx, index);
+    let key = emit_operand_once(emitter, ctx, index);
     // RHS evaluates before the bounds check throws, preserving left-to-right
     // evaluation order (`emit_array_index_store` does the same).
-    let value_local = emitter.add_anonymous_local(ValType::I32);
-    emit_expr(emitter, ctx, value);
-    emitter.instruction(Instruction::I32TruncSatF64U);
-    emitter.instruction(Instruction::I32Const(0xff));
-    emitter.instruction(Instruction::I32And);
-    emitter.instruction(Instruction::LocalSet(value_local));
+    let original_value = emit_operand_once(emitter, ctx, value);
 
     // `$Uint8Array`'s backing field is immutable — no `push` exists to swap the
     // buffer out — so this read could sit anywhere after the receiver. It goes
@@ -467,6 +465,22 @@ fn emit_uint8_index_store(
         heap_type: HeapType::Concrete(raw_uint8_idx),
     }));
     emitter.instruction(Instruction::LocalGet(recv_local));
+    crate::codegen::cast_check::emit_operation_cast_on_stack(
+        emitter,
+        ctx,
+        &ctx.ta.expr(receiver).ty,
+        &Type::Uint8Array,
+    );
+    emitter.instruction(Instruction::LocalGet(key));
+    super::expr::emit_index_number(emitter, ctx, &ctx.ta.expr(index).ty);
+    let idx_f64_local = stash_index_operand(emitter);
+    let value_local = emitter.add_anonymous_local(ValType::I32);
+    emitter.instruction(Instruction::LocalGet(original_value));
+    cast::emit_coerce_to_slot(emitter, ctx, &ctx.ta.expr(value).ty, &Type::Number);
+    emitter.instruction(Instruction::I32TruncSatF64U);
+    emitter.instruction(Instruction::I32Const(0xff));
+    emitter.instruction(Instruction::I32And);
+    emitter.instruction(Instruction::LocalSet(value_local));
     emitter.instruction(Instruction::StructGet {
         struct_type_index: uint8_idx,
         field_index: 1,
@@ -486,7 +500,7 @@ fn emit_array_index_store(
     receiver: ExprId,
     index: ExprId,
     value: ExprId,
-    elem_ty: &Type,
+    _elem_ty: &Type,
 ) {
     let raw_array_idx = ctx
         .symbols
@@ -502,7 +516,7 @@ fn emit_array_index_store(
         .expect("intrinsics declared")
         .object;
     let recv_local = emit_operand_once(emitter, ctx, receiver);
-    let idx_f64_local = emit_index_once(emitter, ctx, index);
+    let key = emit_operand_once(emitter, ctx, index);
     // RHS evaluates before the store (and so before the bounds check throws),
     // preserving left-to-right evaluation order.
     let value_local = emitter.add_anonymous_local(ValType::Ref(RefType {
@@ -511,10 +525,8 @@ fn emit_array_index_store(
     }));
     let value_ty = ctx.ta.expr(value).ty.clone();
     emit_expr(emitter, ctx, value);
-    // Coerce the RHS to the element type (e.g. NumberLiteral → Number), then
-    // box for the (ref null $Object) slot.
-    cast::emit_coerce_to_slot(emitter, ctx, &value_ty, elem_ty);
-    cast::emit_box(emitter, ctx, elem_ty);
+    // Preserve the actual RHS in the erased element slot.
+    cast::emit_box(emitter, ctx, &value_ty);
     emitter.instruction(Instruction::LocalSet(value_local));
 
     // Read the backing array *after* the RHS: `push` swaps in a fresh
@@ -526,6 +538,15 @@ fn emit_array_index_store(
         heap_type: HeapType::Concrete(raw_array_idx),
     }));
     emitter.instruction(Instruction::LocalGet(recv_local));
+    crate::codegen::cast_check::emit_operation_cast_on_stack(
+        emitter,
+        ctx,
+        &ctx.ta.expr(receiver).ty,
+        &Type::Array(Box::new(Type::Unknown)),
+    );
+    emitter.instruction(Instruction::LocalGet(key));
+    super::expr::emit_index_number(emitter, ctx, &ctx.ta.expr(index).ty);
+    let idx_f64_local = stash_index_operand(emitter);
     emitter.instruction(Instruction::StructGet {
         struct_type_index: array_idx,
         field_index: 1,

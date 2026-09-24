@@ -51,9 +51,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
 
     reg_str_str_num_to_num(linker, &engine, &abi, "indexOf", index_of)?;
     reg_str_str_num_to_num(linker, &engine, &abi, "lastIndexOf", last_index_of)?;
-    reg_str_str_num_to_bool(linker, &engine, &abi, "includes", includes)?;
-    reg_str_str_num_to_bool(linker, &engine, &abi, "startsWith", starts_with)?;
-    reg_str_str_num_to_bool(linker, &engine, &abi, "endsWith", ends_with)?;
+    register_string_search_predicate(linker, &engine, &abi, "includes", includes)?;
+    register_string_search_predicate(linker, &engine, &abi, "startsWith", starts_with)?;
+    register_string_search_predicate(linker, &engine, &abi, "endsWith", ends_with)?;
 
     reg_str_str_to_str(linker, &engine, &abi, "concat", concat)?;
     reg_str_num_str_to_str(linker, &engine, &abi, "padStart", pad_start)?;
@@ -338,8 +338,8 @@ pub fn declare(defs: &mut PackageDeclaration) {
         "includes",
         vec![
             s(),
-            Param::new("search", Type::String),
-            Param::new("fromIndex", Type::Number),
+            Param::new("search", Type::Unknown),
+            Param::new("fromIndex", Type::Unknown),
         ],
         Type::Boolean,
     );
@@ -348,8 +348,8 @@ pub fn declare(defs: &mut PackageDeclaration) {
         "startsWith",
         vec![
             s(),
-            Param::new("search", Type::String),
-            Param::new("position", Type::Number),
+            Param::new("search", Type::Unknown),
+            Param::new("position", Type::Unknown),
         ],
         Type::Boolean,
     );
@@ -358,8 +358,8 @@ pub fn declare(defs: &mut PackageDeclaration) {
         "endsWith",
         vec![
             s(),
-            Param::new("search", Type::String),
-            Param::new("endPosition", Type::Number),
+            Param::new("search", Type::Unknown),
+            Param::new("endPosition", Type::Unknown),
         ],
         Type::Boolean,
     );
@@ -643,28 +643,36 @@ fn reg_str_str_num_to_num(
     )
 }
 
-/// `(string, string, f64) -> boolean`: `includes`, `startsWith`, `endsWith`.
-fn reg_str_str_num_to_bool(
+/// Search and position stay boxed so RegExp rejection and coercions run in order.
+fn register_string_search_predicate(
     linker: &mut Linker<StoreData>,
     engine: &wasmtime::Engine,
     abi: &StringAbi,
     name: &'static str,
     op: fn(&Str, &Str, f64) -> bool,
 ) -> wasmtime::Result<()> {
-    let s = abi.value_type();
+    let intr = build_intrinsic_types(engine)?;
+    let value = ValType::Ref(RefType::new(true, HeapType::ConcreteStruct(intr.object)));
     let abi = abi.clone();
-    register_host_fn(
+    register_host_fn_async(
         linker,
         MODULE_NAME,
         method_key(name),
-        FuncType::new(engine, [s.clone(), s, ValType::F64], [ValType::I32]),
+        FuncType::new(
+            engine,
+            [abi.value_type(), value.clone(), value],
+            [ValType::I32],
+        ),
         true,
         move |caller, params, results| {
-            let recv = abi.read(caller, &params[0], name)?;
-            let search = abi.read(caller, &params[1], name)?;
-            let from = number(&params[2], name)?;
-            results[0] = Val::I32(op(&recv.value, &search.value, from) as i32);
-            Ok(())
+            let abi = abi.clone();
+            Box::pin(async move {
+                let recv = abi.read(caller, &params[0], name)?;
+                let search = super::super::value::search_string(caller, &params[1]).await?;
+                let from = super::super::value::to_number(caller, &params[2]).await?;
+                results[0] = Val::I32(op(&recv.value, &Str::from_units(search), from) as i32);
+                Ok(())
+            })
         },
     )
 }

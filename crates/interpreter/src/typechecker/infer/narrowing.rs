@@ -251,6 +251,8 @@ pub struct PendingPostIfMaterialization {
 /// `help:` line so the LLM doesn't have to guess why a narrowing went away.
 #[derive(Clone, Debug)]
 pub enum InvalidationReason {
+    /// A proven predicate had no source that codegen could rebuild in its region.
+    ShapeUnrebuildable { narrowed_ty: Type },
     /// A write reached the path (or a prefix of it) and falsified the guard:
     /// a field or index write, a loop back edge, or a merge of an inner block's
     /// writes. Narrowings on the path and any extension of it are dropped.
@@ -264,8 +266,13 @@ pub enum InvalidationReason {
 }
 
 impl InvalidationReason {
+    pub fn invalidates(&self) -> bool {
+        !matches!(self, Self::ShapeUnrebuildable { .. })
+    }
+
     pub fn span(&self) -> Option<crate::Span> {
         match self {
+            Self::ShapeUnrebuildable { .. } => None,
             Self::Write { span } => Some(*span),
             Self::Reassignment { span } => Some(*span),
             Self::CapturedMutator { closure_span } => *closure_span,
@@ -484,7 +491,79 @@ pub fn narrow_field_presence(
 /// `joined_rebound` and `retain_emittable_views`'s `candidates` would inherit that order.
 /// Only the region nesting reaches the emitted Wasm — [`wrap_order`] pins that, and
 /// locals are unnamed there — so this is defence in depth for everything else.
-pub type NarrowEnv = BTreeMap<ReferencePath, NarrowedView>;
+#[derive(Clone, Debug, Default)]
+pub struct NarrowEnv {
+    views: BTreeMap<ReferencePath, NarrowedView>,
+    /// Predicate drops belong to this outcome, never to the condition's parent
+    /// scope. A consumer that installs no frame simply discards these records.
+    pub dropped: BTreeMap<ReferencePath, Type>,
+}
+
+impl NarrowEnv {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn insert(&mut self, path: ReferencePath, view: NarrowedView) -> Option<NarrowedView> {
+        self.dropped.remove(&path);
+        self.views.insert(path, view)
+    }
+
+    pub fn extend_env(&mut self, other: Self) {
+        self.dropped.extend(other.dropped);
+        self.extend(other.views);
+    }
+
+    pub fn clear(&mut self) {
+        self.views.clear();
+        self.dropped.clear();
+    }
+}
+
+impl std::ops::Deref for NarrowEnv {
+    type Target = BTreeMap<ReferencePath, NarrowedView>;
+    fn deref(&self) -> &Self::Target {
+        &self.views
+    }
+}
+
+impl std::ops::DerefMut for NarrowEnv {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.views
+    }
+}
+
+impl IntoIterator for NarrowEnv {
+    type Item = (ReferencePath, NarrowedView);
+    type IntoIter = std::collections::btree_map::IntoIter<ReferencePath, NarrowedView>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.views.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a NarrowEnv {
+    type Item = (&'a ReferencePath, &'a NarrowedView);
+    type IntoIter = std::collections::btree_map::Iter<'a, ReferencePath, NarrowedView>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.views.iter()
+    }
+}
+
+impl Extend<(ReferencePath, NarrowedView)> for NarrowEnv {
+    fn extend<I: IntoIterator<Item = (ReferencePath, NarrowedView)>>(&mut self, iter: I) {
+        for (path, view) in iter {
+            self.insert(path, view);
+        }
+    }
+}
+
+impl FromIterator<(ReferencePath, NarrowedView)> for NarrowEnv {
+    fn from_iter<I: IntoIterator<Item = (ReferencePath, NarrowedView)>>(iter: I) -> Self {
+        let mut env = Self::new();
+        env.extend(iter);
+        env
+    }
+}
 
 /// Nesting order for the wrap-the-body-in-one-region-per-path loops: longest chain
 /// first, so every path is wrapped *inside* the prefixes its source reads. Ties break
@@ -929,9 +1008,28 @@ pub fn union_envs(
         }
     }
 
+    for (path, ty) in a_narrowings.dropped.iter().chain(&b_narrowings.dropped) {
+        let left_ty = a_narrowings
+            .dropped
+            .get(path)
+            .or_else(|| a_narrowings.get(path).map(|view| &view.narrowed_ty));
+        let right_ty = b_narrowings
+            .dropped
+            .get(path)
+            .or_else(|| b_narrowings.get(path).map(|view| &view.narrowed_ty));
+        if left_ty == Some(ty) && right_ty == Some(ty) {
+            joined_narrowings.dropped.insert(path.clone(), ty.clone());
+        }
+    }
+
     let mut joined_assigned = a_assigned;
     joined_assigned.extend(b_assigned);
 
+    joined_narrowings.dropped.retain(|key, _| {
+        !joined_assigned
+            .iter()
+            .any(|assigned| assigned.is_prefix_of(key))
+    });
     joined_narrowings.retain(|key, _| {
         !joined_assigned
             .iter()

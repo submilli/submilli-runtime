@@ -7,6 +7,7 @@ pub mod rules;
 pub mod type_param_substitution;
 
 pub use capture::capture;
+pub(crate) use capture::{ResolvedLocals, resolve_locals};
 pub use desugar::desugar;
 pub use infer::{infer, infer_package};
 pub use rules::check;

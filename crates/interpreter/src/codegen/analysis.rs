@@ -38,6 +38,42 @@ impl CodegenAnalysis {
             adapter_seen: BTreeSet::new(),
         };
 
+        for ty in ta.runtime_source_types.values() {
+            analysis.visit_type(ty);
+            analysis
+                .string_pool
+                .intern_text(&cast_check::error_prefix(ty));
+        }
+        if !ta.runtime_source_types.is_empty() {
+            for text in cast_check::TYPE_TAG_STRINGS {
+                analysis.string_pool.intern_text(text);
+            }
+            for name in [
+                "numeric",
+                "inc",
+                "dec",
+                "to_number",
+                "to_index",
+                "to_string",
+                "member",
+                "invoke",
+                "property",
+            ] {
+                analysis
+                    .dependency_usage
+                    .note_value(crate::mangle::prelude(&format!("__value_{name}")));
+            }
+        }
+        for types in ta.runtime_chain_types.values() {
+            for ty in types {
+                let ty = crate::typechecker::infer::narrowing::strip_null(ty);
+                analysis.visit_type(&ty);
+                analysis
+                    .string_pool
+                    .intern_text(&cast_check::error_prefix(&ty));
+            }
+        }
+
         for shape in &ta.shapes {
             if matches!(shape, Shape::Object { .. }) {
                 analysis
@@ -89,6 +125,17 @@ impl CodegenAnalysis {
             let crate::TypedTypeDecl::Class(class) = decl else {
                 continue;
             };
+            if class
+                .methods
+                .iter()
+                .any(|method| matches!(method.name.name.as_str(), "toString" | "toJson"))
+            {
+                self.string_pool
+                    .intern_text(&cast_check::error_prefix(&Type::String));
+                for tag in cast_check::TYPE_TAG_STRINGS {
+                    self.string_pool.intern_text(tag);
+                }
+            }
             for check in class
                 .fields
                 .iter()
@@ -490,14 +537,14 @@ impl CodegenAnalysis {
             TypedStmtKind::AssignField { receiver, name, .. } => {
                 self.extra_field_names.push(name.name.clone());
                 self.note_shaped_property_access(
-                    &ta.expr(*receiver).ty,
+                    ta.source_type(*receiver),
                     &name.name,
                     AccessorKind::Set,
                 );
             }
             TypedStmtKind::AssignIndex { elem_ty, .. } => {
                 self.visit_type(elem_ty);
-                self.string_pool.intern_text(bounds::INDEX_OOB_MESSAGE);
+                self.note_index_check();
             }
             TypedStmtKind::NarrowRegion { cast_info, .. } => {
                 self.visit_type(&cast_info.from_ty);
@@ -665,14 +712,18 @@ impl CodegenAnalysis {
                 name,
                 args,
                 ..
-            } => self.note_method_call(&ta.expr(*receiver).ty, iface, name, args.len(), &expr.ty),
+            } => {
+                self.note_method_call(ta.source_type(*receiver), iface, name, args.len(), &expr.ty);
+            }
             TypedExprKind::GenericMethodCall {
                 receiver,
                 iface,
                 name,
                 args,
                 ..
-            } => self.note_method_call(&ta.expr(*receiver).ty, iface, name, args.len(), &expr.ty),
+            } => {
+                self.note_method_call(ta.source_type(*receiver), iface, name, args.len(), &expr.ty);
+            }
             TypedExprKind::InterfacePropertyAccess { iface, name, .. } => {
                 self.dependency_usage
                     .note_member(crate::mangle::extend(iface, &name.name));
@@ -716,13 +767,13 @@ impl CodegenAnalysis {
             TypedExprKind::FieldAccess { receiver, name } => {
                 self.extra_field_names.push(name.name.clone());
                 self.note_shaped_property_access(
-                    &ta.expr(*receiver).ty,
+                    ta.source_type(*receiver),
                     &name.name,
                     AccessorKind::Get,
                 );
             }
             TypedExprKind::IndexAccess { .. } => {
-                self.string_pool.intern_text(bounds::INDEX_OOB_MESSAGE);
+                self.note_index_check();
             }
             TypedExprKind::Closure {
                 runtime_generics,
@@ -751,7 +802,7 @@ impl CodegenAnalysis {
                 self.visit_type(&cast_info.to_ty);
             }
             TypedExprKind::OptionalChain { base, parts } => {
-                self.note_chain_parts(ta, *base, parts);
+                self.note_chain_parts(ta, id, *base, parts);
             }
             TypedExprKind::PostfixUnary { target, .. } => match target {
                 PostfixTarget::Local { .. } => {
@@ -763,13 +814,13 @@ impl CodegenAnalysis {
                 }
                 PostfixTarget::Field { receiver, name, .. } => {
                     self.note_postfix_target(&expr.ty);
-                    let receiver_ty = &ta.expr(*receiver).ty;
+                    let receiver_ty = ta.source_type(*receiver);
                     self.note_shaped_property_access(receiver_ty, &name.name, AccessorKind::Get);
                     self.note_shaped_property_access(receiver_ty, &name.name, AccessorKind::Set);
                 }
                 PostfixTarget::Index { elem_ty, .. } => {
                     self.note_postfix_target(elem_ty);
-                    self.string_pool.intern_text(bounds::INDEX_OOB_MESSAGE);
+                    self.note_index_check();
                 }
             },
             TypedExprKind::NonNullAssert { .. } => {
@@ -793,6 +844,13 @@ impl CodegenAnalysis {
                 self.string_pool.intern_text(source);
                 self.string_pool.intern_text(flags);
             }
+            TypedExprKind::CallClosure { callee, .. } => {
+                self.string_pool
+                    .intern_text(&cast_check::error_prefix(ta.source_type(*callee)));
+                for tag in cast_check::TYPE_TAG_STRINGS {
+                    self.string_pool.intern_text(tag);
+                }
+            }
             TypedExprKind::InstanceOf { class, .. } => {
                 // `ref.test (ref $Foo)` needs the class's type (and its rec group, for an
                 // imported class) pulled into the dependency set; `expr.ty` is just `boolean`.
@@ -808,7 +866,6 @@ impl CodegenAnalysis {
             | TypedExprKind::LocalNarrowRef { .. }
             | TypedExprKind::SuperCtorCall { .. }
             | TypedExprKind::SuperMethodCall { .. }
-            | TypedExprKind::CallClosure { .. }
             | TypedExprKind::TypeofTag { .. }
             | TypedExprKind::Ternary { .. }
             | TypedExprKind::NullishCoalesce { .. } => {}
@@ -827,6 +884,7 @@ impl CodegenAnalysis {
     ) {
         self.dependency_usage
             .note_member(crate::mangle::extend(iface, &name.name));
+        self.string_pool.intern_text("Value is not callable");
         self.extra_field_names.push(name.name.clone());
         self.note_shape_dispatch(receiver_ty, arity, ret);
     }
@@ -842,6 +900,7 @@ impl CodegenAnalysis {
     /// an anonymous object type is a function-typed *field*, so it lowers to a
     /// property read followed by a closure call, never to method dispatch.
     fn note_shape_dispatch(&mut self, receiver_ty: &Type, arity: usize, ret: &Type) {
+        self.string_pool.intern_text("Value is not callable");
         // An optional chain dispatches on the non-null half of its receiver.
         let receiver_ty = crate::typechecker::infer::narrowing::strip_null(receiver_ty);
         if !matches!(receiver_ty.peel(), Type::InterfaceRef { .. }) {
@@ -852,9 +911,22 @@ impl CodegenAnalysis {
 
     /// Each step's receiver is the previous step's result, so a chain has to be
     /// read in order to know what any one step dispatches on.
-    fn note_chain_parts(&mut self, ta: &TypedAst, base: ExprId, parts: &[TypedChainPart]) {
-        let mut receiver_ty = &ta.expr(base).ty;
-        for part in parts {
+    fn note_chain_parts(
+        &mut self,
+        ta: &TypedAst,
+        id: ExprId,
+        base: ExprId,
+        parts: &[TypedChainPart],
+    ) {
+        let source_types = ta.runtime_chain_types.get(&id);
+        let mut receiver_ty = ta.source_type(base);
+        for (index, part) in parts.iter().enumerate() {
+            if let TypedChainPart::MethodCall { iface, name, .. }
+            | TypedChainPart::InterfaceProperty { iface, name, .. } = part
+            {
+                self.string_pool.intern_text(iface.as_str());
+                self.string_pool.intern_text(&name.name);
+            }
             match part {
                 TypedChainPart::Field {
                     name, result_ty, ..
@@ -878,7 +950,7 @@ impl CodegenAnalysis {
                     self.visit_type(result_ty);
                     // A chain index is bounds-checked like any other, so it
                     // needs the same message in the pool.
-                    self.string_pool.intern_text(bounds::INDEX_OOB_MESSAGE);
+                    self.note_index_check();
                 }
                 TypedChainPart::Call { result_ty, .. } => {
                     self.visit_type(result_ty);
@@ -901,7 +973,7 @@ impl CodegenAnalysis {
                     self.note_shape_dispatch(receiver_ty, args.len(), result_ty);
                 }
             }
-            receiver_ty = part.result_ty();
+            receiver_ty = source_types.map_or_else(|| part.result_ty(), |types| &types[index + 1]);
         }
     }
 
@@ -920,9 +992,11 @@ impl CodegenAnalysis {
     fn note_shaped_property_access(&mut self, receiver_ty: &Type, prop: &str, kind: AccessorKind) {
         self.mentioned_closure_sigs
             .push(super::field_guards::signature());
-        if !is_shaped_receiver(receiver_ty) {
+        if !is_shaped_receiver(receiver_ty) && !matches!(receiver_ty.peel(), Type::ClassRef { .. })
+        {
             return;
         }
+        self.string_pool.intern_text("Value is not callable");
         // Both directions need the getter's name and sig: a write scans the
         // `get <prop>` slot to tell a read-only property from an absent one.
         self.extra_field_names
@@ -942,6 +1016,16 @@ impl CodegenAnalysis {
             // where the receiver turns out to be getter-backed.
             self.string_pool
                 .intern_text(throw::READ_ONLY_PROPERTY_MESSAGE);
+        }
+    }
+
+    fn note_index_check(&mut self) {
+        self.string_pool.intern_text(bounds::INDEX_OOB_MESSAGE);
+        for ty in [Type::Array(Box::new(Type::Unknown)), Type::Uint8Array] {
+            self.string_pool.intern_text(&cast_check::error_prefix(&ty));
+        }
+        for tag in cast_check::TYPE_TAG_STRINGS {
+            self.string_pool.intern_text(tag);
         }
     }
 

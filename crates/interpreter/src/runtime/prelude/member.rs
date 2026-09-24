@@ -1,0 +1,337 @@
+//! Lookup members on live receivers before evaluating call arguments.
+
+use super::{MODULE_NAME, declare_method, value};
+use crate::runtime::intrinsic_types::build_intrinsic_types;
+use crate::runtime::{StoreData, host};
+use crate::{PackageDeclaration, Param, Type};
+use std::collections::BTreeMap;
+use wasmtime::{Caller, Func, FuncType, HeapType, Linker, RefType, Store, Val, ValType};
+
+pub(crate) fn functions(
+    linker: &Linker<StoreData>,
+    store: &mut Store<StoreData>,
+) -> BTreeMap<String, Func> {
+    super::package_declaration()
+        .values
+        .values()
+        .filter_map(|symbol| {
+            let key = symbol.mangled_name.as_str();
+            let wasmtime::Extern::Func(function) =
+                linker.get(&mut *store, MODULE_NAME, key).ok()?
+            else {
+                return None;
+            };
+            Some((key.to_owned(), function))
+        })
+        .collect()
+}
+
+pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    let engine = linker.engine().clone();
+    let intr = build_intrinsic_types(&engine)?;
+    let object = ValType::Ref(RefType::new(true, HeapType::ConcreteStruct(intr.object)));
+    for (name, arity) in [("member", 3), ("invoke", 2), ("property", 3)] {
+        host::register_host_fn_async(
+            linker,
+            MODULE_NAME,
+            crate::mangle::prelude(&format!("__value_{name}")),
+            FuncType::new(&engine, vec![object.clone(); arity], [object.clone()]),
+            true,
+            move |caller, params, results| {
+                Box::pin(async move {
+                    results[0] = match name {
+                        "member" => lookup(caller, params).await?,
+                        "invoke" => invoke(caller, &params[0], &params[1]).await?,
+                        _ => property(caller, params).await?,
+                    };
+                    Ok(())
+                })
+            },
+        )?;
+    }
+    Ok(())
+}
+
+pub(super) fn declare(defs: &mut PackageDeclaration) {
+    for (name, arity) in [("member", 3), ("invoke", 2), ("property", 3)] {
+        declare_method(
+            defs,
+            name,
+            crate::mangle::prelude(&format!("__value_{name}")),
+            (0..arity)
+                .map(|i| Param::new(format!("arg{i}"), Type::Unknown))
+                .collect(),
+            Type::Unknown,
+        );
+    }
+}
+
+async fn lookup(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime::Result<Val> {
+    require_receiver(&params[0])?;
+    let name = host::read_string_arg(caller, &params[1], "member")?;
+    let fallback = host::read_string_arg(caller, &params[2], "interface")?;
+    let method = value::conversion_method(caller, &params[0], &name).await?;
+    let interface = receiver_interface(caller, &params[0])?.unwrap_or(fallback);
+    let key = if method.is_some() {
+        String::new()
+    } else {
+        format!("{interface}#{name}")
+    };
+    let key = Val::AnyRef(Some(
+        host::write_submilli_string_struct(caller, &key)?.to_anyref(),
+    ));
+    Ok(Val::AnyRef(Some(
+        host::write_submilli_array_struct(
+            caller,
+            &[params[0], key, method.unwrap_or(Val::null_any_ref())],
+        )?
+        .to_anyref(),
+    )))
+}
+
+async fn invoke(
+    caller: &mut Caller<'_, StoreData>,
+    token: &Val,
+    args: &Val,
+) -> wasmtime::Result<Val> {
+    let token = super::array::read_array(caller, token, "member")?;
+    let args = super::array::read_array(caller, args, "arguments")?;
+    let key = host::read_string_arg(caller, &token[1], "member key")?;
+    if key.is_empty() {
+        if !value::is_callable(caller, &token[2])? {
+            return Err(host::type_error("Member is not callable"));
+        }
+        return super::closure::read(caller, &token[2], "method")?
+            .call_dynamic(caller, &args)
+            .await;
+    }
+    let function = caller
+        .data()
+        .host_abi
+        .as_ref()
+        .and_then(|abi| abi.member_functions.get(&key))
+        .copied();
+    if let Some(function) = function {
+        return call_builtin(caller, function, token[0], &args, &key).await;
+    }
+    let slot = if key.ends_with("#toString") {
+        Some(0)
+    } else if key.ends_with("#toJson") {
+        Some(1)
+    } else {
+        None
+    };
+    if let Some(slot) = slot {
+        return super::vtable::dispatch_vtable_slot(caller, &token[0], slot, &[]).await;
+    }
+    Err(host::type_error("Member is not callable"))
+}
+
+async fn call_builtin(
+    caller: &mut Caller<'_, StoreData>,
+    function: Func,
+    receiver: Val,
+    args: &[Val],
+    key: &str,
+) -> wasmtime::Result<Val> {
+    let params = builtin_parameters(key);
+    let args = if let Some(params) = params {
+        super::arguments::bind(caller, &params, args)?
+    } else {
+        args.to_vec()
+    };
+    let signature = function.ty(&*caller);
+    let mut inputs = Vec::new();
+    for (index, slot) in signature.params().enumerate() {
+        let value = if index == 0 {
+            receiver
+        } else if let Some(value) = args.get(index - 1) {
+            *value
+        } else {
+            Val::null_any_ref()
+        };
+        inputs.push(coerce(caller, value, &slot).await?);
+    }
+    let mut outputs: Vec<_> = signature
+        .results()
+        .map(|ty| match ty {
+            ValType::F64 => Val::F64(0),
+            ValType::I32 => Val::I32(0),
+            _ => Val::null_any_ref(),
+        })
+        .collect();
+    function
+        .call_async(&mut *caller, &inputs, &mut outputs)
+        .await?;
+    box_result(
+        caller,
+        outputs.first().copied().unwrap_or(Val::null_any_ref()),
+    )
+}
+
+async fn coerce(
+    caller: &mut Caller<'_, StoreData>,
+    input: Val,
+    slot: &ValType,
+) -> wasmtime::Result<Val> {
+    if fits_slot(caller, &input, slot)? {
+        return Ok(input);
+    }
+    match slot {
+        ValType::F64 => Ok(Val::F64(value::to_number(caller, &input).await?.to_bits())),
+        ValType::I32 => Ok(Val::I32(value::truthy(caller, &input)? as i32)),
+        ValType::Ref(reference)
+            if reference.heap_type()
+                == &HeapType::ConcreteStruct(build_intrinsic_types(caller.engine())?.string) =>
+        {
+            let units = value::string(value::primitive_with_hint(caller, &input, true).await?);
+            Ok(Val::AnyRef(Some(
+                host::write_submilli_string_struct_units(caller, &units)?.to_anyref(),
+            )))
+        }
+        _ => Err(host::type_error("Invalid method argument")),
+    }
+}
+
+fn builtin_parameters(key: &str) -> Option<super::arguments::Parameters> {
+    let defs = super::prelude_package_declaration();
+    let (interface, method) = key.rsplit_once('#')?;
+    let symbol = defs
+        .types
+        .values()
+        .find(|symbol| symbol.mangled_name.as_str() == interface)?;
+    let crate::TypeKind::Interface { methods, .. } = &symbol.kind else {
+        return None;
+    };
+    Some(
+        methods
+            .get(method)?
+            .params
+            .iter()
+            .map(|param| (param.default.clone(), param.rest))
+            .collect(),
+    )
+}
+
+pub(super) fn box_result(caller: &mut Caller<'_, StoreData>, result: Val) -> wasmtime::Result<Val> {
+    match result {
+        Val::F64(bits) => Ok(Val::AnyRef(Some(
+            host::write_boxed_number_struct(caller, f64::from_bits(bits))?.to_anyref(),
+        ))),
+        Val::I32(value) => Ok(Val::AnyRef(Some(
+            box_boolean(caller, value != 0)?.to_anyref(),
+        ))),
+        _ => Ok(result),
+    }
+}
+
+async fn property(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime::Result<Val> {
+    require_receiver(&params[0])?;
+    let name = host::read_string_arg(caller, &params[1], "property")?;
+    if let Some(value) = value::conversion_method(caller, &params[0], &name).await? {
+        return Ok(value);
+    }
+    let interface = receiver_interface(caller, &params[0])?;
+    if name == "length"
+        && interface.as_deref().is_some_and(|name| {
+            [
+                "submilli:prelude#String",
+                "submilli:prelude#Array",
+                "submilli:prelude#Uint8Array",
+            ]
+            .contains(&name)
+        })
+    {
+        let Val::AnyRef(Some(reference)) = params[0] else {
+            unreachable!("classified receiver")
+        };
+        let object = reference.unwrap_struct(&mut *caller)?;
+        let Val::AnyRef(Some(backing)) = object.field(&mut *caller, 1)? else {
+            unreachable!("intrinsic backing")
+        };
+        let backing = backing.unwrap_array(&mut *caller)?;
+        let len = backing.len(&mut *caller)?;
+        return box_result(caller, Val::F64((len as f64).to_bits()));
+    }
+    let token = lookup(caller, params).await?;
+    let args = Val::AnyRef(Some(
+        host::write_submilli_array_struct(caller, &[])?.to_anyref(),
+    ));
+    invoke(caller, &token, &args).await
+}
+
+fn require_receiver(value: &Val) -> wasmtime::Result<()> {
+    if matches!(value, Val::AnyRef(None)) {
+        return Err(host::type_error("Cannot read property of null"));
+    }
+    Ok(())
+}
+
+fn receiver_interface(
+    caller: &mut Caller<'_, StoreData>,
+    value: &Val,
+) -> wasmtime::Result<Option<String>> {
+    let Val::AnyRef(Some(reference)) = value else {
+        return Ok(None);
+    };
+    let Some(object) = reference.as_struct(&mut *caller)? else {
+        return Ok(None);
+    };
+    let intr = build_intrinsic_types(caller.engine())?;
+    for (ty, name) in [
+        (intr.string, "String"),
+        (intr.boxed_number, "Number"),
+        (intr.boxed_boolean, "Boolean"),
+        (intr.array, "Array"),
+        (intr.uint8_array, "Uint8Array"),
+        (intr.bigint, "BigInt"),
+        (intr.regex, "RegExp"),
+    ] {
+        if object.matches_ty(&*caller, &ty)? {
+            return Ok(Some(crate::mangle::prelude(name).as_str().to_owned()));
+        }
+    }
+    if object.matches_ty(&*caller, &intr.object_shape)? {
+        return Ok(Some(crate::mangle::prelude("Object").as_str().to_owned()));
+    }
+    if let Some(abi) = caller.data().host_abi.as_ref() {
+        for (ty, name) in [
+            (&abi.map_backing_type, "Map"),
+            (&abi.set_backing_type, "Set"),
+        ] {
+            if object.matches_ty(&*caller, ty)? {
+                return Ok(Some(crate::mangle::prelude(name).as_str().to_owned()));
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn box_boolean(
+    caller: &mut Caller<'_, StoreData>,
+    value: bool,
+) -> wasmtime::Result<wasmtime::Rooted<wasmtime::StructRef>> {
+    let ty = build_intrinsic_types(caller.engine())?.boxed_boolean;
+    let vtable = host::host_boxed_boolean_vtable(caller)?;
+    let pre = wasmtime::StructRefPre::new(&mut *caller, ty);
+    wasmtime::StructRef::new(&mut *caller, &pre, &[vtable, Val::I32(value as i32)])
+}
+
+fn fits_slot(
+    caller: &mut Caller<'_, StoreData>,
+    value: &Val,
+    ty: &ValType,
+) -> wasmtime::Result<bool> {
+    Ok(match (value, ty) {
+        (Val::F64(_), ValType::F64) | (Val::I32(_), ValType::I32) => true,
+        (Val::AnyRef(None), ValType::Ref(ty)) => ty.is_nullable(),
+        (Val::AnyRef(Some(value)), ValType::Ref(ty)) => match ty.heap_type() {
+            HeapType::ConcreteStruct(ty) => match value.as_struct(&mut *caller)? {
+                Some(value) => value.matches_ty(&*caller, ty)?,
+                None => false,
+            },
+            _ => false,
+        },
+        _ => false,
+    })
+}

@@ -76,10 +76,12 @@ pub fn allocate(
 ) -> Vec<(Type, u32)> {
     let mut targets = BTreeSet::from([Type::Unknown]);
     targets.extend(extra.iter().cloned());
+    let mut has_generic_calls = false;
     for index in 0..ta.exprs_len() {
         if let TypedExprKind::GenericCall { type_args, .. } =
             &ta.expr(crate::ExprId(index as u32)).kind
         {
+            has_generic_calls = true;
             targets.extend(type_args.iter().cloned());
         }
     }
@@ -88,7 +90,8 @@ pub fn allocate(
             targets.extend(context.args.iter().cloned());
         }
     }
-    if targets.len() == 1
+    if !has_generic_calls
+        && targets.len() == 1
         && ta.runtime_class_contexts.values().all(Vec::is_empty)
         && !ta
             .runtime_field_guards

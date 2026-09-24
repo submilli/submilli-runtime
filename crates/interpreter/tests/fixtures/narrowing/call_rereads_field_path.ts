@@ -115,12 +115,7 @@ export function main(): void {
   }
 
   const accessor = new AccessorMutation();
-  try {
-    accessor.readAfterGetter();
-    assert(false, "an accessor mutation must not leave a stale narrowed value");
-  } catch (e) {
-    assert(e instanceof TypeError, "an accessor mutation throws TypeError at the read");
-  }
+  assert(accessor.readAfterGetter() === "null1", "concatenation uses the actual null value");
 
   const nested = new NestedMutation();
   try {

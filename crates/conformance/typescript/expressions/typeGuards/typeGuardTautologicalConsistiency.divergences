@@ -2,8 +2,8 @@ types: 14 of 23 tsc entries compared, 2 differ
 
 line 6: stringOrNumber
   tsc:  never
-  ours: number
+  ours: number | string
 
 line 11: stringOrNumber
   tsc:  never
-  ours: number
+  ours: number | string

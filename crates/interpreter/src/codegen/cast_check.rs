@@ -59,6 +59,11 @@ pub fn emit_cast(
     }
 
     let Some(check_shape) = check else {
+        if &source_ty != ctx.ta.source_type(value) {
+            emit_expr(emitter, ctx, value);
+            emit_checked_cast_on_stack(emitter, ctx, &source_ty, target_ty);
+            return;
+        }
         // Statically-proven upcast: box then narrow representation, no runtime test.
         emit_expr(emitter, ctx, value);
         cast::emit_box(emitter, ctx, &source_ty);
@@ -648,6 +653,44 @@ fn is_interface_parameter(ty: &Type) -> bool {
     }
 }
 
+/// Require the carrier an operation consumes, without validating its contents
+/// or invoking getters. Reading a value itself does not perform this check.
+pub(crate) fn emit_operation_cast_on_stack(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    source_ty: &Type,
+    target_ty: &Type,
+) {
+    cast::emit_box(emitter, ctx, source_ty);
+    let scratch = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)));
+    emitter.instruction(Instruction::LocalSet(scratch));
+    if matches!(target_ty.peel(), Type::Function { .. }) {
+        let signature = crate::codegen::closures::classify(target_ty.peel());
+        emit_representation_test(emitter, ctx, scratch, target_ty);
+        let opposite = crate::codegen::closures::ClosureSig {
+            is_void: !signature.is_void,
+            ..signature
+        };
+        if let Some(structure) = ctx.symbols.closure_struct_type_idx(opposite) {
+            emit_ref_test(emitter, scratch, structure);
+            emitter.instruction(Instruction::I32Or);
+        }
+    } else if matches!(
+        ctx.symbols.value_type(target_ty),
+        ValType::F64 | ValType::I32
+    ) {
+        emit_structural_test(emitter, ctx, scratch, target_ty);
+    } else {
+        emit_representation_test(emitter, ctx, scratch, target_ty);
+    }
+    emitter.emit_if(BlockType::Result(ctx.symbols.value_type(target_ty)));
+    emitter.instruction(Instruction::LocalGet(scratch));
+    cast::emit_cast_to(emitter, ctx, target_ty);
+    emitter.emit_else();
+    emit_cast_throw(emitter, ctx, scratch, target_ty);
+    emitter.emit_end();
+}
+
 /// The conservative fallback for types without a full structural validator.
 /// It cannot distinguish two interface values sharing `$Object`, but it proves
 /// the following representation cast safe and turns representation mismatches
@@ -769,13 +812,23 @@ pub fn emit_narrowed_field_read(
     check: &crate::FieldNarrowingCheck,
     result_ty: &Type,
 ) {
+    emit_narrowed_field_read_as(emitter, ctx, check, result_ty, result_ty);
+}
+
+pub(crate) fn emit_narrowed_field_read_as(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    check: &crate::FieldNarrowingCheck,
+    result_ty: &Type,
+    check_ty: &Type,
+) {
     let result_val = ctx.symbols.value_type(result_ty);
     let scratch = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)));
     emitter.instruction(Instruction::LocalSet(scratch));
     // Prefer the concrete read-time descriptor. It includes generic
     // substitutions and nested interface metadata that the declaration could
     // not know; imported legacy declarations fall back to their recorded test.
-    let runtime_test = ctx.ta.runtime_type_tests.get(result_ty.peel());
+    let runtime_test = ctx.ta.runtime_type_tests.get(check_ty.peel());
     let test = match runtime_test {
         Some(crate::FieldNarrowingTest::Representation)
             if !matches!(&check.test, crate::FieldNarrowingTest::Representation) =>
@@ -792,7 +845,7 @@ pub fn emit_narrowed_field_read(
         // the cast lets it through anyway. `result_ty` is substituted, so it
         // answers what the declaration could not.
         crate::FieldNarrowingTest::NonNull => {
-            if cast::target_allows_null(ctx, result_ty) {
+            if cast::target_allows_null(ctx, check_ty) {
                 emitter.instruction(Instruction::I32Const(1));
             } else {
                 emit_is_non_null(emitter, scratch);
@@ -803,7 +856,7 @@ pub fn emit_narrowed_field_read(
             // `emit_cast_to` lifts to non-null for every target it does not admit
             // a null for, so those are exactly the targets a `null` in the slot
             // would trap on.
-            if !cast::target_allows_null(ctx, result_ty) {
+            if !cast::target_allows_null(ctx, check_ty) {
                 emit_is_non_null(emitter, scratch);
                 emitter.instruction(Instruction::I32And);
             }
@@ -812,10 +865,10 @@ pub fn emit_narrowed_field_read(
             emit_interface_test(emitter, ctx, scratch, test);
         }
         crate::FieldNarrowingTest::Substituted => {
-            emit_representation_test(emitter, ctx, scratch, result_ty);
+            emit_representation_test(emitter, ctx, scratch, check_ty);
         }
         crate::FieldNarrowingTest::Representation => {
-            emit_representation_test(emitter, ctx, scratch, result_ty);
+            emit_representation_test(emitter, ctx, scratch, check_ty);
         }
     }
     emitter.emit_if(BlockType::Result(result_val));

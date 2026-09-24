@@ -140,6 +140,7 @@ fn emit_stringify_optional_args(
     emit_stringify_value(emitter, ctx, arg_ty);
     match space {
         StringifySpace::None => {}
+        StringifySpace::Dynamic(local) => emit_dynamic_space(emitter, ctx, local),
         StringifySpace::Number(local) => {
             emit_string_on_stack_raw(emitter, ctx);
             emitter.instruction(Instruction::LocalGet(local));
@@ -160,6 +161,7 @@ enum StringifySpace {
     None,
     Number(u32),
     String(u32),
+    Dynamic(u32),
 }
 
 fn emit_stringify_space_arg(
@@ -186,9 +188,50 @@ fn emit_stringify_space_arg(
             emitter.instruction(Instruction::Drop);
             StringifySpace::None
         }
+        Type::Unknown => {
+            emit_expr(emitter, ctx, space);
+            let local = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown));
+            emitter.instruction(Instruction::LocalSet(local));
+            StringifySpace::Dynamic(local)
+        }
         Type::Error => StringifySpace::None,
         other => panic!("JSON.stringify space type should be checked, got {other:?}"),
     }
+}
+
+fn emit_dynamic_space(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, space: u32) {
+    let string_type = ctx.symbols.value_type(&Type::String);
+    let json = emitter.add_anonymous_local(string_type);
+    emitter.instruction(Instruction::LocalSet(json));
+    let number = ctx
+        .symbols
+        .boxed_number_type_idx()
+        .expect("boxed number registered");
+    let string = ctx.symbols.string_type_idx().expect("string registered");
+    emitter.instruction(Instruction::LocalGet(space));
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(number)));
+    emitter.emit_if(BlockType::Result(string_type));
+    emitter.instruction(Instruction::LocalGet(json));
+    emit_string_on_stack_raw(emitter, ctx);
+    emitter.instruction(Instruction::LocalGet(space));
+    super::cast::emit_cast_to(emitter, ctx, &Type::Number);
+    emit_pretty_number_host(emitter, ctx);
+    emit_wrap_raw_string(emitter, ctx);
+    emitter.emit_else();
+    emitter.instruction(Instruction::LocalGet(space));
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(string)));
+    emitter.emit_if(BlockType::Result(string_type));
+    emitter.instruction(Instruction::LocalGet(json));
+    emit_string_on_stack_raw(emitter, ctx);
+    emitter.instruction(Instruction::LocalGet(space));
+    super::cast::emit_cast_to(emitter, ctx, &Type::String);
+    emit_string_on_stack_raw(emitter, ctx);
+    emit_pretty_string_host(emitter, ctx);
+    emit_wrap_raw_string(emitter, ctx);
+    emitter.emit_else();
+    emitter.instruction(Instruction::LocalGet(json));
+    emitter.emit_end();
+    emitter.emit_end();
 }
 
 fn emit_string_on_stack_raw(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
@@ -257,10 +300,25 @@ pub(crate) fn emit_main_output_shim(
     ctx: &CodegenCtx,
     main_func_idx: u32,
     return_ty: &Type,
+    source_return_ty: &Type,
 ) -> Function {
     let mut emitter = FunctionEmitter::new(ctx, &[]);
     emitter.instruction(Instruction::Call(main_func_idx));
-    emit_main_output_value(&mut emitter, ctx, return_ty.peel());
+    let scalar_output = match source_return_ty.peel() {
+        Type::String
+        | Type::StringLiteral(_)
+        | Type::Number
+        | Type::NumberLiteral(_)
+        | Type::Boolean
+        | Type::BooleanLiteral(_) => true,
+        Type::Union(members) => is_nullable_primitive(members),
+        _ => false,
+    };
+    if return_ty == &Type::Unknown && scalar_output {
+        emit_nullable_primitive_to_string(&mut emitter, ctx);
+    } else {
+        emit_main_output_value(&mut emitter, ctx, return_ty.peel());
+    }
     emitter.build()
 }
 
@@ -357,6 +415,7 @@ pub(super) fn emit_parse(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, args: 
     // Emit arg (the source `$string`), then extract field 1 — the host fn
     // signature takes `(ref $rawString)`, not the wrapped struct.
     emit_expr(emitter, ctx, args[0]);
+    super::cast::emit_coerce_to_slot(emitter, ctx, &ctx.ta.expr(args[0]).ty, &Type::String);
     let string_type_idx = ctx.symbols.string_type_idx().expect("$string registered");
     emitter.instruction(Instruction::StructGet {
         struct_type_index: string_type_idx,

@@ -217,7 +217,25 @@ pub fn emit_coerce_to_wasm_slot(
     if crate::codegen::closure_coercions::emit_coercion(emitter, ctx, source_ty, target_val) {
         return;
     }
+    if source_ty == &Type::Unknown && target_val == ctx.symbols.value_type(&Type::String) {
+        let function = ctx
+            .symbols
+            .prelude_func_idx("__value_to_string")
+            .expect("dynamic string conversion collected");
+        emitter.instruction(Instruction::Call(function));
+        return;
+    }
     match (&source_val, &target_val) {
+        (ValType::Ref(_), ValType::F64) if matches!(source_ty, Type::Unknown) => {
+            let function = ctx
+                .symbols
+                .prelude_func_idx("__value_to_number")
+                .expect("dynamic number conversion collected");
+            emitter.instruction(Instruction::Call(function));
+        }
+        (ValType::Ref(_), ValType::I32) if matches!(source_ty, Type::Unknown) => {
+            emit_condition_to_i32(emitter, ctx, source_ty);
+        }
         (ValType::Ref(_), ValType::F64) => {
             emit_cast_to(emitter, ctx, &Type::Number);
         }

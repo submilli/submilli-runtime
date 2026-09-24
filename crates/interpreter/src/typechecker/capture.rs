@@ -15,10 +15,23 @@ use crate::{
 pub(crate) const THIS_BINDING: &str = "this";
 
 pub fn capture(ta: &mut TypedAst) {
+    resolve_locals(ta);
+}
+
+/// Declaration identities for storage-flow analysis after desugaring. The
+/// declaration span distinguishes same-named bindings in nested scopes.
+#[derive(Default)]
+pub(crate) struct ResolvedLocals {
+    pub reads: BTreeMap<ExprId, Ident>,
+    pub writes: BTreeMap<StmtId, Ident>,
+}
+
+pub(crate) fn resolve_locals(ta: &mut TypedAst) -> ResolvedLocals {
     let mut state = State {
         ta,
         frames: Vec::new(),
         pending: Vec::new(),
+        resolved: ResolvedLocals::default(),
     };
     let function_bodies: Vec<(usize, Vec<crate::TypedParam>, StmtId)> = state
         .ta
@@ -45,6 +58,7 @@ pub fn capture(ta: &mut TypedAst) {
     }
     // Deferred so refs before a capturing closure still see the final `boxed` flag.
     state.apply_pending();
+    state.resolved
 }
 
 /// A class member body, the parameters in scope for it, and the instance type
@@ -129,6 +143,7 @@ struct State<'a> {
     ta: &'a mut TypedAst,
     frames: Vec<Frame>,
     pending: Vec<Pending>,
+    resolved: ResolvedLocals,
 }
 
 enum Pending {
@@ -394,7 +409,12 @@ impl State<'_> {
                     self.walk_stmt(d);
                 }
             }
-            TypedStmtKind::Break | TypedStmtKind::Continue | TypedStmtKind::ReboxLocal { .. } => {}
+            TypedStmtKind::Break | TypedStmtKind::Continue => {}
+            TypedStmtKind::ReboxLocal { ident, .. } => {
+                if let Some(binding) = self.resolve_source(&ident.name) {
+                    self.resolved.writes.insert(id, binding.name_ident.clone());
+                }
+            }
             TypedStmtKind::Return(value) => {
                 if let Some(v) = value {
                     self.walk_expr(v);
@@ -404,6 +424,7 @@ impl State<'_> {
             TypedStmtKind::AssignLocal { ident, value, .. } => {
                 self.walk_expr(value);
                 if let Some(b) = self.resolve_source(&ident.name) {
+                    self.resolved.writes.insert(id, b.name_ident.clone());
                     self.mark_cross_frame_capture(&ident.name, &b);
                     self.pending.push(Pending::AssignLocal(id, b.source));
                 }
@@ -466,6 +487,7 @@ impl State<'_> {
         match kind {
             TypedExprKind::LocalRef { ident, .. } => {
                 if let Some(b) = self.resolve_source(&ident.name) {
+                    self.resolved.reads.insert(id, b.name_ident.clone());
                     self.mark_cross_frame_capture(&ident.name, &b);
                     self.pending.push(Pending::LocalRef(id, b.source));
                 }
@@ -478,8 +500,13 @@ impl State<'_> {
                     self.mark_cross_frame_capture(THIS_BINDING, &b);
                 }
             }
-            TypedExprKind::LocalNarrowRef { .. } => {
-                // Synthetic narrow-region local — not subject to capture.
+            TypedExprKind::LocalNarrowRef { path, .. } => {
+                if path.chain.is_empty()
+                    && let super::infer::narrowing::BindingId::Local { name, .. } = &path.root
+                    && let Some(binding) = self.resolve_source(name)
+                {
+                    self.resolved.reads.insert(id, binding.name_ident);
+                }
             }
             TypedExprKind::Closure { params, body, .. } => {
                 self.frames.push(Frame::default());
@@ -619,6 +646,7 @@ impl State<'_> {
             TypedExprKind::PostfixUnary { target, .. } => match target {
                 crate::PostfixTarget::Local { ident, .. } => {
                     if let Some(b) = self.resolve_source(&ident.name) {
+                        self.resolved.reads.insert(id, b.name_ident.clone());
                         self.mark_cross_frame_capture(&ident.name, &b);
                         self.pending.push(Pending::PostfixLocal(id, b.source));
                     }

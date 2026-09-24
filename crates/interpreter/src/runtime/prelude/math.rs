@@ -57,7 +57,7 @@ const UNARY: &[(&str, UnaryFn)] = &[
 
 const BINARY: &[(&str, BinaryFn)] = &[
     ("imul", math_imul),
-    ("pow", f64::powf),
+    ("pow", crate::runtime::number::pow_js),
     ("atan2", f64::atan2),
 ];
 

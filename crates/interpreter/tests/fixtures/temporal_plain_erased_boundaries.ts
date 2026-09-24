@@ -27,10 +27,12 @@ function main(): void {
   assert(acceptsNullable(null) === 0, "nullable plain interface null parameter");
 
   const wrong = ((): unknown => ({ wrong: 1 })) as () => Temporal.PlainDate;
-  assert(catchesTypeError(() => { wrong(); }), "wrong erased plain return");
+  const actual: unknown = wrong();
+  assert(JSON.stringify(actual) === '{"wrong":1}', "return annotations preserve actual values");
+  assert(catchesTypeError(() => { wrong() as Temporal.PlainDate; }), "explicit plain return cast");
 
   const monthDayAsYearMonth = ((): unknown => Temporal.PlainMonthDay.from("01-02")) as () => Temporal.PlainYearMonth;
-  assert(catchesTypeError(() => { monthDayAsYearMonth(); }), "MonthDay is not YearMonth");
+  assert(catchesTypeError(() => { monthDayAsYearMonth() as Temporal.PlainYearMonth; }), "MonthDay is not YearMonth");
   const yearMonthAsMonthDay = ((): unknown => Temporal.PlainYearMonth.from("2024-01")) as () => Temporal.PlainMonthDay;
-  assert(catchesTypeError(() => { yearMonthAsMonthDay(); }), "YearMonth is not MonthDay");
+  assert(catchesTypeError(() => { yearMonthAsMonthDay() as Temporal.PlainMonthDay; }), "YearMonth is not MonthDay");
 }

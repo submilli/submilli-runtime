@@ -342,52 +342,7 @@ impl<'a> Inferer<'a> {
         if self.narrowed_in_suspended_frame(path) {
             return Some(self.closure_boundary_hint(path));
         }
-        self.unpreserved_shape_hint(path)
-    }
-
-    /// Last resort: the path *ends* at an index step, which is the one shape whose
-    /// refusal is decidable from the path alone. No shadow can be synthesized for
-    /// an element, so a guard on `a[0]` never reaches the read — while a path that
-    /// merely passes *through* an index usually narrows at the steps after it,
-    /// which is the same rule `narrow_step_result` applies to a chain.
-    ///
-    /// "Usually" is the gap: `synthesize_wrap_time_source` bails on *any* non-field
-    /// element, so a through-index path also loses its guard when its source is a
-    /// narrow shadow rather than a plain read — the second conjunct of an `&&`.
-    /// That is not visible here either; see below.
-    ///
-    /// Other refusals are deliberately not guessed at here. Whether a guard was
-    /// dropped for its shape is decided in `retain_emittable_views`, and the path
-    /// alone cannot distinguish a shape that was refused from one that was simply
-    /// never guarded — attempts to infer it from the root kind or the chain depth
-    /// produced a hint that contradicted the correct advice beside it.
-    ///
-    /// Telling the truth here needs the drop itself to reach the region that
-    /// would have installed the guard. `retain_emittable_views` runs while the
-    /// *condition* is still being inferred, so it cannot know which of the two
-    /// envs the caller will push, and a stash drained by the next
-    /// `push_narrow_frame` lands in the wrong arm and outlives callers that push
-    /// no frame at all. The drops have to travel *with* their env.
-    ///
-    /// The advice does not name a *kind* of narrowing. This fires from sites
-    /// where nullability is the failure and from sites where it is not (a union
-    /// member missing the field), and "still reads as nullable" is false at the
-    /// second kind.
-    fn unpreserved_shape_hint(&self, path: &narrowing::ReferencePath) -> Option<DiagnosticAddon> {
-        if !matches!(path.chain.last(), Some(narrowing::PathElem::Index(_))) {
-            return None;
-        }
-        let reason = "an index step";
-        let rendered = path.render();
-        let tmp = self.fresh_hint_binding();
-        Some((
-            vec![format!(
-                "narrowing is not preserved through {reason}, so `{rendered}` \
-                 is not narrowed here. Bind it to a local `const` and guard that \
-                 instead: `const {tmp} = {rendered};` then narrow `{tmp}`.",
-            )],
-            Vec::new(),
-        ))
+        None
     }
 
     /// Explains a nullable read on a path whose guard the engine cannot carry
@@ -477,6 +432,13 @@ impl<'a> Inferer<'a> {
         // may be a discriminant or `typeof` one, where that edit does nothing. The
         // primary diagnostic already names the form this type needs.
         let (help, note_text) = match reason {
+            narrowing::InvalidationReason::ShapeUnrebuildable { .. } => (
+                format!(
+                    "cannot preserve this guard on `{rendered}` because its source cannot be \
+                     rebuilt here. Bind the value to a local `const` and guard that instead."
+                ),
+                String::new(),
+            ),
             narrowing::InvalidationReason::Write { .. } => (
                 format!(
                     "narrowing on `{rendered}` was dropped by the write — \
@@ -1487,5 +1449,143 @@ fn render_literal(literal: &narrowing::LiteralValue) -> String {
         narrowing::LiteralValue::String(s) => format!("{s:?}"),
         narrowing::LiteralValue::Number(n) => crate::runtime::number::format_number_js(n.0),
         narrowing::LiteralValue::Boolean(b) => b.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod dropped_guard_tests {
+    use super::super::test_support::run;
+
+    const TYPES: &str = "class Leaf { z: number | null = 3; }\n\
+        class Element { y: Leaf | null = new Leaf(); }\n\
+        class Holder { elems: Element[] = [new Element()]; }\n";
+
+    #[test]
+    fn dropped_guard_hint_stays_in_its_branch() {
+        for (condition, guarded_arm) in [
+            (
+                "h.elems[0].y !== null && h.elems[0].y.z !== null",
+                "thenValue",
+            ),
+            (
+                "h.elems[0].y === null || h.elems[0].y.z === null",
+                "elseValue",
+            ),
+        ] {
+            let source = format!(
+                "{TYPES}
+                function main(): void {{
+                    const h = new Holder();
+                    if ({condition}) {{
+                        const thenValue: number = h.elems[0].y.z;
+                    }} else {{
+                        const elseValue: number = h.elems[0].y.z;
+                    }}
+                    const afterValue: number = h.elems[0].y.z;
+                }}"
+            );
+            let (_, diagnostics) = run(&source);
+            let hints: Vec<_> = diagnostics
+                .iter()
+                .filter(|diagnostic| {
+                    diagnostic
+                        .help
+                        .iter()
+                        .any(|help| help.contains("cannot preserve this guard"))
+                })
+                .collect();
+            assert_eq!(hints.len(), 1, "{diagnostics:?}");
+            let guarded_line = source
+                .lines()
+                .find(|line| line.contains(guarded_arm))
+                .unwrap();
+            let expected_start = source.find(guarded_line).unwrap();
+            assert!(
+                hints[0].span.start as usize >= expected_start,
+                "{diagnostics:?}"
+            );
+            assert!(
+                (hints[0].span.start as usize) < expected_start + guarded_line.len(),
+                "{diagnostics:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn early_return_keeps_the_surviving_outcomes_drop() {
+        let source = format!(
+            "{TYPES}
+            function main(): number {{
+                const h = new Holder();
+                if (h.elems[0].y === null || h.elems[0].y.z === null) return 0;
+                return h.elems[0].y.z;
+            }}"
+        );
+        let (_, diagnostics) = run(&source);
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic
+                    .help
+                    .iter()
+                    .any(|help| help.contains("cannot preserve this guard"))
+            }),
+            "{diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn branch_join_keeps_only_a_common_dropped_refinement() {
+        for (else_guard, expected_hint) in [
+            (
+                "if (h.elems[0].y === null || h.elems[0].y.z === null) return 0;",
+                true,
+            ),
+            ("", false),
+        ] {
+            let source = format!(
+                "{TYPES}
+                function read(h: Holder, flag: boolean): number {{
+                    if (flag) {{
+                        if (h.elems[0].y === null || h.elems[0].y.z === null) return 0;
+                    }} else {{ {else_guard} }}
+                    return h.elems[0].y.z;
+                }}"
+            );
+            let (_, diagnostics) = run(&source);
+            let has_hint = diagnostics.iter().any(|diagnostic| {
+                diagnostic
+                    .help
+                    .iter()
+                    .any(|help| help.contains("cannot preserve this guard"))
+            });
+            assert_eq!(has_hint, expected_hint, "{diagnostics:?}");
+        }
+    }
+
+    #[test]
+    fn condition_without_a_branch_cannot_leak_a_drop() {
+        let source = format!(
+            "{TYPES}
+            function first(): void {{
+                const h = new Holder();
+                do {{}} while (h.elems[0].y !== null && h.elems[0].y.z !== null);
+                const read = (): number => h.elems[0].y.z;
+            }}
+            function second(): number {{
+                const h = new Holder();
+                return h.elems[0].y.z;
+            }}"
+        );
+        let (_, diagnostics) = run(&source);
+        assert!(!diagnostics.is_empty());
+        assert!(
+            !diagnostics.iter().any(|diagnostic| {
+                diagnostic
+                    .help
+                    .iter()
+                    .any(|help| help.contains("cannot preserve this guard"))
+            }),
+            "{diagnostics:?}"
+        );
     }
 }

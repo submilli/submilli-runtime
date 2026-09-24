@@ -838,6 +838,10 @@ impl Inferer<'_> {
         }
         let mut typed_args: Vec<ExprId> = typed_slots.into_iter().flatten().collect();
 
+        if has_rest || typed_args.len() < sig.params.len() {
+            self.typed_ast
+                .record_authored_arguments(span, typed_args.clone());
+        }
         if arity_ok {
             self.fill_omitted_defaults(&sig.params, args.len(), span, &mut typed_args);
         }
@@ -1148,6 +1152,10 @@ impl Inferer<'_> {
             }
         }
 
+        if has_rest || typed_args.len() < params.len() {
+            self.typed_ast
+                .record_authored_arguments(span, typed_args.clone());
+        }
         if arity_ok {
             self.fill_omitted_defaults(&params, args.len(), span, &mut typed_args);
         }

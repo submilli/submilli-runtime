@@ -231,10 +231,10 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     // `NumberConstructor` predicates and the bare `globalThis` `isNaN`/`isFinite`
     // (which share bodies). The double import of the globals with the still-Wasm
     // prelude is fine — the prelude disappears once it's fully ported.
-    reg_predicate(linker, &engine, ctor_key("isNaN"), f64::is_nan)?;
-    reg_predicate(linker, &engine, ctor_key("isFinite"), f64::is_finite)?;
-    reg_predicate(linker, &engine, ctor_key("isInteger"), is_integer)?;
-    reg_predicate(linker, &engine, ctor_key("isSafeInteger"), is_safe_integer)?;
+    reg_number_predicate(linker, &engine, ctor_key("isNaN"), f64::is_nan)?;
+    reg_number_predicate(linker, &engine, ctor_key("isFinite"), f64::is_finite)?;
+    reg_number_predicate(linker, &engine, ctor_key("isInteger"), is_integer)?;
+    reg_number_predicate(linker, &engine, ctor_key("isSafeInteger"), is_safe_integer)?;
     reg_predicate(linker, &engine, global_key("isNaN"), f64::is_nan)?;
     reg_predicate(linker, &engine, global_key("isFinite"), f64::is_finite)?;
 
@@ -309,7 +309,13 @@ pub fn declare(defs: &mut PackageDeclaration) {
         Type::Number,
     );
     for pred in ["isNaN", "isFinite", "isInteger", "isSafeInteger"] {
-        declare_method(defs, pred, ctor_key(pred), vec![n()], Type::Boolean);
+        declare_method(
+            defs,
+            pred,
+            ctor_key(pred),
+            vec![Param::new("value", Type::Unknown)],
+            Type::Boolean,
+        );
     }
     // `globalThis.isNaN` / `globalThis.isFinite`.
     declare_method(defs, "isNaN", global_key("isNaN"), vec![n()], Type::Boolean);
@@ -396,7 +402,36 @@ fn reg_format(
     )
 }
 
-/// Register an `(f64) -> boolean` numeric predicate.
+/// Inspect a boxed value without coercing non-number inputs.
+fn reg_number_predicate(
+    linker: &mut Linker<StoreData>,
+    engine: &wasmtime::Engine,
+    key: MangledName,
+    op: fn(f64) -> bool,
+) -> wasmtime::Result<()> {
+    let intr = crate::runtime::intrinsic_types::build_intrinsic_types(engine)?;
+    register_host_fn(
+        linker,
+        MODULE_NAME,
+        key,
+        FuncType::new(
+            engine,
+            [ValType::Ref(RefType::new(
+                true,
+                HeapType::ConcreteStruct(intr.object),
+            ))],
+            [ValType::I32],
+        ),
+        true,
+        move |caller, params, results| {
+            results[0] =
+                Val::I32(super::value::number_value(caller, &params[0])?.is_some_and(op) as i32);
+            Ok(())
+        },
+    )
+}
+
+/// Register an `(f64) -> boolean` predicate after caller-side numeric conversion.
 fn reg_predicate(
     linker: &mut Linker<StoreData>,
     engine: &wasmtime::Engine,

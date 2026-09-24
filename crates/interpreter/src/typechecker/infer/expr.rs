@@ -1361,29 +1361,14 @@ impl Inferer<'_> {
         } else {
             return None;
         };
-        let (typed_operand, operand_ty) = self.infer_expr(operand_id, None);
-        // all five literal-string `typeof` tags lower
-        // through `fold_typeof_tag` → a `TypedExprKind::TypeofTag`
-        // node (or a folded `Boolean(true/false)` constant when the
-        // operand's type makes the answer static). Previously
-        // primitive tags went through `TypedExprKind::Is`; that
-        // intermediate is gone with the `is` expression removal.
-        let inner_kind = match tag.as_str() {
-            "number" => {
-                self.fold_typeof_tag(typed_operand, &operand_ty, crate::TypeofTagKind::Number)
-            }
-            "string" => {
-                self.fold_typeof_tag(typed_operand, &operand_ty, crate::TypeofTagKind::String)
-            }
-            "boolean" => {
-                self.fold_typeof_tag(typed_operand, &operand_ty, crate::TypeofTagKind::Boolean)
-            }
-            "object" => {
-                self.fold_typeof_tag(typed_operand, &operand_ty, crate::TypeofTagKind::Object)
-            }
-            "function" => {
-                self.fold_typeof_tag(typed_operand, &operand_ty, crate::TypeofTagKind::Function)
-            }
+        let (typed_operand, _) = self.infer_expr(operand_id, None);
+        // Retained refinements cannot prove the kind of a later live read.
+        let tag = match tag.as_str() {
+            "number" => crate::TypeofTagKind::Number,
+            "string" => crate::TypeofTagKind::String,
+            "boolean" => crate::TypeofTagKind::Boolean,
+            "object" => crate::TypeofTagKind::Object,
+            "function" => crate::TypeofTagKind::Function,
             _ => {
                 self.error_with_help(
                     tag_span,
@@ -1397,13 +1382,12 @@ impl Inferer<'_> {
                             .into(),
                     ],
                 );
-                // Push a placeholder TypeofTag with an arbitrary
-                // tag; type-checked Error already propagated.
-                TypedExprKind::TypeofTag {
-                    value: typed_operand,
-                    tag: crate::TypeofTagKind::Object,
-                }
+                crate::TypeofTagKind::Object
             }
+        };
+        let inner_kind = TypedExprKind::TypeofTag {
+            value: typed_operand,
+            tag,
         };
         match op {
             BinOp::Eq => Some((inner_kind, Type::Boolean)),
@@ -1424,81 +1408,6 @@ impl Inferer<'_> {
                 ))
             }
             _ => unreachable!("try_typeof_fold called with non-eq op"),
-        }
-    }
-
-    /// Static-fold a `typeof x === "object"` / `"function"` predicate
-    /// when the operand's type is fully concrete and the answer is
-    /// determinable at compile time. Otherwise emit the runtime
-    /// `TypeofTag` node.
-    ///
-    /// - If the operand transitively contains a `Type::TypeVar` /
-    ///   `Type::GenericParam`, or is `unknown`, the runtime
-    ///   classification could go either way — emit `TypeofTag` so
-    ///   codegen runs the test.
-    /// - If `intersect_with(operand_ty, facts)` covers every union
-    ///   member (or the single non-union operand matches), the
-    ///   predicate is statically true → `Boolean(true)`.
-    /// - If the intersection is empty (no member satisfies the
-    ///   tag's facts), the predicate is statically false →
-    ///   `Boolean(false)`.
-    /// - Otherwise (some members match, some don't), emit
-    ///   `TypeofTag` for the runtime disjunction.
-    fn fold_typeof_tag(
-        &mut self,
-        value_id: ExprId,
-        operand_ty: &Type,
-        tag: crate::TypeofTagKind,
-    ) -> TypedExprKind {
-        use super::narrowing::{TypeFacts, has_erased_member, intersect_with};
-        let runtime_test = TypedExprKind::TypeofTag {
-            value: value_id,
-            tag,
-        };
-        if has_erased_member(operand_ty) {
-            return runtime_test;
-        }
-        // `unknown` says nothing about the runtime shape, so no tag is
-        // statically decidable. `intersect_with` hands `unknown` back for the
-        // tags it can't assert a type for (`"object"`, `"function"`), which the
-        // equality test below would otherwise read as "every member matched"
-        // and fold to `true` — for *both* of them, on every value.
-        if matches!(operand_ty.peel(), Type::Unknown) {
-            return runtime_test;
-        }
-        let facts = match tag {
-            crate::TypeofTagKind::Number => TypeFacts::IS_NUMBER,
-            crate::TypeofTagKind::String => TypeFacts::IS_STRING,
-            crate::TypeofTagKind::Boolean => TypeFacts::IS_BOOLEAN,
-            crate::TypeofTagKind::Object => TypeFacts::IS_OBJECT,
-            crate::TypeofTagKind::Function => TypeFacts::IS_FUNCTION,
-        };
-        let intersected = intersect_with(operand_ty, facts);
-        if matches!(intersected, Type::Error) {
-            return self.constant_keeping_effects(value_id, false);
-        }
-        if &intersected == operand_ty {
-            return self.constant_keeping_effects(value_id, true);
-        }
-        runtime_test
-    }
-
-    /// The predicate's answer is `answer`, but `operand` still has to run.
-    /// An operand that can't have side effects folds flat, so the overwhelmingly
-    /// common `typeof localVar === "…"` keeps producing a plain literal.
-    fn constant_keeping_effects(&mut self, operand: ExprId, answer: bool) -> TypedExprKind {
-        if self.typed_ast.is_effect_free(operand) {
-            return TypedExprKind::Boolean(answer);
-        }
-        let span = self.typed_ast.expr(operand).span;
-        let result = self.typed_ast.push_expr(TypedExpr {
-            kind: TypedExprKind::Boolean(answer),
-            span,
-            ty: Type::Boolean,
-        });
-        TypedExprKind::EffectThen {
-            effect: operand,
-            result,
         }
     }
 
@@ -3519,6 +3428,10 @@ impl Inferer<'_> {
             typed_args.push(typed_id);
         }
 
+        if has_rest || typed_args.len() < params.len() {
+            self.typed_ast
+                .record_authored_arguments(span, typed_args.clone());
+        }
         if arity_ok {
             self.fill_omitted_defaults(params, args.len(), span, &mut typed_args);
         }
@@ -5702,13 +5615,22 @@ impl Inferer<'_> {
             }
         };
         let (typed_index, _) = self.infer_expr(index, Some(&Type::Number));
-        (
-            TypedExprKind::IndexAccess {
-                receiver: typed_receiver,
-                index: typed_index,
-            },
-            elem_ty,
-        )
+        let kind = TypedExprKind::IndexAccess {
+            receiver: typed_receiver,
+            index: typed_index,
+        };
+        if let Some(path) = self.kind_to_reference_path(&kind)
+            && let Some(view) = self.lookup_narrowed_view(&path)
+        {
+            return (
+                TypedExprKind::LocalNarrowRef {
+                    binding: view.binding.clone(),
+                    path,
+                },
+                view.narrowed_ty.clone(),
+            );
+        }
+        (kind, elem_ty)
     }
 
     /// arrow function inference. Two-mode:
@@ -6503,26 +6425,28 @@ impl Inferer<'_> {
         let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None);
         let elem_ty = self.indexed_write_elem_ty(&receiver_ty, recv_span, span);
         let (typed_index, _) = self.infer_expr(index, Some(&Type::Number));
+        let read_ty = self.index_read_ty(typed_receiver, typed_index, &elem_ty);
         if !matches!(
-            elem_ty.primitive_behavior(),
+            read_ty.primitive_behavior(),
             Type::Number | Type::NumberLiteral(_) | Type::BigInt | Type::Error
         ) {
             self.error(
                 span,
-                format!("postfix `{op_symbol}` expects `number` or `bigint`, found `{elem_ty}`",),
+                format!("postfix `{op_symbol}` expects `number` or `bigint`, found `{read_ty}`",),
             );
         }
-        let result_ty = postfix_result_ty(&elem_ty);
+        let result_ty = postfix_result_ty(&read_ty);
         if !matches!(elem_ty, Type::Error) && !assignable(&result_ty, &elem_ty, self.resolver()) {
             self.error(span, format!("expected `{elem_ty}`, got `{result_ty}`"));
         }
+        self.invalidate_index_write(typed_receiver, typed_index, span);
         (
             TypedExprKind::PostfixUnary {
                 op,
                 target: crate::PostfixTarget::Index {
                     receiver: typed_receiver,
                     index: typed_index,
-                    elem_ty: elem_ty.clone(),
+                    elem_ty: read_ty,
                 },
             },
             if matches!(elem_ty, Type::Error) {
@@ -7390,13 +7314,8 @@ impl Inferer<'_> {
     /// A method step is skipped: its function type is not something the narrowing
     /// store keys, and rewriting it would strand the `Call` step that consumes it.
     ///
-    /// So is an index step, which is where the whole index rule lives: a
-    /// narrowing whose path *ends* at an index is refused on the plain path too
-    /// — no shadow local can be synthesized for an element, so
-    /// `unpreserved_shape_hint` tells the author to bind it to a `const` first —
-    /// and applying it here would let the chain accept what `h.elems[0].y`
-    /// rejects. A path that merely passes *through* an index still narrows at the
-    /// steps after it, which is why [`extend_chain_path`] keeps walking past one.
+    /// Literal index steps consume the same path narrowing as ordinary element
+    /// reads. Computed indices have no reference path and remain conservative.
     fn narrow_step_result(
         &self,
         result_path: Option<&super::narrowing::ReferencePath>,
@@ -7404,7 +7323,7 @@ impl Inferer<'_> {
         part: &mut TypedChainPart,
         step_ty: Type,
     ) -> Type {
-        if pending_method.is_some() || matches!(part, TypedChainPart::Index { .. }) {
+        if pending_method.is_some() {
             return step_ty;
         }
         let Some(view) = result_path.and_then(|p| self.lookup_narrowed_view(p)) else {
@@ -7420,8 +7339,7 @@ impl Inferer<'_> {
     ///
     /// A call has no path form at all, and a computed index has none we can key
     /// a narrowing on; both drop the path, so the steps after them read their
-    /// declared types. A *literal* index extends it — a view is nonetheless
-    /// never applied at one, for the reason [`narrow_step_result`] gives.
+    /// declared types. A literal index extends the path.
     ///
     /// `!` steps never reach here; [`infer_chain_steps`] handles them before it
     /// dispatches. Its arm records the rule the exhaustive match needs anyway:

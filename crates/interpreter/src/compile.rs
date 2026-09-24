@@ -373,7 +373,7 @@ pub fn compile_package_with_transitive(
         .filter(|defs| !external_packages.contains_key(&defs.package_name))
         .map(|defs| (defs.package_name.clone(), (*defs).clone()))
         .collect();
-    let (mut ta, declaration, mut package_diags) = crate::typechecker::infer_package(
+    let (mut ta, mut declaration, mut package_diags) = crate::typechecker::infer_package(
         package_name,
         root_module.clone(),
         module_refs,
@@ -419,6 +419,8 @@ pub fn compile_package_with_transitive(
         &ta,
         &codegen_deps,
     );
+    declaration.runtime_functions = generated.runtime_functions;
+    declaration.runtime_globals = generated.runtime_globals;
     Ok(CompiledPackage {
         wasm: generated.wasm,
         type_info: generated.type_info,

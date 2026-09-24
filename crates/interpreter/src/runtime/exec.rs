@@ -311,6 +311,16 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn widened_boolean_literal_main_preserves_scalar_output() {
+        let source = include_str!("../../tests/fixtures/narrowing/live_boolean_literal_result.ts");
+        for source in [source.to_owned(), source.replace("true", "false")] {
+            let bytes = compile(&source);
+            let result = RuntimeConfig::default().run(&bytes).await.expect("runs");
+            assert_eq!(result.value.as_deref(), Some("changed"));
+        }
+    }
+
+    #[tokio::test]
     async fn console_and_return_are_independent_streams() {
         let bytes = compile(r#"function main(): number { console.log("hi"); return 7; }"#);
         let result = RuntimeConfig::default().run(&bytes).await.expect("runs");

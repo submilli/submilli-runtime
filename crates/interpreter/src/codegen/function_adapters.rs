@@ -57,7 +57,11 @@ pub fn emit_bodies(metas: &[AdapterMeta], code: &mut CodeSection, ctx: &CodegenC
         }
         let mut emitter = FunctionEmitter::new(ctx, &wasm_params);
 
-        for (i, p_ty) in params.iter().enumerate() {
+        let target = ctx
+            .symbols
+            .top_level_fn(&meta.mangled)
+            .expect("adapter target signature recorded");
+        for (i, p_ty) in target.params.iter().enumerate() {
             emitter.instruction(Instruction::LocalGet((i + 1) as u32));
             crate::codegen::cast_check::emit_checked_parameter_cast_on_stack(
                 &mut emitter,
@@ -68,7 +72,7 @@ pub fn emit_bodies(metas: &[AdapterMeta], code: &mut CodeSection, ctx: &CodegenC
         }
         emitter.instruction(Instruction::Call(target_idx));
         if !ret.is_void() {
-            cast::emit_box(&mut emitter, ctx, ret);
+            cast::emit_box(&mut emitter, ctx, &target.ret);
         }
         let built = emitter.build();
         code.function(&built);

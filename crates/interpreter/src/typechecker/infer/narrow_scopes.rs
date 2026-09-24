@@ -289,6 +289,12 @@ impl<'a> Inferer<'a> {
     /// so the tail never refers to a region defined inside the body.
     pub(super) fn loop_tail_env(&mut self, env: &narrowing::NarrowEnv) -> narrowing::NarrowEnv {
         let mut tail = narrowing::NarrowEnv::new();
+        tail.dropped = env
+            .dropped
+            .iter()
+            .filter(|(path, _)| self.path_root_in_scope(path))
+            .map(|(path, ty)| (path.clone(), ty.clone()))
+            .collect();
         for (path, view) in env {
             if !self.path_root_in_scope(path) || matches!(view.narrowed_ty, Type::Error) {
                 continue;
@@ -305,11 +311,19 @@ impl<'a> Inferer<'a> {
         tail
     }
 
-    pub(super) fn push_narrow_frame(&mut self, env: narrowing::NarrowEnv) {
+    pub(super) fn push_narrow_frame(&mut self, mut env: narrowing::NarrowEnv) {
+        let tombstones = std::mem::take(&mut env.dropped)
+            .into_iter()
+            .map(|(path, narrowed_ty)| {
+                (
+                    path,
+                    narrowing::InvalidationReason::ShapeUnrebuildable { narrowed_ty },
+                )
+            })
+            .collect();
         self.narrow_scopes.push(env);
         self.assigned_scopes.push(std::collections::BTreeSet::new());
-        self.tombstone_scopes
-            .push(std::collections::BTreeMap::new());
+        self.tombstone_scopes.push(tombstones);
     }
 
     pub(super) fn pop_narrow_frame(&mut self) {
@@ -343,9 +357,15 @@ impl<'a> Inferer<'a> {
         narrowing::NarrowEnv,
         std::collections::BTreeSet<narrowing::ReferencePath>,
     ) {
-        let narrowings = self.narrow_scopes.pop().unwrap_or_default();
+        let mut narrowings = self.narrow_scopes.pop().unwrap_or_default();
         let assigned = self.assigned_scopes.pop().unwrap_or_default();
-        self.tombstone_scopes.pop();
+        for (path, reason) in self.tombstone_scopes.pop().unwrap_or_default() {
+            if let narrowing::InvalidationReason::ShapeUnrebuildable { narrowed_ty } = reason
+                && !narrowings.contains_key(&path)
+            {
+                narrowings.dropped.insert(path, narrowed_ty);
+            }
+        }
         (narrowings, assigned)
     }
 
@@ -377,7 +397,25 @@ impl<'a> Inferer<'a> {
         let mut assigned = std::collections::BTreeSet::new();
         for frame_idx in base_depth..self.narrow_scopes.len() {
             if let Some(tombs) = self.tombstone_scopes.get(frame_idx) {
-                env.retain(|path, _| !tombs.keys().any(|written| written.is_prefix_of(path)));
+                env.retain(|path, _| {
+                    !tombs
+                        .iter()
+                        .any(|(written, reason)| reason.invalidates() && written.is_prefix_of(path))
+                });
+            }
+            if let Some(tombs) = self.tombstone_scopes.get(frame_idx) {
+                env.dropped.retain(|path, _| {
+                    !tombs
+                        .iter()
+                        .any(|(written, reason)| reason.invalidates() && written.is_prefix_of(path))
+                });
+                for (path, reason) in tombs {
+                    if let narrowing::InvalidationReason::ShapeUnrebuildable { narrowed_ty } =
+                        reason
+                    {
+                        env.dropped.insert(path.clone(), narrowed_ty.clone());
+                    }
+                }
             }
             for (path, view) in &self.narrow_scopes[frame_idx] {
                 env.insert(path.clone(), view.clone());
@@ -852,6 +890,24 @@ impl<'a> Inferer<'a> {
         );
     }
 
+    pub(super) fn index_read_ty(&self, receiver: ExprId, index: ExprId, declared: &Type) -> Type {
+        let kind = crate::TypedExprKind::IndexAccess { receiver, index };
+        self.kind_to_reference_path(&kind)
+            .and_then(|path| self.lookup_narrowed_view(&path))
+            .map_or_else(|| declared.clone(), |view| view.narrowed_ty.clone())
+    }
+
+    /// Literal writes kill one element path; computed writes can affect every
+    /// guarded element below the receiver, but do not replace the receiver itself.
+    pub(super) fn invalidate_index_write(&mut self, receiver: ExprId, index: ExprId, span: Span) {
+        let kind = crate::TypedExprKind::IndexAccess { receiver, index };
+        if let Some(path) = self.kind_to_reference_path(&kind) {
+            self.invalidate_for_write(path, span);
+        }
+        // TypeScript retains literal-index facts across computed writes. The
+        // live read lowering preserves the actual element if that fact is stale.
+    }
+
     /// An identifier was reassigned. Named apart from [`Self::invalidate_for_write`]
     /// only so the diagnostic can call the statement what the reader sees.
     pub(super) fn invalidate_for_reassignment(
@@ -1232,7 +1288,7 @@ impl<'a> Inferer<'a> {
     ///   to the root ident so `LocalNarrowRef` reads the existing Wasm slot.
     /// - Field paths: mint a fresh shadow and push a
     ///   `PendingPostIfMaterialization` for the enclosing `Block` to drain.
-    /// - Globals: dropped — `GlobalRef` shadows can't be preserved past an `if`.
+    /// - Globals: retain the view; runtime lowering reads their live storage.
     pub(super) fn install_joined_narrowings(
         &mut self,
         joined_narrowings: narrowing::NarrowEnv,
@@ -1242,6 +1298,16 @@ impl<'a> Inferer<'a> {
             Vec::new();
         let mut field_path_mats: Vec<(narrowing::ReferencePath, narrowing::NarrowedView)> =
             Vec::new();
+        if let Some(tombstones) = self.tombstone_scopes.last_mut() {
+            for (path, narrowed_ty) in &joined_narrowings.dropped {
+                tombstones.insert(
+                    path.clone(),
+                    narrowing::InvalidationReason::ShapeUnrebuildable {
+                        narrowed_ty: narrowed_ty.clone(),
+                    },
+                );
+            }
+        }
         for (path, view) in joined_narrowings {
             if self.lookup_narrowed_view(&path).is_some_and(|active| {
                 active.binding == view.binding && active.narrowed_ty == view.narrowed_ty
@@ -1262,8 +1328,22 @@ impl<'a> Inferer<'a> {
             }
             let binding_name = match &path.root {
                 narrowing::BindingId::Local { name, .. } => name.clone(),
+                narrowing::BindingId::Global(_) => {
+                    joined_rebound.push((path, view));
+                    continue;
+                }
                 // Neither a global nor `this` has a local slot to rebind onto.
-                narrowing::BindingId::Global(_) | narrowing::BindingId::This => continue,
+                narrowing::BindingId::This => {
+                    if let Some(tombstones) = self.tombstone_scopes.last_mut() {
+                        tombstones.insert(
+                            path,
+                            narrowing::InvalidationReason::ShapeUnrebuildable {
+                                narrowed_ty: view.narrowed_ty.clone(),
+                            },
+                        );
+                    }
+                    continue;
+                }
             };
             let source_span = self.typed_ast.expr(view.source).span;
             let rebound = narrowing::NarrowedView {

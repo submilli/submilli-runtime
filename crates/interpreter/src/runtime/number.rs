@@ -229,7 +229,7 @@ pub fn parse_float_js(input: &str) -> f64 {
 /// is `0`. Handles the `0x`/`0o`/`0b` integer-literal prefixes — these take no
 /// sign and no fractional/exponent part, per the grammar.
 pub fn string_to_number_js(input: &str) -> f64 {
-    let s = input.trim();
+    let s = input.trim_matches(is_js_whitespace);
     if s.is_empty() {
         return 0.0;
     }
@@ -352,6 +352,20 @@ fn float_prefix(s: &str) -> &str {
 
     let end = if i > frac_end { i } else { frac_end };
     &s[..end]
+}
+
+/// ECMAScript WhiteSpace and LineTerminator code points.
+pub(crate) fn is_js_whitespace(value: char) -> bool {
+    matches!(value, '\u{0009}'..='\u{000D}' | '\u{0020}' | '\u{00A0}' | '\u{1680}'
+        | '\u{2000}'..='\u{200A}' | '\u{2028}' | '\u{2029}' | '\u{202F}' | '\u{205F}'
+        | '\u{3000}' | '\u{FEFF}')
+}
+
+pub(crate) fn pow_js(base: f64, exponent: f64) -> f64 {
+    if exponent.is_nan() || (base.abs() == 1.0 && exponent.is_infinite()) {
+        return f64::NAN;
+    }
+    base.powf(exponent)
 }
 
 #[cfg(test)]

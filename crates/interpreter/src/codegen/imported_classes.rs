@@ -51,6 +51,7 @@ pub struct ImportedSlot {
     /// Declared parameter/return types of the owner's body, so a local subclass
     /// can emit its own payload adapter for this slot.
     pub param_tys: Vec<crate::Type>,
+    pub argument_metadata: Option<String>,
     pub ret_ty: crate::Type,
     pub generic: bool,
 }
@@ -458,6 +459,7 @@ fn reconstruct_one(
                     name: s.name.clone(),
                     owner: s.owner.clone(),
                     param_tys: s.param_tys.clone(),
+                    argument_metadata: s.argument_metadata.clone(),
                     ret_ty: s.ret_ty.clone(),
                     generic: s.generic,
                 })
@@ -465,6 +467,13 @@ fn reconstruct_one(
         })
         .unwrap_or_default();
     for (name, (param_tys, ret_ty)) in &methods {
+        let argument_metadata = class.methods.get(name).and_then(|sig| {
+            super::call_arguments::metadata(
+                sig.params
+                    .iter()
+                    .map(|param| (param.default.as_ref(), param.rest)),
+            )
+        });
         let generic = class
             .methods
             .get(name)
@@ -474,6 +483,7 @@ fn reconstruct_one(
             // it rather than the ancestor's.
             slot.owner = mangled.clone();
             slot.param_tys = param_tys.clone();
+            slot.argument_metadata = argument_metadata;
             slot.ret_ty = ret_ty.clone();
             slot.generic = generic;
         } else {
@@ -481,6 +491,7 @@ fn reconstruct_one(
                 name: name.clone(),
                 owner: mangled.clone(),
                 param_tys: param_tys.clone(),
+                argument_metadata,
                 ret_ty: ret_ty.clone(),
                 generic,
             });
