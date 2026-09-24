@@ -1,0 +1,8 @@
+additionOperatorWithOnlyNullValueOrUndefinedValue.ts(3,10): error TS18050: The value 'null' cannot be used here.
+additionOperatorWithOnlyNullValueOrUndefinedValue.ts(3,17): error TS18050: The value 'null' cannot be used here.
+additionOperatorWithOnlyNullValueOrUndefinedValue.ts(4,10): error TS18050: The value 'null' cannot be used here.
+additionOperatorWithOnlyNullValueOrUndefinedValue.ts(4,17): error TS18050: The value 'null' cannot be used here.
+additionOperatorWithOnlyNullValueOrUndefinedValue.ts(5,10): error TS18050: The value 'null' cannot be used here.
+additionOperatorWithOnlyNullValueOrUndefinedValue.ts(5,17): error TS18050: The value 'null' cannot be used here.
+additionOperatorWithOnlyNullValueOrUndefinedValue.ts(6,10): error TS18050: The value 'null' cannot be used here.
+additionOperatorWithOnlyNullValueOrUndefinedValue.ts(6,17): error TS18050: The value 'null' cannot be used here.

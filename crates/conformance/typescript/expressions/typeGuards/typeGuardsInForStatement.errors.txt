@@ -1,0 +1,6 @@
+typeGuardsInForStatement.ts(4,10): error TS2322: Type 'null' is not assignable to type 'string | number'.
+typeGuardsInForStatement.ts(4,43): error TS2322: Type 'null' is not assignable to type 'string | number'.
+typeGuardsInForStatement.ts(10,10): error TS2322: Type 'null' is not assignable to type 'string | number'.
+typeGuardsInForStatement.ts(10,43): error TS2322: Type 'null' is not assignable to type 'string | number'.
+typeGuardsInForStatement.ts(17,10): error TS2322: Type 'null' is not assignable to type 'string | number'.
+typeGuardsInForStatement.ts(17,43): error TS2322: Type 'null' is not assignable to type 'string | number'.

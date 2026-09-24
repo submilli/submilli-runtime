@@ -1,0 +1,2 @@
+usingDeclarations.4.ts(7,5): error TS2304: Cannot find name 'using'.
+usingDeclarations.4.ts(7,12): error TS2304: Cannot find name 'a'.

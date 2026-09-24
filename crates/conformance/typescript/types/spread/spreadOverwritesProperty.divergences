@@ -1,0 +1,6 @@
+types: 22 of 45 tsc entries compared, 0 differ
+
+errors:
+line 5: tsc TS2783: 'b' is specified more than once, so this usage will be overwritten. (we accept)
+line 10: tsc TS2783: 'x' is specified more than once, so this usage will be overwritten. (we accept)
+line 13: tsc TS2783: 'x' is specified more than once, so this usage will be overwritten. (we accept)

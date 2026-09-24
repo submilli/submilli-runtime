@@ -1,0 +1,2 @@
+restElementMustBeLast.ts(2,9): error TS2462: A rest element must be last in a destructuring pattern.
+restElementMustBeLast.ts(3,2): error TS2462: A rest element must be last in a destructuring pattern.

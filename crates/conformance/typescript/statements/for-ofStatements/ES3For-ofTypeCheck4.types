@@ -1,0 +1,21 @@
+=== ES3For-ofTypeCheck4.ts ===
+let union: string | string[] = null as unknown as (string | string[]);
+>union : string | string[]
+>      : ^^^^^^^^^^^^^^^^^
+>null as unknown as (string | string[]) : string | string[]
+>                                       : ^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+for (const v of union) { }
+>v : string
+>  : ^^^^^^
+>union : string | string[]
+>      : ^^^^^^^^^^^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

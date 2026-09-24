@@ -1,0 +1,17 @@
+types: 8 of 10 tsc entries compared, 4 differ
+
+line 4: foo
+  tsc:  () => [null]
+  ours: () => [string]
+
+line 4: function bar() { let intermediate: [string] = null as unknown as ([string]); return intermediate = [null]; }
+  tsc:  () => [null]
+  ours: () => [string]
+
+line 6: intermediate = [null]
+  tsc:  [null]
+  ours: [string]
+
+line 6: [null]
+  tsc:  [null]
+  ours: [string]

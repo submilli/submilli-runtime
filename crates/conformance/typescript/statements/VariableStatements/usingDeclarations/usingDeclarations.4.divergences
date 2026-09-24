@@ -1,0 +1,9 @@
+types: 2 of 5 tsc entries compared, 2 differ
+
+line 7: using
+  tsc:  any
+  ours: <error>
+
+line 7: a
+  tsc:  any
+  ours: <error>

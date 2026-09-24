@@ -1,0 +1,1 @@
+narrowingGenericTypeFromInstanceof01.ts(14,17): error TS2345: Argument of type 'B<T>' is not assignable to parameter of type 'A<unknown>'.   Property 'a' is missing in type 'B<T>' but required in type 'A<unknown>'.

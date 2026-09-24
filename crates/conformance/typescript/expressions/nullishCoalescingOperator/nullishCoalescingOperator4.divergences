@@ -1,0 +1,37 @@
+types: 15 of 18 tsc entries compared, 9 differ
+
+line 5: aa1
+  tsc:  any
+  ours: <error>
+
+line 5: a1 ?? a1.toLowerCase()
+  tsc:  any
+  ours: <error>
+
+line 5: a1
+  tsc:  null
+  ours: "literal" | null
+
+line 5: a1.toLowerCase()
+  tsc:  any
+  ours: <error>
+
+line 5: a1.toLowerCase
+  tsc:  any
+  ours: <error>
+
+line 6: aa2
+  tsc:  any
+  ours: <error>
+
+line 6: a1 || a1.toLocaleUpperCase()
+  tsc:  any
+  ours: <error>
+
+line 6: a1.toLocaleUpperCase()
+  tsc:  any
+  ours: <error>
+
+line 6: a1.toLocaleUpperCase
+  tsc:  any
+  ours: <error>

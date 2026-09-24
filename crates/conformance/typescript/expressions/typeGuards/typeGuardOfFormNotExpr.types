@@ -1,0 +1,318 @@
+=== typeGuardOfFormNotExpr.ts ===
+let str: string = null as unknown as (string);
+>str : string
+>    : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let bool: boolean = null as unknown as (boolean);
+>bool : boolean
+>     : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let num: number = null as unknown as (number);
+>num : number
+>    : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let strOrNum: string | number = null as unknown as (string | number);
+>strOrNum : string | number
+>         : ^^^^^^^^^^^^^^^
+>null as unknown as (string | number) : string | number
+>                                     : ^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let strOrNumOrBool: string | number | boolean = null as unknown as (string | number | boolean);
+>strOrNumOrBool : string | number | boolean
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (string | number | boolean) : string | number | boolean
+>                                               : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let numOrBool: number | boolean = null as unknown as (number | boolean);
+>numOrBool : number | boolean
+>          : ^^^^^^^^^^^^^^^^
+>null as unknown as (number | boolean) : number | boolean
+>                                      : ^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+// A type guard of the form !expr
+// - when true, narrows the type of x by expr when false, or
+// - when false, narrows the type of x by expr when true.
+
+// !typeguard1
+if (!(typeof strOrNum === "string")) {
+>!(typeof strOrNum === "string") : boolean
+>                                : ^^^^^^^
+>(typeof strOrNum === "string") : boolean
+>                               : ^^^^^^^
+>typeof strOrNum === "string" : boolean
+>                             : ^^^^^^^
+>typeof strOrNum : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>strOrNum : string | number
+>         : ^^^^^^^^^^^^^^^
+>"string" : "string"
+>         : ^^^^^^^^
+
+    num === strOrNum; // number
+>num === strOrNum : boolean
+>                 : ^^^^^^^
+>num : number
+>    : ^^^^^^
+>strOrNum : number
+>         : ^^^^^^
+
+}
+else {
+    str = strOrNum; // string
+>str = strOrNum : string
+>               : ^^^^^^
+>str : string
+>    : ^^^^^^
+>strOrNum : string
+>         : ^^^^^^
+
+}
+// !(typeguard1 || typeguard2)
+if (!(typeof strOrNumOrBool === "string" || typeof strOrNumOrBool === "number")) {
+>!(typeof strOrNumOrBool === "string" || typeof strOrNumOrBool === "number") : boolean
+>                                                                            : ^^^^^^^
+>(typeof strOrNumOrBool === "string" || typeof strOrNumOrBool === "number") : boolean
+>                                                                           : ^^^^^^^
+>typeof strOrNumOrBool === "string" || typeof strOrNumOrBool === "number" : boolean
+>                                                                         : ^^^^^^^
+>typeof strOrNumOrBool === "string" : boolean
+>                                   : ^^^^^^^
+>typeof strOrNumOrBool : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>strOrNumOrBool : string | number | boolean
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>"string" : "string"
+>         : ^^^^^^^^
+>typeof strOrNumOrBool === "number" : boolean
+>                                   : ^^^^^^^
+>typeof strOrNumOrBool : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>strOrNumOrBool : number | boolean
+>               : ^^^^^^^^^^^^^^^^
+>"number" : "number"
+>         : ^^^^^^^^
+
+    bool = strOrNumOrBool; // boolean
+>bool = strOrNumOrBool : boolean
+>                      : ^^^^^^^
+>bool : boolean
+>     : ^^^^^^^
+>strOrNumOrBool : boolean
+>               : ^^^^^^^
+
+}
+else {
+    strOrNum = strOrNumOrBool; // string | number
+>strOrNum = strOrNumOrBool : string | number
+>                          : ^^^^^^^^^^^^^^^
+>strOrNum : string | number
+>         : ^^^^^^^^^^^^^^^
+>strOrNumOrBool : string | number
+>               : ^^^^^^^^^^^^^^^
+
+}
+// !(typeguard1) || !(typeguard2)
+if (!(typeof strOrNumOrBool !== "string") || !(typeof strOrNumOrBool !== "number")) {
+>!(typeof strOrNumOrBool !== "string") || !(typeof strOrNumOrBool !== "number") : boolean
+>                                                                               : ^^^^^^^
+>!(typeof strOrNumOrBool !== "string") : boolean
+>                                      : ^^^^^^^
+>(typeof strOrNumOrBool !== "string") : boolean
+>                                     : ^^^^^^^
+>typeof strOrNumOrBool !== "string" : boolean
+>                                   : ^^^^^^^
+>typeof strOrNumOrBool : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>strOrNumOrBool : string | number | boolean
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>"string" : "string"
+>         : ^^^^^^^^
+>!(typeof strOrNumOrBool !== "number") : boolean
+>                                      : ^^^^^^^
+>(typeof strOrNumOrBool !== "number") : boolean
+>                                     : ^^^^^^^
+>typeof strOrNumOrBool !== "number" : boolean
+>                                   : ^^^^^^^
+>typeof strOrNumOrBool : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>strOrNumOrBool : number | boolean
+>               : ^^^^^^^^^^^^^^^^
+>"number" : "number"
+>         : ^^^^^^^^
+
+    strOrNum = strOrNumOrBool; // string | number
+>strOrNum = strOrNumOrBool : string | number
+>                          : ^^^^^^^^^^^^^^^
+>strOrNum : string | number
+>         : ^^^^^^^^^^^^^^^
+>strOrNumOrBool : string | number
+>               : ^^^^^^^^^^^^^^^
+
+}
+else {
+    bool = strOrNumOrBool; // boolean
+>bool = strOrNumOrBool : boolean
+>                      : ^^^^^^^
+>bool : boolean
+>     : ^^^^^^^
+>strOrNumOrBool : boolean
+>               : ^^^^^^^
+
+}
+// !(typeguard1 && typeguard2)
+if (!(typeof strOrNumOrBool !== "string" && typeof strOrNumOrBool !== "number")) {
+>!(typeof strOrNumOrBool !== "string" && typeof strOrNumOrBool !== "number") : boolean
+>                                                                            : ^^^^^^^
+>(typeof strOrNumOrBool !== "string" && typeof strOrNumOrBool !== "number") : boolean
+>                                                                           : ^^^^^^^
+>typeof strOrNumOrBool !== "string" && typeof strOrNumOrBool !== "number" : boolean
+>                                                                         : ^^^^^^^
+>typeof strOrNumOrBool !== "string" : boolean
+>                                   : ^^^^^^^
+>typeof strOrNumOrBool : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>strOrNumOrBool : string | number | boolean
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>"string" : "string"
+>         : ^^^^^^^^
+>typeof strOrNumOrBool !== "number" : boolean
+>                                   : ^^^^^^^
+>typeof strOrNumOrBool : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>strOrNumOrBool : number | boolean
+>               : ^^^^^^^^^^^^^^^^
+>"number" : "number"
+>         : ^^^^^^^^
+
+    strOrNum = strOrNumOrBool; // string | number
+>strOrNum = strOrNumOrBool : string | number
+>                          : ^^^^^^^^^^^^^^^
+>strOrNum : string | number
+>         : ^^^^^^^^^^^^^^^
+>strOrNumOrBool : string | number
+>               : ^^^^^^^^^^^^^^^
+
+}
+else {
+    bool = strOrNumOrBool; // boolean
+>bool = strOrNumOrBool : boolean
+>                      : ^^^^^^^
+>bool : boolean
+>     : ^^^^^^^
+>strOrNumOrBool : boolean
+>               : ^^^^^^^
+
+}
+// !(typeguard1) && !(typeguard2)
+if (!(typeof strOrNumOrBool === "string") && !(typeof strOrNumOrBool === "number")) {
+>!(typeof strOrNumOrBool === "string") && !(typeof strOrNumOrBool === "number") : boolean
+>                                                                               : ^^^^^^^
+>!(typeof strOrNumOrBool === "string") : boolean
+>                                      : ^^^^^^^
+>(typeof strOrNumOrBool === "string") : boolean
+>                                     : ^^^^^^^
+>typeof strOrNumOrBool === "string" : boolean
+>                                   : ^^^^^^^
+>typeof strOrNumOrBool : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>strOrNumOrBool : string | number | boolean
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>"string" : "string"
+>         : ^^^^^^^^
+>!(typeof strOrNumOrBool === "number") : boolean
+>                                      : ^^^^^^^
+>(typeof strOrNumOrBool === "number") : boolean
+>                                     : ^^^^^^^
+>typeof strOrNumOrBool === "number" : boolean
+>                                   : ^^^^^^^
+>typeof strOrNumOrBool : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>strOrNumOrBool : number | boolean
+>               : ^^^^^^^^^^^^^^^^
+>"number" : "number"
+>         : ^^^^^^^^
+
+    bool = strOrNumOrBool; // boolean
+>bool = strOrNumOrBool : boolean
+>                      : ^^^^^^^
+>bool : boolean
+>     : ^^^^^^^
+>strOrNumOrBool : boolean
+>               : ^^^^^^^
+
+}
+else {
+    strOrNum = strOrNumOrBool; // string | number
+>strOrNum = strOrNumOrBool : string | number
+>                          : ^^^^^^^^^^^^^^^
+>strOrNum : string | number
+>         : ^^^^^^^^^^^^^^^
+>strOrNumOrBool : string | number
+>               : ^^^^^^^^^^^^^^^
+
+}
+// !(typeguard1) && simpleExpr
+if (!(typeof strOrNumOrBool === "string") && numOrBool !== strOrNumOrBool) {
+>!(typeof strOrNumOrBool === "string") && numOrBool !== strOrNumOrBool : boolean
+>                                                                      : ^^^^^^^
+>!(typeof strOrNumOrBool === "string") : boolean
+>                                      : ^^^^^^^
+>(typeof strOrNumOrBool === "string") : boolean
+>                                     : ^^^^^^^
+>typeof strOrNumOrBool === "string" : boolean
+>                                   : ^^^^^^^
+>typeof strOrNumOrBool : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>strOrNumOrBool : string | number | boolean
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>"string" : "string"
+>         : ^^^^^^^^
+>numOrBool !== strOrNumOrBool : boolean
+>                             : ^^^^^^^
+>numOrBool : number | boolean
+>          : ^^^^^^^^^^^^^^^^
+>strOrNumOrBool : number | boolean
+>               : ^^^^^^^^^^^^^^^^
+
+    numOrBool = strOrNumOrBool; // number | boolean
+>numOrBool = strOrNumOrBool : number | boolean
+>                           : ^^^^^^^^^^^^^^^^
+>numOrBool : number | boolean
+>          : ^^^^^^^^^^^^^^^^
+>strOrNumOrBool : number | boolean
+>               : ^^^^^^^^^^^^^^^^
+
+}
+else {
+    let r1: string | number | boolean = strOrNumOrBool; // string | number | boolean
+>r1 : string | number | boolean
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>strOrNumOrBool : string | number | boolean
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

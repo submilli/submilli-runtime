@@ -1,0 +1,37 @@
+types: 26 of 42 tsc entries compared, 9 differ
+
+line 4: x
+  tsc:  string | number
+  ours: null
+
+line 5: x
+  tsc:  string
+  ours: null
+
+line 7: x
+  tsc:  number
+  ours: null
+
+line 10: x
+  tsc:  string | number
+  ours: null
+
+line 11: x
+  tsc:  string
+  ours: null
+
+line 14: x
+  tsc:  number
+  ours: null
+
+line 17: x
+  tsc:  string | number
+  ours: null
+
+line 18: x
+  tsc:  string
+  ours: null
+
+line 21: x
+  tsc:  string | number
+  ours: null

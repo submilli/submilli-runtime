@@ -1,0 +1,32 @@
+=== wideningTuples7.ts ===
+let foo = function bar() {
+>foo : () => [null]
+>    : ^^^^^^^^^^^^
+>function bar() {     let intermediate: [string] = null as unknown as ([string]);     return intermediate = [null]; } : () => [null]
+>                                                                                                                     : ^^^^^^^^^^^^
+>bar : () => [null]
+>    : ^^^^^^^^^^^^
+
+    let intermediate: [string] = null as unknown as ([string]);
+>intermediate : [string]
+>             : ^^^^^^^^
+>null as unknown as ([string]) : [string]
+>                              : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    return intermediate = [null];
+>intermediate = [null] : [null]
+>                      : ^^^^^^
+>intermediate : [string]
+>             : ^^^^^^^^
+>[null] : [null]
+>       : ^^^^^^
+
+};
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

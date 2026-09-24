@@ -24,9 +24,13 @@ Each case is four files with the same base name:
 | `<case>.divergences` | Every place we disagree with `tsc`. Written by the test, and committed. |
 
 The cases come from the TypeScript repository at
-`5848bc5157b22ff7f4e3369f4645a514a433b15f`. They are the ones that compile after the
-mechanical port below. They remain under TypeScript's Apache 2.0 license; see
-`../TYPESCRIPT-LICENSE`.
+`5848bc5157b22ff7f4e3369f4645a514a433b15f`. They are the ones that, after the
+mechanical port below, we either accept or reject only on lines where `tsc` also
+reports an error or where Submilli differs from TypeScript by design (an array
+literal's element type comes from its first element, for instance). A case we reject
+for a missing feature is left out: the rest of its types would compare against our
+error recovery, not our inference. The cases remain under TypeScript's Apache 2.0
+license; see `../TYPESCRIPT-LICENSE`.
 
 ## What the test checks
 
@@ -76,21 +80,24 @@ Two kinds of entry are skipped, because they are not comparable:
 
 ## Porting a case
 
-The port is mechanical, and keeps each line where it was:
+`typescript-baselines/port-case.cjs` does the port. It is mechanical, and keeps each
+line where it was:
 
-1. `var` becomes `let`, and `undefined` becomes `null`.
+1. `var` becomes `let`, and `undefined` becomes `null`, outside strings and comments.
 2. A typed binding with no value, such as `let x: T;` or `declare const x: T;`, gets the
    value `null as unknown as (T)`.
 3. A `declare function` gets a body that returns such a value.
-4. A function with no return type gets `: void`.
+4. A function declaration or class method with no return type gets the one `tsc`
+   infers for it.
 5. `// @strict: false` becomes `// @strict: true`. Submilli is always strict.
 6. `function main(): void {}` is appended.
 
-Then write the case's baselines and its `.divergences`:
+To port a case, then write its baselines and its `.divergences`:
 
 ```sh
 cd typescript-baselines
 npm ci
+node port-case.cjs <TypeScript>/tests/cases/conformance/<case>.ts ../typescript/<case>.ts
 node write-baselines.cjs <path substring>
 cd ..
 UPDATE_TYPESCRIPT_EXPECTED=1 CONFORMANCE_FILTER=<path substring> cargo test -p conformance --test typescript

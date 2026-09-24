@@ -1,0 +1,21 @@
+=== ES5For-ofTypeCheck5.ts ===
+let union: string | number[] = null as unknown as (string | number[]);
+>union : string | number[]
+>      : ^^^^^^^^^^^^^^^^^
+>null as unknown as (string | number[]) : string | number[]
+>                                       : ^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+for (let v of union) { }
+>v : string | number
+>  : ^^^^^^^^^^^^^^^
+>union : string | number[]
+>      : ^^^^^^^^^^^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

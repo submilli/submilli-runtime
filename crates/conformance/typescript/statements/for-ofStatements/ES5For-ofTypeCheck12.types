@@ -1,0 +1,13 @@
+=== ES5For-ofTypeCheck12.ts ===
+for (const v of 0) { }
+>v : any
+>  : ^^^
+>0 : 0
+>  : ^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

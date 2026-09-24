@@ -1,0 +1,33 @@
+types: 8 of 9 tsc entries compared, 8 differ
+
+line 3: r1
+  tsc:  any
+  ours: <error>
+
+line 3: null + null
+  tsc:  any
+  ours: <error>
+
+line 4: r2
+  tsc:  any
+  ours: <error>
+
+line 4: null + null
+  tsc:  any
+  ours: <error>
+
+line 5: r3
+  tsc:  any
+  ours: <error>
+
+line 5: null + null
+  tsc:  any
+  ours: <error>
+
+line 6: r4
+  tsc:  any
+  ours: <error>
+
+line 6: null + null
+  tsc:  any
+  ours: <error>

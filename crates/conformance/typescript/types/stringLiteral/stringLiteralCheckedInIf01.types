@@ -1,0 +1,64 @@
+=== stringLiteralCheckedInIf01.ts ===
+
+type S = "a" | "b";
+>S : S
+>  : ^
+
+type T = S[] | S;
+>T : T
+>  : ^
+
+
+function f(foo: T): S {
+>f : (foo: T) => S
+>  : ^^^^^^^^^^^^^
+>foo : T
+>    : ^
+
+    if (foo === "a") {
+>foo === "a" : boolean
+>            : ^^^^^^^
+>foo : T
+>    : ^
+>"a" : "a"
+>    : ^^^
+
+        return foo;
+>foo : "a"
+>    : ^^^
+
+    }
+    else if (foo === "b") {
+>foo === "b" : boolean
+>            : ^^^^^^^
+>foo : "b" | S[]
+>    : ^^^^^^^^^
+>"b" : "b"
+>    : ^^^
+
+        return foo;
+>foo : "b"
+>    : ^^^
+
+    }
+    else { 
+        return (foo as S[])[0];
+>(foo as S[])[0] : S
+>                : ^
+>(foo as S[]) : S[]
+>             : ^^^
+>foo as S[] : S[]
+>           : ^^^
+>foo : S[]
+>    : ^^^
+>0 : 0
+>  : ^
+
+    }
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -1,0 +1,8 @@
+types: 17 of 21 tsc entries compared, 1 differ
+
+line 6: isFoo
+  tsc:  (value: string) => value is "foo"
+  ours: (arg0: string) => boolean
+
+errors:
+line 2: ours: type-guard return value does not narrow parameter `value` to `"foo"` (tsc accepts)

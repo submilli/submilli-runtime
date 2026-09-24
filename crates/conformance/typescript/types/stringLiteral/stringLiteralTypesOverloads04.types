@@ -1,0 +1,42 @@
+=== stringLiteralTypesOverloads04.ts ===
+
+function f(x: (p: "foo" | "bar") => "foo"): void { }
+>f : (x: (p: "foo" | "bar") => "foo") => void
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : (p: "foo" | "bar") => "foo"
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>p : "foo" | "bar"
+>  : ^^^^^^^^^^^^^
+
+
+f(y => {
+>f(y => {     const z = y = "foo";     return z; }) : void
+>                                                   : ^^^^
+>f : (x: (p: "foo" | "bar") => "foo") => void
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>y => {     const z = y = "foo";     return z; } : (y: "foo" | "bar") => "foo"
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>y : "foo" | "bar"
+>  : ^^^^^^^^^^^^^
+
+    const z = y = "foo";
+>z : "foo"
+>  : ^^^^^
+>y = "foo" : "foo"
+>          : ^^^^^
+>y : "foo" | "bar"
+>  : ^^^^^^^^^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+
+    return z;
+>z : "foo"
+>  : ^^^^^
+
+})
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

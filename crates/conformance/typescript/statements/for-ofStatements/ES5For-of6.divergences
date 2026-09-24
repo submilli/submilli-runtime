@@ -1,0 +1,37 @@
+types: 8 of 9 tsc entries compared, 8 differ
+
+line 3: w
+  tsc:  never
+  ours: <error>
+
+line 3: []
+  tsc:  never[]
+  ours: <error>[]
+
+line 4: v
+  tsc:  never
+  ours: <error>
+
+line 4: []
+  tsc:  never[]
+  ours: <error>[]
+
+line 5: x
+  tsc:  never[]
+  ours: <error>[]
+
+line 5: [w, v]
+  tsc:  never[]
+  ours: <error>[]
+
+line 5: w
+  tsc:  never
+  ours: <error>
+
+line 5: v
+  tsc:  never
+  ours: <error>
+
+errors:
+line 3: ours: cannot infer element type of empty array; add a `: T[]` annotation (tsc accepts)
+line 4: ours: cannot infer element type of empty array; add a `: T[]` annotation (tsc accepts)

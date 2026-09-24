@@ -1,0 +1,7 @@
+types: 57 of 90 tsc entries compared, 0 differ
+
+errors:
+line 9: tsc TS2367: This comparison appears to be unintentional because the types '"foo"' and '"bar"' have no overlap. (we accept)
+line 10: tsc TS2367: This comparison appears to be unintentional because the types '"bar"' and '"foo"' have no overlap. (we accept)
+line 18: tsc TS2367: This comparison appears to be unintentional because the types '"foo"' and '"bar"' have no overlap. (we accept)
+line 19: tsc TS2367: This comparison appears to be unintentional because the types '"bar"' and '"foo"' have no overlap. (we accept)

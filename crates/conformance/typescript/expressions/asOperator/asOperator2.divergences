@@ -1,0 +1,9 @@
+types: 2 of 4 tsc entries compared, 2 differ
+
+line 2: x
+  tsc:  string
+  ours: <error>
+
+line 2: 23 as string
+  tsc:  string
+  ours: <error>

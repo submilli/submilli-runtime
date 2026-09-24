@@ -1,0 +1,29 @@
+types: 26 of 45 tsc entries compared, 7 differ
+
+line 6: x
+  tsc:  string | true
+  ours: boolean
+
+line 8: x
+  tsc:  string | number | boolean
+  ours: null
+
+line 9: x
+  tsc:  number | boolean
+  ours: null
+
+line 14: x
+  tsc:  string | true
+  ours: boolean
+
+line 17: x
+  tsc:  string | number | boolean
+  ours: boolean | null
+
+line 18: x
+  tsc:  number | boolean
+  ours: never
+
+line 26: x
+  tsc:  string | number
+  ours: null
