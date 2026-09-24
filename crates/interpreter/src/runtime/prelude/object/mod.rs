@@ -79,6 +79,23 @@ fn field_array(
     }
 }
 
+/// A nullable optional slot has a separate presence flag on its field name.
+pub(crate) fn field_is_present(
+    caller: &mut Caller<'_, StoreData>,
+    name: &Val,
+    value: &Val,
+) -> wasmtime::Result<bool> {
+    if !matches!(value, Val::AnyRef(None)) {
+        return Ok(true);
+    }
+    let name = as_struct(caller, name, "field name")?;
+    let string = build_intrinsic_types(caller.engine())?.string;
+    if StructType::eq(&name.ty(&*caller)?, &string) {
+        return Ok(true);
+    }
+    Ok(matches!(name.field(&mut *caller, 2)?, Val::I32(value) if value != 0))
+}
+
 fn enumerate(
     caller: &mut Caller<'_, StoreData>,
     obj: &Val,
@@ -95,6 +112,11 @@ fn enumerate(
         let len = names.len(&mut *caller)?;
         elems.reserve(len as usize);
         for i in 0..len {
+            let name = names.get(&mut *caller, i)?;
+            let value = values.get(&mut *caller, i)?;
+            if !field_is_present(caller, &name, &value)? {
+                continue;
+            }
             let elem = match kind {
                 Enumerate::Keys => names.get(&mut *caller, i)?,
                 Enumerate::Values => values.get(&mut *caller, i)?,
@@ -131,26 +153,23 @@ fn spread(
         for index in 0..names.len(&mut *caller)? {
             let name = names.get(&mut *caller, index)?;
             let value = values.get(&mut *caller, index)?;
-            let name_object = as_struct(caller, &name, "object spread field name")?;
-            let optional = !StructType::eq(&name_object.ty(&*caller)?, &intr.string);
-            if optional && matches!(value, Val::AnyRef(None)) {
+            if !field_is_present(caller, &name, &value)? {
                 continue;
             }
             let units = string_units(caller, &name)?;
             if source_index == 1 && omitted.contains(&units) {
                 continue;
             }
-            entries.insert(units, (name, value));
+            entries.insert(units, (copy_field_name(caller, name, true)?, value));
         }
     }
     if let Some((names, _)) = shape_arrays(caller, shape)? {
         for index in 0..names.len(&mut *caller)? {
             let name = names.get(&mut *caller, index)?;
             let units = string_units(caller, &name)?;
-            entries
-                .entry(units)
-                .and_modify(|(existing, _)| *existing = name)
-                .or_insert((name, Val::AnyRef(None)));
+            if let std::collections::btree_map::Entry::Vacant(entry) = entries.entry(units) {
+                entry.insert((copy_field_name(caller, name, false)?, Val::AnyRef(None)));
+            }
         }
     }
     let (names, values): (Vec<_>, Vec<_>) = entries.into_values().unzip();
@@ -170,6 +189,34 @@ fn spread(
         ],
     )?;
     Ok(Val::AnyRef(Some(object.to_anyref())))
+}
+
+fn copy_field_name(
+    caller: &mut Caller<'_, StoreData>,
+    name: Val,
+    present: bool,
+) -> wasmtime::Result<Val> {
+    let object = as_struct(caller, &name, "field name")?;
+    let string = build_intrinsic_types(caller.engine())?.string;
+    if StructType::eq(&object.ty(&*caller)?, &string) {
+        return Ok(name);
+    }
+    let ty = if present {
+        build_intrinsic_types(caller.engine())?.string
+    } else {
+        object.ty(&*caller)?
+    };
+    let mut fields = vec![
+        object.field(&mut *caller, 0)?,
+        object.field(&mut *caller, 1)?,
+    ];
+    if !present {
+        fields.push(Val::I32(0));
+    }
+    let pre = StructRefPre::new(&mut *caller, ty);
+    Ok(Val::AnyRef(Some(
+        StructRef::new(&mut *caller, &pre, &fields)?.to_anyref(),
+    )))
 }
 
 /// The compiler marks rejected known fields with non-null mask slots.
@@ -193,14 +240,15 @@ fn has_own(caller: &mut Caller<'_, StoreData>, obj: &Val, key: &Val) -> wasmtime
     if matches!(obj, Val::AnyRef(None)) {
         return Err(wasmtime::Error::msg("Object.hasOwn called on null"));
     }
-    let Some((names, _)) = shape_arrays(caller, obj)? else {
+    let Some((names, values)) = shape_arrays(caller, obj)? else {
         return Ok(false);
     };
     let target = string_units(caller, key)?;
     for i in 0..names.len(&mut *caller)? {
         let name = names.get(&mut *caller, i)?;
         if string_units(caller, &name)? == target {
-            return Ok(true);
+            let value = values.get(&mut *caller, i)?;
+            return field_is_present(caller, &name, &value);
         }
     }
     Ok(false)

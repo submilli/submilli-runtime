@@ -349,6 +349,7 @@ fn emit_subtype_to_json_body(
             intrinsics,
             string_concat_func_idx,
             string_vtable_global_idx,
+            symbols.optional_field_name_type(),
         );
     };
     let pkg_string_global_idx =
@@ -386,6 +387,7 @@ fn emit_subtype_to_json_vtable_body(
     intrinsics: IntrinsicTypeIndices,
     string_concat_func_idx: u32,
     string_vtable_global_idx: u32,
+    optional_name_type: u32,
 ) -> Function {
     let Type::Object { fields } = &subtype.ty else {
         unreachable!(
@@ -446,7 +448,7 @@ fn emit_subtype_to_json_vtable_body(
     for (idx, (field_name, field)) in fields.iter().enumerate() {
         let key_no_comma = format!("\"{}\":", json_escape_key(field_name));
         let key_with_comma = format!(",\"{}\":", json_escape_key(field_name));
-        let field_nullable = !field.optional && may_hold_null(&field.ty);
+        let field_nullable = may_hold_null(&field.ty);
 
         f.instruction(&Instruction::LocalGet(self_t));
         f.instruction(&Instruction::StructGet {
@@ -465,9 +467,14 @@ fn emit_subtype_to_json_vtable_body(
         f.instruction(&Instruction::If(BlockType::Empty));
 
         if field.optional {
-            f.instruction(&Instruction::LocalGet(elem));
-            f.instruction(&Instruction::RefIsNull);
-            f.instruction(&Instruction::I32Eqz);
+            super::field_names::emit_optional_presence(
+                &mut f,
+                intrinsics,
+                optional_name_type,
+                self_t,
+                idx as u32,
+                elem,
+            );
             f.instruction(&Instruction::If(BlockType::Empty));
         }
 

@@ -371,6 +371,14 @@ impl Inferer<'_> {
             super::type_aliases::type_has_alias_ref(want).then(|| self.rehydrate_alias_refs(want))
         });
         let expected = rehydrated_hint.as_ref().or(expected);
+        if let ExprKind::FunctionExpression {
+            name,
+            function,
+            this_type,
+        } = self.ast.expr(expr_id).kind.clone()
+        {
+            return self.infer_function_expression(name, function, this_type, expected);
+        }
         let expr = self.ast.expr(expr_id).clone();
         let span = expr.span;
         let (kind, ty) = match expr.kind {
@@ -429,6 +437,9 @@ impl Inferer<'_> {
             ExprKind::IndexAccess { receiver, index } => {
                 self.infer_index_access(receiver, index, span, expr_id)
             }
+            ExprKind::FunctionExpression { .. } => {
+                unreachable!("handled before ordinary expressions")
+            }
             ExprKind::Arrow {
                 params,
                 return_type,
@@ -478,7 +489,9 @@ impl Inferer<'_> {
             ExprKind::InstanceOf { value, ty } => self.infer_instanceof(value, ty, span),
             ExprKind::Regex { source, flags } => self.infer_regex(source, flags, span),
             ExprKind::This => {
-                if let Some(ty) = &self.current_class {
+                if let Some(ty) = &self.function_this {
+                    (TypedExprKind::This, ty.clone())
+                } else if let Some(ty) = &self.current_class {
                     // In a subclass constructor, `this` before `super(...)` reads
                     // uninitialized parent fields — flag it for the super call.
                     if self.in_constructor && self.current_super.is_some() && !self.super_seen {
@@ -4248,6 +4261,9 @@ impl Inferer<'_> {
             }
         }
 
+        let (receiver_hint, mut inferred_fields) =
+            self.infer_object_receiver(&members, expected_fields.as_ref());
+
         // walk members in source order, applying last-writer-wins
         // for both literal-position fields and spread sources. `merged`
         // tracks the resolved field shape + origin per output field.
@@ -4288,14 +4304,28 @@ impl Inferer<'_> {
                             .map(|f| f.ty.clone())
                     });
                     let errors_before = self.error_count();
-                    let (typed_value, value_ty) = self.infer_expr(field.value, hint.as_ref());
+                    let previous_hint = self.object_this_hint.take();
+                    if matches!(
+                        self.ast.expr(field.value).kind,
+                        ExprKind::FunctionExpression { .. }
+                    ) {
+                        self.object_this_hint = Some(receiver_hint.clone());
+                    }
+                    let (typed_value, value_ty, cached_error) =
+                        if let Some(value) = inferred_fields.remove(&field.value) {
+                            value
+                        } else {
+                            let (id, ty) = self.infer_expr(field.value, hint.as_ref());
+                            (id, ty, false)
+                        };
+                    self.object_this_hint = previous_hint;
                     if !has_spread {
                         object_members.push(crate::TypedObjectMember::Value(typed_value));
                     }
                     let value_span = self.ast.expr(field.value).span;
                     // A hinted slot already reported the mismatch against its
                     // hint; screening again gives one mistake two errors.
-                    let already_errored = self.error_count() > errors_before;
+                    let already_errored = cached_error || self.error_count() > errors_before;
                     if !already_errored
                         && self.reject_void_value(&value_ty, value_span, ValuePosition::FieldValue)
                     {
@@ -4409,7 +4439,12 @@ impl Inferer<'_> {
                     value,
                     span: spread_span,
                 } => {
-                    let (typed_source, source_ty) = self.infer_expr(value, None);
+                    let (typed_source, source_ty) =
+                        if let Some((id, ty, _)) = inferred_fields.remove(&value) {
+                            (id, ty)
+                        } else {
+                            self.infer_expr(value, None)
+                        };
                     let Some(SpreadFields { fields, by_name }) =
                         self.spread_source_fields(typed_source, &source_ty, spread_span)
                     else {
@@ -4545,7 +4580,7 @@ impl Inferer<'_> {
                         name.clone(),
                         (
                             want_field.clone(),
-                            crate::TypedObjectFieldSource::Literal(null_id),
+                            crate::TypedObjectFieldSource::Absent(null_id),
                         ),
                     );
                 }
@@ -5631,6 +5666,305 @@ impl Inferer<'_> {
             );
         }
         (kind, elem_ty)
+    }
+
+    /// Infer data fields before method bodies so receiver types do not depend on
+    /// member order. Cached expressions still execute in their original source order.
+    fn infer_object_receiver(
+        &mut self,
+        members: &[crate::ObjectLiteralMember],
+        expected: Option<&std::collections::BTreeMap<String, crate::ObjectField>>,
+    ) -> (
+        Type,
+        std::collections::BTreeMap<ExprId, (ExprId, Type, bool)>,
+    ) {
+        let mut fields = expected.cloned().unwrap_or_default();
+        let mut inferred = std::collections::BTreeMap::new();
+        let mut method_sources = std::collections::BTreeMap::new();
+        if expected.is_some() || !members.iter().any(|member| matches!(member,
+            crate::ObjectLiteralMember::Field(field) if matches!(self.ast.expr(field.value).kind, ExprKind::FunctionExpression { .. }))) {
+            return (Type::Object { fields }, inferred);
+        }
+        for member in members {
+            let (value, name) = match member {
+                crate::ObjectLiteralMember::Field(field) => (field.value, Some(&field.name.name)),
+                crate::ObjectLiteralMember::Spread { value, .. } => (*value, None),
+            };
+            let signature = match self.ast.expr(value).kind {
+                ExprKind::FunctionExpression { function, .. } => {
+                    Some(self.function_expression_signature(function, None))
+                }
+                ExprKind::Arrow { .. } => Some(self.function_expression_signature(value, None)),
+                _ => None,
+            };
+            if let Some(ty) = signature {
+                if let Some(name) = name {
+                    fields.insert(name.clone(), crate::ObjectField::required(ty));
+                    method_sources.insert(name.clone(), value);
+                }
+                continue;
+            }
+            let errors_before = self.error_count();
+            let hint = name.and_then(|name| override_field_signature(name));
+            let (id, ty) = self.infer_expr(value, hint.as_ref());
+            inferred.insert(value, (id, ty.clone(), self.error_count() > errors_before));
+            if let Some(name) = name {
+                method_sources.remove(name);
+                fields.insert(name.clone(), crate::ObjectField::required(ty));
+            } else if let Some(SpreadFields { fields: spread, .. }) =
+                self.spread_source_fields(id, &ty, self.ast.expr(value).span)
+            {
+                for name in spread.keys() {
+                    method_sources.remove(name);
+                }
+                for (name, field) in spread {
+                    let merged = merge_spread_field_type(fields.remove(&name), field);
+                    fields.insert(name, merged);
+                }
+            }
+        }
+        self.infer_receiver_methods(members, &method_sources, &mut fields, &mut inferred);
+        (Type::Object { fields }, inferred)
+    }
+
+    fn infer_receiver_methods(
+        &mut self,
+        members: &[crate::ObjectLiteralMember],
+        method_sources: &std::collections::BTreeMap<String, ExprId>,
+        fields: &mut std::collections::BTreeMap<String, crate::ObjectField>,
+        inferred: &mut std::collections::BTreeMap<ExprId, (ExprId, Type, bool)>,
+    ) {
+        let mut pending = members
+            .iter()
+            .filter_map(|member| {
+                let crate::ObjectLiteralMember::Field(field) = member else {
+                    return None;
+                };
+                matches!(
+                    self.ast.expr(field.value).kind,
+                    ExprKind::FunctionExpression { .. } | ExprKind::Arrow { .. }
+                )
+                .then(|| (field.name.name.clone(), field.value))
+            })
+            .collect::<Vec<_>>();
+        while !pending.is_empty() {
+            let unresolved = pending.iter().filter_map(|(name, value)| {
+                if method_sources.get(name) != Some(value) { return None; }
+                matches!(fields.get(name).map(|field| field.ty.peel()), Some(Type::Function { ret, .. }) if **ret == Type::Unknown)
+                    .then_some(name.as_str())
+            }).collect::<std::collections::HashSet<_>>();
+            let index = pending
+                .iter()
+                .position(|(_, value)| {
+                    self.receiver_dependencies(*value)
+                        .iter()
+                        .all(|name| !unresolved.contains(name.as_str()))
+                })
+                .unwrap_or(0);
+            let (name, value) = pending.remove(index);
+            let previous_hint = self.object_this_hint.replace(Type::Object {
+                fields: fields.clone(),
+            });
+            let errors_before = self.error_count();
+            let hint = override_field_signature(&name);
+            let (id, ty) = self.infer_expr(value, hint.as_ref());
+            self.object_this_hint = previous_hint;
+            inferred.insert(value, (id, ty.clone(), self.error_count() > errors_before));
+            if method_sources.get(&name) == Some(&value) {
+                fields.insert(name, crate::ObjectField::required(ty));
+            }
+        }
+    }
+
+    /// Only reads of this object's receiver constrain the order in which method
+    /// returns are inferred. Nested ordinary functions establish another receiver.
+    fn receiver_dependencies(&self, value: ExprId) -> Vec<String> {
+        if !matches!(
+            self.ast.expr(value).kind,
+            ExprKind::FunctionExpression { .. }
+        ) {
+            return Vec::new();
+        }
+        let span = self.ast.expr(value).span;
+        let nested = (0..self.ast.exprs_len())
+            .map(|i| self.ast.expr(ExprId(i as u32)))
+            .filter(|expr| {
+                expr.span.start > span.start
+                    && expr.span.end <= span.end
+                    && matches!(expr.kind, ExprKind::FunctionExpression { .. })
+            })
+            .map(|expr| expr.span)
+            .collect::<Vec<_>>();
+        let aliases = self.receiver_aliases(span, &nested);
+        (0..self.ast.exprs_len())
+            .filter_map(|i| {
+                let expr = self.ast.expr(ExprId(i as u32));
+                if expr.span.start < span.start || expr.span.end > span.end {
+                    return None;
+                }
+                let (receiver, name) = match &expr.kind {
+                    ExprKind::FieldAccess { receiver, name } => (*receiver, name.name.clone()),
+                    ExprKind::IndexAccess { receiver, index } => {
+                        let ExprKind::String(name) = &self.ast.expr(*index).kind else {
+                            return None;
+                        };
+                        (*receiver, name.clone())
+                    }
+                    ExprKind::OptionalChain { base, parts } => {
+                        let name = match parts.first()? {
+                            crate::ChainPart::Field { name, .. } => name.name.clone(),
+                            crate::ChainPart::Index { idx, .. } => {
+                                let ExprKind::String(name) = &self.ast.expr(*idx).kind else {
+                                    return None;
+                                };
+                                name.clone()
+                            }
+                            _ => return None,
+                        };
+                        (*base, name)
+                    }
+                    _ => return None,
+                };
+                let own_this = !nested
+                    .iter()
+                    .any(|nested| expr.span.start >= nested.start && expr.span.end <= nested.end);
+                self.is_receiver_reference(receiver, &aliases, own_this)
+                    .then_some(name)
+            })
+            .collect()
+    }
+
+    fn receiver_aliases(&self, span: Span, nested: &[Span]) -> std::collections::HashSet<String> {
+        let mut aliases = std::collections::HashSet::new();
+        loop {
+            let before = aliases.len();
+            for i in 0..self.ast.stmts_len() {
+                let statement = self.ast.stmt(crate::StmtId(i as u32));
+                if statement.span.start < span.start || statement.span.end > span.end {
+                    continue;
+                }
+                let own_this = !nested.iter().any(|nested| {
+                    statement.span.start >= nested.start && statement.span.end <= nested.end
+                });
+                if let crate::StmtKind::Let { name, value, .. }
+                | crate::StmtKind::Const { name, value, .. } = &statement.kind
+                    && self.is_receiver_reference(*value, &aliases, own_this)
+                {
+                    aliases.insert(name.name.clone());
+                }
+            }
+            if aliases.len() == before {
+                break;
+            }
+        }
+        aliases
+    }
+
+    fn is_receiver_reference(
+        &self,
+        mut value: ExprId,
+        aliases: &std::collections::HashSet<String>,
+        own_this: bool,
+    ) -> bool {
+        loop {
+            match &self.ast.expr(value).kind {
+                ExprKind::This => return own_this,
+                ExprKind::Identifier(name) => return aliases.contains(&name.name),
+                ExprKind::Paren(inner)
+                | ExprKind::As { expr: inner, .. }
+                | ExprKind::PostfixUnary {
+                    op: crate::PostfixOp::NonNullAssert,
+                    operand: inner,
+                } => value = *inner,
+                _ => return false,
+            }
+        }
+    }
+
+    fn infer_function_expression(
+        &mut self,
+        name: Option<Ident>,
+        function: ExprId,
+        this_type: Option<TypeAnnotation>,
+        expected: Option<&Type>,
+    ) -> (ExprId, Type) {
+        let signature = self.function_expression_signature(function, expected);
+        self.scopes.push();
+        if let Some(name) = &name {
+            self.scopes
+                .insert(name.name.clone(), signature, true, name.span);
+        }
+        let previous_hint = self.object_this_hint.take();
+        let receiver = this_type
+            .as_ref()
+            .map(|ty| self.resolve_type(ty))
+            .or_else(|| previous_hint.clone())
+            .unwrap_or(Type::Unknown);
+        let previous_this = self.function_this.replace(receiver.clone());
+        let previous_class = self.current_class.take();
+        let previous_static = self.current_static.take();
+        let (id, ty) = self.infer_expr(function, expected);
+        self.function_this = previous_this;
+        self.object_this_hint = previous_hint;
+        self.current_class = previous_class;
+        self.current_static = previous_static;
+        self.scopes.pop();
+        self.typed_ast.closure_this.insert(id, receiver);
+        if let Some(name) = name {
+            self.typed_ast.closure_names.insert(id, name);
+        }
+        (id, ty)
+    }
+
+    fn function_expression_signature(&mut self, function: ExprId, expected: Option<&Type>) -> Type {
+        let ExprKind::Arrow {
+            params,
+            return_type,
+            type_predicate,
+            ..
+        } = self.ast.expr(function).kind.clone()
+        else {
+            unreachable!("function expression wraps its function body");
+        };
+        let hint = expected.and_then(|ty| match ty.peel() {
+            Type::Function { params, ret, .. } => Some((params, ret)),
+            _ => None,
+        });
+        let param_types: Vec<Type> = params
+            .iter()
+            .enumerate()
+            .map(|(index, param)| {
+                param
+                    .ty
+                    .as_ref()
+                    .map(|ty| self.resolve_type(ty))
+                    .or_else(|| hint.and_then(|(params, _)| params.get(index).cloned()))
+                    .unwrap_or(Type::Error)
+            })
+            .collect();
+        let predicate = type_predicate.as_ref().and_then(|predicate| {
+            let signature_params = params
+                .iter()
+                .zip(&param_types)
+                .map(|(param, ty)| crate::Param::new(param.name.name.clone(), ty.clone()))
+                .collect::<Vec<_>>();
+            self.resolve_type_predicate(predicate, &signature_params)
+        });
+        let ret = return_type
+            .as_ref()
+            .map(|ty| self.resolve_type(ty))
+            .or_else(|| hint.map(|(_, ret)| (**ret).clone()))
+            .unwrap_or(Type::Unknown);
+        Type::Function {
+            params: param_types,
+            ret: Box::new(if type_predicate.is_some() {
+                Type::Boolean
+            } else {
+                ret
+            }),
+            predicate: predicate.map(Box::new),
+            has_rest: params.last().is_some_and(|param| param.rest),
+        }
     }
 
     /// arrow function inference. Two-mode:
@@ -8425,7 +8759,7 @@ struct SpreadFields {
 ///
 /// An optional field may be absent, and then the earlier value stays: `{ a: 1,
 /// ...{} }` keeps `a: 1`. So the field holds either value, and is optional only
-/// if the earlier one was. Optional null slots count as absent, matching `in`.
+/// if the earlier one was. Omitted optional slots count as absent, matching `in`.
 fn merge_spread_field(
     earlier: Option<(crate::ObjectField, crate::TypedObjectFieldSource)>,
     field: crate::ObjectField,
@@ -8439,14 +8773,21 @@ fn merge_spread_field(
     if let crate::TypedObjectFieldSource::Spread { fallback, .. } = &mut origin {
         *fallback = Some(Box::new(earlier_origin));
     }
-    (
-        crate::ObjectField {
-            ty: Type::union(vec![earlier_field.ty, field.ty]),
-            optional: earlier_field.optional,
-            readonly: false,
-        },
-        origin,
-    )
+    (merge_spread_field_type(Some(earlier_field), field), origin)
+}
+
+fn merge_spread_field_type(
+    earlier: Option<crate::ObjectField>,
+    field: crate::ObjectField,
+) -> crate::ObjectField {
+    let Some(earlier) = earlier.filter(|_| field.optional) else {
+        return field;
+    };
+    crate::ObjectField {
+        ty: Type::union(vec![earlier.ty, field.ty]),
+        optional: earlier.optional,
+        readonly: false,
+    }
 }
 
 fn collect_union_members(ty: &Type, out: &mut Vec<Type>) {

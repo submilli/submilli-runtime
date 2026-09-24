@@ -313,7 +313,8 @@ fn stringify_typed_object_value(
             )));
         };
         let raw = field_array.get(&mut *caller, field_index)?;
-        if matches!(raw, Val::AnyRef(None)) && field.optional {
+        let name = field_names.get(&mut *caller, field_index)?;
+        if !crate::runtime::prelude::object::field_is_present(caller, &name, &raw)? {
             continue;
         }
         map.insert(

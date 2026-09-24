@@ -23,6 +23,7 @@ mod runtime_descriptors;
 mod runtime_values;
 pub mod string_pool;
 pub mod symbol_table;
+mod this_binding;
 pub mod throw;
 pub mod user_subtypes;
 mod vtable_walk;

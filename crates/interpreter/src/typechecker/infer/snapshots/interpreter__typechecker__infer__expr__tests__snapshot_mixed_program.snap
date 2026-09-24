@@ -4,6 +4,8 @@ assertion_line: 9201
 expression: ta
 ---
 TypedAst {
+    closure_this: {},
+    closure_names: {},
     authored_arguments: {},
     runtime_source_types: {},
     runtime_chain_types: {},

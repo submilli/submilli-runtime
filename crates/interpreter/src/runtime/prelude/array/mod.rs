@@ -834,7 +834,7 @@ pub(super) async fn from(
         super::set::values(caller, src)?
     } else if let Some(iter_method) = object_field(caller, src, "iterator")? {
         let c = closure::read(caller, &iter_method, "Array.from iterable")?;
-        c.call(caller, &[]).await?
+        c.call_with_receiver(caller, *src, &[]).await?
     } else {
         *src
     };
@@ -843,7 +843,7 @@ pub(super) async fn from(
         .ok_or_else(|| wasmtime::Error::msg("Array.from: source is not iterable"))?;
     let next_closure = closure::read(caller, &next, "Array.from iterator")?;
     loop {
-        let result = next_closure.call(caller, &[]).await?;
+        let result = next_closure.call_with_receiver(caller, it, &[]).await?;
         let done = object_field(caller, &result, "done")?
             .ok_or_else(|| wasmtime::Error::msg("Array.from: iterator result missing `done`"))?;
         if unbox_bool(caller, &done)? {

@@ -26,13 +26,13 @@ function main(): void {
 
   const opt: { a: number; b?: string } = { a: 1 };
   const optKeys = Object.keys(opt);
-  assert(optKeys.length === 2, "optional field is part of the shape");
-  assert(optKeys[0] === "a" && optKeys[1] === "b", "optional field keeps sorted order");
-  const optValues = Object.values(opt);
-  assert(optValues[1] === null, "unset optional field surfaces as null");
-  const optEntries = Object.entries(opt);
-  assert(optEntries[1][0] === "b", "optional field has an entry");
-  assert(optEntries[1][1] === null, "entry carries the null");
+  assert(optKeys.length === 1 && optKeys[0] === "a", "omitted field has no key");
+  assert(Object.values(opt).length === 1, "omitted field has no value");
+  assert(Object.entries(opt).length === 1, "omitted field has no entry");
+  assert(!Object.hasOwn(opt, "b"), "omitted field is not an own property");
+  const present: { a: number; b?: string | null } = { a: 1, b: null };
+  assert(Object.values(present)[1] === null, "present optional null has a value");
+  assert(Object.entries(present)[1][1] === null, "present optional null has an entry");
 
   const o = { a: 1, b: 2 };
   const values = Object.values(o);

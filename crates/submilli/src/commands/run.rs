@@ -248,6 +248,16 @@ pub(crate) fn execute_with_dispatch(
         .map(|artifact| &artifact.package_declaration)
         .collect();
 
+    let transitive_refs: Vec<_> = package_artifacts
+        .iter()
+        .filter(|artifact| {
+            !blueprint
+                .as_ref()
+                .is_some_and(|bp| bp.packages.contains(&artifact.metadata.package_name))
+        })
+        .map(|artifact| &artifact.package_declaration)
+        .collect();
+
     // Host fns (`http`/`fs`/MCP) are async, so the run drives on a private
     // current-thread runtime. MCP discovery is async too and must precede
     // compilation (the `@mcp/<server>` decls type-check the script), so the
@@ -296,13 +306,14 @@ pub(crate) fn execute_with_dispatch(
     let parsed = interpreter::parse_script(&source, file);
     let mut stdlib = interpreter::runtime::stdlib_package_declarations();
     stdlib.retain(|decl| git_enabled || decl.package_name != "submilli:git");
-    let compiled = interpreter::compile_parsed_script_timed(
+    let compiled = interpreter::compile::compile_parsed_script_with_transitive(
         &source,
         &filename,
         &parsed,
         &stdlib,
         &package_refs,
         &mcp_defs,
+        &transitive_refs,
     );
     let compiled = match compiled {
         Ok(compiled) => {

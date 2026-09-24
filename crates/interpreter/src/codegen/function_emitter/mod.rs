@@ -58,10 +58,11 @@ pub struct FunctionEmitter<'a> {
     /// Pending completion targets, innermost last. Bodies are emitted once.
     finally_stack: Vec<finally::FinallyFrame>,
 
-    /// Wasm local holding `this` inside a class method (receiver param) or
-    /// constructor (allocated instance). `None` outside class bodies; reading
-    /// `this` there is a typecheck error so codegen never hits it.
+    /// Local receiver for a class member, ordinary function expression, or
+    /// arrow capturing an enclosing receiver.
     this_local: Option<u32>,
+    pub(super) dynamic_this: bool,
+    pub(super) call_receiver: Option<u32>,
 
     /// Set while emitting a constructor *init* fn: the class being constructed.
     /// `super(...)` reads it to emit the field-setup sequence (own initializers
@@ -162,6 +163,8 @@ impl<'a> FunctionEmitter<'a> {
             return_target: ReturnTarget::NoResult,
             finally_stack: Vec::new(),
             this_local: None,
+            dynamic_this: false,
+            call_receiver: None,
             ctor_class: None,
             source_mappings: Vec::new(),
             single_evaluations: Vec::new(),
@@ -689,7 +692,21 @@ pub fn emit_closure_function(
         heap_type: wasm_encoder::HeapType::Concrete(env_type_idx),
     });
     let env_typed_local = emitter.add_anonymous_local(env_typed_val);
+    if meta.this_type.is_some() {
+        crate::codegen::this_binding::load_receiver(&mut emitter, ctx);
+    }
     emitter.instructions.push(Instruction::LocalGet(0));
+    if meta.this_type.is_some() {
+        emitter.instruction(Instruction::RefCastNonNull(
+            wasm_encoder::HeapType::Concrete(
+                ctx.symbols.this_environment_type.expect("this environment"),
+            ),
+        ));
+        emitter.instruction(Instruction::StructGet {
+            struct_type_index: ctx.symbols.this_environment_type.expect("this environment"),
+            field_index: 0,
+        });
+    }
     if crate::codegen::call_arguments::typed_metadata(&meta.params).is_some() {
         crate::codegen::call_arguments::unwrap(&mut emitter, ctx);
     }
@@ -700,6 +717,17 @@ pub fn emit_closure_function(
         .instructions
         .push(Instruction::LocalSet(env_typed_local));
 
+    if let Some(name) = &meta.self_name {
+        let slot = emitter.define_local(name, ctx.symbols.value_type(&meta.signature));
+        emitter.instruction(Instruction::LocalGet(env_typed_local));
+        emitter.instruction(Instruction::StructGet {
+            struct_type_index: env_type_idx,
+            field_index: (meta.captured.len() + usize::from(!meta.runtime_generics.is_empty()))
+                as u32,
+        });
+        cast::emit_cast_to(&mut emitter, ctx, &meta.signature);
+        emitter.instruction(Instruction::LocalSet(slot));
+    }
     if !meta.runtime_generics.is_empty() {
         let types = emitter.add_anonymous_local(
             crate::codegen::runtime_descriptors::environment_type(ctx.symbols),
@@ -776,6 +804,7 @@ pub fn emit_closure_function(
         // local so `TypedExprKind::This` reads it like any method body.
         if c.name.name == crate::typechecker::capture::THIS_BINDING {
             emitter.set_this_local(captured_local);
+            emitter.dynamic_this = c.ty == crate::Type::Unknown;
         }
     }
 

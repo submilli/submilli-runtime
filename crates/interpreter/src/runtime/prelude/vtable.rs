@@ -726,12 +726,8 @@ pub(crate) fn read_object_entries(
     for i in 0..name_count {
         let field_name = names.get(&mut *caller, i)?;
         let value = values.get(&mut *caller, i)?;
-        if matches!(value, Val::AnyRef(None)) {
-            let name_object = as_struct(caller, &field_name, name)?;
-            let string_type = build_intrinsic_types(caller.engine())?.string;
-            if !StructType::eq(&name_object.ty(&*caller)?, &string_type) {
-                continue;
-            }
+        if !super::object::field_is_present(caller, &field_name, &value)? {
+            continue;
         }
         let field_name = read_units_val(caller, &field_name, name)?;
         entries.push((field_name, value));

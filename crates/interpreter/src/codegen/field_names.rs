@@ -24,12 +24,18 @@ pub fn declare_optional_name_type(
     next_type_idx: &mut u32,
     intrinsics: IntrinsicTypeIndices,
 ) {
-    let fields = [intrinsics.vtable, intrinsics.raw_string].map(|index| wasm_encoder::FieldType {
-        element_type: StorageType::Val(ValType::Ref(RefType {
-            nullable: false,
-            heap_type: HeapType::Concrete(index),
-        })),
-        mutable: false,
+    let mut fields = [intrinsics.vtable, intrinsics.raw_string]
+        .map(|index| wasm_encoder::FieldType {
+            element_type: StorageType::Val(ValType::Ref(RefType {
+                nullable: false,
+                heap_type: HeapType::Concrete(index),
+            })),
+            mutable: false,
+        })
+        .to_vec();
+    fields.push(wasm_encoder::FieldType {
+        element_type: StorageType::Val(ValType::I32),
+        mutable: true,
     });
     types.ty().subtype(&wasm_encoder::SubType {
         is_final: true,
@@ -114,6 +120,9 @@ fn build_init_expr(
             array_type_index: intrinsics.raw_string,
             array_size: code_units.len() as u32,
         });
+        if name.optional {
+            instrs.push(Instruction::I32Const(0));
+        }
         instrs.push(Instruction::StructNew(if name.optional {
             optional_name_type
         } else {
@@ -129,6 +138,150 @@ fn build_init_expr(
         heap_type: HeapType::Concrete(intrinsics.field_names),
     }));
     ConstExpr::extended(instrs)
+}
+
+/// Optional names carry per-instance presence separately from the value slot.
+/// Required names remain shared immutable strings.
+pub(crate) fn emit_instance_names(
+    emitter: &mut super::function_emitter::FunctionEmitter,
+    ctx: &super::CodegenCtx,
+    names: &[FieldName],
+    present: impl Fn(&str) -> bool,
+) {
+    let global = ctx
+        .symbols
+        .field_names_global_idx(names)
+        .expect("field names collected");
+    if !names.iter().any(|name| name.optional) {
+        emitter.instruction(Instruction::GlobalGet(global));
+        return;
+    }
+    let intrinsics = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .expect("intrinsics declared");
+    for (index, name) in names.iter().enumerate() {
+        if name.optional {
+            for field_index in [0, 1] {
+                emitter.instruction(Instruction::GlobalGet(global));
+                emitter.instruction(Instruction::I32Const(index as i32));
+                emitter.instruction(Instruction::ArrayGet(intrinsics.field_names));
+                emitter.instruction(Instruction::StructGet {
+                    struct_type_index: intrinsics.string,
+                    field_index,
+                });
+            }
+            emitter.instruction(Instruction::I32Const(i32::from(present(&name.name))));
+            emitter.instruction(Instruction::StructNew(
+                ctx.symbols.optional_field_name_type(),
+            ));
+        } else {
+            emitter.instruction(Instruction::GlobalGet(global));
+            emitter.instruction(Instruction::I32Const(index as i32));
+            emitter.instruction(Instruction::ArrayGet(intrinsics.field_names));
+        }
+    }
+    emitter.instruction(Instruction::ArrayNewFixed {
+        array_type_index: intrinsics.field_names,
+        array_size: names.len() as u32,
+    });
+}
+
+/// Push the presence flag for a field name already on the stack.
+pub(crate) fn emit_name_presence(
+    emitter: &mut super::function_emitter::FunctionEmitter,
+    ctx: &super::CodegenCtx,
+) {
+    let intrinsics = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .expect("intrinsics declared");
+    let name = emitter.add_anonymous_local(ValType::Ref(RefType {
+        nullable: false,
+        heap_type: HeapType::Concrete(intrinsics.string),
+    }));
+    emitter.instruction(Instruction::LocalTee(name));
+    let optional = ctx.symbols.optional_field_name_type();
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(optional)));
+    emitter.emit_if(wasm_encoder::BlockType::Result(ValType::I32));
+    emitter.instruction(Instruction::LocalGet(name));
+    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(optional)));
+    emitter.instruction(Instruction::StructGet {
+        struct_type_index: optional,
+        field_index: 2,
+    });
+    emitter.emit_else();
+    emitter.instruction(Instruction::I32Const(1));
+    emitter.emit_end();
+}
+
+/// The object and index are locals; callers mark a successful store as present.
+pub(crate) fn emit_set_presence(
+    emitter: &mut super::function_emitter::FunctionEmitter,
+    ctx: &super::CodegenCtx,
+    object: u32,
+    index: u32,
+    present: bool,
+) {
+    let intrinsics = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .expect("intrinsics declared");
+    let name = emitter.add_anonymous_local(ValType::Ref(RefType {
+        nullable: false,
+        heap_type: HeapType::Concrete(intrinsics.string),
+    }));
+    emitter.instruction(Instruction::LocalGet(object));
+    emitter.instruction(Instruction::StructGet {
+        struct_type_index: intrinsics.object_shape,
+        field_index: 1,
+    });
+    emitter.instruction(Instruction::LocalGet(index));
+    emitter.instruction(Instruction::ArrayGet(intrinsics.field_names));
+    emitter.instruction(Instruction::LocalTee(name));
+    let optional = ctx.symbols.optional_field_name_type();
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(optional)));
+    emitter.emit_if(wasm_encoder::BlockType::Empty);
+    emitter.instruction(Instruction::LocalGet(name));
+    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(optional)));
+    emitter.instruction(Instruction::I32Const(i32::from(present)));
+    emitter.instruction(Instruction::StructSet {
+        struct_type_index: optional,
+        field_index: 2,
+    });
+    emitter.emit_end();
+}
+
+/// Serializer fast path for an optional slot in its own declared layout.
+pub(crate) fn emit_optional_presence(
+    function: &mut wasm_encoder::Function,
+    intrinsics: IntrinsicTypeIndices,
+    optional_name_type: u32,
+    object: u32,
+    index: u32,
+    value: u32,
+) {
+    for instruction in [
+        Instruction::LocalGet(object),
+        Instruction::RefCastNonNull(HeapType::Concrete(intrinsics.object_shape)),
+        Instruction::StructGet {
+            struct_type_index: intrinsics.object_shape,
+            field_index: 1,
+        },
+        Instruction::I32Const(index as i32),
+        Instruction::ArrayGet(intrinsics.field_names),
+        Instruction::RefCastNonNull(HeapType::Concrete(optional_name_type)),
+        Instruction::StructGet {
+            struct_type_index: optional_name_type,
+            field_index: 2,
+        },
+        Instruction::LocalGet(value),
+        Instruction::RefIsNull,
+        Instruction::I32Eqz,
+        Instruction::I32Or,
+    ] {
+        function.instruction(&instruction);
+    }
 }
 
 #[cfg(test)]

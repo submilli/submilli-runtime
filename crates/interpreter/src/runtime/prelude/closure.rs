@@ -13,6 +13,19 @@ pub struct Closure {
 }
 
 impl Closure {
+    pub(crate) async fn call_with_receiver(
+        &self,
+        caller: &mut Caller<'_, StoreData>,
+        receiver: Val,
+        args: &[Val],
+    ) -> wasmtime::Result<Val> {
+        let bound = Self {
+            func: self.func,
+            env: bind_receiver(caller, self.env, receiver)?,
+        };
+        bound.call_dynamic(caller, args).await
+    }
+
     /// Re-enter the guest: call the funcref with the uniform ABI (env as the
     /// leading argument), filling `out` with the results in place.
     async fn invoke(
@@ -136,4 +149,49 @@ pub(crate) fn read(
     };
     let env = st.field(&mut *caller, 2)?;
     Ok(Closure { func, env })
+}
+
+pub(super) fn receiver_type(engine: &wasmtime::Engine) -> wasmtime::Result<wasmtime::StructType> {
+    use wasmtime::{FieldType, Finality, HeapType, Mutability, RefType, StorageType, ValType};
+    let intr = crate::runtime::intrinsic_types::build_intrinsic_types(engine)?;
+    crate::runtime::gc_singleton::singleton_struct(
+        engine,
+        Finality::Final,
+        None,
+        vec![
+            FieldType::new(
+                Mutability::Const,
+                StorageType::ValType(ValType::Ref(RefType::new(false, HeapType::Any))),
+            ),
+            FieldType::new(
+                Mutability::Const,
+                StorageType::ValType(ValType::Ref(RefType::new(
+                    true,
+                    HeapType::ConcreteStruct(intr.object),
+                ))),
+            ),
+        ],
+    )
+}
+
+fn bind_receiver(
+    caller: &mut Caller<'_, StoreData>,
+    env: Val,
+    receiver: Val,
+) -> wasmtime::Result<Val> {
+    let Val::AnyRef(Some(reference)) = env else {
+        return Ok(env);
+    };
+    let Some(object) = reference.as_struct(&mut *caller)? else {
+        return Ok(env);
+    };
+    let ty = receiver_type(caller.engine())?;
+    if !object.matches_ty(&*caller, &ty)? {
+        return Ok(env);
+    }
+    let inner = object.field(&mut *caller, 0)?;
+    let pre = wasmtime::StructRefPre::new(&mut *caller, ty);
+    Ok(Val::AnyRef(Some(
+        wasmtime::StructRef::new(&mut *caller, &pre, &[inner, receiver])?.to_anyref(),
+    )))
 }

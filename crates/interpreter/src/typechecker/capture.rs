@@ -510,6 +510,25 @@ impl State<'_> {
             }
             TypedExprKind::Closure { params, body, .. } => {
                 self.frames.push(Frame::default());
+                if self.ta.closure_this.contains_key(&id) {
+                    self.bind(LocalBinding {
+                        name_ident: Ident {
+                            name: THIS_BINDING.to_string(),
+                            span: self.ta.expr(id).span,
+                        },
+                        ty: Type::Unknown,
+                        mutable: false,
+                        source: BindingSource::Const,
+                    });
+                }
+                if let Some(name) = self.ta.closure_names.get(&id).cloned() {
+                    self.bind(LocalBinding {
+                        name_ident: name,
+                        ty: self.ta.expr(id).ty.clone(),
+                        mutable: false,
+                        source: BindingSource::Const,
+                    });
+                }
                 for (i, p) in params.iter().enumerate() {
                     self.bind(LocalBinding {
                         name_ident: p.name.clone(),

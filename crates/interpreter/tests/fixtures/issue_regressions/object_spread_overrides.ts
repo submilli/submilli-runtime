@@ -8,5 +8,5 @@ function main(): void {
   assert(merged.a === null && JSON.stringify(merged) === '{"a":null}', "present null replaces value");
   const contextual: { a?: number | null } = { ...({ a: 1 }) };
   contextual.a = null;
-  assert(JSON.stringify(contextual) === '{}', "contextual optional-null model");
+  assert(JSON.stringify(contextual) === '{"a":null}', "explicit null remains present");
 }

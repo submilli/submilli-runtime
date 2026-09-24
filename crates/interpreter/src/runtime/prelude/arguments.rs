@@ -42,6 +42,10 @@ pub(super) fn metadata(
     let Some(object) = reference.as_struct(&mut *caller)? else {
         return Ok(None);
     };
+    if object.matches_ty(&*caller, &super::closure::receiver_type(caller.engine())?)? {
+        let inner = object.field(&mut *caller, 0)?;
+        return metadata(caller, &inner);
+    }
     if !object.matches_ty(&*caller, &metadata_type(caller.engine())?)? {
         return Ok(None);
     }

@@ -50,6 +50,16 @@ pub fn infer<'a>(
     ast: &'a Ast,
     packages: &'a [&'a PackageDeclaration],
 ) -> (TypedAst, Vec<Diagnostic>) {
+    infer_with_transitive(source, package_name, ast, packages, &[])
+}
+
+pub fn infer_with_transitive<'a>(
+    source: &'a str,
+    package_name: &'a str,
+    ast: &'a Ast,
+    packages: &'a [&'a PackageDeclaration],
+    transitive: &'a [&'a PackageDeclaration],
+) -> (TypedAst, Vec<Diagnostic>) {
     #[cfg(debug_assertions)]
     debug_assert_no_patterns(ast);
     let packages_by_name: BTreeMap<&'a str, &'a PackageDeclaration> = packages
@@ -80,6 +90,8 @@ pub fn infer<'a>(
         next_narrow_counter: 0,
         current_return: None,
         current_class: None,
+        function_this: None,
+        object_this_hint: None,
         current_static: None,
         current_super: None,
         in_constructor: false,
@@ -94,7 +106,15 @@ pub fn infer<'a>(
         body_instantiations: Vec::new(),
         next_generic_param_id: 0,
         packages_by_name,
-        type_only_packages: BTreeMap::new(),
+        type_only_packages: transitive
+            .iter()
+            .filter(|decl| {
+                !packages
+                    .iter()
+                    .any(|direct| direct.package_name == decl.package_name)
+            })
+            .map(|decl| (decl.package_name.as_str(), *decl))
+            .collect(),
         module: ModulePath::from(""),
         root_module: ModulePath::from(""),
         package_inference: false,
@@ -211,6 +231,8 @@ pub fn infer_package<'a>(
         next_narrow_counter: 0,
         current_return: None,
         current_class: None,
+        function_this: None,
+        object_this_hint: None,
         current_static: None,
         current_super: None,
         in_constructor: false,
@@ -424,6 +446,8 @@ pub(super) struct Inferer<'a> {
     /// method or constructor body. `this` resolves to it; `None` everywhere else
     /// (bare `this` is rejected).
     pub(super) current_class: Option<Type>,
+    pub(super) function_this: Option<Type>,
+    pub(super) object_this_hint: Option<Type>,
     /// `(class name, member name)` while checking a static method body or a
     /// static field initializer — there is no instance, so `this` gets a
     /// tailored diagnostic instead of the generic rejection.

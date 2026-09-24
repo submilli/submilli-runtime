@@ -56,6 +56,11 @@ pub enum ExprKind {
         receiver: ExprId,
         index: ExprId,
     },
+    FunctionExpression {
+        name: Option<Ident>,
+        this_type: Option<TypeAnnotation>,
+        function: ExprId,
+    },
     Arrow {
         params: Vec<ParamDecl>,
         return_type: Option<TypeAnnotation>,
@@ -72,7 +77,7 @@ pub enum ExprKind {
         type_args: Option<Vec<TypeAnnotation>>,
         args: Vec<ExprId>,
     },
-    /// `this` — accepted only inside a class method or constructor body (parser-enforced).
+    /// `this` — a class receiver, a function receiver, or an arrow capture.
     /// `Span` lives on the enclosing `Expr`.
     This,
     /// `super` — composes with `Call`/`FieldAccess` for `super(...)` / `super.method(...)`.

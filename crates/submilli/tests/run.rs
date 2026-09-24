@@ -201,6 +201,91 @@ fn blueprint_package_dependency_runs() {
 }
 
 #[test]
+fn blueprint_transitive_ancestor_is_available_but_not_importable() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let base = compile_package(
+        "@acme/base", ModulePath::from("lib"),
+        &[PackageSourceModule { path: ModulePath::from("lib"), source:
+            "export class Top { static readonly F: (n: number) => number = (n: number): number => n + 1; }" }], &[],
+    ).expect("compile base");
+    let mid = compile_package(
+        "@acme/mid",
+        ModulePath::from("lib"),
+        &[PackageSourceModule {
+            path: ModulePath::from("lib"),
+            source: "import { Top } from \"@acme/base\"; export class Mid extends Top {}",
+        }],
+        &[&base.declaration],
+    )
+    .expect("compile mid");
+    for (name, package, dependencies) in [
+        ("base", &base, Vec::new()),
+        (
+            "mid",
+            &mid,
+            vec![submilli_build::ArtifactDependency::new(
+                "@acme/base",
+                "0.0.0-test",
+            )],
+        ),
+    ] {
+        write_package_artifact_with_docs_and_sources(
+            tmp.path().join("packages/@acme").join(name),
+            &package.wasm,
+            &package.type_info,
+            &derive_capability_schema(&package.declaration, &package.required_capabilities),
+            &package.declaration,
+            &ArtifactMetadata::new(format!("@acme/{name}"), "0.0.0-test", dependencies),
+            "",
+            &[],
+        )
+        .expect("write artifact");
+    }
+    let blueprint = tmp.path().join("blueprint.yaml");
+    write_blueprint(
+        &blueprint,
+        "name: transitive-test\npackages:\n  - \"@acme/mid\"\n",
+    );
+    let script = tmp.path().join("consumer.ts");
+    fs::write(
+        &script,
+        r#"
+        import { Mid } from "@acme/mid";
+        class Local extends Mid {}
+        function main(): number {
+            assert(new Local() instanceof Mid, "subclass");
+            return Mid.F(1);
+        }
+    "#,
+    )
+    .expect("write script");
+    let args = [
+        "run".as_ref(),
+        script.as_os_str(),
+        "--blueprint".as_ref(),
+        blueprint.as_os_str(),
+    ];
+    let out = run_with_submilli_home(&args, tmp.path());
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out), "2\n");
+    fs::write(
+        &script,
+        r#"
+        import { Top } from "@acme/base";
+        function main(): number { return Top.F(1); }
+    "#,
+    )
+    .expect("write forbidden import");
+    let out = run_with_submilli_home(&args, tmp.path());
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("package `@acme/base` is not a dependency"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
 fn package_error_renders_package_source_context() {
     let tmp = tempfile::tempdir().expect("tempdir");
     write_acme_util_package(tmp.path());

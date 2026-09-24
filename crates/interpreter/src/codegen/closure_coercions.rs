@@ -60,19 +60,68 @@ fn emit_body(target: ClosureSig, ctx: &CodegenCtx<'_>) -> Function {
         .symbols
         .closure_func_type_idx(source)
         .expect("source function type");
-    let mut body = Function::new([]);
+    let wrapper = ctx.symbols.this_environment_type.expect("this environment");
+    let object = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .expect("intrinsics")
+        .object;
+    let original = u32::from(target.arity) + 1;
+    let receiver = original + 1;
+    let env = original + 2;
+    let mut body = Function::new([
+        (
+            1,
+            ValType::Ref(RefType {
+                nullable: false,
+                heap_type: HeapType::Concrete(structure),
+            }),
+        ),
+        (
+            1,
+            ValType::Ref(RefType {
+                nullable: true,
+                heap_type: HeapType::Concrete(object),
+            }),
+        ),
+        (
+            1,
+            ValType::Ref(RefType {
+                nullable: false,
+                heap_type: HeapType::ANY,
+            }),
+        ),
+    ]);
+    body.instruction(&Instruction::LocalGet(0));
+    body.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(wrapper)));
+    body.instruction(&Instruction::StructGet {
+        struct_type_index: wrapper,
+        field_index: 1,
+    });
+    body.instruction(&Instruction::LocalSet(receiver));
+    body.instruction(&Instruction::LocalGet(0));
+    body.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(wrapper)));
+    body.instruction(&Instruction::StructGet {
+        struct_type_index: wrapper,
+        field_index: 0,
+    });
+    body.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(structure)));
+    body.instruction(&Instruction::LocalSet(original));
     // The wrapper's environment is the original closure. Preserve its own
     // environment and pass every erased argument through unchanged.
-    body.instruction(&Instruction::LocalGet(0));
+    body.instruction(&Instruction::LocalGet(original));
     body.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(structure)));
     body.instruction(&Instruction::StructGet {
         struct_type_index: structure,
         field_index: 2,
     });
+    for instruction in super::this_binding::binding_instructions(wrapper, env, receiver) {
+        body.instruction(&instruction);
+    }
     for i in 1..=u32::from(target.arity) {
         body.instruction(&Instruction::LocalGet(i));
     }
-    body.instruction(&Instruction::LocalGet(0));
+    body.instruction(&Instruction::LocalGet(original));
     body.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(structure)));
     body.instruction(&Instruction::StructGet {
         struct_type_index: structure,
@@ -125,6 +174,7 @@ pub fn emit_coercion(
     emit_identity_vtable(emitter, ctx, original);
     emitter.instruction(Instruction::RefFunc(function));
     emitter.instruction(Instruction::LocalGet(original));
+    super::this_binding::wrap(emitter, ctx);
     emitter.instruction(Instruction::StructNew(structure));
     true
 }
@@ -163,6 +213,7 @@ pub fn emit_erased_cast(
     ));
     emitter.instruction(Instruction::LocalGet(original));
     emitter.instruction(Instruction::RefAsNonNull);
+    super::this_binding::wrap(emitter, ctx);
     emitter.instruction(Instruction::StructNew(target_struct));
     emitter.emit_else();
     emitter.instruction(Instruction::LocalGet(original));

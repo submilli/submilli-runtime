@@ -14,7 +14,7 @@ function main(): void {
     assert(alias({a:1}) === "missing", "alias omitted");
     assert(inline({a:1,b:"ok"}) === "ok", "inline present");
     assert(inline({a:1}) === "missing", "inline omitted");
-    assert(nullable({b:null}) === "missing", "optional null is absent");
+    assert(nullable({b:null}) === null, "optional null is present");
     assert(required({b:null}), "required null is present");
     assert(union({a:1,b:"ok"}) === "ok", "union present");
     assert(union({a:1}) === "missing", "optional union member can be absent");

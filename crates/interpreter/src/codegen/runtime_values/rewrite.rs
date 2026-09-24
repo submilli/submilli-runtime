@@ -215,7 +215,11 @@ fn rewrite_operation(ast: &mut TypedAst, flow: &Flow, id: ExprId) {
             name,
             args,
             ..
-        } if flow.expr_is_wide(receiver) && super::dynamic_member_interface(&iface) => {
+        } if super::dynamic_member_interface(&iface)
+            && (flow.expr_is_wide(receiver)
+                || (!iface.as_str().starts_with("submilli:")
+                    && ast.authored_call_arguments(ast.expr(id).span).is_some())) =>
+        {
             rewrite_member_call(ast, id, receiver, &iface, &name.name, args);
         }
         TypedExprKind::GenericMethodCall {
@@ -224,7 +228,11 @@ fn rewrite_operation(ast: &mut TypedAst, flow: &Flow, id: ExprId) {
             name,
             args,
             ..
-        } if flow.expr_is_wide(receiver) && super::dynamic_member_interface(&iface) => {
+        } if super::dynamic_member_interface(&iface)
+            && (flow.expr_is_wide(receiver)
+                || (!iface.as_str().starts_with("submilli:")
+                    && ast.authored_call_arguments(ast.expr(id).span).is_some())) =>
+        {
             rewrite_member_call(
                 ast,
                 id,
@@ -373,5 +381,20 @@ fn rewrite_member_call(
         ty: Type::Array(Box::new(Type::Unknown)),
         span,
     });
-    ast.expr_mut(id).kind = member_helper("invoke", vec![member, args]);
+    let kind = member_helper("invoke", vec![member, args]);
+    let target_ty = ast.expr(id).ty.clone();
+    ast.expr_mut(id).kind = if matches!(target_ty, Type::Unknown | Type::Void) {
+        kind
+    } else {
+        let value = ast.push_expr(crate::TypedExpr {
+            kind,
+            ty: Type::Unknown,
+            span,
+        });
+        TypedExprKind::Cast {
+            value,
+            target_ty,
+            check: None,
+        }
+    };
 }

@@ -122,6 +122,16 @@ fn front_end(
     stdlib_defs: &[PackageDeclaration],
     packages: &[&PackageDeclaration],
 ) -> (TypedAst, Vec<Diagnostic>, PhaseTimings) {
+    front_end_with_transitive(source, parsed, stdlib_defs, packages, &[])
+}
+
+fn front_end_with_transitive(
+    source: &str,
+    parsed: &ParsedScript,
+    stdlib_defs: &[PackageDeclaration],
+    packages: &[&PackageDeclaration],
+    transitive: &[&PackageDeclaration],
+) -> (TypedAst, Vec<Diagnostic>, PhaseTimings) {
     let mut timings = parsed.timings;
     let mut diags = parsed.diagnostics.clone();
 
@@ -131,11 +141,12 @@ fn front_end(
     infer_refs.extend(host_defs.iter());
     infer_refs.extend(stdlib_defs.iter());
     infer_refs.extend_from_slice(packages);
-    let (ta, infer_diags) = crate::typechecker::infer(
+    let (ta, infer_diags) = crate::typechecker::infer::infer_with_transitive(
         source,
         crate::mangle::USER_PACKAGE,
         &parsed.ast,
         &infer_refs,
+        transitive,
     );
     diags.extend(infer_diags);
     diags.extend(check(&ta));
@@ -226,14 +237,15 @@ pub fn compile_script_owned_by(
 ) -> Result<CompiledScript, Vec<Diagnostic>> {
     let parsed = parse_script(source, file);
     let stdlib_defs = runtime::stdlib_package_declarations();
+    let declarations = [packages, mcps].concat();
     compile_parsed_script_owned_by(
         Some(owning_package),
         source,
         filename,
         &parsed,
         &stdlib_defs,
-        packages,
-        mcps,
+        &declarations,
+        &[],
     )
 }
 
@@ -245,7 +257,38 @@ pub fn compile_parsed_script_timed(
     packages: &[&PackageDeclaration],
     mcps: &[&PackageDeclaration],
 ) -> Result<CompiledScript, Vec<Diagnostic>> {
-    compile_parsed_script_owned_by(None, source, filename, parsed, stdlib_defs, packages, mcps)
+    compile_parsed_script_with_transitive(
+        source,
+        filename,
+        parsed,
+        stdlib_defs,
+        packages,
+        mcps,
+        &[],
+    )
+}
+
+/// Compile with declarations needed to reconstruct imported types without
+/// exposing those transitive packages to source-level imports.
+pub fn compile_parsed_script_with_transitive(
+    source: &str,
+    filename: &str,
+    parsed: &ParsedScript,
+    stdlib_defs: &[PackageDeclaration],
+    packages: &[&PackageDeclaration],
+    mcps: &[&PackageDeclaration],
+    transitive: &[&PackageDeclaration],
+) -> Result<CompiledScript, Vec<Diagnostic>> {
+    let declarations = [packages, mcps].concat();
+    compile_parsed_script_owned_by(
+        None,
+        source,
+        filename,
+        parsed,
+        stdlib_defs,
+        &declarations,
+        transitive,
+    )
 }
 
 fn compile_parsed_script_owned_by(
@@ -254,14 +297,16 @@ fn compile_parsed_script_owned_by(
     filename: &str,
     parsed: &ParsedScript,
     stdlib_defs: &[PackageDeclaration],
-    packages: &[&PackageDeclaration],
-    mcps: &[&PackageDeclaration],
+    external_declarations: &[&PackageDeclaration],
+    transitive: &[&PackageDeclaration],
 ) -> Result<CompiledScript, Vec<Diagnostic>> {
-    let mut external_declarations = Vec::with_capacity(packages.len() + mcps.len());
-    external_declarations.extend_from_slice(packages);
-    external_declarations.extend_from_slice(mcps);
-    let (mut ta, diags, mut timings) =
-        front_end(source, parsed, stdlib_defs, &external_declarations);
+    let (mut ta, diags, mut timings) = front_end_with_transitive(
+        source,
+        parsed,
+        stdlib_defs,
+        external_declarations,
+        transitive,
+    );
     if has_errors(&diags) {
         return Err(diags);
     }
@@ -284,7 +329,8 @@ fn compile_parsed_script_owned_by(
     for defs in stdlib_defs {
         dependencies.push(defs);
     }
-    dependencies.extend(external_declarations);
+    dependencies.extend_from_slice(external_declarations);
+    dependencies.extend_from_slice(transitive);
 
     let codegen_start = Instant::now();
     let generated = match owning_package {

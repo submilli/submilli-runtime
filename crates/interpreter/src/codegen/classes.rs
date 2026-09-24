@@ -952,6 +952,7 @@ impl ClassPlan {
                     intrinsics,
                     string_vtable_global_idx,
                     string_concat_func_idx,
+                    ctx.symbols.optional_field_name_type(),
                 )
             }));
             code.function(&emit_class_hash_body(class.fields.len() as u32, intrinsics));
@@ -1179,12 +1180,7 @@ impl ClassPlan {
                 .class_vtable_global_idx(&class.mangled)
                 .expect("vtable global"),
         );
-        push_global(
-            &mut emitter,
-            ctx.symbols
-                .field_names_global_idx(&field_names)
-                .expect("field-names global"),
-        );
+        super::field_names::emit_instance_names(&mut emitter, ctx, &field_names, |_| false);
         let intrinsics = ctx
             .symbols
             .intrinsic_type_indices()
@@ -1930,6 +1926,7 @@ fn emit_class_to_json_body(
     intrinsics: IntrinsicTypeIndices,
     string_vtable_global_idx: u32,
     string_concat_func_idx: u32,
+    optional_name_type: u32,
 ) -> Function {
     let push_str = |f: &mut Function, text: &str| {
         crate::codegen::intrinsics::push_string_literal(
@@ -2004,6 +2001,17 @@ fn emit_class_to_json_body(
             intrinsics.closure,
         )));
         f.instruction(&Instruction::I32Eqz);
+        if fields[*slot as usize].optional {
+            super::field_names::emit_optional_presence(
+                &mut f,
+                intrinsics,
+                optional_name_type,
+                0,
+                *slot,
+                elem,
+            );
+            f.instruction(&Instruction::I32And);
+        }
         f.instruction(&Instruction::If(BlockType::Empty));
         f.instruction(&Instruction::LocalGet(acc));
         f.instruction(&Instruction::LocalGet(5));

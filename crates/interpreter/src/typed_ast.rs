@@ -420,6 +420,7 @@ pub struct TypedObjectFieldOrigin {
 #[derive(Clone, Debug, PartialEq)]
 pub enum TypedObjectFieldSource {
     Literal(ExprId),
+    Absent(ExprId),
     /// `source_index` counts the literal's `Spread` members; `source_ty` is the
     /// spread's `Type::Object` so codegen can index by BTreeMap order.
     Spread {
@@ -436,7 +437,7 @@ pub enum TypedObjectFieldSource {
 impl TypedObjectFieldSource {
     pub fn literal_expr_id(&self) -> Option<ExprId> {
         match self {
-            TypedObjectFieldSource::Literal(id) => Some(*id),
+            TypedObjectFieldSource::Literal(id) | TypedObjectFieldSource::Absent(id) => Some(*id),
             TypedObjectFieldSource::Spread { .. } => None,
         }
     }
@@ -771,6 +772,10 @@ pub struct TypedParam {
 
 #[derive(Default, Clone, Debug)]
 pub struct TypedAst {
+    /// Receiver types for ordinary function expressions; arrows capture their receiver.
+    pub closure_this: std::collections::BTreeMap<ExprId, Type>,
+    /// Named function-expression bindings, scoped to their closure body.
+    pub closure_names: std::collections::BTreeMap<ExprId, Ident>,
     /// Arguments before omitted defaults and rest packing, keyed by call span.
     pub authored_arguments: std::collections::BTreeMap<(u32, u32, u32), Vec<ExprId>>,
     /// Authored expression types retained by runtime-value lowering for member

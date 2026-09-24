@@ -3,11 +3,11 @@ function first<T>(xs: T[]): T {
 }
 
 function main(): void {
-  const opt: { a: number; b?: string } = { a: 1 };
+  const opt: { a: number; b?: string | null } = { a: 1, b: null };
   const values = Object.values(opt);
   assert(values.length === 2, "two fields");
   assert(values[0] as number === 1, "set field survives");
-  assert(values[1] === null, "unset optional field reads as null unknown");
+  assert(values[1] === null, "present optional field holds null unknown");
 
   const entries = Object.entries(opt);
   assert(entries[1][1] === null, "entries value slot holds null");

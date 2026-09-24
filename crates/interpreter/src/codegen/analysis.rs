@@ -784,6 +784,8 @@ impl CodegenAnalysis {
                 ..
             } => {
                 self.closure_metas.push(ClosureMeta {
+                    this_type: ta.closure_this.get(&id).cloned(),
+                    self_name: ta.closure_names.get(&id).cloned(),
                     runtime_generics: runtime_generics.clone(),
                     expr_id: id,
                     signature: expr.ty.clone(),
@@ -885,6 +887,8 @@ impl CodegenAnalysis {
         self.dependency_usage
             .note_member(crate::mangle::extend(iface, &name.name));
         self.string_pool.intern_text("Value is not callable");
+        self.string_pool
+            .intern_text("Unbound function has no this receiver");
         self.extra_field_names.push(name.name.clone());
         self.note_shape_dispatch(receiver_ty, arity, ret);
     }
@@ -901,6 +905,8 @@ impl CodegenAnalysis {
     /// property read followed by a closure call, never to method dispatch.
     fn note_shape_dispatch(&mut self, receiver_ty: &Type, arity: usize, ret: &Type) {
         self.string_pool.intern_text("Value is not callable");
+        self.string_pool
+            .intern_text("Unbound function has no this receiver");
         // An optional chain dispatches on the non-null half of its receiver.
         let receiver_ty = crate::typechecker::infer::narrowing::strip_null(receiver_ty);
         if !matches!(receiver_ty.peel(), Type::InterfaceRef { .. }) {
@@ -939,8 +945,17 @@ impl CodegenAnalysis {
                     iface,
                     name,
                     result_ty,
+                    span,
                     ..
                 } => {
+                    if ta.authored_call_arguments(*span).is_some()
+                        && !iface.as_str().starts_with("submilli:")
+                    {
+                        for helper in ["__value_member", "__value_invoke"] {
+                            self.dependency_usage
+                                .note_value(crate::mangle::prelude(helper));
+                        }
+                    }
                     self.extra_field_names.push(name.name.clone());
                     self.dependency_usage
                         .note_member(crate::mangle::extend(iface, &name.name));
@@ -964,8 +979,17 @@ impl CodegenAnalysis {
                     name,
                     args,
                     result_ty,
+                    span,
                     ..
                 } => {
+                    if ta.authored_call_arguments(*span).is_some()
+                        && !iface.as_str().starts_with("submilli:")
+                    {
+                        for helper in ["__value_member", "__value_invoke"] {
+                            self.dependency_usage
+                                .note_value(crate::mangle::prelude(helper));
+                        }
+                    }
                     self.extra_field_names.push(name.name.clone());
                     self.dependency_usage
                         .note_member(crate::mangle::extend(iface, &name.name));
@@ -997,6 +1021,8 @@ impl CodegenAnalysis {
             return;
         }
         self.string_pool.intern_text("Value is not callable");
+        self.string_pool
+            .intern_text("Unbound function has no this receiver");
         // Both directions need the getter's name and sig: a write scans the
         // `get <prop>` slot to tell a read-only property from an absent one.
         self.extra_field_names

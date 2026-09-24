@@ -24,7 +24,9 @@ use crate::CapabilitySchema;
 // incompatible, hence the gate rather than a migration.
 // v6: every class-method parameter uses a nullable boxed slot to support
 // contravariant overrides. Older method signatures cannot link to new consumers.
-pub const ARTIFACT_SCHEMA_VERSION: u32 = 6;
+// v7: optional field names carry per-instance presence bits. Older artifacts
+// conflate absent fields with explicit null and cannot share the new markers.
+pub const ARTIFACT_SCHEMA_VERSION: u32 = 7;
 
 const WASM_FILE: &str = "pkg.wasm";
 const CAPABILITIES_FILE: &str = "capabilities.yaml";

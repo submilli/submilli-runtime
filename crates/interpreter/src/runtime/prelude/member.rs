@@ -102,7 +102,7 @@ async fn invoke(
             return Err(host::type_error("Member is not callable"));
         }
         return super::closure::read(caller, &token[2], "method")?
-            .call_dynamic(caller, &args)
+            .call_with_receiver(caller, token[0], &args)
             .await;
     }
     let function = caller

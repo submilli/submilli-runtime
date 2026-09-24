@@ -831,6 +831,9 @@ fn satisfies_structurally(
         // Coinductive: an in-progress pair counts as satisfied.
         return true;
     }
+    if expanding_interface_pair(actual, expected, seen) {
+        return true;
+    }
     let Some((me, _pe, ne, ae)) = expected.interface_routing() else {
         return false;
     };
@@ -857,6 +860,90 @@ fn satisfies_structurally(
         });
     seen.pop();
     ok
+}
+
+/// Expansive recursion produces fresh instantiations forever, so exact-pair
+/// coinduction cannot terminate it. Require growth on at least one side of the same
+/// named comparison; explicitly nested, shrinking arguments still get checked.
+fn expanding_interface_pair(actual: &Type, expected: &Type, seen: &[(Type, Type)]) -> bool {
+    let (
+        Type::InterfaceRef {
+            mangled: actual_name,
+            args: actual_args,
+            ..
+        },
+        Type::InterfaceRef {
+            mangled: expected_name,
+            args: expected_args,
+            ..
+        },
+    ) = (actual, expected)
+    else {
+        return false;
+    };
+    let mut previous = (
+        type_argument_depth(actual_args),
+        type_argument_depth(expected_args),
+    );
+    let mut expansions = 0;
+    for (actual, expected) in seen.iter().rev() {
+        let (
+            Type::InterfaceRef {
+                mangled: ancestor_actual_name,
+                args: ancestor_actual_args,
+                ..
+            },
+            Type::InterfaceRef {
+                mangled: ancestor_expected_name,
+                args: ancestor_expected_args,
+                ..
+            },
+        ) = (actual, expected)
+        else {
+            continue;
+        };
+        if ancestor_actual_name != actual_name || ancestor_expected_name != expected_name {
+            continue;
+        }
+        let depth = (
+            type_argument_depth(ancestor_actual_args),
+            type_argument_depth(ancestor_expected_args),
+        );
+        if depth.0 > previous.0 || depth.1 > previous.1 || depth == previous {
+            continue;
+        }
+        expansions += 1;
+        if expansions == 3 {
+            return true;
+        }
+        previous = depth;
+    }
+    false
+}
+
+fn type_argument_depth(args: &[Type]) -> usize {
+    args.iter().map(type_nesting_depth).max().unwrap_or(0)
+}
+
+fn type_nesting_depth(ty: &Type) -> usize {
+    1 + match ty {
+        Type::Array(element) | Type::Readonly(element) => type_nesting_depth(element),
+        Type::InterfaceRef { args, .. }
+        | Type::ClassRef { args, .. }
+        | Type::AliasRef { args, .. }
+        | Type::Alias { args, .. } => type_argument_depth(args),
+        Type::Tuple(elements) | Type::Union(elements) => type_argument_depth(elements),
+        Type::Function { params, ret, .. } => {
+            type_argument_depth(params).max(type_nesting_depth(ret))
+        }
+        Type::Refined { original, ty } => type_nesting_depth(original).max(type_nesting_depth(ty)),
+        Type::Object { fields } => fields
+            .values()
+            .map(|field| type_nesting_depth(&field.ty))
+            .max()
+            .unwrap_or(0),
+        _ => 0,
+    }
 }
 
 /// TS weak-type rule: an all-optional target is vacuously satisfied by the

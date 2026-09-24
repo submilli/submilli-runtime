@@ -44,6 +44,7 @@ pub fn parse(source: &str, tokens: Vec<Token>, file: FileId) -> (Ast, Vec<Diagno
         diagnostics: Vec::new(),
         block_depth: 0,
         class_member_body_depth: 0,
+        function_expression_body_depth: 0,
     };
     p.parse_program();
     (p.ast, p.diagnostics)
@@ -60,6 +61,7 @@ pub(crate) struct Parser<'a> {
     block_depth: u32,
     /// Nonzero while parsing a class method or constructor body; gates `this`/`super`.
     class_member_body_depth: u32,
+    function_expression_body_depth: u32,
 }
 
 impl<'a> Parser<'a> {
@@ -3618,17 +3620,8 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    /// `function (a: T): R { … }` in expression position, parsed into `ExprKind::Arrow`.
-    ///
-    /// The two forms differ only in how they bind `this`. The body is parsed through
-    /// `parse_outer_this_boundary`, which rejects `this` inside it, so the one case where
-    /// they would disagree cannot be written and the lowering is exact for the rest.
-    ///
-    /// In the named form `function f() { … }`, TypeScript binds `f` inside the function's
-    /// own body, and an arrow has nowhere to record that name. The name is therefore
-    /// accepted and dropped — it is almost always only a label — and rejected just when
-    /// the body actually references it, which is the one case where dropping it would
-    /// change meaning.
+    /// Function expressions share parameter/body parsing with arrows, but retain
+    /// their own receiver and optional recursive-name binding.
     fn parse_function_expression(&mut self) -> Option<ExprId> {
         let kw = self.advance();
 
@@ -3650,6 +3643,24 @@ impl<'a> Parser<'a> {
         }
         self.advance();
 
+        let this_type = if matches!(self.peek().kind, TokenKind::This) {
+            self.advance();
+            if !matches!(self.peek().kind, TokenKind::Colon) {
+                self.error_at_peek("expected a type annotation after `this`");
+                return None;
+            }
+            self.advance();
+            let ty = self.parse_type_annotation()?;
+            if matches!(self.peek().kind, TokenKind::Comma) {
+                self.advance();
+            } else if !matches!(self.peek().kind, TokenKind::RightParen) {
+                self.error_at_peek("expected `,` or `)` after the `this` parameter");
+                return None;
+            }
+            Some(ty)
+        } else {
+            None
+        };
         let params = if matches!(self.peek().kind, TokenKind::RightParen) {
             Vec::new()
         } else {
@@ -3674,23 +3685,16 @@ impl<'a> Parser<'a> {
             self.error_at_peek("expected `{` to open the function body");
             return None;
         }
-        let body_start = self.pos;
-        let block = self.parse_outer_this_boundary(Self::parse_block)?;
+        let saved = self.class_member_body_depth;
+        self.class_member_body_depth = 0;
+        self.function_expression_body_depth += 1;
+        let block = self.parse_block();
+        self.function_expression_body_depth -= 1;
+        self.class_member_body_depth = saved;
+        let block = block?;
         let end = self.ast.stmt(block).span.end;
 
-        if let Some(name) = self_name.filter(|n| self.body_mentions(body_start, &n.name)) {
-            self.error_at_with_help(
-                name.span,
-                "a named function expression cannot call itself",
-                vec![format!(
-                    "declare it instead: `function {}(…) {{ … }}`",
-                    name.name
-                )],
-            );
-            return None;
-        }
-
-        Some(self.ast.push_expr(Expr {
+        let function = self.ast.push_expr(Expr {
             kind: ExprKind::Arrow {
                 params,
                 return_type,
@@ -3698,55 +3702,31 @@ impl<'a> Parser<'a> {
                 body: ArrowBody::Block(block),
             },
             span: self.span(kw.span.start, end),
+        });
+        Some(self.ast.push_expr(Expr {
+            kind: ExprKind::FunctionExpression {
+                name: self_name,
+                this_type,
+                function,
+            },
+            span: self.span(kw.span.start, end),
         }))
     }
 
-    /// Parses a body that gets its own `this`, so an enclosing class method's `this` does
-    /// not leak into it.
-    ///
-    /// A `function` expression and a shorthand method each rebind `this` at call time,
-    /// but both lower to `ExprKind::Arrow`, which captures `this` lexically. Inside a
-    /// class method the two disagree: TypeScript gives the receiver, an arrow gives the
-    /// enclosing instance. Zeroing the depth turns that case into the existing "`this` is
-    /// only valid inside a class method" error instead of a silently different value.
+    /// Shorthand methods still use arrow lowering. Reject their receiver syntax
+    /// so an enclosing class or function receiver cannot leak into the body.
     fn parse_outer_this_boundary<T>(
         &mut self,
         parse: impl FnOnce(&mut Self) -> Option<T>,
     ) -> Option<T> {
         let saved = self.class_member_body_depth;
         self.class_member_body_depth = 0;
+        let saved_function = self.function_expression_body_depth;
+        self.function_expression_body_depth = 0;
         let parsed = parse(self);
         self.class_member_body_depth = saved;
+        self.function_expression_body_depth = saved_function;
         parsed
-    }
-
-    /// Whether the body starting at `body_start` spells `name` anywhere.
-    ///
-    /// Deliberately an over-approximation: it matches identifier tokens by text, with no
-    /// notion of scope, so a property (`o.bar`), an object key (`{ bar: 1 }`) or a local
-    /// that shadows the name also count. The parser has no binding information here, and
-    /// erring toward rejection is the safe direction — a missed self-reference would
-    /// silently drop a binding the body depends on.
-    ///
-    /// Two positions are excluded because they can never be a reference to the function
-    /// and are common in ordinary code: a member name after `.`, and a key before `:`.
-    /// A local, parameter, or type that merely shares the name is still caught.
-    fn body_mentions(&self, body_start: usize, name: &str) -> bool {
-        let body = &self.tokens[body_start..self.pos];
-        body.iter().enumerate().any(|(i, t)| {
-            if !matches!(t.kind, TokenKind::Identifier)
-                || self.source[t.span.start as usize..t.span.end as usize] != *name
-            {
-                return false;
-            }
-            let after_dot = i
-                .checked_sub(1)
-                .is_some_and(|p| matches!(body[p].kind, TokenKind::Dot));
-            let before_colon = body
-                .get(i + 1)
-                .is_some_and(|n| matches!(n.kind, TokenKind::Colon));
-            !after_dot && !before_colon
-        })
     }
 
     fn parse_arrow_param_list(&mut self) -> Option<Vec<ParamDecl>> {
@@ -4367,14 +4347,14 @@ impl<'a> Parser<'a> {
         Some(self.ast.push_expr(Expr { kind, span }))
     }
 
-    /// Parses `this` / `super` as primary expressions. Both are gated to class
-    /// method/constructor bodies via `class_member_body_depth`. The depth is lexical
-    /// and does not model a nested non-arrow `function` rebinding `this` — the
-    /// typechecker performs the precise binding (deferred to the class typechecking work).
+    /// Ordinary functions establish a `this` boundary and exclude an enclosing
+    /// class's `super`; arrows inherit the current parsing context.
     fn parse_this_or_super(&mut self, is_this: bool) -> Option<ExprId> {
         let tok = self.advance();
         let span = tok.span;
-        if self.class_member_body_depth == 0 {
+        if self.class_member_body_depth == 0
+            && !(is_this && self.function_expression_body_depth > 0)
+        {
             if is_this {
                 self.error_at_with_help(
                     span,
@@ -4922,6 +4902,7 @@ mod tests {
             diagnostics: Vec::new(),
             block_depth: 0,
             class_member_body_depth: 0,
+            function_expression_body_depth: 0,
         }
     }
 
@@ -9197,6 +9178,10 @@ mod tests {
             StmtKind::Const { value, .. } => *value,
             _ => panic!("expected const declaration"),
         };
+        let value = match ast.expr(value).kind {
+            ExprKind::FunctionExpression { function, .. } => function,
+            _ => value,
+        };
         let expr = ast.expr(value).clone();
         let (params, return_type, body) = match expr.kind {
             ExprKind::Arrow {
@@ -9229,25 +9214,20 @@ mod tests {
         assert!(matches!(body, crate::ArrowBody::Block(_)));
     }
 
-    /// The name is a label with no binding of its own, so it is dropped.
+    /// The named wrapper preserves its body signature.
     #[test]
-    fn parses_named_function_expression_by_dropping_the_name() {
+    fn parses_named_function_expression_signature() {
         let (_ast, params, _return_type, _body) =
             parse_arrow_const("const f = function named(x: number): number { return x + 1; };");
         assert_eq!(params.len(), 1);
     }
 
-    /// Dropping the name would change meaning here, so this one is rejected.
+    /// Self references are resolved in the function expression scope.
     #[test]
-    fn rejects_a_named_function_expression_that_calls_itself() {
+    fn accepts_a_named_function_expression_that_calls_itself() {
         let (_ast, diags) =
             parse_str("const f = function bar(x: number): number { return bar(x); };");
-        assert!(
-            diags
-                .iter()
-                .any(|d| d.message.contains("cannot call itself")),
-            "self-referential named function expression should be rejected: {diags:?}"
-        );
+        assert!(diags.is_empty(), "{diags:?}");
     }
 
     /// A member name after `.` is never a reference to the function itself.
@@ -9274,17 +9254,12 @@ mod tests {
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
     }
 
-    /// A template substitution holds real identifier tokens, so a call there is caught.
+    /// A self reference in a template substitution remains a normal expression.
     #[test]
-    fn rejects_a_self_call_inside_a_template_substitution() {
+    fn accepts_a_self_call_inside_a_template_substitution() {
         let (_ast, diags) =
             parse_str("const f = function bar(x: number): string { return `${bar(0)}`; };");
-        assert!(
-            diags
-                .iter()
-                .any(|d| d.message.contains("cannot call itself")),
-            "a self-call in a template substitution should be rejected: {diags:?}"
-        );
+        assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
@@ -9298,21 +9273,13 @@ mod tests {
         );
     }
 
-    /// Both forms lower to an arrow, which captures `this` lexically, while TypeScript
-    /// rebinds it per call. Inside a class method those disagree, so `this` is rejected
-    /// there rather than silently resolving to the enclosing instance.
     #[test]
-    fn rejects_this_inside_a_function_expression_in_a_class_method() {
+    fn accepts_this_inside_a_function_expression_in_a_class_method() {
         let (_ast, diags) = parse_str(
             "class C { x: number = 1; m(): number { \
-             const f = function (): number { return this.x; }; return f(); } }",
+             const f = function (this: { x: number }): number { return this.x; }; return f(); } }",
         );
-        assert!(
-            diags
-                .iter()
-                .any(|d| d.message.contains("`this` is only valid inside")),
-            "`this` in a function expression should be rejected: {diags:?}"
-        );
+        assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]

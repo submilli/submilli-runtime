@@ -227,6 +227,24 @@ fn visit_stmt(ast: &Ast, id: StmtId, out: &mut Analysis) {
 fn visit_expr(ast: &Ast, id: ExprId, out: &mut Analysis) {
     use crate::{ChainPart, ExprKind};
     match &ast.expr(id).kind {
+        ExprKind::FunctionExpression { name, function, .. } => {
+            out.scopes.push(
+                name.iter()
+                    .map(|name| {
+                        (
+                            name.name.clone(),
+                            Binding {
+                                span: name.span,
+                                function_depth: out.function_depth,
+                                initialized: true,
+                            },
+                        )
+                    })
+                    .collect(),
+            );
+            visit_expr(ast, *function, out);
+            out.scopes.pop();
+        }
         ExprKind::Arrow { params, body, .. } => scan_function(ast, params, *body, out),
         ExprKind::Identifier(ident) => out.read(ident),
         // `x++` and `x--` write `x` exactly as `x = x + 1` does. `x!` is the

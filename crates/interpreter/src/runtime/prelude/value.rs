@@ -303,7 +303,7 @@ pub(super) async fn primitive_with_hint(
                 continue;
             }
             super::closure::read(caller, &method, name)?
-                .call(caller, &[])
+                .call_with_receiver(caller, *value, &[])
                 .await?
         } else if name == "toString" {
             super::vtable::dispatch_vtable_slot(caller, value, 0, &[]).await?
@@ -350,7 +350,7 @@ pub(super) async fn conversion_method(
         return Ok(None);
     }
     let method = super::closure::read(caller, &getter, &getter_name)?
-        .call(caller, &[])
+        .call_with_receiver(caller, *value, &[])
         .await?;
     Ok(Some(method))
 }

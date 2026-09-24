@@ -68,6 +68,8 @@ pub fn classify(sig: &Type) -> ClosureSig {
 
 #[derive(Clone, Debug)]
 pub struct ClosureMeta {
+    pub this_type: Option<Type>,
+    pub self_name: Option<crate::Ident>,
     pub runtime_generics: Vec<String>,
     pub expr_id: ExprId,
     pub signature: Type,
@@ -514,6 +516,25 @@ pub fn emit_env_types(
     ]);
     symbols.call_metadata_type = Some(*next_type_idx);
     *next_type_idx += 1;
+    let object = symbols.intrinsic_type_indices().expect("intrinsics").object;
+    types.ty().struct_([
+        FieldType {
+            element_type: StorageType::Val(ValType::Ref(RefType {
+                nullable: false,
+                heap_type: HeapType::ANY,
+            })),
+            mutable: false,
+        },
+        FieldType {
+            element_type: StorageType::Val(ValType::Ref(RefType {
+                nullable: true,
+                heap_type: HeapType::Concrete(object),
+            })),
+            mutable: false,
+        },
+    ]);
+    symbols.this_environment_type = Some(*next_type_idx);
+    *next_type_idx += 1;
     for meta in metas {
         let mut fields: Vec<FieldType> = meta
             .captured
@@ -529,6 +550,20 @@ pub fn emit_env_types(
                     symbols,
                 )),
                 mutable: false,
+            });
+        }
+        if meta.self_name.is_some() {
+            fields.push(FieldType {
+                element_type: StorageType::Val(ValType::Ref(RefType {
+                    nullable: true,
+                    heap_type: HeapType::Concrete(
+                        symbols
+                            .intrinsic_type_indices()
+                            .expect("intrinsics declared")
+                            .object,
+                    ),
+                })),
+                mutable: true,
             });
         }
         types.ty().subtype(&SubType {
