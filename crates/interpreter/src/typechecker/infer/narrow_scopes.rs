@@ -541,54 +541,80 @@ impl<'a> Inferer<'a> {
     }
 
     /// Whether every field `candidate` lists, `other` lists too, at any depth:
-    /// inside each shared field, array element, tuple element, and function
-    /// return.
+    /// inside each shared field, array element, tuple element, function return,
+    /// and union alternative.
     fn fields_within(&self, candidate: &Type, other: &Type) -> bool {
-        self.fields_within_compared(candidate, other, &mut Vec::new())
+        self.fields_within_compared(candidate, other, &mut FieldComparison::default())
     }
 
-    /// `compared` holds the pairs already met; meeting one again adds nothing,
-    /// which keeps a recursive type finite.
     fn fields_within_compared(
         &self,
         candidate: &Type,
         other: &Type,
-        compared: &mut Vec<(Type, Type)>,
+        comparison: &mut FieldComparison,
     ) -> bool {
-        let pair = (candidate.clone(), other.clone());
-        if compared.contains(&pair) {
+        if candidate.peel() == other.peel() {
             return true;
         }
-        compared.push(pair);
+        let pair = (candidate.clone(), other.clone());
+        if comparison.refuted.contains(&pair) {
+            return false;
+        }
+        if comparison.in_progress.contains(&pair) {
+            return true;
+        }
+        if comparison.in_progress.len() >= MAX_FIELD_COMPARISON_DEPTH {
+            return false;
+        }
+        comparison.in_progress.insert(pair.clone());
+        let within = self.fields_within_step(candidate, other, comparison);
+        comparison.in_progress.remove(&pair);
+        if !within {
+            comparison.refuted.insert(pair);
+        }
+        within
+    }
+
+    fn fields_within_step(
+        &self,
+        candidate: &Type,
+        other: &Type,
+        comparison: &mut FieldComparison,
+    ) -> bool {
+        let candidates = alternatives(candidate);
+        let others = alternatives(other);
+        if candidates.len() > 1 || others.len() > 1 {
+            // Every `candidate` alternative fits within some `other` one, and
+            // every `other` alternative has some `candidate` one within it. A
+            // lone type is its own single alternative, so `string` meets
+            // `"a" | string`.
+            return candidates.iter().all(|c| {
+                others
+                    .iter()
+                    .any(|o| self.fields_within_compared(c, o, comparison))
+            }) && others.iter().all(|o| {
+                candidates
+                    .iter()
+                    .any(|c| self.fields_within_compared(c, o, comparison))
+            });
+        }
         match (candidate.peel(), other.peel()) {
             (Type::Array(c), Type::Array(o))
             | (Type::Function { ret: c, .. }, Type::Function { ret: o, .. }) => {
-                self.fields_within_compared(c, o, compared)
+                self.fields_within_compared(c, o, comparison)
             }
             (Type::Tuple(cs), Type::Tuple(os)) => {
                 cs.len() == os.len()
                     && cs
                         .iter()
                         .zip(os)
-                        .all(|(c, o)| self.fields_within_compared(c, o, compared))
+                        .all(|(c, o)| self.fields_within_compared(c, o, comparison))
             }
-            // Each alternative on either side must meet one on the other that
-            // it lists no more fields than, or that lists no more than it.
-            (Type::Union(cs), Type::Union(os)) => {
-                cs.iter().all(|c| {
-                    os.iter()
-                        .any(|o| self.fields_within_compared(c, o, compared))
-                }) && os.iter().all(|o| {
-                    cs.iter()
-                        .any(|c| self.fields_within_compared(c, o, compared))
-                })
-            }
-            (Type::Union(_), _) | (_, Type::Union(_)) => false,
             _ => match (self.member_shape(candidate), self.member_shape(other)) {
                 (Some(candidate_fields), Some(other_fields)) => {
                     candidate_fields.iter().all(|(name, field)| {
                         other_fields.get(name).is_some_and(|other_field| {
-                            self.fields_within_compared(&field.ty, &other_field.ty, compared)
+                            self.fields_within_compared(&field.ty, &other_field.ty, comparison)
                         })
                     })
                 }
@@ -1366,6 +1392,29 @@ fn narrows_to_itself(ty: &Type) -> bool {
             | Type::Error
             | Type::Never
     )
+}
+
+/// How deep [`Inferer::fields_within`] follows nested types before it gives
+/// up and answers no, which narrows to the members' union instead. A generic
+/// type that refers to itself with a larger argument (`Box<Box<T>>`) never
+/// meets the same pair twice.
+const MAX_FIELD_COMPARISON_DEPTH: usize = 32;
+
+/// The state of one [`Inferer::fields_within`] question. A pair in progress is
+/// assumed to hold, which keeps a recursive type finite; a pair refuted stays
+/// refuted, since an assumption can only make an answer more permissive.
+#[derive(Default)]
+struct FieldComparison {
+    in_progress: std::collections::BTreeSet<(Type, Type)>,
+    refuted: std::collections::BTreeSet<(Type, Type)>,
+}
+
+/// A union's alternatives, or the type itself as the only one.
+fn alternatives(ty: &Type) -> Vec<&Type> {
+    match ty.peel() {
+        Type::Union(members) => members.iter().collect(),
+        _ => vec![ty],
+    }
 }
 
 /// A named alias, class, or interface instance's name and type arguments.

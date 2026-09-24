@@ -99,6 +99,24 @@ class Item {
 type PointTwinA = { readonly a: number; b: number };
 type PointTwinB = { readonly a: number; b: number };
 
+type Size = "small" | "large" | string;
+interface Plain {
+  readonly id: number;
+  size: string;
+  area(): number;
+}
+interface Hinted {
+  readonly id: number;
+  size: Size;
+  area(): number;
+}
+interface Nest<T> {
+  readonly v: T;
+  next: Nest<Nest<T>> | null;
+}
+type OneOf = { readonly id: number; p: { a: number } };
+type EitherOf = { readonly id: number; p: { a: number } | { a: number; b?: number } };
+
 class Square {
   side: number = 2;
   get area(): number {
@@ -166,6 +184,20 @@ function readonlyDeclarations(): void {
   points = [{ a: 1, b: 2 }];
   points.push({ a: 3, b: 4 });
   assert(points.length === 2 && points[1].b === 4, "array twins narrow to one of them");
+
+  const plain: Plain = { id: 1, size: "small", area: (): number => 3 };
+  let sized: Plain | Hinted | null = null;
+  sized = plain;
+  assert(sized.area() === 3, "a field type meets a union it is assignable both ways with");
+
+  let nest: Nest<number> = { v: 0, next: null };
+  nest = { v: 1, next: null };
+  assert(nest.v === 1, "a generic type nesting itself deeper still narrows");
+
+  let fields: OneOf | EitherOf = { id: 0, p: { a: 1 } };
+  fields = { id: 1, p: { a: 1 } };
+  fields.p = { a: 2 };
+  assert(fields.p.a === 2, "a lone type meets a union of alternatives");
 
   let shape: HasArea | null = null;
   shape = new Square();

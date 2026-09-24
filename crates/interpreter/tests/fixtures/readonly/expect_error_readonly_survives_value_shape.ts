@@ -7,9 +7,10 @@
 // makes an inherited field `readonly` keeps it. Of two members differing only in
 // a field's `readonly`, neither stands for the value alone, and of two differing
 // in their fields, the one listing fewer does, at any depth: inside a field's
-// object type and inside a nullable element. Each of the sixteen writes below
-// matches a `tsc --strict` error.
-// expect-error-count: 16
+// object type, inside a nullable element, and alternative by alternative
+// inside a union. Each of the seventeen writes below matches a `tsc --strict`
+// error.
+// expect-error-count: 17
 // expect-error: cannot call `push` on `readonly number[]`
 // expect-error: cannot assign to readonly property `xs`
 // expect-error: cannot assign to readonly property `val`
@@ -18,6 +19,7 @@
 // expect-error: cannot assign to readonly field `f` on `Gadget`
 // expect-error: no field `extra` on type `IdOnly`
 // expect-error: no field `y`
+// expect-error: field `s` does not exist on all members
 
 interface Record1 {
   readonly id: number;
@@ -76,6 +78,14 @@ interface Tight {
 }
 type Wide = { x: number; y?: number };
 type Narrow = { x: number };
+
+type C1 = { k: number; a?: number; s?: number };
+type C2 = { k: number; b?: number; s?: number };
+type G1 = { k: number; a?: number; s?: number; x1?: number };
+type G2 = { k: number; b?: number; s?: number; x2?: number };
+type Bare = { k: number; a0?: number };
+type Covered = { readonly id: number; x: C1 | C2 };
+type Uncovered = { readonly id: number; x: G1 | Bare | G2 };
 
 interface Mutable {
   a: number;
@@ -166,4 +176,8 @@ function main(): void {
   if (first !== null) {
     first.y = 4;
   }
+
+  let covered: Covered | Uncovered = { id: 0, x: { k: 1 } };
+  covered = { id: 1, x: { k: 1 } };
+  covered.x.s = 1;
 }
