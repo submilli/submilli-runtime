@@ -10,13 +10,12 @@ use super::{Inferer, assignable, narrowing};
 ///
 /// Only a literal token qualifies, through any number of parentheses. A computed
 /// initializer widens even under `const` (`const a = 1 + 1` is `number`), matching
-/// TypeScript, and so do arrays, object literals, and call results. Booleans widen
-/// too, there being no boolean literal type — `const b = true` is `boolean` where
-/// TypeScript says `true`.
+/// TypeScript, and so do arrays, object literals, and call results.
 pub(super) fn literal_type_of(ast: &crate::Ast, value: crate::ExprId) -> Option<Type> {
     match &ast.expr(value).kind {
         ExprKind::Number(v) => Some(Type::NumberLiteral(crate::types::LiteralF64(*v))),
         ExprKind::String(s) => Some(Type::StringLiteral(s.clone())),
+        ExprKind::Boolean(b) => Some(Type::BooleanLiteral(*b)),
         // `const a = (1)` is `1`, as in TypeScript: parentheses group, they do not
         // compute.
         ExprKind::Paren(inner) => literal_type_of(ast, *inner),
@@ -196,7 +195,7 @@ impl Inferer<'_> {
                     true_env,
                     body_span,
                     body_scope_floor,
-                    None,
+                    LoopTail::None,
                 );
                 let frame = self.pop_pending_join_frame();
                 let (typed_cond, _) = self.infer_expr(condition, None);
@@ -244,7 +243,7 @@ impl Inferer<'_> {
                     true_env,
                     body_span,
                     body_scope_floor,
-                    update,
+                    update.map_or(LoopTail::None, LoopTail::Update),
                 );
                 let frame = self.pop_pending_join_frame();
                 let typed_update = outcome.update;
@@ -344,7 +343,7 @@ impl Inferer<'_> {
                     narrowing::NarrowEnv::new(),
                     body_span,
                     body_scope_floor,
-                    None,
+                    LoopTail::None,
                 );
                 let frame = self.pop_pending_join_frame();
                 self.merge_assigned_into_outer(outcome.assigned.clone(), span);
@@ -380,7 +379,7 @@ impl Inferer<'_> {
                     narrowing::NarrowEnv::new(),
                     body_span,
                     body_scope_floor,
-                    None,
+                    LoopTail::Condition(condition),
                 );
                 let frame = self.pop_pending_join_frame();
                 self.merge_assigned_into_outer(outcome.assigned.clone(), span);
@@ -953,6 +952,7 @@ impl Inferer<'_> {
             return;
         }
         let path = narrowing::ReferencePath::root(narrowing::BindingId::Global(mangled.clone()));
+        let written_ty = self.assignment_narrowed_ty(declared_ty, written_ty);
         if written_ty == *declared_ty {
             self.invalidate_for_reassignment(path, ident.span);
             return;
@@ -985,7 +985,7 @@ impl Inferer<'_> {
         }
     }
 
-    fn infer_assign_field(
+    pub(super) fn infer_assign_field(
         &mut self,
         receiver: ExprId,
         name: Ident,
@@ -1220,7 +1220,7 @@ impl Inferer<'_> {
         result
     }
 
-    fn infer_assign_index(
+    pub(super) fn infer_assign_index(
         &mut self,
         receiver: ExprId,
         index: ExprId,
@@ -1230,34 +1230,7 @@ impl Inferer<'_> {
         let recv_span = self.ast.expr(receiver).span;
         let value_span = self.ast.expr(value).span;
         let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None);
-        // Peel to match the read path: an alias of an array or `Uint8Array` is
-        // assignable on the same terms as the type it names.
-        let elem_ty = match receiver_ty.peel() {
-            Type::Array(elem) => (**elem).clone(),
-            // codegen truncates RHS to the low 8 bits for storage in `$rawUint8Array`.
-            Type::Uint8Array => Type::Number,
-            Type::Tuple(_) => {
-                self.error_with_help(
-                    recv_span,
-                    "indexed write on tuple not supported".to_string(),
-                    vec![
-                        "tuples are read-only; reconstruct the tuple with the updated element"
-                            .to_string(),
-                    ],
-                );
-                Type::Error
-            }
-            Type::Error => Type::Error,
-            _ => {
-                let help = vec![self.format_definition(&receiver_ty)];
-                self.error_with_help(
-                    recv_span,
-                    format!("cannot assign to index of `{receiver_ty}`"),
-                    help,
-                );
-                Type::Error
-            }
-        };
+        let elem_ty = self.indexed_write_elem_ty(&receiver_ty, recv_span, recv_span);
         let (typed_index, _) = self.infer_expr(index, Some(&Type::Number));
         let (typed_value, value_ty) = self.infer_expr(value, Some(&elem_ty));
         if !matches!(elem_ty, Type::Error)
@@ -1276,6 +1249,63 @@ impl Inferer<'_> {
             index: typed_index,
             value: typed_value,
             elem_ty,
+        }
+    }
+
+    /// The element type a write through `receiver_ty[i]` stores, or `Type::Error`
+    /// after reporting why the receiver cannot be written through. Shared by plain,
+    /// compound, and postfix index writes so all three reject the same receivers.
+    /// `fallback_span` is where a receiver of the wrong kind altogether is reported.
+    pub(super) fn indexed_write_elem_ty(
+        &mut self,
+        receiver_ty: &Type,
+        recv_span: Span,
+        fallback_span: Span,
+    ) -> Type {
+        if receiver_ty.is_readonly_array() {
+            let copy_help = if matches!(receiver_ty.peel(), Type::Tuple(_)) {
+                "reconstruct the tuple with the updated element"
+            } else {
+                "copy it first (`[...xs]` or `xs.slice()`) and write to the copy, \
+                 or drop `readonly` from the declared type"
+            };
+            self.error_with_help(
+                recv_span,
+                format!("cannot assign to an element of `{receiver_ty}`"),
+                vec![
+                    "a `readonly` array or tuple only permits reading".to_string(),
+                    copy_help.to_string(),
+                ],
+            );
+            return Type::Error;
+        }
+        // Peel to match the read path: an alias of an array or `Uint8Array` is
+        // assignable on the same terms as the type it names.
+        match receiver_ty.peel() {
+            Type::Array(elem) => (**elem).clone(),
+            // codegen truncates RHS to the low 8 bits for storage in `$rawUint8Array`.
+            Type::Uint8Array => Type::Number,
+            Type::Tuple(_) => {
+                self.error_with_help(
+                    recv_span,
+                    "indexed write on tuple not supported".to_string(),
+                    vec![
+                        "tuples are read-only; reconstruct the tuple with the updated element"
+                            .to_string(),
+                    ],
+                );
+                Type::Error
+            }
+            Type::Error => Type::Error,
+            _ => {
+                let help = vec![self.format_definition(receiver_ty)];
+                self.error_with_help(
+                    fallback_span,
+                    format!("cannot assign to index of `{receiver_ty}`"),
+                    help,
+                );
+                Type::Error
+            }
         }
     }
 
@@ -1302,6 +1332,7 @@ impl Inferer<'_> {
             name: target.name.clone(),
             decl_scope,
         });
+        let written_ty = self.assignment_narrowed_ty(declared_ty, written_ty);
         if written_ty == *declared_ty {
             self.invalidate_for_reassignment(path, target.span);
             return None;
@@ -1310,7 +1341,12 @@ impl Inferer<'_> {
         Some(written_ty)
     }
 
-    fn infer_assign(&mut self, target: Ident, value: ExprId, span: Span) -> TypedStmtKind {
+    pub(super) fn infer_assign(
+        &mut self,
+        target: Ident,
+        value: ExprId,
+        span: Span,
+    ) -> TypedStmtKind {
         if let Some(entry) = self.scopes.get(&target.name).cloned() {
             if entry.is_const {
                 self.diagnostics.push(Diagnostic {
@@ -1434,7 +1470,7 @@ impl Inferer<'_> {
 
     /// `x += y` lowers to `x = x + y`; the synthesized LHS reads through any active
     /// narrowing so the binary type rule sees the narrowed view.
-    fn infer_compound_assign(
+    pub(super) fn infer_compound_assign(
         &mut self,
         target: Ident,
         op: BinOp,
@@ -1588,7 +1624,7 @@ impl Inferer<'_> {
         }
     }
 
-    fn infer_compound_assign_field(
+    pub(super) fn infer_compound_assign_field(
         &mut self,
         receiver: ExprId,
         name: Ident,
@@ -1790,7 +1826,7 @@ impl Inferer<'_> {
         }
     }
 
-    fn infer_compound_assign_index(
+    pub(super) fn infer_compound_assign_index(
         &mut self,
         receiver: ExprId,
         index: ExprId,
@@ -1803,31 +1839,7 @@ impl Inferer<'_> {
         let value_span = self.ast.expr(value).span;
         let stmt_span = recv_span.merge(value_span);
         let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None);
-        let elem_ty = match receiver_ty.peel() {
-            Type::Array(elem) => (**elem).clone(),
-            Type::Uint8Array => Type::Number,
-            Type::Tuple(_) => {
-                self.error_with_help(
-                    recv_span,
-                    "indexed write on tuple not supported".to_string(),
-                    vec![
-                        "tuples are read-only; reconstruct the tuple with the updated element"
-                            .to_string(),
-                    ],
-                );
-                Type::Error
-            }
-            Type::Error => Type::Error,
-            _ => {
-                let help = vec![self.format_definition(&receiver_ty)];
-                self.error_with_help(
-                    recv_span,
-                    format!("cannot assign to index of `{receiver_ty}`"),
-                    help,
-                );
-                Type::Error
-            }
-        };
+        let elem_ty = self.indexed_write_elem_ty(&receiver_ty, recv_span, recv_span);
         let (typed_index, _) = self.infer_expr(index, Some(&Type::Number));
         let (typed_value, value_ty) = self.infer_expr(value, Some(&elem_ty));
         // Built before the operator check so the check can name it as the
@@ -1976,6 +1988,25 @@ fn apply_finally_to_transfers(
     }
 }
 
+/// What runs on a loop's back edge, after the body and before the next pass.
+#[derive(Clone, Copy)]
+pub(super) enum LoopTail {
+    None,
+    /// A `for` update.
+    Update(StmtId),
+    /// A `do … while` condition.
+    Condition(ExprId),
+}
+
+impl LoopTail {
+    fn update(self) -> Option<StmtId> {
+        match self {
+            LoopTail::Update(update) => Some(update),
+            LoopTail::None | LoopTail::Condition(_) => None,
+        }
+    }
+}
+
 /// The typed body/update and the state returning to the condition. For a
 /// classic `for`, `back_edge` includes the update's effects.
 pub(super) struct LoopBodyOutcome {
@@ -2040,7 +2071,7 @@ impl Inferer<'_> {
         entry_env: narrowing::NarrowEnv,
         body_span: Span,
         body_scope_floor: narrowing::ScopeId,
-        update: Option<StmtId>,
+        tail: LoopTail,
     ) -> LoopBodyOutcome {
         let diag_len = self.diagnostics.len();
         let mats_len = self.pending_post_if_materializations.len();
@@ -2051,7 +2082,7 @@ impl Inferer<'_> {
         let entry_reachable = self.reachable;
 
         loop {
-            let outcome = self.run_body_pass(body, &entry_env, body_span, continues_len, update);
+            let outcome = self.run_body_pass(body, &entry_env, body_span, continues_len, tail);
             if !self.drop_narrowings_the_body_falsifies(&outcome, body_scope_floor, body_span) {
                 return outcome;
             }
@@ -2146,7 +2177,7 @@ impl Inferer<'_> {
         entry_env: &narrowing::NarrowEnv,
         body_span: Span,
         continues_base: usize,
-        update: Option<StmtId>,
+        tail: LoopTail,
     ) -> LoopBodyOutcome {
         self.push_narrow_frame(entry_env.clone());
         self.loop_depth += 1;
@@ -2157,7 +2188,16 @@ impl Inferer<'_> {
         let (continues, continued_assignments) = self.continue_exits_since(continues_base);
         assigned.extend(continued_assignments);
         let mut back_edge = join_reachable_envs(body_end_reachable.then_some(body_post), continues);
-        let typed_update = update.and_then(|update| {
+        if let LoopTail::Condition(condition) = tail
+            && let Some(edge) = back_edge.as_mut()
+        {
+            let (writes, continues) =
+                self.do_while_condition_effects(condition, &assigned, edge, body_span);
+            edge.retain(|path, _| !writes.iter().any(|w| w.is_prefix_of(path)));
+            edge.extend(continues);
+            assigned.extend(writes);
+        }
+        let typed_update = tail.update().and_then(|update| {
             self.push_narrow_frame(narrowing::NarrowEnv::new());
             for path in &assigned {
                 self.drop_narrowings_under(
@@ -2187,6 +2227,41 @@ impl Inferer<'_> {
             assigned,
             back_edge: back_edge.unwrap_or_default(),
         }
+    }
+
+    /// The paths a `do … while` condition writes, and what it proves when it
+    /// holds. It runs on the back edge, so both reach the next pass through the
+    /// body, as a `for` update's writes do: `while ((x = next()) !== null)`
+    /// re-narrows `x` for that pass. The condition is inferred again, for real,
+    /// after the loop, so this pass's diagnostics are discarded.
+    fn do_while_condition_effects(
+        &mut self,
+        condition: ExprId,
+        body_writes: &std::collections::BTreeSet<narrowing::ReferencePath>,
+        back_edge: &narrowing::NarrowEnv,
+        body_span: Span,
+    ) -> (
+        std::collections::BTreeSet<narrowing::ReferencePath>,
+        narrowing::NarrowEnv,
+    ) {
+        let diag_len = self.diagnostics.len();
+        let mats_len = self.pending_post_if_materializations.len();
+        self.push_narrow_frame(narrowing::NarrowEnv::new());
+        for path in body_writes {
+            self.drop_narrowings_under(
+                path,
+                narrowing::InvalidationReason::Write { span: body_span },
+            );
+        }
+        let tail_env = self.loop_tail_env(back_edge);
+        self.push_narrow_frame(tail_env);
+        let (typed_condition, _) = self.infer_expr(condition, None);
+        let (continues, _) = self.predicate_envs(typed_condition);
+        let (_, writes) = self.pop_narrow_frame_capture();
+        self.pop_narrow_frame();
+        self.diagnostics.truncate(diag_len);
+        self.pending_post_if_materializations.truncate(mats_len);
+        (writes, continues)
     }
 
     /// Capture the normal exit before the body's lexical frame is removed.

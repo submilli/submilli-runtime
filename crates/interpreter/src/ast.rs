@@ -95,6 +95,16 @@ pub enum ExprKind {
         op: PostfixOp,
         operand: ExprId,
     },
+    /// An assignment used as a value: `b = (a = 3)`, `while ((m = next()) !== null)`.
+    /// It yields the assigned value. One in statement position is parsed as an
+    /// assignment statement instead. `target` is an identifier, field access, or
+    /// index access; `op` is set for a compound assignment (`+=`).
+    Assign {
+        target: ExprId,
+        op: Option<BinOp>,
+        op_span: Span,
+        value: ExprId,
+    },
     /// `x as T` — runtime-checked, unlike TypeScript's unchecked `as`. Codegen emits `ref.test`; throws `Error` on mismatch.
     As {
         expr: ExprId,
@@ -310,7 +320,7 @@ pub enum StmtKind {
         condition: ExprId,
         body: StmtId,
     },
-    /// C-style `for` loop. `update` is a `StmtId` (not `ExprId`) because assignment is statement-only in Submilli.
+    /// C-style `for` loop. `update` is a `StmtId` so an assignment there is an assignment statement.
     For {
         init: Option<StmtId>,
         condition: Option<ExprId>,
@@ -683,8 +693,14 @@ pub enum TypeAnnotationKind {
     StringLiteral(String),
     /// Parser canonicalizes `-0.0` to `0.0`.
     NumberLiteral(crate::types::LiteralF64),
+    BooleanLiteral(bool),
     Array(Box<TypeAnnotation>),
+    /// Element labels (`[x: number, y: number]`) are documentation only, so the
+    /// parser checks and drops them.
     Tuple(Vec<TypeAnnotation>),
+    /// `readonly T[]` / `readonly [A, B]`. The parser only builds this around an
+    /// [`Array`](Self::Array) or [`Tuple`](Self::Tuple) operand.
+    Readonly(Box<TypeAnnotation>),
     Object {
         fields: Vec<TypeAnnotationField>,
     },

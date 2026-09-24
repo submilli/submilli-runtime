@@ -95,30 +95,15 @@ impl ChainField {
     }
 }
 
-/// True if `expected` is `Type::StringLiteral` or a union containing
-/// at least one `Type::StringLiteral` member. Used by `infer_expr`'s
-/// `ExprKind::String` arm to decide whether to narrow the inferred
-/// type to the specific literal value or widen to `Type::String`.
-/// Peels through aliases so `type Status = "a" | "b"` and a plain
-/// `"a" | "b"` hint behave identically
-fn expects_string_literal(expected: Option<&Type>) -> bool {
+/// Whether `expected` asks for a literal type: it is one `is_literal` accepts,
+/// or a union with such a member. Decides whether a literal expression keeps
+/// its literal type or widens to its primitive. Peels through aliases so
+/// `type Status = "a" | "b"` and a plain `"a" | "b"` hint behave identically.
+fn expects_literal(expected: Option<&Type>, is_literal: fn(&Type) -> bool) -> bool {
     match expected.map(crate::types::Type::peel) {
-        Some(Type::StringLiteral(_)) => true,
-        Some(Type::Union(ms)) => ms
-            .iter()
-            .any(|m| matches!(m.peel(), Type::StringLiteral(_))),
-        _ => false,
-    }
-}
-
-/// Mirror of `expects_string_literal` for number literals.
-fn expects_number_literal(expected: Option<&Type>) -> bool {
-    match expected.map(crate::types::Type::peel) {
-        Some(Type::NumberLiteral(_)) => true,
-        Some(Type::Union(ms)) => ms
-            .iter()
-            .any(|m| matches!(m.peel(), Type::NumberLiteral(_))),
-        _ => false,
+        Some(Type::Union(ms)) => ms.iter().any(|m| is_literal(m.peel())),
+        Some(ty) => is_literal(ty),
+        None => false,
     }
 }
 
@@ -157,14 +142,9 @@ fn excess_field_fix_help(
     }
 }
 
-/// post-increment/-decrement result type for a slot of
-/// `operand_ty`. Bigint operands round-trip as `bigint`; everything
-/// else (`Number`, `NumberLiteral`, and the typechecker-fallthrough
-/// `Error`) widens to `Number` — a narrowed slot like `1 | 2 | 3`
-/// doesn't constrain the post-add value.
-/// Array methods that mutate the receiver. Rejected on tuple-typed receivers,
-/// which are fixed-length and read-only — mutation would break their arity and
-/// per-position types.
+/// Array methods that mutate the receiver. Rejected on tuple-typed and `readonly`
+/// receivers: tuples are fixed-length, so mutation would break their arity and
+/// per-position types, and a `readonly` array only permits reading.
 fn is_mutating_array_method(name: &str) -> bool {
     matches!(
         name,
@@ -178,6 +158,17 @@ fn is_mutating_array_method(name: &str) -> bool {
             | "fill"
             | "copyWithin"
     )
+}
+
+/// The copying counterpart of a mutating array method, where the prelude has one.
+fn non_mutating_alternative(name: &str) -> Option<&'static str> {
+    match name {
+        "push" | "unshift" => Some("concat"),
+        "sort" => Some("toSorted"),
+        "reverse" => Some("toReversed"),
+        "splice" => Some("toSpliced"),
+        _ => None,
+    }
 }
 
 /// Whether `null` is one of the values `ty` can hold. `unknown` counts: it may
@@ -310,7 +301,7 @@ fn spread_element_type(peeled_source: &Type) -> Option<Type> {
 pub(crate) fn type_contains_type_var(ty: &Type) -> bool {
     match ty {
         Type::TypeVar(_) => true,
-        Type::Array(elem) => type_contains_type_var(elem),
+        Type::Array(elem) | Type::Readonly(elem) => type_contains_type_var(elem),
         Type::Tuple(elems) => elems.iter().any(type_contains_type_var),
         Type::Function { params, ret, .. } => {
             params.iter().any(type_contains_type_var) || type_contains_type_var(ret)
@@ -389,7 +380,7 @@ impl Inferer<'_> {
             // to the base primitive — `let x = "hi"` stays
             // `x: string`, not `x: "hi"`.
             ExprKind::Number(v) => {
-                let ty = if expects_number_literal(expected) {
+                let ty = if expects_literal(expected, |t| matches!(t, Type::NumberLiteral(_))) {
                     let canonical = if v == 0.0 { 0.0 } else { v };
                     Type::NumberLiteral(crate::types::LiteralF64(canonical))
                 } else {
@@ -401,14 +392,21 @@ impl Inferer<'_> {
             // (no `Type::BigIntLiteral` narrowing variant in v1).
             ExprKind::BigInt(digits) => (TypedExprKind::BigInt(digits), Type::BigInt),
             ExprKind::String(s) => {
-                let ty = if expects_string_literal(expected) {
+                let ty = if expects_literal(expected, |t| matches!(t, Type::StringLiteral(_))) {
                     Type::StringLiteral(s.clone())
                 } else {
                     Type::String
                 };
                 (TypedExprKind::String(s), ty)
             }
-            ExprKind::Boolean(b) => (TypedExprKind::Boolean(b), Type::Boolean),
+            ExprKind::Boolean(b) => {
+                let ty = if expects_literal(expected, |t| matches!(t, Type::BooleanLiteral(_))) {
+                    Type::BooleanLiteral(b)
+                } else {
+                    Type::Boolean
+                };
+                (TypedExprKind::Boolean(b), ty)
+            }
             ExprKind::Null => (TypedExprKind::Null, Type::Null),
             ExprKind::Identifier(ident) => self.resolve_ident(ident, span),
             ExprKind::Binary { op, lhs, rhs } => self.infer_binary(op, lhs, rhs, expected, span),
@@ -470,6 +468,12 @@ impl Inferer<'_> {
                 self.infer_optional_chain(base, parts, expected, span)
             }
             ExprKind::PostfixUnary { op, operand } => self.infer_postfix_unary(op, operand, span),
+            ExprKind::Assign {
+                target,
+                op,
+                op_span,
+                value,
+            } => self.infer_assign_expr(target, op.map(|op| (op, op_span)), value, span),
             ExprKind::As { expr: inner, ty } => self.infer_as(inner, ty, span),
             ExprKind::InstanceOf { value, ty } => self.infer_instanceof(value, ty, span),
             ExprKind::Regex { source, flags } => self.infer_regex(source, flags, span),
@@ -1173,9 +1177,7 @@ impl Inferer<'_> {
                     BinOp::Or => false_env,
                     _ => unreachable!("matched And | Or above"),
                 };
-                self.push_narrow_frame(rhs_env.clone());
-                let (typed_rhs, rhs_ty) = self.infer_expr(rhs, expected);
-                self.pop_narrow_frame();
+                let (typed_rhs, rhs_ty) = self.infer_conditional_operand(rhs, &rhs_env, expected);
                 if matches!(rhs_ty.peel(), Type::Void | Type::Never) {
                     condition_error = true;
                     let rhs_span = self.ast.expr(rhs).span;
@@ -1513,6 +1515,47 @@ impl Inferer<'_> {
         }
     }
 
+    /// Reports a call of a mutating array method (`push`, `sort`, …) on a receiver
+    /// that must not change: a `readonly` array or tuple, or any tuple. Returns
+    /// whether it reported, in which case the caller poisons the call.
+    fn reject_mutating_array_call(&mut self, recv_ty: &Type, name: &crate::Ident) -> bool {
+        if !is_mutating_array_method(&name.name) {
+            return false;
+        }
+        if recv_ty.is_readonly_array() {
+            let mut help = vec![format!(
+                "`{}` mutates the array, and a `readonly` array or tuple only permits reading",
+                name.name
+            )];
+            if let Some(alternative) = non_mutating_alternative(&name.name) {
+                help.push(format!(
+                    "`{alternative}` returns a new array instead of modifying this one"
+                ));
+            }
+            help.push(
+                "or copy it first (`[...xs]` or `xs.slice()`) and modify the copy".to_string(),
+            );
+            self.error_with_help(
+                name.span,
+                format!("cannot call `{}` on `{}`", name.name, recv_ty),
+                help,
+            );
+            return true;
+        }
+        if matches!(recv_ty.peel(), Type::Tuple(_)) {
+            self.error_with_help(
+                name.span,
+                format!("cannot call `{}` on tuple `{}`", name.name, recv_ty),
+                vec![
+                    "tuples are fixed-length and read-only; assign to an array-typed binding first to mutate"
+                        .to_string(),
+                ],
+            );
+            return true;
+        }
+        false
+    }
+
     fn infer_call(
         &mut self,
         callee: ExprId,
@@ -1751,15 +1794,7 @@ impl Inferer<'_> {
                     }
                 }
             }
-            if matches!(recv_ty.peel(), Type::Tuple(_)) && is_mutating_array_method(&name.name) {
-                self.error_with_help(
-                    name.span,
-                    format!("cannot call `{}` on tuple `{}`", name.name, recv_ty),
-                    vec![
-                        "tuples are fixed-length and read-only; assign to an array-typed binding first to mutate"
-                            .to_string(),
-                    ],
-                );
+            if self.reject_mutating_array_call(&recv_ty, name) {
                 return (TypedExprKind::Null, Type::Error);
             }
             if let Some((sig, interface_bindings, iface_mangled, _dispatch)) =
@@ -4130,27 +4165,28 @@ impl Inferer<'_> {
     /// Field values aren't inferred yet, so the discriminant tag is read
     /// straight from the AST and matched against the union's discriminant
     /// table; failing that, the unique variant whose fields the literal
-    /// exactly satisfies wins. `None` (defer to the caller's single-shape
-    /// scan) for spreads, ambiguity, or no match.
+    /// exactly satisfies wins. A spread's fields aren't known here, so with a
+    /// spread only the tag selects. A later spread that overwrites the tag is
+    /// still checked against the selected variant's field, so it is rejected
+    /// rather than mistyped. `None` (defer to the caller's single-shape scan)
+    /// for ambiguity or no match.
     fn select_union_variant<'a>(
         &self,
         members: &'a [Type],
         literal: &[crate::ObjectLiteralMember],
     ) -> Option<&'a Type> {
-        if literal
+        let has_spread = literal
             .iter()
-            .any(|m| matches!(m, crate::ObjectLiteralMember::Spread { .. }))
-        {
-            return None;
-        }
+            .any(|m| matches!(m, crate::ObjectLiteralMember::Spread { .. }));
 
         if let Some((key, table)) = self.union_discriminant_with_nominals(members) {
-            let tag_value = literal.iter().find_map(|m| match m {
+            let tag_value = literal.iter().rev().find_map(|m| match m {
                 crate::ObjectLiteralMember::Field(f) if f.name.name == key => {
                     match &self.ast.expr(f.value).kind {
                         crate::ExprKind::String(s) => {
                             Some(narrowing::LiteralValue::String(s.clone()))
                         }
+                        crate::ExprKind::Boolean(b) => Some(narrowing::LiteralValue::Boolean(*b)),
                         crate::ExprKind::Number(n) => {
                             // Mirror the number-literal inference's -0.0 → 0.0.
                             let canonical = if *n == 0.0 { 0.0 } else { *n };
@@ -4168,6 +4204,9 @@ impl Inferer<'_> {
             {
                 return members.get(idx.0 as usize);
             }
+        }
+        if has_spread {
+            return None;
         }
 
         let lit_names: std::collections::BTreeSet<&str> = literal
@@ -4834,12 +4873,16 @@ impl Inferer<'_> {
                     value,
                     span: spread_span,
                 } => {
+                    // A spread only reads its source, so a readonly one qualifies.
                     let source_hint = element_ty
                         .as_ref()
-                        .map(|t| Type::Array(Box::new(t.clone())));
+                        .map(|t| Type::Readonly(Box::new(Type::Array(Box::new(t.clone())))));
                     let errors_before = self.error_count();
                     let (typed_source, source_ty) = self.infer_expr(value, source_hint.as_ref());
                     let already_errored = self.error_count() > errors_before;
+                    if let Some(hint) = &source_hint {
+                        self.drop_readonly_from_hint_mismatch(value, hint, &source_ty);
+                    }
                     // The spread source must be an array — or a tuple, which is one at
                     // runtime and contributes the union of its positions. Reject other
                     // shapes (primitive, object, unknown, union, function) with a typed
@@ -4916,6 +4959,19 @@ impl Inferer<'_> {
                 format!("expected `{expected}` (matching first element), got `{actual}`"),
                 already_errored,
             );
+        }
+    }
+
+    /// A spread source is hinted `readonly T[]` only so a readonly source is
+    /// accepted; any mismatch left is in the elements, so the diagnostic names the
+    /// `T[]` the writer thinks in rather than a `readonly` they never wrote.
+    fn drop_readonly_from_hint_mismatch(&mut self, source: ExprId, hint: &Type, actual: &Type) {
+        let span = self.ast.expr(source).span;
+        if let Some(diagnostic) = self.diagnostics.last_mut()
+            && diagnostic.span == span
+            && diagnostic.message == format!("expected `{hint}`, got `{actual}`")
+        {
+            diagnostic.message = format!("expected `{}`, got `{actual}`", hint.peel());
         }
     }
 
@@ -6445,31 +6501,7 @@ impl Inferer<'_> {
     ) -> (TypedExprKind, Type) {
         let recv_span = self.ast.expr(receiver).span;
         let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None);
-        let elem_ty: Type = match receiver_ty.peel() {
-            Type::Array(elem) => (**elem).clone(),
-            Type::Uint8Array => Type::Number,
-            Type::Tuple(_) => {
-                self.error_with_help(
-                    recv_span,
-                    "indexed write on tuple not supported".to_string(),
-                    vec![
-                        "tuples are read-only; reconstruct the tuple with the updated element"
-                            .to_string(),
-                    ],
-                );
-                Type::Error
-            }
-            Type::Error => Type::Error,
-            _ => {
-                let help = vec![self.format_definition(&receiver_ty)];
-                self.error_with_help(
-                    span,
-                    format!("cannot assign to index of `{receiver_ty}`"),
-                    help,
-                );
-                Type::Error
-            }
-        };
+        let elem_ty = self.indexed_write_elem_ty(&receiver_ty, recv_span, span);
         let (typed_index, _) = self.infer_expr(index, Some(&Type::Number));
         if !matches!(
             elem_ty.primitive_behavior(),
@@ -6518,15 +6550,11 @@ impl Inferer<'_> {
 
         let (true_env, false_env) = self.predicate_envs(typed_cond);
 
-        self.push_narrow_frame(true_env.clone());
-        let (typed_then, then_ty) = self.infer_expr(then_, expected);
-        self.pop_narrow_frame();
+        let (typed_then, then_ty) = self.infer_conditional_operand(then_, &true_env, expected);
         let then_span = self.ast.expr(then_).span;
         let wrapped_then = self.wrap_narrow_exprs(typed_then, &true_env, then_span);
 
-        self.push_narrow_frame(false_env.clone());
-        let (typed_else, else_ty) = self.infer_expr(else_, expected);
-        self.pop_narrow_frame();
+        let (typed_else, else_ty) = self.infer_conditional_operand(else_, &false_env, expected);
         let else_span = self.ast.expr(else_).span;
         let wrapped_else = self.wrap_narrow_exprs(typed_else, &false_env, else_span);
 
@@ -6551,7 +6579,8 @@ impl Inferer<'_> {
         span: Span,
     ) -> (TypedExprKind, Type) {
         let (typed_lhs, lhs_ty) = self.infer_expr(lhs, None);
-        let (typed_rhs, rhs_ty) = self.infer_expr(rhs, None);
+        let (typed_rhs, rhs_ty) =
+            self.infer_conditional_operand(rhs, &super::narrowing::NarrowEnv::new(), None);
 
         // A poisoned operand has no knowable nullability, and naming it in the
         // message would print `<error>` at the user.
@@ -6651,8 +6680,16 @@ impl Inferer<'_> {
         // Set by a `Field` step that resolved to a method, consumed by the
         // `Call` step that lifts the pair into a `MethodCall`.
         let mut pending_method: Option<ChainMethod> = None;
+        // Every step from the first `?.` on may be skipped, so a write in one
+        // (`c?.m(x = 5)`) must not narrow what follows the chain; see
+        // `infer_conditional_operand`.
+        let mut short_circuit_span: Option<Span> = None;
 
         for part in parts {
+            if part.is_optional() && short_circuit_span.is_none() {
+                short_circuit_span = Some(part.span());
+                self.push_narrow_frame(super::narrowing::NarrowEnv::new());
+            }
             // A method step is only legal as the callee of the `Call` that
             // follows it; anything else means the user wrote a bare method
             // reference, which is not a value here. Poisoning the receiver stops
@@ -6708,6 +6745,10 @@ impl Inferer<'_> {
             );
             typed_parts.push(typed_part);
         }
+        if let Some(span) = short_circuit_span {
+            let (_, assigned) = self.pop_narrow_frame_capture();
+            self.merge_assigned_into_outer(assigned, span);
+        }
         // A method named by the chain's last step never sees a `Call` at all.
         if let Some(dangling) = pending_method.take() {
             receiver_ty = self.reject_chain_method_reference(&dangling);
@@ -6751,6 +6792,16 @@ impl Inferer<'_> {
                 optional,
                 span,
             } => {
+                if self.reject_mutating_array_call(receiver_ty, &name) {
+                    *pending_method = None;
+                    let typed_part = TypedChainPart::Field {
+                        name,
+                        optional,
+                        result_ty: Type::Error,
+                        span,
+                    };
+                    return (typed_part, Type::Error);
+                }
                 let resolved = self.lookup_chain_field(receiver_ty, receiver_path, &name, span);
                 *pending_method = resolved.method;
                 let result_ty = resolved.ty;
@@ -8167,6 +8218,7 @@ fn unsupported_cast_target_reason(
         | Type::String
         | Type::StringLiteral(_)
         | Type::Boolean
+        | Type::BooleanLiteral(_)
         | Type::Null
         | Type::Uint8Array
         | Type::Function { .. }
@@ -8215,7 +8267,9 @@ fn unsupported_cast_target_reason(
         Type::Never => Some("`never` has no runtime values"),
         Type::Void => Some("`void` is not a value type"),
         Type::Error => None,
-        Type::Alias { .. } | Type::Refined { .. } => unreachable!("peel guarantees no alias here"),
+        Type::Alias { .. } | Type::Refined { .. } | Type::Readonly(_) => {
+            unreachable!("peel guarantees no alias here")
+        }
     }
 }
 
@@ -8309,6 +8363,7 @@ pub(super) fn literal_comparison_type(ast: &crate::TypedAst, expr: &TypedExpr) -
     match &expr.kind {
         TypedExprKind::String(value) => Type::StringLiteral(value.clone()),
         TypedExprKind::Number(value) => Type::NumberLiteral(crate::types::LiteralF64(*value)),
+        TypedExprKind::Boolean(value) => Type::BooleanLiteral(*value),
         TypedExprKind::Unary {
             op: UnOp::Neg | UnOp::Pos,
             operand,
@@ -8426,6 +8481,7 @@ fn has_to_string(ty: &Type) -> bool {
             | Type::NumberLiteral(_)
             | Type::BigInt
             | Type::Boolean
+            | Type::BooleanLiteral(_)
             | Type::Array(_)
             | Type::Object { .. }
             // Class instances answer `toString` through vtable slot 0

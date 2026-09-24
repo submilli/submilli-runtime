@@ -706,11 +706,31 @@ impl TypeText<'_> {
     }
 
     fn postfix(&mut self) -> Option<CanonicalType> {
+        // `readonly` applies to the whole postfix type after it: `readonly T[][]`.
+        if self.eat("readonly ") {
+            let operand = self.postfix()?;
+            return Some(CanonicalType::plain(format!("readonly {}", operand.text)));
+        }
         let mut ty = self.primary()?;
         while self.eat("[]") {
             ty = CanonicalType::plain(format!("({})[]", ty.text));
         }
         Some(ty)
+    }
+
+    /// A tuple element. Its label is dropped, like a parameter name: `tsc` prints
+    /// `[x: number]`, we print `[number]`, and labels do not change the type.
+    fn tuple_element(&mut self) -> Option<String> {
+        let start = self.pos;
+        let optional = match self.word() {
+            Some(_) if self.eat("?: ") => "?",
+            Some(_) if self.eat(": ") => "",
+            _ => {
+                self.pos = start;
+                ""
+            }
+        };
+        Some(format!("{}{optional}", self.union_text()?))
     }
 
     fn primary(&mut self) -> Option<CanonicalType> {
@@ -721,7 +741,7 @@ impl TypeText<'_> {
             return self.object().map(CanonicalType::plain);
         }
         if self.eat("[") {
-            let elements = self.list("]", Self::union_text)?;
+            let elements = self.list("]", Self::tuple_element)?;
             return Some(CanonicalType::plain(format!("[{}]", elements.join(", "))));
         }
         if self.rest().starts_with('"') {
@@ -933,6 +953,26 @@ fn normalizing_equates_equivalent_spellings() {
     assert_eq!(
         normalize_type(r#""a\"b" | "c""#),
         normalize_type(r#""c" | "a\"b""#)
+    );
+    assert_eq!(
+        normalize_type("[first: number, second: string]"),
+        normalize_type("[number, string]")
+    );
+    assert_eq!(
+        normalize_type("string | readonly (number | null)[]"),
+        normalize_type("readonly (null | number)[] | string")
+    );
+}
+
+#[test]
+fn normalizing_keeps_readonly_distinct() {
+    assert_ne!(
+        normalize_type("readonly number[]"),
+        normalize_type("number[]")
+    );
+    assert_ne!(
+        normalize_type("readonly number[][]"),
+        normalize_type("(readonly number[])[]")
     );
 }
 

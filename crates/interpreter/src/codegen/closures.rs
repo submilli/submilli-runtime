@@ -321,7 +321,7 @@ fn inherited_dependency_sigs(
 /// Every function-typed position reachable from `ty`.
 pub(crate) fn walk_type(ty: &Type, out: &mut Vec<ClosureSig>) {
     match ty {
-        Type::Refined { ty, .. } => walk_type(ty, out),
+        Type::Refined { ty, .. } | Type::Readonly(ty) => walk_type(ty, out),
         Type::Function { params, ret, .. } => {
             out.push(classify(ty));
             for p in params {
@@ -364,6 +364,7 @@ pub(crate) fn walk_type(ty: &Type, out: &mut Vec<ClosureSig>) {
         | Type::NumberLiteral(_)
         | Type::BigInt
         | Type::Boolean
+        | Type::BooleanLiteral(_)
         | Type::String
         | Type::StringLiteral(_)
         | Type::Uint8Array

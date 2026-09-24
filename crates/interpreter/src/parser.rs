@@ -115,114 +115,75 @@ impl<'a> Parser<'a> {
             TokenKind::Throw => self.parse_throw(),
             TokenKind::Try => self.parse_try(),
             TokenKind::LeftBrace => self.parse_block(),
-            TokenKind::Identifier if is_assign_lookahead(&self.peek_at(1).kind) => {
-                self.parse_assign()
-            }
             _ => self.parse_expression_statement(),
         }
-    }
-
-    fn parse_assign(&mut self) -> Option<StmtId> {
-        let name_tok = self.advance();
-        let target = self.ident_from_token(&name_tok);
-        let op_tok = self.advance();
-        let value = self.parse_expression()?;
-
-        if !matches!(self.peek().kind, TokenKind::Semicolon) {
-            self.error_at_peek("expected `;` after assignment");
-            return None;
-        }
-        let semi = self.advance();
-
-        let span = self.span(target.span.start, semi.span.end);
-        let kind = if let Some(op) = compound_op_for_token(&op_tok.kind) {
-            StmtKind::CompoundAssign {
-                target,
-                op,
-                op_span: op_tok.span,
-                value,
-            }
-        } else {
-            StmtKind::Assign { target, value }
-        };
-        Some(self.ast.push_stmt(Stmt { kind, span }))
     }
 
     fn parse_expression_statement(&mut self) -> Option<StmtId> {
         let expr_id = self.parse_expression()?;
         let expr_span = self.ast.expr(expr_id).span;
-
-        if is_assign_lookahead(&self.peek().kind) {
-            return self.parse_assign_tail(expr_id, expr_span);
-        }
-
         if !matches!(self.peek().kind, TokenKind::Semicolon) {
-            self.error_at_peek("expected `;` after expression");
+            let what = if matches!(self.ast.expr(expr_id).kind, ExprKind::Assign { .. }) {
+                "assignment"
+            } else {
+                "expression"
+            };
+            self.error_at_peek(format!("expected `;` after {what}"));
             return None;
         }
         let semi = self.advance();
-
         let span = self.span(expr_span.start, semi.span.end);
-        Some(self.ast.push_stmt(Stmt {
-            kind: StmtKind::Expr(expr_id),
-            span,
-        }))
+        let kind = self.statement_kind_for(expr_id);
+        Some(self.ast.push_stmt(Stmt { kind, span }))
     }
 
-    fn parse_assign_tail(&mut self, lhs_id: ExprId, lhs_span: Span) -> Option<StmtId> {
-        let op_tok = self.advance();
-        let value_id = self.parse_expression()?;
-
-        if !matches!(self.peek().kind, TokenKind::Semicolon) {
-            self.error_at_peek("expected `;` after assignment");
-            return None;
-        }
-        let semi = self.advance();
-        let span = self.span(lhs_span.start, semi.span.end);
-        let compound = compound_op_for_token(&op_tok.kind);
-
-        let lhs_kind = self.ast.expr(lhs_id).kind.clone();
-        match lhs_kind {
-            ExprKind::FieldAccess { receiver, name } => {
-                let kind = if let Some(op) = compound {
-                    StmtKind::CompoundAssignField {
-                        receiver,
-                        field_name: name,
-                        op,
-                        op_span: op_tok.span,
-                        value: value_id,
-                    }
-                } else {
-                    StmtKind::AssignField {
-                        receiver,
-                        field_name: name,
-                        value: value_id,
-                    }
-                };
-                Some(self.ast.push_stmt(Stmt { kind, span }))
+    /// An assignment in statement position becomes an assignment statement;
+    /// only one used as a value stays an `ExprKind::Assign`.
+    fn statement_kind_for(&self, expr_id: ExprId) -> StmtKind {
+        let ExprKind::Assign {
+            target,
+            op,
+            op_span,
+            value,
+        } = self.ast.expr(expr_id).kind.clone()
+        else {
+            return StmtKind::Expr(expr_id);
+        };
+        match (self.ast.expr(target).kind.clone(), op) {
+            (ExprKind::Identifier(target), None) => StmtKind::Assign { target, value },
+            (ExprKind::Identifier(target), Some(op)) => StmtKind::CompoundAssign {
+                target,
+                op,
+                op_span,
+                value,
+            },
+            (ExprKind::FieldAccess { receiver, name }, None) => StmtKind::AssignField {
+                receiver,
+                field_name: name,
+                value,
+            },
+            (ExprKind::FieldAccess { receiver, name }, Some(op)) => StmtKind::CompoundAssignField {
+                receiver,
+                field_name: name,
+                op,
+                op_span,
+                value,
+            },
+            (ExprKind::IndexAccess { receiver, index }, None) => StmtKind::AssignIndex {
+                receiver,
+                index,
+                value,
+            },
+            (ExprKind::IndexAccess { receiver, index }, Some(op)) => {
+                StmtKind::CompoundAssignIndex {
+                    receiver,
+                    index,
+                    op,
+                    op_span,
+                    value,
+                }
             }
-            ExprKind::IndexAccess { receiver, index } => {
-                let kind = if let Some(op) = compound {
-                    StmtKind::CompoundAssignIndex {
-                        receiver,
-                        index,
-                        op,
-                        op_span: op_tok.span,
-                        value: value_id,
-                    }
-                } else {
-                    StmtKind::AssignIndex {
-                        receiver,
-                        index,
-                        value: value_id,
-                    }
-                };
-                Some(self.ast.push_stmt(Stmt { kind, span }))
-            }
-            _ => {
-                self.error_at(lhs_span, "invalid assignment target");
-                None
-            }
+            _ => unreachable!("parse_expression only builds assignments to valid targets"),
         }
     }
 
@@ -1611,29 +1572,33 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Whether the cursor sits on `keyof` used as the type operator.
+    /// Whether the token at `index` is `operator` (`keyof`, `readonly`) used as a
+    /// prefix type operator.
     ///
-    /// `keyof` is a contextual keyword — valid as an ordinary identifier in both
-    /// TypeScript and Submilli — so it is only the operator when a type follows. A bare
-    /// type name is never followed by another type name, so requiring one separates
-    /// `keyof T` from a type literally named `keyof`.
-    fn at_contextual_keyof(&self) -> bool {
-        let tok = self.peek();
-        if !matches!(tok.kind, TokenKind::Identifier)
-            || &self.source[tok.span.start as usize..tok.span.end as usize] != "keyof"
-        {
+    /// Both are contextual keywords — valid as ordinary identifiers in TypeScript and
+    /// Submilli — so they are only operators when a type follows. A bare type name is
+    /// never followed by another type name, so requiring one separates `keyof T` from
+    /// a type literally named `keyof`.
+    fn is_contextual_type_operator(&self, index: usize, operator: &str) -> bool {
+        let Some(tok) = self.tokens.get(index) else {
+            return false;
+        };
+        if !self.token_is_word(tok, operator) {
             return false;
         }
         matches!(
-            self.peek_at(1).kind,
-            TokenKind::Identifier
-                | TokenKind::Void
-                | TokenKind::LeftBrace
-                | TokenKind::LeftParen
-                | TokenKind::LeftBracket
-                | TokenKind::StringLiteral(_)
-                | TokenKind::NumberLiteral(_)
-                | TokenKind::NullLiteral
+            self.tokens.get(index + 1).map(|t| &t.kind),
+            Some(
+                TokenKind::Identifier
+                    | TokenKind::Void
+                    | TokenKind::LeftBrace
+                    | TokenKind::LeftParen
+                    | TokenKind::LeftBracket
+                    | TokenKind::StringLiteral(_)
+                    | TokenKind::NumberLiteral(_)
+                    | TokenKind::BooleanLiteral(_)
+                    | TokenKind::NullLiteral
+            )
         )
     }
 
@@ -2139,9 +2104,6 @@ impl<'a> Parser<'a> {
             let init_id = match self.peek().kind {
                 TokenKind::Let => self.parse_let_or_const(false)?,
                 TokenKind::Const => self.parse_let_or_const(true)?,
-                TokenKind::Identifier if is_assign_lookahead(&self.peek_at(1).kind) => {
-                    self.parse_assign()?
-                }
                 _ => self.parse_expression_statement()?,
             };
             Some(init_id)
@@ -2183,81 +2145,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_for_update_stmt(&mut self) -> Option<StmtId> {
-        if matches!(self.peek().kind, TokenKind::Identifier)
-            && is_assign_lookahead(&self.peek_at(1).kind)
-        {
-            let name_tok = self.advance();
-            let target = self.ident_from_token(&name_tok);
-            let op_tok = self.advance();
-            let value = self.parse_expression()?;
-            let span = self.span(target.span.start, self.ast.expr(value).span.end);
-            let kind = if let Some(op) = compound_op_for_token(&op_tok.kind) {
-                StmtKind::CompoundAssign {
-                    target,
-                    op,
-                    op_span: op_tok.span,
-                    value,
-                }
-            } else {
-                StmtKind::Assign { target, value }
-            };
-            return Some(self.ast.push_stmt(Stmt { kind, span }));
-        }
         let expr_id = self.parse_expression()?;
-        let expr_span = self.ast.expr(expr_id).span;
-        if is_assign_lookahead(&self.peek().kind) {
-            let op_tok = self.advance();
-            let value_id = self.parse_expression()?;
-            let span = self.span(expr_span.start, self.ast.expr(value_id).span.end);
-            let compound = compound_op_for_token(&op_tok.kind);
-            let lhs_kind = self.ast.expr(expr_id).kind.clone();
-            return match lhs_kind {
-                ExprKind::FieldAccess { receiver, name } => {
-                    let kind = if let Some(op) = compound {
-                        StmtKind::CompoundAssignField {
-                            receiver,
-                            field_name: name,
-                            op,
-                            op_span: op_tok.span,
-                            value: value_id,
-                        }
-                    } else {
-                        StmtKind::AssignField {
-                            receiver,
-                            field_name: name,
-                            value: value_id,
-                        }
-                    };
-                    Some(self.ast.push_stmt(Stmt { kind, span }))
-                }
-                ExprKind::IndexAccess { receiver, index } => {
-                    let kind = if let Some(op) = compound {
-                        StmtKind::CompoundAssignIndex {
-                            receiver,
-                            index,
-                            op,
-                            op_span: op_tok.span,
-                            value: value_id,
-                        }
-                    } else {
-                        StmtKind::AssignIndex {
-                            receiver,
-                            index,
-                            value: value_id,
-                        }
-                    };
-                    Some(self.ast.push_stmt(Stmt { kind, span }))
-                }
-                _ => {
-                    self.error_at(expr_span, "invalid assignment target");
-                    None
-                }
-            };
-        }
-        Some(self.ast.push_stmt(Stmt {
-            kind: StmtKind::Expr(expr_id),
-            span: expr_span,
-        }))
+        let span = self.ast.expr(expr_id).span;
+        let kind = self.statement_kind_for(expr_id);
+        Some(self.ast.push_stmt(Stmt { kind, span }))
     }
 
     fn parse_for_of_tail(&mut self, kw: Token) -> Option<StmtId> {
@@ -2756,7 +2647,7 @@ impl<'a> Parser<'a> {
         // `keyof` is contextual, not reserved: TypeScript allows it as an ordinary
         // identifier, and so does Submilli. It is an operator only when another type
         // follows it, which an identifier in type position never does.
-        if self.at_contextual_keyof() {
+        if self.is_contextual_type_operator(self.pos, "keyof") {
             let kw = self.advance();
             let operand = self.parse_type_array(type_pos)?;
             let span = self.span(kw.span.start, operand.span.end);
@@ -2764,6 +2655,9 @@ impl<'a> Parser<'a> {
                 kind: TypeAnnotationKind::KeyOf(Box::new(operand)),
                 span,
             });
+        }
+        if self.is_contextual_type_operator(self.pos, "readonly") {
+            return self.parse_readonly_type(type_pos);
         }
 
         let mut ty = match self.peek().kind {
@@ -2871,6 +2765,13 @@ impl<'a> Parser<'a> {
                     span,
                 }
             }
+            TokenKind::BooleanLiteral(value) => {
+                let span = self.advance().span;
+                TypeAnnotation {
+                    kind: TypeAnnotationKind::BooleanLiteral(value),
+                    span,
+                }
+            }
             TokenKind::LeftBrace => self.parse_object_type_annotation()?,
             TokenKind::LeftParen if self.paren_at_opens_function_type(self.pos, type_pos) => {
                 self.parse_function_type_annotation()?
@@ -2897,6 +2798,41 @@ impl<'a> Parser<'a> {
             };
         }
         Some(ty)
+    }
+
+    /// `readonly T[]` or `readonly [A, B]`. The operand binds like `keyof`'s, so
+    /// `readonly T[][]` is a readonly array of mutable arrays and
+    /// `readonly T[] | null` a union with a readonly member.
+    fn parse_readonly_type(&mut self, type_pos: TypePos) -> Option<TypeAnnotation> {
+        let kw = self.advance();
+        let opens_group = matches!(self.peek().kind, TokenKind::LeftParen);
+        let operand = self.parse_type_array(type_pos)?;
+        // `readonly (T[])` is rejected as TypeScript rejects it: the operand must be
+        // written as an array or tuple type, not grouped into one.
+        let grouped =
+            opens_group && matches!(self.tokens[self.pos - 1].kind, TokenKind::RightParen);
+        if grouped
+            || !matches!(
+                operand.kind,
+                TypeAnnotationKind::Array(_) | TypeAnnotationKind::Tuple(_)
+            )
+        {
+            self.error_at_with_help(
+                kw.span,
+                "`readonly` only applies to array and tuple types",
+                vec![
+                    "write `readonly T[]` or `readonly [A, B]`; to protect an object's \
+                     properties, mark each one `readonly` instead"
+                        .to_string(),
+                ],
+            );
+            return Some(operand);
+        }
+        let span = self.span(kw.span.start, operand.span.end);
+        Some(TypeAnnotation {
+            kind: TypeAnnotationKind::Readonly(Box::new(operand)),
+            span,
+        })
     }
 
     /// In type position `(` is ambiguous: a function type's parameter list, or a
@@ -3097,7 +3033,22 @@ impl<'a> Parser<'a> {
         }
         let mut elements: Vec<TypeAnnotation> = Vec::new();
         loop {
+            if matches!(self.peek().kind, TokenKind::DotDotDot) {
+                self.error_at_with_help(
+                    self.peek().span,
+                    "rest elements in tuple types are not supported",
+                    vec!["use an array type `T[]` for a list of varying length".to_string()],
+                );
+                return None;
+            }
+            // Labels may be mixed with unlabeled elements, as TypeScript allows
+            // since 5.2.
+            self.skip_tuple_element_label()?;
             let ty = self.parse_type_annotation()?;
+            if matches!(self.peek().kind, TokenKind::Question) {
+                self.reject_optional_tuple_element(self.peek().span);
+                return None;
+            }
             elements.push(ty);
             match self.peek().kind {
                 TokenKind::Comma => {
@@ -3122,6 +3073,39 @@ impl<'a> Parser<'a> {
             kind: TypeAnnotationKind::Tuple(elements),
             span: self.span(open.span.start, close.span.end),
         })
+    }
+
+    /// Consumes a tuple element's `name:` label, if it has one. Labels only document
+    /// the positions — `[x: number]` is the type `[number]` — so nothing of them is
+    /// kept. `None` after reporting an optional element (`name?:`), which tuples do
+    /// not support.
+    fn skip_tuple_element_label(&mut self) -> Option<()> {
+        if !is_property_name(&self.peek().kind) {
+            return Some(());
+        }
+        match self.peek_at(1).kind {
+            TokenKind::Colon => {
+                self.advance();
+                self.advance();
+            }
+            TokenKind::Question if matches!(self.peek_at(2).kind, TokenKind::Colon) => {
+                self.reject_optional_tuple_element(self.peek_at(1).span);
+                return None;
+            }
+            _ => {}
+        }
+        Some(())
+    }
+
+    fn reject_optional_tuple_element(&mut self, question: Span) {
+        self.error_at_with_help(
+            question,
+            "optional tuple elements are not supported",
+            vec![
+                "give the element a nullable type (`T | null`) and pass `null` where it is absent"
+                    .to_string(),
+            ],
+        );
     }
 
     fn parse_object_type_annotation(&mut self) -> Option<TypeAnnotation> {
@@ -3311,7 +3295,53 @@ impl<'a> Parser<'a> {
             && matches!(self.peek_at(1).kind, TokenKind::Identifier)
     }
 
+    /// Assignment is the lowest-precedence expression and right-associative:
+    /// `a = b = c` assigns `c` to both, and yields it.
     fn parse_expression(&mut self) -> Option<ExprId> {
+        let written = self.parse_conditional()?;
+        if !is_assign_lookahead(&self.peek().kind) {
+            return Some(written);
+        }
+        let target_span = self.ast.expr(written).span;
+        let target = self.assignment_target(written)?;
+        let op_tok = self.advance();
+        let value = self.parse_expression()?;
+        let value_span = self.ast.expr(value).span;
+        Some(self.ast.push_expr(Expr {
+            kind: ExprKind::Assign {
+                target,
+                op: compound_op_for_token(&op_tok.kind),
+                op_span: op_tok.span,
+                value,
+            },
+            span: self.span(target_span.start, value_span.end),
+        }))
+    }
+
+    /// The binding, field, or element `written` names, through any parentheses:
+    /// `(a) = 1` assigns `a`, as in JavaScript.
+    fn assignment_target(&mut self, written: ExprId) -> Option<ExprId> {
+        let mut target = written;
+        while let ExprKind::Paren(inner) = self.ast.expr(target).kind {
+            target = inner;
+        }
+        if matches!(
+            self.ast.expr(target).kind,
+            ExprKind::Identifier(_) | ExprKind::FieldAccess { .. } | ExprKind::IndexAccess { .. }
+        ) {
+            return Some(target);
+        }
+        self.error_at_with_help(
+            self.ast.expr(written).span,
+            "invalid assignment target",
+            vec![
+                "assign to a variable, a field (`o.f = …`), or an element (`a[i] = …`)".to_string(),
+            ],
+        );
+        None
+    }
+
+    fn parse_conditional(&mut self) -> Option<ExprId> {
         if self.is_arrow_start() {
             return self.parse_arrow();
         }
@@ -3412,6 +3442,11 @@ impl<'a> Parser<'a> {
     }
 
     fn scan_past_single_type_member(&self, start: usize, type_pos: TypePos) -> Option<usize> {
+        if self.is_contextual_type_operator(start, "keyof")
+            || self.is_contextual_type_operator(start, "readonly")
+        {
+            return self.scan_past_single_type_member(start + 1, type_pos);
+        }
         let mut i = start;
         match self.tokens.get(i)?.kind {
             TokenKind::Identifier | TokenKind::Void => {
@@ -3436,7 +3471,10 @@ impl<'a> Parser<'a> {
                     )?;
                 }
             }
-            TokenKind::NullLiteral | TokenKind::StringLiteral(_) | TokenKind::NumberLiteral(_) => {
+            TokenKind::NullLiteral
+            | TokenKind::StringLiteral(_)
+            | TokenKind::NumberLiteral(_)
+            | TokenKind::BooleanLiteral(_) => {
                 i += 1;
             }
             TokenKind::LeftBrace => {
@@ -4944,6 +4982,13 @@ mod tests {
             "| number | string",
             "(n: number) => number",
             "(n: number) => [number, number]",
+            "readonly number[]",
+            "readonly number[][]",
+            "readonly [number, string]",
+            "readonly number[] | null",
+            "[first: number, second: string]",
+            "[new: number, string]",
+            "keyof { a: number }",
         ] {
             let annotation = format!("function f(): void {{ const a: {ty} = x; }}");
             let (_ast, diags) = parse_str(&annotation);
@@ -8741,6 +8786,58 @@ mod tests {
                 .contains("tuple types must have at least one element")),
             "expected empty-tuple diagnostic, got: {diags:?}"
         );
+    }
+
+    #[test]
+    fn parse_labeled_tuple_drops_labels() {
+        let (ast, diags) = parse_str("let p: [first: number, string] = null;");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let ty = type_of_let(single_stmt(&ast));
+        let crate::TypeAnnotationKind::Tuple(ref elems) = ty.kind else {
+            panic!("expected Tuple, got {:?}", ty.kind);
+        };
+        assert_eq!(elems.len(), 2);
+        assert!(
+            elems
+                .iter()
+                .all(|e| matches!(e.kind, crate::TypeAnnotationKind::Name { .. }))
+        );
+    }
+
+    #[test]
+    fn parse_labeled_optional_tuple_element_rejected() {
+        let (_ast, diags) = parse_str("let p: [first: number, second?: string] = null;");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message == "optional tuple elements are not supported"),
+            "expected optional-element diagnostic, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn parse_readonly_binds_to_the_postfix_type() {
+        let (ast, diags) = parse_str("let p: readonly number[][] | null = null;");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let ty = type_of_let(single_stmt(&ast));
+        let crate::TypeAnnotationKind::Union(ref members) = ty.kind else {
+            panic!("expected Union, got {:?}", ty.kind);
+        };
+        let crate::TypeAnnotationKind::Readonly(ref operand) = members[0].kind else {
+            panic!("expected Readonly, got {:?}", members[0].kind);
+        };
+        let crate::TypeAnnotationKind::Array(ref inner) = operand.kind else {
+            panic!("expected Array, got {:?}", operand.kind);
+        };
+        assert!(matches!(inner.kind, crate::TypeAnnotationKind::Array(_)));
+    }
+
+    #[test]
+    fn parse_readonly_as_a_type_name_is_not_the_operator() {
+        let (ast, diags) = parse_str("let p: readonly = null;");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let ty = type_of_let(single_stmt(&ast));
+        assert!(matches!(ty.kind, crate::TypeAnnotationKind::Name { .. }));
     }
 
     #[test]

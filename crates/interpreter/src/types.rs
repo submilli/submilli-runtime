@@ -153,6 +153,10 @@ pub enum Type {
     StringLiteral(String),
     Uint8Array,
     Boolean,
+    /// `true` or `false`. Like the other literal types it has no runtime
+    /// representation of its own: it lowers exactly as `boolean`. `Type::union`
+    /// folds `true | false` into `boolean`, which is what `boolean` means.
+    BooleanLiteral(bool),
     Null,
     Void,
     /// Unlike TypeScript's `any`, requires explicit narrowing before use.
@@ -175,6 +179,13 @@ pub enum Type {
     /// Parser rejects empty tuples. Index access requires an integer literal; out-of-range and
     /// non-literal indices are rejected at typecheck time. Lowers to `(ref $Array)` at runtime.
     Tuple(Vec<Type>),
+    /// `readonly T[]` (also spelled `ReadonlyArray<T>`) or `readonly [A, B]`. The inner
+    /// type is always a [`Type::Array`] or [`Type::Tuple`]: the wrapper only forbids
+    /// writes, so [`Type::peel`] strips it and every read path sees the plain array.
+    /// Write paths (index assignment, mutating methods) must ask
+    /// [`Type::is_readonly_array`] before peeling. `Eq`/`Ord` keep it distinct from the
+    /// mutable type because a readonly array is not assignable to a mutable one.
+    Readonly(Box<Type>),
     /// Diagnostic already reported; downstream code must not emit cascading errors.
     Error,
     /// No Wasm representation — never values never reach codegen.
@@ -382,10 +393,26 @@ impl Type {
 
     pub fn peel(&self) -> &Type {
         let mut t = self;
+        while let Type::Alias { ty, .. } | Type::Refined { ty, .. } | Type::Readonly(ty) = t {
+            t = ty;
+        }
+        t
+    }
+
+    /// [`peel`](Self::peel), but stopping at a [`Type::Readonly`] wrapper, for
+    /// sites that carry a type onward and must not drop its readonly-ness.
+    pub fn peel_preserving_readonly(&self) -> &Type {
+        let mut t = self;
         while let Type::Alias { ty, .. } | Type::Refined { ty, .. } = t {
             t = ty;
         }
         t
+    }
+
+    /// Whether writes through a value of this type are forbidden because it is a
+    /// `readonly` array or tuple, looking through aliases and refinements.
+    pub fn is_readonly_array(&self) -> bool {
+        matches!(self.peel_preserving_readonly(), Type::Readonly(_))
     }
 
     /// Whether this type is `void`, through any depth of alias.
@@ -425,6 +452,7 @@ impl Type {
         match self.peel() {
             Type::NumberEnum { .. } => &Type::Number,
             Type::StringEnum { .. } => &Type::String,
+            Type::BooleanLiteral(_) => &Type::Boolean,
             Type::Union(members)
                 if !members.is_empty()
                     && members.iter().all(|member| {
@@ -460,6 +488,7 @@ impl Type {
         match self {
             Type::NumberLiteral(_) => Type::Number,
             Type::StringLiteral(_) => Type::String,
+            Type::BooleanLiteral(_) => Type::Boolean,
             // A union widens memberwise, which also collapses it when the members
             // share a base: `1 | 2` is `number`, not `number | number`, because
             // `Type::union` deduplicates.
@@ -541,6 +570,7 @@ impl Type {
                 .then_with(|| alias_rank(a).cmp(&alias_rank(b)))
         });
         flat.dedup_by(|a, b| a.without_aliases() == b.without_aliases());
+        fold_boolean_literals(&mut flat);
         match flat.len() {
             // All members were Never → return Never (the bottom type), not Error.
             0 => Type::Never,
@@ -701,6 +731,24 @@ pub(crate) fn escape_string_literal(s: &str) -> String {
     out
 }
 
+/// `boolean` is `true | false`: a union holding both literals, or `boolean`
+/// and either literal, holds exactly `boolean`. `members` is sorted and
+/// deduplicated, and stays so.
+fn fold_boolean_literals(members: &mut Vec<Type>) {
+    let is_boolean = |m: &Type| matches!(m.without_aliases(), Type::Boolean);
+    let is_literal = |m: &Type| matches!(m.without_aliases(), Type::BooleanLiteral(_));
+    let literals = members.iter().filter(|m| is_literal(m)).count();
+    let has_boolean = members.iter().any(is_boolean);
+    if literals == 0 || (literals == 1 && !has_boolean) {
+        return;
+    }
+    members.retain(|m| !is_literal(m));
+    if !has_boolean {
+        let at = members.partition_point(|m| m.without_aliases() < &Type::Boolean);
+        members.insert(at, Type::Boolean);
+    }
+}
+
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -713,6 +761,7 @@ impl fmt::Display for Type {
             Type::StringLiteral(s) => write!(f, "\"{}\"", escape_string_literal(s)),
             Type::Uint8Array => f.write_str("Uint8Array"),
             Type::Boolean => f.write_str("boolean"),
+            Type::BooleanLiteral(value) => write!(f, "{value}"),
             Type::Null => f.write_str("null"),
             Type::Void => f.write_str("void"),
             Type::Unknown => f.write_str("unknown"),
@@ -743,9 +792,12 @@ impl fmt::Display for Type {
             // element of either shape has to be parenthesised or the rendering
             // re-parses as a different type.
             Type::Array(elem) => match &**elem {
-                Type::Union(_) | Type::Function { .. } => write!(f, "({elem})[]"),
+                Type::Union(_) | Type::Function { .. } | Type::Readonly(_) => {
+                    write!(f, "({elem})[]")
+                }
                 _ => write!(f, "{elem}[]"),
             },
+            Type::Readonly(inner) => write!(f, "readonly {inner}"),
             Type::Tuple(elements) => {
                 f.write_str("[")?;
                 for (i, t) in elements.iter().enumerate() {
@@ -837,6 +889,27 @@ mod tests {
         assert_eq!(Type::Null.to_string(), "null");
         assert_eq!(Type::Void.to_string(), "void");
         assert_eq!(Type::Error.to_string(), "<error>");
+    }
+
+    #[test]
+    fn readonly_display_matches_typescript() {
+        let numbers = Type::Array(Box::new(Type::Number));
+        let readonly = Type::Readonly(Box::new(numbers.clone()));
+        assert_eq!(readonly.to_string(), "readonly number[]");
+        assert_eq!(
+            Type::Array(Box::new(readonly.clone())).to_string(),
+            "(readonly number[])[]"
+        );
+        assert_eq!(
+            Type::Readonly(Box::new(Type::Array(Box::new(numbers)))).to_string(),
+            "readonly number[][]"
+        );
+        assert_eq!(
+            Type::Readonly(Box::new(Type::Tuple(vec![Type::Number, Type::String]))).to_string(),
+            "readonly [number, string]"
+        );
+        assert!(readonly.is_readonly_array());
+        assert_eq!(readonly.peel(), &Type::Array(Box::new(Type::Number)));
     }
 
     #[test]

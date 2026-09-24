@@ -777,7 +777,13 @@ pub fn declare(defs: &mut PackageDeclaration) {
     m(
         defs,
         "concat",
-        vec![arr(), Param::new("others", Type::Array(Box::new(arr_ty())))],
+        vec![
+            arr(),
+            Param::new(
+                "others",
+                Type::Array(Box::new(Type::Readonly(Box::new(arr_ty())))),
+            ),
+        ],
         arr_ty(),
     );
     m(
@@ -975,7 +981,7 @@ pub fn declare(defs: &mut PackageDeclaration) {
             Param::new(
                 "src",
                 Type::union(vec![
-                    arr_ty(),
+                    Type::Readonly(Box::new(arr_ty())),
                     iter(t()),
                     Type::prelude_interface("Iterable".to_string(), vec![t()]),
                 ]),
@@ -1353,9 +1359,9 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             // array.
                             params: vec![Param::rest(
                                 "others",
-                                Type::Array(Box::new(Type::Array(Box::new(
-                                    Type::TypeVar("T".to_string()),
-                                )))),
+                                Type::Array(Box::new(Type::Readonly(Box::new(Type::Array(
+                                    Box::new(Type::TypeVar("T".to_string())),
+                                ))))),
                             )],
                             ret: Type::Array(Box::new(Type::TypeVar("T".to_string()))),
                             predicate: None,
@@ -1771,7 +1777,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             Param::new(
                                 "src",
                                 Type::union(vec![
-                                    Type::Array(Box::new(Type::TypeVar("T".to_string()))),
+                                    Type::Readonly(Box::new(Type::Array(Box::new(Type::TypeVar("T".to_string()))))),
                                     Type::prelude_interface(
                                         "Iterator".to_string(),
                                         vec![Type::TypeVar("T".to_string())],

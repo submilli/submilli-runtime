@@ -1,0 +1,97 @@
+=== nullishCoalescingOperator3.ts ===
+
+const a1: 'literal' | null | null = null as unknown as ('literal' | null | null);
+>a1 : "literal" | null
+>   : ^^^^^^^^^^^^^^^^
+>null as unknown as ('literal' | null | null) : "literal" | null
+>                                             : ^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+const a2: '' | null | null = null as unknown as ('' | null | null);
+>a2 : "" | null
+>   : ^^^^^^^^^
+>null as unknown as ('' | null | null) : "" | null
+>                                      : ^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+const a3: 1 | null | null = null as unknown as (1 | null | null);
+>a3 : 1 | null
+>   : ^^^^^^^^
+>null as unknown as (1 | null | null) : 1 | null
+>                                     : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+const a4: 0 | null | null = null as unknown as (0 | null | null);
+>a4 : 0 | null
+>   : ^^^^^^^^
+>null as unknown as (0 | null | null) : 0 | null
+>                                     : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+const a5: true | null | null = null as unknown as (true | null | null);
+>a5 : true | null
+>   : ^^^^^^^^^^^
+>true : true
+>     : ^^^^
+>null as unknown as (true | null | null) : true | null
+>                                        : ^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>true : true
+>     : ^^^^
+
+const a6: false | null | null = null as unknown as (false | null | null);
+>a6 : false | null
+>   : ^^^^^^^^^^^^
+>false : false
+>      : ^^^^^
+>null as unknown as (false | null | null) : false | null
+>                                         : ^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>false : false
+>      : ^^^^^
+
+
+
+const aa1 = a1 ?? a2 ?? a3 ?? a4 ?? a5 ?? a6 ?? 'whatever'
+>aa1 : boolean | "" | 0 | "literal" | 1 | "whatever"
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a1 ?? a2 ?? a3 ?? a4 ?? a5 ?? a6 ?? 'whatever' : boolean | "" | 0 | "literal" | 1 | "whatever"
+>                                               : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a1 ?? a2 ?? a3 ?? a4 ?? a5 ?? a6 : boolean | "" | 0 | "literal" | 1 | null
+>                                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a1 ?? a2 ?? a3 ?? a4 ?? a5 : true | "" | 0 | "literal" | 1 | null
+>                           : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a1 ?? a2 ?? a3 ?? a4 : "" | 0 | "literal" | 1 | null
+>                     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a1 ?? a2 ?? a3 : "" | "literal" | 1 | null
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>a1 ?? a2 : "" | "literal" | null
+>         : ^^^^^^^^^^^^^^^^^^^^^
+>a1 : "literal" | null
+>   : ^^^^^^^^^^^^^^^^
+>a2 : "" | null
+>   : ^^^^^^^^^
+>a3 : 1 | null
+>   : ^^^^^^^^
+>a4 : 0 | null
+>   : ^^^^^^^^
+>a5 : true | null
+>   : ^^^^^^^^^^^
+>a6 : false | null
+>   : ^^^^^^^^^^^^
+>'whatever' : "whatever"
+>           : ^^^^^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

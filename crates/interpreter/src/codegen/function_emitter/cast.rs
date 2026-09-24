@@ -102,7 +102,7 @@ pub fn emit_box(emitter: &mut FunctionEmitter<'_>, ctx: &CodegenCtx<'_>, ty: &Ty
             emitter.instruction(Instruction::LocalGet(scratch));
             emitter.instruction(Instruction::StructNew(boxed_idx));
         }
-        Type::Boolean => {
+        Type::Boolean | Type::BooleanLiteral(_) => {
             let boxed_idx = ctx
                 .symbols
                 .boxed_boolean_type_idx()
@@ -157,7 +157,7 @@ pub fn emit_box(emitter: &mut FunctionEmitter<'_>, ctx: &CodegenCtx<'_>, ty: &Ty
         // A recursion back-edge lowers to `(ref null $Object)` — already
         // an `$Object` subtype, so the upcast is implicit. No-op.
         Type::AliasRef { .. } => {}
-        Type::Alias { .. } | Type::Refined { .. } => {
+        Type::Alias { .. } | Type::Refined { .. } | Type::Readonly(_) => {
             unreachable!("peel guarantees no alias here (SUB-242)")
         }
     }
@@ -340,7 +340,7 @@ fn emit_ref_truthiness(
     };
     let test_string = needs(StringLike, |m| matches!(m, Type::StringLiteral(_)));
     let test_number = needs(NumberLike, |m| matches!(m, Type::NumberLiteral(_)));
-    let test_boolean = needs(BooleanLike, |_| false);
+    let test_boolean = needs(BooleanLike, |m| matches!(m, Type::BooleanLiteral(_)));
     let test_bigint = needs(BigIntLike, |_| false);
 
     let slot = ctx.symbols.value_type(cond_ty);
@@ -543,7 +543,7 @@ pub fn emit_cast_to(emitter: &mut FunctionEmitter<'_>, ctx: &CodegenCtx<'_>, ty:
                 field_index: 1,
             });
         }
-        Type::Boolean => {
+        Type::Boolean | Type::BooleanLiteral(_) => {
             let boxed_idx = ctx
                 .symbols
                 .boxed_boolean_type_idx()
@@ -672,7 +672,7 @@ pub fn emit_cast_to(emitter: &mut FunctionEmitter<'_>, ctx: &CodegenCtx<'_>, ty:
             // may list flows through. Field reads go through the shape
             // field-name scan, same as `InterfaceRef`; no per-shape cast.
         }
-        Type::Alias { .. } | Type::Refined { .. } => {
+        Type::Alias { .. } | Type::Refined { .. } | Type::Readonly(_) => {
             unreachable!("peel guarantees no alias here (SUB-242)")
         }
     }

@@ -38,6 +38,7 @@ pub enum TypeInfoKind {
     String,
     NumberLiteral(LiteralF64),
     StringLiteral(String),
+    BooleanLiteral(bool),
     Array { element: TypeInfoId },
     Tuple { elements: Vec<TypeInfoId> },
     Object { fields: Vec<FieldInfo> },
@@ -117,6 +118,7 @@ impl TypeInfoTable {
         match ty.peel() {
             Type::Null
             | Type::Boolean
+            | Type::BooleanLiteral(_)
             | Type::Number
             | Type::NumberLiteral(_)
             | Type::String
@@ -160,6 +162,7 @@ impl TypeInfoTable {
             | (TypeInfoKind::String, Type::String) => true,
             (TypeInfoKind::NumberLiteral(a), Type::NumberLiteral(b)) => a == b,
             (TypeInfoKind::StringLiteral(a), Type::StringLiteral(b)) => a == b,
+            (TypeInfoKind::BooleanLiteral(a), Type::BooleanLiteral(b)) => a == b,
             (TypeInfoKind::Array { element }, Type::Array(expected)) => {
                 self.type_info_matches_type(*element, expected, seen)
             }
@@ -237,6 +240,7 @@ impl TypeInfoBuilder {
             Type::String => TypeInfoKind::String,
             Type::NumberLiteral(n) => TypeInfoKind::NumberLiteral(*n),
             Type::StringLiteral(s) => TypeInfoKind::StringLiteral(s.clone()),
+            Type::BooleanLiteral(b) => TypeInfoKind::BooleanLiteral(*b),
             Type::Array(element) => TypeInfoKind::Array {
                 element: self.intern_type(element),
             },

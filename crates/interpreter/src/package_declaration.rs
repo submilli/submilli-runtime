@@ -261,7 +261,9 @@ impl PackageShapeCollector {
                     self.collect_type(arg);
                 }
             }
-            Type::Alias { ty, .. } | Type::Refined { ty, .. } => self.collect_type(ty),
+            Type::Alias { ty, .. } | Type::Refined { ty, .. } | Type::Readonly(ty) => {
+                self.collect_type(ty);
+            }
             Type::Number
             | Type::BigInt
             | Type::NumberLiteral(_)
@@ -269,6 +271,7 @@ impl PackageShapeCollector {
             | Type::StringLiteral(_)
             | Type::Uint8Array
             | Type::Boolean
+            | Type::BooleanLiteral(_)
             | Type::Null
             | Type::Void
             | Type::Never

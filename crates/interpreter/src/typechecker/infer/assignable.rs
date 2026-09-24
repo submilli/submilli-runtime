@@ -384,6 +384,30 @@ impl<'a> TypeResolver<'a> {
         )
     }
 
+    /// The names of an interface's methods.
+    pub(super) fn interface_method_names(&self, mangled: &MangledName, name: &str) -> Vec<String> {
+        match self.lookup(mangled, name).map(|symbol| &symbol.kind) {
+            Some(TypeKind::Interface { methods, .. }) => methods.keys().cloned().collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// The names of a class's methods, its ancestors' included.
+    pub(super) fn class_method_names(&self, mangled: &MangledName, args: &[Type]) -> Vec<String> {
+        let mut names = Vec::new();
+        super::classes::for_each_class_in_chain(
+            |m| self.sym_by_mangled(m).cloned(),
+            mangled,
+            args,
+            |sym, _| {
+                if let TypeKind::Class { methods, .. } = &sym.kind {
+                    names.extend(methods.keys().cloned());
+                }
+            },
+        );
+        names
+    }
+
     /// True when `name` resolves to an interface that declares methods — the
     /// nominal-only interfaces `interface_data_shape` refuses to expand.
     pub(super) fn interface_has_methods(&self, mangled: &MangledName, name: &str) -> bool {
@@ -434,6 +458,9 @@ fn assignable_rec(
     }
     if let Type::Union(ms) = expected.peel() {
         return ms.iter().any(|m| assignable_rec(actual, m, types, seen));
+    }
+    if drops_readonly(actual, expected) {
+        return false;
     }
     if matches!(actual, Type::Alias { .. }) || matches!(expected, Type::Alias { .. }) {
         let pair = (actual.clone(), expected.clone());
@@ -526,6 +553,9 @@ fn assignable_rec(
         (Type::NumberLiteral(a), Type::NumberLiteral(b)) => a == b,
         (Type::NumberLiteral(_) | Type::NumberEnum { .. }, Type::Number) => true,
         (Type::Number, Type::NumberLiteral(_)) => false,
+        (Type::BooleanLiteral(a), Type::BooleanLiteral(b)) => a == b,
+        (Type::BooleanLiteral(_), Type::Boolean) => true,
+        (Type::Boolean, Type::BooleanLiteral(_)) => false,
         (Type::Array(ae), Type::Array(ee)) => assignable_rec(ae, ee, types, seen),
         (Type::Tuple(aa), Type::Tuple(ae)) => {
             aa.len() == ae.len()
@@ -719,6 +749,15 @@ fn assignable_rec(
     }
 }
 
+/// Whether `actual` is a `readonly` array or tuple and `expected` a mutable one.
+/// The element types still decide assignability everywhere else: `readonly` is
+/// shallow and otherwise covariant, like the array it wraps.
+pub(super) fn drops_readonly(actual: &Type, expected: &Type) -> bool {
+    actual.is_readonly_array()
+        && !expected.is_readonly_array()
+        && matches!(expected.peel(), Type::Array(_) | Type::Tuple(_))
+}
+
 fn same_alias_instance(left: &Type, right: &Type) -> bool {
     if left == right {
         return true;
@@ -736,7 +775,7 @@ fn same_alias_instance(left: &Type, right: &Type) -> bool {
             .all(|(left, right)| same_alias_instance(left, right))
 }
 
-fn alias_identity(ty: &Type) -> Option<(&MangledName, &[Type])> {
+pub(super) fn alias_identity(ty: &Type) -> Option<(&MangledName, &[Type])> {
     match ty {
         Type::Alias { mangled, args, .. } | Type::AliasRef { mangled, args, .. } => {
             Some((mangled, args))
@@ -867,12 +906,11 @@ pub(super) fn literal_value_of(kind: &crate::TypedExprKind) -> Option<narrowing:
     }
 }
 
-/// Boolean maps to `Type::Boolean` — no `BooleanLiteral`, booleans aren't refined by value.
 pub(super) fn literal_to_type(lit: &narrowing::LiteralValue) -> Type {
     match lit {
         narrowing::LiteralValue::Number(n) => Type::NumberLiteral(*n),
         narrowing::LiteralValue::String(s) => Type::StringLiteral(s.clone()),
-        narrowing::LiteralValue::Boolean(_) => Type::Boolean,
+        narrowing::LiteralValue::Boolean(b) => Type::BooleanLiteral(*b),
     }
 }
 
@@ -1053,6 +1091,31 @@ mod tests {
         let narrow_arr = Type::Array(Box::new(Type::Number));
         assert!(assignable(&narrow_arr, &union_arr));
         assert!(!assignable(&union_arr, &narrow_arr));
+    }
+
+    #[test]
+    fn readonly_accepts_mutable_but_not_the_reverse() {
+        let array = |elem: Type| Type::Array(Box::new(elem));
+        let readonly = |ty: Type| Type::Readonly(Box::new(ty));
+        let numbers = array(Type::Number);
+        let either = array(Type::union(vec![Type::Number, Type::String]));
+        assert!(assignable(&numbers, &readonly(numbers.clone())));
+        assert!(!assignable(&readonly(numbers.clone()), &numbers));
+        // Covariant in the element, like the array it wraps.
+        assert!(assignable(
+            &readonly(numbers.clone()),
+            &readonly(either.clone())
+        ));
+        assert!(!assignable(&readonly(either), &readonly(numbers.clone())));
+        let pair = Type::Tuple(vec![Type::Number, Type::Number]);
+        assert!(assignable(&pair, &readonly(pair.clone())));
+        assert!(!assignable(&readonly(pair.clone()), &pair));
+        assert!(assignable(
+            &readonly(pair.clone()),
+            &readonly(numbers.clone())
+        ));
+        assert!(!assignable(&readonly(pair), &numbers));
+        assert!(assignable(&readonly(numbers), &Type::Unknown));
     }
 
     #[test]

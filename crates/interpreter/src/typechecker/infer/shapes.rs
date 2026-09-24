@@ -123,7 +123,9 @@ impl<'a> ShapeCollector<'a> {
                 }
             }
             // aliases have no shape of their own — recurse into the body
-            Type::Alias { ty: inner, .. } | Type::Refined { ty: inner, .. } => self.collect(inner),
+            Type::Alias { ty: inner, .. }
+            | Type::Refined { ty: inner, .. }
+            | Type::Readonly(inner) => self.collect(inner),
             Type::Number
             | Type::BigInt
             | Type::NumberLiteral(_)
@@ -131,6 +133,7 @@ impl<'a> ShapeCollector<'a> {
             | Type::StringLiteral(_)
             | Type::Uint8Array
             | Type::Boolean
+            | Type::BooleanLiteral(_)
             | Type::Null
             | Type::Void
             | Type::Never
@@ -331,6 +334,12 @@ pub(super) fn collect_from_expr(
         }
         TypedExprKind::EffectThen { effect, result } => {
             collect_from_expr(ast, *effect, c);
+            collect_from_expr(ast, *result, c);
+        }
+        TypedExprKind::Sequence { stmts, result } => {
+            for &stmt in stmts {
+                collect_from_stmt(ast, stmt, c);
+            }
             collect_from_expr(ast, *result, c);
         }
         TypedExprKind::Unary { operand, .. } => collect_from_expr(ast, *operand, c),

@@ -843,7 +843,7 @@ impl SymbolTable {
         let ty = ty.peel();
         match ty {
             Type::Number | Type::NumberLiteral(_) => ValType::F64,
-            Type::Boolean => ValType::I32,
+            Type::Boolean | Type::BooleanLiteral(_) => ValType::I32,
             Type::String | Type::StringLiteral(_) => {
                 let idx = self.string_type_idx().expect(
                     "Type::String requires the intrinsic types to be declared (declare_intrinsic_types)",
@@ -1052,7 +1052,7 @@ impl SymbolTable {
                     heap_type: HeapType::Concrete(idx),
                 })
             }
-            Type::Alias { .. } | Type::Refined { .. } => {
+            Type::Alias { .. } | Type::Refined { .. } | Type::Readonly(_) => {
                 unreachable!("peel guarantees no alias here (SUB-242)")
             }
         }

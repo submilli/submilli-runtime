@@ -344,7 +344,9 @@ fn stringify_type_info_val(
         })?;
     match kind {
         crate::TypeInfoKind::Null => Ok(serde_json::Value::Null),
-        crate::TypeInfoKind::Boolean => boxed_bool(caller, val).map(serde_json::Value::Bool),
+        crate::TypeInfoKind::Boolean | crate::TypeInfoKind::BooleanLiteral(_) => {
+            boxed_bool(caller, val).map(serde_json::Value::Bool)
+        }
         crate::TypeInfoKind::Number | crate::TypeInfoKind::NumberLiteral(_) => {
             let n = boxed_number(caller, val)?;
             json_number_value(n)

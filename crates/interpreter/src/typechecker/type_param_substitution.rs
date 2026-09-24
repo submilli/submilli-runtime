@@ -91,6 +91,7 @@ impl TypeParamSubstitution {
                 None => ty.clone(),
             },
             Type::Array(elem) => Type::Array(Box::new(self.apply_rec(elem, substituting))),
+            Type::Readonly(inner) => Type::Readonly(Box::new(self.apply_rec(inner, substituting))),
             Type::Tuple(elements) => Type::Tuple(
                 elements
                     .iter()
@@ -203,6 +204,7 @@ impl TypeParamSubstitution {
             | Type::StringLiteral(_)
             | Type::Uint8Array
             | Type::Boolean
+            | Type::BooleanLiteral(_)
             | Type::Null
             | Type::Void
             | Type::Never
@@ -279,6 +281,9 @@ impl<'a> Unifier<'a> {
     #[allow(clippy::result_large_err)]
     fn unify(&mut self, param_ty: &Type, arg_ty: &Type) -> Result<(), UnifyError> {
         // peel aliases — unification is structural, alias label doesn't participate.
+        // A type variable still binds to a readonly argument as readonly, or the
+        // call's result would hand back a writable view of it.
+        let bindable_arg = arg_ty.peel_preserving_readonly();
         let param_ty = param_ty.peel();
         let arg_ty = arg_ty.peel();
         if matches!(param_ty, Type::Error) || matches!(arg_ty, Type::Error) {
@@ -294,7 +299,7 @@ impl<'a> Unifier<'a> {
             // from, and codegen lowers a bare back-edge to the universal
             // `$Object` where the inline `Alias` form gives the narrower
             // `$ObjectShape` — bind the inline form so the two agree.
-            let arg_ty = &self.inline_alias_refs(arg_ty);
+            let arg_ty = &self.inline_alias_refs(bindable_arg);
             if let Some(existing) = self.sub.bindings.get(name).cloned() {
                 let resolved = self.sub.apply(&existing);
                 // A `T → T` self-binding (two nested generics sharing a name, e.g. the

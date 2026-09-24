@@ -1,8 +1,4 @@
-types: 117 of 147 tsc entries compared, 7 differ
-
-line 50: maybeBool
-  tsc:  false
-  ours: boolean
+types: 117 of 147 tsc entries compared, 4 differ
 
 line 52: !(maybeBool ?? true)
   tsc:  true
@@ -12,15 +8,7 @@ line 52: maybeBool ?? true
   tsc:  false
   ours: boolean
 
-line 52: maybeBool
-  tsc:  false
-  ours: boolean
-
 line 56: maybeBool ?? true
-  tsc:  false
-  ours: boolean
-
-line 56: maybeBool
   tsc:  false
   ours: boolean
 

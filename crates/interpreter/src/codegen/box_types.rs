@@ -239,6 +239,12 @@ impl Collector<'_> {
                 self.walk_expr(*effect);
                 self.walk_expr(*result);
             }
+            TypedExprKind::Sequence { stmts, result } => {
+                for &stmt in stmts {
+                    self.walk_stmt(stmt);
+                }
+                self.walk_expr(*result);
+            }
             TypedExprKind::Unary { operand, .. } => self.walk_expr(*operand),
             TypedExprKind::TypeofTag { value, .. } | TypedExprKind::InstanceOf { value, .. } => {
                 self.walk_expr(*value);

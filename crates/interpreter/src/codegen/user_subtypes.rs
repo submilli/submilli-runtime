@@ -791,7 +791,7 @@ fn emit_field_compare(
         Type::Number | Type::NumberLiteral(_) => {
             boxed_compare(f, intrinsics.boxed_number, Instruction::F64Eq);
         }
-        Type::Boolean => {
+        Type::Boolean | Type::BooleanLiteral(_) => {
             boxed_compare(f, intrinsics.boxed_boolean, Instruction::I32Eq);
         }
         Type::String
@@ -902,7 +902,7 @@ fn emit_field_compare(
             f.instruction(&Instruction::End);
             f.instruction(&Instruction::End);
         }
-        Type::Alias { .. } | Type::Refined { .. } => unreachable!("peel guarantees no alias here (SUB-242)"),
+        Type::Alias { .. } | Type::Refined { .. } | Type::Readonly(_) => unreachable!("peel guarantees no alias here (SUB-242)"),
     }
 }
 
@@ -1056,7 +1056,7 @@ fn emit_field_hash(
             f.instruction(&Instruction::I32WrapI64);
             f.instruction(&Instruction::I32Xor);
         }
-        Type::Boolean => {
+        Type::Boolean | Type::BooleanLiteral(_) => {
             load_slot_as_object(f);
             f.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(
                 intrinsics.boxed_boolean,
@@ -1119,7 +1119,7 @@ fn emit_field_hash(
                 (self_t, field_obj, hash_fn, f_null),
             );
         }
-        Type::Alias { .. } | Type::Refined { .. } => unreachable!("peel guarantees no alias here (SUB-242)"),
+        Type::Alias { .. } | Type::Refined { .. } | Type::Readonly(_) => unreachable!("peel guarantees no alias here (SUB-242)"),
     }
 }
 

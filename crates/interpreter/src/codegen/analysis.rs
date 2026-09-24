@@ -354,6 +354,12 @@ impl CodegenAnalysis {
                 self.walk_expr(ta, *effect);
                 self.walk_expr(ta, *result);
             }
+            TypedExprKind::Sequence { stmts, result } => {
+                for &stmt in stmts {
+                    self.walk_stmt(ta, stmt);
+                }
+                self.walk_expr(ta, *result);
+            }
             TypedExprKind::Unary { operand, .. }
             | TypedExprKind::TypeofTag { value: operand, .. }
             | TypedExprKind::InstanceOf { value: operand, .. }
@@ -797,6 +803,7 @@ impl CodegenAnalysis {
             | TypedExprKind::Null
             | TypedExprKind::This
             | TypedExprKind::EffectThen { .. }
+            | TypedExprKind::Sequence { .. }
             | TypedExprKind::LocalRef { .. }
             | TypedExprKind::LocalNarrowRef { .. }
             | TypedExprKind::SuperCtorCall { .. }

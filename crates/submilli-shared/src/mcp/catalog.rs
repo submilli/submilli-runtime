@@ -355,7 +355,7 @@ fn collect_shapes(ty: &Type, out: &mut Vec<Shape>) {
                 collect_shapes(&field.ty, out);
             }
         }
-        Type::Array(elem) => collect_shapes(elem, out),
+        Type::Array(elem) | Type::Readonly(elem) => collect_shapes(elem, out),
         Type::Tuple(elements) => {
             for elem in elements {
                 collect_shapes(elem, out);

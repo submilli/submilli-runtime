@@ -143,7 +143,7 @@ impl Buckets {
             Type::Number | Type::NumberLiteral(_) | Type::NumberEnum { .. } => {
                 self.number.push(ty.clone());
             }
-            Type::Boolean => self.boolean.push(ty.clone()),
+            Type::Boolean | Type::BooleanLiteral(_) => self.boolean.push(ty.clone()),
             Type::Null => self.null.push(ty.clone()),
             Type::Object { .. } => self.object.push(ty.clone()),
             Type::Array(_) => self.array.push(ty.clone()),
@@ -240,6 +240,7 @@ fn literal_value_of(ty: &Type) -> Option<LiteralValue> {
     match ty.peel() {
         Type::StringLiteral(s) => Some(LiteralValue::String(s.clone())),
         Type::NumberLiteral(n) => Some(LiteralValue::Number(*n)),
+        Type::BooleanLiteral(b) => Some(LiteralValue::Boolean(*b)),
         _ => None,
     }
 }

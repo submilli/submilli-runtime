@@ -92,7 +92,7 @@ impl Inferer<'_> {
         if self.path_root_is_captured_mutator(&path) {
             return Some((narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new()));
         }
-        let from_ty = arg_expr.ty.clone();
+        let from_ty = self.narrowing_source_ty(arg_expr);
         let arg_span = arg_expr.span;
         let fallback_kind = arg_expr.kind.clone();
 
@@ -164,6 +164,18 @@ impl Inferer<'_> {
                 ty: Box::new(asserted.clone()),
             },
             _ if assignable(ty, asserted, self.resolver()) => ty.clone(),
+            // A readonly array is still an array at runtime, so a guard for `T[]`
+            // (`Array.isArray`) keeps it, readonly. The false branch keeps it too,
+            // as `tsc` does: it is not assignable to the asserted mutable type.
+            _ if assignable::drops_readonly(ty, asserted)
+                && assignable(
+                    ty,
+                    &Type::Readonly(Box::new(asserted.peel().clone())),
+                    self.resolver(),
+                ) =>
+            {
+                ty.clone()
+            }
             _ if assignable(asserted, ty, self.resolver()) => asserted.clone(),
             _ => Type::Error,
         }

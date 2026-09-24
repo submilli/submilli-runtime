@@ -92,6 +92,12 @@ fn emit_expr_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) 
         TypedExprKind::Regex { source, flags } => {
             emit_regex_literal(emitter, ctx, source, flags);
         }
+        TypedExprKind::Sequence { stmts, result } => {
+            for &stmt in stmts {
+                super::stmt::emit_statement(emitter, ctx, stmt);
+            }
+            emit_expr(emitter, ctx, *result);
+        }
         TypedExprKind::EffectThen { effect, result } => {
             emit_expr(emitter, ctx, *effect);
             // A `void` call leaves nothing on the stack, so there is nothing to drop.
@@ -4288,7 +4294,7 @@ fn type_mentions_alias_ref(ty: &Type) -> bool {
     match ty {
         Type::AliasRef { .. } => true,
         Type::Union(ms) => ms.iter().any(type_mentions_alias_ref),
-        Type::Array(e) => type_mentions_alias_ref(e),
+        Type::Array(e) | Type::Readonly(e) => type_mentions_alias_ref(e),
         Type::Tuple(es) => es.iter().any(type_mentions_alias_ref),
         Type::Object { fields } => fields.values().any(|f| type_mentions_alias_ref(&f.ty)),
         Type::Function { params, ret, .. } => {

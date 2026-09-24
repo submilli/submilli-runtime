@@ -1306,6 +1306,7 @@ fn ts_type(ty: &Type) -> String {
         Type::StringLiteral(s) => format!("\"{}\"", escape_string_literal(s)),
         Type::Uint8Array => "Uint8Array".to_string(),
         Type::Boolean => "boolean".to_string(),
+        Type::BooleanLiteral(value) => value.to_string(),
         Type::Null => "null".to_string(),
         Type::Void => "void".to_string(),
         Type::Unknown => "unknown".to_string(),
@@ -1353,6 +1354,7 @@ fn ts_type(ty: &Type) -> String {
             let elements = elements.iter().map(ts_type).collect::<Vec<_>>().join(", ");
             format!("[{elements}]")
         }
+        Type::Readonly(inner) => format!("readonly {}", ts_type(inner)),
         Type::Error => "never".to_string(),
         Type::Never => "never".to_string(),
         Type::TypeVar(name) | Type::GenericParam { name, .. } => name.clone(),
@@ -1379,7 +1381,7 @@ fn ts_named_type(name: &str, args: &[Type]) -> String {
 
 fn ts_type_array_element(ty: &Type) -> String {
     match ty {
-        Type::Function { .. } | Type::Union(_) => format!("({})", ts_type(ty)),
+        Type::Function { .. } | Type::Union(_) | Type::Readonly(_) => format!("({})", ts_type(ty)),
         _ => ts_type(ty),
     }
 }

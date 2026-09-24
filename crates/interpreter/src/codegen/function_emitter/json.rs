@@ -40,19 +40,12 @@ pub(crate) fn emit_stringify_value(emitter: &mut FunctionEmitter, ctx: &CodegenC
             emitter.instruction(Instruction::Drop);
             super::emit_inline_string_literal(emitter, ctx, "null");
         }
-        Type::Boolean => emit_to_json_direct(emitter, ctx, "Boolean"),
+        Type::Boolean | Type::BooleanLiteral(_) => emit_to_json_direct(emitter, ctx, "Boolean"),
         Type::Number | Type::NumberLiteral(_) => {
             emit_to_json_direct(emitter, ctx, "Number");
         }
         Type::String | Type::StringLiteral(_) => {
             emit_stringify_string_host(emitter, ctx);
-        }
-        Type::Object { .. } | Type::InterfaceRef { .. }
-            if host_stringify_object_type(ctx, peeled).is_some() =>
-        {
-            let object_ty =
-                host_stringify_object_type(ctx, peeled).expect("caller checked TypeInfo exists");
-            emit_stringify_typed_object_host(emitter, ctx, &object_ty);
         }
         _ if may_hold_null(peeled) => {
             // The value lowers to `(ref null $Object)`; vtable dispatch on a
@@ -64,68 +57,6 @@ pub(crate) fn emit_stringify_value(emitter: &mut FunctionEmitter, ctx: &CodegenC
             emit_vtable_dispatch_on_object_stack(emitter, ctx, 1);
         }
     }
-}
-
-fn host_stringify_object_type(ctx: &CodegenCtx, arg_ty: &Type) -> Option<Type> {
-    let object_ty = match arg_ty.peel() {
-        Type::Object { .. } => arg_ty.peel().clone(),
-        Type::InterfaceRef { .. } => ctx.validator_bodies.expand_one(arg_ty),
-        _ => return None,
-    };
-    ctx.type_info.object_type_id(&object_ty)?;
-    ctx.type_info
-        .supports_host_json_object(&object_ty)
-        .then_some(object_ty)
-}
-
-fn emit_stringify_typed_object_host(
-    emitter: &mut FunctionEmitter,
-    ctx: &CodegenCtx,
-    arg_ty: &Type,
-) {
-    let intrinsics = ctx
-        .symbols
-        .intrinsic_type_indices()
-        .expect("intrinsics declared by codegen entry");
-    let type_id = ctx
-        .type_info
-        .object_type_id(arg_ty)
-        .expect("caller checked host object TypeInfo exists");
-    let pkg_string_global_idx = ctx
-        .package_string_global_idx
-        .expect("host object JSON.stringify requires package string global");
-    let stringify_idx = ctx
-        .symbols
-        .func_idx(&crate::mangle::host(
-            crate::runtime::JSON_MODULE_NAME,
-            "stringifyTypedObject",
-        ))
-        .expect("submilli:json.stringifyTypedObject imported during codegen");
-    let string_vtable_global_idx = ctx
-        .symbols
-        .prelude_global_idx("string_vtable")
-        .expect("string_vtable imported from prelude");
-
-    let object_local = emitter.add_anonymous_local(ValType::Ref(RefType {
-        nullable: true,
-        heap_type: HeapType::Concrete(intrinsics.object),
-    }));
-    emitter.instruction(Instruction::LocalSet(object_local));
-    emitter.instruction(Instruction::GlobalGet(string_vtable_global_idx));
-    emitter.instruction(Instruction::GlobalGet(pkg_string_global_idx));
-    emitter.instruction(Instruction::RefAsNonNull);
-    emitter.instruction(Instruction::StructGet {
-        struct_type_index: intrinsics.string,
-        field_index: 1,
-    });
-    emitter.instruction(Instruction::I32Const(type_id.as_u32() as i32));
-    emitter.instruction(Instruction::LocalGet(object_local));
-    emitter.instruction(Instruction::RefAsNonNull);
-    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
-        intrinsics.object_shape,
-    )));
-    emitter.instruction(Instruction::Call(stringify_idx));
-    emitter.instruction(Instruction::StructNew(intrinsics.string));
 }
 
 fn emit_stringify_nullable(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
@@ -342,7 +273,7 @@ fn emit_main_output_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, arg_t
     match arg_ty {
         Type::String | Type::StringLiteral(_) => {}
         Type::Number | Type::NumberLiteral(_) => emit_number_to_string_radix10(emitter, ctx),
-        Type::Boolean => emit_to_string_direct(emitter, ctx, "Boolean"),
+        Type::Boolean | Type::BooleanLiteral(_) => emit_to_string_direct(emitter, ctx, "Boolean"),
         // A nullable primitive (`string | null`, the type of `readText` & friends)
         // follows the primitive rule, not JSON: the string flows through verbatim.
         Type::Union(members) if is_nullable_primitive(members) => {
@@ -365,7 +296,8 @@ fn is_nullable_primitive(members: &[Type]) -> bool {
             | Type::StringLiteral(_)
             | Type::Number
             | Type::NumberLiteral(_)
-            | Type::Boolean => has_primitive = true,
+            | Type::Boolean
+            | Type::BooleanLiteral(_) => has_primitive = true,
             _ => return false,
         }
     }

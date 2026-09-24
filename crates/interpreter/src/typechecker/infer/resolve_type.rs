@@ -76,6 +76,15 @@ fn valueless_within<'t>(ty: &'t Type, rule: ValuelessScan) -> Option<&'t Type> {
     }
 }
 
+/// `readonly` around a resolved array or tuple. A poisoned operand stays poisoned
+/// rather than becoming a readonly wrapper around nothing.
+fn readonly_of(operand: Type) -> Type {
+    match operand {
+        Type::Array(_) | Type::Tuple(_) => Type::Readonly(Box::new(operand)),
+        other => other,
+    }
+}
+
 /// The `void` inside `ty` that would need a value slot — the rule for ordinary
 /// value positions (a parameter, a union member, an element, a field).
 pub(super) fn void_within_value_position(ty: &Type) -> Option<&Type> {
@@ -455,6 +464,25 @@ impl<'a> Inferer<'a> {
                     let elem_ty = self.resolve_value_type(&args[0], ValuePosition::ArrayElement);
                     return Type::Array(Box::new(elem_ty));
                 }
+                // `ReadonlyArray<T>` is likewise the library spelling of `readonly T[]`.
+                if text == "ReadonlyArray" {
+                    if args.len() != 1 {
+                        self.error_with_help(
+                            annot.span,
+                            format!(
+                                "`ReadonlyArray<T>` expects 1 type argument, got {}",
+                                args.len()
+                            ),
+                            vec![
+                                "write `ReadonlyArray<T>` or equivalently `readonly T[]`"
+                                    .to_string(),
+                            ],
+                        );
+                        return Type::Error;
+                    }
+                    let elem_ty = self.resolve_value_type(&args[0], ValuePosition::ArrayElement);
+                    return readonly_of(Type::Array(Box::new(elem_ty)));
+                }
                 if let Some(sym) = self.lookup_named_type(text) {
                     let package = self.type_package(text);
                     // Identity = the declaring symbol's mangled name; no change
@@ -700,6 +728,7 @@ impl<'a> Inferer<'a> {
                     .collect();
                 Type::Tuple(resolved)
             }
+            TypeAnnotationKind::Readonly(operand) => readonly_of(self.resolve_type(operand)),
             TypeAnnotationKind::Object { fields } => {
                 let mut resolved: std::collections::BTreeMap<String, crate::ObjectField> =
                     std::collections::BTreeMap::new();
@@ -771,6 +800,7 @@ impl<'a> Inferer<'a> {
             }
             TypeAnnotationKind::StringLiteral(s) => Type::StringLiteral(s.clone()),
             TypeAnnotationKind::NumberLiteral(v) => Type::NumberLiteral(*v),
+            TypeAnnotationKind::BooleanLiteral(b) => Type::BooleanLiteral(*b),
             TypeAnnotationKind::KeyOf(operand) => self.resolve_keyof(operand),
             TypeAnnotationKind::TypeOf { path } => self.resolve_typeof(path),
         }

@@ -32,6 +32,10 @@ impl<'a> Inferer<'a> {
     ) -> Option<ReferencePathState> {
         use crate::TypedExprKind;
         match kind {
+            TypedExprKind::Sequence { stmts, .. } => Some(ReferencePathState {
+                path: self.sequence_binding_path(stmts)?,
+                contains_getter: false,
+            }),
             TypedExprKind::LocalRef { ident, .. } => {
                 let entry = self.scopes.get(&ident.name)?;
                 Some(ReferencePathState {
@@ -174,11 +178,16 @@ impl<'a> Inferer<'a> {
         let cond_kind = cond.kind.clone();
         match cond_kind {
             TypedExprKind::Binary { op, lhs, rhs } if matches!(op, BinOp::Eq | BinOp::NotEq) => {
-                if let Some(envs) = self.try_predicate_envs_literal_equality(op, lhs, rhs) {
-                    envs
-                } else {
-                    self.predicate_envs_eq_null(op, lhs, rhs)
+                let (mut true_env, mut false_env) = self
+                    .try_predicate_envs_literal_equality(op, lhs, rhs)
+                    .unwrap_or_else(|| self.predicate_envs_eq_null(op, lhs, rhs));
+                // A constant on the left leaves the right as the tested path,
+                // read after anything it writes.
+                if !self.is_constant_operand(lhs) {
+                    self.forget_later_writes(&mut true_env, lhs, rhs);
+                    self.forget_later_writes(&mut false_env, lhs, rhs);
                 }
+                (true_env, false_env)
             }
             TypedExprKind::Binary {
                 op: BinOp::And,
@@ -232,9 +241,7 @@ impl<'a> Inferer<'a> {
                 args,
                 type_predicate: Some(predicate),
                 ..
-            } => self
-                .predicate_envs_user_guard(&predicate, &args)
-                .unwrap_or_else(|| (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new())),
+            } => self.guard_envs(&predicate, &args, cond_expr_id),
             TypedExprKind::CallClosure { callee, args, .. } => {
                 let Type::Function {
                     predicate: Some(predicate),
@@ -243,8 +250,7 @@ impl<'a> Inferer<'a> {
                 else {
                     return (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new());
                 };
-                self.predicate_envs_user_guard(&predicate, &args)
-                    .unwrap_or_else(|| (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new()))
+                self.guard_envs(&predicate, &args, cond_expr_id)
             }
             TypedExprKind::GenericCall {
                 args,
@@ -253,30 +259,27 @@ impl<'a> Inferer<'a> {
             } => {
                 // `asserted_type` already substituted with type-arg bindings during inference.
                 let exprs: Vec<ExprId> = args.iter().map(|a| a.expr).collect();
-                self.predicate_envs_user_guard(&predicate, &exprs)
-                    .unwrap_or_else(|| (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new()))
+                self.guard_envs(&predicate, &exprs, cond_expr_id)
             }
             TypedExprKind::MethodCall {
                 args,
                 type_predicate: Some(predicate),
                 ..
-            } => self
-                .predicate_envs_user_guard(&predicate, &args)
-                .unwrap_or_else(|| (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new())),
+            } => self.guard_envs(&predicate, &args, cond_expr_id),
             TypedExprKind::GenericMethodCall {
                 args,
                 type_predicate: Some(predicate),
                 ..
             } => {
                 let exprs: Vec<ExprId> = args.iter().map(|a| a.expr).collect();
-                self.predicate_envs_user_guard(&predicate, &exprs)
-                    .unwrap_or_else(|| (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new()))
+                self.guard_envs(&predicate, &exprs, cond_expr_id)
             }
             TypedExprKind::LocalRef { .. }
             | TypedExprKind::LocalNarrowRef { .. }
             | TypedExprKind::GlobalRef { .. }
             | TypedExprKind::FieldAccess { .. }
-            | TypedExprKind::IndexAccess { .. } => self.predicate_envs_truthiness(cond_expr_id),
+            | TypedExprKind::IndexAccess { .. }
+            | TypedExprKind::Sequence { .. } => self.predicate_envs_truthiness(cond_expr_id),
             TypedExprKind::OptionalChain { .. } => (
                 self.optional_chain_nonnull_env(cond_expr_id),
                 narrowing::NarrowEnv::new(),
@@ -285,12 +288,39 @@ impl<'a> Inferer<'a> {
         }
     }
 
+    /// A user-defined guard's narrowing of its argument, without what a later
+    /// argument writes.
+    fn guard_envs(
+        &mut self,
+        predicate: &crate::TypePredicate,
+        args: &[ExprId],
+        call: ExprId,
+    ) -> (narrowing::NarrowEnv, narrowing::NarrowEnv) {
+        let Some((mut true_env, mut false_env)) = self.predicate_envs_user_guard(predicate, args)
+        else {
+            return (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new());
+        };
+        if let Some(&arg) = args.get(predicate.parameter_index as usize) {
+            self.forget_later_writes(&mut true_env, arg, call);
+            self.forget_later_writes(&mut false_env, arg, call);
+        }
+        (true_env, false_env)
+    }
+
+    /// A literal or `null`: an operand that reads no reference path.
+    fn is_constant_operand(&self, id: ExprId) -> bool {
+        matches!(self.typed_ast.expr(id).kind, crate::TypedExprKind::Null)
+            || comparison_literal(&self.typed_ast, id).is_some()
+    }
+
     fn predicate_envs_and(
         &mut self,
         lhs: ExprId,
         rhs: ExprId,
     ) -> (narrowing::NarrowEnv, narrowing::NarrowEnv) {
-        let (lhs_true, lhs_false) = self.predicate_envs_unfiltered(lhs);
+        let (mut lhs_true, lhs_false) = self.predicate_envs_unfiltered(lhs);
+        // The right side runs only when the left is true.
+        self.forget_later_writes(&mut lhs_true, lhs, rhs);
         self.push_narrow_frame(lhs_true.clone());
         let (rhs_true, rhs_false) = self.predicate_envs_unfiltered(rhs);
         self.pop_narrow_frame();
@@ -315,7 +345,9 @@ impl<'a> Inferer<'a> {
         lhs: ExprId,
         rhs: ExprId,
     ) -> (narrowing::NarrowEnv, narrowing::NarrowEnv) {
-        let (lhs_true, lhs_false) = self.predicate_envs_unfiltered(lhs);
+        let (lhs_true, mut lhs_false) = self.predicate_envs_unfiltered(lhs);
+        // The right side runs only when the left is false.
+        self.forget_later_writes(&mut lhs_false, lhs, rhs);
         self.push_narrow_frame(lhs_false.clone());
         let (rhs_true, rhs_false) = self.predicate_envs_unfiltered(rhs);
         self.pop_narrow_frame();
@@ -374,7 +406,7 @@ impl<'a> Inferer<'a> {
         if self.path_root_is_captured_mutator(&path) {
             return (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new());
         }
-        let path_ty = path_expr.ty.clone();
+        let path_ty = self.narrowing_source_ty(path_expr);
         // Never introduce a null alternative that the operand cannot hold.
         // Keep the non-null fact even when already proven: loop rechecking
         // needs it after invalidating the enclosing guard at a back edge.
@@ -496,7 +528,7 @@ impl<'a> Inferer<'a> {
         if self.path_root_is_captured_mutator(&path) {
             return (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new());
         }
-        let path_ty = rhs.ty.clone();
+        let path_ty = self.narrowing_source_ty(rhs);
         let path_span = rhs.span;
         let fallback_kind = rhs.kind.clone();
 
@@ -617,7 +649,7 @@ impl<'a> Inferer<'a> {
         if self.path_root_is_captured_mutator(&path) {
             return None;
         }
-        let path_ty = path_expr.ty.clone();
+        let path_ty = self.narrowing_source_ty(path_expr);
         let path_span = path_expr.span;
         let path_kind = path_expr.kind.clone();
 
@@ -830,6 +862,12 @@ impl<'a> Inferer<'a> {
         for m in members {
             if m.peel() == &literal_ty {
                 matched.push(m.clone());
+            } else if let (Type::Boolean, narrowing::LiteralValue::Boolean(value)) =
+                (m.peel(), &literal)
+            {
+                // `boolean` is `true | false`: `b === true` leaves `false`.
+                matched.push(literal_ty.clone());
+                remaining.push(Type::BooleanLiteral(!value));
             } else {
                 if matches!(m.peel(), Type::Unknown) || m.peel() == &literal_ty.widen_literal() {
                     matched.push(literal_ty.clone());
@@ -1003,7 +1041,7 @@ impl<'a> Inferer<'a> {
         if self.path_root_is_captured_mutator(&path) {
             return (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new());
         }
-        let from_ty = value_expr.ty.clone();
+        let from_ty = self.narrowing_source_ty(value_expr);
         let value_span = value_expr.span;
         let fallback_kind = value_expr.kind.clone();
 
@@ -1070,9 +1108,25 @@ impl<'a> Inferer<'a> {
         if self.path_root_is_captured_mutator(&path) {
             return (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new());
         }
-        let from_ty = path_expr.ty.clone();
+        let from_ty = self.narrowing_source_ty(path_expr);
         let span = path_expr.span;
         let fallback_kind = path_expr.kind.clone();
+
+        // `if (r.ok)` on a union tagged `ok: true` / `ok: false` tests the tag
+        // exactly as `r.ok === true` does, and narrows `r` the same way.
+        if !path.chain.is_empty()
+            && matches!(from_ty.peel(), Type::Boolean)
+            && let Some(envs) = self.narrow_literal_discriminant(
+                crate::BinOp::Eq,
+                path.clone(),
+                from_ty.clone(),
+                fallback_kind.clone(),
+                span,
+                narrowing::LiteralValue::Boolean(true),
+            )
+        {
+            return envs;
+        }
 
         let true_ty = narrowing::intersect_with(&from_ty, narrowing::TypeFacts::TRUTHY);
         let false_ty = narrowing::intersect_with(&from_ty, narrowing::TypeFacts::FALSY);
@@ -1335,6 +1389,7 @@ fn comparison_literal(ast: &crate::TypedAst, id: ExprId) -> Option<narrowing::Li
     literal_value_of(&expr.kind).or_else(|| match super::expr::literal_comparison_type(ast, expr) {
         Type::NumberLiteral(value) => Some(narrowing::LiteralValue::Number(value)),
         Type::StringLiteral(value) => Some(narrowing::LiteralValue::String(value)),
+        Type::BooleanLiteral(value) => Some(narrowing::LiteralValue::Boolean(value)),
         _ => None,
     })
 }

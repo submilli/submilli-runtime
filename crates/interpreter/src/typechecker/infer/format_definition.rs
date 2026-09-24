@@ -42,7 +42,7 @@ pub(super) fn format_definition(
             "BigInt",
             &[],
         ),
-        Type::Boolean => format_named_interface(
+        Type::Boolean | Type::BooleanLiteral(_) => format_named_interface(
             types,
             registry,
             &crate::mangle::prelude("Boolean"),
@@ -125,7 +125,9 @@ pub(super) fn format_definition(
         Type::StringEnum { mangled, name, .. } => {
             format_string_enum_definition(types, registry, mangled, name)
         }
-        Type::Alias { .. } | Type::Refined { .. } => unreachable!("peel guarantees no alias here"),
+        Type::Alias { .. } | Type::Refined { .. } | Type::Readonly(_) => {
+            unreachable!("peel guarantees no alias here")
+        }
     }
 }
 

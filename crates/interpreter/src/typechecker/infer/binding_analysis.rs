@@ -240,6 +240,15 @@ fn visit_expr(ast: &Ast, id: ExprId, out: &mut Analysis) {
             }
             visit_expr(ast, *operand, out);
         }
+        ExprKind::Assign { target, value, .. } => {
+            if let ExprKind::Identifier(ident) = &ast.expr(*target).kind {
+                out.read(ident);
+                out.write(ident);
+            } else {
+                visit_expr(ast, *target, out);
+            }
+            visit_expr(ast, *value, out);
+        }
         ExprKind::Binary { lhs, rhs, .. } => {
             visit_expr(ast, *lhs, out);
             visit_expr(ast, *rhs, out);

@@ -1,5 +1,6 @@
 //! Inference pass — produces the Typed AST.
 
+mod assign_expr;
 pub(crate) mod assignable;
 mod binding_analysis;
 mod classes;

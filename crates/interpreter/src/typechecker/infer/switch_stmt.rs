@@ -398,12 +398,14 @@ fn format_one_literal(ty: &Type) -> Option<String> {
     match ty.peel() {
         Type::StringLiteral(s) => Some(format!("\"{s}\"")),
         Type::NumberLiteral(n) => Some(format!("{}", n.0)),
+        Type::BooleanLiteral(b) => Some(b.to_string()),
         Type::Object { fields } => {
             // Discriminated-union residuals are object variants; find the discriminant field's literal.
             for field in fields.values() {
                 if let Some(lit) = match field.ty.peel() {
                     Type::StringLiteral(s) => Some(format!("\"{s}\"")),
                     Type::NumberLiteral(n) => Some(format!("{}", n.0)),
+                    Type::BooleanLiteral(b) => Some(b.to_string()),
                     _ => None,
                 } {
                     return Some(lit);

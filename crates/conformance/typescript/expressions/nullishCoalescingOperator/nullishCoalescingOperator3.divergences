@@ -1,0 +1,9 @@
+types: 31 of 37 tsc entries compared, 2 differ
+
+line 12: aa1
+  tsc:  boolean | "" | 0 | "literal" | 1 | "whatever"
+  ours: 0 | 1 | string | "" | "literal" | boolean
+
+line 12: a1 ?? a2 ?? a3 ?? a4 ?? a5 ?? a6 ?? 'whatever'
+  tsc:  boolean | "" | 0 | "literal" | 1 | "whatever"
+  ours: 0 | 1 | string | "" | "literal" | boolean
