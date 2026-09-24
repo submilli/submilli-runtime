@@ -197,7 +197,8 @@ impl Inferer<'_> {
                 self.scopes.push();
                 let typed_init = init.and_then(|id| self.infer_stmt(id));
                 // Init-scope bindings persist across iterations, so the body's
-                // scope floor, taken inside, sits above them.
+                // scope floor, taken in `infer_condition_first_loop`, sits
+                // above them.
                 let (typed_cond, typed_update, typed_body) =
                     self.infer_condition_first_loop(condition, update, body, span);
                 self.scopes.pop();
@@ -1959,8 +1960,8 @@ struct ConditionEffects {
     after: Option<narrowing::NarrowEnv>,
 }
 
-/// The state a loop condition is checked in: `env`, over the enclosing state
-/// with the narrowings under `dropped` removed.
+/// The state a loop's update or condition runs in: `env`, over the enclosing
+/// state with the narrowings under `dropped` removed.
 struct LoopHead {
     env: narrowing::NarrowEnv,
     dropped: std::collections::BTreeSet<narrowing::ReferencePath>,
@@ -2031,6 +2032,47 @@ fn loop_head_env(
     .0
 }
 
+/// Widen each narrowing a body pass starts with that the next pass falsifies
+/// to cover that pass too, or drop it when the next pass has none there or it
+/// was already widened once. Returns whether any changed.
+fn widen_entry_to_cover_next_pass(
+    entry_env: &mut narrowing::NarrowEnv,
+    outcome: &LoopBodyOutcome,
+    widened: &mut std::collections::BTreeSet<narrowing::ReferencePath>,
+) -> bool {
+    let Some(next_pass) = &outcome.next_pass else {
+        return false;
+    };
+    let falsified: Vec<_> = entry_env
+        .iter()
+        .filter(|(path, view)| next_pass_falsifies(view, next_pass.get(*path)))
+        .map(|(path, _)| path.clone())
+        .collect();
+    for path in &falsified {
+        let view = entry_env
+            .remove(path)
+            .expect("falsified paths come from the env");
+        let Some(post) = next_pass.get(path) else {
+            continue;
+        };
+        if !widened.insert(path.clone()) {
+            continue;
+        }
+        let single = |view: &narrowing::NarrowedView| {
+            narrowing::NarrowEnv::from([(path.clone(), view.clone())])
+        };
+        let joined = narrowing::union_envs(
+            single(&view),
+            Default::default(),
+            single(post),
+            Default::default(),
+        )
+        .0;
+        entry_env.extend(joined);
+    }
+    !falsified.is_empty()
+}
+
 /// Whether a narrowing `view` fails to cover the same path's `post` state on
 /// the next pass, which has no narrowing there when `post` is `None`.
 fn next_pass_falsifies(
@@ -2051,9 +2093,10 @@ fn cond_is_static_true(_inferer: &Inferer<'_>, expr_id: ExprId) -> bool {
 
 impl Inferer<'_> {
     /// Retype while the next pass falsifies a narrowing the body starts with:
-    /// an enclosing view, or one from the condition's true branch, which holds
-    /// again on each pass but may narrow differently after what the body did.
-    /// Both sets strictly shrink, so retries terminate.
+    /// an enclosing view, which is dropped, or one from the condition's true
+    /// branch, which holds again on each pass but may narrow differently after
+    /// what the body did, and is widened to cover it. Each retry drops a view
+    /// or widens one for the only time, so retries terminate.
     pub(super) fn run_loop_body_with_fixed_point(
         &mut self,
         body: StmtId,
@@ -2069,21 +2112,19 @@ impl Inferer<'_> {
             .last()
             .map_or((0, 0), |f| (f.breaks.len(), f.continues.len()));
         let entry_reachable = self.reachable;
+        let mut widened = std::collections::BTreeSet::new();
 
         loop {
             let outcome = self.run_body_pass(body, &entry_env, body_span, continues_len, tail);
             let outer_falsified =
                 self.drop_narrowings_the_body_falsifies(&outcome, body_scope_floor, body_span);
-            let entry_falsified = outcome.next_pass.as_ref().is_some_and(|next_pass| {
-                let before = entry_env.len();
-                entry_env.retain(|path, view| !next_pass_falsifies(view, next_pass.get(path)));
-                entry_env.len() != before
-            });
+            let entry_falsified =
+                widen_entry_to_cover_next_pass(&mut entry_env, &outcome, &mut widened);
             if !outer_falsified && !entry_falsified {
                 return outcome;
             }
             // Discard speculative diagnostics and exits before retyping under
-            // the widened state. Each retry removes at least one outer view.
+            // the widened state.
             self.diagnostics.truncate(diag_len);
             self.pending_post_if_materializations.truncate(mats_len);
             if let Some(frame) = self.pending_joins.last_mut() {
@@ -2126,7 +2167,7 @@ impl Inferer<'_> {
         }
     }
 
-    /// Invalidate outer views widened or killed on a reachable back edge.
+    /// Invalidate outer views that the next pass widens or kills.
     /// Bindings declared within the body are recreated on each iteration.
     fn drop_narrowings_the_body_falsifies(
         &mut self,
@@ -2181,34 +2222,26 @@ impl Inferer<'_> {
         let (continues, continued_assignments) = self.continue_exits_since(continues_base);
         assigned.extend(continued_assignments);
         let mut back_edge = join_reachable_envs(body_end_reachable.then_some(body_post), continues);
-        let typed_update = tail.update.and_then(|update| {
-            self.push_narrow_frame(narrowing::NarrowEnv::new());
-            for path in &assigned {
-                self.drop_narrowings_under(
-                    path,
-                    narrowing::InvalidationReason::Write { span: body_span },
-                );
-            }
-            let tail_env =
-                self.loop_tail_env(back_edge.as_ref().unwrap_or(&narrowing::NarrowEnv::new()));
-            self.push_narrow_frame(tail_env.clone());
-            let typed = self
-                .infer_stmt(update)
-                .map(|body| self.wrap_narrow_regions(body, &tail_env, self.ast.stmt(update).span));
-            let post = self.snapshot_active_narrowings(0).0;
-            let (_, update_assigned) = self.pop_narrow_frame_capture();
-            self.pop_narrow_frame();
-            if back_edge.is_some() {
-                back_edge = Some(post);
-            }
-            assigned.extend(update_assigned);
-            typed
-        });
+        let mut typed_update = None;
+        if let Some(update) = tail.update {
+            let state = LoopHead {
+                env: back_edge.clone().unwrap_or_default(),
+                dropped: assigned.clone(),
+            };
+            let (typed, post, writes) = self.infer_loop_update(update, &state, body_span);
+            typed_update = typed;
+            back_edge = back_edge.map(|_| post);
+            assigned.extend(writes);
+        }
         let head_edge = back_edge.clone().unwrap_or_default();
         let reaches_back_edge = back_edge.is_some();
         let next_pass = match (tail.condition, back_edge) {
             (Some(condition), Some(edge)) => {
-                let effects = self.condition_effects(condition, &assigned, &edge, body_span);
+                let state = LoopHead {
+                    env: edge,
+                    dropped: assigned.clone(),
+                };
+                let effects = self.condition_effects(condition, &state, body_span);
                 assigned.extend(effects.writes);
                 effects.after
             }
@@ -2230,33 +2263,66 @@ impl Inferer<'_> {
     fn condition_effects(
         &mut self,
         condition: ExprId,
-        body_writes: &std::collections::BTreeSet<narrowing::ReferencePath>,
-        back_edge: &narrowing::NarrowEnv,
+        state: &LoopHead,
         body_span: Span,
     ) -> ConditionEffects {
         let diag_len = self.diagnostics.len();
         let mats_len = self.pending_post_if_materializations.len();
-        self.push_narrow_frame(narrowing::NarrowEnv::new());
-        for path in body_writes {
-            self.drop_narrowings_under(
-                path,
-                narrowing::InvalidationReason::Write { span: body_span },
-            );
-        }
-        let tail_env = self.loop_tail_env(back_edge);
-        self.push_narrow_frame(tail_env);
+        self.enter_loop_head(state, body_span);
         let (typed_condition, _) = self.infer_expr(condition, None);
-        let (true_env, _, true_possible) = self.predicate_envs_and_feasibility(typed_condition);
-        let after = true_possible.then(|| {
+        let (true_env, _) = self.predicate_envs(typed_condition);
+        let after = self.condition_can_hold(typed_condition).then(|| {
             let mut after = self.snapshot_active_narrowings(0).0;
             after.extend(true_env);
             after
         });
-        let (_, writes) = self.pop_narrow_frame_capture();
-        self.pop_narrow_frame();
+        let writes = self.leave_loop_head();
         self.diagnostics.truncate(diag_len);
         self.pending_post_if_materializations.truncate(mats_len);
         ConditionEffects { writes, after }
+    }
+
+    /// Infer a `for` update in `state`, the back edge after the body's writes.
+    /// Returns the typed update, the state after it, and the paths it writes.
+    fn infer_loop_update(
+        &mut self,
+        update: StmtId,
+        state: &LoopHead,
+        body_span: Span,
+    ) -> (
+        Option<StmtId>,
+        narrowing::NarrowEnv,
+        std::collections::BTreeSet<narrowing::ReferencePath>,
+    ) {
+        let tail_env = self.enter_loop_head(state, body_span);
+        let typed = self
+            .infer_stmt(update)
+            .map(|body| self.wrap_narrow_regions(body, &tail_env, self.ast.stmt(update).span));
+        let post = self.snapshot_active_narrowings(0).0;
+        let writes = self.leave_loop_head();
+        (typed, post, writes)
+    }
+
+    /// Enter `state`: the enclosing state without the narrowings under
+    /// `state.dropped`, with `state.env` on top under fresh bindings. Returns
+    /// that env, for wrapping what is inferred in it. Pair with
+    /// `leave_loop_head`.
+    fn enter_loop_head(&mut self, state: &LoopHead, span: Span) -> narrowing::NarrowEnv {
+        self.push_narrow_frame(narrowing::NarrowEnv::new());
+        for path in &state.dropped {
+            self.drop_narrowings_under(path, narrowing::InvalidationReason::Write { span });
+        }
+        let env = self.loop_tail_env(&state.env);
+        self.push_narrow_frame(env.clone());
+        env
+    }
+
+    /// Leave the state `enter_loop_head` entered, and give the paths written
+    /// in it.
+    fn leave_loop_head(&mut self) -> std::collections::BTreeSet<narrowing::ReferencePath> {
+        let (_, writes) = self.pop_narrow_frame_capture();
+        self.pop_narrow_frame();
+        writes
     }
 
     /// Infer a `while` or `for` loop. Its condition runs before every pass, so
@@ -2334,23 +2400,14 @@ impl Inferer<'_> {
         head: &LoopHead,
         body_span: Span,
     ) -> (ExprId, Option<narrowing::NarrowEnv>) {
-        self.push_narrow_frame(narrowing::NarrowEnv::new());
-        for path in &head.dropped {
-            self.drop_narrowings_under(
-                path,
-                narrowing::InvalidationReason::Write { span: body_span },
-            );
-        }
-        let head_env = self.loop_tail_env(&head.env);
-        self.push_narrow_frame(head_env.clone());
+        let head_env = self.enter_loop_head(head, body_span);
         let cond_span = self.ast.expr(condition).span;
         let (typed, ty) = self.infer_expr(condition, None);
         self.check_condition_ty(&ty, cond_span);
         let (_, false_env) = self.predicate_envs(typed);
         let mut exit = self.snapshot_active_narrowings(0).0;
         exit.extend(false_env);
-        let (_, condition_assigned) = self.pop_narrow_frame_capture();
-        self.pop_narrow_frame();
+        let condition_assigned = self.leave_loop_head();
         self.merge_assigned_into_outer(condition_assigned, cond_span);
         let natural = (!cond_is_static_true(self, typed)).then_some(exit);
         (self.wrap_narrow_exprs(typed, &head_env, cond_span), natural)

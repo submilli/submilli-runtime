@@ -1,7 +1,7 @@
 // A loop condition is checked where the state before the loop meets every
 // back edge, so a read it makes before its own write sees what the body left.
 // Each line below is an error `tsc --strict` reports too.
-// expect-error-count: 9
+// expect-error-count: 10
 // expect-error: cannot read field `toFixed` on non-object type `number | string`
 // expect-error: cannot read field `length` on non-object type `5 | string`
 // expect-error: expected `number`, got `string`
@@ -90,8 +90,24 @@ function guardSeesWhatTheBodyLeft(): void {
   }
 }
 
+// Only one side of `||` needs to hold on the next pass.
+function eitherSideHolds(): void {
+  let x: string | number | null = "a";
+  x = "a";
+  let y: string | null = "q";
+  y = "q";
+  let i = 0;
+  while (y === null || i < 3) {
+    const s: string = x;
+    i++;
+    x = 5;
+    y = null;
+  }
+}
+
 function main(): void {
   noReset();
+  eitherSideHolds();
   guardSeesWhatTheBodyLeft();
   readBeforeWriteWithoutBackEdge();
   conditionDependsOnTheBody();

@@ -131,24 +131,50 @@ impl<'a> Inferer<'a> {
         &mut self,
         cond_expr_id: ExprId,
     ) -> (narrowing::NarrowEnv, narrowing::NarrowEnv) {
-        let (true_env, false_env, _) = self.predicate_envs_and_feasibility(cond_expr_id);
+        let (mut true_env, mut false_env) = self.predicate_envs_unfiltered(cond_expr_id);
+        self.retain_emittable_views(&mut true_env);
+        self.retain_emittable_views(&mut false_env);
         (true_env, false_env)
     }
 
-    /// `predicate_envs`, and whether the condition's true branch can be taken:
-    /// not when it narrows a path to nothing, as `s !== null` does where `s`
-    /// can only be `null`.
-    pub(super) fn predicate_envs_and_feasibility(
-        &mut self,
-        cond_expr_id: ExprId,
-    ) -> (narrowing::NarrowEnv, narrowing::NarrowEnv, bool) {
-        let (mut true_env, mut false_env) = self.predicate_envs_unfiltered(cond_expr_id);
-        let true_possible = !true_env
-            .values()
-            .any(|view| matches!(view.narrowed_ty.peel(), Type::Never | Type::Error));
-        self.retain_emittable_views(&mut true_env);
-        self.retain_emittable_views(&mut false_env);
-        (true_env, false_env, true_possible)
+    /// Whether `cond` can be true. A comparison cannot when it narrows a path
+    /// to nothing, as `s !== null` does where `s` can only be `null`; `&&`,
+    /// `||` and `!` combine their operands' answers. Anything else can.
+    pub(super) fn condition_can_hold(&mut self, cond_expr_id: ExprId) -> bool {
+        self.condition_can_be(cond_expr_id, true)
+    }
+
+    fn condition_can_be(&mut self, cond_expr_id: ExprId, outcome: bool) -> bool {
+        use crate::{BinOp, TypedExprKind, UnOp};
+        match self.typed_ast.expr(cond_expr_id).kind.clone() {
+            TypedExprKind::Binary {
+                op: op @ (BinOp::And | BinOp::Or),
+                lhs,
+                rhs,
+            } => {
+                // `a && b` is true only if both are, and false if either is.
+                let needs_both = (op == BinOp::And) == outcome;
+                let lhs_can = self.condition_can_be(lhs, outcome);
+                let rhs_can = self.condition_can_be(rhs, outcome);
+                if needs_both {
+                    lhs_can && rhs_can
+                } else {
+                    lhs_can || rhs_can
+                }
+            }
+            TypedExprKind::Unary {
+                op: UnOp::Not,
+                operand,
+            } => self.condition_can_be(operand, !outcome),
+            TypedExprKind::Narrowed { inner, .. } => self.condition_can_be(inner, outcome),
+            _ => {
+                // Unfiltered: dropping unemittable views could drop the empty one.
+                let (true_env, false_env) = self.predicate_envs_unfiltered(cond_expr_id);
+                let env = if outcome { true_env } else { false_env };
+                !env.values()
+                    .any(|view| matches!(view.narrowed_ty.peel(), Type::Never | Type::Error))
+            }
+        }
     }
 
     fn retain_emittable_views(&mut self, env: &mut narrowing::NarrowEnv) {

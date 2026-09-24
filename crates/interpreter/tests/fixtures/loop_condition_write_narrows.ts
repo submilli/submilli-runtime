@@ -57,4 +57,24 @@ function main(): void {
   } while (v !== null);
   const gone: null = v;
   assert(gone === null && polls === 3, "a `do … while` exits where its condition fails");
+
+  let u: string | number | null = "a";
+  u = "a";
+  let steps = 0;
+  while (u !== null && steps < 2) {
+    const kept: string | number = u;
+    assert(kept !== null, "a guard widens to what the body leaves, not to its declaration");
+    u = 5;
+    steps++;
+  }
+
+  let state: "a" | "b" | "c" | null = "a";
+  state = "a";
+  let trail = "";
+  while (state !== null) {
+    const current: "a" | "b" | "c" = state;
+    trail = trail + current;
+    state = current === "a" ? "b" : current === "b" ? "c" : null;
+  }
+  assert(trail === "abc", "a state machine keeps its non-null states");
 }
