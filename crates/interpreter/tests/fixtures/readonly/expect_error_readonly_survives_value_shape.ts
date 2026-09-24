@@ -5,8 +5,9 @@
 // function-valued property of an object type, an interface (with or without
 // methods), or a class. A value's own `readonly` survives too: a subclass that
 // makes an inherited field `readonly` keeps it. Of two members differing only in
-// a field's `readonly`, or listing different fields, neither stands for the
-// value alone. Each of the fourteen writes below matches a `tsc --strict` error.
+// a field's `readonly`, neither stands for the value alone, and of two differing
+// in their fields, the one listing fewer does. Each of the fourteen writes below
+// matches a `tsc --strict` error.
 // expect-error-count: 14
 // expect-error: cannot call `push` on `readonly number[]`
 // expect-error: cannot assign to readonly property `xs`
@@ -14,7 +15,7 @@
 // expect-error: cannot assign to readonly field `x` on `Sub`
 // expect-error: cannot assign to readonly property `cb`
 // expect-error: cannot assign to readonly field `f` on `Gadget`
-// expect-error: field `extra` does not exist on all members
+// expect-error: no field `extra` on type `IdOnly`
 
 interface Record1 {
   readonly id: number;

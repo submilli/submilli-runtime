@@ -81,6 +81,24 @@ class Impl implements Guarded {
   }
 }
 
+interface Full {
+  readonly id: number;
+  label?: string;
+  describe(): string;
+}
+interface Slim {
+  readonly id: number;
+  describe(): string;
+}
+class Item {
+  readonly id: number = 7;
+  describe(): string {
+    return "item";
+  }
+}
+type Point2 = { readonly a: number; b: number };
+type Point3 = { readonly a: number; b: number };
+
 class Square {
   side: number = 2;
   get area(): number {
@@ -139,6 +157,15 @@ function readonlyDeclarations(): void {
   let guarded: Guarded | Open | null = null;
   guarded = new Impl();
   assert(guarded.m() === 2, "equally specific members narrow to the one keeping the other's readonly");
+
+  let item: Full | Slim | null = null;
+  item = new Item();
+  assert(item.describe() === "item" && item.id === 7, "a member listing fewer fields stands for the others");
+
+  let points: Point2[] | Point3[] | string = "s";
+  points = [{ a: 1, b: 2 }];
+  points.push({ a: 3, b: 4 });
+  assert(points.length === 2 && points[1].b === 4, "array twins narrow to one of them");
 
   let shape: HasArea | null = null;
   shape = new Square();

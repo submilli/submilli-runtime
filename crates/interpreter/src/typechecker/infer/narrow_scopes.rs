@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    ExprId, Ident, MangledName, ObjectField, Span, StmtId, Type, TypeKind, TypedExpr, TypedStmt,
+    ExprId, Ident, MangledName, ObjectField, Span, StmtId, Type, TypedExpr, TypedStmt,
     TypedStmtKind, ValueKind,
 };
 
@@ -504,7 +504,7 @@ impl<'a> Inferer<'a> {
         {
             return Some((*readonly).clone());
         }
-        match self.sole_most_specific(&accepting) {
+        match self.most_specific_member(&accepting) {
             Some(member) if !self.may_lose_readonly(&part, member) => Some(member.clone()),
             // A subclass instance keeps what it makes `readonly` of its
             // ancestor's fields only as its own class, which has every field
@@ -520,10 +520,10 @@ impl<'a> Inferer<'a> {
     }
 
     /// The accepting member assignable to all the others. Members assignable to
-    /// each other are equally specific; one stands for the rest when they list
-    /// the same fields and it keeps every `readonly` of theirs, so it permits
-    /// no write and no read their union would not.
-    fn sole_most_specific<'t>(&self, accepting: &[&'t Type]) -> Option<&'t Type> {
+    /// each other are equally specific; one stands for the rest when it lists
+    /// only fields they all list and keeps every `readonly` of theirs, so it
+    /// permits no write and no read their union would not.
+    fn most_specific_member<'t>(&self, accepting: &[&'t Type]) -> Option<&'t Type> {
         let most_specific: Vec<&Type> = accepting
             .iter()
             .copied()
@@ -533,21 +533,29 @@ impl<'a> Inferer<'a> {
                     .all(|other| super::assignable(candidate, other, self.resolver()))
             })
             .collect();
-        if let [only] = most_specific.as_slice() {
-            return Some(only);
-        }
         most_specific.iter().copied().find(|candidate| {
-            let fields = self
-                .member_shape(candidate)
-                .map(|shape| shape.into_keys().collect::<Vec<_>>());
-            fields.is_some()
-                && most_specific.iter().all(|other| {
-                    self.member_shape(other)
-                        .map(|shape| shape.into_keys().collect::<Vec<_>>())
-                        == fields
-                        && !self.may_lose_readonly(other, candidate)
-                })
+            most_specific.iter().all(|other| {
+                self.fields_within(candidate, other) && !self.may_lose_readonly(other, candidate)
+            })
         })
+    }
+
+    /// Whether every field `narrow` lists, `wide` lists too, looking through
+    /// arrays, tuples, and what a function returns.
+    fn fields_within(&self, narrow: &Type, wide: &Type) -> bool {
+        match (narrow.peel(), wide.peel()) {
+            (Type::Array(n), Type::Array(w))
+            | (Type::Function { ret: n, .. }, Type::Function { ret: w, .. }) => {
+                self.fields_within(n, w)
+            }
+            (Type::Tuple(ns), Type::Tuple(ws)) => {
+                ns.len() == ws.len() && ns.iter().zip(ws).all(|(n, w)| self.fields_within(n, w))
+            }
+            _ => match (self.member_shape(narrow), self.member_shape(wide)) {
+                (Some(narrow), Some(wide)) => narrow.keys().all(|name| wide.contains_key(name)),
+                (narrow, wide) => narrow.is_none() && wide.is_none(),
+            },
+        }
     }
 
     /// Whether seeing a `part` value as `member` could make writable something
@@ -702,10 +710,9 @@ impl<'a> Inferer<'a> {
         })
     }
 
-    /// Whether a member of `owner`'s forbids writing data through it: a
-    /// `readonly` field or property. A method is a read-only member of a
-    /// structural form, but not data a write could reach; a class and an
-    /// interface list their methods apart, so a `readonly` function-valued
+    /// A predicate: whether a field of `owner` forbids writing data through it,
+    /// as a `readonly` field or property does and a method does not. A class and
+    /// an interface list their methods apart, so a `readonly` function-valued
     /// property forbids writes as any other does.
     fn write_forbidder(&self, owner: &Type) -> impl Fn(&str, &ObjectField) -> bool {
         let methods = self.method_names(owner);
@@ -719,13 +726,7 @@ impl<'a> Inferer<'a> {
                 self.resolver().class_method_names(mangled, args)
             }
             Type::InterfaceRef { mangled, name, .. } => {
-                match self
-                    .lookup_structural_type(mangled, name)
-                    .map(|sym| &sym.kind)
-                {
-                    Some(TypeKind::Interface { methods, .. }) => methods.keys().cloned().collect(),
-                    _ => Vec::new(),
-                }
+                self.resolver().interface_method_names(mangled, name)
             }
             _ => Vec::new(),
         }

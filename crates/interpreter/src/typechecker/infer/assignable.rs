@@ -384,6 +384,14 @@ impl<'a> TypeResolver<'a> {
         )
     }
 
+    /// The names of an interface's methods.
+    pub(super) fn interface_method_names(&self, mangled: &MangledName, name: &str) -> Vec<String> {
+        match self.lookup(mangled, name).map(|symbol| &symbol.kind) {
+            Some(TypeKind::Interface { methods, .. }) => methods.keys().cloned().collect(),
+            _ => Vec::new(),
+        }
+    }
+
     /// The names of a class's methods, its ancestors' included.
     pub(super) fn class_method_names(&self, mangled: &MangledName, args: &[Type]) -> Vec<String> {
         let mut names = Vec::new();
