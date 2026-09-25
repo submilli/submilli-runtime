@@ -448,7 +448,8 @@ fn emit_subtype_to_json_vtable_body(
     for (idx, (field_name, field)) in fields.iter().enumerate() {
         let key_no_comma = format!("\"{}\":", json_escape_key(field_name));
         let key_with_comma = format!(",\"{}\":", json_escape_key(field_name));
-        let field_nullable = may_hold_null(&field.ty);
+        // A present optional field may hold a written `null` its declared type lacks.
+        let field_nullable = field.optional || may_hold_null(&field.ty);
 
         f.instruction(&Instruction::LocalGet(self_t));
         f.instruction(&Instruction::StructGet {

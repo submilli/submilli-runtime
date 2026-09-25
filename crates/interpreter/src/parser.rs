@@ -3289,6 +3289,27 @@ impl<'a> Parser<'a> {
             && &self.source[tok.span.start as usize..tok.span.end as usize] == expected
     }
 
+    /// `delete` is lexed as an identifier: `map.delete(k)`, a `delete()` method and
+    /// `submilli:http`'s `delete(url)` function all use the name. So it is the
+    /// operator only when an operand that can't be an argument list follows it, and
+    /// `delete (o.x)` stays a call. `as` and `satisfies` are lexed as identifiers too:
+    /// `delete as unknown` casts the function value, while `delete as.x` deletes from a
+    /// binding named `as`.
+    fn at_delete_operator(&self) -> bool {
+        if !self.peek_identifier_text_is("delete") {
+            return false;
+        }
+        if !matches!(
+            self.peek_at(1).kind,
+            TokenKind::Identifier | TokenKind::This
+        ) {
+            return false;
+        }
+        let next_is_cast_keyword =
+            self.peek_at_is_word(1, "as") || self.peek_at_is_word(1, "satisfies");
+        !next_is_cast_keyword || cannot_start_type(&self.peek_at(2).kind)
+    }
+
     /// `type X …` commits to a type-alias declaration only when followed by an
     /// identifier, mirroring TypeScript; `type = 5`, `type;`, `type(x)` stay
     /// expression statements over a binding named `type`.
@@ -3885,13 +3906,10 @@ impl<'a> Parser<'a> {
         // `typeof` is parsed as a unary prefix so `typeof x === "T"` works without a new layer;
         // the typechecker rejects `Typeof` outside the recognized equality fold position.
         if matches!(self.peek().kind, TokenKind::Typeof) {
-            let op_tok = self.advance();
-            let operand = self.parse_unary()?;
-            let operand_span = self.ast.expr(operand).span;
-            return Some(self.ast.push_expr(Expr {
-                kind: ExprKind::Typeof { operand },
-                span: self.span(op_tok.span.start, operand_span.end),
-            }));
+            return self.parse_prefix_expr(|operand| ExprKind::Typeof { operand });
+        }
+        if self.at_delete_operator() {
+            return self.parse_prefix_expr(|operand| ExprKind::Delete { operand });
         }
         if matches!(self.peek().kind, TokenKind::New) {
             let op_tok = self.advance();
@@ -3960,11 +3978,16 @@ impl<'a> Parser<'a> {
             TokenKind::Plus => UnOp::Pos,
             _ => return self.parse_postfix(),
         };
+        self.parse_prefix_expr(|operand| ExprKind::Unary { op, operand })
+    }
+
+    /// Consume a prefix operator and its operand, spanning both.
+    fn parse_prefix_expr(&mut self, kind: impl FnOnce(ExprId) -> ExprKind) -> Option<ExprId> {
         let op_tok = self.advance();
         let operand = self.parse_unary()?;
         let operand_span = self.ast.expr(operand).span;
         Some(self.ast.push_expr(Expr {
-            kind: ExprKind::Unary { op, operand },
+            kind: kind(operand),
             span: self.span(op_tok.span.start, operand_span.end),
         }))
     }
@@ -4842,6 +4865,24 @@ fn peek_binop(kind: &TokenKind) -> Option<(BinOp, u8)> {
         TokenKind::StarStar => (BinOp::Pow, 7),
         _ => return None,
     })
+}
+
+/// After `as` or `satisfies`, a token that can only extend or end an operand, never
+/// begin a type. `[` counts, as TypeScript reads `delete as [0]` as an index, so a
+/// tuple cast of a binding named `delete` needs parentheses.
+fn cannot_start_type(kind: &TokenKind) -> bool {
+    matches!(
+        kind,
+        TokenKind::Dot
+            | TokenKind::QuestionDot
+            | TokenKind::LeftBracket
+            | TokenKind::Bang
+            | TokenKind::Semicolon
+            | TokenKind::RightParen
+            | TokenKind::RightBrace
+            | TokenKind::Comma
+            | TokenKind::Eof
+    )
 }
 
 fn is_right_associative(op: BinOp) -> bool {

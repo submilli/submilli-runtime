@@ -317,6 +317,12 @@ fn stringify_typed_object_value(
         if !crate::runtime::prelude::object::field_is_present(caller, &name, &raw)? {
             continue;
         }
+        // An optional field can hold a written `null` even where its declared type
+        // has none, since `T | null` is what a write to `x?: T` accepts.
+        if matches!(raw, Val::AnyRef(None)) {
+            map.insert(field.name, serde_json::Value::Null);
+            continue;
+        }
         map.insert(
             field.name,
             stringify_type_info_val(caller, package, field.type_id, raw)?,

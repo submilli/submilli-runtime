@@ -273,6 +273,7 @@ fn visit_expr(ast: &Ast, id: ExprId, out: &mut Analysis) {
         }
         ExprKind::Unary { operand: inner, .. }
         | ExprKind::Typeof { operand: inner }
+        | ExprKind::Delete { operand: inner }
         | ExprKind::As { expr: inner, .. }
         | ExprKind::InstanceOf { value: inner, .. }
         | ExprKind::Paren(inner)
