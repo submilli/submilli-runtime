@@ -38,6 +38,22 @@ metric — improving this prompt is a primary lever.
 Run a submilli program — strict TypeScript subset compiled to
 WebAssembly.
 
+Prefer one coherent program over a sequence of one-call executions.
+Batch related API calls, follow data dependencies and pagination in
+code, and reuse fetched data. An ID or path returned by one call can
+feed the next call in the same program. Return to the model when
+results require judgment, not merely to pass data between operations.
+
+Preserve the model's context window: execution output becomes part of
+the conversation and is read again on later turns. Filter, search,
+join, and aggregate inside the program; return only relevant fields,
+counts, and excerpts needed for the answer or next decision. Include
+source identifiers and material errors or gaps, and state when results
+are partial. Avoid dumping whole files or collections and repeatedly
+fetching a file just to return different slices. Batch focused work,
+not an exhaustive investigation; stop once there is enough evidence
+to fulfill the request.
+
 You do NOT have access to Node.js APIs, browser globals, or NPM
 packages. Submilli ships its own standard library — modules are:
 `submilli:code`, `submilli:fs`, `submilli:http`, `submilli:url`, `submilli:crypto`,
