@@ -257,11 +257,11 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                         fieldtype_ref(vtable),
                         FieldType {
                             element_type: StorageType::Val(ref_to(field_names)),
-                            mutable: false,
+                            mutable: true,
                         },
                         FieldType {
                             element_type: StorageType::Val(ref_to(object_fields)),
-                            mutable: false,
+                            mutable: true,
                         },
                     ]
                     .into_boxed_slice(),
@@ -389,8 +389,14 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
         substruct(
             vec![
                 fieldtype_ref(error_vtable),
-                fieldtype_ref(field_names),
-                fieldtype_ref(object_fields),
+                FieldType {
+                    mutable: true,
+                    ..fieldtype_ref(field_names)
+                },
+                FieldType {
+                    mutable: true,
+                    ..fieldtype_ref(object_fields)
+                },
             ],
             Some(object_shape),
         ),

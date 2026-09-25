@@ -343,7 +343,7 @@ pub(super) async fn conversion_method(
         return Ok(None);
     }
     let getter_name = format!("get {name}");
-    let Some(getter) = super::collection::object_field(caller, value, &getter_name)? else {
+    let Some(getter) = super::collection::object_accessor(caller, value, &getter_name)? else {
         return Ok(None);
     };
     if !is_callable(caller, &getter)? {

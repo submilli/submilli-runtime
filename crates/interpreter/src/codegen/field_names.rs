@@ -16,6 +16,7 @@ use crate::codegen::symbol_table::SymbolTable;
 pub struct FieldName {
     pub name: String,
     pub optional: bool,
+    pub is_accessor: bool,
 }
 
 pub fn declare_optional_name_type(
@@ -63,6 +64,7 @@ pub fn collect(shapes: &[Type]) -> Vec<Vec<FieldName>> {
                     .map(|(name, field)| FieldName {
                         name: name.clone(),
                         optional: field.optional,
+                        is_accessor: false,
                     })
                     .collect(),
             );
@@ -120,14 +122,16 @@ fn build_init_expr(
             array_type_index: intrinsics.raw_string,
             array_size: code_units.len() as u32,
         });
-        if name.optional {
-            instrs.push(Instruction::I32Const(0));
+        if name.optional || name.is_accessor {
+            instrs.push(Instruction::I32Const(if name.is_accessor { -1 } else { 0 }));
         }
-        instrs.push(Instruction::StructNew(if name.optional {
-            optional_name_type
-        } else {
-            intrinsics.string
-        }));
+        instrs.push(Instruction::StructNew(
+            if name.optional || name.is_accessor {
+                optional_name_type
+            } else {
+                intrinsics.string
+            },
+        ));
     }
     instrs.push(Instruction::ArrayNewFixed {
         array_type_index: intrinsics.field_names,
@@ -187,6 +191,29 @@ pub(crate) fn emit_instance_names(
     });
 }
 
+/// Push whether the name on the stack marks an internal accessor payload slot.
+pub(crate) fn emit_name_is_accessor(
+    emitter: &mut super::function_emitter::FunctionEmitter,
+    ctx: &super::CodegenCtx,
+) {
+    let name = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::String));
+    let marked = ctx.symbols.optional_field_name_type();
+    emitter.instruction(Instruction::LocalTee(name));
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(marked)));
+    emitter.emit_if(wasm_encoder::BlockType::Result(ValType::I32));
+    emitter.instruction(Instruction::LocalGet(name));
+    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(marked)));
+    emitter.instruction(Instruction::StructGet {
+        struct_type_index: marked,
+        field_index: 2,
+    });
+    emitter.instruction(Instruction::I32Const(-1));
+    emitter.instruction(Instruction::I32Eq);
+    emitter.emit_else();
+    emitter.instruction(Instruction::I32Const(0));
+    emitter.emit_end();
+}
+
 /// Push the presence flag for a field name already on the stack.
 pub(crate) fn emit_name_presence(
     emitter: &mut super::function_emitter::FunctionEmitter,
@@ -210,18 +237,19 @@ pub(crate) fn emit_name_presence(
         struct_type_index: optional,
         field_index: 2,
     });
+    emitter.instruction(Instruction::I32Eqz);
+    emitter.instruction(Instruction::I32Eqz);
     emitter.emit_else();
     emitter.instruction(Instruction::I32Const(1));
     emitter.emit_end();
 }
 
 /// The object and index are locals; callers mark a successful store as present.
-pub(crate) fn emit_set_presence(
+pub(crate) fn emit_mark_present(
     emitter: &mut super::function_emitter::FunctionEmitter,
     ctx: &super::CodegenCtx,
     object: u32,
     index: u32,
-    present: bool,
 ) {
     let intrinsics = ctx
         .symbols
@@ -244,11 +272,20 @@ pub(crate) fn emit_set_presence(
     emitter.emit_if(wasm_encoder::BlockType::Empty);
     emitter.instruction(Instruction::LocalGet(name));
     emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(optional)));
-    emitter.instruction(Instruction::I32Const(i32::from(present)));
+    emitter.instruction(Instruction::StructGet {
+        struct_type_index: optional,
+        field_index: 2,
+    });
+    emitter.instruction(Instruction::I32Eqz);
+    emitter.emit_if(wasm_encoder::BlockType::Empty);
+    emitter.instruction(Instruction::LocalGet(name));
+    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(optional)));
+    emitter.instruction(Instruction::I32Const(1));
     emitter.instruction(Instruction::StructSet {
         struct_type_index: optional,
         field_index: 2,
     });
+    emitter.emit_end();
     emitter.emit_end();
 }
 
@@ -303,7 +340,8 @@ mod tests {
             keys[0],
             vec![FieldName {
                 name: "x".to_string(),
-                optional: false
+                optional: false,
+                is_accessor: false
             }]
         );
     }
@@ -322,14 +360,16 @@ mod tests {
             keys[0],
             vec![FieldName {
                 name: "x".to_string(),
-                optional: false
+                optional: false,
+                is_accessor: false
             }]
         );
         assert_eq!(
             keys[1],
             vec![FieldName {
                 name: "y".to_string(),
-                optional: false
+                optional: false,
+                is_accessor: false
             }]
         );
     }

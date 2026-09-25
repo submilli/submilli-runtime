@@ -181,11 +181,11 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
         .nullable(false)
         .finish();
     def.forward_ref_field(field_names)
-        .mutability(imm)
+        .mutability(mutv)
         .nullable(false)
         .finish();
     def.forward_ref_field(object_fields)
-        .mutability(imm)
+        .mutability(mutv)
         .nullable(false)
         .finish();
     def.finish();
@@ -374,14 +374,14 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
         .nullable(false)
         .finish();
     def.field(FieldType::new(
-        imm,
+        mutv,
         StorageType::ValType(ValType::Ref(RefType::new(
             false,
             field_names.clone().into(),
         ))),
     ));
     def.field(FieldType::new(
-        imm,
+        mutv,
         StorageType::ValType(ValType::Ref(RefType::new(
             false,
             object_fields.clone().into(),

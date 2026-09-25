@@ -386,20 +386,23 @@ fn emit_class_field_store(
         .symbols
         .intrinsic_type_indices()
         .expect("intrinsics declared by codegen entry");
+    let value_ty = ctx.ta.expr(value).ty.clone();
+    emit_expr(emitter, ctx, value);
+    cast::emit_box(emitter, ctx, &value_ty);
+    let stored = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown));
+    emitter.instruction(Instruction::LocalSet(stored));
     emitter.instruction(Instruction::LocalGet(recv));
     emitter.instruction(Instruction::StructGet {
         struct_type_index: struct_idx,
         field_index: 2,
     });
     emitter.instruction(Instruction::I32Const(slot as i32));
-    let value_ty = ctx.ta.expr(value).ty.clone();
-    emit_expr(emitter, ctx, value);
-    cast::emit_box(emitter, ctx, &value_ty);
+    emitter.instruction(Instruction::LocalGet(stored));
     emitter.instruction(Instruction::ArraySet(intrinsics.object_fields));
     let index = emitter.add_anonymous_local(ValType::I32);
     emitter.instruction(Instruction::I32Const(slot as i32));
     emitter.instruction(Instruction::LocalSet(index));
-    crate::codegen::field_names::emit_set_presence(emitter, ctx, recv, index, true);
+    crate::codegen::field_names::emit_mark_present(emitter, ctx, recv, index);
 }
 
 fn emit_object_field_store(

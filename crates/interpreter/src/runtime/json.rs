@@ -217,6 +217,20 @@ fn contains_dynamic_object(
         return Ok(false);
     };
     let values = if object.matches_ty(&*caller, &intr.object_shape)? {
+        let names = match object.field(&mut *caller, 1)? {
+            Val::AnyRef(Some(names)) => names.unwrap_array(&mut *caller)?,
+            _ => {
+                return Err(wasmtime::Error::msg(
+                    "JSON.stringify: invalid field-name array",
+                ));
+            }
+        };
+        for index in 0..names.len(&mut *caller)? {
+            let name = names.get(&mut *caller, index)?;
+            if crate::runtime::prelude::object::field_was_inserted(caller, &name)? {
+                return Ok(true);
+            }
+        }
         let actual = object.field(&mut *caller, 0)?;
         let dynamic = host_object_vtable(caller)?;
         if let (Val::AnyRef(Some(actual)), Val::AnyRef(Some(dynamic))) = (actual, dynamic)

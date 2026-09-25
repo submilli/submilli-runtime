@@ -72,11 +72,11 @@ function main(): void {
   writeNote(b, "w2");
   assert(readNote(b) === "w2", "optional accessor write across the boundary");
 
-  // A genuinely absent optional member still reads null and discards its write.
+  // An absent optional member reads null until a write creates it.
   const bp = new BagPlain();
   assert(readNote(bp) === null, "absent optional member reads null");
   writeNote(bp, "gone");
-  assert(readNote(bp) === null, "write to an absent optional member is discarded");
+  assert(readNote(bp) === "gone", "write creates an optional member across packages");
 
   assert(readPerimeter(new AppPerimeter()) === 8, "required accessor member across the boundary");
 

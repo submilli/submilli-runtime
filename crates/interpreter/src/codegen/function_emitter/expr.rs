@@ -456,6 +456,7 @@ fn emit_expr_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) 
                 .map(|(name, field)| crate::codegen::field_names::FieldName {
                     name: name.clone(),
                     optional: field.optional,
+                    is_accessor: false,
                 })
                 .collect();
             let intrinsics = ctx
@@ -2154,6 +2155,7 @@ fn emit_spread_shape(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, shape: &Ty
         .map(|(name, field)| crate::codegen::field_names::FieldName {
             name: name.clone(),
             optional: field.optional,
+            is_accessor: false,
         })
         .collect();
     let names_global = ctx
@@ -2817,12 +2819,6 @@ pub(crate) fn emit_class_field_setup(
             .symbols
             .class_field_slot(mangled, field)
             .expect("class field slot recorded in classes::emit");
-        emitter.instruction(Instruction::LocalGet(this));
-        emitter.instruction(Instruction::StructGet {
-            struct_type_index: struct_idx,
-            field_index: 2,
-        });
-        emitter.instruction(Instruction::I32Const(slot as i32));
         match step {
             FieldSetup::Init { value, .. } => {
                 let value_ty = ctx.ta.expr(*value).ty.clone();
@@ -2839,11 +2835,20 @@ pub(crate) fn emit_class_field_setup(
                 emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object)));
             }
         }
+        let stored = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown));
+        emitter.instruction(Instruction::LocalSet(stored));
+        emitter.instruction(Instruction::LocalGet(this));
+        emitter.instruction(Instruction::StructGet {
+            struct_type_index: struct_idx,
+            field_index: 2,
+        });
+        emitter.instruction(Instruction::I32Const(slot as i32));
+        emitter.instruction(Instruction::LocalGet(stored));
         emitter.instruction(Instruction::ArraySet(intrinsics.object_fields));
         let index = emitter.add_anonymous_local(ValType::I32);
         emitter.instruction(Instruction::I32Const(slot as i32));
         emitter.instruction(Instruction::LocalSet(index));
-        crate::codegen::field_names::emit_set_presence(emitter, ctx, this, index, true);
+        crate::codegen::field_names::emit_mark_present(emitter, ctx, this, index);
     }
 }
 
@@ -2928,7 +2933,16 @@ pub(crate) fn emit_object_field_write_by_name(
     emitter.instruction(Instruction::LocalGet(index_local));
     emitter.instruction(Instruction::LocalGet(value_local));
     emitter.instruction(Instruction::ArraySet(intrinsics.object_fields));
-    crate::codegen::field_names::emit_set_presence(emitter, ctx, object_local, index_local, true);
+    crate::codegen::field_names::emit_mark_present(emitter, ctx, object_local, index_local);
+    emitter.emit_else();
+    emitter.instruction(Instruction::LocalGet(object_local));
+    emitter.instruction(Instruction::GlobalGet(name_global));
+    emitter.instruction(Instruction::LocalGet(value_local));
+    let insert = ctx
+        .symbols
+        .prelude_func_idx("ObjectConstructor##insertField")
+        .expect("field insertion helper imported");
+    emitter.instruction(Instruction::Call(insert));
     emitter.emit_end();
 }
 
@@ -2980,7 +2994,7 @@ pub(crate) fn emit_is_accessor_backed(
         .closure_struct_type_idx(crate::codegen::classes::accessor_closure_sig(kind))
         .expect("accessor closure struct collected by analysis::note_shaped_property_access");
     let index_local = emitter.add_anonymous_local(ValType::I32);
-    emit_object_field_index_by_name(emitter, ctx, object_local, accessor_global);
+    emit_field_index_by_name(emitter, ctx, object_local, accessor_global, true);
     emitter.instruction(Instruction::LocalTee(index_local));
     emitter.instruction(Instruction::I32Const(0));
     emitter.instruction(Instruction::I32GeS);
@@ -2994,10 +3008,19 @@ pub(crate) fn emit_is_accessor_backed(
     )));
     emitter.instruction(Instruction::I32And);
     emitter.emit_if(BlockType::Result(ValType::I32));
+    emitter.instruction(Instruction::LocalGet(object_local));
+    emitter.instruction(Instruction::StructGet {
+        struct_type_index: intrinsics.object_shape,
+        field_index: 1,
+    });
+    emitter.instruction(Instruction::LocalGet(index_local));
+    emitter.instruction(Instruction::ArrayGet(intrinsics.field_names));
+    crate::codegen::field_names::emit_name_is_accessor(emitter, ctx);
     emit_field_slot_get(emitter, intrinsics, object_local, index_local);
     emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
         closure_struct_idx,
     )));
+    emitter.instruction(Instruction::I32And);
     emitter.emit_else();
     emitter.instruction(Instruction::I32Const(0));
     emitter.emit_end();
@@ -3178,10 +3201,7 @@ fn emit_dynamic_narrowing_check(
 /// accessor-aware: a data field writes its payload slot; an accessor property
 /// invokes its `set <prop>` method closure; a property backed by a getter with no
 /// setter throws, since the target exists but is read-only; a property with none
-/// of the three is absent and the write is discarded, matching
-/// `emit_object_field_write_by_name`. `value` is emitted in whichever branch runs
-/// (only one executes at runtime), so its side effects happen exactly once even
-/// where the store goes nowhere.
+/// of the three gets a new data slot. `value` is evaluated exactly once.
 pub(crate) fn emit_object_property_write(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
@@ -3206,10 +3226,6 @@ fn emit_object_property_write_value(
     value: &ShapeArgument,
 ) {
     let prop_name = prop.name.as_str();
-    let intrinsics = ctx
-        .symbols
-        .intrinsic_type_indices()
-        .expect("intrinsics declared by codegen entry");
     let setter = crate::codegen::classes::accessor_setter_name(prop_name);
     let getter = crate::codegen::classes::accessor_getter_name(prop_name);
     let has_setter_name = ctx.symbols.field_name_string_global_idx(&setter).is_some();
@@ -3235,18 +3251,12 @@ fn emit_object_property_write_value(
     emitter.instruction(Instruction::I32Const(0));
     emitter.instruction(Instruction::I32GeS);
     emitter.emit_if(BlockType::Empty);
-    // data slot
-    emitter.instruction(Instruction::LocalGet(object_local));
-    emitter.instruction(Instruction::StructGet {
-        struct_type_index: intrinsics.object_shape,
-        field_index: 2,
-    });
-    emitter.instruction(Instruction::LocalGet(index_local));
+    // Evaluate the RHS before loading the payload: it may insert another
+    // field and replace the receiver's backing arrays.
     let value_ty = value.ty(ctx);
     value.emit(emitter, ctx);
     cast::emit_box(emitter, ctx, &value_ty);
-    emitter.instruction(Instruction::ArraySet(intrinsics.object_fields));
-    crate::codegen::field_names::emit_set_presence(emitter, ctx, object_local, index_local, true);
+    emit_object_field_write_by_name(emitter, ctx, object_local, name_global);
     emitter.emit_else();
     // One nested `if` per accessor the program declares, innermost `else` being
     // the absent case — so the arm list *is* the nesting depth. An accessor the
@@ -3292,10 +3302,10 @@ fn emit_object_property_write_value(
         }
         emitter.emit_else();
     }
-    // No slot of any kind: an absent optional member, so the store has nowhere
-    // to go.
+    let value_ty = value.ty(ctx);
     value.emit(emitter, ctx);
-    emitter.instruction(Instruction::Drop);
+    cast::emit_box(emitter, ctx, &value_ty);
+    emit_object_field_write_by_name(emitter, ctx, object_local, name_global);
     for _ in &arms {
         emitter.emit_end();
     }
@@ -3428,6 +3438,16 @@ pub(crate) fn emit_object_field_index_by_name(
     object_local: u32,
     name_global: u32,
 ) {
+    emit_field_index_by_name(emitter, ctx, object_local, name_global, false);
+}
+
+fn emit_field_index_by_name(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    object_local: u32,
+    name_global: u32,
+    accessor: bool,
+) {
     let object_shape_idx = ctx
         .symbols
         .object_shape_type_idx()
@@ -3465,6 +3485,8 @@ pub(crate) fn emit_object_field_index_by_name(
         len_local,
         name_global,
         None,
+        ctx,
+        accessor,
     );
     emit_field_name_scan_pass(
         emitter,
@@ -3474,11 +3496,14 @@ pub(crate) fn emit_object_field_index_by_name(
         len_local,
         name_global,
         Some(string_eq_idx),
+        ctx,
+        accessor,
     );
     emitter.instruction(Instruction::I32Const(-1));
     emitter.emit_end();
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_field_name_scan_pass(
     emitter: &mut FunctionEmitter,
     field_names_type_idx: u32,
@@ -3487,6 +3512,8 @@ fn emit_field_name_scan_pass(
     len_local: u32,
     name_global: u32,
     string_eq_idx: Option<u32>,
+    ctx: &CodegenCtx,
+    accessor: bool,
 ) {
     emitter.instruction(Instruction::I32Const(0));
     emitter.instruction(Instruction::LocalSet(i_local));
@@ -3505,6 +3532,13 @@ fn emit_field_name_scan_pass(
     } else {
         emitter.instruction(Instruction::RefEq);
     }
+    emitter.instruction(Instruction::LocalGet(names_local));
+    emitter.instruction(Instruction::LocalGet(i_local));
+    emitter.instruction(Instruction::ArrayGet(field_names_type_idx));
+    crate::codegen::field_names::emit_name_is_accessor(emitter, ctx);
+    emitter.instruction(Instruction::I32Const(i32::from(accessor)));
+    emitter.instruction(Instruction::I32Eq);
+    emitter.instruction(Instruction::I32And);
     emitter.emit_if(BlockType::Empty);
     emitter.instruction(Instruction::LocalGet(i_local));
     emitter.instruction(Instruction::Br(3));

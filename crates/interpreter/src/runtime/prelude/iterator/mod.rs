@@ -135,14 +135,14 @@ pub(crate) fn iterator_result_struct(
                 ))),
             ),
             FieldType::new(
-                imm,
+                Mutability::Var,
                 StorageType::ValType(ValType::Ref(RefType::new(
                     false,
                     intr.field_names.clone().into(),
                 ))),
             ),
             FieldType::new(
-                imm,
+                Mutability::Var,
                 StorageType::ValType(ValType::Ref(RefType::new(
                     false,
                     intr.object_fields.clone().into(),
@@ -718,8 +718,14 @@ mod tests {
                 inner: CompositeInnerType::Struct(EncStructType {
                     fields: vec![
                         mk(vtable_type_idx),
-                        mk(field_names_type_idx),
-                        mk(object_fields_type_idx),
+                        EncFieldType {
+                            mutable: true,
+                            ..mk(field_names_type_idx)
+                        },
+                        EncFieldType {
+                            mutable: true,
+                            ..mk(object_fields_type_idx)
+                        },
                     ]
                     .into_boxed_slice(),
                 }),

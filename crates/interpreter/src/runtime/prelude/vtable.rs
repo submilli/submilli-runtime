@@ -584,7 +584,8 @@ pub(crate) async fn object_to_json(
     if let Some(value) = object_override(caller, recv, "toJson").await? {
         return Ok(value);
     }
-    let entries = read_object_entries(caller, recv, "Object#toJson")?;
+    let mut entries = read_object_entries(caller, recv, "Object#toJson")?;
+    entries.sort_by(|(left, _), (right, _)| left.cmp(right));
 
     let mut out: Vec<u16> = vec![u16::from(b'{')];
     for (name_units, value) in &entries {
@@ -718,7 +719,8 @@ pub(crate) fn read_object_entries(
 
     let name_count = names.len(&mut *caller)?;
     let value_count = values.len(&mut *caller)?;
-    if name_count != value_count {
+    // Class validator rows follow the named payload and are not properties.
+    if name_count > value_count {
         wasmtime::bail!("{name}: field-name count {name_count} != field-value count {value_count}");
     }
 
@@ -726,7 +728,9 @@ pub(crate) fn read_object_entries(
     for i in 0..name_count {
         let field_name = names.get(&mut *caller, i)?;
         let value = values.get(&mut *caller, i)?;
-        if !super::object::field_is_present(caller, &field_name, &value)? {
+        if !super::object::field_is_present(caller, &field_name, &value)?
+            || super::object::is_accessor_slot(caller, &field_name)?
+        {
             continue;
         }
         let field_name = read_units_val(caller, &field_name, name)?;

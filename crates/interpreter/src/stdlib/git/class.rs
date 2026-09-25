@@ -103,8 +103,20 @@ fn class_types(
         .mutability(Mutability::Const)
         .nullable(false)
         .finish();
-    def.field(ref_field(intr.field_names.clone().into(), false));
-    def.field(ref_field(intr.object_fields.clone().into(), false));
+    def.field(FieldType::new(
+        Mutability::Var,
+        StorageType::ValType(ValType::Ref(RefType::new(
+            false,
+            intr.field_names.clone().into(),
+        ))),
+    ));
+    def.field(FieldType::new(
+        Mutability::Var,
+        StorageType::ValType(ValType::Ref(RefType::new(
+            false,
+            intr.object_fields.clone().into(),
+        ))),
+    ));
     def.finish();
     let group = builder.build()?;
     Ok((

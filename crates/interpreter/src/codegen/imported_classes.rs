@@ -588,8 +588,14 @@ fn reconstruct_one(
     let struct_ty = substruct(
         vec![
             fieldtype_ref(vtable_idx),
-            fieldtype_ref(intrinsics.field_names),
-            fieldtype_ref(intrinsics.object_fields),
+            FieldType {
+                mutable: true,
+                ..fieldtype_ref(intrinsics.field_names)
+            },
+            FieldType {
+                mutable: true,
+                ..fieldtype_ref(intrinsics.object_fields)
+            },
         ],
         Some(struct_super),
     );

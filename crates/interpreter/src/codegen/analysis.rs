@@ -38,6 +38,12 @@ impl CodegenAnalysis {
             adapter_seen: BTreeSet::new(),
         };
 
+        // Generated serializers also cover dependency shapes discovered later.
+        analysis.dependency_usage.note_member(crate::mangle::extend(
+            &crate::mangle::prelude("ObjectConstructor"),
+            "#toJson",
+        ));
+
         for ty in ta.runtime_source_types.values() {
             analysis.visit_type(ty);
             analysis
@@ -1014,6 +1020,12 @@ impl CodegenAnalysis {
     /// whole-program fact, and a library that declares an interface and reads it
     /// never sees the consumer's accessor implementation.
     fn note_shaped_property_access(&mut self, receiver_ty: &Type, prop: &str, kind: AccessorKind) {
+        if matches!(kind, AccessorKind::Set) {
+            self.dependency_usage.note_member(crate::mangle::extend(
+                &crate::mangle::prelude("ObjectConstructor"),
+                "#insertField",
+            ));
+        }
         self.mentioned_closure_sigs
             .push(super::field_guards::signature());
         if !is_shaped_receiver(receiver_ty) && !matches!(receiver_ty.peel(), Type::ClassRef { .. })

@@ -181,14 +181,14 @@ pub(crate) fn build_error_subclass_types(
         .nullable(false)
         .finish();
     def.field(wasmtime::FieldType::new(
-        imm,
+        wasmtime::Mutability::Var,
         wasmtime::StorageType::ValType(ValType::Ref(RefType::new(
             false,
             intr.field_names.clone().into(),
         ))),
     ));
     def.field(wasmtime::FieldType::new(
-        imm,
+        wasmtime::Mutability::Var,
         wasmtime::StorageType::ValType(ValType::Ref(RefType::new(
             false,
             intr.object_fields.clone().into(),

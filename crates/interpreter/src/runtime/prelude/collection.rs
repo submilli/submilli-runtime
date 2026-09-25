@@ -56,6 +56,23 @@ pub(crate) fn object_field(
     obj: &Val,
     name: &str,
 ) -> wasmtime::Result<Option<Val>> {
+    object_field_kind(caller, obj, name, false)
+}
+
+pub(crate) fn object_accessor(
+    caller: &mut Caller<'_, StoreData>,
+    obj: &Val,
+    name: &str,
+) -> wasmtime::Result<Option<Val>> {
+    object_field_kind(caller, obj, name, true)
+}
+
+fn object_field_kind(
+    caller: &mut Caller<'_, StoreData>,
+    obj: &Val,
+    name: &str,
+    accessor: bool,
+) -> wasmtime::Result<Option<Val>> {
     let Val::AnyRef(Some(any)) = obj else {
         return Ok(None);
     };
@@ -82,7 +99,9 @@ pub(crate) fn object_field(
     let target: Vec<u16> = name.encode_utf16().collect();
     for i in 0..names.len(&mut *caller)? {
         let nm = names.get(&mut *caller, i)?;
-        if string_units(caller, &nm)? == target {
+        if string_units(caller, &nm)? == target
+            && super::object::is_accessor_slot(caller, &nm)? == accessor
+        {
             return Ok(Some(fields.get(&mut *caller, i)?));
         }
     }

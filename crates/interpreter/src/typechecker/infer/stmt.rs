@@ -128,34 +128,36 @@ impl Inferer<'_> {
                     .infer_stmt(then_block)
                     .expect("if-branch is a Block, never a type-only decl");
                 let then_reachable = self.reachable;
-                let (then_narrowings, then_assigned) = self.pop_narrow_frame_capture();
+                let then_narrowings = self.snapshot_active_narrowings(0).0;
+                let (_, then_assigned) = self.pop_narrow_frame_capture();
                 let typed_then = self.wrap_narrow_regions(typed_then, &true_env, then_span);
-                let (typed_else, else_narrowings, else_assigned, else_reachable) = match else_block
+                let (typed_else, else_narrowings, else_assigned, else_reachable) = if let Some(b) =
+                    else_block
                 {
-                    Some(b) => {
-                        let else_span = self.ast.stmt(b).span;
-                        self.push_narrow_frame(false_env.clone());
-                        self.reachable = entry_reachable;
-                        let typed_else = self
-                            .infer_stmt(b)
-                            .expect("else-branch is a Block, never a type-only decl");
-                        let er = self.reachable;
-                        let (en, ea) = self.pop_narrow_frame_capture();
-                        let typed_else =
-                            self.wrap_narrow_regions(typed_else, &false_env, else_span);
-                        (Some(typed_else), en, ea, er)
-                    }
-                    None => {
-                        // Implicit-else carries the false-side narrowings so
-                        // `if (x === null) return;` propagates the non-null
-                        // narrowing past the `if` when the then-branch is unreachable.
-                        (
-                            None,
-                            false_env.clone(),
-                            std::collections::BTreeSet::new(),
-                            entry_reachable,
-                        )
-                    }
+                    let else_span = self.ast.stmt(b).span;
+                    self.push_narrow_frame(false_env.clone());
+                    self.reachable = entry_reachable;
+                    let typed_else = self
+                        .infer_stmt(b)
+                        .expect("else-branch is a Block, never a type-only decl");
+                    let er = self.reachable;
+                    let en = self.snapshot_active_narrowings(0).0;
+                    let (_, ea) = self.pop_narrow_frame_capture();
+                    let typed_else = self.wrap_narrow_regions(typed_else, &false_env, else_span);
+                    (Some(typed_else), en, ea, er)
+                } else {
+                    // Implicit-else carries the false-side narrowings so
+                    // `if (x === null) return;` propagates the non-null
+                    // narrowing past the `if` when the then-branch is unreachable.
+                    self.push_narrow_frame(false_env.clone());
+                    let unchanged = self.snapshot_active_narrowings(0).0;
+                    self.pop_narrow_frame();
+                    (
+                        None,
+                        unchanged,
+                        std::collections::BTreeSet::new(),
+                        entry_reachable,
+                    )
                 };
                 let (joined_narrowings, joined_assigned) = match (then_reachable, else_reachable) {
                     (true, true) => crate::typechecker::infer::narrowing::union_envs(
@@ -2093,6 +2095,15 @@ fn cond_is_static_true(_inferer: &Inferer<'_>, expr_id: ExprId) -> bool {
     )
 }
 
+/// A disproved loop-entry view, keyed by its declaration rather than the
+/// transient scope number assigned when an enclosing loop is retyped.
+#[derive(Clone, PartialEq)]
+pub(super) struct LoopInvalidation {
+    path: narrowing::ReferencePath,
+    declaration: Option<Span>,
+    narrowed_ty: Type,
+}
+
 impl Inferer<'_> {
     /// Retype while the next pass falsifies a narrowing the body starts with:
     /// an enclosing view, which is dropped, or one from the condition's true
@@ -2107,6 +2118,7 @@ impl Inferer<'_> {
         body_scope_floor: narrowing::ScopeId,
         tail: LoopTail,
     ) -> LoopBodyOutcome {
+        self.apply_loop_invalidations(body, body_span);
         let diag_len = self.diagnostics.len();
         let mats_len = self.pending_post_if_materializations.len();
         let (breaks_len, continues_len) = self
@@ -2118,8 +2130,12 @@ impl Inferer<'_> {
 
         loop {
             let outcome = self.run_body_pass(body, &entry_env, body_span, continues_len, tail);
-            let outer_falsified =
-                self.drop_narrowings_the_body_falsifies(&outcome, body_scope_floor, body_span);
+            let outer_falsified = self.drop_narrowings_the_body_falsifies(
+                body,
+                &outcome,
+                body_scope_floor,
+                body_span,
+            );
             let entry_falsified =
                 widen_entry_to_cover_next_pass(&mut entry_env, &outcome, &mut widened);
             if !outer_falsified && !entry_falsified {
@@ -2173,6 +2189,7 @@ impl Inferer<'_> {
     /// Bindings declared within the body are recreated on each iteration.
     fn drop_narrowings_the_body_falsifies(
         &mut self,
+        body: StmtId,
         outcome: &LoopBodyOutcome,
         body_scope_floor: narrowing::ScopeId,
         body_span: Span,
@@ -2197,12 +2214,57 @@ impl Inferer<'_> {
             .map(|(path, _)| path.clone())
             .collect();
         for path in &falsified {
+            let view = active.get(path).expect("active falsified view");
+            let invalidation = self.loop_invalidation(path, &view.narrowed_ty);
+            let cached = self.loop_invalidations.entry(body).or_default();
+            if !cached.contains(&invalidation) {
+                cached.push(invalidation);
+            }
             self.drop_narrowings_under(
                 path,
                 narrowing::InvalidationReason::Write { span: body_span },
             );
         }
         !falsified.is_empty()
+    }
+
+    /// Reuse widening discovered by an earlier pass through this syntax node.
+    /// Inner loops therefore do not repeat their fixed point for every retry
+    /// of every enclosing loop. Guards are still installed afresh by the body.
+    fn apply_loop_invalidations(&mut self, body: StmtId, span: Span) {
+        let Some(cached) = self.loop_invalidations.get(&body) else {
+            return;
+        };
+        let (active, _) = self.snapshot_active_narrowings(0);
+        let falsified: Vec<_> = active
+            .iter()
+            .filter(|(path, view)| {
+                cached.contains(&self.loop_invalidation(path, &view.narrowed_ty))
+            })
+            .map(|(path, _)| path.clone())
+            .collect();
+        for path in falsified {
+            self.drop_narrowings_under(&path, narrowing::InvalidationReason::Write { span });
+        }
+    }
+
+    fn loop_invalidation(&self, path: &narrowing::ReferencePath, ty: &Type) -> LoopInvalidation {
+        let mut path = path.clone();
+        let declaration = if let narrowing::BindingId::Local { name, decl_scope } = &mut path.root {
+            let span = self
+                .scopes
+                .get_binding(name, *decl_scope)
+                .map(|entry| entry.decl_span);
+            *decl_scope = narrowing::ScopeId(0);
+            span
+        } else {
+            None
+        };
+        LoopInvalidation {
+            path,
+            declaration,
+            narrowed_ty: ty.clone(),
+        }
     }
 
     /// One walk of a loop body under `entry_env`: infer it, wrap the narrow
@@ -2506,6 +2568,55 @@ impl Inferer<'_> {
 #[cfg(test)]
 mod tests {
     use super::super::test_support::run;
+
+    #[test]
+    fn nested_loop_retries_do_not_multiply() {
+        let shallow = nested_loop_expression_count(8);
+        let deep = nested_loop_expression_count(16);
+        assert!(
+            deep < shallow * 12,
+            "typed expression growth: {shallow} -> {deep}"
+        );
+        assert!(deep < 150_000, "excessive speculative expressions: {deep}");
+    }
+
+    fn nested_loop_expression_count(depth: usize) -> usize {
+        use std::fmt::Write;
+        let mut source = String::from("function main(): void {\n");
+        for i in 0..depth {
+            writeln!(
+                source,
+                "let x{i}: string | number | boolean | null = null; x{i} = 'a';"
+            )
+            .unwrap();
+            writeln!(
+                source,
+                "let y{i}: string | number | boolean | null = null; y{i} = 'a';"
+            )
+            .unwrap();
+            writeln!(source, "let i{i} = 0;").unwrap();
+        }
+        for i in 0..depth {
+            writeln!(source, "while (x{i} !== null && y{i} !== null && typeof x{i} !== 'boolean' && i{i} < 2) {{ i{i}++;").unwrap();
+        }
+        for i in (0..depth).rev() {
+            for j in 0..=i {
+                writeln!(
+                    source,
+                    "if (i{j} > 7) {{ x{j} = {j}; }} else if (i{j} > 9) {{ y{j} = true; }}"
+                )
+                .unwrap();
+            }
+            source.push_str("}\n");
+        }
+        source.push('}');
+        let (ast, diagnostics) = run(&source);
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected diagnostics: {diagnostics:?}"
+        );
+        ast.exprs_len()
+    }
 
     /// A rejected write checks its value against the field's *write* type, so an
     /// accessor pair that takes wider than it returns does not earn a second

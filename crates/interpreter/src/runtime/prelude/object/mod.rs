@@ -114,7 +114,7 @@ fn enumerate(
         for i in 0..len {
             let name = names.get(&mut *caller, i)?;
             let value = values.get(&mut *caller, i)?;
-            if !field_is_present(caller, &name, &value)? {
+            if !field_is_present(caller, &name, &value)? || is_accessor_slot(caller, &name)? {
                 continue;
             }
             let elem = match kind {
@@ -132,6 +132,20 @@ fn enumerate(
     }
     let arr = write_submilli_array_struct(caller, &elems)?;
     Ok(Val::AnyRef(Some(arr.to_anyref())))
+}
+
+/// A marked name identifies an internal accessor slot independently of its
+/// spelling or current value; user data named `get x` remains ordinary data.
+pub(crate) fn is_accessor_slot(
+    caller: &mut Caller<'_, StoreData>,
+    name: &Val,
+) -> wasmtime::Result<bool> {
+    let name = as_struct(caller, name, "field name")?;
+    let string = build_intrinsic_types(caller.engine())?.string;
+    if StructType::eq(&name.ty(&*caller)?, &string) {
+        return Ok(false);
+    }
+    Ok(matches!(name.field(&mut *caller, 2)?, Val::I32(-1)))
 }
 
 /// Copy present own fields while preserving UTF-16 names and boxed values.
@@ -153,7 +167,7 @@ fn spread(
         for index in 0..names.len(&mut *caller)? {
             let name = names.get(&mut *caller, index)?;
             let value = values.get(&mut *caller, index)?;
-            if !field_is_present(caller, &name, &value)? {
+            if !field_is_present(caller, &name, &value)? || is_accessor_slot(caller, &name)? {
                 continue;
             }
             let units = string_units(caller, &name)?;
@@ -219,6 +233,88 @@ fn copy_field_name(
     )))
 }
 
+/// Append without replacing the receiver, so every alias sees the new slot.
+/// Existing indices (including class payload and guard slots) stay unchanged.
+fn insert_field(
+    caller: &mut Caller<'_, StoreData>,
+    obj: &Val,
+    name: &Val,
+    value: &Val,
+) -> wasmtime::Result<()> {
+    let object = as_struct(caller, obj, "field insertion receiver")?;
+    let names = field_array(caller, &object, 1)?;
+    let values = field_array(caller, &object, 2)?;
+    let named_len = names.len(&mut *caller)?;
+    let value_len = values.len(&mut *caller)?;
+    let mut new_names = Vec::new();
+    let mut new_values = Vec::new();
+    for index in 0..named_len {
+        new_names.push(names.get(&mut *caller, index)?);
+        new_values.push(values.get(&mut *caller, index)?);
+    }
+    new_names.push(inserted_field_name(caller, name)?);
+    new_values.push(*value);
+    // Each hidden guard row has one slot per named field followed by its
+    // generic context. Grow every row along with the named payload so the
+    // compiler's depth/field indexing continues to address the same guards.
+    let row_width = named_len + 1;
+    for row_start in (named_len..value_len).step_by(row_width as usize) {
+        for index in row_start..row_start + named_len {
+            new_values.push(values.get(&mut *caller, index)?);
+        }
+        new_values.push(Val::AnyRef(None));
+        new_values.push(values.get(&mut *caller, row_start + named_len)?);
+    }
+    let intr = build_intrinsic_types(caller.engine())?;
+    let names_pre = ArrayRefPre::new(&mut *caller, intr.field_names);
+    let values_pre = ArrayRefPre::new(&mut *caller, intr.object_fields);
+    let names = ArrayRef::new_fixed(&mut *caller, &names_pre, &new_names)?;
+    let values = ArrayRef::new_fixed(&mut *caller, &values_pre, &new_values)?;
+    object.set_field(&mut *caller, 1, Val::AnyRef(Some(names.to_anyref())))?;
+    object.set_field(&mut *caller, 2, Val::AnyRef(Some(values.to_anyref())))?;
+    Ok(())
+}
+
+/// A present inserted name also tells typed serializers that the original
+/// static shape no longer describes all of this object's fields.
+fn inserted_field_name(caller: &mut Caller<'_, StoreData>, name: &Val) -> wasmtime::Result<Val> {
+    use wasmtime::{FieldType, Finality, Mutability, StorageType};
+    let intr = build_intrinsic_types(caller.engine())?;
+    let mut fields: Vec<_> = intr.string.fields().collect();
+    fields.push(FieldType::new(
+        Mutability::Var,
+        StorageType::ValType(ValType::I32),
+    ));
+    let ty = crate::runtime::gc_singleton::singleton_struct(
+        caller.engine(),
+        Finality::Final,
+        Some(intr.string),
+        fields,
+    )?;
+    let name = as_struct(caller, name, "inserted field name")?;
+    let values = [
+        name.field(&mut *caller, 0)?,
+        name.field(&mut *caller, 1)?,
+        Val::I32(2),
+    ];
+    let pre = StructRefPre::new(&mut *caller, ty);
+    Ok(Val::AnyRef(Some(
+        StructRef::new(&mut *caller, &pre, &values)?.to_anyref(),
+    )))
+}
+
+pub(crate) fn field_was_inserted(
+    caller: &mut Caller<'_, StoreData>,
+    name: &Val,
+) -> wasmtime::Result<bool> {
+    let name = as_struct(caller, name, "field name")?;
+    let string = build_intrinsic_types(caller.engine())?.string;
+    if StructType::eq(&name.ty(&*caller)?, &string) {
+        return Ok(false);
+    }
+    Ok(matches!(name.field(&mut *caller, 2)?, Val::I32(2)))
+}
+
 /// The compiler marks rejected known fields with non-null mask slots.
 fn spread_omitted_fields(
     caller: &mut Caller<'_, StoreData>,
@@ -248,7 +344,9 @@ fn has_own(caller: &mut Caller<'_, StoreData>, obj: &Val, key: &Val) -> wasmtime
         let name = names.get(&mut *caller, i)?;
         if string_units(caller, &name)? == target {
             let value = values.get(&mut *caller, i)?;
-            return field_is_present(caller, &name, &value);
+            return Ok(
+                field_is_present(caller, &name, &value)? && !is_accessor_slot(caller, &name)?
+            );
         }
     }
     Ok(false)
@@ -333,12 +431,21 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         linker,
         MODULE_NAME,
         ctor_key("hasOwn"),
-        ft(vec![obj.clone(), string], vec![boolean.clone()]),
+        ft(vec![obj.clone(), string.clone()], vec![boolean.clone()]),
         true,
         |caller, params, results| {
             results[0] = Val::I32(i32::from(has_own(caller, &params[0], &params[1])?));
             Ok(())
         },
+    )?;
+
+    register_host_fn(
+        linker,
+        MODULE_NAME,
+        ctor_key("#insertField"),
+        ft(vec![obj.clone(), string, obj.clone()], vec![]),
+        true,
+        |caller, params, _| insert_field(caller, &params[0], &params[1], &params[2]),
     )?;
 
     let shape = ValType::Ref(RefType::new(
@@ -362,6 +469,32 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     register_host_fn_async(
         linker,
         MODULE_NAME,
+        ctor_key("#toJson"),
+        ft(
+            vec![obj.clone()],
+            vec![ValType::Ref(RefType::new(
+                false,
+                HeapType::ConcreteStruct(intr.string.clone()),
+            ))],
+        ),
+        true,
+        |caller, params, results| {
+            Box::pin(async move {
+                let intr = build_intrinsic_types(caller.engine())?;
+                results[0] = super::vtable::object_to_json(
+                    caller,
+                    &params[0],
+                    &intr.raw_string,
+                    &intr.string,
+                )
+                .await?;
+                Ok(())
+            })
+        },
+    )?;
+    register_host_fn_async(
+        linker,
+        MODULE_NAME,
         ctor_key("is"),
         ft(vec![obj.clone(), obj], vec![boolean]),
         true,
@@ -375,6 +508,24 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
 }
 
 pub fn declare(defs: &mut PackageDeclaration) {
+    declare_method(
+        defs,
+        "#toJson",
+        ctor_key("#toJson"),
+        vec![Param::new("object", Type::Unknown)],
+        Type::String,
+    );
+    declare_method(
+        defs,
+        "#insertField",
+        ctor_key("#insertField"),
+        vec![
+            Param::new("object", Type::Unknown),
+            Param::new("name", Type::String),
+            Param::new("value", Type::Unknown),
+        ],
+        Type::Void,
+    );
     // Compiler-only helper: deliberately absent from ObjectConstructor's public surface.
     declare_method(
         defs,

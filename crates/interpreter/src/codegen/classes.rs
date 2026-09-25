@@ -132,11 +132,13 @@ impl ClassLayout {
             .map(|f| super::field_names::FieldName {
                 name: f.name.clone(),
                 optional: f.optional,
+                is_accessor: false,
             })
             .collect();
         names.extend(self.payload_slots().map(|s| super::field_names::FieldName {
             name: s.name.clone(),
             optional: false,
+            is_accessor: s.name.starts_with("get ") || s.name.starts_with("set "),
         }));
         names
     }
@@ -662,8 +664,14 @@ impl ClassPlan {
         // to be re-listed.
         let fields: Vec<FieldType> = vec![
             fieldtype_ref(class.vtable_type_idx),
-            fieldtype_ref(intrinsics.field_names),
-            fieldtype_ref(intrinsics.object_fields),
+            FieldType {
+                mutable: true,
+                ..fieldtype_ref(intrinsics.field_names)
+            },
+            FieldType {
+                mutable: true,
+                ..fieldtype_ref(intrinsics.object_fields)
+            },
         ];
         substruct(fields, Some(supertype))
     }
@@ -949,10 +957,11 @@ impl ClassPlan {
             code.function(&user_method_thunk("toJson").unwrap_or_else(|| {
                 emit_class_to_json_body(
                     &class.fields,
+                    class.payload_field_names().len() as u32,
                     intrinsics,
                     string_vtable_global_idx,
                     string_concat_func_idx,
-                    ctx.symbols.optional_field_name_type(),
+                    ctx.symbols,
                 )
             }));
             code.function(&emit_class_hash_body(class.fields.len() as u32, intrinsics));
@@ -1923,10 +1932,11 @@ fn emit_class_to_string_body(
 /// Trailing method-closure slots are not fields and are skipped.
 fn emit_class_to_json_body(
     fields: &[FieldLayout],
+    named_len: u32,
     intrinsics: IntrinsicTypeIndices,
     string_vtable_global_idx: u32,
     string_concat_func_idx: u32,
-    optional_name_type: u32,
+    symbols: &SymbolTable,
 ) -> Function {
     let push_str = |f: &mut Function, text: &str| {
         crate::codegen::intrinsics::push_string_literal(
@@ -1946,6 +1956,7 @@ fn emit_class_to_json_body(
 
     if sorted.is_empty() {
         let mut f = Function::new([]);
+        super::user_subtypes::emit_grown_object_to_json(&mut f, intrinsics, symbols, named_len);
         push_str(&mut f, "{}");
         f.instruction(&Instruction::End);
         return f;
@@ -1971,6 +1982,7 @@ fn emit_class_to_json_body(
         (1, ValType::I32),
     ];
     let mut f = Function::new(locals);
+    super::user_subtypes::emit_grown_object_to_json(&mut f, intrinsics, symbols, named_len);
     let (fields_arr, acc, elem, tj_fn) = (1u32, 2u32, 3u32, 4u32);
 
     f.instruction(&Instruction::LocalGet(0));
@@ -2005,7 +2017,7 @@ fn emit_class_to_json_body(
             super::field_names::emit_optional_presence(
                 &mut f,
                 intrinsics,
-                optional_name_type,
+                symbols.optional_field_name_type(),
                 0,
                 *slot,
                 elem,

@@ -26,7 +26,8 @@ use crate::CapabilitySchema;
 // contravariant overrides. Older method signatures cannot link to new consumers.
 // v7: optional field names carry per-instance presence bits. Older artifacts
 // conflate absent fields with explicit null and cannot share the new markers.
-pub const ARTIFACT_SCHEMA_VERSION: u32 = 7;
+// v8: replaceable object-shape arrays and explicitly marked accessor payload names.
+pub const ARTIFACT_SCHEMA_VERSION: u32 = 8;
 
 const WASM_FILE: &str = "pkg.wasm";
 const CAPABILITIES_FILE: &str = "capabilities.yaml";

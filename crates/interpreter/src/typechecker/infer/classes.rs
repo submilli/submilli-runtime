@@ -1340,6 +1340,10 @@ impl<'a> Inferer<'a> {
         let field = &member.name;
         let check = crate::FieldNarrowingCheck {
             declaration: Some(member.child_class.clone()),
+            minimal_test_target: (self.array_representation_distinguishes(&parent_ty, child_ty)
+                || (matches!(test, crate::FieldNarrowingTest::NonNull)
+                    && !type_mentions_erased_parameter(child_ty)))
+            .then(|| child_ty.clone()),
             test,
             message: format!(
                 "field `{field}` holds a value its declaration does not admit: \
@@ -1356,6 +1360,31 @@ impl<'a> Inferer<'a> {
             } = &mut symbol.kind
         {
             narrowing_checks.insert(field.clone(), check);
+        }
+    }
+
+    /// Only skip the element walk when every array the ancestor admits also
+    /// satisfies the child. Unknown, structural, and other erased alternatives
+    /// require the full validator because they can conceal incompatible arrays.
+    fn array_representation_distinguishes(&self, parent: &Type, child: &Type) -> bool {
+        let child_non_null = super::narrowing::strip_null(child);
+        if !matches!(child_non_null.peel(), Type::Array(_)) {
+            return false;
+        }
+        match parent.peel() {
+            Type::Union(members) => members
+                .iter()
+                .all(|member| self.array_representation_distinguishes(member, child)),
+            Type::Array(_) | Type::Tuple(_) => super::assignable(parent, child, self.resolver()),
+            Type::Null
+            | Type::Number
+            | Type::NumberLiteral(_)
+            | Type::Boolean
+            | Type::BooleanLiteral(_)
+            | Type::String
+            | Type::StringLiteral(_)
+            | Type::BigInt => true,
+            _ => false,
         }
     }
 

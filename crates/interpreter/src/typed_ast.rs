@@ -992,6 +992,10 @@ pub struct FieldNarrowingCheck {
     #[serde(default)]
     pub declaration: Option<MangledName>,
     pub test: FieldNarrowingTest,
+    /// A concrete declaration type whose ancestor alternatives need only a
+    /// presence or representation check. Other read types still validate fully.
+    #[serde(default)]
+    pub minimal_test_target: Option<Type>,
     pub message: String,
 }
 

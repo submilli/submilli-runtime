@@ -349,7 +349,7 @@ fn emit_subtype_to_json_body(
             intrinsics,
             string_concat_func_idx,
             string_vtable_global_idx,
-            symbols.optional_field_name_type(),
+            symbols,
         );
     };
     let pkg_string_global_idx =
@@ -382,12 +382,41 @@ fn emit_subtype_to_json_body(
     f
 }
 
+/// Static serializers fall back to the dynamic walker after shape growth.
+pub(super) fn emit_grown_object_to_json(
+    function: &mut Function,
+    intrinsics: IntrinsicTypeIndices,
+    symbols: &SymbolTable,
+    original_len: u32,
+) {
+    function.instruction(&Instruction::LocalGet(0));
+    function.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(
+        intrinsics.object_shape,
+    )));
+    function.instruction(&Instruction::StructGet {
+        struct_type_index: intrinsics.object_shape,
+        field_index: 1,
+    });
+    function.instruction(&Instruction::ArrayLen);
+    function.instruction(&Instruction::I32Const(original_len as i32));
+    function.instruction(&Instruction::I32GtU);
+    function.instruction(&Instruction::If(BlockType::Empty));
+    function.instruction(&Instruction::LocalGet(0));
+    function.instruction(&Instruction::Call(
+        symbols
+            .prelude_func_idx("ObjectConstructor##toJson")
+            .expect("dynamic object serializer imported"),
+    ));
+    function.instruction(&Instruction::Return);
+    function.instruction(&Instruction::End);
+}
+
 fn emit_subtype_to_json_vtable_body(
     subtype: &UserSubtype,
     intrinsics: IntrinsicTypeIndices,
     string_concat_func_idx: u32,
     string_vtable_global_idx: u32,
-    optional_name_type: u32,
+    symbols: &SymbolTable,
 ) -> Function {
     let Type::Object { fields } = &subtype.ty else {
         unreachable!(
@@ -409,6 +438,7 @@ fn emit_subtype_to_json_vtable_body(
         (1, ValType::I32), // Whether any serializable field has been emitted.
     ];
     let mut f = Function::new(locals);
+    emit_grown_object_to_json(&mut f, intrinsics, symbols, fields.len() as u32);
     let self_t = 1u32;
     let acc = 2u32;
     let elem = 3u32;
@@ -471,7 +501,7 @@ fn emit_subtype_to_json_vtable_body(
             super::field_names::emit_optional_presence(
                 &mut f,
                 intrinsics,
-                optional_name_type,
+                symbols.optional_field_name_type(),
                 self_t,
                 idx as u32,
                 elem,

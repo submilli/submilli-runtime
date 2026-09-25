@@ -2,10 +2,10 @@
 // property can be backed at runtime: a data slot, a `set` accessor, a `get` with
 // no `set` (the target exists but is read-only, so the write throws rather than
 // vanishing), and absent entirely (an optional member the value never
-// materialised, where the write is discarded).
+// materialised, where the write creates a data slot).
 //
 // The value expression must be evaluated exactly once whichever branch runs —
-// including the discarding one, since the source wrote a call.
+// including the inserting one, since the source wrote a call.
 interface Bag {
   tag: string;
   note?: string;
@@ -79,6 +79,6 @@ function main(): void {
   const raw = { tag: "raw" };
   const absent: Bag = raw;
   put(absent);
-  assert(absent.note === null, "absent optional discards the write");
-  assert(calls === 4, "the discarding branch evaluated its value exactly once");
+  assert(absent.note === "v4", "absent optional gets a new data slot");
+  assert(calls === 4, "the inserting branch evaluated its value exactly once");
 }

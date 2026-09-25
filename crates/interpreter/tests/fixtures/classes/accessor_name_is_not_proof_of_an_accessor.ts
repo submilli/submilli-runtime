@@ -24,16 +24,16 @@ class RealAccessor implements Foo {
 
 function main(): void {
   // Parsed data whose key collides with the accessor ABI. The member is absent,
-  // so the read is `null` and the write goes nowhere.
+  // so the read is `null` and the write creates a data property.
   const collide = JSON.parse('{"get x": 5}') as Foo;
   assert(collide.x === null, "a data field named `get x` is not an accessor");
   collide.x = 7;
-  assert(collide.x === null, "and a write to it is still an absent-member write");
+  assert(collide.x === 7, "a write creates the absent data property");
 
   const collideSetter = JSON.parse('{"set x": 5}') as Foo;
   assert(collideSetter.x === null, "same for a data field named `set x`");
   collideSetter.x = 7;
-  assert(collideSetter.x === null, "and its write");
+  assert(collideSetter.x === 7, "a setter-like key does not intercept insertion");
 
   // Both keys at once, plus a real member alongside.
   const both = JSON.parse('{"get x": 1, "set x": 2}') as Foo;

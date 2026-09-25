@@ -829,14 +829,26 @@ pub(crate) fn emit_narrowed_field_read_as(
     // substitutions and nested interface metadata that the declaration could
     // not know; imported legacy declarations fall back to their recorded test.
     let runtime_test = ctx.ta.runtime_type_tests.get(check_ty.peel());
-    let test = match runtime_test {
-        Some(crate::FieldNarrowingTest::Representation)
-            if !matches!(&check.test, crate::FieldNarrowingTest::Representation) =>
-        {
+    let test = if check
+        .minimal_test_target
+        .as_ref()
+        .is_some_and(|target| target.peel() == check_ty.peel())
+    {
+        if matches!(check.test, crate::FieldNarrowingTest::NonNull) {
             &check.test
+        } else {
+            &crate::FieldNarrowingTest::Representation
         }
-        Some(test) => test,
-        None => &check.test,
+    } else {
+        match runtime_test {
+            Some(crate::FieldNarrowingTest::Representation)
+                if !matches!(&check.test, crate::FieldNarrowingTest::Representation) =>
+            {
+                &check.test
+            }
+            Some(test) => test,
+            None => &check.test,
+        }
     };
     match test {
         // Presence is the check only where the read's type rejects `null`. On a

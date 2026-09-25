@@ -29,8 +29,8 @@ function main(): void {
   const absent: Bag = raw;
   assert(absent.note === null, "absent optional property reads null");
 
-  // The write has nowhere to go, but must not dispatch the sibling's setter.
-  absent.note = "ignored";
-  assert(absent.note === null, "absent optional property stays absent");
+  // The write creates a data property without dispatching the sibling's setter.
+  absent.note = "inserted";
+  assert(absent.note === "inserted", "absent optional property is created");
   assert(noted.note === "accessor", "the write did not reach the other object");
 }
