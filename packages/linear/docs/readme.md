@@ -55,3 +55,61 @@ function main(): string {
     return lines.join("\n");
 }
 ```
+
+## Agent sessions
+
+For an installed Linear agent, bind its app OAuth access token to `LINEAR_API_KEY`.
+OAuth tokens are sent with `Bearer`; personal `lin_api_` keys remain raw. Agent
+session mutations require the app identity that owns the session. Request
+`actor=app` when authorizing; add `app:mentionable` and `app:assignable` if needed.
+
+- `getAgentSession(id)` reads session status, links, plan, and issue/comment IDs.
+- `listAgentActivities(id, page)` reads activity history, including user prompts
+  and their signals. Pagination is explicit and bounded, just like issue lists.
+- `createAgentActivity(input)` emits `thought`, `action`, `elicitation`, `response`,
+  or `error`. A `response` marks work complete; an `elicitation` waits for input.
+  Use `thought` for short progress updates, not private internal reasoning.
+- Only `thought` and `action` may be `ephemeral`. Use `signal: "auth"` with an
+  elicitation and `signalMetadata: { url, providerName }` for account linking, or
+  `signal: "select"` and `signalMetadata: { options: [{ label, value }] }` for choices.
+- `updateAgentSession(id, input)` updates links, summary, or the whole plan.
+  `externalUrls` replaces all links; use `addedExternalUrls`/`removedExternalUrls`
+  for incremental changes. Do not combine replacement and incremental fields.
+- `createAgentSessionOnIssue({ issueId })` and
+  `createAgentSessionOnComment({ commentId })` proactively create sessions without
+  waiting for a mention or delegation. Both accept optional `externalUrls`.
+- `listComments(issueId, page)` reads issue comments with parent thread IDs.
+  `createComment({ issueId, parentId, body })` replies to a comment thread.
+
+A webhook receiver must validate and deduplicate deliveries, acknowledge within
+5 seconds, and route `created` to a new conversation and `prompted` to the existing
+conversation keyed by Linear session ID. A new session needs an activity or
+external URL update within 10 seconds. Handle a user `stop` signal in the harness:
+interrupt ongoing work, then emit a final acknowledgement. These receiving,
+routing, and cancellation responsibilities are outside this outbound API package.
+Do not use an ordinary issue comment as a substitute for a session response.
+
+Example: create a session and record a result. Calling this writes to Linear.
+
+```ts
+import linear from "@submilli/linear";
+
+function main(): string {
+    const issueId = "REPLACE_WITH_TEST_ISSUE_UUID";
+    const session = linear.createAgentSessionOnIssue({ issueId: issueId });
+    linear.createAgentActivity({
+        agentSessionId: session.id,
+        content: { type: "thought", body: "Checking the issue." },
+        ephemeral: true,
+    });
+    const issue = linear.getIssue(issueId);
+    linear.createAgentActivity({
+        agentSessionId: session.id,
+        content: {
+            type: "response",
+            body: issue === null ? "Issue not found." : "Reviewed " + issue.identifier,
+        },
+    });
+    return session.id;
+}
+```

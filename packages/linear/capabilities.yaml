@@ -1,5 +1,14 @@
 namespace: submilli
 provides:
+- name: linear.app/createAgentActivity
+  description: Emit progress, a question, a final response, or an error.
+  fields: {}
+- name: linear.app/createAgentSessionOnComment
+  description: Proactively create a session on an existing comment using the app's token.
+  fields: {}
+- name: linear.app/createAgentSessionOnIssue
+  description: Proactively create a session on an issue using the installed app's token.
+  fields: {}
 - name: linear.app/createComment
   description: Create a comment on an issue; returns the created comment.
   fields: {}
@@ -8,6 +17,9 @@ provides:
   fields:
     teamId:
       type: string
+- name: linear.app/getAgentSession
+  description: Fetch a Linear agent session by UUID.
+  fields: {}
 - name: linear.app/getIssue
   description: Fetch one issue by UUID; null when not found.
   fields: {}
@@ -18,6 +30,12 @@ provides:
       type: string
 - name: linear.app/getViewer
   description: Fetch the authenticated user (whoever owns the API token).
+  fields: {}
+- name: linear.app/listAgentActivities
+  description: Read a page of session activities, including user prompts and stop signals.
+  fields: {}
+- name: linear.app/listComments
+  description: Read comments, including parent IDs for threaded replies.
   fields: {}
 - name: linear.app/listIssues
   description: List issues, optionally filtered and paginated.
@@ -32,6 +50,9 @@ provides:
   fields: {}
 - name: linear.app/listUsers
   description: List users, paginated.
+  fields: {}
+- name: linear.app/updateAgentSession
+  description: Update session links, summary, or the complete plan.
   fields: {}
 - name: linear.app/updateIssue
   description: Update an issue by UUID; returns the updated issue.

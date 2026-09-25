@@ -131,6 +131,8 @@ export interface Issue {
 
 /** A comment on an issue. */
 export interface Comment {
+    /** Parent thread, if this is a reply. */
+    parent?: EntityReference | null;
     /** Stable UUID. */
     id: string;
     /** Markdown body. */
@@ -188,7 +190,167 @@ export interface CommentCreateInput {
     issueId: string;
     /** Markdown body. */
     body: string;
+    /** Parent comment UUID for a threaded reply. */
+    parentId?: string;
 }
+
+// ---------------------------------------------------------------------------
+// Agent session types.
+// ---------------------------------------------------------------------------
+
+/** A related entity's stable UUID. */
+export interface EntityReference {
+    /** Stable UUID. */
+    id: string;
+}
+
+/** A named link shown on the Linear agent session. */
+export interface AgentSessionExternalUrl {
+    /** Human-readable label. */
+    label: string;
+    /** URL to open. */
+    url: string;
+}
+
+/** One item in the complete session plan. */
+export interface AgentPlanStep {
+    /** Description of the step. */
+    content: string;
+    /** Current lifecycle or plan status. */
+    status: "pending" | "inProgress" | "completed" | "canceled";
+}
+
+/** Session state is driven by activities, not set manually. */
+export interface AgentSession {
+    /** Stable UUID. */
+    id: string;
+    /** Current lifecycle or plan status. */
+    status: string;
+    /** URL to open. */
+    url: string | null;
+    /** Session title, or null. */
+    summary: string | null;
+    /** Associated issue, or null. */
+    issue: EntityReference | null;
+    /** Associated comment, or null. */
+    comment: EntityReference | null;
+    /** Named external links; on update, replaces the entire list. */
+    externalUrls: AgentSessionExternalUrl[];
+    /** Complete session plan, or null. */
+    plan: AgentPlanStep[] | null;
+}
+
+/** A progress message, clarification request, result, or failure. */
+export interface AgentTextContent {
+    /** Semantic activity type. */
+    type: "thought" | "elicitation" | "response" | "error";
+    /** Markdown message. */
+    body: string;
+}
+
+/** A tool action and optional result. */
+export interface AgentActionContent {
+    /** Semantic activity type. */
+    type: "action";
+    /** Action being performed. */
+    action: string;
+    /** Action input, such as a path or search term. */
+    parameter: string;
+    /** Optional Markdown action result. */
+    result?: string;
+}
+
+/** Prompt activities are read-only: they originate from the user. */
+export interface AgentPromptContent {
+    /** Semantic activity type. */
+    type: "prompt";
+    /** Markdown message. */
+    body: string;
+}
+/** Activity types an agent may emit; user prompts are excluded. */
+export type AgentActivityContent = AgentTextContent | AgentActionContent;
+
+/** One choice presented with a select signal. */
+export interface AgentSelectOption {
+    /** Human-readable label. */
+    label?: string;
+    /** Value returned when the choice is selected. */
+    value: string;
+}
+/** Metadata for authentication links and selection prompts. */
+export interface AgentSignalMetadata {
+    /** URL to open. */
+    url?: string;
+    /** Optional user allowed to complete authentication. */
+    userId?: string;
+    /** Provider shown in the authentication prompt. */
+    providerName?: string;
+    /** Choices shown for a select signal. */
+    options?: AgentSelectOption[];
+}
+
+/** One recorded session activity, including incoming user prompts. */
+export interface AgentActivity {
+    /** Stable UUID. */
+    id: string;
+    /** Creation timestamp. */
+    createdAt: string;
+    /** Whether the next activity replaces this activity. */
+    ephemeral: boolean;
+    /** Structured activity content. */
+    content: AgentActivityContent | AgentPromptContent;
+    /** Intent modifier; incoming user prompts may carry stop. */
+    signal: string | null;
+    /** Additional signal details. */
+    signalMetadata: AgentSignalMetadata | null;
+}
+
+/** Input for emitting an activity as the installed app. */
+export interface AgentActivityCreateInput {
+    /** Target session UUID. */
+    agentSessionId: string;
+    /** Structured activity content. */
+    content: AgentActivityContent;
+    /** Only thought and action activities may be ephemeral. */
+    ephemeral?: boolean;
+    /** Optional caller-provided UUID. */
+    id?: string;
+    /** Authentication or selection prompt modifier. */
+    signal?: "auth" | "select";
+    /** Additional signal details. */
+    signalMetadata?: AgentSignalMetadata;
+}
+
+/** Partial update; omitted fields remain unchanged. */
+export interface AgentSessionUpdateInput {
+    /** Named external links; on update, replaces the entire list. */
+    externalUrls?: AgentSessionExternalUrl[];
+    /** Links to add without replacing existing links. */
+    addedExternalUrls?: AgentSessionExternalUrl[];
+    /** URLs to remove. */
+    removedExternalUrls?: string[];
+    /** Replaces the complete plan. */
+    plan?: AgentPlanStep[];
+    /** Session title, or null. */
+    summary?: string | null;
+}
+
+/** Input for proactively starting a session on an issue. */
+export interface AgentSessionCreateOnIssueInput {
+    /** Target issue UUID. */
+    issueId: string;
+    /** Named external links; on update, replaces the entire list. */
+    externalUrls?: AgentSessionExternalUrl[];
+}
+
+/** Input for proactively starting a session on a comment. */
+export interface AgentSessionCreateOnCommentInput {
+    /** Target comment UUID. */
+    commentId: string;
+    /** Named external links; on update, replaces the entire list. */
+    externalUrls?: AgentSessionExternalUrl[];
+}
+
 
 // ---------------------------------------------------------------------------
 // Pagination + filtering.
@@ -361,6 +523,95 @@ export function createComment(input: CommentCreateInput): Comment {
         throw new Error("Linear commentCreate did not succeed");
     }
     return comment;
+}
+
+/** Read comments, including parent IDs for threaded replies.
+ * @capability linear.app/listComments {}
+ */
+export function listComments(issueId: string, page: PageOptions | null = null): Page<Comment> {
+    check("linear.app/listComments", {});
+    const vars = buildEntityPageVars(issueId, page);
+    const envelope = graphqlPost(LIST_COMMENTS_QUERY, vars).json() as GraphQlResponse<IssueCommentsData>;
+    return requireData(envelope).issue.comments;
+}
+
+/** Fetch a Linear agent session by UUID.
+ * @capability linear.app/getAgentSession {}
+ */
+export function getAgentSession(id: string): AgentSession {
+    check("linear.app/getAgentSession", {});
+    const vars: IdVars = { id: id };
+    const envelope = graphqlPost(GET_AGENT_SESSION_QUERY, vars).json() as GraphQlResponse<AgentSessionData>;
+    return requireData(envelope).agentSession;
+}
+
+/** Read a page of session activities, including user prompts and stop signals.
+ * @capability linear.app/listAgentActivities {}
+ */
+export function listAgentActivities(id: string, page: PageOptions | null = null): Page<AgentActivity> {
+    check("linear.app/listAgentActivities", {});
+    const vars = buildEntityPageVars(id, page);
+    const envelope = graphqlPost(LIST_AGENT_ACTIVITIES_QUERY, vars).json() as GraphQlResponse<AgentActivitiesData>;
+    return requireData(envelope).agentSession.activities;
+}
+
+/** Emit progress, a question, a final response, or an error.
+ * @capability linear.app/createAgentActivity {}
+ */
+export function createAgentActivity(input: AgentActivityCreateInput): AgentActivity {
+    check("linear.app/createAgentActivity", {});
+    const vars: CreateAgentActivityVars = { input: input };
+    const envelope = graphqlPost(CREATE_AGENT_ACTIVITY_QUERY, vars).json() as GraphQlResponse<AgentActivityCreateData>;
+    const payload = requireData(envelope).agentActivityCreate;
+    if (!payload.success || payload.agentActivity === null) {
+        throw new Error("Linear agentActivityCreate did not succeed");
+    }
+    return payload.agentActivity;
+}
+
+/** Update session links, summary, or the complete plan.
+ * @capability linear.app/updateAgentSession {}
+ */
+export function updateAgentSession(id: string, input: AgentSessionUpdateInput): AgentSession {
+    check("linear.app/updateAgentSession", {});
+    const vars: UpdateAgentSessionVars = { id: id, input: input };
+    const envelope = graphqlPost(UPDATE_AGENT_SESSION_QUERY, vars).json() as GraphQlResponse<AgentSessionUpdateData>;
+    return requireAgentSession(requireData(envelope).agentSessionUpdate, "agentSessionUpdate");
+}
+
+/** Proactively create a session on an issue using the installed app's token.
+ * @capability linear.app/createAgentSessionOnIssue {}
+ */
+export function createAgentSessionOnIssue(input: AgentSessionCreateOnIssueInput): AgentSession {
+    check("linear.app/createAgentSessionOnIssue", {});
+    const vars: CreateAgentSessionOnIssueVars = { input: input };
+    const envelope = graphqlPost(CREATE_AGENT_SESSION_ON_ISSUE_QUERY, vars).json() as GraphQlResponse<AgentSessionCreateOnIssueData>;
+    return requireAgentSession(requireData(envelope).agentSessionCreateOnIssue, "agentSessionCreateOnIssue");
+}
+
+/** Proactively create a session on an existing comment using the app's token.
+ * @capability linear.app/createAgentSessionOnComment {}
+ */
+export function createAgentSessionOnComment(input: AgentSessionCreateOnCommentInput): AgentSession {
+    check("linear.app/createAgentSessionOnComment", {});
+    const vars: CreateAgentSessionOnCommentVars = { input: input };
+    const envelope = graphqlPost(CREATE_AGENT_SESSION_ON_COMMENT_QUERY, vars).json() as GraphQlResponse<AgentSessionCreateOnCommentData>;
+    return requireAgentSession(requireData(envelope).agentSessionCreateOnComment, "agentSessionCreateOnComment");
+}
+
+function requireAgentSession(payload: AgentSessionPayload, operation: string): AgentSession {
+    if (!payload.success || payload.agentSession === null) {
+        throw new Error(`Linear ${operation} did not succeed`);
+    }
+    return payload.agentSession;
+}
+
+function buildEntityPageVars(id: string, page: PageOptions | null): EntityPageVars {
+    const pagination = buildPageVars(page);
+    const vars: EntityPageVars = { id: id };
+    if (pagination.first !== null) vars.first = pagination.first;
+    if (pagination.after !== null) vars.after = pagination.after;
+    return vars;
 }
 
 // ---------------------------------------------------------------------------
@@ -611,6 +862,40 @@ interface CreateCommentVars {
     input: CommentCreateInput;
 }
 
+interface EntityPageVars { id: string; first?: number; after?: string; }
+interface IssueComments { comments: Page<Comment>; }
+interface IssueCommentsData { issue: IssueComments; }
+interface AgentSessionData { agentSession: AgentSession; }
+interface SessionActivities { activities: Page<AgentActivity>; }
+interface AgentActivitiesData { agentSession: SessionActivities; }
+interface AgentSessionPayload { success: boolean; agentSession: AgentSession | null; }
+interface AgentActivityPayload { success: boolean; agentActivity: AgentActivity | null; }
+interface AgentActivityCreateData { agentActivityCreate: AgentActivityPayload; }
+interface AgentSessionUpdateData { agentSessionUpdate: AgentSessionPayload; }
+interface AgentSessionCreateOnIssueData { agentSessionCreateOnIssue: AgentSessionPayload; }
+interface AgentSessionCreateOnCommentData { agentSessionCreateOnComment: AgentSessionPayload; }
+interface CreateAgentActivityVars { input: AgentActivityCreateInput; }
+interface UpdateAgentSessionVars { id: string; input: AgentSessionUpdateInput; }
+interface CreateAgentSessionOnIssueVars { input: AgentSessionCreateOnIssueInput; }
+interface CreateAgentSessionOnCommentVars { input: AgentSessionCreateOnCommentInput; }
+
+const COMMENT_FIELDS = "id body user { id name email active } parent { id }";
+const AGENT_SESSION_FIELDS = "id status url summary issue { id } comment { id } externalUrls plan";
+const AGENT_ACTIVITY_FIELDS = "id createdAt ephemeral signal signalMetadata content { " +
+    "... on AgentActivityThoughtContent { type body } " +
+    "... on AgentActivityActionContent { type action parameter result } " +
+    "... on AgentActivityElicitationContent { type body } " +
+    "... on AgentActivityResponseContent { type body } " +
+    "... on AgentActivityErrorContent { type body } " +
+    "... on AgentActivityPromptContent { type body } }";
+const LIST_COMMENTS_QUERY = `query($id: String!, $first: Int, $after: String) { issue(id: $id) { comments(first: $first, after: $after) { nodes { ${COMMENT_FIELDS} } pageInfo { hasNextPage endCursor } } } }`;
+const GET_AGENT_SESSION_QUERY = `query($id: String!) { agentSession(id: $id) { ${AGENT_SESSION_FIELDS} } }`;
+const LIST_AGENT_ACTIVITIES_QUERY = `query($id: String!, $first: Int, $after: String) { agentSession(id: $id) { activities(first: $first, after: $after) { nodes { ${AGENT_ACTIVITY_FIELDS} } pageInfo { hasNextPage endCursor } } } }`;
+const CREATE_AGENT_ACTIVITY_QUERY = `mutation($input: AgentActivityCreateInput!) { agentActivityCreate(input: $input) { success agentActivity { ${AGENT_ACTIVITY_FIELDS} } } }`;
+const UPDATE_AGENT_SESSION_QUERY = `mutation($id: String!, $input: AgentSessionUpdateInput!) { agentSessionUpdate(id: $id, input: $input) { success agentSession { ${AGENT_SESSION_FIELDS} } } }`;
+const CREATE_AGENT_SESSION_ON_ISSUE_QUERY = `mutation($input: AgentSessionCreateOnIssue!) { agentSessionCreateOnIssue(input: $input) { success agentSession { ${AGENT_SESSION_FIELDS} } } }`;
+const CREATE_AGENT_SESSION_ON_COMMENT_QUERY = `mutation($input: AgentSessionCreateOnComment!) { agentSessionCreateOnComment(input: $input) { success agentSession { ${AGENT_SESSION_FIELDS} } } }`;
+
 const ISSUE_FIELDS =
     "id identifier number title description priority priorityLabel url " +
     "createdAt updatedAt completedAt canceledAt startedAt triagedAt archivedAt autoClosedAt " +
@@ -632,14 +917,18 @@ const LIST_USERS_QUERY = "query($first: Int, $after: String) { users(first: $fir
 
 const CREATE_ISSUE_QUERY = `mutation($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { ${ISSUE_FIELDS} } } }`;
 const UPDATE_ISSUE_QUERY = `mutation($id: String!, $input: IssueUpdateInput!) { issueUpdate(id: $id, input: $input) { success issue { ${ISSUE_FIELDS} } } }`;
-const CREATE_COMMENT_QUERY = "mutation($input: CommentCreateInput!) { commentCreate(input: $input) { success comment { id body user { id name email active } } } }";
+const CREATE_COMMENT_QUERY = `mutation($input: CommentCreateInput!) { commentCreate(input: $input) { success comment { ${COMMENT_FIELDS} } } }`;
 
-// Read the bearer token from the LINEAR_API_KEY secret and attach it raw. The
+// Personal keys use a raw header; OAuth access tokens use Bearer. The
 // literal secret name keeps the `secrets.get` capability statically filterable.
 function authorize(headers: Map<string, string>): void {
     const token = secrets.get("LINEAR_API_KEY");
     if (token !== null) {
-        headers.set("Authorization", token);
+        if (token.startsWith("lin_api_") || token.startsWith("Bearer ")) {
+            headers.set("Authorization", token);
+        } else {
+            headers.set("Authorization", "Bearer " + token);
+        }
     }
 }
 
