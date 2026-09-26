@@ -369,6 +369,65 @@ mod blueprint_scoped {
     }
 
     #[tokio::test]
+    async fn llm_rest_discovery_requires_models_and_permission() {
+        let config = "llm:\n  providers:\n    test:\n      type: anthropic\n  models:\n    test-model:\n      provider: test\n";
+        for (configuration, default, visible) in [
+            ("", "allow", false),
+            (config, "deny", false),
+            (config, "allow", true),
+            (config, "ask-human", true),
+        ] {
+            let blueprint = submilli_blueprint::parse(&format!(
+                "name: scoped\ndefault: {default}\n{configuration}"
+            ))
+            .unwrap();
+            let router = app(AppState::new(ServerConfig {
+                blueprints: Some(Arc::new(InMemoryBlueprintStore::seed([blueprint]))),
+                ..ServerConfig::default()
+            })
+            .unwrap());
+            for query in ["", "models", "submilli:llm", "nothingmatchesthis"] {
+                let (status, body) = get_from(
+                    router.clone(),
+                    &format!("/v1/packages/search?blueprint=scoped&q={query}"),
+                )
+                .await;
+                assert_eq!(status, StatusCode::OK);
+                assert_eq!(body.to_string().contains("submilli:llm"), visible, "{body}");
+            }
+            let (status, body) = get_from(
+                router.clone(),
+                "/v1/packages/docs?blueprint=scoped&name=submilli:llm",
+            )
+            .await;
+            assert_eq!(
+                status,
+                if visible {
+                    StatusCode::OK
+                } else {
+                    StatusCode::NOT_FOUND
+                }
+            );
+            assert_eq!(body["source"] == "host", visible);
+            let (_, body) = get_from(
+                router.clone(),
+                "/v1/packages/docs?blueprint=scoped&name=submilli:llmx",
+            )
+            .await;
+            assert_eq!(body["did_you_mean"] == "submilli:llm", visible, "{body}");
+            let (status, body) = get_from(router.clone(), "/v1/blueprints/scoped/prompt").await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(
+                body["prompt"].as_str().unwrap().contains("Model calls"),
+                visible
+            );
+            let (status, body) = get_from(router, "/v1/packages/docs?name=submilli:llm").await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(body["source"], "host");
+        }
+    }
+
+    #[tokio::test]
     async fn policy_hides_libraries_from_rest_discovery() {
         let store = tempfile::tempdir().unwrap();
         let router = router(store.path());

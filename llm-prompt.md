@@ -140,14 +140,7 @@ restart, so a key you wrote on an earlier call may legitimately be
 missing. Read a key that may be absent as `get<T | null>(key)` and
 handle the `null`.
 
-Model calls (`submilli:llm`): `call(model, prompt)` returns a
-`Completion`; `call<T>` returns a checked `T`. `ok` is not "nothing
-threw" — a truncated or filtered completion is `ok: false` **and still
-carries `text`**, so `if (!r.ok) continue` drops usable output. Token
-counts may be `null`: indeterminate, not free. `batch` is
-bounded-concurrent, one result per prompt, positionally. Models are
-operator-declared — `models()` lists them, and `contextWindow` /
-`description` are `null` when undeclared, so filtering drops those.
+{llm_guidance}
 
 Output: success returns just `main()`'s value as a string (a `string`
 return verbatim; numbers/booleans via `toString`; objects/arrays as
@@ -171,6 +164,7 @@ resolved values.
 | `{http_guidance}` | HTTP credential guidance, only when HTTP is visible | same visibility rule |
 | `{builtins}` | comma-separated catalog of in-scope built-in types + namespaces | prelude (`interpreter::packages::builtins`) |
 | `{mcp_packages}` | empty when no MCP servers; else a note on the available `@mcp/<server>` packages | policy `mcp:` block |
+| `{llm_guidance}` | model-call guidance only when at least one model is declared and `main` has potential `llm.call` permission | policy `llm.models`, default, and `permissions:` rules |
 | `{git_package}` | empty unless Git is configured; otherwise a pointer to its package docs | policy `git:` block |
 
 HTTP, FS, and Code are advertised when the default action is not `deny`, or
@@ -178,7 +172,10 @@ HTTP, FS, and Code are advertised when the default action is not `deny`, or
 default means `deny`. Filters and rule shadowing do not affect discovery;
 `ask-human` keeps a library visible without authorizing execution. Code shares
 `fs.read`, `fs.write`, `fs.stat`, and `fs.list` with FS. Other callers' grants
-do not advertise these libraries to `main`.
+do not advertise these libraries to `main`. LLM additionally requires at least
+one declared model and uses the same non-deny rule for `llm.call`. A provider
+without models is not enough to advertise LLM. Git visibility depends only on
+the presence of its `git:` configuration.
 
 Add new placeholders here when the resolved value is policy-dependent
 and the LLM needs it during planning. Keep the list short — most

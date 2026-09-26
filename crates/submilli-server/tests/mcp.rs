@@ -1466,7 +1466,7 @@ async fn packages_search_by_symbol_and_list_all() {
     // Empty query lists every user-facing module (security excluded).
     let (_, _, all) = h.post(EPH, search(2, ""), Some(&session)).await;
     let count = output(&all)["results"].as_array().unwrap().len();
-    assert_eq!(count, 8, "expected 8 permitted stdlib modules: {all}");
+    assert_eq!(count, 7, "expected 7 permitted stdlib modules: {all}");
     assert!(
         output(&all)["results"]
             .as_array()
@@ -2075,5 +2075,89 @@ async fn policy_hides_libraries_from_mcp_discovery() {
                 assert_eq!(output(&response)["error"], "unknown_package");
             }
         }
+    }
+}
+
+#[tokio::test]
+async fn llm_discovery_requires_models_and_permission() {
+    let config = "llm:\n  providers:\n    test:\n      type: anthropic\n  models:\n    test-model:\n      provider: test\n";
+    for (configuration, policy, visible) in [
+        ("", "default: allow\n", false),
+        (
+            "llm:\n  providers:\n    test:\n      type: anthropic\n",
+            "default: allow\n",
+            false,
+        ),
+        (config, "default: deny\n", false),
+        (config, "default: allow\n", true),
+        (
+            config,
+            "permissions:\n  main:\n    - capability: llm.call\n      action: ask-human\n",
+            true,
+        ),
+    ] {
+        let blueprint =
+            submilli_blueprint::parse(&format!("name: eph\n{configuration}{policy}")).unwrap();
+        let h = Harness::from_blueprints(vec![blueprint]);
+        let session = h.handshake(EPH).await;
+        let (_, _, tools) = h.post(EPH, tools_list(1), Some(&session)).await;
+        let prompt = tool_desc(&tools, EXECUTE);
+        assert_eq!(prompt.contains("submilli:llm"), visible);
+        assert_eq!(prompt.contains("Model calls"), visible);
+        for query in ["", "submilli:llm", "models", "nothingmatchesthis"] {
+            let (_, _, response) = h
+                .post(
+                    EPH,
+                    rpc_call(
+                        2,
+                        "submilli__typescript__packages__search",
+                        json!({"query": query}),
+                    ),
+                    Some(&session),
+                )
+                .await;
+            assert_eq!(
+                output(&response).to_string().contains("submilli:llm"),
+                visible,
+                "{response}"
+            );
+        }
+        let (_, _, response) = h
+            .post(
+                EPH,
+                rpc_call(
+                    3,
+                    "submilli__typescript__packages__docs",
+                    json!({"name": "submilli:llm"}),
+                ),
+                Some(&session),
+            )
+            .await;
+        assert_eq!(output(&response)["source"] == "host", visible, "{response}");
+        if !visible {
+            assert_eq!(output(&response)["error"], "unknown_package");
+        }
+        let (_, _, response) = h
+            .post(
+                EPH,
+                rpc_call(
+                    4,
+                    "submilli__typescript__builtins__docs",
+                    json!({"names": ["submilli:llm", "submilli:llmx"]}),
+                ),
+                Some(&session),
+            )
+            .await;
+        let entries = output(&response)["results"].as_array().unwrap().clone();
+        assert_eq!(
+            entries[0]["error"] == "not_a_builtin",
+            visible,
+            "{response}"
+        );
+        assert_eq!(
+            entries[1]["did_you_mean"] == "submilli:llm",
+            visible,
+            "{response}"
+        );
     }
 }

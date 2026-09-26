@@ -10,6 +10,7 @@ pub struct LibraryVisibility {
     fs: bool,
     code: bool,
     git: bool,
+    llm: bool,
 }
 
 impl LibraryVisibility {
@@ -20,6 +21,7 @@ impl LibraryVisibility {
             fs: true,
             code: true,
             git: false,
+            llm: true,
         }
     }
 
@@ -31,6 +33,7 @@ impl LibraryVisibility {
                 .iter()
                 .any(|capability| has_grant(blueprint, capability)),
             git: blueprint.git.is_some(),
+            llm: !blueprint.llm.models.is_empty() && has_grant(blueprint, "llm.call"),
         }
     }
 
@@ -40,6 +43,7 @@ impl LibraryVisibility {
             "submilli:fs" => self.fs,
             "submilli:code" => self.code,
             "submilli:git" => self.git,
+            "submilli:llm" => self.llm,
             _ => true,
         }
     }
@@ -91,5 +95,52 @@ mod tests {
             assert!(!visibility.allows(name));
         }
         assert!(visibility.allows("submilli:crypto"));
+    }
+
+    #[test]
+    fn llm_needs_a_model_and_a_non_deny_main_policy() {
+        for config in [
+            "",
+            "llm: {}\n",
+            "llm:\n  providers:\n    test:\n      type: anthropic\n",
+        ] {
+            for default in ["deny", "allow", "ask-human"] {
+                let blueprint =
+                    submilli_blueprint::parse(&format!("name: test\ndefault: {default}\n{config}"))
+                        .unwrap();
+                assert!(!LibraryVisibility::for_blueprint(&blueprint).allows("submilli:llm"));
+            }
+        }
+        let config = "llm:\n  providers:\n    test:\n      type: anthropic\n  models:\n    test-model:\n      provider: test\n";
+        for (policy, visible) in [
+            ("", false),
+            ("default: deny\n", false),
+            ("default: allow\n", true),
+            ("default: ask-human\n", true),
+            (
+                "permissions:\n  '@acme/tools':\n    - capability: llm.call\n      action: allow\n",
+                false,
+            ),
+        ] {
+            let blueprint =
+                submilli_blueprint::parse(&format!("name: test\n{config}{policy}")).unwrap();
+            assert_eq!(
+                LibraryVisibility::for_blueprint(&blueprint).allows("submilli:llm"),
+                visible,
+                "{policy}"
+            );
+        }
+        for action in ["deny", "allow", "ask-human"] {
+            for filter in ["", "      filter: model == \"test-model\"\n"] {
+                let blueprint = submilli_blueprint::parse(&format!(
+                    "name: test\n{config}permissions:\n  main:\n    - capability: llm.call\n      action: deny\n    - capability: llm.call\n      action: {action}\n{filter}"
+                )).unwrap();
+                assert_eq!(
+                    LibraryVisibility::for_blueprint(&blueprint).allows("submilli:llm"),
+                    action != "deny"
+                );
+            }
+        }
+        assert!(LibraryVisibility::unscoped().allows("submilli:llm"));
     }
 }

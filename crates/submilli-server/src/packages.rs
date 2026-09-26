@@ -632,31 +632,41 @@ mod policy_visibility_tests {
         let store = PackageStore::new(directory.path());
         let catalog = McpCatalog::empty();
         for (policy, expected) in [
-            ("", [false, false, false]),
-            ("default: allow", [true, true, true]),
-            ("default: ask-human", [true, true, true]),
+            ("", [false, false, false, false]),
+            ("default: allow", [true, true, true, false]),
+            ("default: ask-human", [true, true, true, false]),
             (
                 "permissions:\n  main:\n    - capability: http.get\n      action: ask-human",
-                [true, false, false],
+                [true, false, false, false],
             ),
             (
                 "permissions:\n  main:\n    - capability: fs.mkdir\n      action: allow",
-                [false, true, false],
+                [false, true, false, false],
             ),
             (
                 "permissions:\n  main:\n    - capability: fs.read\n      action: allow",
-                [false, true, true],
+                [false, true, true, false],
+            ),
+            (
+                "default: allow\nllm:\n  providers:\n    test:\n      type: anthropic\n  models:\n    test-model:\n      provider: test",
+                [true, true, true, true],
             ),
         ] {
             let blueprint = submilli_blueprint::parse(&format!("name: test\n{policy}\n")).unwrap();
-            for (name, visible) in ["submilli:http", "submilli:fs", "submilli:code"]
-                .into_iter()
-                .zip(expected)
+            for (name, visible) in [
+                "submilli:http",
+                "submilli:fs",
+                "submilli:code",
+                "submilli:llm",
+            ]
+            .into_iter()
+            .zip(expected)
             {
                 for fetch in [Fetch::Rest, Fetch::Mcp] {
                     let symbol = match name {
                         "submilli:http" => "download",
                         "submilli:fs" => "readText",
+                        "submilli:llm" => "models",
                         _ => "diffText",
                     };
                     for query in ["", name, symbol, "nothingmatchesthis"] {

@@ -101,12 +101,43 @@ pub fn execute_tool_description(blueprint: &Blueprint) -> String {
     prompt_template()
         .replace("{stdlib_modules}", &stdlib_modules_phrase(visibility))
         .replace("{sandbox}", &sandbox)
-        .replace("{http_guidance}", if http_visible { HTTP_GUIDANCE } else { "" })
+        .replace(
+            "{http_guidance}",
+            if http_visible { HTTP_GUIDANCE } else { "" },
+        )
         .replace("{http_access}", &http_access)
+        .replace(
+            "{llm_guidance}",
+            if visibility.allows("submilli:llm") {
+                LLM_GUIDANCE
+            } else {
+                ""
+            },
+        )
         .replace("{builtins}", &builtins_phrase())
         .replace("{mcp_packages}", &mcp_packages_phrase(blueprint))
-        .replace("{git_package}", if blueprint.git.is_some() { "\n\nGit is available as `submilli:git`. Read its package docs before use; init, clone, fetch/pull, and commit require their respective Git capabilities. Other local operations need no Git capability. Push is not available." } else { "" })
+        .replace(
+            "{git_package}",
+            if visibility.allows("submilli:git") {
+                GIT_GUIDANCE
+            } else {
+                ""
+            },
+        )
 }
+
+const GIT_GUIDANCE: &str = "\n\nGit is available as `submilli:git`. Read its package docs before use; \
+    init, clone, fetch/pull, and commit require their respective Git capabilities. \
+    Other local operations need no Git capability. Push is not available.";
+
+const LLM_GUIDANCE: &str = r#"Model calls (`submilli:llm`): `call(model, prompt)` returns a
+`Completion`; `call<T>` returns a checked `T`. `ok` is not "nothing
+threw" — a truncated or filtered completion is `ok: false` **and still
+carries `text`**, so `if (!r.ok) continue` drops usable output. Token
+counts may be `null`: indeterminate, not free. `batch` is
+bounded-concurrent, one result per prompt, positionally. Models are
+operator-declared — `models()` lists them, and `contextWindow` /
+`description` are `null` when undeclared, so filtering drops those."#;
 
 const HTTP_GUIDANCE: &str = r#"When making outbound HTTP, do NOT construct `Authorization` headers
 or include API keys in query strings. The operator's policy
@@ -421,6 +452,67 @@ mod tests {
             assert!(rendered.contains("Sandbox: File system ephemeral"));
             assert_eq!(rendered.contains("submilli:code"), code_visible);
             assert!(!rendered.contains("submilli:http"));
+        }
+    }
+
+    #[test]
+    fn llm_prompt_guidance_requires_configuration_and_permission() {
+        let config = "llm:\n  providers:\n    test:\n      type: anthropic\n  models:\n    test-model:\n      provider: test\n";
+        for (configuration, policy, visible) in [
+            ("", "default: allow\n", false),
+            (config, "", false),
+            (config, "default: allow\n", true),
+            (
+                config,
+                "permissions:\n  main:\n    - capability: llm.call\n      action: ask-human\n",
+                true,
+            ),
+        ] {
+            let blueprint =
+                submilli_blueprint::parse(&format!("name: test\n{configuration}{policy}")).unwrap();
+            let prompt = execute_tool_description(&blueprint);
+            for text in [
+                "submilli:llm",
+                "Model calls",
+                "call(model, prompt)",
+                "call<T>",
+                "contextWindow",
+                "models()",
+            ] {
+                assert_eq!(prompt.contains(text), visible, "{text}: {prompt}");
+            }
+            assert!(!prompt.contains("{llm_guidance}"));
+        }
+    }
+
+    #[test]
+    fn git_prompt_guidance_follows_configuration_not_capability_grants() {
+        for config in [
+            "",
+            "git:\n  identity:\n    name: Agent\n    email: agent@example.com\n",
+        ] {
+            for policy in [
+                "default: allow\n",
+                "default: deny\n",
+                "permissions:\n  main:\n    - capability: git.init\n      action: allow\n",
+            ] {
+                let blueprint =
+                    submilli_blueprint::parse(&format!("name: test\n{config}{policy}")).unwrap();
+                let prompt = execute_tool_description(&blueprint);
+                for text in [
+                    "submilli:git",
+                    "Git is available",
+                    "init, clone, fetch/pull",
+                    "Push is not available",
+                ] {
+                    assert_eq!(
+                        prompt.contains(text),
+                        !config.is_empty(),
+                        "{text}: {prompt}"
+                    );
+                }
+                assert!(!prompt.contains("{git_package}"));
+            }
         }
     }
 
