@@ -222,6 +222,9 @@ async fn run_inner(
         Ok(s) => s,
         Err(err) => return internal_failure(&format!("store init failed: {err}")),
     };
+    // The shared ticker must not interrupt setup using RuntimeConfig's
+    // single-watchdog deadline. Arm this store only when main begins.
+    store.set_epoch_deadline(u64::MAX);
     let execution = async {
         // Without this the store has no `ResourceLimiter`, and the engine falls back
         // to its 1 GiB abort-safety cap — which exists to avoid an OOM-abort, not to
@@ -269,7 +272,7 @@ async fn run_inner(
         };
         rt.instantiate = phase_start.elapsed();
 
-        let _watchdog = runtime.config.arm_timeout(runtime.engine);
+        crate::execution_timeout::arm(&mut store, runtime.config.timeout);
         let phase_start = Instant::now();
         let dispatch = dispatch_main_async(&mut store, &instance).await;
         rt.execute = phase_start.elapsed();

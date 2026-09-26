@@ -173,6 +173,13 @@ pub struct Cli {
     #[arg(long, value_name = "MEGABYTES")]
     max_execution_memory: Option<u64>,
 
+    /// Execution timeout in whole seconds; 0 disables it. [default: disabled]
+    /// Starts at main; epoch checks may interrupt up to one tick later.
+    /// Pending host calls are not cancelled by this timeout.
+    /// Env: `$SUBMILLI_MAX_EXECUTION_TIME`, which outranks the config file.
+    #[arg(long, value_name = "SECONDS")]
+    max_execution_time: Option<u64>,
+
     /// Memory every live session's `submilli:session` state may hold *in total*,
     /// in megabytes. Unlike `--max-execution-memory`, which bounds one execution,
     /// this bounds the process against session count: reservations are taken

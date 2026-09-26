@@ -45,6 +45,7 @@ futures = { workspace = true }
 ureq = { workspace = true }
 
 [dev-dependencies]
+wasm-encoder = { workspace = true }
 async-trait = { workspace = true }
 http-body-util = { workspace = true }
 submilli-blueprint = { path = "../submilli-blueprint" }

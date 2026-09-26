@@ -766,3 +766,32 @@ async fn git_transitive_imports_require_configuration_and_keep_package_attributi
         "{denied}"
     );
 }
+
+#[tokio::test]
+async fn configured_execution_timeout_interrupts_loop_without_expiring_early() {
+    use std::time::{Duration, Instant};
+    let blueprints = Arc::new(InMemoryBlueprintStore::seed([Blueprint {
+        name: BLUEPRINT_NAME.into(),
+        ..Default::default()
+    }]));
+    let router = app(AppState::new(ServerConfig {
+        blueprints: Some(blueprints),
+        runtime: submilli_server::RuntimeConfig {
+            timeout: Some(Duration::from_secs(1)),
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .unwrap());
+    let started = Instant::now();
+    let (_, body) = tokio::time::timeout(
+        Duration::from_secs(15),
+        execute_on(&router, "function main(): void { while (true) {} }"),
+    )
+    .await
+    .expect("loop must be interrupted");
+    assert!(started.elapsed() >= Duration::from_secs(1));
+    assert_eq!(body["error"]["kind"], "timeout", "{body}");
+    let (_, body) = execute_on(&router, "function main(): number { return 42; }").await;
+    assert_eq!(body["result"], "42", "{body}");
+}

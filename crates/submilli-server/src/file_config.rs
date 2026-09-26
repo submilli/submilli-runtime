@@ -75,6 +75,8 @@ pub struct FileConfig {
     pub shutdown_grace: Option<u64>,
     /// Megabytes of memory one execution may hold live.
     pub max_execution_memory: Option<u64>,
+    /// Whole seconds; zero or omission disables execution timeout.
+    pub max_execution_time: Option<u64>,
     /// Megabytes of `submilli:session` state every live session may hold in
     /// total. Bounds the process against session count, where
     /// `max_execution_memory` bounds a single execution.
@@ -172,6 +174,7 @@ pub(crate) struct EnvConfig {
     port: Option<String>,
     shutdown_grace: Option<String>,
     max_execution_memory: Option<String>,
+    max_execution_time: Option<String>,
     max_session_state_memory: Option<String>,
     max_llm_tokens: Option<String>,
     max_execution_llm_tokens: Option<String>,
@@ -238,6 +241,7 @@ impl EnvConfig {
             port: var("SUBMILLI_PORT"),
             shutdown_grace: var("SUBMILLI_SHUTDOWN_GRACE"),
             max_execution_memory: var("SUBMILLI_MAX_EXECUTION_MEMORY"),
+            max_execution_time: var("SUBMILLI_MAX_EXECUTION_TIME"),
             max_session_state_memory: var("SUBMILLI_MAX_SESSION_STATE_MEMORY"),
             max_llm_tokens: var("SUBMILLI_MAX_LLM_TOKENS"),
             max_execution_llm_tokens: var("SUBMILLI_MAX_EXECUTION_LLM_TOKENS"),
@@ -363,6 +367,7 @@ fn preflight(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<()> {
     shutdown_grace(cli, file, env)?;
     resolve_network_policy(cli, file, env)?;
     max_execution_memory(cli, file, env)?;
+    max_execution_time(cli, file, env)?;
     max_session_state_memory(cli, file, env)?;
     max_llm_tokens(cli, file, env)?;
     max_execution_llm_tokens(cli, file, env)?;
@@ -566,6 +571,20 @@ fn bind_addr(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<SocketAddr
     ))
 }
 
+/// Optional elapsed execution limit; zero explicitly disables it.
+fn max_execution_time(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<Option<Duration>> {
+    let env_seconds = parse_env(
+        "SUBMILLI_MAX_EXECUTION_TIME",
+        "a whole number of seconds",
+        env.max_execution_time.as_ref(),
+    )?;
+    Ok(
+        explicit(cli.max_execution_time, env_seconds, file.max_execution_time)
+            .filter(|seconds| *seconds != 0)
+            .map(Duration::from_secs),
+    )
+}
+
 /// How long in-flight requests may keep running after a shutdown signal.
 fn shutdown_grace(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<Duration> {
     let env_grace = parse_env(
@@ -714,6 +733,7 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
     let mcp_allowed_hosts = resolve_mcp_allowed_hosts(&cli, &file, &env);
     let runtime = RuntimeConfig {
         max_store_bytes: max_execution_memory(&cli, &file, &env)?,
+        timeout: max_execution_time(&cli, &file, &env)?,
         ..RuntimeConfig::default()
     };
     let max_session_state_memory = max_session_state_memory(&cli, &file, &env)?;
@@ -925,6 +945,7 @@ mod tests {
             mcp_allowed_host: vec![],
             shutdown_grace: None,
             max_execution_memory: None,
+            max_execution_time: None,
             max_session_state_memory: None,
             max_llm_tokens: None,
             max_execution_llm_tokens: None,
@@ -1904,6 +1925,48 @@ network:
                 grace,
                 Duration::from_secs(expected),
                 "{tier} should have won"
+            );
+        }
+    }
+
+    #[test]
+    fn execution_timeout_configuration() {
+        let file: FileConfig = serde_yml::from_str("max_execution_time: 30").unwrap();
+        let mut cli = empty_cli();
+        let mut env = EnvConfig::default();
+        assert_eq!(
+            max_execution_time(&cli, &FileConfig::default(), &env).unwrap(),
+            None
+        );
+        assert_eq!(
+            max_execution_time(&cli, &file, &env).unwrap(),
+            Some(Duration::from_secs(30))
+        );
+        env = env_from(&[("SUBMILLI_MAX_EXECUTION_TIME", "20")]);
+        assert_eq!(
+            max_execution_time(&cli, &file, &env).unwrap(),
+            Some(Duration::from_secs(20))
+        );
+        cli.max_execution_time = Some(10);
+        assert_eq!(
+            max_execution_time(&cli, &file, &env).unwrap(),
+            Some(Duration::from_secs(10))
+        );
+        cli.max_execution_time = Some(0);
+        assert_eq!(max_execution_time(&cli, &file, &env).unwrap(), None);
+        cli.max_execution_time = None;
+        env = env_from(&[("SUBMILLI_MAX_EXECUTION_TIME", "0")]);
+        assert_eq!(max_execution_time(&cli, &file, &env).unwrap(), None);
+        for value in ["-1", "1.5", "30s"] {
+            env = env_from(&[("SUBMILLI_MAX_EXECUTION_TIME", value)]);
+            assert!(
+                max_execution_time(&cli, &file, &env)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("SUBMILLI_MAX_EXECUTION_TIME")
+            );
+            assert!(
+                serde_yml::from_str::<FileConfig>(&format!("max_execution_time: {value}")).is_err()
             );
         }
     }

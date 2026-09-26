@@ -106,6 +106,9 @@ impl AppState {
     pub fn new(config: ServerConfig) -> Result<Self> {
         let runtime = config.runtime;
         let engine = server_engine(&runtime)?;
+        if runtime.timeout.is_some_and(|timeout| !timeout.is_zero()) {
+            crate::execution_timeout::start_ticker(&engine)?;
+        }
         let mut base_linker = Linker::<StoreData>::new(&engine);
         install_runtime_host_functions(&mut base_linker)?;
         // One HTTP client (connection pool) is built per session for isolation —
