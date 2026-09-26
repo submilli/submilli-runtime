@@ -4,6 +4,6 @@
 // expect-error: unary `+` not defined for `string | null`
 // expect-error: convert first: `Number(s)`
 function main(): void {
-  const maybe: string | null = "6";
+  const maybe: string | null = "6" as string | null;
   const n = +maybe;
 }

@@ -123,7 +123,7 @@ function main(): void {
   assert(w?.v.w! === 5, "a `!` after a union step");
   const c: Callable | Callable2 | null = mkCallable();
   assert(c?.v() === 42, "a call after a union step");
-  const gone: Callable | Callable2 | null = null;
+  const gone: Callable | Callable2 | null = null as Callable | Callable2 | null;
   assert((gone?.v() ?? 7) === 7, "a `??` tail over a short-circuited union step");
 
   // The union step in the middle of a chain rather than at its head.

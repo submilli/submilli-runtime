@@ -7,6 +7,6 @@ function main(): void {
   assert(item(null) === null, "null tuple");
   let calls = 0;
   const index = (): number => { calls++; return 0; };
-  const none: Uint8Array | null = null;
+  const none: Uint8Array | null = null as Uint8Array | null;
   assert(none?.[index()] === null && calls === 0, "skip index");
 }

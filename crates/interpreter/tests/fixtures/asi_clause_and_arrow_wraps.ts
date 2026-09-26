@@ -61,7 +61,7 @@ function main(): void {
     .filter((n: number): boolean => n > 2);
   assert(chained.length === 2, "member chain wrapped before `.`");
 
-  const maybe: Box | null = null;
+  const maybe: Box | null = null as Box | null;
   const reached = maybe
     ?.v;
   assert(reached === null, "member chain wrapped before `?.`");

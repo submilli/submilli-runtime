@@ -3860,6 +3860,19 @@ impl<'a> Parser<'a> {
                 );
                 return None;
             }
+            if op == BinOp::Pow
+                && matches!(
+                    self.ast.expr(lhs).kind,
+                    ExprKind::Unary { .. } | ExprKind::Typeof { .. } | ExprKind::Delete { .. }
+                )
+            {
+                self.error_at_with_help(
+                    self.ast.expr(lhs).span,
+                    "an unparenthesized unary expression cannot be the left operand of `**`",
+                    vec!["choose the grouping explicitly: `(-x) ** 2` or `-(x ** 2)`".into()],
+                );
+                return None;
+            }
             self.advance();
             let next_min = if is_right_associative(op) {
                 prec

@@ -14,6 +14,9 @@
 //! divergences differ from it, in either direction, so a fixed divergence and a
 //! new one both show up in review. `UPDATE_TYPESCRIPT_EXPECTED=1` rewrites it.
 
+#[path = "support/typed_reachability.rs"]
+mod typed_reachability;
+
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::fs;
@@ -293,14 +296,23 @@ fn compare_errors(
 /// Our type for every expression and every name a declaration or assignment
 /// binds.
 fn entries_by_line(typed: &TypedAst, source: &str) -> EntriesByLine {
+    let reachable = typed_reachability::Reachable::collect(typed);
     let expressions = (0..typed.exprs_len()).filter_map(|i| {
-        let e = typed.expr(ExprId(i as u32));
+        let id = ExprId(i as u32);
+        let e = typed.expr(id);
         let text = span_text(source, e.span)?;
-        Some((e.span, text, Claim::of(&e.kind, i, text), e.ty.clone()))
+        Some((
+            e.span,
+            text,
+            Claim::of(&e.kind, i, text, reachable.expressions.contains(&id)),
+            e.ty.clone(),
+        ))
     });
-    let names = bindings(typed)
+    let names = bindings(typed, &reachable)
         .into_iter()
-        .filter_map(|(span, ty)| Some((span, span_text(source, span)?, Claim::Binding, ty)));
+        .filter_map(|(span, ty, retained)| {
+            Some((span, span_text(source, span)?, Claim::Binding(retained), ty))
+        });
     let mut nodes: Vec<(Span, &str, Claim, Type)> = expressions.chain(names).collect();
     nodes.sort_by_key(|(span, _, claim, _)| (span.start, Reverse(span.end), Reverse(*claim)));
     nodes.dedup_by(|a, b| a.0.start == b.0.start && a.0.end == b.0.end);
@@ -321,23 +333,25 @@ fn entries_by_line(typed: &TypedAst, source: &str) -> EntriesByLine {
 /// Which of the nodes sharing a span is the one the source wrote; the greatest
 /// wins. The typechecker gives each node it synthesizes (a default argument, a
 /// rest parameter's array, the comparisons a `switch` expands to, a narrowed or
-/// captured read) the span of the construct it belongs to.
+/// captured read) the span of the construct it belongs to. Within a category,
+/// prefer retained nodes over abandoned inference retries. Keep unreachable
+/// candidates as a fallback for source expressions erased by constant folding.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Claim {
     /// A variable reference whose span is not a name: a closure's capture.
     SynthesizedReference,
     /// Any other expression. The last one created at a span is the construct
     /// itself, created after the pieces synthesized for it.
-    Expression(usize),
+    Expression(bool, usize),
     /// A variable reference at a name. The first one created is the read the
     /// source wrote; a narrowed copy comes after it.
-    Reference(Reverse<usize>),
+    Reference(bool, Reverse<usize>),
     /// A declared or assigned name, typed by what the binding holds.
-    Binding,
+    Binding(bool),
 }
 
 impl Claim {
-    fn of(kind: &TypedExprKind, index: usize, text: &str) -> Self {
+    fn of(kind: &TypedExprKind, index: usize, text: &str, retained: bool) -> Self {
         let is_reference = matches!(
             kind,
             TypedExprKind::LocalRef { .. }
@@ -346,9 +360,9 @@ impl Claim {
                 | TypedExprKind::FunctionRef { .. }
         );
         match (is_reference, is_identifier(text)) {
-            (true, true) => Claim::Reference(Reverse(index)),
+            (true, true) => Claim::Reference(retained, Reverse(index)),
             (true, false) => Claim::SynthesizedReference,
-            (false, _) => Claim::Expression(index),
+            (false, _) => Claim::Expression(retained, index),
         }
     }
 }
@@ -356,29 +370,39 @@ impl Claim {
 /// Each name a declaration or assignment binds, with the binding's type. `tsc`
 /// types an assignment's target, like a declaration's name, by what the binding
 /// holds, not by the value being assigned.
-fn bindings(typed: &TypedAst) -> Vec<(Span, Type)> {
-    let mut out: Vec<(Span, Type)> = typed
+fn bindings(
+    typed: &TypedAst,
+    reachable: &typed_reachability::Reachable,
+) -> Vec<(Span, Type, bool)> {
+    let mut out: Vec<(Span, Type, bool)> = typed
         .globals
         .iter()
-        .map(|g| (g.name.span, g.ty.clone()))
+        .map(|g| (g.name.span, g.ty.clone(), true))
         .collect();
     for function in &typed.functions {
-        out.extend(function.params.iter().map(|p| (p.name.span, p.ty.clone())));
+        out.extend(
+            function
+                .params
+                .iter()
+                .map(|p| (p.name.span, p.ty.clone(), true)),
+        );
     }
     for i in 0..typed.stmts_len() {
-        match &typed.stmt(StmtId(i as u32)).kind {
+        let id = StmtId(i as u32);
+        let retained = reachable.statements.contains(&id);
+        match &typed.stmt(id).kind {
             TypedStmtKind::Let { name, ty, .. } | TypedStmtKind::Const { name, ty, .. } => {
-                out.push((name.span, ty.clone()));
+                out.push((name.span, ty.clone(), retained));
             }
             TypedStmtKind::ForOf {
                 name, element_ty, ..
-            } => out.push((name.span, element_ty.clone())),
+            } => out.push((name.span, element_ty.clone(), retained)),
             TypedStmtKind::AssignLocal {
                 ident, target_ty, ..
             }
             | TypedStmtKind::AssignGlobal {
                 ident, target_ty, ..
-            } => out.push((ident.span, target_ty.clone())),
+            } => out.push((ident.span, target_ty.clone(), retained)),
             _ => {}
         }
     }
@@ -1059,5 +1083,21 @@ fn option_lines_match_the_baseline_writer() {
         "// @: x",
     ] {
         assert!(!is_option_line(line), "{line:?}");
+    }
+}
+
+#[test]
+fn entries_prefer_retained_loop_reads_and_keep_erased_source_nodes() {
+    let cases = [
+        ("controlFlow/controlFlowNoIntermediateErrors", 17),
+        ("types/stringLiteral/stringLiteralTypesOverloads04", 8),
+    ];
+    for (case, compared) in cases {
+        let path = Path::new(ROOT)
+            .join("typescript")
+            .join(format!("{case}.ts"));
+        let report = compare_case(&path).expect("conformance case");
+        assert_eq!(report.compared, compared, "source coverage for {case}");
+        assert!(report.type_divergences.is_empty(), "{}", report.render());
     }
 }

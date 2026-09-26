@@ -9,8 +9,8 @@ class Measure {
 }
 
 function main(): void {
-  let x: string | null = null;
-  const m: Measure | null = null;
+  let x: string | null = null as string | null;
+  const m: Measure | null = null as Measure | null;
   m?.of((x = "hello").length);
   console.log(`${x.length}`);
 }

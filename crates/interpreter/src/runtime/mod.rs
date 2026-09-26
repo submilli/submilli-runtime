@@ -352,7 +352,10 @@ impl RuntimeConfig {
         config.memory_may_move(true);
         config.memory_init_cow(true);
 
-        config.gc_heap_reservation(self.memory_reservation);
+        // The engine grants this reservation without consulting the store limiter.
+        // Start at zero so every GC byte is charged to the tenant's aggregate cap,
+        // including stores whose cap differs from this engine's RuntimeConfig.
+        config.gc_heap_reservation(0);
         config.gc_heap_guard_size(self.memory_guard_size);
         config.gc_heap_reservation_for_growth(self.memory_reservation_for_growth);
         config.gc_heap_may_move(true);

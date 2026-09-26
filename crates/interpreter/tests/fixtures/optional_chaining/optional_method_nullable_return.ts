@@ -48,7 +48,7 @@ function main(): void {
   assert(store?.find("hit") === "found", "non-null return, interface receiver");
 
   // a null receiver short-circuits regardless
-  const gone: Leafy | null = null;
+  const gone: Leafy | null = null as Leafy | null;
   assert(gone?.at(0) === null, "null receiver short-circuits");
   assert(gone?.at(0)?.tag === null, "null receiver, two steps");
 }

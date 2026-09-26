@@ -498,6 +498,10 @@ impl<'a> Inferer<'a> {
         if !self.declares_readonly(declared) {
             return written;
         }
+        self.initializer_narrowed_ty(declared, written)
+    }
+
+    pub(super) fn initializer_narrowed_ty(&self, declared: &Type, written: Type) -> Type {
         let members: Vec<&Type> = match declared.peel_preserving_readonly() {
             Type::Union(members) => members.iter().collect(),
             other => vec![other],

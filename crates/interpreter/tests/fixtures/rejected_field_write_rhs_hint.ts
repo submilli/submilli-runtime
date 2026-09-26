@@ -55,7 +55,7 @@ function mixed(flag: boolean): MA | MB {
 function maybeRO(flag: boolean): RO | null { return flag ? new RO() : null; }
 
 function plainString(s: string): void { s.length = "x"; }
-function nullableString(v: string): void {
+function nullableString(v: string | null): void {
     const s: string | null = v;
     s.length = "x";
 }

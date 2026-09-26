@@ -13,10 +13,8 @@ use wasmtime::{Linker, Module};
 fn cap_run(src: &str, max_store_bytes: u64) -> wasmtime::Result<()> {
     let compiled = compile_script(src, "test.subm", interpreter::FileId(0), &[], &[])
         .map_err(|d| wasmtime::Error::msg(format!("compile failed: {d:#?}")))?;
-    let cfg = RuntimeConfig {
-        max_store_bytes,
-        ..RuntimeConfig::default()
-    };
+    // One engine may serve tenants with smaller caps than its own defaults.
+    let cfg = RuntimeConfig::default();
     let engine = cfg.engine()?;
     let data = StoreData::with_vfs_and_cap(Vfs::tempdir()?, max_store_bytes);
     let mut store = cfg.store(&engine, data)?;
@@ -24,8 +22,13 @@ fn cap_run(src: &str, max_store_bytes: u64) -> wasmtime::Result<()> {
     let module = Module::new(&engine, &compiled.wasm)?;
     let mut linker = Linker::<StoreData>::new(&engine);
     pollster::block_on(async {
-        install_runtime_async(&mut linker, &mut store).await?;
-        let instance = linker.instantiate_async(&mut store, &module).await?;
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .expect("runtime initialization fits within cap");
+        let instance = linker
+            .instantiate_async(&mut store, &module)
+            .await
+            .expect("script globals fit within cap");
         dispatch_main_async(&mut store, &instance).await.map(|_| ())
     })
 }
@@ -36,7 +39,7 @@ fn tenant_cap_traps_on_excess_growth() {
 function main(): void {
   let arr: number[] = [];
   let i: number = 0;
-  while (i < 1000000) {
+  while (i < 10000) {
     arr.push(i);
     i = i + 1;
   }
@@ -88,6 +91,11 @@ function main(): void {
     pollster::block_on(dispatch_main_async(&mut store, &instance)).expect("run");
 
     let capacity = store.gc_heap_capacity() as u64;
+    let observed = store.data().tenant_limits.observed_bytes();
+    assert!(
+        observed >= capacity,
+        "GC allocations must be charged: {observed} < {capacity}"
+    );
     assert!(
         capacity > 0,
         "expected non-zero gc_heap_capacity after allocation"
@@ -96,6 +104,40 @@ function main(): void {
         capacity <= cfg.max_store_bytes,
         "expected capacity ({capacity}) <= max_store_bytes ({})",
         cfg.max_store_bytes,
+    );
+}
+
+#[test]
+fn small_tenant_can_run_within_its_cap() {
+    cap_run(
+        "function main(): void { const xs = [1, 2, 3]; assert(xs[2] === 3, \"value\"); }",
+        64 * 1024,
+    )
+    .expect("small live heap fits");
+}
+
+#[test]
+fn gc_reservation_counts_toward_host_allocations() {
+    let cfg = RuntimeConfig::default();
+    let engine = cfg.engine().expect("engine");
+    let data = StoreData::with_vfs_and_cap(Vfs::tempdir().expect("vfs"), 128 * 1024);
+    let mut store = cfg.store(&engine, data).expect("store");
+    install_tenant_limits(&mut store);
+    let mut linker = Linker::<StoreData>::new(&engine);
+    pollster::block_on(install_runtime_async(&mut linker, &mut store)).expect("runtime");
+    let limits = &store.data().tenant_limits;
+    let observed = limits.observed_bytes();
+    assert!(
+        observed > 0,
+        "initial runtime GC reservation must be charged"
+    );
+    let remaining = limits.max_total_bytes - observed - limits.host_attached_bytes();
+    limits
+        .charge_host_bytes(remaining)
+        .expect("exact aggregate cap");
+    assert!(
+        limits.charge_host_bytes(1).is_err(),
+        "GC plus host bytes exceed cap"
     );
 }
 
@@ -220,7 +262,7 @@ function main(): void {
 /// `submilli:regex.compile` charges `estimate_regex_bytes()` against `TenantLimits.host_attached_bytes` per compile; exceeding the cap traps.
 #[test]
 fn regex_host_bytes_cap_traps_on_excess_compiles() {
-    // 16 KB charged per regex × 10 patterns ≈ 160 KB > 32 KB cap.
+    // Reserve room for runtime GC; 10 regexes then exceed the remaining host budget.
     let src = r#"
 function main(): void {
   let i: number = 0;
@@ -232,13 +274,11 @@ function main(): void {
 }
 "#;
 
-    let err = cap_run(src, 32 * 1024).expect_err("cap should reject compile");
+    let err = cap_run(src, 128 * 1024).expect_err("cap should reject compile");
     let msg = format!("{err:#}");
     assert!(
-        msg.to_lowercase().contains("memory")
-            || msg.to_lowercase().contains("cap")
-            || msg.to_lowercase().contains("regex"),
-        "expected memory/cap/regex language in trap, got: {msg}"
+        msg.contains("memory cap exceeded") && msg.contains("host bytes"),
+        "expected host allocation cap failure, got: {msg}"
     );
 }
 

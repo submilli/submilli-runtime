@@ -15,7 +15,7 @@ function main(): void {
   s?.push(32);
 
   // Null receiver: the call short-circuits, no side effect.
-  const none: Sink | null = null;
+  const none: Sink | null = null as Sink | null;
   none?.push(999);
 
   assert(total === 42, "both non-null pushes ran; null receiver skipped");

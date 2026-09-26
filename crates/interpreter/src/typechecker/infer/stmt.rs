@@ -64,6 +64,7 @@ impl Inferer<'_> {
                 };
                 self.scopes
                     .insert(name.name.clone(), bound.clone(), false, name.span);
+                self.narrow_local_initializer(&name, &bound, value_ty);
                 TypedStmtKind::Let {
                     name,
                     ty: bound,
@@ -87,7 +88,7 @@ impl Inferer<'_> {
                     .map(|a| self.resolve_type(a))
                     .or_else(|| literal_type_of(self.ast, value));
                 let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref());
-                let bound = hint.unwrap_or(value_ty);
+                let bound = hint.unwrap_or_else(|| value_ty.clone());
                 // Reject a void binding; poison the slot so codegen never
                 // sees a void value-type.
                 let bound = if self.reject_void_binding(&bound, span) {
@@ -97,6 +98,7 @@ impl Inferer<'_> {
                 };
                 self.scopes
                     .insert(name.name.clone(), bound.clone(), true, name.span);
+                self.narrow_local_initializer(&name, &bound, value_ty);
                 TypedStmtKind::Const {
                     name,
                     ty: bound,
@@ -121,13 +123,15 @@ impl Inferer<'_> {
                 self.check_condition_ty(&cond_ty, cond_span);
                 let (true_env, false_env) = self.predicate_envs(typed_cond);
                 let entry_reachable = self.reachable;
+                let then_possible = self.condition_can_be(typed_cond, true);
+                let else_possible = self.condition_can_be(typed_cond, false);
                 let then_span = self.ast.stmt(then_block).span;
                 self.push_narrow_frame(true_env.clone());
                 self.reachable = entry_reachable;
                 let typed_then = self
                     .infer_stmt(then_block)
                     .expect("if-branch is a Block, never a type-only decl");
-                let then_reachable = self.reachable;
+                let then_reachable = self.reachable && then_possible;
                 let then_narrowings = self.snapshot_active_narrowings(0).0;
                 let (_, then_assigned) = self.pop_narrow_frame_capture();
                 let typed_then = self.wrap_narrow_regions(typed_then, &true_env, then_span);
@@ -140,7 +144,7 @@ impl Inferer<'_> {
                     let typed_else = self
                         .infer_stmt(b)
                         .expect("else-branch is a Block, never a type-only decl");
-                    let er = self.reachable;
+                    let er = self.reachable && else_possible;
                     let en = self.snapshot_active_narrowings(0).0;
                     let (_, ea) = self.pop_narrow_frame_capture();
                     let typed_else = self.wrap_narrow_regions(typed_else, &false_env, else_span);
@@ -156,7 +160,7 @@ impl Inferer<'_> {
                         None,
                         unchanged,
                         std::collections::BTreeSet::new(),
-                        entry_reachable,
+                        entry_reachable && else_possible,
                     )
                 };
                 let (joined_narrowings, joined_assigned) = match (then_reachable, else_reachable) {
@@ -1238,6 +1242,31 @@ impl Inferer<'_> {
                 Type::Error
             }
         }
+    }
+
+    /// Keep the declared storage type while a union initializer establishes its
+    /// current member. Non-union annotations still define the object's surface.
+    fn narrow_local_initializer(&mut self, name: &Ident, declared: &Type, value: Type) {
+        if !matches!(declared.peel(), Type::Union(_))
+            || matches!(value, Type::Error)
+            || value == *declared
+        {
+            return;
+        }
+        let scope = self
+            .scopes
+            .get(&name.name)
+            .expect("binding just inserted")
+            .decl_scope;
+        let path = narrowing::ReferencePath::root(narrowing::BindingId::Local {
+            name: name.name.clone(),
+            decl_scope: scope,
+        });
+        if self.path_root_is_captured_mutator(&path) {
+            return;
+        }
+        let narrowed = self.initializer_narrowed_ty(declared, value);
+        self.renarrow_local_after_write(name, scope, declared, narrowed);
     }
 
     /// Re-narrows a local after a write to it. A value whose type *differs* from
@@ -2629,13 +2658,13 @@ mod tests {
             // Nullable receiver: the hint comes from the null-stripped type.
             "class C { private n: number = 0; get v(): number { return this.n; } \
              set v(s: number | null) { this.n = 1; } }\n\
-             function main(): string { let c: C | null = new C(); c.v = null; return \"x\"; }",
+             function main(): string { let c: C | null = new C() as C | null; c.v = null; return \"x\"; }",
             // Union receiver: the hint comes from the members' agreed write type.
             "class A { private n: number = 0; get v(): number { return this.n; } \
              set v(s: number | null) { this.n = 1; } }\n\
              class B { private n: number = 0; get v(): number { return this.n; } \
              set v(s: number | null) { this.n = 2; } }\n\
-             function main(): string { let u: A | B = new A(); u.v = null; return \"x\"; }",
+             function main(): string { let u: A | B = new A() as A | B; u.v = null; return \"x\"; }",
         ] {
             let (_, diags) = run(source);
             let errors: Vec<&crate::Diagnostic> = diags

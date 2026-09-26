@@ -115,9 +115,9 @@ function main(): void {
 
   const u: unknown = null;
   assert((u as R2) === null, "`as` into a recursive alias, null value");
-  const x1: R2 = null;
-  const x2: R2 = null;
-  const x3: R2 = "s";
+  const x1: R2 = null as R2;
+  const x2: R2 = null as R2;
+  const x3: R2 = "s" as R2;
   assert(x1 === x2, "`===` between two null recursive-alias values");
   assert(!(x1 === x3), "and between a null and a non-null one");
 

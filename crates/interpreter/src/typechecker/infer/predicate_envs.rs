@@ -144,7 +144,7 @@ impl<'a> Inferer<'a> {
         self.condition_can_be(cond_expr_id, true)
     }
 
-    fn condition_can_be(&mut self, cond_expr_id: ExprId, outcome: bool) -> bool {
+    pub(super) fn condition_can_be(&mut self, cond_expr_id: ExprId, outcome: bool) -> bool {
         use crate::{BinOp, TypedExprKind, UnOp};
         match self.typed_ast.expr(cond_expr_id).kind.clone() {
             TypedExprKind::Binary {

@@ -38,6 +38,7 @@ pub struct ClassGuardLayout {
 
 #[derive(Default, Clone, Debug)]
 pub struct SymbolTable {
+    pub(crate) field_lookup_function: Option<u32>,
     pub class_type_parameters: BTreeMap<MangledName, Vec<String>>,
     pub runtime_generic_functions: BTreeSet<MangledName>,
     pub field_guard_targets: BTreeMap<u32, Type>,

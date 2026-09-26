@@ -25,7 +25,7 @@ function main(): void {
   assert(maybe?.n?.toFixed(1) === "2.5", "straight-line step inside a short-circuit");
   assert(maybe?.n?.toFixed(1)?.length === 3, "and a further step after it");
 
-  const absent: Holder | null = null;
+  const absent: Holder | null = null as Holder | null;
   assert(absent?.n?.toFixed(1) === null, "outer short-circuit still wins");
 
   // a non-nullable *ref* receiver keeps the short-circuit shape and still works

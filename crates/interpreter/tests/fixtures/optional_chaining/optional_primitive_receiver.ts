@@ -10,13 +10,13 @@ function main(): void {
   const n: number | null = 3.14159;
   assert(n?.toFixed(2) === "3.14", "number receiver unboxes");
 
-  const noNumber: number | null = null;
+  const noNumber: number | null = null as number | null;
   assert(noNumber?.toFixed(2) === null, "null number short-circuits");
 
   const b: boolean | null = true;
   assert(b?.toString() === "true", "boolean receiver unboxes");
 
-  const noBool: boolean | null = null;
+  const noBool: boolean | null = null as boolean | null;
   assert(noBool?.toString() === null, "null boolean short-circuits");
 
   // element access hands the next step a boxed element out of the array slot

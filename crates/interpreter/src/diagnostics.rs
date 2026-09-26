@@ -132,20 +132,29 @@ pub(crate) fn render_source_block(
             out,
             "{:>width$} | {}",
             start_line - 1,
-            prev,
+            expand_tabs(prev),
             width = gutter_width
         )
         .unwrap();
     }
 
     let start_text = line_index.line_text(source, start_line);
-    writeln!(out, "{start_line:>gutter_width$} | {start_text}").unwrap();
-    let caret_indent = chars_in_byte_range(start_text, 0, start_col - 1);
+    writeln!(
+        out,
+        "{start_line:>gutter_width$} | {}",
+        expand_tabs(start_text)
+    )
+    .unwrap();
+    let caret_indent = display_column(start_text, start_col - 1);
     let caret_len = if start_line == end_line {
-        chars_in_byte_range(start_text, start_col - 1, end_col - 1).max(1)
+        display_column(start_text, end_col - 1)
+            .saturating_sub(caret_indent)
+            .max(1)
     } else {
         // Multi-line: extend to end of line.
-        chars_in_byte_range(start_text, start_col - 1, u32::MAX).max(1)
+        display_column(start_text, u32::MAX)
+            .saturating_sub(caret_indent)
+            .max(1)
     };
     writeln!(
         out,
@@ -159,13 +168,13 @@ pub(crate) fn render_source_block(
     if end_line > start_line {
         for mid_line in (start_line + 1)..end_line {
             let mid_text = line_index.line_text(source, mid_line);
-            writeln!(out, "{mid_line:>gutter_width$} | {mid_text}").unwrap();
-            let mid_carets = mid_text.chars().count().max(1);
+            writeln!(out, "{mid_line:>gutter_width$} | {}", expand_tabs(mid_text)).unwrap();
+            let mid_carets = display_column(mid_text, u32::MAX).max(1);
             writeln!(out, "{} | {}", gutter_blank, "^".repeat(mid_carets)).unwrap();
         }
         let end_text = line_index.line_text(source, end_line);
-        writeln!(out, "{end_line:>gutter_width$} | {end_text}").unwrap();
-        let end_carets = chars_in_byte_range(end_text, 0, end_col.saturating_sub(1)).max(1);
+        writeln!(out, "{end_line:>gutter_width$} | {}", expand_tabs(end_text)).unwrap();
+        let end_carets = display_column(end_text, end_col.saturating_sub(1)).max(1);
         writeln!(out, "{} | {}", gutter_blank, "^".repeat(end_carets)).unwrap();
     }
 
@@ -176,27 +185,49 @@ pub(crate) fn render_source_block(
             out,
             "{:>width$} | {}",
             end_line + 1,
-            next,
+            expand_tabs(next),
             width = gutter_width
         )
         .unwrap();
     }
 }
 
-/// Characters in `line[from..to]`, where `from`/`to` are byte columns as
-/// `LineIndex::line_col` reports them, clamped to the line. Carets are drawn one per
-/// character, so a multi-byte character before or inside the span counts once. (A
-/// double-width character such as CJK or emoji still takes two terminal columns.)
-fn chars_in_byte_range(line: &str, from: u32, to: u32) -> usize {
-    let clamp = |col: u32| {
-        let mut at = (col as usize).min(line.len());
-        while !line.is_char_boundary(at) {
-            at -= 1;
+/// Terminal column at a byte offset. Source columns remain byte-based for LSP
+/// round trips; only the displayed source and underline use terminal widths.
+fn display_column(line: &str, offset: u32) -> usize {
+    use unicode_width::UnicodeWidthStr;
+    let mut end = (offset as usize).min(line.len());
+    while !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    line[..end]
+        .split('\t')
+        .enumerate()
+        .fold(0, |column, (index, text)| {
+            let start = if index == 0 {
+                column
+            } else {
+                column + 4 - column % 4
+            };
+            start + text.width()
+        })
+}
+
+/// Expand tabs at four-column stops relative to the source, excluding the gutter.
+fn expand_tabs(line: &str) -> String {
+    use unicode_width::UnicodeWidthStr;
+    let mut out = String::new();
+    let mut column = 0;
+    for (index, text) in line.split('\t').enumerate() {
+        if index != 0 {
+            let spaces = 4 - column % 4;
+            out.push_str(&" ".repeat(spaces));
+            column += spaces;
         }
-        at
-    };
-    let (from, to) = (clamp(from), clamp(to));
-    line[from..to.max(from)].chars().count()
+        out.push_str(text);
+        column += text.width();
+    }
+    out
 }
 
 #[cfg(test)]
@@ -275,6 +306,55 @@ mod tests {
             .count();
         assert_eq!(caret_col, bad_col, "{rendered}");
         assert_eq!(caret_line.matches('^').count(), 3, "{rendered}");
+    }
+
+    #[test]
+    fn carets_follow_terminal_columns() {
+        use unicode_width::UnicodeWidthStr;
+        for (source, target, indent, width) in [
+            ("let s = \"日本😀\"; bad;", "bad", 18, 3),
+            ("\tlet s = \"e\u{301}\";\tbad;", "bad", 20, 3),
+            ("x\t日本😀;", "日本😀", 4, 6),
+            ("x\tbad;", "\tbad", 1, 6),
+        ] {
+            let start = source.find(target).unwrap();
+            let diag = Diagnostic {
+                severity: Severity::Error,
+                span: Span::new(F, start as u32, (start + target.len()) as u32),
+                message: "bad value".into(),
+                help: vec![],
+                notes: vec![],
+            };
+            let rendered = render(&diag, &sources(source));
+            assert!(!rendered.contains('\t'), "{rendered}");
+            let caret = rendered.lines().find(|line| line.contains('^')).unwrap();
+            let expanded = super::expand_tabs(source);
+            assert_eq!(caret.find('^').unwrap(), 4 + indent, "{rendered}");
+            assert_eq!(caret.matches('^').count(), width, "{rendered}");
+            assert_eq!(expanded.width(), super::display_column(source, u32::MAX));
+            assert!(rendered.contains(&format!("script.subm:1:{}", start + 1)));
+        }
+    }
+
+    #[test]
+    fn multiline_carets_use_terminal_widths() {
+        let source = "a\t日\n\t😀e\u{301}\n終z";
+        let end = source.find('終').unwrap() + '終'.len_utf8();
+        let diag = Diagnostic {
+            severity: Severity::Error,
+            span: Span::new(F, 1, end as u32),
+            message: "multiline".into(),
+            help: vec![],
+            notes: vec![],
+        };
+        let rendered = render(&diag, &sources(source));
+        let carets: Vec<_> = rendered.lines().filter(|line| line.contains('^')).collect();
+        assert_eq!(
+            carets,
+            ["  |  ^^^^^", "  | ^^^^^^^", "  | ^^"],
+            "{rendered}"
+        );
+        assert!(!rendered.contains('\t'));
     }
 
     #[test]

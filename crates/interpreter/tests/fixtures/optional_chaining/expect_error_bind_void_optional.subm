@@ -11,7 +11,7 @@ interface Logger {
 }
 
 function main(): void {
-  const l: Logger | null = null;
+  const l: Logger | null = null as Logger | null;
   const annotated: void | null = l?.log("hello");
   const inferred = l?.log("hello");
 }

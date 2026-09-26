@@ -3448,108 +3448,14 @@ fn emit_field_index_by_name(
     name_global: u32,
     accessor: bool,
 ) {
-    let object_shape_idx = ctx
-        .symbols
-        .object_shape_type_idx()
-        .expect("ObjectShape type registered");
-    let field_names_type_idx = ctx
-        .symbols
-        .field_names_type_idx()
-        .expect("field_names type registered");
-    let names_local = emitter.add_anonymous_local(ValType::Ref(RefType {
-        nullable: false,
-        heap_type: HeapType::Concrete(field_names_type_idx),
-    }));
-    let i_local = emitter.add_anonymous_local(ValType::I32);
-    let len_local = emitter.add_anonymous_local(ValType::I32);
     emitter.instruction(Instruction::LocalGet(object_local));
-    emitter.instruction(Instruction::StructGet {
-        struct_type_index: object_shape_idx,
-        field_index: 1,
-    });
-    emitter.instruction(Instruction::LocalSet(names_local));
-    emitter.instruction(Instruction::LocalGet(names_local));
-    emitter.instruction(Instruction::ArrayLen);
-    emitter.instruction(Instruction::LocalSet(len_local));
-    let string_eq_idx = ctx
-        .symbols
-        .prelude_func_idx("string_eq")
-        .expect("submilli:prelude.string_eq imported");
-
-    emitter.emit_block(BlockType::Result(ValType::I32));
-    emit_field_name_scan_pass(
-        emitter,
-        field_names_type_idx,
-        names_local,
-        i_local,
-        len_local,
-        name_global,
-        None,
-        ctx,
-        accessor,
-    );
-    emit_field_name_scan_pass(
-        emitter,
-        field_names_type_idx,
-        names_local,
-        i_local,
-        len_local,
-        name_global,
-        Some(string_eq_idx),
-        ctx,
-        accessor,
-    );
-    emitter.instruction(Instruction::I32Const(-1));
-    emitter.emit_end();
-}
-
-#[allow(clippy::too_many_arguments)]
-fn emit_field_name_scan_pass(
-    emitter: &mut FunctionEmitter,
-    field_names_type_idx: u32,
-    names_local: u32,
-    i_local: u32,
-    len_local: u32,
-    name_global: u32,
-    string_eq_idx: Option<u32>,
-    ctx: &CodegenCtx,
-    accessor: bool,
-) {
-    emitter.instruction(Instruction::I32Const(0));
-    emitter.instruction(Instruction::LocalSet(i_local));
-    emitter.emit_block(BlockType::Empty);
-    emitter.emit_loop(BlockType::Empty);
-    emitter.instruction(Instruction::LocalGet(i_local));
-    emitter.instruction(Instruction::LocalGet(len_local));
-    emitter.instruction(Instruction::I32Eq);
-    emitter.instruction(Instruction::BrIf(1));
-    emitter.instruction(Instruction::LocalGet(names_local));
-    emitter.instruction(Instruction::LocalGet(i_local));
-    emitter.instruction(Instruction::ArrayGet(field_names_type_idx));
     emitter.instruction(Instruction::GlobalGet(name_global));
-    if let Some(string_eq_idx) = string_eq_idx {
-        emitter.instruction(Instruction::Call(string_eq_idx));
-    } else {
-        emitter.instruction(Instruction::RefEq);
-    }
-    emitter.instruction(Instruction::LocalGet(names_local));
-    emitter.instruction(Instruction::LocalGet(i_local));
-    emitter.instruction(Instruction::ArrayGet(field_names_type_idx));
-    crate::codegen::field_names::emit_name_is_accessor(emitter, ctx);
     emitter.instruction(Instruction::I32Const(i32::from(accessor)));
-    emitter.instruction(Instruction::I32Eq);
-    emitter.instruction(Instruction::I32And);
-    emitter.emit_if(BlockType::Empty);
-    emitter.instruction(Instruction::LocalGet(i_local));
-    emitter.instruction(Instruction::Br(3));
-    emitter.emit_end();
-    emitter.instruction(Instruction::LocalGet(i_local));
-    emitter.instruction(Instruction::I32Const(1));
-    emitter.instruction(Instruction::I32Add);
-    emitter.instruction(Instruction::LocalSet(i_local));
-    emitter.instruction(Instruction::Br(0));
-    emitter.emit_end();
-    emitter.emit_end();
+    emitter.instruction(Instruction::Call(
+        ctx.symbols
+            .field_lookup_function
+            .expect("field lookup allocated"),
+    ));
 }
 
 /// Emit a direct call to an imported function. Host imports get the

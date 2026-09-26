@@ -29,7 +29,7 @@ function main(): void {
   // nullable concrete ref rather than `$Object`, so `ref.test` sees the null
   // directly instead of through a boxed `unknown`.
   const some: Uint8Array | null = new Uint8Array([1, 2]);
-  const none: Uint8Array | null = null;
+  const none: Uint8Array | null = null as Uint8Array | null;
   assert(some instanceof Uint8Array, "non-null member of a nullable tests true");
   assert(!(none instanceof Uint8Array), "null member of a nullable tests false");
   if (some instanceof Uint8Array) {

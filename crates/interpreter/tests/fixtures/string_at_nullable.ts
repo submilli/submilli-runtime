@@ -32,7 +32,7 @@ function main(): void {
 
   const receiver: string | null = "abc";
   assert(receiver?.at(0) === "a", "a nullable receiver");
-  const gone: string | null = null;
+  const gone: string | null = null as string | null;
   assert(gone?.at(0) === null, "a null receiver short-circuits");
 
   assert(JSON.stringify({ hit: s.at(0), miss: s.at(9) }) === "{\"hit\":\"a\",\"miss\":null}",

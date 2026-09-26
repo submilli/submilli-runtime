@@ -37,7 +37,7 @@ function main(): void {
   const bare = url.parse("http://plain.test/");
   const w: Wrap | null = { u: full };
   const b: Wrap | null = { u: bare };
-  const none: Wrap | null = null;
+  const none: Wrap | null = null as Wrap | null;
 
   // Nullable property, present.
   assert(w?.u.port === 8443, "nullable number property through a chain");
@@ -87,7 +87,7 @@ function main(): void {
   const m = new Map<string, number>();
   m.set("k", 1);
   const sh: Shapes | null = { m: m, a: ["x", "y"], t: "hello", r: new RegExp("a(b)c", "g") };
-  const noSh: Shapes | null = null;
+  const noSh: Shapes | null = null as Shapes | null;
   assert(sh?.m.size === 1, "`Map#size` through a chain");
   assert(sh?.a.length === 2, "the intrinsic `.length` branch through a chain");
   assert(sh?.t.length === 5, "and on a string");

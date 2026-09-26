@@ -26,7 +26,7 @@ function main(): void {
   assert(pair?.["length"] === 2, "tuple length");
   assert(sizes?.["size"] === 0, "Map size");
 
-  const empty: Wrapper | null = null;
+  const empty: Wrapper | null = null as Wrapper | null;
   assert((empty?.["inner-value"]?.["length"] ?? -1) === -1, "short-circuits the whole chain");
 
   const h: Headers = { "content-type": "text/plain", length: 3 };

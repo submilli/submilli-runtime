@@ -38,7 +38,7 @@ function main(): void {
   // declare, of another type. A field whose value isn't of the declared type
   // reads as absent, rather than as a value of the wrong type.
   const wide = { a: 1, b: 5 };
-  const narrow: { a: number } | { a: number; b: string } = wide;
+  const narrow: { a: number } | { a: number; b: string } = wide as { a: number } | { a: number; b: string };
   const spreadWide = { ...narrow };
   assert((spreadWide.b ?? "absent") === "absent", "a field of another type is absent");
 }

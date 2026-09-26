@@ -3008,6 +3008,7 @@ dependencies = [
  "tokio",
  "unicode-ident",
  "unicode-normalization",
+ "unicode-width",
  "ureq",
  "url",
  "uuid",

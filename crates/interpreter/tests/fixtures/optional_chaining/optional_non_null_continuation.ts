@@ -48,7 +48,7 @@ function main(): void {
   assert(present?.b!!.y === 2, "repeated assertion");
   assert(present?.b!?.y === 2, "optional step after an assertion");
 
-  const short: Outer | null = null;
+  const short: Outer | null = null as Outer | null;
   assert(short?.b!.y === null, "base short-circuits before the assertion");
 
   // A trailing `!` removes the chain's own `| null`, so this is `Inner`, not

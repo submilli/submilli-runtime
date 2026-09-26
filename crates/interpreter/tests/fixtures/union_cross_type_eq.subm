@@ -20,8 +20,8 @@ function main(): void {
   assert(arrs[0] !== arrs[1], "number[] differs from string[]");
 
   // Object member vs primitive member of the same union.
-  const o: U = { k: 5 };
-  const n: U = 5;
+  const o: U = { k: 5 } as U;
+  const n: U = 5 as U;
   assert(o !== 5, "object differs from a number");
   assert(n === 5, "number member equals its literal");
   assert(n !== o, "number differs from an object");

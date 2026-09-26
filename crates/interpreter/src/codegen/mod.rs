@@ -12,6 +12,7 @@ pub mod closures;
 pub mod dependency_usage;
 pub mod dwarf;
 mod field_guards;
+mod field_lookup;
 pub mod field_name_strings;
 pub mod field_names;
 pub mod function_adapters;
@@ -941,6 +942,13 @@ fn codegen_inner(
         &mut next_func_idx,
     );
 
+    let field_lookup_signature = field_lookup::allocate(
+        &mut types,
+        &mut symbols,
+        &mut next_type_idx,
+        &mut next_func_idx,
+    );
+
     // Recursive runtime validators. Allocate signatures and indices, then
     // register each back-edge key so structural checks can call its plan.
     let object_ref_null = ValType::Ref(RefType {
@@ -1049,6 +1057,7 @@ fn codegen_inner(
                 .expect("guard signature registered"),
         );
     }
+    functions.function(field_lookup_signature);
     for &sig_idx in &runtime_validator_sigs {
         functions.function(sig_idx);
     }
@@ -1378,6 +1387,7 @@ fn codegen_inner(
         code.function(&runtime_descriptors::body(&ctx, ty));
     }
 
+    code.function(&field_lookup::body(&ctx));
     for (validator_id, plan) in recursive_validators.plans.iter().enumerate() {
         code.function(&cast_check::emit_runtime_validator_body(
             &ctx,
@@ -2727,7 +2737,8 @@ function main(): string {
     #[test]
     fn string_runtime_imported_from_prelude() {
         let bytes = compile("function main(): void { }");
-        assert_eq!(function_count(&bytes), 2);
+        // User functions, module start, and the shared field lookup.
+        assert_eq!(function_count(&bytes), 3);
         let stable_imports: Vec<_> = imports(&bytes)
             .into_iter()
             .filter(|(_, name)| !is_sub421_temporal_getter_import(name))
@@ -2880,7 +2891,8 @@ function main(): string {
     #[test]
     fn module_with_strings_keeps_runtime_imports() {
         let bytes = compile(r#"let x: string = "hi"; function main(): void { }"#);
-        assert_eq!(function_count(&bytes), 2);
+        // User functions, module start, and the shared field lookup.
+        assert_eq!(function_count(&bytes), 3);
         let imp = imports(&bytes);
         assert!(imp.contains(&(
             crate::runtime::prelude::MODULE_NAME.to_string(),
@@ -2903,7 +2915,8 @@ function main(): string {
     fn helper_emits_function_body_but_is_not_exported() {
         let bytes = compile("function main(): void { } function helper(): void { }");
         instantiate_against_prelude(&bytes);
-        assert_eq!(function_count(&bytes), 3);
+        // User functions, module start, and the shared field lookup.
+        assert_eq!(function_count(&bytes), 4);
         assert_eq!(export_names(&bytes), vec!["main".to_string()]);
     }
 
@@ -3808,7 +3821,8 @@ function main(): number { return counter + max_iterations; }"#,
             start_function_idx(&bytes),
             Some(imported_func_count(&bytes))
         );
-        assert_eq!(function_count(&bytes), 2);
+        // User functions, module start, and the shared field lookup.
+        assert_eq!(function_count(&bytes), 3);
     }
 
     #[test]

@@ -7,6 +7,6 @@ type NN1 = number | NN2[];
 type NN2 = NN1 | string;
 
 function main(): void {
-  const w: NN2 = 1;
+  const w: NN2 = 1 as NN2;
   assert((w ?? 5) === 1, "the left side is always taken");
 }

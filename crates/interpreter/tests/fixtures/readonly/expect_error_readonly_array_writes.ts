@@ -25,6 +25,8 @@ function fill<T>(xs: readonly T[], x: T): void {
   xs.push(x);
 }
 
+function nullable(xs: readonly number[]): readonly number[] | null { return xs; }
+
 function main(): void {
   const ro: readonly number[] = [1, 2, 3];
   ro[0] = 1;
@@ -46,7 +48,7 @@ function main(): void {
   const pair: readonly [number, string] = [1, "a"];
   pair[0] = 2;
   fill(ro, 1);
-  const maybe: readonly number[] | null = ro;
+  const maybe: readonly number[] | null = nullable(ro);
   maybe?.push(1);
   console.log(assigned);
 }

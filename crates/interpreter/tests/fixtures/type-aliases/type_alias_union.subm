@@ -1,8 +1,8 @@
 type Status = "active" | "inactive";
 
 function main(): void {
-  const a: Status = "active";
-  const b: Status = "inactive";
+  const a: Status = "active" as Status;
+  const b: Status = "inactive" as Status;
   assert(a === "active", "alias union accepts first literal");
   assert(b === "inactive", "alias union accepts second literal");
   assert(a !== b, "distinct literal-union members compare unequal");
