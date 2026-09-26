@@ -56,8 +56,7 @@ to fulfill the request.
 
 You do NOT have access to Node.js APIs, browser globals, or NPM
 packages. Submilli ships its own standard library — modules are:
-`submilli:code`, `submilli:fs`, `submilli:http`, `submilli:url`, `submilli:crypto`,
-`submilli:uuid`, `submilli:session`, `submilli:llm`. Submilli native
+{stdlib_modules}. Submilli native
 packages (e.g., `@stripe.com/sdk`, `@mcp/linear`) are also available;
 use the `packages.search` and `packages.docs` tools to discover them.
 
@@ -73,15 +72,12 @@ the `packages.docs` call to make, and asking `packages.docs` for a
 built-in serves it — the two tools cross-check each other, so a name
 in the wrong one is never a dead end.
 
-When making outbound HTTP, do NOT construct `Authorization` headers
-or include API keys in query strings. The operator's policy
-configures an `auth_proxy` that injects credentials transparently —
-just hit the URL.
+{http_guidance}
 
 Denials are final. A `permission denied … capability=…` error means
 that operation is forbidden — for you and for every other route to the
 same effect. Do not retry it, call the same service through
-`submilli:http` or a different package, or change arguments to slip
+a different package, or change arguments to slip
 past the filter. Stop and report the denial. Most denials are the
 operator's policy; a few are runtime rules no policy can change, and
 the message says which. Likewise an HTTP 401/403 or "authentication
@@ -124,7 +120,7 @@ verbatim (so don't `JSON.stringify` it yourself — that double-encodes),
 `number`/`boolean` use `toString`, and objects/arrays serialize to
 JSON. `console.log` is a separate debug stream.
 
-Reading JSON text (e.g. an HTTP response body): `JSON.parse(s)`
+Reading JSON text: `JSON.parse(s)`
 returns `unknown`. Validate and type the result with a runtime cast:
 `const x = JSON.parse(s) as T`. Do not write `JSON.parse<T>(s)` or
 rely on `const x: T = JSON.parse(s)`.
@@ -132,8 +128,8 @@ rely on `const x: T = JSON.parse(s)`.
 an array, or a data-only `interface` you declare (no methods) — and
 combinations like `Issue[]`.{mcp_packages}{git_package}
 
-Sandbox: File system {vfs_mode}.
-Network (`submilli:http`): {http_access}.
+{sandbox}
+{http_access}
 
 Session state (`submilli:session`): a key-value store scoped to this
 session — `set(key, value)` writes, `get<T>(key)` reads it back checked
@@ -169,11 +165,20 @@ resolved values.
 
 | Placeholder | Resolves to | Source |
 |:---|:---|:---|
-| `{vfs_mode}` | `none` / `ephemeral` / `per_session` / `persistent`, with limits where applicable | policy `vfs:` block |
-| `{http_access}` | per-method host reachability (`GET → api.example.com; …`), `any host`, or `none` when blocked | policy `permissions:` `http.*` `allow` rules for `main` |
+| `{sandbox}` | empty when FS and Code are hidden; otherwise `none` / `ephemeral` / `per_session` / `persistent`, with limits where applicable | policy `vfs:` block |
+| `{http_access}` | empty when HTTP is hidden; otherwise per-method host reachability (`GET → api.example.com; …`), `any host`, or an approval-policy note | policy default and `permissions:` HTTP rules for `main` |
+| `{stdlib_modules}` | visible standard-library names | non-deny default or relevant non-deny rules for `main` |
+| `{http_guidance}` | HTTP credential guidance, only when HTTP is visible | same visibility rule |
 | `{builtins}` | comma-separated catalog of in-scope built-in types + namespaces | prelude (`interpreter::packages::builtins`) |
 | `{mcp_packages}` | empty when no MCP servers; else a note on the available `@mcp/<server>` packages | policy `mcp:` block |
 | `{git_package}` | empty unless Git is configured; otherwise a pointer to its package docs | policy `git:` block |
+
+HTTP, FS, and Code are advertised when the default action is not `deny`, or
+`main` has a relevant capability rule whose action is not `deny`. An absent
+default means `deny`. Filters and rule shadowing do not affect discovery;
+`ask-human` keeps a library visible without authorizing execution. Code shares
+`fs.read`, `fs.write`, `fs.stat`, and `fs.list` with FS. Other callers' grants
+do not advertise these libraries to `main`.
 
 Add new placeholders here when the resolved value is policy-dependent
 and the LLM needs it during planning. Keep the list short — most

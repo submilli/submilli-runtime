@@ -9,6 +9,7 @@
 
 pub mod github;
 pub mod host;
+pub mod library_visibility;
 pub mod llm;
 pub mod mcp;
 pub mod mcp_auth;

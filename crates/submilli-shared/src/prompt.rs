@@ -1,11 +1,12 @@
 //! Renders the LLM-facing `execute` tool description — the "system prompt" the
 //! MCP server hands its caller. The text lives in `llm-prompt.md`; this
-//! crate extracts the prompt body and resolves its placeholders (`{vfs_mode}`,
+//! crate extracts the prompt body and resolves its placeholders (`{sandbox}`,
 //! `{http_access}`, `{builtins}`) against the compiler and a blueprint's policy.
 //!
 //! Shared so the server (which serves it) and the CLI (which prints it for
 //! debugging) can't drift apart.
 
+use crate::library_visibility::LibraryVisibility;
 use interpreter::stdlib::capabilities;
 use submilli_blueprint::{Action, Blueprint, DefaultAction, FieldMatch, FilterExpr};
 
@@ -26,7 +27,7 @@ const HTTP_MODULE: &str = "submilli:http";
 /// can't drift.
 pub mod tools {
     pub const PACKAGES_SEARCH: &str = "Search available packages by name, description, or exported \
-        symbol name — stdlib modules (e.g. \"submilli:http\"), this blueprint's declared registry \
+        symbol name — stdlib modules (e.g. \"submilli:crypto\"), this blueprint's declared registry \
         packages (e.g. \"@submilli/github\"), and its discovered @mcp/<server> packages (results \
         tagged with a \"source\" of \"host\", \"registry\", or \"mcp\"). An empty query lists every \
         available package. A query matching nothing returns the available-package catalog and a \
@@ -34,7 +35,7 @@ pub mod tools {
 
     pub const PACKAGES_DOCS: &str = "Return the type declarations (a TypeScript `.d.ts`-style \
         listing of every exported function and type) plus a one-line description for a package — \
-        an importable stdlib module (e.g. \"submilli:http\"), a registry package, or an \
+        an importable stdlib module (e.g. \"submilli:crypto\"), a registry package, or an \
         @mcp/<server> package. Read these before importing a package: the signatures are the \
         contract. A name that is a language built-in rather than a package (e.g. \"Temporal\") \
         is served here too, tagged \"source\": \"builtin\" — use it directly, with no `import`. \
@@ -80,14 +81,54 @@ pub fn prompt_template() -> &'static str {
 }
 
 /// The `execute` tool description for a blueprint: the canonical prompt with
-/// `{vfs_mode}`, `{http_access}`, and `{builtins}` resolved.
+/// policy-dependent library listings and guidance resolved.
 pub fn execute_tool_description(blueprint: &Blueprint) -> String {
+    let visibility = LibraryVisibility::for_blueprint(blueprint);
+    let http_visible = visibility.allows(HTTP_MODULE);
+    let sandbox = if visibility.allows("submilli:fs") || visibility.allows("submilli:code") {
+        format!("Sandbox: File system {}.", vfs_mode_phrase(&blueprint.vfs))
+    } else {
+        String::new()
+    };
+    let http_access = if http_visible {
+        format!(
+            "Network (`submilli:http`): {}.",
+            http_access_phrase(blueprint)
+        )
+    } else {
+        String::new()
+    };
     prompt_template()
-        .replace("{vfs_mode}", &vfs_mode_phrase(&blueprint.vfs))
-        .replace("{http_access}", &http_access_phrase(blueprint))
+        .replace("{stdlib_modules}", &stdlib_modules_phrase(visibility))
+        .replace("{sandbox}", &sandbox)
+        .replace("{http_guidance}", if http_visible { HTTP_GUIDANCE } else { "" })
+        .replace("{http_access}", &http_access)
         .replace("{builtins}", &builtins_phrase())
         .replace("{mcp_packages}", &mcp_packages_phrase(blueprint))
         .replace("{git_package}", if blueprint.git.is_some() { "\n\nGit is available as `submilli:git`. Read its package docs before use; init, clone, fetch/pull, and commit require their respective Git capabilities. Other local operations need no Git capability. Push is not available." } else { "" })
+}
+
+const HTTP_GUIDANCE: &str = r#"When making outbound HTTP, do NOT construct `Authorization` headers
+or include API keys in query strings. The operator's policy
+configures an `auth_proxy` that injects credentials transparently —
+just hit the URL."#;
+
+fn stdlib_modules_phrase(visibility: LibraryVisibility) -> String {
+    [
+        "submilli:code",
+        "submilli:fs",
+        "submilli:http",
+        "submilli:url",
+        "submilli:crypto",
+        "submilli:uuid",
+        "submilli:session",
+        "submilli:llm",
+    ]
+    .into_iter()
+    .filter(|name| visibility.allows(name))
+    .map(|name| format!("`{name}`"))
+    .collect::<Vec<_>>()
+    .join(", ")
 }
 
 /// A worked example of using a *typed* MCP tool result directly — narrowing an
@@ -145,7 +186,7 @@ fn builtins_phrase() -> String {
     )
 }
 
-/// Resolve the `{vfs_mode}` placeholder from the bound blueprint's vfs config.
+/// Describe the bound blueprint's VFS configuration for the sandbox section.
 fn vfs_mode_phrase(vfs: &submilli_blueprint::VfsConfig) -> String {
     use submilli_blueprint::VfsConfig;
     let limits = || -> String {
@@ -213,6 +254,9 @@ fn http_access_phrase(blueprint: &Blueprint) -> String {
             Some((labels, _)) => labels.push(label),
             None => groups.push((vec![label], scope)),
         }
+    }
+    if groups.is_empty() && LibraryVisibility::for_blueprint(blueprint).allows(HTTP_MODULE) {
+        return "subject to policy; approval rules do not authorize execution automatically".into();
     }
     if groups.is_empty() {
         return "none — `submilli:http` is blocked by policy".into();
@@ -337,6 +381,50 @@ mod tests {
     }
 
     #[test]
+    fn prompt_omits_hidden_libraries_and_their_guidance() {
+        let denied = execute_tool_description(&Blueprint::default());
+        for hidden in [
+            "submilli:http",
+            "submilli:fs",
+            "submilli:code",
+            "When making outbound HTTP",
+            "Sandbox: File system",
+            "Network (",
+        ] {
+            assert!(!denied.contains(hidden), "{hidden}: {denied}");
+        }
+        for placeholder in [
+            "{stdlib_modules}",
+            "{sandbox}",
+            "{http_guidance}",
+            "{http_access}",
+        ] {
+            assert!(!denied.contains(placeholder));
+        }
+        for action in ["allow", "ask-human"] {
+            let blueprint = blueprint_with(&format!(
+                "    - capability: http.get\n      action: {action}\n"
+            ));
+            let rendered = execute_tool_description(&blueprint);
+            assert!(rendered.contains("submilli:http"));
+            assert!(rendered.contains("When making outbound HTTP"));
+            assert!(!rendered.contains("submilli:fs"));
+            assert!(!rendered.contains("submilli:code"));
+            assert!(!rendered.contains("blocked by policy"));
+        }
+        for (capability, code_visible) in [("fs.mkdir", false), ("fs.read", true)] {
+            let blueprint = blueprint_with(&format!(
+                "    - capability: {capability}\n      action: allow\n"
+            ));
+            let rendered = execute_tool_description(&blueprint);
+            assert!(rendered.contains("submilli:fs"));
+            assert!(rendered.contains("Sandbox: File system ephemeral"));
+            assert_eq!(rendered.contains("submilli:code"), code_visible);
+            assert!(!rendered.contains("submilli:http"));
+        }
+    }
+
+    #[test]
     fn mcp_packages_absent_without_servers() {
         let rendered = execute_tool_description(&Blueprint::default());
         assert!(mcp_packages_phrase(&Blueprint::default()).is_empty());
@@ -364,8 +452,8 @@ mod tests {
             },
             ..Blueprint::default()
         };
-        assert!(execute_tool_description(&Blueprint::default()).contains("ephemeral"));
-        assert!(execute_tool_description(&sess).contains("per_session"));
+        assert!(vfs_mode_phrase(&Blueprint::default().vfs).contains("ephemeral"));
+        assert!(vfs_mode_phrase(&sess.vfs).contains("per_session"));
     }
 
     #[test]
@@ -374,11 +462,11 @@ mod tests {
             http_access_phrase(&Blueprint::default()),
             "none — `submilli:http` is blocked by policy"
         );
-        // an http rule that only asks-for-approval grants no access either
+        // Approval keeps discovery visible without promising runtime authorization.
         let bp = blueprint_with("    - capability: http.get\n      action: ask-human\n");
         assert_eq!(
             http_access_phrase(&bp),
-            "none — `submilli:http` is blocked by policy"
+            "subject to policy; approval rules do not authorize execution automatically"
         );
     }
 

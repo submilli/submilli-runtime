@@ -248,7 +248,12 @@ pub async fn builtins() -> impl IntoResponse {
 
 pub async fn builtin_docs(Query(params): Query<DocsParams>) -> impl IntoResponse {
     crate::metrics::builtins("docs");
-    let body = packages::builtin_entry_json(&params.name, &[], &packages::Fetch::Rest);
+    let body = packages::builtin_entry_json(
+        &params.name,
+        &[],
+        &packages::Fetch::Rest,
+        submilli_shared::library_visibility::LibraryVisibility::unscoped(),
+    );
     let status = if body.get("error").is_some() {
         StatusCode::NOT_FOUND
     } else {

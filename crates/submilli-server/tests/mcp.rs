@@ -829,7 +829,7 @@ async fn mcp_session_restores_after_server_restart() {
 
 /// `sess` (per_session + fs) re-applied with an added `http.get` allow rule —
 /// keeps the same vfs mode so its workspace survives, but flips `{http_access}`
-/// in the execute tool description from "blocked" to "GET → any host".
+/// in the execute tool description from omitted to "GET → any host".
 const SESS_PLUS_HTTP: &str = "name: sess\n\
     vfs: per_session\n\
     permissions:\n  \
@@ -847,8 +847,8 @@ async fn session_survives_blueprint_update() {
     // Before the update the bound blueprint blocks http.
     let (_, _, before) = h.post(SESS, tools_list(1), Some(&session)).await;
     assert!(
-        tool_desc(&before, EXECUTE).contains("blocked by policy"),
-        "baseline description should report http blocked: {before}"
+        !tool_desc(&before, EXECUTE).contains("submilli:http"),
+        "baseline description should omit http: {before}"
     );
 
     // Write a file into the per_session workspace, then update the blueprint.
@@ -1221,9 +1221,9 @@ async fn tool_description_is_resolved_prompt() {
         "builtins unresolved: {desc}"
     );
     assert!(!desc.contains("{builtins}"), "placeholder left in: {desc}");
-    // ...and `{http_access}` resolved (this blueprint allows no HTTP).
+    // HTTP is omitted because this blueprint grants only FS capabilities.
     assert!(
-        desc.contains("`submilli:http` is blocked by policy"),
+        !desc.contains("submilli:http"),
         "http_access unresolved: {desc}"
     );
     assert!(
@@ -1386,7 +1386,10 @@ async fn last_run_without_prior_execute_errors() {
 
 #[tokio::test]
 async fn packages_docs_host_module() {
-    let h = Harness::new();
+    let h =
+        Harness::from_blueprints(vec![submilli_blueprint::parse(
+        "name: eph\npermissions:\n  main:\n    - capability: http.get\n      action: allow\n"
+    ).unwrap()]);
     let session = h.handshake(EPH).await;
     let (status, _, rpc) = h
         .post(
@@ -1463,7 +1466,7 @@ async fn packages_search_by_symbol_and_list_all() {
     // Empty query lists every user-facing module (security excluded).
     let (_, _, all) = h.post(EPH, search(2, ""), Some(&session)).await;
     let count = output(&all)["results"].as_array().unwrap().len();
-    assert_eq!(count, 9, "expected 9 stdlib modules: {all}");
+    assert_eq!(count, 8, "expected 8 permitted stdlib modules: {all}");
     assert!(
         output(&all)["results"]
             .as_array()
@@ -1583,7 +1586,7 @@ async fn builtins_docs_names_the_packages_docs_call_for_a_package_name() {
             rpc_call(
                 1,
                 "submilli__typescript__builtins__docs",
-                json!({ "names": ["submilli:http", "Temporel", "Array"] }),
+                json!({ "names": ["submilli:crypto", "Temporel", "Array"] }),
             ),
             Some(&session),
         )
@@ -1601,7 +1604,7 @@ async fn builtins_docs_names_the_packages_docs_call_for_a_package_name() {
 
     // A package name gets the call to make, not the declarations — the
     // `import` is the step that distinguishes the two namespaces.
-    let package = by_name("submilli:http");
+    let package = by_name("submilli:crypto");
     assert_eq!(
         package["error"],
         json!("not_a_builtin"),
@@ -1609,7 +1612,7 @@ async fn builtins_docs_names_the_packages_docs_call_for_a_package_name() {
     );
     let message = package["message"].as_str().unwrap_or("");
     assert!(
-        message.contains("submilli__typescript__packages__docs(\"submilli:http\")"),
+        message.contains("submilli__typescript__packages__docs(\"submilli:crypto\")"),
         "got: {message}"
     );
     assert!(message.contains("import"), "got: {message}");
@@ -2006,4 +2009,71 @@ async fn mcp_undeclared_volume_fails_by_name_without_a_host_path() {
         !body.contains(dir.path().to_str().unwrap()),
         "no host path may reach the client: {body}"
     );
+}
+
+#[tokio::test]
+async fn policy_hides_libraries_from_mcp_discovery() {
+    for default in ["deny", "allow", "ask-human"] {
+        let h = Harness::from_blueprints(vec![
+            submilli_blueprint::parse(&format!("name: eph\ndefault: {default}\n")).unwrap(),
+        ]);
+        let session = h.handshake(EPH).await;
+        let (_, _, tools) = h.post(EPH, tools_list(1), Some(&session)).await;
+        let visible = default != "deny";
+        for name in ["submilli:http", "submilli:fs", "submilli:code"] {
+            assert_eq!(tool_desc(&tools, EXECUTE).contains(name), visible);
+            let typo = format!("{name}x");
+            let (_, _, builtins) = h
+                .post(
+                    EPH,
+                    rpc_call(
+                        4,
+                        "submilli__typescript__builtins__docs",
+                        json!({"names": [name, typo]}),
+                    ),
+                    Some(&session),
+                )
+                .await;
+            let entries = output(&builtins)["results"].as_array().unwrap().clone();
+            assert_eq!(
+                entries[0]["error"] == "not_a_builtin",
+                visible,
+                "{builtins}"
+            );
+            assert_eq!(entries[1]["did_you_mean"] == name, visible, "{builtins}");
+            for query in [name, "", "nothingmatchesthis"] {
+                let (_, _, response) = h
+                    .post(
+                        EPH,
+                        rpc_call(
+                            2,
+                            "submilli__typescript__packages__search",
+                            json!({"query": query}),
+                        ),
+                        Some(&session),
+                    )
+                    .await;
+                assert_eq!(
+                    output(&response).to_string().contains(name),
+                    visible,
+                    "{response}"
+                );
+            }
+            let (_, _, response) = h
+                .post(
+                    EPH,
+                    rpc_call(
+                        3,
+                        "submilli__typescript__packages__docs",
+                        json!({"name": name}),
+                    ),
+                    Some(&session),
+                )
+                .await;
+            assert_eq!(output(&response)["source"] == "host", visible, "{response}");
+            if !visible {
+                assert_eq!(output(&response)["error"], "unknown_package");
+            }
+        }
+    }
 }

@@ -148,7 +148,7 @@ async fn zero_hit_search_lists_what_is_available() {
     let listed = body["available_packages"].as_array().expect("a catalog");
     assert!(!listed.is_empty(), "got: {body}");
     assert!(
-        listed.iter().any(|e| e["name"] == "submilli:http"),
+        listed.iter().any(|e| e["name"] == "submilli:crypto"),
         "got: {body}"
     );
     // Summary-only: a pointer, not a payload.
@@ -369,6 +369,30 @@ mod blueprint_scoped {
     }
 
     #[tokio::test]
+    async fn policy_hides_libraries_from_rest_discovery() {
+        let store = tempfile::tempdir().unwrap();
+        let router = router(store.path());
+        for name in ["submilli:http", "submilli:fs", "submilli:code"] {
+            for query in ["", name, "nothingmatchesthis"] {
+                let (status, body) = get_from(
+                    router.clone(),
+                    &format!("/v1/packages/search?blueprint=scoped&q={query}"),
+                )
+                .await;
+                assert_eq!(status, StatusCode::OK);
+                assert!(!body.to_string().contains(name), "{body}");
+            }
+            let (status, body) = get_from(
+                router.clone(),
+                &format!("/v1/packages/docs?blueprint=scoped&name={name}"),
+            )
+            .await;
+            assert_eq!(status, StatusCode::NOT_FOUND);
+            assert_eq!(body["error"], "unknown_package");
+        }
+    }
+
+    #[tokio::test]
     async fn search_includes_blueprint_packages_only_when_scoped() {
         let store = tempfile::tempdir().expect("tempdir");
 
@@ -412,7 +436,7 @@ mod blueprint_scoped {
         // The listing covers every source the call site can see, not just
         // the stdlib half `search_json_with_catalog` would have reached.
         assert!(
-            listed.iter().any(|e| e["name"] == "submilli:http"),
+            listed.iter().any(|e| e["name"] == "submilli:crypto"),
             "got: {body}"
         );
         let registry = listed

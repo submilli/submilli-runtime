@@ -585,7 +585,18 @@ pub fn suggest(name: &str, extra: &[String]) -> Option<String> {
 
 /// Blueprint-scoped variant; Git is visible only when configured.
 pub fn suggest_with_git(name: &str, extra: &[String], git_enabled: bool) -> Option<String> {
-    let mut candidates: Vec<String> = search_with_git("", git_enabled)
+    suggest_filtered(name, extra, |module| {
+        git_enabled || module != "submilli:git"
+    })
+}
+
+/// Suggest only names visible to the caller, retaining built-in corrections.
+pub fn suggest_filtered(
+    name: &str,
+    extra: &[String],
+    visible: impl Fn(&str) -> bool,
+) -> Option<String> {
+    let mut candidates: Vec<String> = search_with_git("", true)
         .into_iter()
         .map(|m| m.name)
         .collect();
@@ -593,6 +604,7 @@ pub fn suggest_with_git(name: &str, extra: &[String], git_enabled: bool) -> Opti
     candidates.extend(builtins.types);
     candidates.extend(builtins.namespaces);
     candidates.extend(extra.iter().cloned());
+    candidates.retain(|candidate| visible(candidate));
 
     // Only the head segment is in question: `Temporel.Instant` misses because
     // of `Temporel`, and the tail only inflates the distance past threshold.
@@ -704,7 +716,12 @@ pub fn catalog(extra: Vec<CatalogEntry>) -> Catalog {
 
 /// Blueprint-scoped variant; Git is visible only when configured.
 pub fn catalog_with_git(extra: Vec<CatalogEntry>, git_enabled: bool) -> Catalog {
-    let mut entries: Vec<CatalogEntry> = search_with_git("", git_enabled)
+    catalog_filtered(extra, |module| git_enabled || module != "submilli:git")
+}
+
+/// Filter before applying the catalog limit so omitted counts reflect visibility.
+pub fn catalog_filtered(extra: Vec<CatalogEntry>, visible: impl Fn(&str) -> bool) -> Catalog {
+    let mut entries: Vec<CatalogEntry> = search_with_git("", true)
         .into_iter()
         .map(|m| CatalogEntry {
             name: m.name,
@@ -713,6 +730,7 @@ pub fn catalog_with_git(extra: Vec<CatalogEntry>, git_enabled: bool) -> Catalog 
         })
         .collect();
     entries.extend(extra);
+    entries.retain(|entry| visible(&entry.name));
     let remaining = entries.len().saturating_sub(CATALOG_LIMIT);
     entries.truncate(CATALOG_LIMIT);
     Catalog { entries, remaining }
@@ -1813,6 +1831,26 @@ fn type_doc(kind: &TypeKind) -> &Option<DocComment> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn catalog_filters_before_counting_omitted_entries() {
+        let extra = (0..CATALOG_LIMIT)
+            .map(|index| CatalogEntry {
+                name: format!("@acme/package{index}"),
+                source: "registry".into(),
+                description: String::new(),
+            })
+            .collect();
+        let catalog = catalog_filtered(extra, |name| !name.starts_with("submilli:"));
+        assert_eq!(catalog.entries.len(), CATALOG_LIMIT);
+        assert_eq!(catalog.remaining, 0);
+        assert!(
+            catalog
+                .entries
+                .iter()
+                .all(|entry| entry.name.starts_with("@acme/"))
+        );
+    }
 
     #[test]
     fn http_docs_render_signatures() {

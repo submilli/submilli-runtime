@@ -20,6 +20,7 @@ use rmcp::service::RequestContext;
 use rmcp::{ErrorData, RoleServer, ServerHandler, schemars, tool, tool_router};
 use serde::{Deserialize, Serialize};
 use submilli_blueprint::{Blueprint, HarnessSecretBindings, VfsConfig, required_harness_secrets};
+use submilli_shared::library_visibility::LibraryVisibility;
 use submilli_shared::{BlueprintAuthProxy, BlueprintSecretProvider, PolicyCheck};
 
 use crate::app::AppState;
@@ -42,7 +43,7 @@ struct ExecuteArgs {
 
 #[derive(Deserialize, schemars::JsonSchema)]
 struct PackageDocsArgs {
-    /// Package name, e.g. `submilli:http`.
+    /// Package name, e.g. `submilli:crypto`.
     name: String,
 }
 
@@ -465,20 +466,25 @@ impl SubmilliMcp {
     ) -> Result<CallToolResult, ErrorData> {
         // The bound blueprint's `@mcp/*` names, so a package name asked of this
         // tool gets the correcting call rather than a bare unknown.
-        let mcp_packages = match self.state.blueprints().get(&self.blueprint_name).await {
-            Some(blueprint) => {
-                let catalog = self
-                    .state
-                    .mcp_catalog(&self.blueprint_name, &blueprint)
-                    .await;
-                packages::mcp_package_names(&catalog)
-            }
-            None => Vec::new(),
-        };
+        let (mcp_packages, visibility) =
+            match self.state.blueprints().get(&self.blueprint_name).await {
+                Some(blueprint) => {
+                    let catalog = self
+                        .state
+                        .mcp_catalog(&self.blueprint_name, &blueprint)
+                        .await;
+                    (
+                        packages::mcp_package_names(&catalog),
+                        LibraryVisibility::for_blueprint(&blueprint),
+                    )
+                }
+                None => (Vec::new(), LibraryVisibility::unscoped()),
+            };
         Ok(CallToolResult::structured(packages::builtins_docs_json(
             &args.names,
             &mcp_packages,
             &packages::Fetch::Mcp,
+            visibility,
         )))
     }
 
