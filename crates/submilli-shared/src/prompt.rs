@@ -203,7 +203,7 @@ const MCP_PACKAGES_EXAMPLE: &str = r#"  import github from "@mcp/github";
   }"#;
 
 /// Resolve `{mcp_packages}`: empty when the blueprint declares no MCP servers,
-/// else a short note naming the available `@mcp/<server>` packages and how to
+/// else a short note explaining discovery of available `@mcp/<server>` packages and how to
 /// consume their tools — use a typed result directly, cast only for `unknown`.
 /// Injected only when relevant, so the no-MCP prompt stays terse. Starts with a
 /// blank line so it slots cleanly between paragraphs.
@@ -211,14 +211,10 @@ fn mcp_packages_phrase(blueprint: &Blueprint) -> String {
     if blueprint.mcp.is_empty() {
         return String::new();
     }
-    let list = blueprint
-        .mcp
-        .keys()
-        .map(|s| format!("@mcp/{s}"))
-        .collect::<Vec<_>>()
-        .join(", ");
     format!(
-        "\n\nMCP packages available: {list}. Call `{{t_docs}}` with a package \
+        "\n\nMCP servers are configured. Call `{{t_search}}` with `@mcp/` to find \
+         currently available packages; unauthenticated or unreachable servers are omitted. \
+         Call `{{t_docs}}` with an available package \
          name for its tools and signatures, then `import` it. Most tools are \
          typed — read the signature and use the result directly, narrowing \
          optional (`foo?`) fields against `null` before access; do not cast a \
@@ -566,11 +562,13 @@ mod tests {
     }
 
     #[test]
-    fn mcp_packages_lists_declared_servers() {
+    fn mcp_packages_require_discovery_before_importing() {
         let bp = submilli_blueprint::parse("name: t\nmcp:\n  linear:\n    url: https://x/mcp\n")
             .expect("valid blueprint");
         let rendered = execute_tool_description(&bp, PromptSurface::Mcp);
-        assert!(rendered.contains("MCP packages available: @mcp/linear"));
+        assert!(rendered.contains("MCP servers are configured"));
+        assert!(!mcp_packages_phrase(&bp).contains("@mcp/linear"));
+        assert!(rendered.contains("unauthenticated or unreachable servers are omitted"));
         assert!(rendered.contains("return type is literally `unknown`"));
         assert!(rendered.contains("use the result directly"));
         assert!(!rendered.contains("raw `string`"));

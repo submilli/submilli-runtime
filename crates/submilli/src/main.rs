@@ -155,5 +155,6 @@ fn server_label(cmd: &commands::server::ServerCmd) -> &'static str {
         ServerCmd::Blueprint(_) => "server.blueprint",
         ServerCmd::Secret(_) => "server.secret",
         ServerCmd::Mcp(_) => "server.mcp",
+        ServerCmd::Docs(_) => "server.docs",
     }
 }

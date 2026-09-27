@@ -18,7 +18,7 @@ mod auth_status;
 mod authenticate;
 mod deauthenticate;
 mod provider;
-mod provider_config;
+pub(crate) mod provider_config;
 
 #[derive(Subcommand)]
 pub enum McpCmd {

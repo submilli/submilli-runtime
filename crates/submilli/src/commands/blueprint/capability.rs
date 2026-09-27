@@ -338,8 +338,21 @@ fn add(args: &AddArgs) -> Result<String> {
             args.caller
         );
     }
-    let shadowed = rules.iter().any(|r| r.capability == args.capability);
-    rules.push(rule.clone());
+    // MCP scaffolding ends in an unconditional deny. Insert an explicit grant
+    // before that fallback so `add-mcp` followed by `capability add` works,
+    // while preserving earlier filtered rules and the fallback for other tools.
+    let position = if args.capability.starts_with("mcp.") && action == Action::Allow {
+        rules.iter().position(|r| {
+            r.capability == args.capability && r.filter.is_none() && r.action == Action::Deny
+        })
+    } else {
+        None
+    }
+    .unwrap_or(rules.len());
+    let shadowed = rules[..position]
+        .iter()
+        .any(|r| r.capability == args.capability);
+    rules.insert(position, rule.clone());
     if !had_policy {
         blueprint.default_action = Some(DefaultAction::Deny);
     }
@@ -660,6 +673,21 @@ mod tests {
             reload(&path).permissions["@acme/sdk"][0].capability,
             "secrets.get"
         );
+    }
+
+    #[test]
+    fn mcp_allow_is_inserted_before_the_scaffold_deny() {
+        let (_tmp, path) = temp_blueprint(
+            "name: t\nmcp:\n  x:\n    url: https://example.com/mcp\npermissions:\n  main:\n    - capability: mcp.x\n      action: deny\n",
+        );
+        let mut args = add_args("mcp.x", &path);
+        args.filter = Some("tool == \"read\"".into());
+        add(&args).unwrap();
+        let blueprint = reload(&path);
+        let rules = &blueprint.permissions["main"];
+        assert_eq!(rules[0].action, Action::Allow);
+        assert!(rules[0].filter.is_some());
+        assert_eq!(rules[1].action, Action::Deny);
     }
 
     #[test]

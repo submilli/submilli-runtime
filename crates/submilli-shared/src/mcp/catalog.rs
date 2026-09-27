@@ -8,14 +8,10 @@
 //! (not named interfaces) so the same value can be built and JSON-validated by the
 //! `JSON.parse` machinery codegen already has.
 //!
-//! A tool is exposed only if its `inputSchema` is representable: scalar `anyOf`/
-//! `oneOf` map to unions (a nullable `[{string},{null}]` → `string | null`), but
-//! anything the strict subset still can't express (`allOf`, object/array
-//! combinators, `$ref`, recursion, open objects) would force an `unknown` argument
-//! the script can't construct, so such a tool is dropped with a
-//! [`ToolWarning`](crate::mcp::ToolWarning). Its return
-//! is typed from `outputSchema` when that is representable; otherwise the tool
-//! returns `unknown`.
+//! Representable input fields keep their types; an unsupported field schema
+//! becomes `unknown`, leaving validation to the MCP server. Output schemas stay
+//! strict: an unrepresentable result returns `unknown`. Invalid function names
+//! and duplicate names are excluded with diagnostics.
 //!
 //! The mapper is pure and network-free: discovery feeds it [`ToolCatalogEntry`]s,
 //! keeping the rmcp transport out of the codegen path.
@@ -57,10 +53,8 @@ pub fn package_name(server: &str) -> String {
 /// plus any [`ToolWarning`]s raised while mapping. An empty catalog yields a valid,
 /// importable package with no tools — the shape a server-unreachable stub takes.
 ///
-/// A tool is exposed only if its arguments map to fully concrete structural types;
-/// one whose argument schema needs `unknown` anywhere is dropped (we can't marshal
-/// a value the script can't construct). Its return is typed from `outputSchema`
-/// when that is representable, otherwise the tool returns `unknown`.
+/// Unsupported input fields are `unknown`; required fields remain required.
+/// Results are typed from representable output schemas or return `unknown`.
 pub fn build_mcp_definitions(
     server: &str,
     tools: &[ToolCatalogEntry],
@@ -72,7 +66,23 @@ pub fn build_mcp_definitions(
     // calls to `submilli:mcp.call` and skips per-tool imports, no name-prefix match.
     defs.mcp_server = Some(server.to_string());
     let mut warnings = Vec::new();
+    let mut untyped = 0;
+    let mut counts = BTreeMap::new();
     for tool in tools {
+        *counts.entry(tool.name.as_str()).or_insert(0) += 1;
+    }
+    for tool in tools {
+        let reason = if counts[tool.name.as_str()] > 1 {
+            Some("duplicate tool name in tools/list")
+        } else if !valid_function_name(&tool.name) {
+            Some("tool name must be a TypeScript function identifier")
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            warnings.push(ToolWarning::dropped(server, &tool.name, reason));
+            continue;
+        }
         let Some(params) = args_param(&tool.input_schema) else {
             warnings.push(ToolWarning::dropped(
                 server,
@@ -85,31 +95,75 @@ pub fn build_mcp_definitions(
         let ret = match &resolved {
             ResolvedOutput::Published(ty) | ResolvedOutput::Registry { ty, .. } => ty.clone(),
             ResolvedOutput::Untyped { .. } => {
-                warnings.push(ToolWarning::untyped_output(server, &tool.name));
+                untyped += 1;
                 Type::Unknown
             }
         };
-        for param in &params {
-            collect_shapes(&param.ty, &mut defs.shapes);
-        }
-        collect_shapes(&ret, &mut defs.shapes);
-        defs.values.insert(
-            tool.name.clone(),
-            ValueSymbol {
-                name: tool.name.clone(),
-                mangled_name: mangle::host(&pkg, &tool.name),
-                declaration_span: Span::at(interpreter::FileId::MCP),
-                kind: ValueKind::Function {
-                    generics: Vec::new(),
-                    params,
-                    ret,
-                    type_predicate: None,
-                    doc: Some(tool_doc(tool.description.as_deref(), &resolved)),
-                },
-            },
-        );
+        register_tool(&mut defs, tool, params, ret, &resolved);
+    }
+    if untyped > 0 {
+        warnings.push(ToolWarning {
+            server: server.to_string(),
+            tool: String::new(),
+            message: format!("{untyped} tool(s) return unknown: result schemas are unavailable or unrepresentable; consult package docs for signatures"),
+        });
     }
     (defs, warnings)
+}
+
+fn register_tool(
+    defs: &mut PackageDeclaration,
+    tool: &ToolCatalogEntry,
+    params: Vec<Param>,
+    ret: Type,
+    resolved: &ResolvedOutput,
+) {
+    for param in &params {
+        collect_shapes(&param.ty, &mut defs.shapes);
+    }
+    collect_shapes(&ret, &mut defs.shapes);
+    defs.values.insert(
+        tool.name.clone(),
+        ValueSymbol {
+            name: tool.name.clone(),
+            mangled_name: mangle::host(&defs.package_name, &tool.name),
+            declaration_span: Span::at(interpreter::FileId::MCP),
+            kind: ValueKind::Function {
+                generics: Vec::new(),
+                params,
+                ret,
+                type_predicate: None,
+                doc: Some(tool_doc(tool.description.as_deref(), resolved)),
+            },
+        },
+    );
+}
+
+fn valid_function_name(name: &str) -> bool {
+    let mut lexer = interpreter::Lexer::new(name, interpreter::FileId::MCP);
+    let token = lexer.next_token();
+    token.kind == interpreter::TokenKind::Identifier
+        && token.span.start == 0
+        && token.span.end as usize == name.len()
+        && lexer.into_diagnostics().is_empty()
+        && !matches!(
+            name,
+            "await"
+                | "delete"
+                | "with"
+                | "debugger"
+                | "yield"
+                | "eval"
+                | "arguments"
+                | "implements"
+                | "interface"
+                | "package"
+                | "private"
+                | "protected"
+                | "public"
+                | "static"
+                | "let"
+        )
 }
 
 /// How a tool's return type was resolved: from the server's own `outputSchema`,
@@ -150,8 +204,8 @@ fn resolve_output(tool: &ToolCatalogEntry, pack: Option<&SchemaPack>) -> Resolve
 }
 
 /// A tool's parameter list: a single structural-object `args` param when the
-/// `inputSchema` declares properties, or empty for a zero-arg tool. `None` means
-/// "drop the tool" — an argument property isn't representable in the subset.
+/// `inputSchema` declares properties, or empty for a zero-arg tool. Unsupported
+/// property schemas become `unknown`; their required/optional status is preserved.
 ///
 /// When the schema marks nothing required, the `args` param carries a `{}` default so a
 /// zero-arg call type-checks — the common all-optional-filters shape an LLM reaches for.
@@ -164,7 +218,7 @@ fn args_param(schema: &Value) -> Option<Vec<Param>> {
         return Some(Vec::new());
     }
     let obj = schema.as_object()?;
-    let ty = object_type(obj, 0)?;
+    let ty = object_type(obj, 0, input_field_type)?;
     let has_required = obj
         .get("required")
         .and_then(Value::as_array)
@@ -175,6 +229,12 @@ fn args_param(schema: &Value) -> Option<Vec<Param>> {
         Param::with_default("args", ty, DefaultValue::EmptyObject)
     };
     Some(vec![param])
+}
+
+/// Keep an input field callable when its schema exceeds the static type subset.
+/// The upstream server validates these values against its complete JSON Schema.
+fn input_field_type(schema: &Value, depth: u32) -> Option<Type> {
+    Some(schema_to_type(schema, depth).unwrap_or(Type::Unknown))
 }
 
 /// Recursively map a JSON Schema node to a structural [`Type`]. `None` signals the
@@ -224,7 +284,7 @@ pub fn schema_to_type(schema: &Value, depth: u32) -> Option<Type> {
             let elem = schema_to_type(obj.get("items")?, depth + 1)?;
             Some(Type::Array(Box::new(elem)))
         }
-        "object" => object_type(obj, depth),
+        "object" => object_type(obj, depth, schema_to_type),
         _ => None,
     }
 }
@@ -232,7 +292,11 @@ pub fn schema_to_type(schema: &Value, depth: u32) -> Option<Type> {
 /// Map an object schema to a structural [`Type::Object`]. `None` when it declares
 /// no properties (an open object carries no field information) or any property is
 /// unrepresentable.
-fn object_type(obj: &Map<String, Value>, depth: u32) -> Option<Type> {
+fn object_type(
+    obj: &Map<String, Value>,
+    depth: u32,
+    field_type: fn(&Value, u32) -> Option<Type>,
+) -> Option<Type> {
     let props = obj
         .get("properties")
         .and_then(Value::as_object)
@@ -245,7 +309,7 @@ fn object_type(obj: &Map<String, Value>, depth: u32) -> Option<Type> {
 
     let mut fields: BTreeMap<String, ObjectField> = BTreeMap::new();
     for (name, prop_schema) in props {
-        let ty = schema_to_type(prop_schema, depth + 1)?;
+        let ty = field_type(prop_schema, depth + 1)?;
         let field = if required.contains(&name.as_str()) {
             ObjectField::required(ty)
         } else {
@@ -415,6 +479,65 @@ fn doc_summary(summary: &str) -> DocComment {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn function_names_exclude_punctuation_and_strict_mode_reserved_words() {
+        for name in [
+            "",
+            "create-issue",
+            "two words",
+            "42",
+            "default",
+            "class",
+            "await",
+            "delete",
+            "with",
+            "debugger",
+            "yield",
+            "eval",
+            "arguments",
+            "implements",
+            "interface",
+            "package",
+            "private",
+            "protected",
+            "public",
+            "static",
+            "let",
+        ] {
+            assert!(!valid_function_name(name), "{name}");
+        }
+        for name in ["create_issue", "$tool", "_tool", "Ω", "constructor"] {
+            assert!(valid_function_name(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn untyped_tools_produce_one_summary() {
+        let tools: Vec<_> = (0..24)
+            .map(|i| tool(&format!("tool{i}"), r#"{"type":"object"}"#))
+            .collect();
+        let (defs, warnings) = build_mcp_definitions("x", &tools, None);
+        assert_eq!(defs.values.len(), 24);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("24"));
+    }
+
+    #[test]
+    fn invalid_and_duplicate_tool_names_are_not_exported() {
+        let (defs, warnings) = super::build_mcp_definitions(
+            "x",
+            &[
+                tool("create-issue", r#"{"type":"object"}"#),
+                tool("repeat", r#"{"type":"object"}"#),
+                tool("repeat", r#"{"type":"object"}"#),
+            ],
+            None,
+        );
+        assert!(defs.values.is_empty());
+        assert!(warnings.iter().any(|w| w.message.contains("identifier")));
+        assert!(warnings.iter().any(|w| w.message.contains("duplicate")));
+    }
+
     use super::*;
 
     fn schema(json: &str) -> Value {
@@ -645,8 +768,8 @@ mod tests {
     }
 
     #[test]
-    fn object_combinator_arg_drops_the_tool() {
-        // A combinator with object members has no scalar union form → drop.
+    fn object_combinator_arg_is_unknown() {
+        // Object combinators remain callable; the server validates the unknown field.
         let (defs, warnings) = build_mcp_definitions(
             "x",
             &[tool(
@@ -658,9 +781,8 @@ mod tests {
             )],
             None,
         );
-        assert!(!defs.values.contains_key("weird"), "tool must be dropped");
-        assert!(warnings[0].message.contains("dropped"));
-        assert_eq!(warnings[0].tool, "weird");
+        assert_eq!(args_fields(&defs, "weird")["v"].ty, Type::Unknown);
+        assert!(warnings.iter().all(|w| !w.message.contains("dropped")));
     }
 
     #[test]
@@ -680,8 +802,8 @@ mod tests {
     }
 
     #[test]
-    fn object_multi_type_arg_drops_the_tool() {
-        // A multi-type carrying a non-primitive (`object`) has no field info → drop.
+    fn object_multi_type_arg_is_unknown() {
+        // An open nullable object is accepted as unknown.
         let (defs, warnings) = build_mcp_definitions(
             "x",
             &[tool(
@@ -690,8 +812,8 @@ mod tests {
             )],
             None,
         );
-        assert!(!defs.values.contains_key("t"));
-        assert!(warnings[0].message.contains("dropped"));
+        assert_eq!(args_fields(&defs, "t")["v"].ty, Type::Unknown);
+        assert!(warnings.iter().all(|w| !w.message.contains("dropped")));
     }
 
     #[test]
@@ -1014,15 +1136,14 @@ mod tests {
     }
 
     #[test]
-    fn deeply_nested_arg_drops_the_tool_without_overflow() {
-        // A chain deeper than MAX_DEPTH isn't representable, so the tool is
-        // dropped — and the mapper must terminate rather than recurse forever.
+    fn deeply_nested_arg_becomes_unknown_without_overflow() {
+        // A chain deeper than MAX_DEPTH becomes unknown without unbounded recursion.
         let mut s = String::from(r#"{"type":"string"}"#);
         for _ in 0..40 {
             s = format!(r#"{{"type":"object","properties":{{"n":{s}}}}}"#);
         }
         let (defs, warnings) = build_mcp_definitions("x", &[tool("deep", &s)], None);
-        assert!(!defs.values.contains_key("deep"));
-        assert!(warnings[0].message.contains("dropped"));
+        assert_eq!(args_fields(&defs, "deep")["n"].ty, Type::Unknown);
+        assert!(warnings.iter().all(|w| !w.message.contains("dropped")));
     }
 }

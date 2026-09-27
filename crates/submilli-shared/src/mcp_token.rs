@@ -171,6 +171,30 @@ impl OAuthTokenManager {
         self.refresh(blueprint, server, &mut slot).await
     }
 
+    /// Replace or remove a credential under the refresh lock, then retire the
+    /// cached access token. An in-flight refresh cannot overwrite the new login.
+    pub async fn set_credential(
+        &self,
+        blueprint: &str,
+        server: &str,
+        credential: Option<&OAuthCredential>,
+    ) -> Result<(), McpTokenError> {
+        let slot = self.slot(blueprint, server).await;
+        let mut slot = slot.lock().await;
+        match credential {
+            Some(credential) => {
+                write_credential(blueprint, server, credential, &self.store).await?;
+            }
+            None => self
+                .store
+                .delete(&credential_key(blueprint, server))
+                .await
+                .map_err(|error| McpTokenError::Store(error.to_string()))?,
+        }
+        slot.cached = None;
+        Ok(())
+    }
+
     /// The slot for a key, created empty on first use.
     async fn slot(&self, blueprint: &str, server: &str) -> Arc<Mutex<Slot>> {
         let mut slots = self.slots.lock().await;

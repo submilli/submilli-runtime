@@ -158,8 +158,8 @@ fn run(args: &Args) -> Result<String> {
     }
     if kind == "oauth" {
         message.push_str(&format!(
-            "\n  Authenticate it: submilli server mcp authenticate {} {}",
-            blueprint.name, args.name
+            "\n  Authenticate locally: submilli mcp authenticate {} --blueprint {}\n  After applying to a server: submilli server mcp authenticate {} {}",
+            args.name, path.display(), blueprint.name, args.name
         ));
     }
     Ok(message)

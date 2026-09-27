@@ -16,9 +16,9 @@ pub use discovery::{McpCatalog, discover_all, discover_selected};
 pub use transport::StreamableHttpTransport;
 
 /// A diagnostic raised while mapping a server's `tools/list` to the typed
-/// `@mcp/<server>` surface. Tools whose argument schema can't be expressed in
-/// the strict subset are dropped entirely; tools whose result can't be typed are
-/// kept but return `unknown`. Either way the operator should know.
+/// `@mcp/<server>` surface. Invalid or duplicate names are dropped; untyped
+/// results are summarized per server. Unsupported input fields remain callable
+/// as `unknown`.
 #[derive(Debug, Clone)]
 pub struct ToolWarning {
     pub server: String,
@@ -32,16 +32,6 @@ impl ToolWarning {
             server: server.to_string(),
             tool: tool.to_string(),
             message: format!("tool `{tool}` dropped: {reason}"),
-        }
-    }
-
-    pub fn untyped_output(server: &str, tool: &str) -> Self {
-        Self {
-            server: server.to_string(),
-            tool: tool.to_string(),
-            message: format!(
-                "tool `{tool}` returns unknown: its result schema isn't representable"
-            ),
         }
     }
 

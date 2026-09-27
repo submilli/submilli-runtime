@@ -4,6 +4,7 @@ use anyhow::Result;
 use clap::Subcommand;
 
 pub mod blueprint;
+pub mod docs;
 pub mod mcp;
 pub mod packages;
 pub mod run_code;
@@ -13,6 +14,8 @@ pub mod stop;
 
 #[derive(Subcommand)]
 pub enum ServerCmd {
+    /// Read package declarations, including a blueprint's MCP tools.
+    Docs(docs::Args),
     /// Execute a Submilli script on a running submilli-server.
     #[command(name = "run-code")]
     RunCode(run_code::Args),
@@ -36,6 +39,7 @@ pub enum ServerCmd {
 
 pub fn execute(cmd: ServerCmd) -> Result<ExitCode> {
     match cmd {
+        ServerCmd::Docs(args) => docs::execute(args),
         ServerCmd::RunCode(args) => run_code::execute(args),
         ServerCmd::Packages(cmd) => packages::execute(cmd),
         ServerCmd::Status(args) => status::execute(args),

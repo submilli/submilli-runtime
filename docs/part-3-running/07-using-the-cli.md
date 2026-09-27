@@ -109,6 +109,8 @@ what they print is what the model sees.
 | --- | --- |
 | `submilli search [query]` | Standard-library modules and installed packages whose name, description, or exported symbol contains the query; all of them with no query |
 | `submilli docs <name>` | One module's or package's description and declarations: `submilli:fs`, `@acme/billing`; a built-in such as `Temporal.Instant` resolves here too |
+| `submilli docs @mcp/<server> --blueprint <file>` | Discover one MCP server using local credentials and print its tool signatures; the file defaults to `blueprint.yaml` |
+| `submilli server docs @mcp/<server> --blueprint <name>` | Read the registered blueprint's discovered MCP tool signatures; `--server <url>` selects the runtime server |
 | `submilli builtins [names…]` | The built-in catalog with no argument; one or more built-ins' declarations with names, down to a member such as `Temporal.Instant` |
 
 ```sh
@@ -128,6 +130,11 @@ function applyCredit(customerId: string, amount: number): Credit;
 
 The `@capability` line is what the blueprint chapter's `capability list` reads;
 `docs` is the place to read a package before granting anything to it.
+
+MCP tools retain representable argument types; unsupported fields appear as
+`unknown` and are validated by the MCP server. Calls have a 60-second deadline,
+including authentication and connection. Use `mcp.<server>` permission rules
+with a filter such as `tool == "save_issue"`; the legacy `/tool` suffix is rejected.
 
 ## Author a blueprint
 

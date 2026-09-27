@@ -305,6 +305,9 @@ pub(crate) fn execute_with_dispatch(
         }
         None => McpCatalog::empty(),
     };
+    for warning in mcp_catalog.warnings() {
+        eprintln!("warning: @mcp/{}: {}", warning.server, warning.message);
+    }
     let mcp_defs = mcp_catalog.defs_refs();
     let git_enabled = blueprint.as_ref().is_some_and(|bp| bp.git.is_some());
     let parsed = interpreter::parse_script(&source, file);

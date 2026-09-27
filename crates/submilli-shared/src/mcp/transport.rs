@@ -15,6 +15,7 @@
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::host::EnvFileSecretResolver;
 use http::{HeaderName, HeaderValue};
@@ -29,6 +30,9 @@ use submilli_blueprint::{Blueprint, HarnessSecretBindings, McpAuth, McpServer, i
 
 use crate::mcp_token::{McpTokenError, OAuthTokenManager};
 use crate::secret_store::SecretStore;
+
+/// Bounds authentication, connection, the tool response, and teardown together.
+const CALL_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The outbound MCP transport bound to one blueprint. Built per execute and set on
 /// the store; `call` runs once per `@mcp/<server>.<tool>` invocation.
@@ -169,6 +173,42 @@ impl StreamableHttpTransport {
         self.call_once(server, Some(fresh), HashMap::new(), tool, arguments.clone())
             .await
     }
+
+    async fn call_tool(
+        &self,
+        server_name: &str,
+        tool: &str,
+        args_json: &str,
+    ) -> Result<Value, McpCallError> {
+        let server = self.blueprint.mcp.get(server_name).ok_or_else(|| {
+            McpCallError::Transport(format!("server '{server_name}' is not declared"))
+        })?;
+        // `streamable_http` (and its `sse` alias) only; `stdio` is deferred.
+        if server.transport == "stdio" {
+            return Err(McpCallError::Transport(
+                "stdio transport is deferred to a later release".to_string(),
+            ));
+        }
+
+        // The args object is a JSON object; an empty/non-object arg → `{}`.
+        let arguments = match serde_json::from_str::<Value>(args_json) {
+            Ok(Value::Object(map)) => map,
+            _ => Map::new(),
+        };
+
+        let result = match &server.auth {
+            Some(McpAuth::Oauth2 { .. }) => {
+                self.call_oauth(server_name, server, tool, &arguments)
+                    .await?
+            }
+            None => {
+                let headers = self.static_headers(server).await?;
+                self.call_once(server, None, headers, tool, arguments)
+                    .await?
+            }
+        };
+        interpret(result)
+    }
 }
 
 impl McpTransport for StreamableHttpTransport {
@@ -179,34 +219,14 @@ impl McpTransport for StreamableHttpTransport {
         args_json: &'a str,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<Value, McpCallError>> + Send + 'a>> {
         Box::pin(async move {
-            let server = self.blueprint.mcp.get(server_name).ok_or_else(|| {
-                McpCallError::Transport(format!("server '{server_name}' is not declared"))
-            })?;
-            // `streamable_http` (and its `sse` alias) only; `stdio` is deferred.
-            if server.transport == "stdio" {
-                return Err(McpCallError::Transport(
-                    "stdio transport is deferred to a later release".to_string(),
-                ));
-            }
-
-            // The args object is a JSON object; an empty/non-object arg → `{}`.
-            let arguments = match serde_json::from_str::<Value>(args_json) {
-                Ok(Value::Object(map)) => map,
-                _ => Map::new(),
-            };
-
-            let result = match &server.auth {
-                Some(McpAuth::Oauth2 { .. }) => {
-                    self.call_oauth(server_name, server, tool, &arguments)
-                        .await?
-                }
-                None => {
-                    let headers = self.static_headers(server).await?;
-                    self.call_once(server, None, headers, tool, arguments)
-                        .await?
-                }
-            };
-            interpret(result)
+            tokio::time::timeout(CALL_TIMEOUT, self.call_tool(server_name, tool, args_json))
+                .await
+                .map_err(|_| {
+                    McpCallError::Transport(format!(
+                        "MCP tool '{server_name}/{tool}' timed out after {} seconds",
+                        CALL_TIMEOUT.as_secs()
+                    ))
+                })?
         })
     }
 }
@@ -275,6 +295,31 @@ pub(crate) fn policy_http_client(policy: &Arc<NetworkPolicy>) -> reqwest::Client
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test(start_paused = true)]
+    async fn hung_server_call_has_a_deadline() {
+        use std::time::Duration;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let bp = parse(&format!(
+            "name: bp\nmcp:\n  local:\n    url: http://{address}/mcp\n"
+        ))
+        .unwrap();
+        let transport = StreamableHttpTransport::new(
+            "bp".into(),
+            Arc::new(bp),
+            None,
+            None,
+            Arc::new(NetworkPolicy::allow_all()),
+        );
+        let result =
+            tokio::time::timeout(Duration::from_secs(61), transport.call("local", "t", "{}")).await;
+        let error = result
+            .expect("MCP call must expire before the enclosing program deadline")
+            .unwrap_err();
+        assert!(matches!(error, McpCallError::Transport(message) if message.contains("timed out")));
+    }
+
     use std::sync::Arc;
 
     use rmcp::model::CallToolResult;

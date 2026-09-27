@@ -89,6 +89,12 @@ pub(crate) fn lookup(name: &str) -> DocLookup {
 /// discovered catalog.
 pub(crate) fn lookup_with_catalog(name: &str, catalog: &McpCatalog) -> DocLookup {
     if name.starts_with("@mcp/") {
+        if let Some(reason) = catalog.unavailable_reason(name.trim_start_matches("@mcp/")) {
+            return DocLookup::Unknown {
+                message: format!("`{name}` is declared but unavailable: {reason}"),
+                suggestion: None,
+            };
+        }
         return match catalog.package(name) {
             Some(pkg) => DocLookup::Mcp {
                 description: pkg.description(),

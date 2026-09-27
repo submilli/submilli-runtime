@@ -1805,6 +1805,12 @@ mod upstream {
         pub name: String,
     }
 
+    #[derive(serde::Deserialize, schemars::JsonSchema)]
+    pub struct EchoRequest {
+        pub value: serde_json::Value,
+        pub label: String,
+    }
+
     #[derive(Clone)]
     pub struct Upstream {
         tool_router: ToolRouter<Self>,
@@ -1820,6 +1826,11 @@ mod upstream {
 
     #[tool_router]
     impl Upstream {
+        #[tool(name = "echo", description = "Echo a JSON value")]
+        fn echo(&self, Parameters(req): Parameters<EchoRequest>) -> String {
+            serde_json::json!({"value": req.value, "label": req.label}).to_string()
+        }
+
         #[tool(name = "createIssue", description = "Create an issue")]
         fn create_issue(&self, Parameters(_req): Parameters<CreateIssueRequest>) -> String {
             "ok".to_string()
@@ -1948,6 +1959,33 @@ async fn mcp_virtual_package_discovers_typechecks_and_calls() {
         output(&r2)["result"].as_str().unwrap_or("").contains("ok"),
         "expected the upstream tool result, got: {r2}",
     );
+
+    assert!(decls.contains("label: string; value: unknown"), "{decls}");
+    let code = include_str!("fixtures/mcp_unknown_arguments.ts");
+    let (_, _, response) = h.post("up-bp", tools_call(4, code), Some(&session)).await;
+    let result = output(&response);
+    assert!(result["error"].is_null(), "{result}");
+    let actual: Value = serde_json::from_str(result["result"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        actual,
+        json!([
+            {"label": "check", "value": {"nested": [1, 2], "flag": true}},
+            {"label": "check", "value": [1, 2]},
+            {"label": "check", "value": null},
+            {"label": "check", "value": 42},
+            {"label": "check", "value": "hello"},
+        ])
+    );
+    for args in [r#"{ label: 42, value: null }"#, r#"{ value: null }"#] {
+        let code = format!(
+            r#"import up from "@mcp/up"; function main(): unknown {{ return up.echo({args}); }}"#
+        );
+        let (_, _, response) = h.post("up-bp", tools_call(5, &code), Some(&session)).await;
+        assert!(
+            !output(&response)["error"].is_null(),
+            "typed required fields must remain checked: {response}"
+        );
+    }
 }
 
 const VOL: &str = "vol";

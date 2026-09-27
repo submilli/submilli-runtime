@@ -8,6 +8,96 @@
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_docs_work_locally_and_through_a_registered_blueprint() {
+    use axum::{Json, Router, routing::post};
+    use serde_json::{Value, json};
+    use std::sync::Arc;
+    use submilli_server::{AppState, ServerConfig, app, blueprint::InMemoryBlueprintStore};
+
+    async fn upstream(Json(request): Json<Value>) -> (axum::http::StatusCode, Json<Value>) {
+        if request.get("id").is_none() {
+            return (axum::http::StatusCode::ACCEPTED, Json(Value::Null));
+        }
+        let result = match request["method"].as_str().unwrap() {
+            "initialize" => {
+                json!({"protocolVersion": request["params"]["protocolVersion"], "capabilities": {"tools": {}}, "serverInfo": {"name": "test", "version": "1"}})
+            }
+            "tools/list" => {
+                json!({"tools": [{"name": "save_issue", "inputSchema": {"type": "object", "properties": {"title": {"type": "string"}, "metadata": {"type": "object"}}, "required": ["title"]}}]})
+            }
+            other => panic!("unexpected request: {other}"),
+        };
+        (
+            axum::http::StatusCode::OK,
+            Json(json!({"jsonrpc": "2.0", "id": request["id"], "result": result})),
+        )
+    }
+    async fn serve(router: Router) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        format!("http://{address}")
+    }
+
+    let upstream = serve(Router::new().route("/mcp", post(upstream))).await;
+    let yaml = format!("name: test\nmcp:\n  tracker:\n    url: {upstream}/mcp\n");
+    let blueprint = submilli_blueprint::parse(&yaml).unwrap();
+    let server = serve(app(AppState::new(ServerConfig {
+        blueprints: Some(Arc::new(InMemoryBlueprintStore::seed([blueprint]))),
+        ..ServerConfig::default()
+    })
+    .unwrap()))
+    .await;
+    tokio::task::spawn_blocking(move || {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("blueprint.yaml");
+        std::fs::write(&path, yaml).unwrap();
+        let local = Command::new(submilli_bin())
+            .args(["docs", "@mcp/tracker", "--blueprint"])
+            .arg(&path)
+            .env("SUBMILLI_HOME", temporary.path().join("home"))
+            .output()
+            .unwrap();
+        assert!(local.status.success(), "{}", stderr(&local));
+        assert!(
+            stdout(&local)
+                .contains("function save_issue(args: { metadata?: unknown; title: string })"),
+            "{}",
+            stdout(&local)
+        );
+        let remote = run(&[
+            "server",
+            "docs",
+            "@mcp/tracker",
+            "--blueprint",
+            "test",
+            "--server",
+            &server,
+        ]);
+        assert!(remote.status.success(), "{}", stderr(&remote));
+        assert!(
+            stdout(&remote).contains("function save_issue"),
+            "{}",
+            stdout(&remote)
+        );
+        let missing = run(&[
+            "server",
+            "docs",
+            "@mcp/missing",
+            "--blueprint",
+            "test",
+            "--server",
+            &server,
+        ]);
+        assert!(!missing.status.success());
+    })
+    .await
+    .unwrap();
+}
+
 fn submilli_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_submilli"))
 }

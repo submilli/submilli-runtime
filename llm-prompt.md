@@ -57,8 +57,8 @@ to fulfill the request.
 You do NOT have access to Node.js APIs, browser globals, or NPM
 packages. Submilli ships its own standard library — modules are:
 {stdlib_modules}. Submilli native
-packages (e.g., `@stripe.com/sdk`, `@mcp/linear`) are also available;
-use the `{t_search}` and `{t_docs}` tools to discover them.
+packages and discovered `@mcp/<server>` packages may also be available;
+use the `{t_search}` and `{t_docs}` tools to discover them before importing.
 
 Built-ins already in scope, no `import` needed: {builtins}. Their
 signatures are a strict subset and differ from Node/TS in places (no

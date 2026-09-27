@@ -21,8 +21,7 @@ use submilli_shared::EnvFileSecretResolver;
 use crate::app::AppState;
 use crate::handlers::execute::blueprint_miss_message;
 use submilli_shared::mcp_auth::{
-    AuthState, OAuthCredential, ServerKind, blueprint_auth_state, credential_key, server_kind,
-    write_credential,
+    AuthState, OAuthCredential, ServerKind, blueprint_auth_state, server_kind,
 };
 use submilli_shared::secret_store::SecretStore;
 
@@ -324,15 +323,7 @@ pub async fn oauth_exchange(
             scopes: Vec::new(),
         }
     };
-    write_credential(&blueprint, &server, &credential, store)
-        .await
-        .map_err(|e| {
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "store_error",
-                e.to_string(),
-            )
-        })?;
+    update_credential(&state, &blueprint, &server, Some(&credential)).await?;
     Ok(Json(blueprint_auth_state(&bp, Some(store)).await.into()))
 }
 
@@ -426,15 +417,7 @@ pub async fn put_refresh_token(
             ));
         }
     };
-    write_credential(&blueprint, &server, &credential, store)
-        .await
-        .map_err(|e| {
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "store_error",
-                e.to_string(),
-            )
-        })?;
+    update_credential(&state, &blueprint, &server, Some(&credential)).await?;
     Ok(Json(blueprint_auth_state(&bp, Some(store)).await.into()))
 }
 
@@ -446,17 +429,35 @@ pub async fn delete_refresh_token(
     let bp = get_blueprint(&state, &blueprint).await?;
     oauth_server(&bp, &server)?;
     let store = store(&state)?;
-    store
-        .delete(&credential_key(&blueprint, &server))
+    update_credential(&state, &blueprint, &server, None).await?;
+    Ok(Json(blueprint_auth_state(&bp, Some(store)).await.into()))
+}
+
+async fn update_credential(
+    state: &AppState,
+    blueprint: &str,
+    server: &str,
+    credential: Option<&OAuthCredential>,
+) -> Result<(), Failure> {
+    let manager = state.oauth_token_manager().ok_or_else(|| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "no_secret_store",
+            "OAuth token manager is unavailable".into(),
+        )
+    })?;
+    manager
+        .set_credential(blueprint, server, credential)
         .await
-        .map_err(|e| {
+        .map_err(|error| {
             err(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "store_error",
-                e.to_string(),
+                error.to_string(),
             )
         })?;
-    Ok(Json(blueprint_auth_state(&bp, Some(store)).await.into()))
+    state.evict_mcp_catalog(blueprint);
+    Ok(())
 }
 
 #[derive(Debug, Serialize)]

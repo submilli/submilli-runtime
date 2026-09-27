@@ -89,6 +89,7 @@ struct AppStateInner {
     /// Per-blueprint discovered `@mcp/<server>` catalogs (the typed import
     /// surface), built lazily on first execute and evicted on blueprint change.
     mcp_catalogs: Mutex<HashMap<String, Arc<McpCatalog>>>,
+    mcp_catalog_generation: AtomicU64,
     package_store: PackageStore,
     prepared_packages: Mutex<HashMap<String, Arc<PreparedBlueprintPackages>>>,
     /// Bumped by every eviction. A prepare snapshots it before reading the
@@ -218,6 +219,7 @@ impl AppState {
                 mcp_oauth_providers,
                 oauth_http,
                 mcp_catalogs: Mutex::new(HashMap::new()),
+                mcp_catalog_generation: AtomicU64::new(0),
                 package_store: layered_package_store(
                     config.package_store_root,
                     config.package_fallback_root,
@@ -403,6 +405,7 @@ impl AppState {
         if blueprint.mcp.is_empty() {
             return Arc::new(McpCatalog::empty());
         }
+        let generation = self.inner.mcp_catalog_generation.load(Ordering::Acquire);
         let key = mcp_catalog_cache_key(blueprint_name, None);
         if let Some(cached) = self.cached_mcp_catalog(&key) {
             return cached;
@@ -416,6 +419,9 @@ impl AppState {
             .mcp_catalogs
             .lock()
             .expect("mcp catalog poisoned");
+        if self.inner.mcp_catalog_generation.load(Ordering::Acquire) != generation {
+            return discovered;
+        }
         Arc::clone(cache.entry(key).or_insert(discovered))
     }
 
@@ -446,6 +452,7 @@ impl AppState {
         if declared.is_empty() {
             return Arc::new(McpCatalog::empty());
         }
+        let generation = self.inner.mcp_catalog_generation.load(Ordering::Acquire);
         let key = mcp_catalog_cache_key(blueprint_name, Some(&declared));
         let session_scoped = !harness_secrets.is_empty();
         if !session_scoped && let Some(cached) = self.cached_mcp_catalog(&key) {
@@ -468,6 +475,9 @@ impl AppState {
             .mcp_catalogs
             .lock()
             .expect("mcp catalog poisoned");
+        if self.inner.mcp_catalog_generation.load(Ordering::Acquire) != generation {
+            return discovered;
+        }
         Arc::clone(cache.entry(key).or_insert(discovered))
     }
 
@@ -590,11 +600,15 @@ impl AppState {
     /// Drop the discovered `@mcp/<server>` catalog so the next execute rediscovers
     /// it against the current `mcp:` block. Called on blueprint update and removal.
     pub(crate) fn evict_mcp_catalog(&self, name: &str) {
-        self.inner
+        let mut catalogs = self
+            .inner
             .mcp_catalogs
             .lock()
-            .expect("mcp catalog poisoned")
-            .retain(|key, _| !cache_key_belongs_to_blueprint(key, name));
+            .expect("mcp catalog poisoned");
+        self.inner
+            .mcp_catalog_generation
+            .fetch_add(1, Ordering::AcqRel);
+        catalogs.retain(|key, _| !cache_key_belongs_to_blueprint(key, name));
     }
 
     /// Drop every cached module set. An install can change what any blueprint
@@ -866,6 +880,66 @@ fn cache_key_belongs_to_blueprint(key: &str, blueprint_name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn oauth_deposit_invalidates_catalog_discovered_before_login() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            submilli_shared::secret_store::PlaintextFileSecretStore::open(directory.path().into())
+                .unwrap(),
+        );
+        let blueprint = submilli_blueprint::parse("name: test\nmcp:\n  local:\n    url: http://127.0.0.1:1/mcp\n    auth:\n      type: oauth2\n").unwrap();
+        let state = AppState::new(ServerConfig {
+            secret_store: Some(store),
+            blueprints: Some(Arc::new(InMemoryBlueprintStore::seed([blueprint.clone()]))),
+            ..ServerConfig::default()
+        })
+        .unwrap();
+        let before = state.mcp_catalog("test", &blueprint).await;
+        assert!(
+            before
+                .warnings()
+                .any(|warning| warning.message.contains("not authenticated"))
+        );
+        let credential =
+            serde_json::from_value(serde_json::json!({"access_token": "test-token"})).unwrap();
+        let _ = crate::handlers::mcp_auth::put_refresh_token(
+            axum::extract::State(state.clone()),
+            axum::extract::Path(("test".into(), "local".into())),
+            axum::Json(credential),
+        )
+        .await
+        .unwrap();
+        let after = state.mcp_catalog("test", &blueprint).await;
+        assert!(
+            !Arc::ptr_eq(&before, &after),
+            "catalog must be rediscovered after authentication"
+        );
+        assert!(
+            !after
+                .warnings()
+                .any(|warning| warning.message.contains("not authenticated"))
+        );
+        let manager = state.oauth_token_manager().unwrap();
+        assert_eq!(
+            manager.access_token("test", "local").await.unwrap(),
+            "test-token"
+        );
+        let credential =
+            serde_json::from_value(serde_json::json!({"access_token": "replacement-token"}))
+                .unwrap();
+        let _ = crate::handlers::mcp_auth::put_refresh_token(
+            axum::extract::State(state.clone()),
+            axum::extract::Path(("test".into(), "local".into())),
+            axum::Json(credential),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            manager.access_token("test", "local").await.unwrap(),
+            "replacement-token"
+        );
+    }
+
     use super::*;
     use interpreter::FileId;
     use interpreter::runtime::{

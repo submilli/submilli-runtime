@@ -228,7 +228,7 @@ impl<'a> Inferer<'a> {
                     self.error_with_help(
                         module_span,
                         format!(
-                            "unknown MCP server `{server}` — `{module}` is not declared in this blueprint's `mcp:` block"
+                            "MCP server `{server}` is unavailable — `{module}` is absent from the discovered catalog; check the blueprint's `mcp:` block and discovery warnings"
                         ),
                         help,
                     );
@@ -659,8 +659,7 @@ impl<'a> Inferer<'a> {
         ), "use your package-discovery tool to list available packages, or check the blueprint configuration".to_string()]
     }
 
-    /// Help text listing the `@mcp/*` packages the blueprint actually declares,
-    /// so an LLM importing an undeclared server sees the valid names.
+    /// The compiler sees discovered packages, not the blueprint's declarations.
     fn available_mcp_servers_help(&self) -> Vec<String> {
         let mut servers: Vec<&str> = self
             .packages_by_name
@@ -669,10 +668,10 @@ impl<'a> Inferer<'a> {
             .collect();
         servers.sort();
         if servers.is_empty() {
-            return vec!["this blueprint declares no `mcp:` servers".to_string()];
+            return vec!["no MCP servers are currently available; declared servers may need authentication or may have failed discovery".to_string()];
         }
         vec![format!(
-            "declared MCP servers: {}",
+            "available MCP servers: {}",
             servers
                 .iter()
                 .map(|n| format!("`@mcp/{n}`"))

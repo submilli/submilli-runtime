@@ -173,6 +173,15 @@ fn validate_permission_servers(blueprint: &Blueprint) -> Result<(), BlueprintErr
             let Some(server) = mcp_capability_server(&rule.capability) else {
                 continue;
             };
+            if rule.capability.contains('/') {
+                return Err(BlueprintError::InvalidMcp(Fault::at(
+                    yaml_path!["permissions", caller, i, "capability"],
+                    format!(
+                        "permission rule '{}': use capability 'mcp.{server}' with a filter such as 'tool == \"name\"' instead of '/tool'",
+                        rule.capability
+                    ),
+                )));
+            }
             if !blueprint.mcp.contains_key(server) {
                 return Err(BlueprintError::InvalidMcp(Fault::at(
                     yaml_path!["permissions", caller, i, "capability"],
@@ -188,8 +197,8 @@ fn validate_permission_servers(blueprint: &Blueprint) -> Result<(), BlueprintErr
 }
 
 /// The server name in an `mcp.<server>` capability, or `None` if the capability
-/// isn't an MCP one. A legacy `mcp.<server>/<tool>` form is still accepted — the
-/// tool half (after the first `/`) is ignored — so older blueprints validate.
+/// isn't an MCP one. Splitting the legacy `/tool` suffix lets validation suggest
+/// the supported capability and filter spelling.
 fn mcp_capability_server(capability: &str) -> Option<&str> {
     let rest = capability.strip_prefix(CAPABILITY_PREFIX)?;
     Some(rest.split_once('/').map_or(rest, |(server, _)| server))
@@ -375,7 +384,7 @@ mcp:
     }
 
     #[test]
-    fn permission_rule_to_declared_server_ok() {
+    fn legacy_tool_permission_is_rejected_with_filter_guidance() {
         let yaml = "\
 name: x
 mcp:
@@ -387,7 +396,9 @@ permissions:
     - capability: mcp.linear/listIssues
       action: allow
 ";
-        assert!(parse(yaml).is_ok());
+        let err = parse(yaml).unwrap_err().to_string();
+        assert!(err.contains("filter"), "{err}");
+        assert!(err.contains("mcp.linear"), "{err}");
     }
 
     #[test]

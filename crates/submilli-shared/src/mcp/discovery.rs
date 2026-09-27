@@ -3,11 +3,11 @@
 //! At connection time the server calls `tools/list` on each declared `mcp:`
 //! server and feeds the result to the [`catalog`](super::catalog) mapper, yielding
 //! the `@mcp/<server>` virtual-package [`PackageDeclaration`]. A server that's down (or
-//! whose auth fails) doesn't fail the connection: it resolves to an empty,
-//! still-importable package whose calls trap with "server unreachable".
+//! whose auth fails) doesn't fail the connection: it is omitted from the catalog
+//! and a warning explains why it is unavailable.
 //!
-//! Discovery does network I/O, so the result is cached per blueprint on
-//! [`AppState`](crate::app::AppState) and rebuilt only when the blueprint changes.
+//! Discovery does network I/O. The server caches catalogs until the blueprint or
+//! its OAuth credentials change.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
@@ -129,6 +129,14 @@ impl McpCatalog {
             .chain(self.unavailable.iter())
     }
 
+    /// Why a declared server could not be discovered.
+    pub fn unavailable_reason(&self, server: &str) -> Option<&str> {
+        self.unavailable
+            .iter()
+            .find(|warning| warning.server == server)
+            .map(|warning| warning.message.as_str())
+    }
+
     /// `@mcp/<server>` packages matching `query` (case-insensitive, against the
     /// package name, server name, or a tool name), for `packages.search`. An
     /// empty query lists every declared server.
@@ -196,11 +204,8 @@ async fn discover_matching(
             continue;
         }
         match discover_server(auth, blueprint_name, blueprint, server_name, server).await {
-            Some(pkg) => packages.push(pkg),
-            None => unavailable.push(ToolWarning::server_unavailable(
-                server_name,
-                "unreachable at connection time",
-            )),
+            Ok(pkg) => packages.push(pkg),
+            Err(reason) => unavailable.push(ToolWarning::server_unavailable(server_name, &reason)),
         }
     }
     McpCatalog {
@@ -209,14 +214,14 @@ async fn discover_matching(
     }
 }
 
-/// Discover one server's tools, or `None` if it's unreachable/failed (logged).
+/// Discover one server's tools, preserving its failure reason for callers.
 async fn discover_server(
     auth: DiscoveryAuth<'_>,
     blueprint_name: &str,
     blueprint: &Blueprint,
     server_name: &str,
     server: &McpServer,
-) -> Option<McpPackage> {
+) -> Result<McpPackage, String> {
     let fetch = fetch_tools(auth, blueprint_name, blueprint, server_name, server);
     match tokio::time::timeout(DISCOVERY_TIMEOUT, fetch).await {
         Ok(Ok(tools)) => {
@@ -234,7 +239,7 @@ async fn discover_server(
             for w in &warnings {
                 warn!(server = server_name, tool = w.tool, "{}", w.message);
             }
-            Some(McpPackage {
+            Ok(McpPackage {
                 server: server_name.to_string(),
                 defs,
                 warnings,
@@ -242,20 +247,23 @@ async fn discover_server(
         }
         Ok(Err(err)) => {
             warn!(server = server_name, %err, "MCP discovery failed; @mcp/{server_name} omitted");
-            None
+            Err(format!("{err:#}"))
         }
         Err(_) => {
             warn!(
                 server = server_name,
                 "MCP discovery timed out; @mcp/{server_name} omitted"
             );
-            None
+            Err(format!(
+                "discovery timed out after {} seconds",
+                DISCOVERY_TIMEOUT.as_secs()
+            ))
         }
     }
 }
 
 /// Connect to one server and return its tool catalog. `anyhow` here is server
-/// glue — the error is logged, never surfaced to the script.
+/// glue — the error becomes a discovery warning.
 async fn fetch_tools(
     auth: DiscoveryAuth<'_>,
     blueprint_name: &str,
@@ -361,6 +369,33 @@ async fn resolve_auth(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn discovery_reports_network_policy_failure() {
+        let bp = submilli_blueprint::parse(
+            "name: x\nmcp:\n  blocked:\n    url: http://127.0.0.1:1/mcp\n",
+        )
+        .unwrap();
+        let policy = Arc::new(NetworkPolicy::deny_private());
+        let catalog = discover_all(
+            DiscoveryAuth {
+                secret_store: None,
+                oauth: None,
+                harness_secrets: None,
+                network_policy: &policy,
+            },
+            "x",
+            &bp,
+        )
+        .await;
+        let warnings: Vec<_> = catalog.warnings().collect();
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            warnings[0].message.contains("blocked by network policy"),
+            "{}",
+            warnings[0].message
+        );
+    }
+
     use super::*;
     use serde_json::json;
 
