@@ -16,24 +16,10 @@
 const ts = require("typescript");
 const fs = require("fs");
 const path = require("path");
+const { OPTION_LINE, compilerOptions, lineIndex, tscErrors } = require("./tsc-case.cjs");
 
 const casesDir = path.join(__dirname, "..", "typescript");
 const filter = process.argv[2] ?? "";
-
-// A `// @name: value` compiler-option line. `is_option_line` in
-// tests/typescript.rs must agree with it: the runner maps baseline lines back to
-// the case by skipping the same lines.
-const OPTION_LINE = /^\s*\/\/\s*@(\w+)\s*:\s*([^\r\n]*)/;
-
-// The case options that change what `tsc` infers. Submilli is always strict, so
-// every case is checked strictly; the port rewrites any `@strict: false`.
-const BOOLEAN_OPTIONS = {
-  strict: "strict",
-  strictnullchecks: "strictNullChecks",
-  noimplicitany: "noImplicitAny",
-  exactoptionalpropertytypes: "exactOptionalPropertyTypes",
-  nouncheckedindexedaccess: "noUncheckedIndexedAccess",
-};
 
 for (const file of findCases(casesDir)) {
   if (!file.includes(filter)) continue;
@@ -48,26 +34,10 @@ function writeBaselines(file) {
 
   fs.writeFileSync(`${base}.types`, typesBaseline(sourceFile, checker));
 
-  const errors = errorLines(program, sourceFile);
+  const errors = errorLines(file);
   const errorsPath = `${base}.errors.txt`;
   if (errors.length) fs.writeFileSync(errorsPath, errors.join("\n") + "\n");
   else fs.rmSync(errorsPath, { force: true });
-}
-
-function compilerOptions(file) {
-  const options = {
-    strict: true,
-    target: ts.ScriptTarget.ES2020,
-    lib: ["lib.es2020.d.ts", "lib.dom.d.ts"],
-    module: ts.ModuleKind.ES2020,
-    noEmit: true,
-  };
-  const text = fs.readFileSync(file, "utf8");
-  for (const [, name, value] of text.matchAll(new RegExp(OPTION_LINE.source, "gm"))) {
-    const key = BOOLEAN_OPTIONS[name.toLowerCase()];
-    if (key) options[key] = value.split(",")[0].trim().toLowerCase() === "true";
-  }
-  return options;
 }
 
 function typesBaseline(sourceFile, checker) {
@@ -122,25 +92,16 @@ function typeEntry(node, sourceFile, checker) {
     : undefined;
   if (!type || type.flags & ts.TypeFlags.Any) type = checker.getTypeAtLocation(node);
   const flags = ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.AllowUniqueESSymbolType;
-  return [line, text, checker.typeToString(type, node.parent, flags)];
+  // A module's type names its file by absolute path; make it relative to the case,
+  // so the baseline doesn't carry the path of the checkout that wrote it.
+  const checkoutPrefix = `import("${path.dirname(sourceFile.fileName)}/`;
+  const written = checker.typeToString(type, node.parent, flags).replaceAll(checkoutPrefix, 'import("./');
+  return [line, text, written];
 }
 
-function errorLines(program, sourceFile) {
-  const name = path.basename(sourceFile.fileName);
-  return [...program.getSyntacticDiagnostics(sourceFile), ...program.getSemanticDiagnostics(sourceFile)]
-    .filter((d) => d.category === ts.DiagnosticCategory.Error && d.file === sourceFile)
-    .map((d) => {
-      const line = lineIndex(sourceFile, d.start) + 1;
-      const { character } = sourceFile.getLineAndCharacterOfPosition(d.start);
-      const message = ts.flattenDiagnosticMessageText(d.messageText, " ");
-      return `${name}(${line},${character + 1}): error TS${d.code}: ${message}`;
-    });
-}
-
-// The 0-based line `pos` is on, counted in `\n`s as the runner counts them.
-// `tsc`'s own line map also breaks at U+2028, U+2029 and a lone `\r`.
-function lineIndex(sourceFile, pos) {
-  return sourceFile.text.slice(0, pos).split("\n").length - 1;
+function errorLines(file) {
+  const name = path.basename(file);
+  return tscErrors(file).map((e) => `${name}(${e.line},${e.column}): error TS${e.code}: ${e.message}`);
 }
 
 function findCases(dir) {

@@ -1,0 +1,94 @@
+=== objectTypeHidingMembersOfObject.ts ===
+// all of these valueOf calls should return the type shown in the overriding signatures here
+
+class C {
+>C : C
+>  : ^
+
+    valueOf(): void { }
+>valueOf : () => void
+>        : ^^^^^^^^^^
+
+}
+
+/*pruned*/;                       
+/*pruned*/;                
+
+interface I {
+>I : I
+>  : ^
+
+    valueOf(): void;
+>valueOf : () => void
+>        : ^^^^^^^^^^
+
+}
+
+/*pruned*/;                       
+/*pruned*/;                
+
+let a = {
+>a : { valueOf: () => void; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^
+>{     valueOf: () => { } } : { valueOf: () => void; }
+>                           : ^^^^^^^^^^^^^^^^^^^^^^^^
+
+    valueOf: () => { }
+>valueOf : () => void
+>        : ^^^^^^^^^^
+>() => { } : () => void
+>          : ^^^^^^^^^^
+
+}
+
+let r3: void = a.valueOf();
+>r3 : void
+>   : ^^^^
+>a.valueOf() : void
+>            : ^^^^
+>a.valueOf : () => void
+>          : ^^^^^^^^^^
+>a : { valueOf: () => void; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^
+>valueOf : () => void
+>        : ^^^^^^^^^^
+
+
+let b: {
+>b : { valueOf(): void; }
+>  : ^^^^^^^^^^^^^^^^^^^^
+
+    valueOf(): void;
+>valueOf : () => void
+>        : ^^^^^^^^^^
+
+} = null as unknown as ({
+>null as unknown as ({     valueOf(): void; }) : { valueOf(): void; }
+>                                              : ^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    valueOf(): void;
+>valueOf : () => void
+>        : ^^^^^^^^^^
+
+});
+
+let r4: void = b.valueOf();
+>r4 : void
+>   : ^^^^
+>b.valueOf() : void
+>            : ^^^^
+>b.valueOf : () => void
+>          : ^^^^^^^^^^
+>b : { valueOf(): void; }
+>  : ^^^^^^^^^^^^^^^^^^^^
+>valueOf : () => void
+>        : ^^^^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

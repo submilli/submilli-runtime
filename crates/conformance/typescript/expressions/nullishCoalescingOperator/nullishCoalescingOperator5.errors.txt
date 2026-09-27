@@ -1,0 +1,4 @@
+nullishCoalescingOperator5.ts(9,1): error TS5076: '??' and '||' operations cannot be mixed without parentheses.
+nullishCoalescingOperator5.ts(12,1): error TS5076: '||' and '??' operations cannot be mixed without parentheses.
+nullishCoalescingOperator5.ts(15,6): error TS5076: '??' and '&&' operations cannot be mixed without parentheses.
+nullishCoalescingOperator5.ts(18,1): error TS5076: '&&' and '??' operations cannot be mixed without parentheses.

@@ -1,0 +1,283 @@
+=== controlFlowTruthiness.ts ===
+
+function foo(): string | null { return null as unknown as (string | null); }
+>foo : () => string | null
+>    : ^^^^^^^^^^^^^^^^^^^
+>null as unknown as (string | null) : string | null
+>                                   : ^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+function f1(): void {
+>f1 : () => void
+>   : ^^^^^^^^^^
+
+    let x = foo();
+>x : string | null
+>  : ^^^^^^^^^^^^^
+>foo() : string | null
+>      : ^^^^^^^^^^^^^
+>foo : () => string | null
+>    : ^^^^^^^^^^^^^^^^^^^
+
+    if (x) {
+>x : string | null
+>  : ^^^^^^^^^^^^^
+
+        x; // string
+>x : string
+>  : ^^^^^^
+
+    }
+    else {
+        x; // string | undefined
+>x : string | null
+>  : ^^^^^^^^^^^^^
+
+    }
+}
+
+function f2(): void {
+>f2 : () => void
+>   : ^^^^^^^^^^
+
+    let x: string | null = null as unknown as (string | null);
+>x : string | null
+>  : ^^^^^^^^^^^^^
+>null as unknown as (string | null) : string | null
+>                                   : ^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    x = foo();
+>x = foo() : string | null
+>          : ^^^^^^^^^^^^^
+>x : string | null
+>  : ^^^^^^^^^^^^^
+>foo() : string | null
+>      : ^^^^^^^^^^^^^
+>foo : () => string | null
+>    : ^^^^^^^^^^^^^^^^^^^
+
+    if (x) {
+>x : string | null
+>  : ^^^^^^^^^^^^^
+
+        x; // string
+>x : string
+>  : ^^^^^^
+
+    }
+    else {
+        x; // string | undefined
+>x : string | null
+>  : ^^^^^^^^^^^^^
+
+    }
+}
+
+function f3(): void {
+>f3 : () => void
+>   : ^^^^^^^^^^
+
+    let x: string | null = null as unknown as (string | null);
+>x : string | null
+>  : ^^^^^^^^^^^^^
+>null as unknown as (string | null) : string | null
+>                                   : ^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    if (x = foo()) {
+>x = foo() : string | null
+>          : ^^^^^^^^^^^^^
+>x : string | null
+>  : ^^^^^^^^^^^^^
+>foo() : string | null
+>      : ^^^^^^^^^^^^^
+>foo : () => string | null
+>    : ^^^^^^^^^^^^^^^^^^^
+
+        x; // string
+>x : string
+>  : ^^^^^^
+
+    }
+    else {
+        x; // string | undefined
+>x : string | null
+>  : ^^^^^^^^^^^^^
+
+    }
+}
+
+function f4(): void {
+>f4 : () => void
+>   : ^^^^^^^^^^
+
+    let x: string | null = null as unknown as (string | null);
+>x : string | null
+>  : ^^^^^^^^^^^^^
+>null as unknown as (string | null) : string | null
+>                                   : ^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    if (!(x = foo())) {
+>!(x = foo()) : boolean
+>             : ^^^^^^^
+>(x = foo()) : string | null
+>            : ^^^^^^^^^^^^^
+>x = foo() : string | null
+>          : ^^^^^^^^^^^^^
+>x : string | null
+>  : ^^^^^^^^^^^^^
+>foo() : string | null
+>      : ^^^^^^^^^^^^^
+>foo : () => string | null
+>    : ^^^^^^^^^^^^^^^^^^^
+
+        x; // string | undefined
+>x : string | null
+>  : ^^^^^^^^^^^^^
+
+    }
+    else {
+        x; // string
+>x : string
+>  : ^^^^^^
+
+    }
+}
+
+function f5(): void {
+>f5 : () => void
+>   : ^^^^^^^^^^
+
+    let x: string | null = null as unknown as (string | null);
+>x : string | null
+>  : ^^^^^^^^^^^^^
+>null as unknown as (string | null) : string | null
+>                                   : ^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    let y: string | null = null as unknown as (string | null);
+>y : string | null
+>  : ^^^^^^^^^^^^^
+>null as unknown as (string | null) : string | null
+>                                   : ^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    if (x = y = foo()) {
+>x = y = foo() : string | null
+>              : ^^^^^^^^^^^^^
+>x : string | null
+>  : ^^^^^^^^^^^^^
+>y = foo() : string | null
+>          : ^^^^^^^^^^^^^
+>y : string | null
+>  : ^^^^^^^^^^^^^
+>foo() : string | null
+>      : ^^^^^^^^^^^^^
+>foo : () => string | null
+>    : ^^^^^^^^^^^^^^^^^^^
+
+        x; // string
+>x : string
+>  : ^^^^^^
+
+        y; // string | undefined
+>y : string
+>  : ^^^^^^
+
+    }
+    else {
+        x; // string | undefined
+>x : string | null
+>  : ^^^^^^^^^^^^^
+
+        y; // string | undefined
+>y : string | null
+>  : ^^^^^^^^^^^^^
+
+    }
+}
+
+/*pruned*/;          
+                                                              
+                                                              
+                               
+                                
+                    
+     
+          
+                                
+                                
+     
+ 
+
+function f7(x: {}): void {
+>f7 : (x: {}) => void
+>   : ^^^^^^^^^^^^^^^
+>x : {}
+>  : ^^
+
+    if (x) {
+>x : {}
+>  : ^^
+
+        x; // {}
+>x : {}
+>  : ^^
+
+    }
+    else {
+        x; // {}
+>x : {}
+>  : ^^
+
+    }
+}
+
+function f8<T>(x: T): void {
+>f8 : <T>(x: T) => void
+>   : ^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+
+    if (x) {
+>x : T
+>  : ^
+
+        x; // {}
+>x : NonNullable<T>
+>  : ^^^^^^^^^^^^^^
+
+    }
+    else {
+        x; // {}
+>x : T
+>  : ^
+
+    }
+}
+
+/*pruned*/;                                
+            
+                
+     
+          
+                   
+     
+ 
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

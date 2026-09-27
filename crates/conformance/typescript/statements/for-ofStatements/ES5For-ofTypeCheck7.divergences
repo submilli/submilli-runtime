@@ -1,5 +1,1 @@
-types: 5 of 6 tsc entries compared, 1 differ
-
-line 3: v
-  tsc:  any
-  ours: <error>
+types: 4 of 6 tsc entries compared, 0 differ

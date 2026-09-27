@@ -1,0 +1,17 @@
+types: 6 of 28 tsc entries compared, 4 differ
+
+line 5: f(1)
+  tsc:  1
+  ours: number
+
+line 31: r6
+  tsc:  unknown
+  ours: number
+
+line 31: (new C2()).f(1)
+  tsc:  unknown
+  ours: number
+
+line 31: new C2()
+  tsc:  C2<unknown>
+  ours: C2<T>

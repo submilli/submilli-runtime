@@ -1,0 +1,33 @@
+types: 13 of 18 tsc entries compared, 7 differ
+
+line 7: b
+  tsc:  "foo"
+  ours: string
+
+line 7: a || "foo"
+  tsc:  "foo"
+  ours: string
+
+line 8: b
+  tsc:  "foo"
+  ours: string
+
+line 9: d
+  tsc:  "foo"
+  ours: string
+
+line 9: b || "bar"
+  tsc:  "foo"
+  ours: string
+
+line 9: b
+  tsc:  "foo"
+  ours: string
+
+line 10: d
+  tsc:  "foo"
+  ours: string
+
+errors:
+line 8: ours: expected `"foo"`, got `string` (tsc accepts)
+line 10: ours: expected `"bar" | "foo"`, got `string` (tsc accepts)

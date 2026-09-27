@@ -1,0 +1,164 @@
+=== callGenericFunctionWithIncorrectNumberOfTypeArguments.ts ===
+// type parameter lists must exactly match type argument lists
+// all of these invocations are errors
+
+function f<T, U>(x: T, y: U): T { return null; }
+>f : <T, U>(x: T, y: U) => T
+>  : ^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>x : T
+>  : ^
+>y : U
+>  : ^
+
+let r1 = f<number>(1, '');
+>r1 : number
+>   : ^^^^^^
+>f<number>(1, '') : number
+>                 : ^^^^^^
+>f : <T, U>(x: T, y: U) => T
+>  : ^^^^^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+>'' : ""
+>   : ^^
+
+let r1b = f<number, string, number>(1, '');
+>r1b : number
+>    : ^^^^^^
+>f<number, string, number>(1, '') : number
+>                                 : ^^^^^^
+>f : <T, U>(x: T, y: U) => T
+>  : ^^^^^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+>'' : ""
+>   : ^^
+
+
+/*pruned*/;                                       
+/*pruned*/;                
+/*pruned*/;                                 
+
+/*pruned*/;                                                                          
+/*pruned*/;                
+/*pruned*/;                                 
+
+/**/;    
+                            
+                    
+     
+ 
+/*pruned*/;                         
+/*pruned*/;                                          
+
+interface I {
+>I : I
+>  : ^
+
+    f<T, U>(x: T, y: U): T;
+>f : <T, U>(x: T, y: U) => T
+>  : ^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>x : T
+>  : ^
+>y : U
+>  : ^
+
+}
+/*pruned*/;                       
+/*pruned*/;                 
+/*pruned*/;                                  
+
+class C2<T, U> {
+>C2 : C2<T, U>
+>   : ^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+
+    f(x: T, y: U): T {
+>f : (x: T, y: U) => T
+>  : ^^^^^^^^^^^^^^^^^
+>x : T
+>  : ^
+>y : U
+>  : ^
+
+        return null;
+    }
+}
+let r6 = (new C2()).f<number>(1, '');
+>r6 : unknown
+>   : ^^^^^^^
+>(new C2()).f<number>(1, '') : unknown
+>                            : ^^^^^^^
+>(new C2()).f : (x: unknown, y: unknown) => unknown
+>             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(new C2()) : C2<unknown, unknown>
+>           : ^^^^^^^^^^^^^^^^^^^^
+>new C2() : C2<unknown, unknown>
+>         : ^^^^^^^^^^^^^^^^^^^^
+>C2 : typeof C2
+>   : ^^^^^^^^^
+>f : (x: unknown, y: unknown) => unknown
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+>'' : ""
+>   : ^^
+
+let r6b = (new C2()).f<number, string, number>(1, '');
+>r6b : unknown
+>    : ^^^^^^^
+>(new C2()).f<number, string, number>(1, '') : unknown
+>                                            : ^^^^^^^
+>(new C2()).f : (x: unknown, y: unknown) => unknown
+>             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(new C2()) : C2<unknown, unknown>
+>           : ^^^^^^^^^^^^^^^^^^^^
+>new C2() : C2<unknown, unknown>
+>         : ^^^^^^^^^^^^^^^^^^^^
+>C2 : typeof C2
+>   : ^^^^^^^^^
+>f : (x: unknown, y: unknown) => unknown
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+>'' : ""
+>   : ^^
+
+
+interface I2<T, U> {
+>I2 : I2<T, U>
+>   : ^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+
+    f(x: T, y: U): T;
+>f : (x: T, y: U) => T
+>  : ^^^^^^^^^^^^^^^^^
+>x : T
+>  : ^
+>y : U
+>  : ^
+
+}
+/*pruned*/;                                                          
+/*pruned*/;                  
+/*pruned*/;                                   
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

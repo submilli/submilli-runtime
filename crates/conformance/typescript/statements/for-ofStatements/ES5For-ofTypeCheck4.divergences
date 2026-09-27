@@ -1,8 +1,4 @@
-types: 5 of 6 tsc entries compared, 1 differ
-
-line 3: v
-  tsc:  string
-  ours: <error>
+types: 4 of 6 tsc entries compared, 0 differ
 
 errors:
 line 3: ours: `for-of` requires an array, tuple, string, `Iterator<T>`, or `Iterable<T>`, got `string | string[]` (tsc accepts)

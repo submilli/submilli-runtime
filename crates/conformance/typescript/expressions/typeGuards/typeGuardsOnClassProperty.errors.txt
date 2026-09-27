@@ -1,0 +1,1 @@
+typeGuardsOnClassProperty.ts(8,5): error TS2564: Property 'data' has no initializer and is not definitely assigned in the constructor.

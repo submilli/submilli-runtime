@@ -1,0 +1,66 @@
+=== numberPropertyAccess.ts ===
+let x = 1;
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+let a = x.toExponential();
+>a : string
+>  : ^^^^^^
+>x.toExponential() : string
+>                  : ^^^^^^
+>x.toExponential : (fractionDigits?: number) => string
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>toExponential : (fractionDigits?: number) => string
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+let b = x.hasOwnProperty('toFixed');
+>b : boolean
+>  : ^^^^^^^
+>x.hasOwnProperty('toFixed') : boolean
+>                            : ^^^^^^^
+>x.hasOwnProperty : (v: PropertyKey) => boolean
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>hasOwnProperty : (v: PropertyKey) => boolean
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>'toFixed' : "toFixed"
+>          : ^^^^^^^^^
+
+
+let c = x['toExponential']();
+>c : string
+>  : ^^^^^^
+>x['toExponential']() : string
+>                     : ^^^^^^
+>x['toExponential'] : (fractionDigits?: number) => string
+>                   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>'toExponential' : "toExponential"
+>                : ^^^^^^^^^^^^^^^
+
+let d = x['hasOwnProperty']('toFixed');
+>d : boolean
+>  : ^^^^^^^
+>x['hasOwnProperty']('toFixed') : boolean
+>                               : ^^^^^^^
+>x['hasOwnProperty'] : (v: PropertyKey) => boolean
+>                    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>'hasOwnProperty' : "hasOwnProperty"
+>                 : ^^^^^^^^^^^^^^^^
+>'toFixed' : "toFixed"
+>          : ^^^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

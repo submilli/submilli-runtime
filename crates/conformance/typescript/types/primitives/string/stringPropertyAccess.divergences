@@ -1,0 +1,5 @@
+types: 9 of 27 tsc entries compared, 0 differ
+
+errors:
+line 4: ours: field `hasOwnProperty` does not exist on `string` (tsc accepts)
+line 7: ours: field `hasOwnProperty` does not exist on `string` (tsc accepts)

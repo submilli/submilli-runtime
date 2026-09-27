@@ -1,0 +1,5 @@
+types: 17 of 38 tsc entries compared, 1 differ
+
+line 44: { id: 'a string' }
+  tsc:  { id: string; }
+  ours: I

@@ -1,0 +1,181 @@
+=== typeGuardsInProperties.ts ===
+
+// Note that type guards affect types of variables and parameters only and 
+// have no effect on members of objects such as properties. 
+
+let num: number = null as unknown as (number);
+>num : number
+>    : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let strOrNum: string | number = null as unknown as (string | number);
+>strOrNum : string | number
+>         : ^^^^^^^^^^^^^^^
+>null as unknown as (string | number) : string | number
+>                                     : ^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+class C1 {
+>C1 : C1
+>   : ^^
+
+    private pp1: string | number;
+>pp1 : string | number
+>    : ^^^^^^^^^^^^^^^
+
+    pp2: string | number;
+>pp2 : string | number
+>    : ^^^^^^^^^^^^^^^
+
+    // Inside public accessor getter
+    get pp3() {
+>pp3 : string | number
+>    : ^^^^^^^^^^^^^^^
+
+        return strOrNum;
+>strOrNum : string | number
+>         : ^^^^^^^^^^^^^^^
+
+    }
+    method(): void {
+>method : () => void
+>       : ^^^^^^^^^^
+
+        strOrNum = typeof this.pp1 === "string" && this.pp1; // string | number
+>strOrNum = typeof this.pp1 === "string" && this.pp1 : string | false
+>                                                    : ^^^^^^^^^^^^^^
+>strOrNum : string | number
+>         : ^^^^^^^^^^^^^^^
+>typeof this.pp1 === "string" && this.pp1 : string | false
+>                                         : ^^^^^^^^^^^^^^
+>typeof this.pp1 === "string" : boolean
+>                             : ^^^^^^^
+>typeof this.pp1 : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>this.pp1 : string | number
+>         : ^^^^^^^^^^^^^^^
+>this : this
+>     : ^^^^
+>pp1 : string | number
+>    : ^^^^^^^^^^^^^^^
+>"string" : "string"
+>         : ^^^^^^^^
+>this.pp1 : string
+>         : ^^^^^^
+>this : this
+>     : ^^^^
+>pp1 : string
+>    : ^^^^^^
+
+        strOrNum = typeof this.pp2 === "string" && this.pp2; // string | number
+>strOrNum = typeof this.pp2 === "string" && this.pp2 : string | false
+>                                                    : ^^^^^^^^^^^^^^
+>strOrNum : string | number
+>         : ^^^^^^^^^^^^^^^
+>typeof this.pp2 === "string" && this.pp2 : string | false
+>                                         : ^^^^^^^^^^^^^^
+>typeof this.pp2 === "string" : boolean
+>                             : ^^^^^^^
+>typeof this.pp2 : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>this.pp2 : string | number
+>         : ^^^^^^^^^^^^^^^
+>this : this
+>     : ^^^^
+>pp2 : string | number
+>    : ^^^^^^^^^^^^^^^
+>"string" : "string"
+>         : ^^^^^^^^
+>this.pp2 : string
+>         : ^^^^^^
+>this : this
+>     : ^^^^
+>pp2 : string
+>    : ^^^^^^
+
+        strOrNum = typeof this.pp3 === "string" && this.pp3; // string | number
+>strOrNum = typeof this.pp3 === "string" && this.pp3 : string | false
+>                                                    : ^^^^^^^^^^^^^^
+>strOrNum : string | number
+>         : ^^^^^^^^^^^^^^^
+>typeof this.pp3 === "string" && this.pp3 : string | false
+>                                         : ^^^^^^^^^^^^^^
+>typeof this.pp3 === "string" : boolean
+>                             : ^^^^^^^
+>typeof this.pp3 : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>this.pp3 : string | number
+>         : ^^^^^^^^^^^^^^^
+>this : this
+>     : ^^^^
+>pp3 : string | number
+>    : ^^^^^^^^^^^^^^^
+>"string" : "string"
+>         : ^^^^^^^^
+>this.pp3 : string
+>         : ^^^^^^
+>this : this
+>     : ^^^^
+>pp3 : string
+>    : ^^^^^^
+
+    }
+}
+/*pruned*/;                          
+/*pruned*/;                                      // string | number
+/*pruned*/;                                      // string | number
+let obj1: {
+>obj1 : { x: string | number; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^
+
+    x: string | number;
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+} = null as unknown as ({
+>null as unknown as ({     x: string | number; }) : { x: string | number; }
+>                                                 : ^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    x: string | number;
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+});
+strOrNum = typeof obj1.x === "string" && obj1.x;  // string | number
+>strOrNum = typeof obj1.x === "string" && obj1.x : string | false
+>                                                : ^^^^^^^^^^^^^^
+>strOrNum : string | number
+>         : ^^^^^^^^^^^^^^^
+>typeof obj1.x === "string" && obj1.x : string | false
+>                                     : ^^^^^^^^^^^^^^
+>typeof obj1.x === "string" : boolean
+>                           : ^^^^^^^
+>typeof obj1.x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>obj1.x : string | number
+>       : ^^^^^^^^^^^^^^^
+>obj1 : { x: string | number; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>"string" : "string"
+>         : ^^^^^^^^
+>obj1.x : string
+>       : ^^^^^^
+>obj1 : { x: string | number; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

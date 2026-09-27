@@ -1,0 +1,1 @@
+switchCaseWithUnionTypes01.ts(24,10): error TS2678: Type 'boolean' is not comparable to type 'string | number'.

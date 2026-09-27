@@ -1,0 +1,6 @@
+types: 26 of 59 tsc entries compared, 0 differ
+
+errors:
+line 55: ours: unresolved identifier `window` (tsc accepts)
+line 70: ours: unresolved identifier `window` (tsc accepts)
+line 85: ours: unresolved identifier `window` (tsc accepts)

@@ -1,0 +1,2 @@
+equalityWithEnumTypes.ts(17,9): error TS2367: This comparison appears to be unintentional because the types 'E1' and '0' have no overlap.
+equalityWithEnumTypes.ts(26,9): error TS2367: This comparison appears to be unintentional because the types 'E1' and '3' have no overlap.

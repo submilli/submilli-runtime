@@ -1,0 +1,23 @@
+types: 14 of 55 tsc entries compared, 4 differ
+
+line 19: E.a
+  tsc:  E.a
+  ours: E
+
+line 20: E['a']
+  tsc:  E.a
+  ours: E
+
+line 24: E.a
+  tsc:  E.a
+  ours: E
+
+line 25: E['a']
+  tsc:  E.a
+  ours: E
+
+errors:
+line 28: ours: `+` not defined for `null` and `string` (tsc accepts)
+line 29: ours: `+` not defined for `null` and `string` (tsc accepts)
+line 30: ours: `+` not defined for `string` and `null` (tsc accepts)
+line 31: ours: `+` not defined for `string` and `null` (tsc accepts)

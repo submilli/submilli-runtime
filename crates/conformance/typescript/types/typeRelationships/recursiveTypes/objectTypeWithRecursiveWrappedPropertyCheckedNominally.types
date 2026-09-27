@@ -1,0 +1,158 @@
+=== objectTypeWithRecursiveWrappedPropertyCheckedNominally.ts ===
+// Types with infinitely expanding recursive types are type checked nominally
+
+class List<T> {
+>List : List<T>
+>     : ^^^^^^^
+>T : T
+>  : ^
+
+    data: T;
+>data : T
+>     : ^
+
+    next: List<List<T>>;
+>next : List<List<T>>
+>     : ^^^^^^^^^^^^^
+
+}
+
+class MyList<T> {
+>MyList : MyList<T>
+>       : ^^^^^^^^^
+>T : T
+>  : ^
+
+    data: T;
+>data : T
+>     : ^
+
+    next: MyList<MyList<T>>;
+>next : MyList<MyList<T>>
+>     : ^^^^^^^^^^^^^^^^^
+
+}
+
+let list1 = new List<number>();
+>list1 : List<number>
+>      : ^^^^^^^^^^^^
+>new List<number>() : List<number>
+>                   : ^^^^^^^^^^^^
+>List : typeof List
+>     : ^^^^^^^^^^^
+
+let list2 = new List<string>();
+>list2 : List<string>
+>      : ^^^^^^^^^^^^
+>new List<string>() : List<string>
+>                   : ^^^^^^^^^^^^
+>List : typeof List
+>     : ^^^^^^^^^^^
+
+
+let myList1 = new MyList<number>();
+>myList1 : MyList<number>
+>        : ^^^^^^^^^^^^^^
+>new MyList<number>() : MyList<number>
+>                     : ^^^^^^^^^^^^^^
+>MyList : typeof MyList
+>       : ^^^^^^^^^^^^^
+
+let myList2 = new MyList<string>();
+>myList2 : MyList<string>
+>        : ^^^^^^^^^^^^^^
+>new MyList<string>() : MyList<string>
+>                     : ^^^^^^^^^^^^^^
+>MyList : typeof MyList
+>       : ^^^^^^^^^^^^^
+
+
+list1 = myList1; // error, not nominally equal
+>list1 = myList1 : MyList<number>
+>                : ^^^^^^^^^^^^^^
+>list1 : List<number>
+>      : ^^^^^^^^^^^^
+>myList1 : MyList<number>
+>        : ^^^^^^^^^^^^^^
+
+list1 = myList2; // error, type mismatch
+>list1 = myList2 : MyList<string>
+>                : ^^^^^^^^^^^^^^
+>list1 : List<number>
+>      : ^^^^^^^^^^^^
+>myList2 : MyList<string>
+>        : ^^^^^^^^^^^^^^
+
+
+list2 = myList1; // error, not nominally equal
+>list2 = myList1 : MyList<number>
+>                : ^^^^^^^^^^^^^^
+>list2 : List<string>
+>      : ^^^^^^^^^^^^
+>myList1 : MyList<number>
+>        : ^^^^^^^^^^^^^^
+
+list2 = myList2; // error, type mismatch
+>list2 = myList2 : MyList<string>
+>                : ^^^^^^^^^^^^^^
+>list2 : List<string>
+>      : ^^^^^^^^^^^^
+>myList2 : MyList<string>
+>        : ^^^^^^^^^^^^^^
+
+
+let rList1 = new List<List<number>>();
+>rList1 : List<List<number>>
+>       : ^^^^^^^^^^^^^^^^^^
+>new List<List<number>>() : List<List<number>>
+>                         : ^^^^^^^^^^^^^^^^^^
+>List : typeof List
+>     : ^^^^^^^^^^^
+
+let rMyList1 = new List<MyList<number>>();
+>rMyList1 : List<MyList<number>>
+>         : ^^^^^^^^^^^^^^^^^^^^
+>new List<MyList<number>>() : List<MyList<number>>
+>                           : ^^^^^^^^^^^^^^^^^^^^
+>List : typeof List
+>     : ^^^^^^^^^^^
+
+rList1 = rMyList1; // error, not nominally equal
+>rList1 = rMyList1 : List<MyList<number>>
+>                  : ^^^^^^^^^^^^^^^^^^^^
+>rList1 : List<List<number>>
+>       : ^^^^^^^^^^^^^^^^^^
+>rMyList1 : List<MyList<number>>
+>         : ^^^^^^^^^^^^^^^^^^^^
+
+
+/*pruned*/;                                                                       
+                   
+                   
+
+                                                            
+                                                                
+                
+                   
+                   
+                
+ 
+
+/*pruned*/;                                                             
+                   
+                                                                         
+
+                                                            
+                                                                
+
+                   
+                   
+                
+                
+ 
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

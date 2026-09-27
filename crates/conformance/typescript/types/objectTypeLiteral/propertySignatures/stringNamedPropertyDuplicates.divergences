@@ -1,0 +1,16 @@
+types: 3 of 16 tsc entries compared, 2 differ
+
+line 14: a
+  tsc:  { "a b": number; }
+  ours: { a b: number }
+
+line 17: null as unknown as ({ "a b": number; "a b": number; })
+  tsc:  { "a b": number; }
+  ours: { a b: number }
+
+errors:
+line 10: tsc TS2300: Duplicate identifier 'a b'. (we accept)
+line 15: tsc TS2300: Duplicate identifier 'a b'. (we accept)
+line 18: tsc TS2300: Duplicate identifier 'a b'. (we accept)
+line 3: ours: property `a b` has no initializer and is not assigned in the constructor (tsc accepts)
+line 5: ours: a static field must be initialized (tsc accepts)

@@ -1,0 +1,40 @@
+types: 26 of 38 tsc entries compared, 9 differ
+
+line 37: stringOrNumber
+  tsc:  "string"
+  ours: "number" | "string"
+
+line 37: string || number
+  tsc:  "string"
+  ours: "number" | "string"
+
+line 38: stringOrBoolean
+  tsc:  "string"
+  ours: "boolean" | "string"
+
+line 38: string || boolean
+  tsc:  "string"
+  ours: "boolean" | "string"
+
+line 39: booleanOrNumber
+  tsc:  "number"
+  ours: "boolean" | "number"
+
+line 39: number || boolean
+  tsc:  "number"
+  ours: "boolean" | "number"
+
+line 40: stringOrBooleanOrNumber
+  tsc:  "string"
+  ours: "boolean" | "number" | "string"
+
+line 40: stringOrBoolean || number
+  tsc:  "string"
+  ours: "boolean" | "number" | "string"
+
+line 40: stringOrBoolean
+  tsc:  "string"
+  ours: "boolean" | "string"
+
+errors:
+line 24: ours: expected `Error`, got `string` (tsc accepts)

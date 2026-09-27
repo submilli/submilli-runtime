@@ -1,0 +1,314 @@
+=== indexerWithTuple.ts ===
+let strNumTuple: [string, number] = ["foo", 10];
+>strNumTuple : [string, number]
+>            : ^^^^^^^^^^^^^^^^
+>["foo", 10] : [string, number]
+>            : ^^^^^^^^^^^^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+>10 : 10
+>   : ^^
+
+let numTupleTuple: [number, [string, number]] = [10, ["bar", 20]];
+>numTupleTuple : [number, [string, number]]
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>[10, ["bar", 20]] : [number, [string, number]]
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>10 : 10
+>   : ^^
+>["bar", 20] : [string, number]
+>            : ^^^^^^^^^^^^^^^^
+>"bar" : "bar"
+>      : ^^^^^
+>20 : 20
+>   : ^^
+
+let unionTuple1: [number, string| number] = [10, "foo"];
+>unionTuple1 : [number, string | number]
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>[10, "foo"] : [number, string]
+>            : ^^^^^^^^^^^^^^^^
+>10 : 10
+>   : ^^
+>"foo" : "foo"
+>      : ^^^^^
+
+let unionTuple2: [boolean, string| number] = [true, "foo"];
+>unionTuple2 : [boolean, string | number]
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>[true, "foo"] : [true, string]
+>              : ^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+>"foo" : "foo"
+>      : ^^^^^
+
+
+// no error
+let idx0 = 0;
+>idx0 : number
+>     : ^^^^^^
+>0 : 0
+>  : ^
+
+let idx1 = 1;
+>idx1 : number
+>     : ^^^^^^
+>1 : 1
+>  : ^
+
+let ele10 = strNumTuple[0]; // string
+>ele10 : string
+>      : ^^^^^^
+>strNumTuple[0] : string
+>               : ^^^^^^
+>strNumTuple : [string, number]
+>            : ^^^^^^^^^^^^^^^^
+>0 : 0
+>  : ^
+
+let ele11 = strNumTuple[1]; // number
+>ele11 : number
+>      : ^^^^^^
+>strNumTuple[1] : number
+>               : ^^^^^^
+>strNumTuple : [string, number]
+>            : ^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+let ele12 = strNumTuple[2]; // string | number
+>ele12 : undefined
+>      : ^^^^^^^^^
+>strNumTuple[2] : undefined
+>               : ^^^^^^^^^
+>strNumTuple : [string, number]
+>            : ^^^^^^^^^^^^^^^^
+>2 : 2
+>  : ^
+
+let ele13 = strNumTuple[idx0]; // string | number
+>ele13 : string | number
+>      : ^^^^^^^^^^^^^^^
+>strNumTuple[idx0] : string | number
+>                  : ^^^^^^^^^^^^^^^
+>strNumTuple : [string, number]
+>            : ^^^^^^^^^^^^^^^^
+>idx0 : number
+>     : ^^^^^^
+
+let ele14 = strNumTuple[idx1]; // string | number
+>ele14 : string | number
+>      : ^^^^^^^^^^^^^^^
+>strNumTuple[idx1] : string | number
+>                  : ^^^^^^^^^^^^^^^
+>strNumTuple : [string, number]
+>            : ^^^^^^^^^^^^^^^^
+>idx1 : number
+>     : ^^^^^^
+
+let ele15 = strNumTuple["0"]; // string
+>ele15 : string
+>      : ^^^^^^
+>strNumTuple["0"] : string
+>                 : ^^^^^^
+>strNumTuple : [string, number]
+>            : ^^^^^^^^^^^^^^^^
+>"0" : "0"
+>    : ^^^
+
+let ele16 = strNumTuple["1"]; // number
+>ele16 : number
+>      : ^^^^^^
+>strNumTuple["1"] : number
+>                 : ^^^^^^
+>strNumTuple : [string, number]
+>            : ^^^^^^^^^^^^^^^^
+>"1" : "1"
+>    : ^^^
+
+let strNumTuple1 = numTupleTuple[1];  //[string, number];
+>strNumTuple1 : [string, number]
+>             : ^^^^^^^^^^^^^^^^
+>numTupleTuple[1] : [string, number]
+>                 : ^^^^^^^^^^^^^^^^
+>numTupleTuple : [number, [string, number]]
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+let ele17 = numTupleTuple[2]; // number | [string, number]
+>ele17 : undefined
+>      : ^^^^^^^^^
+>numTupleTuple[2] : undefined
+>                 : ^^^^^^^^^
+>numTupleTuple : [number, [string, number]]
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>2 : 2
+>  : ^
+
+let ele19 = strNumTuple[-1]   // undefined
+>ele19 : undefined
+>      : ^^^^^^^^^
+>strNumTuple[-1] : undefined
+>                : ^^^^^^^^^
+>strNumTuple : [string, number]
+>            : ^^^^^^^^^^^^^^^^
+>-1 : -1
+>   : ^^
+>1 : 1
+>  : ^
+
+
+let eleUnion10 = unionTuple1[0]; // number
+>eleUnion10 : number
+>           : ^^^^^^
+>unionTuple1[0] : number
+>               : ^^^^^^
+>unionTuple1 : [number, string | number]
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>0 : 0
+>  : ^
+
+let eleUnion11 = unionTuple1[1]; // string | number
+>eleUnion11 : string | number
+>           : ^^^^^^^^^^^^^^^
+>unionTuple1[1] : string | number
+>               : ^^^^^^^^^^^^^^^
+>unionTuple1 : [number, string | number]
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+let eleUnion12 = unionTuple1[2]; // string | number
+>eleUnion12 : undefined
+>           : ^^^^^^^^^
+>unionTuple1[2] : undefined
+>               : ^^^^^^^^^
+>unionTuple1 : [number, string | number]
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>2 : 2
+>  : ^
+
+let eleUnion13 = unionTuple1[idx0]; // string | number
+>eleUnion13 : string | number
+>           : ^^^^^^^^^^^^^^^
+>unionTuple1[idx0] : string | number
+>                  : ^^^^^^^^^^^^^^^
+>unionTuple1 : [number, string | number]
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>idx0 : number
+>     : ^^^^^^
+
+let eleUnion14 = unionTuple1[idx1]; // string | number
+>eleUnion14 : string | number
+>           : ^^^^^^^^^^^^^^^
+>unionTuple1[idx1] : string | number
+>                  : ^^^^^^^^^^^^^^^
+>unionTuple1 : [number, string | number]
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>idx1 : number
+>     : ^^^^^^
+
+let eleUnion15 = unionTuple1["0"]; // number
+>eleUnion15 : number
+>           : ^^^^^^
+>unionTuple1["0"] : number
+>                 : ^^^^^^
+>unionTuple1 : [number, string | number]
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>"0" : "0"
+>    : ^^^
+
+let eleUnion16 = unionTuple1["1"]; // string | number
+>eleUnion16 : string | number
+>           : ^^^^^^^^^^^^^^^
+>unionTuple1["1"] : string | number
+>                 : ^^^^^^^^^^^^^^^
+>unionTuple1 : [number, string | number]
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>"1" : "1"
+>    : ^^^
+
+
+let eleUnion20 = unionTuple2[0]; // boolean
+>eleUnion20 : boolean
+>           : ^^^^^^^
+>unionTuple2[0] : boolean
+>               : ^^^^^^^
+>unionTuple2 : [boolean, string | number]
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>0 : 0
+>  : ^
+
+let eleUnion21 = unionTuple2[1]; // string | number
+>eleUnion21 : string | number
+>           : ^^^^^^^^^^^^^^^
+>unionTuple2[1] : string | number
+>               : ^^^^^^^^^^^^^^^
+>unionTuple2 : [boolean, string | number]
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+let eleUnion22 = unionTuple2[2]; // string | number | boolean
+>eleUnion22 : undefined
+>           : ^^^^^^^^^
+>unionTuple2[2] : undefined
+>               : ^^^^^^^^^
+>unionTuple2 : [boolean, string | number]
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>2 : 2
+>  : ^
+
+let eleUnion23 = unionTuple2[idx0]; // string | number | boolean
+>eleUnion23 : string | number | boolean
+>           : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>unionTuple2[idx0] : string | number | boolean
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>unionTuple2 : [boolean, string | number]
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>idx0 : number
+>     : ^^^^^^
+
+let eleUnion24 = unionTuple2[idx1]; // string | number | boolean
+>eleUnion24 : string | number | boolean
+>           : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>unionTuple2[idx1] : string | number | boolean
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>unionTuple2 : [boolean, string | number]
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>idx1 : number
+>     : ^^^^^^
+
+let eleUnion25 = unionTuple2["0"]; // boolean
+>eleUnion25 : boolean
+>           : ^^^^^^^
+>unionTuple2["0"] : boolean
+>                 : ^^^^^^^
+>unionTuple2 : [boolean, string | number]
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>"0" : "0"
+>    : ^^^
+
+let eleUnion26 = unionTuple2["1"]; // string | number
+>eleUnion26 : string | number
+>           : ^^^^^^^^^^^^^^^
+>unionTuple2["1"] : string | number
+>                 : ^^^^^^^^^^^^^^^
+>unionTuple2 : [boolean, string | number]
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>"1" : "1"
+>    : ^^^
+
+
+/*pruned*/;                     // string
+/*pruned*/;                     // number
+/*pruned*/;                     // undefined
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

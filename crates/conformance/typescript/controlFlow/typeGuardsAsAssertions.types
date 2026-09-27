@@ -1,0 +1,612 @@
+=== typeGuardsAsAssertions.ts ===
+
+// Repro from #8513
+
+let cond: boolean = null as unknown as (boolean);
+>cond : boolean
+>     : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+export type Optional<a> = Some<a> | None;
+>Optional : Optional<a>
+>         : ^^^^^^^^^^^
+>a : a
+>  : ^
+
+
+export interface None { readonly none: string; }
+>None : None
+>     : ^^^^
+>none : string
+>     : ^^^^^^
+
+export interface Some<a> { readonly some: a; }
+>Some : Some<a>
+>     : ^^^^^^^
+>a : a
+>  : ^
+>some : a
+>     : ^
+
+
+export const none : None = { none: '' };
+>none : None
+>     : ^^^^
+>{ none: '' } : { none: string; }
+>             : ^^^^^^^^^^^^^^^^^
+>none : string
+>     : ^^^^^^
+>'' : ""
+>   : ^^
+
+
+export function isSome<a>(value: Optional<a>): value is Some<a> {
+>isSome : <a>(value: Optional<a>) => value is Some<a>
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : a
+>  : ^
+>value : Optional<a>
+>      : ^^^^^^^^^^^
+
+    return 'some' in value;
+>'some' in value : boolean
+>                : ^^^^^^^
+>'some' : "some"
+>       : ^^^^^^
+>value : Optional<a>
+>      : ^^^^^^^^^^^
+
+}
+
+function someFrom<a>(some: a): { some: a; } {
+>someFrom : <a>(some: a) => { some: a; }
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : a
+>  : ^
+>some : a
+>     : ^
+>some : a
+>     : ^
+
+    return { some };
+>{ some } : { some: a; }
+>         : ^^^^^^^^^^^^
+>some : a
+>     : ^
+
+}
+
+export function fn<r>(makeSome: () => r): void {
+>fn : <r>(makeSome: () => r) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>r : r
+>  : ^
+>makeSome : () => r
+>         : ^^^^^^^
+
+    let result: Optional<r> = none;
+>result : Optional<r>
+>       : ^^^^^^^^^^^
+>none : None
+>     : ^^^^
+
+    result;  // None
+>result : None
+>       : ^^^^
+
+    while (cond) {
+>cond : boolean
+>     : ^^^^^^^
+
+        result;  // Some<r> | None
+>result : Optional<r>
+>       : ^^^^^^^^^^^
+
+        result = someFrom(isSome(result) ? result.some : makeSome());
+>result = someFrom(isSome(result) ? result.some : makeSome()) : { some: r; }
+>                                                             : ^^^^^^^^^^^^
+>result : Optional<r>
+>       : ^^^^^^^^^^^
+>someFrom(isSome(result) ? result.some : makeSome()) : { some: r; }
+>                                                    : ^^^^^^^^^^^^
+>someFrom : <a>(some: a) => { some: a; }
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>isSome(result) ? result.some : makeSome() : r
+>                                          : ^
+>isSome(result) : boolean
+>               : ^^^^^^^
+>isSome : <a>(value: Optional<a>) => value is Some<a>
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>result : Optional<r>
+>       : ^^^^^^^^^^^
+>result.some : r
+>            : ^
+>result : Some<r>
+>       : ^^^^^^^
+>some : r
+>     : ^
+>makeSome() : r
+>           : ^
+>makeSome : () => r
+>         : ^^^^^^^
+
+        result;  // Some<r>
+>result : Some<r>
+>       : ^^^^^^^
+
+    }
+}
+
+function foo1(): void {
+>foo1 : () => void
+>     : ^^^^^^^^^^
+
+    let x: string | number | boolean = 0;
+>x : string | number | boolean
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>0 : 0
+>  : ^
+
+    x;  // number
+>x : number
+>  : ^^^^^^
+
+    while (cond) {
+>cond : boolean
+>     : ^^^^^^^
+
+        x;  // number, then string | number
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+        x = typeof x === "string" ? x.slice() : "abc";
+>x = typeof x === "string" ? x.slice() : "abc" : string
+>                                              : ^^^^^^
+>x : string | number | boolean
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>typeof x === "string" ? x.slice() : "abc" : string
+>                                          : ^^^^^^
+>typeof x === "string" : boolean
+>                      : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>"string" : "string"
+>         : ^^^^^^^^
+>x.slice() : string
+>          : ^^^^^^
+>x.slice : (start?: number, end?: number) => string
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>slice : (start?: number, end?: number) => string
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>"abc" : "abc"
+>      : ^^^^^
+
+        x;  // string
+>x : string
+>  : ^^^^^^
+
+    }
+    x;
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+}
+
+function foo2(): void {
+>foo2 : () => void
+>     : ^^^^^^^^^^
+
+    let x: string | number | boolean = 0;
+>x : string | number | boolean
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>0 : 0
+>  : ^
+
+    x;  // number
+>x : number
+>  : ^^^^^^
+
+    while (cond) {
+>cond : boolean
+>     : ^^^^^^^
+
+        x;  // number, then string | number
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+        if (typeof x === "string") {
+>typeof x === "string" : boolean
+>                      : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>"string" : "string"
+>         : ^^^^^^^^
+
+            x = x.slice();
+>x = x.slice() : string
+>              : ^^^^^^
+>x : string | number | boolean
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x.slice() : string
+>          : ^^^^^^
+>x.slice : (start?: number, end?: number) => string
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>slice : (start?: number, end?: number) => string
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        }
+        else {
+            x = "abc";
+>x = "abc" : "abc"
+>          : ^^^^^
+>x : string | number | boolean
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>"abc" : "abc"
+>      : ^^^^^
+
+        }
+        x;  // string
+>x : string
+>  : ^^^^^^
+
+    }
+    x;
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+}
+
+// Type guards as assertions
+
+function f1(): void {
+>f1 : () => void
+>   : ^^^^^^^^^^
+
+    let x: string | number | null = null;
+>x : string | number | null
+>  : ^^^^^^^^^^^^^^^^^^^^^^
+
+    x;  // undefined
+>x : null
+>  : ^^^^
+
+    if (x) {
+>x : null
+>  : ^^^^
+
+        x;  // string | number (guard as assertion)
+>x : never
+>  : ^^^^^
+
+    }
+    x;  // string | number | undefined
+>x : null
+>  : ^^^^
+
+}
+
+function f2(): void {
+>f2 : () => void
+>   : ^^^^^^^^^^
+
+    let x: string | number | null = null;
+>x : string | number | null
+>  : ^^^^^^^^^^^^^^^^^^^^^^
+
+    x;  // undefined
+>x : null
+>  : ^^^^
+
+    if (typeof x === "string") {
+>typeof x === "string" : boolean
+>                      : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : null
+>  : ^^^^
+>"string" : "string"
+>         : ^^^^^^^^
+
+        x;  // string (guard as assertion)
+>x : never
+>  : ^^^^^
+
+    }
+    x;  // string | undefined
+>x : null
+>  : ^^^^
+
+}
+
+function f3(): void {
+>f3 : () => void
+>   : ^^^^^^^^^^
+
+    let x: string | number | null = null;
+>x : string | number | null
+>  : ^^^^^^^^^^^^^^^^^^^^^^
+
+    x;  // undefined
+>x : null
+>  : ^^^^
+
+    if (!x) {
+>!x : true
+>   : ^^^^
+>x : null
+>  : ^^^^
+
+        return;
+    }
+    x;  // string | number (guard as assertion)
+>x : never
+>  : ^^^^^
+
+}
+
+function f4(): void {
+>f4 : () => void
+>   : ^^^^^^^^^^
+
+    let x: string | number | null = null;
+>x : string | number | null
+>  : ^^^^^^^^^^^^^^^^^^^^^^
+
+    x;  // undefined
+>x : null
+>  : ^^^^
+
+    if (typeof x === "boolean") {
+>typeof x === "boolean" : boolean
+>                       : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : null
+>  : ^^^^
+>"boolean" : "boolean"
+>          : ^^^^^^^^^
+
+        x;  // nothing (boolean not in declared type)
+>x : never
+>  : ^^^^^
+
+    }
+    x;  // undefined
+>x : null
+>  : ^^^^
+
+}
+
+function f5(x: string | number): void {
+>f5 : (x: string | number) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+    if (typeof x === "string" && typeof x === "number") {
+>typeof x === "string" && typeof x === "number" : boolean
+>                                               : ^^^^^^^
+>typeof x === "string" : boolean
+>                      : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>"string" : "string"
+>         : ^^^^^^^^
+>typeof x === "number" : boolean
+>                      : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>"number" : "number"
+>         : ^^^^^^^^
+
+        x;  // number (guard as assertion)
+>x : never
+>  : ^^^^^
+
+    }
+    else {
+        x;  // string | number
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+    }
+    x;  // string | number
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+}
+
+function f6(): void {
+>f6 : () => void
+>   : ^^^^^^^^^^
+
+    let x: string | null | null = null as unknown as (string | null | null);
+>x : string | null
+>  : ^^^^^^^^^^^^^
+>null as unknown as (string | null | null) : string | null
+>                                          : ^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    x!.slice();
+>x!.slice() : string
+>           : ^^^^^^
+>x!.slice : (start?: number, end?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x! : string
+>   : ^^^^^^
+>x : string | null
+>  : ^^^^^^^^^^^^^
+>slice : (start?: number, end?: number) => string
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    x = "";
+>x = "" : ""
+>       : ^^
+>x : string | null
+>  : ^^^^^^^^^^^^^
+>"" : ""
+>   : ^^
+
+    x!.slice();
+>x!.slice() : string
+>           : ^^^^^^
+>x!.slice : (start?: number, end?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x! : string
+>   : ^^^^^^
+>x : string
+>  : ^^^^^^
+>slice : (start?: number, end?: number) => string
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    x = null;
+>x = null : null
+>         : ^^^^
+>x : string | null
+>  : ^^^^^^^^^^^^^
+
+    x!.slice();
+>x!.slice() : string
+>           : ^^^^^^
+>x!.slice : (start?: number, end?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x! : string
+>   : ^^^^^^
+>x : string | null
+>  : ^^^^^^^^^^^^^
+>slice : (start?: number, end?: number) => string
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    x = null;
+>x = null : null
+>         : ^^^^
+>x : string | null
+>  : ^^^^^^^^^^^^^
+
+    x!.slice();
+>x!.slice() : string
+>           : ^^^^^^
+>x!.slice : (start?: number, end?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x! : string
+>   : ^^^^^^
+>x : string | null
+>  : ^^^^^^^^^^^^^
+>slice : (start?: number, end?: number) => string
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    x = <null | null>null;
+>x = <null | null>null : null
+>                      : ^^^^
+>x : string | null
+>  : ^^^^^^^^^^^^^
+><null | null>null : null
+>                  : ^^^^
+
+    x!.slice();
+>x!.slice() : string
+>           : ^^^^^^
+>x!.slice : (start?: number, end?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x! : string
+>   : ^^^^^^
+>x : string | null
+>  : ^^^^^^^^^^^^^
+>slice : (start?: number, end?: number) => string
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    x = <string | null>"";
+>x = <string | null>"" : string | null
+>                      : ^^^^^^^^^^^^^
+>x : string | null
+>  : ^^^^^^^^^^^^^
+><string | null>"" : string | null
+>                  : ^^^^^^^^^^^^^
+>"" : ""
+>   : ^^
+
+    x!.slice();
+>x!.slice() : string
+>           : ^^^^^^
+>x!.slice : (start?: number, end?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x! : string
+>   : ^^^^^^
+>x : string | null
+>  : ^^^^^^^^^^^^^
+>slice : (start?: number, end?: number) => string
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    x = <string | null>"";
+>x = <string | null>"" : string | null
+>                      : ^^^^^^^^^^^^^
+>x : string | null
+>  : ^^^^^^^^^^^^^
+><string | null>"" : string | null
+>                  : ^^^^^^^^^^^^^
+>"" : ""
+>   : ^^
+
+    x!.slice();
+>x!.slice() : string
+>           : ^^^^^^
+>x!.slice : (start?: number, end?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x! : string
+>   : ^^^^^^
+>x : string | null
+>  : ^^^^^^^^^^^^^
+>slice : (start?: number, end?: number) => string
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+}
+
+function f7(): void {
+>f7 : () => void
+>   : ^^^^^^^^^^
+
+    let x: string = null as unknown as (string);
+>x : string
+>  : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    x!.slice();
+>x!.slice() : string
+>           : ^^^^^^
+>x!.slice : (start?: number, end?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x! : string
+>   : ^^^^^^
+>x : string
+>  : ^^^^^^
+>slice : (start?: number, end?: number) => string
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

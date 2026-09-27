@@ -1,0 +1,118 @@
+=== genericInstantiationEquivalentToObjectLiteral.ts ===
+interface Pair<T1, T2> { first: T1; second: T2; }
+>Pair : Pair<T1, T2>
+>     : ^^^^^^^^^^^^
+>T1 : T1
+>   : ^^
+>T2 : T2
+>   : ^^
+>first : T1
+>      : ^^
+>second : T2
+>       : ^^
+
+let x: Pair<string, number> = null as unknown as (Pair<string, number>);
+>x : Pair<string, number>
+>  : ^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (Pair<string, number>) : Pair<string, number>
+>                                          : ^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let y: { first: string; second: number; } = null as unknown as ({ first: string; second: number; });
+>y : { first: string; second: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>first : string
+>      : ^^^^^^
+>second : number
+>       : ^^^^^^
+>null as unknown as ({ first: string; second: number; }) : { first: string; second: number; }
+>                                                        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>first : string
+>      : ^^^^^^
+>second : number
+>       : ^^^^^^
+
+
+x = y;
+>x = y : { first: string; second: number; }
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : Pair<string, number>
+>  : ^^^^^^^^^^^^^^^^^^^^
+>y : { first: string; second: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+y = x;
+>y = x : Pair<string, number>
+>      : ^^^^^^^^^^^^^^^^^^^^
+>y : { first: string; second: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : Pair<string, number>
+>  : ^^^^^^^^^^^^^^^^^^^^
+
+
+function f<T, U>(x: Pair<T, U>): void { }
+>f : <T, U>(x: Pair<T, U>) => void
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>x : Pair<T, U>
+>  : ^^^^^^^^^^
+
+function f2<T, U>(x: { first: T; second: U; }): void { }
+>f2 : <T, U>(x: { first: T; second: U; }) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>x : { first: T; second: U; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^
+>first : T
+>      : ^
+>second : U
+>       : ^
+
+
+f(x);
+>f(x) : void
+>     : ^^^^
+>f : <T, U>(x: Pair<T, U>) => void
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : Pair<string, number>
+>  : ^^^^^^^^^^^^^^^^^^^^
+
+f(y);
+>f(y) : void
+>     : ^^^^
+>f : <T, U>(x: Pair<T, U>) => void
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>y : { first: string; second: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+f2(x);
+>f2(x) : void
+>      : ^^^^
+>f2 : <T, U>(x: { first: T; second: U; }) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : Pair<string, number>
+>  : ^^^^^^^^^^^^^^^^^^^^
+
+f2(y);
+>f2(y) : void
+>      : ^^^^
+>f2 : <T, U>(x: { first: T; second: U; }) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>y : { first: string; second: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -1,0 +1,126 @@
+=== genericCallWithFunctionTypedArguments5.ts ===
+// Generic call with parameter of object type with member of function type of n args passed object whose associated member is call signature with n+1 args
+
+function foo<T, U>(arg: { cb: (t: T) => U }): U {
+>foo : <T, U>(arg: { cb: (t: T) => U; }) => U
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>arg : { cb: (t: T) => U; }
+>    : ^^^^^^^^^^^^^^^^^^^^
+>cb : (t: T) => U
+>   : ^^^^^^^^^^^
+>t : T
+>  : ^
+
+    return arg.cb(null);
+>arg.cb(null) : U
+>             : ^
+>arg.cb : (t: T) => U
+>       : ^^^^^^^^^^^
+>arg : { cb: (t: T) => U; }
+>    : ^^^^^^^^^^^^^^^^^^^^
+>cb : (t: T) => U
+>   : ^^^^^^^^^^^
+
+}
+
+/*pruned*/;                       
+/*pruned*/;       // {}
+// more args not allowed
+/*pruned*/;                                  // error
+let r3 = foo({ cb: (x: string, y: number) => '' }); // error
+>r3 : string
+>   : ^^^^^^
+>foo({ cb: (x: string, y: number) => '' }) : string
+>                                          : ^^^^^^
+>foo : <T, U>(arg: { cb: (t: T) => U; }) => U
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ cb: (x: string, y: number) => '' } : { cb: (x: string, y: number) => string; }
+>                                     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>cb : (x: string, y: number) => string
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(x: string, y: number) => '' : (x: string, y: number) => string
+>                             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>y : number
+>  : ^^^^^^
+>'' : ""
+>   : ^^
+
+
+function foo2<T, U>(arg: { cb: (t: T, t2: T) => U }): U {
+>foo2 : <T, U>(arg: { cb: (t: T, t2: T) => U; }) => U
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>arg : { cb: (t: T, t2: T) => U; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>cb : (t: T, t2: T) => U
+>   : ^^^^^^^^^^^^^^^^^^
+>t : T
+>  : ^
+>t2 : T
+>   : ^
+
+    return arg.cb(null, null);
+>arg.cb(null, null) : U
+>                   : ^
+>arg.cb : (t: T, t2: T) => U
+>       : ^^^^^^^^^^^^^^^^^^
+>arg : { cb: (t: T, t2: T) => U; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>cb : (t: T, t2: T) => U
+>   : ^^^^^^^^^^^^^^^^^^
+
+}
+
+// fewer args ok
+/*pruned*/;        // {}
+/*pruned*/;                            // {}
+let r6 = foo({ cb: (x: string) => '' }); // string
+>r6 : string
+>   : ^^^^^^
+>foo({ cb: (x: string) => '' }) : string
+>                               : ^^^^^^
+>foo : <T, U>(arg: { cb: (t: T) => U; }) => U
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ cb: (x: string) => '' } : { cb: (x: string) => string; }
+>                          : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>cb : (x: string) => string
+>   : ^^^^^^^^^^^^^^^^^^^^^
+>(x: string) => '' : (x: string) => string
+>                  : ^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>'' : ""
+>   : ^^
+
+let r7 = foo({ cb: () => '' }); // string
+>r7 : string
+>   : ^^^^^^
+>foo({ cb: () => '' }) : string
+>                      : ^^^^^^
+>foo : <T, U>(arg: { cb: (t: T) => U; }) => U
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ cb: () => '' } : { cb: () => string; }
+>                 : ^^^^^^^^^^^^^^^^^^^^^
+>cb : () => string
+>   : ^^^^^^^^^^^^
+>() => '' : () => string
+>         : ^^^^^^^^^^^^
+>'' : ""
+>   : ^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

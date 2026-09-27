@@ -1,0 +1,14 @@
+controlFlowAliasing.ts(63,13): error TS2322: Type 'string | number' is not assignable to type 'string'.   Type 'number' is not assignable to type 'string'.
+controlFlowAliasing.ts(78,13): error TS2322: Type 'string | number' is not assignable to type 'string'.   Type 'number' is not assignable to type 'string'.
+controlFlowAliasing.ts(95,13): error TS2339: Property 'foo' does not exist on type '{ kind: "foo"; foo: string; } | { kind: "bar"; bar: number; }'.   Property 'foo' does not exist on type '{ kind: "bar"; bar: number; }'.
+controlFlowAliasing.ts(98,13): error TS2339: Property 'bar' does not exist on type '{ kind: "foo"; foo: string; } | { kind: "bar"; bar: number; }'.   Property 'bar' does not exist on type '{ kind: "foo"; foo: string; }'.
+controlFlowAliasing.ts(105,13): error TS2339: Property 'foo' does not exist on type '{ kind: "foo"; foo: string; } | { kind: "bar"; bar: number; }'.   Property 'foo' does not exist on type '{ kind: "bar"; bar: number; }'.
+controlFlowAliasing.ts(108,13): error TS2339: Property 'bar' does not exist on type '{ kind: "foo"; foo: string; } | { kind: "bar"; bar: number; }'.   Property 'bar' does not exist on type '{ kind: "foo"; foo: string; }'.
+controlFlowAliasing.ts(116,13): error TS2339: Property 'foo' does not exist on type '{ kind: "foo"; foo: string; } | { kind: "bar"; bar: number; }'.   Property 'foo' does not exist on type '{ kind: "bar"; bar: number; }'.
+controlFlowAliasing.ts(119,13): error TS2339: Property 'bar' does not exist on type '{ kind: "foo"; foo: string; } | { kind: "bar"; bar: number; }'.   Property 'bar' does not exist on type '{ kind: "foo"; foo: string; }'.
+controlFlowAliasing.ts(158,19): error TS2339: Property 'foo' does not exist on type '{ kind: "foo"; foo: string; } | { kind: "bar"; bar: number; }'.   Property 'foo' does not exist on type '{ kind: "bar"; bar: number; }'.
+controlFlowAliasing.ts(161,19): error TS2339: Property 'bar' does not exist on type '{ kind: "foo"; foo: string; } | { kind: "bar"; bar: number; }'.   Property 'bar' does not exist on type '{ kind: "foo"; foo: string; }'.
+controlFlowAliasing.ts(237,13): error TS2322: Type 'string | number' is not assignable to type 'string'.   Type 'number' is not assignable to type 'string'.
+controlFlowAliasing.ts(284,5): error TS2448: Block-scoped variable 'a' used before its declaration.
+controlFlowAliasing.ts(284,5): error TS2454: Variable 'a' is used before being assigned.
+controlFlowAliasing.ts(296,19): error TS2564: Property 'testNumber' has no initializer and is not definitely assigned in the constructor.

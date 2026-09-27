@@ -1,0 +1,17 @@
+types: 68 of 134 tsc entries compared, 3 differ
+
+line 36: a
+  tsc:  string | undefined
+  ours: AWithOptionalProp
+
+line 87: this
+  tsc:  this
+  ours: SelfAssert
+
+line 88: this
+  tsc:  this
+  ours: SelfAssert
+
+errors:
+line 39: ours: expected `string`, got `string | null` (tsc accepts)
+line 40: ours: expected `string`, got `string | null` (tsc accepts)

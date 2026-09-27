@@ -1,0 +1,15 @@
+types: 37 of 65 tsc entries compared, 1 differ
+
+line 35: E.a
+  tsc:  E.a
+  ours: E
+
+errors:
+line 17: ours: `+` not defined for `string` and `boolean` (tsc accepts)
+line 18: ours: `+` not defined for `string` and `number` (tsc accepts)
+line 26: ours: `+` not defined for `boolean` and `string` (tsc accepts)
+line 27: ours: `+` not defined for `number` and `string` (tsc accepts)
+line 35: ours: `+` not defined for `string` and `E` (tsc accepts)
+line 37: ours: `+` not defined for `string` and `number` (tsc accepts)
+line 38: ours: `+` not defined for `string` and `{ a: string }` (tsc accepts)
+line 39: ours: cannot infer element type of empty array; add a `: T[]` annotation (tsc accepts)

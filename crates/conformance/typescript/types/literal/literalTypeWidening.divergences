@@ -1,0 +1,187 @@
+types: 120 of 162 tsc entries compared, 45 differ
+
+line 10: v3
+  tsc:  "hello"
+  ours: string
+
+line 12: v4
+  tsc:  "hello"
+  ours: string
+
+line 16: c1
+  tsc:  "foo" | "bar"
+  ours: string
+
+line 16: cond ? "foo" : "bar"
+  tsc:  "foo" | "bar"
+  ours: string
+
+line 17: c1
+  tsc:  "foo" | "bar"
+  ours: string
+
+line 18: c3
+  tsc:  "foo" | "bar"
+  ours: string
+
+line 18: cond ? c1 : c2
+  tsc:  "foo" | "bar"
+  ours: string
+
+line 18: c1
+  tsc:  "foo" | "bar"
+  ours: string
+
+line 18: c2
+  tsc:  "foo" | "bar"
+  ours: string
+
+line 19: c4
+  tsc:  "foo" | "bar" | "baz"
+  ours: string
+
+line 19: cond ? c3 : "baz"
+  tsc:  "foo" | "bar" | "baz"
+  ours: string
+
+line 19: c3
+  tsc:  "foo" | "bar"
+  ours: string
+
+line 20: c4
+  tsc:  "foo" | "bar" | "baz"
+  ours: string
+
+line 21: c1
+  tsc:  "foo" | "bar"
+  ours: string
+
+line 22: v2
+  tsc:  "foo" | "bar"
+  ours: string
+
+line 22: c2
+  tsc:  "foo" | "bar"
+  ours: string
+
+line 23: v3
+  tsc:  "foo" | "bar"
+  ours: string
+
+line 23: c3
+  tsc:  "foo" | "bar"
+  ours: string
+
+line 24: c4
+  tsc:  "foo" | "bar" | "baz"
+  ours: string
+
+line 25: v5
+  tsc:  "foo" | "bar" | "baz"
+  ours: string
+
+line 25: c5
+  tsc:  "foo" | "bar" | "baz"
+  ours: string
+
+line 34: v3
+  tsc:  123
+  ours: number
+
+line 36: v4
+  tsc:  123
+  ours: number
+
+line 40: c1
+  tsc:  123 | 456
+  ours: number
+
+line 40: cond ? 123 : 456
+  tsc:  123 | 456
+  ours: number
+
+line 41: c1
+  tsc:  123 | 456
+  ours: number
+
+line 42: c3
+  tsc:  123 | 456
+  ours: number
+
+line 42: cond ? c1 : c2
+  tsc:  123 | 456
+  ours: number
+
+line 42: c1
+  tsc:  123 | 456
+  ours: number
+
+line 42: c2
+  tsc:  123 | 456
+  ours: number
+
+line 43: c4
+  tsc:  123 | 456 | 789
+  ours: number
+
+line 43: cond ? c3 : 789
+  tsc:  123 | 456 | 789
+  ours: number
+
+line 43: c3
+  tsc:  123 | 456
+  ours: number
+
+line 44: c4
+  tsc:  123 | 456 | 789
+  ours: number
+
+line 45: c1
+  tsc:  123 | 456
+  ours: number
+
+line 46: v2
+  tsc:  123 | 456
+  ours: number
+
+line 46: c2
+  tsc:  123 | 456
+  ours: number
+
+line 47: v3
+  tsc:  123 | 456
+  ours: number
+
+line 47: c3
+  tsc:  123 | 456
+  ours: number
+
+line 48: c4
+  tsc:  123 | 456 | 789
+  ours: number
+
+line 49: v5
+  tsc:  123 | 456 | 789
+  ours: number
+
+line 49: c5
+  tsc:  123 | 456 | 789
+  ours: number
+
+line 56: v2
+  tsc:  "foo"
+  ours: string
+
+line 58: v3
+  tsc:  "foo"
+  ours: string
+
+line 60: v4
+  tsc:  "foo"
+  ours: string
+
+errors:
+line 17: ours: expected `"bar" | "foo"`, got `string` (tsc accepts)
+line 20: ours: expected `"bar" | "baz" | "foo"`, got `string` (tsc accepts)
+line 41: ours: expected `123 | 456`, got `number` (tsc accepts)
+line 44: ours: expected `123 | 456 | 789`, got `number` (tsc accepts)

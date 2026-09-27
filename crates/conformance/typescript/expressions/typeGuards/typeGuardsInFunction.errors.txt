@@ -1,0 +1,4 @@
+typeGuardsInFunction.ts(11,5): error TS2322: Type 'number | false' is not assignable to type 'number'.   Type 'boolean' is not assignable to type 'number'.
+typeGuardsInFunction.ts(15,5): error TS2322: Type 'number | false' is not assignable to type 'number'.   Type 'boolean' is not assignable to type 'number'.
+typeGuardsInFunction.ts(18,5): error TS2322: Type 'number | false' is not assignable to type 'number'.   Type 'boolean' is not assignable to type 'number'.
+typeGuardsInFunction.ts(88,1): error TS2322: Type 'string | number | false' is not assignable to type 'string | number'.   Type 'boolean' is not assignable to type 'string | number'.

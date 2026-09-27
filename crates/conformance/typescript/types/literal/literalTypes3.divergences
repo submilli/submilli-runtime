@@ -1,0 +1,25 @@
+types: 60 of 85 tsc entries compared, 5 differ
+
+line 19: s
+  tsc:  "foo" | "bar" | "baz"
+  ours: "baz"
+
+line 39: x
+  tsc:  0 | 1 | 2
+  ours: number
+
+line 45: x
+  tsc:  0 | 1 | 2
+  ours: number
+
+line 51: x
+  tsc:  "foo" | "bar" | 1 | 2
+  ours: number | "bar" | "foo"
+
+line 65: x
+  tsc:  number | "bar"
+  ours: number | "bar" | "foo"
+
+errors:
+line 15: ours: `switch` case body must end with `break` or `return` — no fallthrough (tsc accepts)
+line 34: ours: constructor of `Error` expects 1 argument(s), got 0 (tsc accepts)

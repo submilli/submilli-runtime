@@ -1,0 +1,122 @@
+=== nonGenericTypeReferenceWithTypeArguments.ts ===
+// Check that errors are reported for non-generic types with type arguments
+
+class C { }
+>C : C
+>  : ^
+
+interface I { }
+>I : I
+>  : ^
+
+enum E { }
+>E : E
+>  : ^
+
+type T = { };
+>T : T
+>  : ^
+
+let v1: C<string> = null as unknown as (C<string>);
+>v1 : any
+>   : ^^^
+>null as unknown as (C<string>) : any
+>                               : ^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let v2: I<string> = null as unknown as (I<string>);
+>v2 : any
+>   : ^^^
+>null as unknown as (I<string>) : any
+>                               : ^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let v3: E<string> = null as unknown as (E<string>);
+>v3 : any
+>   : ^^^
+>null as unknown as (E<string>) : any
+>                               : ^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let v4: T<string> = null as unknown as (T<string>);
+>v4 : any
+>   : ^^^
+>null as unknown as (T<string>) : any
+>                               : ^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+function f<U>(): void {
+>f : <U>() => void
+>  : ^^^^^^^^^^^^^
+>U : U
+>  : ^
+
+    class C { }
+>C : C
+>  : ^
+
+    interface I { }
+>I : I
+>  : ^
+
+    enum E { }
+>E : E
+>  : ^
+
+    type T = {};
+>T : {}
+>  : ^^
+
+    let v1: C<string> = null as unknown as (C<string>);
+>v1 : any
+>   : ^^^
+>null as unknown as (C<string>) : any
+>                               : ^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    let v2: I<string> = null as unknown as (I<string>);
+>v2 : any
+>   : ^^^
+>null as unknown as (I<string>) : any
+>                               : ^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    let v3: E<string> = null as unknown as (E<string>);
+>v3 : any
+>   : ^^^
+>null as unknown as (E<string>) : any
+>                               : ^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    let v4: T<string> = null as unknown as (T<string>);
+>v4 : any
+>   : ^^^
+>null as unknown as (T<string>) : any
+>                               : ^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    let v5: U<string> = null as unknown as (U<string>);
+>v5 : any
+>   : ^^^
+>null as unknown as (U<string>) : any
+>                               : ^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

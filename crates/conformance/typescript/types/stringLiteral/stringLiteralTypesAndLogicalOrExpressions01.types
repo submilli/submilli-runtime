@@ -1,0 +1,56 @@
+=== stringLiteralTypesAndLogicalOrExpressions01.ts ===
+
+function myRandBool(): boolean { return null as unknown as (boolean); }
+>myRandBool : () => boolean
+>           : ^^^^^^^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+let a: "foo" = "foo";
+>a : "foo"
+>  : ^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+
+let b = a || "foo";
+>b : "foo"
+>  : ^^^^^
+>a || "foo" : "foo"
+>           : ^^^^^
+>a : "foo"
+>  : ^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+
+let c: "foo" = b;
+>c : "foo"
+>  : ^^^^^
+>b : "foo"
+>  : ^^^^^
+
+let d = b || "bar";
+>d : "foo"
+>  : ^^^^^
+>b || "bar" : "foo"
+>           : ^^^^^
+>b : "foo"
+>  : ^^^^^
+>"bar" : "bar"
+>      : ^^^^^
+
+let e: "foo" | "bar" = d;
+>e : "foo" | "bar"
+>  : ^^^^^^^^^^^^^
+>d : "foo"
+>  : ^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

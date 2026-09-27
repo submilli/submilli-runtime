@@ -1,0 +1,176 @@
+=== compoundAdditionAssignmentLHSCanBeAssigned.ts ===
+enum E { a, b }
+>E : E
+>  : ^
+>a : E.a
+>  : ^^^
+>b : E.b
+>  : ^^^
+
+
+/*pruned*/;                           
+/*pruned*/;                             
+
+/*pruned*/;                            
+/**/;   
+/**/;   
+/*pruned*/;
+/**/;   
+/**/;    
+/**/;     
+/**/;    
+/*pruned*/;
+/*pruned*/;
+
+let x2: string = null as unknown as (string);
+>x2 : string
+>   : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/**/;   
+/**/;   
+x2 += true;
+>x2 += true : string
+>           : ^^^^^^
+>x2 : string
+>   : ^^^^^^
+>true : true
+>     : ^^^^
+
+x2 += 0;
+>x2 += 0 : string
+>        : ^^^^^^
+>x2 : string
+>   : ^^^^^^
+>0 : 0
+>  : ^
+
+x2 += '';
+>x2 += '' : string
+>         : ^^^^^^
+>x2 : string
+>   : ^^^^^^
+>'' : ""
+>   : ^^
+
+x2 += E.a;
+>x2 += E.a : string
+>          : ^^^^^^
+>x2 : string
+>   : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+
+x2 += {};
+>x2 += {} : string
+>         : ^^^^^^
+>x2 : string
+>   : ^^^^^^
+>{} : {}
+>   : ^^
+
+x2 += null;
+>x2 += null : string
+>           : ^^^^^^
+>x2 : string
+>   : ^^^^^^
+
+x2 += null;
+>x2 += null : string
+>           : ^^^^^^
+>x2 : string
+>   : ^^^^^^
+
+
+let x3: number = null as unknown as (number);
+>x3 : number
+>   : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/**/;   
+x3 += 0;
+>x3 += 0 : number
+>        : ^^^^^^
+>x3 : number
+>   : ^^^^^^
+>0 : 0
+>  : ^
+
+x3 += E.a;
+>x3 += E.a : number
+>          : ^^^^^^
+>x3 : number
+>   : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+
+x3 += null;
+>x3 += null : any
+>           : ^^^
+>x3 : number
+>   : ^^^^^^
+
+x3 += null;
+>x3 += null : any
+>           : ^^^
+>x3 : number
+>   : ^^^^^^
+
+
+/*pruned*/;                        
+/**/;   
+/**/;   
+/**/;     
+/*pruned*/;
+/*pruned*/;
+
+let x5: boolean = null as unknown as (boolean);
+>x5 : boolean
+>   : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/**/;   
+
+let x6: {} = null as unknown as ({});
+>x6 : {}
+>   : ^^
+>null as unknown as ({}) : {}
+>                        : ^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/**/;   
+x6 += '';
+>x6 += '' : string
+>         : ^^^^^^
+>x6 : {}
+>   : ^^
+>'' : ""
+>   : ^^
+
+
+/*pruned*/;                              
+/**/;   
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

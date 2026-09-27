@@ -1,0 +1,5 @@
+types: 43 of 60 tsc entries compared, 0 differ
+
+errors:
+line 23: ours: cannot cast `string` to `T`: no assignable direction between these types (tsc accepts)
+line 24: ours: cannot cast `string` to `T`: no assignable direction between these types (tsc accepts)

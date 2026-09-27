@@ -1,0 +1,1 @@
+typeGuardOfFormTypeOfNotEqualHasNoEffect.ts(2,19): error TS2564: Property 'p' has no initializer and is not definitely assigned in the constructor.

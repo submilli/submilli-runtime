@@ -1,0 +1,13 @@
+types: 13 of 24 tsc entries compared, 2 differ
+
+line 21: v
+  tsc:  E1.b
+  ours: E1
+
+line 24: v
+  tsc:  E1.a
+  ours: E1
+
+errors:
+line 17: tsc TS2367: This comparison appears to be unintentional because the types 'E1' and '0' have no overlap. (we accept)
+line 26: tsc TS2367: This comparison appears to be unintentional because the types 'E1' and '3' have no overlap. (we accept)

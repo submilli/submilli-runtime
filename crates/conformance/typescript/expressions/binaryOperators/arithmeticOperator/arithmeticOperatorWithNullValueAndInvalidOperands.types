@@ -1,0 +1,477 @@
+=== arithmeticOperatorWithNullValueAndInvalidOperands.ts ===
+// If one operand is the null or undefined value, it is treated as having the type of the
+// other operand.
+
+let a: boolean = null as unknown as (boolean);
+>a : boolean
+>  : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let b: string = null as unknown as (string);
+>b : string
+>  : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;                                 
+
+// operator *
+let r1a1 = null * a;
+>r1a1 : number
+>     : ^^^^^^
+>null * a : number
+>         : ^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+let r1a2 = null * b;
+>r1a2 : number
+>     : ^^^^^^
+>null * b : number
+>         : ^^^^^^
+>b : string
+>  : ^^^^^^
+
+/*pruned*/;         
+
+let r1b1 = a * null;
+>r1b1 : number
+>     : ^^^^^^
+>a * null : number
+>         : ^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+let r1b2 = b * null;
+>r1b2 : number
+>     : ^^^^^^
+>b * null : number
+>         : ^^^^^^
+>b : string
+>  : ^^^^^^
+
+/*pruned*/;         
+
+let r1c1 = null * true;
+>r1c1 : number
+>     : ^^^^^^
+>null * true : number
+>            : ^^^^^^
+>true : true
+>     : ^^^^
+
+let r1c2 = null * '';
+>r1c2 : number
+>     : ^^^^^^
+>null * '' : number
+>          : ^^^^^^
+>'' : ""
+>   : ^^
+
+let r1c3 = null * {};
+>r1c3 : number
+>     : ^^^^^^
+>null * {} : number
+>          : ^^^^^^
+>{} : {}
+>   : ^^
+
+
+let r1d1 = true * null;
+>r1d1 : number
+>     : ^^^^^^
+>true * null : number
+>            : ^^^^^^
+>true : true
+>     : ^^^^
+
+let r1d2 = '' * null;
+>r1d2 : number
+>     : ^^^^^^
+>'' * null : number
+>          : ^^^^^^
+>'' : ""
+>   : ^^
+
+let r1d3 = {} * null;
+>r1d3 : number
+>     : ^^^^^^
+>{} * null : number
+>          : ^^^^^^
+>{} : {}
+>   : ^^
+
+
+// operator /
+let r2a1 = null / a;
+>r2a1 : number
+>     : ^^^^^^
+>null / a : number
+>         : ^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+let r2a2 = null / b;
+>r2a2 : number
+>     : ^^^^^^
+>null / b : number
+>         : ^^^^^^
+>b : string
+>  : ^^^^^^
+
+/*pruned*/;         
+
+let r2b1 = a / null;
+>r2b1 : number
+>     : ^^^^^^
+>a / null : number
+>         : ^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+let r2b2 = b / null;
+>r2b2 : number
+>     : ^^^^^^
+>b / null : number
+>         : ^^^^^^
+>b : string
+>  : ^^^^^^
+
+/*pruned*/;         
+
+let r2c1 = null / true;
+>r2c1 : number
+>     : ^^^^^^
+>null / true : number
+>            : ^^^^^^
+>true : true
+>     : ^^^^
+
+let r2c2 = null / '';
+>r2c2 : number
+>     : ^^^^^^
+>null / '' : number
+>          : ^^^^^^
+>'' : ""
+>   : ^^
+
+let r2c3 = null / {};
+>r2c3 : number
+>     : ^^^^^^
+>null / {} : number
+>          : ^^^^^^
+>{} : {}
+>   : ^^
+
+
+let r2d1 = true / null;
+>r2d1 : number
+>     : ^^^^^^
+>true / null : number
+>            : ^^^^^^
+>true : true
+>     : ^^^^
+
+let r2d2 = '' / null;
+>r2d2 : number
+>     : ^^^^^^
+>'' / null : number
+>          : ^^^^^^
+>'' : ""
+>   : ^^
+
+let r2d3 = {} / null;
+>r2d3 : number
+>     : ^^^^^^
+>{} / null : number
+>          : ^^^^^^
+>{} : {}
+>   : ^^
+
+
+// operator %
+let r3a1 = null % a;
+>r3a1 : number
+>     : ^^^^^^
+>null % a : number
+>         : ^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+let r3a2 = null % b;
+>r3a2 : number
+>     : ^^^^^^
+>null % b : number
+>         : ^^^^^^
+>b : string
+>  : ^^^^^^
+
+/*pruned*/;         
+
+let r3b1 = a % null;
+>r3b1 : number
+>     : ^^^^^^
+>a % null : number
+>         : ^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+let r3b2 = b % null;
+>r3b2 : number
+>     : ^^^^^^
+>b % null : number
+>         : ^^^^^^
+>b : string
+>  : ^^^^^^
+
+/*pruned*/;         
+
+let r3c1 = null % true;
+>r3c1 : number
+>     : ^^^^^^
+>null % true : number
+>            : ^^^^^^
+>true : true
+>     : ^^^^
+
+let r3c2 = null % '';
+>r3c2 : number
+>     : ^^^^^^
+>null % '' : number
+>          : ^^^^^^
+>'' : ""
+>   : ^^
+
+let r3c3 = null % {};
+>r3c3 : number
+>     : ^^^^^^
+>null % {} : number
+>          : ^^^^^^
+>{} : {}
+>   : ^^
+
+
+let r3d1 = true % null;
+>r3d1 : number
+>     : ^^^^^^
+>true % null : number
+>            : ^^^^^^
+>true : true
+>     : ^^^^
+
+let r3d2 = '' % null;
+>r3d2 : number
+>     : ^^^^^^
+>'' % null : number
+>          : ^^^^^^
+>'' : ""
+>   : ^^
+
+let r3d3 = {} % null;
+>r3d3 : number
+>     : ^^^^^^
+>{} % null : number
+>          : ^^^^^^
+>{} : {}
+>   : ^^
+
+
+// operator -
+let r4a1 = null - a;
+>r4a1 : number
+>     : ^^^^^^
+>null - a : number
+>         : ^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+let r4a2 = null - b;
+>r4a2 : number
+>     : ^^^^^^
+>null - b : number
+>         : ^^^^^^
+>b : string
+>  : ^^^^^^
+
+/*pruned*/;         
+
+let r4b1 = a - null;
+>r4b1 : number
+>     : ^^^^^^
+>a - null : number
+>         : ^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+let r4b2 = b - null;
+>r4b2 : number
+>     : ^^^^^^
+>b - null : number
+>         : ^^^^^^
+>b : string
+>  : ^^^^^^
+
+/*pruned*/;         
+
+let r4c1 = null - true;
+>r4c1 : number
+>     : ^^^^^^
+>null - true : number
+>            : ^^^^^^
+>true : true
+>     : ^^^^
+
+let r4c2 = null - '';
+>r4c2 : number
+>     : ^^^^^^
+>null - '' : number
+>          : ^^^^^^
+>'' : ""
+>   : ^^
+
+let r4c3 = null - {};
+>r4c3 : number
+>     : ^^^^^^
+>null - {} : number
+>          : ^^^^^^
+>{} : {}
+>   : ^^
+
+
+let r4d1 = true - null;
+>r4d1 : number
+>     : ^^^^^^
+>true - null : number
+>            : ^^^^^^
+>true : true
+>     : ^^^^
+
+let r4d2 = '' - null;
+>r4d2 : number
+>     : ^^^^^^
+>'' - null : number
+>          : ^^^^^^
+>'' : ""
+>   : ^^
+
+let r4d3 = {} - null;
+>r4d3 : number
+>     : ^^^^^^
+>{} - null : number
+>          : ^^^^^^
+>{} : {}
+>   : ^^
+
+
+// operator <<
+/*pruned*/;          
+/*pruned*/;          
+/*pruned*/;          
+
+/*pruned*/;          
+/*pruned*/;          
+/*pruned*/;          
+
+/*pruned*/;             
+/*pruned*/;           
+/*pruned*/;           
+
+/*pruned*/;             
+/*pruned*/;           
+/*pruned*/;           
+
+// operator >>
+/*pruned*/;          
+/*pruned*/;          
+/*pruned*/;          
+
+/*pruned*/;          
+/*pruned*/;          
+/*pruned*/;          
+
+/*pruned*/;             
+/*pruned*/;           
+/*pruned*/;           
+
+/*pruned*/;             
+/*pruned*/;           
+/*pruned*/;           
+
+// operator >>>
+/*pruned*/;           
+/*pruned*/;           
+/*pruned*/;           
+
+/*pruned*/;           
+/*pruned*/;           
+/*pruned*/;           
+
+/*pruned*/;              
+/*pruned*/;            
+/*pruned*/;            
+
+/*pruned*/;              
+/*pruned*/;            
+/*pruned*/;            
+
+// operator &
+/*pruned*/;         
+/*pruned*/;         
+/*pruned*/;         
+
+/*pruned*/;         
+/*pruned*/;         
+/*pruned*/;         
+
+/*pruned*/;            
+/*pruned*/;          
+/*pruned*/;          
+
+/*pruned*/;            
+/*pruned*/;          
+/*pruned*/;          
+
+// operator ^
+/*pruned*/;         
+/*pruned*/;         
+/*pruned*/;         
+
+/*pruned*/;         
+/*pruned*/;         
+/*pruned*/;         
+
+/*pruned*/;            
+/*pruned*/;          
+/*pruned*/;          
+
+/*pruned*/;            
+/*pruned*/;          
+/*pruned*/;          
+
+// operator |
+/*pruned*/;          
+/*pruned*/;          
+/*pruned*/;          
+
+/*pruned*/;          
+/*pruned*/;          
+/*pruned*/;          
+
+/*pruned*/;             
+/*pruned*/;           
+/*pruned*/;           
+
+/*pruned*/;             
+/*pruned*/;           
+/*pruned*/;           
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

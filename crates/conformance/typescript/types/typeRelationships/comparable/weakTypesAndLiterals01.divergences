@@ -1,0 +1,17 @@
+types: 23 of 35 tsc entries compared, 3 differ
+
+line 29: arg
+  tsc:  { toLowerCase?(): string; } | { toUpperCase?(): string; otherOptionalProp?: number; }
+  ours: WeakTypes
+
+line 38: arg
+  tsc:  { toLowerCase?(): string; } | { toUpperCase?(): string; otherOptionalProp?: number; } | "A" | "B"
+  ours: LiteralsOrWeakTypes
+
+line 47: arg
+  tsc:  { toLowerCase?(): string; } | { toUpperCase?(): string; otherOptionalProp?: number; }
+  ours: WeakTypes
+
+errors:
+line 28: ours: expected `WeakTypes`, got `"A"` (tsc accepts)
+line 46: ours: expected `WeakTypes`, got `"A" | "B"` (tsc accepts)

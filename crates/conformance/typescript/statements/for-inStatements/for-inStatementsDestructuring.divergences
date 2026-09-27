@@ -1,1 +1,5 @@
 types: 0 of 4 tsc entries compared, 0 differ
+
+errors:
+line 2: tsc TS2491: The left-hand side of a 'for...in' statement cannot be a destructuring pattern. (we reject the line for another reason)
+line 2: ours: `let` declaration requires an initializer (tsc rejects the line for another reason)

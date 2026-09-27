@@ -1,0 +1,118 @@
+=== undefinedAssignableToEveryType.ts ===
+class C {
+>C : C
+>  : ^
+
+    foo: string;
+>foo : string
+>    : ^^^^^^
+
+}
+/*pruned*/;                        
+interface I {
+>I : I
+>  : ^
+
+    foo: string;
+>foo : string
+>    : ^^^^^^
+
+}
+let ai: I = null as unknown as (I);
+>ai : I
+>   : ^
+>null as unknown as (I) : I
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+enum E { A }
+>E : E
+>  : ^
+>A : E.A
+>  : ^^^
+
+/*pruned*/;                        
+
+let b: number = null;
+>b : number
+>  : ^^^^^^
+
+let c: string = null;
+>c : string
+>  : ^^^^^^
+
+let d: boolean = null;
+>d : boolean
+>  : ^^^^^^^
+
+/*pruned*/;        
+/*pruned*/;       
+let g: void = null;
+>g : void
+>  : ^^^^
+
+let h: Object = null;
+>h : Object
+>  : ^^^^^^
+
+let i: {} = null;
+>i : {}
+>  : ^^
+
+let j: () => {} = null;
+>j : () => {}
+>  : ^^^^^^^^
+
+/*pruned*/;            
+let l: (x: number) => string = null;
+>l : (x: number) => string
+>  : ^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+
+/**/;     
+ai = null;
+>ai = null : null
+>          : ^^^^
+>ai : I
+>   : ^
+
+/**/;     
+let m: number[] = null;
+>m : number[]
+>  : ^^^^^^^^
+
+let n: { foo: string } = null;
+>n : { foo: string; }
+>  : ^^^^^^^^^^^^^^^^
+>foo : string
+>    : ^^^^^^
+
+/*pruned*/;                  
+let p: Number = null;
+>p : Number
+>  : ^^^^^^
+
+let q: String = null;
+>q : String
+>  : ^^^^^^
+
+
+/*pruned*/;                                                 
+             
+             
+             
+ 
+//function foo<T, U extends T, V extends Date>(x: T, y: U, z: V) {
+//    x = undefined;
+//    y = undefined;
+//    z = undefined;
+//}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

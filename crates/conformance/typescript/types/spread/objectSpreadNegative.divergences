@@ -1,0 +1,44 @@
+types: 57 of 158 tsc entries compared, 8 differ
+
+line 18: { ...optionalString, ...optionalNumber }
+  tsc:  { sn?: string | number | undefined; }
+  ours: { sn: number | string }
+
+line 43: { ...{ a: 4, ...{ b: false, c: 'overriden' } }, d: 'actually new', ...{ a: 5, d: 'maybe new' } }
+  tsc:  { a: number; d: string; b: false; c: string; }
+  ours: { a: number; b: boolean; c: string; d: string }
+
+line 43: { a: 4, ...{ b: false, c: 'overriden' } }
+  tsc:  { b: false; c: string; a: number; }
+  ours: { a: number; b: boolean; c: string }
+
+line 43: { b: false, c: 'overriden' }
+  tsc:  { b: false; c: string; }
+  ours: { b: boolean; c: string }
+
+line 53: spreadZero
+  tsc:  any
+  ours: {}
+
+line 55: spreadBool
+  tsc:  any
+  ours: {}
+
+line 57: spreadStr
+  tsc:  any
+  ours: {}
+
+line 58: spreadStr
+  tsc:  any
+  ours: {}
+
+errors:
+line 34: tsc TS2783: 'b' is specified more than once, so this usage will be overwritten. (we accept)
+line 39: tsc TS2783: 'b' is specified more than once, so this usage will be overwritten. (we accept)
+line 41: tsc TS2783: 'b' is specified more than once, so this usage will be overwritten. (we accept)
+line 43: tsc TS2783: 'd' is specified more than once, so this usage will be overwritten. (we accept)
+line 53: ours: field `toFixed` does not exist on `{}` (tsc accepts)
+line 55: ours: field `valueOf` does not exist on `{}` (tsc accepts)
+line 57: ours: field `length` does not exist on `{}` (tsc accepts)
+line 58: ours: field `charAt` does not exist on `{}` (tsc accepts)
+line 60: ours: cannot spread `() => void` into an object literal (tsc accepts)

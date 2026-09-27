@@ -1,0 +1,539 @@
+=== comparisonOperatorWithTypeParameter.ts ===
+let a: {} = null as unknown as ({});
+>a : {}
+>  : ^^
+>null as unknown as ({}) : {}
+>                        : ^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;                                 
+
+function foo<T, U/* extends T*/, V/* extends U*/>(t: T, u: U, v: V): void {
+>foo : <T, U, V>(t: T, u: U, v: V) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>V : V
+>  : ^
+>t : T
+>  : ^
+>u : U
+>  : ^
+>v : V
+>  : ^
+
+    // errors
+    let ra1 = t < u;
+>ra1 : boolean
+>    : ^^^^^^^
+>t < u : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+    let ra2 = t > u;
+>ra2 : boolean
+>    : ^^^^^^^
+>t > u : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+    let ra3 = t <= u;
+>ra3 : boolean
+>    : ^^^^^^^
+>t <= u : boolean
+>       : ^^^^^^^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+    let ra4 = t >= u;
+>ra4 : boolean
+>    : ^^^^^^^
+>t >= u : boolean
+>       : ^^^^^^^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+    let ra5 = t == u;
+>ra5 : boolean
+>    : ^^^^^^^
+>t == u : boolean
+>       : ^^^^^^^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+    let ra6 = t != u;
+>ra6 : boolean
+>    : ^^^^^^^
+>t != u : boolean
+>       : ^^^^^^^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+    let ra7 = t === u;
+>ra7 : boolean
+>    : ^^^^^^^
+>t === u : boolean
+>        : ^^^^^^^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+    let ra8 = t !== u;
+>ra8 : boolean
+>    : ^^^^^^^
+>t !== u : boolean
+>        : ^^^^^^^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+
+    let rb1 = u < t;
+>rb1 : boolean
+>    : ^^^^^^^
+>u < t : boolean
+>      : ^^^^^^^
+>u : U
+>  : ^
+>t : T
+>  : ^
+
+    let rb2 = u > t;
+>rb2 : boolean
+>    : ^^^^^^^
+>u > t : boolean
+>      : ^^^^^^^
+>u : U
+>  : ^
+>t : T
+>  : ^
+
+    let rb3 = u <= t;
+>rb3 : boolean
+>    : ^^^^^^^
+>u <= t : boolean
+>       : ^^^^^^^
+>u : U
+>  : ^
+>t : T
+>  : ^
+
+    let rb4 = u >= t;
+>rb4 : boolean
+>    : ^^^^^^^
+>u >= t : boolean
+>       : ^^^^^^^
+>u : U
+>  : ^
+>t : T
+>  : ^
+
+    let rb5 = u == t;
+>rb5 : boolean
+>    : ^^^^^^^
+>u == t : boolean
+>       : ^^^^^^^
+>u : U
+>  : ^
+>t : T
+>  : ^
+
+    let rb6 = u != t;
+>rb6 : boolean
+>    : ^^^^^^^
+>u != t : boolean
+>       : ^^^^^^^
+>u : U
+>  : ^
+>t : T
+>  : ^
+
+    let rb7 = u === t;
+>rb7 : boolean
+>    : ^^^^^^^
+>u === t : boolean
+>        : ^^^^^^^
+>u : U
+>  : ^
+>t : T
+>  : ^
+
+    let rb8 = u !== t;
+>rb8 : boolean
+>    : ^^^^^^^
+>u !== t : boolean
+>        : ^^^^^^^
+>u : U
+>  : ^
+>t : T
+>  : ^
+
+
+    let rc1 = t < v;
+>rc1 : boolean
+>    : ^^^^^^^
+>t < v : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>v : V
+>  : ^
+
+    let rc2 = t > v;
+>rc2 : boolean
+>    : ^^^^^^^
+>t > v : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>v : V
+>  : ^
+
+    let rc3 = t <= v;
+>rc3 : boolean
+>    : ^^^^^^^
+>t <= v : boolean
+>       : ^^^^^^^
+>t : T
+>  : ^
+>v : V
+>  : ^
+
+    let rc4 = t >= v;
+>rc4 : boolean
+>    : ^^^^^^^
+>t >= v : boolean
+>       : ^^^^^^^
+>t : T
+>  : ^
+>v : V
+>  : ^
+
+    let rc5 = t == v;
+>rc5 : boolean
+>    : ^^^^^^^
+>t == v : boolean
+>       : ^^^^^^^
+>t : T
+>  : ^
+>v : V
+>  : ^
+
+    let rc6 = t != v;
+>rc6 : boolean
+>    : ^^^^^^^
+>t != v : boolean
+>       : ^^^^^^^
+>t : T
+>  : ^
+>v : V
+>  : ^
+
+    let rc7 = t === v;
+>rc7 : boolean
+>    : ^^^^^^^
+>t === v : boolean
+>        : ^^^^^^^
+>t : T
+>  : ^
+>v : V
+>  : ^
+
+    let rc8 = t !== v;
+>rc8 : boolean
+>    : ^^^^^^^
+>t !== v : boolean
+>        : ^^^^^^^
+>t : T
+>  : ^
+>v : V
+>  : ^
+
+
+    let rd1 = v < t;
+>rd1 : boolean
+>    : ^^^^^^^
+>v < t : boolean
+>      : ^^^^^^^
+>v : V
+>  : ^
+>t : T
+>  : ^
+
+    let rd2 = v > t;
+>rd2 : boolean
+>    : ^^^^^^^
+>v > t : boolean
+>      : ^^^^^^^
+>v : V
+>  : ^
+>t : T
+>  : ^
+
+    let rd3 = v <= t;
+>rd3 : boolean
+>    : ^^^^^^^
+>v <= t : boolean
+>       : ^^^^^^^
+>v : V
+>  : ^
+>t : T
+>  : ^
+
+    let rd4 = v >= t;
+>rd4 : boolean
+>    : ^^^^^^^
+>v >= t : boolean
+>       : ^^^^^^^
+>v : V
+>  : ^
+>t : T
+>  : ^
+
+    let rd5 = v == t;
+>rd5 : boolean
+>    : ^^^^^^^
+>v == t : boolean
+>       : ^^^^^^^
+>v : V
+>  : ^
+>t : T
+>  : ^
+
+    let rd6 = v != t;
+>rd6 : boolean
+>    : ^^^^^^^
+>v != t : boolean
+>       : ^^^^^^^
+>v : V
+>  : ^
+>t : T
+>  : ^
+
+    let rd7 = v === t;
+>rd7 : boolean
+>    : ^^^^^^^
+>v === t : boolean
+>        : ^^^^^^^
+>v : V
+>  : ^
+>t : T
+>  : ^
+
+    let rd8 = v !== t;
+>rd8 : boolean
+>    : ^^^^^^^
+>v !== t : boolean
+>        : ^^^^^^^
+>v : V
+>  : ^
+>t : T
+>  : ^
+
+
+    // ok
+    let re1 = t < a;
+>re1 : boolean
+>    : ^^^^^^^
+>t < a : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>a : {}
+>  : ^^
+
+    let re2 = t > a;
+>re2 : boolean
+>    : ^^^^^^^
+>t > a : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>a : {}
+>  : ^^
+
+    let re3 = t <= a;
+>re3 : boolean
+>    : ^^^^^^^
+>t <= a : boolean
+>       : ^^^^^^^
+>t : T
+>  : ^
+>a : {}
+>  : ^^
+
+    let re4 = t >= a;
+>re4 : boolean
+>    : ^^^^^^^
+>t >= a : boolean
+>       : ^^^^^^^
+>t : T
+>  : ^
+>a : {}
+>  : ^^
+
+    let re5 = t == a;
+>re5 : boolean
+>    : ^^^^^^^
+>t == a : boolean
+>       : ^^^^^^^
+>t : T
+>  : ^
+>a : {}
+>  : ^^
+
+    let re6 = t != a;
+>re6 : boolean
+>    : ^^^^^^^
+>t != a : boolean
+>       : ^^^^^^^
+>t : T
+>  : ^
+>a : {}
+>  : ^^
+
+    let re7 = t === a;
+>re7 : boolean
+>    : ^^^^^^^
+>t === a : boolean
+>        : ^^^^^^^
+>t : T
+>  : ^
+>a : {}
+>  : ^^
+
+    let re8 = t !== a;
+>re8 : boolean
+>    : ^^^^^^^
+>t !== a : boolean
+>        : ^^^^^^^
+>t : T
+>  : ^
+>a : {}
+>  : ^^
+
+
+    let rf1 = a < t;
+>rf1 : boolean
+>    : ^^^^^^^
+>a < t : boolean
+>      : ^^^^^^^
+>a : {}
+>  : ^^
+>t : T
+>  : ^
+
+    let rf2 = a > t;
+>rf2 : boolean
+>    : ^^^^^^^
+>a > t : boolean
+>      : ^^^^^^^
+>a : {}
+>  : ^^
+>t : T
+>  : ^
+
+    let rf3 = a <= t;
+>rf3 : boolean
+>    : ^^^^^^^
+>a <= t : boolean
+>       : ^^^^^^^
+>a : {}
+>  : ^^
+>t : T
+>  : ^
+
+    let rf4 = a >= t;
+>rf4 : boolean
+>    : ^^^^^^^
+>a >= t : boolean
+>       : ^^^^^^^
+>a : {}
+>  : ^^
+>t : T
+>  : ^
+
+    let rf5 = a == t;
+>rf5 : boolean
+>    : ^^^^^^^
+>a == t : boolean
+>       : ^^^^^^^
+>a : {}
+>  : ^^
+>t : T
+>  : ^
+
+    let rf6 = a != t;
+>rf6 : boolean
+>    : ^^^^^^^
+>a != t : boolean
+>       : ^^^^^^^
+>a : {}
+>  : ^^
+>t : T
+>  : ^
+
+    let rf7 = a === t;
+>rf7 : boolean
+>    : ^^^^^^^
+>a === t : boolean
+>        : ^^^^^^^
+>a : {}
+>  : ^^
+>t : T
+>  : ^
+
+    let rf8 = a !== t;
+>rf8 : boolean
+>    : ^^^^^^^
+>a !== t : boolean
+>        : ^^^^^^^
+>a : {}
+>  : ^^
+>t : T
+>  : ^
+
+
+    /*pruned*/;     
+    /*pruned*/;     
+    /*pruned*/;      
+    /*pruned*/;      
+    /*pruned*/;      
+    /*pruned*/;      
+    /*pruned*/;       
+    /*pruned*/;       
+
+    /*pruned*/;     
+    /*pruned*/;     
+    /*pruned*/;      
+    /*pruned*/;      
+    /*pruned*/;      
+    /*pruned*/;      
+    /*pruned*/;       
+    /*pruned*/;       
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -1,0 +1,13 @@
+types: 56 of 140 tsc entries compared, 1 differ
+
+line 46: a
+  tsc:  AList2
+  ours: BList2
+
+errors:
+line 46: tsc TS2322: Type 'AList2' is not assignable to type 'BList2'.   Types of property 'forEach' are incompatible.     Types of parameters 'cb' and 'cb' are incompatible.       Type 'void' is not assignable to type 'boolean'. (we accept)
+line 81: ours: expected `Bivar<unknown>`, got `Bivar<string>` (tsc accepts)
+line 87: ours: expected `Bivar<(arg0: string) => void>`, got `Bivar<(arg0: unknown) => void>` (tsc accepts)
+line 95: ours: expected `Bivar2<(arg0: string) => void>`, got `Bivar1<(arg0: unknown) => void>` (tsc accepts)
+line 102: ours: expected `SetLike1<(arg0: string) => void>`, got `SetLike1<(arg0: unknown) => void>` (tsc accepts)
+line 110: ours: expected `SetLike2<(arg0: string) => void>`, got `SetLike1<(arg0: unknown) => void>` (tsc accepts)

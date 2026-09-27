@@ -1,0 +1,52 @@
+types: 38 of 75 tsc entries compared, 12 differ
+
+line 8: as
+  tsc:  ({ x: number; y?: number; } | { x: number; z?: number; })[]
+  ours: { x: number; y?: number }[]
+
+line 8: [a, b]
+  tsc:  ({ x: number; y?: number; } | { x: number; z?: number; })[]
+  ours: { x: number; y?: number }[]
+
+line 9: bs
+  tsc:  ({ x: number; y?: number; } | { x: number; z?: number; })[]
+  ours: { x: number; z?: number }[]
+
+line 9: [b, a]
+  tsc:  ({ x: number; y?: number; } | { x: number; z?: number; })[]
+  ours: { x: number; z?: number }[]
+
+line 10: cs
+  tsc:  ({ x: number; y?: number; } | { x: number; z?: number; } | { x: number; a?: number; })[]
+  ours: { x: number; y?: number }[]
+
+line 10: [a, b, c]
+  tsc:  ({ x: number; y?: number; } | { x: number; z?: number; } | { x: number; a?: number; })[]
+  ours: { x: number; y?: number }[]
+
+line 12: ds
+  tsc:  ((x: string) => number)[]
+  ours: ((arg0: Object) => number)[]
+
+line 12: [(x: Object) => 1, (x: string) => 2]
+  tsc:  ((x: string) => number)[]
+  ours: ((arg0: Object) => number)[]
+
+line 14: fs
+  tsc:  (((a: { x: number; y?: number; }) => number) | ((b: { x: number; z?: number; }) => number))[]
+  ours: ((arg0: { x: number; y?: number }) => number)[]
+
+line 14: [(a: { x: number; y?: number }) => 1, (b: { x: number; z?: number }) => 2]
+  tsc:  (((a: { x: number; y?: number; }) => number) | ((b: { x: number; z?: number; }) => number))[]
+  ours: ((arg0: { x: number; y?: number }) => number)[]
+
+line 15: gs
+  tsc:  (((b: { x: number; z?: number; }) => number) | ((a: { x: number; y?: number; }) => number))[]
+  ours: ((arg0: { x: number; z?: number }) => number)[]
+
+line 15: [(b: { x: number; z?: number }) => 2, (a: { x: number; y?: number }) => 1]
+  tsc:  (((b: { x: number; z?: number; }) => number) | ((a: { x: number; y?: number; }) => number))[]
+  ours: ((arg0: { x: number; z?: number }) => number)[]
+
+errors:
+line 12: ours: parameter `x`: expected `Object`, got `string` (tsc accepts)

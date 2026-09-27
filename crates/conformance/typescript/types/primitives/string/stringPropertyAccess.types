@@ -1,0 +1,70 @@
+=== stringPropertyAccess.ts ===
+let x = '';
+>x : string
+>  : ^^^^^^
+>'' : ""
+>   : ^^
+
+let a = x.charAt(0);
+>a : string
+>  : ^^^^^^
+>x.charAt(0) : string
+>            : ^^^^^^
+>x.charAt : (pos: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>charAt : (pos: number) => string
+>       : ^^^^^^^^^^^^^^^^^^^^^^^
+>0 : 0
+>  : ^
+
+let b = x.hasOwnProperty('charAt');
+>b : boolean
+>  : ^^^^^^^
+>x.hasOwnProperty('charAt') : boolean
+>                           : ^^^^^^^
+>x.hasOwnProperty : (v: PropertyKey) => boolean
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>hasOwnProperty : (v: PropertyKey) => boolean
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>'charAt' : "charAt"
+>         : ^^^^^^^^
+
+
+let c = x['charAt'](0);
+>c : string
+>  : ^^^^^^
+>x['charAt'](0) : string
+>               : ^^^^^^
+>x['charAt'] : (pos: number) => string
+>            : ^^^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>'charAt' : "charAt"
+>         : ^^^^^^^^
+>0 : 0
+>  : ^
+
+let e = x['hasOwnProperty']('toFixed');
+>e : boolean
+>  : ^^^^^^^
+>x['hasOwnProperty']('toFixed') : boolean
+>                               : ^^^^^^^
+>x['hasOwnProperty'] : (v: PropertyKey) => boolean
+>                    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>'hasOwnProperty' : "hasOwnProperty"
+>                 : ^^^^^^^^^^^^^^^^
+>'toFixed' : "toFixed"
+>          : ^^^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

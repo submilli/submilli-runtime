@@ -1,0 +1,72 @@
+=== spreadUnion3.ts ===
+function f(x: { y: string } | null): { y: string } {
+>f : (x: { y: string; } | null) => { y: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : { y: string; } | null
+>  : ^^^^^^^^^^^^^^^^^^^^^
+>y : string
+>  : ^^^^^^
+>y : string
+>  : ^^^^^^
+
+    return { y: 123, ...x } // y: string | number
+>{ y: 123, ...x } : { y: string | number; }
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^
+>y : number
+>  : ^^^^^^
+>123 : 123
+>    : ^^^
+>x : { y: string; } | null
+>  : ^^^^^^^^^^^^^^^^^^^^^
+
+}
+f(null)
+>f(null) : { y: string; }
+>        : ^^^^^^^^^^^^^^
+>f : (x: { y: string; } | null) => { y: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+
+/*pruned*/;                                 
+                     
+                                               
+ 
+;  
+/**/;  
+/**/;  
+
+// spreading nothing but null and undefined is not allowed
+const nullAndUndefinedUnion: null | null = null as unknown as (null | null);
+>nullAndUndefinedUnion : null
+>                      : ^^^^
+>null as unknown as (null | null) : null
+>                                 : ^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let x = { ...nullAndUndefinedUnion, ...nullAndUndefinedUnion };
+>x : any
+>  : ^^^
+>{ ...nullAndUndefinedUnion, ...nullAndUndefinedUnion } : any
+>                                                       : ^^^
+>nullAndUndefinedUnion : null
+>                      : ^^^^
+>nullAndUndefinedUnion : null
+>                      : ^^^^
+
+let y = { ...nullAndUndefinedUnion };
+>y : any
+>  : ^^^
+>{ ...nullAndUndefinedUnion } : any
+>                             : ^^^
+>nullAndUndefinedUnion : null
+>                      : ^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

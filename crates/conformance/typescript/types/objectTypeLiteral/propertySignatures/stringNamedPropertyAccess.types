@@ -1,0 +1,114 @@
+=== stringNamedPropertyAccess.ts ===
+class C {
+>C : C
+>  : ^
+
+    "a b": number;
+>"a b" : number
+>      : ^^^^^^
+
+    static "c d": number;
+>"c d" : number
+>      : ^^^^^^
+
+}
+/*pruned*/;                       
+/*pruned*/;       
+let r1b = C['c d'];
+>r1b : number
+>    : ^^^^^^
+>C['c d'] : number
+>         : ^^^^^^
+>C : typeof C
+>  : ^^^^^^^^
+>'c d' : "c d"
+>      : ^^^^^
+
+
+interface I {
+>I : I
+>  : ^
+
+    "a b": number;
+>"a b" : number
+>      : ^^^^^^
+
+}
+let i: I = null as unknown as (I);
+>i : I
+>  : ^
+>null as unknown as (I) : I
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let r2 = i["a b"];
+>r2 : number
+>   : ^^^^^^
+>i["a b"] : number
+>         : ^^^^^^
+>i : I
+>  : ^
+>"a b" : "a b"
+>      : ^^^^^
+
+
+let a: {
+>a : { "a b": number; }
+>  : ^^^^^^^^^^^^^^^^^^
+
+    "a b": number;
+>"a b" : number
+>      : ^^^^^^
+
+} = null as unknown as ({
+>null as unknown as ({     "a b": number; }) : { "a b": number; }
+>                                            : ^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    "a b": number;
+>"a b" : number
+>      : ^^^^^^
+
+});
+let r3 = a["a b"];
+>r3 : number
+>   : ^^^^^^
+>a["a b"] : number
+>         : ^^^^^^
+>a : { "a b": number; }
+>  : ^^^^^^^^^^^^^^^^^^
+>"a b" : "a b"
+>      : ^^^^^
+
+
+let b = {
+>b : { "a b": number; }
+>  : ^^^^^^^^^^^^^^^^^^
+>{     "a b": 1 } : { "a b": number; }
+>                 : ^^^^^^^^^^^^^^^^^^
+
+    "a b": 1
+>"a b" : number
+>      : ^^^^^^
+>1 : 1
+>  : ^
+
+}
+let r4 = b["a b"];
+>r4 : number
+>   : ^^^^^^
+>b["a b"] : number
+>         : ^^^^^^
+>b : { "a b": number; }
+>  : ^^^^^^^^^^^^^^^^^^
+>"a b" : "a b"
+>      : ^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

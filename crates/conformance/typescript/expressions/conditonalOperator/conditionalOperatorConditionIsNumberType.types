@@ -1,0 +1,411 @@
+=== conditionalOperatorConditionIsNumberType.ts ===
+//Cond ? Expr1 : Expr2,  Cond is of number type, Expr1 and Expr2 have the same type
+let condNumber: number = null as unknown as (number);
+>condNumber : number
+>           : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+/*pruned*/;                                  
+let exprBoolean1: boolean = null as unknown as (boolean);
+>exprBoolean1 : boolean
+>             : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let exprNumber1: number = null as unknown as (number);
+>exprNumber1 : number
+>            : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let exprString1: string = null as unknown as (string);
+>exprString1 : string
+>            : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;                                             
+
+/*pruned*/;                                  
+let exprBoolean2: boolean = null as unknown as (boolean);
+>exprBoolean2 : boolean
+>             : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let exprNumber2: number = null as unknown as (number);
+>exprNumber2 : number
+>            : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let exprString2: string = null as unknown as (string);
+>exprString2 : string
+>            : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;                                             
+
+//Cond is a number type variable
+/*pruned*/;                      
+condNumber ? exprBoolean1 : exprBoolean2;
+>condNumber ? exprBoolean1 : exprBoolean2 : boolean
+>                                         : ^^^^^^^
+>condNumber : number
+>           : ^^^^^^
+>exprBoolean1 : boolean
+>             : ^^^^^^^
+>exprBoolean2 : boolean
+>             : ^^^^^^^
+
+condNumber ? exprNumber1 : exprNumber2;
+>condNumber ? exprNumber1 : exprNumber2 : number
+>                                       : ^^^^^^
+>condNumber : number
+>           : ^^^^^^
+>exprNumber1 : number
+>            : ^^^^^^
+>exprNumber2 : number
+>            : ^^^^^^
+
+condNumber ? exprString1 : exprString2;
+>condNumber ? exprString1 : exprString2 : string
+>                                       : ^^^^^^
+>condNumber : number
+>           : ^^^^^^
+>exprString1 : string
+>            : ^^^^^^
+>exprString2 : string
+>            : ^^^^^^
+
+/*pruned*/;                                
+condNumber ? exprString1 : exprBoolean1; // Union
+>condNumber ? exprString1 : exprBoolean1 : string | boolean
+>                                        : ^^^^^^^^^^^^^^^^
+>condNumber : number
+>           : ^^^^^^
+>exprString1 : string
+>            : ^^^^^^
+>exprBoolean1 : boolean
+>             : ^^^^^^^
+
+
+//Cond is a number type literal
+/*pruned*/;             
+0 ? exprBoolean1 : exprBoolean2;
+>0 ? exprBoolean1 : exprBoolean2 : boolean
+>                                : ^^^^^^^
+>0 : 0
+>  : ^
+>exprBoolean1 : boolean
+>             : ^^^^^^^
+>exprBoolean2 : boolean
+>             : ^^^^^^^
+
+0.123456789 ? exprNumber1 : exprNumber2;
+>0.123456789 ? exprNumber1 : exprNumber2 : number
+>                                        : ^^^^^^
+>0.123456789 : 0.123456789
+>            : ^^^^^^^^^^^
+>exprNumber1 : number
+>            : ^^^^^^
+>exprNumber2 : number
+>            : ^^^^^^
+
+- 10000000000000 ? exprString1 : exprString2;
+>- 10000000000000 ? exprString1 : exprString2 : string
+>                                             : ^^^^^^
+>- 10000000000000 : -10000000000000
+>                 : ^^^^^^^^^^^^^^^
+>10000000000000 : 10000000000000
+>               : ^^^^^^^^^^^^^^
+>exprString1 : string
+>            : ^^^^^^
+>exprString2 : string
+>            : ^^^^^^
+
+/*pruned*/;                                   
+10000 ? exprString1 : exprBoolean1; // Union
+>10000 ? exprString1 : exprBoolean1 : string | boolean
+>                                   : ^^^^^^^^^^^^^^^^
+>10000 : 10000
+>      : ^^^^^
+>exprString1 : string
+>            : ^^^^^^
+>exprBoolean1 : boolean
+>             : ^^^^^^^
+
+
+//Cond is a number type expression
+function foo(): number { return 1 };
+>foo : () => number
+>    : ^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+let array = [1, 2, 3];
+>array : number[]
+>      : ^^^^^^^^
+>[1, 2, 3] : number[]
+>          : ^^^^^^^^
+>1 : 1
+>  : ^
+>2 : 2
+>  : ^
+>3 : 3
+>  : ^
+
+
+/*pruned*/;                 
+1 + 1 ? exprBoolean1 : exprBoolean2;
+>1 + 1 ? exprBoolean1 : exprBoolean2 : boolean
+>                                    : ^^^^^^^
+>1 + 1 : number
+>      : ^^^^^^
+>1 : 1
+>  : ^
+>1 : 1
+>  : ^
+>exprBoolean1 : boolean
+>             : ^^^^^^^
+>exprBoolean2 : boolean
+>             : ^^^^^^^
+
+"string".length ? exprNumber1 : exprNumber2;
+>"string".length ? exprNumber1 : exprNumber2 : number
+>                                            : ^^^^^^
+>"string".length : number
+>                : ^^^^^^
+>"string" : "string"
+>         : ^^^^^^^^
+>length : number
+>       : ^^^^^^
+>exprNumber1 : number
+>            : ^^^^^^
+>exprNumber2 : number
+>            : ^^^^^^
+
+foo() ? exprString1 : exprString2;
+>foo() ? exprString1 : exprString2 : string
+>                                  : ^^^^^^
+>foo() : number
+>      : ^^^^^^
+>foo : () => number
+>    : ^^^^^^^^^^^^
+>exprString1 : string
+>            : ^^^^^^
+>exprString2 : string
+>            : ^^^^^^
+
+/*pruned*/;                                      
+foo() ? exprString1 : exprBoolean1; // Union
+>foo() ? exprString1 : exprBoolean1 : string | boolean
+>                                   : ^^^^^^^^^^^^^^^^
+>foo() : number
+>      : ^^^^^^
+>foo : () => number
+>    : ^^^^^^^^^^^^
+>exprString1 : string
+>            : ^^^^^^
+>exprBoolean1 : boolean
+>             : ^^^^^^^
+
+
+//Results shoud be same as Expr1 and Expr2
+/*pruned*/;                                         
+let resultIsBoolean1 = condNumber ? exprBoolean1 : exprBoolean2;
+>resultIsBoolean1 : boolean
+>                 : ^^^^^^^
+>condNumber ? exprBoolean1 : exprBoolean2 : boolean
+>                                         : ^^^^^^^
+>condNumber : number
+>           : ^^^^^^
+>exprBoolean1 : boolean
+>             : ^^^^^^^
+>exprBoolean2 : boolean
+>             : ^^^^^^^
+
+let resultIsNumber1 = condNumber ? exprNumber1 : exprNumber2;
+>resultIsNumber1 : number
+>                : ^^^^^^
+>condNumber ? exprNumber1 : exprNumber2 : number
+>                                       : ^^^^^^
+>condNumber : number
+>           : ^^^^^^
+>exprNumber1 : number
+>            : ^^^^^^
+>exprNumber2 : number
+>            : ^^^^^^
+
+let resultIsString1 = condNumber ? exprString1 : exprString2;
+>resultIsString1 : string
+>                : ^^^^^^
+>condNumber ? exprString1 : exprString2 : string
+>                                       : ^^^^^^
+>condNumber : number
+>           : ^^^^^^
+>exprString1 : string
+>            : ^^^^^^
+>exprString2 : string
+>            : ^^^^^^
+
+/*pruned*/;                                                      
+let resultIsStringOrBoolean1 = condNumber ? exprString1 : exprBoolean1; // Union
+>resultIsStringOrBoolean1 : string | boolean
+>                         : ^^^^^^^^^^^^^^^^
+>condNumber ? exprString1 : exprBoolean1 : string | boolean
+>                                        : ^^^^^^^^^^^^^^^^
+>condNumber : number
+>           : ^^^^^^
+>exprString1 : string
+>            : ^^^^^^
+>exprBoolean1 : boolean
+>             : ^^^^^^^
+
+
+/*pruned*/;                                
+let resultIsBoolean2 = 0 ? exprBoolean1 : exprBoolean2;
+>resultIsBoolean2 : boolean
+>                 : ^^^^^^^
+>0 ? exprBoolean1 : exprBoolean2 : boolean
+>                                : ^^^^^^^
+>0 : 0
+>  : ^
+>exprBoolean1 : boolean
+>             : ^^^^^^^
+>exprBoolean2 : boolean
+>             : ^^^^^^^
+
+let resultIsNumber2 = 0.123456789 ? exprNumber1 : exprNumber2;
+>resultIsNumber2 : number
+>                : ^^^^^^
+>0.123456789 ? exprNumber1 : exprNumber2 : number
+>                                        : ^^^^^^
+>0.123456789 : 0.123456789
+>            : ^^^^^^^^^^^
+>exprNumber1 : number
+>            : ^^^^^^
+>exprNumber2 : number
+>            : ^^^^^^
+
+let resultIsString2 = - 10000000000000 ? exprString1 : exprString2;
+>resultIsString2 : string
+>                : ^^^^^^
+>- 10000000000000 ? exprString1 : exprString2 : string
+>                                             : ^^^^^^
+>- 10000000000000 : -10000000000000
+>                 : ^^^^^^^^^^^^^^^
+>10000000000000 : 10000000000000
+>               : ^^^^^^^^^^^^^^
+>exprString1 : string
+>            : ^^^^^^
+>exprString2 : string
+>            : ^^^^^^
+
+/*pruned*/;                                                         
+let resultIsStringOrBoolean2 = 10000 ? exprString1 : exprBoolean1; // Union
+>resultIsStringOrBoolean2 : string | boolean
+>                         : ^^^^^^^^^^^^^^^^
+>10000 ? exprString1 : exprBoolean1 : string | boolean
+>                                   : ^^^^^^^^^^^^^^^^
+>10000 : 10000
+>      : ^^^^^
+>exprString1 : string
+>            : ^^^^^^
+>exprBoolean1 : boolean
+>             : ^^^^^^^
+
+
+/*pruned*/;                                    
+let resultIsBoolean3 = 1 + 1 ? exprBoolean1 : exprBoolean2;
+>resultIsBoolean3 : boolean
+>                 : ^^^^^^^
+>1 + 1 ? exprBoolean1 : exprBoolean2 : boolean
+>                                    : ^^^^^^^
+>1 + 1 : number
+>      : ^^^^^^
+>1 : 1
+>  : ^
+>1 : 1
+>  : ^
+>exprBoolean1 : boolean
+>             : ^^^^^^^
+>exprBoolean2 : boolean
+>             : ^^^^^^^
+
+let resultIsNumber3 = "string".length ? exprNumber1 : exprNumber2;
+>resultIsNumber3 : number
+>                : ^^^^^^
+>"string".length ? exprNumber1 : exprNumber2 : number
+>                                            : ^^^^^^
+>"string".length : number
+>                : ^^^^^^
+>"string" : "string"
+>         : ^^^^^^^^
+>length : number
+>       : ^^^^^^
+>exprNumber1 : number
+>            : ^^^^^^
+>exprNumber2 : number
+>            : ^^^^^^
+
+let resultIsString3 = foo() ? exprString1 : exprString2;
+>resultIsString3 : string
+>                : ^^^^^^
+>foo() ? exprString1 : exprString2 : string
+>                                  : ^^^^^^
+>foo() : number
+>      : ^^^^^^
+>foo : () => number
+>    : ^^^^^^^^^^^^
+>exprString1 : string
+>            : ^^^^^^
+>exprString2 : string
+>            : ^^^^^^
+
+/*pruned*/;                                                            
+let resultIsStringOrBoolean3 = foo() / array[1] ? exprString1 : exprBoolean1; // Union
+>resultIsStringOrBoolean3 : string | boolean
+>                         : ^^^^^^^^^^^^^^^^
+>foo() / array[1] ? exprString1 : exprBoolean1 : string | boolean
+>                                              : ^^^^^^^^^^^^^^^^
+>foo() / array[1] : number
+>                 : ^^^^^^
+>foo() : number
+>      : ^^^^^^
+>foo : () => number
+>    : ^^^^^^^^^^^^
+>array[1] : number
+>         : ^^^^^^
+>array : number[]
+>      : ^^^^^^^^
+>1 : 1
+>  : ^
+>exprString1 : string
+>            : ^^^^^^
+>exprBoolean1 : boolean
+>             : ^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

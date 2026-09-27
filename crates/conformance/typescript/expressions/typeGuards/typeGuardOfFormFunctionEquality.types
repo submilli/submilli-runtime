@@ -1,0 +1,79 @@
+=== typeGuardOfFormFunctionEquality.ts ===
+function isString1(a: number, b: Object): b is string { return null as unknown as (boolean); }
+>isString1 : (a: number, b: Object) => b is string
+>          : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>b : Object
+>  : ^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+function isString2(a: Object): a is string { return null as unknown as (boolean); }
+>isString2 : (a: Object) => a is string
+>          : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : Object
+>  : ^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+/*pruned*/;                
+                       
+            
+ 
+
+let x = isString1(0, "") === isString2("");
+>x : boolean
+>  : ^^^^^^^
+>isString1(0, "") === isString2("") : boolean
+>                                   : ^^^^^^^
+>isString1(0, "") : boolean
+>                 : ^^^^^^^
+>isString1 : (a: number, b: Object) => b is string
+>          : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>0 : 0
+>  : ^
+>"" : ""
+>   : ^^
+>isString2("") : boolean
+>              : ^^^^^^^
+>isString2 : (a: Object) => a is string
+>          : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>"" : ""
+>   : ^^
+
+
+function isString3(a: number, b: number, c: Object): c is string {
+>isString3 : (a: number, b: number, c: Object) => c is string
+>          : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+>c : Object
+>  : ^^^^^^
+
+    return isString1(0, c);
+>isString1(0, c) : boolean
+>                : ^^^^^^^
+>isString1 : (a: number, b: Object) => b is string
+>          : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>0 : 0
+>  : ^
+>c : Object
+>  : ^^^^^^
+
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

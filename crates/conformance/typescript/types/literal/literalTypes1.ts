@@ -1,0 +1,93 @@
+// @target: es2015
+// @strictNullChecks: true
+
+let zero: 0 = 0;
+let one: 1 = 1;
+let two: 2 = 2;
+let oneOrTwo: 1 | 2 = <1 | 2>1;
+
+function f1(x: 0 | 1 | 2): void {
+    switch (x) {
+        case zero:
+            x;
+            break;
+        case one:
+            x;
+            break;
+        case two:
+            x;
+            break;
+        default:
+            x;
+    }
+}
+
+function f2(x: 0 | 1 | 2): void {
+    switch (x) {
+        case zero:
+            x;
+            break;
+        case oneOrTwo:
+            x;
+            break;
+        default:
+            x;
+    }
+}
+
+type Falsy = false | 0 | "" | null | null;
+
+function f3(x: Falsy): void {
+    if (x) {
+        x;
+    }
+    else {
+        x;
+    }
+}
+
+function f4(x: 0 | 1 | true | string): void {
+    switch (x) {
+        case 0:
+            x;
+            break;
+        case 1:
+            x;
+            break;
+        case "abc":
+        case "def":
+            x;
+            break;
+        case null:
+            x;
+            break;
+        case null:
+            x;
+            break;
+        default:
+            x;
+    }
+}
+
+function f5(x: string | number | boolean): void {
+    switch (x) {
+        case "abc":
+            x;
+            break;
+        case 0:
+        case 1:
+            x;
+            break;
+        case true:
+            x;
+            break;
+        case "hello":
+        case 123:
+            x;
+            break;
+        default:
+            x;
+    }
+}
+
+function main(): void {}

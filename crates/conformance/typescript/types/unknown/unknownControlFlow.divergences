@@ -1,0 +1,173 @@
+types: 187 of 273 tsc entries compared, 41 differ
+
+line 30: x
+  tsc:  {}
+  ours: unknown
+
+line 39: x
+  tsc:  {}
+  ours: unknown
+
+line 45: x
+  tsc:  NonNullable<T>
+  ours: T
+
+line 54: x
+  tsc:  NonNullable<T>
+  ours: T
+
+line 69: x
+  tsc:  {} | undefined
+  ours: unknown
+
+line 75: x
+  tsc:  {} | undefined
+  ours: unknown
+
+line 80: x
+  tsc:  {} | undefined
+  ours: unknown
+
+line 81: x
+  tsc:  {} | undefined
+  ours: unknown
+
+line 87: x
+  tsc:  {}
+  ours: unknown
+
+line 93: x
+  tsc:  {}
+  ours: unknown
+
+line 102: x
+  tsc:  T & ({} | undefined)
+  ours: T
+
+line 108: x
+  tsc:  T & ({} | undefined)
+  ours: T
+
+line 113: x
+  tsc:  T & ({} | undefined)
+  ours: T
+
+line 114: x
+  tsc:  T & ({} | undefined)
+  ours: T
+
+line 120: x
+  tsc:  NonNullable<T>
+  ours: T
+
+line 126: x
+  tsc:  NonNullable<T>
+  ours: T
+
+line 168: x
+  tsc:  T & ({} | undefined)
+  ours: T
+
+line 171: x
+  tsc:  T & ({} | undefined)
+  ours: T
+
+line 174: x
+  tsc:  NonNullable<T>
+  ours: T
+
+line 177: x
+  tsc:  NonNullable<T>
+  ours: T
+
+line 183: x
+  tsc:  object
+  ours: {}
+
+line 189: x
+  tsc:  (T & object) | (T & null)
+  ours: T
+
+line 191: x && typeof x === "object"
+  tsc:  boolean
+  ours: boolean | T
+
+line 191: x
+  tsc:  NonNullable<T>
+  ours: T
+
+line 192: x
+  tsc:  T & object
+  ours: T
+
+line 194: typeof x === "object" && x
+  tsc:  false | (T & object) | (T & null)
+  ours: boolean | T
+
+line 194: x
+  tsc:  (T & object) | (T & null)
+  ours: T
+
+line 195: x
+  tsc:  T & object
+  ours: T
+
+line 206: !!true
+  tsc:  true
+  ours: boolean
+
+line 206: !true
+  tsc:  false
+  ours: boolean
+
+line 210: !!true
+  tsc:  true
+  ours: boolean
+
+line 210: !true
+  tsc:  false
+  ours: boolean
+
+line 253: a
+  tsc:  (T & object) | (T & null)
+  ours: T
+
+line 253: b
+  tsc:  (T & object) | (T & null)
+  ours: T
+
+line 256: a
+  tsc:  T & object
+  ours: T
+
+line 256: b
+  tsc:  T & object
+  ours: T
+
+line 259: a
+  tsc:  T & object
+  ours: T
+
+line 259: b
+  tsc:  T & object
+  ours: T
+
+line 270: y
+  tsc:  T & ({} | undefined)
+  ours: T
+
+line 382: encoding
+  tsc:  {} | undefined
+  ours: unknown
+
+line 402: value
+  tsc:  {} | undefined
+  ours: unknown
+
+errors:
+line 294: tsc TS2345: Argument of type '"foo"' is not assignable to parameter of type 'never'. (we accept)
+line 29: ours: cannot use `unknown` as a condition (tsc accepts)
+line 35: ours: cannot use `unknown` in a boolean context (tsc accepts)
+line 214: ours: expected `T`, got `null | T` (tsc accepts)
+line 278: ours: `keyof` needs an object type or interface, got `T` (tsc accepts)
+line 279: ours: cannot index into non-array type `T` (tsc accepts)

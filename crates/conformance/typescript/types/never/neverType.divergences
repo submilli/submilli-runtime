@@ -1,0 +1,13 @@
+types: 47 of 80 tsc entries compared, 1 differ
+
+line 93: () => { throw new Error(); }
+  tsc:  () => never
+  ours: () => void
+
+errors:
+line 22: ours: constructor of `Error` expects 1 argument(s), got 0 (tsc accepts)
+line 30: ours: function `infiniteLoop2` does not return a value on all paths (tsc accepts)
+line 57: ours: constructor of `Error` expects 1 argument(s), got 0 (tsc accepts)
+line 63: ours: constructor of `Error` expects 1 argument(s), got 0 (tsc accepts)
+line 76: ours: function `f2` does not return a value on all paths (tsc accepts)
+line 93: ours: constructor of `Error` expects 1 argument(s), got 0 (tsc accepts)

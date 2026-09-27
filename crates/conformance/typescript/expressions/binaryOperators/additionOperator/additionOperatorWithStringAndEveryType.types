@@ -1,0 +1,189 @@
+=== additionOperatorWithStringAndEveryType.ts ===
+enum E { a, b, c }
+>E : E
+>  : ^
+>a : E.a
+>  : ^^^
+>b : E.b
+>  : ^^^
+>c : E.c
+>  : ^^^
+
+
+/*pruned*/;                           
+let b: boolean = null as unknown as (boolean);
+>b : boolean
+>  : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let c: number = null as unknown as (number);
+>c : number
+>  : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let d: string = null as unknown as (string);
+>d : string
+>  : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;                                 
+/*pruned*/;                             
+/*pruned*/;                       
+
+let x: string = null as unknown as (string);
+>x : string
+>  : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+// string could plus every type, and the result is always string
+// string as left operand
+/*pruned*/;    
+let r2 = x + b;
+>r2 : string
+>   : ^^^^^^
+>x + b : string
+>      : ^^^^^^
+>x : string
+>  : ^^^^^^
+>b : boolean
+>  : ^^^^^^^
+
+let r3 = x + c;
+>r3 : string
+>   : ^^^^^^
+>x + c : string
+>      : ^^^^^^
+>x : string
+>  : ^^^^^^
+>c : number
+>  : ^^^^^^
+
+let r4 = x + d;
+>r4 : string
+>   : ^^^^^^
+>x + d : string
+>      : ^^^^^^
+>x : string
+>  : ^^^^^^
+>d : string
+>  : ^^^^^^
+
+/*pruned*/;    
+/*pruned*/;    
+/*pruned*/;    
+
+// string as right operand
+/*pruned*/;    
+let r9 = b + x;
+>r9 : string
+>   : ^^^^^^
+>b + x : string
+>      : ^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>x : string
+>  : ^^^^^^
+
+let r10 = c + x;
+>r10 : string
+>    : ^^^^^^
+>c + x : string
+>      : ^^^^^^
+>c : number
+>  : ^^^^^^
+>x : string
+>  : ^^^^^^
+
+let r11 = d + x;
+>r11 : string
+>    : ^^^^^^
+>d + x : string
+>      : ^^^^^^
+>d : string
+>  : ^^^^^^
+>x : string
+>  : ^^^^^^
+
+/*pruned*/;     
+/*pruned*/;     
+/*pruned*/;     
+
+// other cases
+/*pruned*/;     
+let r16 = x + E.a;
+>r16 : string
+>    : ^^^^^^
+>x + E.a : string
+>        : ^^^^^^
+>x : string
+>  : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+
+let r17 = x + '';
+>r17 : string
+>    : ^^^^^^
+>x + '' : string
+>       : ^^^^^^
+>x : string
+>  : ^^^^^^
+>'' : ""
+>   : ^^
+
+let r18 = x + 0;
+>r18 : string
+>    : ^^^^^^
+>x + 0 : string
+>      : ^^^^^^
+>x : string
+>  : ^^^^^^
+>0 : 0
+>  : ^
+
+let r19 = x + { a: '' };
+>r19 : string
+>    : ^^^^^^
+>x + { a: '' } : string
+>              : ^^^^^^
+>x : string
+>  : ^^^^^^
+>{ a: '' } : { a: string; }
+>          : ^^^^^^^^^^^^^^
+>a : string
+>  : ^^^^^^
+>'' : ""
+>   : ^^
+
+let r20 = x + [];
+>r20 : string
+>    : ^^^^^^
+>x + [] : string
+>       : ^^^^^^
+>x : string
+>  : ^^^^^^
+>[] : never[]
+>   : ^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

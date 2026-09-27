@@ -1,0 +1,5 @@
+types: 3 of 28 tsc entries compared, 1 differ
+
+line 20: { id: 12 }
+  tsc:  { id: number; }
+  ours: I

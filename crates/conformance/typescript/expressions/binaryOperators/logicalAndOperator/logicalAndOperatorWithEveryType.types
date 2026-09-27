@@ -1,0 +1,559 @@
+=== logicalAndOperatorWithEveryType.ts ===
+// The && operator permits the operands to be of any type and produces a result of the same
+// type as the second operand.
+
+enum E { a, b, c }
+>E : E
+>  : ^
+>a : E.a
+>  : ^^^
+>b : E.b
+>  : ^^^
+>c : E.c
+>  : ^^^
+
+
+/*pruned*/;                            
+let a2: boolean = null as unknown as (boolean);
+>a2 : boolean
+>   : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let a3: number = null as unknown as (number);
+>a3 : number
+>   : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let a4: string = null as unknown as (string);
+>a4 : string
+>   : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;                              
+/*pruned*/;                        
+let a7: {} = null as unknown as ({});
+>a7 : {}
+>   : ^^
+>null as unknown as ({}) : {}
+>                        : ^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let a8: string[] = null as unknown as (string[]);
+>a8 : string[]
+>   : ^^^^^^^^
+>null as unknown as (string[]) : string[]
+>                              : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+/*pruned*/;        
+/*pruned*/;        
+/*pruned*/;        
+/*pruned*/;        
+/*pruned*/;        
+/*pruned*/;        
+/*pruned*/;        
+/*pruned*/;        
+/*pruned*/;          
+/*pruned*/;           
+
+/*pruned*/;        
+let rb2 = a2 && a2;
+>rb2 : boolean
+>    : ^^^^^^^
+>a2 && a2 : boolean
+>         : ^^^^^^^
+>a2 : boolean
+>   : ^^^^^^^
+>a2 : true
+>   : ^^^^
+
+let rb3 = a3 && a2;
+>rb3 : boolean | 0
+>    : ^^^^^^^^^^^
+>a3 && a2 : boolean | 0
+>         : ^^^^^^^^^^^
+>a3 : number
+>   : ^^^^^^
+>a2 : boolean
+>   : ^^^^^^^
+
+let rb4 = a4 && a2;
+>rb4 : boolean | ""
+>    : ^^^^^^^^^^^^
+>a4 && a2 : boolean | ""
+>         : ^^^^^^^^^^^^
+>a4 : string
+>   : ^^^^^^
+>a2 : boolean
+>   : ^^^^^^^
+
+/*pruned*/;        
+/*pruned*/;        
+let rb7 = a7 && a2;
+>rb7 : boolean
+>    : ^^^^^^^
+>a7 && a2 : boolean
+>         : ^^^^^^^
+>a7 : {}
+>   : ^^
+>a2 : boolean
+>   : ^^^^^^^
+
+let rb8 = a8 && a2;
+>rb8 : boolean
+>    : ^^^^^^^
+>a8 && a2 : boolean
+>         : ^^^^^^^
+>a8 : string[]
+>   : ^^^^^^^^
+>a2 : boolean
+>   : ^^^^^^^
+
+let rb9 = null && a2;
+>rb9 : null
+>    : ^^^^
+>null && a2 : null
+>           : ^^^^
+>a2 : boolean
+>   : ^^^^^^^
+
+let rb10 = null && a2;
+>rb10 : null
+>     : ^^^^
+>null && a2 : null
+>           : ^^^^
+>a2 : boolean
+>   : ^^^^^^^
+
+
+/*pruned*/;        
+let rc2 = a2 && a3;
+>rc2 : number | false
+>    : ^^^^^^^^^^^^^^
+>a2 && a3 : number | false
+>         : ^^^^^^^^^^^^^^
+>a2 : boolean
+>   : ^^^^^^^
+>a3 : number
+>   : ^^^^^^
+
+let rc3 = a3 && a3;
+>rc3 : number
+>    : ^^^^^^
+>a3 && a3 : number
+>         : ^^^^^^
+>a3 : number
+>   : ^^^^^^
+>a3 : number
+>   : ^^^^^^
+
+let rc4 = a4 && a3;
+>rc4 : number | ""
+>    : ^^^^^^^^^^^
+>a4 && a3 : number | ""
+>         : ^^^^^^^^^^^
+>a4 : string
+>   : ^^^^^^
+>a3 : number
+>   : ^^^^^^
+
+/*pruned*/;        
+/*pruned*/;        
+let rc7 = a7 && a3;
+>rc7 : number
+>    : ^^^^^^
+>a7 && a3 : number
+>         : ^^^^^^
+>a7 : {}
+>   : ^^
+>a3 : number
+>   : ^^^^^^
+
+let rc8 = a8 && a3;
+>rc8 : number
+>    : ^^^^^^
+>a8 && a3 : number
+>         : ^^^^^^
+>a8 : string[]
+>   : ^^^^^^^^
+>a3 : number
+>   : ^^^^^^
+
+let rc9 = null && a3;
+>rc9 : null
+>    : ^^^^
+>null && a3 : null
+>           : ^^^^
+>a3 : number
+>   : ^^^^^^
+
+let rc10 = null && a3;
+>rc10 : null
+>     : ^^^^
+>null && a3 : null
+>           : ^^^^
+>a3 : number
+>   : ^^^^^^
+
+
+/*pruned*/;        
+let rd2 = a2 && a4;
+>rd2 : string | false
+>    : ^^^^^^^^^^^^^^
+>a2 && a4 : string | false
+>         : ^^^^^^^^^^^^^^
+>a2 : boolean
+>   : ^^^^^^^
+>a4 : string
+>   : ^^^^^^
+
+let rd3 = a3 && a4;
+>rd3 : string | 0
+>    : ^^^^^^^^^^
+>a3 && a4 : string | 0
+>         : ^^^^^^^^^^
+>a3 : number
+>   : ^^^^^^
+>a4 : string
+>   : ^^^^^^
+
+let rd4 = a4 && a4;
+>rd4 : string
+>    : ^^^^^^
+>a4 && a4 : string
+>         : ^^^^^^
+>a4 : string
+>   : ^^^^^^
+>a4 : string
+>   : ^^^^^^
+
+/*pruned*/;        
+/*pruned*/;        
+let rd7 = a7 && a4;
+>rd7 : string
+>    : ^^^^^^
+>a7 && a4 : string
+>         : ^^^^^^
+>a7 : {}
+>   : ^^
+>a4 : string
+>   : ^^^^^^
+
+let rd8 = a8 && a4;
+>rd8 : string
+>    : ^^^^^^
+>a8 && a4 : string
+>         : ^^^^^^
+>a8 : string[]
+>   : ^^^^^^^^
+>a4 : string
+>   : ^^^^^^
+
+let rd9 = null && a4;
+>rd9 : null
+>    : ^^^^
+>null && a4 : null
+>           : ^^^^
+>a4 : string
+>   : ^^^^^^
+
+let rd10 = null && a4;
+>rd10 : null
+>     : ^^^^
+>null && a4 : null
+>           : ^^^^
+>a4 : string
+>   : ^^^^^^
+
+
+/*pruned*/;        
+/*pruned*/;        
+/*pruned*/;        
+/*pruned*/;        
+/*pruned*/;        
+/*pruned*/;        
+/*pruned*/;        
+/*pruned*/;        
+/*pruned*/;          
+/*pruned*/;           
+
+/*pruned*/;        
+/*pruned*/;        
+/*pruned*/;        
+/*pruned*/;        
+/*pruned*/;        
+/*pruned*/;        
+/*pruned*/;        
+/*pruned*/;        
+/*pruned*/;          
+/*pruned*/;           
+
+/*pruned*/;        
+let rg2 = a2 && a7;
+>rg2 : false | {}
+>    : ^^^^^^^^^^
+>a2 && a7 : false | {}
+>         : ^^^^^^^^^^
+>a2 : boolean
+>   : ^^^^^^^
+>a7 : {}
+>   : ^^
+
+let rg3 = a3 && a7;
+>rg3 : {} | 0
+>    : ^^^^^^
+>a3 && a7 : {} | 0
+>         : ^^^^^^
+>a3 : number
+>   : ^^^^^^
+>a7 : {}
+>   : ^^
+
+let rg4 = a4 && a7;
+>rg4 : {} | ""
+>    : ^^^^^^^
+>a4 && a7 : {} | ""
+>         : ^^^^^^^
+>a4 : string
+>   : ^^^^^^
+>a7 : {}
+>   : ^^
+
+/*pruned*/;        
+/*pruned*/;        
+let rg7 = a7 && a7;
+>rg7 : {}
+>    : ^^
+>a7 && a7 : {}
+>         : ^^
+>a7 : {}
+>   : ^^
+>a7 : {}
+>   : ^^
+
+let rg8 = a8 && a7;
+>rg8 : {}
+>    : ^^
+>a8 && a7 : {}
+>         : ^^
+>a8 : string[]
+>   : ^^^^^^^^
+>a7 : {}
+>   : ^^
+
+let rg9 = null && a7;
+>rg9 : null
+>    : ^^^^
+>null && a7 : null
+>           : ^^^^
+>a7 : {}
+>   : ^^
+
+let rg10 = null && a7;
+>rg10 : null
+>     : ^^^^
+>null && a7 : null
+>           : ^^^^
+>a7 : {}
+>   : ^^
+
+
+/*pruned*/;        
+let rh2 = a2 && a8;
+>rh2 : false | string[]
+>    : ^^^^^^^^^^^^^^^^
+>a2 && a8 : false | string[]
+>         : ^^^^^^^^^^^^^^^^
+>a2 : boolean
+>   : ^^^^^^^
+>a8 : string[]
+>   : ^^^^^^^^
+
+let rh3 = a3 && a8;
+>rh3 : 0 | string[]
+>    : ^^^^^^^^^^^^
+>a3 && a8 : 0 | string[]
+>         : ^^^^^^^^^^^^
+>a3 : number
+>   : ^^^^^^
+>a8 : string[]
+>   : ^^^^^^^^
+
+let rh4 = a4 && a8;
+>rh4 : "" | string[]
+>    : ^^^^^^^^^^^^^
+>a4 && a8 : "" | string[]
+>         : ^^^^^^^^^^^^^
+>a4 : string
+>   : ^^^^^^
+>a8 : string[]
+>   : ^^^^^^^^
+
+/*pruned*/;        
+/*pruned*/;        
+let rh7 = a7 && a8;
+>rh7 : string[]
+>    : ^^^^^^^^
+>a7 && a8 : string[]
+>         : ^^^^^^^^
+>a7 : {}
+>   : ^^
+>a8 : string[]
+>   : ^^^^^^^^
+
+let rh8 = a8 && a8;
+>rh8 : string[]
+>    : ^^^^^^^^
+>a8 && a8 : string[]
+>         : ^^^^^^^^
+>a8 : string[]
+>   : ^^^^^^^^
+>a8 : string[]
+>   : ^^^^^^^^
+
+let rh9 = null && a8;
+>rh9 : null
+>    : ^^^^
+>null && a8 : null
+>           : ^^^^
+>a8 : string[]
+>   : ^^^^^^^^
+
+let rh10 = null && a8;
+>rh10 : null
+>     : ^^^^
+>null && a8 : null
+>           : ^^^^
+>a8 : string[]
+>   : ^^^^^^^^
+
+
+/*pruned*/;          
+let ri2 = a2 && null;
+>ri2 : false | null
+>    : ^^^^^^^^^^^^
+>a2 && null : false | null
+>           : ^^^^^^^^^^^^
+>a2 : boolean
+>   : ^^^^^^^
+
+let ri3 = a3 && null;
+>ri3 : 0 | null
+>    : ^^^^^^^^
+>a3 && null : 0 | null
+>           : ^^^^^^^^
+>a3 : number
+>   : ^^^^^^
+
+let ri4 = a4 && null;
+>ri4 : "" | null
+>    : ^^^^^^^^^
+>a4 && null : "" | null
+>           : ^^^^^^^^^
+>a4 : string
+>   : ^^^^^^
+
+/*pruned*/;          
+/*pruned*/;          
+let ri7 = a7 && null;
+>ri7 : null
+>    : ^^^^
+>a7 && null : null
+>           : ^^^^
+>a7 : {}
+>   : ^^
+
+let ri8 = a8 && null;
+>ri8 : null
+>    : ^^^^
+>a8 && null : null
+>           : ^^^^
+>a8 : string[]
+>   : ^^^^^^^^
+
+let ri9 = null && null;
+>ri9 : null
+>    : ^^^^
+>null && null : null
+>             : ^^^^
+
+let ri10 = null && null;
+>ri10 : null
+>     : ^^^^
+>null && null : null
+>             : ^^^^
+
+
+/*pruned*/;          
+let rj2 = a2 && null;
+>rj2 : false | null
+>    : ^^^^^^^^^^^^
+>a2 && null : false | null
+>           : ^^^^^^^^^^^^
+>a2 : boolean
+>   : ^^^^^^^
+
+let rj3 = a3 && null;
+>rj3 : 0 | null
+>    : ^^^^^^^^
+>a3 && null : 0 | null
+>           : ^^^^^^^^
+>a3 : number
+>   : ^^^^^^
+
+let rj4 = a4 && null;
+>rj4 : "" | null
+>    : ^^^^^^^^^
+>a4 && null : "" | null
+>           : ^^^^^^^^^
+>a4 : string
+>   : ^^^^^^
+
+/*pruned*/;          
+/*pruned*/;          
+let rj7 = a7 && null;
+>rj7 : null
+>    : ^^^^
+>a7 && null : null
+>           : ^^^^
+>a7 : {}
+>   : ^^
+
+let rj8 = a8 && null;
+>rj8 : null
+>    : ^^^^
+>a8 && null : null
+>           : ^^^^
+>a8 : string[]
+>   : ^^^^^^^^
+
+let rj9 = null && null;
+>rj9 : null
+>    : ^^^^
+>null && null : null
+>             : ^^^^
+
+let rj10 = null && null;
+>rj10 : null
+>     : ^^^^
+>null && null : null
+>             : ^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

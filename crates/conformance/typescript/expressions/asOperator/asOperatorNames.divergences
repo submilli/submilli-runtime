@@ -1,9 +1,1 @@
-types: 8 of 11 tsc entries compared, 2 differ
-
-line 3: b
-  tsc:  string
-  ours: <error>
-
-line 3: a as string
-  tsc:  string
-  ours: <error>
+types: 6 of 11 tsc entries compared, 0 differ

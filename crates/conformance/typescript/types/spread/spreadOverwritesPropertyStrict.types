@@ -1,0 +1,270 @@
+=== spreadOverwritesPropertyStrict.ts ===
+let ab: { a: number, b: number } = null as unknown as ({ a: number, b: number });
+>ab : { a: number; b: number; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+>null as unknown as ({ a: number, b: number }) : { a: number; b: number; }
+>                                              : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+
+let abq: { a: number, b?: number } = null as unknown as ({ a: number, b?: number });
+>abq : { a: number; b?: number; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>null as unknown as ({ a: number, b?: number }) : { a: number; b?: number; }
+>                                               : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+let unused1 = { b: 1, ...ab } // error
+>unused1 : { a: number; b: number; }
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ b: 1, ...ab } : { a: number; b: number; }
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>ab : { a: number; b: number; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+let unused2 = { ...ab, ...ab } // ok, overwritten error doesn't apply to spreads
+>unused2 : { a: number; b: number; }
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ ...ab, ...ab } : { a: number; b: number; }
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>ab : { a: number; b: number; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>ab : { a: number; b: number; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+let unused3 = { b: 1, ...abq } // ok, abq might have b: undefined
+>unused3 : { a: number; b: number; }
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ b: 1, ...abq } : { a: number; b: number; }
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>abq : { a: number; b?: number; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+let unused4 = { ...ab, b: 1 } // ok, we don't care that b in ab is overwritten
+>unused4 : { b: number; a: number; }
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ ...ab, b: 1 } : { b: number; a: number; }
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>ab : { a: number; b: number; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+let unused5 = { ...abq, b: 1 } // ok
+>unused5 : { b: number; a: number; }
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ ...abq, b: 1 } : { b: number; a: number; }
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>abq : { a: number; b?: number; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+function g(obj: { x: number | null }): { x: number | null; } {
+>g : (obj: { x: number | null; }) => { x: number | null; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>obj : { x: number | null; }
+>    : ^^^^^^^^^^^^^^^^^^^^^
+>x : number | null
+>  : ^^^^^^^^^^^^^
+>x : number | null
+>  : ^^^^^^^^^^^^^
+
+    return { x: 1, ...obj }; // ok, obj might have x: undefined
+>{ x: 1, ...obj } : { x: number | null; }
+>                 : ^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>obj : { x: number | null; }
+>    : ^^^^^^^^^^^^^^^^^^^^^
+
+}
+function f(obj: { x: number } | null): { x: number; } {
+>f : (obj: { x: number; } | null) => { x: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>obj : { x: number; } | null
+>    : ^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>x : number
+>  : ^^^^^^
+
+    return { x: 1, ...obj }; // ok, obj might be undefined
+>{ x: 1, ...obj } : { x: number; }
+>                 : ^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>obj : { x: number; } | null
+>    : ^^^^^^^^^^^^^^^^^^^^^
+
+}
+function h(obj: { x: number } | { x: string }): { x: number; } | { x: string; } {
+>h : (obj: { x: number; } | { x: string; }) => { x: number; } | { x: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>obj : { x: number; } | { x: string; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>x : string
+>  : ^^^^^^
+>x : number
+>  : ^^^^^^
+>x : string
+>  : ^^^^^^
+
+    return { x: 1, ...obj } // error
+>{ x: 1, ...obj } : { x: number; } | { x: string; }
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>obj : { x: number; } | { x: string; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+}
+function i(b: boolean, t: { command: string, ok: string }): { command: string; ok?: string | null; } {
+>i : (b: boolean, t: { command: string; ok: string; }) => { command: string; ok?: string | null; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>t : { command: string; ok: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>command : string
+>        : ^^^^^^
+>ok : string
+>   : ^^^^^^
+>command : string
+>        : ^^^^^^
+>ok : string | null | undefined
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    return { command: "hi", ...(b ? t : {}) } // ok
+>{ command: "hi", ...(b ? t : {}) } : { command: string; ok?: string | undefined; }
+>                                   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>command : string
+>        : ^^^^^^
+>"hi" : "hi"
+>     : ^^^^
+>(b ? t : {}) : { command: string; ok: string; } | {}
+>             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b ? t : {} : { command: string; ok: string; } | {}
+>           : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>t : { command: string; ok: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{} : {}
+>   : ^^
+
+}
+function j(): { command: string; } {
+>j : () => { command: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>command : string
+>        : ^^^^^^
+
+    return { ...{ command: "hi" } , ...{ command: "bye" } } // ok
+>{ ...{ command: "hi" } , ...{ command: "bye" } } : { command: string; }
+>                                                 : ^^^^^^^^^^^^^^^^^^^^
+>{ command: "hi" } : { command: string; }
+>                  : ^^^^^^^^^^^^^^^^^^^^
+>command : string
+>        : ^^^^^^
+>"hi" : "hi"
+>     : ^^^^
+>{ command: "bye" } : { command: string; }
+>                   : ^^^^^^^^^^^^^^^^^^^^
+>command : string
+>        : ^^^^^^
+>"bye" : "bye"
+>      : ^^^^^
+
+}
+function k(t: { command: string, ok: string }): { command: string; ok: string; spoiler2: boolean; spoiler: boolean; } {
+>k : (t: { command: string; ok: string; }) => { command: string; ok: string; spoiler2: boolean; spoiler: boolean; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>t : { command: string; ok: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>command : string
+>        : ^^^^^^
+>ok : string
+>   : ^^^^^^
+>command : string
+>        : ^^^^^^
+>ok : string
+>   : ^^^^^^
+>spoiler2 : boolean
+>         : ^^^^^^^
+>spoiler : boolean
+>        : ^^^^^^^
+
+    return { command: "hi", ...{ spoiler: true }, spoiler2: true, ...t } // error
+>{ command: "hi", ...{ spoiler: true }, spoiler2: true, ...t } : { command: string; ok: string; spoiler2: true; spoiler: true; }
+>                                                              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>command : string
+>        : ^^^^^^
+>"hi" : "hi"
+>     : ^^^^
+>{ spoiler: true } : { spoiler: true; }
+>                  : ^^^^^^^^^^^^^^^^^^
+>spoiler : true
+>        : ^^^^
+>true : true
+>     : ^^^^
+>spoiler2 : true
+>         : ^^^^
+>true : true
+>     : ^^^^
+>t : { command: string; ok: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+}
+
+/*pruned*/;                                       
+                                                
+ 
+/*pruned*/;                                        
+                                             
+ 
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

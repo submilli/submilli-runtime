@@ -1,0 +1,123 @@
+=== stringLiteralsWithEqualityChecks03.ts ===
+interface Runnable {
+>Runnable : Runnable
+>         : ^^^^^^^^
+
+    isRunning: boolean;
+>isRunning : boolean
+>          : ^^^^^^^
+
+}
+
+/*pruned*/;                              
+                             
+ 
+
+let x: string = null as unknown as (string);
+>x : string
+>  : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;                                                             
+
+let b: boolean = null as unknown as (boolean);
+>b : boolean
+>  : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/; 
+/*pruned*/;    
+/*pruned*/;     
+b = "foo" === "bar";
+>b = "foo" === "bar" : boolean
+>                    : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>"foo" === "bar" : boolean
+>                : ^^^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+>"bar" : "bar"
+>      : ^^^^^
+
+b = "bar" === x;
+>b = "bar" === x : boolean
+>                : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>"bar" === x : boolean
+>            : ^^^^^^^
+>"bar" : "bar"
+>      : ^^^^^
+>x : string
+>  : ^^^^^^
+
+b = x === "bar";
+>b = x === "bar" : boolean
+>                : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>x === "bar" : boolean
+>            : ^^^^^^^
+>x : string
+>  : ^^^^^^
+>"bar" : "bar"
+>      : ^^^^^
+
+/*pruned*/;     
+/*pruned*/;     
+
+/*pruned*/; 
+/*pruned*/;    
+/*pruned*/;     
+b = "foo" !== "bar";
+>b = "foo" !== "bar" : boolean
+>                    : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>"foo" !== "bar" : boolean
+>                : ^^^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+>"bar" : "bar"
+>      : ^^^^^
+
+b = "bar" !== x;
+>b = "bar" !== x : boolean
+>                : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>"bar" !== x : boolean
+>            : ^^^^^^^
+>"bar" : "bar"
+>      : ^^^^^
+>x : string
+>  : ^^^^^^
+
+b = x !== "bar";
+>b = x !== "bar" : boolean
+>                : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>x !== "bar" : boolean
+>            : ^^^^^^^
+>x : string
+>  : ^^^^^^
+>"bar" : "bar"
+>      : ^^^^^
+
+/*pruned*/;     
+/*pruned*/;     
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

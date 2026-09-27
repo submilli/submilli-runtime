@@ -1,0 +1,1 @@
+typeGuardsInRightOperandOfOrOrOperator.ts(45,25): error TS2339: Property 'toString' does not exist on type 'never'.

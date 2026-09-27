@@ -1,0 +1,432 @@
+=== controlFlowWhileStatement.ts ===
+let cond: boolean = null as unknown as (boolean);
+>cond : boolean
+>     : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+function a(): void {
+>a : () => void
+>  : ^^^^^^^^^^
+
+    let x: string | number = null as unknown as (string | number);
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>null as unknown as (string | number) : string | number
+>                                     : ^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    x = "";
+>x = "" : ""
+>       : ^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>"" : ""
+>   : ^^
+
+    while (cond) {
+>cond : boolean
+>     : ^^^^^^^
+
+        x; // string
+>x : string
+>  : ^^^^^^
+
+    }
+}
+function b(): void {
+>b : () => void
+>  : ^^^^^^^^^^
+
+    let x: string | number = null as unknown as (string | number);
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>null as unknown as (string | number) : string | number
+>                                     : ^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    x = "";
+>x = "" : ""
+>       : ^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>"" : ""
+>   : ^^
+
+    while (cond) {
+>cond : boolean
+>     : ^^^^^^^
+
+        x; // string
+>x : string
+>  : ^^^^^^
+
+        x = 42;
+>x = 42 : 42
+>       : ^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>42 : 42
+>   : ^^
+
+        break;
+    }
+}
+function c(): void {
+>c : () => void
+>  : ^^^^^^^^^^
+
+    let x: string | number = null as unknown as (string | number);
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>null as unknown as (string | number) : string | number
+>                                     : ^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    x = "";
+>x = "" : ""
+>       : ^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>"" : ""
+>   : ^^
+
+    while (cond) {
+>cond : boolean
+>     : ^^^^^^^
+
+        x; // string
+>x : string
+>  : ^^^^^^
+
+        x = null;
+>x = null : null
+>         : ^^^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+        if (typeof x === "string") continue;
+>typeof x === "string" : boolean
+>                      : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>"string" : "string"
+>         : ^^^^^^^^
+
+        break;
+    }
+}
+function d(): void {
+>d : () => void
+>  : ^^^^^^^^^^
+
+    let x: string | number = null as unknown as (string | number);
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>null as unknown as (string | number) : string | number
+>                                     : ^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    x = "";
+>x = "" : ""
+>       : ^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>"" : ""
+>   : ^^
+
+    while (x = x.length) {
+>x = x.length : number
+>             : ^^^^^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>x.length : number
+>         : ^^^^^^
+>x : string
+>  : ^^^^^^
+>length : number
+>       : ^^^^^^
+
+        x; // number
+>x : number
+>  : ^^^^^^
+
+        x = "";
+>x = "" : ""
+>       : ^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>"" : ""
+>   : ^^
+
+    }
+}
+function e(): void {
+>e : () => void
+>  : ^^^^^^^^^^
+
+    let x: string | number = null as unknown as (string | number);
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>null as unknown as (string | number) : string | number
+>                                     : ^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    x = "";
+>x = "" : ""
+>       : ^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>"" : ""
+>   : ^^
+
+    while (cond) {
+>cond : boolean
+>     : ^^^^^^^
+
+        x; // string | number
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+        x = 42;
+>x = 42 : 42
+>       : ^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>42 : 42
+>   : ^^
+
+        x; // number
+>x : number
+>  : ^^^^^^
+
+    }
+    x; // string | number
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+}
+function f(): void {
+>f : () => void
+>  : ^^^^^^^^^^
+
+    /*pruned*/;                                                                                                               
+    /**/;  
+    while (cond) {
+>cond : boolean
+>     : ^^^^^^^
+
+        if (cond) {
+>cond : true
+>     : ^^^^
+
+            /**/;  
+            break;
+        }
+        if (cond) {
+>cond : never
+>     : ^^^^^
+
+            /**/;    
+            continue;
+        }
+        /**/;   
+    }
+    ;  // string | number | boolean | RegExp
+}
+function g(): void {
+>g : () => void
+>  : ^^^^^^^^^^
+
+    /*pruned*/;                                                                                                               
+    /**/;  
+    while (true) {
+>true : true
+>     : ^^^^
+
+        if (cond) {
+>cond : boolean
+>     : ^^^^^^^
+
+            /**/;  
+            break;
+        }
+        if (cond) {
+>cond : false
+>     : ^^^^^
+
+            /**/;    
+            continue;
+        }
+        /**/;   
+    }
+    ;  // number
+}
+function h1(): void {
+>h1 : () => void
+>   : ^^^^^^^^^^
+
+    let x: string | number | boolean = null as unknown as (string | number | boolean);
+>x : string | number | boolean
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (string | number | boolean) : string | number | boolean
+>                                               : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    x = "";
+>x = "" : ""
+>       : ^^
+>x : string | number | boolean
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>"" : ""
+>   : ^^
+
+    while (x > 1) {
+>x > 1 : boolean
+>      : ^^^^^^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+        x; // string | number
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+        x = 1;
+>x = 1 : 1
+>      : ^
+>x : string | number | boolean
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+        x; // number
+>x : number
+>  : ^^^^^^
+
+    }
+    x; // string | number
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+}
+function len(s: string | number): number { return null as unknown as (number); }
+>len : (s: string | number) => number
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>s : string | number
+>  : ^^^^^^^^^^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+function h2(): void {
+>h2 : () => void
+>   : ^^^^^^^^^^
+
+    let x: string | number | boolean = null as unknown as (string | number | boolean);
+>x : string | number | boolean
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (string | number | boolean) : string | number | boolean
+>                                               : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    x = "";
+>x = "" : ""
+>       : ^^
+>x : string | number | boolean
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>"" : ""
+>   : ^^
+
+    while (cond) {
+>cond : boolean
+>     : ^^^^^^^
+
+        x = len(x);
+>x = len(x) : number
+>           : ^^^^^^
+>x : string | number | boolean
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>len(x) : number
+>       : ^^^^^^
+>len : (s: string | number) => number
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+        x; // number
+>x : number
+>  : ^^^^^^
+
+    }
+    x; // string | number
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+}
+function h3(): void {
+>h3 : () => void
+>   : ^^^^^^^^^^
+
+    let x: string | number | boolean = null as unknown as (string | number | boolean);
+>x : string | number | boolean
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (string | number | boolean) : string | number | boolean
+>                                               : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    x = "";
+>x = "" : ""
+>       : ^^
+>x : string | number | boolean
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>"" : ""
+>   : ^^
+
+    while (cond) {
+>cond : boolean
+>     : ^^^^^^^
+
+        x; // string | number
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+        x = len(x);
+>x = len(x) : number
+>           : ^^^^^^
+>x : string | number | boolean
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>len(x) : number
+>       : ^^^^^^
+>len : (s: string | number) => number
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+    }
+    x; // string | number
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

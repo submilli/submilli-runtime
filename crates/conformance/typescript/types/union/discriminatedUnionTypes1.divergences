@@ -1,0 +1,73 @@
+types: 144 of 251 tsc entries compared, 16 differ
+
+line 62: s
+  tsc:  never
+  ours: Shape
+
+line 72: m
+  tsc:  { kind: "A"; x: string; }
+  ours: Message
+
+line 74: m
+  tsc:  { kind: "B" | "C"; y: number; } | { kind: "D"; }
+  ours: Message
+
+line 75: m
+  tsc:  { kind: "D"; }
+  ours: Message
+
+line 78: m
+  tsc:  { kind: "B" | "C"; y: number; }
+  ours: Message
+
+line 86: m
+  tsc:  { kind: "B" | "C"; y: number; } | { kind: "D"; }
+  ours: Message
+
+line 91: m
+  tsc:  never
+  ours: Message
+
+line 97: m
+  tsc:  { kind: "A"; x: string; } | { kind: "D"; }
+  ours: Message
+
+line 104: m
+  tsc:  { kind: "A"; x: string; }
+  ours: Message
+
+line 107: m
+  tsc:  { kind: "D"; }
+  ours: Message
+
+line 110: m
+  tsc:  { kind: "B" | "C"; y: number; }
+  ours: Message
+
+line 117: m
+  tsc:  { kind: "A"; x: string; }
+  ours: Message
+
+line 119: m
+  tsc:  { kind: "A"; x: string; } | { kind: "D"; }
+  ours: Message
+
+line 122: m
+  tsc:  { kind: "B" | "C"; y: number; }
+  ours: Message
+
+line 132: m
+  tsc:  { kind: "B" | "C"; y: number; } | { kind: "D"; }
+  ours: Message
+
+line 142: m
+  tsc:  { kind: "B" | "C"; y: number; }
+  ours: Message
+
+errors:
+line 44: ours: `+` not defined for `string` and `never` (tsc accepts)
+line 62: ours: expected `never`, got `Shape` (tsc accepts)
+line 116: ours: `switch` case body must end with `break` or `return` — no fallthrough (tsc accepts)
+line 127: ours: non-exhaustive `switch`: missing case(s) "C", "D" (tsc accepts)
+line 136: ours: non-exhaustive `switch`: missing case(s) "B", "C" (tsc accepts)
+line 140: ours: constructor of `Error` expects 1 argument(s), got 0 (tsc accepts)

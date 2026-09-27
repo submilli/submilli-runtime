@@ -1,0 +1,33 @@
+ifDoWhileStatements.ts(9,5): error TS2564: Property 'id' has no initializer and is not definitely assigned in the constructor.
+ifDoWhileStatements.ts(10,5): error TS2564: Property 'name' has no initializer and is not definitely assigned in the constructor.
+ifDoWhileStatements.ts(14,5): error TS2564: Property 'valid' has no initializer and is not definitely assigned in the constructor.
+ifDoWhileStatements.ts(47,5): error TS2873: This kind of expression is always falsy.
+ifDoWhileStatements.ts(48,8): error TS2873: This kind of expression is always falsy.
+ifDoWhileStatements.ts(49,13): error TS2873: This kind of expression is always falsy.
+ifDoWhileStatements.ts(51,5): error TS2873: This kind of expression is always falsy.
+ifDoWhileStatements.ts(52,8): error TS2873: This kind of expression is always falsy.
+ifDoWhileStatements.ts(53,13): error TS2873: This kind of expression is always falsy.
+ifDoWhileStatements.ts(59,5): error TS2872: This kind of expression is always truthy.
+ifDoWhileStatements.ts(60,8): error TS2872: This kind of expression is always truthy.
+ifDoWhileStatements.ts(61,13): error TS2872: This kind of expression is always truthy.
+ifDoWhileStatements.ts(63,5): error TS2873: This kind of expression is always falsy.
+ifDoWhileStatements.ts(64,8): error TS2873: This kind of expression is always falsy.
+ifDoWhileStatements.ts(65,13): error TS2873: This kind of expression is always falsy.
+ifDoWhileStatements.ts(67,5): error TS2872: This kind of expression is always truthy.
+ifDoWhileStatements.ts(68,8): error TS2872: This kind of expression is always truthy.
+ifDoWhileStatements.ts(69,13): error TS2872: This kind of expression is always truthy.
+ifDoWhileStatements.ts(71,5): error TS2872: This kind of expression is always truthy.
+ifDoWhileStatements.ts(72,8): error TS2872: This kind of expression is always truthy.
+ifDoWhileStatements.ts(73,13): error TS2872: This kind of expression is always truthy.
+ifDoWhileStatements.ts(75,5): error TS2872: This kind of expression is always truthy.
+ifDoWhileStatements.ts(76,8): error TS2872: This kind of expression is always truthy.
+ifDoWhileStatements.ts(77,13): error TS2872: This kind of expression is always truthy.
+ifDoWhileStatements.ts(79,5): error TS2872: This kind of expression is always truthy.
+ifDoWhileStatements.ts(80,8): error TS2872: This kind of expression is always truthy.
+ifDoWhileStatements.ts(81,13): error TS2872: This kind of expression is always truthy.
+ifDoWhileStatements.ts(83,5): error TS2872: This kind of expression is always truthy.
+ifDoWhileStatements.ts(84,8): error TS2872: This kind of expression is always truthy.
+ifDoWhileStatements.ts(85,13): error TS2872: This kind of expression is always truthy.
+ifDoWhileStatements.ts(87,5): error TS2872: This kind of expression is always truthy.
+ifDoWhileStatements.ts(88,8): error TS2872: This kind of expression is always truthy.
+ifDoWhileStatements.ts(89,13): error TS2872: This kind of expression is always truthy.

@@ -1,0 +1,152 @@
+=== stringLiteralTypesOverloads01.ts ===
+
+type PrimitiveName = 'string' | 'number' | 'boolean';
+>PrimitiveName : PrimitiveName
+>              : ^^^^^^^^^^^^^
+
+
+/*pruned*/;                                     
+/*pruned*/;                                     
+/*pruned*/;                                       
+/*pruned*/;                                                           
+/*pruned*/;                                                           
+/*pruned*/;                                                         
+/*pruned*/;                                                                               
+function getFalsyPrimitive(x: PrimitiveName): number | string | boolean {
+>getFalsyPrimitive : (x: PrimitiveName) => number | string | boolean
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : PrimitiveName
+>  : ^^^^^^^^^^^^^
+
+    if (x === "string") {
+>x === "string" : boolean
+>               : ^^^^^^^
+>x : PrimitiveName
+>  : ^^^^^^^^^^^^^
+>"string" : "string"
+>         : ^^^^^^^^
+
+        return "";
+>"" : ""
+>   : ^^
+
+    }
+    if (x === "number") {
+>x === "number" : boolean
+>               : ^^^^^^^
+>x : "number" | "boolean"
+>  : ^^^^^^^^^^^^^^^^^^^^
+>"number" : "number"
+>         : ^^^^^^^^
+
+        return 0;
+>0 : 0
+>  : ^
+
+    }
+    if (x === "boolean") {
+>x === "boolean" : boolean
+>                : ^^^^^^^
+>x : "boolean"
+>  : ^^^^^^^^^
+>"boolean" : "boolean"
+>          : ^^^^^^^^^
+
+        return false;
+>false : false
+>      : ^^^^^
+
+    }
+
+    // Should be unreachable.
+    throw "Invalid value";
+>"Invalid value" : "Invalid value"
+>                : ^^^^^^^^^^^^^^^
+
+}
+
+/*pruned*/;        
+                                                     
+                                             
+                                               
+ 
+
+const string: "string" = "string"
+>string : "string"
+>       : ^^^^^^^^
+>"string" : "string"
+>         : ^^^^^^^^
+
+const number: "number" = "number"
+>number : "number"
+>       : ^^^^^^^^
+>"number" : "number"
+>         : ^^^^^^^^
+
+const boolean: "boolean" = "boolean"
+>boolean : "boolean"
+>        : ^^^^^^^^^
+>"boolean" : "boolean"
+>          : ^^^^^^^^^
+
+
+const stringOrNumber = string || number;
+>stringOrNumber : "string"
+>               : ^^^^^^^^
+>string || number : "string"
+>                 : ^^^^^^^^
+>string : "string"
+>       : ^^^^^^^^
+>number : "number"
+>       : ^^^^^^^^
+
+const stringOrBoolean = string || boolean;
+>stringOrBoolean : "string"
+>                : ^^^^^^^^
+>string || boolean : "string"
+>                  : ^^^^^^^^
+>string : "string"
+>       : ^^^^^^^^
+>boolean : "boolean"
+>        : ^^^^^^^^^
+
+const booleanOrNumber = number || boolean;
+>booleanOrNumber : "number"
+>                : ^^^^^^^^
+>number || boolean : "number"
+>                  : ^^^^^^^^
+>number : "number"
+>       : ^^^^^^^^
+>boolean : "boolean"
+>        : ^^^^^^^^^
+
+const stringOrBooleanOrNumber = stringOrBoolean || number;
+>stringOrBooleanOrNumber : "string"
+>                        : ^^^^^^^^
+>stringOrBoolean || number : "string"
+>                          : ^^^^^^^^
+>stringOrBoolean : "string"
+>                : ^^^^^^^^
+>number : "number"
+>       : ^^^^^^^^
+
+
+/*pruned*/;        
+                                                   
+                                           
+                                             
+
+                                                
+                                                 
+                                                 
+                                                         
+ 
+
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

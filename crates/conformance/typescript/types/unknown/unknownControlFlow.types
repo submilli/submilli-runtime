@@ -1,0 +1,1125 @@
+=== unknownControlFlow.ts ===
+
+/*pruned*/;              // {} & string
+/*pruned*/;           // 'a'
+/*pruned*/;              // object
+/*pruned*/;                     // { x: number }
+/*pruned*/;            // never
+/*pruned*/;            // never
+/*pruned*/;              // undefined
+
+/*pruned*/;              // Specially preserved
+/*pruned*/;              // Specially preserved
+/*pruned*/;              // Specially preserved
+
+type ThisNode = {};
+>ThisNode : ThisNode
+>         : ^^^^^^^^
+
+type ThatNode = {};
+>ThatNode : ThatNode
+>         : ^^^^^^^^
+
+type ThisOrThatNode = ThisNode | ThatNode;
+>ThisOrThatNode : ThisOrThatNode
+>               : ^^^^^^^^^^^^^^
+
+
+function f01(u: unknown): void {
+>f01 : (u: unknown) => void
+>    : ^^^^^^^^^^^^^^^^^^^^
+>u : unknown
+>  : ^^^^^^^
+
+    let x1: {} = u;  // Error
+>x1 : {}
+>   : ^^
+>u : unknown
+>  : ^^^^^^^
+
+    let x2: {} | null | null = u;
+>x2 : {} | null
+>   : ^^^^^^^^^
+>u : unknown
+>  : ^^^^^^^
+
+    let x3: {} | { x: string } | null | null = u;
+>x3 : {} | { x: string; } | null
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>u : unknown
+>  : ^^^^^^^
+
+    let x4: ThisOrThatNode | null | null = u;
+>x4 : ThisOrThatNode | null
+>   : ^^^^^^^^^^^^^^^^^^^^^
+>u : unknown
+>  : ^^^^^^^
+
+}
+
+function f10(x: unknown): void {
+>f10 : (x: unknown) => void
+>    : ^^^^^^^^^^^^^^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+
+    if (x) {
+>x : unknown
+>  : ^^^^^^^
+
+        x;  // {}
+>x : {}
+>  : ^^
+
+    }
+    else {
+        x;  // unknown
+>x : unknown
+>  : ^^^^^^^
+
+    }
+    if (!x) {
+>!x : boolean
+>   : ^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+
+        x;  // unknown
+>x : unknown
+>  : ^^^^^^^
+
+    }
+    else {
+        x;  // {}
+>x : {}
+>  : ^^
+
+    }
+}
+
+function f11<T>(x: T): void {
+>f11 : <T>(x: T) => void
+>    : ^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+
+    if (x) {
+>x : T
+>  : ^
+
+        x;  // T & {}
+>x : NonNullable<T>
+>  : ^^^^^^^^^^^^^^
+
+    }
+    else {
+        x;  // T
+>x : T
+>  : ^
+
+    }
+    if (!x) {
+>!x : boolean
+>   : ^^^^^^^
+>x : T
+>  : ^
+
+        x;  // T
+>x : T
+>  : ^
+
+    }
+    else {
+        x;  // T & {}
+>x : NonNullable<T>
+>  : ^^^^^^^^^^^^^^
+
+    }
+}
+
+/*pruned*/;                             
+            
+                
+     
+          
+                
+     
+ 
+
+function f20(x: unknown): void {
+>f20 : (x: unknown) => void
+>    : ^^^^^^^^^^^^^^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+
+    if (x !== null) {
+>x !== null : boolean
+>           : ^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+
+        x;  // {} | null
+>x : {} | undefined
+>  : ^^^^^^^^^^^^^^
+
+    }
+    else {
+        x;  // undefined
+>x : null
+>  : ^^^^
+
+    }
+    if (x !== null) {
+>x !== null : boolean
+>           : ^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+
+        x;  // {} | undefined
+>x : {} | undefined
+>  : ^^^^^^^^^^^^^^
+
+    }
+    else {
+        x;  // null
+>x : null
+>  : ^^^^
+
+    }
+    if (x !== null && x !== null) {
+>x !== null && x !== null : boolean
+>                         : ^^^^^^^
+>x !== null : boolean
+>           : ^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+>x !== null : boolean
+>           : ^^^^^^^
+>x : {} | undefined
+>  : ^^^^^^^^^^^^^^
+
+        x;  // {}
+>x : {} | undefined
+>  : ^^^^^^^^^^^^^^
+
+    }
+    else {
+        x;  // null | undefined
+>x : null
+>  : ^^^^
+
+    }
+    if (x != null) {
+>x != null : boolean
+>          : ^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+
+        x;  // {}
+>x : {}
+>  : ^^
+
+    }
+    else {
+        x;  // null | undefined
+>x : null | undefined
+>  : ^^^^^^^^^^^^^^^^
+
+    }
+    if (x != null) {
+>x != null : boolean
+>          : ^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+
+        x;  // {}
+>x : {}
+>  : ^^
+
+    }
+    else {
+        x;  // null | undefined
+>x : null | undefined
+>  : ^^^^^^^^^^^^^^^^
+
+    }
+}
+
+function f21<T>(x: T): void {
+>f21 : <T>(x: T) => void
+>    : ^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+
+    if (x !== null) {
+>x !== null : boolean
+>           : ^^^^^^^
+>x : T
+>  : ^
+
+        x;  // T & ({} | null)
+>x : T & ({} | undefined)
+>  : ^^^^^^^^^^^^^^^^^^^^
+
+    }
+    else {
+        x;  // T
+>x : T
+>  : ^
+
+    }
+    if (x !== null) {
+>x !== null : boolean
+>           : ^^^^^^^
+>x : T
+>  : ^
+
+        x;  // T & ({} | undefined)
+>x : T & ({} | undefined)
+>  : ^^^^^^^^^^^^^^^^^^^^
+
+    }
+    else {
+        x;  // T
+>x : T
+>  : ^
+
+    }
+    if (x !== null && x !== null) {
+>x !== null && x !== null : boolean
+>                         : ^^^^^^^
+>x !== null : boolean
+>           : ^^^^^^^
+>x : T
+>  : ^
+>x !== null : boolean
+>           : ^^^^^^^
+>x : T & ({} | undefined)
+>  : ^^^^^^^^^^^^^^^^^^^^
+
+        x;  // T & {}
+>x : T & ({} | undefined)
+>  : ^^^^^^^^^^^^^^^^^^^^
+
+    }
+    else {
+        x;  // T
+>x : T
+>  : ^
+
+    }
+    if (x != null) {
+>x != null : boolean
+>          : ^^^^^^^
+>x : T
+>  : ^
+
+        x;  // T & {}
+>x : NonNullable<T>
+>  : ^^^^^^^^^^^^^^
+
+    }
+    else {
+        x;  // T
+>x : T
+>  : ^
+
+    }
+    if (x != null) {
+>x != null : boolean
+>          : ^^^^^^^
+>x : T
+>  : ^
+
+        x;  // T & {}
+>x : NonNullable<T>
+>  : ^^^^^^^^^^^^^^
+
+    }
+    else {
+        x;  // T
+>x : T
+>  : ^
+
+    }
+}
+
+/*pruned*/;                                    
+                     
+                     
+     
+          
+                
+     
+                     
+                
+     
+          
+                
+     
+                                   
+                     
+     
+          
+                
+     
+                    
+                     
+     
+          
+                
+     
+                    
+                     
+     
+          
+                
+     
+ 
+
+function f23<T>(x: T | null | null): void {
+>f23 : <T>(x: T | null | null) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T | null
+>  : ^^^^^^^^
+
+    if (x !== null) {
+>x !== null : boolean
+>           : ^^^^^^^
+>x : T | null
+>  : ^^^^^^^^
+
+        x;  // T & {} | null
+>x : T & ({} | undefined)
+>  : ^^^^^^^^^^^^^^^^^^^^
+
+    }
+    if (x !== null) {
+>x !== null : boolean
+>           : ^^^^^^^
+>x : T | null
+>  : ^^^^^^^^
+
+        x;  // T & {} | undefined
+>x : T & ({} | undefined)
+>  : ^^^^^^^^^^^^^^^^^^^^
+
+    }
+    if (x != null) {
+>x != null : boolean
+>          : ^^^^^^^
+>x : T | null
+>  : ^^^^^^^^
+
+        x;  // T & {}
+>x : NonNullable<T>
+>  : ^^^^^^^^^^^^^^
+
+    }
+    if (x != null) {
+>x != null : boolean
+>          : ^^^^^^^
+>x : T | null
+>  : ^^^^^^^^
+
+        x;  // T & {}
+>x : NonNullable<T>
+>  : ^^^^^^^^^^^^^^
+
+    }
+}
+
+function f30(x: {}): void {
+>f30 : (x: {}) => void
+>    : ^^^^^^^^^^^^^^^
+>x : {}
+>  : ^^
+
+    if (typeof x === "object") {
+>typeof x === "object" : boolean
+>                      : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : {}
+>  : ^^
+>"object" : "object"
+>         : ^^^^^^^^
+
+        x;  // object
+>x : object
+>  : ^^^^^^
+
+    }
+}
+
+function f31<T>(x: T): void {
+>f31 : <T>(x: T) => void
+>    : ^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+
+    if (typeof x === "object") {
+>typeof x === "object" : boolean
+>                      : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : T
+>  : ^
+>"object" : "object"
+>         : ^^^^^^^^
+
+        x;  // T & object | T & null
+>x : (T & object) | (T & null)
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    }
+    if (x && typeof x === "object") {
+>x && typeof x === "object" : boolean
+>                           : ^^^^^^^
+>x : T
+>  : ^
+>typeof x === "object" : boolean
+>                      : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : NonNullable<T>
+>  : ^^^^^^^^^^^^^^
+>"object" : "object"
+>         : ^^^^^^^^
+
+        x;  // T & object
+>x : T & object
+>  : ^^^^^^^^^^
+
+    }
+    if (typeof x === "object" && x) {
+>typeof x === "object" && x : false | (T & object) | (T & null)
+>                           : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>typeof x === "object" : boolean
+>                      : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : T
+>  : ^
+>"object" : "object"
+>         : ^^^^^^^^
+>x : (T & object) | (T & null)
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        x;  // T & object
+>x : T & object
+>  : ^^^^^^^^^^
+
+    }
+}
+
+/*pruned*/;                                    
+                                
+                         
+     
+ 
+
+function possiblyNull<T>(x: T): T | null {
+>possiblyNull : <T>(x: T) => T | null
+>             : ^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+
+    return !!true ? x : null;  // T | null
+>!!true ? x : null : T | null
+>                  : ^^^^^^^^
+>!!true : true
+>       : ^^^^
+>!true : false
+>      : ^^^^^
+>true : true
+>     : ^^^^
+>x : T
+>  : ^
+
+}
+
+function possiblyUndefined<T>(x: T): T | null {
+>possiblyUndefined : <T>(x: T) => T | null
+>                  : ^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+
+    return !!true ? x : null;  // T | undefined
+>!!true ? x : null : T | null
+>                  : ^^^^^^^^
+>!!true : true
+>       : ^^^^
+>!true : false
+>      : ^^^^^
+>true : true
+>     : ^^^^
+>x : T
+>  : ^
+
+}
+
+function possiblyNullOrUndefined<T>(x: T): T | null {
+>possiblyNullOrUndefined : <T>(x: T) => T | null
+>                        : ^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+
+    return possiblyUndefined(possiblyNull(x));  // T | null | undefined
+>possiblyUndefined(possiblyNull(x)) : T | null
+>                                   : ^^^^^^^^
+>possiblyUndefined : <T>(x: T) => T | null
+>                  : ^^^^^^^^^^^^^^^^^^^^^
+>possiblyNull(x) : T | null
+>                : ^^^^^^^^
+>possiblyNull : <T>(x: T) => T | null
+>             : ^^^^^^^^^^^^^^^^^^^^^
+>x : T
+>  : ^
+
+}
+
+/*pruned*/;                                       
+                                  
+                                      
+ 
+
+/*pruned*/;                                            
+                                  
+                                 
+ 
+
+/*pruned*/;                                                        
+                                                           
+ 
+
+function f40(a: string | null, b: number | null | null): void {
+>f40 : (a: string | null, b: number | null | null) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : string | null
+>  : ^^^^^^^^^^^^^
+>b : number | null
+>  : ^^^^^^^^^^^^^
+
+    /*pruned*/;                            // string
+    /*pruned*/;                            // number
+}
+
+/*pruned*/;                                           
+
+function f41<T>(a: T): void {
+>f41 : <T>(a: T) => void
+>    : ^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>a : T
+>  : ^
+
+    /*pruned*/;                                     // T & {}
+    /*pruned*/;                                     // T & {}
+    /*pruned*/;                                // T & {} | T & undefined
+    /*pruned*/;                                          // T & {} | T & null
+    /*pruned*/;                                                      // T & {}
+    /*pruned*/;                                          // T & {} | undefined
+    /*pruned*/;                                               // T & {} | null
+    /*pruned*/;                                    // T & {} | undefined
+    /*pruned*/;                                    // T & {} | null
+}
+
+// Repro from #48468
+
+function deepEquals<T>(a: T, b: T): boolean {
+>deepEquals : <T>(a: T, b: T) => boolean
+>           : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>a : T
+>  : ^
+>b : T
+>  : ^
+
+    if (typeof a !== 'object' || typeof b !== 'object' || !a || !b) {
+>typeof a !== 'object' || typeof b !== 'object' || !a || !b : boolean
+>                                                           : ^^^^^^^
+>typeof a !== 'object' || typeof b !== 'object' || !a : boolean
+>                                                     : ^^^^^^^
+>typeof a !== 'object' || typeof b !== 'object' : boolean
+>                                               : ^^^^^^^
+>typeof a !== 'object' : boolean
+>                      : ^^^^^^^
+>typeof a : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : T
+>  : ^
+>'object' : "object"
+>         : ^^^^^^^^
+>typeof b !== 'object' : boolean
+>                      : ^^^^^^^
+>typeof b : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : T
+>  : ^
+>'object' : "object"
+>         : ^^^^^^^^
+>!a : boolean
+>   : ^^^^^^^
+>a : (T & object) | (T & null)
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>!b : boolean
+>   : ^^^^^^^
+>b : (T & object) | (T & null)
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        return false;
+>false : false
+>      : ^^^^^
+
+    }
+    if (Array.isArray(a) || Array.isArray(b)) {
+>Array.isArray(a) || Array.isArray(b) : boolean
+>                                     : ^^^^^^^
+>Array.isArray(a) : boolean
+>                 : ^^^^^^^
+>Array.isArray : (arg: any) => arg is any[]
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>Array : ArrayConstructor
+>      : ^^^^^^^^^^^^^^^^
+>isArray : (arg: any) => arg is any[]
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : T & object
+>  : ^^^^^^^^^^
+>Array.isArray(b) : boolean
+>                 : ^^^^^^^
+>Array.isArray : (arg: any) => arg is any[]
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>Array : ArrayConstructor
+>      : ^^^^^^^^^^^^^^^^
+>isArray : (arg: any) => arg is any[]
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : T & object
+>  : ^^^^^^^^^^
+
+        return false;
+>false : false
+>      : ^^^^^
+
+    }
+    if (Object.keys(a).length !== Object.keys(b).length) { // Error here
+>Object.keys(a).length !== Object.keys(b).length : boolean
+>                                                : ^^^^^^^
+>Object.keys(a).length : number
+>                      : ^^^^^^
+>Object.keys(a) : string[]
+>               : ^^^^^^^^
+>Object.keys : { (o: object): string[]; (o: {}): string[]; }
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>Object : ObjectConstructor
+>       : ^^^^^^^^^^^^^^^^^
+>keys : { (o: object): string[]; (o: {}): string[]; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : T & object
+>  : ^^^^^^^^^^
+>length : number
+>       : ^^^^^^
+>Object.keys(b).length : number
+>                      : ^^^^^^
+>Object.keys(b) : string[]
+>               : ^^^^^^^^
+>Object.keys : { (o: object): string[]; (o: {}): string[]; }
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>Object : ObjectConstructor
+>       : ^^^^^^^^^^^^^^^^^
+>keys : { (o: object): string[]; (o: {}): string[]; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : T & object
+>  : ^^^^^^^^^^
+>length : number
+>       : ^^^^^^
+
+        return false;
+>false : false
+>      : ^^^^^
+
+    }
+    return true;
+>true : true
+>     : ^^^^
+
+}
+
+// Repro from #49386
+
+function foo<T>(x: T | null): void {
+>foo : <T>(x: T | null) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T | null
+>  : ^^^^^^^^
+
+    let y = x;
+>y : T | null
+>  : ^^^^^^^^
+>x : T | null
+>  : ^^^^^^^^
+
+    if (y !== null) {
+>y !== null : boolean
+>           : ^^^^^^^
+>y : T | null
+>  : ^^^^^^^^
+
+        y;
+>y : T & ({} | undefined)
+>  : ^^^^^^^^^^^^^^^^^^^^
+
+    }
+}
+
+// We allow an unconstrained object of a generic type `T` to be indexed by a key of type `keyof T`
+// without a check that the object is non-undefined and non-null. This is safe because `keyof T`
+// is `never` (meaning no possible keys) for any `T` that includes `undefined` or `null`.
+
+function ff1<T>(t: T, k: keyof T): void {
+>ff1 : <T>(t: T, k: keyof T) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>t : T
+>  : ^
+>k : keyof T
+>  : ^^^^^^^
+
+    t[k];
+>t[k] : T[keyof T]
+>     : ^^^^^^^^^^
+>t : T
+>  : ^
+>k : keyof T
+>  : ^^^^^^^
+
+}
+
+/*pruned*/;                                   
+         
+ 
+
+/*pruned*/;                                     
+                   
+ 
+
+/*pruned*/;                                          
+         
+ 
+
+ff1(null, 'foo');  // Error
+>ff1(null, 'foo') : void
+>                 : ^^^^
+>ff1 : <T>(t: T, k: keyof T) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>'foo' : "foo"
+>      : ^^^^^
+
+/*pruned*/;        // Error
+/*pruned*/;      
+/*pruned*/;        // Error
+
+// Repro from #49681
+
+/*pruned*/;                           
+/*pruned*/;                   
+
+/*pruned*/;                                              
+
+// Generics and intersections with {}
+
+/*pruned*/;                                    
+                       
+                         
+     
+          
+                                  
+     
+ 
+
+/*pruned*/;                                                    
+                       
+                         
+     
+          
+                                  
+     
+ 
+
+/*pruned*/;                                               
+                       
+                         
+     
+          
+                                  
+     
+ 
+
+/*pruned*/;                                                      
+                       
+                         
+     
+          
+                                  
+     
+ 
+
+/*pruned*/;                                                      
+                       
+                         
+     
+          
+                                  
+     
+ 
+
+/*pruned*/;                                                             
+                       
+                         
+     
+          
+                                  
+     
+ 
+
+// Double-equals narrowing
+
+function fx10(x: string | number, y: number): void {
+>fx10 : (x: string | number, y: number) => void
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>y : number
+>  : ^^^^^^
+
+    if (x == y) {
+>x == y : boolean
+>       : ^^^^^^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>y : number
+>  : ^^^^^^
+
+        x;  // string | number
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+    }
+    else {
+        x;  // string | number
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+    }
+    if (x != y) {
+>x != y : boolean
+>       : ^^^^^^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>y : number
+>  : ^^^^^^
+
+        x;  // string | number
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+    }
+    else {
+        x;  // string | number
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+    }
+}
+
+// Repros from #50706
+
+function SendBlob(encoding: unknown): void {
+>SendBlob : (encoding: unknown) => void
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>encoding : unknown
+>         : ^^^^^^^
+
+    if (encoding !== null && encoding !== 'utf8') {
+>encoding !== null && encoding !== 'utf8' : boolean
+>                                         : ^^^^^^^
+>encoding !== null : boolean
+>                  : ^^^^^^^
+>encoding : unknown
+>         : ^^^^^^^
+>encoding !== 'utf8' : boolean
+>                    : ^^^^^^^
+>encoding : {} | undefined
+>         : ^^^^^^^^^^^^^^
+>'utf8' : "utf8"
+>       : ^^^^^^
+
+        throw new Error('encoding');
+>new Error('encoding') : Error
+>                      : ^^^^^
+>Error : ErrorConstructor
+>      : ^^^^^^^^^^^^^^^^
+>'encoding' : "encoding"
+>           : ^^^^^^^^^^
+
+    }
+    encoding;
+>encoding : "utf8" | null
+>         : ^^^^^^^^^^^^^
+
+};
+
+/*pruned*/;                                            
+                         
+                     
+     
+                       
+                                             
+     
+                 
+ 
+
+function doSomething2(value: unknown): void {
+>doSomething2 : (value: unknown) => void
+>             : ^^^^^^^^^^^^^^^^^^^^^^^^
+>value : unknown
+>      : ^^^^^^^
+
+    if (value === null) {
+>value === null : boolean
+>               : ^^^^^^^
+>value : unknown
+>      : ^^^^^^^
+
+        return;
+    }
+    if (value === 42) {
+>value === 42 : boolean
+>             : ^^^^^^^
+>value : {} | undefined
+>      : ^^^^^^^^^^^^^^
+>42 : 42
+>   : ^^
+
+        value;
+>value : 42
+>      : ^^
+
+    }
+}
+
+// Repro from #51009
+
+type TypeA = {
+>TypeA : TypeA
+>      : ^^^^^
+
+    A: 'A',
+>A : "A"
+>  : ^^^
+
+    B: 'B',
+>B : "B"
+>  : ^^^
+
+}
+
+type TypeB = {
+>TypeB : TypeB
+>      : ^^^^^
+
+    A: 'A',
+>A : "A"
+>  : ^^^
+
+    B: 'B',
+>B : "B"
+>  : ^^^
+
+    C: 'C',
+>C : "C"
+>  : ^^^
+
+}
+
+/*pruned*/;                    
+                                                         
+
+/*pruned*/;                     
+                                                                                         
+
+// Repro from #51041
+
+type AB = "A" | "B";
+>AB : AB
+>   : ^^
+
+
+/*pruned*/;                                                
+                                     
+  
+
+// Repro from #51538
+
+type Left = 'left';
+>Left : "left"
+>     : ^^^^^^
+
+/*pruned*/;                               
+/*pruned*/;                
+
+function assertNever(v: never): never {
+>assertNever : (v: never) => never
+>            : ^^^^^^^^^^^^^^^^^^^
+>v : never
+>  : ^^^^^
+
+    throw new Error('never');
+>new Error('never') : Error
+>                   : ^^^^^
+>Error : ErrorConstructor
+>      : ^^^^^^^^^^^^^^^^
+>'never' : "never"
+>        : ^^^^^^^
+
+}
+
+/*pruned*/;                         
+                           
+                                  
+     
+                                 
+                                   
+     
+          
+                           
+     
+ 
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

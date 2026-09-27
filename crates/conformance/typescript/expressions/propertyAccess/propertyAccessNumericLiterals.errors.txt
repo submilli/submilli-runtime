@@ -1,0 +1,3 @@
+propertyAccessNumericLiterals.ts(8,1): error TS1121: Octal literals are not allowed. Use the syntax '0o0'.
+propertyAccessNumericLiterals.ts(9,1): error TS1489: Decimals with leading zeros are not allowed.
+propertyAccessNumericLiterals.ts(12,1): error TS1489: Decimals with leading zeros are not allowed.

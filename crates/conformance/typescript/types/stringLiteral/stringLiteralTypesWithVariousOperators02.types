@@ -1,0 +1,132 @@
+=== stringLiteralTypesWithVariousOperators02.ts ===
+
+let abc: "ABC" = null as unknown as ("ABC");
+>abc : "ABC"
+>    : ^^^^^
+>null as unknown as ("ABC") : "ABC"
+>                           : ^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let xyz: "XYZ" = null as unknown as ("XYZ");
+>xyz : "XYZ"
+>    : ^^^^^
+>null as unknown as ("XYZ") : "XYZ"
+>                           : ^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let abcOrXyz: "ABC" | "XYZ" = null as unknown as ("ABC" | "XYZ");
+>abcOrXyz : "ABC" | "XYZ"
+>         : ^^^^^^^^^^^^^
+>null as unknown as ("ABC" | "XYZ") : "ABC" | "XYZ"
+>                                   : ^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let abcOrXyzOrNumber: "ABC" | "XYZ" | number = null as unknown as ("ABC" | "XYZ" | number);
+>abcOrXyzOrNumber : number | "ABC" | "XYZ"
+>                 : ^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as ("ABC" | "XYZ" | number) : number | "ABC" | "XYZ"
+>                                            : ^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+let a = abcOrXyzOrNumber + 100;
+>a : any
+>  : ^^^
+>abcOrXyzOrNumber + 100 : any
+>                       : ^^^
+>abcOrXyzOrNumber : number | "ABC" | "XYZ"
+>                 : ^^^^^^^^^^^^^^^^^^^^^^
+>100 : 100
+>    : ^^^
+
+let b = 100 + abcOrXyzOrNumber;
+>b : any
+>  : ^^^
+>100 + abcOrXyzOrNumber : any
+>                       : ^^^
+>100 : 100
+>    : ^^^
+>abcOrXyzOrNumber : number | "ABC" | "XYZ"
+>                 : ^^^^^^^^^^^^^^^^^^^^^^
+
+let c = abcOrXyzOrNumber + abcOrXyzOrNumber;
+>c : any
+>  : ^^^
+>abcOrXyzOrNumber + abcOrXyzOrNumber : any
+>                                    : ^^^
+>abcOrXyzOrNumber : number | "ABC" | "XYZ"
+>                 : ^^^^^^^^^^^^^^^^^^^^^^
+>abcOrXyzOrNumber : number | "ABC" | "XYZ"
+>                 : ^^^^^^^^^^^^^^^^^^^^^^
+
+let d = abcOrXyzOrNumber + true;
+>d : any
+>  : ^^^
+>abcOrXyzOrNumber + true : any
+>                        : ^^^
+>abcOrXyzOrNumber : number | "ABC" | "XYZ"
+>                 : ^^^^^^^^^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+
+let e = false + abcOrXyzOrNumber;
+>e : any
+>  : ^^^
+>false + abcOrXyzOrNumber : any
+>                         : ^^^
+>false : false
+>      : ^^^^^
+>abcOrXyzOrNumber : number | "ABC" | "XYZ"
+>                 : ^^^^^^^^^^^^^^^^^^^^^^
+
+let f = abcOrXyzOrNumber++;
+>f : number
+>  : ^^^^^^
+>abcOrXyzOrNumber++ : number
+>                   : ^^^^^^
+>abcOrXyzOrNumber : string | number
+>                 : ^^^^^^^^^^^^^^^
+
+/*pruned*/;                
+/*pruned*/;                   
+/*pruned*/;                   
+let j = abc < xyz;
+>j : boolean
+>  : ^^^^^^^
+>abc < xyz : boolean
+>          : ^^^^^^^
+>abc : "ABC"
+>    : ^^^^^
+>xyz : "XYZ"
+>    : ^^^^^
+
+let k = abc === xyz;
+>k : boolean
+>  : ^^^^^^^
+>abc === xyz : boolean
+>            : ^^^^^^^
+>abc : "ABC"
+>    : ^^^^^
+>xyz : "XYZ"
+>    : ^^^^^
+
+let l = abc != xyz;
+>l : boolean
+>  : ^^^^^^^
+>abc != xyz : boolean
+>           : ^^^^^^^
+>abc : "ABC"
+>    : ^^^^^
+>xyz : "XYZ"
+>    : ^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

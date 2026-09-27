@@ -1,0 +1,5 @@
+types: 11 of 21 tsc entries compared, 1 differ
+
+line 4: { y: 123, ...x }
+  tsc:  { y: string | number; }
+  ours: { y: number }

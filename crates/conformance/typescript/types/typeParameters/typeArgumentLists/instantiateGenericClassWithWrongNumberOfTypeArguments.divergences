@@ -1,0 +1,9 @@
+types: 4 of 15 tsc entries compared, 2 differ
+
+line 17: d
+  tsc:  D<number, unknown>
+  ours: D<number, U>
+
+line 17: new D<number>()
+  tsc:  D<number, unknown>
+  ours: D<number, U>

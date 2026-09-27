@@ -1,24 +1,8 @@
-types: 8 of 10 tsc entries compared, 7 differ
-
-line 3: v
-  tsc:  never
-  ours: <error>
-
-line 3: []
-  tsc:  never[]
-  ours: <error>[]
+types: 4 of 10 tsc entries compared, 3 differ
 
 line 4: v
   tsc:  never
   ours: <error>
-
-line 5: v
-  tsc:  never
-  ours: <error>
-
-line 5: []
-  tsc:  never[]
-  ours: <error>[]
 
 line 6: x
   tsc:  never

@@ -1,0 +1,109 @@
+=== typeGuardsNestedAssignments.ts ===
+
+class Foo {
+>Foo : Foo
+>    : ^^^
+
+    x: string = "";
+>x : string
+>  : ^^^^^^
+>"" : ""
+>   : ^^
+
+}
+
+/*pruned*/;                                                                    
+function getStringOrNumberOrNull(): string | number | null { return null as unknown as (string | number | null); }
+>getStringOrNumberOrNull : () => string | number | null
+>                        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (string | number | null) : string | number | null
+>                                            : ^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+function f1(): void {
+>f1 : () => void
+>   : ^^^^^^^^^^
+
+    /*pruned*/;                                           
+    /*pruned*/;                           
+                    
+     
+}
+
+/*pruned*/;          
+                                                           
+                                                           
+                                                        
+                            
+                     
+     
+ 
+
+function f3(): void {
+>f3 : () => void
+>   : ^^^^^^^^^^
+
+    /*pruned*/;                                                 
+    /*pruned*/;                                 
+            
+     
+}
+
+function f4(): void {
+>f4 : () => void
+>   : ^^^^^^^^^^
+
+    let x: string | number | null = null as unknown as (string | number | null);
+>x : string | number | null
+>  : ^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (string | number | null) : string | number | null
+>                                            : ^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    if (typeof (x = getStringOrNumberOrNull()) === "number") {
+>typeof (x = getStringOrNumberOrNull()) === "number" : boolean
+>                                                    : ^^^^^^^
+>typeof (x = getStringOrNumberOrNull()) : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                                       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(x = getStringOrNumberOrNull()) : string | number | null
+>                                : ^^^^^^^^^^^^^^^^^^^^^^
+>x = getStringOrNumberOrNull() : string | number | null
+>                              : ^^^^^^^^^^^^^^^^^^^^^^
+>x : string | number | null
+>  : ^^^^^^^^^^^^^^^^^^^^^^
+>getStringOrNumberOrNull() : string | number | null
+>                          : ^^^^^^^^^^^^^^^^^^^^^^
+>getStringOrNumberOrNull : () => string | number | null
+>                        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>"number" : "number"
+>         : ^^^^^^^^
+
+        x;
+>x : number
+>  : ^^^^^^
+
+    }
+}
+
+// Repro from #8851
+
+const re = /./g
+>re : RegExp
+>   : ^^^^^^
+>/./g : RegExp
+>     : ^^^^^^
+
+/*pruned*/;                                                                     
+
+/*pruned*/;                               
+                                                    
+ 
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

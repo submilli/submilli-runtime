@@ -1,0 +1,1 @@
+bestCommonTypeOfTuple.ts(23,13): error TS2493: Tuple type '[(x: number) => string, (x: number) => number]' of length '2' has no element at index '2'.

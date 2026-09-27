@@ -1,0 +1,23 @@
+types: 55 of 120 tsc entries compared, 2 differ
+
+line 4: [10, "foo"]
+  tsc:  [number, string]
+  ours: [number, number | string]
+
+line 5: [true, "foo"]
+  tsc:  [true, string]
+  ours: [boolean, number | string]
+
+errors:
+line 13: ours: tuple index must be a non-negative integer literal; tuple has 2 elements (tsc accepts)
+line 14: ours: tuple index must be a non-negative integer literal; tuple has 2 elements (tsc accepts)
+line 15: ours: field `0` does not exist on `[string, number]` (tsc accepts)
+line 16: ours: field `1` does not exist on `[string, number]` (tsc accepts)
+line 24: ours: tuple index must be a non-negative integer literal; tuple has 2 elements (tsc accepts)
+line 25: ours: tuple index must be a non-negative integer literal; tuple has 2 elements (tsc accepts)
+line 26: ours: field `0` does not exist on `[number, number | string]` (tsc accepts)
+line 27: ours: field `1` does not exist on `[number, number | string]` (tsc accepts)
+line 32: ours: tuple index must be a non-negative integer literal; tuple has 2 elements (tsc accepts)
+line 33: ours: tuple index must be a non-negative integer literal; tuple has 2 elements (tsc accepts)
+line 34: ours: field `0` does not exist on `[boolean, number | string]` (tsc accepts)
+line 35: ours: field `1` does not exist on `[boolean, number | string]` (tsc accepts)

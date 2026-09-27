@@ -1,0 +1,146 @@
+=== arithmeticOperatorWithOnlyNullValueOrUndefinedValue.ts ===
+// operator *
+let ra1 = null * null;
+>ra1 : number
+>    : ^^^^^^
+>null * null : number
+>            : ^^^^^^
+
+let ra2 = null * null;
+>ra2 : number
+>    : ^^^^^^
+>null * null : number
+>            : ^^^^^^
+
+let ra3 = null * null;
+>ra3 : number
+>    : ^^^^^^
+>null * null : number
+>            : ^^^^^^
+
+let ra4 = null * null;
+>ra4 : number
+>    : ^^^^^^
+>null * null : number
+>            : ^^^^^^
+
+
+// operator /
+let rb1 = null / null;
+>rb1 : number
+>    : ^^^^^^
+>null / null : number
+>            : ^^^^^^
+
+let rb2 = null / null;
+>rb2 : number
+>    : ^^^^^^
+>null / null : number
+>            : ^^^^^^
+
+let rb3 = null / null;
+>rb3 : number
+>    : ^^^^^^
+>null / null : number
+>            : ^^^^^^
+
+let rb4 = null / null;
+>rb4 : number
+>    : ^^^^^^
+>null / null : number
+>            : ^^^^^^
+
+
+// operator %
+let rc1 = null % null;
+>rc1 : number
+>    : ^^^^^^
+>null % null : number
+>            : ^^^^^^
+
+let rc2 = null % null;
+>rc2 : number
+>    : ^^^^^^
+>null % null : number
+>            : ^^^^^^
+
+let rc3 = null % null;
+>rc3 : number
+>    : ^^^^^^
+>null % null : number
+>            : ^^^^^^
+
+let rc4 = null % null;
+>rc4 : number
+>    : ^^^^^^
+>null % null : number
+>            : ^^^^^^
+
+
+// operator -
+let rd1 = null - null;
+>rd1 : number
+>    : ^^^^^^
+>null - null : number
+>            : ^^^^^^
+
+let rd2 = null - null;
+>rd2 : number
+>    : ^^^^^^
+>null - null : number
+>            : ^^^^^^
+
+let rd3 = null - null;
+>rd3 : number
+>    : ^^^^^^
+>null - null : number
+>            : ^^^^^^
+
+let rd4 = null - null;
+>rd4 : number
+>    : ^^^^^^
+>null - null : number
+>            : ^^^^^^
+
+
+// operator <<
+/*pruned*/;            
+/*pruned*/;            
+/*pruned*/;            
+/*pruned*/;            
+
+// operator >>
+/*pruned*/;            
+/*pruned*/;            
+/*pruned*/;            
+/*pruned*/;            
+
+// operator >>>
+/*pruned*/;             
+/*pruned*/;             
+/*pruned*/;             
+/*pruned*/;             
+
+// operator &
+/*pruned*/;           
+/*pruned*/;           
+/*pruned*/;           
+/*pruned*/;           
+
+// operator ^
+/*pruned*/;           
+/*pruned*/;           
+/*pruned*/;           
+/*pruned*/;           
+
+// operator |
+/*pruned*/;           
+/*pruned*/;           
+/*pruned*/;           
+/*pruned*/;           
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

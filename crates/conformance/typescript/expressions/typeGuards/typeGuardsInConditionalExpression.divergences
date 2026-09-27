@@ -1,0 +1,150 @@
+types: 172 of 256 tsc entries compared, 34 differ
+
+line 16: x = "hello"
+  tsc:  "hello"
+  ours: string
+
+line 21: x = 10
+  tsc:  10
+  ours: number
+
+line 27: x = 10
+  tsc:  10
+  ours: number
+
+line 32: x = "hello"
+  tsc:  "hello"
+  ours: string
+
+line 37: x = 10
+  tsc:  10
+  ours: number
+
+line 38: x = "hello"
+  tsc:  "hello"
+  ours: string
+
+line 49: typeof x === "string" ? x === "hello" : ((b = x) && // number | boolean (typeof x === "boolean" ? x // boolean : x == 10))
+  tsc:  boolean | 0
+  ours: number | boolean
+
+line 51: ((b = x) && // number | boolean (typeof x === "boolean" ? x // boolean : x == 10))
+  tsc:  boolean | 0
+  ours: number | boolean
+
+line 51: (b = x) && // number | boolean (typeof x === "boolean" ? x // boolean : x == 10)
+  tsc:  boolean | 0
+  ours: number | boolean
+
+line 52: x
+  tsc:  number | true
+  ours: number | boolean
+
+line 53: x
+  tsc:  true
+  ours: boolean
+
+line 59: typeof x === "string" ? ((y = x.length) && x === "hello") // boolean : x === 10
+  tsc:  boolean | 0
+  ours: number | boolean
+
+line 60: ((y = x.length) && x === "hello")
+  tsc:  boolean | 0
+  ours: number | boolean
+
+line 60: (y = x.length) && x === "hello"
+  tsc:  boolean | 0
+  ours: number | boolean
+
+line 66: typeof x === "string" ? x // string : ((b = x) // x is number | boolean && typeof x === "number" && x.toString())
+  tsc:  string | false | 0
+  ours: number | string | boolean
+
+line 68: ((b = x) // x is number | boolean && typeof x === "number" && x.toString())
+  tsc:  string | false | 0
+  ours: number | string | boolean
+
+line 68: (b = x) // x is number | boolean && typeof x === "number" && x.toString()
+  tsc:  string | false | 0
+  ours: number | string | boolean
+
+line 68: (b = x) // x is number | boolean && typeof x === "number"
+  tsc:  boolean | 0
+  ours: number | boolean
+
+line 69: x
+  tsc:  number | true
+  ours: number | boolean
+
+line 75: typeof x === "string" ? x // string : ((b = x) // x is number | boolean && typeof x === "number" && (x = 10) // assignment to x && x)
+  tsc:  string | number | false
+  ours: number | string | boolean
+
+line 77: ((b = x) // x is number | boolean && typeof x === "number" && (x = 10) // assignment to x && x)
+  tsc:  number | false
+  ours: number | string | boolean
+
+line 77: (b = x) // x is number | boolean && typeof x === "number" && (x = 10) // assignment to x && x
+  tsc:  number | false
+  ours: number | string | boolean
+
+line 77: (b = x) // x is number | boolean && typeof x === "number" && (x = 10)
+  tsc:  false | 0 | 10
+  ours: number | boolean
+
+line 77: (b = x) // x is number | boolean && typeof x === "number"
+  tsc:  boolean | 0
+  ours: number | boolean
+
+line 78: x
+  tsc:  number | true
+  ours: number | boolean
+
+line 79: (x = 10)
+  tsc:  10
+  ours: number
+
+line 79: x = 10
+  tsc:  10
+  ours: number
+
+line 80: x
+  tsc:  number
+  ours: number | string | boolean
+
+line 85: typeof x === "string" ? ((x = 10) && x.toString().length) // number : ((b = x) // x is number | boolean && typeof x === "number" && x)
+  tsc:  number | false
+  ours: number | boolean
+
+line 86: x = 10
+  tsc:  10
+  ours: number
+
+line 87: ((b = x) // x is number | boolean && typeof x === "number" && x)
+  tsc:  number | false
+  ours: number | boolean
+
+line 87: (b = x) // x is number | boolean && typeof x === "number" && x
+  tsc:  number | false
+  ours: number | boolean
+
+line 87: (b = x) // x is number | boolean && typeof x === "number"
+  tsc:  boolean | 0
+  ours: number | boolean
+
+line 88: x
+  tsc:  number | true
+  ours: number | boolean
+
+errors:
+line 49: ours: expected `0 | boolean`, got `number | boolean` (tsc accepts)
+line 51: ours: expected `0 | boolean`, got `number | boolean` (tsc accepts)
+line 59: ours: expected `0 | boolean`, got `number | boolean` (tsc accepts)
+line 60: ours: expected `0 | boolean`, got `number | boolean` (tsc accepts)
+line 66: ours: expected `0 | string | false`, got `number | string | boolean` (tsc accepts)
+line 68: ours: expected `0 | string | false`, got `number | string | boolean` (tsc accepts)
+line 75: ours: expected `number | string | false`, got `number | string | boolean` (tsc accepts)
+line 77: ours: expected `number | string | false`, got `number | string | boolean` (tsc accepts)
+line 80: ours: expected `number | string | false`, got `number | string | boolean` (tsc accepts)
+line 85: ours: expected `number | false`, got `number | boolean` (tsc accepts)
+line 87: ours: expected `number | false`, got `number | boolean` (tsc accepts)

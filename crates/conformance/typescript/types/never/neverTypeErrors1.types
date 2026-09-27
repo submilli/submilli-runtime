@@ -1,0 +1,96 @@
+=== neverTypeErrors1.ts ===
+function f1(): void {
+>f1 : () => void
+>   : ^^^^^^^^^^
+
+    /*pruned*/;                               
+    /**/; 
+    /**/;     
+    /**/;     
+    /**/;    
+    /**/;    
+    /**/;  
+    ;   
+}
+
+function f2(): never {
+>f2 : () => never
+>   : ^^^^^^^^^^^
+
+    return;
+}
+
+function f3(): never {
+>f3 : () => never
+>   : ^^^^^^^^^^^
+
+    return 1;
+>1 : 1
+>  : ^
+
+}
+
+function f4(): never {
+>f4 : () => never
+>   : ^^^^^^^^^^^
+
+}
+
+for (const n of f4()) {}
+>n : any
+>  : ^^^
+>f4() : never
+>     : ^^^^^
+>f4 : () => never
+>   : ^^^^^^^^^^^
+
+/*pruned*/;             
+
+function f5(): void {
+>f5 : () => void
+>   : ^^^^^^^^^^
+
+    let x: never[] = [];  // Ok
+>x : never[]
+>  : ^^^^^^^
+>[] : never[]
+>   : ^^^^^^^
+
+}
+
+// Repro from #46032
+
+interface A {
+>A : A
+>  : ^
+
+    foo: "a";
+>foo : "a"
+>    : ^^^
+
+}
+
+interface B {
+>B : B
+>  : ^
+
+    foo: "b";
+>foo : "b"
+>    : ^^^
+
+}
+
+/*pruned*/;        
+
+/*pruned*/;                          
+            
+                  
+      
+ 
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

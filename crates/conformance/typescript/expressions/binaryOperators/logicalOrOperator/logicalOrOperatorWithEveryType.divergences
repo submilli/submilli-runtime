@@ -1,0 +1,169 @@
+types: 183 of 190 tsc entries compared, 38 differ
+
+line 36: rb7
+  tsc:  { a: string; }
+  ours: boolean | { a: string }
+
+line 36: a7 || a2
+  tsc:  { a: string; }
+  ours: boolean | { a: string }
+
+line 37: rb8
+  tsc:  string[]
+  ours: boolean | string[]
+
+line 37: a8 || a2
+  tsc:  string[]
+  ours: boolean | string[]
+
+line 42: rc2
+  tsc:  number | true
+  ours: number | boolean
+
+line 42: a2 || a3
+  tsc:  number | true
+  ours: number | boolean
+
+line 47: rc7
+  tsc:  { a: string; }
+  ours: number | { a: string }
+
+line 47: a7 || a3
+  tsc:  { a: string; }
+  ours: number | { a: string }
+
+line 48: rc8
+  tsc:  string[]
+  ours: number | string[]
+
+line 48: a8 || a3
+  tsc:  string[]
+  ours: number | string[]
+
+line 53: rd2
+  tsc:  string | true
+  ours: string | boolean
+
+line 53: a2 || a4
+  tsc:  string | true
+  ours: string | boolean
+
+line 58: rd7
+  tsc:  { a: string; }
+  ours: string | { a: string }
+
+line 58: a7 || a4
+  tsc:  { a: string; }
+  ours: string | { a: string }
+
+line 59: rd8
+  tsc:  string[]
+  ours: string | string[]
+
+line 59: a8 || a4
+  tsc:  string[]
+  ours: string | string[]
+
+line 86: rh2
+  tsc:  true | { a: string; }
+  ours: boolean | { a: string }
+
+line 86: a2 || a7
+  tsc:  true | { a: string; }
+  ours: boolean | { a: string }
+
+line 91: a7
+  tsc:  never
+  ours: { a: string }
+
+line 92: rh8
+  tsc:  string[]
+  ours: { a: string } | string[]
+
+line 92: a8 || a7
+  tsc:  string[]
+  ours: { a: string } | string[]
+
+line 97: ri2
+  tsc:  true | string[]
+  ours: boolean | string[]
+
+line 97: a2 || a8
+  tsc:  true | string[]
+  ours: boolean | string[]
+
+line 102: ri7
+  tsc:  { a: string; }
+  ours: { a: string } | string[]
+
+line 102: a7 || a8
+  tsc:  { a: string; }
+  ours: { a: string } | string[]
+
+line 103: a8
+  tsc:  never
+  ours: string[]
+
+line 108: rj2
+  tsc:  true | null
+  ours: boolean | null
+
+line 108: a2 || null
+  tsc:  true | null
+  ours: boolean | null
+
+line 113: rj7
+  tsc:  { a: string; }
+  ours: null | { a: string }
+
+line 113: a7 || null
+  tsc:  { a: string; }
+  ours: null | { a: string }
+
+line 114: rj8
+  tsc:  string[]
+  ours: null | string[]
+
+line 114: a8 || null
+  tsc:  string[]
+  ours: null | string[]
+
+line 119: rf2
+  tsc:  true | null
+  ours: boolean | null
+
+line 119: a2 || null
+  tsc:  true | null
+  ours: boolean | null
+
+line 124: rf7
+  tsc:  { a: string; }
+  ours: null | { a: string }
+
+line 124: a7 || null
+  tsc:  { a: string; }
+  ours: null | { a: string }
+
+line 125: rf8
+  tsc:  string[]
+  ours: null | string[]
+
+line 125: a8 || null
+  tsc:  string[]
+  ours: null | string[]
+
+errors:
+line 38: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 39: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 49: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 50: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 60: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 61: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 93: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 94: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 104: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 105: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 115: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 116: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 126: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 127: tsc TS2873: This kind of expression is always falsy. (we accept)

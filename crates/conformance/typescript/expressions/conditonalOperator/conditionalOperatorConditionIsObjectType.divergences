@@ -1,0 +1,12 @@
+types: 76 of 124 tsc entries compared, 0 differ
+
+errors:
+line 30: tsc TS2872: This kind of expression is always truthy. (we accept)
+line 31: tsc TS2872: This kind of expression is always truthy. (we accept)
+line 32: tsc TS2872: This kind of expression is always truthy. (we accept)
+line 34: tsc TS2872: This kind of expression is always truthy. (we accept)
+line 53: tsc TS2872: This kind of expression is always truthy. (we accept)
+line 54: tsc TS2872: This kind of expression is always truthy. (we accept)
+line 55: tsc TS2872: This kind of expression is always truthy. (we accept)
+line 57: tsc TS2872: This kind of expression is always truthy. (we accept)
+line 18: ours: a static field must be initialized (tsc accepts)

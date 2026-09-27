@@ -1,0 +1,16 @@
+types: 23 of 66 tsc entries compared, 0 differ
+
+errors:
+line 19: ours: unary `-` not defined for `string` (tsc accepts)
+line 20: ours: unary `-` not defined for `string[]` (tsc accepts)
+line 23: ours: unary `-` not defined for `string` (tsc accepts)
+line 24: ours: unary `-` not defined for `{ x: string; y: string }` (tsc accepts)
+line 25: ours: unary `-` not defined for `{ x: string; y: (arg0: string) => string }` (tsc accepts)
+line 30: ours: unary `-` not defined for `string` (tsc accepts)
+line 31: ours: unary `-` not defined for `string` (tsc accepts)
+line 33: ours: unary `-` not defined for `string` (tsc accepts)
+line 34: ours: unary `-` not defined for `string` (tsc accepts)
+line 37: ours: unary `-` not defined for `string` (tsc accepts)
+line 38: ours: unary `-` not defined for `string` (tsc accepts)
+line 39: ours: unary `-` not defined for `string[]` (tsc accepts)
+line 40: ours: unary `-` not defined for `string` (tsc accepts)

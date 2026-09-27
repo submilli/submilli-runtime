@@ -1,0 +1,73 @@
+types: 20 of 66 tsc entries compared, 18 differ
+
+line 26: new Map([ [AppType.Standard, [AppStyle.Standard, AppStyle.MiniApp]], [AppType.Relationship, [AppStyle.Standard, AppStyle.Tree, AppStyle.TreeEntity]], [AppType.AdvancedList, [AppStyle.Standard, AppStyle.MiniApp]] ])
+  tsc:  Map<AppType.AdvancedList | AppType.Standard | AppType.Relationship, (AppStyle.Standard | AppStyle.MiniApp)[] | (AppStyle.Tree | AppStyle.TreeEntity | AppStyle.Standard)[]>
+  ours: Map<AppType, AppStyle[]>
+
+line 26: [ [AppType.Standard, [AppStyle.Standard, AppStyle.MiniApp]], [AppType.Relationship, [AppStyle.Standard, AppStyle.Tree, AppStyle.TreeEntity]], [AppType.AdvancedList, [AppStyle.Standard, AppStyle.MiniApp]] ]
+  tsc:  ([AppType.Standard, (AppStyle.Standard | AppStyle.MiniApp)[]] | [AppType.Relationship, (AppStyle.Tree | AppStyle.TreeEntity | AppStyle.Standard)[]] | [AppType.AdvancedList, (AppStyle.Standard | AppStyle.MiniApp)[]])[]
+  ours: [AppType, AppStyle[]][]
+
+line 27: [AppType.Standard, [AppStyle.Standard, AppStyle.MiniApp]]
+  tsc:  [AppType.Standard, (AppStyle.Standard | AppStyle.MiniApp)[]]
+  ours: [AppType, AppStyle[]]
+
+line 27: AppType.Standard
+  tsc:  AppType.Standard
+  ours: AppType
+
+line 27: [AppStyle.Standard, AppStyle.MiniApp]
+  tsc:  (AppStyle.Standard | AppStyle.MiniApp)[]
+  ours: AppStyle[]
+
+line 27: AppStyle.Standard
+  tsc:  AppStyle.Standard
+  ours: AppStyle
+
+line 27: AppStyle.MiniApp
+  tsc:  AppStyle.MiniApp
+  ours: AppStyle
+
+line 28: [AppType.Relationship, [AppStyle.Standard, AppStyle.Tree, AppStyle.TreeEntity]]
+  tsc:  [AppType.Relationship, (AppStyle.Tree | AppStyle.TreeEntity | AppStyle.Standard)[]]
+  ours: [AppType, AppStyle[]]
+
+line 28: AppType.Relationship
+  tsc:  AppType.Relationship
+  ours: AppType
+
+line 28: [AppStyle.Standard, AppStyle.Tree, AppStyle.TreeEntity]
+  tsc:  (AppStyle.Tree | AppStyle.TreeEntity | AppStyle.Standard)[]
+  ours: AppStyle[]
+
+line 28: AppStyle.Standard
+  tsc:  AppStyle.Standard
+  ours: AppStyle
+
+line 28: AppStyle.Tree
+  tsc:  AppStyle.Tree
+  ours: AppStyle
+
+line 28: AppStyle.TreeEntity
+  tsc:  AppStyle.TreeEntity
+  ours: AppStyle
+
+line 29: [AppType.AdvancedList, [AppStyle.Standard, AppStyle.MiniApp]]
+  tsc:  [AppType.AdvancedList, (AppStyle.Standard | AppStyle.MiniApp)[]]
+  ours: [AppType, AppStyle[]]
+
+line 29: AppType.AdvancedList
+  tsc:  AppType.AdvancedList
+  ours: AppType
+
+line 29: [AppStyle.Standard, AppStyle.MiniApp]
+  tsc:  (AppStyle.Standard | AppStyle.MiniApp)[]
+  ours: AppStyle[]
+
+line 29: AppStyle.Standard
+  tsc:  AppStyle.Standard
+  ours: AppStyle
+
+line 29: AppStyle.MiniApp
+  tsc:  AppStyle.MiniApp
+  ours: AppStyle

@@ -1,0 +1,2 @@
+assignmentCompatBetweenTupleAndArray.ts(18,1): error TS2322: Type '[number, string]' is not assignable to type 'number[]'.   Type 'string | number' is not assignable to type 'number'.     Type 'string' is not assignable to type 'number'.
+assignmentCompatBetweenTupleAndArray.ts(19,1): error TS2322: Type '{}[]' is not assignable to type '[{}]'.   Target requires 1 element(s) but source may have fewer.

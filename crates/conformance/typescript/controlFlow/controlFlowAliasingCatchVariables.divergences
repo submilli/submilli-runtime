@@ -1,0 +1,43 @@
+types: 17 of 42 tsc entries compared, 9 differ
+
+line 6: e
+  tsc:  unknown
+  ours: Error
+
+line 8: e
+  tsc:  string
+  ours: Error
+
+line 11: e
+  tsc:  unknown
+  ours: Error
+
+line 12: e
+  tsc:  string
+  ours: Error
+
+line 18: e
+  tsc:  unknown
+  ours: Error
+
+line 20: e
+  tsc:  unknown
+  ours: Error
+
+line 23: e
+  tsc:  unknown
+  ours: number
+
+line 26: e
+  tsc:  unknown
+  ours: number
+
+line 27: e
+  tsc:  string
+  ours: Error
+
+errors:
+line 8: ours: field `toUpperCase` does not exist on `Error` (tsc accepts)
+line 12: ours: field `toUpperCase` does not exist on `Error` (tsc accepts)
+line 20: ours: cannot assign to const binding `e` (tsc accepts)
+line 27: ours: field `toUpperCase` does not exist on `Error` (tsc accepts)

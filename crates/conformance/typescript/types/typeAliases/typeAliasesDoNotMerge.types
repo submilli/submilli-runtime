@@ -1,11 +1,11 @@
 === typeAliasesDoNotMerge.ts ===
 export type A = {}
->A : import("/Users/shmuellamm/development/sim/submilli-runtime-worktrees/conf-suite/crates/conformance/typescript/types/typeAliases/typeAliasesDoNotMerge").A
->  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>A : import("./typeAliasesDoNotMerge").A
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 type A = {}
->A : import("/Users/shmuellamm/development/sim/submilli-runtime-worktrees/conf-suite/crates/conformance/typescript/types/typeAliases/typeAliasesDoNotMerge").A
->  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>A : import("./typeAliasesDoNotMerge").A
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 

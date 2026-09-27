@@ -1,0 +1,5 @@
+types: 9 of 25 tsc entries compared, 0 differ
+
+errors:
+line 4: ours: cannot read field `hasOwnProperty` on non-object type `number` (tsc accepts)
+line 7: ours: cannot read field `hasOwnProperty` on non-object type `number` (tsc accepts)

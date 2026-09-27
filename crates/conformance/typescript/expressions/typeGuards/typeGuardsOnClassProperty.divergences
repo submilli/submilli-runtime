@@ -1,0 +1,28 @@
+types: 31 of 71 tsc entries compared, 6 differ
+
+line 10: this
+  tsc:  this
+  ours: D
+
+line 15: this
+  tsc:  this
+  ours: D
+
+line 15: this
+  tsc:  this
+  ours: D
+
+line 15: this
+  tsc:  this
+  ours: D
+
+line 22: { prop1: "string" , prop2: true }
+  tsc:  { prop1: string; prop2: true; }
+  ours: { prop1: string; prop2: boolean }
+
+line 27: typeof o.prop1 === "string" && o.prop1.toLowerCase()
+  tsc:  string | false
+  ours: string | boolean
+
+errors:
+line 29: ours: field `toLocaleLowerCase` does not exist on `string` (tsc accepts)

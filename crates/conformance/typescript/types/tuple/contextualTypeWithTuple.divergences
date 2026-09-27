@@ -1,0 +1,41 @@
+types: 44 of 86 tsc entries compared, 10 differ
+
+line 4: [5, "foo", true]
+  tsc:  [number, string, boolean]
+  ours: [number, string]
+
+line 5: [5, "foo", true]
+  tsc:  [number, string, true]
+  ours: [number, string, boolean]
+
+line 7: ["bar", [5, { x: 1, y: 1 }]]
+  tsc:  [string, [number, { x: number; y: number; }]]
+  ours: [string, [number, {}]]
+
+line 7: [5, { x: 1, y: 1 }]
+  tsc:  [number, { x: number; y: number; }]
+  ours: [number, {}]
+
+line 10: [new C(), "foo"]
+  tsc:  [C, string]
+  ours: [C, number | string]
+
+line 11: [new C(), "foo"]
+  tsc:  [C, string]
+  ours: [C, number | string]
+
+line 12: [new C(), "foo", new D()]
+  tsc:  [C, string, D]
+  ours: [C, number | string, D]
+
+line 13: [10, "foo"]
+  tsc:  [number, string]
+  ours: [number, number | string]
+
+line 19: [ {}, 5]
+  tsc:  [{}, number]
+  ours: [{ a: string }, number]
+
+line 21: ["foo", "bar", 5]
+  tsc:  [string, string, number]
+  ours: [string, string]

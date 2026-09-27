@@ -1,0 +1,1 @@
+typeGuardsInIfStatement.ts(121,17): error TS2872: This kind of expression is always truthy.

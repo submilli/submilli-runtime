@@ -1,0 +1,25 @@
+types: 51 of 82 tsc entries compared, 6 differ
+
+line 5: x = 5
+  tsc:  5
+  ours: number | string | boolean
+
+line 6: x
+  tsc:  string | number
+  ours: number | string | boolean
+
+line 11: x = x.length
+  tsc:  number
+  ours: number | string | boolean
+
+line 24: x = 5
+  tsc:  5
+  ours: number | string | boolean
+
+line 37: x
+  tsc:  number | boolean
+  ours: number | boolean | null
+
+line 38: x
+  tsc:  number | boolean
+  ours: number | boolean | null

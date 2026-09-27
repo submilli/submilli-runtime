@@ -1,0 +1,295 @@
+=== neverType.ts ===
+
+
+function error(message: string): never {
+>error : (message: string) => never
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>message : string
+>        : ^^^^^^
+
+    throw new Error(message);
+>new Error(message) : Error
+>                   : ^^^^^
+>Error : ErrorConstructor
+>      : ^^^^^^^^^^^^^^^^
+>message : string
+>        : ^^^^^^
+
+}
+
+function errorVoid(message: string): void {
+>errorVoid : (message: string) => void
+>          : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>message : string
+>        : ^^^^^^
+
+    throw new Error(message);
+>new Error(message) : Error
+>                   : ^^^^^
+>Error : ErrorConstructor
+>      : ^^^^^^^^^^^^^^^^
+>message : string
+>        : ^^^^^^
+
+}
+
+function fail(): never {
+>fail : () => never
+>     : ^^^^^^^^^^^
+
+    return error("Something failed");
+>error("Something failed") : never
+>                          : ^^^^^
+>error : (message: string) => never
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>"Something failed" : "Something failed"
+>                   : ^^^^^^^^^^^^^^^^^^
+
+}
+
+function failOrThrow(shouldFail: boolean): never {
+>failOrThrow : (shouldFail: boolean) => never
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>shouldFail : boolean
+>           : ^^^^^^^
+
+    if (shouldFail) {
+>shouldFail : boolean
+>           : ^^^^^^^
+
+        return fail();
+>fail() : never
+>       : ^^^^^
+>fail : () => never
+>     : ^^^^^^^^^^^
+
+    }
+    throw new Error();
+>new Error() : Error
+>            : ^^^^^
+>Error : ErrorConstructor
+>      : ^^^^^^^^^^^^^^^^
+
+}
+
+function infiniteLoop1(): void {
+>infiniteLoop1 : () => void
+>              : ^^^^^^^^^^
+
+    while (true) {
+>true : true
+>     : ^^^^
+
+    }
+}
+
+function infiniteLoop2(): never {
+>infiniteLoop2 : () => never
+>              : ^^^^^^^^^^^
+
+    while (true) {
+>true : true
+>     : ^^^^
+
+    }
+}
+
+/*pruned*/;                                       
+                        
+                  
+                     
+                    
+                       
+     
+                                          
+ 
+
+/*pruned*/;                                       
+                                   
+                                   
+                                       
+ 
+
+/*pruned*/;                                     
+                                         
+ 
+
+class C {
+>C : C
+>  : ^
+
+    void1(): void {
+>void1 : () => void
+>      : ^^^^^^^^^^
+
+        throw new Error();
+>new Error() : Error
+>            : ^^^^^
+>Error : ErrorConstructor
+>      : ^^^^^^^^^^^^^^^^
+
+    }
+    void2(): void {
+>void2 : () => void
+>      : ^^^^^^^^^^
+
+        while (true) {}
+>true : true
+>     : ^^^^
+
+    }
+    never1(): never {
+>never1 : () => never
+>       : ^^^^^^^^^^^
+
+        throw new Error();
+>new Error() : Error
+>            : ^^^^^
+>Error : ErrorConstructor
+>      : ^^^^^^^^^^^^^^^^
+
+    }
+    never2(): never {
+>never2 : () => never
+>       : ^^^^^^^^^^^
+
+        while (true) {}
+>true : true
+>     : ^^^^
+
+    }
+}
+
+function f1(x: string | number): void {
+>f1 : (x: string | number) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+    if (typeof x === "boolean") {
+>typeof x === "boolean" : boolean
+>                       : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>"boolean" : "boolean"
+>          : ^^^^^^^^^
+
+        x;  // never
+>x : never
+>  : ^^^^^
+
+    }
+}
+
+function f2(x: string | number): never {
+>f2 : (x: string | number) => never
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+    while (true) {
+>true : true
+>     : ^^^^
+
+        if (typeof x === "boolean") {
+>typeof x === "boolean" : boolean
+>                       : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>"boolean" : "boolean"
+>          : ^^^^^^^^^
+
+            return x;  // never
+>x : never
+>  : ^^^^^
+
+        }
+    }
+}
+
+function test(cb: () => string): string {
+>test : (cb: () => string) => string
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>cb : () => string
+>   : ^^^^^^^^^^^^
+
+    let s = cb();
+>s : string
+>  : ^^^^^^
+>cb() : string
+>     : ^^^^^^
+>cb : () => string
+>   : ^^^^^^^^^^^^
+
+    return s;
+>s : string
+>  : ^^^^^^
+
+}
+
+let errorCallback = () => error("Error callback");
+>errorCallback : () => never
+>              : ^^^^^^^^^^^
+>() => error("Error callback") : () => never
+>                              : ^^^^^^^^^^^
+>error("Error callback") : never
+>                        : ^^^^^
+>error : (message: string) => never
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>"Error callback" : "Error callback"
+>                 : ^^^^^^^^^^^^^^^^
+
+
+test(() => "hello");
+>test(() => "hello") : string
+>                    : ^^^^^^
+>test : (cb: () => string) => string
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>() => "hello" : () => string
+>              : ^^^^^^^^^^^^
+>"hello" : "hello"
+>        : ^^^^^^^
+
+test(() => fail());
+>test(() => fail()) : string
+>                   : ^^^^^^
+>test : (cb: () => string) => string
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>() => fail() : () => never
+>             : ^^^^^^^^^^^
+>fail() : never
+>       : ^^^^^
+>fail : () => never
+>     : ^^^^^^^^^^^
+
+test(() => { throw new Error(); })
+>test(() => { throw new Error(); }) : string
+>                                   : ^^^^^^
+>test : (cb: () => string) => string
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>() => { throw new Error(); } : () => never
+>                             : ^^^^^^^^^^^
+>new Error() : Error
+>            : ^^^^^
+>Error : ErrorConstructor
+>      : ^^^^^^^^^^^^^^^^
+
+test(errorCallback);
+>test(errorCallback) : string
+>                    : ^^^^^^
+>test : (cb: () => string) => string
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>errorCallback : () => never
+>              : ^^^^^^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

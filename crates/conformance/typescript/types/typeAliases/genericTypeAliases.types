@@ -1,0 +1,305 @@
+=== genericTypeAliases.ts ===
+type Tree<T> = T | { left: Tree<T>, right: Tree<T> };
+>Tree : Tree<T>
+>     : ^^^^^^^
+>T : T
+>  : ^
+>left : Tree<T>
+>     : ^^^^^^^
+>right : Tree<T>
+>      : ^^^^^^^
+
+
+let tree: Tree<number> = {
+>tree : Tree<number>
+>     : ^^^^^^^^^^^^
+>{     left: {         left: 0,         right: {             left: 1,             right: 2         },     },     right: 3 } : { left: { left: number; right: { left: number; right: number; }; }; right: number; }
+>                                                                                                                           : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    left: {
+>left : { left: number; right: { left: number; right: number; }; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{         left: 0,         right: {             left: 1,             right: 2         },     } : { left: number; right: { left: number; right: number; }; }
+>                                                                                               : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        left: 0,
+>left : number
+>     : ^^^^^^
+>0 : 0
+>  : ^
+
+        right: {
+>right : { left: number; right: number; }
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{             left: 1,             right: 2         } : { left: number; right: number; }
+>                                                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+            left: 1,
+>left : number
+>     : ^^^^^^
+>1 : 1
+>  : ^
+
+            right: 2
+>right : number
+>      : ^^^^^^
+>2 : 2
+>  : ^
+
+        },
+    },
+    right: 3
+>right : number
+>      : ^^^^^^
+>3 : 3
+>  : ^
+
+};
+
+type Lazy<T> = T | (() => T);
+>Lazy : Lazy<T>
+>     : ^^^^^^^
+>T : T
+>  : ^
+
+
+let ls: Lazy<string> = null as unknown as (Lazy<string>);
+>ls : Lazy<string>
+>   : ^^^^^^^^^^^^
+>null as unknown as (Lazy<string>) : Lazy<string>
+>                                  : ^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+ls = "eager";
+>ls = "eager" : "eager"
+>             : ^^^^^^^
+>ls : Lazy<string>
+>   : ^^^^^^^^^^^^
+>"eager" : "eager"
+>        : ^^^^^^^
+
+ls = () => "lazy";
+>ls = () => "lazy" : () => string
+>                  : ^^^^^^^^^^^^
+>ls : Lazy<string>
+>   : ^^^^^^^^^^^^
+>() => "lazy" : () => string
+>             : ^^^^^^^^^^^^
+>"lazy" : "lazy"
+>       : ^^^^^^
+
+
+type Foo<T> = T | { x: Foo<T> };
+>Foo : Foo<T>
+>    : ^^^^^^
+>T : T
+>  : ^
+>x : Foo<T>
+>  : ^^^^^^
+
+type Bar<U> = U | { x: Bar<U> };
+>Bar : Bar<U>
+>    : ^^^^^^
+>U : U
+>  : ^
+>x : Bar<U>
+>  : ^^^^^^
+
+
+// Deeply instantiated generics
+let x: Foo<string> = null as unknown as (Foo<string>);
+>x : Foo<string>
+>  : ^^^^^^^^^^^
+>null as unknown as (Foo<string>) : Foo<string>
+>                                 : ^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let y: Bar<string> = null as unknown as (Bar<string>);
+>y : Bar<string>
+>  : ^^^^^^^^^^^
+>null as unknown as (Bar<string>) : Bar<string>
+>                                 : ^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+x = y;
+>x = y : Bar<string>
+>      : ^^^^^^^^^^^
+>x : Foo<string>
+>  : ^^^^^^^^^^^
+>y : Bar<string>
+>  : ^^^^^^^^^^^
+
+y = x;
+>y = x : Foo<string>
+>      : ^^^^^^^^^^^
+>y : Bar<string>
+>  : ^^^^^^^^^^^
+>x : Foo<string>
+>  : ^^^^^^^^^^^
+
+
+x = "string";
+>x = "string" : "string"
+>             : ^^^^^^^^
+>x : Foo<string>
+>  : ^^^^^^^^^^^
+>"string" : "string"
+>         : ^^^^^^^^
+
+x = { x: "hello" };
+>x = { x: "hello" } : { x: string; }
+>                   : ^^^^^^^^^^^^^^
+>x : Foo<string>
+>  : ^^^^^^^^^^^
+>{ x: "hello" } : { x: string; }
+>               : ^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>"hello" : "hello"
+>        : ^^^^^^^
+
+x = { x: { x: "world" } };
+>x = { x: { x: "world" } } : { x: { x: string; }; }
+>                          : ^^^^^^^^^^^^^^^^^^^^^^
+>x : Foo<string>
+>  : ^^^^^^^^^^^
+>{ x: { x: "world" } } : { x: { x: string; }; }
+>                      : ^^^^^^^^^^^^^^^^^^^^^^
+>x : { x: string; }
+>  : ^^^^^^^^^^^^^^
+>{ x: "world" } : { x: string; }
+>               : ^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>"world" : "world"
+>        : ^^^^^^^
+
+
+let z: Foo<number> = null as unknown as (Foo<number>);
+>z : Foo<number>
+>  : ^^^^^^^^^^^
+>null as unknown as (Foo<number>) : Foo<number>
+>                                 : ^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+z = 42;
+>z = 42 : 42
+>       : ^^
+>z : Foo<number>
+>  : ^^^^^^^^^^^
+>42 : 42
+>   : ^^
+
+z = { x: 42 };
+>z = { x: 42 } : { x: number; }
+>              : ^^^^^^^^^^^^^^
+>z : Foo<number>
+>  : ^^^^^^^^^^^
+>{ x: 42 } : { x: number; }
+>          : ^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>42 : 42
+>   : ^^
+
+z = { x: { x: 42 } };
+>z = { x: { x: 42 } } : { x: { x: number; }; }
+>                     : ^^^^^^^^^^^^^^^^^^^^^^
+>z : Foo<number>
+>  : ^^^^^^^^^^^
+>{ x: { x: 42 } } : { x: { x: number; }; }
+>                 : ^^^^^^^^^^^^^^^^^^^^^^
+>x : { x: number; }
+>  : ^^^^^^^^^^^^^^
+>{ x: 42 } : { x: number; }
+>          : ^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>42 : 42
+>   : ^^
+
+
+type Strange<T> = string;  // Type parameter not used
+>Strange : string
+>        : ^^^^^^
+>T : T
+>  : ^
+
+let s: Strange<number> = null as unknown as (Strange<number>);
+>s : string
+>  : ^^^^^^
+>null as unknown as (Strange<number>) : string
+>                                     : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+s = "hello";
+>s = "hello" : "hello"
+>            : ^^^^^^^
+>s : string
+>  : ^^^^^^
+>"hello" : "hello"
+>        : ^^^^^^^
+
+
+interface AB<A, B> {
+>AB : AB<A, B>
+>   : ^^^^^^^^
+>A : A
+>  : ^
+>B : B
+>  : ^
+
+    a: A;
+>a : A
+>  : ^
+
+    b: B;
+>b : B
+>  : ^
+
+}
+
+type Pair<T> = AB<T, T>;
+>Pair : Pair<T>
+>     : ^^^^^^^
+>T : T
+>  : ^
+
+
+/*pruned*/;                              
+                
+ 
+
+/*pruned*/;                                                         
+/**/;   
+/**/;   
+/*pruned*/;    
+
+/*pruned*/;                               
+                                    
+                                                    
+             
+ 
+
+/*pruned*/;                               
+                                    
+                                                    
+             
+ 
+
+// Deeply instantiated generics
+/*pruned*/;         
+/*pruned*/;         
+/**/; 
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

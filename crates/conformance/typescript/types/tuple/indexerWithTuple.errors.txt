@@ -1,0 +1,5 @@
+indexerWithTuple.ts(12,25): error TS2493: Tuple type '[string, number]' of length '2' has no element at index '2'.
+indexerWithTuple.ts(18,27): error TS2493: Tuple type '[number, [string, number]]' of length '2' has no element at index '2'.
+indexerWithTuple.ts(19,25): error TS2514: A tuple type cannot be indexed with a negative value.
+indexerWithTuple.ts(23,30): error TS2493: Tuple type '[number, string | number]' of length '2' has no element at index '2'.
+indexerWithTuple.ts(31,30): error TS2493: Tuple type '[boolean, string | number]' of length '2' has no element at index '2'.

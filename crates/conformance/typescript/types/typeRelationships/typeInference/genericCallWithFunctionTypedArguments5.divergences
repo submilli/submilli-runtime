@@ -1,0 +1,20 @@
+types: 20 of 46 tsc entries compared, 4 differ
+
+line 12: r3
+  tsc:  string
+  ours: U
+
+line 12: foo({ cb: (x: string, y: number) => '' })
+  tsc:  string
+  ours: U
+
+line 22: r7
+  tsc:  string
+  ours: U
+
+line 22: foo({ cb: () => '' })
+  tsc:  string
+  ours: U
+
+errors:
+line 22: ours: expected `(arg0: T) => U`, got `() => string` (tsc accepts)

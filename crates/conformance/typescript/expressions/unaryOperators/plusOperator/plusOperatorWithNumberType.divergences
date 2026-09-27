@@ -1,0 +1,7 @@
+types: 32 of 59 tsc entries compared, 0 differ
+
+errors:
+line 20: ours: unary `+` not defined for `number[]` (tsc accepts)
+line 24: ours: unary `+` not defined for `{ x: number; y: number }` (tsc accepts)
+line 25: ours: unary `+` not defined for `{ x: number; y: (arg0: number) => number }` (tsc accepts)
+line 38: ours: unary `+` not defined for `number[]` (tsc accepts)

@@ -1,0 +1,9 @@
+types: 40 of 75 tsc entries compared, 2 differ
+
+line 19: { foo: '' }
+  tsc:  { foo: string; }
+  ours: S2
+
+line 20: { foo: '' }
+  tsc:  { foo: string; }
+  ours: T2

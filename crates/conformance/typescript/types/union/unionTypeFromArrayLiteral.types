@@ -1,0 +1,97 @@
+=== unionTypeFromArrayLiteral.ts ===
+// The resulting type an array literal expression is determined as follows:
+// If the array literal is empty, the resulting type is an array type with the element type Undefined.
+// Otherwise, if the array literal is contextually typed by a type that has a property with the numeric name ‘0’, the resulting type is a tuple type constructed from the types of the element expressions.
+// Otherwise, the resulting type is an array type with an element type that is the union of the types of the element expressions.
+
+let arr1 = [1, 2]; // number[]
+>arr1 : number[]
+>     : ^^^^^^^^
+>[1, 2] : number[]
+>       : ^^^^^^^^
+>1 : 1
+>  : ^
+>2 : 2
+>  : ^
+
+let arr2 = ["hello", true]; // (string | number)[]
+>arr2 : (string | boolean)[]
+>     : ^^^^^^^^^^^^^^^^^^^^
+>["hello", true] : (string | boolean)[]
+>                : ^^^^^^^^^^^^^^^^^^^^
+>"hello" : "hello"
+>        : ^^^^^^^
+>true : true
+>     : ^^^^
+
+let arr3Tuple: [number, string] = [3, "three"]; // [number, string]
+>arr3Tuple : [number, string]
+>          : ^^^^^^^^^^^^^^^^
+>[3, "three"] : [number, string]
+>             : ^^^^^^^^^^^^^^^^
+>3 : 3
+>  : ^
+>"three" : "three"
+>        : ^^^^^^^
+
+let arr4Tuple: [number, string] = [3, "three", "hello"]; // [number, string, string]
+>arr4Tuple : [number, string]
+>          : ^^^^^^^^^^^^^^^^
+>[3, "three", "hello"] : [number, string, string]
+>                      : ^^^^^^^^^^^^^^^^^^^^^^^^
+>3 : 3
+>  : ^
+>"three" : "three"
+>        : ^^^^^^^
+>"hello" : "hello"
+>        : ^^^^^^^
+
+let arrEmpty = [];
+>arrEmpty : any[]
+>         : ^^^^^
+>[] : never[]
+>   : ^^^^^^^
+
+/*pruned*/;     
+              
+              
+                                                       // Tuple
+class C { foo(): void { } }
+>C : C
+>  : ^
+>foo : () => void
+>    : ^^^^^^^^^^
+
+class D { foo2(): void { } }
+>D : D
+>  : ^
+>foo2 : () => void
+>     : ^^^^^^^^^^
+
+class E extends C { foo3(): void { } }
+>E : E
+>  : ^
+>C : C
+>  : ^
+>foo3 : () => void
+>     : ^^^^^^^^^^
+
+class F extends C { foo4(): void { } }
+>F : F
+>  : ^
+>C : C
+>  : ^
+>foo4 : () => void
+>     : ^^^^^^^^^^
+
+/*pruned*/;                                                                                                                    
+/*pruned*/;         // (C | D)[]
+/*pruned*/;           // (C | D)[]
+/*pruned*/;        // C[]
+/*pruned*/;        // (E|F)[]
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

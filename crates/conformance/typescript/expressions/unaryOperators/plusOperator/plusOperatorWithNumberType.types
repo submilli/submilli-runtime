@@ -1,0 +1,179 @@
+=== plusOperatorWithNumberType.ts ===
+// + operator on number type
+let NUMBER: number = null as unknown as (number);
+>NUMBER : number
+>       : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let NUMBER1: number[] = [1, 2];
+>NUMBER1 : number[]
+>        : ^^^^^^^^
+>[1, 2] : number[]
+>       : ^^^^^^^^
+>1 : 1
+>  : ^
+>2 : 2
+>  : ^
+
+
+function foo(): number { return 1; }
+>foo : () => number
+>    : ^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+
+/**/;    
+                      
+                                      
+ 
+/*pruned*/;  
+                             
+ 
+
+/*pruned*/;        
+
+// number type var
+let ResultIsNumber1 = +NUMBER;
+>ResultIsNumber1 : number
+>                : ^^^^^^
+>+NUMBER : number
+>        : ^^^^^^
+>NUMBER : number
+>       : ^^^^^^
+
+let ResultIsNumber2 = +NUMBER1;
+>ResultIsNumber2 : number
+>                : ^^^^^^
+>+NUMBER1 : number
+>         : ^^^^^^
+>NUMBER1 : number[]
+>        : ^^^^^^^^
+
+
+// number type literal
+let ResultIsNumber3 = +1;
+>ResultIsNumber3 : number
+>                : ^^^^^^
+>+1 : 1
+>   : ^
+>1 : 1
+>  : ^
+
+let ResultIsNumber4 = +{ x: 1, y: 2};
+>ResultIsNumber4 : number
+>                : ^^^^^^
+>+{ x: 1, y: 2} : number
+>               : ^^^^^^
+>{ x: 1, y: 2} : { x: number; y: number; }
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>y : number
+>  : ^^^^^^
+>2 : 2
+>  : ^
+
+let ResultIsNumber5 = +{ x: 1, y: (n: number) => { return n; } };
+>ResultIsNumber5 : number
+>                : ^^^^^^
+>+{ x: 1, y: (n: number) => { return n; } } : number
+>                                           : ^^^^^^
+>{ x: 1, y: (n: number) => { return n; } } : { x: number; y: (n: number) => number; }
+>                                          : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>y : (n: number) => number
+>  : ^^^^^^^^^^^^^^^^^^^^^
+>(n: number) => { return n; } : (n: number) => number
+>                             : ^^^^^^^^^^^^^^^^^^^^^
+>n : number
+>  : ^^^^^^
+>n : number
+>  : ^^^^^^
+
+
+// number type expressions
+/*pruned*/;                   
+/*pruned*/;                
+let ResultIsNumber8 = +NUMBER1[0];
+>ResultIsNumber8 : number
+>                : ^^^^^^
+>+NUMBER1[0] : number
+>            : ^^^^^^
+>NUMBER1[0] : number
+>           : ^^^^^^
+>NUMBER1 : number[]
+>        : ^^^^^^^^
+>0 : 0
+>  : ^
+
+let ResultIsNumber9 = +foo();
+>ResultIsNumber9 : number
+>                : ^^^^^^
+>+foo() : number
+>       : ^^^^^^
+>foo() : number
+>      : ^^^^^^
+>foo : () => number
+>    : ^^^^^^^^^^^^
+
+/*pruned*/;                     
+let ResultIsNumber11 = +(NUMBER + NUMBER);
+>ResultIsNumber11 : number
+>                 : ^^^^^^
+>+(NUMBER + NUMBER) : number
+>                   : ^^^^^^
+>(NUMBER + NUMBER) : number
+>                  : ^^^^^^
+>NUMBER + NUMBER : number
+>                : ^^^^^^
+>NUMBER : number
+>       : ^^^^^^
+>NUMBER : number
+>       : ^^^^^^
+
+
+// miss assignment operators
++1;
+>+1 : 1
+>   : ^
+>1 : 1
+>  : ^
+
++NUMBER;
+>+NUMBER : number
+>        : ^^^^^^
+>NUMBER : number
+>       : ^^^^^^
+
++NUMBER1;
+>+NUMBER1 : number
+>         : ^^^^^^
+>NUMBER1 : number[]
+>        : ^^^^^^^^
+
++foo();
+>+foo() : number
+>       : ^^^^^^
+>foo() : number
+>      : ^^^^^^
+>foo : () => number
+>    : ^^^^^^^^^^^^
+
+/**/;   
+/**/;
+/*pruned*/;  
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

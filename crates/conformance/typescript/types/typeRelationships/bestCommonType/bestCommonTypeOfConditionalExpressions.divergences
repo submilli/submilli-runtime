@@ -1,0 +1,13 @@
+types: 36 of 74 tsc entries compared, 3 differ
+
+line 15: true ? 1 : 2
+  tsc:  1 | 2
+  ours: number
+
+line 16: r3
+  tsc:  {}
+  ours: number | {}
+
+line 16: true ? 1 : {}
+  tsc:  1 | {}
+  ours: number | {}

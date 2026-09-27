@@ -1,0 +1,57 @@
+=== validNumberAssignments.ts ===
+let x = 1;
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+
+/*pruned*/;    
+let b: Object = x;
+>b : Object
+>  : ^^^^^^
+>x : number
+>  : ^^^^^^
+
+let c: number = x;
+>c : number
+>  : ^^^^^^
+>x : number
+>  : ^^^^^^
+
+enum E { A };
+>E : E
+>  : ^
+>A : E.A
+>  : ^^^
+
+let d: E = x;
+>d : E
+>  : ^
+>x : number
+>  : ^^^^^^
+
+let e = E.A;
+>e : E
+>  : ^
+>E.A : E
+>    : ^
+>E : typeof E
+>  : ^^^^^^^^
+>A : E
+>  : ^
+
+e = x;
+>e = x : number
+>      : ^^^^^^
+>e : E
+>  : ^
+>x : number
+>  : ^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

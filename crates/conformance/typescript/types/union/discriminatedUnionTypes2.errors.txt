@@ -1,0 +1,2 @@
+discriminatedUnionTypes2.ts(30,30): error TS2353: Object literal may only specify known properties, and 'c' does not exist in type '{ a: null; b: string; }'.
+discriminatedUnionTypes2.ts(35,11): error TS2339: Property 'b' does not exist on type '{ a: 0; b: string; } | { a: T; c: number; }'.   Property 'b' does not exist on type '{ a: T; c: number; }'.

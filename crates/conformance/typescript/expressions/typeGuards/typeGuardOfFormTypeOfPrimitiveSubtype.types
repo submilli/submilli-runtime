@@ -1,0 +1,131 @@
+=== typeGuardOfFormTypeOfPrimitiveSubtype.ts ===
+let a: {} = null as unknown as ({});
+>a : {}
+>  : ^^
+>null as unknown as ({}) : {}
+>                        : ^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let b: {toString(): string} = null as unknown as ({toString(): string});
+>b : { toString(): string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^
+>toString : () => string
+>         : ^^^^^^^^^^^^
+>null as unknown as ({toString(): string}) : { toString(): string; }
+>                                          : ^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>toString : () => string
+>         : ^^^^^^^^^^^^
+
+if (typeof a === "number") {
+>typeof a === "number" : boolean
+>                      : ^^^^^^^
+>typeof a : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : {}
+>  : ^^
+>"number" : "number"
+>         : ^^^^^^^^
+
+    let c: number = a;
+>c : number
+>  : ^^^^^^
+>a : number
+>  : ^^^^^^
+
+}
+if (typeof a === "string") {
+>typeof a === "string" : boolean
+>                      : ^^^^^^^
+>typeof a : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : {}
+>  : ^^
+>"string" : "string"
+>         : ^^^^^^^^
+
+    let c: string = a;
+>c : string
+>  : ^^^^^^
+>a : string
+>  : ^^^^^^
+
+}
+if (typeof a === "boolean") {
+>typeof a === "boolean" : boolean
+>                       : ^^^^^^^
+>typeof a : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : {}
+>  : ^^
+>"boolean" : "boolean"
+>          : ^^^^^^^^^
+
+    let c: boolean = a;
+>c : boolean
+>  : ^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+}
+
+if (typeof b === "number") {
+>typeof b === "number" : boolean
+>                      : ^^^^^^^
+>typeof b : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : { toString(): string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^
+>"number" : "number"
+>         : ^^^^^^^^
+
+    let c: number = b;
+>c : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+
+}
+if (typeof b === "string") {
+>typeof b === "string" : boolean
+>                      : ^^^^^^^
+>typeof b : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : number | { toString(): string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>"string" : "string"
+>         : ^^^^^^^^
+
+    let c: string = b;
+>c : string
+>  : ^^^^^^
+>b : string
+>  : ^^^^^^
+
+}
+if (typeof b === "boolean") {
+>typeof b === "boolean" : boolean
+>                       : ^^^^^^^
+>typeof b : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : string | number | { toString(): string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>"boolean" : "boolean"
+>          : ^^^^^^^^^
+
+    let c: boolean = b;
+>c : boolean
+>  : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

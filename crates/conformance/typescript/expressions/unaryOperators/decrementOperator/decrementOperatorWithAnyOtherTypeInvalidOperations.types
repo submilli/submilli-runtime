@@ -1,0 +1,179 @@
+=== decrementOperatorWithAnyOtherTypeInvalidOperations.ts ===
+// -- operator on any type
+/*pruned*/;                              
+/*pruned*/;                
+
+let obj: () => {} = null as unknown as (() => {});
+>obj : () => {}
+>    : ^^^^^^^^
+>null as unknown as (() => {}) : () => {}
+>                              : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let obj1 = { x: "", y: () => { } };
+>obj1 : { x: string; y: () => void; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ x: "", y: () => { } } : { x: string; y: () => void; }
+>                        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>"" : ""
+>   : ^^
+>y : () => void
+>  : ^^^^^^^^^^
+>() => { } : () => void
+>          : ^^^^^^^^^^
+
+/*pruned*/;          
+          
+             
+ 
+/**/;    
+                  
+                       
+              
+                 
+     
+ 
+/*pruned*/;  
+                                          
+ 
+/*pruned*/;        
+
+// any type var
+/*pruned*/;                  
+/*pruned*/;               
+/*pruned*/;               
+/*pruned*/;                 
+/*pruned*/;                  
+
+/*pruned*/;                  
+/*pruned*/;               
+/*pruned*/;               
+let ResultIsNumber9 = obj--;
+>ResultIsNumber9 : number
+>                : ^^^^^^
+>obj-- : number
+>      : ^^^^^^
+>obj : () => {}
+>    : ^^^^^^^^
+
+let ResultIsNumber10 = obj1--;
+>ResultIsNumber10 : number
+>                 : ^^^^^^
+>obj1-- : number
+>       : ^^^^^^
+>obj1 : { x: string; y: () => void; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+// any type literal
+/*pruned*/;                 
+/*pruned*/;                   
+/*pruned*/;                   
+
+let ResultIsNumber14 = null--;
+>ResultIsNumber14 : number
+>                 : ^^^^^^
+>null-- : number
+>       : ^^^^^^
+
+let ResultIsNumber15 = {}--;
+>ResultIsNumber15 : number
+>                 : ^^^^^^
+>{}-- : number
+>     : ^^^^^^
+>{} : {}
+>   : ^^
+
+let ResultIsNumber16 = null--;
+>ResultIsNumber16 : number
+>                 : ^^^^^^
+>null-- : number
+>       : ^^^^^^
+
+
+// any type expressions
+/*pruned*/;                    
+/*pruned*/;                      
+/*pruned*/;                            
+/*pruned*/;                            
+/*pruned*/;                            
+/*pruned*/;                     
+/*pruned*/;                     
+
+/*pruned*/;                    
+/*pruned*/;                      
+let ResultIsNumber26 = (null + null)--;
+>ResultIsNumber26 : number
+>                 : ^^^^^^
+>(null + null)-- : number
+>                : ^^^^^^
+>(null + null) : any
+>              : ^^^
+>null + null : any
+>            : ^^^
+
+let ResultIsNumber27 = (null + null)--;
+>ResultIsNumber27 : number
+>                 : ^^^^^^
+>(null + null)-- : number
+>                : ^^^^^^
+>(null + null) : any
+>              : ^^^
+>null + null : any
+>            : ^^^
+
+let ResultIsNumber28 = (null + null)--;
+>ResultIsNumber28 : number
+>                 : ^^^^^^
+>(null + null)-- : number
+>                : ^^^^^^
+>(null + null) : any
+>              : ^^^
+>null + null : any
+>            : ^^^
+
+let ResultIsNumber29 = obj1.x--;
+>ResultIsNumber29 : number
+>                 : ^^^^^^
+>obj1.x-- : number
+>         : ^^^^^^
+>obj1.x : string
+>       : ^^^^^^
+>obj1 : { x: string; y: () => void; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+
+let ResultIsNumber30 = obj1.y--;
+>ResultIsNumber30 : number
+>                 : ^^^^^^
+>obj1.y-- : number
+>         : ^^^^^^
+>obj1.y : () => void
+>       : ^^^^^^^^^^
+>obj1 : { x: string; y: () => void; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>y : () => void
+>  : ^^^^^^^^^^
+
+
+// miss assignment operators
+/**/;  
+
+/**/;  
+
+/**/; ;  
+/**/; ;  
+/**/; ;  
+/**/;    ;  
+/**/;    ;  
+/**/;    ;  
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

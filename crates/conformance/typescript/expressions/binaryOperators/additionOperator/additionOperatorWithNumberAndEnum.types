@@ -1,0 +1,134 @@
+=== additionOperatorWithNumberAndEnum.ts ===
+enum E { a, b }
+>E : E
+>  : ^
+>a : E.a
+>  : ^^^
+>b : E.b
+>  : ^^^
+
+enum F { c, d }
+>F : F
+>  : ^
+>c : F.c
+>  : ^^^
+>d : F.d
+>  : ^^^
+
+
+let a: number = null as unknown as (number);
+>a : number
+>  : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;                       
+/*pruned*/;                               
+
+let r1 = a + a;
+>r1 : number
+>   : ^^^^^^
+>a + a : number
+>      : ^^^^^^
+>a : number
+>  : ^^^^^^
+>a : number
+>  : ^^^^^^
+
+/*pruned*/;    
+/*pruned*/;    
+/*pruned*/;    
+
+let r5 = 0 + a;
+>r5 : number
+>   : ^^^^^^
+>0 + a : number
+>      : ^^^^^^
+>0 : 0
+>  : ^
+>a : number
+>  : ^^^^^^
+
+let r6 = E.a + 0;
+>r6 : number
+>   : ^^^^^^
+>E.a + 0 : number
+>        : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>0 : 0
+>  : ^
+
+let r7 = E.a + E.b;
+>r7 : number
+>   : ^^^^^^
+>E.a + E.b : number
+>          : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+let r8 = E['a'] + E['b'];
+>r8 : number
+>   : ^^^^^^
+>E['a'] + E['b'] : number
+>                : ^^^^^^
+>E['a'] : E.a
+>       : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>'a' : "a"
+>    : ^^^
+>E['b'] : E.b
+>       : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>'b' : "b"
+>    : ^^^
+
+let r9 = E['a'] + F['c'];
+>r9 : number
+>   : ^^^^^^
+>E['a'] + F['c'] : number
+>                : ^^^^^^
+>E['a'] : E.a
+>       : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>'a' : "a"
+>    : ^^^
+>F['c'] : F.c
+>       : ^^^
+>F : typeof F
+>  : ^^^^^^^^
+>'c' : "c"
+>    : ^^^
+
+
+/*pruned*/;     
+/*pruned*/;     
+/*pruned*/;     
+/*pruned*/;     
+/*pruned*/;     
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+
