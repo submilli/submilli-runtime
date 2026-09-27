@@ -43,7 +43,9 @@ pub(super) enum CallLift<'a> {
     },
     /// An unnamed function-typed callee (a closure held in a field or
     /// local); lifts the anonymous `(T, U) => R` form.
-    Anon,
+    Anon {
+        ty: &'a Type,
+    },
     /// A method, lifted against the receiver it resolved on so interface
     /// generics render substituted.
     Method {
@@ -2068,6 +2070,7 @@ impl Inferer<'_> {
             let help = match &lift_function {
                 Some((name, sig_params)) => self.format_signature(SignatureKind::Function {
                     name,
+                    predicate: None,
                     generics: &[],
                     params: sig_params,
                     ret: &ret_ty,
@@ -2091,7 +2094,11 @@ impl Inferer<'_> {
                     args.len(),
                 )
             };
-            self.error_with_help(span, msg, vec![help]);
+            let mut hints = vec![help];
+            if lift_function.is_none() {
+                hints.extend(super::type_diff::guard_loss_note(&callee_ty));
+            }
+            self.error_with_help(span, msg, hints);
         }
 
         // trailing args after `fixed_count` are bound to the
@@ -3414,12 +3421,13 @@ impl Inferer<'_> {
                 }
                 CallLift::Function { name } => self.format_signature(SignatureKind::Function {
                     name,
+                    predicate: None,
                     generics: &[],
                     params,
                     ret,
                     doc: None,
                 }),
-                CallLift::Anon => {
+                CallLift::Anon { .. } => {
                     let tys: Vec<Type> = params.iter().map(|p| p.ty.clone()).collect();
                     self.format_signature(SignatureKind::Anon {
                         params: &tys,
@@ -3441,7 +3449,7 @@ impl Inferer<'_> {
                 CallLift::Constructor { class_ty } => {
                     format!("constructor of `{class_ty}` expects")
                 }
-                CallLift::Function { .. } | CallLift::Anon => "expected".to_string(),
+                CallLift::Function { .. } | CallLift::Anon { .. } => "expected".to_string(),
                 CallLift::Method { name, .. } => format!("method `{name}` expects"),
             };
             let msg = if has_rest {
@@ -3456,7 +3464,11 @@ impl Inferer<'_> {
                     args.len(),
                 )
             };
-            self.error_with_help(span, msg, vec![help]);
+            let mut hints = vec![help];
+            if let CallLift::Anon { ty } = lift {
+                hints.extend(super::type_diff::guard_loss_note(ty));
+            }
+            self.error_with_help(span, msg, hints);
         }
 
         let rest_elem_ty: Option<Type> = if has_rest {
@@ -7389,7 +7401,7 @@ impl Inferer<'_> {
                             &param_tys,
                             &ret_ty,
                             has_rest,
-                            CallLift::Anon,
+                            CallLift::Anon { ty: &fn_ty },
                             &args,
                             combined_span,
                         ),
@@ -7421,7 +7433,7 @@ impl Inferer<'_> {
                             &param_tys,
                             &ret_ty,
                             has_rest,
-                            CallLift::Anon,
+                            CallLift::Anon { ty: receiver_ty },
                             &args,
                             span,
                         );

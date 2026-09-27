@@ -71,7 +71,7 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.commit }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.98.1
         with:
           targets: ${{ matrix.target }}
 

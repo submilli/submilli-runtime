@@ -650,13 +650,13 @@ impl<'a> Inferer<'a> {
         let mut names: Vec<&str> = self.packages_by_name.keys().copied().collect();
         names.sort();
         vec![format!(
-            "available packages: {}",
+            "packages loaded for this compilation (not the full catalog): {}",
             names
                 .iter()
                 .map(|n| format!("`{n}`"))
                 .collect::<Vec<_>>()
                 .join(", "),
-        )]
+        ), "use your package-discovery tool to list available packages, or check the blueprint configuration".to_string()]
     }
 
     /// Help text listing the `@mcp/*` packages the blueprint actually declares,

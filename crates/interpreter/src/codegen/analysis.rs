@@ -121,7 +121,12 @@ impl CodegenAnalysis {
 
         // Imported class members can add closure adapters after dependency
         // selection, even when the source mentions no function-valued types.
-        for name in ["__value_defaults_fit", "__value_invoke_defaults"] {
+        for name in [
+            "__value_defaults_fit",
+            "__value_invoke_defaults",
+            "Number#toString",
+            "string_concat",
+        ] {
             analysis
                 .dependency_usage
                 .note_value(crate::mangle::prelude(name));

@@ -556,6 +556,15 @@ async fn compile_error_returns_diagnostics() {
 }
 
 #[tokio::test]
+async fn unresolved_import_does_not_claim_a_complete_catalog() {
+    let (_, body) = execute(r#"import fs from "node:fs"; function main(): void {}"#).await;
+    let message = body["error"]["message"].as_str().expect("compile error");
+    assert!(message.contains("not the full catalog"), "{message}");
+    assert!(message.contains("package-discovery tool"), "{message}");
+    assert!(!message.contains("help: available packages:"), "{message}");
+}
+
+#[tokio::test]
 async fn compile_error_syntax() {
     let (status, body) = execute("let x = ;").await;
     assert_eq!(status, StatusCode::OK);

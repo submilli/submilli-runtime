@@ -966,6 +966,7 @@ impl Inferer<'_> {
                 let doc = self.lookup_function_doc(&callee_ident.name);
                 self.format_signature(SignatureKind::Function {
                     name: &callee_ident.name,
+                    predicate: None,
                     generics,
                     params,
                     ret,

@@ -24,7 +24,10 @@ pub fn execute(args: Args) -> Result<ExitCode> {
     let blueprint = resolve_blueprint(args.blueprint.as_deref())?;
     println!(
         "{}",
-        submilli_shared::prompt::execute_tool_description(&blueprint)
+        submilli_shared::prompt::execute_tool_description(
+            &blueprint,
+            submilli_shared::prompt::PromptSurface::Mcp
+        )
     );
     Ok(ExitCode::SUCCESS)
 }

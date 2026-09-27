@@ -366,7 +366,10 @@ pub async fn prompt(
         Some(blueprint) => Ok((
             StatusCode::OK,
             Json(PromptResponse {
-                prompt: submilli_shared::prompt::execute_tool_description(&blueprint),
+                prompt: submilli_shared::prompt::execute_tool_description(
+                    &blueprint,
+                    submilli_shared::prompt::PromptSurface::Rest,
+                ),
                 name,
                 tools: ToolDescriptions {
                     search: submilli_shared::prompt::tools::PACKAGES_SEARCH,

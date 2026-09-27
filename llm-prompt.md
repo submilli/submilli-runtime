@@ -58,17 +58,17 @@ You do NOT have access to Node.js APIs, browser globals, or NPM
 packages. Submilli ships its own standard library — modules are:
 {stdlib_modules}. Submilli native
 packages (e.g., `@stripe.com/sdk`, `@mcp/linear`) are also available;
-use the `packages.search` and `packages.docs` tools to discover them.
+use the `{t_search}` and `{t_docs}` tools to discover them.
 
 Built-ins already in scope, no `import` needed: {builtins}. Their
 signatures are a strict subset and differ from Node/TS in places (no
 `Date` — use the `Temporal` global, ISO 8601 + IANA timezones; `Math`
 includes `Math.random()`; `JSON` is `stringify` / `parse`). Call the
-`builtins.docs` tool with the names you'll use to get their exact
+`{t_builtins_docs}` tool for each name you'll use to get their exact
 `.d.ts` declarations before relying on a method. It takes a dotted
 member path too (`Temporal.Instant`), which returns just that member
 instead of the whole namespace. Asking it for a package name returns
-the `packages.docs` call to make, and asking `packages.docs` for a
+the `{t_docs}` call to make, and asking `{t_docs}` for a
 built-in serves it — the two tools cross-check each other, so a name
 in the wrong one is never a dead end.
 
@@ -158,6 +158,7 @@ resolved values.
 
 | Placeholder | Resolves to | Source |
 |:---|:---|:---|
+| `{t_search}`, `{t_docs}`, `{t_builtins_docs}` | registered discovery tool names | MCP or REST caller |
 | `{sandbox}` | empty when FS and Code are hidden; otherwise `none` / `ephemeral` / `per_session` / `persistent`, with limits where applicable | policy `vfs:` block |
 | `{http_access}` | empty when HTTP is hidden; otherwise per-method host reachability (`GET → api.example.com; …`), `any host`, or an approval-policy note | policy default and `permissions:` HTTP rules for `main` |
 | `{stdlib_modules}` | visible standard-library names | non-deny default or relevant non-deny rules for `main` |

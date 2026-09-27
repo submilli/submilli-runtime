@@ -14,6 +14,7 @@ pub(super) enum SignatureKind<'a> {
         params: &'a [Param],
         ret: &'a Type,
         doc: Option<&'a crate::DocComment>,
+        predicate: Option<&'a crate::TypePredicate>,
     },
     Method {
         receiver_ty: &'a Type,
@@ -56,7 +57,8 @@ pub(super) fn format_signature(
             params,
             ret,
             doc,
-        } => format_function(name, generics, params, ret, doc),
+            predicate,
+        } => format_function(name, generics, params, ret, doc, predicate),
         SignatureKind::Method {
             receiver_ty,
             name,
@@ -77,6 +79,7 @@ fn format_function(
     params: &[Param],
     ret: &Type,
     doc: Option<&crate::DocComment>,
+    predicate: Option<&crate::TypePredicate>,
 ) -> String {
     let mut out = String::new();
     if let Some(d) = doc {
@@ -92,7 +95,14 @@ fn format_function(
         }
         write_named_param(&mut out, &p.name, &p.ty, p.default.as_ref(), p.rest);
     }
-    write!(out, "): {ret}").unwrap();
+    out.push_str("): ");
+    write_return(
+        &mut out,
+        params,
+        ret,
+        predicate,
+        &TypeParamSubstitution::new(),
+    );
     out
 }
 
@@ -166,8 +176,37 @@ fn format_method(
             p.rest,
         );
     }
-    write!(out, "): {}", substitution.apply(&sig.ret)).unwrap();
+    out.push_str("): ");
+    write_return(
+        &mut out,
+        &sig.params,
+        &sig.ret,
+        sig.predicate.as_ref(),
+        substitution,
+    );
     out
+}
+
+fn write_return(
+    out: &mut String,
+    params: &[Param],
+    ret: &Type,
+    predicate: Option<&crate::TypePredicate>,
+    substitution: &TypeParamSubstitution,
+) {
+    if let Some(predicate) = predicate
+        && let Some(param) = params.get(predicate.parameter_index as usize)
+    {
+        write!(
+            out,
+            "{} is {}",
+            param.name,
+            substitution.apply(&predicate.asserted_type)
+        )
+        .unwrap();
+        return;
+    }
+    write!(out, "{}", substitution.apply(ret)).unwrap();
 }
 
 /// An anonymous callee has only parameter *types* to lift, so it renders through
@@ -230,6 +269,7 @@ mod tests {
                 params: &[],
                 ret: &Type::Void,
                 doc: None,
+                predicate: None,
             },
             &TypeParamSubstitution::new(),
         );
@@ -245,6 +285,7 @@ mod tests {
                 params: &[Param::new("x", Type::TypeVar("T".to_string()))],
                 ret: &Type::TypeVar("T".to_string()),
                 doc: None,
+                predicate: None,
             },
             &TypeParamSubstitution::new(),
         );
@@ -263,6 +304,7 @@ mod tests {
                 ],
                 ret: &Type::TypeVar("T".to_string()),
                 doc: None,
+                predicate: None,
             },
             &TypeParamSubstitution::new(),
         );
@@ -278,6 +320,7 @@ mod tests {
                 params: &[Param::anon(Type::String), Param::anon(Type::String)],
                 ret: &Type::String,
                 doc: None,
+                predicate: None,
             },
             &TypeParamSubstitution::new(),
         );

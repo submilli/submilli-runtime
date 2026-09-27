@@ -19,7 +19,7 @@ function main(): void {
   } catch (e: Error) {
     missing = e.message;
   }
-  assert(missing === "type mismatch: expected { name: string }, got object", missing);
+  assert(missing === "type mismatch: expected { name: string }, got object at $[\"name\"]", missing);
 
   // Number literal mismatch.
   let literal: string = "<none>";

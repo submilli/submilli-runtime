@@ -537,6 +537,33 @@ impl<'a> Inferer<'a> {
     /// was actually looked up with — see
     /// [`method_lift_substitution`](Self::method_lift_substitution).
     pub(super) fn format_signature(&self, kind: format_signature::SignatureKind<'_>) -> String {
+        if let SignatureKind::Function {
+            name,
+            generics,
+            params,
+            ret,
+            doc,
+            ..
+        } = kind
+        {
+            let predicate = self
+                .lookup_top_function(name)
+                .and_then(|entry| match &entry.kind {
+                    ValueKind::Function { type_predicate, .. } => type_predicate.as_ref(),
+                    _ => None,
+                });
+            return format_signature::format_signature(
+                SignatureKind::Function {
+                    name,
+                    generics,
+                    params,
+                    ret,
+                    doc,
+                    predicate,
+                },
+                &TypeParamSubstitution::new(),
+            );
+        }
         let substitution = match &kind {
             SignatureKind::Method {
                 receiver_ty, name, ..

@@ -6,6 +6,7 @@ pub mod bounds;
 pub mod box_types;
 mod call_arguments;
 pub mod cast_check;
+mod cast_diagnostics;
 pub mod classes;
 mod closure_coercions;
 pub mod closures;

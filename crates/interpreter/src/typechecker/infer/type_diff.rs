@@ -55,11 +55,11 @@ pub(super) fn format_type_diff(expected: &Type, got: &Type) -> Option<String> {
 /// The rendering *parses*, which is what makes it worth a note — pasted into an
 /// annotation it silently drops the narrowing, and the loss surfaces much later,
 /// as a failed read inside the `if` the guard was supposed to open.
-fn guard_loss_note(got: &Type) -> Option<String> {
+pub(super) fn guard_loss_note(got: &Type) -> Option<String> {
     let Type::Function {
         predicate: Some(predicate),
         ..
-    } = got
+    } = got.peel()
     else {
         return None;
     };

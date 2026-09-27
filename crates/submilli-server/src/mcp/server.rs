@@ -748,8 +748,10 @@ impl ServerHandler for SubmilliMcp {
     ) -> Result<ListToolsResult, ErrorData> {
         use submilli_shared::prompt::tools as shared;
         let mut tools = self.tool_router.list_all();
-        let execute =
-            submilli_shared::prompt::execute_tool_description(&self.current_blueprint().await);
+        let execute = submilli_shared::prompt::execute_tool_description(
+            &self.current_blueprint().await,
+            submilli_shared::prompt::PromptSurface::Mcp,
+        );
         for tool in &mut tools {
             let description = match tool.name.as_ref() {
                 TOOL_NAME => Some(execute.clone()),

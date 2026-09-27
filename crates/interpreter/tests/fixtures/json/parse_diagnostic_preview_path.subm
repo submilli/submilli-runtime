@@ -44,7 +44,7 @@ function main(): void {
       "{\"hasNextPage\":false,\"issues\":[{\"id\":\"SUB-1\",\"title\":\"x\",\"status\":\"Done\",\"statusType\":\"completed\"}]}"
     ) as ListIssuesResponse;
   });
-  assert(nestedMissing === "type mismatch: expected ListIssuesResponse, got object", nestedMissing);
+  assert(nestedMissing === "type mismatch: expected ListIssuesResponse, got object at $[\"issues\"][0][\"state\"]", nestedMissing);
 
   const multiMissingRoot = expectMessage((): void => {
     const issue = JSON.parse(
@@ -52,7 +52,7 @@ function main(): void {
     ) as LinearIssueWithIdentifier;
   });
   assert(
-    multiMissingRoot === "type mismatch: expected LinearIssueWithIdentifier, got object",
+    multiMissingRoot === "type mismatch: expected LinearIssueWithIdentifier, got object at $[\"identifier\"]",
     multiMissingRoot
   );
 
@@ -61,10 +61,10 @@ function main(): void {
       "{\"hasNextPage\":false,\"issues\":[]}"
     ) as ListNodesResponse;
   });
-  assert(shapeRename === "type mismatch: expected ListNodesResponse, got object", shapeRename);
+  assert(shapeRename === "type mismatch: expected ListNodesResponse, got object at $[\"nodes\"]", shapeRename);
 
   const indexed = expectMessage((): void => {
     const nums = JSON.parse("[1,\"two\",3]") as number[];
   });
-  assert(indexed === "type mismatch: expected number[], got object", indexed);
+  assert(indexed === "type mismatch: expected number[], got object at $[1]", indexed);
 }

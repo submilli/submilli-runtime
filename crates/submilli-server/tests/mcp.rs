@@ -1209,6 +1209,21 @@ async fn tool_description_is_resolved_prompt() {
     let (status, _, rpc) = h.post(EPH, tools_list(1), Some(&session)).await;
     assert_eq!(status, StatusCode::OK);
     let desc = tool_desc(&rpc, EXECUTE);
+    for name in [
+        "submilli__typescript__packages__search",
+        "submilli__typescript__packages__docs",
+        "submilli__typescript__builtins__docs",
+    ] {
+        assert!(desc.contains(&format!("`{name}`")), "{desc}");
+        assert!(
+            rpc["result"]["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|tool| tool["name"] == name)
+        );
+    }
+    assert!(!desc.contains("{t_"));
 
     // Body of llm-prompt.md's `## The prompt` section is present...
     assert!(desc.contains("strict TypeScript subset"), "got: {desc}");

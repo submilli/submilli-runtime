@@ -80,9 +80,16 @@ pub fn prompt_template() -> &'static str {
     body.split("\n---").next().unwrap_or(body).trim()
 }
 
+/// Discovery vocabulary exposed by the consumer of the prompt.
+#[derive(Clone, Copy)]
+pub enum PromptSurface {
+    Mcp,
+    Rest,
+}
+
 /// The `execute` tool description for a blueprint: the canonical prompt with
 /// policy-dependent library listings and guidance resolved.
-pub fn execute_tool_description(blueprint: &Blueprint) -> String {
+pub fn execute_tool_description(blueprint: &Blueprint, surface: PromptSurface) -> String {
     let visibility = LibraryVisibility::for_blueprint(blueprint);
     let http_visible = visibility.allows(HTTP_MODULE);
     let sandbox = if visibility.allows("submilli:fs") || visibility.allows("submilli:code") {
@@ -98,6 +105,7 @@ pub fn execute_tool_description(blueprint: &Blueprint) -> String {
     } else {
         String::new()
     };
+    let [search, docs, builtins] = surface.discovery_tools();
     prompt_template()
         .replace("{stdlib_modules}", &stdlib_modules_phrase(visibility))
         .replace("{sandbox}", &sandbox)
@@ -116,6 +124,9 @@ pub fn execute_tool_description(blueprint: &Blueprint) -> String {
         )
         .replace("{builtins}", &builtins_phrase())
         .replace("{mcp_packages}", &mcp_packages_phrase(blueprint))
+        .replace("{t_search}", search)
+        .replace("{t_docs}", docs)
+        .replace("{t_builtins_docs}", builtins)
         .replace(
             "{git_package}",
             if visibility.allows("submilli:git") {
@@ -138,6 +149,19 @@ counts may be `null`: indeterminate, not free. `batch` is
 bounded-concurrent, one result per prompt, positionally. Models are
 operator-declared — `models()` lists them, and `contextWindow` /
 `description` are `null` when undeclared, so filtering drops those."#;
+
+impl PromptSurface {
+    fn discovery_tools(self) -> [&'static str; 3] {
+        match self {
+            Self::Mcp => [
+                "submilli__typescript__packages__search",
+                "submilli__typescript__packages__docs",
+                "submilli__typescript__builtins__docs",
+            ],
+            Self::Rest => ["search", "docs", "builtins"],
+        }
+    }
+}
 
 const HTTP_GUIDANCE: &str = r#"When making outbound HTTP, do NOT construct `Authorization` headers
 or include API keys in query strings. The operator's policy
@@ -194,7 +218,7 @@ fn mcp_packages_phrase(blueprint: &Blueprint) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "\n\nMCP packages available: {list}. Call `packages.docs` with a package \
+        "\n\nMCP packages available: {list}. Call `{{t_docs}}` with a package \
          name for its tools and signatures, then `import` it. Most tools are \
          typed — read the signature and use the result directly, narrowing \
          optional (`foo?`) fields against `null` before access; do not cast a \
@@ -392,6 +416,24 @@ mod tests {
     use super::*;
     use submilli_blueprint::VfsConfig;
 
+    #[test]
+    fn discovery_names_match_each_prompt_surface() {
+        for surface in [PromptSurface::Mcp, PromptSurface::Rest] {
+            let rendered = execute_tool_description(&Blueprint::default(), surface);
+            for name in surface.discovery_tools() {
+                assert!(rendered.contains(&format!("`{name}`")), "{rendered}");
+            }
+            for stale in [
+                "`packages.search`",
+                "`packages.docs`",
+                "`builtins.docs`",
+                "{t_",
+            ] {
+                assert!(!rendered.contains(stale), "{rendered}");
+            }
+        }
+    }
+
     /// Build a blueprint from `main`-caller rule lines (real parse path).
     fn blueprint_with(rule_lines: &str) -> Blueprint {
         let yaml = format!("name: t\npermissions:\n  main:\n{rule_lines}");
@@ -404,7 +446,7 @@ mod tests {
         assert!(!template.is_empty());
         assert!(!template.starts_with("\n## The prompt"));
 
-        let rendered = execute_tool_description(&Blueprint::default());
+        let rendered = execute_tool_description(&Blueprint::default(), PromptSurface::Mcp);
         assert!(!rendered.contains("{vfs_mode}"));
         assert!(!rendered.contains("{http_access}"));
         assert!(!rendered.contains("{builtins}"));
@@ -413,7 +455,7 @@ mod tests {
 
     #[test]
     fn prompt_omits_hidden_libraries_and_their_guidance() {
-        let denied = execute_tool_description(&Blueprint::default());
+        let denied = execute_tool_description(&Blueprint::default(), PromptSurface::Mcp);
         for hidden in [
             "submilli:http",
             "submilli:fs",
@@ -436,7 +478,7 @@ mod tests {
             let blueprint = blueprint_with(&format!(
                 "    - capability: http.get\n      action: {action}\n"
             ));
-            let rendered = execute_tool_description(&blueprint);
+            let rendered = execute_tool_description(&blueprint, PromptSurface::Mcp);
             assert!(rendered.contains("submilli:http"));
             assert!(rendered.contains("When making outbound HTTP"));
             assert!(!rendered.contains("submilli:fs"));
@@ -447,7 +489,7 @@ mod tests {
             let blueprint = blueprint_with(&format!(
                 "    - capability: {capability}\n      action: allow\n"
             ));
-            let rendered = execute_tool_description(&blueprint);
+            let rendered = execute_tool_description(&blueprint, PromptSurface::Mcp);
             assert!(rendered.contains("submilli:fs"));
             assert!(rendered.contains("Sandbox: File system ephemeral"));
             assert_eq!(rendered.contains("submilli:code"), code_visible);
@@ -470,7 +512,7 @@ mod tests {
         ] {
             let blueprint =
                 submilli_blueprint::parse(&format!("name: test\n{configuration}{policy}")).unwrap();
-            let prompt = execute_tool_description(&blueprint);
+            let prompt = execute_tool_description(&blueprint, PromptSurface::Mcp);
             for text in [
                 "submilli:llm",
                 "Model calls",
@@ -498,7 +540,7 @@ mod tests {
             ] {
                 let blueprint =
                     submilli_blueprint::parse(&format!("name: test\n{config}{policy}")).unwrap();
-                let prompt = execute_tool_description(&blueprint);
+                let prompt = execute_tool_description(&blueprint, PromptSurface::Mcp);
                 for text in [
                     "submilli:git",
                     "Git is available",
@@ -518,7 +560,7 @@ mod tests {
 
     #[test]
     fn mcp_packages_absent_without_servers() {
-        let rendered = execute_tool_description(&Blueprint::default());
+        let rendered = execute_tool_description(&Blueprint::default(), PromptSurface::Mcp);
         assert!(mcp_packages_phrase(&Blueprint::default()).is_empty());
         assert!(!rendered.contains("MCP packages available"));
     }
@@ -527,7 +569,7 @@ mod tests {
     fn mcp_packages_lists_declared_servers() {
         let bp = submilli_blueprint::parse("name: t\nmcp:\n  linear:\n    url: https://x/mcp\n")
             .expect("valid blueprint");
-        let rendered = execute_tool_description(&bp);
+        let rendered = execute_tool_description(&bp, PromptSurface::Mcp);
         assert!(rendered.contains("MCP packages available: @mcp/linear"));
         assert!(rendered.contains("return type is literally `unknown`"));
         assert!(rendered.contains("use the result directly"));

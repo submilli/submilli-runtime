@@ -573,7 +573,7 @@ async fn show_round_trip() {
 /// so a drift here means a REST agent is taught a different language than an
 /// MCP client.
 #[tokio::test]
-async fn prompt_matches_the_mcp_execute_description() {
+async fn prompt_uses_rest_discovery_vocabulary() {
     let yaml = "name: prompted\nvfs: per_session\n";
     let router = seeded_router(&[yaml]);
 
@@ -582,8 +582,15 @@ async fn prompt_matches_the_mcp_execute_description() {
     assert_eq!(body["name"], json!("prompted"));
 
     let blueprint = submilli_blueprint::parse(yaml).expect("valid blueprint");
-    let expected = submilli_shared::prompt::execute_tool_description(&blueprint);
+    let expected = submilli_shared::prompt::execute_tool_description(
+        &blueprint,
+        submilli_shared::prompt::PromptSurface::Rest,
+    );
     assert_eq!(body["prompt"].as_str().unwrap(), expected);
+    for tool in ["`search`", "`docs`", "`builtins`"] {
+        assert!(expected.contains(tool), "{expected}");
+    }
+    assert!(!expected.contains("submilli__typescript__"));
 
     // Placeholders resolve rather than leaking through to the model.
     let prompt = body["prompt"].as_str().unwrap();

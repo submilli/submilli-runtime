@@ -39,6 +39,7 @@ pub enum ReturnTarget {
 }
 
 pub struct FunctionEmitter<'a> {
+    pub(super) cast_diagnostic: Option<super::cast_diagnostics::Locals>,
     pub runtime_type_params: BTreeMap<String, (u32, u32)>,
     #[allow(dead_code)]
     ctx: &'a CodegenCtx<'a>,
@@ -168,6 +169,7 @@ impl<'a> FunctionEmitter<'a> {
             ctor_class: None,
             source_mappings: Vec::new(),
             single_evaluations: Vec::new(),
+            cast_diagnostic: None,
         };
         for (name, ty) in params {
             let index = emitter.next_local_index;
