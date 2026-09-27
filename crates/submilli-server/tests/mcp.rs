@@ -31,7 +31,7 @@ const NO_VFS: &str = "novfs";
 /// Grant the fs capabilities the WRITE/READ scripts use. The server is
 /// deny-by-default, so without these the writes/reads would be denied.
 fn allow_fs() -> BTreeMap<String, Vec<PermissionRule>> {
-    let rules = ["fs.read", "fs.write", "fs.mkdir"]
+    let rules = ["fs.read", "fs.write", "fs.mkdir", "fs.list"]
         .into_iter()
         .map(|cap| PermissionRule {
             capability: cap.into(),
@@ -2174,5 +2174,139 @@ async fn llm_discovery_requires_models_and_permission() {
             visible,
             "{response}"
         );
+    }
+}
+
+#[tokio::test]
+async fn files_tools_enforce_session_policy_on_persistent_volume() {
+    let dir = tempfile::tempdir().expect("volume");
+    for user in ["ada", "grace"] {
+        std::fs::create_dir(dir.path().join(user)).unwrap();
+        std::fs::write(dir.path().join(user).join("secret.txt"), user).unwrap();
+    }
+    let blueprint = submilli_blueprint::parse(
+        r#"
+name: vol
+vfs: { mode: persistent, volume: work }
+variables:
+  user: { required: true }
+permissions:
+  main:
+    - capability: fs.read
+      filter: 'op == "readText" and path == "/${vars.user}/secret.txt"'
+      action: allow
+    - capability: fs.list
+      filter: 'op == "list" and path == "/${vars.user}" and recursive == false'
+      action: allow
+"#,
+    )
+    .unwrap();
+    let h = Harness::from_blueprints_with_volumes(
+        vec![blueprint],
+        VolumeTable::from([("work".into(), dir.path().to_path_buf())]),
+    );
+    for user in ["ada", "grace"] {
+        let session = handshake_with_vars(&h, VOL, json!({"user": user})).await;
+        let other = if user == "ada" { "grace" } else { "ada" };
+        for (tool, args, capability) in [
+            (
+                "submilli__files__read",
+                json!({"path": format!("/{other}/secret.txt")}),
+                "fs.read",
+            ),
+            (
+                "submilli__files__list",
+                json!({"path": format!("/{other}")}),
+                "fs.list",
+            ),
+            (
+                "submilli__files__list",
+                json!({"recursive": true}),
+                "fs.list",
+            ),
+            (
+                "submilli__files__list",
+                json!({"path": format!("/{user}"), "recursive": true}),
+                "fs.list",
+            ),
+        ] {
+            let (_, _, rpc) = h.post(VOL, rpc_call(2, tool, args), Some(&session)).await;
+            assert!(
+                refuses_with(
+                    &rpc,
+                    &format!("permission denied: caller=main capability={capability}")
+                ),
+                "{rpc}"
+            );
+        }
+        let (_, _, read) = h
+            .post(
+                VOL,
+                rpc_call(
+                    3,
+                    "submilli__files__read",
+                    json!({"path": format!("/{user}/secret.txt")}),
+                ),
+                Some(&session),
+            )
+            .await;
+        assert_eq!(output(&read)["content"], user, "{read}");
+        let (_, _, list) = h
+            .post(
+                VOL,
+                rpc_call(
+                    4,
+                    "submilli__files__list",
+                    json!({"path": format!("/{user}")}),
+                ),
+                Some(&session),
+            )
+            .await;
+        assert_eq!(
+            output(&list)["entries"][0]["path"],
+            format!("/{user}/secret.txt"),
+            "{list}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn files_tools_default_deny_in_every_vfs_mode() {
+    for vfs in [
+        VfsConfig::Ephemeral {
+            size_limit: None,
+            path_limit: None,
+        },
+        VfsConfig::PerSession {
+            size_limit: None,
+            path_limit: None,
+        },
+        VfsConfig::None,
+    ] {
+        let h = Harness::from_blueprints(vec![Blueprint {
+            name: "denied".into(),
+            vfs,
+            ..Default::default()
+        }]);
+        let session = h.handshake("denied").await;
+        for (tool, args, capability) in [
+            (
+                "submilli__files__read",
+                json!({"path": "/missing"}),
+                "fs.read",
+            ),
+            ("submilli__files__list", json!({}), "fs.list"),
+        ] {
+            let (_, _, rpc) = h
+                .post("denied", rpc_call(2, tool, args), Some(&session))
+                .await;
+            assert!(
+                refuses_with(
+                    &rpc,
+                    &format!("permission denied: caller=main capability={capability}")
+                ),
+                "{rpc}"
+            );
+        }
     }
 }

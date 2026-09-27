@@ -7,7 +7,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use interpreter::runtime::fs::{ContainError, ContentPath, resolve_content};
-use interpreter::runtime::{Vfs, VfsInfo};
+use interpreter::runtime::{CheckOutcome, SecurityCheck, Vfs, VfsInfo};
 use interpreter::stdlib::fs::handles::kind_of;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::tool::{Extension, ToolCallContext};
@@ -507,16 +507,22 @@ impl SubmilliMcp {
             { content, line_start, line_end, has_more, next_offset, bytes }; pass \
             `next_offset` back to page on. Files survive across calls under a \
             per_session or persistent VFS; an ephemeral one is emptied after \
-            every execute."
+            every execute. Requires fs.read as caller main with op readText."
     )]
     async fn read_file(
         &self,
         Parameters(args): Parameters<ReadFileArgs>,
         Extension(parts): Extension<axum::http::request::Parts>,
     ) -> Result<CallToolResult, ErrorData> {
-        let blueprint = self.require_blueprint().await?;
+        let blueprint = Arc::new(self.require_blueprint().await?);
 
         let session_id = session_header(&parts);
+        self.check_file_permission(
+            Arc::clone(&blueprint),
+            session_id.as_deref(),
+            "fs.read",
+            serde_json::json!({ "op": "readText", "path": &args.path }),
+        )?;
         let (vfs, _info) = self.acquire_vfs(&blueprint, session_id.as_deref()).await?;
 
         let resolved = resolve_content(&vfs, "/", &args.path)
@@ -543,28 +549,33 @@ impl SubmilliMcp {
             `recursive` (default false). Returns { entries: [{ path, kind, bytes }], \
             count, truncated }, capped at 1000 entries. Files survive across calls \
             under a per_session or persistent VFS; an ephemeral one is emptied \
-            after every execute."
+            after every execute. Requires fs.list as caller main with op list; \
+            policy checks the starting directory, including recursive listings."
     )]
     async fn list_files(
         &self,
         Parameters(args): Parameters<ListFilesArgs>,
         Extension(parts): Extension<axum::http::request::Parts>,
     ) -> Result<CallToolResult, ErrorData> {
-        let blueprint = self.require_blueprint().await?;
+        let blueprint = Arc::new(self.require_blueprint().await?);
 
         let session_id = session_header(&parts);
+        let dir = args.path.as_deref().unwrap_or("/");
+        let recursive = args.recursive.unwrap_or(false);
+        self.check_file_permission(
+            Arc::clone(&blueprint),
+            session_id.as_deref(),
+            "fs.list",
+            serde_json::json!({ "op": "list", "path": dir, "recursive": recursive }),
+        )?;
         let (vfs, _info) = self.acquire_vfs(&blueprint, session_id.as_deref()).await?;
 
-        let dir = args.path.as_deref().unwrap_or("/");
         let resolved = resolve_content(&vfs, "/", dir)
             .map_err(|e| ErrorData::invalid_request(format!("{dir}: {e}"), None))?;
 
-        let (mut entries, truncated) = list_entries(
-            &resolved,
-            &guest_dir_prefix(dir),
-            args.recursive.unwrap_or(false),
-        )
-        .map_err(|e| ErrorData::invalid_request(format!("{dir}: {e}"), None))?;
+        let (mut entries, truncated) =
+            list_entries(&resolved, &guest_dir_prefix(dir), recursive)
+                .map_err(|e| ErrorData::invalid_request(format!("{dir}: {e}"), None))?;
         entries.sort_by(|a, b| a.path.cmp(&b.path));
 
         let output = ListFilesOutput {
@@ -576,6 +587,32 @@ impl SubmilliMcp {
         let value = serde_json::to_value(output)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::structured(value))
+    }
+}
+
+impl SubmilliMcp {
+    /// File tools act as the session's main program, including on isolated VFSs.
+    fn check_file_permission(
+        &self,
+        blueprint: Arc<Blueprint>,
+        session_id: Option<&str>,
+        capability: &str,
+        context: serde_json::Value,
+    ) -> Result<(), ErrorData> {
+        let variables = self
+            .state
+            .session_manager()
+            .variables(session_id.unwrap_or(""));
+        let policy = PolicyCheck::with_variables(blueprint, variables);
+        let reason = match policy.check("main", capability, &context) {
+            CheckOutcome::Allow => return Ok(()),
+            CheckOutcome::Deny { reason } => reason,
+            _ => "unrecognized policy outcome".to_string(),
+        };
+        Err(ErrorData::invalid_request(
+            format!("permission denied: caller=main capability={capability}: {reason}"),
+            None,
+        ))
     }
 }
 
