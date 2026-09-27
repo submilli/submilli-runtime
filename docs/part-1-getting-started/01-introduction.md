@@ -120,9 +120,10 @@ may do *inside* it — which operation, with which arguments, on whose
 behalf. "May list charges but must not export customers" is invisible at
 the socket; it is also exactly the rule you need enforced.
 
-> [!IMPORTANT]
-> Whatever your agent can do, an attacker who controls what it reads can
-> make it do. Control must live outside the model.
+:::note[Important]
+Whatever your agent can do, an attacker who controls what it reads can
+make it do. Control must live outside the model.
+:::
 
 ## Submilli enforces the rules
 
