@@ -2,11 +2,12 @@
 // baselines and `.divergences`, and drops the ones left checking too little.
 // ../typescript/README.md describes which cases belong.
 //
-// Usage: node port-suite.cjs <TypeScript checkout> <typescript_case_errors>
+// Usage: node port-suite.cjs [--refresh] <TypeScript checkout> <typescript_case_errors>
 // Runs `cargo test`, so it needs the workspace.
 //
 // A case already in the suite is left alone, so the cases ported whole before
-// pruning existed keep their form.
+// pruning existed keep their form. `--refresh` ports again each case pruning cut
+// something from, so what it cut comes back once we support it.
 const ts = require("typescript");
 const fs = require("fs");
 const path = require("path");
@@ -85,9 +86,11 @@ const MIN_KEPT_FRACTION = 1 / 3;
 const MIN_CHECKS = 5;
 
 async function main() {
-  const [typescript, caseErrors] = process.argv.slice(2);
+  const args = process.argv.slice(2);
+  const refresh = args[0] === "--refresh";
+  const [typescript, caseErrors] = refresh ? args.slice(1) : args;
   if (!typescript || !caseErrors) {
-    console.error("usage: node port-suite.cjs <TypeScript checkout> <typescript_case_errors>");
+    console.error("usage: node port-suite.cjs [--refresh] <TypeScript checkout> <typescript_case_errors>");
     process.exit(2);
   }
   const upstream = {
@@ -95,7 +98,7 @@ async function main() {
     baselines: path.join(typescript, "tests", "baselines", "reference"),
   };
   upstream.errorBaselines = fs.readdirSync(upstream.baselines).filter((f) => f.endsWith(".errors.txt"));
-  const candidates = candidateCases(upstream.conformance);
+  const candidates = candidateCases(upstream.conformance, refresh);
   const results = await pool(candidates, (rel) => portCase(upstream, caseErrors, rel));
   printDropReasons(results);
   const ported = dropDuplicates(results.filter((r) => r.kept).map((r) => r.rel));
@@ -112,7 +115,7 @@ async function main() {
   console.log(`${ported.length - thin.length} of ${candidates.length} candidate cases kept; ${thin.length} dropped as checking too little`);
 }
 
-function candidateCases(conformance) {
+function candidateCases(conformance, refresh) {
   return AREAS.flatMap((area) => findCases(path.join(conformance, area)))
     .map((file) => path.relative(conformance, file))
     .filter((rel) => {
@@ -120,8 +123,14 @@ function candidateCases(conformance) {
       if (EXCLUDED_NAMES.test(path.basename(rel, ".ts"))) return false;
       const source = fs.readFileSync(path.join(conformance, rel), "utf8");
       if (MULTI_FILE_OR_JS.test(source) || CONSTRUCT_SIGNATURE.test(source)) return false;
-      return !fs.existsSync(path.join(casesDir, rel));
+      const existing = path.join(casesDir, rel);
+      return !fs.existsSync(existing) || (refresh && wasPruned(existing));
     });
+}
+
+/** Whether pruning cut something from a case: `prune-case.cjs` marks what it blanks. */
+function wasPruned(file) {
+  return /\/\*pruned\*\/|\/\*\*\/[;{]/.test(fs.readFileSync(file, "utf8"));
 }
 
 async function portCase(upstream, caseErrors, rel) {
@@ -217,10 +226,15 @@ function codeOf(file) {
 }
 
 async function updateDivergences() {
-  await run("cargo", ["test", "--release", "-p", "conformance", "--test", "typescript"], {
-    env: { ...process.env, UPDATE_TYPESCRIPT_EXPECTED: "1" },
-    maxBuffer: 1 << 26,
-  });
+  try {
+    await run("cargo", ["test", "--release", "-p", "conformance", "--test", "typescript"], {
+      env: { ...process.env, UPDATE_TYPESCRIPT_EXPECTED: "1" },
+      maxBuffer: 1 << 26,
+    });
+  } catch (e) {
+    // The runner reports why a case failed on stdout.
+    throw new Error(`the runner failed in update mode:\n${e.stdout?.slice(-4000) ?? ""}${e.stderr ?? ""}`);
+  }
 }
 
 /** Whether a case checks fewer than `MIN_CHECKS` things: `tsc` types compared, plus

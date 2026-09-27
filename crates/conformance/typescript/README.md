@@ -117,25 +117,9 @@ line where it was:
 5. `// @strict: false` becomes `// @strict: true`. Submilli is always strict.
 6. `function main(): void {}` is appended.
 
-To port every case that belongs, then prune each, write its baselines and its
-`.divergences`, and drop the ones left checking too little:
-
-```sh
-cargo build --release -p conformance --example typescript_case_errors
-cd typescript-baselines
-npm ci
-node port-suite.cjs <TypeScript> ../../../target/release/examples/typescript_case_errors
-```
-
-To port one case by hand:
-
-```sh
-node port-case.cjs <TypeScript>/tests/cases/conformance/<case>.ts ../typescript/<case>.ts
-node prune-case.cjs <typescript_case_errors> ../typescript/<case>.ts
-node write-baselines.cjs <path substring>
-cd ..
-UPDATE_TYPESCRIPT_EXPECTED=1 CONFORMANCE_FILTER=<path substring> cargo test -p conformance --test typescript
-```
+`port-suite.cjs` runs the whole pipeline over every upstream case: port, prune,
+baselines, `.divergences`. [Maintaining the suite](#maintaining-the-suite) says when to
+run it.
 
 The baselines are generated from the ported case, not copied from TypeScript's
 recorded ones. A port changes what `tsc` infers: giving a variable a value where the
@@ -167,3 +151,87 @@ The blanked text starts with `/*pruned*/`, or `/**/` where that doesn't fit, the
 `{}` where a statement is still required, such as the body of an `if` or the last
 clause of a `switch`, and `;` elsewhere, so the statements either side can't run together. Every other line stays
 where it was, so line numbers still match the upstream case.
+
+## Maintaining the suite
+
+### The tools
+
+All in `typescript-baselines/`, except the last:
+
+| Tool | What it does |
+|:-----|:-------------|
+| `port-case.cjs` | Ports one upstream case (see [Porting a case](#porting-a-case)). |
+| `prune-case.cjs` | Prunes one ported case (see [Pruning](#pruning)). |
+| `write-baselines.cjs` | Writes the `.types` and `.errors.txt` of every case, or those matching a path substring. |
+| `port-suite.cjs` | Picks the upstream cases that belong, and runs the three above and the runner on each. |
+| `tsc-case.cjs` | What the others share: the `tsc` options a case is checked with, and its errors. |
+| `../examples/typescript_case_errors.rs` | Prints our errors on a case for the pruner, classified by `../tests/support/case_errors.rs`, which the runner uses too. |
+
+### Setting up
+
+Once, from the repository root:
+
+```sh
+# TypeScript's conformance tests, at the commit the suite is ported from.
+git init <TypeScript> && cd <TypeScript>
+git remote add origin https://github.com/microsoft/TypeScript.git
+git sparse-checkout set tests/cases/conformance/{controlFlow,expressions,statements,types} \
+  tests/baselines/reference
+git fetch --depth 1 --filter=blob:none origin 5848bc5157b22ff7f4e3369f4645a514a433b15f
+git checkout FETCH_HEAD
+cd -
+
+(cd crates/conformance/typescript-baselines && npm ci)
+cargo build --release -p conformance --example typescript_case_errors
+```
+
+`tests/baselines/reference` is only read, to tell an error the port caused from one
+the upstream case has.
+
+### After a change to the compiler
+
+1. Run the suite. If it fails, a case's divergences changed: read the diff it prints.
+2. When the change is intended, write the new divergences and commit them with the
+   change:
+
+   ```sh
+   UPDATE_TYPESCRIPT_EXPECTED=1 cargo test -p conformance --test typescript
+   ```
+
+3. If the change adds support for something, such as a syntax or a library type, the
+   pruned cases can keep more, and cases that were left out may now belong. Rebuild
+   the example, since it reports what we support, then port again:
+
+   ```sh
+   cargo build --release -p conformance --example typescript_case_errors
+   cd crates/conformance/typescript-baselines
+   node port-suite.cjs --refresh <TypeScript> ../../../target/release/examples/typescript_case_errors
+   ```
+
+   Without `--refresh`, only cases not yet in the suite are ported. With it, each case
+   pruning cut something from is ported again too, so what it cut comes back. Cases
+   ported whole are never touched. Review the diff: a case can also leave the suite,
+   when what's left no longer passes the criteria above.
+
+### After changing what counts as supported
+
+The lists in `tests/support/case_errors.rs` decide which of our errors lack support,
+and so what the runner reports and what pruning cuts. After editing them, rebuild the
+example, update the divergences (step 2 above), and port again with `--refresh`
+(step 3). The lists of excluded directories and case names are in `port-suite.cjs`; a
+change there only affects cases not yet in the suite, so remove any case it now
+excludes by hand.
+
+### Moving to another TypeScript commit
+
+Check out the new commit, change the hash here and in the setup above, and run
+`port-suite.cjs` without `--refresh`: it adds the upstream cases the suite doesn't
+have. Cases already in the suite keep the version they were ported from; to take an
+upstream change to one, delete it and port again.
+
+### Upgrading `tsc`
+
+The baselines come from the `typescript` version in `typescript-baselines/package.json`,
+not from the TypeScript commit above. After changing it, run `npm install`, then
+`node write-baselines.cjs`, then update the divergences (step 2 above), and review the
+diff: every case's baselines can change.
