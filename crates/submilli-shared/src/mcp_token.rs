@@ -41,15 +41,18 @@ const MAX_RESPONSE_SIZE: u64 = 64 * 1024;
 /// Token-endpoint request timeout (ms).
 const EXCHANGE_TIMEOUT_MS: u64 = 30_000;
 
+/// A provider can briefly reject a refresh token it has just issued. Keep the
+/// retry delays short enough for discovery's ten-second deadline.
+const INVALID_GRANT_RETRY_DELAYS: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(2)];
+
 /// Why minting an access token failed.
 #[derive(Debug)]
 pub enum McpTokenError {
     /// No credential on file — the blueprint never authenticated this server.
     NotAuthenticated,
-    /// Refresh token revoked upstream (`invalid_grant`). The credential has been
-    /// dropped, demoting the blueprint to PENDING; the operator must re-run
-    /// `submilli server mcp authenticate`. The transport surfaces this to the
-    /// script as a catchable `McpAuthExpiredError`.
+    /// The provider rejected the refresh token (`invalid_grant`). Refresh retries
+    /// briefly, then retains the credential so a later run can recover. The
+    /// transport surfaces exhausted retries as a catchable `McpAuthExpiredError`.
     AuthExpired,
     /// Any other non-success from the token endpoint (network `5xx`, or an OAuth
     /// error that isn't `invalid_grant`), carrying the upstream payload.
@@ -73,7 +76,7 @@ impl std::fmt::Display for McpTokenError {
             }
             McpTokenError::AuthExpired => write!(
                 f,
-                "OAuth refresh token was revoked upstream; re-run `submilli server mcp authenticate`"
+                "OAuth token endpoint rejected the refresh token (invalid_grant) after retries; credential retained — retry later or authenticate the MCP server again"
             ),
             McpTokenError::Upstream { status, body } => {
                 write!(f, "token endpoint returned HTTP {status}: {body}")
@@ -207,7 +210,7 @@ impl OAuthTokenManager {
 
     /// Redeem the stored refresh token for a fresh access token and cache it.
     /// Runs under the caller's held slot lock. Persists a rotated refresh token;
-    /// drops the credential (→ PENDING) on `invalid_grant`.
+    /// keeps the credential on rejection so a later invocation can recover.
     async fn refresh(
         &self,
         blueprint: &str,
@@ -229,19 +232,7 @@ impl OAuthTokenManager {
             return Ok(access_token.clone());
         }
 
-        let grant = match self.exchange(&credential).await {
-            Ok(grant) => grant,
-            Err(McpTokenError::AuthExpired) => {
-                // The refresh token is dead upstream. Dropping the credential makes
-                // `blueprint_auth_state` derive PENDING on the next bind.
-                self.store
-                    .delete(&credential_key(blueprint, server))
-                    .await
-                    .map_err(|e| McpTokenError::Store(e.to_string()))?;
-                return Err(McpTokenError::AuthExpired);
-            }
-            Err(e) => return Err(e),
-        };
+        let grant = self.exchange_with_retry(&credential).await?;
 
         if let Some(rotated) = &grant.refresh_token
             && credential.refresh_token.as_deref() != Some(rotated.as_str())
@@ -257,6 +248,24 @@ impl OAuthTokenManager {
             expires_at: Instant::now() + ttl,
         });
         Ok(grant.access_token)
+    }
+
+    async fn exchange_with_retry(
+        &self,
+        credential: &OAuthCredential,
+    ) -> Result<GrantResponse, McpTokenError> {
+        let mut delays = INVALID_GRANT_RETRY_DELAYS.into_iter();
+        loop {
+            match self.exchange(credential).await {
+                Err(McpTokenError::AuthExpired) => {
+                    let Some(delay) = delays.next() else {
+                        return Err(McpTokenError::AuthExpired);
+                    };
+                    tokio::time::sleep(delay).await;
+                }
+                result => return result,
+            }
+        }
     }
 
     /// POST `grant_type=refresh_token` to the credential's token endpoint. Pure:
@@ -626,19 +635,153 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn invalid_grant_drops_credential_and_reports_expired() {
+    #[tokio::test(start_paused = true)]
+    async fn invalid_grant_preserves_credential_for_a_later_run() {
         let (_tmp, store) = temp_store();
         seed(&store, "r1").await;
         let body = json!({ "error": "invalid_grant", "error_description": "revoked" });
-        let http = MockHttp::new(vec![(400, body.to_string().into_bytes())], None);
+        let rejection = (400, body.to_string().into_bytes());
+        let http = MockHttp::new(
+            vec![
+                rejection.clone(),
+                rejection.clone(),
+                rejection,
+                ok_token("at-1", 3600),
+            ],
+            None,
+        );
         let mgr = manager(&store, &http);
 
         let err = mgr.access_token(BP, SRV).await.unwrap_err();
         assert!(matches!(err, McpTokenError::AuthExpired), "got {err:?}");
-        // Credential dropped → the blueprint derives PENDING again.
-        assert!(read_credential(BP, SRV, &store).await.unwrap().is_none());
-        assert!(!is_authenticated(BP, SRV, Some(&store)).await);
+        assert_eq!(http.count(), 3, "stop after bounded retries");
+        assert_eq!(
+            read_credential(BP, SRV, &store)
+                .await
+                .unwrap()
+                .unwrap()
+                .refresh_token
+                .as_deref(),
+            Some("r1")
+        );
+        assert!(is_authenticated(BP, SRV, Some(&store)).await);
+        let next_run = manager(&store, &http);
+        assert_eq!(next_run.access_token(BP, SRV).await.unwrap(), "at-1");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn invalid_grant_retries_after_a_delay_and_persists_rotation() {
+        let (_tmp, store) = temp_store();
+        seed(&store, "r1").await;
+        let http = MockHttp::new(
+            vec![
+                (400, br#"{"error":"invalid_grant"}"#.to_vec()),
+                ok_token_rotating("at-1", 3600, "r2"),
+            ],
+            None,
+        );
+        let mgr = manager(&store, &http);
+        let start = Instant::now();
+        assert_eq!(mgr.access_token(BP, SRV).await.unwrap(), "at-1");
+        assert!(start.elapsed() >= Duration::from_secs(1));
+        assert_eq!(http.count(), 2);
+        assert_eq!(
+            read_credential(BP, SRV, &store)
+                .await
+                .unwrap()
+                .unwrap()
+                .refresh_token
+                .as_deref(),
+            Some("r2")
+        );
+        assert_eq!(mgr.access_token(BP, SRV).await.unwrap(), "at-1");
+        assert_eq!(http.count(), 2, "successful retry fills the cache");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn rejected_rotated_token_recovers_on_the_last_retry() {
+        let (_tmp, store) = temp_store();
+        seed(&store, "r1").await;
+        let rejection = (400, br#"{"error":"invalid_grant"}"#.to_vec());
+        let http = MockHttp::new(
+            vec![
+                ok_token_rotating("at-1", 3600, "r2"),
+                rejection.clone(),
+                rejection,
+                ok_token_rotating("at-2", 3600, "r3"),
+            ],
+            None,
+        );
+        let mgr = Arc::new(manager(&store, &http));
+        assert_eq!(mgr.access_token(BP, SRV).await.unwrap(), "at-1");
+        let start = Instant::now();
+        let mut callers = Vec::new();
+        for _ in 0..5 {
+            let mgr = Arc::clone(&mgr);
+            callers.push(tokio::spawn(async move {
+                mgr.force_refresh(BP, SRV, "at-1").await.unwrap()
+            }));
+        }
+        for caller in callers {
+            assert_eq!(caller.await.unwrap(), "at-2");
+        }
+        assert_eq!(start.elapsed(), Duration::from_secs(3));
+        assert_eq!(
+            http.count(),
+            4,
+            "concurrent callers share the retry sequence"
+        );
+        assert!(http.last_body().contains("refresh_token=r2"));
+        assert_eq!(
+            read_credential(BP, SRV, &store)
+                .await
+                .unwrap()
+                .unwrap()
+                .refresh_token
+                .as_deref(),
+            Some("r3")
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancelled_retry_preserves_credential() {
+        let (_tmp, store) = temp_store();
+        seed(&store, "r1").await;
+        let http = MockHttp::new(
+            vec![
+                (400, br#"{"error":"invalid_grant"}"#.to_vec()),
+                ok_token("at-1", 3600),
+            ],
+            None,
+        );
+        let mgr = manager(&store, &http);
+        let result =
+            tokio::time::timeout(Duration::from_millis(500), mgr.access_token(BP, SRV)).await;
+        assert!(result.is_err());
+        assert_eq!(http.count(), 1, "cancel during the retry delay");
+        assert!(is_authenticated(BP, SRV, Some(&store)).await);
+        assert_eq!(mgr.access_token(BP, SRV).await.unwrap(), "at-1");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn retry_stops_on_a_different_upstream_error() {
+        let (_tmp, store) = temp_store();
+        seed(&store, "r1").await;
+        let http = MockHttp::new(
+            vec![
+                (400, br#"{"error":"invalid_grant"}"#.to_vec()),
+                (503, b"upstream unavailable".to_vec()),
+                ok_token("at-1", 3600),
+            ],
+            None,
+        );
+        let mgr = manager(&store, &http);
+        assert!(matches!(
+            mgr.access_token(BP, SRV).await.unwrap_err(),
+            McpTokenError::Upstream { status: 503, .. }
+        ));
+        assert_eq!(http.count(), 2);
+        assert!(is_authenticated(BP, SRV, Some(&store)).await);
     }
 
     #[tokio::test]

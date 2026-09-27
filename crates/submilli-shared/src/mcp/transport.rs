@@ -5,9 +5,9 @@
 //! headers or an OAuth bearer token), then perform a JSON-RPC `tools/call` over
 //! rmcp's streamable-HTTP client — the same client discovery uses, so the MCP
 //! `initialize`/session handshake and SSE framing come for free. OAuth calls retry
-//! **once** after forcing a token refresh; `invalid_grant` demotes the blueprint to
-//! PENDING (inside [`OAuthTokenManager`]) and surfaces as
-//! [`McpCallError::AuthExpired`].
+//! **once** after forcing a token refresh. [`OAuthTokenManager`] retries
+//! `invalid_grant` briefly, then surfaces [`McpCallError::AuthExpired`] while
+//! retaining the credential for a later attempt.
 //!
 //! A fresh rmcp session is opened per call. Caching a session per
 //! `(blueprint, server)` is a future optimization; correctness comes first.

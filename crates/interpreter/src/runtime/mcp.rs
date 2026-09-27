@@ -32,8 +32,8 @@ pub const MCP_MODULE_NAME: &str = "submilli:mcp";
 /// script error (see [`mcp_error_to_throw`]).
 #[derive(Debug)]
 pub enum McpCallError {
-    /// The OAuth refresh token was revoked upstream; the blueprint is demoted to
-    /// PENDING. Surfaces to the script as a catchable `McpAuthExpiredError`.
+    /// OAuth authentication failed. A provider rejection may be transient;
+    /// surfaces to the script as a catchable `McpAuthExpiredError`.
     AuthExpired,
     /// The server reported a tool-level or JSON-RPC error.
     Mcp { message: String },
@@ -153,8 +153,8 @@ pub fn mcp_call_package_declaration() -> PackageDeclaration {
 fn mcp_error_to_throw(server: &str, tool: &str, err: McpCallError) -> wasmtime::Error {
     let message = match err {
         McpCallError::AuthExpired => format!(
-            "McpAuthExpiredError: @mcp/{server}.{tool}: the OAuth credential expired upstream; \
-             re-authenticate the blueprint"
+            "McpAuthExpiredError: @mcp/{server}.{tool}: OAuth authentication failed; \
+             retry later or authenticate the MCP server again"
         ),
         McpCallError::Mcp { message } => format!("@mcp/{server}.{tool}: {message}"),
         McpCallError::Upstream { status, body } => {
