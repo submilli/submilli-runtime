@@ -25,7 +25,7 @@ pub fn execution(outcome: &'static str) {
         .capture();
 }
 
-/// A package-docs lookup (`GET /v1/packages/docs`). `found` is false for an
+/// A package-docs lookup (`GET /v1/blueprints/{name}/packages/docs`). `found` is false for an
 /// unknown name.
 pub fn docs(found: bool) {
     counter("submilli.server.docs", 1)
@@ -33,13 +33,13 @@ pub fn docs(found: bool) {
         .capture();
 }
 
-/// A package search (`GET /v1/packages/search`).
+/// A package search (`GET /v1/blueprints/{name}/packages/search`).
 pub fn search() {
     counter("submilli.server.search", 1).capture();
 }
 
-/// A built-in discovery call. `kind` is `list` (`GET /v1/builtins`) or `docs`
-/// (`GET /v1/builtins/docs`).
+/// A built-in discovery call. `kind` is `list` or `docs`, for the two
+/// built-in routes under `/v1/blueprints/{name}/builtins`.
 pub fn builtins(kind: &'static str) {
     counter("submilli.server.builtins", 1)
         .attribute("kind", kind)

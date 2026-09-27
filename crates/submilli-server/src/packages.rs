@@ -16,18 +16,21 @@ use crate::mcp::McpCatalog;
 /// actually make. The MCP tool and the REST endpoint reach the same resolution
 /// but are invoked differently; naming the other one is its own dead end.
 #[derive(Clone, Copy)]
-pub(crate) enum Fetch {
+pub(crate) enum Fetch<'a> {
     Mcp,
-    Rest,
+    /// The REST routes, which are nested under the blueprint named here.
+    Rest(&'a str),
 }
 
-impl Fetch {
+impl Fetch<'_> {
     fn package_docs(self, name: &str) -> String {
         match self {
             Fetch::Mcp => {
                 format!("Fetch it with submilli__typescript__packages__docs(\"{name}\")")
             }
-            Fetch::Rest => format!("Fetch it from `GET /v1/packages/docs?name={name}`"),
+            Fetch::Rest(blueprint) => {
+                format!("Fetch it from `GET /v1/blueprints/{blueprint}/packages/docs?name={name}`")
+            }
         }
     }
 
@@ -36,9 +39,9 @@ impl Fetch {
             Fetch::Mcp => {
                 interpreter::packages::builtins_pointer("`submilli__typescript__builtins__docs`")
             }
-            Fetch::Rest => {
-                interpreter::packages::builtins_pointer("`GET /v1/builtins/docs?name=<name>`")
-            }
+            Fetch::Rest(blueprint) => interpreter::packages::builtins_pointer(&format!(
+                "`GET /v1/blueprints/{blueprint}/builtins/docs?name=<name>`"
+            )),
         }
     }
 }
@@ -268,7 +271,7 @@ pub(crate) fn docs_markdown(lookup: &DocLookup) -> Option<String> {
 pub(crate) fn builtin_entry_json(
     name: &str,
     mcp_packages: &[String],
-    fetch_with: &Fetch,
+    fetch_with: &Fetch<'_>,
     visibility: LibraryVisibility,
 ) -> Value {
     use interpreter::packages::BuiltinLookup;
@@ -301,7 +304,7 @@ pub(crate) fn builtin_entry_json(
 fn package_correcting_call(
     name: &str,
     mcp_packages: &[String],
-    fetch_with: &Fetch,
+    fetch_with: &Fetch<'_>,
     visibility: LibraryVisibility,
 ) -> Option<Value> {
     if !visibility.allows(name) {
@@ -350,7 +353,7 @@ fn unknown_builtin_entry(
 pub(crate) fn builtins_docs_json(
     names: &[String],
     mcp_packages: &[String],
-    fetch_with: &Fetch,
+    fetch_with: &Fetch<'_>,
     visibility: LibraryVisibility,
 ) -> Value {
     let results: Vec<Value> = names
@@ -367,7 +370,7 @@ pub(crate) fn mcp_package_names(catalog: &McpCatalog) -> Vec<String> {
 }
 
 /// The built-in catalog — `{ types: [...], namespaces: [...] }`. Mirrors the
-/// `{builtins}` prompt placeholder; backs the REST `/v1/builtins` listing.
+/// `{builtins}` prompt placeholder; backs the REST built-ins listing.
 pub(crate) fn builtins_list_json() -> Value {
     let b = interpreter::packages::builtins();
     json!({ "types": b.types, "namespaces": b.namespaces })
@@ -376,7 +379,7 @@ pub(crate) fn builtins_list_json() -> Value {
 /// `packages.search` body — `{ results: [{ name, source, description }] }`.
 /// Stdlib modules only; for a blueprint's discovered `@mcp/<server>` packages use
 /// [`search_json_with_catalog`].
-pub(crate) fn search_json(query: &str, fetch_with: Fetch) -> Value {
+pub(crate) fn search_json(query: &str, fetch_with: Fetch<'_>) -> Value {
     search_json_with_catalog(query, &McpCatalog::empty(), fetch_with)
 }
 
@@ -385,7 +388,7 @@ pub(crate) fn search_json(query: &str, fetch_with: Fetch) -> Value {
 pub(crate) fn search_json_with_catalog(
     query: &str,
     catalog: &McpCatalog,
-    fetch_with: Fetch,
+    fetch_with: Fetch<'_>,
 ) -> Value {
     let results = search_json_results(query, catalog, LibraryVisibility::unscoped());
     search_body(results, fetch_with, LibraryVisibility::unscoped(), || {
@@ -398,7 +401,7 @@ pub(crate) fn search_json_with_blueprint(
     catalog: &McpCatalog,
     blueprint: &Blueprint,
     store: &PackageStore,
-    fetch_with: Fetch,
+    fetch_with: Fetch<'_>,
 ) -> Value {
     // Load each declared artifact once and derive both views from it: the hit
     // list and, only on a miss, the catalog listing.
@@ -433,7 +436,7 @@ pub(crate) fn search_json_with_blueprint(
 /// `available` is a closure so a hit never pays to assemble the listing.
 fn search_body(
     results: Vec<Value>,
-    fetch_with: Fetch,
+    fetch_with: Fetch<'_>,
     visibility: LibraryVisibility,
     available: impl FnOnce() -> Vec<CatalogEntry>,
 ) -> Value {
@@ -615,7 +618,7 @@ mod git_discovery_tests {
             DocLookup::Host { .. }
         ));
         assert!(
-            !search_json("", Fetch::Rest)
+            !search_json("", Fetch::Mcp)
                 .to_string()
                 .contains("submilli:git")
         );
@@ -662,7 +665,7 @@ mod policy_visibility_tests {
             .into_iter()
             .zip(expected)
             {
-                for fetch in [Fetch::Rest, Fetch::Mcp] {
+                for fetch in [Fetch::Rest("test"), Fetch::Mcp] {
                     let symbol = match name {
                         "submilli:http" => "download",
                         "submilli:fs" => "readText",

@@ -780,18 +780,24 @@ pub fn app(state: AppState) -> Router {
             delete(crate::handlers::packages::uninstall),
         )
         .route(
-            "/v1/packages/search",
-            get(crate::handlers::packages::search),
-        )
-        .route("/v1/packages/docs", get(crate::handlers::packages::docs))
-        .route(
             "/v1/packages/install",
             post(crate::handlers::packages::install),
         )
-        .route("/v1/builtins", get(crate::handlers::packages::builtins))
         .route(
-            "/v1/builtins/docs",
-            get(crate::handlers::packages::builtin_docs),
+            "/v1/blueprints/{name}/packages/search",
+            get(crate::handlers::packages::blueprint_search),
+        )
+        .route(
+            "/v1/blueprints/{name}/packages/docs",
+            get(crate::handlers::packages::blueprint_docs),
+        )
+        .route(
+            "/v1/blueprints/{name}/builtins",
+            get(crate::handlers::packages::blueprint_builtins),
+        )
+        .route(
+            "/v1/blueprints/{name}/builtins/docs",
+            get(crate::handlers::packages::blueprint_builtin_docs),
         )
         .route("/v1/capabilities", get(crate::handlers::capabilities::list))
         // Read-only, and names only: the host directory behind a volume name

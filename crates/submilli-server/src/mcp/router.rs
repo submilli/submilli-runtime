@@ -60,13 +60,21 @@ pub(crate) async fn mcp_handler(
     // is simply omitted from discovery (with a warning) so the rest of the
     // blueprint stays usable. See `discover_all`.
     let service = get_or_build(&state, &blueprint, &bp);
+    let terminates_session = req.method() == Method::DELETE;
 
     // `oneshot` consumes the service; the inner state is `Arc`-shared, so the
     // clone is cheap and shares sessions across requests.
-    match (*service).clone().oneshot(req).await {
+    let mut response = match (*service).clone().oneshot(req).await {
         Ok(resp) => resp.map(Body::new),
         Err(infallible) => match infallible {},
+    };
+    // rmcp answers a termination with 202, but the session is already closed
+    // and wiped by then, and MCP clients that accept only 200 or 204 report the
+    // 202 as a failed termination.
+    if terminates_session && response.status() == StatusCode::ACCEPTED {
+        *response.status_mut() = StatusCode::NO_CONTENT;
     }
+    response
 }
 
 /// Reject an `initialize` whose `${vars.NAME}` bindings don't satisfy the

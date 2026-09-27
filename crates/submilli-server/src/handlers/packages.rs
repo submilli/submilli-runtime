@@ -1,23 +1,23 @@
-//! REST package- and built-in-discovery endpoints, mirroring the MCP tools:
+//! REST package- and built-in-discovery endpoints, mirroring the MCP tools.
+//! Each is nested under the blueprint it answers for, the way an MCP tool is
+//! scoped by the blueprint its endpoint names, and 404s on a blueprint that is
+//! not registered:
 //!
-//! * `GET /v1/packages/search?q=<query>[&blueprint=<name>]` — matching packages
-//!   (empty query = all)
-//! * `GET /v1/packages/docs?name=<name>[&blueprint=<name>]` — declarations +
-//!   description for one
-//!
-//! `blueprint=` scopes discovery the way the MCP tools are scoped by the bound
-//! blueprint: without it these resolve stdlib only, so a caller (the agent
-//! server's `search`/`docs` tools) would never see the packages or
-//! `@mcp/<server>` entries its own blueprint declares.
-//! * `GET /v1/builtins` — the in-scope built-in catalog (`{ types, namespaces }`)
-//! * `GET /v1/builtins/docs?name=<name>` — `.d.ts` declarations for one built-in
+//! * `GET /v1/blueprints/{blueprint}/packages/search?q=<query>` — matching
+//!   packages (empty query = all)
+//! * `GET /v1/blueprints/{blueprint}/packages/docs?name=<name>` — declarations
+//!   + description for one
+//! * `GET /v1/blueprints/{blueprint}/builtins` — the built-in catalog
+//!   (`{ types, namespaces }`)
+//! * `GET /v1/blueprints/{blueprint}/builtins/docs?name=<name>[&name=<name>…]`
+//!   — `.d.ts` declarations for the built-ins named
 //!
 //! The response bodies come from `crate::packages` (shared with the MCP tools);
 //! the REST layer only adds an HTTP status code. Names carry `:` / `@` / `/`, so
 //! they ride in the query string rather than a path segment.
 
 use axum::Json;
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, RawQuery, State};
 use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
@@ -96,7 +96,7 @@ pub struct UninstallResponse {
 /// package routes.
 pub async fn uninstall(
     State(state): State<AppState>,
-    axum::extract::Path(name): axum::extract::Path<String>,
+    Path(name): Path<String>,
 ) -> Result<Json<UninstallResponse>, (StatusCode, Json<serde_json::Value>)> {
     let store = state.package_store();
     let error = |status: StatusCode, error: &str, message: String| {
@@ -152,73 +152,7 @@ pub async fn uninstall(
     }))
 }
 
-#[derive(Debug, Deserialize)]
-pub struct SearchParams {
-    #[serde(default)]
-    q: String,
-    /// Scope the search to a blueprint: folds in its registry packages and its
-    /// discovered `@mcp/<server>` packages. Omitted ⇒ stdlib only.
-    #[serde(default)]
-    blueprint: Option<String>,
-}
-
-pub async fn search(
-    State(state): State<AppState>,
-    Query(params): Query<SearchParams>,
-) -> impl IntoResponse {
-    crate::metrics::search();
-    match blueprint_context(&state, params.blueprint.as_deref()).await {
-        Some((blueprint, catalog)) => Json(packages::search_json_with_blueprint(
-            &params.q,
-            &catalog,
-            &blueprint,
-            state.package_store(),
-            packages::Fetch::Rest,
-        )),
-        None => Json(packages::search_json(&params.q, packages::Fetch::Rest)),
-    }
-}
-
-/// Resolve the optional `blueprint=` scope into the blueprint and its MCP
-/// catalog. An unknown name degrades to stdlib-only rather than erroring: the
-/// caller asked to discover packages, not to assert the blueprint exists.
-async fn blueprint_context(
-    state: &AppState,
-    name: Option<&str>,
-) -> Option<(
-    submilli_blueprint::Blueprint,
-    std::sync::Arc<crate::mcp::McpCatalog>,
-)> {
-    let name = name?;
-    let blueprint = state.blueprints().get(name).await?;
-    let catalog = state.mcp_catalog(name, &blueprint).await;
-    Some((blueprint, catalog))
-}
-
-#[derive(Debug, Deserialize)]
-pub struct DocsParams {
-    name: String,
-    /// Same scoping as search: required to resolve `@mcp/<server>` and this
-    /// blueprint's registry packages.
-    #[serde(default)]
-    blueprint: Option<String>,
-}
-
-pub async fn docs(
-    State(state): State<AppState>,
-    Query(params): Query<DocsParams>,
-) -> axum::response::Response {
-    // Without a blueprint the endpoint resolves stdlib only — `@mcp/<server>`
-    // packages are blueprint-scoped, so `lookup` maps them to `McpUnknown`.
-    let lookup = match blueprint_context(&state, params.blueprint.as_deref()).await {
-        Some((blueprint, catalog)) => packages::lookup_with_blueprint(
-            &params.name,
-            &catalog,
-            &blueprint,
-            state.package_store(),
-        ),
-        None => packages::lookup(&params.name),
-    };
+fn docs_response(name: &str, lookup: DocLookup) -> axum::response::Response {
     let status = match &lookup {
         DocLookup::Host { .. }
         | DocLookup::Mcp { .. }
@@ -238,28 +172,113 @@ pub async fn docs(
         )
             .into_response();
     }
-    (status, Json(packages::docs_json(&params.name, lookup))).into_response()
+    (status, Json(packages::docs_json(name, lookup))).into_response()
 }
 
-pub async fn builtins() -> impl IntoResponse {
+type BlueprintMiss = (StatusCode, Json<serde_json::Value>);
+
+/// The blueprint a nested discovery route names, with its MCP catalog.
+async fn registered_blueprint(
+    state: &AppState,
+    name: &str,
+) -> Result<
+    (
+        submilli_blueprint::Blueprint,
+        std::sync::Arc<crate::mcp::McpCatalog>,
+    ),
+    BlueprintMiss,
+> {
+    match state.blueprints().get(name).await {
+        Some(blueprint) => {
+            let catalog = state.mcp_catalog(name, &blueprint).await;
+            Ok((blueprint, catalog))
+        }
+        None => Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "not_found",
+                "message": format!("blueprint '{name}' is not registered"),
+                "name": name,
+            })),
+        )),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BlueprintSearchParams {
+    #[serde(default)]
+    q: String,
+}
+
+/// `GET /v1/blueprints/{blueprint}/packages/search` — what the blueprint's MCP
+/// `packages__search` tool answers.
+pub async fn blueprint_search(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Query(params): Query<BlueprintSearchParams>,
+) -> Result<Json<serde_json::Value>, BlueprintMiss> {
+    let (blueprint, catalog) = registered_blueprint(&state, &name).await?;
+    crate::metrics::search();
+    Ok(Json(packages::search_json_with_blueprint(
+        &params.q,
+        &catalog,
+        &blueprint,
+        state.package_store(),
+        packages::Fetch::Rest(&name),
+    )))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BlueprintDocsParams {
+    name: String,
+}
+
+/// `GET /v1/blueprints/{blueprint}/packages/docs` — what the blueprint's MCP
+/// `packages__docs` tool answers.
+pub async fn blueprint_docs(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Query(params): Query<BlueprintDocsParams>,
+) -> Result<axum::response::Response, BlueprintMiss> {
+    let (blueprint, catalog) = registered_blueprint(&state, &name).await?;
+    let lookup =
+        packages::lookup_with_blueprint(&params.name, &catalog, &blueprint, state.package_store());
+    Ok(docs_response(&params.name, lookup))
+}
+
+/// `GET /v1/blueprints/{blueprint}/builtins` — the built-in catalog. It is the
+/// same for every blueprint; the route is nested so a harness addresses one
+/// blueprint throughout.
+pub async fn blueprint_builtins(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<serde_json::Value>, BlueprintMiss> {
+    registered_blueprint(&state, &name).await?;
     crate::metrics::builtins("list");
-    Json(packages::builtins_list_json())
+    Ok(Json(packages::builtins_list_json()))
 }
 
-pub async fn builtin_docs(Query(params): Query<DocsParams>) -> impl IntoResponse {
+/// `GET /v1/blueprints/{blueprint}/builtins/docs?name=A&name=B` — what the
+/// blueprint's MCP `builtins__docs` tool answers: one entry per `name`, an
+/// unknown one reported inline rather than failing the batch.
+pub async fn blueprint_builtin_docs(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    RawQuery(query): RawQuery,
+) -> Result<Json<serde_json::Value>, BlueprintMiss> {
+    let (blueprint, catalog) = registered_blueprint(&state, &name).await?;
     crate::metrics::builtins("docs");
-    let body = packages::builtin_entry_json(
-        &params.name,
-        &[],
-        &packages::Fetch::Rest,
-        submilli_shared::library_visibility::LibraryVisibility::unscoped(),
-    );
-    let status = if body.get("error").is_some() {
-        StatusCode::NOT_FOUND
-    } else {
-        StatusCode::OK
-    };
-    (status, Json(body))
+    // `Query` keeps only one value of a repeated key, so read them all here.
+    let names: Vec<String> = url::form_urlencoded::parse(query.unwrap_or_default().as_bytes())
+        .filter(|(key, _)| key == "name")
+        .map(|(_, value)| value.into_owned())
+        .collect();
+    Ok(Json(packages::builtins_docs_json(
+        &names,
+        &packages::mcp_package_names(&catalog),
+        &packages::Fetch::Rest(&name),
+        submilli_shared::library_visibility::LibraryVisibility::for_blueprint(&blueprint),
+    )))
 }
 
 #[derive(Debug, Serialize)]

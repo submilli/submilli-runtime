@@ -1334,7 +1334,7 @@ async fn delete_wipes_session_vfs() {
     let dir = h.session_root.join(&session);
     assert!(dir.is_dir(), "per_session dir should exist after a write");
 
-    assert_eq!(h.delete(SESS, &session).await, StatusCode::ACCEPTED);
+    assert_eq!(h.delete(SESS, &session).await, StatusCode::NO_CONTENT);
     assert!(!dir.exists(), "DELETE must wipe the session VFS");
 }
 

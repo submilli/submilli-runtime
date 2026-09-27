@@ -7,8 +7,18 @@ use serde_json::Value;
 use submilli_server::{AppState, ServerConfig, app};
 use tower::ServiceExt;
 
-async fn get(uri: &str) -> (StatusCode, Value) {
-    let state = AppState::new(ServerConfig::default()).expect("AppState");
+/// `GET` a discovery route of a blueprint that grants everything, so every
+/// stdlib module is visible. `route` is relative to the blueprint.
+async fn get(route: &str) -> (StatusCode, Value) {
+    let blueprint = submilli_blueprint::parse("name: open\ndefault: allow\n").expect("blueprint");
+    let state = AppState::new(ServerConfig {
+        blueprints: Some(std::sync::Arc::new(
+            submilli_server::blueprint::InMemoryBlueprintStore::seed([blueprint]),
+        )),
+        ..ServerConfig::default()
+    })
+    .expect("AppState");
+    let uri = &format!("/v1/blueprints/open{route}");
     let req = Request::builder()
         .method("GET")
         .uri(uri)
@@ -23,11 +33,12 @@ async fn get(uri: &str) -> (StatusCode, Value) {
 
 #[tokio::test]
 async fn search_lists_all_and_filters_by_symbol() {
-    let (status, all) = get("/v1/packages/search").await;
+    let (status, all) = get("/packages/search").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(all["results"].as_array().unwrap().len(), 9, "got: {all}");
+    // Every stdlib module but `submilli:llm`, which needs models declared.
+    assert_eq!(all["results"].as_array().unwrap().len(), 8, "got: {all}");
 
-    let (_, hit) = get("/v1/packages/search?q=sha256").await;
+    let (_, hit) = get("/packages/search?q=sha256").await;
     let names: Vec<&str> = hit["results"]
         .as_array()
         .unwrap()
@@ -39,7 +50,7 @@ async fn search_lists_all_and_filters_by_symbol() {
 
 #[tokio::test]
 async fn docs_host_unknown_and_mcp() {
-    let (status, doc) = get("/v1/packages/docs?name=submilli:http").await;
+    let (status, doc) = get("/packages/docs?name=submilli:http").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(doc["source"], "host");
     assert!(
@@ -50,7 +61,7 @@ async fn docs_host_unknown_and_mcp() {
         "got: {doc}"
     );
 
-    let (status, code) = get("/v1/packages/docs?name=submilli:code").await;
+    let (status, code) = get("/packages/docs?name=submilli:code").await;
     assert_eq!(status, StatusCode::OK);
     assert!(
         code["declarations"]
@@ -59,13 +70,13 @@ async fn docs_host_unknown_and_mcp() {
             .contains("function diffText(")
     );
 
-    let (status, body) = get("/v1/packages/docs?name=nope").await;
+    let (status, body) = get("/packages/docs?name=nope").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["error"], "unknown_package");
 
     // `@mcp/<server>` docs are blueprint-scoped; the REST endpoint isn't bound to
     // one, so they resolve through the per-blueprint MCP tool, not here.
-    let (status, body) = get("/v1/packages/docs?name=@mcp/linear").await;
+    let (status, body) = get("/packages/docs?name=@mcp/linear").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["error"], "unknown_mcp_server");
 }
@@ -73,7 +84,7 @@ async fn docs_host_unknown_and_mcp() {
 #[tokio::test]
 async fn docs_redirects_a_builtin_name_rather_than_erroring() {
     // Returned `404 unknown_package` before the cross-namespace redirect.
-    let (status, doc) = get("/v1/packages/docs?name=Temporal").await;
+    let (status, doc) = get("/packages/docs?name=Temporal").await;
     assert_eq!(status, StatusCode::OK, "got: {doc}");
     assert_eq!(doc["source"], "builtin");
     assert!(
@@ -94,7 +105,7 @@ async fn docs_redirects_a_builtin_name_rather_than_erroring() {
 async fn docs_redirect_resolves_a_dotted_builtin_path() {
     // The composed case: the redirect has to run the path-aware lookup, not an
     // exact-name one, or the dot makes it miss.
-    let (status, slice) = get("/v1/packages/docs?name=Temporal.Instant").await;
+    let (status, slice) = get("/packages/docs?name=Temporal.Instant").await;
     assert_eq!(status, StatusCode::OK, "got: {slice}");
     assert_eq!(slice["source"], "builtin");
     let declarations = slice["declarations"].as_str().unwrap_or("");
@@ -107,7 +118,7 @@ async fn docs_redirect_resolves_a_dotted_builtin_path() {
         "got: {declarations}"
     );
 
-    let (_, full) = get("/v1/packages/docs?name=Temporal").await;
+    let (_, full) = get("/packages/docs?name=Temporal").await;
     assert!(
         declarations.len() * 4 < full["declarations"].as_str().unwrap_or("").len(),
         "the slice is meant to be much smaller than the namespace"
@@ -116,20 +127,20 @@ async fn docs_redirect_resolves_a_dotted_builtin_path() {
 
 #[tokio::test]
 async fn docs_miss_in_both_catalogs_suggests_the_closest_name() {
-    let (status, body) = get("/v1/packages/docs?name=Temporel").await;
+    let (status, body) = get("/packages/docs?name=Temporel").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["did_you_mean"], "Temporal", "got: {body}");
 
     // Dropping the scheme is the likeliest package typo and sits 9 edits from
     // the full name — bare edit distance cannot reach it.
-    let (status, body) = get("/v1/packages/docs?name=http").await;
+    let (status, body) = get("/packages/docs?name=http").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["did_you_mean"], "submilli:http", "got: {body}");
 }
 
 #[tokio::test]
 async fn docs_unknown_member_lists_the_members_that_exist() {
-    let (status, body) = get("/v1/packages/docs?name=Temporal.Foo").await;
+    let (status, body) = get("/packages/docs?name=Temporal.Foo").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     let message = body["message"].as_str().unwrap_or("");
     assert!(message.contains("Instant"), "got: {message}");
@@ -138,7 +149,7 @@ async fn docs_unknown_member_lists_the_members_that_exist() {
 
 #[tokio::test]
 async fn zero_hit_search_lists_what_is_available() {
-    let (status, body) = get("/v1/packages/search?q=nothingmatchesthis").await;
+    let (status, body) = get("/packages/search?q=nothingmatchesthis").await;
     assert_eq!(status, StatusCode::OK);
     assert!(
         body["results"].as_array().unwrap().is_empty(),
@@ -162,7 +173,10 @@ async fn zero_hit_search_lists_what_is_available() {
     // Over REST the pointer names the endpoint, not the MCP tool a REST caller
     // has no way to invoke.
     let pointer = body["builtins"].as_str().unwrap_or("");
-    assert!(pointer.contains("/v1/builtins/docs"), "got: {pointer}");
+    assert!(
+        pointer.contains("/v1/blueprints/open/builtins/docs"),
+        "got: {pointer}"
+    );
     assert!(
         !listed.iter().any(|e| e["name"] == "Temporal"),
         "got: {body}"
@@ -171,7 +185,7 @@ async fn zero_hit_search_lists_what_is_available() {
 
 #[tokio::test]
 async fn a_search_that_hits_is_unchanged() {
-    let (_, body) = get("/v1/packages/search?q=sha256").await;
+    let (_, body) = get("/packages/search?q=sha256").await;
     assert_eq!(body["results"].as_array().unwrap().len(), 1, "got: {body}");
     assert!(body["available_packages"].is_null(), "got: {body}");
     assert!(body["builtins"].is_null(), "got: {body}");
@@ -179,7 +193,7 @@ async fn a_search_that_hits_is_unchanged() {
 
 #[tokio::test]
 async fn builtins_catalog_and_docs() {
-    let (status, cat) = get("/v1/builtins").await;
+    let (status, cat) = get("/builtins").await;
     assert_eq!(status, StatusCode::OK);
     let types: Vec<&str> = cat["types"]
         .as_array()
@@ -200,8 +214,9 @@ async fn builtins_catalog_and_docs() {
         "got: {cat}"
     );
 
-    let (status, doc) = get("/v1/builtins/docs?name=Array").await;
+    let (status, docs) = get("/builtins/docs?name=Array").await;
     assert_eq!(status, StatusCode::OK);
+    let doc = &docs["results"][0];
     assert_eq!(doc["name"], "Array");
     assert!(
         doc["declarations"]
@@ -211,23 +226,22 @@ async fn builtins_catalog_and_docs() {
         "got: {doc}"
     );
 
-    let (status, body) = get("/v1/builtins/docs?name=Promise").await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(body["error"], "unknown_builtin");
+    // An unknown name is reported in its entry rather than failing the batch.
+    let (status, body) = get("/builtins/docs?name=Promise").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["results"][0]["error"], "unknown_builtin");
 }
 
-/// The HTTP client’s `search`/`docs` tools ride these REST endpoints, so
-/// without a blueprint scope an agent cannot see the packages its own
-/// blueprint declares — only stdlib.
 #[tokio::test]
 async fn builtin_docs_names_the_packages_docs_call_for_a_package_name() {
-    let (status, body) = get("/v1/builtins/docs?name=submilli:http").await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, body) = get("/builtins/docs?name=submilli:http").await;
+    assert_eq!(status, StatusCode::OK);
+    let body = &body["results"][0];
     assert_eq!(body["error"], "not_a_builtin", "got: {body}");
     // The correcting call names the REST route, since this is the REST surface.
     let message = body["message"].as_str().unwrap_or("");
     assert!(
-        message.contains("/v1/packages/docs?name=submilli:http"),
+        message.contains("/v1/blueprints/open/packages/docs?name=submilli:http"),
         "got: {message}"
     );
     assert!(body["declarations"].is_null(), "got: {body}");
@@ -235,20 +249,21 @@ async fn builtin_docs_names_the_packages_docs_call_for_a_package_name() {
 
 #[tokio::test]
 async fn builtin_docs_resolves_a_dotted_path_and_reports_a_bad_member() {
-    let (status, body) = get("/v1/builtins/docs?name=Temporal.Instant").await;
+    let (status, body) = get("/builtins/docs?name=Temporal.Instant&name=Temporal.Foo").await;
     assert_eq!(status, StatusCode::OK, "got: {body}");
     assert!(
-        body["declarations"]
+        body["results"][0]["declarations"]
             .as_str()
             .unwrap_or("")
             .contains("interface InstantConstructor {"),
         "got: {body}"
     );
 
-    let (status, body) = get("/v1/builtins/docs?name=Temporal.Foo").await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(
-        body["message"].as_str().unwrap_or("").contains("Instant"),
+        body["results"][1]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Instant"),
         "got: {body}"
     );
 }
@@ -369,6 +384,72 @@ mod blueprint_scoped {
     }
 
     #[tokio::test]
+    async fn routes_nested_under_a_blueprint_answer_for_that_blueprint() {
+        let store = tempfile::tempdir().unwrap();
+
+        let (status, body) = get_from(
+            router(store.path()),
+            "/v1/blueprints/scoped/packages/search?q=ping",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(names(&body), ["@acme/tools"], "got: {body}");
+
+        let (status, markdown, content_type) = get_text_from(
+            router(store.path()),
+            "/v1/blueprints/scoped/packages/docs?name=@acme/tools",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(content_type.starts_with("text/markdown"), "{content_type}");
+        assert!(markdown.contains("ping"), "got: {markdown}");
+
+        let (status, body) = get_from(router(store.path()), "/v1/blueprints/scoped/builtins").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["types"].as_array().unwrap().iter().any(|t| t == "Map"));
+    }
+
+    #[tokio::test]
+    async fn nested_builtin_docs_answers_every_name_and_corrects_in_its_own_terms() {
+        let store = tempfile::tempdir().unwrap();
+        let (status, body) = get_from(
+            router(store.path()),
+            "/v1/blueprints/scoped/builtins/docs?name=Array&name=Temporal.Instant&name=submilli:crypto",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "got: {body}");
+        let results = body["results"].as_array().unwrap();
+        assert_eq!(results.len(), 3, "got: {body}");
+        assert!(results[0]["declarations"].is_string(), "got: {body}");
+        assert!(results[1]["declarations"].is_string(), "got: {body}");
+        assert_eq!(results[2]["error"], "not_a_builtin", "got: {body}");
+        let message = results[2]["message"].as_str().unwrap_or("");
+        assert!(
+            message.contains("/v1/blueprints/scoped/packages/docs?name=submilli:crypto"),
+            "got: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn nested_routes_refuse_a_blueprint_that_is_not_registered() {
+        let store = tempfile::tempdir().unwrap();
+        for route in [
+            "packages/search",
+            "packages/docs?name=submilli:json",
+            "builtins",
+            "builtins/docs?name=Array",
+        ] {
+            let (status, body) = get_from(
+                router(store.path()),
+                &format!("/v1/blueprints/ghost/{route}"),
+            )
+            .await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{route}");
+            assert_eq!(body["error"], "not_found", "{route}: {body}");
+        }
+    }
+
+    #[tokio::test]
     async fn llm_rest_discovery_requires_models_and_permission() {
         let config = "llm:\n  providers:\n    test:\n      type: anthropic\n  models:\n    test-model:\n      provider: test\n";
         for (configuration, default, visible) in [
@@ -389,7 +470,7 @@ mod blueprint_scoped {
             for query in ["", "models", "submilli:llm", "nothingmatchesthis"] {
                 let (status, body) = get_from(
                     router.clone(),
-                    &format!("/v1/packages/search?blueprint=scoped&q={query}"),
+                    &format!("/v1/blueprints/scoped/packages/search?q={query}"),
                 )
                 .await;
                 assert_eq!(status, StatusCode::OK);
@@ -397,7 +478,7 @@ mod blueprint_scoped {
             }
             let (status, body) = get_from(
                 router.clone(),
-                "/v1/packages/docs?blueprint=scoped&name=submilli:llm",
+                "/v1/blueprints/scoped/packages/docs?name=submilli:llm",
             )
             .await;
             assert_eq!(
@@ -411,7 +492,7 @@ mod blueprint_scoped {
             assert_eq!(body["source"] == "host", visible);
             let (_, body) = get_from(
                 router.clone(),
-                "/v1/packages/docs?blueprint=scoped&name=submilli:llmx",
+                "/v1/blueprints/scoped/packages/docs?name=submilli:llmx",
             )
             .await;
             assert_eq!(body["did_you_mean"] == "submilli:llm", visible, "{body}");
@@ -421,9 +502,6 @@ mod blueprint_scoped {
                 body["prompt"].as_str().unwrap().contains("Model calls"),
                 visible
             );
-            let (status, body) = get_from(router, "/v1/packages/docs?name=submilli:llm").await;
-            assert_eq!(status, StatusCode::OK);
-            assert_eq!(body["source"], "host");
         }
     }
 
@@ -435,7 +513,7 @@ mod blueprint_scoped {
             for query in ["", name, "nothingmatchesthis"] {
                 let (status, body) = get_from(
                     router.clone(),
-                    &format!("/v1/packages/search?blueprint=scoped&q={query}"),
+                    &format!("/v1/blueprints/scoped/packages/search?q={query}"),
                 )
                 .await;
                 assert_eq!(status, StatusCode::OK);
@@ -443,7 +521,7 @@ mod blueprint_scoped {
             }
             let (status, body) = get_from(
                 router.clone(),
-                &format!("/v1/packages/docs?blueprint=scoped&name={name}"),
+                &format!("/v1/blueprints/scoped/packages/docs?name={name}"),
             )
             .await;
             assert_eq!(status, StatusCode::NOT_FOUND);
@@ -452,29 +530,18 @@ mod blueprint_scoped {
     }
 
     #[tokio::test]
-    async fn search_includes_blueprint_packages_only_when_scoped() {
+    async fn search_includes_the_blueprint_packages() {
         let store = tempfile::tempdir().expect("tempdir");
-
-        let (status, unscoped) = get_from(router(store.path()), "/v1/packages/search").await;
-        assert_eq!(status, StatusCode::OK);
-        assert!(
-            !names(&unscoped).contains(&"@acme/tools".to_string()),
-            "unscoped search must stay stdlib-only, got: {unscoped}"
-        );
-
-        let (status, scoped) =
-            get_from(router(store.path()), "/v1/packages/search?blueprint=scoped").await;
+        let (status, scoped) = get_from(
+            router(store.path()),
+            "/v1/blueprints/scoped/packages/search",
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert!(
             names(&scoped).contains(&"@acme/tools".to_string()),
-            "scoped search must list the blueprint's packages, got: {scoped}"
+            "search must list the blueprint's packages, got: {scoped}"
         );
-
-        // An unknown blueprint degrades to stdlib rather than erroring.
-        let (status, unknown) =
-            get_from(router(store.path()), "/v1/packages/search?blueprint=ghost").await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(names(&unknown), names(&unscoped));
     }
 
     #[tokio::test]
@@ -482,7 +549,7 @@ mod blueprint_scoped {
         let store = tempfile::tempdir().expect("tempdir");
         let (status, body) = get_from(
             router(store.path()),
-            "/v1/packages/search?q=nothingmatchesthis&blueprint=scoped",
+            "/v1/blueprints/scoped/packages/search?q=nothingmatchesthis",
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -515,7 +582,7 @@ mod blueprint_scoped {
         // placed inside `search_json_results` rather than after the extension.
         let (status, body) = get_from(
             router(store.path()),
-            "/v1/packages/search?q=ping&blueprint=scoped",
+            "/v1/blueprints/scoped/packages/search?q=ping",
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -525,18 +592,14 @@ mod blueprint_scoped {
     }
 
     #[tokio::test]
-    async fn docs_resolve_blueprint_packages_only_when_scoped() {
+    async fn docs_resolve_the_blueprint_packages() {
         let store = tempfile::tempdir().expect("tempdir");
-
-        let (status, _) =
-            get_from(router(store.path()), "/v1/packages/docs?name=@acme/tools").await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
 
         // Registry packages carry a readme, so — exactly like the MCP tool —
         // they come back as markdown text, not JSON with escaped newlines.
         let (status, body, content_type) = get_text_from(
             router(store.path()),
-            "/v1/packages/docs?name=@acme/tools&blueprint=scoped",
+            "/v1/blueprints/scoped/packages/docs?name=@acme/tools",
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -552,21 +615,15 @@ mod blueprint_scoped {
     async fn docs_suggestions_draw_on_every_catalog_the_call_site_can_see() {
         let store = tempfile::tempdir().expect("tempdir");
 
-        // Scoped: the blueprint's registry names join the candidate pool, so a
-        // near-miss on one is recoverable.
+        // The blueprint's registry names join the candidate pool, so a near-miss
+        // on one is recoverable.
         let (status, body) = get_from(
             router(store.path()),
-            "/v1/packages/docs?name=@acme/tool&blueprint=scoped",
+            "/v1/blueprints/scoped/packages/docs?name=@acme/tool",
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(body["did_you_mean"], "@acme/tools", "got: {body}");
-
-        // Unscoped, the same name has no registry catalog to be matched against.
-        let (status, body) =
-            get_from(router(store.path()), "/v1/packages/docs?name=@acme/tool").await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
-        assert!(body["did_you_mean"].is_null(), "got: {body}");
     }
 
     #[tokio::test]
@@ -577,7 +634,7 @@ mod blueprint_scoped {
                 store.path(),
                 ["@acme/tools".to_string(), "@acme/absent".to_string()],
             ),
-            "/v1/packages/docs?name=@acme/absent&blueprint=scoped",
+            "/v1/blueprints/scoped/packages/docs?name=@acme/absent",
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
@@ -595,7 +652,7 @@ mod blueprint_scoped {
         // on every namespace stay exactly as they were.
         let (status, body, _) = get_text_from(
             router(store.path()),
-            "/v1/packages/docs?name=@acme/tools&blueprint=scoped",
+            "/v1/blueprints/scoped/packages/docs?name=@acme/tools",
         )
         .await;
         assert_eq!(status, StatusCode::OK);
