@@ -1,0 +1,64 @@
+---
+import { Icon } from '@astrojs/starlight/components';
+
+interface Props {
+	/** `icon` renders the glyph only; `label` includes the community name. */
+	variant?: 'icon' | 'label';
+}
+
+const DISCORD_URL = 'https://discord.gg/VphpukeGGj';
+const { variant = 'label' } = Astro.props;
+const accessibleLabel = 'Join us on Discord';
+const visibleLabel = 'Join Discord';
+---
+
+<a
+	href={DISCORD_URL}
+	class:list={['discord-link', `discord-link--${variant}`]}
+	aria-label={accessibleLabel}
+>
+	<Icon name="discord" />
+	{variant === 'label' && <span>{visibleLabel}</span>}
+</a>
+
+<style>
+	.discord-link {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.5rem;
+		min-height: 2.25rem;
+		border-radius: 10px;
+		font: 600 0.875rem/1 var(--sl-font);
+		color: var(--sl-color-gray-2);
+		text-decoration: none;
+		transition:
+			color var(--sub-dur-base) var(--sub-ease-out),
+			background-color var(--sub-dur-base) var(--sub-ease-out),
+			border-color var(--sub-dur-base) var(--sub-ease-out);
+	}
+	.discord-link--label {
+		padding: 0 0.75rem;
+		border: 1px solid var(--sub-line);
+	}
+	.discord-link--label:hover {
+		color: var(--sl-color-white);
+		border-color: var(--sub-line-strong);
+		background: var(--sub-hover);
+	}
+	.discord-link--icon {
+		width: 2.75rem;
+		height: 2.75rem;
+	}
+	.discord-link--icon:hover {
+		color: var(--sl-color-white);
+	}
+	.discord-link :global(svg) {
+		width: 16px;
+		height: 16px;
+	}
+	.discord-link--icon :global(svg) {
+		width: 20px;
+		height: 20px;
+	}
+</style>
