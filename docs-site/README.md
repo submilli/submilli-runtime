@@ -6,7 +6,7 @@ those files directly; no private repository or runtime build is needed.
 
 ## Build and preview
 
-Use Node.js 22 or newer, from the repository root:
+Use Node.js 22.18 or newer, from the repository root:
 
 ```sh
 npm --prefix docs-site ci
@@ -79,3 +79,46 @@ The `Documentation` workflow checks and builds the site and uploads a
 `documentation-site` artifact. It does not deploy. Connect the docs output to
 hosting before deploying the marketing site without its former book pages.
 The existing pre-launch `noindex, nofollow` setting is preserved.
+
+## Documentation for agents
+
+The build generates `/llms.txt` (chapter index), `/llms-full.txt` (the complete
+visible book), and `/docs/<slug>.md` from the same `docs/` sources. The docs
+home exports as `/docs/index.md`. Every visible page needs a title, description,
+and explicit slug; `sidebar.hidden: true` excludes a page from all exports.
+The index follows the book's directory groups and sidebar order.
+
+Markdown exports include the chapter title and source URL without presentation
+frontmatter. Links to visible chapters point to their absolute Markdown URLs;
+other relative links resolve against the chapter's public HTML URL. Code blocks
+and callouts retain their original source. Each visible HTML page advertises its
+Markdown alternative and the index in `<link>` elements, plus visible footer
+links. The bundled skill directs assistants to the index for topics beyond its
+local references.
+
+`npm run check` tests index coverage, hidden-page exclusion, metadata, and link
+rewriting. `npm run build` also verifies the generated files and HTML discovery
+links. The exports are build artifacts; run a build before previewing them.
+For a production-layout preview including the root indexes, serve `dist/` at the
+domain root (for example,
+`python3 -m http.server 4321 --directory docs-site/dist` from the repository root).
+Astro's normal preview is scoped to `/docs/`.
+
+The marketing service must forward these two additional paths to the docs
+service, alongside its existing `/docs/*` rewrite:
+
+| Public path | Rewrite destination |
+| --- | --- |
+| `/llms.txt` | `https://YOUR-DOCS-SERVICE.onrender.com/llms.txt` |
+| `/llms-full.txt` | `https://YOUR-DOCS-SERVICE.onrender.com/llms-full.txt` |
+
+Serve `.md` files as `text/markdown; charset=utf-8` and `.txt` files as
+`text/plain; charset=utf-8`. These must be file responses, not the marketing
+site's HTML fallback. The root files are in `dist/`, beside `dist/docs/`.
+After publishing and configuring the rewrites, verify the public paths:
+
+```sh
+curl --fail https://submilli.ai/llms.txt
+curl --fail https://submilli.ai/llms-full.txt
+curl --fail https://submilli.ai/docs/blueprints.md
+```

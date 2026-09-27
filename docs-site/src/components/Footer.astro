@@ -2,6 +2,10 @@
 import EditLink from './EditLink.astro';
 import LastUpdated from './LastUpdated.astro';
 import Pagination from './Pagination.astro';
+import { DOCS_INDEX, markdownPath } from '../lib/agent-docs';
+
+const { entry } = Astro.locals.starlightRoute;
+const slug = entry.id === 'index' ? '' : entry.id;
 ---
 
 <footer class="page-footer">
@@ -9,10 +13,25 @@ import Pagination from './Pagination.astro';
 		<EditLink />
 		<LastUpdated />
 	</div>
+	{entry.id !== '404' && !entry.data.sidebar.hidden && (
+		<div class="agent-links print:hidden">
+			<a href={markdownPath(slug)}>View Markdown</a>
+			<a href={DOCS_INDEX}>Documentation for agents</a>
+		</div>
+	)}
 	<Pagination />
 </footer>
 
 <style>
+	.agent-links {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.75rem 1rem;
+		padding-bottom: 1.25rem;
+		font-size: 0.875rem;
+	}
+	.agent-links a { color: var(--sl-color-gray-2); }
+	.agent-links a:hover { color: var(--sl-color-white); }
 	.page-footer {
 		display: flex;
 		flex-direction: column;

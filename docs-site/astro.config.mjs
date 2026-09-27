@@ -4,6 +4,7 @@ import starlight from "@astrojs/starlight";
 import { satteri } from "@astrojs/markdown-satteri";
 import { submilliDark, submilliLight } from "./src/code-themes.mjs";
 import { securityAside } from "./src/plugins/satteri-security-aside.mjs";
+import { agentDocs } from "./src/plugins/agent-docs.ts";
 
 export default defineConfig({
   site: "https://submilli.ai",
@@ -16,6 +17,7 @@ export default defineConfig({
     processor: satteri({ mdastPlugins: [securityAside()] }),
   },
   integrations: [
+    agentDocs(),
     starlight({
       title: "Submilli",
       description:
@@ -34,6 +36,7 @@ export default defineConfig({
       // heading anchors) on it.
       markdown: { processedDirs: ["../docs"] },
       components: {
+        Head: "./src/components/Head.astro",
         Header: "./src/components/Header.astro",
         SiteTitle: "./src/components/SiteTitle.astro",
         SocialIcons: "./src/components/GitHubLink.astro",

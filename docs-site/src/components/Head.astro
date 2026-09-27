@@ -1,0 +1,15 @@
+---
+import DefaultHead from '@astrojs/starlight/components/Head.astro';
+import { DOCS_INDEX, DOCS_ORIGIN, markdownPath } from '../lib/agent-docs';
+
+const { entry } = Astro.locals.starlightRoute;
+const slug = entry.id === 'index' ? '' : entry.id;
+---
+
+<DefaultHead />
+{entry.id !== '404' && !entry.data.sidebar.hidden && (
+	<>
+		<link rel="alternate" type="text/markdown" href={DOCS_ORIGIN + markdownPath(slug)} />
+		<link rel="describedby" href={DOCS_ORIGIN + DOCS_INDEX} />
+	</>
+)}
