@@ -88,3 +88,10 @@ version = "0.1.0"
 description = "Firecrawl v2 web search, scraping, URL discovery, and explicit batch/crawl jobs with paginated results and failures."
 keywords = ["firecrawl", "search", "scrape", "map", "crawl", "markdown", "web"]
 path = "packages/firecrawl"
+
+[[package]]
+name = "@submilli/typesafe"
+version = "0.1.0"
+description = "TypeSafe semantic judgments for routing, ranking, evidence checks, and selecting known values. Batch Choice, Noul, and Score questions; combine typed answers and probabilities in code."
+keywords = ["typesafe", "jev", "classification", "ranking", "verification", "agents"]
+path = "packages/typesafe"

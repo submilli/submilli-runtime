@@ -19,7 +19,7 @@ standard-library calls: the program gets a value back without `await`.
 
 ## Choose a package
 
-The repository currently contains thirteen packages. Each name links to its setup
+The repository currently contains fourteen packages. Each name links to its setup
 instructions, including the credentials and service permissions it needs.
 
 | Package | Use it for |
@@ -37,6 +37,7 @@ instructions, including the credentials and service permissions it needs.
 | [`@submilli/sentry`](https://github.com/submilli/submilli-runtime/tree/main/packages/sentry) | Sentry Cloud organizations, projects, issues, events, and issue triage |
 | [`@submilli/slack-bot`](https://github.com/submilli/submilli-runtime/tree/main/packages/slack-bot) | Bot-owned messages, conversations, users, direct messages, and reactions |
 | [`@submilli/slack-user`](https://github.com/submilli/submilli-runtime/tree/main/packages/slack-user) | Search, read, and act as the authenticated Slack user |
+| [`@submilli/typesafe`](https://github.com/submilli/submilli-runtime/tree/main/packages/typesafe) | Focused semantic judgments for routing, ranking, selecting known values, and verifying supplied evidence |
 
 The two Slack packages represent different identities. Use `slack-bot` when
 the agent acts as your app's bot, and `slack-user` when it acts on behalf of a
@@ -227,6 +228,60 @@ strict downstream-domain isolation is required.
 See the [package setup](https://github.com/submilli/submilli-runtime/tree/main/packages/firecrawl)
 and [agent API guide](https://github.com/submilli/submilli-runtime/blob/main/packages/firecrawl/docs/readme.md)
 for bounded crawl examples, explicit pagination, and the full capability table.
+
+## Semantic judgments with TypeSafe
+
+For a bounded language judgment, use the installed `@submilli/typesafe` package.
+TypeSafe's Jev model evaluates supplied text or application state and returns
+typed answers with probabilities. Use it to route requests, rank retrieved
+passages, select a known candidate, or check a claim against source evidence.
+Keep exact lookups, calculations, policy checks, and actions in ordinary code;
+use `submilli:llm` when the work needs generated text or reasoning explanations.
+This follows TypeSafe's [System One guidance](https://docs.typesafe.ai/concepts/system-one).
+
+| Judgment | Primitive | Result |
+| --- | --- | --- |
+| Select one known option | `choice` | Winning option, probabilities for every option, and confidence |
+| Decide whether a condition holds | `noul` | Probability of yes; near 0.5 means uncertainty, not medium intensity |
+| Rate one dimension against described levels | `score` | Fractional position along the levels, their probabilities, and confidence |
+
+For one judgment, `choice`, `noul`, and `score` each make one HTTP call and return
+a concrete answer type. For several judgments, create definitions with
+`choiceQuestion`, `noulQuestion`, and `scoreQuestion`, then pass them to `batch`
+to evaluate independent questions against shared state in one request.
+Supply the relevant evidence and complete instructions: it cannot fetch missing
+records or see the agent's conversation. Include a no-match option when no
+candidate may fit, and describe Score levels as concrete situations. Questions
+in a batch cannot see each other's answers. Code selects which results matter
+and makes another call when new evidence or options depend on an earlier answer.
+
+Confidence describes how concentrated the answer's probabilities are; it does
+not guarantee correctness or authorize an action. Evaluate thresholds on your
+own examples and route uncertain cases to more evidence, a reasoning model, or
+human review. Keep the returned probabilities available when combining results.
+
+In an existing blueprint directory:
+
+```sh
+submilli install submilli/submilli-runtime @submilli/typesafe
+submilli blueprint add-package @submilli/typesafe --no-capabilities
+submilli blueprint secret add TYPESAFE_AI_KEY --store typesafe_ai_key
+submilli secret put typesafe_ai_key
+submilli blueprint capability add typesafe.ai/systemone
+submilli docs @submilli/typesafe
+```
+
+Enter the key at the hidden prompt. The package reads `TYPESAFE_AI_KEY`
+internally and sends requests only to `POST api.typesafe.ai/v1/systemone`.
+`batch` defaults to `jev-latest`; its `model` option permits pinning a version.
+It returns the answering model and token usage alongside the judgments. Calls
+consume TypeSafe credits and do not retry automatically. They use the package's
+HTTP permissions, not the `llm.call` model configuration or reserved token budget.
+
+The [agent guide](https://github.com/submilli/submilli-runtime/blob/main/packages/typesafe/docs/readme.md)
+is also included in `submilli docs` output. It covers when to use the package,
+state preparation, question design, independent batching, uncertainty, and
+errors, with a complete example using all three primitives.
 
 ## Supply credentials outside the program
 

@@ -1,0 +1,10 @@
+namespace: submilli
+provides:
+- name: typesafe.ai/systemone
+  description: Evaluate independent semantic judgments together; code owns subsequent actions.
+  fields: {}
+requires:
+- capability: http.post
+  filter: host == "api.typesafe.ai" and path == "/v1/systemone"
+- capability: secrets.get
+  filter: name == "TYPESAFE_AI_KEY"
