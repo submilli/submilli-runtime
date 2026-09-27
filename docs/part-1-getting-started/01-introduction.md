@@ -1,5 +1,6 @@
 ---
 title: "Introduction"
+description: "Why Submilli runs agent-written programs under developer-defined rules, with a first look at a blueprint."
 slug: introduction
 sidebar:
   order: 1

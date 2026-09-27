@@ -1,5 +1,6 @@
 ---
 title: "Quickstart"
+description: "Install the CLI, configure a blueprint, and run your first agent-written program."
 slug: quickstart
 sidebar:
   order: 2

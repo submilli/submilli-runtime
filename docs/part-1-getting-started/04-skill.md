@@ -1,5 +1,6 @@
 ---
 title: "Coding assistant skill"
+description: "Install and update the Submilli skill for your coding assistant, including its independent policy verifier."
 slug: skill
 sidebar:
   order: 4
