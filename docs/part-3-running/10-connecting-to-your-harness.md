@@ -862,7 +862,6 @@ Playwright's MCP server:
 
 ```sh
 submilli blueprint add-mcp playwright http://localhost:8931/mcp
-submilli blueprint capability remove mcp.playwright
 submilli blueprint capability add mcp.playwright
 submilli server blueprint apply blueprint.yaml
 ```
