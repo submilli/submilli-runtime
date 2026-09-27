@@ -6,14 +6,22 @@ sidebar:
   order: 8
 ---
 
-`submilli-server` is the process that runs the agent's programs. Your
-application sends it a program and the name of a blueprint; the server
-compiles the program, runs it under that blueprint's rules, and returns the
-result ([how Submilli works](/docs/how-submilli-works)).
+The quickstart started `submilli-server` and left it running; the last two
+chapters worked without it. `submilli-server` is the service your harness or
+application uses to run the agent's programs. It is how Submilli runs in
+production: one long-lived process that holds your blueprints, packages, and
+secrets, runs each session's programs in isolation, and answers every gated
+call from the blueprint the session was opened against. An agent framework connects
+to it over MCP and gets Submilli as a set of tools; an application calls its
+HTTP API. Either way, the server keeps each session's files and state and
+enforces the limits that keep one runaway program from touching the others.
 
-This chapter is about operating that process: starting it, where it keeps
-things, how it is configured, and how your blueprints, packages, and secrets
-get onto it.
+Programs run concurrently inside that one process. Each run is a fresh
+WebAssembly instance with its own memory and the view of the filesystem its
+blueprint allows. An instance costs a few megabytes and no CPU while it waits
+on a request, so one server carries many sessions at once. There is no process
+or container boundary between programs: a fault in the runtime itself would
+reach every session.
 
 ## Start it
 
@@ -49,12 +57,13 @@ blueprints:      (none)
 | `submilli server packages install\|list\|uninstall` | Manage the server's package store |
 | `submilli server secret put\|list\|delete` | Manage the server's secret store |
 | `submilli server mcp authenticate\|auth-status\|deauthenticate` | Authorize the OAuth MCP servers a blueprint declares |
-| `submilli server run-code <file> --blueprint <name>` | Run a program once, the way an application would |
+| `submilli server run-code <file> --blueprint <name> [--var NAME=VALUE]` | Run a program once, the way an application would |
 | `submilli server stop` | Ask the server to finish in-flight requests and exit |
 
 `run-code` is the quickest check that a blueprint does what you meant: it
-sends the file to `/v1/execute`, prints the program's console output, then the
-result, and exits 1 if the program failed.
+sends the file to `/v1/execute`, prints the program's console output on
+standard error and the result on standard output, and exits 1 if the program
+failed.
 
 ## Who can reach it
 
@@ -65,10 +74,20 @@ from your application. That is why it listens on `127.0.0.1` by default and
 logs a warning when bound anywhere else, and why the container and cluster
 setups in [deploying](/docs/deploying) keep it private too.
 
-So run one server per application, and keep its port where only that
-application can reach it. The server doesn't yet authenticate callers
-itself; until it does, where you put it on the network is how you control
-who uses it.
+The server does not authenticate callers: no token, no client list, on any
+endpoint, `POST /v1/shutdown` included. Anything that can open a connection to
+the port can run programs, register blueprints and through them use every
+stored secret, install packages, and stop the server. It speaks plain HTTP; a
+reverse proxy in front of it is where TLS goes. So run one server per
+application, and keep its port where only that application can reach it: where
+you put it on the network is the whole access control.
+
+Agents can also connect to the server directly, over MCP. The MCP endpoint
+accepts only requests whose `Host` header is a loopback name, which stops a web
+page open in a user's browser from reaching it through a host name that
+resolves to `127.0.0.1`. Behind a reverse proxy or a platform host name, add
+that name with `--mcp-allowed-host`. This is a check on one header, on the MCP
+endpoint only; it is not authentication, and the HTTP API has no equivalent.
 
 ## Where it keeps state
 
@@ -80,28 +99,25 @@ where it left off. In a container it doesn't: anything not on a persistent
 volume is gone after the next deploy. So the question is what has to be kept,
 and what losing each piece would cost you.
 
-| What | Where, under `$SUBMILLI_HOME` | If it's lost |
+| What | Where, under `$SUBMILLI_HOME/server` | If it's lost |
 | --- | --- | --- |
-| Registered blueprints | `blueprints/` | Every program is refused until you register them again. That's quick if they live in source control ([seed directory](#blueprints-from-a-directory)). |
+| Registered blueprints | `blueprints/` | Every program is refused until you register them again. That's quick if they live in source control and the server seeds from them ([register blueprints](#register-blueprints)). |
 | Open sessions | `sessions/`, `vfs/sessions/` | Your users' sessions end: reconnecting clients get `404 unknown session`, and files the agent wrote in them are gone. There's nothing to rebuild them from. |
 | Secrets | `secrets/` | Blueprints that read `store:` secrets fail until every value is put back. Keep the key file safe too: without it the store can't be read. |
 | Packages | `packages/` | Imports fail until you reinstall. The same install commands bring them back. |
-| Per-run scratch space | the OS temp dir | Nothing. Each run gets its own directory, deleted when the run ends. |
+| Per-run scratch space | the OS temp dir, or `vfs_ephemeral_dir` | Nothing. Each run gets its own directory, deleted when the run ends. |
 
 The simplest setup is one persistent volume for `$SUBMILLI_HOME`. Back up the
 sessions and the secrets, and keep the key somewhere separate from the store.
 Blueprints and packages can be rebuilt from source. If you need to split
 things up, for example to put sessions on faster disk, each directory has its
-own flag, environment variable, and config key (`--session-store-dir`,
-`SUBMILLI_SESSION_STORE_DIR`, `session_store_dir`).
+own setting (`session_store_dir` and its siblings in the template below).
 
-**Running the CLI and a server on one machine.** With default paths, the two
-share some of these directories. For packages that's convenient: a package
-built with `submilli install` is already visible to the server, which is how
-the quickstart worked. For secrets it's a trap. The CLI stores plain values
-and the server stores encrypted ones in the same folder, so the server lists
-the CLI's secrets and then fails to read them (`secret store crypto: sealed
-blob too short`). Give the server its own `--secret-store-dir`.
+The server keeps its state under `server/`, apart from the CLI's own
+`packages/`, `secrets/`, and `mcp_oauth.yaml`. It does read the CLI's
+`packages/` as a read-only fallback, which is why a package installed with
+`submilli install` or `submilli build publish-local` is visible to a server on
+the same machine, and how the quickstart worked.
 
 ## Configure it
 
@@ -109,8 +125,13 @@ On your laptop, flags are all you need. A deployment usually wants more
 structure: a config file in your repository, reviewed like code and the same
 everywhere, plus environment variables for the few things that differ between
 environments, such as the port or where the store key lives. The server reads
-flags, `SUBMILLI_*` environment variables, and a YAML file named by
-`--config` or `$SUBMILLI_CONFIG`, so you can mix them that way.
+three sources: flags, `SUBMILLI_*` environment variables, and a YAML file named
+by `--config` or `$SUBMILLI_CONFIG`. When they disagree, a flag beats a
+variable and a variable beats the file. Two settings break that order. A file
+that says `telemetry: false` wins over `SUBMILLI_TELEMETRY`. And the plain
+`PORT` variable that hosting platforms inject ranks below the file: on its own,
+`PORT` makes the server listen on every interface, so a file that says
+`bind: 127.0.0.1` keeps it private.
 
 Here is a file with every setting spelled out. Apart from the paths, each
 value is the default, so treat it as a template and delete what you don't
@@ -121,6 +142,7 @@ bind: 127.0.0.1
 port: 8128
 
 blueprint_dir: /srv/submilli/blueprints
+blueprint_seed_dir: /etc/submilli/blueprints
 session_store_dir: /srv/submilli/sessions
 vfs_session_dir: /srv/submilli/vfs
 package_store_dir: /srv/submilli/packages
@@ -128,7 +150,7 @@ vfs_ephemeral_dir: /tmp/submilli
 
 secret_store:
   dir: /srv/submilli/secrets
-  key_file: /etc/submilli/store.key
+  key_file: /etc/submilli/store.key   # or key_env: SUBMILLI_SECRET_KEY
 
 network:
   allow_localhost: false
@@ -139,16 +161,22 @@ volumes: {}
 mcp_allowed_hosts: []
 
 max_execution_memory: 50
+max_execution_time: 0
 max_session_state_memory: 1024
 max_llm_tokens: 20000000
 max_execution_llm_tokens: 1000000
 max_llm_concurrency: 4
 shutdown_grace: 5
 telemetry: false
+telemetry_include_source: false
 ```
 
 ```sh
 submilli-server --config server.yaml
+```
+
+```text
+INFO submilli_server::serve: submilli-server listening addr=127.0.0.1:8128
 ```
 
 The names line up across the three sources: `max_execution_memory` in the
@@ -168,113 +196,54 @@ Caused by:
     unknown field `prot`, expected one of `bind`, `port`, `blueprint_dir`, …
 ```
 
-### When sources disagree
-
-The most specific source wins: a flag, then a `SUBMILLI_*` variable, then the
-config file. Below the file come the plain `HOST` and `PORT` variables, and
-then the built-in default.
-
-`HOST` and `PORT` are there for hosting platforms such as Heroku, Railway, and
-Cloud Run, which set `PORT` and expect the process to accept traffic from
-outside. So `PORT` on its own also makes the server bind `0.0.0.0`. That is
-why the file outranks them: if your file says `bind: 127.0.0.1`, a platform
-that happens to set `PORT` can't quietly open the server up.
-
-### Settings only the file can hold
-
-`volumes` and `mcp_oauth` can't be set by flag or environment variable.
-`volumes` decides which host directories programs can ever reach, and
-`mcp_oauth` holds the OAuth client registrations for MCP servers that need
-one. Both widen what a program can touch, so they live in the one file that
-gets reviewed.
-
 ### Telemetry
 
 `telemetry` is off unless the file or `SUBMILLI_TELEMETRY` turns it on. When
-on, the server sends errors and crashes to the Submilli maintainers' Sentry
-project, including request details such as client IP addresses and headers.
-Leave it off if that data must not leave your infrastructure.
+on, the server reports to the Submilli maintainers' Sentry project:
 
-## Register blueprints
+- **Always:** crashes; usage counters (sessions opened, programs run, lookups
+  made); and for each failed program, the kind of failure and the first line
+  of its message.
+- **Only with `telemetry_include_source`** (or
+  `SUBMILLI_TELEMETRY_INCLUDE_SOURCE`): the failed program's source, and its
+  full error, including the backtrace or diagnostics that quote the failing
+  lines.
+- **Never:** client IP addresses, request headers, or the host names of the
+  programs' outbound calls.
 
-A blueprint reaches the server as a file you register; the server keeps its
-own copy and never reads the file again. `apply` registers or replaces,
-`add` refuses a name already taken:
+## Secrets
+
+The server's secret store is what a blueprint's `store:` secrets read from,
+and where `submilli server mcp authenticate` keeps the OAuth tokens it
+obtains. It is encrypted at rest and off until it has a key:
 
 ```sh
-submilli server blueprint apply blueprint.yaml
+head -c 32 /dev/urandom | base64 > store.key
+submilli-server --secret-store-key-file store.key
+```
+
+The key can also come from the `SUBMILLI_SECRET_KEY` environment variable;
+without one the server boots normally and every secret command answers `no
+secret store is configured on this server`.
+
+```sh
+submilli server secret put billing_api_key
 ```
 
 ```text
-Added blueprint 'notes'
+Value for 'billing_api_key': [hidden]
+Stored secret 'billing_api_key'
 ```
 
-Run it again after an edit and the answer is `Updated blueprint 'notes'`.
-`list` prints the registered names, `show <name>` prints the YAML the server
-holds, and `remove <name>` unregisters it. Under the hood the store is a
-revision log, so every version ever applied is on disk; `show` and
-executions use the latest.
+`put` prompts for the value with echo off, `list` prints keys, and `delete`
+removes one. Nothing reads a value back over the API: the value is decrypted
+inside the server process when a package calls `secrets.get` and never leaves
+that process.
 
-`remove` also ends every open session bound to that blueprint and deletes
-its records, so a client reconnecting to one gets `404 unknown session` rather
-than its old session back. Re-registering the name later does not bring them
-back. On a live server, removing a blueprint cuts off the people using it.
-
-Registration is where a blueprint is checked, so a mistake fails here rather
-than on the first program:
-
-- The YAML must parse and every rule's filter must parse; the error points
-  at the line:
-
-  ```text
-  error: blueprint parse error: permissions.main.[0]: invalid filter `path glob`: expected an operand after `glob`
-    path glob
-             ^ at line 5 column 7
-  ```
-
-- Every declared secret must be resolvable now. A `store:` secret must exist
-  in the server's store, and be readable with the server's key (`secret
-  check failed: missing secret 'A'`).
-- A `persistent` filesystem must name a volume the server declares (`volume
-  'shared' is not declared on this server`).
-- `env:` and `file:` secret sources are refused over the API, because a
-  caller who can register a blueprint would otherwise be able to read the
-  server's environment and files, the store key included. Use `store:` or
-  `harness:`; the seed directory below is the one way to register a
-  blueprint that reads the server's environment.
-
-One thing registration does not check is that the packages in `packages:`
-are installed. A blueprint naming a package the server doesn't have
-registers fine and runs fine until a program imports it, which fails with
-``package `@acme/billing` was not found in …/packages``.
-
-### Blueprints from a directory
-
-A deployment usually keeps blueprints in source control and wants the server
-to pick them up, rather than an operator running `apply` after every
-deploy. `--blueprint-seed-dir` names a read-only directory of blueprint
-YAML that the server reconciles into its store on every start:
-
-```sh
-submilli-server --blueprint-seed-dir /etc/submilli/blueprints
-```
-
-```text
-INFO submilli_server::blueprint_seed: blueprint seed reconcile complete dir=/etc/submilli/blueprints seeded=2 skipped=0 failed=0 unresolved_secrets=0
-```
-
-The files win. A seeded blueprint that is edited or removed over the API
-comes back in its seeded form at the next start, so a blueprint is owned
-either by the directory or by the API, never both. Blueprints the directory
-doesn't name are left alone, which means removing a file doesn't remove the
-blueprint; do that with `remove`. The store keys on the `name:` inside each
-file, not the file name. Because the directory is the operator's, blueprints
-seeded from it may use `env:` and `file:` secrets.
-
-Watch the reconcile line after each deploy. A file that fails to register is
-logged and counted in `failed` without stopping the server, so a seed
-directory the process can't read looks like a healthy server that knows no
-blueprints.
+A credential that belongs to the session rather than the server, a customer's
+own API token for instance, is a `harness:` secret that the application
+supplies when it opens a session; the server keeps it in memory only.
+[Connecting to your harness](/docs/harness) covers it.
 
 ## Install packages
 
@@ -289,49 +258,67 @@ installed @acme/billing @ 3f9c2a1b7e40
 The server fetches the repository from GitHub, builds the package (or every
 package the repository declares when none is named), and puts it in its
 package store pinned to the commit it resolved. `--sha <ref>` pins a commit,
-tag, or branch; `--upgrade` replaces a package already installed at another
-commit, without which the command reports it `up to date`. `list` prints
-what is installed and `uninstall <name>` removes one. Packages are compiled
+tag, or branch. A package already installed at the same commit is reported
+`up to date` and left alone; one installed at a different commit is refused
+unless `--upgrade` is given, which replaces it. `list` prints what is
+installed and `uninstall <name>` removes one. Packages are compiled
 at install time, so nothing is built per request.
 
-## Secrets
+## Register blueprints
 
-The server's secret store is what a blueprint's `store:` secrets read from,
-and where `submilli server mcp authenticate` keeps the OAuth tokens it
-obtains. It is encrypted at rest and off until it has a key:
-
-```sh
-head -c 32 /dev/urandom | base64 > store.key
-submilli-server --secret-store-key-file store.key
-```
-
-The key is 32 random bytes, base64-encoded, read from the file named by
-`--secret-store-key-file` or from the environment variable
-`SUBMILLI_SECRET_KEY` (a different variable name with
-`--secret-store-key-env`). The file wins when both are set, and the key
-never appears on a command line. With no key the store stays off, the
-server boots normally, and every secret command answers `no secret store is
-configured on this server`.
+A blueprint reaches the server as a file you register; the server keeps its
+own copy and never reads the file again. `apply` registers or replaces,
+`add` refuses a name already taken:
 
 ```sh
-submilli server secret put billing_api_key
+submilli server blueprint apply blueprint.yaml
 ```
 
 ```text
-Value for 'billing_api_key': [hidden]
-Stored secret 'billing_api_key'
+Added blueprint 'support'
 ```
 
-`put` prompts with echo off or reads a pipe, `list` prints keys, `delete`
-removes one. There is no way to read a value back over the API: values are
-written in, decrypted inside the server process when a package calls
-`secrets.get`, and never leave it. Each secret is one sealed file
-(XChaCha20-Poly1305), opened on demand and not held decrypted in memory.
+Run it again after an edit and the answer is `Updated blueprint 'support'`.
+`list` prints the registered names and `show <name>` prints the YAML the
+server holds. `remove <name>` unregisters a blueprint and ends every open
+session bound to it; on a live server that cuts off the people using it.
 
-A credential that belongs to the session rather than the server, a customer's
-own API token for instance, is a `harness:` secret: the application supplies
-it when it opens a session and the server keeps it only in memory for that
-session. [Connecting to your harness](/docs/harness) covers it.
+With the blueprint registered, the secrets in the store, and the package
+installed, the program from the CLI chapter runs on the server the way an
+application would run it:
+
+```sh
+submilli server run-code credit.ts --blueprint support --var customerId=cus_northwind
+```
+
+```text
+credited 1500 cents
+```
+
+Registration checks the blueprint, so a mistake fails here rather than on the
+first program: the YAML and every filter must parse, every `store:` secret
+must exist in the server's store, and a `persistent` filesystem must name a
+volume the server declares.
+
+Over the API, `env:` and `file:` secret sources are refused: a caller who can
+register a blueprint could otherwise read the server's environment and files.
+Use `store:` or `harness:` instead, or seed the blueprint from a directory, as
+described next. Registration does not check that the packages in `packages:`
+are installed. A missing package fails the first program that imports it, and
+the error names the directories it searched.
+
+For a deployment that keeps blueprints in source control, `--blueprint-seed-dir`
+names a read-only directory of blueprint YAML that the server registers on
+every start, so nobody runs `apply` after a deploy. The directory is the source
+of truth: a seeded blueprint edited or removed over the API returns to its
+seeded form at the next start, and blueprints the directory doesn't name are
+left alone. Because the operator controls the directory, seeded blueprints may
+use `env:` and `file:` secrets. A seeded blueprint whose `store:` secret
+doesn't exist yet is still registered, so you can add secrets after the first
+deploy; programs that need the missing one fail until you do. A file that fails
+to register is logged and counted, not fatal, so read the `blueprint seed
+reconcile complete` line after a deploy: a nonzero `failed=` means a blueprint
+you think is registered isn't.
 
 ## Volumes
 
@@ -344,141 +331,99 @@ volumes:
   shared: /srv/submilli/volumes/shared
 ```
 
-`GET /v1/volumes` lists the names, never the paths. Registration refuses a
-blueprint naming a volume that isn't in the table, and boot refuses a table
-that would let a program reach the server's own state: a relative path, a
-volume containing or inside any of the six directories above or the config
-file itself, two names for one directory, or one volume nested in another.
-The refusal says what it collided with and why:
+Every session of every blueprint that names a volume shares that one
+directory, read and write; the blueprint's filesystem rules are the only thing
+separating one program's files from another's.
 
-```text
-Error: volume 'oops' (/srv/submilli) contains the blueprint store (/srv/submilli/blueprints): a guest write would reach the blueprint index, letting a program grant itself capabilities. Point the volume at a directory outside it, or move the blueprint store elsewhere
-```
+Two checks guard the map. Registration refuses a blueprint that names a volume
+the map doesn't have. Boot refuses a map that would let a program reach the
+server's own state: a relative path, a volume that contains or sits inside a
+directory the server owns, two names for one directory, or one volume nested
+in another. Each refusal says what collided and why.
 
 ## Outbound network
 
-The server usually runs inside your own network, next to things no agent
-should touch: your database, internal admin tools, and the cloud metadata
-endpoint that hands out credentials to anything that asks. A blueprint that
-lets programs call `http.request` is a door to those if a program can be
-talked into fetching the wrong URL, for instance by instructions hidden in a
-web page the agent read.
-
-So the server blocks private addresses on its own, whatever the blueprint
-allows: loopback, the private ranges (RFC 1918, carrier-grade NAT, IPv6
-unique local), and link-local, which covers the metadata endpoint. It checks
-where a host name actually resolves, so a public name pointing at an internal
-address is caught too. The local CLI doesn't block these addresses, which means a
-program that fetched a local URL fine under `submilli run` fails on the
-server. The error doesn't yet say why; it looks like any other connection
-failure:
+The server usually runs inside your network, next to things no agent should
+touch: your database, internal admin tools, the cloud metadata endpoint that
+hands out credentials. So whatever the blueprint allows, the server blocks
+private addresses on its own: loopback, the private ranges, and link-local,
+which covers the metadata endpoint. The block covers every connection the
+server makes on a program's behalf, including the model endpoints and MCP
+servers a blueprint declares. It checks the address a host name resolves to, so
+a public name that points at an internal address is caught too. The local CLI
+has no such block. A program that fetched a local URL under `submilli run`
+fails on the server with an error naming the policy and the flag that would
+open it:
 
 ```text
-error: Error: http GET http://localhost:8128/v1/status: network error: error sending request for url (http://localhost:8128/v1/status)
+blocked by network policy: localhost resolves only to private/loopback IP space; allow-list it on the server with --allow-ip / --allow-localhost / --allow-private
 ```
 
-If a program fails like this against an internal or local address that you
-know is up, the block is the likely cause.
-
-When a package legitimately needs an internal service, open the smallest
-hole that works:
+When a package needs an internal service, open the smallest hole that works;
+in production that is `--allow-ip` for the one address:
 
 | Setting | Opens | Typical use |
 | --- | --- | --- |
-| `--allow-ip <ip\|cidr>` | One address or range; repeatable | A package that calls one internal API. The right choice in production. |
+| `--allow-ip <ip\|cidr>` | One address or range; repeatable | A package that calls one internal API |
 | `--allow-localhost` | IPv4 and IPv6 loopback | Development, against a service on your own machine |
-| `--allow-private` | Every private range | Rarely; it opens your whole internal network |
+| `--allow-private` | Every private range | Not in production; it opens your whole internal network |
 
-Grants add up across sources: one made by a flag, an environment variable, or
-the file stands, and no other source can take it back. A stray
-`SUBMILLI_ALLOW_PRIVATE=1` left in a deployment's environment would therefore
-override a file that says `allow_private: false`, so the server calls it out
-at startup:
-
-```text
-the outbound egress guard was widened by environment variables; the config file cannot revoke these
-```
-
-One more network setting is about inbound traffic from agents. The server
-also has an MCP endpoint that agents can connect to directly, and it only
-answers requests addressed to a loopback host name. That stops a malicious
-web page in the user's browser from reaching it through a DNS trick. If
-agents reach it through a reverse proxy or a platform host name, add that
-name with `--mcp-allowed-host`.
+Grants add up across flags, environment, and file, and no source can revoke
+another's, so a stray `SUBMILLI_ALLOW_PRIVATE=1` overrides a file that says
+`allow_private: false`; the server warns at startup whenever one of those
+variables is set.
 
 ## Limits
 
-An agent writes its own programs, and some of them will be wrong: a loop
-that never stops growing a list, a prompt that reads a whole data dump into
-memory, a batch that asks a model a million questions. The limits make sure
-one bad program fails on its own instead of taking the server down with it
-or running up your model provider's bill. They are the operator's settings;
-a blueprint can't raise them.
+Some of the programs an agent writes will be wrong: a loop that never stops
+growing a list, a batch that asks a model a million questions. The limits make
+one bad program fail on its own instead of taking the server down or running
+up your model provider's bill. They are the operator's settings; a blueprint
+can't raise them.
 
-| Setting | Default | What it stops |
+| Setting | Default | What it stops, and how |
 | --- | --- | --- |
-| `max_execution_memory` | 50 MB | One program holding too much memory. The program gets an error it can catch, and the server carries on. |
-| `max_execution_llm_tokens` | 1,000,000 | One program spending too many model tokens. Its next model call fails, telling it to use fewer or shorter calls. |
-| `max_llm_tokens` | 20,000,000 | All running programs together spending too much. This is your ceiling on the provider credential at any moment. |
-| `max_session_state_memory` | 1024 MB | `submilli:session` state piling up across every open session. A `set` that would pass it is refused. |
-| `max_llm_concurrency` | 4 | One `llm.batch` sending too many prompts at once and running into the provider's rate limits. |
+| `max_execution_memory` | 50 MB | One program holding too much memory; the run ends with an `out of memory` error |
+| `max_execution_time` | off | One program running too long; the run ends with `timeout exceeded` |
+| `max_execution_llm_tokens` | 1,000,000 | One program spending too many model tokens; the next model call throws a `RangeError` naming the budget |
+| `max_llm_tokens` | 20,000,000 | All running programs together, your ceiling on the provider credential; the next model call throws a `RangeError` naming the budget |
+| `max_session_state_memory` | 1024 MB | `submilli:session` state across every open session; a `set` past it throws |
+| `max_llm_concurrency` | 4 | One `llm.batch` sending too many prompts at once; the extra prompts wait their turn |
+| `idle_timeout` (blueprint) | 24 h | A session nobody has run a program in; a sweep every 30 seconds closes it and deletes its `per_session` files, across restarts too |
 
-Raise a limit when legitimate work hits it, not before. The two token limits
-fail with different messages, and the difference matters: the per-program
-one tells the agent to use fewer or shorter calls, while the server-wide one
-says the program's own spend isn't the problem and the operator needs to
-raise `--max-llm-tokens`.
+Strings are stored as UTF-16, so text costs two bytes per character: a 25 MB
+document needs about 50 MB of the execution limit. To size a container, budget
+`max_execution_memory` times the programs running at once, plus
+`max_session_state_memory`.
 
-Text costs more memory than its file size suggests. The runtime stores
-strings as UTF-16, two bytes per character, so reading a 25 MB document needs
-about 50 MB of the execution limit.
-
-To size a container's memory, budget at least:
-
-```text
-max_execution_memory × programs running at once + max_session_state_memory
-```
-
-Sessions don't last forever either. Each ends after its blueprint's
-`idle_timeout` without use (24 hours unless the blueprint says otherwise). A
-sweep every 30 seconds closes idle sessions and deletes their `per_session`
-files, and because it works from the session store on disk, sessions still
-expire on time across a restart.
+`max_execution_time` is whole seconds, `0` disables it, and it counts from the
+moment `main` starts, so compiling the program doesn't eat into it. The check
+runs once a second, so a program may run up to a second past the limit. A host
+call already in flight, an HTTP request for instance, is not interrupted; the
+program is stopped when it returns. Without a time limit, a runaway loop runs
+until it exhausts a fixed budget of a trillion instructions, which takes far
+longer than any caller will wait, so a deployment whose callers have their own
+timeouts should set one.
 
 ## Health, logs, and stopping
 
 `GET /v1/status` is the health endpoint and what `submilli server status`
-prints:
+prints. In a container with no shell or `curl`, use `submilli-server
+--health-check` as the probe. It exits 0 when the server answers. Answering
+means the process is serving, not that any blueprint is registered or that the
+secret store has a key. The probe is a separate process and does not see the
+server's flags: it finds the port through `SUBMILLI_PORT` or a config file, so
+if you changed the port with a flag, set it one of those ways as well.
 
-```sh
-curl -s http://127.0.0.1:8128/v1/status
-```
-
-```json
-{"status":"running","bind_addr":"127.0.0.1:8128","pid":16882,"active_sessions":0,"blueprints":["notes"]}
-```
-
-For a container with no shell or `curl`, the binary probes itself:
-`submilli-server --health-check` exits 0 when the server answers and 1 with
-the reason when it doesn't. The probe is a separate process and can't see
-the flags given to the serving one. It resolves the address the same way the
-server does, from its own flags, `SUBMILLI_BIND`/`SUBMILLI_PORT`, or the
-config file. So a server started with `--port 9000` needs
-`--health-check --port 9000`; setting the port through the environment or
-the config file instead covers both processes at once.
-
-Logs go to standard error, one line per event, at `info` and above;
-`RUST_LOG=submilli_server=debug` raises the level for the server's own
-modules.
+Logs go to standard output, one line per event, at `info` and above;
+`RUST_LOG=submilli_server=debug` raises the level.
 
 To stop, send SIGTERM or SIGINT, run `submilli server stop`, or `POST
-/v1/shutdown`. The server stops accepting connections, lets requests already
-running finish for up to `shutdown_grace` seconds (5 by default), then drops
-whatever remains and exits; a second signal skips the wait. Keep the grace
-period a few seconds under the container runtime's own stop timeout (Docker
-gives 10), or the runtime kills the process mid-drain.
+/v1/shutdown`. The server lets running requests finish for up to
+`shutdown_grace` seconds (5 by default), then exits; a program still running at
+that point is cut off and its caller gets no response. Keep the grace period a
+few seconds under the container runtime's own stop timeout.
 
 Next: [connecting to your harness](/docs/harness), where an application or
-an agent framework opens sessions against a registered blueprint and runs
-programs in them; then [deploying](/docs/deploying), which puts everything
-above in a container and a cluster.
+an agent framework opens sessions against a registered blueprint; then
+[deploying](/docs/deploying), which puts all of this in a container.
