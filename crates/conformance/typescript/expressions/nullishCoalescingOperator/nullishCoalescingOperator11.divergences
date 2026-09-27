@@ -1,21 +1,5 @@
-types: 9 of 11 tsc entries compared, 5 differ
-
-line 6: g11
-  tsc:  any
-  ours: <error>
-
-line 6: f11 ?? f11.toFixed()
-  tsc:  any
-  ours: <error>
+types: 5 of 11 tsc entries compared, 1 differ
 
 line 6: f11
   tsc:  null
   ours: 0 | 1 | "" | null
-
-line 6: f11.toFixed()
-  tsc:  any
-  ours: <error>
-
-line 6: f11.toFixed
-  tsc:  any
-  ours: <error>

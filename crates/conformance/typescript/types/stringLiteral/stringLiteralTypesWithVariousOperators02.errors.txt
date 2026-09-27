@@ -1,0 +1,8 @@
+stringLiteralTypesWithVariousOperators02.ts(9,9): error TS2365: Operator '+' cannot be applied to types 'string | number' and 'number'.
+stringLiteralTypesWithVariousOperators02.ts(10,9): error TS2365: Operator '+' cannot be applied to types 'number' and 'string | number'.
+stringLiteralTypesWithVariousOperators02.ts(11,9): error TS2365: Operator '+' cannot be applied to types 'string | number' and 'string | number'.
+stringLiteralTypesWithVariousOperators02.ts(12,9): error TS2365: Operator '+' cannot be applied to types 'string | number' and 'boolean'.
+stringLiteralTypesWithVariousOperators02.ts(13,9): error TS2365: Operator '+' cannot be applied to types 'boolean' and 'string | number'.
+stringLiteralTypesWithVariousOperators02.ts(14,9): error TS2356: An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.
+stringLiteralTypesWithVariousOperators02.ts(19,9): error TS2367: This comparison appears to be unintentional because the types '"ABC"' and '"XYZ"' have no overlap.
+stringLiteralTypesWithVariousOperators02.ts(20,9): error TS2367: This comparison appears to be unintentional because the types '"ABC"' and '"XYZ"' have no overlap.

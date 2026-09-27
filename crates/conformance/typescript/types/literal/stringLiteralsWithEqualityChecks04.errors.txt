@@ -1,0 +1,2 @@
+stringLiteralsWithEqualityChecks04.ts(17,5): error TS2367: This comparison appears to be unintentional because the types '"foo"' and '"bar"' have no overlap.
+stringLiteralsWithEqualityChecks04.ts(26,5): error TS2367: This comparison appears to be unintentional because the types '"foo"' and '"bar"' have no overlap.

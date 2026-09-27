@@ -1,0 +1,252 @@
+=== equalityStrictNulls.ts ===
+
+function f1(x: string): void {
+>f1 : (x: string) => void
+>   : ^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+
+    if (x == null) {
+>x == null : boolean
+>          : ^^^^^^^
+>x : string
+>  : ^^^^^^
+
+    }
+    if (x != null) {
+>x != null : boolean
+>          : ^^^^^^^
+>x : string
+>  : ^^^^^^
+
+    }
+    if (x === null) {
+>x === null : boolean
+>           : ^^^^^^^
+>x : string
+>  : ^^^^^^
+
+    }
+    if (x !== null) {
+>x !== null : boolean
+>           : ^^^^^^^
+>x : string
+>  : ^^^^^^
+
+    }
+    if (x == null) {
+>x == null : boolean
+>          : ^^^^^^^
+>x : string
+>  : ^^^^^^
+
+    }
+    if (x != null) {
+>x != null : boolean
+>          : ^^^^^^^
+>x : string
+>  : ^^^^^^
+
+    }
+    if (x === null) {
+>x === null : boolean
+>           : ^^^^^^^
+>x : string
+>  : ^^^^^^
+
+    }
+    if (x !== null) {
+>x !== null : boolean
+>           : ^^^^^^^
+>x : string
+>  : ^^^^^^
+
+    }
+    if (null == x) {
+>null == x : boolean
+>          : ^^^^^^^
+>x : string
+>  : ^^^^^^
+
+    }
+    if (null != x) {
+>null != x : boolean
+>          : ^^^^^^^
+>x : string
+>  : ^^^^^^
+
+    }
+    if (null === x) {
+>null === x : boolean
+>           : ^^^^^^^
+>x : string
+>  : ^^^^^^
+
+    }
+    if (null !== x) {
+>null !== x : boolean
+>           : ^^^^^^^
+>x : string
+>  : ^^^^^^
+
+    }
+    if (null == x) {
+>null == x : boolean
+>          : ^^^^^^^
+>x : string
+>  : ^^^^^^
+
+    }
+    if (null != x) {
+>null != x : boolean
+>          : ^^^^^^^
+>x : string
+>  : ^^^^^^
+
+    }
+    if (null === x) {
+>null === x : boolean
+>           : ^^^^^^^
+>x : string
+>  : ^^^^^^
+
+    }
+    if (null !== x) {
+>null !== x : boolean
+>           : ^^^^^^^
+>x : string
+>  : ^^^^^^
+
+    }
+}
+
+function f2(): void {
+>f2 : () => void
+>   : ^^^^^^^^^^
+
+    if (null == null) {
+>null == null : boolean
+>             : ^^^^^^^
+
+    }
+    if (null == null) {
+>null == null : boolean
+>             : ^^^^^^^
+
+    }
+    if (null == null) {
+>null == null : boolean
+>             : ^^^^^^^
+
+    }
+    if (null == null) {
+>null == null : boolean
+>             : ^^^^^^^
+
+    }
+}
+
+function f3(a: number, b: boolean, c: { x: number }, d: number | string): void {
+>f3 : (a: number, b: boolean, c: { x: number; }, d: number | string) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>c : { x: number; }
+>  : ^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>d : string | number
+>  : ^^^^^^^^^^^^^^^
+
+    if (a == null) {
+>a == null : boolean
+>          : ^^^^^^^
+>a : number
+>  : ^^^^^^
+
+    }
+    if (b == null) {
+>b == null : boolean
+>          : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+
+    }
+    if (c == null) {
+>c == null : boolean
+>          : ^^^^^^^
+>c : { x: number; }
+>  : ^^^^^^^^^^^^^^
+
+    }
+    if (d == null) {
+>d == null : boolean
+>          : ^^^^^^^
+>d : string | number
+>  : ^^^^^^^^^^^^^^^
+
+    }
+}
+
+function f4(x: number): void {
+>f4 : (x: number) => void
+>   : ^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+
+    if (x > null) {
+>x > null : boolean
+>         : ^^^^^^^
+>x : number
+>  : ^^^^^^
+
+    }
+    if (x < null) {
+>x < null : boolean
+>         : ^^^^^^^
+>x : number
+>  : ^^^^^^
+
+    }
+    if (x >= null) {
+>x >= null : boolean
+>          : ^^^^^^^
+>x : number
+>  : ^^^^^^
+
+    }
+    if (x <= null) {
+>x <= null : boolean
+>          : ^^^^^^^
+>x : number
+>  : ^^^^^^
+
+    }
+}
+function f5(x: string): void {
+>f5 : (x: string) => void
+>   : ^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+
+    switch(x) {
+>x : string
+>  : ^^^^^^
+
+        case null:
+            break;
+        case null:
+            break;
+        default:
+            return;
+    }
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -1,0 +1,210 @@
+=== assignmentCompatWithCallSignatures2.ts ===
+// void returning call signatures can be assigned a non-void returning call signature that otherwise matches
+
+interface T {
+>T : T
+>  : ^
+
+    f(x: number): void;
+>f : (x: number) => void
+>  : ^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+
+}
+/*pruned*/;                       
+let a: { f(x: number): void } = null as unknown as ({ f(x: number): void });
+>a : { f(x: number): void; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^
+>f : (x: number) => void
+>  : ^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>null as unknown as ({ f(x: number): void }) : { f(x: number): void; }
+>                                            : ^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>f : (x: number) => void
+>  : ^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+
+
+/**/; 
+/**/; 
+
+interface S {
+>S : S
+>  : ^
+
+    f(x: number): string;
+>f : (x: number) => string
+>  : ^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+
+}
+/*pruned*/;                       
+let a2: { f(x: number): string } = null as unknown as ({ f(x: number): string });
+>a2 : { f(x: number): string; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>f : (x: number) => string
+>  : ^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>null as unknown as ({ f(x: number): string }) : { f(x: number): string; }
+>                                              : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>f : (x: number) => string
+>  : ^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+
+/**/; 
+/**/;  
+/**/; 
+a = a2;
+>a = a2 : { f(x: number): string; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : { f(x: number): void; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^
+>a2 : { f(x: number): string; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+/*pruned*/;        
+/*pruned*/;              
+/*pruned*/;                          
+/*pruned*/;                        
+a = { f: () => 1 }
+>a = { f: () => 1 } : { f: () => number; }
+>                   : ^^^^^^^^^^^^^^^^^^^^
+>a : { f(x: number): void; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^
+>{ f: () => 1 } : { f: () => number; }
+>               : ^^^^^^^^^^^^^^^^^^^^
+>f : () => number
+>  : ^^^^^^^^^^^^
+>() => 1 : () => number
+>        : ^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+/*pruned*/;               
+a = { f: function (x: number) { return ''; } }
+>a = { f: function (x: number) { return ''; } } : { f: (x: number) => string; }
+>                                               : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : { f(x: number): void; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^
+>{ f: function (x: number) { return ''; } } : { f: (x: number) => string; }
+>                                           : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>f : (x: number) => string
+>  : ^^^^^^^^^^^^^^^^^^^^^
+>function (x: number) { return ''; } : (x: number) => string
+>                                    : ^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>'' : ""
+>   : ^^
+
+
+// errors
+/*pruned*/; 
+/*pruned*/;                            
+a = () => 1;
+>a = () => 1 : () => number
+>            : ^^^^^^^^^^^^
+>a : { f(x: number): void; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^
+>() => 1 : () => number
+>        : ^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+a = function (x: number) { return ''; }
+>a = function (x: number) { return ''; } : (x: number) => string
+>                                        : ^^^^^^^^^^^^^^^^^^^^^
+>a : { f(x: number): void; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^
+>function (x: number) { return ''; } : (x: number) => string
+>                                    : ^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>'' : ""
+>   : ^^
+
+
+interface S2 {
+>S2 : S2
+>   : ^^
+
+    f(x: string): void;
+>f : (x: string) => void
+>  : ^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+
+}
+/*pruned*/;                          
+let a3: { f(x: string): void } = null as unknown as ({ f(x: string): void });
+>a3 : { f(x: string): void; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^
+>f : (x: string) => void
+>  : ^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>null as unknown as ({ f(x: string): void }) : { f(x: string): void; }
+>                                            : ^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>f : (x: string) => void
+>  : ^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+
+// these are errors
+/**/;  
+/**/;  
+/*pruned*/;          
+/*pruned*/;                            
+/**/;  
+a = a3;
+>a = a3 : { f(x: string): void; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^
+>a : { f(x: number): void; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^
+>a3 : { f(x: string): void; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^
+
+a = (x: string) => 1;
+>a = (x: string) => 1 : (x: string) => number
+>                     : ^^^^^^^^^^^^^^^^^^^^^
+>a : { f(x: number): void; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^
+>(x: string) => 1 : (x: string) => number
+>                 : ^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+a = function (x: string) { return ''; }
+>a = function (x: string) { return ''; } : (x: string) => string
+>                                        : ^^^^^^^^^^^^^^^^^^^^^
+>a : { f(x: number): void; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^
+>function (x: string) { return ''; } : (x: string) => string
+>                                    : ^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>'' : ""
+>   : ^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

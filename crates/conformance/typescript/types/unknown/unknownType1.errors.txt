@@ -1,0 +1,18 @@
+unknownType1.ts(53,5): error TS18046: 'x' is of type 'unknown'.
+unknownType1.ts(54,5): error TS18046: 'x' is of type 'unknown'.
+unknownType1.ts(55,5): error TS18046: 'x' is of type 'unknown'.
+unknownType1.ts(56,5): error TS18046: 'x' is of type 'unknown'.
+unknownType1.ts(57,5): error TS18046: 'x' is of type 'unknown'.
+unknownType1.ts(58,5): error TS18046: 'x' is of type 'unknown'.
+unknownType1.ts(59,6): error TS18046: 'x' is of type 'unknown'.
+unknownType1.ts(60,6): error TS18046: 'x' is of type 'unknown'.
+unknownType1.ts(66,5): error TS18046: 'x' is of type 'unknown'.
+unknownType1.ts(67,5): error TS18046: 'x' is of type 'unknown'.
+unknownType1.ts(68,5): error TS18046: 'x' is of type 'unknown'.
+unknownType1.ts(69,9): error TS18046: 'x' is of type 'unknown'.
+unknownType1.ts(114,9): error TS2322: Type 'unknown' is not assignable to type 'string'.
+unknownType1.ts(115,9): error TS2322: Type 'unknown' is not assignable to type 'string[]'.
+unknownType1.ts(116,9): error TS2322: Type 'unknown' is not assignable to type '{}'.
+unknownType1.ts(117,9): error TS2322: Type 'unknown' is not assignable to type '{} | null'.
+unknownType1.ts(153,17): error TS2355: A function whose declared type is neither 'undefined', 'void', nor 'any' must return a value.
+unknownType1.ts(159,14): error TS2700: Rest types may only be created from object types.

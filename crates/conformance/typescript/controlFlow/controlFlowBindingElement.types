@@ -1,0 +1,237 @@
+=== controlFlowBindingElement.ts ===
+{
+    const data =  { param: 'value' };
+>data : { param: string; }
+>     : ^^^^^^^^^^^^^^^^^^
+>{ param: 'value' } : { param: string; }
+>                   : ^^^^^^^^^^^^^^^^^^
+>param : string
+>      : ^^^^^^
+>'value' : "value"
+>        : ^^^^^^^
+
+
+    /**/;  
+                                                                      
+             
+    
+    /*pruned*/;         // should not trigger 'Unreachable code detected.'    
+}
+
+
+{
+    const data =  { param: 'value' };
+>data : { param: string; }
+>     : ^^^^^^^^^^^^^^^^^^
+>{ param: 'value' } : { param: string; }
+>                   : ^^^^^^^^^^^^^^^^^^
+>param : string
+>      : ^^^^^^
+>'value' : "value"
+>        : ^^^^^^^
+
+
+    let foo: string | null = "";
+>foo : string | null
+>    : ^^^^^^^^^^^^^
+>"" : ""
+>   : ^^
+
+    /**/;  
+                                                                      
+             
+    
+    foo;  // should be string  
+>foo : string
+>    : ^^^^^^
+
+}
+
+{
+    const data =  { param: 'value' };
+>data : { param: string; }
+>     : ^^^^^^^^^^^^^^^^^^
+>{ param: 'value' } : { param: string; }
+>                   : ^^^^^^^^^^^^^^^^^^
+>param : string
+>      : ^^^^^^
+>'value' : "value"
+>        : ^^^^^^^
+
+
+    let foo: string | null = "";
+>foo : string | null
+>    : ^^^^^^^^^^^^^
+>"" : ""
+>   : ^^
+
+    /**/;  
+                                         
+             
+    
+    foo;  // should be string | undefined
+>foo : string
+>    : ^^^^^^
+
+}
+
+{
+    const data =  { param: 'value' };
+>data : { param: string; }
+>     : ^^^^^^^^^^^^^^^^^^
+>{ param: 'value' } : { param: string; }
+>                   : ^^^^^^^^^^^^^^^^^^
+>param : string
+>      : ^^^^^^
+>'value' : "value"
+>        : ^^^^^^^
+
+
+    let foo: string | null = "";
+>foo : string | null
+>    : ^^^^^^^^^^^^^
+>"" : ""
+>   : ^^
+
+    /**/;  
+                                            
+             
+    
+    foo;  // should be string
+>foo : string
+>    : ^^^^^^
+
+}
+
+{
+    interface Window {
+>Window : Window
+>       : ^^^^^^
+
+        window: Window;
+>window : Window
+>       : ^^^^^^
+
+    }
+
+    let foo: string | null = null as unknown as (string | null);
+>foo : string | null
+>    : ^^^^^^^^^^^^^
+>null as unknown as (string | null) : string | null
+>                                   : ^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    /*pruned*/;               
+    window.window = window;
+>window.window = window : globalThis.Window & typeof globalThis
+>                       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>window.window : globalThis.Window & typeof globalThis
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>window : globalThis.Window & typeof globalThis
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>window : globalThis.Window & typeof globalThis
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>window : globalThis.Window & typeof globalThis
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+    /*pruned*/;                                                
+                                                                     
+
+    foo;  // should be string
+>foo : string | null
+>    : ^^^^^^^^^^^^^
+
+}
+
+{
+    interface Window {
+>Window : Window
+>       : ^^^^^^
+
+        window: Window;
+>window : Window
+>       : ^^^^^^
+
+    }
+
+    let foo: string | null = null as unknown as (string | null);
+>foo : string | null
+>    : ^^^^^^^^^^^^^
+>null as unknown as (string | null) : string | null
+>                                   : ^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    /*pruned*/;               
+    window.window = window;
+>window.window = window : globalThis.Window & typeof globalThis
+>                       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>window.window : globalThis.Window & typeof globalThis
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>window : globalThis.Window & typeof globalThis
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>window : globalThis.Window & typeof globalThis
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>window : globalThis.Window & typeof globalThis
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+    /*pruned*/;                                       
+                                                                               
+
+    foo;  // should be string
+>foo : string | null
+>    : ^^^^^^^^^^^^^
+
+}
+
+{
+    interface Window {
+>Window : Window
+>       : ^^^^^^
+
+        window: Window;
+>window : Window
+>       : ^^^^^^
+
+    }
+
+    let foo: string | null = null as unknown as (string | null);
+>foo : string | null
+>    : ^^^^^^^^^^^^^
+>null as unknown as (string | null) : string | null
+>                                   : ^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    /*pruned*/;               
+    window.window = window;
+>window.window = window : globalThis.Window & typeof globalThis
+>                       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>window.window : globalThis.Window & typeof globalThis
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>window : globalThis.Window & typeof globalThis
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>window : globalThis.Window & typeof globalThis
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>window : globalThis.Window & typeof globalThis
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+    /*pruned*/;                                      
+                                                                                                              
+
+    foo;  // should be string | undefined
+>foo : string | null
+>    : ^^^^^^^^^^^^^
+
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

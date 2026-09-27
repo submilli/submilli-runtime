@@ -1,0 +1,13 @@
+types: 58 of 86 tsc entries compared, 2 differ
+
+line 39: maybeNumber
+  tsc:  number
+  ours: number | null
+
+line 48: test
+  tsc:  string
+  ours: string | null
+
+errors:
+line 38: ours: postfix `++` expects `number` or `bigint`, found `number | null` (tsc accepts)
+line 48: ours: cannot read field `slice` on `string | null`: the receiver can be `null` (tsc accepts)

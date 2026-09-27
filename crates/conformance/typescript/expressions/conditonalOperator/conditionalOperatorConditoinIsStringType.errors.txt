@@ -1,0 +1,11 @@
+conditionalOperatorConditoinIsStringType.ts(27,1): error TS2872: This kind of expression is always truthy.
+conditionalOperatorConditoinIsStringType.ts(28,1): error TS2872: This kind of expression is always truthy.
+conditionalOperatorConditoinIsStringType.ts(29,1): error TS2872: This kind of expression is always truthy.
+conditionalOperatorConditoinIsStringType.ts(31,1): error TS2872: This kind of expression is always truthy.
+conditionalOperatorConditoinIsStringType.ts(38,1): error TS2774: This condition will always return true since this function is always defined. Did you mean to call it instead?
+conditionalOperatorConditoinIsStringType.ts(53,24): error TS2872: This kind of expression is always truthy.
+conditionalOperatorConditoinIsStringType.ts(54,23): error TS2872: This kind of expression is always truthy.
+conditionalOperatorConditoinIsStringType.ts(55,23): error TS2872: This kind of expression is always truthy.
+conditionalOperatorConditoinIsStringType.ts(57,32): error TS2872: This kind of expression is always truthy.
+conditionalOperatorConditoinIsStringType.ts(60,24): error TS2774: This condition will always return true since this function is always defined. Did you mean to call it instead?
+conditionalOperatorConditoinIsStringType.ts(65,32): error TS2774: This condition will always return true since this function is always defined. Did you mean to call it instead?

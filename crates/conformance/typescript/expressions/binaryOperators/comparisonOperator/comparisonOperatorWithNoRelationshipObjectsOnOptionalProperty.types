@@ -1,0 +1,219 @@
+=== comparisonOperatorWithNoRelationshipObjectsOnOptionalProperty.ts ===
+interface A1 {
+>A1 : A1
+>   : ^^
+
+    b?: number;
+>b : number | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+}
+
+interface B1 {
+>B1 : B1
+>   : ^^
+
+    b?: string;
+>b : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+}
+
+let a: A1 = null as unknown as (A1);
+>a : A1
+>  : ^^
+>null as unknown as (A1) : A1
+>                        : ^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let b: B1 = null as unknown as (B1);
+>b : B1
+>  : ^^
+>null as unknown as (B1) : B1
+>                        : ^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+// operator <
+let ra1 = a < b;
+>ra1 : boolean
+>    : ^^^^^^^
+>a < b : boolean
+>      : ^^^^^^^
+>a : A1
+>  : ^^
+>b : B1
+>  : ^^
+
+let ra2 = b < a;
+>ra2 : boolean
+>    : ^^^^^^^
+>b < a : boolean
+>      : ^^^^^^^
+>b : B1
+>  : ^^
+>a : A1
+>  : ^^
+
+
+// operator >
+let rb1 = a > b;
+>rb1 : boolean
+>    : ^^^^^^^
+>a > b : boolean
+>      : ^^^^^^^
+>a : A1
+>  : ^^
+>b : B1
+>  : ^^
+
+let rb2 = b > a;
+>rb2 : boolean
+>    : ^^^^^^^
+>b > a : boolean
+>      : ^^^^^^^
+>b : B1
+>  : ^^
+>a : A1
+>  : ^^
+
+
+// operator <=
+let rc1 = a <= b;
+>rc1 : boolean
+>    : ^^^^^^^
+>a <= b : boolean
+>       : ^^^^^^^
+>a : A1
+>  : ^^
+>b : B1
+>  : ^^
+
+let rc2 = b <= a;
+>rc2 : boolean
+>    : ^^^^^^^
+>b <= a : boolean
+>       : ^^^^^^^
+>b : B1
+>  : ^^
+>a : A1
+>  : ^^
+
+
+// operator >=
+let rd1 = a >= b;
+>rd1 : boolean
+>    : ^^^^^^^
+>a >= b : boolean
+>       : ^^^^^^^
+>a : A1
+>  : ^^
+>b : B1
+>  : ^^
+
+let rd2 = b >= a;
+>rd2 : boolean
+>    : ^^^^^^^
+>b >= a : boolean
+>       : ^^^^^^^
+>b : B1
+>  : ^^
+>a : A1
+>  : ^^
+
+
+// operator ==
+let re1 = a == b;
+>re1 : boolean
+>    : ^^^^^^^
+>a == b : boolean
+>       : ^^^^^^^
+>a : A1
+>  : ^^
+>b : B1
+>  : ^^
+
+let re2 = b == a;
+>re2 : boolean
+>    : ^^^^^^^
+>b == a : boolean
+>       : ^^^^^^^
+>b : B1
+>  : ^^
+>a : A1
+>  : ^^
+
+
+// operator !=
+let rf1 = a != b;
+>rf1 : boolean
+>    : ^^^^^^^
+>a != b : boolean
+>       : ^^^^^^^
+>a : A1
+>  : ^^
+>b : B1
+>  : ^^
+
+let rf2 = b != a;
+>rf2 : boolean
+>    : ^^^^^^^
+>b != a : boolean
+>       : ^^^^^^^
+>b : B1
+>  : ^^
+>a : A1
+>  : ^^
+
+
+// operator ===
+let rg1 = a === b;
+>rg1 : boolean
+>    : ^^^^^^^
+>a === b : boolean
+>        : ^^^^^^^
+>a : A1
+>  : ^^
+>b : B1
+>  : ^^
+
+let rg2 = b === a;
+>rg2 : boolean
+>    : ^^^^^^^
+>b === a : boolean
+>        : ^^^^^^^
+>b : B1
+>  : ^^
+>a : A1
+>  : ^^
+
+
+// operator !==
+let rh1 = a !== b;
+>rh1 : boolean
+>    : ^^^^^^^
+>a !== b : boolean
+>        : ^^^^^^^
+>a : A1
+>  : ^^
+>b : B1
+>  : ^^
+
+let rh2 = b !== a;
+>rh2 : boolean
+>    : ^^^^^^^
+>b !== a : boolean
+>        : ^^^^^^^
+>b : B1
+>  : ^^
+>a : A1
+>  : ^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

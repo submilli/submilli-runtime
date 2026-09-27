@@ -1,0 +1,4 @@
+types: 27 of 69 tsc entries compared, 0 differ
+
+errors:
+line 27: ours: expected `(arg0: number) => void`, got `() => number` (tsc accepts)

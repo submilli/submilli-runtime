@@ -1,0 +1,237 @@
+=== unionTypesAssignability.ts ===
+let unionNumberString: number | string = null as unknown as (number | string);
+>unionNumberString : string | number
+>                  : ^^^^^^^^^^^^^^^
+>null as unknown as (number | string) : string | number
+>                                     : ^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+class C { }
+>C : C
+>  : ^
+
+class D extends C { foo1(): void { } }
+>D : D
+>  : ^
+>C : C
+>  : ^
+>foo1 : () => void
+>     : ^^^^^^^^^^
+
+class E extends C { foo2(): void { } }
+>E : E
+>  : ^
+>C : C
+>  : ^
+>foo2 : () => void
+>     : ^^^^^^^^^^
+
+/*pruned*/;                                     
+
+let num: number = null as unknown as (number);
+>num : number
+>    : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let str: string = null as unknown as (string);
+>str : string
+>    : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;                       
+/*pruned*/;                       
+/*pruned*/;                       
+
+// A union type U is assignable to a type T if each type in U is assignable to T
+/**/; 
+/**/; 
+/*pruned*/;  // ok
+/**/; 
+/**/; 
+/*pruned*/;  // error e is not assignable to d
+/**/; 
+/**/; 
+/*pruned*/;  // error d is not assignable to e
+num = num;
+>num = num : number
+>          : ^^^^^^
+>num : number
+>    : ^^^^^^
+>num : number
+>    : ^^^^^^
+
+num = str;
+>num = str : string
+>          : ^^^^^^
+>num : number
+>    : ^^^^^^
+>str : string
+>    : ^^^^^^
+
+num = unionNumberString; // error string is not assignable to number
+>num = unionNumberString : string | number
+>                        : ^^^^^^^^^^^^^^^
+>num : number
+>    : ^^^^^^
+>unionNumberString : string | number
+>                  : ^^^^^^^^^^^^^^^
+
+str = num;
+>str = num : number
+>          : ^^^^^^
+>str : string
+>    : ^^^^^^
+>num : number
+>    : ^^^^^^
+
+str = str;
+>str = str : string
+>          : ^^^^^^
+>str : string
+>    : ^^^^^^
+>str : string
+>    : ^^^^^^
+
+str = unionNumberString; // error since number is not assignable to string
+>str = unionNumberString : string | number
+>                        : ^^^^^^^^^^^^^^^
+>str : string
+>    : ^^^^^^
+>unionNumberString : string | number
+>                  : ^^^^^^^^^^^^^^^
+
+
+// A type T is assignable to a union type U if T is assignable to any type in U
+/**/; 
+/**/; 
+/*pruned*/;  // error since C is not assinable to either D or E
+/**/; 
+/**/; 
+/*pruned*/;  // ok
+/**/; 
+/**/; 
+/*pruned*/;  // ok
+num = num;
+>num = num : number
+>          : ^^^^^^
+>num : number
+>    : ^^^^^^
+>num : number
+>    : ^^^^^^
+
+str = num;
+>str = num : number
+>          : ^^^^^^
+>str : string
+>    : ^^^^^^
+>num : number
+>    : ^^^^^^
+
+unionNumberString = num; // ok 
+>unionNumberString = num : number
+>                        : ^^^^^^
+>unionNumberString : string | number
+>                  : ^^^^^^^^^^^^^^^
+>num : number
+>    : ^^^^^^
+
+num = str;
+>num = str : string
+>          : ^^^^^^
+>num : number
+>    : ^^^^^^
+>str : string
+>    : ^^^^^^
+
+str = str;
+>str = str : string
+>          : ^^^^^^
+>str : string
+>    : ^^^^^^
+>str : string
+>    : ^^^^^^
+
+unionNumberString = str; // ok
+>unionNumberString = str : string
+>                        : ^^^^^^
+>unionNumberString : string | number
+>                  : ^^^^^^^^^^^^^^^
+>str : string
+>    : ^^^^^^
+
+
+// Any
+/*pruned*/;                                
+/*pruned*/;      
+/*pruned*/;                
+/*pruned*/;      
+/*pruned*/;                
+
+// null
+/*pruned*/;    
+unionNumberString = null;
+>unionNumberString = null : null
+>                         : ^^^^
+>unionNumberString : string | number
+>                  : ^^^^^^^^^^^^^^^
+
+
+// undefined
+/*pruned*/;    
+unionNumberString = null;
+>unionNumberString = null : null
+>                         : ^^^^
+>unionNumberString : string | number
+>                  : ^^^^^^^^^^^^^^^
+
+
+// type parameters
+function foo<T, U>(t: T, u: U): void {
+>foo : <T, U>(t: T, u: U) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+    t = u; // error
+>t = u : U
+>      : ^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+    u = t; // error
+>u = t : T
+>      : ^
+>u : U
+>  : ^
+>t : T
+>  : ^
+
+    /*pruned*/;                                
+    /**/;  // ok
+    /**/;  // ok
+    /**/;    
+    /**/;  // error U not assignable to T
+    /**/;  // error T not assignable to U
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

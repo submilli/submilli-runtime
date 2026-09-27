@@ -1,0 +1,338 @@
+=== conditionalOperatorConditionIsObjectType.ts ===
+//Cond ? Expr1 : Expr2,  Cond is of object type, Expr1 and Expr2 have the same type
+/*pruned*/;                                          
+
+/*pruned*/;                                  
+let exprBoolean1: boolean = null as unknown as (boolean);
+>exprBoolean1 : boolean
+>             : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let exprNumber1: number = null as unknown as (number);
+>exprNumber1 : number
+>            : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let exprString1: string = null as unknown as (string);
+>exprString1 : string
+>            : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;                                             
+
+/*pruned*/;                                  
+let exprBoolean2: boolean = null as unknown as (boolean);
+>exprBoolean2 : boolean
+>             : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let exprNumber2: number = null as unknown as (number);
+>exprNumber2 : number
+>            : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let exprString2: string = null as unknown as (string);
+>exprString2 : string
+>            : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;                                             
+
+function foo(): void { };
+>foo : () => void
+>    : ^^^^^^^^^^
+
+class C { static doIt: () => void };
+>C : C
+>  : ^
+>doIt : () => void
+>     : ^^^^^^^^^^
+
+
+//Cond is an object type variable
+/*pruned*/;                      
+/*pruned*/;                              
+/*pruned*/;                            
+/*pruned*/;                            
+/*pruned*/;                                
+/*pruned*/;                              // union
+
+//Cond is an object type literal
+/*pruned*/;                                     
+((a: string) => a.length) ? exprBoolean1 : exprBoolean2;
+>((a: string) => a.length) ? exprBoolean1 : exprBoolean2 : boolean
+>                                                        : ^^^^^^^
+>((a: string) => a.length) : (a: string) => number
+>                          : ^^^^^^^^^^^^^^^^^^^^^
+>(a: string) => a.length : (a: string) => number
+>                        : ^^^^^^^^^^^^^^^^^^^^^
+>a : string
+>  : ^^^^^^
+>a.length : number
+>         : ^^^^^^
+>a : string
+>  : ^^^^^^
+>length : number
+>       : ^^^^^^
+>exprBoolean1 : boolean
+>             : ^^^^^^^
+>exprBoolean2 : boolean
+>             : ^^^^^^^
+
+({}) ? exprNumber1 : exprNumber2;
+>({}) ? exprNumber1 : exprNumber2 : number
+>                                 : ^^^^^^
+>({}) : {}
+>     : ^^
+>{} : {}
+>   : ^^
+>exprNumber1 : number
+>            : ^^^^^^
+>exprNumber2 : number
+>            : ^^^^^^
+
+({ a: 1, b: "s" }) ? exprString1 : exprString2;
+>({ a: 1, b: "s" }) ? exprString1 : exprString2 : string
+>                                               : ^^^^^^
+>({ a: 1, b: "s" }) : { a: number; b: string; }
+>                   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ a: 1, b: "s" } : { a: number; b: string; }
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>b : string
+>  : ^^^^^^
+>"s" : "s"
+>    : ^^^
+>exprString1 : string
+>            : ^^^^^^
+>exprString2 : string
+>            : ^^^^^^
+
+/*pruned*/;                                        
+({ a: 1, b: "s" }) ? exprString1: exprBoolean1; // union
+>({ a: 1, b: "s" }) ? exprString1: exprBoolean1 : string | boolean
+>                                               : ^^^^^^^^^^^^^^^^
+>({ a: 1, b: "s" }) : { a: number; b: string; }
+>                   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ a: 1, b: "s" } : { a: number; b: string; }
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>b : string
+>  : ^^^^^^
+>"s" : "s"
+>    : ^^^
+>exprString1 : string
+>            : ^^^^^^
+>exprBoolean1 : boolean
+>             : ^^^^^^^
+
+
+//Cond is an object type expression
+/*pruned*/;                 
+/*pruned*/;                              
+new C() ? exprNumber1 : exprNumber2;
+>new C() ? exprNumber1 : exprNumber2 : number
+>                                    : ^^^^^^
+>new C() : C
+>        : ^
+>C : typeof C
+>  : ^^^^^^^^
+>exprNumber1 : number
+>            : ^^^^^^
+>exprNumber2 : number
+>            : ^^^^^^
+
+C.doIt() ? exprString1 : exprString2;
+>C.doIt() ? exprString1 : exprString2 : string
+>                                     : ^^^^^^
+>C.doIt() : void
+>         : ^^^^
+>C.doIt : () => void
+>       : ^^^^^^^^^^
+>C : typeof C
+>  : ^^^^^^^^
+>doIt : () => void
+>     : ^^^^^^^^^^
+>exprString1 : string
+>            : ^^^^^^
+>exprString2 : string
+>            : ^^^^^^
+
+/*pruned*/;                                          
+/*pruned*/;                              // union
+
+//Results shoud be same as Expr1 and Expr2
+/*pruned*/;                                         
+/*pruned*/;                                                     
+/*pruned*/;                                                  
+/*pruned*/;                                                  
+/*pruned*/;                                                      
+/*pruned*/;                                                             // union
+
+/*pruned*/;                                                        
+let resultIsBoolean2 = ((a: string) => a.length) ? exprBoolean1 : exprBoolean2;
+>resultIsBoolean2 : boolean
+>                 : ^^^^^^^
+>((a: string) => a.length) ? exprBoolean1 : exprBoolean2 : boolean
+>                                                        : ^^^^^^^
+>((a: string) => a.length) : (a: string) => number
+>                          : ^^^^^^^^^^^^^^^^^^^^^
+>(a: string) => a.length : (a: string) => number
+>                        : ^^^^^^^^^^^^^^^^^^^^^
+>a : string
+>  : ^^^^^^
+>a.length : number
+>         : ^^^^^^
+>a : string
+>  : ^^^^^^
+>length : number
+>       : ^^^^^^
+>exprBoolean1 : boolean
+>             : ^^^^^^^
+>exprBoolean2 : boolean
+>             : ^^^^^^^
+
+let resultIsNumber2 = ({}) ? exprNumber1 : exprNumber2;
+>resultIsNumber2 : number
+>                : ^^^^^^
+>({}) ? exprNumber1 : exprNumber2 : number
+>                                 : ^^^^^^
+>({}) : {}
+>     : ^^
+>{} : {}
+>   : ^^
+>exprNumber1 : number
+>            : ^^^^^^
+>exprNumber2 : number
+>            : ^^^^^^
+
+let resultIsString2 = ({ a: 1, b: "s" }) ? exprString1 : exprString2;
+>resultIsString2 : string
+>                : ^^^^^^
+>({ a: 1, b: "s" }) ? exprString1 : exprString2 : string
+>                                               : ^^^^^^
+>({ a: 1, b: "s" }) : { a: number; b: string; }
+>                   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ a: 1, b: "s" } : { a: number; b: string; }
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>b : string
+>  : ^^^^^^
+>"s" : "s"
+>    : ^^^
+>exprString1 : string
+>            : ^^^^^^
+>exprString2 : string
+>            : ^^^^^^
+
+/*pruned*/;                                                              
+let resultIsStringOrBoolean2 = ({ a: 1, b: "s" }) ? exprString1 : exprBoolean1; // union
+>resultIsStringOrBoolean2 : string | boolean
+>                         : ^^^^^^^^^^^^^^^^
+>({ a: 1, b: "s" }) ? exprString1 : exprBoolean1 : string | boolean
+>                                                : ^^^^^^^^^^^^^^^^
+>({ a: 1, b: "s" }) : { a: number; b: string; }
+>                   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ a: 1, b: "s" } : { a: number; b: string; }
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>b : string
+>  : ^^^^^^
+>"s" : "s"
+>    : ^^^
+>exprString1 : string
+>            : ^^^^^^
+>exprBoolean1 : boolean
+>             : ^^^^^^^
+
+
+/*pruned*/;                                    
+/*pruned*/;                                                     
+let resultIsNumber3 = new C() ? exprNumber1 : exprNumber2;
+>resultIsNumber3 : number
+>                : ^^^^^^
+>new C() ? exprNumber1 : exprNumber2 : number
+>                                    : ^^^^^^
+>new C() : C
+>        : ^
+>C : typeof C
+>  : ^^^^^^^^
+>exprNumber1 : number
+>            : ^^^^^^
+>exprNumber2 : number
+>            : ^^^^^^
+
+let resultIsString3 = C.doIt() ? exprString1 : exprString2;
+>resultIsString3 : string
+>                : ^^^^^^
+>C.doIt() ? exprString1 : exprString2 : string
+>                                     : ^^^^^^
+>C.doIt() : void
+>         : ^^^^
+>C.doIt : () => void
+>       : ^^^^^^^^^^
+>C : typeof C
+>  : ^^^^^^^^
+>doIt : () => void
+>     : ^^^^^^^^^^
+>exprString1 : string
+>            : ^^^^^^
+>exprString2 : string
+>            : ^^^^^^
+
+/*pruned*/;                                                                
+let resultIsStringOrBoolean3 = C.doIt() ? exprString1 : exprBoolean1; // union
+>resultIsStringOrBoolean3 : string | boolean
+>                         : ^^^^^^^^^^^^^^^^
+>C.doIt() ? exprString1 : exprBoolean1 : string | boolean
+>                                      : ^^^^^^^^^^^^^^^^
+>C.doIt() : void
+>         : ^^^^
+>C.doIt : () => void
+>       : ^^^^^^^^^^
+>C : typeof C
+>  : ^^^^^^^^
+>doIt : () => void
+>     : ^^^^^^^^^^
+>exprString1 : string
+>            : ^^^^^^
+>exprBoolean1 : boolean
+>             : ^^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

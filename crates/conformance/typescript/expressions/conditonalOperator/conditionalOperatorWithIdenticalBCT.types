@@ -1,0 +1,182 @@
+=== conditionalOperatorWithIdenticalBCT.ts ===
+//Cond ? Expr1 : Expr2,  Expr1 and Expr2 have identical best common type
+/*pruned*/;                                                       ;
+/*pruned*/;                            ;
+/*pruned*/;                            ;
+
+/*pruned*/;                       
+/*pruned*/;                       
+/*pruned*/;                       
+
+//Cond ? Expr1 : Expr2,  Expr1 is supertype
+//Be Not contextually typed
+/*pruned*/;  
+/*pruned*/;                
+
+//Expr1 and Expr2 are literals
+true ? {} : 1;
+>true ? {} : 1 : {} | 1
+>              : ^^^^^^
+>true : true
+>     : ^^^^
+>{} : {}
+>   : ^^
+>1 : 1
+>  : ^
+
+true ? { a: 1 } : { a: 2, b: 'string' };
+>true ? { a: 1 } : { a: 2, b: 'string' } : { a: number; } | { a: number; b: string; }
+>                                        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+>{ a: 1 } : { a: number; }
+>         : ^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>{ a: 2, b: 'string' } : { a: number; b: string; }
+>                      : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>2 : 2
+>  : ^
+>b : string
+>  : ^^^^^^
+>'string' : "string"
+>         : ^^^^^^^^
+
+let result2 = true ? {} : 1;
+>result2 : {}
+>        : ^^
+>true ? {} : 1 : 1 | {}
+>              : ^^^^^^
+>true : true
+>     : ^^^^
+>{} : {}
+>   : ^^
+>1 : 1
+>  : ^
+
+let result3 = true ? { a: 1 } : { a: 2, b: 'string' };
+>result3 : { a: number; b?: undefined; } | { a: number; b: string; }
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>true ? { a: 1 } : { a: 2, b: 'string' } : { a: number; } | { a: number; b: string; }
+>                                        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+>{ a: 1 } : { a: number; }
+>         : ^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>{ a: 2, b: 'string' } : { a: number; b: string; }
+>                      : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>2 : 2
+>  : ^
+>b : string
+>  : ^^^^^^
+>'string' : "string"
+>         : ^^^^^^^^
+
+
+//Contextually typed
+/*pruned*/;                      
+/*pruned*/;                                                                 
+
+//Cond ? Expr1 : Expr2,  Expr2 is supertype
+//Be Not contextually typed
+/*pruned*/;  
+/*pruned*/;                
+
+//Expr1 and Expr2 are literals
+true ? 1 : {};
+>true ? 1 : {} : 1 | {}
+>              : ^^^^^^
+>true : true
+>     : ^^^^
+>1 : 1
+>  : ^
+>{} : {}
+>   : ^^
+
+true ? { a: 2, b: 'string' } : { a: 1 };
+>true ? { a: 2, b: 'string' } : { a: 1 } : { a: number; b: string; } | { a: number; }
+>                                        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+>{ a: 2, b: 'string' } : { a: number; b: string; }
+>                      : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>2 : 2
+>  : ^
+>b : string
+>  : ^^^^^^
+>'string' : "string"
+>         : ^^^^^^^^
+>{ a: 1 } : { a: number; }
+>         : ^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+let result6 = true ? 1 : {};
+>result6 : {}
+>        : ^^
+>true ? 1 : {} : 1 | {}
+>              : ^^^^^^
+>true : true
+>     : ^^^^
+>1 : 1
+>  : ^
+>{} : {}
+>   : ^^
+
+let result7 = true ? { a: 2, b: 'string' } : { a: 1 };
+>result7 : { a: number; b: string; } | { a: number; b?: undefined; }
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>true ? { a: 2, b: 'string' } : { a: 1 } : { a: number; b: string; } | { a: number; }
+>                                        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+>{ a: 2, b: 'string' } : { a: number; b: string; }
+>                      : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>2 : 2
+>  : ^
+>b : string
+>  : ^^^^^^
+>'string' : "string"
+>         : ^^^^^^^^
+>{ a: 1 } : { a: number; }
+>         : ^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+
+//Contextually typed
+/*pruned*/;                      
+/*pruned*/;                                                                 
+
+//Result = Cond ? Expr1 : Expr2,  Result is supertype
+//Contextually typed
+/*pruned*/;                      
+/*pruned*/;                                                                    
+
+//Expr1 and Expr2 are literals
+/*pruned*/;                             
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

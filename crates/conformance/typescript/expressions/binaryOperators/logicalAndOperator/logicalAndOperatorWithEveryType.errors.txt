@@ -1,0 +1,14 @@
+logicalAndOperatorWithEveryType.ts(36,11): error TS2873: This kind of expression is always falsy.
+logicalAndOperatorWithEveryType.ts(37,12): error TS2873: This kind of expression is always falsy.
+logicalAndOperatorWithEveryType.ts(47,11): error TS2873: This kind of expression is always falsy.
+logicalAndOperatorWithEveryType.ts(48,12): error TS2873: This kind of expression is always falsy.
+logicalAndOperatorWithEveryType.ts(58,11): error TS2873: This kind of expression is always falsy.
+logicalAndOperatorWithEveryType.ts(59,12): error TS2873: This kind of expression is always falsy.
+logicalAndOperatorWithEveryType.ts(91,11): error TS2873: This kind of expression is always falsy.
+logicalAndOperatorWithEveryType.ts(92,12): error TS2873: This kind of expression is always falsy.
+logicalAndOperatorWithEveryType.ts(102,11): error TS2873: This kind of expression is always falsy.
+logicalAndOperatorWithEveryType.ts(103,12): error TS2873: This kind of expression is always falsy.
+logicalAndOperatorWithEveryType.ts(113,11): error TS2873: This kind of expression is always falsy.
+logicalAndOperatorWithEveryType.ts(114,12): error TS2873: This kind of expression is always falsy.
+logicalAndOperatorWithEveryType.ts(124,11): error TS2873: This kind of expression is always falsy.
+logicalAndOperatorWithEveryType.ts(125,12): error TS2873: This kind of expression is always falsy.

@@ -1,84 +1,20 @@
-types: 49 of 76 tsc entries compared, 20 differ
-
-line 4: r1
-  tsc:  (from: number, length?: number) => string
-  ours: <error>
-
-line 4: typeof x === "string" && typeof x === "string" ? x.substr : x.toFixed
-  tsc:  (from: number, length?: number) => string
-  ours: <error>
+types: 33 of 76 tsc entries compared, 4 differ
 
 line 4: x
   tsc:  number
   ours: number | string
 
-line 4: x.substr
-  tsc:  (from: number, length?: number) => string
-  ours: <error>
-
-line 4: x.toFixed
-  tsc:  (fractionDigits?: number) => string
-  ours: <error>
-
-line 6: r2
-  tsc:  (from: number, length?: number) => string
-  ours: <error>
-
-line 6: !(typeof x === "string" && typeof x === "string") ? x.toFixed : x.substr
-  tsc:  (from: number, length?: number) => string
-  ours: <error>
-
 line 6: x
   tsc:  number
   ours: number | string
-
-line 6: x.toFixed
-  tsc:  (fractionDigits?: number) => string
-  ours: <error>
-
-line 6: x.substr
-  tsc:  (from: number, length?: number) => string
-  ours: <error>
-
-line 8: r3
-  tsc:  (from: number, length?: number) => string
-  ours: <error>
-
-line 8: typeof x === "string" || typeof x === "string" ? x.substr : x.toFixed
-  tsc:  (from: number, length?: number) => string
-  ours: <error>
 
 line 8: x
   tsc:  string
   ours: number | string
 
-line 8: x.substr
-  tsc:  (from: number, length?: number) => string
-  ours: <error>
-
-line 8: x.toFixed
-  tsc:  (fractionDigits?: number) => string
-  ours: <error>
-
-line 10: r4
-  tsc:  (from: number, length?: number) => string
-  ours: <error>
-
-line 10: !(typeof x === "string" || typeof x === "string") ? x.toFixed : x.substr
-  tsc:  (from: number, length?: number) => string
-  ours: <error>
-
 line 10: x
   tsc:  string
   ours: number | string
-
-line 10: x.toFixed
-  tsc:  (fractionDigits?: number) => string
-  ours: <error>
-
-line 10: x.substr
-  tsc:  (from: number, length?: number) => string
-  ours: <error>
 
 errors:
 line 4: ours: field `substr` does not exist on `string` (tsc accepts)

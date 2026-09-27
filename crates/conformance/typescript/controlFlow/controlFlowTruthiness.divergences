@@ -1,0 +1,9 @@
+types: 60 of 72 tsc entries compared, 2 differ
+
+line 52: y
+  tsc:  string
+  ours: string | null
+
+line 84: x
+  tsc:  NonNullable<T>
+  ours: T

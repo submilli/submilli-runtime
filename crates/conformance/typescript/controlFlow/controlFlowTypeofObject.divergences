@@ -1,0 +1,41 @@
+types: 38 of 60 tsc entries compared, 9 differ
+
+line 11: x
+  tsc:  {}
+  ours: unknown
+
+line 20: x
+  tsc:  {} | undefined
+  ours: unknown
+
+line 29: x
+  tsc:  {}
+  ours: unknown
+
+line 38: x
+  tsc:  {}
+  ours: unknown
+
+line 44: !!true
+  tsc:  true
+  ours: boolean
+
+line 44: !true
+  tsc:  false
+  ours: boolean
+
+line 54: x
+  tsc:  {} | undefined
+  ours: unknown
+
+line 64: x
+  tsc:  {} | undefined
+  ours: unknown
+
+line 65: x
+  tsc:  {} | undefined
+  ours: unknown
+
+errors:
+line 8: ours: cannot use `unknown` in a boolean context (tsc accepts)
+line 45: ours: cannot use `unknown` in a boolean context (tsc accepts)

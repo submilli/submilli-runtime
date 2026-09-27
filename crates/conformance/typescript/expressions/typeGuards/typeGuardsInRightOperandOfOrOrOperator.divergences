@@ -1,0 +1,94 @@
+types: 93 of 141 tsc entries compared, 22 differ
+
+line 10: typeof x !== "string" || ((x = 10) || x)
+  tsc:  true | 10
+  ours: number | boolean
+
+line 10: ((x = 10) || x)
+  tsc:  10
+  ours: number
+
+line 10: (x = 10) || x
+  tsc:  10
+  ours: number
+
+line 10: x = 10
+  tsc:  10
+  ours: number
+
+line 14: typeof x !== "string" || ((x = "hello") || x)
+  tsc:  true | "hello"
+  ours: string | boolean
+
+line 14: ((x = "hello") || x)
+  tsc:  "hello"
+  ours: string
+
+line 14: (x = "hello") || x
+  tsc:  "hello"
+  ours: string
+
+line 14: x = "hello"
+  tsc:  "hello"
+  ours: string
+
+line 25: x
+  tsc:  number | false
+  ours: number | boolean
+
+line 26: x
+  tsc:  false
+  ours: boolean
+
+line 41: (typeof x === "number" // change value of x ? ((x = 10) && x.toString()) // number | boolean | string // do not change value : ((y = x) && x.toString()))
+  tsc:  string | false
+  ours: number | string | boolean
+
+line 41: typeof x === "number" // change value of x ? ((x = 10) && x.toString()) // number | boolean | string // do not change value : ((y = x) && x.toString())
+  tsc:  string | false
+  ours: number | string | boolean
+
+line 41: x
+  tsc:  number | false
+  ours: number | boolean
+
+line 43: ((x = 10) && x.toString())
+  tsc:  string
+  ours: number | string
+
+line 43: (x = 10) && x.toString()
+  tsc:  string
+  ours: number | string
+
+line 43: x = 10
+  tsc:  10
+  ours: number
+
+line 45: ((y = x) && x.toString())
+  tsc:  false
+  ours: string | boolean
+
+line 45: (y = x) && x.toString()
+  tsc:  false
+  ours: string | boolean
+
+line 45: y = x
+  tsc:  false
+  ours: boolean
+
+line 45: x
+  tsc:  false
+  ours: boolean
+
+line 45: x
+  tsc:  never
+  ours: boolean
+
+line 45: x.toString()
+  tsc:  any
+  ours: string
+
+errors:
+line 45: tsc TS2339: Property 'toString' does not exist on type 'never'. (we accept)
+line 10: ours: expected `10 | true`, got `number` (tsc accepts)
+line 14: ours: expected `"hello" | true`, got `string` (tsc accepts)

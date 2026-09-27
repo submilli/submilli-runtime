@@ -1,0 +1,3 @@
+genericCallWithFunctionTypedArguments5.ts(5,19): error TS2345: Argument of type 'null' is not assignable to parameter of type 'T'.   'T' could be instantiated with an arbitrary type which could be unrelated to 'null'.
+genericCallWithFunctionTypedArguments5.ts(12,16): error TS2322: Type '(x: string, y: number) => string' is not assignable to type '(t: string) => string'.   Target signature provides too few arguments. Expected 2 or more, but got 1.
+genericCallWithFunctionTypedArguments5.ts(15,19): error TS2345: Argument of type 'null' is not assignable to parameter of type 'T'.   'T' could be instantiated with an arbitrary type which could be unrelated to 'null'.

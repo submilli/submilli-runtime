@@ -1,0 +1,141 @@
+types: 158 of 241 tsc entries compared, 34 differ
+
+line 7: a
+  tsc:  1
+  ours: A
+
+line 8: a
+  tsc:  1
+  ours: A
+
+line 8: a
+  tsc:  1
+  ours: A
+
+line 9: a
+  tsc:  1
+  ours: A
+
+line 10: a
+  tsc:  1
+  ours: A
+
+line 11: a
+  tsc:  1
+  ours: A
+
+line 14: a
+  tsc:  1
+  ours: A
+
+line 15: a
+  tsc:  1
+  ours: A
+
+line 16: b
+  tsc:  B
+  ours: A
+
+line 21: a
+  tsc:  1
+  ours: A
+
+line 22: a
+  tsc:  1
+  ours: A
+
+line 24: c
+  tsc:  2 | 3
+  ours: B
+
+line 28: a
+  tsc:  1
+  ours: A
+
+line 29: a
+  tsc:  1
+  ours: A
+
+line 32: d
+  tsc:  D
+  ours: C
+
+line 35: a
+  tsc:  1
+  ours: A
+
+line 36: a
+  tsc:  1
+  ours: A
+
+line 37: a
+  tsc:  1
+  ours: A
+
+line 38: a
+  tsc:  1
+  ours: A
+
+line 39: a
+  tsc:  1
+  ours: A
+
+line 54: a
+  tsc:  1
+  ours: A
+
+line 55: a
+  tsc:  1
+  ours: A
+
+line 56: a
+  tsc:  1
+  ours: A
+
+line 57: a
+  tsc:  1
+  ours: A
+
+line 58: a
+  tsc:  1
+  ours: A
+
+line 73: a
+  tsc:  1
+  ours: A
+
+line 74: a
+  tsc:  1
+  ours: A
+
+line 74: a
+  tsc:  1
+  ours: A
+
+line 75: a
+  tsc:  1
+  ours: A
+
+line 76: a
+  tsc:  1
+  ours: A
+
+line 77: a
+  tsc:  1
+  ours: A
+
+line 78: a
+  tsc:  1
+  ours: A
+
+line 82: a
+  tsc:  1
+  ours: A
+
+line 86: a
+  tsc:  1
+  ours: A
+
+errors:
+line 16: ours: expected `B`, got `A` (tsc accepts)
+line 32: ours: expected `D`, got `C` (tsc accepts)

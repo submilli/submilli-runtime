@@ -1,0 +1,6 @@
+types: 9 of 37 tsc entries compared, 0 differ
+
+errors:
+line 8: tsc TS1121: Octal literals are not allowed. Use the syntax '0o0'. (we accept)
+line 9: tsc TS1489: Decimals with leading zeros are not allowed. (we accept)
+line 12: tsc TS1489: Decimals with leading zeros are not allowed. (we accept)

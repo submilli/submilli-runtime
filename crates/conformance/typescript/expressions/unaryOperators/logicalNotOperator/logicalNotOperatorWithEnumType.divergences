@@ -1,0 +1,33 @@
+types: 17 of 37 tsc entries compared, 8 differ
+
+line 11: !ENUM["B"]
+  tsc:  false
+  ours: boolean
+
+line 11: ENUM["B"]
+  tsc:  ENUM.B
+  ours: ENUM
+
+line 12: ENUM.B
+  tsc:  ENUM.B
+  ours: ENUM
+
+line 12: ENUM["C"]
+  tsc:  ENUM.C
+  ours: ENUM
+
+line 16: ENUM["B"]
+  tsc:  ENUM.B
+  ours: ENUM
+
+line 16: ENUM.C
+  tsc:  ENUM.C
+  ours: ENUM
+
+line 21: !ENUM.B
+  tsc:  false
+  ours: boolean
+
+line 21: ENUM.B
+  tsc:  ENUM.B
+  ours: ENUM

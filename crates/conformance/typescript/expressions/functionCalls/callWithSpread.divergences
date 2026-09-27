@@ -1,0 +1,8 @@
+types: 17 of 48 tsc entries compared, 1 differ
+
+line 42: this
+  tsc:  this
+  ours: C
+
+errors:
+line 54: ours: override of method `foo` is not compatible with the inherited signature (tsc accepts)

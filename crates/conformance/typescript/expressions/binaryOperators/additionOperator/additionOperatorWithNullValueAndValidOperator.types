@@ -1,0 +1,160 @@
+=== additionOperatorWithNullValueAndValidOperator.ts ===
+// If one operand is the null or undefined value, it is treated as having the type of the other operand.
+
+enum E { a, b, c }
+>E : E
+>  : ^
+>a : E.a
+>  : ^^^
+>b : E.b
+>  : ^^^
+>c : E.c
+>  : ^^^
+
+
+/*pruned*/;                           
+let b: number = null as unknown as (number);
+>b : number
+>  : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;                       
+let d: string = null as unknown as (string);
+>d : string
+>  : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+// null + any
+/*pruned*/;            
+/*pruned*/;            
+
+// null + number/enum
+let r3 = null + b;
+>r3 : any
+>   : ^^^
+>null + b : any
+>         : ^^^
+>b : number
+>  : ^^^^^^
+
+let r4 = null + 1;
+>r4 : any
+>   : ^^^
+>null + 1 : any
+>         : ^^^
+>1 : 1
+>  : ^
+
+/*pruned*/;       
+let r6 = null + E.a;
+>r6 : any
+>   : ^^^
+>null + E.a : any
+>           : ^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+
+let r7 = null + E['a'];
+>r7 : any
+>   : ^^^
+>null + E['a'] : any
+>              : ^^^
+>E['a'] : E.a
+>       : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>'a' : "a"
+>    : ^^^
+
+let r8 = b + null;
+>r8 : any
+>   : ^^^
+>b + null : any
+>         : ^^^
+>b : number
+>  : ^^^^^^
+
+let r9 = 1 + null;
+>r9 : any
+>   : ^^^
+>1 + null : any
+>         : ^^^
+>1 : 1
+>  : ^
+
+/*pruned*/;       
+let r11 = E.a + null;
+>r11 : any
+>    : ^^^
+>E.a + null : any
+>           : ^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+
+let r12 = E['a'] + null;
+>r12 : any
+>    : ^^^
+>E['a'] + null : any
+>              : ^^^
+>E['a'] : E.a
+>       : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>'a' : "a"
+>    : ^^^
+
+
+// null + string
+let r13 = null + d;
+>r13 : string
+>    : ^^^^^^
+>null + d : string
+>         : ^^^^^^
+>d : string
+>  : ^^^^^^
+
+let r14 = null + '';
+>r14 : string
+>    : ^^^^^^
+>null + '' : string
+>          : ^^^^^^
+>'' : ""
+>   : ^^
+
+let r15 = d + null;
+>r15 : string
+>    : ^^^^^^
+>d + null : string
+>         : ^^^^^^
+>d : string
+>  : ^^^^^^
+
+let r16 = '' + null;
+>r16 : string
+>    : ^^^^^^
+>'' + null : string
+>          : ^^^^^^
+>'' : ""
+>   : ^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

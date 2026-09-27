@@ -14,18 +14,17 @@
 //! divergences differ from it, in either direction, so a fixed divergence and a
 //! new one both show up in review. `UPDATE_TYPESCRIPT_EXPECTED=1` rewrites it.
 
+#[path = "support/case_errors.rs"]
+mod case_errors;
 #[path = "support/typed_reachability.rs"]
 mod typed_reachability;
 
 use std::cmp::Reverse;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use interpreter::{
-    Diagnostic, ExprId, FileId, Severity, Span, StmtId, Type, TypedAst, TypedExprKind,
-    TypedStmtKind, typecheck_to_typed_ast,
-};
+use interpreter::{ExprId, Span, StmtId, Type, TypedAst, TypedExprKind, TypedStmtKind};
 
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
@@ -52,7 +51,7 @@ fn typescript_baselines() {
 
     eprintln!(
         "typescript: {} case(s); {} of {} tsc types compared, {} differ; \
-         {} tsc error line(s) we accept, {} error line(s) tsc accepts",
+         {} tsc error line(s) none of ours agrees with, {} error line(s) of ours tsc does not share",
         cases.len(),
         totals.compared,
         totals.baseline_entries,
@@ -169,10 +168,11 @@ struct Report {
     baseline_entries: usize,
     compared: usize,
     type_divergences: Vec<TypeDivergence>,
-    /// Lines where `tsc` reports an error and we report none.
-    missed_errors: Vec<BaselineError>,
-    /// Our errors on lines where `tsc` reports none.
-    extra_errors: Vec<(usize, String)>,
+    /// `tsc`'s errors that none of ours agrees with.
+    missed_errors: Vec<MissedError>,
+    /// Our errors on lines where `tsc` reports none, or where ours is about syntax
+    /// or a feature we lack.
+    extra_errors: Vec<ExtraError>,
 }
 
 impl Report {
@@ -192,17 +192,49 @@ impl Report {
         if !self.missed_errors.is_empty() || !self.extra_errors.is_empty() {
             out.push_str("\nerrors:\n");
         }
-        for e in &self.missed_errors {
+        for MissedError {
+            error: e,
+            we_reject,
+        } in &self.missed_errors
+        {
+            let our_note = if *we_reject {
+                "we reject the line for another reason"
+            } else {
+                "we accept"
+            };
             out.push_str(&format!(
-                "line {}: tsc {}: {} (we accept)\n",
+                "line {}: tsc {}: {} ({our_note})\n",
                 e.line, e.code, e.message
             ));
         }
-        for (line, message) in &self.extra_errors {
-            out.push_str(&format!("line {line}: ours: {message} (tsc accepts)\n"));
+        for e in &self.extra_errors {
+            let tsc_note = if e.tsc_rejects {
+                "tsc rejects the line for another reason"
+            } else {
+                "tsc accepts"
+            };
+            out.push_str(&format!(
+                "line {}: ours: {} ({tsc_note})\n",
+                e.line, e.message
+            ));
         }
         out
     }
+}
+
+struct MissedError {
+    error: BaselineError,
+    /// We report an error on the line too, but ours lacks support, so the two reject
+    /// it for different reasons.
+    we_reject: bool,
+}
+
+struct ExtraError {
+    line: usize,
+    message: String,
+    /// `tsc` reports an error on the line too, but ours lacks support, so the two
+    /// reject it for different reasons.
+    tsc_rejects: bool,
 }
 
 struct TypeDivergence {
@@ -224,11 +256,15 @@ type EntriesByLine = BTreeMap<usize, Vec<Entry>>;
 fn compare_case(case: &Path) -> Result<Report, String> {
     let source = fs::read_to_string(case).map_err(|e| format!("read: {e}"))?;
     let baseline = read_baseline_types(&case.with_extension("types"), &source)?;
-    let (typed, diags) = typecheck_to_typed_ast(&source, FileId(0));
+    let (typed, errors) = case_errors::case_errors(&source);
     let ours = entries_by_line(&typed, &source);
-    let (compared, type_divergences) = compare_types(&baseline, &ours);
-    let (missed_errors, extra_errors) =
-        compare_errors(read_baseline_errors(case), error_lines(&diags, &source));
+    let our_errors = errors_by_line(errors);
+    let tsc_errors = read_baseline_errors(case);
+    let agreed_lines = agreed_lines(&tsc_errors, &our_errors);
+    let our_error_lines: BTreeSet<usize> = our_errors.keys().copied().collect();
+    let (compared, type_divergences) =
+        compare_types(&baseline, &ours, &our_error_lines, &agreed_lines);
+    let (missed_errors, extra_errors) = compare_errors(tsc_errors, &our_errors, &agreed_lines);
     Ok(Report {
         baseline_entries: baseline.values().map(Vec::len).sum(),
         compared,
@@ -239,7 +275,21 @@ fn compare_case(case: &Path) -> Result<Report, String> {
 }
 
 /// How many `tsc` entries were compared, and those whose type differs from ours.
-fn compare_types(baseline: &EntriesByLine, ours: &EntriesByLine) -> (usize, Vec<TypeDivergence>) {
+///
+/// Skips a pair where a side's type is its error recovery, which says nothing about
+/// inference: ours holding `<error>` on a line where we report an error (the error
+/// is recorded already), and `tsc`'s `any` on a line where the two errors agree.
+fn compare_types(
+    baseline: &EntriesByLine,
+    ours: &EntriesByLine,
+    our_error_lines: &BTreeSet<usize>,
+    agreed_lines: &BTreeSet<usize>,
+) -> (usize, Vec<TypeDivergence>) {
+    let error_type = Type::Error.to_string();
+    let is_recovery = |line: &usize, tsc_ty: &str, our_ty: &str| {
+        (our_ty.contains(&error_type) && our_error_lines.contains(line))
+            || (tsc_ty == "any" && agreed_lines.contains(line))
+    };
     let mut compared = 0;
     let mut divergences = Vec::new();
     for (line, entries) in baseline {
@@ -260,6 +310,9 @@ fn compare_types(baseline: &EntriesByLine, ours: &EntriesByLine) -> (usize, Vec<
                 continue;
             }
             for (tsc_ty, our_ty) in tsc_types.into_iter().zip(our_types) {
+                if is_recovery(line, tsc_ty, our_ty) {
+                    continue;
+                }
                 compared += 1;
                 if normalize_type(tsc_ty) != normalize_type(our_ty) {
                     divergences.push(TypeDivergence {
@@ -275,20 +328,45 @@ fn compare_types(baseline: &EntriesByLine, ours: &EntriesByLine) -> (usize, Vec<
     (compared, divergences)
 }
 
-/// `tsc`'s errors on lines where we report none, and ours on lines where it
-/// reports none.
+/// The lines where our error agrees with `tsc`'s: both reject the line, and ours
+/// could agree.
+fn agreed_lines(
+    tsc_errors: &[BaselineError],
+    our_errors: &BTreeMap<usize, LineError>,
+) -> BTreeSet<usize> {
+    tsc_errors
+        .iter()
+        .filter(|e| our_errors.get(&e.line).is_some_and(LineError::can_agree))
+        .map(|e| e.line)
+        .collect()
+}
+
+/// `tsc`'s errors that none of ours agrees with, and ours that agree with none of
+/// `tsc`'s. Ours agrees with an error `tsc` reports on the same line, unless ours
+/// lacks support: then the two reject the line for different reasons.
 fn compare_errors(
     tsc_errors: Vec<BaselineError>,
-    our_errors: BTreeMap<usize, String>,
-) -> (Vec<BaselineError>, Vec<(usize, String)>) {
+    our_errors: &BTreeMap<usize, LineError>,
+    agreed: &BTreeSet<usize>,
+) -> (Vec<MissedError>, Vec<ExtraError>) {
     let extra = our_errors
         .iter()
-        .filter(|(line, _)| !tsc_errors.iter().any(|e| e.line == **line))
-        .map(|(line, message)| (*line, message.clone()))
+        .filter_map(|(&line, ours)| {
+            let tsc_rejects = tsc_errors.iter().any(|e| e.line == line);
+            (!agreed.contains(&line)).then(|| ExtraError {
+                line,
+                message: ours.message.clone(),
+                tsc_rejects,
+            })
+        })
         .collect();
     let missed = tsc_errors
         .into_iter()
-        .filter(|e| !our_errors.contains_key(&e.line))
+        .filter(|e| !agreed.contains(&e.line))
+        .map(|error| MissedError {
+            we_reject: our_errors.contains_key(&error.line),
+            error,
+        })
         .collect();
     (missed, extra)
 }
@@ -544,16 +622,34 @@ fn read_baseline_errors(case: &Path) -> Vec<BaselineError> {
     errors
 }
 
-/// The first of our errors on each line.
-fn error_lines(diags: &[Diagnostic], source: &str) -> BTreeMap<usize, String> {
-    let mut lines = BTreeMap::new();
-    for d in diags
-        .iter()
-        .filter(|d| matches!(d.severity, Severity::Error))
-    {
-        lines
-            .entry(line_of(source, d.span.start as usize))
-            .or_insert_with(|| d.message.clone());
+/// The error of ours that stands for its line.
+struct LineError {
+    message: String,
+    unsupported: bool,
+}
+
+impl LineError {
+    fn can_agree(&self) -> bool {
+        !self.unsupported
+    }
+}
+
+/// One of our errors on each line: the first that lacks support, else the first.
+fn errors_by_line(errors: Vec<case_errors::CaseError>) -> BTreeMap<usize, LineError> {
+    let mut lines: BTreeMap<usize, LineError> = BTreeMap::new();
+    for e in errors {
+        let replace = lines
+            .get(&e.line)
+            .is_none_or(|kept| kept.can_agree() && e.support == case_errors::Support::Lacking);
+        if replace {
+            lines.insert(
+                e.line,
+                LineError {
+                    message: e.message,
+                    unsupported: e.support == case_errors::Support::Lacking,
+                },
+            );
+        }
     }
     lines
 }
@@ -915,9 +1011,9 @@ fn line_of(source: &str, offset: usize) -> usize {
     source[..offset.min(source.len())].matches('\n').count() + 1
 }
 
-/// A `// @name: value` compiler-option line. Must agree with `OPTION_LINE` in
-/// `typescript-baselines/write-baselines.cjs`, which leaves these lines out of the
-/// baseline: `^\s*//\s*@\w+\s*:`. JavaScript's `\s` includes a byte-order mark.
+/// A `// @name: value` compiler-option line, which the baseline writer leaves out.
+/// Must agree with `OPTION_LINE` in `typescript-baselines/tsc-case.cjs`:
+/// `^\s*//\s*@\w+\s*:`. JavaScript's `\s` includes a byte-order mark.
 fn is_option_line(line: &str) -> bool {
     let Some(rest) = trim_js_space(line)
         .strip_prefix("//")
@@ -1084,6 +1180,51 @@ fn option_lines_match_the_baseline_writer() {
     ] {
         assert!(!is_option_line(line), "{line:?}");
     }
+}
+
+#[test]
+fn only_a_supported_error_agrees_with_a_tsc_error_on_its_line() {
+    let tsc = || {
+        vec![BaselineError {
+            line: 3,
+            code: "TS2362".into(),
+            message: "The left-hand side of an arithmetic operation must be ...".into(),
+        }]
+    };
+    let ours = |unsupported: bool| {
+        BTreeMap::from([(
+            3,
+            LineError {
+                message: "any message".into(),
+                unsupported,
+            },
+        )])
+    };
+
+    let (missed, extra) = compare_errors(tsc(), &ours(true), &agreed_lines(&tsc(), &ours(true)));
+    assert_eq!((missed.len(), extra.len()), (1, 1));
+    assert!(extra[0].tsc_rejects);
+
+    let (missed, extra) = compare_errors(tsc(), &ours(false), &agreed_lines(&tsc(), &ours(false)));
+    assert_eq!((missed.len(), extra.len()), (0, 0));
+}
+
+#[test]
+fn syntax_and_named_gaps_lack_support_and_other_errors_do_not() {
+    let source = "let a: number = \"s\";\nlet b = 1 +;\nlet c: any = 1;\n\
+                  type D<T, T> = T;\nfunction main(): void {}\n";
+    let (_, errors) = case_errors::case_errors(source);
+    let messages: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
+    let on = |line: usize| {
+        errors
+            .iter()
+            .find(|e| e.line == line)
+            .map(|e| e.support == case_errors::Support::Lacking)
+    };
+    assert_eq!(on(1), Some(false), "a type mismatch: {messages:?}");
+    assert_eq!(on(2), Some(true), "a parse error: {messages:?}");
+    assert_eq!(on(3), Some(true), "`any`: {messages:?}");
+    assert_eq!(on(4), Some(false), "a check `tsc` makes too: {messages:?}");
 }
 
 #[test]

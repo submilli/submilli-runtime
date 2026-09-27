@@ -1,1 +1,5 @@
 types: 0 of 16 tsc entries compared, 0 differ
+
+errors:
+line 3: tsc TS2462: A rest element must be last in a destructuring pattern. (we reject the line for another reason)
+line 3: ours: invalid assignment target (tsc rejects the line for another reason)

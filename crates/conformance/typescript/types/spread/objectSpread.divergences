@@ -1,0 +1,235 @@
+types: 169 of 308 tsc entries compared, 52 differ
+
+line 8: { ...o, c: false }
+  tsc:  { c: false; a: number; b: string; }
+  ours: { a: number; b: string; c: boolean }
+
+line 10: { c: false, ...o }
+  tsc:  { a: number; b: string; c: false; }
+  ours: { a: number; b: string; c: boolean }
+
+line 14: { ...{ a: 3, ...{ b: false, c: 'overriden' } }, c: 'whatever' }
+  tsc:  { c: string; b: false; a: number; }
+  ours: { a: number; b: boolean; c: string }
+
+line 14: { a: 3, ...{ b: false, c: 'overriden' } }
+  tsc:  { b: false; c: string; a: number; }
+  ours: { a: number; b: boolean; c: string }
+
+line 14: { b: false, c: 'overriden' }
+  tsc:  { b: false; c: string; }
+  ours: { b: boolean; c: string }
+
+line 20: { ...{ a: 1, ...{ b: false, c: 'overriden' } }, c: -1 }
+  tsc:  { c: number; b: false; a: number; }
+  ours: { a: number; b: boolean; c: number }
+
+line 20: { a: 1, ...{ b: false, c: 'overriden' } }
+  tsc:  { b: false; c: string; a: number; }
+  ours: { a: number; b: boolean; c: string }
+
+line 20: { b: false, c: 'overriden' }
+  tsc:  { b: false; c: string; }
+  ours: { b: boolean; c: string }
+
+line 46: b && { x: 14 }
+  tsc:  false | { x: number; }
+  ours: boolean | { x: number }
+
+line 48: o2
+  tsc:  { x?: number | undefined; }
+  ours: {}
+
+line 48: { ...b && { x: 21 }}
+  tsc:  { x?: number | undefined; }
+  ours: {}
+
+line 48: b && { x: 21 }
+  tsc:  false | { x: number; }
+  ours: boolean | { x: number }
+
+line 55: nt && { x: nt }
+  tsc:  0 | { x: number; }
+  ours: number | { x: number }
+
+line 57: o2
+  tsc:  { x?: number | undefined; }
+  ours: {}
+
+line 57: { ...nt && { x: nt }}
+  tsc:  { x?: number | undefined; }
+  ours: {}
+
+line 57: nt && { x: nt }
+  tsc:  0 | { x: number; }
+  ours: number | { x: number }
+
+line 66: o2
+  tsc:  { x?: string | undefined; }
+  ours: {}
+
+line 66: { ...st && { x: st }}
+  tsc:  { x?: string | undefined; }
+  ours: {}
+
+line 127: x01
+  tsc:  T
+  ours: {}
+
+line 127: { ...t }
+  tsc:  T
+  ours: {}
+
+line 128: x02
+  tsc:  T
+  ours: {}
+
+line 128: { ...t, ...t }
+  tsc:  T
+  ours: {}
+
+line 129: x03
+  tsc:  T & U
+  ours: {}
+
+line 129: { ...t, ...u }
+  tsc:  T & U
+  ours: {}
+
+line 130: x04
+  tsc:  U & T
+  ours: {}
+
+line 130: { ...u, ...t }
+  tsc:  U & T
+  ours: {}
+
+line 131: x05
+  tsc:  { a: number; b: string; } & T
+  ours: { a: number; b: string }
+
+line 131: { a: 5, b: 'hi', ...t }
+  tsc:  { a: number; b: string; } & T
+  ours: { a: number; b: string }
+
+line 132: x06
+  tsc:  T & { a: number; b: string; }
+  ours: { a: number; b: string }
+
+line 132: { ...t, a: 5, b: 'hi' }
+  tsc:  T & { a: number; b: string; }
+  ours: { a: number; b: string }
+
+line 133: x07
+  tsc:  { a: number; b: string; } & T & { x: number; c: boolean; }
+  ours: { a: number; b: string; c: boolean; x: number }
+
+line 133: { a: 5, b: 'hi', ...t, c: true, ...obj }
+  tsc:  { a: number; b: string; } & T & { x: number; c: boolean; }
+  ours: { a: number; b: string; c: boolean; x: number }
+
+line 134: x09
+  tsc:  { a: number; } & T & { x: number; b: string; c: boolean; }
+  ours: { a: number; b: string; c: boolean; x: number }
+
+line 134: { a: 5, ...t, b: 'hi', c: true, ...obj }
+  tsc:  { a: number; } & T & { x: number; b: string; c: boolean; }
+  ours: { a: number; b: string; c: boolean; x: number }
+
+line 135: x10
+  tsc:  { a: number; } & T & { b: string; } & U & { x: number; }
+  ours: { a: number; b: string; x: number }
+
+line 135: { a: 5, ...t, b: 'hi', ...u, ...obj }
+  tsc:  { a: number; } & T & { b: string; } & U & { x: number; }
+  ours: { a: number; b: string; x: number }
+
+line 136: x11
+  tsc:  T | U
+  ours: {}
+
+line 136: { ...v }
+  tsc:  T | U
+  ours: {}
+
+line 137: x12
+  tsc:  (T & { x: number; }) | (U & { x: number; })
+  ours: { x: number }
+
+line 137: { ...v, ...obj }
+  tsc:  (T & { x: number; }) | (U & { x: number; })
+  ours: { x: number }
+
+line 138: x13
+  tsc:  T | { s: string; }
+  ours: {}
+
+line 138: { ...w }
+  tsc:  T | { s: string; }
+  ours: {}
+
+line 139: x14
+  tsc:  (T & { x: number; }) | { x: number; s: string; }
+  ours: { x: number }
+
+line 139: { ...w, ...obj }
+  tsc:  (T & { x: number; }) | { x: number; s: string; }
+  ours: { x: number }
+
+line 140: x15
+  tsc:  T | (T & U)
+  ours: {}
+
+line 140: { ...t, ...v }
+  tsc:  T | (T & U)
+  ours: {}
+
+line 141: x16
+  tsc:  T | (T & { s: string; })
+  ours: {}
+
+line 141: { ...t, ...w }
+  tsc:  T | (T & { s: string; })
+  ours: {}
+
+line 142: x17
+  tsc:  (T & { x: number; }) | (T & { x: number; s: string; })
+  ours: { x: number }
+
+line 142: { ...t, ...w, ...obj }
+  tsc:  (T & { x: number; }) | (T & { x: number; s: string; })
+  ours: { x: number }
+
+line 143: x18
+  tsc:  T | (T & U) | (T & { s: string; }) | (T & U & { s: string; })
+  ours: {}
+
+line 143: { ...t, ...v, ...w }
+  tsc:  T | (T & U) | (T & { s: string; }) | (T & U & { s: string; })
+  ours: {}
+
+errors:
+line 31: ours: cannot spread `() => void` into an object literal (tsc accepts)
+line 46: ours: cannot spread `boolean` into an object literal (tsc accepts)
+line 48: ours: cannot spread `boolean` into an object literal (tsc accepts)
+line 55: ours: cannot spread `number` into an object literal (tsc accepts)
+line 57: ours: cannot spread `number` into an object literal (tsc accepts)
+line 64: ours: cannot spread `""` into an object literal (tsc accepts)
+line 66: ours: cannot spread `""` into an object literal (tsc accepts)
+line 127: ours: cannot spread `T` into an object literal (tsc accepts)
+line 128: ours: cannot spread `T` into an object literal (tsc accepts)
+line 129: ours: cannot spread `T` into an object literal (tsc accepts)
+line 130: ours: cannot spread `U` into an object literal (tsc accepts)
+line 131: ours: cannot spread `T` into an object literal (tsc accepts)
+line 132: ours: cannot spread `T` into an object literal (tsc accepts)
+line 133: ours: cannot spread `T` into an object literal (tsc accepts)
+line 134: ours: cannot spread `T` into an object literal (tsc accepts)
+line 135: ours: cannot spread `T` into an object literal (tsc accepts)
+line 136: ours: cannot spread `T` into an object literal (tsc accepts)
+line 137: ours: cannot spread `T` into an object literal (tsc accepts)
+line 138: ours: cannot spread `T` into an object literal (tsc accepts)
+line 139: ours: cannot spread `T` into an object literal (tsc accepts)
+line 140: ours: cannot spread `T` into an object literal (tsc accepts)
+line 141: ours: cannot spread `T` into an object literal (tsc accepts)
+line 142: ours: cannot spread `T` into an object literal (tsc accepts)
+line 143: ours: cannot spread `T` into an object literal (tsc accepts)

@@ -1,0 +1,14 @@
+objectSpreadNegative.ts(18,5): error TS2322: Type '{ sn?: string | number | undefined; }' is not assignable to type '{ sn: string | number; }'.   Types of property 'sn' are incompatible.     Type 'string | number | undefined' is not assignable to type 'string | number'.       Type 'undefined' is not assignable to type 'string | number'.
+objectSpreadNegative.ts(25,1): error TS2741: Property 'b' is missing in type '{ s: string; }' but required in type '{ s: string; b: boolean; }'.
+objectSpreadNegative.ts(27,1): error TS2741: Property 's' is missing in type '{ b: boolean; }' but required in type '{ s: string; b: boolean; }'.
+objectSpreadNegative.ts(34,7): error TS2783: 'b' is specified more than once, so this usage will be overwritten.
+objectSpreadNegative.ts(39,7): error TS2783: 'b' is specified more than once, so this usage will be overwritten.
+objectSpreadNegative.ts(41,14): error TS2783: 'b' is specified more than once, so this usage will be overwritten.
+objectSpreadNegative.ts(43,53): error TS2783: 'd' is specified more than once, so this usage will be overwritten.
+objectSpreadNegative.ts(45,7): error TS2783: 'a' is specified more than once, so this usage will be overwritten.
+objectSpreadNegative.ts(50,19): error TS2698: Spread types may only be created from object types.
+objectSpreadNegative.ts(51,19): error TS2698: Spread types may only be created from object types.
+objectSpreadNegative.ts(52,20): error TS2698: Spread types may only be created from object types.
+objectSpreadNegative.ts(54,20): error TS2698: Spread types may only be created from object types.
+objectSpreadNegative.ts(56,19): error TS2698: Spread types may only be created from object types.
+objectSpreadNegative.ts(61,1): error TS2349: This expression is not callable.   Type '{}' has no call signatures.

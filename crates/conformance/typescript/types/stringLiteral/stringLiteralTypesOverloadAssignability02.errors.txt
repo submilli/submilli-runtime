@@ -1,0 +1,2 @@
+stringLiteralTypesOverloadAssignability02.ts(17,1): error TS2322: Type '(x: "bar") => number' is not assignable to type '(x: "foo") => number'.   Types of parameters 'x' and 'x' are incompatible.     Type '"foo"' is not assignable to type '"bar"'.
+stringLiteralTypesOverloadAssignability02.ts(18,1): error TS2322: Type '(x: "foo") => number' is not assignable to type '(x: "bar") => number'.   Types of parameters 'x' and 'x' are incompatible.     Type '"bar"' is not assignable to type '"foo"'.

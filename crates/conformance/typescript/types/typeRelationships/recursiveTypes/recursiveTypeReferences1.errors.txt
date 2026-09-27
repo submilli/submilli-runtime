@@ -1,0 +1,1 @@
+recursiveTypeReferences1.ts(49,7): error TS2322: Type 'number' is not assignable to type 'Box2'.

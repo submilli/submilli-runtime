@@ -1,0 +1,10 @@
+types: 10 of 30 tsc entries compared, 0 differ
+
+errors:
+line 18: ours: unary `+` not defined for `boolean` (tsc accepts)
+line 21: ours: unary `+` not defined for `boolean` (tsc accepts)
+line 22: ours: unary `+` not defined for `{ x: boolean; y: boolean }` (tsc accepts)
+line 27: ours: unary `+` not defined for `boolean` (tsc accepts)
+line 31: ours: unary `+` not defined for `boolean` (tsc accepts)
+line 32: ours: unary `+` not defined for `boolean` (tsc accepts)
+line 33: ours: unary `+` not defined for `boolean` (tsc accepts)

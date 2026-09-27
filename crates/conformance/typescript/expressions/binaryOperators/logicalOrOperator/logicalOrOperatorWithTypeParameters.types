@@ -1,0 +1,137 @@
+=== logicalOrOperatorWithTypeParameters.ts ===
+function fn1<T, U>(t: T, u: U): void {
+>fn1 : <T, U>(t: T, u: U) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+    let r1 = t || t;
+>r1 : T
+>   : ^
+>t || t : T
+>       : ^
+>t : T
+>  : ^
+>t : T
+>  : ^
+
+    let r2: T = t || t;
+>r2 : T
+>   : ^
+>t || t : T
+>       : ^
+>t : T
+>  : ^
+>t : T
+>  : ^
+
+    let r3 = t || u;
+>r3 : U | NonNullable<T>
+>   : ^^^^^^^^^^^^^^^^^^
+>t || u : U | NonNullable<T>
+>       : ^^^^^^^^^^^^^^^^^^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+    let r4: {} = t || u;
+>r4 : {}
+>   : ^^
+>t || u : U | NonNullable<T>
+>       : ^^^^^^^^^^^^^^^^^^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+}
+
+function fn2<T, U/* extends T*/, V/* extends T*/>(t: T, u: U, v: V): void {
+>fn2 : <T, U, V>(t: T, u: U, v: V) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>V : V
+>  : ^
+>t : T
+>  : ^
+>u : U
+>  : ^
+>v : V
+>  : ^
+
+    let r1 = t || u;
+>r1 : U | NonNullable<T>
+>   : ^^^^^^^^^^^^^^^^^^
+>t || u : U | NonNullable<T>
+>       : ^^^^^^^^^^^^^^^^^^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+    //var r2: T = t || u;
+    let r3 = u || u;
+>r3 : U
+>   : ^
+>u || u : U
+>       : ^
+>u : U
+>  : ^
+>u : U
+>  : ^
+
+    let r4: U = u || u;
+>r4 : U
+>   : ^
+>u || u : U
+>       : ^
+>u : U
+>  : ^
+>u : U
+>  : ^
+
+    let r5 = u || v;
+>r5 : V | NonNullable<U>
+>   : ^^^^^^^^^^^^^^^^^^
+>u || v : V | NonNullable<U>
+>       : ^^^^^^^^^^^^^^^^^^
+>u : U
+>  : ^
+>v : V
+>  : ^
+
+    let r6: {} = u || v;
+>r6 : {}
+>   : ^^
+>u || v : V | NonNullable<U>
+>       : ^^^^^^^^^^^^^^^^^^
+>u : U
+>  : ^
+>v : V
+>  : ^
+
+    //var r7: T = u || v;
+}
+
+/*pruned*/;                                                                                             
+                    
+                        
+                            
+                                   
+ 
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

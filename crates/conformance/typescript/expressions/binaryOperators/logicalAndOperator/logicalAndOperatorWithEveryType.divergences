@@ -1,0 +1,217 @@
+types: 183 of 188 tsc entries compared, 50 differ
+
+line 30: rb3
+  tsc:  boolean | 0
+  ours: number | boolean
+
+line 30: a3 && a2
+  tsc:  boolean | 0
+  ours: number | boolean
+
+line 31: rb4
+  tsc:  boolean | ""
+  ours: string | boolean
+
+line 36: rb9
+  tsc:  null
+  ours: boolean | null
+
+line 36: null && a2
+  tsc:  null
+  ours: boolean | null
+
+line 37: rb10
+  tsc:  null
+  ours: boolean | null
+
+line 37: null && a2
+  tsc:  null
+  ours: boolean | null
+
+line 40: rc2
+  tsc:  number | false
+  ours: number | boolean
+
+line 40: a2 && a3
+  tsc:  number | false
+  ours: number | boolean
+
+line 42: rc4
+  tsc:  number | ""
+  ours: number | string
+
+line 47: rc9
+  tsc:  null
+  ours: number | null
+
+line 47: null && a3
+  tsc:  null
+  ours: number | null
+
+line 48: rc10
+  tsc:  null
+  ours: number | null
+
+line 48: null && a3
+  tsc:  null
+  ours: number | null
+
+line 51: rd2
+  tsc:  string | false
+  ours: string | boolean
+
+line 51: a2 && a4
+  tsc:  string | false
+  ours: string | boolean
+
+line 52: rd3
+  tsc:  string | 0
+  ours: number | string
+
+line 52: a3 && a4
+  tsc:  string | 0
+  ours: number | string
+
+line 58: rd9
+  tsc:  null
+  ours: string | null
+
+line 58: null && a4
+  tsc:  null
+  ours: string | null
+
+line 59: rd10
+  tsc:  null
+  ours: string | null
+
+line 59: null && a4
+  tsc:  null
+  ours: string | null
+
+line 84: rg2
+  tsc:  false | {}
+  ours: boolean | {}
+
+line 84: a2 && a7
+  tsc:  false | {}
+  ours: boolean | {}
+
+line 85: rg3
+  tsc:  {} | 0
+  ours: number | {}
+
+line 85: a3 && a7
+  tsc:  {} | 0
+  ours: number | {}
+
+line 86: rg4
+  tsc:  {} | ""
+  ours: string | {}
+
+line 91: rg9
+  tsc:  null
+  ours: null | {}
+
+line 91: null && a7
+  tsc:  null
+  ours: null | {}
+
+line 92: rg10
+  tsc:  null
+  ours: null | {}
+
+line 92: null && a7
+  tsc:  null
+  ours: null | {}
+
+line 95: rh2
+  tsc:  false | string[]
+  ours: boolean | string[]
+
+line 95: a2 && a8
+  tsc:  false | string[]
+  ours: boolean | string[]
+
+line 96: rh3
+  tsc:  0 | string[]
+  ours: number | string[]
+
+line 96: a3 && a8
+  tsc:  0 | string[]
+  ours: number | string[]
+
+line 97: rh4
+  tsc:  "" | string[]
+  ours: string | string[]
+
+line 102: rh9
+  tsc:  null
+  ours: null | string[]
+
+line 102: null && a8
+  tsc:  null
+  ours: null | string[]
+
+line 103: rh10
+  tsc:  null
+  ours: null | string[]
+
+line 103: null && a8
+  tsc:  null
+  ours: null | string[]
+
+line 106: ri2
+  tsc:  false | null
+  ours: boolean | null
+
+line 106: a2 && null
+  tsc:  false | null
+  ours: boolean | null
+
+line 107: ri3
+  tsc:  0 | null
+  ours: number | null
+
+line 107: a3 && null
+  tsc:  0 | null
+  ours: number | null
+
+line 108: ri4
+  tsc:  "" | null
+  ours: string | null
+
+line 117: rj2
+  tsc:  false | null
+  ours: boolean | null
+
+line 117: a2 && null
+  tsc:  false | null
+  ours: boolean | null
+
+line 118: rj3
+  tsc:  0 | null
+  ours: number | null
+
+line 118: a3 && null
+  tsc:  0 | null
+  ours: number | null
+
+line 119: rj4
+  tsc:  "" | null
+  ours: string | null
+
+errors:
+line 36: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 37: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 47: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 48: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 58: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 59: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 91: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 92: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 102: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 103: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 113: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 114: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 124: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 125: tsc TS2873: This kind of expression is always falsy. (we accept)

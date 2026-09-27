@@ -1,12 +1,4 @@
-types: 4 of 5 tsc entries compared, 4 differ
-
-line 3: v
-  tsc:  never
-  ours: <error>
-
-line 3: []
-  tsc:  never[]
-  ours: <error>[]
+types: 2 of 5 tsc entries compared, 2 differ
 
 line 4: x
   tsc:  never

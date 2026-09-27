@@ -1,0 +1,217 @@
+=== nullishCoalescingOperator5.ts ===
+
+const a: string | null = null as unknown as (string | null);
+>a : string | null
+>  : ^^^^^^^^^^^^^
+>null as unknown as (string | null) : string | null
+>                                   : ^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+const b: string | null = null as unknown as (string | null);
+>b : string | null
+>  : ^^^^^^^^^^^^^
+>null as unknown as (string | null) : string | null
+>                                   : ^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+const c: string | null = null as unknown as (string | null);
+>c : string | null
+>  : ^^^^^^^^^^^^^
+>null as unknown as (string | null) : string | null
+>                                   : ^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+// should be a syntax error
+a ?? b || c;
+>a ?? b || c : string | null
+>            : ^^^^^^^^^^^^^
+>a ?? b : string | null
+>       : ^^^^^^^^^^^^^
+>a : string | null
+>  : ^^^^^^^^^^^^^
+>b : string | null
+>  : ^^^^^^^^^^^^^
+>c : string | null
+>  : ^^^^^^^^^^^^^
+
+
+// should be a syntax error
+a || b ?? c;
+>a || b ?? c : string | null
+>            : ^^^^^^^^^^^^^
+>a || b : string | null
+>       : ^^^^^^^^^^^^^
+>a : string | null
+>  : ^^^^^^^^^^^^^
+>b : string | null
+>  : ^^^^^^^^^^^^^
+>c : string | null
+>  : ^^^^^^^^^^^^^
+
+
+// should be a syntax error
+a ?? b && c;
+>a ?? b && c : string | null
+>            : ^^^^^^^^^^^^^
+>a : string | null
+>  : ^^^^^^^^^^^^^
+>b && c : string | null
+>       : ^^^^^^^^^^^^^
+>b : string | null
+>  : ^^^^^^^^^^^^^
+>c : string | null
+>  : ^^^^^^^^^^^^^
+
+
+// should be a syntax error
+a && b ?? c;
+>a && b ?? c : string | null
+>            : ^^^^^^^^^^^^^
+>a && b : string | null
+>       : ^^^^^^^^^^^^^
+>a : string | null
+>  : ^^^^^^^^^^^^^
+>b : string | null
+>  : ^^^^^^^^^^^^^
+>c : string | null
+>  : ^^^^^^^^^^^^^
+
+
+// Valid according to spec
+a ?? (b || c);
+>a ?? (b || c) : string | null
+>              : ^^^^^^^^^^^^^
+>a : string | null
+>  : ^^^^^^^^^^^^^
+>(b || c) : string | null
+>         : ^^^^^^^^^^^^^
+>b || c : string | null
+>       : ^^^^^^^^^^^^^
+>b : string | null
+>  : ^^^^^^^^^^^^^
+>c : string | null
+>  : ^^^^^^^^^^^^^
+
+
+// Valid according to spec
+(a ?? b) || c;
+>(a ?? b) || c : string | null
+>              : ^^^^^^^^^^^^^
+>(a ?? b) : string | null
+>         : ^^^^^^^^^^^^^
+>a ?? b : string | null
+>       : ^^^^^^^^^^^^^
+>a : string | null
+>  : ^^^^^^^^^^^^^
+>b : string | null
+>  : ^^^^^^^^^^^^^
+>c : string | null
+>  : ^^^^^^^^^^^^^
+
+
+// Valid according to spec
+(a || b) ?? c;
+>(a || b) ?? c : string | null
+>              : ^^^^^^^^^^^^^
+>(a || b) : string | null
+>         : ^^^^^^^^^^^^^
+>a || b : string | null
+>       : ^^^^^^^^^^^^^
+>a : string | null
+>  : ^^^^^^^^^^^^^
+>b : string | null
+>  : ^^^^^^^^^^^^^
+>c : string | null
+>  : ^^^^^^^^^^^^^
+
+
+// Valid according to spec
+a || (b ?? c);
+>a || (b ?? c) : string | null
+>              : ^^^^^^^^^^^^^
+>a : string | null
+>  : ^^^^^^^^^^^^^
+>(b ?? c) : string | null
+>         : ^^^^^^^^^^^^^
+>b ?? c : string | null
+>       : ^^^^^^^^^^^^^
+>b : string | null
+>  : ^^^^^^^^^^^^^
+>c : string | null
+>  : ^^^^^^^^^^^^^
+
+
+// Valid according to spec
+a ?? (b && c);
+>a ?? (b && c) : string | null
+>              : ^^^^^^^^^^^^^
+>a : string | null
+>  : ^^^^^^^^^^^^^
+>(b && c) : string | null
+>         : ^^^^^^^^^^^^^
+>b && c : string | null
+>       : ^^^^^^^^^^^^^
+>b : string | null
+>  : ^^^^^^^^^^^^^
+>c : string | null
+>  : ^^^^^^^^^^^^^
+
+
+// Valid according to spec
+(a ?? b) && c;
+>(a ?? b) && c : string | null
+>              : ^^^^^^^^^^^^^
+>(a ?? b) : string | null
+>         : ^^^^^^^^^^^^^
+>a ?? b : string | null
+>       : ^^^^^^^^^^^^^
+>a : string | null
+>  : ^^^^^^^^^^^^^
+>b : string | null
+>  : ^^^^^^^^^^^^^
+>c : string | null
+>  : ^^^^^^^^^^^^^
+
+
+// Valid according to spec
+(a && b) ?? c;
+>(a && b) ?? c : string | null
+>              : ^^^^^^^^^^^^^
+>(a && b) : string | null
+>         : ^^^^^^^^^^^^^
+>a && b : string | null
+>       : ^^^^^^^^^^^^^
+>a : string | null
+>  : ^^^^^^^^^^^^^
+>b : string | null
+>  : ^^^^^^^^^^^^^
+>c : string | null
+>  : ^^^^^^^^^^^^^
+
+
+// Valid according to spec
+a && (b ?? c);
+>a && (b ?? c) : string | null
+>              : ^^^^^^^^^^^^^
+>a : string | null
+>  : ^^^^^^^^^^^^^
+>(b ?? c) : string | null
+>         : ^^^^^^^^^^^^^
+>b ?? c : string | null
+>       : ^^^^^^^^^^^^^
+>b : string | null
+>  : ^^^^^^^^^^^^^
+>c : string | null
+>  : ^^^^^^^^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

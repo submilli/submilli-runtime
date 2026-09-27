@@ -1,0 +1,125 @@
+=== typeGuardOfFormTypeOfEqualEqualHasNoEffect.ts ===
+class C { private p: string };
+>C : C
+>  : ^
+>p : string
+>  : ^^^^^^
+
+
+let strOrNum: string | number = null as unknown as (string | number);
+>strOrNum : string | number
+>         : ^^^^^^^^^^^^^^^
+>null as unknown as (string | number) : string | number
+>                                     : ^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let strOrBool: string | boolean = null as unknown as (string | boolean);
+>strOrBool : string | boolean
+>          : ^^^^^^^^^^^^^^^^
+>null as unknown as (string | boolean) : string | boolean
+>                                      : ^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let numOrBool: number | boolean = null as unknown as (number | boolean);
+>numOrBool : number | boolean
+>          : ^^^^^^^^^^^^^^^^
+>null as unknown as (number | boolean) : number | boolean
+>                                      : ^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;                                              
+
+// typeof x == s has not effect on typeguard
+if (typeof strOrNum == "string") {
+>typeof strOrNum == "string" : boolean
+>                            : ^^^^^^^
+>typeof strOrNum : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>strOrNum : string | number
+>         : ^^^^^^^^^^^^^^^
+>"string" : "string"
+>         : ^^^^^^^^
+
+    let r1 = strOrNum; // string | number
+>r1 : string
+>   : ^^^^^^
+>strOrNum : string
+>         : ^^^^^^
+
+}
+else {
+    let r1 = strOrNum; // string | number
+>r1 : number
+>   : ^^^^^^
+>strOrNum : number
+>         : ^^^^^^
+
+}
+
+if (typeof strOrBool == "boolean") {
+>typeof strOrBool == "boolean" : boolean
+>                              : ^^^^^^^
+>typeof strOrBool : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>strOrBool : string | boolean
+>          : ^^^^^^^^^^^^^^^^
+>"boolean" : "boolean"
+>          : ^^^^^^^^^
+
+    let r2 = strOrBool; // string | boolean
+>r2 : boolean
+>   : ^^^^^^^
+>strOrBool : boolean
+>          : ^^^^^^^
+
+}
+else {
+    let r2 = strOrBool; // string | boolean
+>r2 : string
+>   : ^^^^^^
+>strOrBool : string
+>          : ^^^^^^
+
+}
+
+if (typeof numOrBool == "number") {
+>typeof numOrBool == "number" : boolean
+>                             : ^^^^^^^
+>typeof numOrBool : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>numOrBool : number | boolean
+>          : ^^^^^^^^^^^^^^^^
+>"number" : "number"
+>         : ^^^^^^^^
+
+    let r3 = numOrBool; // number | boolean
+>r3 : number
+>   : ^^^^^^
+>numOrBool : number
+>          : ^^^^^^
+
+}
+else {
+    let r3 =  numOrBool; // number | boolean
+>r3 : boolean
+>   : ^^^^^^^
+>numOrBool : boolean
+>          : ^^^^^^^
+
+}
+
+/*pruned*/;                     
+                                  
+ 
+      
+                                  
+ 
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

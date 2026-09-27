@@ -1,0 +1,28 @@
+types: 19 of 34 tsc entries compared, 6 differ
+
+line 6: ["Hello", "Brave", "New", "World"]
+  tsc:  [string, string, string, string]
+  ours: string[]
+
+line 9: im
+  tsc:  "I'm"
+  ours: string
+
+line 9: a
+  tsc:  "a"
+  ours: string
+
+line 9: ['I\'m', 'a', 't-rex']
+  tsc:  ["I'm", "a", "t-rex"]
+  ours: ["I'm", "a", RexOrRaptor]
+
+line 11: dinosaur
+  tsc:  "t-rex"
+  ours: RexOrRaptor
+
+line 21: dino
+  tsc:  never
+  ours: "raptor"
+
+errors:
+line 21: ours: expected `Error`, got `string` (tsc accepts)

@@ -1,0 +1,8 @@
+stringNamedPropertyDuplicates.ts(4,5): error TS2300: Duplicate identifier '"a b"'.
+stringNamedPropertyDuplicates.ts(6,12): error TS2300: Duplicate identifier '"c d"'.
+stringNamedPropertyDuplicates.ts(10,5): error TS2300: Duplicate identifier 'a b'.
+stringNamedPropertyDuplicates.ts(11,5): error TS2300: Duplicate identifier 'a b'.
+stringNamedPropertyDuplicates.ts(15,5): error TS2300: Duplicate identifier 'a b'.
+stringNamedPropertyDuplicates.ts(16,5): error TS2300: Duplicate identifier 'a b'.
+stringNamedPropertyDuplicates.ts(18,5): error TS2300: Duplicate identifier 'a b'.
+stringNamedPropertyDuplicates.ts(19,5): error TS2300: Duplicate identifier 'a b'.

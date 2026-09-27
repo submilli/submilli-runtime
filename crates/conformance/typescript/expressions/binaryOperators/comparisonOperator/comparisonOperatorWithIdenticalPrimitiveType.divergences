@@ -1,0 +1,7 @@
+types: 137 of 142 tsc entries compared, 0 differ
+
+errors:
+line 12: ours: `<` not defined for `boolean` and `boolean` (tsc accepts)
+line 21: ours: `>` not defined for `boolean` and `boolean` (tsc accepts)
+line 30: ours: `<=` not defined for `boolean` and `boolean` (tsc accepts)
+line 39: ours: `>=` not defined for `boolean` and `boolean` (tsc accepts)

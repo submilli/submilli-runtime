@@ -1,0 +1,106 @@
+=== logicalNotOperatorWithEnumType.ts ===
+// ! operator on enum type
+
+enum ENUM { A, B, C };
+>ENUM : ENUM
+>     : ^^^^
+>A : ENUM.A
+>  : ^^^^^^
+>B : ENUM.B
+>  : ^^^^^^
+>C : ENUM.C
+>  : ^^^^^^
+
+enum ENUM1 { };
+>ENUM1 : ENUM1
+>      : ^^^^^
+
+
+// enum type var
+/*pruned*/;                  
+
+// enum type expressions
+let ResultIsBoolean2 = !ENUM["B"];
+>ResultIsBoolean2 : boolean
+>                 : ^^^^^^^
+>!ENUM["B"] : false
+>           : ^^^^^
+>ENUM["B"] : ENUM.B
+>          : ^^^^^^
+>ENUM : typeof ENUM
+>     : ^^^^^^^^^^^
+>"B" : "B"
+>    : ^^^
+
+let ResultIsBoolean3 = !(ENUM.B + ENUM["C"]);
+>ResultIsBoolean3 : boolean
+>                 : ^^^^^^^
+>!(ENUM.B + ENUM["C"]) : boolean
+>                      : ^^^^^^^
+>(ENUM.B + ENUM["C"]) : number
+>                     : ^^^^^^
+>ENUM.B + ENUM["C"] : number
+>                   : ^^^^^^
+>ENUM.B : ENUM.B
+>       : ^^^^^^
+>ENUM : typeof ENUM
+>     : ^^^^^^^^^^^
+>B : ENUM.B
+>  : ^^^^^^
+>ENUM["C"] : ENUM.C
+>          : ^^^^^^
+>ENUM : typeof ENUM
+>     : ^^^^^^^^^^^
+>"C" : "C"
+>    : ^^^
+
+
+// multiple ! operators
+/*pruned*/;                   
+let ResultIsBoolean5 = !!!(ENUM["B"] + ENUM.C);
+>ResultIsBoolean5 : boolean
+>                 : ^^^^^^^
+>!!!(ENUM["B"] + ENUM.C) : boolean
+>                        : ^^^^^^^
+>!!(ENUM["B"] + ENUM.C) : boolean
+>                       : ^^^^^^^
+>!(ENUM["B"] + ENUM.C) : boolean
+>                      : ^^^^^^^
+>(ENUM["B"] + ENUM.C) : number
+>                     : ^^^^^^
+>ENUM["B"] + ENUM.C : number
+>                   : ^^^^^^
+>ENUM["B"] : ENUM.B
+>          : ^^^^^^
+>ENUM : typeof ENUM
+>     : ^^^^^^^^^^^
+>"B" : "B"
+>    : ^^^
+>ENUM.C : ENUM.C
+>       : ^^^^^^
+>ENUM : typeof ENUM
+>     : ^^^^^^^^^^^
+>C : ENUM.C
+>  : ^^^^^^
+
+
+// miss assignment operators
+/**/; 
+/**/;  
+!ENUM.B;
+>!ENUM.B : false
+>        : ^^^^^
+>ENUM.B : ENUM.B
+>       : ^^^^^^
+>ENUM : typeof ENUM
+>     : ^^^^^^^^^^^
+>B : ENUM.B
+>  : ^^^^^^
+
+/*pruned*/;  
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

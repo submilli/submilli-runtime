@@ -1,0 +1,4 @@
+conditionalOperatorConditionIsNumberType.ts(28,1): error TS2872: This kind of expression is always truthy.
+conditionalOperatorConditionIsNumberType.ts(31,1): error TS2872: This kind of expression is always truthy.
+conditionalOperatorConditionIsNumberType.ts(54,23): error TS2872: This kind of expression is always truthy.
+conditionalOperatorConditionIsNumberType.ts(57,32): error TS2872: This kind of expression is always truthy.

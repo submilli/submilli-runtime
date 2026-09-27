@@ -1,0 +1,117 @@
+=== assignmentCompatBetweenTupleAndArray.ts ===
+let numStrTuple: [number, string] = null as unknown as ([number, string]);
+>numStrTuple : [number, string]
+>            : ^^^^^^^^^^^^^^^^
+>null as unknown as ([number, string]) : [number, string]
+>                                      : ^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let numNumTuple: [number, number] = null as unknown as ([number, number]);
+>numNumTuple : [number, number]
+>            : ^^^^^^^^^^^^^^^^
+>null as unknown as ([number, number]) : [number, number]
+>                                      : ^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let numEmptyObjTuple: [number, {}] = null as unknown as ([number, {}]);
+>numEmptyObjTuple : [number, {}]
+>                 : ^^^^^^^^^^^^
+>null as unknown as ([number, {}]) : [number, {}]
+>                                  : ^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let emptyObjTuple: [{}] = null as unknown as ([{}]);
+>emptyObjTuple : [{}]
+>              : ^^^^
+>null as unknown as ([{}]) : [{}]
+>                          : ^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+let numArray: number[] = null as unknown as (number[]);
+>numArray : number[]
+>         : ^^^^^^^^
+>null as unknown as (number[]) : number[]
+>                              : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let emptyObjArray: {}[] = null as unknown as ({}[]);
+>emptyObjArray : {}[]
+>              : ^^^^
+>null as unknown as ({}[]) : {}[]
+>                          : ^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+// no error
+numArray = numNumTuple;
+>numArray = numNumTuple : [number, number]
+>                       : ^^^^^^^^^^^^^^^^
+>numArray : number[]
+>         : ^^^^^^^^
+>numNumTuple : [number, number]
+>            : ^^^^^^^^^^^^^^^^
+
+emptyObjArray = emptyObjTuple;
+>emptyObjArray = emptyObjTuple : [{}]
+>                              : ^^^^
+>emptyObjArray : {}[]
+>              : ^^^^
+>emptyObjTuple : [{}]
+>              : ^^^^
+
+emptyObjArray = numStrTuple;
+>emptyObjArray = numStrTuple : [number, string]
+>                            : ^^^^^^^^^^^^^^^^
+>emptyObjArray : {}[]
+>              : ^^^^
+>numStrTuple : [number, string]
+>            : ^^^^^^^^^^^^^^^^
+
+emptyObjArray = numNumTuple;
+>emptyObjArray = numNumTuple : [number, number]
+>                            : ^^^^^^^^^^^^^^^^
+>emptyObjArray : {}[]
+>              : ^^^^
+>numNumTuple : [number, number]
+>            : ^^^^^^^^^^^^^^^^
+
+emptyObjArray = numEmptyObjTuple;
+>emptyObjArray = numEmptyObjTuple : [number, {}]
+>                                 : ^^^^^^^^^^^^
+>emptyObjArray : {}[]
+>              : ^^^^
+>numEmptyObjTuple : [number, {}]
+>                 : ^^^^^^^^^^^^
+
+
+// error
+numArray = numStrTuple;
+>numArray = numStrTuple : [number, string]
+>                       : ^^^^^^^^^^^^^^^^
+>numArray : number[]
+>         : ^^^^^^^^
+>numStrTuple : [number, string]
+>            : ^^^^^^^^^^^^^^^^
+
+emptyObjTuple = emptyObjArray;
+>emptyObjTuple = emptyObjArray : {}[]
+>                              : ^^^^
+>emptyObjTuple : [{}]
+>              : ^^^^
+>emptyObjArray : {}[]
+>              : ^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -1,0 +1,1 @@
+typeAssertionsWithUnionTypes01.ts(16,9): error TS2352: Conversion of type 'I1' to type 'number' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.

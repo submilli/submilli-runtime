@@ -1,0 +1,5 @@
+unknownControlFlow.ts(22,9): error TS2322: Type 'unknown' is not assignable to type '{}'.
+unknownControlFlow.ts(23,9): error TS2322: Type 'unknown' is not assignable to type '{} | null'.
+unknownControlFlow.ts(24,9): error TS2322: Type 'unknown' is not assignable to type '{} | { x: string; } | null'.
+unknownControlFlow.ts(25,9): error TS2322: Type 'unknown' is not assignable to type 'ThisOrThatNode | null'.
+unknownControlFlow.ts(294,11): error TS2345: Argument of type '"foo"' is not assignable to parameter of type 'never'.

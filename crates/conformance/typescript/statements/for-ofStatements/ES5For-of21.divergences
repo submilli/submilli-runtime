@@ -1,20 +1,4 @@
-types: 4 of 5 tsc entries compared, 4 differ
-
-line 3: v
-  tsc:  never
-  ours: <error>
-
-line 3: []
-  tsc:  never[]
-  ours: <error>[]
-
-line 4: _i
-  tsc:  never
-  ours: <error>
-
-line 4: []
-  tsc:  never[]
-  ours: <error>[]
+types: 0 of 5 tsc entries compared, 0 differ
 
 errors:
 line 3: ours: cannot infer element type of empty array; add a `: T[]` annotation (tsc accepts)

@@ -1,0 +1,17 @@
+types: 35 of 65 tsc entries compared, 4 differ
+
+line 11: x
+  tsc:  Function
+  ours: unknown
+
+line 17: x
+  tsc:  Function
+  ours: {}
+
+line 23: x
+  tsc:  T & Function
+  ours: T
+
+line 29: x
+  tsc:  never
+  ours: { s: string }

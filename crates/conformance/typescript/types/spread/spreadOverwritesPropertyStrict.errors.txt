@@ -1,0 +1,4 @@
+spreadOverwritesPropertyStrict.ts(5,17): error TS2783: 'b' is specified more than once, so this usage will be overwritten.
+spreadOverwritesPropertyStrict.ts(11,14): error TS2783: 'x' is specified more than once, so this usage will be overwritten.
+spreadOverwritesPropertyStrict.ts(17,14): error TS2783: 'x' is specified more than once, so this usage will be overwritten.
+spreadOverwritesPropertyStrict.ts(26,14): error TS2783: 'command' is specified more than once, so this usage will be overwritten.

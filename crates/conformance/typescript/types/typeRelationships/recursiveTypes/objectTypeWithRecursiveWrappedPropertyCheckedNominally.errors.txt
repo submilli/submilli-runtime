@@ -1,0 +1,6 @@
+objectTypeWithRecursiveWrappedPropertyCheckedNominally.ts(5,5): error TS2564: Property 'data' has no initializer and is not definitely assigned in the constructor.
+objectTypeWithRecursiveWrappedPropertyCheckedNominally.ts(6,5): error TS2564: Property 'next' has no initializer and is not definitely assigned in the constructor.
+objectTypeWithRecursiveWrappedPropertyCheckedNominally.ts(10,5): error TS2564: Property 'data' has no initializer and is not definitely assigned in the constructor.
+objectTypeWithRecursiveWrappedPropertyCheckedNominally.ts(11,5): error TS2564: Property 'next' has no initializer and is not definitely assigned in the constructor.
+objectTypeWithRecursiveWrappedPropertyCheckedNominally.ts(21,1): error TS2322: Type 'MyList<string>' is not assignable to type 'List<number>'.   Types of property 'data' are incompatible.     Type 'string' is not assignable to type 'number'.
+objectTypeWithRecursiveWrappedPropertyCheckedNominally.ts(23,1): error TS2322: Type 'MyList<number>' is not assignable to type 'List<string>'.   Types of property 'data' are incompatible.     Type 'number' is not assignable to type 'string'.

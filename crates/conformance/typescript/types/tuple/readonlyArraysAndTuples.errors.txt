@@ -1,0 +1,11 @@
+readonlyArraysAndTuples.ts(13,12): error TS1354: 'readonly' type modifier is only permitted on array and tuple literal types.
+readonlyArraysAndTuples.ts(14,15): error TS1354: 'readonly' type modifier is only permitted on array and tuple literal types.
+readonlyArraysAndTuples.ts(15,12): error TS1354: 'readonly' type modifier is only permitted on array and tuple literal types.
+readonlyArraysAndTuples.ts(16,12): error TS1354: 'readonly' type modifier is only permitted on array and tuple literal types.
+readonlyArraysAndTuples.ts(19,5): error TS4104: The type 'readonly string[]' is 'readonly' and cannot be assigned to the mutable type 'string[]'.
+readonlyArraysAndTuples.ts(21,5): error TS4104: The type 'readonly [string, string]' is 'readonly' and cannot be assigned to the mutable type 'string[]'.
+readonlyArraysAndTuples.ts(25,5): error TS2322: Type 'string[]' is not assignable to type '[string, string]'.   Target requires 2 element(s) but source may have fewer.
+readonlyArraysAndTuples.ts(26,5): error TS4104: The type 'readonly string[]' is 'readonly' and cannot be assigned to the mutable type '[string, string]'.
+readonlyArraysAndTuples.ts(27,5): error TS4104: The type 'readonly [string, string]' is 'readonly' and cannot be assigned to the mutable type '[string, string]'.
+readonlyArraysAndTuples.ts(28,5): error TS2322: Type 'string[]' is not assignable to type 'readonly [string, string]'.   Target requires 2 element(s) but source may have fewer.
+readonlyArraysAndTuples.ts(29,5): error TS2322: Type 'readonly string[]' is not assignable to type 'readonly [string, string]'.   Target requires 2 element(s) but source may have fewer.

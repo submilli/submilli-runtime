@@ -1,0 +1,63 @@
+=== stringLiteralTypesOverloadAssignability04.ts ===
+
+/*pruned*/;                  
+function f(x: "foo"): number {
+>f : (x: "foo") => number
+>  : ^^^^^^^^^^^^^^^^^^^^
+>x : "foo"
+>  : ^^^^^
+
+    return 0;
+>0 : 0
+>  : ^
+
+}
+
+/*pruned*/;                  
+function g(x: "foo"): number {
+>g : (x: "foo") => number
+>  : ^^^^^^^^^^^^^^^^^^^^
+>x : "foo"
+>  : ^^^^^
+
+    return 0;
+>0 : 0
+>  : ^
+
+}
+
+let a = f;
+>a : (x: "foo") => number
+>  : ^^^^^^^^^^^^^^^^^^^^
+>f : (x: "foo") => number
+>  : ^^^^^^^^^^^^^^^^^^^^
+
+let b = g;
+>b : (x: "foo") => number
+>  : ^^^^^^^^^^^^^^^^^^^^
+>g : (x: "foo") => number
+>  : ^^^^^^^^^^^^^^^^^^^^
+
+
+a = b;
+>a = b : (x: "foo") => number
+>      : ^^^^^^^^^^^^^^^^^^^^
+>a : (x: "foo") => number
+>  : ^^^^^^^^^^^^^^^^^^^^
+>b : (x: "foo") => number
+>  : ^^^^^^^^^^^^^^^^^^^^
+
+b = a;
+>b = a : (x: "foo") => number
+>      : ^^^^^^^^^^^^^^^^^^^^
+>b : (x: "foo") => number
+>  : ^^^^^^^^^^^^^^^^^^^^
+>a : (x: "foo") => number
+>  : ^^^^^^^^^^^^^^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

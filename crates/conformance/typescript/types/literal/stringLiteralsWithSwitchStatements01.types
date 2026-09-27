@@ -1,0 +1,49 @@
+=== stringLiteralsWithSwitchStatements01.ts ===
+let x: "foo" = null as unknown as ("foo");
+>x : "foo"
+>  : ^^^^^
+>null as unknown as ("foo") : "foo"
+>                           : ^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let y: "foo" | "bar" = null as unknown as ("foo" | "bar");
+>y : "foo" | "bar"
+>  : ^^^^^^^^^^^^^
+>null as unknown as ("foo" | "bar") : "foo" | "bar"
+>                                   : ^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+switch (x) {
+>x : "foo"
+>  : ^^^^^
+
+    case "foo":
+>"foo" : "foo"
+>      : ^^^^^
+
+        break;
+    case "bar":
+>"bar" : "bar"
+>      : ^^^^^
+
+        break;
+    case y:
+>y : "foo" | "bar"
+>  : ^^^^^^^^^^^^^
+
+        y;
+>y : "foo" | "bar"
+>  : ^^^^^^^^^^^^^
+
+        break;
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

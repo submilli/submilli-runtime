@@ -1,0 +1,565 @@
+=== logicalOrOperatorWithEveryType.ts ===
+// The || operator permits the operands to be of any type.
+// If the || expression is not contextually typed, the right operand is contextually typed
+// by the type of the left operand and the result is of the best common type of the two
+// operand types.
+
+enum E { a, b, c }
+>E : E
+>  : ^
+>a : E.a
+>  : ^^^
+>b : E.b
+>  : ^^^
+>c : E.c
+>  : ^^^
+
+
+/*pruned*/;                            
+let a2: boolean = null as unknown as (boolean);
+>a2 : boolean
+>   : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let a3: number = null as unknown as (number);
+>a3 : number
+>   : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let a4: string = null as unknown as (string);
+>a4 : string
+>   : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;                              
+/*pruned*/;                        
+let a7: {a: string} = null as unknown as ({a: string});
+>a7 : { a: string; }
+>   : ^^^^^^^^^^^^^^
+>a : string
+>  : ^^^^^^
+>null as unknown as ({a: string}) : { a: string; }
+>                                 : ^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>a : string
+>  : ^^^^^^
+
+let a8: string[] = null as unknown as (string[]);
+>a8 : string[]
+>   : ^^^^^^^^
+>null as unknown as (string[]) : string[]
+>                              : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+/*pruned*/;                 // any       || any is any
+/*pruned*/;                 // boolean   || any is any
+/*pruned*/;                 // number    || any is any
+/*pruned*/;                 // string    || any is any
+/*pruned*/;                 // void      || any is any
+/*pruned*/;                 // enum      || any is any
+/*pruned*/;                 // object    || any is any
+/*pruned*/;                 // array     || any is any
+/*pruned*/;                 // null      || any is any
+/*pruned*/;            // undefined || any is any
+
+/*pruned*/;                 // any       || boolean is any
+let rb2 = a2 || a2;         // boolean   || boolean is boolean
+>rb2 : boolean
+>    : ^^^^^^^
+>a2 || a2 : boolean
+>         : ^^^^^^^
+>a2 : boolean
+>   : ^^^^^^^
+>a2 : false
+>   : ^^^^^
+
+let rb3 = a3 || a2;         // number    || boolean is number | boolean
+>rb3 : number | boolean
+>    : ^^^^^^^^^^^^^^^^
+>a3 || a2 : number | boolean
+>         : ^^^^^^^^^^^^^^^^
+>a3 : number
+>   : ^^^^^^
+>a2 : boolean
+>   : ^^^^^^^
+
+let rb4 = a4 || a2;         // string    || boolean is string | boolean
+>rb4 : string | boolean
+>    : ^^^^^^^^^^^^^^^^
+>a4 || a2 : string | boolean
+>         : ^^^^^^^^^^^^^^^^
+>a4 : string
+>   : ^^^^^^
+>a2 : boolean
+>   : ^^^^^^^
+
+/*pruned*/;                 // void      || boolean is void | boolean
+/*pruned*/;                 // enum      || boolean is E | boolean
+let rb7 = a7 || a2;         // object    || boolean is object | boolean
+>rb7 : { a: string; }
+>    : ^^^^^^^^^^^^^^
+>a7 || a2 : { a: string; }
+>         : ^^^^^^^^^^^^^^
+>a7 : { a: string; }
+>   : ^^^^^^^^^^^^^^
+>a2 : boolean
+>   : ^^^^^^^
+
+let rb8 = a8 || a2;         // array     || boolean is array | boolean
+>rb8 : string[]
+>    : ^^^^^^^^
+>a8 || a2 : string[]
+>         : ^^^^^^^^
+>a8 : string[]
+>   : ^^^^^^^^
+>a2 : boolean
+>   : ^^^^^^^
+
+let rb9 = null || a2;       // null      || boolean is boolean
+>rb9 : boolean
+>    : ^^^^^^^
+>null || a2 : boolean
+>           : ^^^^^^^
+>a2 : boolean
+>   : ^^^^^^^
+
+let rb10= null || a2;  // undefined || boolean is boolean
+>rb10 : boolean
+>     : ^^^^^^^
+>null || a2 : boolean
+>           : ^^^^^^^
+>a2 : boolean
+>   : ^^^^^^^
+
+
+/*pruned*/;                 // any       || number is any
+let rc2 = a2 || a3;         // boolean   || number is boolean | number
+>rc2 : number | true
+>    : ^^^^^^^^^^^^^
+>a2 || a3 : number | true
+>         : ^^^^^^^^^^^^^
+>a2 : boolean
+>   : ^^^^^^^
+>a3 : number
+>   : ^^^^^^
+
+let rc3 = a3 || a3;         // number    || number is number
+>rc3 : number
+>    : ^^^^^^
+>a3 || a3 : number
+>         : ^^^^^^
+>a3 : number
+>   : ^^^^^^
+>a3 : number
+>   : ^^^^^^
+
+let rc4 = a4 || a3;         // string    || number is string | number
+>rc4 : string | number
+>    : ^^^^^^^^^^^^^^^
+>a4 || a3 : string | number
+>         : ^^^^^^^^^^^^^^^
+>a4 : string
+>   : ^^^^^^
+>a3 : number
+>   : ^^^^^^
+
+/*pruned*/;                 // void      || number is void | number
+/*pruned*/;                 // enum      || number is number
+let rc7 = a7 || a3;         // object    || number is object | number
+>rc7 : { a: string; }
+>    : ^^^^^^^^^^^^^^
+>a7 || a3 : { a: string; }
+>         : ^^^^^^^^^^^^^^
+>a7 : { a: string; }
+>   : ^^^^^^^^^^^^^^
+>a3 : number
+>   : ^^^^^^
+
+let rc8 = a8 || a3;         // array     || number is array | number
+>rc8 : string[]
+>    : ^^^^^^^^
+>a8 || a3 : string[]
+>         : ^^^^^^^^
+>a8 : string[]
+>   : ^^^^^^^^
+>a3 : number
+>   : ^^^^^^
+
+let rc9 = null || a3;       // null      || number is number
+>rc9 : number
+>    : ^^^^^^
+>null || a3 : number
+>           : ^^^^^^
+>a3 : number
+>   : ^^^^^^
+
+let rc10 = null || a3; // undefined || number is number
+>rc10 : number
+>     : ^^^^^^
+>null || a3 : number
+>           : ^^^^^^
+>a3 : number
+>   : ^^^^^^
+
+
+/*pruned*/;                 // any       || string is any
+let rd2 = a2 || a4;         // boolean   || string is boolean | string
+>rd2 : string | true
+>    : ^^^^^^^^^^^^^
+>a2 || a4 : string | true
+>         : ^^^^^^^^^^^^^
+>a2 : boolean
+>   : ^^^^^^^
+>a4 : string
+>   : ^^^^^^
+
+let rd3 = a3 || a4;         // number    || string is number | string
+>rd3 : string | number
+>    : ^^^^^^^^^^^^^^^
+>a3 || a4 : string | number
+>         : ^^^^^^^^^^^^^^^
+>a3 : number
+>   : ^^^^^^
+>a4 : string
+>   : ^^^^^^
+
+let rd4 = a4 || a4;         // string    || string is string
+>rd4 : string
+>    : ^^^^^^
+>a4 || a4 : string
+>         : ^^^^^^
+>a4 : string
+>   : ^^^^^^
+>a4 : string
+>   : ^^^^^^
+
+/*pruned*/;                 // void      || string is void | string
+/*pruned*/;                 // enum      || string is enum | string
+let rd7 = a7 || a4;         // object    || string is object | string
+>rd7 : { a: string; }
+>    : ^^^^^^^^^^^^^^
+>a7 || a4 : { a: string; }
+>         : ^^^^^^^^^^^^^^
+>a7 : { a: string; }
+>   : ^^^^^^^^^^^^^^
+>a4 : string
+>   : ^^^^^^
+
+let rd8 = a8 || a4;         // array     || string is array | string
+>rd8 : string[]
+>    : ^^^^^^^^
+>a8 || a4 : string[]
+>         : ^^^^^^^^
+>a8 : string[]
+>   : ^^^^^^^^
+>a4 : string
+>   : ^^^^^^
+
+let rd9 = null || a4;       // null      || string is string
+>rd9 : string
+>    : ^^^^^^
+>null || a4 : string
+>           : ^^^^^^
+>a4 : string
+>   : ^^^^^^
+
+let rd10 = null || a4; // undefined || string is string
+>rd10 : string
+>     : ^^^^^^
+>null || a4 : string
+>           : ^^^^^^
+>a4 : string
+>   : ^^^^^^
+
+
+/*pruned*/;                 // any       || void is any
+/*pruned*/;                 // boolean   || void is boolean | void
+/*pruned*/;                 // number    || void is number | void
+/*pruned*/;                 // string    || void is string | void
+/*pruned*/;                 // void      || void is void
+/*pruned*/;                 // enum      || void is enum | void
+/*pruned*/;                 // object    || void is object | void
+/*pruned*/;                 // array     || void is array | void
+/*pruned*/;                 // null      || void is void
+/*pruned*/;            // undefined || void is void
+
+/*pruned*/;                 // any       || enum is any
+/*pruned*/;                 // boolean   || enum is boolean | enum
+/*pruned*/;                 // number    || enum is number
+/*pruned*/;                 // string    || enum is string | enum
+/*pruned*/;                 // void      || enum is void | enum
+/*pruned*/;                 // enum      || enum is E
+/*pruned*/;                 // object    || enum is object | enum
+/*pruned*/;                 // array     || enum is array | enum
+/*pruned*/;                 // null      || enum is E
+/*pruned*/;            // undefined || enum is E
+
+/*pruned*/;                 // any       || object is any
+let rh2 = a2 || a7;         // boolean   || object is boolean | object
+>rh2 : true | { a: string; }
+>    : ^^^^^^^^^^^^^^^^^^^^^
+>a2 || a7 : true | { a: string; }
+>         : ^^^^^^^^^^^^^^^^^^^^^
+>a2 : boolean
+>   : ^^^^^^^
+>a7 : { a: string; }
+>   : ^^^^^^^^^^^^^^
+
+let rh3 = a3 || a7;         // number    || object is number | object
+>rh3 : number | { a: string; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^
+>a3 || a7 : number | { a: string; }
+>         : ^^^^^^^^^^^^^^^^^^^^^^^
+>a3 : number
+>   : ^^^^^^
+>a7 : { a: string; }
+>   : ^^^^^^^^^^^^^^
+
+let rh4 = a4 || a7;         // string    || object is string | object
+>rh4 : string | { a: string; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^
+>a4 || a7 : string | { a: string; }
+>         : ^^^^^^^^^^^^^^^^^^^^^^^
+>a4 : string
+>   : ^^^^^^
+>a7 : { a: string; }
+>   : ^^^^^^^^^^^^^^
+
+/*pruned*/;                 // void      || object is void | object
+/*pruned*/;                 // enum      || object is enum | object
+let rh7 = a7 || a7;         // object    || object is object
+>rh7 : { a: string; }
+>    : ^^^^^^^^^^^^^^
+>a7 || a7 : { a: string; }
+>         : ^^^^^^^^^^^^^^
+>a7 : { a: string; }
+>   : ^^^^^^^^^^^^^^
+>a7 : never
+>   : ^^^^^
+
+let rh8 = a8 || a7;         // array     || object is array | object
+>rh8 : string[]
+>    : ^^^^^^^^
+>a8 || a7 : string[]
+>         : ^^^^^^^^
+>a8 : string[]
+>   : ^^^^^^^^
+>a7 : { a: string; }
+>   : ^^^^^^^^^^^^^^
+
+let rh9 = null || a7;       // null      || object is object
+>rh9 : { a: string; }
+>    : ^^^^^^^^^^^^^^
+>null || a7 : { a: string; }
+>           : ^^^^^^^^^^^^^^
+>a7 : { a: string; }
+>   : ^^^^^^^^^^^^^^
+
+let rh10 = null || a7; // undefined || object is object
+>rh10 : { a: string; }
+>     : ^^^^^^^^^^^^^^
+>null || a7 : { a: string; }
+>           : ^^^^^^^^^^^^^^
+>a7 : { a: string; }
+>   : ^^^^^^^^^^^^^^
+
+
+/*pruned*/;                 // any       || array is any
+let ri2 = a2 || a8;         // boolean   || array is boolean | array
+>ri2 : true | string[]
+>    : ^^^^^^^^^^^^^^^
+>a2 || a8 : true | string[]
+>         : ^^^^^^^^^^^^^^^
+>a2 : boolean
+>   : ^^^^^^^
+>a8 : string[]
+>   : ^^^^^^^^
+
+let ri3 = a3 || a8;         // number    || array is number | array
+>ri3 : number | string[]
+>    : ^^^^^^^^^^^^^^^^^
+>a3 || a8 : number | string[]
+>         : ^^^^^^^^^^^^^^^^^
+>a3 : number
+>   : ^^^^^^
+>a8 : string[]
+>   : ^^^^^^^^
+
+let ri4 = a4 || a8;         // string    || array is string | array
+>ri4 : string | string[]
+>    : ^^^^^^^^^^^^^^^^^
+>a4 || a8 : string | string[]
+>         : ^^^^^^^^^^^^^^^^^
+>a4 : string
+>   : ^^^^^^
+>a8 : string[]
+>   : ^^^^^^^^
+
+/*pruned*/;                 // void      || array is void | array
+/*pruned*/;                 // enum      || array is enum | array
+let ri7 = a7 || a8;         // object    || array is object | array
+>ri7 : { a: string; }
+>    : ^^^^^^^^^^^^^^
+>a7 || a8 : { a: string; }
+>         : ^^^^^^^^^^^^^^
+>a7 : { a: string; }
+>   : ^^^^^^^^^^^^^^
+>a8 : string[]
+>   : ^^^^^^^^
+
+let ri8 = a8 || a8;         // array     || array is array
+>ri8 : string[]
+>    : ^^^^^^^^
+>a8 || a8 : string[]
+>         : ^^^^^^^^
+>a8 : string[]
+>   : ^^^^^^^^
+>a8 : never
+>   : ^^^^^
+
+let ri9 = null || a8;       // null      || array is array
+>ri9 : string[]
+>    : ^^^^^^^^
+>null || a8 : string[]
+>           : ^^^^^^^^
+>a8 : string[]
+>   : ^^^^^^^^
+
+let ri10 = null || a8; // undefined || array is array
+>ri10 : string[]
+>     : ^^^^^^^^
+>null || a8 : string[]
+>           : ^^^^^^^^
+>a8 : string[]
+>   : ^^^^^^^^
+
+
+/*pruned*/;                   // any       || null is any
+let rj2 = a2 || null;         // boolean   || null is boolean
+>rj2 : true | null
+>    : ^^^^^^^^^^^
+>a2 || null : true | null
+>           : ^^^^^^^^^^^
+>a2 : boolean
+>   : ^^^^^^^
+
+let rj3 = a3 || null;         // number    || null is number
+>rj3 : number | null
+>    : ^^^^^^^^^^^^^
+>a3 || null : number | null
+>           : ^^^^^^^^^^^^^
+>a3 : number
+>   : ^^^^^^
+
+let rj4 = a4 || null;         // string    || null is string
+>rj4 : string | null
+>    : ^^^^^^^^^^^^^
+>a4 || null : string | null
+>           : ^^^^^^^^^^^^^
+>a4 : string
+>   : ^^^^^^
+
+/*pruned*/;                   // void      || null is void
+/*pruned*/;                   // enum      || null is E
+let rj7 = a7 || null;         // object    || null is object
+>rj7 : { a: string; }
+>    : ^^^^^^^^^^^^^^
+>a7 || null : { a: string; }
+>           : ^^^^^^^^^^^^^^
+>a7 : { a: string; }
+>   : ^^^^^^^^^^^^^^
+
+let rj8 = a8 || null;         // array     || null is array
+>rj8 : string[]
+>    : ^^^^^^^^
+>a8 || null : string[]
+>           : ^^^^^^^^
+>a8 : string[]
+>   : ^^^^^^^^
+
+let rj9 = null || null;       // null      || null is any
+>rj9 : null
+>    : ^^^^
+>null || null : null
+>             : ^^^^
+
+let rj10 = null || null; // undefined || null is any
+>rj10 : null
+>     : ^^^^
+>null || null : null
+>             : ^^^^
+
+
+/*pruned*/;                   // any       || undefined is any
+let rf2 = a2 || null;         // boolean   || undefined is boolean
+>rf2 : true | null
+>    : ^^^^^^^^^^^
+>a2 || null : true | null
+>           : ^^^^^^^^^^^
+>a2 : boolean
+>   : ^^^^^^^
+
+let rf3 = a3 || null;         // number    || undefined is number
+>rf3 : number | null
+>    : ^^^^^^^^^^^^^
+>a3 || null : number | null
+>           : ^^^^^^^^^^^^^
+>a3 : number
+>   : ^^^^^^
+
+let rf4 = a4 || null;         // string    || undefined is string
+>rf4 : string | null
+>    : ^^^^^^^^^^^^^
+>a4 || null : string | null
+>           : ^^^^^^^^^^^^^
+>a4 : string
+>   : ^^^^^^
+
+/*pruned*/;                   // void      || undefined is void
+/*pruned*/;                   // enum      || undefined is E
+let rf7 = a7 || null;         // object    || undefined is object
+>rf7 : { a: string; }
+>    : ^^^^^^^^^^^^^^
+>a7 || null : { a: string; }
+>           : ^^^^^^^^^^^^^^
+>a7 : { a: string; }
+>   : ^^^^^^^^^^^^^^
+
+let rf8 = a8 || null;         // array     || undefined is array
+>rf8 : string[]
+>    : ^^^^^^^^
+>a8 || null : string[]
+>           : ^^^^^^^^
+>a8 : string[]
+>   : ^^^^^^^^
+
+let rf9 = null || null;       // null      || undefined is any
+>rf9 : null
+>    : ^^^^
+>null || null : null
+>             : ^^^^
+
+let rf10 = null || null; // undefined || undefined is any
+>rf10 : null
+>     : ^^^^
+>null || null : null
+>             : ^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

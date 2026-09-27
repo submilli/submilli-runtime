@@ -1,0 +1,17 @@
+types: 19 of 27 tsc entries compared, 3 differ
+
+line 11: isString1
+  tsc:  (a: number, b: Object) => b is string
+  ours: (arg0: number, arg1: Object) => boolean
+
+line 11: isString2
+  tsc:  (a: Object) => a is string
+  ours: (arg0: Object) => boolean
+
+line 14: isString1
+  tsc:  (a: number, b: Object) => b is string
+  ours: (arg0: number, arg1: Object) => boolean
+
+errors:
+line 2: ours: type-guard return value does not narrow parameter `b` to `string` (tsc accepts)
+line 4: ours: type-guard return value does not narrow parameter `a` to `string` (tsc accepts)

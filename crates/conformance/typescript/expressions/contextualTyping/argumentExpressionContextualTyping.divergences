@@ -1,0 +1,53 @@
+types: 26 of 66 tsc entries compared, 12 differ
+
+line 7: o
+  tsc:  { x: (string | number)[]; y: { c: boolean; d: string; e: number; }; }
+  ours: { x: string[]; y: { c: boolean; d: string; e: number } }
+
+line 7: { x: ["string", 1], y: { c: true, d: "world", e: 3 } }
+  tsc:  { x: (string | number)[]; y: { c: boolean; d: string; e: number; }; }
+  ours: { x: string[]; y: { c: boolean; d: string; e: number } }
+
+line 7: ["string", 1]
+  tsc:  (string | number)[]
+  ours: string[]
+
+line 8: { x: ["string", 1], y: { c: true, d: "world", e: 3 } }
+  tsc:  { x: [string, number]; y: { c: true; d: string; e: number; }; }
+  ours: { x: [string, number]; y: { c: boolean; d: string; e: number } }
+
+line 8: { c: true, d: "world", e: 3 }
+  tsc:  { c: true; d: string; e: number; }
+  ours: { c: boolean; d: string; e: number }
+
+line 12: array
+  tsc:  (string | number | boolean)[]
+  ours: string[]
+
+line 12: ["string", 1, true]
+  tsc:  (string | number | boolean)[]
+  ours: string[]
+
+line 13: ["string", 1, true]
+  tsc:  [string, number, true]
+  ours: [string, number, boolean]
+
+line 15: ["string", 1, true]
+  tsc:  [string, number, true]
+  ours: [string, number, boolean]
+
+line 17: array
+  tsc:  (string | number | boolean)[]
+  ours: string[]
+
+line 18: ["string", 1, true, ...array]
+  tsc:  [string, number, true, ...(string | number | boolean)[]]
+  ours: [string, number, boolean]
+
+line 18: array
+  tsc:  (string | number | boolean)[]
+  ours: string[]
+
+errors:
+line 7: ours: expected `string` (matching first element), got `number` (tsc accepts)
+line 12: ours: expected `string` (matching first element), got `number` (tsc accepts)

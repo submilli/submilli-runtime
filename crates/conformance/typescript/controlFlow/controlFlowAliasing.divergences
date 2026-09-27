@@ -1,0 +1,239 @@
+types: 270 of 512 tsc entries compared, 51 differ
+
+line 10: x
+  tsc:  string
+  ours: number | string
+
+line 13: x
+  tsc:  number
+  ours: number | string
+
+line 20: x
+  tsc:  string
+  ours: unknown
+
+line 28: x
+  tsc:  string | number
+  ours: number | string | boolean
+
+line 31: x
+  tsc:  boolean
+  ours: number | string | boolean
+
+line 40: x
+  tsc:  string | number
+  ours: number | string | boolean
+
+line 43: x
+  tsc:  boolean
+  ours: number | string | boolean
+
+line 49: notUndefined ? x : 0
+  tsc:  number
+  ours: number | null
+
+line 49: x
+  tsc:  number
+  ours: number | null
+
+line 52: obj
+  tsc:  { readonly x: string | number; }
+  ours: { x: number | string }
+
+line 53: obj
+  tsc:  { readonly x: string | number; }
+  ours: { x: number | string }
+
+line 55: obj.x
+  tsc:  string
+  ours: number | string
+
+line 55: obj
+  tsc:  { readonly x: string | number; }
+  ours: { x: number | string }
+
+line 59: obj
+  tsc:  { readonly x: string | number; }
+  ours: { x: number | string }
+
+line 60: obj
+  tsc:  { readonly x: string | number; }
+  ours: { x: number | string }
+
+line 61: obj
+  tsc:  { readonly x: string | number; }
+  ours: { x: number | string }
+
+line 63: obj
+  tsc:  { readonly x: string | number; }
+  ours: { x: number | string }
+
+line 70: obj[0]
+  tsc:  string
+  ours: number | string
+
+line 76: [42]
+  tsc:  [number]
+  ours: [number | string]
+
+line 85: obj
+  tsc:  { kind: "foo"; foo: string; }
+  ours: { bar: number; kind: "bar" } | { foo: string; kind: "foo" }
+
+line 88: obj
+  tsc:  { kind: "bar"; bar: number; }
+  ours: { bar: number; kind: "bar" } | { foo: string; kind: "foo" }
+
+line 127: obj
+  tsc:  { kind: "foo"; foo: string; }
+  ours: { bar: number; kind: "bar" } | { foo: string; kind: "foo" }
+
+line 130: obj
+  tsc:  { kind: "bar"; bar: number; }
+  ours: { bar: number; kind: "bar" } | { foo: string; kind: "foo" }
+
+line 138: obj
+  tsc:  { kind: "foo"; foo: string; }
+  ours: { bar: number; kind: "bar" } | { foo: string; kind: "foo" }
+
+line 141: obj
+  tsc:  { kind: "bar"; bar: number; }
+  ours: { bar: number; kind: "bar" } | { foo: string; kind: "foo" }
+
+line 145: outer
+  tsc:  { readonly obj: { kind: "foo"; foo: string; } | { kind: "bar"; bar: number; }; }
+  ours: { obj: { bar: number; kind: "bar" } | { foo: string; kind: "foo" } }
+
+line 146: outer
+  tsc:  { readonly obj: { kind: "foo"; foo: string; } | { kind: "bar"; bar: number; }; }
+  ours: { obj: { bar: number; kind: "bar" } | { foo: string; kind: "foo" } }
+
+line 148: outer.obj
+  tsc:  { kind: "foo"; foo: string; }
+  ours: { bar: number; kind: "bar" } | { foo: string; kind: "foo" }
+
+line 148: outer
+  tsc:  { readonly obj: { kind: "foo"; foo: string; } | { kind: "bar"; bar: number; }; }
+  ours: { obj: { bar: number; kind: "bar" } | { foo: string; kind: "foo" } }
+
+line 151: outer.obj
+  tsc:  { kind: "bar"; bar: number; }
+  ours: { bar: number; kind: "bar" } | { foo: string; kind: "foo" }
+
+line 151: outer
+  tsc:  { readonly obj: { kind: "foo"; foo: string; } | { kind: "bar"; bar: number; }; }
+  ours: { obj: { bar: number; kind: "bar" } | { foo: string; kind: "foo" } }
+
+line 181: obj
+  tsc:  { kind: "foo"; foo: string; }
+  ours: { bar: number; kind: "bar" } | { foo: string; kind: "foo" }
+
+line 184: obj
+  tsc:  { kind: "bar"; bar: number; }
+  ours: { bar: number; kind: "bar" } | { foo: string; kind: "foo" }
+
+line 191: obj
+  tsc:  { kind: "foo"; foo: string; }
+  ours: { bar: number; kind: "bar" } | { foo: string; kind: "foo" }
+
+line 194: obj
+  tsc:  { kind: "bar"; bar: number; }
+  ours: { bar: number; kind: "bar" } | { foo: string; kind: "foo" }
+
+line 201: obj
+  tsc:  { kind: "foo"; foo: string; }
+  ours: { bar: number; kind: "bar" } | { foo: string; kind: "foo" }
+
+line 204: obj
+  tsc:  { kind: "bar"; bar: number; }
+  ours: { bar: number; kind: "bar" } | { foo: string; kind: "foo" }
+
+line 211: obj
+  tsc:  { kind: "foo"; foo: string; }
+  ours: { bar: number; kind: "bar" } | { foo: string; kind: "foo" }
+
+line 212: obj
+  tsc:  { kind: "bar"; bar: number; }
+  ours: { bar: number; kind: "bar" } | { foo: string; kind: "foo" }
+
+line 219: this
+  tsc:  this
+  ours: C10
+
+line 223: this.x
+  tsc:  string
+  ours: number | string
+
+line 223: this
+  tsc:  this
+  ours: C10
+
+line 224: x
+  tsc:  string
+  ours: number | string
+
+line 231: this
+  tsc:  this
+  ours: C11
+
+line 236: this.x
+  tsc:  string
+  ours: number | string
+
+line 236: this
+  tsc:  this
+  ours: C11
+
+line 240: this
+  tsc:  this
+  ours: C11
+
+line 251: obj
+  tsc:  { kind: "foo"; foo?: string; }
+  ours: { bar?: number; kind: "bar" } | { foo?: string; kind: "foo" }
+
+line 252: obj
+  tsc:  { kind: "foo"; foo?: string; }
+  ours: { bar?: number; kind: "bar" } | { foo?: string; kind: "foo" }
+
+line 271: payload
+  tsc:  string
+  ours: number | string
+
+line 274: payload
+  tsc:  number
+  ours: number | string
+
+errors:
+line 10: ours: expected `string`, got `number | string` (tsc accepts)
+line 13: ours: expected `number`, got `number | string` (tsc accepts)
+line 20: ours: expected `string`, got `unknown` (tsc accepts)
+line 28: ours: expected `number | string`, got `number | string | boolean` (tsc accepts)
+line 31: ours: expected `boolean`, got `number | string | boolean` (tsc accepts)
+line 40: ours: expected `number | string`, got `number | string | boolean` (tsc accepts)
+line 43: ours: expected `boolean`, got `number | string | boolean` (tsc accepts)
+line 55: ours: expected `string`, got `number | string` (tsc accepts)
+line 70: ours: expected `string`, got `number | string` (tsc accepts)
+line 85: ours: field `foo` does not exist on all members of `{ bar: number; kind: "bar" } | { foo: string; kind: "foo" }` (missing on `{ bar: number; kind: "bar" }`) (tsc accepts)
+line 88: ours: field `bar` does not exist on all members of `{ bar: number; kind: "bar" } | { foo: string; kind: "foo" }` (missing on `{ foo: string; kind: "foo" }`) (tsc accepts)
+line 127: ours: field `foo` does not exist on all members of `{ bar: number; kind: "bar" } | { foo: string; kind: "foo" }` (missing on `{ bar: number; kind: "bar" }`) (tsc accepts)
+line 130: ours: field `bar` does not exist on all members of `{ bar: number; kind: "bar" } | { foo: string; kind: "foo" }` (missing on `{ foo: string; kind: "foo" }`) (tsc accepts)
+line 138: ours: field `foo` does not exist on all members of `{ bar: number; kind: "bar" } | { foo: string; kind: "foo" }` (missing on `{ bar: number; kind: "bar" }`) (tsc accepts)
+line 141: ours: field `bar` does not exist on all members of `{ bar: number; kind: "bar" } | { foo: string; kind: "foo" }` (missing on `{ foo: string; kind: "foo" }`) (tsc accepts)
+line 148: ours: field `foo` does not exist on all members of `{ bar: number; kind: "bar" } | { foo: string; kind: "foo" }` (missing on `{ bar: number; kind: "bar" }`) (tsc accepts)
+line 151: ours: field `bar` does not exist on all members of `{ bar: number; kind: "bar" } | { foo: string; kind: "foo" }` (missing on `{ foo: string; kind: "foo" }`) (tsc accepts)
+line 181: ours: field `foo` does not exist on all members of `{ bar: number; kind: "bar" } | { foo: string; kind: "foo" }` (missing on `{ bar: number; kind: "bar" }`) (tsc accepts)
+line 184: ours: field `bar` does not exist on all members of `{ bar: number; kind: "bar" } | { foo: string; kind: "foo" }` (missing on `{ foo: string; kind: "foo" }`) (tsc accepts)
+line 191: ours: field `foo` does not exist on all members of `{ bar: number; kind: "bar" } | { foo: string; kind: "foo" }` (missing on `{ bar: number; kind: "bar" }`) (tsc accepts)
+line 194: ours: field `bar` does not exist on all members of `{ bar: number; kind: "bar" } | { foo: string; kind: "foo" }` (missing on `{ foo: string; kind: "foo" }`) (tsc accepts)
+line 201: ours: field `foo` does not exist on all members of `{ bar: number; kind: "bar" } | { foo: string; kind: "foo" }` (missing on `{ bar: number; kind: "bar" }`) (tsc accepts)
+line 204: ours: field `bar` does not exist on all members of `{ bar: number; kind: "bar" } | { foo: string; kind: "foo" }` (missing on `{ foo: string; kind: "foo" }`) (tsc accepts)
+line 211: ours: field `foo` does not exist on all members of `{ bar: number; kind: "bar" } | { foo: string; kind: "foo" }` (missing on `{ bar: number; kind: "bar" }`) (tsc accepts)
+line 212: ours: field `bar` does not exist on all members of `{ bar: number; kind: "bar" } | { foo: string; kind: "foo" }` (missing on `{ foo: string; kind: "foo" }`) (tsc accepts)
+line 223: ours: expected `string`, got `number | string` (tsc accepts)
+line 224: ours: expected `string`, got `number | string` (tsc accepts)
+line 236: ours: expected `string`, got `number | string` (tsc accepts)
+line 251: ours: field `foo` does not exist on all members of `{ bar?: number; kind: "bar" } | { foo?: string; kind: "foo" }` (missing on `{ bar?: number; kind: "bar" }`) (tsc accepts)
+line 252: ours: field `foo` does not exist on all members of `{ bar?: number; kind: "bar" } | { foo?: string; kind: "foo" }` (missing on `{ bar?: number; kind: "bar" }`) (tsc accepts)
+line 271: ours: expected `string`, got `number | string` (tsc accepts)
+line 274: ours: expected `number`, got `number | string` (tsc accepts)

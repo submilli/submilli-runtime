@@ -1,0 +1,16 @@
+comparisonOperatorWithIdenticalPrimitiveType.ts(16,11): error TS18050: The value 'null' cannot be used here.
+comparisonOperatorWithIdenticalPrimitiveType.ts(16,18): error TS18050: The value 'null' cannot be used here.
+comparisonOperatorWithIdenticalPrimitiveType.ts(17,11): error TS18050: The value 'null' cannot be used here.
+comparisonOperatorWithIdenticalPrimitiveType.ts(17,18): error TS18050: The value 'null' cannot be used here.
+comparisonOperatorWithIdenticalPrimitiveType.ts(25,11): error TS18050: The value 'null' cannot be used here.
+comparisonOperatorWithIdenticalPrimitiveType.ts(25,18): error TS18050: The value 'null' cannot be used here.
+comparisonOperatorWithIdenticalPrimitiveType.ts(26,11): error TS18050: The value 'null' cannot be used here.
+comparisonOperatorWithIdenticalPrimitiveType.ts(26,18): error TS18050: The value 'null' cannot be used here.
+comparisonOperatorWithIdenticalPrimitiveType.ts(34,11): error TS18050: The value 'null' cannot be used here.
+comparisonOperatorWithIdenticalPrimitiveType.ts(34,19): error TS18050: The value 'null' cannot be used here.
+comparisonOperatorWithIdenticalPrimitiveType.ts(35,11): error TS18050: The value 'null' cannot be used here.
+comparisonOperatorWithIdenticalPrimitiveType.ts(35,19): error TS18050: The value 'null' cannot be used here.
+comparisonOperatorWithIdenticalPrimitiveType.ts(43,11): error TS18050: The value 'null' cannot be used here.
+comparisonOperatorWithIdenticalPrimitiveType.ts(43,19): error TS18050: The value 'null' cannot be used here.
+comparisonOperatorWithIdenticalPrimitiveType.ts(44,11): error TS18050: The value 'null' cannot be used here.
+comparisonOperatorWithIdenticalPrimitiveType.ts(44,19): error TS18050: The value 'null' cannot be used here.

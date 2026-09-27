@@ -1,0 +1,810 @@
+=== exhaustiveSwitchStatements1.ts ===
+
+function f1(x: 1 | 2): string {
+>f1 : (x: 1 | 2) => string
+>   : ^^^^^^^^^^^^^^^^^^^^
+>x : 1 | 2
+>  : ^^^^^
+
+    if (!!true) {
+>!!true : true
+>       : ^^^^
+>!true : false
+>      : ^^^^^
+>true : true
+>     : ^^^^
+
+        switch (x) {
+>x : 1 | 2
+>  : ^^^^^
+
+            case 1: return 'a';
+>1 : 1
+>  : ^
+>'a' : "a"
+>    : ^^^
+
+            case 2: return 'b';
+>2 : 2
+>  : ^
+>'b' : "b"
+>    : ^^^
+
+        }
+        x;  // Unreachable
+>x : never
+>  : ^^^^^
+
+    }
+    else {
+        throw 0;
+>0 : 0
+>  : ^
+
+    }
+}
+
+function f2(x: 1 | 2): void {
+>f2 : (x: 1 | 2) => void
+>   : ^^^^^^^^^^^^^^^^^^
+>x : 1 | 2
+>  : ^^^^^
+
+    let z: number = null as unknown as (number);
+>z : number
+>  : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    switch (x) {
+>x : 1 | 2
+>  : ^^^^^
+
+        case 1: z = 10; break;
+>1 : 1
+>  : ^
+>z = 10 : 10
+>       : ^^
+>z : number
+>  : ^^^^^^
+>10 : 10
+>   : ^^
+
+        case 2: z = 20; break;
+>2 : 2
+>  : ^
+>z = 20 : 20
+>       : ^^
+>z : number
+>  : ^^^^^^
+>20 : 20
+>   : ^^
+
+    }
+    z;  // Definitely assigned
+>z : number
+>  : ^^^^^^
+
+}
+
+function f3(x: 1 | 2): 10 | 20 {
+>f3 : (x: 1 | 2) => 10 | 20
+>   : ^^^^^^^^^^^^^^^^^^^^^
+>x : 1 | 2
+>  : ^^^^^
+
+    switch (x) {
+>x : 1 | 2
+>  : ^^^^^
+
+        case 1: return 10;
+>1 : 1
+>  : ^
+>10 : 10
+>   : ^^
+
+        case 2: return 20;
+>2 : 2
+>  : ^
+>20 : 20
+>   : ^^
+
+        // Default considered reachable to allow defensive coding
+        default: throw new Error("Bad input");
+>new Error("Bad input") : Error
+>                       : ^^^^^
+>Error : ErrorConstructor
+>      : ^^^^^^^^^^^^^^^^
+>"Bad input" : "Bad input"
+>            : ^^^^^^^^^^^
+
+    }
+}
+
+// Repro from #11572
+
+enum E { A, B }
+>E : E
+>  : ^
+>A : E.A
+>  : ^^^
+>B : E.B
+>  : ^^^
+
+
+function f(e: E): number {
+>f : (e: E) => number
+>  : ^^^^^^^^^^^^^^^^
+>e : E
+>  : ^
+
+    switch (e) {
+>e : E
+>  : ^
+
+        case E.A: return 0
+>E.A : E.A
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>A : E.A
+>  : ^^^
+>0 : 0
+>  : ^
+
+        case E.B: return 1
+>E.B : E.B
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>B : E.B
+>  : ^^^
+>1 : 1
+>  : ^
+
+    }
+}
+
+/*pruned*/;               
+              
+                 
+        
+                    
+                              
+                              
+         
+ 
+
+// Repro from #12668
+
+interface Square { kind: "square"; size: number; }
+>Square : Square
+>       : ^^^^^^
+>kind : "square"
+>     : ^^^^^^^^
+>size : number
+>     : ^^^^^^
+
+
+interface Rectangle { kind: "rectangle"; width: number; height: number; }
+>Rectangle : Rectangle
+>          : ^^^^^^^^^
+>kind : "rectangle"
+>     : ^^^^^^^^^^^
+>width : number
+>      : ^^^^^^
+>height : number
+>       : ^^^^^^
+
+
+interface Circle { kind: "circle"; radius: number; }
+>Circle : Circle
+>       : ^^^^^^
+>kind : "circle"
+>     : ^^^^^^^^
+>radius : number
+>       : ^^^^^^
+
+
+interface Triangle { kind: "triangle"; side: number; }
+>Triangle : Triangle
+>         : ^^^^^^^^
+>kind : "triangle"
+>     : ^^^^^^^^^^
+>side : number
+>     : ^^^^^^
+
+
+type Shape = Square | Rectangle | Circle | Triangle;
+>Shape : Shape
+>      : ^^^^^
+
+
+/*pruned*/;                      
+             
+                     
+                                                     
+                                                           
+                                                                   
+                                                                          
+     
+                
+ 
+
+/*pruned*/;                             
+             
+                   
+                         
+                                                  
+                                                        
+                                                                
+                                                                       
+         
+         
+                
+ 
+
+// Repro from #13241
+
+enum MyEnum {
+>MyEnum : MyEnum
+>       : ^^^^^^
+
+	A,
+>A : MyEnum.A
+>  : ^^^^^^^^
+
+	B
+>B : MyEnum.B
+>  : ^^^^^^^^
+
+}
+
+function thisGivesError(e: MyEnum): string {
+>thisGivesError : (e: MyEnum) => string
+>               : ^^^^^^^^^^^^^^^^^^^^^
+>e : MyEnum
+>  : ^^^^^^
+
+	let s: string = null as unknown as (string);
+>s : string
+>  : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+	switch (e) {
+>e : MyEnum
+>  : ^^^^^^
+
+		case MyEnum.A: s = "it was A"; break;
+>MyEnum.A : MyEnum.A
+>         : ^^^^^^^^
+>MyEnum : typeof MyEnum
+>       : ^^^^^^^^^^^^^
+>A : MyEnum.A
+>  : ^^^^^^^^
+>s = "it was A" : "it was A"
+>               : ^^^^^^^^^^
+>s : string
+>  : ^^^^^^
+>"it was A" : "it was A"
+>           : ^^^^^^^^^^
+
+		case MyEnum.B: s = "it was B"; break;
+>MyEnum.B : MyEnum.B
+>         : ^^^^^^^^
+>MyEnum : typeof MyEnum
+>       : ^^^^^^^^^^^^^
+>B : MyEnum.B
+>  : ^^^^^^^^
+>s = "it was B" : "it was B"
+>               : ^^^^^^^^^^
+>s : string
+>  : ^^^^^^
+>"it was B" : "it was B"
+>           : ^^^^^^^^^^
+
+	}
+	return s;
+>s : string
+>  : ^^^^^^
+
+}
+
+function good1(e: MyEnum): string {
+>good1 : (e: MyEnum) => string
+>      : ^^^^^^^^^^^^^^^^^^^^^
+>e : MyEnum
+>  : ^^^^^^
+
+	let s: string = null as unknown as (string);
+>s : string
+>  : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+	switch (e) {
+>e : MyEnum
+>  : ^^^^^^
+
+		case MyEnum.A: s = "it was A"; break;
+>MyEnum.A : MyEnum.A
+>         : ^^^^^^^^
+>MyEnum : typeof MyEnum
+>       : ^^^^^^^^^^^^^
+>A : MyEnum.A
+>  : ^^^^^^^^
+>s = "it was A" : "it was A"
+>               : ^^^^^^^^^^
+>s : string
+>  : ^^^^^^
+>"it was A" : "it was A"
+>           : ^^^^^^^^^^
+
+		case MyEnum.B: s = "it was B"; break;
+>MyEnum.B : MyEnum.B
+>         : ^^^^^^^^
+>MyEnum : typeof MyEnum
+>       : ^^^^^^^^^^^^^
+>B : MyEnum.B
+>  : ^^^^^^^^
+>s = "it was B" : "it was B"
+>               : ^^^^^^^^^^
+>s : string
+>  : ^^^^^^
+>"it was B" : "it was B"
+>           : ^^^^^^^^^^
+
+		default: s = "it was something else"; break;
+>s = "it was something else" : "it was something else"
+>                            : ^^^^^^^^^^^^^^^^^^^^^^^
+>s : string
+>  : ^^^^^^
+>"it was something else" : "it was something else"
+>                        : ^^^^^^^^^^^^^^^^^^^^^^^
+
+	}
+	return s;
+>s : string
+>  : ^^^^^^
+
+}
+
+function good2(e: MyEnum): string {
+>good2 : (e: MyEnum) => string
+>      : ^^^^^^^^^^^^^^^^^^^^^
+>e : MyEnum
+>  : ^^^^^^
+
+	switch (e) {
+>e : MyEnum
+>  : ^^^^^^
+
+		case MyEnum.A: return "it was A";
+>MyEnum.A : MyEnum.A
+>         : ^^^^^^^^
+>MyEnum : typeof MyEnum
+>       : ^^^^^^^^^^^^^
+>A : MyEnum.A
+>  : ^^^^^^^^
+>"it was A" : "it was A"
+>           : ^^^^^^^^^^
+
+		case MyEnum.B: return "it was B";
+>MyEnum.B : MyEnum.B
+>         : ^^^^^^^^
+>MyEnum : typeof MyEnum
+>       : ^^^^^^^^^^^^^
+>B : MyEnum.B
+>  : ^^^^^^^^
+>"it was B" : "it was B"
+>           : ^^^^^^^^^^
+
+	}
+}
+
+// Repro from #18362
+
+enum Level {
+>Level : Level
+>      : ^^^^^
+
+  One,
+>One : Level.One
+>    : ^^^^^^^^^
+
+  Two,
+>Two : Level.Two
+>    : ^^^^^^^^^
+
+}
+
+/*pruned*/;                                     
+                                               
+                  
+                   
+                       
+            
+                   
+                       
+            
+   
+              
+  
+
+// Repro from #20409
+
+interface Square2 {
+>Square2 : Square2
+>        : ^^^^^^^
+
+    kind: "square";
+>kind : "square"
+>     : ^^^^^^^^
+
+    size: number;
+>size : number
+>     : ^^^^^^
+
+}
+
+interface Circle2 {
+>Circle2 : Circle2
+>        : ^^^^^^^
+
+    kind: "circle";
+>kind : "circle"
+>     : ^^^^^^^^
+
+    radius: number;
+>radius : number
+>       : ^^^^^^
+
+}
+
+type Shape2 = Square2 | Circle2;
+>Shape2 : Shape2
+>       : ^^^^^^
+
+
+function withDefault(s1: Shape2, s2: Shape2): string {
+>withDefault : (s1: Shape2, s2: Shape2) => string
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>s1 : Shape2
+>   : ^^^^^^
+>s2 : Shape2
+>   : ^^^^^^
+
+    switch (s1.kind) {
+>s1.kind : "square" | "circle"
+>        : ^^^^^^^^^^^^^^^^^^^
+>s1 : Shape2
+>   : ^^^^^^
+>kind : "square" | "circle"
+>     : ^^^^^^^^^^^^^^^^^^^
+
+        case "square":
+>"square" : "square"
+>         : ^^^^^^^^
+
+            return "1";
+>"1" : "1"
+>    : ^^^
+
+        case "circle":
+>"circle" : "circle"
+>         : ^^^^^^^^
+
+            switch (s2.kind) {
+>s2.kind : "square" | "circle"
+>        : ^^^^^^^^^^^^^^^^^^^
+>s2 : Shape2
+>   : ^^^^^^
+>kind : "square" | "circle"
+>     : ^^^^^^^^^^^^^^^^^^^
+
+                case "square":
+>"square" : "square"
+>         : ^^^^^^^^
+
+                    return "2";
+>"2" : "2"
+>    : ^^^
+
+                case "circle":
+>"circle" : "circle"
+>         : ^^^^^^^^
+
+                    return "3";
+>"3" : "3"
+>    : ^^^
+
+                default:
+                    return "never";
+>"never" : "never"
+>        : ^^^^^^^
+
+            }
+    }
+}
+
+function withoutDefault(s1: Shape2, s2: Shape2): string {
+>withoutDefault : (s1: Shape2, s2: Shape2) => string
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>s1 : Shape2
+>   : ^^^^^^
+>s2 : Shape2
+>   : ^^^^^^
+
+    switch (s1.kind) {
+>s1.kind : "square" | "circle"
+>        : ^^^^^^^^^^^^^^^^^^^
+>s1 : Shape2
+>   : ^^^^^^
+>kind : "square" | "circle"
+>     : ^^^^^^^^^^^^^^^^^^^
+
+        case "square":
+>"square" : "square"
+>         : ^^^^^^^^
+
+            return "1";
+>"1" : "1"
+>    : ^^^
+
+        case "circle":
+>"circle" : "circle"
+>         : ^^^^^^^^
+
+            switch (s2.kind) {
+>s2.kind : "square" | "circle"
+>        : ^^^^^^^^^^^^^^^^^^^
+>s2 : Shape2
+>   : ^^^^^^
+>kind : "square" | "circle"
+>     : ^^^^^^^^^^^^^^^^^^^
+
+                case "square":
+>"square" : "square"
+>         : ^^^^^^^^
+
+                    return "2";
+>"2" : "2"
+>    : ^^^
+
+                case "circle":
+>"circle" : "circle"
+>         : ^^^^^^^^
+
+                    return "3";
+>"3" : "3"
+>    : ^^^
+
+            }
+    }
+}
+
+// Repro from #20823
+
+function test4(value: 1 | 2): string {
+>test4 : (value: 1 | 2) => string
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^
+>value : 1 | 2
+>      : ^^^^^
+
+    let x: string = null as unknown as (string);
+>x : string
+>  : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    switch (value) {
+>value : 1 | 2
+>      : ^^^^^
+
+        case 1: x = "one"; break;
+>1 : 1
+>  : ^
+>x = "one" : "one"
+>          : ^^^^^
+>x : string
+>  : ^^^^^^
+>"one" : "one"
+>      : ^^^^^
+
+        case 2: x = "two"; break;
+>2 : 2
+>  : ^
+>x = "two" : "two"
+>          : ^^^^^
+>x : string
+>  : ^^^^^^
+>"two" : "two"
+>      : ^^^^^
+
+    }
+    return x;
+>x : string
+>  : ^^^^^^
+
+}
+
+// Repro from #34661
+
+enum Animal { DOG, CAT }
+>Animal : Animal
+>       : ^^^^^^
+>DOG : Animal.DOG
+>    : ^^^^^^^^^^
+>CAT : Animal.CAT
+>    : ^^^^^^^^^^
+
+
+/*pruned*/;                                                                           
+
+/*pruned*/;                    
+                                        
+                                          
+                                          
+     
+ 
+
+// Repro from #34840
+
+function foo(): void {
+>foo : () => void
+>    : ^^^^^^^^^^
+
+    const foo: number | null = 0;
+>foo : number | null
+>    : ^^^^^^^^^^^^^
+>0 : 0
+>  : ^
+
+    while (true) {
+>true : true
+>     : ^^^^
+
+        const stats = foo;
+>stats : number
+>      : ^^^^^^
+>foo : number
+>    : ^^^^^^
+
+        switch (stats) {
+>stats : number
+>      : ^^^^^^
+
+            case 1: break;
+>1 : 1
+>  : ^
+
+            case 2: break;
+>2 : 2
+>  : ^
+
+        }
+    }
+}
+
+// Repro from #35070
+
+type O = {
+>O : O
+>  : ^
+
+    a: number,
+>a : number
+>  : ^^^^^^
+
+    b: number
+>b : number
+>  : ^^^^^^
+
+};
+type K = keyof O | 'c';
+>K : K
+>  : ^
+
+function ff(o: O, k: K): number {
+>ff : (o: O, k: K) => number
+>   : ^^^^^^^^^^^^^^^^^^^^^^
+>o : O
+>  : ^
+>k : K
+>  : ^
+
+    switch(k) {
+>k : K
+>  : ^
+
+        case 'c':
+>'c' : "c"
+>    : ^^^
+
+            k = 'a';
+>k = 'a' : "a"
+>        : ^^^
+>k : K
+>  : ^
+>'a' : "a"
+>    : ^^^
+
+    }
+    k === 'c';  // Error
+>k === 'c' : boolean
+>          : ^^^^^^^
+>k : keyof O
+>  : ^^^^^^^
+>'c' : "c"
+>    : ^^^
+
+    return o[k];
+>o[k] : number
+>     : ^^^^^^
+>o : O
+>  : ^
+>k : keyof O
+>  : ^^^^^^^
+
+}
+
+// Repro from #35431
+type A = { kind: "abc" } | { kind: "def" };
+>A : A
+>  : ^
+>kind : "abc"
+>     : ^^^^^
+>kind : "def"
+>     : ^^^^^
+
+
+function f35431(a: A): void {
+>f35431 : (a: A) => void
+>       : ^^^^^^^^^^^^^^
+>a : A
+>  : ^
+
+  switch (a.kind) {
+>a.kind : "abc" | "def"
+>       : ^^^^^^^^^^^^^
+>a : A
+>  : ^
+>kind : "abc" | "def"
+>     : ^^^^^^^^^^^^^
+
+    case "abc":
+>"abc" : "abc"
+>      : ^^^^^
+
+    case "def": return;
+>"def" : "def"
+>      : ^^^^^
+
+    default:
+      a!.kind; // Error expected
+>a!.kind : any
+>        : ^^^
+>a! : never
+>   : ^^^^^
+>a : never
+>  : ^^^^^
+>kind : any
+>     : ^^^
+
+  }
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

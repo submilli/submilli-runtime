@@ -1,0 +1,4 @@
+types: 9 of 12 tsc entries compared, 0 differ
+
+errors:
+line 10: ours: expected `"foo"`, got `"bar" | "foo"` (tsc accepts)

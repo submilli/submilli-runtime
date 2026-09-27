@@ -1,0 +1,111 @@
+=== builtinIteratorReturn.ts ===
+
+const array: number[] = null as unknown as (number[]);
+>array : number[]
+>      : ^^^^^^^^
+>null as unknown as (number[]) : number[]
+>                              : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;                                                               
+/*pruned*/;                                               
+
+const i0 = array[Symbol.iterator]();
+>i0 : ArrayIterator<number>
+>   : ^^^^^^^^^^^^^^^^^^^^^
+>array[Symbol.iterator]() : ArrayIterator<number>
+>                         : ^^^^^^^^^^^^^^^^^^^^^
+>array[Symbol.iterator] : () => ArrayIterator<number>
+>                       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>array : number[]
+>      : ^^^^^^^^
+>Symbol.iterator : unique symbol
+>                : ^^^^^^^^^^^^^
+>Symbol : SymbolConstructor
+>       : ^^^^^^^^^^^^^^^^^
+>iterator : unique symbol
+>         : ^^^^^^^^^^^^^
+
+const i1 = array.values();
+>i1 : ArrayIterator<number>
+>   : ^^^^^^^^^^^^^^^^^^^^^
+>array.values() : ArrayIterator<number>
+>               : ^^^^^^^^^^^^^^^^^^^^^
+>array.values : () => ArrayIterator<number>
+>             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>array : number[]
+>      : ^^^^^^^^
+>values : () => ArrayIterator<number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+const i2 = array.keys();
+>i2 : ArrayIterator<number>
+>   : ^^^^^^^^^^^^^^^^^^^^^
+>array.keys() : ArrayIterator<number>
+>             : ^^^^^^^^^^^^^^^^^^^^^
+>array.keys : () => ArrayIterator<number>
+>           : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>array : number[]
+>      : ^^^^^^^^
+>keys : () => ArrayIterator<number>
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+const i3 = array.entries();
+>i3 : ArrayIterator<[number, number]>
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>array.entries() : ArrayIterator<[number, number]>
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>array.entries : () => ArrayIterator<[number, number]>
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>array : number[]
+>      : ^^^^^^^^
+>entries : () => ArrayIterator<[number, number]>
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+for (const x of array);
+>x : number
+>  : ^^^^^^
+>array : number[]
+>      : ^^^^^^^^
+
+
+/*pruned*/;                       
+/*pruned*/;             
+/*pruned*/;           
+/*pruned*/;              
+/*pruned*/;          
+
+/*pruned*/;                       
+/*pruned*/;             
+/*pruned*/;            
+/*pruned*/;               
+/*pruned*/;          
+
+/*pruned*/;                                                                                     
+/*pruned*/;                                                                                   
+/*pruned*/;                                                                                           
+const i15: Iterable<number, null> = null as unknown as (Iterable<number, null>);
+>i15 : Iterable<number, null>
+>    : ^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (Iterable<number, null>) : Iterable<number, null>
+>                                            : ^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;                                                                   
+const i17: Iterable<number, boolean> = null as unknown as (Iterable<number, boolean>);
+>i17 : Iterable<number, boolean>
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (Iterable<number, boolean>) : Iterable<number, boolean>
+>                                               : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

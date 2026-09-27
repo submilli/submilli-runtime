@@ -1,0 +1,24 @@
+comparisonOperatorWithNoRelationshipTypeParameter.ts(13,14): error TS2365: Operator '<' cannot be applied to types 'T' and 'U'.
+comparisonOperatorWithNoRelationshipTypeParameter.ts(14,14): error TS2365: Operator '>' cannot be applied to types 'T' and 'U'.
+comparisonOperatorWithNoRelationshipTypeParameter.ts(15,14): error TS2365: Operator '<=' cannot be applied to types 'T' and 'U'.
+comparisonOperatorWithNoRelationshipTypeParameter.ts(16,14): error TS2365: Operator '>=' cannot be applied to types 'T' and 'U'.
+comparisonOperatorWithNoRelationshipTypeParameter.ts(17,14): error TS2367: This comparison appears to be unintentional because the types 'T' and 'U' have no overlap.
+comparisonOperatorWithNoRelationshipTypeParameter.ts(18,14): error TS2367: This comparison appears to be unintentional because the types 'T' and 'U' have no overlap.
+comparisonOperatorWithNoRelationshipTypeParameter.ts(19,14): error TS2367: This comparison appears to be unintentional because the types 'T' and 'U' have no overlap.
+comparisonOperatorWithNoRelationshipTypeParameter.ts(20,14): error TS2367: This comparison appears to be unintentional because the types 'T' and 'U' have no overlap.
+comparisonOperatorWithNoRelationshipTypeParameter.ts(24,16): error TS2365: Operator '<' cannot be applied to types 'T' and 'number'.
+comparisonOperatorWithNoRelationshipTypeParameter.ts(32,16): error TS2365: Operator '<' cannot be applied to types 'number' and 'T'.
+comparisonOperatorWithNoRelationshipTypeParameter.ts(41,16): error TS2365: Operator '<' cannot be applied to types 'T' and 'number'.
+comparisonOperatorWithNoRelationshipTypeParameter.ts(49,16): error TS2365: Operator '<' cannot be applied to types 'number' and 'T'.
+comparisonOperatorWithNoRelationshipTypeParameter.ts(58,16): error TS2365: Operator '<' cannot be applied to types 'T' and 'number'.
+comparisonOperatorWithNoRelationshipTypeParameter.ts(66,16): error TS2365: Operator '<' cannot be applied to types 'number' and 'T'.
+comparisonOperatorWithNoRelationshipTypeParameter.ts(75,16): error TS2365: Operator '<' cannot be applied to types 'T' and 'number'.
+comparisonOperatorWithNoRelationshipTypeParameter.ts(83,16): error TS2365: Operator '<' cannot be applied to types 'number' and 'T'.
+comparisonOperatorWithNoRelationshipTypeParameter.ts(92,16): error TS2365: Operator '<' cannot be applied to types 'T' and 'number'.
+comparisonOperatorWithNoRelationshipTypeParameter.ts(100,16): error TS2365: Operator '<' cannot be applied to types 'number' and 'T'.
+comparisonOperatorWithNoRelationshipTypeParameter.ts(109,16): error TS2365: Operator '<' cannot be applied to types 'T' and 'number'.
+comparisonOperatorWithNoRelationshipTypeParameter.ts(117,16): error TS2365: Operator '<' cannot be applied to types 'number' and 'T'.
+comparisonOperatorWithNoRelationshipTypeParameter.ts(126,16): error TS2365: Operator '<' cannot be applied to types 'T' and 'number'.
+comparisonOperatorWithNoRelationshipTypeParameter.ts(134,16): error TS2365: Operator '<' cannot be applied to types 'number' and 'T'.
+comparisonOperatorWithNoRelationshipTypeParameter.ts(143,16): error TS2365: Operator '<' cannot be applied to types 'T' and 'number'.
+comparisonOperatorWithNoRelationshipTypeParameter.ts(151,16): error TS2365: Operator '<' cannot be applied to types 'number' and 'T'.

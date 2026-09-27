@@ -1,0 +1,96 @@
+=== comparisonOperatorWithIdenticalTypeParameter.ts ===
+function foo<T>(t: T): void {
+>foo : <T>(t: T) => void
+>    : ^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>t : T
+>  : ^
+
+    let r1 = t < t;
+>r1 : boolean
+>   : ^^^^^^^
+>t < t : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>t : T
+>  : ^
+
+    let r2 = t > t;
+>r2 : boolean
+>   : ^^^^^^^
+>t > t : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>t : T
+>  : ^
+
+    let r3 = t <= t;
+>r3 : boolean
+>   : ^^^^^^^
+>t <= t : boolean
+>       : ^^^^^^^
+>t : T
+>  : ^
+>t : T
+>  : ^
+
+    let r4 = t >= t;
+>r4 : boolean
+>   : ^^^^^^^
+>t >= t : boolean
+>       : ^^^^^^^
+>t : T
+>  : ^
+>t : T
+>  : ^
+
+    let r5 = t == t;
+>r5 : boolean
+>   : ^^^^^^^
+>t == t : boolean
+>       : ^^^^^^^
+>t : T
+>  : ^
+>t : T
+>  : ^
+
+    let r6 = t != t;
+>r6 : boolean
+>   : ^^^^^^^
+>t != t : boolean
+>       : ^^^^^^^
+>t : T
+>  : ^
+>t : T
+>  : ^
+
+    let r7 = t === t;
+>r7 : boolean
+>   : ^^^^^^^
+>t === t : boolean
+>        : ^^^^^^^
+>t : T
+>  : ^
+>t : T
+>  : ^
+
+    let r8 = t !== t;
+>r8 : boolean
+>   : ^^^^^^^
+>t !== t : boolean
+>        : ^^^^^^^
+>t : T
+>  : ^
+>t : T
+>  : ^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

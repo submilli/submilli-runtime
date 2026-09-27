@@ -1,0 +1,415 @@
+=== unknownType1.ts ===
+
+// In an intersection everything absorbs unknown
+
+/*pruned*/;                 // null
+/*pruned*/;                 // undefined
+/*pruned*/;                        // never
+/*pruned*/;                   // string
+/*pruned*/;                     // string[]
+/*pruned*/;                    // unknown
+/*pruned*/;                // any
+
+// In a union an unknown absorbs everything
+
+type T10 = unknown | null;  // unknown
+>T10 : unknown
+>    : ^^^^^^^
+
+type T11 = unknown | null;  // unknown
+>T11 : unknown
+>    : ^^^^^^^
+
+type T12 = unknown | null | null;  // unknown
+>T12 : unknown
+>    : ^^^^^^^
+
+type T13 = unknown | string;  // unknown
+>T13 : unknown
+>    : ^^^^^^^
+
+type T14 = unknown | string[];  // unknown
+>T14 : unknown
+>    : ^^^^^^^
+
+type T15 = unknown | unknown;  // unknown
+>T15 : unknown
+>    : ^^^^^^^
+
+/*pruned*/;                // any
+
+// Type variable and unknown in union and intersection
+
+/*pruned*/;            // T & {}
+type T21<T> = T | {};  // T | {}
+>T21 : T21<T>
+>    : ^^^^^^
+>T : T
+>  : ^
+
+/*pruned*/;                 // T
+type T23<T> = T | unknown;  // unknown
+>T23 : unknown
+>    : ^^^^^^^
+>T : T
+>  : ^
+
+
+// unknown in conditional types
+
+/*pruned*/;                                      // Deferred
+/*pruned*/;                                      // Deferred (so it distributes)
+/*pruned*/;                                    // true
+/*pruned*/;                                    // Deferred
+
+/*pruned*/;                                        
+/*pruned*/;                       // { x: string } | { x: number }
+/*pruned*/;           // { x: any }
+/*pruned*/;               // { x: unknown }
+
+// keyof unknown
+
+/*pruned*/;            // string | number | symbol
+type T41 = keyof unknown;  // never
+>T41 : never
+>    : ^^^^^
+
+
+// Only equality operators are allowed with unknown
+
+function f10(x: unknown): void {
+>f10 : (x: unknown) => void
+>    : ^^^^^^^^^^^^^^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+
+    x == 5;
+>x == 5 : boolean
+>       : ^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+>5 : 5
+>  : ^
+
+    x !== 10;
+>x !== 10 : boolean
+>         : ^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+>10 : 10
+>   : ^^
+
+    x >= 0;  // Error
+>x >= 0 : boolean
+>       : ^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+>0 : 0
+>  : ^
+
+    x.foo;  // Error
+>x.foo : any
+>      : ^^^
+>x : unknown
+>  : ^^^^^^^
+>foo : any
+>    : ^^^
+
+    x[10];  // Error
+>x[10] : any
+>      : ^^^
+>x : unknown
+>  : ^^^^^^^
+>10 : 10
+>   : ^^
+
+    x();  // Error
+>x() : any
+>    : ^^^
+>x : unknown
+>  : ^^^^^^^
+
+    x + 1;  // Error
+>x + 1 : any
+>      : ^^^
+>x : unknown
+>  : ^^^^^^^
+>1 : 1
+>  : ^
+
+    x * 2;  // Error
+>x * 2 : number
+>      : ^^^^^^
+>x : unknown
+>  : ^^^^^^^
+>2 : 2
+>  : ^
+
+    -x;  // Error
+>-x : number
+>   : ^^^^^^
+>x : unknown
+>  : ^^^^^^^
+
+    +x;  // Error
+>+x : number
+>   : ^^^^^^
+>x : unknown
+>  : ^^^^^^^
+
+}
+
+// No property accesses, element accesses, or function calls
+
+function f11(x: unknown): void {
+>f11 : (x: unknown) => void
+>    : ^^^^^^^^^^^^^^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+
+    x.foo;  // Error
+>x.foo : any
+>      : ^^^
+>x : unknown
+>  : ^^^^^^^
+>foo : any
+>    : ^^^
+
+    x[5];  // Error
+>x[5] : any
+>     : ^^^
+>x : unknown
+>  : ^^^^^^^
+>5 : 5
+>  : ^
+
+    x();  // Error
+>x() : any
+>    : ^^^
+>x : unknown
+>  : ^^^^^^^
+
+    new x();  // Error
+>new x() : any
+>        : ^^^
+>x : unknown
+>  : ^^^^^^^
+
+}
+
+// typeof, instanceof, and user defined type predicates
+
+/*pruned*/;                                                                            
+
+function f20(x: unknown): void {
+>f20 : (x: unknown) => void
+>    : ^^^^^^^^^^^^^^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+
+    if (typeof x === "string" || typeof x === "number") {
+>typeof x === "string" || typeof x === "number" : boolean
+>                                               : ^^^^^^^
+>typeof x === "string" : boolean
+>                      : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+>"string" : "string"
+>         : ^^^^^^^^
+>typeof x === "number" : boolean
+>                      : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+>"number" : "number"
+>         : ^^^^^^^^
+
+        x;  // string | number
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+
+    }
+    if (x instanceof Error) {
+>x instanceof Error : boolean
+>                   : ^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+>Error : ErrorConstructor
+>      : ^^^^^^^^^^^^^^^^
+
+        x;  // Error
+>x : Error
+>  : ^^^^^
+
+    }
+    /*pruned*/;         
+                       
+     
+}
+
+// Homomorphic mapped type over unknown
+
+/*pruned*/;                              
+/*pruned*/;           // { [x: string]: number }
+/*pruned*/;               // {}
+
+// Anything is assignable to unknown
+
+/*pruned*/;                                             
+                                                  
+            
+                
+                  
+                    
+          
+             
+               
+           
+ 
+
+// unknown assignable only to itself and any
+
+function f22(x: unknown): void {
+>f22 : (x: unknown) => void
+>    : ^^^^^^^^^^^^^^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+
+    /*pruned*/;     
+    let v2: unknown = x;
+>v2 : unknown
+>   : ^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+
+    /*pruned*/;          // Error
+    let v4: string = x;  // Error
+>v4 : string
+>   : ^^^^^^
+>x : unknown
+>  : ^^^^^^^
+
+    let v5: string[] = x;  // Error
+>v5 : string[]
+>   : ^^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+
+    let v6: {} = x;  // Error
+>v6 : {}
+>   : ^^
+>x : unknown
+>  : ^^^^^^^
+
+    let v7: {} | null | null = x;  // Error
+>v7 : {} | null
+>   : ^^^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+
+}
+
+// Type parameter 'T extends unknown' not related to object
+
+/*pruned*/;                                  
+                                
+ 
+
+// Anything fresh but primitive assignable to { [x: string]: unknown }
+
+/*pruned*/;                                      
+           
+                 
+                           
+                      
+ 
+
+// Locals of type unknown always considered initialized
+
+function f25(): void {
+>f25 : () => void
+>    : ^^^^^^^^^^
+
+    let x: unknown = null as unknown as (unknown);
+>x : unknown
+>  : ^^^^^^^
+>null as unknown as (unknown) : unknown
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    let y = x;
+>y : unknown
+>  : ^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+
+}
+
+// Spread of unknown causes result to be unknown
+
+/*pruned*/;                                    
+                                               
+                                               
+                                                 
+                                    
+ 
+
+// Functions with unknown return type don't need return expressions
+
+function f27(): unknown {
+>f27 : () => unknown
+>    : ^^^^^^^^^^^^^
+
+}
+
+// Rest type cannot be created from unknown
+
+function f28(x: unknown): void {
+>f28 : (x: unknown) => void
+>    : ^^^^^^^^^^^^^^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+
+    let { ...a } = x;  // Error
+>a : any
+>  : ^^^
+>x : unknown
+>  : ^^^^^^^
+
+}
+
+// Class properties of type unknown don't need definite assignment
+
+/**/;     
+                        
+               
+           
+ 
+
+// Type parameter with explicit 'unknown' constraint not assignable to '{}'
+
+/*pruned*/;                                           
+                  
+                  
+ 
+
+// Repro from #26796
+
+/*pruned*/;                                          // false
+/*pruned*/;                                                                   
+/*pruned*/;                                 // false
+
+/*pruned*/;                                   
+                         
+ 
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

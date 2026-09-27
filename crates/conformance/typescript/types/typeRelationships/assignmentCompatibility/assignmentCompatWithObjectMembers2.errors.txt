@@ -1,0 +1,2 @@
+assignmentCompatWithObjectMembers2.ts(6,11): error TS2564: Property 'foo' has no initializer and is not definitely assigned in the constructor.
+assignmentCompatWithObjectMembers2.ts(7,11): error TS2564: Property 'foo' has no initializer and is not definitely assigned in the constructor.

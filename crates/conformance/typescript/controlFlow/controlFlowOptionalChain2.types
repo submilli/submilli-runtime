@@ -1,0 +1,367 @@
+=== controlFlowOptionalChain2.ts ===
+
+type A = {
+>A : A
+>  : ^
+
+  type: 'A';
+>type : "A"
+>     : ^^^
+
+  name: string;
+>name : string
+>     : ^^^^^^
+
+}
+
+type B = {
+>B : B
+>  : ^
+
+  type: 'B';
+>type : "B"
+>     : ^^^
+
+}
+
+function funcTwo(arg: A | B | null): void {
+>funcTwo : (arg: A | B | null) => void
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>arg : A | B | null
+>    : ^^^^^^^^^^^^
+
+  if (arg?.type === 'B') {
+>arg?.type === 'B' : boolean
+>                  : ^^^^^^^
+>arg?.type : "A" | "B" | undefined
+>          : ^^^^^^^^^^^^^^^^^^^^^
+>arg : A | B | null
+>    : ^^^^^^^^^^^^
+>type : "A" | "B" | undefined
+>     : ^^^^^^^^^^^^^^^^^^^^^
+>'B' : "B"
+>    : ^^^
+
+    arg; // `B`
+>arg : B
+>    : ^
+
+    return;
+  }
+
+  arg;
+>arg : A | null
+>    : ^^^^^^^^
+
+  arg?.name;
+>arg?.name : string | undefined
+>          : ^^^^^^^^^^^^^^^^^^
+>arg : A | null
+>    : ^^^^^^^^
+>name : string | undefined
+>     : ^^^^^^^^^^^^^^^^^^
+
+}
+
+function funcThree(arg: A | B | null): void {
+>funcThree : (arg: A | B | null) => void
+>          : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>arg : A | B | null
+>    : ^^^^^^^^^^^^
+
+  if (arg?.type === 'B') {
+>arg?.type === 'B' : boolean
+>                  : ^^^^^^^
+>arg?.type : "A" | "B" | undefined
+>          : ^^^^^^^^^^^^^^^^^^^^^
+>arg : A | B | null
+>    : ^^^^^^^^^^^^
+>type : "A" | "B" | undefined
+>     : ^^^^^^^^^^^^^^^^^^^^^
+>'B' : "B"
+>    : ^^^
+
+    arg; // `B`
+>arg : B
+>    : ^
+
+    return;
+  }
+
+  arg;
+>arg : A | null
+>    : ^^^^^^^^
+
+  arg?.name;
+>arg?.name : string | undefined
+>          : ^^^^^^^^^^^^^^^^^^
+>arg : A | null
+>    : ^^^^^^^^
+>name : string | undefined
+>     : ^^^^^^^^^^^^^^^^^^
+
+}
+
+type U = { kind: null, u: 'u' }
+>U : U
+>  : ^
+>kind : null
+>     : ^^^^
+>u : "u"
+>  : ^^^
+
+type N = { kind: null, n: 'n' }
+>N : N
+>  : ^
+>kind : null
+>     : ^^^^
+>n : "n"
+>  : ^^^
+
+type X = { kind: 'X', x: 'x' }
+>X : X
+>  : ^
+>kind : "X"
+>     : ^^^
+>x : "x"
+>  : ^^^
+
+
+function f1(x: X | U | null): void {
+>f1 : (x: X | U | null) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : U | X | null
+>  : ^^^^^^^^^^^^
+
+    if (x?.kind === null) {
+>x?.kind === null : boolean
+>                 : ^^^^^^^
+>x?.kind : "X" | null | undefined
+>        : ^^^^^^^^^^^^^^^^^^^^^^
+>x : U | X | null
+>  : ^^^^^^^^^^^^
+>kind : "X" | null | undefined
+>     : ^^^^^^^^^^^^^^^^^^^^^^
+
+        x; // U | undefined
+>x : U
+>  : ^
+
+    }
+    else {
+        x; // X
+>x : X | null
+>  : ^^^^^^^^
+
+    }
+}
+
+function f2(x: X | N | null): void {
+>f2 : (x: X | N | null) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : N | X | null
+>  : ^^^^^^^^^^^^
+
+    if (x?.kind === null) {
+>x?.kind === null : boolean
+>                 : ^^^^^^^
+>x?.kind : "X" | null | undefined
+>        : ^^^^^^^^^^^^^^^^^^^^^^
+>x : N | X | null
+>  : ^^^^^^^^^^^^
+>kind : "X" | null | undefined
+>     : ^^^^^^^^^^^^^^^^^^^^^^
+
+        x; // undefined
+>x : N
+>  : ^
+
+    }
+    else {
+        x; // X | N
+>x : X | null
+>  : ^^^^^^^^
+
+    }
+}
+
+function f3(x: X | U | null): void {
+>f3 : (x: X | U | null) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : U | X | null
+>  : ^^^^^^^^^^^^
+
+    if (x?.kind === null) {
+>x?.kind === null : boolean
+>                 : ^^^^^^^
+>x?.kind : "X" | null | undefined
+>        : ^^^^^^^^^^^^^^^^^^^^^^
+>x : U | X | null
+>  : ^^^^^^^^^^^^
+>kind : "X" | null | undefined
+>     : ^^^^^^^^^^^^^^^^^^^^^^
+
+        x; // U | null
+>x : U
+>  : ^
+
+    }
+    else {
+        x; // X
+>x : X | null
+>  : ^^^^^^^^
+
+    }
+}
+
+function f4(x: X | N | null): void {
+>f4 : (x: X | N | null) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : N | X | null
+>  : ^^^^^^^^^^^^
+
+    if (x?.kind === null) {
+>x?.kind === null : boolean
+>                 : ^^^^^^^
+>x?.kind : "X" | null | undefined
+>        : ^^^^^^^^^^^^^^^^^^^^^^
+>x : N | X | null
+>  : ^^^^^^^^^^^^
+>kind : "X" | null | undefined
+>     : ^^^^^^^^^^^^^^^^^^^^^^
+
+        x; // null
+>x : N
+>  : ^
+
+    }
+    else {
+        x; // X | N
+>x : X | null
+>  : ^^^^^^^^
+
+    }
+}
+
+function f5(x: X | U | null): void {
+>f5 : (x: X | U | null) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : U | X | null
+>  : ^^^^^^^^^^^^
+
+    if (x?.kind === null) {
+>x?.kind === null : boolean
+>                 : ^^^^^^^
+>x?.kind : "X" | null | undefined
+>        : ^^^^^^^^^^^^^^^^^^^^^^
+>x : U | X | null
+>  : ^^^^^^^^^^^^
+>kind : "X" | null | undefined
+>     : ^^^^^^^^^^^^^^^^^^^^^^
+
+        x; // never
+>x : U
+>  : ^
+
+    }
+    else {
+        x; // X | U | undefined
+>x : X | null
+>  : ^^^^^^^^
+
+    }
+}
+
+function f6(x: X | N | null): void {
+>f6 : (x: X | N | null) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : N | X | null
+>  : ^^^^^^^^^^^^
+
+    if (x?.kind === null) {
+>x?.kind === null : boolean
+>                 : ^^^^^^^
+>x?.kind : "X" | null | undefined
+>        : ^^^^^^^^^^^^^^^^^^^^^^
+>x : N | X | null
+>  : ^^^^^^^^^^^^
+>kind : "X" | null | undefined
+>     : ^^^^^^^^^^^^^^^^^^^^^^
+
+        x; // N
+>x : N
+>  : ^
+
+    }
+    else {
+        x; // X | undefined
+>x : X | null
+>  : ^^^^^^^^
+
+    }
+}
+
+function f7(x: X | U | null): void {
+>f7 : (x: X | U | null) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : U | X | null
+>  : ^^^^^^^^^^^^
+
+    if (x?.kind === null) {
+>x?.kind === null : boolean
+>                 : ^^^^^^^
+>x?.kind : "X" | null | undefined
+>        : ^^^^^^^^^^^^^^^^^^^^^^
+>x : U | X | null
+>  : ^^^^^^^^^^^^
+>kind : "X" | null | undefined
+>     : ^^^^^^^^^^^^^^^^^^^^^^
+
+        x; // never
+>x : U
+>  : ^
+
+    }
+    else {
+        x; // X | U | null
+>x : X | null
+>  : ^^^^^^^^
+
+    }
+}
+
+function f8(x: X | N | null): void {
+>f8 : (x: X | N | null) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : N | X | null
+>  : ^^^^^^^^^^^^
+
+    if (x?.kind === null) {
+>x?.kind === null : boolean
+>                 : ^^^^^^^
+>x?.kind : "X" | null | undefined
+>        : ^^^^^^^^^^^^^^^^^^^^^^
+>x : N | X | null
+>  : ^^^^^^^^^^^^
+>kind : "X" | null | undefined
+>     : ^^^^^^^^^^^^^^^^^^^^^^
+
+        x; // N
+>x : N
+>  : ^
+
+    }
+    else {
+        x; // X | null
+>x : X | null
+>  : ^^^^^^^^
+
+    }
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

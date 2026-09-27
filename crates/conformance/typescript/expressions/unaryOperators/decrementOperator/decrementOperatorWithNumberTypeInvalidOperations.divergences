@@ -1,0 +1,9 @@
+types: 23 of 62 tsc entries compared, 2 differ
+
+line 20: NUMBER1
+  tsc:  number[]
+  ours: number
+
+line 46: NUMBER1
+  tsc:  number[]
+  ours: number

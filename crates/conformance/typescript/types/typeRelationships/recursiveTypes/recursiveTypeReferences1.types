@@ -1,0 +1,361 @@
+=== recursiveTypeReferences1.ts ===
+
+type ValueOrArray<T> = T | Array<ValueOrArray<T>>;
+>ValueOrArray : ValueOrArray<T>
+>             : ^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+
+
+const a0: ValueOrArray<number> = 1;
+>a0 : ValueOrArray<number>
+>   : ^^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+const a1: ValueOrArray<number> = [1, [2, 3], [4, [5, [6, 7]]]];
+>a1 : ValueOrArray<number>
+>   : ^^^^^^^^^^^^^^^^^^^^
+>[1, [2, 3], [4, [5, [6, 7]]]] : (number | (number | (number | number[])[])[])[]
+>                              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+>[2, 3] : number[]
+>       : ^^^^^^^^
+>2 : 2
+>  : ^
+>3 : 3
+>  : ^
+>[4, [5, [6, 7]]] : (number | (number | number[])[])[]
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>4 : 4
+>  : ^
+>[5, [6, 7]] : (number | number[])[]
+>            : ^^^^^^^^^^^^^^^^^^^^^
+>5 : 5
+>  : ^
+>[6, 7] : number[]
+>       : ^^^^^^^^
+>6 : 6
+>  : ^
+>7 : 7
+>  : ^
+
+
+/*pruned*/;                                                                            
+
+/*pruned*/;                         
+                             
+                                                              
+                                                               
+      
+
+/*pruned*/;                                                                     
+
+/*pruned*/;       
+                    
+                               
+                                  
+  
+
+interface Box<T> { value: T };
+>Box : Box<T>
+>    : ^^^^^^
+>T : T
+>  : ^
+>value : T
+>      : ^
+
+
+type T1 = Box<T1>;
+>T1 : T1
+>   : ^^
+
+type T2 = Box<Box<T2>>;
+>T2 : T2
+>   : ^^
+
+type T3 = Box<Box<Box<T3>>>;
+>T3 : T3
+>   : ^^
+
+
+function f1(t1: T1, t2: T2, t3: T3): void {
+>f1 : (t1: T1, t2: T2, t3: T3) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>t1 : T1
+>   : ^^
+>t2 : T2
+>   : ^^
+>t3 : T3
+>   : ^^
+
+    t1 = t2;
+>t1 = t2 : T2
+>        : ^^
+>t1 : T1
+>   : ^^
+>t2 : T2
+>   : ^^
+
+    t1 = t3;
+>t1 = t3 : T3
+>        : ^^
+>t1 : T1
+>   : ^^
+>t3 : T3
+>   : ^^
+
+    t2 = t1;
+>t2 = t1 : T1
+>        : ^^
+>t2 : T2
+>   : ^^
+>t1 : T1
+>   : ^^
+
+    t2 = t3;
+>t2 = t3 : T3
+>        : ^^
+>t2 : T2
+>   : ^^
+>t3 : T3
+>   : ^^
+
+    t3 = t1;
+>t3 = t1 : T1
+>        : ^^
+>t3 : T3
+>   : ^^
+>t1 : T1
+>   : ^^
+
+    t3 = t2;
+>t3 = t2 : T2
+>        : ^^
+>t3 : T3
+>   : ^^
+>t2 : T2
+>   : ^^
+
+}
+
+type Box1 = Box<Box1> | number;
+>Box1 : Box1
+>     : ^^^^
+
+
+const b10: Box1 = 42;
+>b10 : Box1
+>    : ^^^^
+>42 : 42
+>   : ^^
+
+const b11: Box1 = { value: 42 };
+>b11 : Box1
+>    : ^^^^
+>{ value: 42 } : { value: number; }
+>              : ^^^^^^^^^^^^^^^^^^
+>value : number
+>      : ^^^^^^
+>42 : 42
+>   : ^^
+
+const b12: Box1 = { value: { value: { value: 42 }}};
+>b12 : Box1
+>    : ^^^^
+>{ value: { value: { value: 42 }}} : { value: { value: { value: number; }; }; }
+>                                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>value : { value: { value: number; }; }
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ value: { value: 42 }} : { value: { value: number; }; }
+>                        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>value : { value: number; }
+>      : ^^^^^^^^^^^^^^^^^^
+>{ value: 42 } : { value: number; }
+>              : ^^^^^^^^^^^^^^^^^^
+>value : number
+>      : ^^^^^^
+>42 : 42
+>   : ^^
+
+
+type Box2 = Box<Box2 | number>;
+>Box2 : Box2
+>     : ^^^^
+
+
+const b20: Box2 = 42;  // Error
+>b20 : Box2
+>    : ^^^^
+>42 : 42
+>   : ^^
+
+const b21: Box2 = { value: 42 };
+>b21 : Box2
+>    : ^^^^
+>{ value: 42 } : { value: number; }
+>              : ^^^^^^^^^^^^^^^^^^
+>value : number
+>      : ^^^^^^
+>42 : 42
+>   : ^^
+
+const b22: Box2 = { value: { value: { value: 42 }}};
+>b22 : Box2
+>    : ^^^^
+>{ value: { value: { value: 42 }}} : { value: { value: { value: number; }; }; }
+>                                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>value : { value: { value: number; }; }
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ value: { value: 42 }} : { value: { value: number; }; }
+>                        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>value : { value: number; }
+>      : ^^^^^^^^^^^^^^^^^^
+>{ value: 42 } : { value: number; }
+>              : ^^^^^^^^^^^^^^^^^^
+>value : number
+>      : ^^^^^^
+>42 : 42
+>   : ^^
+
+
+type RecArray<T> = Array<T | RecArray<T>>;
+>RecArray : RecArray<T>
+>         : ^^^^^^^^^^^
+>T : T
+>  : ^
+
+
+/*pruned*/;                                                                         
+/*pruned*/;                                                                                  
+/*pruned*/;                                                                                             
+
+/*pruned*/;           // number[]
+/*pruned*/;     // number[]
+/*pruned*/;                     // number[]
+/*pruned*/;           // (string | number)[]
+/*pruned*/;           // (string | number)[]
+/*pruned*/;        // Error
+
+/*pruned*/;            // (number | number[])[]
+/*pruned*/;      // number[][]
+/*pruned*/;            // (string | number)[]
+/*pruned*/;            // (string | number)[]
+/*pruned*/;         // Error
+
+/*pruned*/;            // number[]
+/*pruned*/;      // number[]
+/*pruned*/;            // (string | number)[]
+/*pruned*/;            // (string | number)[]
+/*pruned*/;         // Error
+
+type T10 = T10[];
+>T10 : T10
+>    : ^^^
+
+type T11 = readonly T11[];
+>T11 : T11
+>    : ^^^
+
+type T12 = (T12)[];
+>T12 : T12
+>    : ^^^
+
+type T13 = T13[] | string;
+>T13 : T13
+>    : ^^^
+
+/*pruned*/;                      
+/*pruned*/;                                       
+
+type ValueOrArray1<T> = T | ValueOrArray1<T>[];
+>ValueOrArray1 : ValueOrArray1<T>
+>              : ^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+
+type ValueOrArray2<T> = T | ValueOrArray2<T>[];
+>ValueOrArray2 : ValueOrArray2<T>
+>              : ^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+
+
+/*pruned*/;                                                                
+let ra1: ValueOrArray2<string> = null as unknown as (ValueOrArray2<string>);
+>ra1 : ValueOrArray2<string>
+>    : ^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (ValueOrArray2<string>) : ValueOrArray2<string>
+>                                           : ^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+/*pruned*/;          // Boom!
+
+type NumberOrArray1<T> = T | ValueOrArray1<T>[];
+>NumberOrArray1 : NumberOrArray1<T>
+>               : ^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+
+type NumberOrArray2<T> = T | ValueOrArray2<T>[];
+>NumberOrArray2 : NumberOrArray2<T>
+>               : ^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+
+
+/*pruned*/;                                                                
+let ra2: ValueOrArray2<string> = null as unknown as (ValueOrArray2<string>);
+>ra2 : ValueOrArray2<string>
+>    : ^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (ValueOrArray2<string>) : ValueOrArray2<string>
+>                                           : ^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+/*pruned*/;          // Boom!
+
+// Repro from #33617 (errors are expected)
+
+/*pruned*/;                              
+
+/*pruned*/;                                                         
+                                                     
+                                  
+                       
+                                                                                                      
+                                                         
+       
+      
+ 
+
+/*pruned*/;                                    
+           
+                                                 
+                            
+                                                       
+                                        
+                                 
+            
+                               
+                     
+              
+                                                               
+          
+ 
+
+/*pruned*/;                                    
+                                  
+                       
+ 
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

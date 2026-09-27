@@ -1,0 +1,2 @@
+exhaustiveSwitchStatements1.ts(240,5): error TS2367: This comparison appears to be unintentional because the types 'keyof O' and '"c"' have no overlap.
+exhaustiveSwitchStatements1.ts(252,10): error TS2339: Property 'kind' does not exist on type 'never'.

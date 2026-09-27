@@ -1,0 +1,13 @@
+types: 16 of 36 tsc entries compared, 3 differ
+
+line 12: ["string", 1, true]
+  tsc:  [string, number, boolean]
+  ours: [boolean, string, number]
+
+line 18: [1, 2, "string", true]
+  tsc:  [number, number, string, boolean]
+  ours: [number, number]
+
+line 34: [...temp1]
+  tsc:  number[]
+  ours: []

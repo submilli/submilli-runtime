@@ -1,0 +1,249 @@
+=== typeGuardOfFormTypeOfFunction.ts ===
+
+/*pruned*/;                
+                                  
+                  
+     
+ 
+
+function f2(x: unknown): void {
+>f2 : (x: unknown) => void
+>   : ^^^^^^^^^^^^^^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+
+    if (typeof x === "function") {
+>typeof x === "function" : boolean
+>                        : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+>"function" : "function"
+>           : ^^^^^^^^^^
+
+        x;  // Function
+>x : Function
+>  : ^^^^^^^^
+
+    }
+}
+
+function f3(x: {}): void {
+>f3 : (x: {}) => void
+>   : ^^^^^^^^^^^^^^^
+>x : {}
+>  : ^^
+
+    if (typeof x === "function") {
+>typeof x === "function" : boolean
+>                        : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : {}
+>  : ^^
+>"function" : "function"
+>           : ^^^^^^^^^^
+
+        x;  // Function
+>x : Function
+>  : ^^^^^^^^
+
+    }
+}
+
+function f4<T>(x: T): void {
+>f4 : <T>(x: T) => void
+>   : ^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+
+    if (typeof x === "function") {
+>typeof x === "function" : boolean
+>                        : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : T
+>  : ^
+>"function" : "function"
+>           : ^^^^^^^^^^
+
+        x;  // T & Function
+>x : T & Function
+>  : ^^^^^^^^^^^^
+
+    }
+}
+
+function f5(x: { s: string }): void {
+>f5 : (x: { s: string; }) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : { s: string; }
+>  : ^^^^^^^^^^^^^^
+>s : string
+>  : ^^^^^^
+
+    if (typeof x === "function") {
+>typeof x === "function" : boolean
+>                        : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : { s: string; }
+>  : ^^^^^^^^^^^^^^
+>"function" : "function"
+>           : ^^^^^^^^^^
+
+        x;  // never
+>x : never
+>  : ^^^^^
+
+    }
+}
+
+function f6(x: () => string): void {
+>f6 : (x: () => string) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : () => string
+>  : ^^^^^^^^^^^^
+
+    if (typeof x === "function") {
+>typeof x === "function" : boolean
+>                        : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : () => string
+>  : ^^^^^^^^^^^^
+>"function" : "function"
+>           : ^^^^^^^^^^
+
+        x;  // () => string
+>x : () => string
+>  : ^^^^^^^^^^^^
+
+    }
+}
+
+function f10(x: string | (() => string)): void {
+>f10 : (x: string | (() => string)) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | (() => string)
+>  : ^^^^^^^^^^^^^^^^^^^^^^^
+
+    if (typeof x === "function") {
+>typeof x === "function" : boolean
+>                        : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | (() => string)
+>  : ^^^^^^^^^^^^^^^^^^^^^^^
+>"function" : "function"
+>           : ^^^^^^^^^^
+
+        x;  // () => string
+>x : () => string
+>  : ^^^^^^^^^^^^
+
+    }
+    else {
+        x;  // string
+>x : string
+>  : ^^^^^^
+
+    }
+}
+
+function f11(x: { s: string } | (() => string)): void {
+>f11 : (x: { s: string; } | (() => string)) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : { s: string; } | (() => string)
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>s : string
+>  : ^^^^^^
+
+    if (typeof x === "function") {
+>typeof x === "function" : boolean
+>                        : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : { s: string; } | (() => string)
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>"function" : "function"
+>           : ^^^^^^^^^^
+
+        x;  // () => string
+>x : () => string
+>  : ^^^^^^^^^^^^
+
+    }
+    else {
+        x;  // { s: string }
+>x : { s: string; }
+>  : ^^^^^^^^^^^^^^
+
+    }
+}
+
+function f12(x: { s: string } | { n: number }): void {
+>f12 : (x: { s: string; } | { n: number; }) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : { s: string; } | { n: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>s : string
+>  : ^^^^^^
+>n : number
+>  : ^^^^^^
+
+    if (typeof x === "function") {
+>typeof x === "function" : boolean
+>                        : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : { s: string; } | { n: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>"function" : "function"
+>           : ^^^^^^^^^^
+
+        x;  // never
+>x : never
+>  : ^^^^^
+
+    }
+    else {
+        x;  // { s: string } | { n: number }
+>x : { s: string; } | { n: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    }
+}
+
+// Repro from #18238
+
+/*pruned*/;                                                    
+                           
+                            
+                                      
+                           
+     
+ 
+
+// Repro from #49316
+
+/*pruned*/;                                                                                           
+                                                                  
+                                        
+                              
+     
+ 
+
+/*pruned*/;                                          
+                                               
+ 
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

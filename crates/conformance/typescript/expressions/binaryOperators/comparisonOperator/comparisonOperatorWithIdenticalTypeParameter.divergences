@@ -1,0 +1,7 @@
+types: 33 of 36 tsc entries compared, 0 differ
+
+errors:
+line 3: ours: `<` not defined for `T` and `T` (tsc accepts)
+line 4: ours: `>` not defined for `T` and `T` (tsc accepts)
+line 5: ours: `<=` not defined for `T` and `T` (tsc accepts)
+line 6: ours: `>=` not defined for `T` and `T` (tsc accepts)

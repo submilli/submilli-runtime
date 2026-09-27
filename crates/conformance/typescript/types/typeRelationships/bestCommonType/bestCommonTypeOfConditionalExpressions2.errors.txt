@@ -1,0 +1,3 @@
+bestCommonTypeOfConditionalExpressions2.ts(5,14): error TS2564: Property 'foo' has no initializer and is not definitely assigned in the constructor.
+bestCommonTypeOfConditionalExpressions2.ts(6,30): error TS2564: Property 'bar' has no initializer and is not definitely assigned in the constructor.
+bestCommonTypeOfConditionalExpressions2.ts(7,31): error TS2564: Property 'baz' has no initializer and is not definitely assigned in the constructor.

@@ -1,0 +1,1 @@
+controlFlowAliasingCatchVariables.ts(23,9): error TS18046: 'e' is of type 'unknown'.

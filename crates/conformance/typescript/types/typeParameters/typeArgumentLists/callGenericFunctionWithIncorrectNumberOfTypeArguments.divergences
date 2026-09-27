@@ -1,0 +1,25 @@
+types: 12 of 52 tsc entries compared, 6 differ
+
+line 37: r6
+  tsc:  unknown
+  ours: number
+
+line 37: (new C2()).f<number>(1, '')
+  tsc:  unknown
+  ours: number
+
+line 37: new C2()
+  tsc:  C2<unknown, unknown>
+  ours: C2<T, U>
+
+line 38: r6b
+  tsc:  unknown
+  ours: number
+
+line 38: (new C2()).f<number, string, number>(1, '')
+  tsc:  unknown
+  ours: number
+
+line 38: new C2()
+  tsc:  C2<unknown, unknown>
+  ours: C2<T, U>

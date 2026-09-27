@@ -1,0 +1,17 @@
+types: 8 of 30 tsc entries compared, 3 differ
+
+line 8: arr2
+  tsc:  (string | boolean)[]
+  ours: string[]
+
+line 8: ["hello", true]
+  tsc:  (string | boolean)[]
+  ours: string[]
+
+line 10: [3, "three", "hello"]
+  tsc:  [number, string, string]
+  ours: [number, string]
+
+errors:
+line 8: ours: expected `string` (matching first element), got `boolean` (tsc accepts)
+line 11: ours: cannot infer element type of empty array; add a `: T[]` annotation (tsc accepts)

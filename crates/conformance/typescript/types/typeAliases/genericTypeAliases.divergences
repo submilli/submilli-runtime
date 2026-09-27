@@ -1,0 +1,13 @@
+types: 37 of 97 tsc entries compared, 3 differ
+
+line 40: s
+  tsc:  string
+  ours: Strange<number>
+
+line 40: null as unknown as (Strange<number>)
+  tsc:  string
+  ours: Strange<number>
+
+line 41: s
+  tsc:  string
+  ours: Strange<number>

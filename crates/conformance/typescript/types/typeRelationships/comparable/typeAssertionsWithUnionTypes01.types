@@ -1,0 +1,55 @@
+=== typeAssertionsWithUnionTypes01.ts ===
+interface I1 {
+>I1 : I1
+>   : ^^
+
+    p1: number
+>p1 : number
+>   : ^^^^^^
+
+}
+
+/*pruned*/;              
+               
+ 
+
+let x = { p1: 10, p2: 20 };
+>x : { p1: number; p2: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ p1: 10, p2: 20 } : { p1: number; p2: number; }
+>                   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>p1 : number
+>   : ^^^^^^
+>10 : 10
+>   : ^^
+>p2 : number
+>   : ^^^^^^
+>20 : 20
+>   : ^^
+
+/*pruned*/;            
+let z: I1 = x;
+>z : I1
+>  : ^^
+>x : { p1: number; p2: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+/*pruned*/;            
+let b = <number>z;
+>b : number
+>  : ^^^^^^
+><number>z : number
+>          : ^^^^^^
+>z : I1
+>  : ^^
+
+/*pruned*/;   
+/*pruned*/;   
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

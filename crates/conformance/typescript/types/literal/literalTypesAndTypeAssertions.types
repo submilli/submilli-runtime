@@ -1,0 +1,57 @@
+=== literalTypesAndTypeAssertions.ts ===
+const obj = {
+>obj : { a: "foo"; b: "foo"; c: string; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{     a: "foo" as "foo",     b: <"foo">"foo",     c: "foo" } : { a: "foo"; b: "foo"; c: string; }
+>                                                             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    a: "foo" as "foo",
+>a : "foo"
+>  : ^^^^^
+>"foo" as "foo" : "foo"
+>               : ^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+
+    b: <"foo">"foo",
+>b : "foo"
+>  : ^^^^^
+><"foo">"foo" : "foo"
+>             : ^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+
+    c: "foo"
+>c : string
+>  : ^^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+
+};
+
+let x1 = 1 as (0 | 1);
+>x1 : 0 | 1
+>   : ^^^^^
+>1 as (0 | 1) : 0 | 1
+>             : ^^^^^
+>1 : 1
+>  : ^
+
+let x2 = 1;
+>x2 : number
+>   : ^^^^^^
+>1 : 1
+>  : ^
+
+
+/*pruned*/;                      
+/*pruned*/;                               
+/*pruned*/;                               
+/*pruned*/;                                        
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

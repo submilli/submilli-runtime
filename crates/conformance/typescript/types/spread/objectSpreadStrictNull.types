@@ -1,0 +1,225 @@
+=== objectSpreadStrictNull.ts ===
+
+function f(
+>f : (definiteBoolean: { sn: boolean; }, definiteString: { sn: string; }, optionalString: { sn?: string; }, optionalNumber: { sn?: number; }, undefinedString: { sn: string | null; }, undefinedNumber: { sn: number | null; }) => void
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    definiteBoolean: { sn: boolean },
+>definiteBoolean : { sn: boolean; }
+>                : ^^^^^^^^^^^^^^^^
+>sn : boolean
+>   : ^^^^^^^
+
+    definiteString: { sn: string },
+>definiteString : { sn: string; }
+>               : ^^^^^^^^^^^^^^^
+>sn : string
+>   : ^^^^^^
+
+    optionalString: { sn?: string },
+>optionalString : { sn?: string; }
+>               : ^^^^^^^^^^^^^^^^
+>sn : string | undefined
+>   : ^^^^^^^^^^^^^^^^^^
+
+    optionalNumber: { sn?: number },
+>optionalNumber : { sn?: number; }
+>               : ^^^^^^^^^^^^^^^^
+>sn : number | undefined
+>   : ^^^^^^^^^^^^^^^^^^
+
+    undefinedString: { sn: string | null },
+>undefinedString : { sn: string | null; }
+>                : ^^^^^^^^^^^^^^^^^^^^^^
+>sn : string | null
+>   : ^^^^^^^^^^^^^
+
+    undefinedNumber: { sn: number | null }): void {
+>undefinedNumber : { sn: number | null; }
+>                : ^^^^^^^^^^^^^^^^^^^^^^
+>sn : number | null
+>   : ^^^^^^^^^^^^^
+
+    // optional
+    let optionalUnionStops: { sn: string | number } = { ...definiteBoolean, ...definiteString, ...optionalNumber };
+>optionalUnionStops : { sn: string | number; }
+>                   : ^^^^^^^^^^^^^^^^^^^^^^^^
+>sn : string | number
+>   : ^^^^^^^^^^^^^^^
+>{ ...definiteBoolean, ...definiteString, ...optionalNumber } : { sn: string | number; }
+>                                                             : ^^^^^^^^^^^^^^^^^^^^^^^^
+>definiteBoolean : { sn: boolean; }
+>                : ^^^^^^^^^^^^^^^^
+>definiteString : { sn: string; }
+>               : ^^^^^^^^^^^^^^^
+>optionalNumber : { sn?: number; }
+>               : ^^^^^^^^^^^^^^^^
+
+    let optionalUnionDuplicates: { sn: string | number } = { ...definiteBoolean, ...definiteString, ...optionalString, ...optionalNumber };
+>optionalUnionDuplicates : { sn: string | number; }
+>                        : ^^^^^^^^^^^^^^^^^^^^^^^^
+>sn : string | number
+>   : ^^^^^^^^^^^^^^^
+>{ ...definiteBoolean, ...definiteString, ...optionalString, ...optionalNumber } : { sn: string | number; }
+>                                                                                : ^^^^^^^^^^^^^^^^^^^^^^^^
+>definiteBoolean : { sn: boolean; }
+>                : ^^^^^^^^^^^^^^^^
+>definiteString : { sn: string; }
+>               : ^^^^^^^^^^^^^^^
+>optionalString : { sn?: string; }
+>               : ^^^^^^^^^^^^^^^^
+>optionalNumber : { sn?: number; }
+>               : ^^^^^^^^^^^^^^^^
+
+    let allOptional: { sn?: string | number } = { ...optionalString, ...optionalNumber };
+>allOptional : { sn?: string | number; }
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>sn : string | number | undefined
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ ...optionalString, ...optionalNumber } : { sn?: string | number | undefined; }
+>                                         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>optionalString : { sn?: string; }
+>               : ^^^^^^^^^^^^^^^^
+>optionalNumber : { sn?: number; }
+>               : ^^^^^^^^^^^^^^^^
+
+
+    // undefined
+    let undefinedUnionStops: { sn: string | number } = { ...definiteBoolean, ...definiteString, ...undefinedNumber };
+>undefinedUnionStops : { sn: string | number; }
+>                    : ^^^^^^^^^^^^^^^^^^^^^^^^
+>sn : string | number
+>   : ^^^^^^^^^^^^^^^
+>{ ...definiteBoolean, ...definiteString, ...undefinedNumber } : { sn: number | null; }
+>                                                              : ^^^^^^^^^^^^^^^^^^^^^^
+>definiteBoolean : { sn: boolean; }
+>                : ^^^^^^^^^^^^^^^^
+>definiteString : { sn: string; }
+>               : ^^^^^^^^^^^^^^^
+>undefinedNumber : { sn: number | null; }
+>                : ^^^^^^^^^^^^^^^^^^^^^^
+
+    let undefinedUnionDuplicates: { sn: string | number } = { ...definiteBoolean, ...definiteString, ...undefinedString, ...undefinedNumber };
+>undefinedUnionDuplicates : { sn: string | number; }
+>                         : ^^^^^^^^^^^^^^^^^^^^^^^^
+>sn : string | number
+>   : ^^^^^^^^^^^^^^^
+>{ ...definiteBoolean, ...definiteString, ...undefinedString, ...undefinedNumber } : { sn: number | null; }
+>                                                                                  : ^^^^^^^^^^^^^^^^^^^^^^
+>definiteBoolean : { sn: boolean; }
+>                : ^^^^^^^^^^^^^^^^
+>definiteString : { sn: string; }
+>               : ^^^^^^^^^^^^^^^
+>undefinedString : { sn: string | null; }
+>                : ^^^^^^^^^^^^^^^^^^^^^^
+>undefinedNumber : { sn: number | null; }
+>                : ^^^^^^^^^^^^^^^^^^^^^^
+
+    let allUndefined: { sn: string | number | null } = { ...undefinedString, ...undefinedNumber };
+>allUndefined : { sn: string | number | null; }
+>             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>sn : string | number | null
+>   : ^^^^^^^^^^^^^^^^^^^^^^
+>{ ...undefinedString, ...undefinedNumber } : { sn: number | null; }
+>                                           : ^^^^^^^^^^^^^^^^^^^^^^
+>undefinedString : { sn: string | null; }
+>                : ^^^^^^^^^^^^^^^^^^^^^^
+>undefinedNumber : { sn: number | null; }
+>                : ^^^^^^^^^^^^^^^^^^^^^^
+
+
+    let undefinedWithOptionalContinues: { sn: string | number | boolean } = { ...definiteBoolean, ...undefinedString, ...optionalNumber };
+>undefinedWithOptionalContinues : { sn: string | number | boolean; }
+>                               : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>sn : string | number | boolean
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ ...definiteBoolean, ...undefinedString, ...optionalNumber } : { sn: string | number | null; }
+>                                                              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>definiteBoolean : { sn: boolean; }
+>                : ^^^^^^^^^^^^^^^^
+>undefinedString : { sn: string | null; }
+>                : ^^^^^^^^^^^^^^^^^^^^^^
+>optionalNumber : { sn?: number; }
+>               : ^^^^^^^^^^^^^^^^
+
+}
+
+type Movie = {
+>Movie : Movie
+>      : ^^^^^
+
+    title: string;
+>title : string
+>      : ^^^^^^
+
+    yearReleased: number;
+>yearReleased : number
+>             : ^^^^^^
+
+}
+
+const m = { title: "The Matrix", yearReleased: 1999 };
+>m : { title: string; yearReleased: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ title: "The Matrix", yearReleased: 1999 } : { title: string; yearReleased: number; }
+>                                            : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>title : string
+>      : ^^^^^^
+>"The Matrix" : "The Matrix"
+>             : ^^^^^^^^^^^^
+>yearReleased : number
+>             : ^^^^^^
+>1999 : 1999
+>     : ^^^^
+
+// should error here because title: undefined is not assignable to string
+const x: Movie = { ...m, title: null };
+>x : Movie
+>  : ^^^^^
+>{ ...m, title: null } : { title: null; yearReleased: number; }
+>                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>m : { title: string; yearReleased: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>title : null
+>      : ^^^^
+
+
+interface Fields {
+>Fields : Fields
+>       : ^^^^^^
+
+    foo: number;
+>foo : number
+>    : ^^^^^^
+
+    bar: string;
+>bar : string
+>    : ^^^^^^
+
+}
+interface NearlyPartialFields {
+>NearlyPartialFields : NearlyPartialFields
+>                    : ^^^^^^^^^^^^^^^^^^^
+
+    foo: number | null;
+>foo : number | null
+>    : ^^^^^^^^^^^^^
+
+    bar: string | null;
+>bar : string | null
+>    : ^^^^^^^^^^^^^
+
+}
+/*pruned*/;                                                                                                 
+                                                                     
+                                             
+                                             
+                                                   
+ 
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -1,0 +1,6 @@
+typeGuardsInProperties.ts(9,13): error TS2564: Property 'pp1' has no initializer and is not definitely assigned in the constructor.
+typeGuardsInProperties.ts(10,5): error TS2564: Property 'pp2' has no initializer and is not definitely assigned in the constructor.
+typeGuardsInProperties.ts(16,9): error TS2322: Type 'string | false' is not assignable to type 'string | number'.   Type 'boolean' is not assignable to type 'string | number'.
+typeGuardsInProperties.ts(17,9): error TS2322: Type 'string | false' is not assignable to type 'string | number'.   Type 'boolean' is not assignable to type 'string | number'.
+typeGuardsInProperties.ts(18,9): error TS2322: Type 'string | false' is not assignable to type 'string | number'.   Type 'boolean' is not assignable to type 'string | number'.
+typeGuardsInProperties.ts(29,1): error TS2322: Type 'string | false' is not assignable to type 'string | number'.   Type 'boolean' is not assignable to type 'string | number'.

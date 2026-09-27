@@ -1,0 +1,108 @@
+=== equalityWithEnumTypes.ts ===
+
+// Literal enum type
+enum E1 {
+>E1 : E1
+>   : ^^
+
+    a = 1,
+>a : E1.a
+>  : ^^^^
+>1 : 1
+>  : ^
+
+    b = 2,
+>b : E1.b
+>  : ^^^^
+>2 : 2
+>  : ^
+
+}
+
+// Numeric enum type
+/**/;    
+               
+              
+ 
+
+function f1(v: E1): void {
+>f1 : (v: E1) => void
+>   : ^^^^^^^^^^^^^^^
+>v : E1
+>  : ^^
+
+    if (v !== 0) {  // Error
+>v !== 0 : boolean
+>        : ^^^^^^^
+>v : E1
+>  : ^^
+>0 : 0
+>  : ^
+
+        v;
+>v : E1
+>  : ^^
+
+    }
+    if (v !== 1) {
+>v !== 1 : boolean
+>        : ^^^^^^^
+>v : E1
+>  : ^^
+>1 : 1
+>  : ^
+
+        v;
+>v : E1.b
+>  : ^^^^
+
+    }
+    if (v !== 2) {
+>v !== 2 : boolean
+>        : ^^^^^^^
+>v : E1
+>  : ^^
+>2 : 2
+>  : ^
+
+        v;
+>v : E1.a
+>  : ^^^^
+
+    }
+    if (v !== 3) {  // Error
+>v !== 3 : boolean
+>        : ^^^^^^^
+>v : E1
+>  : ^^
+>3 : 3
+>  : ^
+
+        v;
+>v : E1
+>  : ^^
+
+    }
+}
+
+/*pruned*/;               
+                  
+          
+     
+                  
+          
+     
+                  
+          
+     
+                  
+          
+     
+ 
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -1,0 +1,863 @@
+=== comparisonOperatorWithNoRelationshipTypeParameter.ts ===
+enum E { a, b, c }
+>E : E
+>  : ^
+>a : E.a
+>  : ^^^
+>b : E.b
+>  : ^^^
+>c : E.c
+>  : ^^^
+
+
+let a: boolean = null as unknown as (boolean);
+>a : boolean
+>  : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let b: number = null as unknown as (number);
+>b : number
+>  : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let c: string = null as unknown as (string);
+>c : string
+>  : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;                             
+/*pruned*/;                       
+let f: { a: string } = null as unknown as ({ a: string });
+>f : { a: string; }
+>  : ^^^^^^^^^^^^^^
+>a : string
+>  : ^^^^^^
+>null as unknown as ({ a: string }) : { a: string; }
+>                                   : ^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>a : string
+>  : ^^^^^^
+
+/*pruned*/;                               
+
+function foo<T, U>(t: T, u: U): void {
+>foo : <T, U>(t: T, u: U) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+    let r1 = t < u;
+>r1 : boolean
+>   : ^^^^^^^
+>t < u : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+    let r2 = t > u;
+>r2 : boolean
+>   : ^^^^^^^
+>t > u : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+    let r3 = t <= u;
+>r3 : boolean
+>   : ^^^^^^^
+>t <= u : boolean
+>       : ^^^^^^^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+    let r4 = t >= u;
+>r4 : boolean
+>   : ^^^^^^^
+>t >= u : boolean
+>       : ^^^^^^^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+    let r5 = t == u;
+>r5 : boolean
+>   : ^^^^^^^
+>t == u : boolean
+>       : ^^^^^^^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+    let r6 = t != u;
+>r6 : boolean
+>   : ^^^^^^^
+>t != u : boolean
+>       : ^^^^^^^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+    let r7 = t === u;
+>r7 : boolean
+>   : ^^^^^^^
+>t === u : boolean
+>        : ^^^^^^^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+    let r8 = t !== u;
+>r8 : boolean
+>   : ^^^^^^^
+>t !== u : boolean
+>        : ^^^^^^^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+
+    // operator <
+    let r1a1 = t < a;
+>r1a1 : boolean
+>     : ^^^^^^^
+>t < a : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>a : boolean
+>  : ^^^^^^^
+
+    let r1a2 = t < b;
+>r1a2 : boolean
+>     : ^^^^^^^
+>t < b : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>b : number
+>  : ^^^^^^
+
+    let r1a3 = t < c;
+>r1a3 : boolean
+>     : ^^^^^^^
+>t < c : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>c : string
+>  : ^^^^^^
+
+    /*pruned*/;      
+    /*pruned*/;      
+    let r1a6 = t < f;
+>r1a6 : boolean
+>     : ^^^^^^^
+>t < f : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>f : { a: string; }
+>  : ^^^^^^^^^^^^^^
+
+    /*pruned*/;      
+
+    let r1b1 = a < t;
+>r1b1 : boolean
+>     : ^^^^^^^
+>a < t : boolean
+>      : ^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>t : T
+>  : ^
+
+    let r1b2 = b < t;
+>r1b2 : boolean
+>     : ^^^^^^^
+>b < t : boolean
+>      : ^^^^^^^
+>b : number
+>  : ^^^^^^
+>t : T
+>  : ^
+
+    let r1b3 = c < t;
+>r1b3 : boolean
+>     : ^^^^^^^
+>c < t : boolean
+>      : ^^^^^^^
+>c : string
+>  : ^^^^^^
+>t : T
+>  : ^
+
+    /*pruned*/;      
+    /*pruned*/;      
+    let r1b6 = f < t;
+>r1b6 : boolean
+>     : ^^^^^^^
+>f < t : boolean
+>      : ^^^^^^^
+>f : { a: string; }
+>  : ^^^^^^^^^^^^^^
+>t : T
+>  : ^
+
+    /*pruned*/;      
+
+    // operator >
+    let r2a1 = t < a;
+>r2a1 : boolean
+>     : ^^^^^^^
+>t < a : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>a : boolean
+>  : ^^^^^^^
+
+    let r2a2 = t < b;
+>r2a2 : boolean
+>     : ^^^^^^^
+>t < b : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>b : number
+>  : ^^^^^^
+
+    let r2a3 = t < c;
+>r2a3 : boolean
+>     : ^^^^^^^
+>t < c : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>c : string
+>  : ^^^^^^
+
+    /*pruned*/;      
+    /*pruned*/;      
+    let r2a6 = t < f;
+>r2a6 : boolean
+>     : ^^^^^^^
+>t < f : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>f : { a: string; }
+>  : ^^^^^^^^^^^^^^
+
+    /*pruned*/;      
+
+    let r2b1 = a < t;
+>r2b1 : boolean
+>     : ^^^^^^^
+>a < t : boolean
+>      : ^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>t : T
+>  : ^
+
+    let r2b2 = b < t;
+>r2b2 : boolean
+>     : ^^^^^^^
+>b < t : boolean
+>      : ^^^^^^^
+>b : number
+>  : ^^^^^^
+>t : T
+>  : ^
+
+    let r2b3 = c < t;
+>r2b3 : boolean
+>     : ^^^^^^^
+>c < t : boolean
+>      : ^^^^^^^
+>c : string
+>  : ^^^^^^
+>t : T
+>  : ^
+
+    /*pruned*/;      
+    /*pruned*/;      
+    let r2b6 = f < t;
+>r2b6 : boolean
+>     : ^^^^^^^
+>f < t : boolean
+>      : ^^^^^^^
+>f : { a: string; }
+>  : ^^^^^^^^^^^^^^
+>t : T
+>  : ^
+
+    /*pruned*/;      
+
+    // operator <=
+    let r3a1 = t < a;
+>r3a1 : boolean
+>     : ^^^^^^^
+>t < a : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>a : boolean
+>  : ^^^^^^^
+
+    let r3a2 = t < b;
+>r3a2 : boolean
+>     : ^^^^^^^
+>t < b : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>b : number
+>  : ^^^^^^
+
+    let r3a3 = t < c;
+>r3a3 : boolean
+>     : ^^^^^^^
+>t < c : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>c : string
+>  : ^^^^^^
+
+    /*pruned*/;      
+    /*pruned*/;      
+    let r3a6 = t < f;
+>r3a6 : boolean
+>     : ^^^^^^^
+>t < f : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>f : { a: string; }
+>  : ^^^^^^^^^^^^^^
+
+    /*pruned*/;      
+
+    let r3b1 = a < t;
+>r3b1 : boolean
+>     : ^^^^^^^
+>a < t : boolean
+>      : ^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>t : T
+>  : ^
+
+    let r3b2 = b < t;
+>r3b2 : boolean
+>     : ^^^^^^^
+>b < t : boolean
+>      : ^^^^^^^
+>b : number
+>  : ^^^^^^
+>t : T
+>  : ^
+
+    let r3b3 = c < t;
+>r3b3 : boolean
+>     : ^^^^^^^
+>c < t : boolean
+>      : ^^^^^^^
+>c : string
+>  : ^^^^^^
+>t : T
+>  : ^
+
+    /*pruned*/;      
+    /*pruned*/;      
+    let r3b6 = f < t;
+>r3b6 : boolean
+>     : ^^^^^^^
+>f < t : boolean
+>      : ^^^^^^^
+>f : { a: string; }
+>  : ^^^^^^^^^^^^^^
+>t : T
+>  : ^
+
+    /*pruned*/;      
+
+    // operator >=
+    let r4a1 = t < a;
+>r4a1 : boolean
+>     : ^^^^^^^
+>t < a : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>a : boolean
+>  : ^^^^^^^
+
+    let r4a2 = t < b;
+>r4a2 : boolean
+>     : ^^^^^^^
+>t < b : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>b : number
+>  : ^^^^^^
+
+    let r4a3 = t < c;
+>r4a3 : boolean
+>     : ^^^^^^^
+>t < c : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>c : string
+>  : ^^^^^^
+
+    /*pruned*/;      
+    /*pruned*/;      
+    let r4a6 = t < f;
+>r4a6 : boolean
+>     : ^^^^^^^
+>t < f : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>f : { a: string; }
+>  : ^^^^^^^^^^^^^^
+
+    /*pruned*/;      
+
+    let r4b1 = a < t;
+>r4b1 : boolean
+>     : ^^^^^^^
+>a < t : boolean
+>      : ^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>t : T
+>  : ^
+
+    let r4b2 = b < t;
+>r4b2 : boolean
+>     : ^^^^^^^
+>b < t : boolean
+>      : ^^^^^^^
+>b : number
+>  : ^^^^^^
+>t : T
+>  : ^
+
+    let r4b3 = c < t;
+>r4b3 : boolean
+>     : ^^^^^^^
+>c < t : boolean
+>      : ^^^^^^^
+>c : string
+>  : ^^^^^^
+>t : T
+>  : ^
+
+    /*pruned*/;      
+    /*pruned*/;      
+    let r4b6 = f < t;
+>r4b6 : boolean
+>     : ^^^^^^^
+>f < t : boolean
+>      : ^^^^^^^
+>f : { a: string; }
+>  : ^^^^^^^^^^^^^^
+>t : T
+>  : ^
+
+    /*pruned*/;      
+
+    // operator ==
+    let r5a1 = t < a;
+>r5a1 : boolean
+>     : ^^^^^^^
+>t < a : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>a : boolean
+>  : ^^^^^^^
+
+    let r5a2 = t < b;
+>r5a2 : boolean
+>     : ^^^^^^^
+>t < b : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>b : number
+>  : ^^^^^^
+
+    let r5a3 = t < c;
+>r5a3 : boolean
+>     : ^^^^^^^
+>t < c : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>c : string
+>  : ^^^^^^
+
+    /*pruned*/;      
+    /*pruned*/;      
+    let r5a6 = t < f;
+>r5a6 : boolean
+>     : ^^^^^^^
+>t < f : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>f : { a: string; }
+>  : ^^^^^^^^^^^^^^
+
+    /*pruned*/;      
+
+    let r5b1 = a < t;
+>r5b1 : boolean
+>     : ^^^^^^^
+>a < t : boolean
+>      : ^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>t : T
+>  : ^
+
+    let r5b2 = b < t;
+>r5b2 : boolean
+>     : ^^^^^^^
+>b < t : boolean
+>      : ^^^^^^^
+>b : number
+>  : ^^^^^^
+>t : T
+>  : ^
+
+    let r5b3 = c < t;
+>r5b3 : boolean
+>     : ^^^^^^^
+>c < t : boolean
+>      : ^^^^^^^
+>c : string
+>  : ^^^^^^
+>t : T
+>  : ^
+
+    /*pruned*/;      
+    /*pruned*/;      
+    let r5b6 = f < t;
+>r5b6 : boolean
+>     : ^^^^^^^
+>f < t : boolean
+>      : ^^^^^^^
+>f : { a: string; }
+>  : ^^^^^^^^^^^^^^
+>t : T
+>  : ^
+
+    /*pruned*/;      
+
+    // operator !=
+    let r6a1 = t < a;
+>r6a1 : boolean
+>     : ^^^^^^^
+>t < a : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>a : boolean
+>  : ^^^^^^^
+
+    let r6a2 = t < b;
+>r6a2 : boolean
+>     : ^^^^^^^
+>t < b : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>b : number
+>  : ^^^^^^
+
+    let r6a3 = t < c;
+>r6a3 : boolean
+>     : ^^^^^^^
+>t < c : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>c : string
+>  : ^^^^^^
+
+    /*pruned*/;      
+    /*pruned*/;      
+    let r6a6 = t < f;
+>r6a6 : boolean
+>     : ^^^^^^^
+>t < f : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>f : { a: string; }
+>  : ^^^^^^^^^^^^^^
+
+    /*pruned*/;      
+
+    let r6b1 = a < t;
+>r6b1 : boolean
+>     : ^^^^^^^
+>a < t : boolean
+>      : ^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>t : T
+>  : ^
+
+    let r6b2 = b < t;
+>r6b2 : boolean
+>     : ^^^^^^^
+>b < t : boolean
+>      : ^^^^^^^
+>b : number
+>  : ^^^^^^
+>t : T
+>  : ^
+
+    let r6b3 = c < t;
+>r6b3 : boolean
+>     : ^^^^^^^
+>c < t : boolean
+>      : ^^^^^^^
+>c : string
+>  : ^^^^^^
+>t : T
+>  : ^
+
+    /*pruned*/;      
+    /*pruned*/;      
+    let r6b6 = f < t;
+>r6b6 : boolean
+>     : ^^^^^^^
+>f < t : boolean
+>      : ^^^^^^^
+>f : { a: string; }
+>  : ^^^^^^^^^^^^^^
+>t : T
+>  : ^
+
+    /*pruned*/;      
+
+    // operator ===
+    let r7a1 = t < a;
+>r7a1 : boolean
+>     : ^^^^^^^
+>t < a : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>a : boolean
+>  : ^^^^^^^
+
+    let r7a2 = t < b;
+>r7a2 : boolean
+>     : ^^^^^^^
+>t < b : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>b : number
+>  : ^^^^^^
+
+    let r7a3 = t < c;
+>r7a3 : boolean
+>     : ^^^^^^^
+>t < c : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>c : string
+>  : ^^^^^^
+
+    /*pruned*/;      
+    /*pruned*/;      
+    let r7a6 = t < f;
+>r7a6 : boolean
+>     : ^^^^^^^
+>t < f : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>f : { a: string; }
+>  : ^^^^^^^^^^^^^^
+
+    /*pruned*/;      
+
+    let r7b1 = a < t;
+>r7b1 : boolean
+>     : ^^^^^^^
+>a < t : boolean
+>      : ^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>t : T
+>  : ^
+
+    let r7b2 = b < t;
+>r7b2 : boolean
+>     : ^^^^^^^
+>b < t : boolean
+>      : ^^^^^^^
+>b : number
+>  : ^^^^^^
+>t : T
+>  : ^
+
+    let r7b3 = c < t;
+>r7b3 : boolean
+>     : ^^^^^^^
+>c < t : boolean
+>      : ^^^^^^^
+>c : string
+>  : ^^^^^^
+>t : T
+>  : ^
+
+    /*pruned*/;      
+    /*pruned*/;      
+    let r7b6 = f < t;
+>r7b6 : boolean
+>     : ^^^^^^^
+>f < t : boolean
+>      : ^^^^^^^
+>f : { a: string; }
+>  : ^^^^^^^^^^^^^^
+>t : T
+>  : ^
+
+    /*pruned*/;      
+
+    // operator !==
+    let r8a1 = t < a;
+>r8a1 : boolean
+>     : ^^^^^^^
+>t < a : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>a : boolean
+>  : ^^^^^^^
+
+    let r8a2 = t < b;
+>r8a2 : boolean
+>     : ^^^^^^^
+>t < b : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>b : number
+>  : ^^^^^^
+
+    let r8a3 = t < c;
+>r8a3 : boolean
+>     : ^^^^^^^
+>t < c : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>c : string
+>  : ^^^^^^
+
+    /*pruned*/;      
+    /*pruned*/;      
+    let r8a6 = t < f;
+>r8a6 : boolean
+>     : ^^^^^^^
+>t < f : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>f : { a: string; }
+>  : ^^^^^^^^^^^^^^
+
+    /*pruned*/;      
+
+    let r8b1 = a < t;
+>r8b1 : boolean
+>     : ^^^^^^^
+>a < t : boolean
+>      : ^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>t : T
+>  : ^
+
+    let r8b2 = b < t;
+>r8b2 : boolean
+>     : ^^^^^^^
+>b < t : boolean
+>      : ^^^^^^^
+>b : number
+>  : ^^^^^^
+>t : T
+>  : ^
+
+    let r8b3 = c < t;
+>r8b3 : boolean
+>     : ^^^^^^^
+>c < t : boolean
+>      : ^^^^^^^
+>c : string
+>  : ^^^^^^
+>t : T
+>  : ^
+
+    /*pruned*/;      
+    /*pruned*/;      
+    let r8b6 = f < t;
+>r8b6 : boolean
+>     : ^^^^^^^
+>f < t : boolean
+>      : ^^^^^^^
+>f : { a: string; }
+>  : ^^^^^^^^^^^^^^
+>t : T
+>  : ^
+
+    /*pruned*/;      
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

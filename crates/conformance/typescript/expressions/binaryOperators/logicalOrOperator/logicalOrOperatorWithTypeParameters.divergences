@@ -1,0 +1,33 @@
+types: 41 of 49 tsc entries compared, 8 differ
+
+line 5: r3
+  tsc:  U | NonNullable<T>
+  ours: T | U
+
+line 5: t || u
+  tsc:  U | NonNullable<T>
+  ours: T | U
+
+line 6: t || u
+  tsc:  U | NonNullable<T>
+  ours: T | U
+
+line 10: r1
+  tsc:  U | NonNullable<T>
+  ours: T | U
+
+line 10: t || u
+  tsc:  U | NonNullable<T>
+  ours: T | U
+
+line 14: r5
+  tsc:  V | NonNullable<U>
+  ours: U | V
+
+line 14: u || v
+  tsc:  V | NonNullable<U>
+  ours: U | V
+
+line 15: u || v
+  tsc:  V | NonNullable<U>
+  ours: U | V

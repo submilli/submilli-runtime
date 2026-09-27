@@ -1,0 +1,125 @@
+types: 78 of 258 tsc entries compared, 27 differ
+
+line 17: { produce: _a => 0, consume: n => n.toFixed(), }
+  tsc:  { produce: (_a: number) => number; consume: (n: number) => string; }
+  ours: { consume: (arg0: T) => <error>; produce: (arg0: number) => number }
+
+line 31: [() => 0, n => n.toFixed()]
+  tsc:  [() => number, (n: number) => string]
+  ours: [(arg0: number) => T, (arg0: T) => void]
+
+line 32: [_a => 0, n => n.toFixed()]
+  tsc:  [(_a: number) => number, (n: number) => string]
+  ours: [(arg0: number) => T, (arg0: T) => void]
+
+line 52: { mutations: { foo() { } }, action: (a) => { a.foo() } }
+  tsc:  { mutations: { foo(): void; }; action: (a: { foo(): void; }) => void; }
+  ours: { action: (arg0: M) => void; mutations: { foo: () => void } }
+
+line 56: (a) => { a.foo() }
+  tsc:  (a: { foo(): void; }) => void
+  ours: (arg0: M) => void
+
+line 63: { a: () => { return 42 }, b(a) {}, }
+  tsc:  { a: () => 42; b(a: () => 42): void; }
+  ours: { a: () => number; b: (arg0: A) => void }
+
+line 64: () => { return 42 }
+  tsc:  () => 42
+  ours: () => number
+
+line 68: { a: function () { return 42 }, b(a) {}, }
+  tsc:  { a: () => 42; b(a: () => 42): void; }
+  ours: { a: () => number; b: (arg0: A) => void }
+
+line 69: function () { return 42 }
+  tsc:  () => 42
+  ours: () => number
+
+line 73: { a() { return 42 }, b(a) {}, }
+  tsc:  { a(): 42; b(a: () => 42): void; }
+  ours: { a: () => number; b: (arg0: A) => void }
+
+line 88: { a: () => 0, b: (a) => 'a', c: (b) => { const x: string = b; } }
+  tsc:  { a: () => number; b: (a: number) => string; c: (b: string) => void; }
+  ours: { a: () => number; b: (arg0: R1) => string; c: (arg0: R2) => void }
+
+line 90: (a) => 'a'
+  tsc:  (a: number) => string
+  ours: (arg0: R1) => string
+
+line 91: (b) => { const x: string = b; }
+  tsc:  (b: string) => void
+  ours: (arg0: R2) => void
+
+line 92: b
+  tsc:  string
+  ours: R2
+
+line 96: { a: () => 0, b: (a) => a, c: (b) => { const x: number = b; } }
+  tsc:  { a: () => number; b: (a: number) => number; c: (b: number) => void; }
+  ours: { a: () => number; b: (arg0: R1) => R1; c: (arg0: R2) => void }
+
+line 98: (a) => a
+  tsc:  (a: number) => number
+  ours: (arg0: R1) => R1
+
+line 99: (b) => { const x: number = b; }
+  tsc:  (b: number) => void
+  ours: (arg0: R2) => void
+
+line 100: b
+  tsc:  number
+  ours: R2
+
+line 174: example({ fetch: (params: Params) => 123, map: (number) => String(number) })
+  tsc:  (params: Params) => string
+  ours: (arg0: TParams) => TMapped
+
+line 174: { fetch: (params: Params) => 123, map: (number) => String(number) }
+  tsc:  { fetch: (params: Params) => number; map: (number: number) => string; }
+  ours: Opts<TParams, TDone, TMapped>
+
+line 176: (number) => String(number)
+  tsc:  (number: number) => string
+  ours: (arg0: TDone) => string
+
+line 179: example({ fetch: (params: Params, foo: number) => 123, map: (number) => String(number) })
+  tsc:  (params: Params) => string
+  ours: (arg0: TParams) => TMapped
+
+line 179: { fetch: (params: Params, foo: number) => 123, map: (number) => String(number) }
+  tsc:  { fetch: (params: Params, foo: number) => number; map: (number: number) => string; }
+  ours: Opts<TParams, TDone, TMapped>
+
+line 181: (number) => String(number)
+  tsc:  (number: number) => string
+  ours: (arg0: TDone) => string
+
+line 184: example({ fetch: (params: Params, foo) => 123, map: (number) => String(number) })
+  tsc:  (params: Params) => string
+  ours: (arg0: TParams) => TMapped
+
+line 184: { fetch: (params: Params, foo) => 123, map: (number) => String(number) }
+  tsc:  { fetch: (params: Params, foo: number) => number; map: (number: number) => string; }
+  ours: Opts<TParams, TDone, TMapped>
+
+line 186: (number) => String(number)
+  tsc:  (number: number) => string
+  ours: (arg0: TDone) => string
+
+errors:
+line 12: ours: expected `{ consume: (arg0: T) => void; produce: (arg0: number) => T }`, got `{ consume: (arg0: T) => <error>; produce: () => number }` (tsc accepts)
+line 13: ours: expected `(arg0: number) => T`, got `() => number` (tsc accepts)
+line 14: ours: field `toFixed` does not exist on `T` (tsc accepts)
+line 19: ours: field `toFixed` does not exist on `T` (tsc accepts)
+line 22: ours: expected `{ consume: (arg0: T) => void; produce: (arg0: number) => T }`, got `{ consume: (arg0: T) => <error>; produce: () => number }` (tsc accepts)
+line 23: ours: expected `(arg0: number) => T`, got `() => number` (tsc accepts)
+line 26: ours: field `toFixed` does not exist on `T` (tsc accepts)
+line 31: ours: expected `(arg0: number) => T`, got `() => number` (tsc accepts)
+line 32: ours: field `toFixed` does not exist on `T` (tsc accepts)
+line 56: ours: field `foo` does not exist on `M` (tsc accepts)
+line 174: ours: cannot infer type parameter(s) `TParams`, `TDone`, `TMapped`; consider adding an explicit type argument (tsc accepts)
+line 175: ours: field `fetch`: expected `(arg0: TParams, arg1: number) => TDone`, got `(arg0: Params) => number` (tsc accepts)
+line 179: ours: cannot infer type parameter(s) `TParams`, `TDone`, `TMapped`; consider adding an explicit type argument (tsc accepts)
+line 184: ours: cannot infer type parameter(s) `TParams`, `TDone`, `TMapped`; consider adding an explicit type argument (tsc accepts)

@@ -1,0 +1,114 @@
+=== typeGuardsTypeParameters.ts ===
+
+// Type guards involving type parameters produce intersection types
+
+class C {
+>C : C
+>  : ^
+
+    prop: string = "";
+>prop : string
+>     : ^^^^^^
+>"" : ""
+>   : ^^
+
+}
+
+function f1<T>(x: T): void {
+>f1 : <T>(x: T) => void
+>   : ^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+
+    if (x instanceof C) {
+>x instanceof C : boolean
+>               : ^^^^^^^
+>x : T
+>  : ^
+>C : typeof C
+>  : ^^^^^^^^
+
+        let v1: T = x;
+>v1 : T
+>   : ^
+>x : T & C
+>  : ^^^^^
+
+        let v2: C = x;
+>v2 : C
+>   : ^
+>x : T & C
+>  : ^^^^^
+
+        x.prop;
+>x.prop : string
+>       : ^^^^^^
+>x : T & C
+>  : ^^^^^
+>prop : string
+>     : ^^^^^^
+
+    }
+}
+
+function f2<T>(x: T): void {
+>f2 : <T>(x: T) => void
+>   : ^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+
+    if (typeof x === "string") {
+>typeof x === "string" : boolean
+>                      : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : T
+>  : ^
+>"string" : "string"
+>         : ^^^^^^^^
+
+        let v1: T = x;
+>v1 : T
+>   : ^
+>x : T & string
+>  : ^^^^^^^^^^
+
+        let v2: string = x;
+>v2 : string
+>   : ^^^^^^
+>x : T & string
+>  : ^^^^^^^^^^
+
+        x.length;
+>x.length : number
+>         : ^^^^^^
+>x : T & string
+>  : ^^^^^^^^^^
+>length : number
+>       : ^^^^^^
+
+    }
+}
+
+// Repro from #13872
+
+/*pruned*/;                                            
+                                 
+                             
+                                
+                                        
+                                
+         
+     
+ 
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

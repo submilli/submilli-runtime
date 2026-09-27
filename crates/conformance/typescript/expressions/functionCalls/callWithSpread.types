@@ -1,0 +1,173 @@
+=== callWithSpread.ts ===
+interface X {
+>X : X
+>  : ^
+
+    foo(x: number, y: number, ...z: string[]): X;
+>foo : (x: number, y: number, ...z: string[]) => X
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>y : number
+>  : ^^^^^^
+>z : string[]
+>  : ^^^^^^^^
+
+}
+
+function foo(x: number, y: number, ...z: string[]): void {
+>foo : (x: number, y: number, ...z: string[]) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>y : number
+>  : ^^^^^^
+>z : string[]
+>  : ^^^^^^^^
+
+}
+
+let a: string[] = null as unknown as (string[]);
+>a : string[]
+>  : ^^^^^^^^
+>null as unknown as (string[]) : string[]
+>                              : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let z: number[] = null as unknown as (number[]);
+>z : number[]
+>  : ^^^^^^^^
+>null as unknown as (number[]) : number[]
+>                              : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;                         
+/*pruned*/;                            
+
+foo(1, 2, "abc");
+>foo(1, 2, "abc") : void
+>                 : ^^^^
+>foo : (x: number, y: number, ...z: string[]) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+>2 : 2
+>  : ^
+>"abc" : "abc"
+>      : ^^^^^
+
+/*pruned*/;     
+/*pruned*/;            
+
+/*pruned*/;          
+/*pruned*/;         
+/*pruned*/;                
+
+/*pruned*/;                          
+/*pruned*/;                         
+/*pruned*/;                                
+
+/*pruned*/;            
+/*pruned*/;           
+/*pruned*/;                  
+
+/*pruned*/;                              
+/*pruned*/;                             
+/*pruned*/;                                    
+
+/*pruned*/;            
+/*pruned*/;           
+/*pruned*/;                  
+
+/*pruned*/;                             
+
+class C {
+>C : C
+>  : ^
+
+    constructor(x: number, y: number, ...z: string[]) {
+>x : number
+>  : ^^^^^^
+>y : number
+>  : ^^^^^^
+>z : string[]
+>  : ^^^^^^^^
+
+        this.foo(x, y);
+>this.foo(x, y) : void
+>               : ^^^^
+>this.foo : (x: number, y: number, ...z: string[]) => void
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>this : this
+>     : ^^^^
+>foo : (x: number, y: number, ...z: string[]) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>y : number
+>  : ^^^^^^
+
+        /*pruned*/;          
+    }
+    foo(x: number, y: number, ...z: string[]): void {
+>foo : (x: number, y: number, ...z: string[]) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>y : number
+>  : ^^^^^^
+>z : string[]
+>  : ^^^^^^^^
+
+    }
+}
+
+class D extends C {
+>D : D
+>  : ^
+>C : C
+>  : ^
+
+    constructor() {
+        super(1, 2);
+>super(1, 2) : void
+>            : ^^^^
+>super : typeof C
+>      : ^^^^^^^^
+>1 : 1
+>  : ^
+>2 : 2
+>  : ^
+
+        /*pruned*/;       
+    }
+    foo(): void {
+>foo : () => void
+>    : ^^^^^^^^^^
+
+        super.foo(1, 2);
+>super.foo(1, 2) : void
+>                : ^^^^
+>super.foo : (x: number, y: number, ...z: string[]) => void
+>          : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>super : C
+>      : ^
+>foo : (x: number, y: number, ...z: string[]) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+>2 : 2
+>  : ^
+
+        /*pruned*/;           
+    }
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+
