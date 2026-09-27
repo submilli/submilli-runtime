@@ -12,8 +12,8 @@ pub(super) fn invalid_argument<'t>(
     types: TypeResolver<'_>,
 ) -> Option<&'t Type> {
     // A legal nested void must not hide a later forbidden never argument.
-    let offender = super::resolve_type::valueless_within_type_argument(ty, false)
-        .or_else(|| super::resolve_type::valueless_within_type_argument(ty, true))?;
+    let offender = super::void_value::valueless_within_type_argument(ty, false)
+        .or_else(|| super::void_value::valueless_within_type_argument(ty, true))?;
     if offender.is_void() && invalid_position(ty, allow_void, types).is_none() {
         return None;
     }

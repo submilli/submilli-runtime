@@ -141,7 +141,7 @@ impl RwOp {
 }
 
 /// A position that compares a value rather than testing it for truthiness.
-/// Sibling of [`ValuePosition`](super::resolve_type::ValuePosition) rather than
+/// Sibling of [`ValuePosition`](super::void_value::ValuePosition) rather than
 /// a shared enum — the two sentence frames differ.
 #[derive(Clone, Copy)]
 pub(super) enum ComparisonPosition {
@@ -182,6 +182,19 @@ impl<'a> Inferer<'a> {
             help,
             notes: vec![],
         });
+    }
+
+    /// How many *errors* have been reported so far.
+    ///
+    /// Callers that suppress a follow-on diagnostic must count errors, not all
+    /// diagnostics: an error aborts before codegen, so a warning is the only
+    /// thing that can both raise the count and let compilation continue —
+    /// which would silence the follow-on and let its subject reach codegen.
+    pub(super) fn error_count(&self) -> usize {
+        self.diagnostics
+            .iter()
+            .filter(|d| d.severity == crate::Severity::Error)
+            .count()
     }
 
     /// A `void`/`never` expression where a value is compared rather than

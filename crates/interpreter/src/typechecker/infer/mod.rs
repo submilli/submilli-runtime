@@ -34,6 +34,7 @@ mod type_namespace;
 mod type_predicate;
 mod type_registry;
 mod void_type_arguments;
+mod void_value;
 
 use std::collections::{BTreeMap, BTreeSet};
 

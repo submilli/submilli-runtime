@@ -7,7 +7,7 @@ use crate::{
     StmtKind, Type, TypeKind, TypeSymbol, ValueKind,
 };
 
-use super::resolve_type::ValuePosition;
+use super::void_value::ValuePosition;
 use super::{Inferer, ValueEntry};
 use crate::runtime::prelude::number::global_constant_value;
 

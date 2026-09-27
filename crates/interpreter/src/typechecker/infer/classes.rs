@@ -15,7 +15,7 @@ use crate::{
 };
 
 use super::Inferer;
-use super::resolve_type::ValuePosition;
+use super::void_value::ValuePosition;
 
 use super::assignable::ImplementsFailure;
 use super::generic::{

@@ -17,8 +17,8 @@ use super::assignable::TypeResolver;
 use super::format_signature::SignatureKind;
 use super::namespace_symbol;
 use super::reserved::{is_reserved_object_field, override_field_signature, reserved_field_message};
-use super::resolve_type::ValuePosition;
 use super::stmt::StaticWrite;
+use super::void_value::{ValueOperand, ValuePosition};
 use crate::did_you_mean;
 
 use super::type_aliases::alias_ref_body;
@@ -4353,7 +4353,6 @@ impl Inferer<'_> {
                             .and_then(|m| m.get(&field.name.name))
                             .map(|f| f.ty.clone())
                     });
-                    let errors_before = self.error_count();
                     let previous_hint = self.object_this_hint.take();
                     if matches!(
                         self.ast.expr(field.value).kind,
@@ -4361,24 +4360,23 @@ impl Inferer<'_> {
                     ) {
                         self.object_this_hint = Some(receiver_hint.clone());
                     }
-                    let (typed_value, value_ty, cached_error) =
-                        if let Some(value) = inferred_fields.remove(&field.value) {
-                            value
-                        } else {
-                            let (id, ty) = self.infer_expr(field.value, hint.as_ref());
-                            (id, ty, false)
-                        };
+                    let ValueOperand {
+                        typed_expr: typed_value,
+                        ty: value_ty,
+                        already_errored,
+                        rejected_void,
+                    } = self.infer_value_operand(
+                        field.value,
+                        hint.as_ref(),
+                        ValuePosition::FieldValue,
+                        inferred_fields.remove(&field.value),
+                    );
                     self.object_this_hint = previous_hint;
                     if !has_spread {
                         object_members.push(crate::TypedObjectMember::Value(typed_value));
                     }
                     let value_span = self.ast.expr(field.value).span;
-                    // A hinted slot already reported the mismatch against its
-                    // hint; screening again gives one mistake two errors.
-                    let already_errored = cached_error || self.error_count() > errors_before;
-                    if !already_errored
-                        && self.reject_void_value(&value_ty, value_span, ValuePosition::FieldValue)
-                    {
+                    if rejected_void {
                         // Record the field at `Error` rather than dropping it —
                         // a missing field cascades into every later use of the
                         // object's shape — and skip the per-field checks below,
@@ -4842,14 +4840,13 @@ impl Inferer<'_> {
                 crate::ArrayLiteralElement::Value(elem_id) => {
                     let elem_span = self.ast.expr(elem_id).span;
                     let hint = element_ty.as_ref().or(expected_elem);
-                    let errors_before = self.error_count();
-                    let (typed_id, elem_ty) = self.infer_expr(elem_id, hint);
-                    // See the object-literal screen: a hinted element has
-                    // already been reported against its hint.
-                    let already_errored = self.error_count() > errors_before;
-                    if !already_errored
-                        && self.reject_void_value(&elem_ty, elem_span, ValuePosition::ArrayElement)
-                    {
+                    let ValueOperand {
+                        typed_expr: typed_id,
+                        ty: elem_ty,
+                        already_errored,
+                        rejected_void,
+                    } = self.infer_value_operand(elem_id, hint, ValuePosition::ArrayElement, None);
+                    if rejected_void {
                         typed_elements.push(crate::TypedArrayElement::Value(typed_id));
                         continue;
                     }

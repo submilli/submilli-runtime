@@ -1,6 +1,9 @@
 use crate::{Package, Type, TypeAnnotation, TypeAnnotationKind, TypeKind, TypeSymbol};
 
 use super::Inferer;
+use super::format_definition;
+use super::reserved::{is_reserved_object_field, override_field_signature};
+use super::void_value::ValuePosition;
 
 /// An already-resolved class identity in type position: how the source spelled
 /// it (`Box`, `ns.Box`) alongside the symbol it resolved to.
@@ -10,71 +13,6 @@ struct ClassName {
     name: String,
     mangled: crate::MangledName,
 }
-use super::format_definition;
-use super::reserved::{is_reserved_object_field, override_field_signature};
-
-/// Which no-value types a [`valueless_within`] scan refuses, and how deep it
-/// looks. The two axes are the whole difference between its two wrappers.
-#[derive(Clone, Copy)]
-struct ValuelessScan {
-    include_void: bool,
-    /// Refuse `never` as well as `void`. `never` has no values either, but it
-    /// is *absorbed* rather than represented — `string | never` collapses to
-    /// `string`, and an erased slot typed `never` is simply never written — so
-    /// only the type-argument rule, where erasure is physical, refuses it.
-    include_never: bool,
-    /// Follow into an `InterfaceRef`/`ClassRef`'s type arguments. Whether
-    /// `T = void` needs a value slot depends on where the *declaration* puts
-    /// `T`: `Sink<void>` is legitimate and supported (its `emit` returns `T`,
-    /// and a `void` return has no result slot at all), while `Map<string, void>`
-    /// is not. Only the class rule, which erases every argument to a boxed
-    /// slot regardless, can refuse them all without a position analysis.
-    follow_type_args: bool,
-}
-
-/// A position that holds a value, named for the diagnostic. `void` reaches all
-/// of these and has no runtime representation in any of them.
-#[derive(Clone, Copy)]
-pub(super) enum ValuePosition {
-    Parameter,
-    UnionMember,
-    ArrayElement,
-    TupleElement,
-    FieldType,
-    FieldValue,
-}
-
-impl std::fmt::Display for ValuePosition {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            ValuePosition::Parameter => "a parameter type",
-            ValuePosition::UnionMember => "a union member",
-            ValuePosition::ArrayElement => "an array element",
-            ValuePosition::TupleElement => "a tuple element",
-            ValuePosition::FieldType => "a field type",
-            ValuePosition::FieldValue => "a field value",
-        })
-    }
-}
-
-/// The first no-value type inside `ty` that would need a value slot, per `rule`.
-fn valueless_within<'t>(ty: &'t Type, rule: ValuelessScan) -> Option<&'t Type> {
-    let recur = |t: &'t Type| valueless_within(t, rule);
-    match ty.peel() {
-        t @ Type::Void if rule.include_void => Some(t),
-        t @ Type::Never if rule.include_never => Some(t),
-        Type::Union(members) => members.iter().find_map(recur),
-        Type::Array(elem) => recur(elem),
-        Type::Tuple(elems) => elems.iter().find_map(recur),
-        // A function's own `void` return is legitimate; only its parameters
-        // occupy value slots.
-        Type::Function { params, .. } => params.iter().find_map(recur),
-        Type::InterfaceRef { args, .. } | Type::ClassRef { args, .. } if rule.follow_type_args => {
-            args.iter().find_map(recur)
-        }
-        _ => None,
-    }
-}
 
 /// `readonly` around a resolved array or tuple. A poisoned operand stays poisoned
 /// rather than becoming a readonly wrapper around nothing.
@@ -83,32 +21,6 @@ fn readonly_of(operand: Type) -> Type {
         Type::Array(_) | Type::Tuple(_) => Type::Readonly(Box::new(operand)),
         other => other,
     }
-}
-
-/// The `void` inside `ty` that would need a value slot — the rule for ordinary
-/// value positions (a parameter, a union member, an element, a field).
-pub(super) fn void_within_value_position(ty: &Type) -> Option<&Type> {
-    valueless_within(
-        ty,
-        ValuelessScan {
-            include_void: true,
-            include_never: false,
-            follow_type_args: false,
-        },
-    )
-}
-
-/// The first `void`/`never` anywhere inside `ty`, which cannot occupy a value
-/// slot and so cannot be erased into one as a type argument.
-pub(super) fn valueless_within_type_argument(ty: &Type, include_void: bool) -> Option<&Type> {
-    valueless_within(
-        ty,
-        ValuelessScan {
-            include_void,
-            include_never: true,
-            follow_type_args: true,
-        },
-    )
 }
 
 impl<'a> Inferer<'a> {
@@ -303,22 +215,6 @@ impl<'a> Inferer<'a> {
         Type::class_ref(package, name, mangled, resolved_args)
     }
 
-    /// [`resolve_type`](Self::resolve_type) for a position that holds a
-    /// *value*. `void` (and `never`) have no runtime representation, so a
-    /// composite built over one has no lowering — codegen would reach
-    /// `value_type called on Void`.
-    pub(super) fn resolve_value_type(
-        &mut self,
-        annot: &TypeAnnotation,
-        position: ValuePosition,
-    ) -> Type {
-        let ty = self.resolve_type(annot);
-        if self.reject_void_value(&ty, annot.span, position) {
-            return Type::Error;
-        }
-        ty
-    }
-
     /// Resolve an annotation that has already been resolved once, dropping the
     /// diagnostics that are replays of ones already recorded at the same span.
     ///
@@ -343,42 +239,6 @@ impl<'a> Inferer<'a> {
             }
         }
         ty
-    }
-
-    /// How many *errors* have been reported so far.
-    ///
-    /// Callers that suppress a follow-on diagnostic must count errors, not all
-    /// diagnostics: an error aborts before codegen, so a warning is the only
-    /// thing that can both raise the count and let compilation continue —
-    /// which would silence the follow-on and let its subject reach codegen.
-    pub(super) fn error_count(&self) -> usize {
-        self.diagnostics
-            .iter()
-            .filter(|d| d.severity == crate::Severity::Error)
-            .count()
-    }
-
-    /// Report the "`void` is not a value" diagnostic if `ty` carries one, and
-    /// say whether it did — the `bool` is what lets each caller keep only its
-    /// own recovery. Type *arguments* word their own message elsewhere; every
-    /// other value position, annotated or inferred, lands here.
-    pub(super) fn reject_void_value(
-        &mut self,
-        ty: &Type,
-        span: crate::Span,
-        position: ValuePosition,
-    ) -> bool {
-        let Some(offender) = void_within_value_position(ty) else {
-            return false;
-        };
-        self.error_with_help(
-            span,
-            format!("`{offender}` cannot be {position} — it has no values"),
-            vec![format!(
-                "`{offender}` is only meaningful as a return type; use a type that has values"
-            )],
-        );
-        true
     }
 
     pub(super) fn resolve_type(&mut self, annot: &TypeAnnotation) -> Type {
