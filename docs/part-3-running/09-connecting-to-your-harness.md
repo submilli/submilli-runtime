@@ -52,22 +52,45 @@ vfs:
   mode: persistent
   volume: notes
 
+default: deny
+
 permissions:
   main:
   - capability: jina.ai/search
     action: allow
   - capability: jina.ai/read
     action: allow
+  - capability: fs.read
+    filter: path == "/${vars.userId}" or path glob "/${vars.userId}/*"
+    action: allow
   - capability: fs.write
-    filter: path glob "/${vars.userId}/*"
+    filter: path == "/${vars.userId}" or path glob "/${vars.userId}/*"
+    action: allow
+  - capability: fs.list
+    filter: path == "/${vars.userId}" or path glob "/${vars.userId}/*"
+    action: allow
+  - capability: fs.stat
+    filter: path == "/${vars.userId}" or path glob "/${vars.userId}/*"
+    action: allow
+  - capability: fs.mkdir
+    filter: path == "/${vars.userId}" or path glob "/${vars.userId}/*"
     action: allow
 ```
 
 `@submilli/jina` is the [curated package](/docs/curated-packages) for web
 search and page reading. The `notes` volume is a directory on the server that
-outlives sessions. The filter on `fs.write`, repeated on the rules for
-reading and listing, confines a program to the directory named after the user
-the session was opened for. The whole file is
+outlives sessions.
+
+The five file rules carry one filter, which confines a program to the
+directory named after the user the session was opened for. The filter has two
+halves because a path rule matches exactly what it names: the `glob` covers
+everything inside `/u_ada`, and the `==` covers `/u_ada` itself, which a
+program asks about when it checks that the directory exists. Anything the
+rules don't name falls to `default: deny`, so a program can't remove or move a
+file, and can't list the volume's root.
+
+The fragment leaves out the package's own permissions and the secret. The
+whole file is
 [`blueprint.yaml`](https://github.com/submilli/submilli-runtime/blob/main/examples/harnesses/blueprint.yaml).
 
 The server needs the volume, a secret store for Jina's API key, and the
