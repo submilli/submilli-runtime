@@ -73,14 +73,18 @@ const OP: FilterField = field(
     "string",
     "The specific operation within the capability, e.g. \"read\", \"readText\"",
 );
-const PATH: FilterField = field("path", "string", "VFS path the call targets");
+const PATH: FilterField = field(
+    "path",
+    "string",
+    "Normalized absolute VFS path the call targets",
+);
 const RECURSIVE: FilterField = field(
     "recursive",
     "boolean",
     "Whether the operation applies recursively",
 );
-const FROM: FilterField = field("from", "string", "Source VFS path");
-const TO: FilterField = field("to", "string", "Destination VFS path");
+const FROM: FilterField = field("from", "string", "Normalized absolute source VFS path");
+const TO: FilterField = field("to", "string", "Normalized absolute destination VFS path");
 const KEY: FilterField = field("key", "string", "Session key the call targets");
 const PREFIX: FilterField = field("prefix", "string", "Session key prefix being listed");
 
@@ -97,49 +101,49 @@ const FS: &[Capability] = &[
         main_denial: None,
         summary: "Create, write, append, or apply code edits to files",
         filter_fields: &[OP, PATH],
-        example_filter: "path glob \"out/*\"",
+        example_filter: "path glob \"/out/*\"",
     },
     Capability {
         name: "fs.stat",
         main_denial: None,
         summary: "Inspect metadata (including code workspace discovery)",
         filter_fields: &[OP, PATH],
-        example_filter: "path glob \"data/*\"",
+        example_filter: "path glob \"/data/*\"",
     },
     Capability {
         name: "fs.list",
         main_denial: None,
         summary: "List directory entries (including code search, glob and tree)",
         filter_fields: &[OP, PATH, RECURSIVE],
-        example_filter: "path glob \"data/*\"",
+        example_filter: "path glob \"/data/*\"",
     },
     Capability {
         name: "fs.mkdir",
         main_denial: None,
         summary: "Create directories",
         filter_fields: &[OP, PATH, RECURSIVE],
-        example_filter: "path glob \"tmp/*\"",
+        example_filter: "path glob \"/tmp/*\"",
     },
     Capability {
         name: "fs.remove",
         main_denial: None,
         summary: "Delete files or directories",
         filter_fields: &[OP, PATH, RECURSIVE],
-        example_filter: "path glob \"tmp/*\"",
+        example_filter: "path glob \"/tmp/*\"",
     },
     Capability {
         name: "fs.move",
         main_denial: None,
         summary: "Move or rename a path",
         filter_fields: &[OP, FROM, TO],
-        example_filter: "to glob \"archive/*\"",
+        example_filter: "to glob \"/archive/*\"",
     },
     Capability {
         name: "fs.copy",
         main_denial: None,
         summary: "Copy a path",
         filter_fields: &[OP, FROM, TO, RECURSIVE],
-        example_filter: "to glob \"backup/*\"",
+        example_filter: "to glob \"/backup/*\"",
     },
 ];
 
@@ -241,7 +245,11 @@ const HTTP: &[Capability] = &[
         filter_fields: &[
             field("host", "string", "Download host, without port"),
             field("url_path", "string", "URL path component"),
-            field("vfs_path", "string", "Destination path in the VFS"),
+            field(
+                "vfs_path",
+                "string",
+                "Normalized absolute destination path in the VFS",
+            ),
             field(
                 "max_bytes",
                 "number",

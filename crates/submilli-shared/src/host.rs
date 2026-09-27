@@ -6,6 +6,7 @@
 //! a `StoreData`. It lives here rather than in `submilli-blueprint` so that
 //! crate stays free of the `interpreter` dependency.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -36,6 +37,10 @@ const MAIN_PACKAGE: &str = "main";
 /// capability. `default: allow` inverts this to allow-by-default. `ask-human`
 /// is deferred (no suspend/resume yet), so it resolves to `Deny` with a reason
 /// that says so.
+///
+/// Filesystem rules see absolute guest paths with `.` and `..` collapsed using
+/// the same lexical resolver as VFS I/O. This also applies to both endpoints of
+/// copy/move and the destination of HTTP downloads. It does not resolve symlinks.
 pub struct PolicyCheck {
     blueprint: Arc<Blueprint>,
     /// Caller-supplied `${vars.NAME}` bindings for this session, resolved at
@@ -60,9 +65,13 @@ impl PolicyCheck {
 
 impl SecurityCheck for PolicyCheck {
     fn check(&self, caller: &str, capability: &str, context: &serde_json::Value) -> CheckOutcome {
+        let context = match filesystem_policy_context(capability, context) {
+            Ok(context) => context,
+            Err(reason) => return CheckOutcome::Deny { reason },
+        };
         match self
             .blueprint
-            .resolve_permission(caller, capability, context, &self.variables)
+            .resolve_permission(caller, capability, &context, &self.variables)
         {
             Action::Allow => CheckOutcome::Allow,
             Action::Deny => CheckOutcome::Deny {
@@ -76,6 +85,36 @@ impl SecurityCheck for PolicyCheck {
             },
         }
     }
+}
+
+/// Keep policy paths in the same guest namespace as the subsequent VFS operation.
+/// Normalization is lexical and performs no I/O, so a denial cannot reveal whether
+/// the target exists. URL paths and application-defined capabilities stay untouched.
+fn filesystem_policy_context<'a>(
+    capability: &str,
+    context: &'a serde_json::Value,
+) -> Result<Cow<'a, serde_json::Value>, String> {
+    let fields: &[&str] = match capability {
+        "fs.read" | "fs.write" | "fs.stat" | "fs.list" | "fs.mkdir" | "fs.remove" => &["path"],
+        "fs.copy" | "fs.move" => &["from", "to"],
+        "http.download" => &["vfs_path"],
+        _ => return Ok(Cow::Borrowed(context)),
+    };
+    let mut normalized_context = Cow::Borrowed(context);
+    for &field in fields {
+        let path = context
+            .get(field)
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                format!("invalid {capability} context: {field} must be a VFS path string")
+            })?;
+        let normalized = interpreter::runtime::fs::guest_normalize("/", path)
+            .map_err(|error| format!("invalid {capability} {field}: {error}"))?;
+        if normalized != path {
+            normalized_context.to_mut()[field] = serde_json::Value::String(normalized);
+        }
+    }
+    Ok(normalized_context)
 }
 
 // ---- SecretStore ---------------------------------------------------------
@@ -319,6 +358,175 @@ fn to_proxy_error(err: AuthError) -> AuthProxyError {
 mod tests {
     use super::*;
     use submilli_blueprint::parse;
+
+    #[test]
+    fn filesystem_policy_matches_normalized_guest_paths() {
+        let blueprint = parse(
+            r#"
+name: tenant
+variables:
+  user: { required: true }
+permissions:
+  main:
+    - capability: fs.read
+      filter: 'path == "/${vars.user}" or path glob "/${vars.user}/*"'
+      action: allow
+    - capability: fs.write
+      filter: 'path == "/${vars.user}" or path glob "/${vars.user}/*"'
+      action: allow
+    - capability: fs.stat
+      filter: 'path == "/${vars.user}" or path glob "/${vars.user}/*"'
+      action: allow
+    - capability: fs.list
+      filter: 'path == "/${vars.user}" or path glob "/${vars.user}/*"'
+      action: allow
+    - capability: fs.mkdir
+      filter: 'path == "/${vars.user}" or path glob "/${vars.user}/*"'
+      action: allow
+    - capability: fs.remove
+      filter: 'path == "/${vars.user}" or path glob "/${vars.user}/*"'
+      action: allow
+    - capability: fs.copy
+      filter: 'from glob "/${vars.user}/*" and to glob "/${vars.user}/*"'
+      action: allow
+    - capability: fs.move
+      filter: 'from glob "/${vars.user}/*" and to glob "/${vars.user}/*"'
+      action: allow
+    - capability: http.download
+      filter: 'vfs_path glob "/${vars.user}/*" and url_path == "/../remote"'
+      action: allow
+"#,
+        )
+        .unwrap();
+        let policy = PolicyCheck::with_variables(
+            Arc::new(blueprint),
+            Arc::new(BTreeMap::from([("user".into(), "ada".into())])),
+        );
+        for capability in [
+            "fs.read",
+            "fs.write",
+            "fs.stat",
+            "fs.list",
+            "fs.mkdir",
+            "fs.remove",
+        ] {
+            for path in [
+                "/ada/file",
+                "ada/file",
+                "/ada/./file",
+                "//ada//file",
+                "/grace/../ada/file",
+                "/ada/",
+            ] {
+                assert!(
+                    matches!(
+                        policy.check("main", capability, &serde_json::json!({"path": path})),
+                        CheckOutcome::Allow
+                    ),
+                    "{capability}: {path}"
+                );
+            }
+            for path in [
+                "/grace/file",
+                "/ada/../grace/file",
+                "ada/../grace/file",
+                "/ada/../../grace/file",
+                "/ada/\0file",
+            ] {
+                assert!(
+                    matches!(
+                        policy.check("main", capability, &serde_json::json!({"path": path})),
+                        CheckOutcome::Deny { .. }
+                    ),
+                    "{capability}: {path}"
+                );
+            }
+        }
+        for capability in ["fs.copy", "fs.move"] {
+            assert!(matches!(
+                policy.check(
+                    "main",
+                    capability,
+                    &serde_json::json!({"from": "ada/./file", "to": "ada/new"})
+                ),
+                CheckOutcome::Allow
+            ));
+            for (from, to) in [
+                ("/ada/../grace/file", "/ada/new"),
+                ("/ada/file", "/ada/../grace/new"),
+            ] {
+                assert!(matches!(
+                    policy.check(
+                        "main",
+                        capability,
+                        &serde_json::json!({"from": from, "to": to})
+                    ),
+                    CheckOutcome::Deny { .. }
+                ));
+            }
+        }
+        for (path, allowed) in [("ada/download", true), ("/ada/../grace/download", false)] {
+            assert_eq!(
+                matches!(
+                    policy.check(
+                        "main",
+                        "http.download",
+                        &serde_json::json!({"vfs_path": path, "url_path": "/../remote"})
+                    ),
+                    CheckOutcome::Allow
+                ),
+                allowed
+            );
+        }
+    }
+
+    #[test]
+    fn filesystem_policy_blocklists_use_the_resolved_path() {
+        let policy = PolicyCheck::new(Arc::new(
+            parse(
+                r#"
+name: blocked
+default: allow
+permissions:
+  main:
+    - capability: fs.read
+      filter: 'path glob "/grace/*"'
+      action: deny
+"#,
+            )
+            .unwrap(),
+        ));
+        assert!(matches!(
+            policy.check(
+                "main",
+                "fs.read",
+                &serde_json::json!({"path": "/ada/../grace/file"})
+            ),
+            CheckOutcome::Deny { .. }
+        ));
+        assert!(matches!(
+            policy.check("main", "fs.read", &serde_json::json!({"path": "/ada/file"})),
+            CheckOutcome::Allow
+        ));
+        for context in [
+            serde_json::json!({}),
+            serde_json::json!({"path": 42}),
+            serde_json::json!({"path": "/../../grace/file"}),
+        ] {
+            assert!(matches!(
+                policy.check("main", "fs.read", &context),
+                CheckOutcome::Deny { .. }
+            ));
+        }
+        assert!(matches!(
+            policy.check(
+                "main",
+                "custom.read",
+                &serde_json::json!({"path": "/../remote"})
+            ),
+            CheckOutcome::Allow
+        ));
+    }
 
     fn req(url: &str, headers: Vec<(&str, &str)>) -> HttpRequest {
         HttpRequest {

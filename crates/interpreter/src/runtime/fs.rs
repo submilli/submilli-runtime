@@ -509,7 +509,12 @@ pub fn guest_normalize(cwd: &str, guest_path: &str) -> Result<String, ResolveErr
     if rel == Path::new(".") {
         return Ok(String::from("/"));
     }
-    Ok(format!("/{}", rel.to_string_lossy()))
+    // Guest paths use forward slashes even when the host uses another separator.
+    let components = rel
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>();
+    Ok(format!("/{}", components.join("/")))
 }
 
 /// The lexical half of resolution: a root-relative path with `.` and `..` collapsed.
@@ -747,6 +752,14 @@ mod tests {
         assert_eq!(guest_normalize(ROOT, "/").unwrap(), "/");
         assert_eq!(guest_normalize(ROOT, "/tree/").unwrap(), "/tree");
         assert_eq!(guest_normalize(ROOT, "tree/sub/..").unwrap(), "/tree");
+        assert_eq!(
+            guest_normalize(ROOT, "tree/sub/file").unwrap(),
+            "/tree/sub/file"
+        );
+        assert_eq!(
+            guest_normalize(ROOT, "tree/./sub/../file").unwrap(),
+            "/tree/file"
+        );
     }
 }
 

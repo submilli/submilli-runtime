@@ -2348,3 +2348,140 @@ async fn files_tools_default_deny_in_every_vfs_mode() {
         }
     }
 }
+
+#[tokio::test]
+async fn filesystem_policy_uses_normalized_paths_for_programs_and_file_tools() {
+    let dir = tempfile::tempdir().unwrap();
+    for user in ["ada", "grace"] {
+        std::fs::create_dir(dir.path().join(user)).unwrap();
+        std::fs::write(dir.path().join(user).join("secret.txt"), user).unwrap();
+    }
+    let blueprint = submilli_blueprint::parse(
+        r#"
+name: vol
+vfs: { mode: persistent, volume: work }
+variables:
+  user: { required: true }
+permissions:
+  main:
+    - capability: fs.read
+      filter: 'path == "/${vars.user}" or path glob "/${vars.user}/*"'
+      action: allow
+    - capability: fs.write
+      filter: 'path == "/${vars.user}" or path glob "/${vars.user}/*"'
+      action: allow
+    - capability: fs.stat
+      filter: 'path == "/${vars.user}" or path glob "/${vars.user}/*"'
+      action: allow
+    - capability: fs.list
+      filter: 'path == "/${vars.user}" or path glob "/${vars.user}/*"'
+      action: allow
+    - capability: fs.mkdir
+      filter: 'path == "/${vars.user}" or path glob "/${vars.user}/*"'
+      action: allow
+    - capability: fs.remove
+      filter: 'path == "/${vars.user}" or path glob "/${vars.user}/*"'
+      action: allow
+    - capability: fs.copy
+      filter: 'from glob "/${vars.user}/*" and to glob "/${vars.user}/*"'
+      action: allow
+    - capability: fs.move
+      filter: 'from glob "/${vars.user}/*" and to glob "/${vars.user}/*"'
+      action: allow
+"#,
+    )
+    .unwrap();
+    let h = Harness::from_blueprints_with_volumes(
+        vec![blueprint],
+        VolumeTable::from([("work".into(), dir.path().to_path_buf())]),
+    );
+    let session = handshake_with_vars(&h, VOL, json!({"user": "ada"})).await;
+    for expression in [
+        "fs.readText('/ada/../grace/secret.txt')",
+        "fs.readBytes('/ada/../grace/secret.txt', 0, 1)",
+        "fs.lines('/ada/../grace/secret.txt')",
+        "fs.bytes('/ada/../grace/secret.txt', 1)",
+        "fs.exists('/ada/../grace/secret.txt')",
+        "fs.stat('/ada/../grace/secret.txt')",
+        "fs.list('/ada/../grace', true)",
+        "fs.writeText('/ada/../grace/new.txt', 'wrong')",
+        "fs.mkdir('/ada/../grace/new', false)",
+        "fs.remove('/ada/../grace/secret.txt', false)",
+        "fs.copy('/ada/../grace/secret.txt', '/ada/copy.txt', false)",
+        "fs.copy('/ada/secret.txt', '/ada/../grace/copy.txt', false)",
+        "fs.move('/ada/../grace/secret.txt', '/ada/moved.txt')",
+        "fs.move('/ada/secret.txt', '/ada/../grace/moved.txt')",
+    ] {
+        let code =
+            format!("import * as fs from 'submilli:fs'; function main(): void {{ {expression}; }}");
+        let (_, _, rpc) = h.post(VOL, tools_call(2, &code), Some(&session)).await;
+        let error = output(&rpc)["error"].to_string();
+        assert!(
+            error.contains("permission denied: caller=main capability=fs."),
+            "{expression}: {rpc}"
+        );
+    }
+    for (tool, path) in [
+        ("submilli__files__read", "/ada/../grace/secret.txt"),
+        ("submilli__files__list", "/ada/../grace"),
+    ] {
+        let (_, _, rpc) = h
+            .post(
+                VOL,
+                rpc_call(3, tool, json!({"path": path})),
+                Some(&session),
+            )
+            .await;
+        assert!(
+            refuses_with(&rpc, "permission denied: caller=main capability=fs."),
+            "{rpc}"
+        );
+    }
+    for path in [
+        "ada/secret.txt",
+        "/ada/./secret.txt",
+        "/grace/../ada/secret.txt",
+    ] {
+        let code = format!(
+            "import {{ readText }} from 'submilli:fs'; function main(): string | null {{ return readText('{path}'); }}"
+        );
+        let (_, _, rpc) = h.post(VOL, tools_call(4, &code), Some(&session)).await;
+        assert_eq!(output(&rpc)["result"], "ada", "{rpc}");
+        let (_, _, rpc) = h
+            .post(
+                VOL,
+                rpc_call(5, "submilli__files__read", json!({"path": path})),
+                Some(&session),
+            )
+            .await;
+        assert_eq!(output(&rpc)["content"], "ada", "{rpc}");
+    }
+    let (_, _, rpc) = h
+        .post(
+            VOL,
+            rpc_call(6, "submilli__files__list", json!({"path": "ada/./"})),
+            Some(&session),
+        )
+        .await;
+    assert_eq!(
+        output(&rpc)["entries"][0]["path"],
+        "/ada/secret.txt",
+        "{rpc}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("grace/secret.txt")).unwrap(),
+        "grace"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("ada/secret.txt")).unwrap(),
+        "ada"
+    );
+    assert_eq!(
+        std::fs::read_dir(dir.path().join("grace")).unwrap().count(),
+        1
+    );
+    assert_eq!(
+        std::fs::read_dir(dir.path().join("ada")).unwrap().count(),
+        1
+    );
+}
