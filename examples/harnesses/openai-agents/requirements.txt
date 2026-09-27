@@ -1,0 +1,2 @@
+# Python 3.10+
+openai-agents>=0.3

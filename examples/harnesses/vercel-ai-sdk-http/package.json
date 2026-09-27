@@ -1,0 +1,19 @@
+{
+  "name": "submilli-example-vercel-ai-sdk-http",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "agent": "tsx agent.ts",
+    "check": "tsx check.ts"
+  },
+  "dependencies": {
+    "@ai-sdk/google": "^4.0.0",
+    "ai": "^7.0.0",
+    "zod": "^4.1.8"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.0"
+  }
+}

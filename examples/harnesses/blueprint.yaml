@@ -1,0 +1,66 @@
+kind: blueprint
+name: research
+
+# Bound once per connection by the application, never by the model.
+variables:
+  userId:
+    required: true
+
+packages:
+- '@submilli/jina'
+
+secrets:
+  JINA_API_KEY:
+    store: jina_api_key
+
+# Notes outlive the conversation: every session shares the `notes` volume, and
+# the rules below give each user one directory of it.
+vfs:
+  mode: persistent
+  volume: notes
+
+default: deny
+
+permissions:
+  # What generated code may do.
+  main:
+  - capability: jina.ai/search
+    action: allow
+  - capability: jina.ai/read
+    action: allow
+  - capability: fs.read
+    filter: path == "/${vars.userId}" or path glob "/${vars.userId}/*"
+    action: allow
+  - capability: fs.write
+    filter: path == "/${vars.userId}" or path glob "/${vars.userId}/*"
+    action: allow
+  - capability: fs.list
+    filter: path == "/${vars.userId}" or path glob "/${vars.userId}/*"
+    action: allow
+  - capability: fs.stat
+    filter: path == "/${vars.userId}" or path glob "/${vars.userId}/*"
+    action: allow
+  - capability: fs.mkdir
+    filter: path == "/${vars.userId}" or path glob "/${vars.userId}/*"
+    action: allow
+
+  # What the package itself may do: reach Jina, and read its key.
+  '@submilli/jina':
+  - capability: fs.write
+    filter: op == "download"
+    action: allow
+  - capability: http.download
+    filter: host == "r.jina.ai"
+    action: allow
+  - capability: http.download
+    filter: host == "s.jina.ai"
+    action: allow
+  - capability: http.post
+    filter: host == "r.jina.ai" and path == "/"
+    action: allow
+  - capability: http.post
+    filter: host == "s.jina.ai" and path == "/"
+    action: allow
+  - capability: secrets.get
+    filter: name == "JINA_API_KEY"
+    action: allow

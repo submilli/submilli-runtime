@@ -1,0 +1,18 @@
+{
+  "name": "submilli-example-mastra",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "agent": "tsx agent.ts",
+    "check": "tsx check.ts"
+  },
+  "dependencies": {
+    "@mastra/core": "^1.67.0",
+    "@mastra/mcp": "^1.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.0"
+  }
+}

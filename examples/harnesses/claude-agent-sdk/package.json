@@ -1,0 +1,17 @@
+{
+  "name": "submilli-example-claude-agent-sdk",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "agent": "tsx agent.ts",
+    "check": "tsx check.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.0"
+  }
+}
