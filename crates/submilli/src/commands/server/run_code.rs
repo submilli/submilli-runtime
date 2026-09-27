@@ -1,11 +1,12 @@
 //! `submilli server run-code` — POST a script to a running `submilli-server`.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -18,6 +19,11 @@ pub struct Args {
 
     #[arg(long, default_value = "http://127.0.0.1:8128")]
     server: String,
+
+    /// Bind a blueprint variable for this run, `NAME=VALUE` (repeatable), the
+    /// way an application binds it when it opens a session.
+    #[arg(long = "var", value_name = "NAME=VALUE")]
+    vars: Vec<String>,
 
     /// Omit for no client-side timeout; the server still enforces its own fuel/epoch limits.
     #[arg(long)]
@@ -53,6 +59,7 @@ struct LastRunResponse {
 pub fn execute(args: Args) -> Result<ExitCode> {
     let source = fs::read_to_string(&args.script)
         .with_context(|| format!("reading {}", args.script.display()))?;
+    let variables = parse_variables(&args.vars)?;
 
     let base = args.server.trim_end_matches('/');
     let execute_url = format!("{base}/v1/execute");
@@ -63,10 +70,14 @@ pub fn execute(args: Args) -> Result<ExitCode> {
     }
     let agent: ureq::Agent = config.build().into();
 
-    let resp = match agent.post(&execute_url).send_json(serde_json::json!({
+    let mut request = serde_json::json!({
         "code": source,
         "blueprint": args.blueprint,
-    })) {
+    });
+    if !variables.is_empty() {
+        request["variables"] = serde_json::to_value(&variables)?;
+    }
+    let resp = match agent.post(&execute_url).send_json(request) {
         Ok(r) => r,
         Err(err) => {
             eprintln!("error: {err}");
@@ -123,4 +134,50 @@ pub fn execute(args: Args) -> Result<ExitCode> {
     }
 
     Ok(ExitCode::SUCCESS)
+}
+
+/// `--var NAME=VALUE` pairs as the `variables` object of the request. The server
+/// checks them against the blueprint's declarations, so only the shape is
+/// checked here.
+fn parse_variables(raw: &[String]) -> Result<BTreeMap<String, String>> {
+    let mut variables = BTreeMap::new();
+    for pair in raw {
+        let (name, value) = pair
+            .split_once('=')
+            .with_context(|| format!("--var '{pair}' must be in `NAME=VALUE` form"))?;
+        if name.is_empty() {
+            bail!("--var '{pair}' has an empty name");
+        }
+        variables.insert(name.to_owned(), value.to_owned());
+    }
+    Ok(variables)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_variables;
+
+    #[test]
+    fn var_pairs_split_on_the_first_equals() {
+        let vars = parse_variables(&["customerId=cus_1".into(), "note=a=b".into()]).unwrap();
+        assert_eq!(vars["customerId"], "cus_1");
+        assert_eq!(vars["note"], "a=b");
+        assert!(parse_variables(&[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn malformed_var_pairs_are_refused() {
+        assert!(
+            parse_variables(&["customerId".into()])
+                .unwrap_err()
+                .to_string()
+                .contains("NAME=VALUE")
+        );
+        assert!(
+            parse_variables(&["=x".into()])
+                .unwrap_err()
+                .to_string()
+                .contains("empty name")
+        );
+    }
 }
