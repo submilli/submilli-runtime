@@ -1,5 +1,1 @@
-types: 14 of 28 tsc entries compared, 1 differ
-
-line 11: (y: string) => { return y2 => { let z = y2.toFixed(); // Should be string return 0; }; }
-  tsc:  (y: string) => (y2: number) => number
-  ours: (arg0: string) => (arg0: number) => void
+types: 14 of 28 tsc entries compared, 0 differ

@@ -85,6 +85,9 @@ pub enum ExprKind {
     /// `this` — a class receiver, a function receiver, or an arrow capture.
     /// `Span` lives on the enclosing `Expr`.
     This,
+    /// `this` parsed across a receiver boundary. Keep this distinction when
+    /// method shorthand is lowered to an arrow; inference owns the diagnostic.
+    ThisOutsideReceiver,
     /// `super` — composes with `Call`/`FieldAccess` for `super(...)` / `super.method(...)`.
     Super,
     /// `parts.len() == exprs.len() + 1`. No-substitution `` `plain` `` is collapsed to `String` by the parser.

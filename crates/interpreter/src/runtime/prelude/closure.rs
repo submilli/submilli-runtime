@@ -26,6 +26,42 @@ impl Closure {
         bound.call_dynamic(caller, args).await
     }
 
+    /// An erased structural signature may omit trailing defaults, but it cannot
+    /// change the packed rest ABI or omit a required parameter.
+    pub(crate) async fn call_with_omitted_defaults(
+        &self,
+        caller: &mut Caller<'_, StoreData>,
+        receiver: Val,
+        args: &[Val],
+    ) -> wasmtime::Result<Val> {
+        if !self.accepts_omitted_defaults(caller, args.len(), None)? {
+            return Err(crate::runtime::host::type_error(
+                "Function has incompatible arity",
+            ));
+        }
+        self.call_with_receiver(caller, receiver, args).await
+    }
+
+    pub(crate) fn accepts_omitted_defaults(
+        &self,
+        caller: &mut Caller<'_, StoreData>,
+        supplied: usize,
+        results: Option<usize>,
+    ) -> wasmtime::Result<bool> {
+        let Some(params) = super::arguments::metadata(caller, &self.env)? else {
+            return Ok(false);
+        };
+        Ok(
+            results.is_none_or(|count| self.func.ty(&*caller).results().len() == count)
+                && supplied < params.len()
+                && !params.iter().any(|(_, rest)| *rest)
+                && params
+                    .iter()
+                    .skip(supplied)
+                    .all(|(default, _)| default.is_some()),
+        )
+    }
+
     /// Re-enter the guest: call the funcref with the uniform ABI (env as the
     /// leading argument), filling `out` with the results in place.
     async fn invoke(

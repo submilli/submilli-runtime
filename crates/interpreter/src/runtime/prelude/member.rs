@@ -30,7 +30,13 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     let engine = linker.engine().clone();
     let intr = build_intrinsic_types(&engine)?;
     let object = ValType::Ref(RefType::new(true, HeapType::ConcreteStruct(intr.object)));
-    for (name, arity) in [("member", 3), ("invoke", 2), ("property", 3)] {
+    for (name, arity) in [
+        ("member", 3),
+        ("invoke", 2),
+        ("property", 3),
+        ("invoke_defaults", 3),
+        ("defaults_fit", 3),
+    ] {
         host::register_host_fn_async(
             linker,
             MODULE_NAME,
@@ -42,6 +48,8 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     results[0] = match name {
                         "member" => lookup(caller, params).await?,
                         "invoke" => invoke(caller, &params[0], &params[1]).await?,
+                        "invoke_defaults" => invoke_defaults(caller, params).await?,
+                        "defaults_fit" => defaults_fit(caller, params)?,
                         _ => property(caller, params).await?,
                     };
                     Ok(())
@@ -53,7 +61,13 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
 }
 
 pub(super) fn declare(defs: &mut PackageDeclaration) {
-    for (name, arity) in [("member", 3), ("invoke", 2), ("property", 3)] {
+    for (name, arity) in [
+        ("member", 3),
+        ("invoke", 2),
+        ("property", 3),
+        ("invoke_defaults", 3),
+        ("defaults_fit", 3),
+    ] {
         declare_method(
             defs,
             name,
@@ -125,6 +139,29 @@ async fn invoke(
         return super::vtable::dispatch_vtable_slot(caller, &token[0], slot, &[]).await;
     }
     Err(host::type_error("Member is not callable"))
+}
+
+fn defaults_fit(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime::Result<Val> {
+    let count = host::read_boxed_number(caller, &params[1], "arity")? as usize;
+    let results = host::read_boxed_number(caller, &params[2], "return convention")?;
+    let results = (results >= 0.0).then_some(results as usize);
+    let fits = value::is_callable(caller, &params[0])?
+        && super::closure::read(caller, &params[0], "function")?
+            .accepts_omitted_defaults(caller, count, results)?;
+    box_result(caller, Val::I32(i32::from(fits)))
+}
+
+async fn invoke_defaults(
+    caller: &mut Caller<'_, StoreData>,
+    params: &[Val],
+) -> wasmtime::Result<Val> {
+    if !value::is_callable(caller, &params[0])? {
+        return Err(host::type_error("Value is not callable"));
+    }
+    let args = super::array::read_array(caller, &params[2], "arguments")?;
+    super::closure::read(caller, &params[0], "function")?
+        .call_with_omitted_defaults(caller, params[1], &args)
+        .await
 }
 
 async fn call_builtin(

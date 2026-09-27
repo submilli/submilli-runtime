@@ -1,5 +1,1 @@
-types: 8 of 23 tsc entries compared, 1 differ
-
-line 12: (foo, bar) => { return true; }
-  tsc:  (foo: number, bar: string) => boolean
-  ours: (arg0: number, arg1: string) => number
+types: 8 of 23 tsc entries compared, 0 differ

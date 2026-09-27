@@ -236,7 +236,7 @@ fn emit_structural_test_inner(
                 .uint8_array_type_idx()
                 .expect("$Uint8Array intrinsic registered"),
         ),
-        Type::Function { .. } => {
+        Type::Function { has_rest, .. } => {
             let signature = crate::codegen::closures::classify(ty);
             emit_ref_test(
                 emitter,
@@ -245,6 +245,19 @@ fn emit_structural_test_inner(
                     .closure_struct_type_idx(signature)
                     .expect("closure signature registered during analysis"),
             );
+            if !has_rest {
+                emitter.emit_if(BlockType::Result(ValType::I32));
+                emitter.instruction(Instruction::I32Const(1));
+                emitter.emit_else();
+                super::closure_coercions::emit_defaults_fit(
+                    emitter,
+                    ctx,
+                    value_local,
+                    signature.arity,
+                    Some(signature.is_void),
+                );
+                emitter.emit_end();
+            }
         }
         // Generic leaves use the caller's concrete predicate when available.
         // Legacy entry points without descriptors retain their erased checks.
@@ -674,6 +687,25 @@ pub(crate) fn emit_operation_cast_on_stack(
         if let Some(structure) = ctx.symbols.closure_struct_type_idx(opposite) {
             emit_ref_test(emitter, scratch, structure);
             emitter.instruction(Instruction::I32Or);
+        }
+        if matches!(
+            target_ty.peel(),
+            Type::Function {
+                has_rest: false,
+                ..
+            }
+        ) {
+            emitter.emit_if(BlockType::Result(ValType::I32));
+            emitter.instruction(Instruction::I32Const(1));
+            emitter.emit_else();
+            super::closure_coercions::emit_defaults_fit(
+                emitter,
+                ctx,
+                scratch,
+                signature.arity,
+                None,
+            );
+            emitter.emit_end();
         }
     } else if matches!(
         ctx.symbols.value_type(target_ty),

@@ -286,7 +286,14 @@ impl<'a> TypeResolver<'a> {
                             member: member.clone(),
                             ty: exp.ty.to_string(),
                         });
-                    } else if !assignable_rec(&act.ty, &exp.ty, *self, &mut seen) {
+                    } else if !self.class_member_assignable(
+                        class_mangled,
+                        class_args,
+                        member,
+                        &act.ty,
+                        &exp.ty,
+                        &mut seen,
+                    ) {
                         failures.push(ImplementsFailure::Incompatible {
                             member: member.clone(),
                             expected: exp.ty.to_string(),
@@ -309,6 +316,85 @@ impl<'a> TypeResolver<'a> {
             }
         }
         failures
+    }
+
+    /// Structural calls resolve a class method dynamically, retaining its default
+    /// metadata even when the target signature has fewer parameters.
+    fn class_member_assignable(
+        self,
+        class: &MangledName,
+        args: &[Type],
+        member: &str,
+        actual: &Type,
+        expected: &Type,
+        seen: &mut Vec<(Type, Type)>,
+    ) -> bool {
+        if assignable_rec(actual, expected, self, seen) {
+            return true;
+        }
+        if let Type::Union(members) = expected.peel() {
+            return members.iter().any(|expected| {
+                self.class_member_assignable(class, args, member, actual, expected, seen)
+            });
+        }
+        let (
+            Type::Function {
+                params,
+                ret,
+                predicate,
+                has_rest: false,
+            },
+            Type::Function {
+                params: expected_params,
+                has_rest: false,
+                ..
+            },
+        ) = (actual.peel(), expected.peel())
+        else {
+            return false;
+        };
+        if expected_params.len() >= params.len() {
+            return false;
+        }
+        let omittable = super::classes::walk_class_chain_with(
+            |m| self.sym_by_mangled(m).cloned(),
+            class,
+            args,
+            |sym, _| {
+                let TypeKind::Class {
+                    methods, fields, ..
+                } = &sym.kind
+                else {
+                    return ControlFlow::Continue(());
+                };
+                if fields.contains_key(member) {
+                    return ControlFlow::Break(Some(false));
+                }
+                let Some(method) = methods.get(member) else {
+                    return ControlFlow::Continue(());
+                };
+                ControlFlow::Break(Some(
+                    method
+                        .params
+                        .iter()
+                        .skip(expected_params.len())
+                        .all(|param| param.default.is_some()),
+                ))
+            },
+        )
+        .unwrap_or(false);
+        omittable
+            && assignable_rec(
+                &Type::Function {
+                    params: params[..expected_params.len()].to_vec(),
+                    ret: ret.clone(),
+                    predicate: predicate.clone(),
+                    has_rest: false,
+                },
+                expected,
+                self,
+                seen,
+            )
     }
 
     fn class_property_is_write_only(
@@ -655,9 +741,34 @@ fn assignable_rec(
                     Some(act) => {
                         !types.class_property_is_write_only(ma, aa, member)
                             && (exp.optional || !act.optional)
-                            && assignable_rec(&act.ty, &exp.ty, types, seen)
+                            && types.class_member_assignable(ma, aa, member, &act.ty, &exp.ty, seen)
                     }
                     None => exp.optional,
+                })
+        }
+        (Type::ClassRef { mangled, args, .. }, Type::Object { fields }) => {
+            let Some(class_form) = types.class_full_form(mangled, args) else {
+                return false;
+            };
+            if weak_type_rejects(&class_form, fields) {
+                return false;
+            }
+            fields
+                .iter()
+                .all(|(member, expected)| match class_form.get(member) {
+                    Some(actual) => {
+                        !types.class_property_is_write_only(mangled, args, member)
+                            && (expected.optional || !actual.optional)
+                            && types.class_member_assignable(
+                                mangled,
+                                args,
+                                member,
+                                &actual.ty,
+                                &expected.ty,
+                                seen,
+                            )
+                    }
+                    None => expected.optional,
                 })
         }
         // An interface value is not nominally a class.

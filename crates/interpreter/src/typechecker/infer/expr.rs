@@ -506,6 +506,14 @@ impl Inferer<'_> {
             ExprKind::As { expr: inner, ty } => self.infer_as(inner, ty, span),
             ExprKind::InstanceOf { value, ty } => self.infer_instanceof(value, ty, span),
             ExprKind::Regex { source, flags } => self.infer_regex(source, flags, span),
+            ExprKind::ThisOutsideReceiver => {
+                self.error_with_help(
+                    span,
+                    "`this` is only valid inside a class method or constructor body".into(),
+                    vec!["reference `this` from within a class method or `constructor`".into()],
+                );
+                (TypedExprKind::Null, Type::Error)
+            }
             ExprKind::This => {
                 if let Some(ty) = &self.function_this {
                     (TypedExprKind::This, ty.clone())
@@ -4758,6 +4766,18 @@ impl Inferer<'_> {
             return self.infer_tuple_literal(plain, expected_elems.clone(), span);
         }
 
+        if let Some(Type::Union(members)) = expected {
+            let candidates: Vec<_> = members
+                .iter()
+                .map(Type::peel)
+                .filter(|member| matches!(member, Type::Tuple(_) | Type::Array(_)))
+                .cloned()
+                .collect();
+            if candidates.len() > 1 && candidates.iter().any(|ty| matches!(ty, Type::Tuple(_))) {
+                return self.infer_tuple_union_literal(elements, candidates);
+            }
+        }
+
         let expected_elem: Option<&Type> = match expected {
             Some(Type::Array(elem)) => Some(elem.as_ref()),
             _ => None,
@@ -5032,6 +5052,101 @@ impl Inferer<'_> {
                 element_ty: Type::Unknown,
             },
             Type::Tuple(slots),
+        )
+    }
+
+    /// Keep the inferred slots rather than the union of contextual slots: the
+    /// enclosing assignment must still validate one complete tuple variant.
+    fn infer_tuple_union_literal(
+        &mut self,
+        elements: Vec<crate::ArrayLiteralElement>,
+        mut candidates: Vec<Type>,
+    ) -> (TypedExprKind, Type) {
+        if !elements
+            .iter()
+            .any(|element| matches!(element, crate::ArrayLiteralElement::Spread { .. }))
+        {
+            let matching: Vec<_> = candidates
+                .iter()
+                .filter(|candidate| match candidate {
+                    Type::Tuple(slots) => slots.len() == elements.len(),
+                    _ => true,
+                })
+                .cloned()
+                .collect();
+            if !matching.is_empty() {
+                candidates = matching;
+            }
+        }
+        let mut typed = Vec::with_capacity(elements.len());
+        let mut slots = Vec::new();
+        let allows_array = candidates.iter().any(|ty| matches!(ty, Type::Array(_)));
+        let mut has_array_spread = false;
+        for element in elements {
+            match element {
+                crate::ArrayLiteralElement::Value(value) => {
+                    let hints: Vec<_> = candidates
+                        .iter()
+                        .filter_map(|candidate| match candidate {
+                            Type::Tuple(tuple) if !has_array_spread => {
+                                tuple.get(slots.len()).cloned()
+                            }
+                            Type::Array(element) => Some((**element).clone()),
+                            _ => None,
+                        })
+                        .collect();
+                    let hint = (!hints.is_empty()).then(|| Type::union(hints));
+                    let (id, ty) = self.infer_expr(value, hint.as_ref());
+                    slots.push(ty);
+                    typed.push(crate::TypedArrayElement::Value(id));
+                }
+                crate::ArrayLiteralElement::Spread { value, span } => {
+                    let (id, ty) = self.infer_expr(value, None);
+                    match ty.peel() {
+                        Type::Tuple(types) => slots.extend(types.iter().cloned()),
+                        Type::Array(element) if allows_array => {
+                            has_array_spread = true;
+                            slots.push((**element).clone());
+                        }
+                        Type::Error => {},
+                        _ => self.error_with_help(span,
+                            format!("tuple literal spread requires a fixed-length tuple, got `{ty}`"),
+                            vec!["annotate the spread source as a tuple, or use an array result type".into()]),
+                    }
+                    typed.push(crate::TypedArrayElement::Spread(id));
+                }
+            }
+            let matching: Vec<_> = candidates
+                .iter()
+                .filter(|candidate| match candidate {
+                    Type::Tuple(tuple) => {
+                        !has_array_spread
+                            && slots.len() <= tuple.len()
+                            && slots.iter().zip(tuple).all(|(actual, expected)| {
+                                assignable(actual, expected, self.resolver())
+                            })
+                    }
+                    Type::Array(element) => slots
+                        .iter()
+                        .all(|actual| assignable(actual, element, self.resolver())),
+                    _ => false,
+                })
+                .cloned()
+                .collect();
+            if !matching.is_empty() {
+                candidates = matching;
+            }
+        }
+        (
+            TypedExprKind::ArrayLiteral {
+                elements: typed,
+                element_ty: Type::Unknown,
+            },
+            if has_array_spread {
+                Type::Array(Box::new(Type::union(slots)))
+            } else {
+                Type::Tuple(slots)
+            },
         )
     }
 
@@ -6034,14 +6149,27 @@ impl Inferer<'_> {
                 ret: hr,
                 ..
             }) if hp.len() == params.len() => Some((hp.clone(), (**hr).clone())),
-            Some(Type::Union(members)) => members.iter().find_map(|m| match m.peel() {
-                Type::Function {
-                    params: hp,
-                    ret: hr,
-                    ..
-                } if hp.len() == params.len() => Some((hp.clone(), (**hr).clone())),
-                _ => None,
-            }),
+            Some(Type::Union(members)) => {
+                let functions: Vec<_> = members
+                    .iter()
+                    .filter_map(|member| match member.peel() {
+                        Type::Function {
+                            params: hp, ret, ..
+                        } if hp.len() == params.len() => Some((hp, ret)),
+                        _ => None,
+                    })
+                    .collect();
+                functions.first().and_then(|(params, _)| {
+                    functions.iter().all(|(other, _)| other == params).then(|| {
+                        (
+                            (*params).clone(),
+                            Type::union(
+                                functions.iter().map(|(_, ret)| (***ret).clone()).collect(),
+                            ),
+                        )
+                    })
+                })
+            }
             _ => None,
         };
 
@@ -6181,7 +6309,7 @@ impl Inferer<'_> {
         // Save / set return-type frames. Stack-based so nested arrows
         // restore correctly.
         let prev_return = std::mem::replace(&mut self.current_return, ret_hint.clone());
-        let prev_collect = if ret_hint.is_none() {
+        let prev_collect = if annotated_ret.is_none() {
             self.inferred_returns.replace(Vec::new())
         } else {
             // Annotated body uses `current_return` for checking; clear
@@ -6205,7 +6333,7 @@ impl Inferer<'_> {
                     .infer_stmt(b)
                     .expect("arrow block body is a Block, never a type-only decl");
                 let id = self.wrap_narrow_regions(id, &narrow_seed, span);
-                let t = if let Some(t) = &ret_hint {
+                let t = if let Some(t) = &annotated_ret {
                     t.clone()
                 } else {
                     let collected = self.inferred_returns.take().unwrap_or_default();
@@ -7808,8 +7936,8 @@ impl Inferer<'_> {
     /// typecheck `x as T`. Resolves the target, infers the operand, validates the static
     /// relationship, and decides the runtime check:
     ///
-    /// - Relatedness: at least one direction `assignable` must hold (interfaces relate via
-    ///   their structural data shape). Neither → reject (the check would always fail).
+    /// - Relatedness: one assignable direction must hold, also considering the source
+    ///   with literals widened as TypeScript does. Interfaces use their structural shape.
     /// - `as` is the language's runtime-validation boundary. When the source is **not** a
     ///   static subtype of the target (`unknown`, downcasts), emit a deep structural check
     ///   (`Cast.check = Some(shape)`); codegen verifies fields/elements/literals and throws
@@ -7859,7 +7987,9 @@ impl Inferer<'_> {
         let shape = self.reduce_interfaces_to_shapes(&target_ty, &mut Vec::new());
         let inner_to_target = assignable(&inner_ty, &shape, self.resolver());
         let target_to_inner = assignable(&shape, &inner_ty, self.resolver());
-        if !inner_to_target && !target_to_inner {
+        let target_to_widened =
+            assignable(&shape, &widen_assertion_source(&inner_ty), self.resolver());
+        if !inner_to_target && !target_to_inner && !target_to_widened {
             let blockers = optional_vs_required_blockers(&inner_ty, &shape, self.resolver());
             if let Some(first) = blockers.first() {
                 let (subj, verb) = if blockers.len() == 1 {
@@ -8863,12 +8993,37 @@ fn merge_spread_alternatives(alternatives: &[ObjectFields]) -> ObjectFields {
         .collect()
 }
 
+/// TypeScript compares assertion targets against the source's widened literals.
+/// This only relaxes acceptance: the original source still determines whether
+/// the cast needs a runtime check.
+fn widen_assertion_source(source: &Type) -> Type {
+    match source.peel() {
+        Type::Union(members) => Type::union(members.iter().map(widen_assertion_source).collect()),
+        source => source.widen_literal(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::test_support::{
         nth_decl_value_ty, nth_expr_stmt_ty, run, run_clean, run_with_packages,
     };
     use crate::{ClosureBody, Type, TypedAst, TypedExprKind, TypedParam, TypedStmtKind};
+
+    #[test]
+    fn this_outside_class_reports_once_per_occurrence() {
+        for body in ["return this.x;", "const x = this.x;", "this.x;"] {
+            let (_, diagnostics) = run(&format!("function main(): void {{ {body} }}"));
+            let count = diagnostics
+                .iter()
+                .filter(|d| {
+                    d.message
+                        .contains("`this` is only valid inside a class method or constructor body")
+                })
+                .count();
+            assert_eq!(count, 1, "{body}: {diagnostics:?}");
+        }
+    }
 
     /// Typecheck `source` against the real `submilli:session` declaration.
     fn run_with_session(source: &str) -> (TypedAst, Vec<crate::Diagnostic>) {

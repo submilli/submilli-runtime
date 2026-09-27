@@ -4388,30 +4388,23 @@ impl<'a> Parser<'a> {
     fn parse_this_or_super(&mut self, is_this: bool) -> Option<ExprId> {
         let tok = self.advance();
         let span = tok.span;
-        if self.class_member_body_depth == 0
-            && !(is_this && self.function_expression_body_depth > 0)
-        {
-            if is_this {
-                self.error_at_with_help(
-                    span,
-                    "`this` is only valid inside a class method or constructor body",
-                    vec![
-                        "reference `this` from within a class method or `constructor`".to_string(),
-                    ],
-                );
-            } else {
-                self.error_at_with_help(
-                    span,
-                    "`super` is only valid inside a class method or constructor body",
-                    vec![
-                        "call `super(...)` in a subclass constructor or `super.method(...)` \
-                         in a subclass method"
-                            .to_string(),
-                    ],
-                );
-            }
+        if !is_this && self.class_member_body_depth == 0 {
+            self.error_at_with_help(
+                span,
+                "`super` is only valid inside a class method or constructor body",
+                vec![
+                    "call `super(...)` in a subclass constructor or `super.method(...)` \
+                     in a subclass method"
+                        .to_string(),
+                ],
+            );
         }
-        let kind = if is_this {
+        let kind = if is_this
+            && self.class_member_body_depth == 0
+            && self.function_expression_body_depth == 0
+        {
+            ExprKind::ThisOutsideReceiver
+        } else if is_this {
             ExprKind::This
         } else {
             ExprKind::Super
@@ -9337,17 +9330,16 @@ mod tests {
     }
 
     #[test]
-    fn rejects_this_inside_method_shorthand_in_a_class_method() {
-        let (_ast, diags) = parse_str(
+    fn retains_this_boundary_inside_method_shorthand() {
+        let (ast, diags) = parse_str(
             "class C { x: number = 1; m(): number { \
              const o = { x: 2, g(): number { return this.x; } }; return o.g(); } }",
         );
-        assert!(
-            diags
-                .iter()
-                .any(|d| d.message.contains("`this` is only valid inside")),
-            "`this` in method shorthand should be rejected: {diags:?}"
-        );
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        assert!((0..ast.exprs_len()).any(|index| matches!(
+            ast.expr(crate::ExprId(index as u32)).kind,
+            ExprKind::ThisOutsideReceiver
+        )));
     }
 
     #[test]
@@ -10393,14 +10385,9 @@ class Dog extends Animal {
     }
 
     #[test]
-    fn this_outside_method_is_rejected() {
+    fn this_outside_method_is_left_to_typechecker() {
         let (_ast, diags) = parse_str("function f(): string { return this.name; }");
-        assert!(
-            diags.iter().any(|d| d
-                .message
-                .contains("`this` is only valid inside a class method or constructor body")),
-            "got: {diags:?}",
-        );
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
     }
 
     #[test]

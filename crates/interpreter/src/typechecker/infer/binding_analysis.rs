@@ -335,6 +335,7 @@ fn visit_expr(ast: &Ast, id: ExprId, out: &mut Analysis) {
         | ExprKind::Boolean(_)
         | ExprKind::Null
         | ExprKind::This
+        | ExprKind::ThisOutsideReceiver
         | ExprKind::Super
         | ExprKind::Regex { .. } => {}
     }

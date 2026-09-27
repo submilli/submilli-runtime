@@ -1,4 +1,4 @@
-//! Bridges the value-returning and void closure ABIs without changing the callee.
+//! Bridges closure return conventions and omitted default arguments without changing the callee.
 
 use wasm_encoder::{
     CodeSection, Function, FunctionSection, HeapType, Instruction, RefType, ValType,
@@ -74,7 +74,7 @@ fn emit_body(target: ClosureSig, ctx: &CodegenCtx<'_>) -> Function {
             1,
             ValType::Ref(RefType {
                 nullable: false,
-                heap_type: HeapType::Concrete(structure),
+                heap_type: HeapType::Concrete(object),
             }),
         ),
         (
@@ -105,8 +105,16 @@ fn emit_body(target: ClosureSig, ctx: &CodegenCtx<'_>) -> Function {
         struct_type_index: wrapper,
         field_index: 0,
     });
-    body.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(structure)));
+    body.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(object)));
     body.instruction(&Instruction::LocalSet(original));
+    body.instruction(&Instruction::LocalGet(original));
+    body.instruction(&Instruction::RefTestNonNull(HeapType::Concrete(structure)));
+    let result = if target.is_void {
+        wasm_encoder::BlockType::Empty
+    } else {
+        wasm_encoder::BlockType::Result(ctx.symbols.value_type(&crate::Type::Unknown))
+    };
+    body.instruction(&Instruction::If(result));
     // The wrapper's environment is the original closure. Preserve its own
     // environment and pass every erased argument through unchanged.
     body.instruction(&Instruction::LocalGet(original));
@@ -138,49 +146,77 @@ fn emit_body(target: ClosureSig, ctx: &CodegenCtx<'_>) -> Function {
             .object;
         body.instruction(&Instruction::RefNull(HeapType::Concrete(object)));
     }
+    body.instruction(&Instruction::Else);
+    emit_default_adapter_call(&mut body, ctx, target, original, receiver);
+    body.instruction(&Instruction::End);
     body.instruction(&Instruction::End);
     body
 }
 
-/// Wrap a known function value when its physical return convention differs
-/// from the target slot. Other reference conversions remain ordinary casts.
+fn emit_default_adapter_call(
+    body: &mut Function,
+    ctx: &CodegenCtx<'_>,
+    target: ClosureSig,
+    original: u32,
+    receiver: u32,
+) {
+    let intr = ctx.symbols.intrinsic_type_indices().expect("intrinsics");
+    body.instruction(&Instruction::LocalGet(original));
+    body.instruction(&Instruction::LocalGet(receiver));
+    body.instruction(&Instruction::GlobalGet(
+        ctx.symbols
+            .prelude_global_idx("array_vtable")
+            .expect("array vtable"),
+    ));
+    for i in 1..=u32::from(target.arity) {
+        body.instruction(&Instruction::LocalGet(i));
+    }
+    body.instruction(&Instruction::ArrayNewFixed {
+        array_type_index: intr.raw_array,
+        array_size: u32::from(target.arity),
+    });
+    body.instruction(&Instruction::StructNew(intr.array));
+    body.instruction(&Instruction::Call(
+        ctx.symbols
+            .prelude_func_idx("__value_invoke_defaults")
+            .expect("default invocation collected"),
+    ));
+    if target.is_void {
+        body.instruction(&Instruction::Drop);
+    }
+}
+
+/// Normalize reference values to a concrete closure slot, preserving the
+/// underlying function identity across return-convention and default adapters.
 pub fn emit_coercion(
     emitter: &mut FunctionEmitter<'_>,
     ctx: &CodegenCtx<'_>,
     source: &crate::Type,
     target_slot: ValType,
 ) -> bool {
-    let crate::Type::Function { .. } = source.peel() else {
-        return false;
-    };
-    let target = opposite(super::closures::classify(source));
-    let Some(structure) = ctx.symbols.closure_struct_type_idx(target) else {
-        return false;
-    };
-    if target_slot
-        != ValType::Ref(RefType {
-            nullable: false,
-            heap_type: HeapType::Concrete(structure),
-        })
-    {
+    if !matches!(ctx.symbols.value_type(source), ValType::Ref(_)) {
         return false;
     }
-    let function = ctx
-        .symbols
-        .closure_coercion(target)
-        .expect("closure coercion allocated");
-    let original = emitter.add_anonymous_local(ctx.symbols.value_type(source));
-    emitter.instruction(Instruction::LocalSet(original));
-    emit_identity_vtable(emitter, ctx, original);
-    emitter.instruction(Instruction::RefFunc(function));
-    emitter.instruction(Instruction::LocalGet(original));
-    super::this_binding::wrap(emitter, ctx);
-    emitter.instruction(Instruction::StructNew(structure));
+    let target = ctx.symbols.closure_signatures().find(|signature| {
+        ctx.symbols
+            .closure_struct_type_idx(*signature)
+            .is_some_and(|structure| {
+                target_slot
+                    == ValType::Ref(RefType {
+                        nullable: false,
+                        heap_type: HeapType::Concrete(structure),
+                    })
+            })
+    });
+    let Some(target) = target else {
+        return false;
+    };
+    emit_erased_cast(emitter, ctx, target);
     true
 }
 
-/// An erased field can carry either return convention after generic substitution.
-/// Adapt only a matching-arity closure; unrelated values still fail the cast.
+/// An erased field can carry either return convention or a method with trailing
+/// defaults. Validate omitted arguments before adapting to the target ABI.
 pub fn emit_erased_cast(
     emitter: &mut FunctionEmitter<'_>,
     ctx: &CodegenCtx<'_>,
@@ -204,6 +240,20 @@ pub fn emit_erased_cast(
     emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
         source_struct,
     )));
+    emitter.instruction(Instruction::LocalGet(original));
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
+        target_struct,
+    )));
+    emitter.instruction(Instruction::I32Or);
+    // Same-arity values need no metadata lookup or allocation.
+    emitter.emit_if(wasm_encoder::BlockType::Result(ValType::I32));
+    emitter.instruction(Instruction::LocalGet(original));
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
+        source_struct,
+    )));
+    emitter.emit_else();
+    emit_defaults_fit(emitter, ctx, original, target.arity, None);
+    emitter.emit_end();
     emitter.emit_if(wasm_encoder::BlockType::Result(target_slot));
     emit_identity_vtable(emitter, ctx, original);
     emitter.instruction(Instruction::RefFunc(
@@ -221,6 +271,27 @@ pub fn emit_erased_cast(
         target_struct,
     )));
     emitter.emit_end();
+}
+
+pub(super) fn emit_defaults_fit(
+    emitter: &mut FunctionEmitter<'_>,
+    ctx: &CodegenCtx<'_>,
+    original: u32,
+    arity: u8,
+    is_void: Option<bool>,
+) {
+    emitter.instruction(Instruction::LocalGet(original));
+    emitter.instruction(Instruction::F64Const(f64::from(arity).into()));
+    super::function_emitter::cast::emit_box(emitter, ctx, &crate::Type::Number);
+    let results = is_void.map_or(-1.0, |is_void| if is_void { 0.0 } else { 1.0 });
+    emitter.instruction(Instruction::F64Const(results.into()));
+    super::function_emitter::cast::emit_box(emitter, ctx, &crate::Type::Number);
+    emitter.instruction(Instruction::Call(
+        ctx.symbols
+            .prelude_func_idx("__value_defaults_fit")
+            .expect("default compatibility collected"),
+    ));
+    super::function_emitter::cast::emit_cast_to(emitter, ctx, &crate::Type::Boolean);
 }
 
 /// The fifth field distinguishes adapter vtables from ordinary and class

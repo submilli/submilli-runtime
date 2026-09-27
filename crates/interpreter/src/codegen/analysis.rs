@@ -119,6 +119,14 @@ impl CodegenAnalysis {
         }
         analysis.note_dependency_narrowing_checks(dependencies);
 
+        // Imported class members can add closure adapters after dependency
+        // selection, even when the source mentions no function-valued types.
+        for name in ["__value_defaults_fit", "__value_invoke_defaults"] {
+            analysis
+                .dependency_usage
+                .note_value(crate::mangle::prelude(name));
+        }
+
         analysis
     }
 
@@ -853,6 +861,8 @@ impl CodegenAnalysis {
                 self.string_pool.intern_text(flags);
             }
             TypedExprKind::CallClosure { callee, .. } => {
+                self.dependency_usage
+                    .note_value(crate::mangle::prelude("__value_invoke_defaults"));
                 self.string_pool
                     .intern_text(&cast_check::error_prefix(ta.source_type(*callee)));
                 for tag in cast_check::TYPE_TAG_STRINGS {
@@ -974,6 +984,8 @@ impl CodegenAnalysis {
                     self.note_index_check();
                 }
                 TypedChainPart::Call { result_ty, .. } => {
+                    self.dependency_usage
+                        .note_value(crate::mangle::prelude("__value_invoke_defaults"));
                     self.visit_type(result_ty);
                 }
                 TypedChainPart::NonNull { result_ty, .. } => {
