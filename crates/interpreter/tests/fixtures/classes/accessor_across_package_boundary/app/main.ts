@@ -111,8 +111,8 @@ function main(): void {
 
   assert(dump(new Plain()) === '{"area":1}', "the library serializes a data-field implementation");
   assert(
-    dump(new ByAccessor()) === '{"side":3}',
-    "and an accessor-backed one by its backing field",
+    dump(new ByAccessor()) === '{"area":9}',
+    "and an accessor-backed one by its public property",
   );
   assert(same(rmw, rmw), "identity of an accessor-backed instance across the boundary");
 }

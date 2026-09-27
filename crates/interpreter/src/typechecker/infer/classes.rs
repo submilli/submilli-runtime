@@ -2602,7 +2602,16 @@ impl<'a> Inferer<'a> {
             }
             return (crate::TypedExprKind::Null, Type::Void);
         };
-        let typed_args = self.bind_ctor_call_args(&params, &args, span, "the parent constructor");
+        let parent_ty = self.super_receiver_type(&parent);
+        let typed_args = self.bind_param_call_args(
+            &params,
+            &Type::Void,
+            super::expr::CallLift::Constructor {
+                class_ty: &parent_ty,
+            },
+            &args,
+            span,
+        );
         (
             crate::TypedExprKind::SuperCtorCall {
                 parent: parent.parent,
@@ -2678,8 +2687,18 @@ impl<'a> Inferer<'a> {
             ret: self.apply_body_instantiations(&sig.ret),
             ..sig
         };
-        let typed_args =
-            self.bind_ctor_call_args(&sig.params, &args, span, &format!("`super.{}`", name.name));
+        let parent_ty = self.super_receiver_type(&parent);
+        let typed_args = self.bind_param_call_args(
+            &sig.params,
+            &sig.ret,
+            super::expr::CallLift::Method {
+                receiver_ty: &parent_ty,
+                name: &name.name,
+                sig: &sig,
+            },
+            &args,
+            span,
+        );
         (
             crate::TypedExprKind::SuperMethodCall {
                 owner,
@@ -2690,77 +2709,20 @@ impl<'a> Inferer<'a> {
         )
     }
 
-    /// Bind call arguments to a constructor's parameter signature (arity,
-    /// per-position assignability), returning the typed argument expressions.
-    /// Serves `new C(...)`, `super(...)`, and `super.method(...)`; `subject` is
-    /// the callee named in diagnostics.
-    ///
-    /// When the arity check passes the returned vector lines up 1:1 with
-    /// `params`. An arity mismatch reports and leaves the vector as the caller
-    /// wrote it; the diagnostic aborts the build before codegen.
-    pub(super) fn bind_ctor_call_args(
-        &mut self,
-        params: &[Param],
-        args: &[crate::ExprId],
-        span: Span,
-        subject: &str,
-    ) -> Vec<crate::ExprId> {
-        let has_rest = params.last().is_some_and(|p| p.rest);
-        let fixed_count = params.iter().take_while(|p| !p.rest).count();
-        let min_args = params
-            .iter()
-            .take_while(|p| p.default.is_none() && !p.rest)
-            .count();
-        let max_args = if has_rest { usize::MAX } else { params.len() };
-        let arity_ok = args.len() >= min_args && args.len() <= max_args;
-        if !arity_ok {
-            let expected = if has_rest {
-                format!("at least {min_args}")
-            } else if min_args == params.len() {
-                format!("{min_args}")
-            } else {
-                format!("{min_args}–{}", params.len())
-            };
-            self.error(
-                span,
-                format!(
-                    "{subject} expects {expected} argument(s), got {}",
-                    args.len()
-                ),
-            );
-        }
-        let rest_elem_ty: Option<Type> =
-            params.last().filter(|p| p.rest).and_then(|p| match &p.ty {
-                Type::Array(elem) => Some((**elem).clone()),
-                _ => None,
-            });
-        let mut typed_args = Vec::with_capacity(args.len().max(params.len()));
-        for (i, arg) in args.iter().enumerate() {
-            let expected_ty = if i < fixed_count {
-                params.get(i).map(|p| p.ty.clone())
-            } else {
-                rest_elem_ty.clone()
-            };
-            let (typed, arg_ty) = self.infer_expr(*arg, expected_ty.as_ref());
-            if let Some(exp) = &expected_ty
-                && !matches!(arg_ty, Type::Error)
-                && !super::assignable(&arg_ty, exp, self.resolver())
-            {
-                let arg_span = self.ast.expr(*arg).span;
-                self.error(
-                    arg_span,
-                    format!("argument {} is `{arg_ty}`, expected `{exp}`", i + 1),
-                );
-            }
-            typed_args.push(typed);
-        }
-        if arity_ok {
-            self.fill_omitted_defaults(params, args.len(), span, &mut typed_args);
-        }
-        if arity_ok && let Some(elem_ty) = rest_elem_ty {
-            self.pack_rest_tail(fixed_count, elem_ty, span, &mut typed_args);
-        }
-        typed_args
+    fn super_receiver_type(&self, parent: &crate::ClassExtends) -> Type {
+        let sym = self
+            .class_by_mangled(&parent.parent)
+            .expect("resolved parent class");
+        Type::class_ref(
+            self.type_package(&sym.name),
+            sym.name.clone(),
+            parent.parent.clone(),
+            parent
+                .args
+                .iter()
+                .map(|ty| self.apply_body_instantiations(ty))
+                .collect(),
+        )
     }
 
     fn class_parent(&self, mangled: &MangledName) -> Option<MangledName> {
@@ -4035,6 +3997,49 @@ mod tests {
                 .message
                 .contains("static member `id` cannot reference class type parameter `T`")),
             "got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn constructor_calls_share_argument_diagnostics() {
+        let (_, diags) = run(r#"
+            class Point {
+                constructor(readonly x: number, readonly y: number = 0, ...labels: string[]) {}
+                move(dx: number, dy: number = 0): number { return dx + dy; }
+            }
+            class Child extends Point {
+                constructor() { super(); }
+                bad(): number { return super.move(); }
+            }
+            function main(): void { new Point(); new Point("wrong"); }
+        "#);
+        let errors: Vec<_> = diags
+            .iter()
+            .filter(|d| d.severity == crate::Severity::Error)
+            .collect();
+        assert_eq!(errors.len(), 4, "{errors:?}");
+        let arity: Vec<_> = errors
+            .iter()
+            .filter(|d| d.message.contains("argument(s)"))
+            .collect();
+        assert_eq!(arity.len(), 3, "{errors:?}");
+        assert!(arity.iter().all(|d| !d.help.is_empty()), "{errors:?}");
+        assert!(
+            arity
+                .iter()
+                .filter(|d| d.message.contains("constructor"))
+                .all(|d| d
+                    .help
+                    .iter()
+                    .any(|h| h.contains("y: number = 0, ...labels: string[]"))),
+            "{errors:?}"
+        );
+        assert!(
+            arity.iter().any(|d| d
+                .help
+                .iter()
+                .any(|h| h.contains("Point.move(dx: number, dy: number = 0)"))),
+            "{errors:?}"
         );
     }
 

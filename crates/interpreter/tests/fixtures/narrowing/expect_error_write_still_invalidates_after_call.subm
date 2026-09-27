@@ -1,5 +1,5 @@
 // expect-error: cannot read field `length` on non-object type `null`
-// expect-error: cannot read field `len` on `null | { len: number }`: the receiver can be `null`
+// expect-error: cannot read field `len` on non-object type `null`
 // expect-error: was dropped by the write
 
 function noop(): void {}

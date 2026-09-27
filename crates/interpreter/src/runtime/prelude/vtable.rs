@@ -584,11 +584,19 @@ pub(crate) async fn object_to_json(
     if let Some(value) = object_override(caller, recv, "toJson").await? {
         return Ok(value);
     }
-    let mut entries = read_object_entries(caller, recv, "Object#toJson")?;
-    entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+    let entries = json_property_slots(caller, recv)?;
 
     let mut out: Vec<u16> = vec![u16::from(b'{')];
-    for (name_units, value) in &entries {
+    for (name_units, slot, getter) in &entries {
+        let object = as_struct(caller, recv, "Object#toJson")?;
+        let values = super::object::field_array(caller, &object, 2)?;
+        let mut value = values.get(&mut *caller, *slot)?;
+        if *getter {
+            value = super::closure::read(caller, &value, "JSON getter")?
+                .call_with_receiver(caller, *recv, &[])
+                .await?;
+        }
+        let value = &value;
         if is_function(caller, value)? {
             continue;
         }
@@ -612,6 +620,46 @@ pub(crate) async fn object_to_json(
 
     let vtable = host_string_vtable(caller)?;
     build_string(caller, raw_string, string_ty, vtable, &out)
+}
+
+/// Snapshot keys, then read each value in canonical key order. Getter side
+/// effects can affect later values, and getter exceptions abort serialization.
+fn json_property_slots(
+    caller: &mut Caller<'_, StoreData>,
+    recv: &Val,
+) -> wasmtime::Result<Vec<(Vec<u16>, u32, bool)>> {
+    let object = as_struct(caller, recv, "Object#toJson")?;
+    let names = super::object::field_array(caller, &object, 1)?;
+    let values = super::object::field_array(caller, &object, 2)?;
+    let mut entries = Vec::new();
+    for slot in 0..names.len(&mut *caller)? {
+        let name = names.get(&mut *caller, slot)?;
+        if super::object::field_is_private(caller, &name)? {
+            continue;
+        }
+        let getter = super::object::is_accessor_slot(caller, &name)?;
+        let mut units = read_units_val(caller, &name, "JSON property name")?;
+        if getter {
+            let getter_prefix = [
+                u16::from(b'g'),
+                u16::from(b'e'),
+                u16::from(b't'),
+                u16::from(b' '),
+            ];
+            if !units.starts_with(&getter_prefix) {
+                continue;
+            }
+            units.drain(..getter_prefix.len());
+        } else {
+            let value = values.get(&mut *caller, slot)?;
+            if !super::object::field_is_present(caller, &name, &value)? {
+                continue;
+            }
+        }
+        entries.push((units, slot, getter));
+    }
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    Ok(entries)
 }
 
 async fn object_equals(

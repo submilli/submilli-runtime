@@ -189,11 +189,17 @@ fn make_field_names(store: &mut Store<StoreData>, intr: &IntrinsicTypes) -> Resu
         .map(|unit| Val::I32(i32::from(unit)))
         .collect::<Vec<_>>();
     let raw = ArrayRef::new_fixed(&mut *store, &pre, &units)?;
-    let pre = StructRefPre::new(&mut *store, intr.string.clone());
+    let name_type = private_field_name_type(store.engine(), intr)?;
+    let pre = StructRefPre::new(&mut *store, name_type);
     let name = StructRef::new(
         &mut *store,
         &pre,
-        &[vtable, Val::AnyRef(Some(raw.to_anyref()))],
+        &[
+            vtable,
+            Val::AnyRef(Some(raw.to_anyref())),
+            Val::I32(1),
+            Val::I32(1),
+        ],
     )?;
     let pre = ArrayRefPre::new(&mut *store, intr.field_names.clone());
     let names = ArrayRef::new_fixed(&mut *store, &pre, &[Val::AnyRef(Some(name.to_anyref()))])?;
@@ -204,6 +210,25 @@ fn make_field_names(store: &mut Store<StoreData>, intr: &IntrinsicTypes) -> Resu
             Mutability::Const,
         ),
         Val::AnyRef(Some(names.to_anyref())),
+    )
+}
+
+/// Match the compiler's marked-name layout: presence followed by privacy.
+fn private_field_name_type(engine: &Engine, intr: &IntrinsicTypes) -> Result<StructType> {
+    let mut fields: Vec<_> = intr.string.fields().collect();
+    fields.push(FieldType::new(
+        Mutability::Var,
+        StorageType::ValType(ValType::I32),
+    ));
+    fields.push(FieldType::new(
+        Mutability::Const,
+        StorageType::ValType(ValType::I32),
+    ));
+    crate::runtime::gc_singleton::singleton_struct(
+        engine,
+        Finality::Final,
+        Some(intr.string.clone()),
+        fields,
     )
 }
 

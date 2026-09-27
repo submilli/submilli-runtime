@@ -59,6 +59,7 @@ struct MethodSlot {
 }
 
 struct ClassLayout {
+    private_members: BTreeSet<String>,
     generics: Vec<String>,
     mangled: MangledName,
     name: String,
@@ -133,12 +134,14 @@ impl ClassLayout {
                 name: f.name.clone(),
                 optional: f.optional,
                 is_accessor: false,
+                is_private: self.private_members.contains(&f.name),
             })
             .collect();
         names.extend(self.payload_slots().map(|s| super::field_names::FieldName {
             name: s.name.clone(),
             optional: false,
             is_accessor: s.name.starts_with("get ") || s.name.starts_with("set "),
+            is_private: self.private_members.contains(&s.name),
         }));
         names
     }
@@ -194,6 +197,10 @@ impl ClassPlan {
             .collect();
 
         let order = topo_order(&by_mangled);
+        let mut private_members: BTreeMap<MangledName, BTreeSet<String>> = imported
+            .iter()
+            .map(|(name, layout)| (name.clone(), layout.private_members.clone()))
+            .collect();
 
         // Build layouts in topo order so a parent's resolved layout is available
         // when its child is processed.
@@ -206,6 +213,24 @@ impl ClassPlan {
 
         for mangled in &order {
             let decl = by_mangled[mangled];
+            let mut private = decl
+                .extends
+                .as_ref()
+                .and_then(|parent| private_members.get(parent))
+                .cloned()
+                .unwrap_or_default();
+            for field in &decl.fields {
+                if field.visibility == crate::Visibility::Private {
+                    private.insert(field.name.name.clone());
+                }
+            }
+            for accessor in &decl.accessors {
+                if accessor.visibility() == crate::Visibility::Private {
+                    private.insert(accessor_getter_name(&accessor.name().name));
+                    private.insert(accessor_setter_name(&accessor.name().name));
+                }
+            }
+            private_members.insert(mangled.clone(), private);
             // Parent prefix: a local parent (resolved earlier this pass) or an
             // imported parent (its full layout reconstructed in `imported_classes`).
             let (parent_fields, parent_methods) = decl
@@ -358,6 +383,7 @@ impl ClassPlan {
                 .into_iter()
                 .collect();
             classes.push(ClassLayout {
+                private_members: private_members.remove(&mangled).unwrap_or_default(),
                 generics: ta
                     .runtime_class_parameters
                     .get(&mangled)
@@ -919,10 +945,6 @@ impl ClassPlan {
                 .symbols
                 .prelude_global_idx("string_vtable")
                 .expect("string_vtable imported from prelude");
-            let string_concat_func_idx = ctx
-                .symbols
-                .prelude_func_idx("string_concat")
-                .expect("string_concat imported from prelude");
             // A user `toString`/`toJson` method fills the universal slot (the
             // universal slots require strings even when the authored method's
             // physical return has widened to preserve live values).
@@ -954,16 +976,10 @@ impl ClassPlan {
                 class.fields.len() as u32,
                 intrinsics,
             ));
-            code.function(&user_method_thunk("toJson").unwrap_or_else(|| {
-                emit_class_to_json_body(
-                    &class.fields,
-                    class.payload_field_names().len() as u32,
-                    intrinsics,
-                    string_vtable_global_idx,
-                    string_concat_func_idx,
-                    ctx.symbols,
-                )
-            }));
+            code.function(
+                &user_method_thunk("toJson")
+                    .unwrap_or_else(|| emit_class_to_json_body(ctx.symbols)),
+            );
             code.function(&emit_class_hash_body(class.fields.len() as u32, intrinsics));
         }
     }
@@ -1924,151 +1940,16 @@ fn emit_class_to_string_body(
     f
 }
 
-/// Default class `toJson`: the data-field payload slots as a JSON object in
-/// canonical sorted-key order (payload order is inherited-prefix-then-own —
-/// an ABI, not the serialization order; spec.md §JSON sorts keys). Field
-/// types are erased at this layer, so every slot value dispatches through
-/// its own `vtable.toJson` and a null slot (nullable field) prints `null`.
-/// Trailing method-closure slots are not fields and are skipped.
-fn emit_class_to_json_body(
-    fields: &[FieldLayout],
-    named_len: u32,
-    intrinsics: IntrinsicTypeIndices,
-    string_vtable_global_idx: u32,
-    string_concat_func_idx: u32,
-    symbols: &SymbolTable,
-) -> Function {
-    let push_str = |f: &mut Function, text: &str| {
-        crate::codegen::intrinsics::push_string_literal(
-            f,
-            intrinsics,
-            string_vtable_global_idx,
-            text,
-        );
-    };
-
-    let mut sorted: Vec<(u32, &str)> = fields
-        .iter()
-        .enumerate()
-        .map(|(slot, field)| (slot as u32, field.name.as_str()))
-        .collect();
-    sorted.sort_by(|a, b| a.1.cmp(b.1));
-
-    if sorted.is_empty() {
-        let mut f = Function::new([]);
-        super::user_subtypes::emit_grown_object_to_json(&mut f, intrinsics, symbols, named_len);
-        push_str(&mut f, "{}");
-        f.instruction(&Instruction::End);
-        return f;
-    }
-
-    // Locals (after 1 param self=0):
-    //   1: $fields (ref $objectFields)
-    //   2: $acc    (ref $string)
-    //   3: $elem   (ref null $Object)
-    //   4: $tj_fn  (ref $toJsonFn)
-    let string_ref = ref_to(intrinsics.string);
-    let locals: Vec<(u32, ValType)> = vec![
-        (1, ref_to(intrinsics.object_fields)),
-        (1, string_ref),
-        (
-            1,
-            ValType::Ref(RefType {
-                nullable: true,
-                heap_type: HeapType::Concrete(intrinsics.object),
-            }),
-        ),
-        (1, ref_to(intrinsics.to_json_fn)),
-        (1, ValType::I32),
-    ];
-    let mut f = Function::new(locals);
-    super::user_subtypes::emit_grown_object_to_json(&mut f, intrinsics, symbols, named_len);
-    let (fields_arr, acc, elem, tj_fn) = (1u32, 2u32, 3u32, 4u32);
-
+/// Class serialization reads the runtime property metadata, including visibility
+/// and getters, so structural views and dynamically added fields use the same rules.
+fn emit_class_to_json_body(symbols: &SymbolTable) -> Function {
+    let mut f = Function::new([]);
     f.instruction(&Instruction::LocalGet(0));
-    f.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(
-        intrinsics.object_shape,
-    )));
-    f.instruction(&Instruction::StructGet {
-        struct_type_index: intrinsics.object_shape,
-        field_index: 2,
-    });
-    f.instruction(&Instruction::LocalSet(fields_arr));
-
-    push_str(&mut f, "{");
-    f.instruction(&Instruction::LocalSet(acc));
-
-    for (slot, name) in &sorted {
-        let key = format!(
-            "\"{}\":",
-            crate::codegen::user_subtypes::json_escape_key(name)
-        );
-        f.instruction(&Instruction::LocalGet(fields_arr));
-        f.instruction(&Instruction::I32Const(*slot as i32));
-        f.instruction(&Instruction::ArrayGet(intrinsics.object_fields));
-        f.instruction(&Instruction::LocalSet(elem));
-
-        f.instruction(&Instruction::LocalGet(elem));
-        f.instruction(&Instruction::RefTestNonNull(HeapType::Concrete(
-            intrinsics.closure,
-        )));
-        f.instruction(&Instruction::I32Eqz);
-        if fields[*slot as usize].optional {
-            super::field_names::emit_optional_presence(
-                &mut f,
-                intrinsics,
-                symbols.optional_field_name_type(),
-                0,
-                *slot,
-                elem,
-            );
-            f.instruction(&Instruction::I32And);
-        }
-        f.instruction(&Instruction::If(BlockType::Empty));
-        f.instruction(&Instruction::LocalGet(acc));
-        f.instruction(&Instruction::LocalGet(5));
-        f.instruction(&Instruction::If(BlockType::Result(string_ref)));
-        push_str(&mut f, ",");
-        f.instruction(&Instruction::Else);
-        push_str(&mut f, "");
-        f.instruction(&Instruction::End);
-        f.instruction(&Instruction::Call(string_concat_func_idx));
-        push_str(&mut f, &key);
-        f.instruction(&Instruction::Call(string_concat_func_idx));
-        f.instruction(&Instruction::LocalSet(acc));
-
-        f.instruction(&Instruction::LocalGet(acc));
-        f.instruction(&Instruction::LocalGet(elem));
-        f.instruction(&Instruction::RefIsNull);
-        f.instruction(&Instruction::If(BlockType::Result(string_ref)));
-        push_str(&mut f, "null");
-        f.instruction(&Instruction::Else);
-        f.instruction(&Instruction::LocalGet(elem));
-        f.instruction(&Instruction::RefAsNonNull);
-        f.instruction(&Instruction::StructGet {
-            struct_type_index: intrinsics.object,
-            field_index: 0,
-        });
-        f.instruction(&Instruction::StructGet {
-            struct_type_index: intrinsics.vtable,
-            field_index: 1,
-        });
-        f.instruction(&Instruction::LocalSet(tj_fn));
-        f.instruction(&Instruction::LocalGet(elem));
-        f.instruction(&Instruction::RefAsNonNull);
-        f.instruction(&Instruction::LocalGet(tj_fn));
-        f.instruction(&Instruction::CallRef(intrinsics.to_json_fn));
-        f.instruction(&Instruction::End);
-        f.instruction(&Instruction::Call(string_concat_func_idx));
-        f.instruction(&Instruction::LocalSet(acc));
-        f.instruction(&Instruction::I32Const(1));
-        f.instruction(&Instruction::LocalSet(5));
-        f.instruction(&Instruction::End);
-    }
-
-    f.instruction(&Instruction::LocalGet(acc));
-    push_str(&mut f, "}");
-    f.instruction(&Instruction::Call(string_concat_func_idx));
+    f.instruction(&Instruction::Call(
+        symbols
+            .prelude_func_idx("ObjectConstructor##toJson")
+            .expect("object serializer imported"),
+    ));
     f.instruction(&Instruction::End);
     f
 }
@@ -2266,6 +2147,7 @@ mod tests {
         let vtable_type_idx = crate::codegen::intrinsics::INTRINSIC_TYPE_COUNT;
         let struct_type_idx = vtable_type_idx + 1;
         let layout = ClassLayout {
+            private_members: BTreeSet::new(),
             generics: Vec::new(),
             mangled: crate::mangle::prelude("ErrorWitness"),
             name: "ErrorWitness".to_string(),

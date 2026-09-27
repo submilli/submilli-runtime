@@ -33,9 +33,14 @@ pub(super) struct StaticCallTarget<'a> {
 /// How [`Inferer::bind_param_call_args`] names the callee in its arity
 /// diagnostic and which signature shape it lifts into the `help:` block.
 #[derive(Clone, Copy)]
-enum CallLift<'a> {
+pub(super) enum CallLift<'a> {
+    Constructor {
+        class_ty: &'a Type,
+    },
     /// A named callee — `http.get`, `Cls.make`, a top-level function.
-    Function { name: &'a str },
+    Function {
+        name: &'a str,
+    },
     /// An unnamed function-typed callee (a closure held in a field or
     /// local); lifts the anonymous `(T, U) => R` form.
     Anon,
@@ -2573,11 +2578,14 @@ impl Inferer<'_> {
                     ),
                 );
             }
-            let typed_args = self.bind_ctor_call_args(
+            let typed_args = self.bind_param_call_args(
                 &ctor_params,
+                &class_ty,
+                CallLift::Constructor {
+                    class_ty: &class_ty,
+                },
                 &args,
                 span,
-                &format!("constructor of `{}`", ident.name),
             );
             // `new Foo(args)` lowers to a call of the synthesized constructor
             // function (codegen emits it; same-package only in SUB-483).
@@ -3372,7 +3380,7 @@ impl Inferer<'_> {
     /// trailing params, and packs the rest tail into a single array so
     /// the returned `Vec<ExprId>` lines up 1:1 with the resolved
     /// signature.
-    fn bind_param_call_args(
+    pub(super) fn bind_param_call_args(
         &mut self,
         params: &[crate::Param],
         ret: &Type,
@@ -3390,6 +3398,12 @@ impl Inferer<'_> {
         let arity_ok = args.len() >= min_args && args.len() <= max_args;
         if !arity_ok {
             let help = match lift {
+                CallLift::Constructor { class_ty } => {
+                    self.format_signature(SignatureKind::Constructor {
+                        name: &class_ty.to_string(),
+                        params,
+                    })
+                }
                 CallLift::Function { name } => self.format_signature(SignatureKind::Function {
                     name,
                     generics: &[],
@@ -3416,6 +3430,9 @@ impl Inferer<'_> {
                 }),
             };
             let subject = match lift {
+                CallLift::Constructor { class_ty } => {
+                    format!("constructor of `{class_ty}` expects")
+                }
                 CallLift::Function { .. } | CallLift::Anon => "expected".to_string(),
                 CallLift::Method { name, .. } => format!("method `{name}` expects"),
             };
@@ -8248,7 +8265,10 @@ impl Inferer<'_> {
     /// `InterfaceRef`s are rejected by `unsupported_cast_target_reason` when a runtime
     /// check is actually needed.
     fn reduce_interfaces_to_shapes(&self, ty: &Type, seen: &mut Vec<String>) -> Type {
-        match ty.peel() {
+        match ty.peel_preserving_readonly() {
+            Type::Readonly(inner) => {
+                Type::Readonly(Box::new(self.reduce_interfaces_to_shapes(inner, seen)))
+            }
             Type::InterfaceRef {
                 mangled,
                 name,

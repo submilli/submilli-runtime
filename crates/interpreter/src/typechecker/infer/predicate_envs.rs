@@ -494,7 +494,11 @@ impl<'a> Inferer<'a> {
         neq_env.insert(
             path,
             narrowing::NarrowedView {
-                narrowed_ty: narrowing::strip_null(&path_ty),
+                narrowed_ty: if matches!(path_ty.peel(), Type::Null) {
+                    Type::Never
+                } else {
+                    narrowing::strip_null(&path_ty)
+                },
                 facts: narrowing::TypeFacts::NE_NULL,
                 excluded_literals: std::collections::BTreeSet::new(),
                 binding: self.mint_narrow_binding(path_span),

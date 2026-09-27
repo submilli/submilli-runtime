@@ -72,14 +72,13 @@ function main(): void {
     assert(deep?.m.i.y === 2, "two narrowed steps in one chain");
   }
 
-  // A write invalidates the narrowing, so the step falls back to the declared
-  // type and the chain has to carry its own `?.` again. Rejecting the step
-  // without the `?.` reports what killed the narrowing, the way the plain read
-  // does — see `expect_error_chain_nullable_step.ts`.
+  // A nullable write leaves the step nullable, so the chain needs its own `?.`.
+  // A literal null write instead establishes an always-null path, rejected in
+  // expect_error_chain_nullable_step.ts (including an optional following step).
   const w = new Outer();
   if (w.b !== null) {
-    w.b = null;
-    assert(w?.b?.y === null, "the step reads its declared type after a write");
+    w.b = clearedInner();
+    assert(w?.b?.y === null, "a nullable write leaves the step nullable");
   }
 
   // A narrowing whose path *ends* at an index is refused — no shadow local can
@@ -113,3 +112,5 @@ function main(): void {
     assert(k?.pet.fetch() === "ball", "an `instanceof`-narrowed step");
   }
 }
+
+function clearedInner(): Inner | null { return null; }

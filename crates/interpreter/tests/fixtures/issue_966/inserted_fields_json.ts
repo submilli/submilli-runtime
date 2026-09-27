@@ -31,6 +31,6 @@ function main(): void {
   const accessorData = new AccessorData();
   const accessorView = accessorData as unknown as { b?: number };
   accessorView.b = 2;
-  const accessorJson = JSON.parse(JSON.stringify(accessorData)) as { b: number; 'get g': number };
-  assert(accessorJson.b === 2 && accessorJson['get g'] === 9 && Object.keys(accessorJson).length === 2, 'dynamic serializer preserves colliding data key');
+  const accessorJson = JSON.parse(JSON.stringify(accessorData)) as { b: number; g: number; 'get g': number };
+  assert(accessorJson.b === 2 && accessorJson['get g'] === 9 && accessorJson.g === 4 && Object.keys(accessorJson).length === 3, 'dynamic serializer preserves colliding data key and public getter');
 }

@@ -1,5 +1,5 @@
-// expect-error: constructor of `Rest` expects at least 1 argument(s), got 0
-// expect-error: constructor of `Defaulted` expects 1–2 argument(s), got 3
+// expect-error: constructor of `Rest` expects 1+ argument(s), got 0
+// expect-error: constructor of `Defaulted` expects 1-2 argument(s), got 3
 // expect-error: default value of type `string` is not assignable to parameter type `number`
 // expect-error: parameter `v` cannot have a default value: its type `T` is chosen by the caller
 class Rest {

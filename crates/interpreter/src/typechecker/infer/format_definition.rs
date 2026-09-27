@@ -348,7 +348,13 @@ fn write_constructor(out: &mut String, chain: &[ClassLink]) {
             if n > 0 {
                 out.push_str(", ");
             }
-            write!(out, "{}: {}", p.name, link.sub.apply(&p.ty)).unwrap();
+            super::format_signature::write_named_param(
+                out,
+                &p.name,
+                &link.sub.apply(&p.ty),
+                p.default.as_ref(),
+                p.rest,
+            );
         }
         writeln!(out, ");{}", inherited_from_note(chain, i)).unwrap();
         return;

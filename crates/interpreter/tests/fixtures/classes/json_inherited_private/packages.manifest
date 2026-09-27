@@ -1,0 +1,2 @@
+@test/json-base lib -
+main app @test/json-base root

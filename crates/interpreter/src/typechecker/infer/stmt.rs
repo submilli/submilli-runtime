@@ -55,6 +55,7 @@ impl Inferer<'_> {
                 // the moment it is written to: `const a = 1; let b = a;` binds `number`,
                 // not `1`. An explicit annotation is honoured as written.
                 let bound = hint.unwrap_or_else(|| value_ty.widen_literal());
+                let bound = self.pattern_binding_storage_type(value, bound);
                 // Reject a void binding; poison the slot so codegen never
                 // sees a void value-type.
                 let bound = if self.reject_void_binding(&bound, span) {
@@ -64,7 +65,8 @@ impl Inferer<'_> {
                 };
                 self.scopes
                     .insert(name.name.clone(), bound.clone(), false, name.span);
-                self.narrow_local_initializer(&name, &bound, value_ty);
+                let flow_ty = self.pattern_binding_flow_type(value).unwrap_or(value_ty);
+                self.narrow_local_initializer(&name, &bound, flow_ty);
                 TypedStmtKind::Let {
                     name,
                     ty: bound,
@@ -89,6 +91,7 @@ impl Inferer<'_> {
                     .or_else(|| literal_type_of(self.ast, value));
                 let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref());
                 let bound = hint.unwrap_or_else(|| value_ty.clone());
+                let bound = self.pattern_binding_storage_type(value, bound);
                 // Reject a void binding; poison the slot so codegen never
                 // sees a void value-type.
                 let bound = if self.reject_void_binding(&bound, span) {
@@ -98,7 +101,11 @@ impl Inferer<'_> {
                 };
                 self.scopes
                     .insert(name.name.clone(), bound.clone(), true, name.span);
-                self.narrow_local_initializer(&name, &bound, value_ty);
+                if name.name.starts_with("#pattern_dst_") {
+                    self.pattern_sources.insert(name.name.clone(), typed_value);
+                }
+                let flow_ty = self.pattern_binding_flow_type(value).unwrap_or(value_ty);
+                self.narrow_local_initializer(&name, &bound, flow_ty);
                 TypedStmtKind::Const {
                     name,
                     ty: bound,
@@ -128,9 +135,7 @@ impl Inferer<'_> {
                 let then_span = self.ast.stmt(then_block).span;
                 self.push_narrow_frame(true_env.clone());
                 self.reachable = entry_reachable;
-                let typed_then = self
-                    .infer_stmt(then_block)
-                    .expect("if-branch is a Block, never a type-only decl");
+                let typed_then = self.infer_if_branch(then_block);
                 let then_reachable = self.reachable && then_possible;
                 let then_narrowings = self.snapshot_active_narrowings(0).0;
                 let (_, then_assigned) = self.pop_narrow_frame_capture();
@@ -141,9 +146,7 @@ impl Inferer<'_> {
                     let else_span = self.ast.stmt(b).span;
                     self.push_narrow_frame(false_env.clone());
                     self.reachable = entry_reachable;
-                    let typed_else = self
-                        .infer_stmt(b)
-                        .expect("else-branch is a Block, never a type-only decl");
+                    let typed_else = self.infer_if_branch(b);
                     let er = self.reachable && else_possible;
                     let en = self.snapshot_active_narrowings(0).0;
                     let (_, ea) = self.pop_narrow_frame_capture();
@@ -711,18 +714,30 @@ impl Inferer<'_> {
         }
     }
 
-    /// Drain `pending_post_if_materializations` after each stmt, wrapping the tail in
-    /// `NarrowRegion`s when non-empty. Does NOT push/pop scopes — the `Block` arm owns those.
+    fn infer_if_branch(&mut self, body: StmtId) -> StmtId {
+        let pending = std::mem::take(&mut self.pending_post_if_materializations);
+        let typed = self
+            .infer_stmt(body)
+            .expect("if-branch is a Block, never a type-only decl");
+        // Block exits export views for their following statements. A branch has
+        // no such continuation: the if join rematerializes its surviving views.
+        // Keep these exports out of the sibling branch and its return paths.
+        self.pending_post_if_materializations = pending;
+        typed
+    }
+
+    /// Field views are lazy reads, so register them around the statement that
+    /// creates them as well as its continuation. An assignment expression can
+    /// use its new view later in the same statement, including inside a branch.
+    /// Does NOT push/pop scopes — the `Block` arm owns those.
     fn block_stmts_with_drain(&mut self, stmts: &[StmtId], outer_span: Span) -> Vec<StmtId> {
         let mut typed_stmts: Vec<StmtId> = Vec::new();
-        let mut i = 0;
-        while i < stmts.len() {
-            if let Some(t) = self.infer_stmt(stmts[i]) {
-                typed_stmts.push(t);
-            }
+        for (i, &stmt) in stmts.iter().enumerate() {
+            let typed = self.infer_stmt(stmt);
             let pending = std::mem::take(&mut self.pending_post_if_materializations);
             if !pending.is_empty() {
-                let tail = self.block_stmts_with_drain(&stmts[i + 1..], outer_span);
+                let mut tail: Vec<StmtId> = typed.into_iter().collect();
+                tail.extend(self.block_stmts_with_drain(&stmts[i + 1..], outer_span));
                 let tail_block = self.typed_ast.push_stmt(TypedStmt {
                     kind: TypedStmtKind::Block(tail),
                     span: outer_span,
@@ -731,7 +746,7 @@ impl Inferer<'_> {
                 typed_stmts.push(wrapped);
                 break;
             }
-            i += 1;
+            typed_stmts.extend(typed);
         }
         typed_stmts
     }
@@ -1136,22 +1151,54 @@ impl Inferer<'_> {
             placeholder(self, target_ty.as_ref())
         };
         if let Some(path) = target_path {
-            let preserved = self.lookup_narrowed_view(&path).cloned().filter(|view| {
-                let TypedStmtKind::AssignField { value, .. } = &result else {
-                    return false;
-                };
-                assignable(
-                    &self.typed_ast.expr(*value).ty,
-                    &view.narrowed_ty,
-                    self.resolver(),
-                )
-            });
             self.invalidate_for_write(path.clone(), name.span);
-            if let Some(view) = preserved {
-                self.install_joined_narrowings([(path, view)].into_iter().collect(), name.span);
+            if let TypedStmtKind::AssignField { value, .. } = &result {
+                self.narrow_field_after_write(path, typed_receiver, &receiver_ty, &name, *value);
             }
         }
         result
+    }
+
+    fn narrow_field_after_write(
+        &mut self,
+        path: narrowing::ReferencePath,
+        receiver: ExprId,
+        receiver_ty: &Type,
+        name: &Ident,
+        value: ExprId,
+    ) {
+        let kind = TypedExprKind::FieldAccess {
+            receiver,
+            name: name.clone(),
+        };
+        if self.kind_to_reference_path(&kind).is_none() || self.path_root_is_captured_mutator(&path)
+        {
+            return;
+        }
+        let Some(declared) = self.write_target_ty(receiver_ty, &name.name) else {
+            return;
+        };
+        let written = self.typed_ast.expr(value).ty.clone();
+        if matches!(written, Type::Error) || !assignable(&written, &declared, self.resolver()) {
+            return;
+        }
+        let narrowed_ty = self.assignment_narrowed_ty(&declared, written);
+        if narrowed_ty == declared {
+            return;
+        }
+        let source = self.typed_ast.push_expr(TypedExpr {
+            kind,
+            span: name.span,
+            ty: declared,
+        });
+        let view = narrowing::NarrowedView {
+            narrowed_ty,
+            facts: narrowing::TypeFacts::EMPTY,
+            excluded_literals: Default::default(),
+            binding: self.mint_narrow_binding(name.span),
+            source,
+        };
+        self.install_joined_narrowings([(path, view)].into_iter().collect(), name.span);
     }
 
     pub(super) fn infer_assign_index(
@@ -1241,6 +1288,88 @@ impl Inferer<'_> {
                 );
                 Type::Error
             }
+        }
+    }
+
+    fn pattern_binding_storage_type(&self, value: ExprId, declared: Type) -> Type {
+        let Some((source, element)) = self.pattern_binding_source(value) else {
+            return declared;
+        };
+        self.pattern_source_view(source, &element).map_or_else(
+            || declared.clone(),
+            |view| self.initializer_narrowed_ty(&declared, view),
+        )
+    }
+
+    fn pattern_binding_flow_type(&self, value: ExprId) -> Option<Type> {
+        use narrowing::{LiteralValue, PathElem};
+        let (source, element) = self.pattern_binding_source(value)?;
+        if let Some(narrowed) = self.pattern_source_view(source, &element) {
+            return Some(narrowed);
+        }
+        match element {
+            // Destructuring snapshots a getter's result; its declared read type
+            // is usable even though repeated getter reads cannot be narrowed.
+            PathElem::Field(field) => self.narrow_source_field_ty(&source.ty, &field),
+            PathElem::Index(LiteralValue::Number(index)) => {
+                Self::pattern_index_flow_type(&source.ty, index.0 as usize)
+            }
+            _ => None,
+        }
+    }
+
+    fn pattern_binding_source(&self, value: ExprId) -> Option<(&TypedExpr, narrowing::PathElem)> {
+        use narrowing::{LiteralValue, PathElem};
+        let (receiver, element) = match &self.ast.expr(value).kind {
+            ExprKind::FieldAccess { receiver, name } => {
+                (*receiver, PathElem::Field(name.name.clone()))
+            }
+            ExprKind::IndexAccess { receiver, index } => {
+                let ExprKind::Number(index) = self.ast.expr(*index).kind else {
+                    return None;
+                };
+                (
+                    *receiver,
+                    PathElem::Index(LiteralValue::Number(crate::types::LiteralF64(index))),
+                )
+            }
+            _ => return None,
+        };
+        let ExprKind::Identifier(source) = &self.ast.expr(receiver).kind else {
+            return None;
+        };
+        let source = self
+            .typed_ast
+            .expr(*self.pattern_sources.get(&source.name)?);
+        Some((source, element))
+    }
+
+    fn pattern_source_view(
+        &self,
+        source: &TypedExpr,
+        element: &narrowing::PathElem,
+    ) -> Option<Type> {
+        if let narrowing::PathElem::Field(field) = element
+            && self.type_has_getter(&source.ty, field)
+        {
+            return None;
+        }
+        let mut path = self.expr_to_reference_path(source)?;
+        path.chain.push(element.clone());
+        self.lookup_narrowed_view(&path)
+            .map(|view| view.narrowed_ty.clone())
+    }
+
+    fn pattern_index_flow_type(source: &Type, index: usize) -> Option<Type> {
+        match source.peel() {
+            Type::Tuple(elems) => elems.get(index).cloned(),
+            Type::Array(elem) => Some((**elem).clone()),
+            Type::Union(members) => members
+                .iter()
+                .map(|member| Self::pattern_index_flow_type(member, index))
+                .collect::<Option<Vec<_>>>()
+                .map(Type::union),
+            _ => None,
         }
     }
 

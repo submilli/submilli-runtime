@@ -64,7 +64,8 @@ async fn repository_class_construction_and_dispatch() {
             let rejected = false;
             try { new Repository("/missing"); } catch (error) { rejected = true; }
             assert(rejected);
-            assert(JSON.stringify(created) === JSON.stringify(checkout));
+            assert(JSON.stringify(created) === "{}", "host repository omits private path");
+            assert(JSON.stringify(created) === JSON.stringify(checkout), "guest subclass preserves privacy");
             const restored: unknown = JSON.parse(JSON.stringify(created));
             assert(!(restored instanceof Repository));
             const forged: unknown = { path: "/repo" };

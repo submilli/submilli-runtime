@@ -84,6 +84,7 @@ pub fn infer_with_transitive<'a>(
         last_write_spans: std::collections::BTreeMap::new(),
         suspended_narrow_scopes: Vec::new(),
         pending_post_if_materializations: Vec::new(),
+        pattern_sources: BTreeMap::new(),
         captured_mutators: bindings.mutators,
         last_assignments: bindings.last_assignments,
         reachable: true,
@@ -226,6 +227,7 @@ pub fn infer_package<'a>(
         last_write_spans: std::collections::BTreeMap::new(),
         suspended_narrow_scopes: Vec::new(),
         pending_post_if_materializations: Vec::new(),
+        pattern_sources: BTreeMap::new(),
         captured_mutators: Default::default(),
         last_assignments: Default::default(),
         reachable: true,
@@ -409,6 +411,8 @@ pub(super) struct NamespaceBinding<'a> {
 }
 
 pub(super) struct Inferer<'a> {
+    /// Source expressions before synthetic destructuring annotations widen them.
+    pattern_sources: BTreeMap<String, crate::ExprId>,
     pub(super) source: &'a str,
     pub(super) package_name: &'a str,
     pub(super) ast: &'a Ast,

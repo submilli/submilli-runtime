@@ -17,6 +17,7 @@ pub struct FieldName {
     pub name: String,
     pub optional: bool,
     pub is_accessor: bool,
+    pub is_private: bool,
 }
 
 pub fn declare_optional_name_type(
@@ -37,6 +38,10 @@ pub fn declare_optional_name_type(
     fields.push(wasm_encoder::FieldType {
         element_type: StorageType::Val(ValType::I32),
         mutable: true,
+    });
+    fields.push(wasm_encoder::FieldType {
+        element_type: StorageType::Val(ValType::I32),
+        mutable: false,
     });
     types.ty().subtype(&wasm_encoder::SubType {
         is_final: true,
@@ -65,6 +70,7 @@ pub fn collect(shapes: &[Type]) -> Vec<Vec<FieldName>> {
                         name: name.clone(),
                         optional: field.optional,
                         is_accessor: false,
+                        is_private: false,
                     })
                     .collect(),
             );
@@ -122,11 +128,18 @@ fn build_init_expr(
             array_type_index: intrinsics.raw_string,
             array_size: code_units.len() as u32,
         });
-        if name.optional || name.is_accessor {
-            instrs.push(Instruction::I32Const(if name.is_accessor { -1 } else { 0 }));
+        if name.optional || name.is_accessor || name.is_private {
+            instrs.push(Instruction::I32Const(if name.is_accessor {
+                -1
+            } else if name.optional {
+                0
+            } else {
+                1
+            }));
+            instrs.push(Instruction::I32Const(i32::from(name.is_private)));
         }
         instrs.push(Instruction::StructNew(
-            if name.optional || name.is_accessor {
+            if name.optional || name.is_accessor || name.is_private {
                 optional_name_type
             } else {
                 intrinsics.string
@@ -176,6 +189,7 @@ pub(crate) fn emit_instance_names(
                 });
             }
             emitter.instruction(Instruction::I32Const(i32::from(present(&name.name))));
+            emitter.instruction(Instruction::I32Const(i32::from(name.is_private)));
             emitter.instruction(Instruction::StructNew(
                 ctx.symbols.optional_field_name_type(),
             ));
@@ -341,7 +355,8 @@ mod tests {
             vec![FieldName {
                 name: "x".to_string(),
                 optional: false,
-                is_accessor: false
+                is_accessor: false,
+                is_private: false,
             }]
         );
     }
@@ -361,7 +376,8 @@ mod tests {
             vec![FieldName {
                 name: "x".to_string(),
                 optional: false,
-                is_accessor: false
+                is_accessor: false,
+                is_private: false,
             }]
         );
         assert_eq!(
@@ -369,7 +385,8 @@ mod tests {
             vec![FieldName {
                 name: "y".to_string(),
                 optional: false,
-                is_accessor: false
+                is_accessor: false,
+                is_private: false,
             }]
         );
     }

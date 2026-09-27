@@ -66,7 +66,7 @@ fn shape_arrays(
     Ok(Some((names, values)))
 }
 
-fn field_array(
+pub(super) fn field_array(
     caller: &mut Caller<'_, StoreData>,
     st: &Rooted<StructRef>,
     idx: usize,
@@ -148,6 +148,19 @@ pub(crate) fn is_accessor_slot(
     Ok(matches!(name.field(&mut *caller, 2)?, Val::I32(-1)))
 }
 
+/// Visibility is carried only by compiler-created marked names. Host-created
+/// names predate that metadata and describe public data properties.
+pub(crate) fn field_is_private(
+    caller: &mut Caller<'_, StoreData>,
+    name: &Val,
+) -> wasmtime::Result<bool> {
+    let name = as_struct(caller, name, "field name")?;
+    if name.ty(&*caller)?.fields().count() < 4 {
+        return Ok(false);
+    }
+    Ok(matches!(name.field(&mut *caller, 3)?, Val::I32(1)))
+}
+
 /// Copy present own fields while preserving UTF-16 names and boxed values.
 /// Each call snapshots its source before the next literal member is evaluated.
 fn spread(
@@ -226,6 +239,9 @@ fn copy_field_name(
     ];
     if !present {
         fields.push(Val::I32(0));
+        if ty.fields().count() > 3 {
+            fields.push(object.field(&mut *caller, 3)?);
+        }
     }
     let pre = StructRefPre::new(&mut *caller, ty);
     Ok(Val::AnyRef(Some(

@@ -32,6 +32,7 @@ use crate::{MangledName, Param, TypeKind, TypedAst, TypedTypeDecl};
 /// so a local subclass extending it lays its own fields/methods out after the
 /// inherited prefix.
 pub struct ImportedClassLayout {
+    pub private_members: BTreeSet<String>,
     /// Full data-field names (inherited prefix then own), object-payload order.
     pub fields: Vec<String>,
     pub optional_fields: std::collections::BTreeSet<String>,
@@ -724,7 +725,29 @@ fn reconstruct_one(
         })
         .collect();
 
+    let mut private_members = class
+        .extends
+        .as_ref()
+        .and_then(|parent| layouts.get(parent))
+        .map(|layout| layout.private_members.clone())
+        .unwrap_or_default();
+    for (name, field) in class.fields {
+        if field.visibility == crate::Visibility::Private {
+            private_members.insert(name.clone());
+        }
+    }
+    for accessor in class.accessors {
+        if class
+            .fields
+            .get(accessor.name())
+            .is_some_and(|field| field.visibility == crate::Visibility::Private)
+        {
+            private_members.insert(super::classes::accessor_getter_name(accessor.name()));
+            private_members.insert(super::classes::accessor_setter_name(accessor.name()));
+        }
+    }
     ImportedClassLayout {
+        private_members,
         fields,
         optional_fields,
         narrowing_checks,

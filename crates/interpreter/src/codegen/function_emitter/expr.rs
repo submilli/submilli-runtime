@@ -457,6 +457,7 @@ fn emit_expr_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) 
                     name: name.clone(),
                     optional: field.optional,
                     is_accessor: false,
+                    is_private: false,
                 })
                 .collect();
             let intrinsics = ctx
@@ -2156,6 +2157,7 @@ fn emit_spread_shape(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, shape: &Ty
             name: name.clone(),
             optional: field.optional,
             is_accessor: false,
+            is_private: false,
         })
         .collect();
     let names_global = ctx

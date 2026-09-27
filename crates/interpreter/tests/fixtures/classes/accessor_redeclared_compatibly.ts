@@ -187,7 +187,7 @@ function readMixed(x: HasA | ASub): string {
   return x.a;
 }
 
-// An accessor backs no data slot, so serialization sees the backing field.
+// Serialization reads public getters and omits private backing fields.
 class SerAcc {
   private sn: number = 4;
   get area(): number {
@@ -235,10 +235,10 @@ function main(): void {
   assert(readMixed(new APlain()) === "plain", "a union receiver, interface arm");
 
   assert(
-    JSON.stringify(new SerAcc()) === '{"sn":4}',
-    "an accessor-backed class serializes its backing field, not the property",
+    JSON.stringify(new SerAcc()) === '{"area":4}',
+    "an accessor-backed class serializes its public property",
   );
-  assert(JSON.stringify(new ASub()) === "{}", "a class with no data field serializes empty");
+  assert(JSON.stringify(new ASub()) === '{"a":"sub"}', "an inherited getter uses the override");
 
   const g = new GenericSub<string>("gen");
   const asGenericBase: GenericBase<string> = g;

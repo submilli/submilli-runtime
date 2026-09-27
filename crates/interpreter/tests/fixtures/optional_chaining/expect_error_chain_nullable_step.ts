@@ -1,6 +1,6 @@
 // expect-error: cannot read `y` on a value of type `null | Inner`
 // expect-error: cannot read `y` on a value of type `Nil | Inner`
-// expect-error: narrowing on `w.b` was dropped by the write
+// expect-error: cannot read `y` on a value of type `null` — the receiver is always null
 // `?.` short-circuits its own step only. A plain `.` after a step that yields a
 // nullable value is an ordinary field read on a nullable receiver, and is
 // rejected exactly as it is outside a chain — admitting it emits a `struct.get`
@@ -28,6 +28,7 @@ function droppedNarrowing(): void {
   if (w.b !== null) {
     w.b = null;
     const r = w?.b.y;
+    const optional = w?.b?.y;
     console.log(r);
   }
 }

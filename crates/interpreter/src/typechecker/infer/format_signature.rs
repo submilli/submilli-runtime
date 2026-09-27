@@ -4,6 +4,10 @@ use crate::typechecker::type_param_substitution::TypeParamSubstitution;
 use crate::{DefaultValue, EnumVariantValue, Intrinsic, MethodSig, Param, Type};
 
 pub(super) enum SignatureKind<'a> {
+    Constructor {
+        name: &'a str,
+        params: &'a [Param],
+    },
     Function {
         name: &'a str,
         generics: &'a [String],
@@ -35,6 +39,17 @@ pub(super) fn format_signature(
     substitution: &TypeParamSubstitution,
 ) -> String {
     match kind {
+        SignatureKind::Constructor { name, params } => {
+            let mut out = format!("new {name}(");
+            for (i, p) in params.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                write_named_param(&mut out, &p.name, &p.ty, p.default.as_ref(), p.rest);
+            }
+            out.push(')');
+            out
+        }
         SignatureKind::Function {
             name,
             generics,
@@ -81,7 +96,7 @@ fn format_function(
     out
 }
 
-fn write_named_param(
+pub(super) fn write_named_param(
     out: &mut String,
     name: &str,
     ty: &Type,
