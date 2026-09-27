@@ -111,6 +111,12 @@ pub struct FileConfig {
     /// `SUBMILLI_TELEMETRY` can also opt in. A config-file `false` or a supplied
     /// environment value other than `1`/`true`/`yes`/`on` disables telemetry.
     pub telemetry: Option<bool>,
+    /// Attach the failed program's source code to telemetry error reports.
+    /// Off by default even when `telemetry` is on: the source is the most
+    /// useful thing for diagnosing a runtime fault and also the most sensitive
+    /// thing the report could carry, so it is a separate opt-in. Same rules as
+    /// `telemetry`; `SUBMILLI_TELEMETRY_INCLUDE_SOURCE` can also opt in.
+    pub telemetry_include_source: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -341,6 +347,13 @@ pub(crate) fn resolve(cli: Cli) -> Result<Resolved> {
         std::env::var("SUBMILLI_TELEMETRY").ok().as_deref(),
         file.telemetry,
     );
+    let telemetry_include_source = telemetry
+        && combine_telemetry(
+            std::env::var("SUBMILLI_TELEMETRY_INCLUDE_SOURCE")
+                .ok()
+                .as_deref(),
+            file.telemetry_include_source,
+        );
     // A failure from here on exits before any subscriber exists to log the
     // migration, so what it moved is said on stderr before the error goes out.
     let resolved = shutdown_grace(&cli, &file, &env).and_then(|shutdown_grace| {
@@ -356,6 +369,7 @@ pub(crate) fn resolve(cli: Cli) -> Result<Resolved> {
         addr,
         config,
         telemetry,
+        telemetry_include_source,
         shutdown_grace,
         migration,
     })
@@ -524,6 +538,9 @@ pub(crate) struct Resolved {
     pub addr: SocketAddr,
     pub config: ServerConfig,
     pub telemetry: bool,
+    /// Whether telemetry error reports carry the failed program's source.
+    /// Always `false` when `telemetry` is.
+    pub telemetry_include_source: bool,
     pub shutdown_grace: Duration,
     /// What the boot migration did, if it ran. Logged once a subscriber exists.
     pub migration: Option<crate::migrate::MigrationReport>,
@@ -985,6 +1002,10 @@ network:
         let cfg: FileConfig = serde_yml::from_str("telemetry: false\n").unwrap();
         assert_eq!(cfg.telemetry, Some(false));
         assert!(FileConfig::default().telemetry.is_none());
+        let cfg: FileConfig =
+            serde_yml::from_str("telemetry: true\ntelemetry_include_source: true\n").unwrap();
+        assert_eq!(cfg.telemetry_include_source, Some(true));
+        assert!(FileConfig::default().telemetry_include_source.is_none());
     }
 
     #[test]

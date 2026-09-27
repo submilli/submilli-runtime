@@ -6,6 +6,7 @@
 //! is readable after `dispatch_main_async` returns in either branch.
 
 use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -419,8 +420,21 @@ fn register_package_sources(sources: &mut Sources, packages: &PreparedBlueprintP
     }
 }
 
-/// Report a failed execution to Sentry with the source that produced it and the
-/// serialized error response attached. A no-op when no Sentry client is bound
+/// Whether [`report_to_sentry`] attaches the failed program's source and the
+/// rendered error, which quotes the failing lines. Process-wide, like the Sentry
+/// hub it feeds: set once at boot from the resolved config, and off until then,
+/// so a report can never carry source the operator didn't opt into.
+static TELEMETRY_INCLUDE_SOURCE: AtomicBool = AtomicBool::new(false);
+
+pub fn set_telemetry_include_source(include: bool) {
+    TELEMETRY_INCLUDE_SOURCE.store(include, Ordering::Relaxed);
+}
+
+/// Report a failed execution to Sentry. Without the operator's opt-in
+/// ([`set_telemetry_include_source`]) the report is the error kind and the
+/// message's first line; with it, the program's source and the full error
+/// response — a backtrace or compile diagnostics, both of which quote source
+/// lines — are attached as extras. A no-op when no Sentry client is bound
 /// (tests, or a build without `sentry::init`). The `submilli.error_kind` tag
 /// lets operators mute the expected-but-noisy classes (compile errors from
 /// LLM-generated code) independently of traps and internal faults.
@@ -438,12 +452,16 @@ fn error_kind_tag(kind: ErrorKind) -> &'static str {
 
 fn report_to_sentry(code: &str, error: &ExecuteError) {
     let kind = error_kind_tag(error.kind);
+    let extras = sentry_extras(
+        code,
+        error,
+        TELEMETRY_INCLUDE_SOURCE.load(Ordering::Relaxed),
+    );
     sentry::with_scope(
         |scope| {
             scope.set_tag("submilli.error_kind", kind);
-            scope.set_extra("code", code.into());
-            if let Ok(response) = serde_json::to_value(error) {
-                scope.set_extra("response", response);
+            for (key, value) in extras {
+                scope.set_extra(key, value);
             }
         },
         || {
@@ -451,6 +469,25 @@ fn report_to_sentry(code: &str, error: &ExecuteError) {
             sentry::capture_message(&format!("[{kind}] {summary}"), sentry::Level::Error);
         },
     );
+}
+
+/// The extras a failure report carries. Both quote the program: the source
+/// itself, and the error response, whose backtrace or diagnostics reproduce the
+/// failing lines. So both wait for `include_source`; without it the report is
+/// only the event message.
+fn sentry_extras(
+    code: &str,
+    error: &ExecuteError,
+    include_source: bool,
+) -> Vec<(&'static str, serde_json::Value)> {
+    if !include_source {
+        return Vec::new();
+    }
+    let mut extras = vec![("code", serde_json::Value::from(code))];
+    if let Ok(response) = serde_json::to_value(error) {
+        extras.push(("response", response));
+    }
+    extras
 }
 
 fn internal_failure(msg: &str) -> RunOutcome {
@@ -483,6 +520,25 @@ mod tests {
     use interpreter::runtime::security::CheckOutcome;
     use interpreter::runtime::{InMemorySessionKv, install_runtime_host_functions};
     use std::time::Duration;
+
+    /// Neither the program's source nor the rendered error, which quotes its
+    /// lines, reaches a telemetry report without the explicit opt-in.
+    #[test]
+    fn source_is_attached_to_telemetry_only_on_opt_in() {
+        let error = ExecuteError {
+            kind: ErrorKind::RuntimeError,
+            message: "boom".into(),
+            diagnostics: Vec::new(),
+        };
+        let keys = |include: bool| -> Vec<&'static str> {
+            sentry_extras("function main(): number { return 1; }", &error, include)
+                .into_iter()
+                .map(|(key, _)| key)
+                .collect()
+        };
+        assert!(keys(false).is_empty());
+        assert_eq!(keys(true), vec!["code", "response"]);
+    }
 
     struct PausedGit {
         started: tokio::sync::Notify,

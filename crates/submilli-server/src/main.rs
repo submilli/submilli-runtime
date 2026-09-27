@@ -237,14 +237,16 @@ fn main() -> Result<()> {
     // Init before the async runtime starts so the guard binds the Sentry hub for
     // every worker thread the runtime spawns. Skipped when telemetry is disabled
     // (the default unless explicitly enabled through the environment or config).
+    submilli_server::runner::set_telemetry_include_source(resolved.telemetry_include_source);
     let _guard = resolved.telemetry.then(|| {
         sentry::init((
             "https://3de786dd0e1733e40a3e3425ab3e4ddc@o4511530557702144.ingest.us.sentry.io/4511530561110016",
             sentry::ClientOptions {
                 release: sentry::release_name!(),
-                // Capture user IPs and potentially sensitive headers via the HTTP integration.
+                // Never send client IPs or request headers; nothing here needs
+                // them and there is no reason to store them.
                 // https://docs.sentry.io/platforms/rust/data-management/data-collected
-                send_default_pii: true,
+                send_default_pii: false,
                 shutdown_timeout: TELEMETRY_FLUSH_BUDGET,
                 ..Default::default()
             },

@@ -138,7 +138,9 @@ pub fn runtime_phases(timings: &RuntimePhaseTimings) {
 }
 
 /// One HTTP host operation finished: transport latency (tagged by `capability`
-/// and `outcome`) and response size. Backs [`SentryMetricsSink`].
+/// and `outcome`) and response size. The destination host is deliberately not
+/// an attribute: which hosts a program talks to is the operator's business.
+/// Backs [`SentryMetricsSink`].
 pub fn http_operation(metric: &HttpMetric) {
     distribution(
         "submilli.server.http.duration_ms",
@@ -146,13 +148,11 @@ pub fn http_operation(metric: &HttpMetric) {
     )
     .unit(Unit::Millisecond)
     .attribute("capability", metric.capability.clone())
-    .attribute("host", metric.host.clone())
     .attribute("outcome", metric.outcome)
     .capture();
     distribution("submilli.server.http.response_bytes", metric.bytes as f64)
         .unit(Unit::Byte)
         .attribute("capability", metric.capability.clone())
-        .attribute("host", metric.host.clone())
         .attribute("outcome", metric.outcome)
         .capture();
 }

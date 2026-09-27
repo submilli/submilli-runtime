@@ -17,9 +17,10 @@ pub fn init() -> Option<sentry::ClientInitGuard> {
         DSN,
         sentry::ClientOptions {
             release: sentry::release_name!(),
-            // Capture user IPs and potentially sensitive headers via the HTTP integration.
+            // Never send the machine's IP or other personal data; nothing here
+            // needs it.
             // https://docs.sentry.io/platforms/rust/data-management/data-collected
-            send_default_pii: true,
+            send_default_pii: false,
             ..Default::default()
         },
     )))
