@@ -39,7 +39,7 @@ pub use declaration::package_declaration;
 pub use policy::NetworkPolicy;
 pub use transport::{
     AuthProxy, AuthProxyError, HttpClient, HttpError, HttpRequest, HttpResponse, NoopAuthProxy,
-    ReqwestHttpClient, default_auth_proxy, default_http_client,
+    ReqwestHttpClient, default_auth_proxy, default_http_client, describe_error_chain,
 };
 
 /// Verb-form helpers' per-request timeout; `download` defaults to

@@ -17,6 +17,7 @@ use crate::host::EnvFileSecretResolver;
 use http::{HeaderName, HeaderValue};
 use interpreter::PackageDeclaration;
 use interpreter::packages::ModuleSummary;
+use interpreter::stdlib::http::NetworkPolicy;
 use rmcp::ServiceExt;
 use rmcp::model::ClientInfo;
 use rmcp::transport::StreamableHttpClientTransport;
@@ -40,6 +41,9 @@ pub struct DiscoveryAuth<'a> {
     pub secret_store: Option<&'a Arc<dyn SecretStore>>,
     pub oauth: Option<&'a Arc<OAuthTokenManager>>,
     pub harness_secrets: Option<&'a Arc<HarnessSecretBindings>>,
+    /// The outbound-address policy the `tools/list` connection is made under;
+    /// the same one every later `tools/call` uses.
+    pub network_policy: &'a Arc<NetworkPolicy>,
 }
 
 /// `tools/list` must complete within this bound or the server is treated as
@@ -280,7 +284,14 @@ async fn fetch_tools(
         custom_headers = custom_headers.len(),
         "MCP discovery: connecting"
     );
-    let transport = StreamableHttpClientTransport::from_config(config);
+    auth.network_policy
+        .check_url(server.url.as_str())
+        .await
+        .map_err(anyhow::Error::msg)?;
+    let transport = StreamableHttpClientTransport::with_client(
+        crate::mcp::transport::policy_http_client(auth.network_policy),
+        config,
+    );
     let client = ClientInfo::default().serve(transport).await?;
     let tools = client.list_all_tools().await;
     // Best-effort shutdown regardless of the list outcome.

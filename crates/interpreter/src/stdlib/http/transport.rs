@@ -123,18 +123,14 @@ impl Default for ReqwestHttpClient {
 
 impl ReqwestHttpClient {
     pub fn new(policy: Arc<crate::stdlib::http::policy::NetworkPolicy>) -> Self {
-        let client = reqwest::Client::builder()
+        let client = policy
+            .client_builder()
             .redirect(reqwest::redirect::Policy::default())
-            .dns_resolver(std::sync::Arc::new(
-                crate::stdlib::http::policy::PolicyResolver::new(Arc::clone(&policy)),
-            ))
             .build()
             .expect("reqwest client builds with static config");
-        let no_redirect_client = reqwest::Client::builder()
+        let no_redirect_client = policy
+            .client_builder()
             .redirect(reqwest::redirect::Policy::none())
-            .dns_resolver(Arc::new(crate::stdlib::http::policy::PolicyResolver::new(
-                Arc::clone(&policy),
-            )))
             .build()
             .expect("reqwest client builds with static config");
         Self {
@@ -147,22 +143,9 @@ impl ReqwestHttpClient {
     /// Block a literal-IP host the policy forbids. Hostnames go through the DNS
     /// resolver (which filters resolved IPs); literal IPs never hit it.
     fn check_literal_ip(&self, url: &str) -> Result<(), HttpError> {
-        let ip = match url::Url::parse(url)
-            .ok()
-            .and_then(|u| u.host().map(|h| h.to_owned()))
-        {
-            Some(url::Host::Ipv4(v4)) => std::net::IpAddr::V4(v4),
-            Some(url::Host::Ipv6(v6)) => std::net::IpAddr::V6(v6),
-            _ => return Ok(()),
-        };
-        if self.policy.permits(ip) {
-            Ok(())
-        } else {
-            Err(HttpError::Network(format!(
-                "blocked by network policy: {ip} is private/loopback IP space; \
-                 allow-list it on the server with --allow-ip / --allow-localhost / --allow-private"
-            )))
-        }
+        self.policy
+            .check_literal_host(url)
+            .map_err(HttpError::Network)
     }
 
     /// Shared request setup: method, URL, per-call timeout, headers.
@@ -387,11 +370,30 @@ pub(super) fn http_failure_outcome(err: &HttpError) -> &'static str {
 }
 
 /// reqwest reports timeout via `is_timeout()`; everything else is a network error.
+///
+/// reqwest's own message stops at "error sending request"; the reason lives at
+/// the bottom of its source chain (a refused connection, or the policy
+/// resolver's "blocked by network policy"). The guest and the operator both act
+/// on that reason, so it is appended when it says more than the top-level message.
 fn map_reqwest_error(err: reqwest::Error) -> HttpError {
     if err.is_timeout() {
         return HttpError::Timeout;
     }
-    HttpError::Network(err.to_string())
+    HttpError::Network(describe_error_chain(&err))
+}
+
+pub fn describe_error_chain(err: &dyn std::error::Error) -> String {
+    let top = err.to_string();
+    let mut deepest: Option<String> = None;
+    let mut current = err.source();
+    while let Some(cause) = current {
+        deepest = Some(cause.to_string());
+        current = cause.source();
+    }
+    match deepest {
+        Some(reason) if !top.contains(&reason) => format!("{top}: {reason}"),
+        _ => top,
+    }
 }
 
 pub fn default_http_client() -> Arc<dyn HttpClient> {
@@ -451,4 +453,64 @@ impl AuthProxy for NoopAuthProxy {
 
 pub fn default_auth_proxy() -> Arc<dyn AuthProxy> {
     Arc::new(NoopAuthProxy)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::describe_error_chain;
+
+    #[derive(Debug)]
+    struct Layer {
+        message: &'static str,
+        source: Option<Box<Layer>>,
+    }
+
+    impl std::fmt::Display for Layer {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.message)
+        }
+    }
+
+    impl std::error::Error for Layer {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.source
+                .as_deref()
+                .map(|layer| layer as &(dyn std::error::Error + 'static))
+        }
+    }
+
+    #[test]
+    fn appends_the_root_cause_when_the_top_message_omits_it() {
+        let err = Layer {
+            message: "error sending request for url (http://x/)",
+            source: Some(Box::new(Layer {
+                message: "client error (Connect)",
+                source: Some(Box::new(Layer {
+                    message: "blocked by network policy: x resolves only to private/loopback IP space",
+                    source: None,
+                })),
+            })),
+        };
+        assert_eq!(
+            describe_error_chain(&err),
+            "error sending request for url (http://x/): blocked by network policy: x resolves only to private/loopback IP space"
+        );
+    }
+
+    #[test]
+    fn leaves_a_message_that_already_carries_its_cause_alone() {
+        let err = Layer {
+            message: "timeout: deadline elapsed",
+            source: Some(Box::new(Layer {
+                message: "deadline elapsed",
+                source: None,
+            })),
+        };
+        assert_eq!(describe_error_chain(&err), "timeout: deadline elapsed");
+        let bare = Layer {
+            message: "plain",
+            source: None,
+        };
+        assert_eq!(describe_error_chain(&bare), "plain");
+    }
 }

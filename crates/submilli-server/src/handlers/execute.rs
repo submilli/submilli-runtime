@@ -242,6 +242,7 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
             Arc::clone(&blueprint),
             state.oauth_token_manager().cloned(),
             state.secret_store().cloned(),
+            Arc::clone(state.network_policy()),
         )
         .with_harness_secrets(Arc::clone(&harness_secrets)),
     );

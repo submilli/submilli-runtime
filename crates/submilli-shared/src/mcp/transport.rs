@@ -19,6 +19,7 @@ use std::sync::Arc;
 use crate::host::EnvFileSecretResolver;
 use http::{HeaderName, HeaderValue};
 use interpreter::runtime::{McpCallError, McpTransport};
+use interpreter::stdlib::http::{NetworkPolicy, describe_error_chain};
 use rmcp::ServiceExt;
 use rmcp::model::{CallToolRequestParams, CallToolResult, ClientInfo, Content};
 use rmcp::transport::StreamableHttpClientTransport;
@@ -37,6 +38,9 @@ pub struct StreamableHttpTransport {
     oauth: Option<Arc<OAuthTokenManager>>,
     secret_store: Option<Arc<dyn SecretStore>>,
     harness_secrets: Arc<HarnessSecretBindings>,
+    /// The server's outbound-address policy; an MCP server's `url` is judged
+    /// like any other outbound destination.
+    policy: Arc<NetworkPolicy>,
 }
 
 impl StreamableHttpTransport {
@@ -45,6 +49,7 @@ impl StreamableHttpTransport {
         blueprint: Arc<Blueprint>,
         oauth: Option<Arc<OAuthTokenManager>>,
         secret_store: Option<Arc<dyn SecretStore>>,
+        policy: Arc<NetworkPolicy>,
     ) -> Self {
         Self {
             blueprint_name,
@@ -52,6 +57,7 @@ impl StreamableHttpTransport {
             oauth,
             secret_store,
             harness_secrets: Arc::new(HarnessSecretBindings::new()),
+            policy,
         }
     }
 
@@ -93,17 +99,22 @@ impl StreamableHttpTransport {
         tool: &str,
         arguments: Map<String, Value>,
     ) -> Result<CallToolResult, McpCallError> {
+        self.policy
+            .check_url(server.url.as_str())
+            .await
+            .map_err(McpCallError::Transport)?;
         let mut config = StreamableHttpClientTransportConfig::with_uri(server.url.as_str());
         config.auth_header = auth_header;
         config.custom_headers = custom_headers;
         // Tolerate stateless servers (per-request auth, no Mcp-Session-Id) — see
         // the discovery path for the rationale. Both stateful and stateless work.
         config.allow_stateless = true;
-        let transport = StreamableHttpClientTransport::from_config(config);
+        let transport =
+            StreamableHttpClientTransport::with_client(policy_http_client(&self.policy), config);
         let client = ClientInfo::default()
             .serve(transport)
             .await
-            .map_err(|e| McpCallError::Transport(e.to_string()))?;
+            .map_err(|e| McpCallError::Transport(describe_error_chain(&e)))?;
         let param = CallToolRequestParams::new(tool.to_string()).with_arguments(arguments);
         let result = client.call_tool(param).await;
         // Best-effort teardown regardless of the call outcome.
@@ -251,6 +262,17 @@ fn map_token_err(err: McpTokenError) -> McpCallError {
     }
 }
 
+/// The reqwest client rmcp drives, built on the policy's resolver. Idle pooling
+/// is off for the same reason rmcp's own default disables it: a stall on
+/// connection reuse after an unconsumed body.
+pub(crate) fn policy_http_client(policy: &Arc<NetworkPolicy>) -> reqwest::Client {
+    policy
+        .client_builder()
+        .pool_max_idle_per_host(0)
+        .build()
+        .expect("the reqwest client builds from static configuration")
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -299,14 +321,50 @@ mod tests {
 
     fn static_transport() -> StreamableHttpTransport {
         let bp = parse("name: bp\nmcp:\n  linear:\n    url: https://x/mcp\n").unwrap();
-        StreamableHttpTransport::new("bp".into(), Arc::new(bp), None, None)
+        StreamableHttpTransport::new(
+            "bp".into(),
+            Arc::new(bp),
+            None,
+            None,
+            Arc::new(NetworkPolicy::allow_all()),
+        )
+    }
+
+    /// An MCP server's `url` is an outbound destination like any other: under
+    /// deny-private a loopback server is refused, by the literal-IP check or at
+    /// resolution, and the error names the policy.
+    #[tokio::test]
+    async fn a_private_mcp_server_is_blocked_by_the_network_policy() {
+        for url in ["http://127.0.0.1:1/mcp", "http://localhost:1/mcp"] {
+            let bp = parse(&format!("name: bp\nmcp:\n  local:\n    url: {url}\n")).unwrap();
+            let t = StreamableHttpTransport::new(
+                "bp".into(),
+                Arc::new(bp),
+                None,
+                None,
+                Arc::new(NetworkPolicy::deny_private()),
+            );
+            match t.call("local", "t", "{}").await {
+                Err(McpCallError::Transport(message)) => assert!(
+                    message.contains("blocked by network policy"),
+                    "{url}: expected the policy reason, got: {message}"
+                ),
+                other => panic!("{url}: expected a transport error, got {other:?}"),
+            }
+        }
     }
 
     #[tokio::test]
     async fn stdio_transport_is_rejected() {
         let mut bp = parse("name: bp\nmcp:\n  linear:\n    url: https://x/mcp\n").unwrap();
         bp.mcp.get_mut("linear").unwrap().transport = "stdio".to_string();
-        let t = StreamableHttpTransport::new("bp".into(), Arc::new(bp), None, None);
+        let t = StreamableHttpTransport::new(
+            "bp".into(),
+            Arc::new(bp),
+            None,
+            None,
+            Arc::new(NetworkPolicy::allow_all()),
+        );
         assert!(matches!(
             t.call("linear", "t", "{}").await,
             Err(McpCallError::Transport(_))

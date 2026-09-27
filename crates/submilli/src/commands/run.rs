@@ -271,10 +271,12 @@ pub(crate) fn execute_with_dispatch(
     // authenticated `@mcp/<server>` servers in-process — server-free parity.
     let mut secret_store: Option<Arc<dyn SecretStore>> = None;
     let mut mcp_transport: Option<Arc<dyn McpTransport>> = None;
+    // A local run is unrestricted; the server is where deny-private applies.
+    let network_policy = Arc::new(NetworkPolicy::default());
     let mcp_catalog = match blueprint.as_ref() {
         Some(bp) => {
             let store = crate::commands::local::open_secret_store()?;
-            let http = Arc::new(ReqwestHttpClient::new(Arc::new(NetworkPolicy::default())))
+            let http = Arc::new(ReqwestHttpClient::new(Arc::clone(&network_policy)))
                 as Arc<dyn HttpClient>;
             let oauth = Arc::new(OAuthTokenManager::new(
                 store.clone(),
@@ -286,6 +288,7 @@ pub(crate) fn execute_with_dispatch(
                     secret_store: Some(&store),
                     oauth: Some(&oauth),
                     harness_secrets: None,
+                    network_policy: &network_policy,
                 },
                 &bp.name,
                 bp,
@@ -295,6 +298,7 @@ pub(crate) fn execute_with_dispatch(
                 bp.clone(),
                 Some(oauth),
                 Some(store.clone()),
+                Arc::clone(&network_policy),
             )));
             secret_store = Some(store);
             catalog
@@ -378,9 +382,13 @@ pub(crate) fn execute_with_dispatch(
         // resolves through. A blueprint that declares no `llm:` block still gets
         // a provider — and `llm.call` against it fails on the undeclared model,
         // naming the block to add, rather than on a missing provider.
-        let dispatch = llm_dispatch
-            .clone()
-            .unwrap_or_else(|| Arc::new(HttpModelDispatch::new(bp.clone(), secret_store.clone())));
+        let dispatch = llm_dispatch.clone().unwrap_or_else(|| {
+            Arc::new(HttpModelDispatch::new(
+                bp.clone(),
+                secret_store.clone(),
+                Arc::clone(&network_policy),
+            ))
+        });
         data.llm_provider = Some(Arc::new(
             BlueprintLlmProvider::new(bp.clone(), dispatch).with_max_concurrency(llm_concurrency),
         ));

@@ -36,6 +36,37 @@ impl NetworkPolicy {
         Self::default()
     }
 
+    /// A reqwest client builder whose DNS resolution is filtered by this policy:
+    /// a name resolving only to forbidden addresses fails to resolve. Every
+    /// outbound client the runtime builds — `submilli:http`, model providers,
+    /// MCP servers — starts from this, so one policy governs them all. Literal
+    /// IP hosts never reach a resolver; refuse those with
+    /// [`Self::check_literal_host`] before sending.
+    pub fn client_builder(self: &Arc<Self>) -> reqwest::ClientBuilder {
+        reqwest::Client::builder().dns_resolver(Arc::new(PolicyResolver::new(Arc::clone(self))))
+    }
+
+    /// Refuse a URL whose host is a literal IP the policy forbids. Host names
+    /// pass here and are judged at resolution.
+    pub fn check_literal_host(&self, url: &str) -> Result<(), String> {
+        let ip = match url::Url::parse(url)
+            .ok()
+            .and_then(|u| u.host().map(|h| h.to_owned()))
+        {
+            Some(url::Host::Ipv4(v4)) => IpAddr::V4(v4),
+            Some(url::Host::Ipv6(v6)) => IpAddr::V6(v6),
+            _ => return Ok(()),
+        };
+        if self.permits(ip) {
+            Ok(())
+        } else {
+            Err(format!(
+                "blocked by network policy: {ip} is private/loopback IP space; \
+                 allow-list it on the server with --allow-ip / --allow-localhost / --allow-private"
+            ))
+        }
+    }
+
     /// Block private, loopback, link-local and other special-purpose IP space.
     /// The secure base the server layers opt-outs onto.
     pub fn deny_private() -> Self {
@@ -107,27 +138,76 @@ impl Resolve for PolicyResolver {
     fn resolve(&self, name: Name) -> Resolving {
         let policy = self.policy.clone();
         Box::pin(async move {
-            let host = name.as_str().to_string();
-            // Port 0 — reqwest overrides it with the request's port. Resolution
-            // happens here once; reqwest connects to exactly what we return.
-            let resolved = tokio::net::lookup_host((host.as_str(), 0))
-                .await
-                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
-            let permitted: Vec<SocketAddr> =
-                resolved.filter(|addr| policy.permits(addr.ip())).collect();
-            if permitted.is_empty() {
-                return Err(blocked_error(&host));
-            }
+            let permitted = policy.resolve_permitted(name.as_str()).await.map_err(
+                |e| -> Box<dyn std::error::Error + Send + Sync> {
+                    match e {
+                        ResolveFailure::Blocked(message) => {
+                            Box::new(std::io::Error::other(message))
+                        }
+                        ResolveFailure::Lookup(error) => Box::new(error),
+                    }
+                },
+            )?;
             Ok(Box::new(permitted.into_iter()) as Addrs)
         })
     }
 }
 
-fn blocked_error(host: &str) -> Box<dyn std::error::Error + Send + Sync> {
-    Box::new(std::io::Error::other(format!(
+/// Why a host name yielded no address to connect to.
+#[derive(Debug)]
+pub enum ResolveFailure {
+    /// It resolved, but only to addresses the policy forbids.
+    Blocked(String),
+    /// DNS itself failed; the policy had nothing to judge.
+    Lookup(std::io::Error),
+}
+
+impl NetworkPolicy {
+    /// Resolve `host` and keep the addresses the policy permits. The resolver
+    /// installed on every outbound client runs this; a caller whose transport
+    /// hides the resolver's error (rmcp wraps it as text) runs it first via
+    /// [`Self::check_url`] so the refusal is reported in its own words.
+    pub async fn resolve_permitted(&self, host: &str) -> Result<Vec<SocketAddr>, ResolveFailure> {
+        // Port 0 — reqwest overrides it with the request's port. Resolution
+        // happens here once; reqwest connects to exactly what we return.
+        let resolved = tokio::net::lookup_host((host, 0))
+            .await
+            .map_err(ResolveFailure::Lookup)?;
+        let permitted: Vec<SocketAddr> = resolved.filter(|addr| self.permits(addr.ip())).collect();
+        if permitted.is_empty() {
+            return Err(ResolveFailure::Blocked(blocked_message(host)));
+        }
+        Ok(permitted)
+    }
+
+    /// Refuse a URL the policy forbids, whether its host is a literal IP or a
+    /// name that resolves only to forbidden addresses. A name that fails to
+    /// resolve at all passes: that failure belongs to the connection attempt,
+    /// which reports it in its own terms. Skips DNS entirely when the policy
+    /// permits everything.
+    pub async fn check_url(&self, url: &str) -> Result<(), String> {
+        self.check_literal_host(url)?;
+        if !self.enforce {
+            return Ok(());
+        }
+        let Some(host) = url::Url::parse(url)
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_owned))
+        else {
+            return Ok(());
+        };
+        match self.resolve_permitted(&host).await {
+            Ok(_) | Err(ResolveFailure::Lookup(_)) => Ok(()),
+            Err(ResolveFailure::Blocked(message)) => Err(message),
+        }
+    }
+}
+
+fn blocked_message(host: &str) -> String {
+    format!(
         "blocked by network policy: {host} resolves only to private/loopback IP space; \
          allow-list it on the server with --allow-ip / --allow-localhost / --allow-private",
-    )))
+    )
 }
 
 fn normalize(ip: IpAddr) -> IpAddr {
@@ -270,7 +350,7 @@ mod tests {
 
     #[test]
     fn blocked_error_names_the_policy_and_host() {
-        let msg = blocked_error("internal.example").to_string();
+        let msg = blocked_message("internal.example");
         assert!(msg.contains("blocked by network policy"), "{msg}");
         assert!(msg.contains("internal.example"), "{msg}");
     }

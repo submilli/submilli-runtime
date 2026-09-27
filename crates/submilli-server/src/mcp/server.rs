@@ -292,6 +292,7 @@ impl SubmilliMcp {
                 Arc::clone(&blueprint),
                 self.state.oauth_token_manager().cloned(),
                 self.state.secret_store().cloned(),
+                Arc::clone(self.state.network_policy()),
             )
             .with_harness_secrets(Arc::clone(&harness_secrets)),
         );

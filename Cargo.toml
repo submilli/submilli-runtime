@@ -45,7 +45,7 @@ http = "1"
 rmcp = { version = "1.7", default-features = false, features = ["server", "client", "macros", "transport-streamable-http-server", "transport-streamable-http-client-reqwest", "reqwest", "schemars"] }
 futures = { version = "0.3", default-features = false }
 ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream"] }
 uuid = { version = "1", features = ["v4", "v7"] }
 url = "2"
 ipnet = "2"

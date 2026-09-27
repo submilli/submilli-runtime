@@ -37,6 +37,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use interpreter::stdlib::http::{NetworkPolicy, describe_error_chain};
 use serde_json::Value;
 use submilli_blueprint::{Blueprint, HarnessSecretBindings, LlmProviderDecl, interpolate};
 
@@ -87,11 +88,20 @@ pub struct HttpModelDispatch {
     blueprint: Arc<Blueprint>,
     secret_store: Option<Arc<dyn SecretStore>>,
     harness_secrets: Arc<HarnessSecretBindings>,
+    /// The server's outbound-address policy. A provider `base_url` is the
+    /// blueprint author's to write, so it is judged like any other outbound
+    /// destination: by the resolver for host names, and by
+    /// [`NetworkPolicy::check_literal_host`] for literal IPs.
+    policy: Arc<NetworkPolicy>,
     client: reqwest::Client,
 }
 
 impl HttpModelDispatch {
-    pub fn new(blueprint: Arc<Blueprint>, secret_store: Option<Arc<dyn SecretStore>>) -> Self {
+    pub fn new(
+        blueprint: Arc<Blueprint>,
+        secret_store: Option<Arc<dyn SecretStore>>,
+        policy: Arc<NetworkPolicy>,
+    ) -> Self {
         Self {
             blueprint,
             secret_store,
@@ -99,7 +109,8 @@ impl HttpModelDispatch {
             // No cookie store is ever enabled, so the client carries no
             // cross-request state and one pool is safe to share across the
             // elements of a fan-out.
-            client: reqwest::Client::builder()
+            client: policy
+                .client_builder()
                 .timeout(REQUEST_TIMEOUT)
                 .connect_timeout(CONNECT_TIMEOUT)
                 // Redirects are refused outright, which is stricter than the
@@ -123,6 +134,7 @@ impl HttpModelDispatch {
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .expect("the reqwest client builds from static configuration"),
+            policy,
         }
     }
 
@@ -202,6 +214,9 @@ impl HttpModelDispatch {
             key.as_deref(),
         );
 
+        self.policy
+            .check_literal_host(&wire_request.url)
+            .map_err(|detail| ProviderFailure::Transport { detail })?;
         let mut builder = self
             .client
             .post(&wire_request.url)
@@ -301,6 +316,12 @@ impl ModelDispatch for HttpModelDispatch {
 /// `openai-compatible` URL is operator-supplied. The strings are the vocabulary
 /// [`ProviderFailure::Transport`] documents.
 fn map_transport_error(err: reqwest::Error) -> ProviderFailure {
+    // A resolver refusal surfaces as a connect error; the policy's reason sits at
+    // the bottom of the chain and is what the operator needs to see.
+    let chain = describe_error_chain(&err);
+    if chain.contains("blocked by network policy") {
+        return ProviderFailure::Transport { detail: chain };
+    }
     if err.is_timeout() {
         return ProviderFailure::Transport {
             detail: "request timed out".to_string(),

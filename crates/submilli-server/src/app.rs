@@ -83,6 +83,9 @@ struct AppStateInner {
     mcp_oauth_providers: Arc<Vec<OAuthProvider>>,
     /// Outbound HTTP for the OAuth handlers (discovery + code exchange).
     oauth_http: Arc<dyn HttpClient>,
+    /// The outbound-address policy every client the server builds starts from:
+    /// script HTTP, model providers, MCP servers, OAuth exchanges.
+    network_policy: Arc<interpreter::stdlib::http::NetworkPolicy>,
     /// Per-blueprint discovered `@mcp/<server>` catalogs (the typed import
     /// surface), built lazily on first execute and evicted on blueprint change.
     mcp_catalogs: Mutex<HashMap<String, Arc<McpCatalog>>>,
@@ -198,6 +201,7 @@ impl AppState {
 
         Ok(Self {
             inner: Arc::new(AppStateInner {
+                network_policy: Arc::clone(&policy),
                 engine,
                 base_linker,
                 runtime,
@@ -284,6 +288,10 @@ impl AppState {
         self.inner.secret_store.as_ref()
     }
 
+    pub(crate) fn network_policy(&self) -> &Arc<interpreter::stdlib::http::NetworkPolicy> {
+        &self.inner.network_policy
+    }
+
     /// The OAuth access-token manager for `@mcp/<server>` calls, present when a
     /// secret store is configured. The MCP transport calls into it to attach a
     /// bearer token and to refresh on a mid-call `401`.
@@ -328,8 +336,12 @@ impl AppState {
         let dispatch = match self.inner.llm_dispatch.as_ref() {
             Some(installed) => Arc::clone(installed),
             None => Arc::new(
-                HttpModelDispatch::new(Arc::clone(blueprint), self.secret_store().cloned())
-                    .with_harness_secrets(Arc::clone(harness_secrets)),
+                HttpModelDispatch::new(
+                    Arc::clone(blueprint),
+                    self.secret_store().cloned(),
+                    Arc::clone(self.network_policy()),
+                )
+                .with_harness_secrets(Arc::clone(harness_secrets)),
             ) as Arc<dyn ModelDispatch>,
         };
         Some(Arc::new(
@@ -377,6 +389,7 @@ impl AppState {
             secret_store: self.secret_store(),
             oauth: self.oauth_token_manager(),
             harness_secrets,
+            network_policy: self.network_policy(),
         }
     }
 

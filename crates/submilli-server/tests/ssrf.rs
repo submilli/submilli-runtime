@@ -81,6 +81,13 @@ async fn post(router: &Router, path: &str, body: Value) -> (StatusCode, Value) {
 /// Build a server with the given policy, register the blueprint, and run the
 /// loopback-hitting script against a fresh mock. Returns the `/v1/execute` body.
 async fn run_against_loopback(policy: NetworkPolicy) -> Value {
+    run_against_loopback_host(policy, "127.0.0.1").await
+}
+
+/// As [`run_against_loopback`], with the script targeting `host` instead of the
+/// literal address, so the policy is exercised at DNS resolution rather than
+/// by the literal-IP pre-check.
+async fn run_against_loopback_host(policy: NetworkPolicy, host: &str) -> Value {
     let port = spawn_ok_mock();
     let config = ServerConfig {
         network_policy: policy,
@@ -91,7 +98,9 @@ async fn run_against_loopback(policy: NetworkPolicy) -> Value {
     let (status, body) = post(&router, "/v1/blueprints", json!({ "yaml": BLUEPRINT })).await;
     assert_eq!(status, StatusCode::OK, "blueprint add failed: {body}");
 
-    let code = SCRIPT.replace("__PORT__", &port.to_string());
+    let code = SCRIPT
+        .replace("127.0.0.1", host)
+        .replace("__PORT__", &port.to_string());
     let (status, body) = post(
         &router,
         "/v1/execute",
@@ -121,6 +130,27 @@ async fn deny_private_blocks_loopback() {
     assert!(
         message.contains("blocked by network policy"),
         "expected the policy reason: {message}"
+    );
+}
+
+/// A host name that resolves only to loopback is refused inside the resolver.
+/// reqwest reports that as a generic send failure; the policy's reason has to
+/// survive from the bottom of its error chain, or the guest can't tell a block
+/// from an outage.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deny_private_blocks_loopback_by_host_name() {
+    let body = run_against_loopback_host(NetworkPolicy::deny_private(), "localhost").await;
+
+    assert!(
+        body["result"].is_null(),
+        "blocked request must not return a result: {body}"
+    );
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains(
+            "blocked by network policy: localhost resolves only to private/loopback IP space"
+        ),
+        "expected the policy reason for a host name: {message}"
     );
 }
 

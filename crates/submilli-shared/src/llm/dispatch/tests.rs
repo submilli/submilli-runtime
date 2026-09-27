@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use httpmock::prelude::*;
 use interpreter::runtime::{FailureReason, LlmCallError, LlmOutcome, LlmProvider};
+use interpreter::stdlib::http::NetworkPolicy;
 use serde_json::{Value, json};
 use submilli_blueprint::{Blueprint, parse};
 
@@ -75,7 +76,7 @@ llm:
 }
 
 fn dispatcher(blueprint: Arc<Blueprint>) -> HttpModelDispatch {
-    HttpModelDispatch::new(blueprint, None)
+    HttpModelDispatch::new(blueprint, None, Arc::new(NetworkPolicy::allow_all()))
 }
 
 fn request<'a>(schema_json: Option<&'a str>) -> ModelRequest<'a> {
@@ -539,9 +540,16 @@ fn a_connection_failure_is_transport_with_no_status() {
     let outcome = with_key(|| {
         block_on(async {
             let bp = blueprint("openai", &dead, true);
-            BlueprintLlmProvider::new(Arc::clone(&bp), Arc::new(HttpModelDispatch::new(bp, None)))
-                .call(MODEL, &[PROMPT.to_string()], None)
-                .await
+            BlueprintLlmProvider::new(
+                Arc::clone(&bp),
+                Arc::new(HttpModelDispatch::new(
+                    bp,
+                    None,
+                    Arc::new(NetworkPolicy::allow_all()),
+                )),
+            )
+            .call(MODEL, &[PROMPT.to_string()], None)
+            .await
         })
     })
     .expect("the provider resolved")
@@ -732,8 +740,8 @@ llm:
     let mut bindings = submilli_blueprint::HarnessSecretBindings::new();
     bindings.insert(HARNESS_SECRET.to_string(), KEY.to_string());
 
-    let dispatch =
-        HttpModelDispatch::new(Arc::new(bp), None).with_harness_secrets(Arc::new(bindings));
+    let dispatch = HttpModelDispatch::new(Arc::new(bp), None, Arc::new(NetworkPolicy::allow_all()))
+        .with_harness_secrets(Arc::new(bindings));
 
     // No `with_key`: the value comes from the bindings, not the environment.
     block_on(async { dispatch.dispatch(request(None)).await }).expect("the call resolved");
@@ -776,13 +784,20 @@ llm:
     // Three prompts, so "once per dispatch" is observable: the per-element
     // shape reported the same misconfiguration once for each of them.
     let error = block_on(async {
-        BlueprintLlmProvider::new(Arc::clone(&bp), Arc::new(HttpModelDispatch::new(bp, None)))
-            .call(
-                MODEL,
-                &[PROMPT.to_string(), PROMPT.to_string(), PROMPT.to_string()],
+        BlueprintLlmProvider::new(
+            Arc::clone(&bp),
+            Arc::new(HttpModelDispatch::new(
+                bp,
                 None,
-            )
-            .await
+                Arc::new(NetworkPolicy::allow_all()),
+            )),
+        )
+        .call(
+            MODEL,
+            &[PROMPT.to_string(), PROMPT.to_string(), PROMPT.to_string()],
+            None,
+        )
+        .await
     })
     .expect_err("an unresolvable key is a dispatch-level failure");
 
@@ -937,9 +952,16 @@ fn ladder_outcome(
     with_key(|| {
         block_on(async {
             let bp = blueprint(kind, &server.base_url(), true);
-            BlueprintLlmProvider::new(Arc::clone(&bp), Arc::new(HttpModelDispatch::new(bp, None)))
-                .call(MODEL, &[PROMPT.to_string()], schema_json)
-                .await
+            BlueprintLlmProvider::new(
+                Arc::clone(&bp),
+                Arc::new(HttpModelDispatch::new(
+                    bp,
+                    None,
+                    Arc::new(NetworkPolicy::allow_all()),
+                )),
+            )
+            .call(MODEL, &[PROMPT.to_string()], schema_json)
+            .await
         })
     })
     .expect("the provider resolved")
@@ -955,4 +977,29 @@ fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
         .build()
         .expect("a tokio runtime builds")
         .block_on(future)
+}
+
+/// A provider endpoint is an outbound destination like any other: under the
+/// server's deny-private policy a `base_url` on loopback is refused whether it
+/// is written as a literal address (checked before sending) or as a host name
+/// (refused at resolution), and the failure names the policy.
+#[tokio::test]
+async fn a_private_provider_endpoint_is_blocked_by_the_network_policy() {
+    for base_url in ["http://127.0.0.1:1/v1", "http://localhost:1/v1"] {
+        // No key, so nothing has to resolve before the destination is judged.
+        let blueprint = blueprint("openai-compatible", base_url, false);
+        let dispatch =
+            HttpModelDispatch::new(blueprint, None, Arc::new(NetworkPolicy::deny_private()));
+        let failure = dispatch
+            .dispatch(request(None))
+            .await
+            .expect_err("the endpoint must be refused");
+        match failure {
+            ProviderFailure::Transport { detail } => assert!(
+                detail.contains("blocked by network policy"),
+                "{base_url}: expected the policy reason, got: {detail}"
+            ),
+            other => panic!("{base_url}: expected a transport failure, got {other:?}"),
+        }
+    }
 }
