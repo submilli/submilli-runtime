@@ -9,8 +9,10 @@
 //! `invalid_grant` briefly, then surfaces [`McpCallError::AuthExpired`] while
 //! retaining the credential for a later attempt.
 //!
-//! A fresh rmcp session is opened per call. Caching a session per
-//! `(blueprint, server)` is a future optimization; correctness comes first.
+//! One rmcp session per server is opened on the first call and kept for the rest
+//! of the execute, so a server that holds state in its session (a browser page,
+//! a cursor) sees one program's calls as one conversation. A call that fails or
+//! times out drops the session, and the next call opens a new one.
 
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -23,6 +25,7 @@ use interpreter::runtime::{McpCallError, McpTransport};
 use interpreter::stdlib::http::{NetworkPolicy, describe_error_chain};
 use rmcp::ServiceExt;
 use rmcp::model::{CallToolRequestParams, CallToolResult, ClientInfo, Content};
+use rmcp::service::{RoleClient, RunningService};
 use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use serde_json::{Map, Value};
@@ -31,7 +34,7 @@ use submilli_blueprint::{Blueprint, HarnessSecretBindings, McpAuth, McpServer, i
 use crate::mcp_token::{McpTokenError, OAuthTokenManager};
 use crate::secret_store::SecretStore;
 
-/// Bounds authentication, connection, the tool response, and teardown together.
+/// Bounds authentication, connection, and the tool response together.
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The outbound MCP transport bound to one blueprint. Built per execute and set on
@@ -45,7 +48,12 @@ pub struct StreamableHttpTransport {
     /// The server's outbound-address policy; an MCP server's `url` is judged
     /// like any other outbound destination.
     policy: Arc<NetworkPolicy>,
+    /// The sessions this execute has opened, by server name. Held across a call,
+    /// which also keeps two calls from interleaving on one session.
+    sessions: tokio::sync::Mutex<HashMap<String, McpSession>>,
 }
+
+type McpSession = RunningService<RoleClient, ClientInfo>;
 
 impl StreamableHttpTransport {
     pub fn new(
@@ -62,6 +70,7 @@ impl StreamableHttpTransport {
             secret_store,
             harness_secrets: Arc::new(HarnessSecretBindings::new()),
             policy,
+            sessions: tokio::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -94,15 +103,45 @@ impl StreamableHttpTransport {
         Ok(headers)
     }
 
-    /// One `tools/call` round-trip over a fresh rmcp streamable-HTTP session.
+    /// One `tools/call` round-trip over this execute's session with the server,
+    /// opening it on the first call. The credentials are those of the call that
+    /// opened the session.
     async fn call_once(
         &self,
+        server_name: &str,
         server: &McpServer,
         auth_header: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
         tool: &str,
         arguments: Map<String, Value>,
     ) -> Result<CallToolResult, McpCallError> {
+        let mut sessions = self.sessions.lock().await;
+        if !sessions.contains_key(server_name) {
+            let session = self.connect(server, auth_header, custom_headers).await?;
+            sessions.insert(server_name.to_string(), session);
+        }
+        let Some(session) = sessions.get(server_name) else {
+            return Err(McpCallError::Transport(format!(
+                "no session with server '{server_name}'"
+            )));
+        };
+        let param = CallToolRequestParams::new(tool.to_string()).with_arguments(arguments);
+        let result = session.call_tool(param).await;
+        if result.is_err()
+            && let Some(broken) = sessions.remove(server_name)
+        {
+            // Best-effort teardown; the next call reconnects.
+            let _ = broken.cancel().await;
+        }
+        result.map_err(|e| McpCallError::Transport(e.to_string()))
+    }
+
+    async fn connect(
+        &self,
+        server: &McpServer,
+        auth_header: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
+    ) -> Result<McpSession, McpCallError> {
         self.policy
             .check_url(server.url.as_str())
             .await
@@ -115,15 +154,10 @@ impl StreamableHttpTransport {
         config.allow_stateless = true;
         let transport =
             StreamableHttpClientTransport::with_client(policy_http_client(&self.policy), config);
-        let client = ClientInfo::default()
+        ClientInfo::default()
             .serve(transport)
             .await
-            .map_err(|e| McpCallError::Transport(describe_error_chain(&e)))?;
-        let param = CallToolRequestParams::new(tool.to_string()).with_arguments(arguments);
-        let result = client.call_tool(param).await;
-        // Best-effort teardown regardless of the call outcome.
-        let _ = client.cancel().await;
-        result.map_err(|e| McpCallError::Transport(e.to_string()))
+            .map_err(|e| McpCallError::Transport(describe_error_chain(&e)))
     }
 
     /// OAuth call path: mint a bearer token, call, and on failure force a refresh
@@ -150,6 +184,7 @@ impl StreamableHttpTransport {
         // (Pre-formatting "Bearer {t}" here would double it → a malformed header.)
         let first = self
             .call_once(
+                server_name,
                 server,
                 Some(token.clone()),
                 HashMap::new(),
@@ -170,8 +205,15 @@ impl StreamableHttpTransport {
             Err(McpTokenError::AuthExpired) => return Err(McpCallError::AuthExpired),
             Err(e) => return Err(map_token_err(e)),
         };
-        self.call_once(server, Some(fresh), HashMap::new(), tool, arguments.clone())
-            .await
+        self.call_once(
+            server_name,
+            server,
+            Some(fresh),
+            HashMap::new(),
+            tool,
+            arguments.clone(),
+        )
+        .await
     }
 
     async fn call_tool(
@@ -203,7 +245,7 @@ impl StreamableHttpTransport {
             }
             None => {
                 let headers = self.static_headers(server).await?;
-                self.call_once(server, None, headers, tool, arguments)
+                self.call_once(server_name, server, None, headers, tool, arguments)
                     .await?
             }
         };
@@ -219,14 +261,16 @@ impl McpTransport for StreamableHttpTransport {
         args_json: &'a str,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<Value, McpCallError>> + Send + 'a>> {
         Box::pin(async move {
-            tokio::time::timeout(CALL_TIMEOUT, self.call_tool(server_name, tool, args_json))
-                .await
-                .map_err(|_| {
-                    McpCallError::Transport(format!(
-                        "MCP tool '{server_name}/{tool}' timed out after {} seconds",
-                        CALL_TIMEOUT.as_secs()
-                    ))
-                })?
+            let call = self.call_tool(server_name, tool, args_json);
+            if let Ok(result) = tokio::time::timeout(CALL_TIMEOUT, call).await {
+                return result;
+            }
+            // The session is mid-call and can't be trusted with another.
+            self.sessions.lock().await.remove(server_name);
+            Err(McpCallError::Transport(format!(
+                "MCP tool '{server_name}/{tool}' timed out after {} seconds",
+                CALL_TIMEOUT.as_secs()
+            )))
         })
     }
 }

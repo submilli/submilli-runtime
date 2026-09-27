@@ -424,6 +424,7 @@ To stop, send SIGTERM or SIGINT, run `submilli server stop`, or `POST
 that point is cut off and its caller gets no response. Keep the grace period a
 few seconds under the container runtime's own stop timeout.
 
-Next: [connecting to your harness](/docs/harness), where an application or
-an agent framework opens sessions against a registered blueprint; then
-[deploying](/docs/deploying), which puts all of this in a container.
+Next: [using MCP servers](/docs/mcp-servers), which turns tool servers you
+already have into packages; then
+[connecting to your harness](/docs/harness), where an application or an agent
+framework opens sessions against a registered blueprint.

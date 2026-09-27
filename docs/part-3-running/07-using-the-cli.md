@@ -194,8 +194,8 @@ For a blueprint that declares MCP servers with OAuth, `submilli mcp
 authenticate --blueprint blueprint.yaml <server>` runs the login flow in your
 browser and stores the credential; `auth-status` shows each declared server's
 state and `deauthenticate` forgets one. `mcp provider` holds the OAuth client
-registrations for servers that need a pre-registered app. [Connecting to your
-harness](/docs/harness) covers MCP servers.
+registrations for servers that need a pre-registered app. [Using MCP
+servers](/docs/mcp-servers) covers all of it.
 
 ## Install a package
 

@@ -1814,12 +1814,16 @@ mod upstream {
     #[derive(Clone)]
     pub struct Upstream {
         tool_router: ToolRouter<Self>,
+        /// State that lives in one upstream session: a handler is built per
+        /// session, so a count above one means calls shared a session.
+        calls: std::sync::Arc<std::sync::atomic::AtomicU32>,
     }
 
     impl Upstream {
         fn new() -> Self {
             Self {
                 tool_router: Self::tool_router(),
+                calls: Default::default(),
             }
         }
     }
@@ -1834,6 +1838,12 @@ mod upstream {
         #[tool(name = "createIssue", description = "Create an issue")]
         fn create_issue(&self, Parameters(_req): Parameters<CreateIssueRequest>) -> String {
             "ok".to_string()
+        }
+
+        #[tool(name = "countCalls", description = "Count this session's calls")]
+        fn count_calls(&self) -> String {
+            let count = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            format!("call {count}")
         }
 
         #[tool(name = "getUser", description = "Get a user")]
@@ -1986,6 +1996,45 @@ async fn mcp_virtual_package_discovers_typechecks_and_calls() {
             "typed required fields must remain checked: {response}"
         );
     }
+}
+
+/// A server that keeps state in its session (a browser page, a cursor) only
+/// works if one program's calls reach it as one session.
+#[tokio::test]
+async fn a_program_calls_an_mcp_server_over_one_session() {
+    let url = upstream::spawn().await;
+    let bp = Blueprint {
+        name: "up-bp".into(),
+        mcp: BTreeMap::from([(
+            "up".to_string(),
+            McpServer {
+                transport: "streamable_http".into(),
+                url,
+                headers: BTreeMap::new(),
+                auth: None,
+            },
+        )]),
+        permissions: BTreeMap::from([(
+            "main".to_string(),
+            vec![PermissionRule {
+                capability: "mcp.up".into(),
+                filter: None,
+                action: Action::Allow,
+            }],
+        )]),
+        ..Default::default()
+    };
+    let h = Harness::from_blueprints(vec![bp]);
+    let session = h.handshake("up-bp").await;
+
+    let code = r#"import up from "@mcp/up"; function main(): string { up.countCalls(); up.countCalls(); return up.countCalls() as string; }"#;
+    let (status, _, run) = h.post("up-bp", tools_call(1, code), Some(&session)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(output(&run)["result"], json!("call 3"), "got: {run}");
+
+    // The next program starts a session of its own.
+    let (_, _, next) = h.post("up-bp", tools_call(2, code), Some(&session)).await;
+    assert_eq!(output(&next)["result"], json!("call 3"), "got: {next}");
 }
 
 const VOL: &str = "vol";

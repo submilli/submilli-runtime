@@ -495,7 +495,7 @@ llm:
 
 Thirteen blocks exist in all; the one this chapter skipped is `mcp`, which
 `add-mcp` writes to make an MCP server you already run importable as a
-package, covered in [connecting to your harness](/docs/harness). Anything else
+package, covered in [using MCP servers](/docs/mcp-servers). Anything else
 in the file is a parse error, so a typo can't silently grant or withhold
 anything.
 

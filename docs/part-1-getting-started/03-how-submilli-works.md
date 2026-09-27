@@ -299,6 +299,6 @@ Programs written fresh each run need no old interfaces, so a Submilli package
 offers one typed way to do each thing. You pay by wrapping your systems as
 packages; tool servers you already run over MCP, the protocol most agent
 frameworks use to call tools, need no wrapping, because Submilli presents each
-as a typed package ([connecting to your harness](/docs/harness)).
+as a typed package ([using MCP servers](/docs/mcp-servers)).
 
 Next: [the language](/docs/the-language), where you write programs of your own.

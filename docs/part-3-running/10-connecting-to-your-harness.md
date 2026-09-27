@@ -3,7 +3,7 @@ title: "Connecting to your harness"
 description: "Connecting an agent framework to submilli-server over MCP, with examples for Mastra, LangChain deepagents, the OpenAI Agents SDK, and the Claude Agent SDK, and building the same tools on the HTTP API."
 slug: harness
 sidebar:
-  order: 9
+  order: 10
 ---
 
 A server is running and a blueprint is registered on it. What remains is the
@@ -851,77 +851,71 @@ HTTP 409 with `session_requires_secrets` until the harness supplies them
 again. `POST /v1/sessions/{id}/rebind` does that, and replaces a token that
 has expired; over MCP, open a new connection.
 
-## Putting your own MCP servers under the blueprint
+## Giving the agent an MCP server
 
-Your harness may already call tools on MCP servers of your own. Left there,
-they stay outside the blueprint. Declared in the blueprint, such a server
-becomes a package that programs import, and each of its tools becomes a
-function the blueprint can allow or deny.
+Your harness may already call tools on MCP servers. Left in the harness,
+those tools stay outside the blueprint. Declared in the blueprint, a server
+becomes a package that programs import, and the blueprint decides which of
+its tools may run. [Using MCP servers](/docs/mcp-servers) covers the
+declaration, credentials, and logins. Here the agent gets a browser, through
+Playwright's MCP server:
 
 ```sh
-submilli blueprint add-mcp orders https://mcp.acme.example/mcp
+submilli blueprint add-mcp playwright http://localhost:8931/mcp
+submilli blueprint capability remove mcp.playwright
+submilli blueprint capability add mcp.playwright
+submilli server blueprint apply blueprint.yaml
 ```
+
+Nothing changes in the harness. This is the Mastra agent from above, the
+same file, asked for something that takes a browser:
 
 ```text
-✓ added mcp server 'orders' (no auth) to blueprint.yaml
-  Gated by `mcp.orders` (deny by default) — set its action to `allow` (optionally `filter: tool == "..."`) to use it.
+Open https://example.com in the browser, follow its link, and tell me the title of the page you land on.
 ```
 
-The command writes the server into the `mcp` block. In a blueprint that
-already has permissions, it also adds a rule that denies the server. Replace
-that rule with one that allows the tools you choose:
-
-```sh
-submilli blueprint capability remove mcp.orders
-submilli blueprint capability add mcp.orders --filter 'tool == "lookup_order"'
-```
-
-```yaml
-permissions:
-  main:
-  - capability: mcp.orders
-    filter: tool == "lookup_order"
-    action: allow
-mcp:
-  orders:
-    url: https://mcp.acme.example/mcp
-```
-
-The first time a program or a search needs it, the server connects to the
-MCP server, reads its tools, and presents them as the package `@mcp/orders`.
-An MCP server it can't reach is left out, with a warning in the log.
+The model reads the documentation of `@mcp/playwright`, takes a snapshot of
+the page to find the link, and then writes this:
 
 ```typescript
-import { lookup_order } from "@mcp/orders";
-
+import * as fs from "submilli:fs";
+import playwright from "@mcp/playwright";
 function main(): string {
-    const order = lookup_order({ order_id: "ord_1042" });
-    return `${order.order_id} is ${order.status}`;
+  playwright.browser_navigate({ url: "https://example.com" });
+  
+  // Click the link with target "e6" (from snapshot)
+  const clickRes = playwright.browser_click({ target: "e6" });
+  
+  // Snapshot after click
+  const snapRes = playwright.browser_snapshot({});
+  // Let's also evaluate document.title
+  const evalRes = playwright.browser_evaluate({ function: "() => document.title" });
+  return JSON.stringify({
+    clickRes,
+    snapRes,
+    evalRes
+  });
 }
 ```
 
+It saves a note, closes the browser, and answers:
+
 ```text
-ord_1042 is shipped
+After opening `https://example.com` and following its "Learn more" link (which directs to
+`https://iana.org/domains/example`, redirecting to `https://www.iana.org/help/example-domains`),
+the title of the page you land on is:
+**"Example Domains"**
 ```
 
-A program that calls `cancel_order`, a tool the filter doesn't name, stops
-with `permission denied: caller=main capability=mcp.orders`. The function's
-types come from the schemas the MCP server publishes; a tool that publishes no
-result schema returns `unknown`. For a server that needs credentials,
-`add-mcp` takes `--authorization-bearer <SECRET>` for an API key and `--oauth`
-for a login, which `submilli server mcp authenticate` then performs. With
-neither flag, the command asks the MCP server whether it requires OAuth;
-`--no-probe` skips the question. The
-server's [outbound network rules](/docs/server#outbound-network) apply to MCP
-servers as they do to any request, so one on a private address must be
-allowed there.
+Four browser actions ran in one program and one round trip to the model. A
+harness calling the MCP server directly would have gone back to the model
+after each.
 
-## Beyond your own machine
-
-The server does not authenticate its callers, so the variables a harness binds
-are only as trustworthy as the network path to the server;
-[who can reach it](/docs/server#who-can-reach-it) covers where to run it. The
-MCP endpoint also checks the `Host` header: behind a proxy or a domain name,
-add the name with `--mcp-allowed-host`, or the harness gets HTTP 403.
+The blueprint above allows every tool the server has, including
+`browser_evaluate`, which runs any JavaScript in the page. In an earlier run
+the blueprint allowed only `browser_navigate`, `browser_snapshot`, and
+`browser_click`. The model's program called `browser_evaluate`, was denied,
+and the model reported the denial and stopped. Allow the tools the task
+needs, and expect a model to reach for the others.
 
 Next: [deploying](/docs/deploying), which puts the server in a container.
