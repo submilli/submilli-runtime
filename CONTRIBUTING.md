@@ -49,4 +49,14 @@ on the documentation website.
 Whether you write the code yourself or use an agent, please review the changes
 and be prepared to explain how they work.
 
+## Contributor License Agreement
+
+You have to sign our [CLA](CLA.md) during your first pull request, otherwise
+we're not able to accept your contributions.
+
+Signing uses [CLA assistant](https://cla-assistant.io). When you open your
+first pull request, it posts a comment with a link: follow it, sign in with
+GitHub, and click "I agree". The pull request's CLA check then turns green, and
+you won't be asked again.
+
 Thank you for helping improve Submilli.
