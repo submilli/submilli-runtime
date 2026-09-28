@@ -617,9 +617,11 @@ impl Inferer<'_> {
             // only those need GP erasure.
             let exprs_before = self.typed_ast.exprs_len();
             let stmts_before = self.typed_ast.stmts_len();
-            let body_id = self.infer_stmt(body)?.ok_or_else(|| {
-                super::inference_failure("function body is a Block, never a type-only decl")
-            })?;
+            let body_id = self
+                .infer_body_with_narrowing_boundary(body)?
+                .ok_or_else(|| {
+                    super::inference_failure("function body is a Block, never a type-only decl")
+                })?;
             self.current_return = prev_return;
             self.current_type_predicate = prev_predicate;
             self.reachable = prev_reachable;
@@ -699,7 +701,10 @@ impl Inferer<'_> {
         {
             sig.generics = vec!["T".into()];
             sig.ret = Type::Array(Box::new(Type::TypeVar("T".into())));
-            sig.params[1].ty = Type::Null;
+            sig.params
+                .get_mut(1)
+                .ok_or_else(|| super::inference_failure("missing Array.from map parameter"))?
+                .ty = Type::Null;
         }
 
         let receiver_ty = self
@@ -793,7 +798,12 @@ impl Inferer<'_> {
         }
 
         let rest_elem_ty: Type = if has_rest {
-            match &sig.params.last().unwrap().ty {
+            match &sig
+                .params
+                .last()
+                .ok_or_else(|| super::inference_failure("rest signature has no parameters"))?
+                .ty
+            {
                 Type::Array(elem) => (**elem).clone(),
                 _ => Type::Error,
             }
@@ -1257,7 +1267,11 @@ impl Inferer<'_> {
         }
 
         let rest_elem_ty: Type = if has_rest {
-            match &params.last().unwrap().ty {
+            match &params
+                .last()
+                .ok_or_else(|| super::inference_failure("rest signature has no parameters"))?
+                .ty
+            {
                 Type::Array(elem) => (**elem).clone(),
                 _ => Type::Error,
             }
@@ -1403,7 +1417,7 @@ impl Inferer<'_> {
             .map(|name| sub.apply(&Type::TypeVar(name.clone())))
             .collect();
         for arg in &runtime_args {
-            self.record_runtime_type_test(arg);
+            self.record_runtime_type_test(arg)?;
         }
         let call = TypedExprKind::GenericCall {
             mangled,

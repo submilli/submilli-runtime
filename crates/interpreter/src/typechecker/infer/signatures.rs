@@ -63,6 +63,7 @@ impl<'a> Inferer<'a> {
         // runs in the pre-pass; the returned `skip` set names the decls
         // that hit one of those so the body binders below skip them.
         let skip = self.pre_register_type_names(&top_level)?;
+        self.rejected_class_names = skip.clone();
         if !self.bind_interfaces_in_order(&top_level, &skip)? {
             return Ok(false);
         }

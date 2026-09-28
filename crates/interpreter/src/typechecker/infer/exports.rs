@@ -30,7 +30,7 @@ impl Inferer<'_> {
             self.typed_ast.exports.push(ExportEntry {
                 public_name: mangled.clone(),
                 target: mangled,
-                kind: export_kind(&stmt.kind),
+                kind: export_kind(&stmt.kind)?,
                 span: ed.export_span,
             });
         }
@@ -255,6 +255,7 @@ impl Inferer<'_> {
             if self.module == self.root_module && !is_class {
                 sym.mangled_name = public_mangled.clone();
             }
+            let statics = static_export_entries(&sym.kind, &target_mangled, span);
             self.current_module_symbols
                 .types
                 .insert(public_name.to_string(), (true, sym));
@@ -263,11 +264,7 @@ impl Inferer<'_> {
                 // public static, keyed by the defining class's `Class#static#name`
                 // (stable across re-exports — statics derive from the class
                 // mangle, which never rebrands).
-                let statics = static_export_entries(
-                    &self.current_module_symbols.types[public_name].1.kind,
-                    &target_mangled,
-                    span,
-                );
+
                 self.current_module_exports.extend(statics);
                 self.current_module_exports.push(ExportEntry {
                     public_name: if is_class {
@@ -354,16 +351,20 @@ fn static_export_entries(
     out
 }
 
-fn export_kind(kind: &StmtKind) -> ExportKind {
-    match kind {
+fn export_kind(kind: &StmtKind) -> Result<ExportKind, CompilerFailure> {
+    Ok(match kind {
         StmtKind::Function { .. } => ExportKind::Function,
         StmtKind::Let { .. } | StmtKind::Const { .. } => ExportKind::Global,
         StmtKind::InterfaceDecl { .. }
         | StmtKind::ClassDecl { .. }
         | StmtKind::EnumDecl { .. }
         | StmtKind::TypeAliasDecl { .. } => ExportKind::Type,
-        _ => unreachable!("export_kind called only after exported_decl_name"),
-    }
+        _ => {
+            return Err(super::inference_failure(
+                "unexpected exported declaration kind",
+            ));
+        }
+    })
 }
 
 #[cfg(test)]

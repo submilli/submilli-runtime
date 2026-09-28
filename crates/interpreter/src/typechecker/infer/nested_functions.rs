@@ -114,15 +114,18 @@ impl Inferer<'_> {
             | StmtKind::ConstRest { name, .. } => name.span,
             _ => return Ok(Vec::new()),
         };
-        let ready: Vec<usize> = (0..self.nested_functions.len())
-            .filter(|&index| {
-                let function = &self.nested_functions[index];
+        let ready: Vec<usize> = self
+            .nested_functions
+            .iter()
+            .enumerate()
+            .filter(|(_, function)| {
                 !function.defined
                     && function
                         .created_after
                         .as_ref()
                         .is_some_and(|local| local.span == declared)
             })
+            .map(|(index, _)| index)
             .collect();
         ready
             .into_iter()
@@ -133,33 +136,58 @@ impl Inferer<'_> {
     /// Check a use of nested function `index`. Inside a sibling's body, it is
     /// recorded as that sibling's dependency; anywhere else, it and every
     /// sibling it uses must already be defined.
-    pub(super) fn check_nested_function_use(&mut self, index: usize, span: Span) {
-        let block = self.nested_functions[index].block;
-        let enclosing = self
-            .nested_function_bodies
-            .iter()
-            .copied()
-            .find(|&body| self.nested_functions[body].block == block);
+    pub(super) fn check_nested_function_use(
+        &mut self,
+        index: usize,
+        span: Span,
+    ) -> Result<(), CompilerFailure> {
+        let block = self
+            .nested_functions
+            .get(index)
+            .ok_or_else(|| super::inference_failure("invalid nested function index"))?
+            .block;
+        let mut enclosing = None;
+        for &body in &self.nested_function_bodies {
+            let function = self
+                .nested_functions
+                .get(body)
+                .ok_or_else(|| super::inference_failure("missing enclosing nested function"))?;
+            if function.block == block {
+                enclosing = Some(body);
+                break;
+            }
+        }
         if let Some(user) = enclosing {
-            let uses = &mut self.nested_functions[user].uses;
+            let uses = &mut self
+                .nested_functions
+                .get_mut(user)
+                .ok_or_else(|| super::inference_failure("invalid nested function index"))?
+                .uses;
             if !uses.contains(&index) {
                 uses.push(index);
             }
-            return;
+            return Ok(());
         }
-        let Some(missing) = self.first_undefined(index) else {
-            return;
+        let Some(missing) = self.first_undefined(index)? else {
+            return Ok(());
         };
-        let name = &self.nested_functions[index].name.name;
-        let missing = &self.nested_functions[missing];
-        let local = missing
-            .created_after
-            .as_ref()
-            .expect("only a function that captures a local is created after the block's start");
+        let name = &self
+            .nested_functions
+            .get(index)
+            .ok_or_else(|| super::inference_failure("invalid nested function index"))?
+            .name
+            .name;
+        let missing = self
+            .nested_functions
+            .get(missing)
+            .ok_or_else(|| super::inference_failure("invalid nested function index"))?;
+        let local = missing.created_after.as_ref().ok_or_else(|| {
+            super::inference_failure("missing nested function creation point").with_span(span)
+        })?;
         // A local declared below the function is already reported where the
         // function's body reads it, as for any closure.
         if local.span.start > missing.name.span.start {
-            return;
+            return Ok(());
         }
         let message = if missing.name.name == *name {
             format!(
@@ -179,17 +207,21 @@ impl Inferer<'_> {
         );
         let note = (local.span, format!("`{}` is declared here", local.name));
         self.error_with_help_and_notes(span, message, vec![help], vec![note]);
+        Ok(())
     }
 
     /// The first function not yet defined among `index` and the siblings it
     /// uses, directly or through one another.
-    fn first_undefined(&self, index: usize) -> Option<usize> {
+    fn first_undefined(&self, index: usize) -> Result<Option<usize>, CompilerFailure> {
         let mut pending = vec![index];
         let mut seen = vec![index];
         while let Some(next) = pending.pop() {
-            let function = &self.nested_functions[next];
+            let function = self
+                .nested_functions
+                .get(next)
+                .ok_or_else(|| super::inference_failure("invalid nested function index"))?;
             if !function.defined {
-                return Some(next);
+                return Ok(Some(next));
             }
             for &used in &function.uses {
                 if !seen.contains(&used) {
@@ -198,7 +230,7 @@ impl Inferer<'_> {
                 }
             }
         }
-        None
+        Ok(None)
     }
 
     fn nested_declaration(&self, stmt: StmtId) -> Result<Option<Declaration>, CompilerFailure> {
@@ -254,7 +286,10 @@ impl Inferer<'_> {
         ty: &Type,
     ) -> Result<StmtId, crate::compiler_error::CompilerFailure> {
         let Type::Function { params, ret, .. } = ty else {
-            unreachable!("a nested function's type is a function type");
+            return Err(
+                super::inference_failure("nested function signature is not a function")
+                    .with_span(declaration.name.span),
+            );
         };
         let span = declaration.name.span;
         let body = self
@@ -309,9 +344,21 @@ impl Inferer<'_> {
     /// binding.
     fn define_nested_function(&mut self, index: usize) -> Result<StmtId, CompilerFailure> {
         let declaration = self
-            .nested_declaration(self.nested_functions[index].stmt)?
-            .expect("a registered nested function is a declaration");
-        let ty = self.nested_functions[index].ty.clone();
+            .nested_declaration(
+                self.nested_functions
+                    .get(index)
+                    .ok_or_else(|| super::inference_failure("invalid nested function index"))?
+                    .stmt,
+            )?
+            .ok_or_else(|| {
+                super::inference_failure("registered nested function is not a declaration")
+            })?;
+        let ty = self
+            .nested_functions
+            .get(index)
+            .ok_or_else(|| super::inference_failure("invalid nested function index"))?
+            .ty
+            .clone();
         let span = self
             .ast
             .try_stmt(declaration.body)
@@ -327,9 +374,12 @@ impl Inferer<'_> {
             Some(&ty),
             span,
         )?;
-        self.exit_closure_narrow_boundary();
+        self.exit_closure_narrow_boundary()?;
         self.nested_function_bodies.pop();
-        self.nested_functions[index].defined = true;
+        self.nested_functions
+            .get_mut(index)
+            .ok_or_else(|| super::inference_failure("invalid nested function index"))?
+            .defined = true;
         let value = self
             .typed_ast
             .try_push_expr(TypedExpr {

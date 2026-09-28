@@ -534,15 +534,16 @@ impl<'a> Inferer<'a> {
         // both sides, so `Box<T> implements Container<T>` still matches member
         // for member while `Box<T> implements Container<string>` is caught —
         // instantiating with bare `TypeVar`s would make both pass.
-        let opaque: BTreeMap<String, Type> = pending
-            .generic_names
-            .iter()
-            .map(|g| (g.clone(), self.fresh_generic_param(g)))
-            .collect();
         let class_args: Vec<Type> = pending
             .generic_names
             .iter()
-            .map(|g| opaque[g].clone())
+            .map(|name| self.fresh_generic_param(name))
+            .collect();
+        let opaque: BTreeMap<String, Type> = pending
+            .generic_names
+            .iter()
+            .cloned()
+            .zip(class_args.iter().cloned())
             .collect();
         for (span, iface_ty) in &pending.targets {
             // Peeled to agree with `resolve_implements_targets`, which admits an
@@ -873,6 +874,7 @@ impl<'a> Inferer<'a> {
                 parent = self.class_parent(&p);
             }
             if cyclic {
+                self.invalid_class_hierarchies.insert(start);
                 self.error_with_help(
                     *ext_span,
                     format!(
@@ -1782,8 +1784,9 @@ impl<'a> Inferer<'a> {
         carriers
     }
 
-    pub(super) fn record_runtime_type_test(&mut self, ty: &Type) {
-        self.record_runtime_type_test_inner(ty, RuntimeTestMode::General, &mut BTreeSet::new());
+    pub(super) fn record_runtime_type_test(&mut self, ty: &Type) -> Result<(), CompilerFailure> {
+        self.record_runtime_type_test_inner(ty, RuntimeTestMode::General, &mut BTreeSet::new())?;
+        Ok(())
     }
 
     fn record_runtime_type_test_inner(
@@ -1791,7 +1794,7 @@ impl<'a> Inferer<'a> {
         ty: &Type,
         mode: RuntimeTestMode,
         active_interfaces: &mut BTreeSet<MangledName>,
-    ) {
+    ) -> Result<(), CompilerFailure> {
         let key = super::generic::erase_generic_params(ty.peel());
         if let Some(existing) = self.typed_ast.runtime_type_tests.get(&key) {
             if mode == RuntimeTestMode::AllowAliasRefs
@@ -1802,15 +1805,15 @@ impl<'a> Inferer<'a> {
                     .runtime_type_tests
                     .insert(key.clone(), crate::FieldNarrowingTest::Shape(key));
             }
-            return;
+            return Ok(());
         }
         // Break recursive interface discovery conservatively. A later outer
         // call replaces this placeholder with the resolved descriptor.
         self.typed_ast
             .runtime_type_tests
             .insert(key.clone(), crate::FieldNarrowingTest::Representation);
-        self.record_runtime_test_dependencies(&key, active_interfaces);
-        self.record_runtime_class_fields(&key, active_interfaces);
+        self.record_runtime_test_dependencies(&key, active_interfaces)?;
+        self.record_runtime_class_fields(&key, active_interfaces)?;
         let testable = if mode == RuntimeTestMode::AllowAliasRefs {
             crate::typed_ast::field_runtime_type_is_testable(&key)
         } else {
@@ -1827,14 +1830,10 @@ impl<'a> Inferer<'a> {
                 }),
                 _ => None,
             };
-            if interface_identity
-                .as_ref()
-                .is_some_and(|identity| !active_interfaces.insert(identity.clone()))
+            if let Some(identity) = interface_identity.as_ref()
+                && !active_interfaces.insert(identity.clone())
             {
-                self.record_generic_interface_validators(
-                    &interface,
-                    interface_identity.as_ref().expect("identity just matched"),
-                );
+                self.record_generic_interface_validators(&interface, identity)?;
                 crate::FieldNarrowingTest::Interface(interface)
             } else {
                 if let Some(index) = &interface.index {
@@ -1842,14 +1841,14 @@ impl<'a> Inferer<'a> {
                         &index.value,
                         RuntimeTestMode::AllowAliasRefs,
                         active_interfaces,
-                    );
+                    )?;
                 }
                 for member in interface.members.values() {
                     self.record_runtime_type_test_inner(
                         &member.ty,
                         RuntimeTestMode::AllowAliasRefs,
                         active_interfaces,
-                    );
+                    )?;
                 }
                 if let Some(identity) = interface_identity {
                     active_interfaces.remove(&identity);
@@ -1862,6 +1861,7 @@ impl<'a> Inferer<'a> {
             crate::FieldNarrowingTest::Representation
         };
         self.typed_ast.runtime_type_tests.insert(key, test);
+        Ok(())
     }
 
     fn enum_runtime_members(&self, ty: &Type) -> Option<Type> {
@@ -1886,61 +1886,83 @@ impl<'a> Inferer<'a> {
         Some(Type::union(members))
     }
 
-    fn record_runtime_class_fields(&mut self, ty: &Type, active: &mut BTreeSet<MangledName>) {
+    fn record_runtime_class_fields(
+        &mut self,
+        ty: &Type,
+        active: &mut BTreeSet<MangledName>,
+    ) -> Result<(), CompilerFailure> {
         let Type::ClassRef { mangled, args, .. } = ty else {
-            return;
+            return Ok(());
         };
+        // Diagnosed source cycles have no runtime descriptor; compilation will
+        // return their diagnostics. Unexplained dependency cycles remain fatal.
+        if self.invalid_class_hierarchies.contains(mangled) {
+            return Ok(());
+        }
         if !active.insert(mangled.clone()) {
             self.typed_ast
                 .runtime_class_fields
                 .insert(ty.clone(), Type::Never);
-            return;
+            return Ok(());
         }
         let mut fields = BTreeMap::new();
         let mut guards = Vec::new();
         let mut contexts = Vec::new();
+        let mut chain = Vec::new();
         for_each_class_in_chain(
             |name| self.class_by_mangled(name),
             mangled,
             args,
-            |symbol, bindings| {
-                let TypeKind::Class {
-                    generics,
-                    fields: declared,
-                    narrowing_checks,
-                    accessors,
-                    ..
-                } = &symbol.kind
-                else {
-                    return;
-                };
-                if !generics.is_empty() {
-                    contexts.push(crate::typed_ast::InstanceTypeContext {
-                        declaration: symbol.mangled_name.clone(),
-                        args: generics.iter().map(|name| bindings[name].clone()).collect(),
-                    });
+            |symbol, bindings| chain.push((symbol.clone(), bindings.clone())),
+        )
+        .ok_or_else(|| super::inference_failure("incomplete runtime class metadata"))?;
+        for (symbol, bindings) in &chain {
+            let TypeKind::Class {
+                generics,
+                fields: declared,
+                narrowing_checks,
+                accessors,
+                ..
+            } = &symbol.kind
+            else {
+                return Err(super::inference_failure(
+                    "runtime class metadata is not a class",
+                ));
+            };
+            if !generics.is_empty() {
+                contexts.push(crate::typed_ast::InstanceTypeContext {
+                    declaration: symbol.mangled_name.clone(),
+                    args: generics
+                        .iter()
+                        .map(|name| {
+                            bindings.get(name).cloned().ok_or_else(|| {
+                                super::inference_failure("missing runtime class generic binding")
+                            })
+                        })
+                        .collect::<Result<_, _>>()?,
+                });
+            }
+            for (name, check) in narrowing_checks {
+                let field = declared
+                    .get(name)
+                    .ok_or_else(|| super::inference_failure("missing guarded-field signature"))?;
+                guards.push(crate::typed_ast::InstantiatedFieldGuard {
+                    field: name.clone(),
+                    target: substitute_typevars(&field_read_ty(field), bindings),
+                    check: check.clone(),
+                });
+            }
+            for (name, field) in declared {
+                if accessors.iter().any(|accessor| accessor.name() == name) {
+                    continue;
                 }
-                for (name, check) in narrowing_checks {
-                    if let Some(field) = declared.get(name) {
-                        guards.push(crate::typed_ast::InstantiatedFieldGuard {
-                            field: name.clone(),
-                            target: substitute_typevars(&field_read_ty(field), bindings),
-                            check: check.clone(),
-                        });
-                    }
-                }
-                for (name, field) in declared {
-                    if accessors.iter().any(|accessor| accessor.name() == name) {
-                        continue;
-                    }
-                    fields.entry(name.clone()).or_insert(crate::ObjectField {
-                        ty: substitute_typevars(&field.ty, bindings),
-                        optional: field.optional,
-                        readonly: field.readonly,
-                    });
-                }
-            },
-        );
+                fields.entry(name.clone()).or_insert(crate::ObjectField {
+                    ty: substitute_typevars(&field.ty, bindings),
+                    optional: field.optional,
+                    readonly: field.readonly,
+                });
+            }
+        }
         self.typed_ast
             .runtime_class_contexts
             .insert(ty.clone(), contexts);
@@ -1952,7 +1974,7 @@ impl<'a> Inferer<'a> {
                 &guard.target,
                 RuntimeTestMode::AllowAliasRefs,
                 active,
-            );
+            )?;
         }
         let shape = Type::Object {
             index: None,
@@ -1961,54 +1983,56 @@ impl<'a> Inferer<'a> {
         self.typed_ast
             .runtime_class_fields
             .insert(ty.clone(), shape.clone());
-        self.record_runtime_type_test_inner(&shape, RuntimeTestMode::AllowAliasRefs, active);
+        self.record_runtime_type_test_inner(&shape, RuntimeTestMode::AllowAliasRefs, active)?;
         active.remove(mangled);
+        Ok(())
     }
 
     fn record_runtime_test_dependencies(
         &mut self,
         ty: &Type,
         active_interfaces: &mut BTreeSet<MangledName>,
-    ) {
+    ) -> Result<(), CompilerFailure> {
         let mut record = |dependency: &Type| {
             self.record_runtime_type_test_inner(
                 dependency,
                 RuntimeTestMode::AllowAliasRefs,
                 active_interfaces,
-            );
+            )
         };
         match ty.peel() {
-            Type::Array(element) => record(element),
+            Type::Array(element) => record(element)?,
             Type::Tuple(elements)
             | Type::Union(elements)
             | Type::ClassRef { args: elements, .. } => {
                 for element in elements {
-                    record(element);
+                    record(element)?;
                 }
             }
             Type::Object { fields, index } => {
                 if let Some(i) = index {
-                    record(&i.value);
+                    record(&i.value)?;
                 }
                 for field in fields.values() {
-                    record(&field.ty);
+                    record(&field.ty)?;
                 }
             }
             Type::Function { params, ret, .. } => {
                 for param in params {
-                    record(param);
+                    record(param)?;
                 }
-                record(ret);
+                record(ret)?;
             }
             _ => {}
         }
+        Ok(())
     }
 
     fn record_generic_interface_validators(
         &mut self,
         interface: &crate::InterfaceNarrowingTest,
         identity: &MangledName,
-    ) {
+    ) -> Result<(), CompilerFailure> {
         let mut references = BTreeSet::new();
         for member in interface.members.values() {
             collect_interface_instantiations(&member.ty, identity, &mut references);
@@ -2040,8 +2064,9 @@ impl<'a> Inferer<'a> {
                 &key,
                 RuntimeTestMode::AllowAliasRefs,
                 &mut BTreeSet::new(),
-            );
+            )?;
         }
+        Ok(())
     }
 
     fn narrowing_check_for(
@@ -2657,6 +2682,11 @@ impl<'a> Inferer<'a> {
                     generics,
                     ..
                 } => {
+                    if generics.len() != e.args.len() {
+                        return Err(super::inference_failure(
+                            "parent class generic argument mismatch",
+                        ));
+                    }
                     let bindings: BTreeMap<String, Type> = generics
                         .iter()
                         .cloned()
@@ -2693,7 +2723,7 @@ impl<'a> Inferer<'a> {
             }
             return Ok((crate::TypedExprKind::Null, Type::Void));
         };
-        let parent_ty = self.super_receiver_type(&parent);
+        let parent_ty = self.super_receiver_type(&parent)?;
         let typed_args = self.bind_param_call_args(
             &params,
             &Type::Void,
@@ -2778,7 +2808,7 @@ impl<'a> Inferer<'a> {
             ret: self.apply_body_instantiations(&sig.ret),
             ..sig
         };
-        let parent_ty = self.super_receiver_type(&parent);
+        let parent_ty = self.super_receiver_type(&parent)?;
         let typed_args = self.bind_param_call_args(
             &sig.params,
             &sig.ret,
@@ -2800,11 +2830,11 @@ impl<'a> Inferer<'a> {
         ))
     }
 
-    fn super_receiver_type(&self, parent: &crate::ClassExtends) -> Type {
+    fn super_receiver_type(&self, parent: &crate::ClassExtends) -> Result<Type, CompilerFailure> {
         let sym = self
             .class_by_mangled(&parent.parent)
-            .expect("resolved parent class");
-        Type::class_ref(
+            .ok_or_else(|| super::inference_failure("missing resolved parent class"))?;
+        Ok(Type::class_ref(
             self.type_package(&sym.name),
             sym.name.clone(),
             parent.parent.clone(),
@@ -2813,7 +2843,7 @@ impl<'a> Inferer<'a> {
                 .iter()
                 .map(|ty| self.apply_body_instantiations(ty))
                 .collect(),
-        )
+        ))
     }
 
     fn class_parent(&self, mangled: &MangledName) -> Option<MangledName> {
@@ -2903,6 +2933,12 @@ impl<'a> Inferer<'a> {
         })
     }
 
+    fn declaration_was_rejected(&self, span: Span) -> bool {
+        self.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == crate::Severity::Error && diagnostic.span == span
+        })
+    }
+
     /// Typecheck every class's field initializers, method bodies, and
     /// constructor body, then mirror the result into the typed AST. Runs after
     /// `infer_functions` so bodies can construct sibling classes and call
@@ -2926,8 +2962,16 @@ impl<'a> Inferer<'a> {
             else {
                 continue;
             };
-            let Some(sym) = self.types.lookup(&name.name) else {
+            if self.rejected_class_names.contains(&name.name) {
                 continue;
+            }
+            let Some(sym) = self.types.lookup(&name.name) else {
+                if self.declaration_was_rejected(name.span) {
+                    continue;
+                }
+                return Err(
+                    super::inference_failure("missing class signature").with_span(name.span)
+                );
             };
             let TypeKind::Class {
                 generics: class_generics,
@@ -2941,7 +2985,13 @@ impl<'a> Inferer<'a> {
                 ..
             } = sym.kind.clone()
             else {
-                continue;
+                if self.declaration_was_rejected(name.span) {
+                    continue;
+                }
+                return Err(
+                    super::inference_failure("class signature has the wrong symbol kind")
+                        .with_span(name.span),
+                );
             };
             let mangled = sym.mangled_name.clone();
             self.typed_ast
@@ -2972,8 +3022,12 @@ impl<'a> Inferer<'a> {
                 mangled.clone(),
                 class_generics
                     .iter()
-                    .map(|g| class_inst[g].clone())
-                    .collect(),
+                    .map(|g| {
+                        class_inst.get(g).cloned().ok_or_else(|| {
+                            super::inference_failure("missing class body generic binding")
+                        })
+                    })
+                    .collect::<Result<_, _>>()?,
             );
 
             let prev_class = self.current_class.replace(class_ty.clone());
@@ -3054,7 +3108,7 @@ impl<'a> Inferer<'a> {
             };
             self.add_typed_type_decl(
                 crate::TypedTypeDecl::Class(decl),
-                sym_for_export(self, &name),
+                sym_for_export(self, &name)?,
             )?;
         }
 
@@ -3086,7 +3140,12 @@ impl<'a> Inferer<'a> {
                 continue;
             }
             let Some(sig) = field_sigs.get(&name.name) else {
-                continue;
+                if self.declaration_was_rejected(name.span) {
+                    continue;
+                }
+                return Err(
+                    super::inference_failure("missing class member signature").with_span(name.span)
+                );
             };
             // Field initializers may read `this`; `current_class` is already set.
             let body_ty = substitute_typevars(&sig.ty, class_inst);
@@ -3132,7 +3191,13 @@ impl<'a> Inferer<'a> {
                     continue;
                 }
                 let Some(sig) = field_sigs.get(&param.name.name) else {
-                    continue;
+                    if self.declaration_was_rejected(param.name.span) {
+                        continue;
+                    }
+                    return Err(
+                        super::inference_failure("missing parameter-property signature")
+                            .with_span(param.name.span),
+                    );
                 };
                 out.push(TypedClassField {
                     name: param.name.clone(),
@@ -3163,7 +3228,7 @@ impl<'a> Inferer<'a> {
             return Ok(None);
         };
 
-        let typed_params = bind_params_for_body(self, params, ctor_params, class_inst);
+        let typed_params = bind_params_for_body(self, params, ctor_params, class_inst)?;
         let prev_in_ctor = std::mem::replace(&mut self.in_constructor, true);
         let prev_super_seen = std::mem::replace(&mut self.super_seen, false);
         let prev_this_before = std::mem::replace(&mut self.this_before_super, false);
@@ -3171,7 +3236,7 @@ impl<'a> Inferer<'a> {
         let prev_return = self.current_return.replace(Type::Void);
         let prev_reachable = std::mem::replace(&mut self.reachable, true);
         let body_id = self
-            .infer_stmt(body)?
+            .infer_body_with_narrowing_boundary(body)?
             .ok_or_else(|| super::inference_failure("constructor body is a Block"))?;
         // A subclass constructor must initialize the parent via `super(...)`.
         if self.current_super.is_some() && !self.super_seen {
@@ -3236,9 +3301,20 @@ impl<'a> Inferer<'a> {
                 continue;
             }
             let Some(sig) = method_sigs.get(&name.name) else {
-                continue;
+                if self.declaration_was_rejected(name.span) {
+                    continue;
+                }
+                return Err(
+                    super::inference_failure("missing class member signature").with_span(name.span)
+                );
             };
 
+            if params.len() != sig.params.len() && !self.declaration_was_rejected(name.span) {
+                return Err(
+                    super::inference_failure("method parameter/signature length mismatch")
+                        .with_span(name.span),
+                );
+            }
             let body_instantiation = self.push_body_generics(sig.generics.clone());
             // Method-level generics shadow class-level ones of the same name.
             let mut merged = class_inst.clone();
@@ -3272,7 +3348,7 @@ impl<'a> Inferer<'a> {
             let exprs_before = self.typed_ast.exprs_len();
             let stmts_before = self.typed_ast.stmts_len();
             let body_id = self
-                .infer_stmt(*body)?
+                .infer_body_with_narrowing_boundary(*body)?
                 .ok_or_else(|| super::inference_failure("method body is a Block"))?;
             self.current_return = prev_return;
             self.reachable = prev_reachable;
@@ -3347,9 +3423,20 @@ impl<'a> Inferer<'a> {
                 continue;
             }
             let Some(sig) = static_sigs.get(&name.name) else {
-                continue;
+                if self.declaration_was_rejected(name.span) {
+                    continue;
+                }
+                return Err(
+                    super::inference_failure("missing class member signature").with_span(name.span)
+                );
             };
 
+            if params.len() != sig.params.len() && !self.declaration_was_rejected(name.span) {
+                return Err(
+                    super::inference_failure("method parameter/signature length mismatch")
+                        .with_span(name.span),
+                );
+            }
             let body_instantiation = self.push_body_generics(sig.generics.clone());
             let body_param_types: Vec<Type> = sig
                 .params
@@ -3382,7 +3469,7 @@ impl<'a> Inferer<'a> {
             let exprs_before = self.typed_ast.exprs_len();
             let stmts_before = self.typed_ast.stmts_len();
             let body_id = self
-                .infer_stmt(*body)?
+                .infer_body_with_narrowing_boundary(*body)?
                 .ok_or_else(|| super::inference_failure("static method body is a Block"))?;
             self.current_return = prev_return;
             self.reachable = prev_reachable;
@@ -3536,7 +3623,7 @@ impl<'a> Inferer<'a> {
         let prev_return = self.current_return.replace(ret.clone());
         let prev_reachable = std::mem::replace(&mut self.reachable, true);
         let body_id = self
-            .infer_stmt(body)?
+            .infer_body_with_narrowing_boundary(body)?
             .ok_or_else(|| super::inference_failure("accessor body is a Block"))?;
         self.current_return = prev_return;
         self.reachable = prev_reachable;
@@ -3671,7 +3758,7 @@ fn walk_chain<T>(
     let mut seen: Vec<MangledName> = Vec::new();
     while let Some((m, cur_args)) = cur {
         if seen.contains(&m) {
-            break;
+            return (None, false);
         }
         seen.push(m.clone());
         let Some(sym) = lookup(&m) else {
@@ -3680,6 +3767,9 @@ fn walk_chain<T>(
         let TypeKind::Class { generics, .. } = &sym.kind else {
             return (None, false);
         };
+        if generics.len() != cur_args.len() {
+            return (None, false);
+        }
         let bindings: BTreeMap<String, Type> = generics
             .iter()
             .cloned()
@@ -3945,7 +4035,12 @@ fn bind_params_for_body(
     params: &[crate::ParamDecl],
     sig_params: &[Param],
     bindings: &BTreeMap<String, Type>,
-) -> Vec<TypedParam> {
+) -> Result<Vec<TypedParam>, CompilerFailure> {
+    if params.len() != sig_params.len() {
+        return Err(super::inference_failure(
+            "constructor parameter/signature length mismatch",
+        ));
+    }
     tc.scopes.push();
     // Scope types go through the body instantiation (TypeVar → GenericParam);
     // the returned TypedParams keep the raw signature forms codegen expects.
@@ -3957,7 +4052,7 @@ fn bind_params_for_body(
             p.name.span,
         );
     }
-    params
+    Ok(params
         .iter()
         .zip(sig_params.iter())
         .map(|(p, sp)| TypedParam {
@@ -3967,7 +4062,7 @@ fn bind_params_for_body(
             rest: sp.rest,
             default: sp.default.clone(),
         })
-        .collect()
+        .collect())
 }
 
 /// Signature-space scan for a `TypeVar` mention: substitute a sentinel for `name`
@@ -3980,11 +4075,10 @@ fn signature_mentions_typevar(ty: &Type, name: &str) -> bool {
 
 /// Re-fetch the class's bound symbol for the export surface (it was registered
 /// in `bind_class`; `add_typed_type_decl` records it into the module's exports).
-fn sym_for_export(tc: &Inferer<'_>, name: &Ident) -> TypeSymbol {
-    tc.types
-        .lookup(&name.name)
-        .cloned()
-        .expect("class symbol bound in signature pass")
+fn sym_for_export(tc: &Inferer<'_>, name: &Ident) -> Result<TypeSymbol, CompilerFailure> {
+    tc.types.lookup(&name.name).cloned().ok_or_else(|| {
+        super::inference_failure("missing class symbol from signature pass").with_span(name.span)
+    })
 }
 
 fn type_mentions_erased_parameter(ty: &Type) -> bool {
@@ -4668,5 +4762,144 @@ mod tests {
                         .contains("member `greet` has an incompatible signature")),
             "expected a wrong-arity implements diagnostic, got: {diags:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod invariant_tests {
+    use super::*;
+
+    #[test]
+    fn missing_class_metadata_stops_descriptor_and_export_construction() {
+        super::super::test_support::with_inferer(|tc| {
+            let name = Ident {
+                name: "Missing".into(),
+                span: Span::at(crate::FileId(0)),
+            };
+            assert!(matches!(
+                sym_for_export(tc, &name),
+                Err(CompilerFailure::Internal { .. })
+            ));
+            let ty = Type::class_ref(
+                crate::Package("missing".into()),
+                "Missing",
+                crate::mangle::package_symbol("missing", "Missing"),
+                Vec::new(),
+            );
+            assert!(matches!(
+                tc.record_runtime_type_test(&ty),
+                Err(CompilerFailure::Internal { .. })
+            ));
+            assert!(!tc.typed_ast.runtime_class_fields.contains_key(&ty));
+        });
+    }
+}
+
+#[cfg(test)]
+mod review_regressions {
+    use super::super::test_support::{run, with_source_inferer};
+    use super::*;
+
+    #[test]
+    fn missing_guarded_field_stops_runtime_metadata_construction() {
+        with_source_inferer("class C {}", |tc| {
+            assert!(tc.signatures().unwrap());
+            let symbol = tc.types.lookup_mut("C").unwrap();
+            let mangled = symbol.mangled_name.clone();
+            let TypeKind::Class {
+                narrowing_checks, ..
+            } = &mut symbol.kind
+            else {
+                panic!("class signature");
+            };
+            narrowing_checks.insert(
+                "missing".into(),
+                crate::FieldNarrowingCheck {
+                    declaration: Some(mangled.clone()),
+                    test: crate::FieldNarrowingTest::NonNull,
+                    minimal_test_target: None,
+                    message: "test guard".into(),
+                },
+            );
+            let ty = Type::class_ref(
+                crate::Package(tc.package_name.into()),
+                "C",
+                mangled,
+                Vec::new(),
+            );
+            assert!(matches!(
+                tc.record_runtime_type_test(&ty),
+                Err(CompilerFailure::Internal { .. })
+            ));
+            assert!(!tc.typed_ast.runtime_field_guards.contains_key(&ty));
+            assert!(!tc.typed_ast.runtime_class_fields.contains_key(&ty));
+        });
+    }
+
+    #[test]
+    fn duplicate_methods_and_inheritance_cycles_remain_source_errors() {
+        for source in [
+            "class C { value: number = 1; m(): number { return 1; } } class C {} function main(): number { return 0; }",
+            "class C { value: number = 1; } interface C { x: number; } function main(): number { return 0; }",
+            "class C { m(): number { return 1; } m(x: number): number { return x; } } function main(): number { return 0; }",
+            "class C { static m(): number { return 1; } static m(x: number): number { return x; } } function main(): number { return 0; }",
+            "class A extends B { constructor() { super(); } } class B extends A { constructor() { super(); } } function main(): number { const a = new A(); return 0; }",
+        ] {
+            let (_, diagnostics) = run(source);
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.severity == crate::Severity::Error)
+            );
+            assert!(
+                !diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.message.contains("internal compiler failure")),
+                "{diagnostics:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn missing_class_and_member_signatures_are_fatal_without_source_errors() {
+        let source = "class C { value: number = 1; m(): number { return 1; } static s(): number { return 2; } }";
+        for missing in ["class", "field", "method", "static", "parameter-property"] {
+            let source = if missing == "parameter-property" {
+                "class C { constructor(public value: number) {} }"
+            } else {
+                source
+            };
+            with_source_inferer(source, |tc| {
+                assert!(tc.signatures().unwrap());
+                assert!(tc.diagnostics.is_empty());
+                if missing == "class" {
+                    tc.types = super::super::TypeNamespace::new();
+                } else {
+                    let TypeKind::Class {
+                        fields,
+                        methods,
+                        statics,
+                        ..
+                    } = &mut tc.types.lookup_mut("C").unwrap().kind
+                    else {
+                        panic!("class signature");
+                    };
+                    match missing {
+                        "field" | "parameter-property" => fields.clear(),
+                        "method" => methods.clear(),
+                        "static" => statics.clear(),
+                        _ => panic!("test case"),
+                    }
+                }
+                assert!(
+                    matches!(tc.infer_classes(), Err(CompilerFailure::Internal { .. })),
+                    "{missing}"
+                );
+                assert!(
+                    tc.typed_ast.types.is_empty(),
+                    "failed class must not be published"
+                );
+            });
+        }
     }
 }

@@ -132,6 +132,8 @@ pub fn infer_with_transitive_checked<'a>(
         local_class_mangles: std::collections::BTreeSet::new(),
         pending_implements: Vec::new(),
         unresolved_parents: std::collections::BTreeSet::new(),
+        rejected_class_names: Default::default(),
+        invalid_class_hierarchies: std::collections::BTreeSet::new(),
         current_type_predicate: None,
         inferred_returns: None,
         generics_in_scope: Vec::new(),
@@ -357,6 +359,8 @@ pub fn infer_package_checked<'a>(
         local_class_mangles: BTreeSet::new(),
         pending_implements: Vec::new(),
         unresolved_parents: BTreeSet::new(),
+        rejected_class_names: Default::default(),
+        invalid_class_hierarchies: BTreeSet::new(),
         current_type_predicate: None,
         inferred_returns: None,
         generics_in_scope: Vec::new(),
@@ -674,6 +678,10 @@ pub(super) struct Inferer<'a> {
     /// missing. Never cleared between modules: an importer of a broken class
     /// must stay silent too.
     pub(super) unresolved_parents: std::collections::BTreeSet<crate::MangledName>,
+    /// Names whose signatures were skipped after source errors in this module.
+    pub(super) rejected_class_names: BTreeSet<String>,
+    /// Source-declared cycles already diagnosed during signature validation.
+    pub(super) invalid_class_hierarchies: std::collections::BTreeSet<crate::MangledName>,
     pub(super) current_type_predicate: Option<(crate::TypePredicate, String)>,
     pub(super) inferred_returns: Option<Vec<(Type, Span)>>,
     pub(super) generics_in_scope: Vec<Vec<String>>,

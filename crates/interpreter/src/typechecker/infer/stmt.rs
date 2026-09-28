@@ -197,7 +197,7 @@ impl Inferer<'_> {
                 self.push_narrow_frame(crate::typechecker::infer::narrowing::NarrowEnv::new());
                 let mut typed_stmts = self.declare_nested_functions(stmt_id, &stmts)?;
                 typed_stmts.extend(self.block_stmts_with_drain(&stmts, span)?);
-                let (inner_narrowings, inner_assigned) = self.pop_narrow_frame_capture();
+                let (inner_narrowings, inner_assigned) = self.pop_narrow_frame_capture()?;
                 let exits_normally = self.reachable;
                 let surviving = if exits_normally {
                     inner_narrowings
@@ -446,7 +446,7 @@ impl Inferer<'_> {
         let typed_then = self.infer_if_branch(then_block)?;
         let then_reachable = self.reachable && then_possible;
         let then_narrowings = self.snapshot_active_narrowings(0).0;
-        let (_, then_assigned) = self.pop_narrow_frame_capture();
+        let (_, then_assigned) = self.pop_narrow_frame_capture()?;
         let typed_then = self.wrap_narrow_regions(typed_then, &true_env, then_span)?;
         let (typed_else, else_narrowings, else_assigned, else_reachable) =
             if let Some(b) = else_block {
@@ -456,7 +456,7 @@ impl Inferer<'_> {
                 let typed_else = self.infer_if_branch(b)?;
                 let er = self.reachable && else_possible;
                 let en = self.snapshot_active_narrowings(0).0;
-                let (_, ea) = self.pop_narrow_frame_capture();
+                let (_, ea) = self.pop_narrow_frame_capture()?;
                 let typed_else = self.wrap_narrow_regions(typed_else, &false_env, else_span)?;
                 (Some(typed_else), en, ea, er)
             } else {
@@ -465,7 +465,7 @@ impl Inferer<'_> {
                 // narrowing past the `if` when the then-branch is unreachable.
                 self.push_narrow_frame(false_env.clone());
                 let unchanged = self.snapshot_active_narrowings(0).0;
-                self.pop_narrow_frame();
+                self.pop_narrow_frame()?;
                 (
                     None,
                     unchanged,
@@ -571,7 +571,7 @@ impl Inferer<'_> {
             body_scope_floor,
             LoopTail::default(),
         )?;
-        let frame = self.pop_pending_join_frame();
+        let frame = self.pop_pending_join_frame()?;
         self.merge_assigned_into_outer(outcome.assigned.clone(), span);
         // Natural exit always reachable — for-of terminates immediately on empty iterable.
         let has_exit = self.fold_exits_into_outer(
@@ -612,7 +612,7 @@ impl Inferer<'_> {
                 condition: Some(condition),
             },
         )?;
-        let frame = self.pop_pending_join_frame();
+        let frame = self.pop_pending_join_frame()?;
         self.merge_assigned_into_outer(outcome.assigned.clone(), span);
         let (typed_cond, exit) = self.check_condition_at_loop_head(
             condition,
@@ -639,7 +639,9 @@ impl Inferer<'_> {
         let pending_start = self.pending_exit_counts();
         let body_outcome =
             self.infer_isolated_clause(body, entry_reachable, &Default::default())?;
-        let typed_body = body_outcome.body.expect("try body is a block");
+        let typed_body = body_outcome
+            .body
+            .ok_or_else(|| super::inference_failure("try body is a block"))?;
         let mut exits = body_outcome.exit.into_iter().collect::<Vec<_>>();
         let body_assigned = body_outcome.all_writes;
         let mut all_assigned = body_assigned.clone();
@@ -679,7 +681,7 @@ impl Inferer<'_> {
             .map(|f| {
                 let pending_end = self.pending_exit_counts();
                 let outcome = self.infer_isolated_clause(f, entry_reachable, &all_assigned)?;
-                self.apply_finally_to_pending(&pending_start, &pending_end, &outcome);
+                self.apply_finally_to_pending(&pending_start, &pending_end, &outcome)?;
                 apply_finally_to_exit(&mut post, &outcome);
                 all_assigned.extend(outcome.all_writes);
                 Ok::<_, CompilerFailure>(outcome.body)
@@ -787,11 +789,17 @@ impl Inferer<'_> {
         starts: &[(usize, usize)],
         ends: &[(usize, usize)],
         outcome: &ClauseOutcome,
-    ) {
-        for ((frame, start), end) in self.pending_joins.iter_mut().zip(starts).zip(ends) {
-            apply_finally_to_transfers(&mut frame.breaks, start.0..end.0, outcome);
-            apply_finally_to_transfers(&mut frame.continues, start.1..end.1, outcome);
+    ) -> Result<(), CompilerFailure> {
+        if self.pending_joins.len() != starts.len() || starts.len() != ends.len() {
+            return Err(super::inference_failure(
+                "finally pending-frame snapshot lengths differ",
+            ));
         }
+        for ((frame, start), end) in self.pending_joins.iter_mut().zip(starts).zip(ends) {
+            apply_finally_to_transfers(&mut frame.breaks, start.0..end.0, outcome)?;
+            apply_finally_to_transfers(&mut frame.continues, start.1..end.1, outcome)?;
+        }
+        Ok(())
     }
 
     fn infer_if_branch(&mut self, body: StmtId) -> Result<StmtId, CompilerFailure> {
@@ -1333,7 +1341,7 @@ impl Inferer<'_> {
             narrowed_ty,
             facts: narrowing::TypeFacts::EMPTY,
             excluded_literals: Default::default(),
-            binding: self.mint_narrow_binding(name.span),
+            binding: self.mint_narrow_binding(name.span)?,
             source,
         };
         self.install_joined_narrowings([(path, view)].into_iter().collect(), name.span)?;
@@ -1581,7 +1589,7 @@ impl Inferer<'_> {
         let scope = self
             .scopes
             .get(&name.name)
-            .expect("binding just inserted")
+            .ok_or_else(|| super::inference_failure("binding just inserted"))?
             .decl_scope;
         let path = narrowing::ReferencePath::root(narrowing::BindingId::Local {
             name: name.name.clone(),
@@ -2293,7 +2301,16 @@ pub(super) fn binary_op_text(op: BinOp) -> &'static str {
         BinOp::Div => "/",
         BinOp::Rem => "%",
         BinOp::Pow => "**",
-        _ => unreachable!("compound assignment only uses arithmetic ops"),
+        BinOp::Eq => "===",
+        BinOp::NotEq => "!==",
+        BinOp::Lt => "<",
+        BinOp::Gt => ">",
+        BinOp::Le => "<=",
+        BinOp::Ge => ">=",
+        BinOp::And => "&&",
+        BinOp::Or => "||",
+        BinOp::In => "in",
+        BinOp::NullishCoalesce => "??",
     }
 }
 
@@ -2351,17 +2368,27 @@ fn apply_finally_to_transfers(
     )>,
     range: std::ops::Range<usize>,
     outcome: &ClauseOutcome,
-) {
+) -> Result<(), CompilerFailure> {
+    if transfers.get(range.clone()).is_none() {
+        return Err(super::inference_failure(
+            "finally transfer snapshot range is invalid",
+        ));
+    }
     if outcome.exit.is_none() {
         transfers.drain(range);
-        return;
+        return Ok(());
     }
-    for (env, assigned) in &mut transfers[range] {
+    for (env, assigned) in transfers
+        .get_mut(range)
+        .ok_or_else(|| super::inference_failure("finally transfer range changed"))?
+    {
         let mut post = Some(std::mem::take(env));
         apply_finally_to_exit(&mut post, outcome);
-        *env = post.unwrap_or_default();
+        *env =
+            post.ok_or_else(|| super::inference_failure("reachable finally lost its transfer"))?;
         assigned.extend(outcome.all_writes.iter().cloned());
     }
+    Ok(())
 }
 
 /// What runs on a loop's back edge, after the body and before its next pass: a
@@ -2491,12 +2518,10 @@ fn widen_entry_to_cover_next_pass(
     let falsified: Vec<_> = entry_env
         .iter()
         .filter(|(path, view)| next_pass_falsifies(view, next_pass.get(*path)))
-        .map(|(path, _)| path.clone())
+        .map(|(path, view)| (path.clone(), view.clone()))
         .collect();
-    for path in &falsified {
-        let view = entry_env
-            .remove(path)
-            .expect("falsified paths come from the env");
+    for (path, view) in &falsified {
+        entry_env.remove(path);
         let Some(post) = next_pass.get(path) else {
             continue;
         };
@@ -2509,7 +2534,7 @@ fn widen_entry_to_cover_next_pass(
             env
         };
         let joined = narrowing::union_envs(
-            single(&view),
+            single(view),
             Default::default(),
             single(post),
             Default::default(),
@@ -2629,9 +2654,9 @@ impl Inferer<'_> {
         let all_writes = self
             .clause_write_scopes
             .pop()
-            .expect("clause write collector");
+            .ok_or_else(|| super::inference_failure("clause write collector"))?;
         let exit = self.reachable.then(|| self.snapshot_active_narrowings(0).0);
-        let (_, assigned) = self.pop_narrow_frame_capture();
+        let (_, assigned) = self.pop_narrow_frame_capture()?;
         self.reachable = entry_reachable;
         Ok(ClauseOutcome {
             body,
@@ -2667,10 +2692,9 @@ impl Inferer<'_> {
                     && outcome.assigned.iter().any(|p| p.is_prefix_of(path))
                     && next_pass_falsifies(view, next_pass.get(*path))
             })
-            .map(|(path, _)| path.clone())
+            .map(|(path, view)| (path.clone(), view.clone()))
             .collect();
-        for path in &falsified {
-            let view = active.get(path).expect("active falsified view");
+        for (path, view) in &falsified {
             let invalidation = self.loop_invalidation(path, &view.narrowed_ty);
             let cached = self.loop_invalidations.entry(body).or_default();
             if !cached.contains(&invalidation) {
@@ -2738,8 +2762,8 @@ impl Inferer<'_> {
         let (typed_body, body_post) = self.infer_loop_body(body)?;
         self.loop_depth -= 1;
         let body_end_reachable = self.reachable;
-        let (_, mut assigned) = self.pop_narrow_frame_capture();
-        let (continues, continued_assignments) = self.continue_exits_since(continues_base);
+        let (_, mut assigned) = self.pop_narrow_frame_capture()?;
+        let (continues, continued_assignments) = self.continue_exits_since(continues_base)?;
         assigned.extend(continued_assignments);
         let mut back_edge = join_reachable_envs(body_end_reachable.then_some(body_post), continues);
         let mut typed_update = None;
@@ -2796,7 +2820,7 @@ impl Inferer<'_> {
             after.extend_env(true_env);
             after
         });
-        let writes = self.leave_loop_head();
+        let writes = self.leave_loop_head()?;
         self.diagnostics.truncate(diag_len);
         self.pending_post_if_materializations.truncate(mats_len);
         Ok(ConditionEffects { writes, after })
@@ -2832,7 +2856,7 @@ impl Inferer<'_> {
             })
             .transpose()?;
         let post = self.snapshot_active_narrowings(0).0;
-        let writes = self.leave_loop_head();
+        let writes = self.leave_loop_head()?;
         Ok((typed, post, writes))
     }
 
@@ -2856,10 +2880,12 @@ impl Inferer<'_> {
 
     /// Leave the state `enter_loop_head` entered, and give the paths written
     /// in it.
-    fn leave_loop_head(&mut self) -> std::collections::BTreeSet<narrowing::ReferencePath> {
-        let (_, writes) = self.pop_narrow_frame_capture();
-        self.pop_narrow_frame();
-        writes
+    fn leave_loop_head(
+        &mut self,
+    ) -> Result<std::collections::BTreeSet<narrowing::ReferencePath>, CompilerFailure> {
+        let (_, writes) = self.pop_narrow_frame_capture()?;
+        self.pop_narrow_frame()?;
+        Ok(writes)
     }
 
     /// Infer a `while` or `for` loop. Its condition runs before every pass, so
@@ -2892,7 +2918,7 @@ impl Inferer<'_> {
             body_scope_floor,
             LoopTail { update, condition },
         )?;
-        let frame = self.pop_pending_join_frame();
+        let frame = self.pop_pending_join_frame()?;
         self.merge_assigned_into_outer(outcome.assigned.clone(), span);
         let (typed_cond, natural) = match first_check {
             Some(check) => {
@@ -2930,7 +2956,7 @@ impl Inferer<'_> {
         let writes = self
             .clause_write_scopes
             .pop()
-            .expect("condition write collector");
+            .ok_or_else(|| super::inference_failure("condition write collector"))?;
         let (true_env, _) = self.predicate_envs(typed)?;
         Ok(FirstConditionCheck {
             condition,
@@ -2959,7 +2985,7 @@ impl Inferer<'_> {
         let (_, false_env) = self.predicate_envs(typed)?;
         let mut exit = self.snapshot_active_narrowings(0).0;
         exit.extend_env(false_env);
-        let condition_assigned = self.leave_loop_head();
+        let condition_assigned = self.leave_loop_head()?;
         self.merge_assigned_into_outer(condition_assigned, cond_span);
         let natural = (!cond_is_static_true(self, typed)?).then_some(exit);
         Ok((
@@ -3001,20 +3027,26 @@ impl Inferer<'_> {
     fn continue_exits_since(
         &self,
         base_len: usize,
-    ) -> (
-        Vec<narrowing::NarrowEnv>,
-        std::collections::BTreeSet<narrowing::ReferencePath>,
-    ) {
-        let Some(frame) = self.pending_joins.last() else {
-            return Default::default();
-        };
-        let exits = &frame.continues[base_len..];
+    ) -> Result<
+        (
+            Vec<narrowing::NarrowEnv>,
+            std::collections::BTreeSet<narrowing::ReferencePath>,
+        ),
+        CompilerFailure,
+    > {
+        let frame = self
+            .pending_joins
+            .last()
+            .ok_or_else(|| super::inference_failure("missing loop pending-join frame"))?;
+        let exits = frame.continues.get(base_len..).ok_or_else(|| {
+            super::inference_failure("continue snapshot offset exceeds pending transfers")
+        })?;
         let envs = exits.iter().map(|(env, _)| env.clone()).collect();
         let assigned = exits
             .iter()
             .flat_map(|(_, assigned)| assigned.iter().cloned())
             .collect();
-        (envs, assigned)
+        Ok((envs, assigned))
     }
 
     /// Shared for-of source classification: what element type a `for-of` (or a
@@ -3054,9 +3086,7 @@ impl Inferer<'_> {
                     Type::Function { params, ret, .. } if params.is_empty() => match *ret {
                         Type::InterfaceRef {
                             name: rn, args: ra, ..
-                        } if rn == "Iterator" && ra.len() == 1 => {
-                            Some(ra.into_iter().next().unwrap())
-                        }
+                        } if rn == "Iterator" && ra.len() == 1 => ra.into_iter().next(),
                         _ => None,
                     },
                     _ => None,
@@ -3247,5 +3277,49 @@ mod tests {
                 == "a `catch` binding must be `Error` or a class extending `Error`; got `string`"),
             "expected catch-type diagnostic, got: {d:?}",
         );
+    }
+}
+
+#[cfg(test)]
+mod invariant_tests {
+    use super::super::test_support::with_inferer;
+    use super::*;
+
+    #[test]
+    fn invalid_transfer_snapshots_return_internal_errors() {
+        with_inferer(|tc| {
+            assert!(matches!(
+                tc.continue_exits_since(0),
+                Err(CompilerFailure::Internal { .. })
+            ));
+            tc.push_pending_join_frame(narrowing::PendingJoinKind::Loop);
+            assert!(matches!(
+                tc.continue_exits_since(1),
+                Err(CompilerFailure::Internal { .. })
+            ));
+            let outcome = ClauseOutcome {
+                all_writes: Default::default(),
+                body: None,
+                exit: Some(Default::default()),
+                assigned: Default::default(),
+            };
+            assert!(matches!(
+                tc.apply_finally_to_pending(&[], &[], &outcome),
+                Err(CompilerFailure::Internal { .. })
+            ));
+            for exit in [None, Some(narrowing::NarrowEnv::new())] {
+                let outcome = ClauseOutcome {
+                    exit,
+                    all_writes: Default::default(),
+                    body: None,
+                    assigned: Default::default(),
+                };
+                let mut transfers = Vec::new();
+                assert!(matches!(
+                    apply_finally_to_transfers(&mut transfers, 0..1, &outcome),
+                    Err(CompilerFailure::Internal { .. })
+                ));
+            }
+        });
     }
 }

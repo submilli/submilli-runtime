@@ -46,7 +46,10 @@ fn lower(ctx: &mut DesugarCtx, id: StmtId) -> Result<(), crate::compiler_error::
         .kind
         .clone()
     else {
-        return Ok(());
+        return Err(crate::typechecker::invariant_failure(
+            "for-of lowering target is not a for-of statement",
+        )
+        .with_span(span));
     };
 
     ctx.ta
@@ -657,4 +660,29 @@ fn synthesize_close_finally(
     )?;
 
     ctx.push_stmt(TypedStmtKind::Block(vec![const_close, if_stmt]), span)
+}
+
+#[cfg(test)]
+mod invariant_tests {
+    use super::*;
+    #[test]
+    fn wrong_for_of_target_is_a_fatal_failure() {
+        let mut ta = crate::TypedAst::with_package("test");
+        let file = crate::FileId(0);
+        let id = ta
+            .try_push_stmt(crate::TypedStmt {
+                kind: TypedStmtKind::Block(Vec::new()),
+                span: Span::at(file),
+            })
+            .unwrap();
+        let mut ctx = DesugarCtx {
+            ta: &mut ta,
+            file,
+            next_temp: 0,
+        };
+        assert!(matches!(
+            lower(&mut ctx, id),
+            Err(crate::compiler_error::CompilerFailure::Internal { .. })
+        ));
+    }
 }

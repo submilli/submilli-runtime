@@ -112,7 +112,9 @@ impl Inferer<'_> {
                 elem_ty,
             } => self.sequence_index_assignment(receiver, index, value, elem_ty, span, stmts)?,
             other => {
-                unreachable!("an assignment infers to an assignment statement, got {other:?}")
+                return Err(super::inference_failure(&format!(
+                    "assignment inferred an unexpected statement: {other:?}"
+                )));
             }
         })
     }

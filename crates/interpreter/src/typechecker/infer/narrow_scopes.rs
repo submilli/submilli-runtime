@@ -84,7 +84,7 @@ impl<'a> Inferer<'a> {
                 .map_err(crate::typechecker::arena_failure)?;
             // Fresh binding: reusing the outer `#narrow_N` is exactly the
             // dangling cross-frame reference the reset exists to prevent.
-            let binding = self.mint_narrow_binding(span);
+            let binding = self.mint_narrow_binding(span)?;
             seed.insert(
                 path,
                 narrowing::NarrowedView {
@@ -107,6 +107,19 @@ impl<'a> Inferer<'a> {
         self.push_narrow_frame(narrowing::NarrowEnv::new());
     }
 
+    /// Function-body exit facts cannot materialize in a later declaration.
+    /// Keep each top-level function or class member's flow state isolated just
+    /// as nested function declarations are isolated from their enclosing body.
+    pub(super) fn infer_body_with_narrowing_boundary(
+        &mut self,
+        body: crate::StmtId,
+    ) -> Result<Option<crate::StmtId>, CompilerFailure> {
+        self.enter_function_declaration_narrow_boundary();
+        let typed_body = self.infer_stmt(body)?;
+        self.exit_closure_narrow_boundary()?;
+        Ok(typed_body)
+    }
+
     fn suspend_narrow_scopes(&mut self) {
         self.suspended_narrow_scopes.push(SuspendedNarrowing {
             narrow_scopes: std::mem::take(&mut self.narrow_scopes),
@@ -120,16 +133,18 @@ impl<'a> Inferer<'a> {
     /// Drops the seed frame and restores the enclosing narrowing state. The
     /// seed frame's `assigned` set must not merge outward — an assignment
     /// inside a closure body says nothing about the enclosing frame's flow.
-    pub(super) fn exit_closure_narrow_boundary(&mut self) {
-        self.pop_narrow_frame();
-        let Some(saved) = self.suspended_narrow_scopes.pop() else {
-            return;
-        };
+    pub(super) fn exit_closure_narrow_boundary(&mut self) -> Result<(), CompilerFailure> {
+        self.pop_narrow_frame()?;
+        let saved = self
+            .suspended_narrow_scopes
+            .pop()
+            .ok_or_else(|| super::inference_failure("missing suspended narrowing scope"))?;
         self.narrow_scopes = saved.narrow_scopes;
         self.assigned_scopes = saved.assigned_scopes;
         self.clause_write_scopes = saved.clause_write_scopes;
         self.tombstone_scopes = saved.tombstone_scopes;
         self.pending_post_if_materializations = saved.pending_materializations;
+        Ok(())
     }
 
     /// The sound subset that crosses a closure boundary, per
@@ -278,7 +293,7 @@ impl<'a> Inferer<'a> {
     /// is about to install: each of its views gets a region here, so naming one
     /// of their bindings is legal even though no frame holds them yet.
     ///
-    /// Checked under `debug_assert!` so a future gap fails in the compiler at
+    /// Checked with a typed failure so a future gap fails in the compiler at
     /// the site that caused it, rather than as an opaque codegen panic. Reads
     /// the live `narrow_scopes`, never a suspended closure frame: inside a
     /// closure body only the fresh stack is in scope.
@@ -347,7 +362,7 @@ impl<'a> Inferer<'a> {
             tail.insert(
                 path.clone(),
                 narrowing::NarrowedView {
-                    binding: self.mint_narrow_binding(span),
+                    binding: self.mint_narrow_binding(span)?,
                     ..view.clone()
                 },
             );
@@ -370,10 +385,9 @@ impl<'a> Inferer<'a> {
         self.tombstone_scopes.push(tombstones);
     }
 
-    pub(super) fn pop_narrow_frame(&mut self) {
-        self.narrow_scopes.pop();
-        self.assigned_scopes.pop();
-        self.tombstone_scopes.pop();
+    pub(super) fn pop_narrow_frame(&mut self) -> Result<(), CompilerFailure> {
+        self.pop_narrow_frame_capture()?;
+        Ok(())
     }
 
     /// Infers an operand that may not run — the right side of `&&`, `||`, or
@@ -389,7 +403,7 @@ impl<'a> Inferer<'a> {
     ) -> Result<(ExprId, Type), CompilerFailure> {
         self.push_narrow_frame(env.clone());
         let inferred = self.infer_expr(operand, expected)?;
-        let (_, assigned) = self.pop_narrow_frame_capture();
+        let (_, assigned) = self.pop_narrow_frame_capture()?;
         let span = self
             .ast
             .try_expr(operand)
@@ -401,20 +415,40 @@ impl<'a> Inferer<'a> {
 
     pub(super) fn pop_narrow_frame_capture(
         &mut self,
-    ) -> (
-        narrowing::NarrowEnv,
-        std::collections::BTreeSet<narrowing::ReferencePath>,
-    ) {
-        let mut narrowings = self.narrow_scopes.pop().unwrap_or_default();
-        let assigned = self.assigned_scopes.pop().unwrap_or_default();
-        for (path, reason) in self.tombstone_scopes.pop().unwrap_or_default() {
+    ) -> Result<
+        (
+            narrowing::NarrowEnv,
+            std::collections::BTreeSet<narrowing::ReferencePath>,
+        ),
+        CompilerFailure,
+    > {
+        if self.narrow_scopes.len() != self.assigned_scopes.len()
+            || self.narrow_scopes.len() != self.tombstone_scopes.len()
+        {
+            return Err(super::inference_failure(
+                "narrowing scope stack lengths differ",
+            ));
+        }
+        let mut narrowings = self
+            .narrow_scopes
+            .pop()
+            .ok_or_else(|| super::inference_failure("missing narrowing frame"))?;
+        let assigned = self
+            .assigned_scopes
+            .pop()
+            .ok_or_else(|| super::inference_failure("missing assignment frame"))?;
+        for (path, reason) in self
+            .tombstone_scopes
+            .pop()
+            .ok_or_else(|| super::inference_failure("missing narrowing tombstone frame"))?
+        {
             if let narrowing::InvalidationReason::ShapeUnrebuildable { narrowed_ty } = reason
                 && !narrowings.contains_key(&path)
             {
                 narrowings.dropped.insert(path, narrowed_ty);
             }
         }
-        (narrowings, assigned)
+        Ok((narrowings, assigned))
     }
 
     pub(super) fn push_pending_join_frame(&mut self, kind: narrowing::PendingJoinKind) {
@@ -426,10 +460,12 @@ impl<'a> Inferer<'a> {
         });
     }
 
-    pub(super) fn pop_pending_join_frame(&mut self) -> narrowing::PendingJoinFrame {
+    pub(super) fn pop_pending_join_frame(
+        &mut self,
+    ) -> Result<narrowing::PendingJoinFrame, CompilerFailure> {
         self.pending_joins
             .pop()
-            .expect("pending_joins push/pop mismatch")
+            .ok_or_else(|| super::inference_failure("pending join push/pop mismatch"))
     }
 
     /// Iterates outer-to-inner so inner entries overwrite outer ones,
@@ -500,21 +536,10 @@ impl<'a> Inferer<'a> {
         if let Some(natural) = natural_exit_env {
             exits.push(natural);
         }
-        let post_env = match exits.len() {
-            0 => return Ok(false),
-            1 => exits.pop().expect("len == 1"),
-            _ => exits
-                .into_iter()
-                .reduce(|a_env, b_env| {
-                    let (joined, _) = narrowing::union_envs(
-                        a_env,
-                        std::collections::BTreeSet::new(),
-                        b_env,
-                        std::collections::BTreeSet::new(),
-                    );
-                    joined
-                })
-                .expect("len >= 2"),
+        let Some(post_env) = exits.into_iter().reduce(|a_env, b_env| {
+            narrowing::union_envs(a_env, Default::default(), b_env, Default::default()).0
+        }) else {
+            return Ok(false);
         };
         if !post_env.is_empty() {
             self.install_joined_narrowings(post_env, anchor_span)?;
@@ -1238,7 +1263,7 @@ impl<'a> Inferer<'a> {
                 "narrow source names a shadow outside its scope",
             ));
         }
-        self.record_runtime_type_test(&view.narrowed_ty);
+        self.record_runtime_type_test(&view.narrowed_ty)?;
         Ok((
             source,
             narrowing::cast_info_for(from_ty, view.narrowed_ty.clone()),
@@ -1482,7 +1507,7 @@ impl<'a> Inferer<'a> {
                 continue;
             }
             let (source, cast_info) = self.wrap_time_source(&rebound_env, &path, &view, if_span)?;
-            let binding = self.mint_narrow_binding(if_span);
+            let binding = self.mint_narrow_binding(if_span)?;
             self.pending_post_if_materializations
                 .push(narrowing::PendingPostIfMaterialization {
                     path: path.clone(),
@@ -1655,4 +1680,46 @@ fn is_class_seen_as_class(part: &Type, member: &Type) -> bool {
         (part.peel(), member.peel()),
         (Type::ClassRef { .. }, Type::ClassRef { .. })
     )
+}
+
+#[cfg(test)]
+mod invariant_tests {
+    use super::*;
+
+    #[test]
+    fn exhausted_narrowing_ids_return_a_limit_without_wrapping() {
+        super::super::test_support::with_inferer(|tc| {
+            tc.next_narrow_counter = u32::MAX;
+            assert!(matches!(
+                tc.mint_narrow_binding(Span::at(crate::FileId(0))),
+                Err(CompilerFailure::Limit { .. })
+            ));
+            assert_eq!(tc.next_narrow_counter, u32::MAX);
+        });
+    }
+
+    #[test]
+    fn missing_join_and_mismatched_narrowing_frames_are_fatal() {
+        super::super::test_support::with_inferer(|tc| {
+            assert!(matches!(
+                tc.pop_pending_join_frame(),
+                Err(CompilerFailure::Internal { .. })
+            ));
+            assert!(matches!(
+                tc.pop_narrow_frame_capture(),
+                Err(CompilerFailure::Internal { .. })
+            ));
+            tc.push_narrow_frame(narrowing::NarrowEnv::new());
+            tc.assigned_scopes.clear();
+            assert!(matches!(
+                tc.pop_narrow_frame_capture(),
+                Err(CompilerFailure::Internal { .. })
+            ));
+            assert_eq!(
+                tc.narrow_scopes.len(),
+                1,
+                "reject before consuming mismatched frames"
+            );
+        });
+    }
 }

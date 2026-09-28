@@ -151,7 +151,7 @@ impl Inferer<'_> {
                 narrowed_ty: true_ty,
                 facts: narrowing::TypeFacts::EMPTY,
                 excluded_literals: std::collections::BTreeSet::new(),
-                binding: self.mint_narrow_binding(arg_span),
+                binding: self.mint_narrow_binding(arg_span)?,
                 source: source_true,
             },
         );
@@ -161,7 +161,7 @@ impl Inferer<'_> {
                 narrowed_ty: false_ty,
                 facts: narrowing::TypeFacts::EMPTY,
                 excluded_literals: std::collections::BTreeSet::new(),
-                binding: self.mint_narrow_binding(arg_span),
+                binding: self.mint_narrow_binding(arg_span)?,
                 source: source_false,
             },
         );

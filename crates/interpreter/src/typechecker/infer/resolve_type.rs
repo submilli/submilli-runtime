@@ -575,7 +575,9 @@ impl<'a> Inferer<'a> {
                     });
                 }
                 let Some((root_name, rest)) = path.split_first() else {
-                    return Ok(Type::Error);
+                    return Err(
+                        super::inference_failure("empty qualified type path").with_span(annot.span)
+                    );
                 };
                 let root = root_name.name.as_str();
                 if let Some(ns) = self.namespace_bindings.get(root) {
@@ -698,7 +700,7 @@ impl<'a> Inferer<'a> {
             TypeAnnotationKind::NumberLiteral(v) => Type::NumberLiteral(*v),
             TypeAnnotationKind::BooleanLiteral(b) => Type::BooleanLiteral(*b),
             TypeAnnotationKind::KeyOf(operand) => self.resolve_keyof(operand)?,
-            TypeAnnotationKind::TypeOf { path } => self.resolve_typeof(path),
+            TypeAnnotationKind::TypeOf { path } => self.resolve_typeof(path)?,
         })
     }
 
@@ -714,26 +716,26 @@ impl<'a> Inferer<'a> {
     ///
     /// Locals shadow globals, as everywhere else. A dotted path walks object fields
     /// from the root value, which is what makes `typeof o.k` work.
-    fn resolve_typeof(&mut self, path: &[crate::Ident]) -> Type {
-        let Some((root_span, rest)) = path.split_first() else {
-            return Type::Error;
-        };
+    fn resolve_typeof(&mut self, path: &[crate::Ident]) -> Result<Type, CompilerFailure> {
+        let (root_span, rest) = path
+            .split_first()
+            .ok_or_else(|| super::inference_failure("empty typeof path"))?;
         let name = root_span.name.clone();
 
         let Some(mut ty) = self.lookup_value_type(&name) else {
             self.error(root_span.span, format!("unresolved identifier `{name}`"));
-            return Type::Error;
+            return Ok(Type::Error);
         };
 
         for seg in rest {
             let field = seg.name.clone();
             let Some(next) = self.field_type_of(&ty, &field) else {
                 self.error(seg.span, format!("`{field}` is not a field of `{ty}`"));
-                return Type::Error;
+                return Ok(Type::Error);
             };
             ty = next;
         }
-        ty
+        Ok(ty)
     }
 
     /// The declared type of a value, locals shadowing globals.
@@ -1447,5 +1449,30 @@ mod tests {
                 .contains("`void` cannot be used as a type argument to class `Crate`")),
             "expected void-arg diagnostic, got: {diags:?}",
         );
+    }
+}
+
+#[cfg(test)]
+mod invariant_tests {
+    use super::*;
+    #[test]
+    fn empty_type_paths_are_internal_errors() {
+        super::super::test_support::with_inferer(|tc| {
+            assert!(matches!(
+                tc.resolve_typeof(&[]),
+                Err(CompilerFailure::Internal { .. })
+            ));
+            let annotation = crate::TypeAnnotation {
+                kind: crate::TypeAnnotationKind::Qualified {
+                    path: Vec::new(),
+                    args: Vec::new(),
+                },
+                span: crate::Span::at(crate::FileId(0)),
+            };
+            assert!(matches!(
+                tc.resolve_type_inner(&annotation),
+                Err(CompilerFailure::Internal { .. })
+            ));
+        });
     }
 }

@@ -584,21 +584,21 @@ fn scan_function(
     body: crate::ArrowBody,
     out: &mut Analysis,
 ) -> Result<(), CompilerFailure> {
-    out.function_depth += 1;
-    out.scopes.push(Default::default());
+    out.function_depth = out
+        .function_depth
+        .checked_add(1)
+        .ok_or_else(|| super::inference_failure("binding analysis function depth overflow"))?;
+    let mut scope = BTreeMap::new();
     // Duplicate parameters have a dedicated diagnostic during signature resolution.
     for param in params {
-        out.scopes
-            .last_mut()
-            .expect("function scope")
-            .entry(param.name.name.clone())
-            .or_insert(Binding {
-                span: param.name.span,
-                function_depth: out.function_depth,
-                initialized: true,
-                block_local: false,
-            });
+        scope.entry(param.name.name.clone()).or_insert(Binding {
+            span: param.name.span,
+            function_depth: out.function_depth,
+            initialized: true,
+            block_local: false,
+        });
     }
+    out.scopes.push(scope);
     match body {
         crate::ArrowBody::Expr(expr) => visit_expr(ast, expr, out)?,
         crate::ArrowBody::Block(body) => scan_body(ast, body, out)?,

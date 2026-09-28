@@ -134,7 +134,7 @@ impl Inferer<'_> {
             })?;
             let body_reachable = self.reachable;
             self.switch_depth -= 1;
-            let (_n, body_assigned) = self.pop_narrow_frame_capture();
+            let (_n, body_assigned) = self.pop_narrow_frame_capture()?;
             let typed_body = self.wrap_narrow_regions(typed_body, &true_env, body_span)?;
             all_assigned.extend(body_assigned);
             any_arm_reachable_exit |= body_reachable;
@@ -170,7 +170,7 @@ impl Inferer<'_> {
             })?;
             let body_reachable = self.reachable;
             self.switch_depth -= 1;
-            let (_n, body_assigned) = self.pop_narrow_frame_capture();
+            let (_n, body_assigned) = self.pop_narrow_frame_capture()?;
             let typed_body = self.wrap_narrow_regions(typed_body, &env, body_span)?;
             all_assigned.extend(body_assigned);
             any_arm_reachable_exit |= body_reachable;
@@ -187,7 +187,7 @@ impl Inferer<'_> {
         };
 
         // Breaks are normal case exits; count them toward post-switch reachability.
-        let frame = self.pop_pending_join_frame();
+        let frame = self.pop_pending_join_frame()?;
         if !frame.breaks.is_empty() {
             any_arm_reachable_exit = true;
         }
@@ -392,7 +392,7 @@ impl Inferer<'_> {
                 .map_err(crate::typechecker::arena_failure)?,
             None => return Ok(env),
         };
-        let binding = self.mint_narrow_binding(body_span);
+        let binding = self.mint_narrow_binding(body_span)?;
         env.insert(
             path,
             narrowing::NarrowedView {

@@ -223,8 +223,11 @@ const NAMESPACE_DROP_HELP: &str = "drop the `?` — a namespace is never null";
 /// the namespace rejection's fix line. Naming both sides makes the help a
 /// literal find/replace, which stays exact on a chain that continues past the
 /// first step. `None` when no rewrite is legal — see [`NAMESPACE_DROP_HELP`].
-fn namespace_fix_forms(written: &str, first: &ChainPart) -> Option<(String, String)> {
-    match first {
+fn namespace_fix_forms(
+    written: &str,
+    first: &ChainPart,
+) -> Result<Option<(String, String)>, CompilerFailure> {
+    Ok(match first {
         ChainPart::Field { name, .. } => Some((
             format!("{written}.{}", name.name),
             format!("{written}?.{}", name.name),
@@ -233,8 +236,12 @@ fn namespace_fix_forms(written: &str, first: &ChainPart) -> Option<(String, Stri
         ChainPart::Index { .. } => None,
         // The rejection runs only when the first step is optional, and `!`
         // never is.
-        ChainPart::NonNull { .. } => unreachable!("`!` is never an optional step"),
-    }
+        ChainPart::NonNull { .. } => {
+            return Err(super::inference_failure(
+                "non-null assertion is not an optional namespace step",
+            ));
+        }
+    })
 }
 
 /// How a chain step is spelled in a diagnostic, so a message reads as the
@@ -246,7 +253,7 @@ struct ChainStepPhrasing {
     span: Span,
 }
 
-fn chain_step_phrasing(part: &ChainPart) -> ChainStepPhrasing {
+fn chain_step_phrasing(part: &ChainPart) -> Result<ChainStepPhrasing, CompilerFailure> {
     let (action, optional_form, span) = match part {
         ChainPart::Field { name, span, .. } => (
             format!("read `{}` on", name.name),
@@ -258,14 +265,16 @@ fn chain_step_phrasing(part: &ChainPart) -> ChainStepPhrasing {
         // Every rejection site runs after the `NonNull` step is handled, so a
         // `!` never needs phrasing.
         ChainPart::NonNull { .. } => {
-            unreachable!("`!` steps are handled before any receiver rejection")
+            return Err(super::inference_failure(
+                "non-null assertion reached receiver rejection",
+            ));
         }
     };
-    ChainStepPhrasing {
+    Ok(ChainStepPhrasing {
         action,
         optional_form,
         span,
-    }
+    })
 }
 
 fn postfix_result_ty(operand_ty: &Type) -> Type {
@@ -447,7 +456,16 @@ impl Inferer<'_> {
                 Ok((TypedExprKind::Boolean(b), ty))
             }
             ExprKind::Null => Ok((TypedExprKind::Null, Type::Null)),
-            ExprKind::Identifier(ident) => Ok(self.resolve_ident(ident, span)),
+            ExprKind::Identifier(ident) => {
+                if let Some(index) = self
+                    .scopes
+                    .get(&ident.name)
+                    .and_then(|entry| entry.nested_function)
+                {
+                    self.check_nested_function_use(index, span)?;
+                }
+                Ok(self.resolve_ident(ident, span))
+            }
             ExprKind::Binary { op, lhs, rhs } => self.infer_binary(op, lhs, rhs, expected, span),
             ExprKind::Unary { op, operand } => self.infer_unary(op, operand),
             ExprKind::Call {
@@ -469,7 +487,9 @@ impl Inferer<'_> {
                 self.infer_index_access(receiver, index, span, expr_id)
             }
             ExprKind::FunctionExpression { .. } => {
-                unreachable!("handled before ordinary expressions")
+                return Err(super::inference_failure(
+                    "handled before ordinary expressions",
+                ));
             }
             ExprKind::Arrow {
                 params,
@@ -631,18 +651,11 @@ impl Inferer<'_> {
                 ty: ty.clone(),
             })
             .map_err(crate::typechecker::arena_failure)?;
-        self.record_runtime_type_test(&ty);
+        self.record_runtime_type_test(&ty)?;
         Ok((id, ty))
     }
 
     fn resolve_ident(&mut self, ident: Ident, span: Span) -> (TypedExprKind, Type) {
-        if let Some(index) = self
-            .scopes
-            .get(&ident.name)
-            .and_then(|entry| entry.nested_function)
-        {
-            self.check_nested_function_use(index, span);
-        }
         if let Some(entry) = self.scopes.get(&ident.name) {
             // Plan 75.8: consult the active narrow-scope stack. If
             // this binding has been narrowed in an enclosing branch,
@@ -1269,7 +1282,7 @@ impl Inferer<'_> {
                 let rhs_env = match op {
                     BinOp::And => true_env,
                     BinOp::Or => false_env,
-                    _ => unreachable!("matched And | Or above"),
+                    _ => return Err(super::inference_failure("matched And | Or above")),
                 };
                 let (typed_rhs, rhs_ty) =
                     self.infer_conditional_operand(rhs, &rhs_env, expected)?;
@@ -1283,7 +1296,7 @@ impl Inferer<'_> {
                 let lhs_kept = match op {
                     BinOp::And => super::narrowing::falsy_part(&lhs_ty),
                     BinOp::Or => super::narrowing::truthy_part(&lhs_ty),
-                    _ => unreachable!("matched And | Or above"),
+                    _ => return Err(super::inference_failure("matched And | Or above")),
                 };
                 let result_ty = if condition_error {
                     Type::Error
@@ -1303,7 +1316,9 @@ impl Inferer<'_> {
             // Lifted earlier in this function — the early-return at
             // the top of `infer_binary` keeps `NullishCoalesce` out of
             // this match.
-            BinOp::NullishCoalesce => unreachable!("NullishCoalesce handled by early return"),
+            BinOp::NullishCoalesce => Err(super::inference_failure(
+                "NullishCoalesce handled by early return",
+            )),
         }
     }
 
@@ -1528,7 +1543,11 @@ impl Inferer<'_> {
                     Type::Boolean,
                 ))
             }
-            _ => unreachable!("try_typeof_fold called with non-eq op"),
+            _ => {
+                return Err(super::inference_failure(
+                    "try_typeof_fold called with non-eq op",
+                ));
+            }
         })
     }
 
@@ -2372,11 +2391,12 @@ impl Inferer<'_> {
         args: Vec<ExprId>,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
-        debug_assert!(
-            sig.generics.is_empty(),
-            "infer_method_call requires sig with no method generics; \
-             interface bindings handled at the call-site dispatch",
-        );
+        if !sig.generics.is_empty() {
+            return Err(
+                super::inference_failure("generic method reached non-generic dispatch")
+                    .with_span(span),
+            );
+        }
         let receiver_ty = self
             .typed_ast
             .try_expr(typed_receiver)
@@ -3127,10 +3147,12 @@ impl Inferer<'_> {
         Ok({
             match self.checked_cast_around(call, result_ty, span)? {
                 Ok(checked) => checked,
-                Err(reason) => unreachable!(
-                    "llm.call<{result_ty}> passed the cast gate in llm_call_schema \
-                 but failed it here: {reason}"
-                ),
+                Err(reason) => {
+                    return Err(super::inference_failure(&format!(
+                        "LLM result cast rejected a previously validated schema: {reason}"
+                    ))
+                    .with_span(span));
+                }
             }
         })
     }
@@ -4145,7 +4167,12 @@ impl Inferer<'_> {
         exprs: Vec<ExprId>,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
-        debug_assert_eq!(parts.len(), exprs.len() + 1);
+        if parts.len().checked_sub(1) != Some(exprs.len()) {
+            return Err(
+                super::inference_failure("template part/interpolation count mismatch")
+                    .with_span(span),
+            );
+        }
 
         // Type each interpolation and (when needed) wrap in toString.
         // We track any propagated `Type::Error` separately so the
@@ -5102,10 +5129,12 @@ impl Inferer<'_> {
             let plain: Vec<ExprId> = elements
                 .into_iter()
                 .map(|e| match e {
-                    crate::ArrayLiteralElement::Value(id) => id,
-                    crate::ArrayLiteralElement::Spread { .. } => unreachable!(),
+                    crate::ArrayLiteralElement::Value(id) => Ok(id),
+                    crate::ArrayLiteralElement::Spread { .. } => Err(super::inference_failure(
+                        "spread reached plain tuple inference",
+                    )),
                 })
-                .collect();
+                .collect::<Result<_, _>>()?;
             return self.infer_tuple_literal(plain, expected_elems.clone(), span);
         }
 
@@ -5614,7 +5643,7 @@ impl Inferer<'_> {
             && self.namespace_symbols.contains_key(&root.name)
         {
             segments.push(name.clone());
-            return Ok(self.infer_namespace_symbol_field_access(root, segments, span));
+            return self.infer_namespace_symbol_field_access(root, segments, span);
         }
 
         // namespace member in non-call position
@@ -6849,15 +6878,21 @@ impl Inferer<'_> {
         let prev_switch_depth = std::mem::replace(&mut self.switch_depth, 0);
         let prev_predicate = std::mem::replace(
             &mut self.current_type_predicate,
-            predicate.as_ref().map(|pred| {
-                (
-                    pred.clone(),
-                    typed_params[pred.parameter_index as usize]
-                        .name
-                        .name
-                        .clone(),
-                )
-            }),
+            predicate
+                .as_ref()
+                .map(|pred| {
+                    let parameter =
+                        typed_params
+                            .get(pred.parameter_index as usize)
+                            .ok_or_else(|| {
+                                super::inference_failure(
+                                    "closure predicate parameter index is invalid",
+                                )
+                                .with_span(span)
+                            })?;
+                    Ok::<_, CompilerFailure>((pred.clone(), parameter.name.name.clone()))
+                })
+                .transpose()?,
         );
 
         // Save / set return-type frames. Stack-based so nested arrows
@@ -6898,7 +6933,7 @@ impl Inferer<'_> {
         };
 
         // Restore frames.
-        self.exit_closure_narrow_boundary();
+        self.exit_closure_narrow_boundary()?;
         self.reachable = prev_reachable;
         self.loop_depth = prev_loop_depth;
         self.switch_depth = prev_switch_depth;
@@ -7759,13 +7794,13 @@ impl Inferer<'_> {
             // of `unknown` resolves to `unknown`. Reject here, while the member
             // name is still in hand.
             if matches!(receiver_ty.peel(), Type::Null | Type::Unknown) {
-                self.reject_undispatchable_chain_receiver(&receiver_ty, &part);
+                self.reject_undispatchable_chain_receiver(&receiver_ty, &part)?;
                 break;
             }
             // Only `?.` short-circuits, so only `?.` may see the receiver with
             // null removed.
             if !part.is_optional() && type_admits_null(&receiver_ty, self.resolver()) {
-                self.reject_nullable_chain_step(&receiver_ty, step_path.as_ref(), &part);
+                self.reject_nullable_chain_step(&receiver_ty, step_path.as_ref(), &part)?;
                 break;
             }
             let effective_recv = super::narrowing::strip_null(&receiver_ty);
@@ -7791,7 +7826,7 @@ impl Inferer<'_> {
             typed_parts.push(typed_part);
         }
         if let Some(span) = short_circuit_span {
-            let (_, assigned) = self.pop_narrow_frame_capture();
+            let (_, assigned) = self.pop_narrow_frame_capture()?;
             self.merge_assigned_into_outer(assigned, span);
         }
         // A method named by the chain's last step never sees a `Call` at all.
@@ -7830,7 +7865,9 @@ impl Inferer<'_> {
     ) -> Result<(TypedChainPart, Type), CompilerFailure> {
         Ok(match string_key_as_field(self.ast, part)? {
             ChainPart::NonNull { .. } => {
-                unreachable!("`!` steps never reach the member-dispatch path")
+                return Err(super::inference_failure(
+                    "`!` steps never reach the member-dispatch path",
+                ));
             }
             ChainPart::Field {
                 name,
@@ -7996,7 +8033,9 @@ impl Inferer<'_> {
                         span: prop_span,
                     }) = typed_parts.pop()
                     else {
-                        unreachable!("matched on InterfaceProperty above");
+                        return Err(super::inference_failure(
+                            "matched on InterfaceProperty above",
+                        ));
                     };
                     let Type::Function {
                         params,
@@ -8005,7 +8044,9 @@ impl Inferer<'_> {
                         ..
                     } = fn_ty.peel()
                     else {
-                        unreachable!("guarded by `matches!(.., Function)` above");
+                        return Err(super::inference_failure(
+                            "guarded by `matches!(.., Function)` above",
+                        ));
                     };
                     let (param_tys, ret_ty, has_rest) =
                         (params.clone(), (**ret).clone(), *has_rest);
@@ -8150,7 +8191,7 @@ impl Inferer<'_> {
         let base_expr = self.ast.try_expr(base).map_err(super::arena_failure)?;
         let (subject, help) = match self.dotted_path(base)? {
             Some(written) => {
-                let help = match namespace_fix_forms(&written, first) {
+                let help = match namespace_fix_forms(&written, first)? {
                     Some((fixed, wrote)) => {
                         format!("a namespace is never null — write `{fixed}`, not `{wrote}`")
                     }
@@ -8225,8 +8266,12 @@ impl Inferer<'_> {
     /// `unknown` gets the same "narrow first" help the non-chain field-access
     /// path gives, since narrowing away `null` — whether by `?.` or a guard —
     /// leaves the dynamic type just as unknown.
-    fn reject_undispatchable_chain_receiver(&mut self, receiver_ty: &Type, part: &ChainPart) {
-        let ChainStepPhrasing { action, span, .. } = chain_step_phrasing(part);
+    fn reject_undispatchable_chain_receiver(
+        &mut self,
+        receiver_ty: &Type,
+        part: &ChainPart,
+    ) -> Result<(), CompilerFailure> {
+        let ChainStepPhrasing { action, span, .. } = chain_step_phrasing(part)?;
         if matches!(receiver_ty.peel(), Type::Unknown) {
             self.error_with_help(
                 span,
@@ -8238,7 +8283,7 @@ impl Inferer<'_> {
                         .to_string(),
                 ],
             );
-            return;
+            return Ok(());
         }
         self.error(
             span,
@@ -8247,6 +8292,7 @@ impl Inferer<'_> {
                  null, so give it a type that can hold a value"
             ),
         );
+        Ok(())
     }
 
     /// Report a plain `.`/`[]`/`()` step whose receiver can be null. The earlier
@@ -8262,12 +8308,12 @@ impl Inferer<'_> {
         receiver_ty: &Type,
         receiver_path: Option<&super::narrowing::ReferencePath>,
         part: &ChainPart,
-    ) {
+    ) -> Result<(), CompilerFailure> {
         let ChainStepPhrasing {
             action,
             optional_form,
             span,
-        } = chain_step_phrasing(part);
+        } = chain_step_phrasing(part)?;
         let mut help = vec![format!(
             "continue the chain with `{optional_form}`, or assert non-null with `!`"
         )];
@@ -8284,6 +8330,7 @@ impl Inferer<'_> {
             help,
             notes,
         );
+        Ok(())
     }
 
     /// A chain step named a method but no `Call` consumed it. Left admitted,
@@ -9392,9 +9439,9 @@ fn unsupported_cast_target_reason(
         Type::Never => Some("`never` has no runtime values"),
         Type::Void => Some("`void` is not a value type"),
         Type::Error => None,
-        Type::Alias { .. } | Type::Refined { .. } | Type::Readonly(_) => {
-            unreachable!("peel guarantees no alias here")
-        }
+        Type::Alias { ty: underlying, .. }
+        | Type::Refined { ty: underlying, .. }
+        | Type::Readonly(underlying) => unsupported_cast_target_reason(underlying, types, seen),
     }
 }
 
@@ -11711,5 +11758,30 @@ function main(): void { if (result < 10) { } }
             1,
             "exactly the original unresolved-type diagnostic: {diags:?}",
         );
+    }
+}
+
+#[cfg(test)]
+mod invariant_tests {
+    use super::*;
+
+    #[test]
+    fn mismatched_template_and_nonnull_dispatch_return_internal_errors() {
+        super::super::test_support::with_inferer(|tc| {
+            let span = Span::at(crate::FileId(0));
+            assert!(matches!(
+                tc.lower_template_literal(Vec::new(), Vec::new(), span),
+                Err(CompilerFailure::Internal { .. })
+            ));
+            let part = ChainPart::NonNull { span };
+            assert!(matches!(
+                chain_step_phrasing(&part),
+                Err(CompilerFailure::Internal { .. })
+            ));
+            assert!(matches!(
+                namespace_fix_forms("Math", &part),
+                Err(CompilerFailure::Internal { .. })
+            ));
+        });
     }
 }

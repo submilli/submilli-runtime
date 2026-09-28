@@ -66,12 +66,18 @@ fn path_string(root: &Ident, segments: &[Ident]) -> String {
 }
 
 impl<'a> Inferer<'a> {
-    fn resolve_namespace_chain(&self, root: &Ident, segments: &[Ident]) -> ChainResolution {
+    fn resolve_namespace_chain(
+        &self,
+        root: &Ident,
+        segments: &[Ident],
+    ) -> Result<ChainResolution, CompilerFailure> {
         let ns = self
             .namespace_symbols
             .get(&root.name)
             .cloned()
-            .expect("caller checked namespace_symbols.contains_key");
+            .ok_or_else(|| {
+                super::inference_failure("missing namespace root metadata").with_span(root.span)
+            })?;
         let mut current = ns;
         for (idx, seg) in segments.iter().enumerate() {
             if let Some(next) = current.child(&seg.name) {
@@ -79,25 +85,25 @@ impl<'a> Inferer<'a> {
                 continue;
             }
             if let Some(value) = current.value(&seg.name) {
-                return ChainResolution::Value {
+                return Ok(ChainResolution::Value {
                     value: value.clone(),
                     index: idx,
-                };
+                });
             }
             if let Some(type_sym) = current.type_symbol(&seg.name) {
-                return ChainResolution::Type {
+                return Ok(ChainResolution::Type {
                     type_sym: type_sym.clone(),
                     index: idx,
-                };
+                });
             }
-            return ChainResolution::NotFound {
+            return Ok(ChainResolution::NotFound {
                 index: idx,
                 parent_exports: current.exports(),
-            };
+            });
         }
-        ChainResolution::Namespace {
+        Ok(ChainResolution::Namespace {
             mangled_prefix: current.mangled_prefix(),
-        }
+        })
     }
 
     pub(super) fn infer_namespace_symbol_call(
@@ -109,8 +115,11 @@ impl<'a> Inferer<'a> {
         expected: Option<&Type>,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
-        debug_assert!(!segments.is_empty(), "namespace call needs ≥1 segment");
-        let resolved = self.resolve_namespace_chain(&root, &segments);
+        let method = segments
+            .last()
+            .ok_or_else(|| super::inference_failure("empty namespace call path").with_span(span))?
+            .clone();
+        let resolved = self.resolve_namespace_chain(&root, &segments)?;
         Ok(match resolved {
             ChainResolution::Value { value, index } => {
                 let remaining = segments.len() - index - 1;
@@ -119,7 +128,6 @@ impl<'a> Inferer<'a> {
                         &root, &segments, value, type_args, args, expected, span,
                     )?
                 } else if remaining == 1 {
-                    let method = segments.last().unwrap().clone();
                     self.dispatch_constructor_static_call(
                         &root, &segments, index, value, method, type_args, args, expected, span,
                     )?
@@ -154,7 +162,10 @@ impl<'a> Inferer<'a> {
                     .namespace_symbols
                     .get(&root.name)
                     .map(super::module_symbols::NamespaceSymbolSet::mangled_prefix)
-                    .expect("caller checked namespace_symbols.contains_key");
+                    .ok_or_else(|| {
+                        super::inference_failure("missing namespace root metadata")
+                            .with_span(root.span)
+                    })?;
                 self.namespace_member_not_found_error(
                     &root,
                     &segments,
@@ -172,13 +183,13 @@ impl<'a> Inferer<'a> {
         root: Ident,
         segments: Vec<Ident>,
         span: Span,
-    ) -> (TypedExprKind, Type) {
-        debug_assert!(
-            !segments.is_empty(),
-            "namespace field access needs ≥1 segment"
-        );
-        let resolved = self.resolve_namespace_chain(&root, &segments);
-        match resolved {
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let member = segments
+            .last()
+            .ok_or_else(|| super::inference_failure("empty namespace field path").with_span(span))?
+            .clone();
+        let resolved = self.resolve_namespace_chain(&root, &segments)?;
+        Ok(match resolved {
             ChainResolution::Value { value, index } => {
                 let remaining = segments.len() - index - 1;
                 if remaining == 0 {
@@ -186,7 +197,7 @@ impl<'a> Inferer<'a> {
                         ValueKind::Const { ty, .. } | ValueKind::Let { ty, .. } => (
                             TypedExprKind::GlobalRef {
                                 mangled: value.mangled_name.clone(),
-                                name: segments.last().unwrap().clone(),
+                                name: member.clone(),
                             },
                             ty.clone(),
                         ),
@@ -199,7 +210,7 @@ impl<'a> Inferer<'a> {
                                 ),
                                 vec![format!("call it directly: `{}(…)`", full)],
                             );
-                            error_local_ref(segments.last().unwrap().clone())
+                            error_local_ref(member.clone())
                         }
                     }
                 } else if remaining == 1
@@ -213,7 +224,7 @@ impl<'a> Inferer<'a> {
                         format!("namespaced method `{full}` is only valid in call position",),
                         vec![format!("call it directly: `{}(…)`", full)],
                     );
-                    error_local_ref(segments.last().unwrap().clone())
+                    error_local_ref(member.clone())
                 }
             }
             ChainResolution::Namespace { .. } => {
@@ -226,12 +237,12 @@ impl<'a> Inferer<'a> {
                         full, full,
                     )],
                 );
-                error_local_ref(segments.last().unwrap().clone())
+                error_local_ref(member.clone())
             }
             ChainResolution::Type { .. } => {
                 let full = path_string(&root, &segments);
                 self.error(span, format!("type `{full}` is not a value"));
-                error_local_ref(segments.last().unwrap().clone())
+                error_local_ref(member.clone())
             }
             ChainResolution::NotFound {
                 index,
@@ -244,9 +255,9 @@ impl<'a> Inferer<'a> {
                     parent_exports,
                     span,
                 );
-                error_local_ref(segments.last().unwrap().clone())
+                error_local_ref(member.clone())
             }
-        }
+        })
     }
 
     pub(super) fn reject_bare_namespace_symbol(
@@ -452,7 +463,7 @@ impl<'a> Inferer<'a> {
             ValueKind::Const { ty, .. } | ValueKind::Let { ty, .. } => ty,
             ValueKind::Function { .. } => return None,
         };
-        let method = segments.last().unwrap();
+        let method = segments.last()?;
         let (sig, bindings, iface_mangled, dispatch) = self.find_method(recv_ty, &method.name)?;
         if dispatch != crate::Dispatch::Static || !bindings.is_empty() || !sig.generics.is_empty() {
             return None;
@@ -552,4 +563,49 @@ fn error_local_ref(ident: Ident) -> (TypedExprKind, Type) {
         },
         Type::Error,
     )
+}
+
+#[cfg(test)]
+mod invariant_tests {
+    use super::*;
+    use crate::compiler_error::CompilerStage;
+
+    #[test]
+    fn empty_namespace_paths_and_missing_roots_are_internal_errors() {
+        super::super::test_support::with_inferer(|tc| {
+            let span = Span::at(crate::FileId(0));
+            let root = Ident {
+                name: "Math".into(),
+                span,
+            };
+            let failures = [
+                tc.infer_namespace_symbol_call(
+                    root.clone(),
+                    Vec::new(),
+                    None,
+                    Vec::new(),
+                    None,
+                    span,
+                )
+                .unwrap_err(),
+                tc.infer_namespace_symbol_field_access(root.clone(), Vec::new(), span)
+                    .unwrap_err(),
+            ];
+            for error in failures {
+                assert!(matches!(
+                    error,
+                    CompilerFailure::Internal {
+                        stage: CompilerStage::Infer,
+                        span: Some(_),
+                        ..
+                    }
+                ));
+            }
+            tc.namespace_symbols.clear();
+            assert!(matches!(
+                tc.resolve_namespace_chain(&root, &[]),
+                Err(CompilerFailure::Internal { .. })
+            ));
+        });
+    }
 }

@@ -1,5 +1,6 @@
 //! Predicate-environment extraction for the narrowing engine.
 
+use crate::compiler_error::CompilerFailure;
 use crate::{ExprId, Ident, Span, Type, TypedExpr};
 
 use super::assignable::{literal_to_type, literal_value_of};
@@ -458,7 +459,7 @@ impl<'a> Inferer<'a> {
         self.forget_later_writes(&mut lhs_true, lhs, rhs)?;
         self.push_narrow_frame(lhs_true.clone());
         let (rhs_true, rhs_false) = self.predicate_envs_unfiltered(rhs)?;
-        self.pop_narrow_frame();
+        self.pop_narrow_frame()?;
         let mut rhs_failure = lhs_true.clone();
         rhs_failure.extend(rhs_false);
         let (false_env, _) = narrowing::union_envs(
@@ -486,7 +487,7 @@ impl<'a> Inferer<'a> {
         self.forget_later_writes(&mut lhs_false, lhs, rhs)?;
         self.push_narrow_frame(lhs_false.clone());
         let (rhs_true, rhs_false) = self.predicate_envs_unfiltered(rhs)?;
-        self.pop_narrow_frame();
+        self.pop_narrow_frame()?;
         let mut rhs_success = lhs_false.clone();
         rhs_success.extend(rhs_true);
         let (true_env, _) = narrowing::union_envs(
@@ -595,7 +596,7 @@ impl<'a> Inferer<'a> {
                     narrowed_ty: Type::Null,
                     facts: narrowing::TypeFacts::EQ_NULL,
                     excluded_literals: std::collections::BTreeSet::new(),
-                    binding: self.mint_narrow_binding(path_span),
+                    binding: self.mint_narrow_binding(path_span)?,
                     source: source_eq,
                 },
             );
@@ -610,7 +611,7 @@ impl<'a> Inferer<'a> {
                 },
                 facts: narrowing::TypeFacts::NE_NULL,
                 excluded_literals: std::collections::BTreeSet::new(),
-                binding: self.mint_narrow_binding(path_span),
+                binding: self.mint_narrow_binding(path_span)?,
                 source: source_neq,
             },
         );
@@ -618,7 +619,11 @@ impl<'a> Inferer<'a> {
         Ok(match op {
             BinOp::Eq => (eq_env, neq_env),
             BinOp::NotEq => (neq_env, eq_env),
-            _ => unreachable!("matched Eq | NotEq above"),
+            _ => {
+                return Err(super::inference_failure(
+                    "non-equality operator reached predicate narrowing",
+                ));
+            }
         })
     }
 
@@ -749,7 +754,7 @@ impl<'a> Inferer<'a> {
                 narrowed_ty: true_ty.clone(),
                 facts: narrowing::TypeFacts::EMPTY,
                 excluded_literals: std::collections::BTreeSet::new(),
-                binding: self.mint_narrow_binding(path_span),
+                binding: self.mint_narrow_binding(path_span)?,
                 source: source_true,
             },
         );
@@ -760,7 +765,7 @@ impl<'a> Inferer<'a> {
                 narrowed_ty: false_ty,
                 facts: narrowing::TypeFacts::EMPTY,
                 excluded_literals: std::collections::BTreeSet::new(),
-                binding: self.mint_narrow_binding(path_span),
+                binding: self.mint_narrow_binding(path_span)?,
                 source: source_false,
             },
         );
@@ -821,7 +826,7 @@ impl<'a> Inferer<'a> {
                 narrowed_ty,
                 facts: narrowing::TypeFacts::EMPTY,
                 excluded_literals: std::collections::BTreeSet::new(),
-                binding: self.mint_narrow_binding(span),
+                binding: self.mint_narrow_binding(span)?,
                 source,
             },
         );
@@ -1020,7 +1025,10 @@ impl<'a> Inferer<'a> {
         let Some(matching_idx) = table_lookup else {
             return Ok(None);
         };
-        let matched_variant = members[matching_idx.0 as usize].clone();
+        let matched_variant = members
+            .get(matching_idx.0 as usize)
+            .ok_or_else(|| super::inference_failure("invalid discriminant variant index"))?
+            .clone();
         let remaining: Vec<Type> = members
             .iter()
             .enumerate()
@@ -1032,7 +1040,11 @@ impl<'a> Inferer<'a> {
         let (true_root_ty, false_root_ty) = match op {
             BinOp::Eq => (matched_variant, remaining_ty),
             BinOp::NotEq => (remaining_ty, matched_variant),
-            _ => unreachable!("matched Eq | NotEq at the predicate_envs dispatch"),
+            _ => {
+                return Err(super::inference_failure(
+                    "non-equality operator reached predicate narrowing",
+                ));
+            }
         };
 
         let true_root_ty = narrowing::with_source_refinement(&root_ty, true_root_ty);
@@ -1061,7 +1073,7 @@ impl<'a> Inferer<'a> {
                 narrowed_ty: true_root_ty,
                 facts: narrowing::TypeFacts::EMPTY,
                 excluded_literals: std::collections::BTreeSet::new(),
-                binding: self.mint_narrow_binding(root_span),
+                binding: self.mint_narrow_binding(root_span)?,
                 source: source_true,
             },
         );
@@ -1071,7 +1083,7 @@ impl<'a> Inferer<'a> {
                 narrowed_ty: false_root_ty,
                 facts: narrowing::TypeFacts::EMPTY,
                 excluded_literals: std::collections::BTreeSet::new(),
-                binding: self.mint_narrow_binding(root_span),
+                binding: self.mint_narrow_binding(root_span)?,
                 source: source_false,
             },
         );
@@ -1143,7 +1155,11 @@ impl<'a> Inferer<'a> {
         let (true_ty, false_ty) = match op {
             BinOp::Eq => (matched_ty, remaining_ty),
             BinOp::NotEq => (remaining_ty, matched_ty),
-            _ => unreachable!(),
+            _ => {
+                return Err(super::inference_failure(
+                    "non-equality operator reached predicate narrowing",
+                ));
+            }
         };
 
         let true_ty = narrowing::with_source_refinement(&path_ty, true_ty);
@@ -1179,7 +1195,7 @@ impl<'a> Inferer<'a> {
                 narrowed_ty: true_ty,
                 facts: narrowing::TypeFacts::EMPTY,
                 excluded_literals: true_excluded,
-                binding: self.mint_narrow_binding(path_span),
+                binding: self.mint_narrow_binding(path_span)?,
                 source: source_true,
             },
         );
@@ -1189,7 +1205,7 @@ impl<'a> Inferer<'a> {
                 narrowed_ty: false_ty,
                 facts: narrowing::TypeFacts::EMPTY,
                 excluded_literals: false_excluded,
-                binding: self.mint_narrow_binding(path_span),
+                binding: self.mint_narrow_binding(path_span)?,
                 source: source_false,
             },
         );
@@ -1296,7 +1312,7 @@ impl<'a> Inferer<'a> {
                 narrowed_ty: true_root_ty,
                 facts: narrowing::TypeFacts::EMPTY,
                 excluded_literals: std::collections::BTreeSet::new(),
-                binding: self.mint_narrow_binding(receiver_span),
+                binding: self.mint_narrow_binding(receiver_span)?,
                 source: source_true,
             },
         );
@@ -1306,7 +1322,7 @@ impl<'a> Inferer<'a> {
                 narrowed_ty: false_root_ty,
                 facts: narrowing::TypeFacts::EMPTY,
                 excluded_literals: std::collections::BTreeSet::new(),
-                binding: self.mint_narrow_binding(receiver_span),
+                binding: self.mint_narrow_binding(receiver_span)?,
                 source: source_false,
             },
         );
@@ -1368,7 +1384,7 @@ impl<'a> Inferer<'a> {
                 narrowed_ty: true_ty,
                 facts: true_facts,
                 excluded_literals: std::collections::BTreeSet::new(),
-                binding: self.mint_narrow_binding(value_span),
+                binding: self.mint_narrow_binding(value_span)?,
                 source: source_true,
             },
         );
@@ -1378,7 +1394,7 @@ impl<'a> Inferer<'a> {
                 narrowed_ty: false_ty,
                 facts: false_facts,
                 excluded_literals: std::collections::BTreeSet::new(),
-                binding: self.mint_narrow_binding(value_span),
+                binding: self.mint_narrow_binding(value_span)?,
                 source: source_false,
             },
         );
@@ -1472,7 +1488,7 @@ impl<'a> Inferer<'a> {
                     narrowed_ty: ty,
                     facts,
                     excluded_literals: std::collections::BTreeSet::new(),
-                    binding: self.mint_narrow_binding(span),
+                    binding: self.mint_narrow_binding(span)?,
                     source,
                 },
             );
@@ -1481,13 +1497,21 @@ impl<'a> Inferer<'a> {
     }
 
     /// Leading `#` prevents collision with user identifiers (first-char rule: `[A-Za-z_$]`).
-    pub(super) fn mint_narrow_binding(&mut self, span: Span) -> Ident {
+    pub(super) fn mint_narrow_binding(&mut self, span: Span) -> Result<Ident, CompilerFailure> {
         let n = self.next_narrow_counter;
-        self.next_narrow_counter += 1;
-        Ident {
+        self.next_narrow_counter =
+            self.next_narrow_counter
+                .checked_add(1)
+                .ok_or_else(|| CompilerFailure::Limit {
+                    stage: crate::compiler_error::CompilerStage::Infer,
+                    span: Some(span),
+                    message: "narrowing binding capacity exceeded".into(),
+                    help: Vec::new(),
+                })?;
+        Ok(Ident {
             name: format!("#narrow_{n}"),
             span,
-        }
+        })
     }
 
     /// Builds an expression for `path` that bypasses chain-shadow `Narrowed` wrappers.

@@ -412,8 +412,7 @@ impl<'a> Unifier<'a> {
                         got: arg_ty.clone(),
                     });
                 }
-                for (k, va) in a {
-                    let vb = b.get(k).expect("keys equal-set above");
+                for (va, vb) in a.values().zip(b.values()) {
                     if va.optional != vb.optional {
                         return Err(UnifyError::Mismatch {
                             expected: param_ty.clone(),
