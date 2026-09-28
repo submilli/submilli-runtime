@@ -26,7 +26,10 @@ pub struct CodegenAnalysis {
 }
 
 impl CodegenAnalysis {
-    pub fn collect(ta: &TypedAst, dependencies: &[&crate::PackageDeclaration]) -> Self {
+    pub fn collect(
+        ta: &TypedAst,
+        dependencies: &[&crate::PackageDeclaration],
+    ) -> Result<Self, crate::compiler_error::CompilerFailure> {
         let mut analysis = Self {
             string_pool: StringPool::default(),
             bigint_pool: BigIntPool::default(),
@@ -97,16 +100,16 @@ impl CodegenAnalysis {
                 analysis.visit_type(&p.ty);
             }
             analysis.visit_type(&f.return_type);
-            analysis.walk_stmt(ta, f.body);
+            analysis.walk_stmt(ta, f.body)?;
         }
         for &stmt_id in &ta.top_level_statements {
-            analysis.walk_stmt(ta, stmt_id);
+            analysis.walk_stmt(ta, stmt_id)?;
         }
         for stmt_id in ta.class_body_roots() {
-            analysis.walk_stmt(ta, stmt_id);
+            analysis.walk_stmt(ta, stmt_id)?;
         }
         for expr_id in ta.class_field_initializers() {
-            analysis.walk_expr(ta, expr_id);
+            analysis.walk_expr(ta, expr_id)?;
         }
         if !ta.runtime_class_fields.is_empty() {
             analysis
@@ -132,7 +135,7 @@ impl CodegenAnalysis {
                 .note_value(crate::mangle::prelude(name));
         }
 
-        analysis
+        Ok(analysis)
     }
 
     /// A narrowed field's read guard throws a constant message and, when its test
@@ -287,26 +290,30 @@ impl CodegenAnalysis {
         }
     }
 
-    fn walk_stmt(&mut self, ta: &TypedAst, id: StmtId) {
-        self.note_stmt_pre(ta, id);
-        match &ta.stmt(id).kind {
+    fn walk_stmt(
+        &mut self,
+        ta: &TypedAst,
+        id: StmtId,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        self.note_stmt_pre(ta, id)?;
+        match &ta.try_stmt(id).map_err(crate::codegen::arena_failure)?.kind {
             TypedStmtKind::Let { value, .. } | TypedStmtKind::Const { value, .. } => {
-                self.walk_expr(ta, *value);
+                self.walk_expr(ta, *value)?;
             }
             TypedStmtKind::If {
                 condition,
                 then_block,
                 else_block,
             } => {
-                self.walk_expr(ta, *condition);
-                self.walk_stmt(ta, *then_block);
+                self.walk_expr(ta, *condition)?;
+                self.walk_stmt(ta, *then_block)?;
                 if let Some(else_block) = else_block {
-                    self.walk_stmt(ta, *else_block);
+                    self.walk_stmt(ta, *else_block)?;
                 }
             }
             TypedStmtKind::While { condition, body } => {
-                self.walk_expr(ta, *condition);
-                self.walk_stmt(ta, *body);
+                self.walk_expr(ta, *condition)?;
+                self.walk_stmt(ta, *body)?;
             }
             TypedStmtKind::For {
                 init,
@@ -315,23 +322,23 @@ impl CodegenAnalysis {
                 body,
             } => {
                 if let Some(init) = init {
-                    self.walk_stmt(ta, *init);
+                    self.walk_stmt(ta, *init)?;
                 }
                 if let Some(condition) = condition {
-                    self.walk_expr(ta, *condition);
+                    self.walk_expr(ta, *condition)?;
                 }
                 if let Some(update) = update {
-                    self.walk_stmt(ta, *update);
+                    self.walk_stmt(ta, *update)?;
                 }
-                self.walk_stmt(ta, *body);
+                self.walk_stmt(ta, *body)?;
             }
             TypedStmtKind::ForOf { iter, body, .. } => {
-                self.walk_expr(ta, *iter);
-                self.walk_stmt(ta, *body);
+                self.walk_expr(ta, *iter)?;
+                self.walk_stmt(ta, *body)?;
             }
             TypedStmtKind::DoWhile { body, condition } => {
-                self.walk_stmt(ta, *body);
-                self.walk_expr(ta, *condition);
+                self.walk_stmt(ta, *body)?;
+                self.walk_expr(ta, *condition)?;
             }
             TypedStmtKind::Switch {
                 discriminant,
@@ -339,33 +346,33 @@ impl CodegenAnalysis {
                 default,
                 ..
             } => {
-                self.walk_expr(ta, *discriminant);
+                self.walk_expr(ta, *discriminant)?;
                 for case in cases {
-                    self.walk_stmt(ta, case.body);
+                    self.walk_stmt(ta, case.body)?;
                 }
                 if let Some(default) = default {
-                    self.walk_stmt(ta, *default);
+                    self.walk_stmt(ta, *default)?;
                 }
             }
             TypedStmtKind::Break | TypedStmtKind::Continue | TypedStmtKind::ReboxLocal { .. } => {}
             TypedStmtKind::Return(value) => {
                 if let Some(value) = value {
-                    self.walk_expr(ta, *value);
+                    self.walk_expr(ta, *value)?;
                 }
             }
-            TypedStmtKind::Expr(expr) => self.walk_expr(ta, *expr),
+            TypedStmtKind::Expr(expr) => self.walk_expr(ta, *expr)?,
             TypedStmtKind::Block(stmts) => {
                 for &stmt in stmts {
-                    self.walk_stmt(ta, stmt);
+                    self.walk_stmt(ta, stmt)?;
                 }
             }
             TypedStmtKind::AssignLocal { value, .. }
-            | TypedStmtKind::AssignGlobal { value, .. } => self.walk_expr(ta, *value),
+            | TypedStmtKind::AssignGlobal { value, .. } => self.walk_expr(ta, *value)?,
             TypedStmtKind::AssignField {
                 receiver, value, ..
             } => {
-                self.walk_expr(ta, *receiver);
-                self.walk_expr(ta, *value);
+                self.walk_expr(ta, *receiver)?;
+                self.walk_expr(ta, *value)?;
             }
             TypedStmtKind::AssignIndex {
                 receiver,
@@ -373,48 +380,53 @@ impl CodegenAnalysis {
                 value,
                 ..
             } => {
-                self.walk_expr(ta, *receiver);
-                self.walk_expr(ta, *index);
-                self.walk_expr(ta, *value);
+                self.walk_expr(ta, *receiver)?;
+                self.walk_expr(ta, *index)?;
+                self.walk_expr(ta, *value)?;
             }
             TypedStmtKind::NarrowRegion { source, body, .. } => {
-                self.walk_expr(ta, *source);
-                self.walk_stmt(ta, *body);
+                self.walk_expr(ta, *source)?;
+                self.walk_stmt(ta, *body)?;
             }
-            TypedStmtKind::Throw { value } => self.walk_expr(ta, *value),
+            TypedStmtKind::Throw { value } => self.walk_expr(ta, *value)?,
             TypedStmtKind::Try {
                 body,
                 catches,
                 finally,
             } => {
-                self.walk_stmt(ta, *body);
+                self.walk_stmt(ta, *body)?;
                 for clause in catches {
-                    self.walk_stmt(ta, clause.body);
+                    self.walk_stmt(ta, clause.body)?;
                 }
                 if let Some(finally) = finally {
-                    self.walk_stmt(ta, *finally);
+                    self.walk_stmt(ta, *finally)?;
                 }
             }
         }
-        self.note_stmt_post(ta, id);
+        self.note_stmt_post(ta, id)?;
+        Ok(())
     }
 
-    fn walk_expr(&mut self, ta: &TypedAst, id: ExprId) {
-        self.note_expr_pre(ta, id);
-        match &ta.expr(id).kind {
+    fn walk_expr(
+        &mut self,
+        ta: &TypedAst,
+        id: ExprId,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        self.note_expr_pre(ta, id)?;
+        let _: () = match &ta.try_expr(id).map_err(crate::codegen::arena_failure)?.kind {
             TypedExprKind::Call { args, .. }
             | TypedExprKind::McpCall { args, .. }
             | TypedExprKind::SuperCtorCall { args, .. }
             | TypedExprKind::SuperMethodCall { args, .. }
             | TypedExprKind::IntrinsicCall { args, .. } => {
                 for &arg in args {
-                    self.walk_expr(ta, arg);
+                    self.walk_expr(ta, arg)?;
                 }
             }
             TypedExprKind::CallClosure { callee, args } => {
-                self.walk_expr(ta, *callee);
+                self.walk_expr(ta, *callee)?;
                 for &arg in args {
-                    self.walk_expr(ta, arg);
+                    self.walk_expr(ta, arg)?;
                 }
             }
             TypedExprKind::GenericCall {
@@ -426,90 +438,92 @@ impl CodegenAnalysis {
                     self.visit_type(ty);
                 }
                 for arg in args {
-                    self.walk_expr(ta, arg.expr);
+                    self.walk_expr(ta, arg.expr)?;
                 }
             }
             TypedExprKind::Closure { body, .. } => match *body {
-                ClosureBody::Expr(expr) => self.walk_expr(ta, expr),
-                ClosureBody::Block(stmt) => self.walk_stmt(ta, stmt),
+                ClosureBody::Expr(expr) => self.walk_expr(ta, expr)?,
+                ClosureBody::Block(stmt) => self.walk_stmt(ta, stmt)?,
             },
             TypedExprKind::Binary { lhs, rhs, .. } => {
-                self.walk_expr(ta, *lhs);
-                self.walk_expr(ta, *rhs);
+                self.walk_expr(ta, *lhs)?;
+                self.walk_expr(ta, *rhs)?;
             }
             TypedExprKind::EffectThen { effect, result } => {
-                self.walk_expr(ta, *effect);
-                self.walk_expr(ta, *result);
+                self.walk_expr(ta, *effect)?;
+                self.walk_expr(ta, *result)?;
             }
             TypedExprKind::Sequence { stmts, result } => {
                 for &stmt in stmts {
-                    self.walk_stmt(ta, stmt);
+                    self.walk_stmt(ta, stmt)?;
                 }
-                self.walk_expr(ta, *result);
+                self.walk_expr(ta, *result)?;
             }
             TypedExprKind::Unary { operand, .. }
             | TypedExprKind::TypeofTag { value: operand, .. }
             | TypedExprKind::InstanceOf { value: operand, .. }
-            | TypedExprKind::NonNullAssert { value: operand } => self.walk_expr(ta, *operand),
+            | TypedExprKind::NonNullAssert { value: operand } => {
+                self.walk_expr(ta, *operand)?;
+            }
             TypedExprKind::MethodCall { receiver, args, .. } => {
-                self.walk_expr(ta, *receiver);
+                self.walk_expr(ta, *receiver)?;
                 for &arg in args {
-                    self.walk_expr(ta, arg);
+                    self.walk_expr(ta, arg)?;
                 }
             }
             TypedExprKind::GenericMethodCall { receiver, args, .. } => {
-                self.walk_expr(ta, *receiver);
+                self.walk_expr(ta, *receiver)?;
                 for arg in args {
-                    self.walk_expr(ta, arg.expr);
+                    self.walk_expr(ta, arg.expr)?;
                 }
             }
             TypedExprKind::ObjectLiteral { members, .. } => {
                 for member in members {
                     for expression in member.expressions() {
-                        self.walk_expr(ta, expression);
+                        self.walk_expr(ta, expression)?;
                     }
                 }
             }
             TypedExprKind::ArrayLiteral { elements, .. } => {
                 for elem in elements {
-                    self.walk_expr(ta, elem.expr_id());
+                    self.walk_expr(ta, elem.expr_id())?;
                 }
             }
             TypedExprKind::TupleLiteral { elements, .. } => {
                 for &elem in elements {
-                    self.walk_expr(ta, elem);
+                    self.walk_expr(ta, elem)?;
                 }
             }
             TypedExprKind::FieldAccess { receiver, .. }
             | TypedExprKind::InterfacePropertyAccess { receiver, .. } => {
-                self.walk_expr(ta, *receiver);
+                self.walk_expr(ta, *receiver)?;
             }
             TypedExprKind::IndexAccess { receiver, index } => {
-                self.walk_expr(ta, *receiver);
-                self.walk_expr(ta, *index);
+                self.walk_expr(ta, *receiver)?;
+                self.walk_expr(ta, *index)?;
             }
             TypedExprKind::Narrowed { source, inner, .. } => {
-                self.walk_expr(ta, *source);
-                self.walk_expr(ta, *inner);
+                self.walk_expr(ta, *source)?;
+                self.walk_expr(ta, *inner)?;
             }
             TypedExprKind::Ternary { cond, then_, else_ } => {
-                self.walk_expr(ta, *cond);
-                self.walk_expr(ta, *then_);
-                self.walk_expr(ta, *else_);
+                self.walk_expr(ta, *cond)?;
+                self.walk_expr(ta, *then_)?;
+                self.walk_expr(ta, *else_)?;
             }
             TypedExprKind::NullishCoalesce { lhs, rhs } => {
-                self.walk_expr(ta, *lhs);
-                self.walk_expr(ta, *rhs);
+                self.walk_expr(ta, *lhs)?;
+                self.walk_expr(ta, *rhs)?;
             }
             TypedExprKind::OptionalChain { base, parts } => {
-                self.walk_expr(ta, *base);
+                self.walk_expr(ta, *base)?;
                 for part in parts {
                     match part {
-                        TypedChainPart::Index { idx, .. } => self.walk_expr(ta, *idx),
+                        TypedChainPart::Index { idx, .. } => self.walk_expr(ta, *idx)?,
                         TypedChainPart::Call { args, .. }
                         | TypedChainPart::MethodCall { args, .. } => {
                             for &arg in args {
-                                self.walk_expr(ta, arg);
+                                self.walk_expr(ta, arg)?;
                             }
                         }
                         TypedChainPart::Field { .. }
@@ -519,16 +533,16 @@ impl CodegenAnalysis {
                 }
             }
             TypedExprKind::PostfixUnary { target, .. } => match target {
-                PostfixTarget::Field { receiver, .. } => self.walk_expr(ta, *receiver),
+                PostfixTarget::Field { receiver, .. } => self.walk_expr(ta, *receiver)?,
                 PostfixTarget::Index {
                     receiver, index, ..
                 } => {
-                    self.walk_expr(ta, *receiver);
-                    self.walk_expr(ta, *index);
+                    self.walk_expr(ta, *receiver)?;
+                    self.walk_expr(ta, *index)?;
                 }
                 PostfixTarget::Local { .. } | PostfixTarget::Global { .. } => {}
             },
-            TypedExprKind::Cast { value, .. } => self.walk_expr(ta, *value),
+            TypedExprKind::Cast { value, .. } => self.walk_expr(ta, *value)?,
             TypedExprKind::Number(_)
             | TypedExprKind::BigInt(_)
             | TypedExprKind::String(_)
@@ -542,11 +556,16 @@ impl CodegenAnalysis {
             | TypedExprKind::FunctionRef { .. }
             | TypedExprKind::NumberEnumMember { .. }
             | TypedExprKind::StringEnumMember { .. } => {}
-        }
+        };
+        Ok(())
     }
 
-    fn note_stmt_pre(&mut self, ta: &TypedAst, id: StmtId) {
-        match &ta.stmt(id).kind {
+    fn note_stmt_pre(
+        &mut self,
+        ta: &TypedAst,
+        id: StmtId,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        let _: () = match &ta.try_stmt(id).map_err(crate::codegen::arena_failure)?.kind {
             TypedStmtKind::Let { ty, .. } | TypedStmtKind::Const { ty, .. } => {
                 self.visit_type(ty);
             }
@@ -579,7 +598,8 @@ impl CodegenAnalysis {
             TypedStmtKind::AssignField { receiver, name, .. } => {
                 self.extra_field_names.push(name.name.clone());
                 self.note_shaped_property_access(
-                    ta.source_type(*receiver),
+                    ta.source_type(*receiver)
+                        .map_err(crate::codegen::arena_failure)?,
                     &name.name,
                     AccessorKind::Set,
                 );
@@ -587,7 +607,11 @@ impl CodegenAnalysis {
             TypedStmtKind::AssignIndex {
                 receiver, elem_ty, ..
             } => {
-                if ta.source_type(*receiver).is_structural_object() {
+                if ta
+                    .source_type(*receiver)
+                    .map_err(crate::codegen::arena_failure)?
+                    .is_structural_object()
+                {
                     self.note_record_helpers();
                 }
                 self.visit_type(elem_ty);
@@ -615,11 +639,18 @@ impl CodegenAnalysis {
             | TypedStmtKind::Expr(_)
             | TypedStmtKind::Block(_)
             | TypedStmtKind::Throw { .. } => {}
-        }
+        };
+        Ok(())
     }
 
-    fn note_stmt_post(&mut self, ta: &TypedAst, id: StmtId) {
-        if let TypedStmtKind::Switch { cases, .. } = &ta.stmt(id).kind {
+    fn note_stmt_post(
+        &mut self,
+        ta: &TypedAst,
+        id: StmtId,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        let _: () = if let TypedStmtKind::Switch { cases, .. } =
+            &ta.try_stmt(id).map_err(crate::codegen::arena_failure)?.kind
+        {
             for case in cases {
                 for value in &case.values {
                     match value {
@@ -636,11 +667,16 @@ impl CodegenAnalysis {
                     }
                 }
             }
-        }
+        };
+        Ok(())
     }
 
-    fn note_expr_pre(&mut self, ta: &TypedAst, id: ExprId) {
-        let expr = ta.expr(id);
+    fn note_expr_pre(
+        &mut self,
+        ta: &TypedAst,
+        id: ExprId,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        let expr = ta.try_expr(id).map_err(crate::codegen::arena_failure)?;
         if matches!(
             expr.kind,
             TypedExprKind::IndexAccess { .. }
@@ -655,7 +691,7 @@ impl CodegenAnalysis {
             self.note_record_helpers();
         }
         self.visit_type(&expr.ty);
-        match &expr.kind {
+        let _: () = match &expr.kind {
             TypedExprKind::String(text) => {
                 self.string_pool.record_expr(id, text);
             }
@@ -713,16 +749,23 @@ impl CodegenAnalysis {
                         | BinOp::NullishCoalesce => {}
                     }
                 }
-                if matches!(ta.expr(*lhs).ty.peel(), Type::BigInt)
-                    && matches!(
-                        op,
-                        BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge
-                    )
-                {
+                if matches!(
+                    ta.try_expr(*lhs)
+                        .map_err(crate::codegen::arena_failure)?
+                        .ty
+                        .peel(),
+                    Type::BigInt
+                ) && matches!(
+                    op,
+                    BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge
+                ) {
                     self.dependency_usage.collect_bigint_host_value("cmp");
                 }
                 if matches!(op, BinOp::In)
-                    && let TypedExprKind::String(name) = &ta.expr(*lhs).kind
+                    && let TypedExprKind::String(name) = &ta
+                        .try_expr(*lhs)
+                        .map_err(crate::codegen::arena_failure)?
+                        .kind
                 {
                     self.extra_field_names.push(name.clone());
                     self.extra_field_names
@@ -736,7 +779,11 @@ impl CodegenAnalysis {
                 }
             }
             TypedExprKind::Unary { op, operand } => {
-                let operand_ty = ta.expr(*operand).ty.peel();
+                let operand_ty = ta
+                    .try_expr(*operand)
+                    .map_err(crate::codegen::arena_failure)?
+                    .ty
+                    .peel();
                 if matches!(op, crate::UnOp::Neg) && matches!(operand_ty, Type::BigInt) {
                     self.dependency_usage.collect_bigint_host_value("neg");
                 }
@@ -773,7 +820,14 @@ impl CodegenAnalysis {
                 args,
                 ..
             } => {
-                self.note_method_call(ta.source_type(*receiver), iface, name, args.len(), &expr.ty);
+                self.note_method_call(
+                    ta.source_type(*receiver)
+                        .map_err(crate::codegen::arena_failure)?,
+                    iface,
+                    name,
+                    args.len(),
+                    &expr.ty,
+                );
             }
             TypedExprKind::GenericMethodCall {
                 receiver,
@@ -782,7 +836,14 @@ impl CodegenAnalysis {
                 args,
                 ..
             } => {
-                self.note_method_call(ta.source_type(*receiver), iface, name, args.len(), &expr.ty);
+                self.note_method_call(
+                    ta.source_type(*receiver)
+                        .map_err(crate::codegen::arena_failure)?,
+                    iface,
+                    name,
+                    args.len(),
+                    &expr.ty,
+                );
             }
             TypedExprKind::InterfacePropertyAccess { iface, name, .. } => {
                 self.dependency_usage
@@ -836,7 +897,8 @@ impl CodegenAnalysis {
             TypedExprKind::FieldAccess { receiver, name } => {
                 self.extra_field_names.push(name.name.clone());
                 self.note_shaped_property_access(
-                    ta.source_type(*receiver),
+                    ta.source_type(*receiver)
+                        .map_err(crate::codegen::arena_failure)?,
                     &name.name,
                     AccessorKind::Get,
                 );
@@ -873,7 +935,7 @@ impl CodegenAnalysis {
                 self.visit_type(&cast_info.to_ty);
             }
             TypedExprKind::OptionalChain { base, parts } => {
-                self.note_chain_parts(ta, id, *base, parts);
+                self.note_chain_parts(ta, id, *base, parts)?;
             }
             TypedExprKind::PostfixUnary { target, .. } => match target {
                 PostfixTarget::Local { .. } => {
@@ -885,7 +947,9 @@ impl CodegenAnalysis {
                 }
                 PostfixTarget::Field { receiver, name, .. } => {
                     self.note_postfix_target(&expr.ty);
-                    let receiver_ty = ta.source_type(*receiver);
+                    let receiver_ty = ta
+                        .source_type(*receiver)
+                        .map_err(crate::codegen::arena_failure)?;
                     self.note_shaped_property_access(receiver_ty, &name.name, AccessorKind::Get);
                     self.note_shaped_property_access(receiver_ty, &name.name, AccessorKind::Set);
                 }
@@ -918,8 +982,10 @@ impl CodegenAnalysis {
             TypedExprKind::CallClosure { callee, .. } => {
                 self.dependency_usage
                     .note_value(crate::mangle::prelude("__value_invoke_defaults"));
-                self.string_pool
-                    .intern_text(&cast_check::error_prefix(ta.source_type(*callee)));
+                self.string_pool.intern_text(&cast_check::error_prefix(
+                    ta.source_type(*callee)
+                        .map_err(crate::codegen::arena_failure)?,
+                ));
                 for tag in cast_check::TYPE_TAG_STRINGS {
                     self.string_pool.intern_text(tag);
                 }
@@ -942,7 +1008,8 @@ impl CodegenAnalysis {
             | TypedExprKind::TypeofTag { .. }
             | TypedExprKind::Ternary { .. }
             | TypedExprKind::NullishCoalesce { .. } => {}
-        }
+        };
+        Ok(())
     }
 
     /// A method call notes its member for imports and, when it dispatches
@@ -994,9 +1061,11 @@ impl CodegenAnalysis {
         id: ExprId,
         base: ExprId,
         parts: &[TypedChainPart],
-    ) {
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         let source_types = ta.runtime_chain_types.get(&id);
-        let mut receiver_ty = ta.source_type(base);
+        let mut receiver_ty = ta
+            .source_type(base)
+            .map_err(crate::codegen::arena_failure)?;
         for (index, part) in parts.iter().enumerate() {
             if let TypedChainPart::MethodCall { iface, name, .. }
             | TypedChainPart::InterfaceProperty { iface, name, .. } = part
@@ -1073,6 +1142,7 @@ impl CodegenAnalysis {
             }
             receiver_ty = source_types.map_or_else(|| part.result_ty(), |types| &types[index + 1]);
         }
+        Ok(())
     }
 
     /// A property access on an `$ObjectShape` receiver emits every branch it

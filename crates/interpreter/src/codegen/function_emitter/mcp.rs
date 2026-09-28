@@ -21,14 +21,14 @@ pub(super) fn emit_mcp_call(
     server: &str,
     tool: &str,
     args: &[ExprId],
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     // Push the three `(ref $string)` args: server, tool, argsJson. A zero-arg
     // tool sends `{}`; otherwise the args object is serialized via its vtable
     // `toJson` slot.
     emit_inline_const_string(emitter, ctx, server);
     emit_inline_const_string(emitter, ctx, tool);
     if let Some(&arg) = args.first() {
-        emit_expr(emitter, ctx, arg);
+        emit_expr(emitter, ctx, arg)?;
         emit_vtable_dispatch_on_object_stack(emitter, ctx, 1);
     } else {
         emit_inline_const_string(emitter, ctx, "{}");
@@ -44,6 +44,7 @@ pub(super) fn emit_mcp_call(
     emitter.instruction(Instruction::Call(call_idx));
 
     emit_parse_unknown(emitter, ctx);
+    Ok(())
 }
 
 fn emit_parse_unknown(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {

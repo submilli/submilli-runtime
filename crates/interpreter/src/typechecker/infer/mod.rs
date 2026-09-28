@@ -196,7 +196,10 @@ pub fn infer_with_transitive_checked<'a>(
         fatal: Some(fatal),
     })?;
     // The `&tc` borrow has to end before the `&mut tc.typed_ast` assignment.
-    let shapes = shapes::collect(&tc.typed_ast, tc.resolver());
+    let shapes = shapes::collect(&tc.typed_ast, tc.resolver()).map_err(|fatal| CompileError {
+        diagnostics: tc.diagnostics.clone(),
+        fatal: Some(fatal),
+    })?;
     tc.typed_ast.shapes = shapes;
     Ok((tc.typed_ast, tc.diagnostics))
 }
@@ -493,7 +496,13 @@ pub fn infer_package_checked<'a>(
     }
 
     // The `&tc` borrow has to end before the `&mut tc.typed_ast` assignment.
-    let shapes = shapes::collect(&tc.typed_ast, tc.resolver());
+    let shapes = shapes::collect(&tc.typed_ast, tc.resolver()).map_err(|fatal| {
+        CompileError {
+            diagnostics: tc.diagnostics.clone(),
+            fatal: Some(fatal),
+        }
+        .with_prior_diagnostics(&diagnostics)
+    })?;
     tc.typed_ast.shapes = shapes;
     for entry in &root_public_exports {
         if package_declaration.runtime_generics.contains(&entry.target)

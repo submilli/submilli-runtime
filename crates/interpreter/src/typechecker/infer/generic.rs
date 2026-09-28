@@ -10,8 +10,8 @@ use crate::compiler_error::CompilerFailure;
 use std::collections::BTreeMap;
 
 use crate::{
-    ExprId, ExprKind, Ident, MethodSig, Span, StmtId, StmtKind, Type, TypeAnnotation,
-    TypedExprKind, TypedParam, TypedStmt, TypedStmtKind, ValueKind,
+    ExprId, ExprKind, Ident, MethodSig, Span, StmtKind, Type, TypeAnnotation, TypedExprKind,
+    TypedParam, TypedStmt, TypedStmtKind, ValueKind,
 };
 
 use super::Inferer;
@@ -625,13 +625,29 @@ impl Inferer<'_> {
             self.reachable = prev_reachable;
             self.scopes.pop();
             self.pop_body_generics();
-            for i in exprs_before..self.typed_ast.exprs_len() {
-                let id = ExprId(i as u32);
-                erase_generic_params_in_expr(self.typed_ast.expr_mut(id));
+            for id in self
+                .typed_ast
+                .expr_ids()
+                .map_err(crate::typechecker::arena_failure)?
+                .skip(exprs_before)
+            {
+                erase_generic_params_in_expr(
+                    self.typed_ast
+                        .try_expr_mut(id)
+                        .map_err(crate::typechecker::arena_failure)?,
+                );
             }
-            for i in stmts_before..self.typed_ast.stmts_len() {
-                let id = StmtId(i as u32);
-                erase_generic_params_in_stmt(self.typed_ast.stmt_mut(id));
+            for id in self
+                .typed_ast
+                .stmt_ids()
+                .map_err(crate::typechecker::arena_failure)?
+                .skip(stmts_before)
+            {
+                erase_generic_params_in_stmt(
+                    self.typed_ast
+                        .try_stmt_mut(id)
+                        .map_err(crate::typechecker::arena_failure)?,
+                );
             }
             let ret_type = stored_return;
             let mangled_name = self.mangle_top_symbol(&name.name)?;
@@ -686,7 +702,12 @@ impl Inferer<'_> {
             sig.params[1].ty = Type::Null;
         }
 
-        let receiver_ty = self.typed_ast.expr(typed_receiver).ty.clone();
+        let receiver_ty = self
+            .typed_ast
+            .try_expr(typed_receiver)
+            .map_err(crate::typechecker::arena_failure)?
+            .ty
+            .clone();
         let mut sub = TypeParamSubstitution::new();
 
         for (k, v) in interface_bindings {
@@ -801,10 +822,10 @@ impl Inferer<'_> {
                 .record_authored_arguments(span, typed_args.clone());
         }
         if arity_ok {
-            self.fill_omitted_defaults(&sig.params, args.len(), span, &mut typed_args);
+            self.fill_omitted_defaults(&sig.params, args.len(), span, &mut typed_args)?;
         }
         if arity_ok && has_rest {
-            self.pack_rest_tail(fixed_count, rest_elem_ty.clone(), span, &mut typed_args);
+            self.pack_rest_tail(fixed_count, rest_elem_ty.clone(), span, &mut typed_args)?;
         }
 
         let array_from_mapper = iface_mangled == crate::mangle::prelude("ArrayConstructor")
@@ -812,7 +833,16 @@ impl Inferer<'_> {
             && sig.generics.len() == 2;
         let mapper_type = typed_args
             .get(1)
-            .map(|id| self.typed_ast.expr(*id).ty.clone());
+            .map(|id| {
+                Ok::<_, crate::compiler_error::CompilerFailure>(
+                    self.typed_ast
+                        .try_expr(*id)
+                        .map_err(crate::typechecker::arena_failure)?
+                        .ty
+                        .clone(),
+                )
+            })
+            .transpose()?;
         if array_from_mapper
             && mapper_type
                 .as_ref()
@@ -1086,7 +1116,7 @@ impl Inferer<'_> {
                         typed_id,
                         already_reported,
                         &signature_help,
-                    );
+                    )?;
                 }
             }
         }
@@ -1103,9 +1133,13 @@ impl Inferer<'_> {
         arg: ExprId,
         already_reported: bool,
         signature_help: &impl Fn(&mut Self) -> String,
-    ) {
-        let arg_span = self.typed_ast.expr(arg).span;
-        match error {
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        let arg_span = self
+            .typed_ast
+            .try_expr(arg)
+            .map_err(crate::typechecker::arena_failure)?
+            .span;
+        let _: () = match error {
             UnifyError::Conflict { .. } if already_reported => {}
             UnifyError::Conflict { name, prev, new } => self.error(
                 arg_span,
@@ -1115,7 +1149,7 @@ impl Inferer<'_> {
             ),
             UnifyError::Mismatch { expected, got } => {
                 if self.structural_member_unify(sub, param_ty, arg_ty) || already_reported {
-                    return;
+                    return Ok(());
                 }
                 let mut help = vec![signature_help(self)];
                 help.extend(super::type_diff::type_mismatch_help(&expected, &got));
@@ -1125,7 +1159,8 @@ impl Inferer<'_> {
                     help,
                 );
             }
-        }
+        };
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1242,12 +1277,12 @@ impl Inferer<'_> {
                 .record_authored_arguments(span, typed_args.clone());
         }
         if arity_ok {
-            self.fill_omitted_defaults(&params, args.len(), span, &mut typed_args);
+            self.fill_omitted_defaults(&params, args.len(), span, &mut typed_args)?;
         }
         // Packed rest array has type T[] — a composite, not a bare TypeVar —
         // so the GenericArgument zip tags it is_generic: false.
         if arity_ok && has_rest {
-            self.pack_rest_tail(fixed_count, rest_elem_ty.clone(), span, &mut typed_args);
+            self.pack_rest_tail(fixed_count, rest_elem_ty.clone(), span, &mut typed_args)?;
         }
 
         // `session.get(key)` without a type argument keeps its pre-generic
@@ -1334,7 +1369,7 @@ impl Inferer<'_> {
             }
         }
         if let Some(schema) = &llm_schema {
-            self.substitute_schema_argument(&params, &mut typed_args, schema, span);
+            self.substitute_schema_argument(&params, &mut typed_args, schema, span)?;
         }
 
         let generic_args: Vec<crate::GenericArgument> = typed_args
@@ -1382,12 +1417,12 @@ impl Inferer<'_> {
             type_predicate,
         };
         if checked_get {
-            return Ok(self.checked_session_get(call, &result_ty, type_args_written, span));
+            return self.checked_session_get(call, &result_ty, type_args_written, span);
         }
         // An untyped `llm.call` emitted no schema and needs no check: it returns
         // the `Completion` envelope the declaration already typed.
         if checked_llm && llm_schema.is_some() {
-            return Ok(self.checked_llm_cast(call, &result_ty, span));
+            return self.checked_llm_cast(call, &result_ty, span);
         }
         Ok((call, result_ty))
     }
@@ -1484,8 +1519,8 @@ mod tests {
 
     fn last_call_resolved_ty(ta: &TypedAst) -> Type {
         for &id in ta.top_level_statements.iter().rev() {
-            if let TypedStmtKind::AssignGlobal { value, .. } = &ta.stmt(id).kind {
-                return ta.expr(*value).ty.clone();
+            if let TypedStmtKind::AssignGlobal { value, .. } = &ta.try_stmt(id).unwrap().kind {
+                return ta.try_expr(*value).unwrap().ty.clone();
             }
         }
         panic!("no top-level let/const init found");
@@ -1567,7 +1602,7 @@ mod tests {
     }
 
     fn collect_body_expr_types(ta: &TypedAst, stmt_id: StmtId, out: &mut Vec<Type>) {
-        let stmt = ta.stmt(stmt_id);
+        let stmt = ta.try_stmt(stmt_id).unwrap();
         match &stmt.kind {
             TypedStmtKind::Block(children) => {
                 for &c in children {
@@ -1677,7 +1712,7 @@ mod tests {
     }
 
     fn collect_expr_types(ta: &TypedAst, expr_id: ExprId, out: &mut Vec<Type>) {
-        let expr = ta.expr(expr_id);
+        let expr = ta.try_expr(expr_id).unwrap();
         out.push(expr.ty.clone());
         match &expr.kind {
             crate::TypedExprKind::Binary { lhs, rhs, .. } => {
@@ -1897,10 +1932,10 @@ mod tests {
             "#);
         assert!(diags.is_empty(), "expected clean typecheck, got: {diags:?}");
         let body = ta.functions[0].body;
-        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+        let TypedStmtKind::Block(stmts) = &ta.try_stmt(body).unwrap().kind else {
             panic!("expected block body");
         };
-        let TypedStmtKind::Const { ty, .. } = &ta.stmt(stmts[0]).kind else {
+        let TypedStmtKind::Const { ty, .. } = &ta.try_stmt(stmts[0]).unwrap().kind else {
             panic!("expected const");
         };
         assert_eq!(*ty, Type::Array(Box::new(Type::Number)));
@@ -1915,10 +1950,10 @@ mod tests {
             "#);
         assert!(diags.is_empty(), "expected clean typecheck, got: {diags:?}");
         let body = ta.functions[0].body;
-        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+        let TypedStmtKind::Block(stmts) = &ta.try_stmt(body).unwrap().kind else {
             panic!("expected block body");
         };
-        let TypedStmtKind::Const { ty, .. } = &ta.stmt(stmts[0]).kind else {
+        let TypedStmtKind::Const { ty, .. } = &ta.try_stmt(stmts[0]).unwrap().kind else {
             panic!("expected const");
         };
         assert_eq!(*ty, Type::Array(Box::new(Type::Number)));
@@ -1950,10 +1985,10 @@ mod tests {
             "#);
         assert!(diags.is_empty(), "expected clean typecheck, got: {diags:?}");
         let body = ta.functions[0].body;
-        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+        let TypedStmtKind::Block(stmts) = &ta.try_stmt(body).unwrap().kind else {
             panic!("expected block body");
         };
-        let TypedStmtKind::Const { ty, .. } = &ta.stmt(stmts[0]).kind else {
+        let TypedStmtKind::Const { ty, .. } = &ta.try_stmt(stmts[0]).unwrap().kind else {
             panic!("expected const");
         };
         assert_eq!(*ty, Type::Array(Box::new(Type::Number)));
@@ -2002,10 +2037,10 @@ mod tests {
             "expected reduce<U> to infer from init arg, got: {diags:?}",
         );
         let body = ta.functions[0].body;
-        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+        let TypedStmtKind::Block(stmts) = &ta.try_stmt(body).unwrap().kind else {
             panic!("expected block body");
         };
-        let TypedStmtKind::Let { ty, .. } = &ta.stmt(stmts[1]).kind else {
+        let TypedStmtKind::Let { ty, .. } = &ta.try_stmt(stmts[1]).unwrap().kind else {
             panic!("expected let sum");
         };
         assert_eq!(*ty, Type::Number, "sum should infer as number");

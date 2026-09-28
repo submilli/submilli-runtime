@@ -317,12 +317,12 @@ mod tests {
             const d: D = D.Down;
             "#,
         );
-        let stmt = ta.stmt(ta.top_level_statements[0]);
+        let stmt = ta.try_stmt(ta.top_level_statements[0]).unwrap();
         let value_id = match &stmt.kind {
             TypedStmtKind::AssignGlobal { value, .. } => *value,
             other => panic!("expected AssignGlobal, got {other:?}"),
         };
-        match &ta.expr(value_id).kind {
+        match &ta.try_expr(value_id).unwrap().kind {
             TypedExprKind::NumberEnumMember {
                 enum_mangled,
                 variant,
@@ -344,12 +344,12 @@ mod tests {
             const s: S = S.Active;
             "#,
         );
-        let stmt = ta.stmt(ta.top_level_statements[0]);
+        let stmt = ta.try_stmt(ta.top_level_statements[0]).unwrap();
         let value_id = match &stmt.kind {
             TypedStmtKind::AssignGlobal { value, .. } => *value,
             other => panic!("expected AssignGlobal, got {other:?}"),
         };
-        match &ta.expr(value_id).kind {
+        match &ta.try_expr(value_id).unwrap().kind {
             TypedExprKind::StringEnumMember {
                 enum_mangled,
                 variant,

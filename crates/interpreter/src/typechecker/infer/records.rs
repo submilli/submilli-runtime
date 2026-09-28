@@ -153,24 +153,32 @@ impl Inferer<'_> {
         key: crate::ExprId,
     ) -> Result<(crate::ExprId, Type), CompilerFailure> {
         let (key, _) = self.infer_expr(key, Some(&Type::String))?;
-        Ok((key, self.object_key_type(key)))
+        Ok((key, self.object_key_type(key)?))
     }
 
     // Key alternatives retain their literal values even where ordinary expression
     // inference widens them. Inspect the inferred tree so evaluation occurs once.
-    fn object_key_type(&self, key: crate::ExprId) -> Type {
-        let expr = self.typed_ast.expr(key);
-        match &expr.kind {
+    fn object_key_type(
+        &self,
+        key: crate::ExprId,
+    ) -> Result<Type, crate::compiler_error::CompilerFailure> {
+        let expr = self
+            .typed_ast
+            .try_expr(key)
+            .map_err(crate::typechecker::arena_failure)?;
+        Ok(match &expr.kind {
             crate::TypedExprKind::Narrowed { inner, .. }
             | crate::TypedExprKind::EffectThen { result: inner, .. }
-            | crate::TypedExprKind::Sequence { result: inner, .. } => self.object_key_type(*inner),
+            | crate::TypedExprKind::Sequence { result: inner, .. } => {
+                self.object_key_type(*inner)?
+            }
             crate::TypedExprKind::Ternary { then_, else_, .. } => Type::union(vec![
-                self.object_key_type(*then_),
-                self.object_key_type(*else_),
+                self.object_key_type(*then_)?,
+                self.object_key_type(*else_)?,
             ]),
             crate::TypedExprKind::NullishCoalesce { lhs, rhs } => {
-                let left = self.object_key_type(*lhs);
-                let right = self.object_key_type(*rhs);
+                let left = self.object_key_type(*lhs)?;
+                let right = self.object_key_type(*rhs)?;
                 if matches!(left.peel(), Type::Null) {
                     right
                 } else if !super::expr::type_admits_null(&left, self.resolver()) {
@@ -179,8 +187,8 @@ impl Inferer<'_> {
                     Type::union(vec![super::narrowing::strip_null(&left), right])
                 }
             }
-            _ => super::expr::literal_comparison_type(&self.typed_ast, expr),
-        }
+            _ => super::expr::literal_comparison_type(&self.typed_ast, expr)?,
+        })
     }
 
     pub(super) fn object_index_read_type(
@@ -365,11 +373,14 @@ impl Inferer<'_> {
         for member in members {
             let (key, key_ty, value) = match member {
                 ObjectLiteralMember::Field(field) => {
-                    let key = self.typed_ast.push_expr(TypedExpr {
-                        kind: TypedExprKind::String(field.name.name.clone()),
-                        ty: Type::StringLiteral(field.name.name.clone()),
-                        span: field.name.span,
-                    });
+                    let key = self
+                        .typed_ast
+                        .try_push_expr(TypedExpr {
+                            kind: TypedExprKind::String(field.name.name.clone()),
+                            ty: Type::StringLiteral(field.name.name.clone()),
+                            span: field.name.span,
+                        })
+                        .map_err(crate::typechecker::arena_failure)?;
                     (key, Type::StringLiteral(field.name.name), field.value)
                 }
                 ObjectLiteralMember::Computed { key, value } => {
@@ -389,10 +400,10 @@ impl Inferer<'_> {
                         Some((id, ty, _)) => (id, ty),
                         None => self.infer_expr(value, None)?,
                     };
-                    let Some(source_fields) = self.spread_source_fields(source, &ty, span) else {
+                    let Some(source_fields) = self.spread_source_fields(source, &ty, span)? else {
                         continue;
                     };
-                    if let Some(value) = self.spread_source_index(source, &ty) {
+                    if let Some(value) = self.spread_source_index(source, &ty)? {
                         for field in fields.values_mut() {
                             field.ty = Type::union(vec![field.ty.clone(), value.clone()]);
                         }

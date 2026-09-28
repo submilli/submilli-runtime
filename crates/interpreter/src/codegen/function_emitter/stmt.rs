@@ -33,8 +33,12 @@ fn branches(kind: &TypedStmtKind) -> bool {
     )
 }
 
-pub fn emit_statement(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: StmtId) {
-    let stmt = ctx.ta.stmt(id);
+pub fn emit_statement(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    id: StmtId,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let stmt = ctx.ta.try_stmt(id).map_err(crate::codegen::arena_failure)?;
     emitter.record_span(stmt.span);
     // Before as well as after: a loop's back edge re-runs the reads above its
     // body's writes, so a shadow taken before the loop is already unsound at
@@ -48,22 +52,33 @@ pub fn emit_statement(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: StmtI
             // needs a fresh name-resolution scope — no Wasm `block`.
             emitter.push_scope();
             for &child in stmts {
-                emit_statement(emitter, ctx, child);
+                emit_statement(emitter, ctx, child)?;
             }
             emitter.pop_scope();
         }
         TypedStmtKind::Return(value) => {
             if let Some(expr_id) = value {
-                emit_expr(emitter, ctx, *expr_id);
-                cast::emit_coerce_to_return_slot(emitter, ctx, &ctx.ta.expr(*expr_id).ty);
+                emit_expr(emitter, ctx, *expr_id)?;
+                cast::emit_coerce_to_return_slot(
+                    emitter,
+                    ctx,
+                    &ctx.ta
+                        .try_expr(*expr_id)
+                        .map_err(crate::codegen::arena_failure)?
+                        .ty,
+                );
             }
             super::finally::emit_transfer(emitter, super::finally::Transfer::Return);
         }
         TypedStmtKind::Expr(expr_id) => {
-            emit_expr(emitter, ctx, *expr_id);
+            emit_expr(emitter, ctx, *expr_id)?;
             // Expression statements discard the result; `void` calls leave
             // nothing on the stack and need no Drop.
-            let ty = &ctx.ta.expr(*expr_id).ty;
+            let ty = &ctx
+                .ta
+                .try_expr(*expr_id)
+                .map_err(crate::codegen::arena_failure)?
+                .ty;
             if !ty.is_void() {
                 emitter.instruction(Instruction::Drop);
             }
@@ -76,8 +91,13 @@ pub fn emit_statement(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: StmtI
             boxed,
             ..
         } => {
-            emit_expr(emitter, ctx, *value);
-            let value_ty = ctx.ta.expr(*value).ty.clone();
+            emit_expr(emitter, ctx, *value)?;
+            let value_ty = ctx
+                .ta
+                .try_expr(*value)
+                .map_err(crate::codegen::arena_failure)?
+                .ty
+                .clone();
             cast::emit_coerce_to_slot(emitter, ctx, &value_ty, ty);
             if *boxed {
                 let box_idx = ctx
@@ -116,8 +136,13 @@ pub fn emit_statement(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: StmtI
             name, ty, value, ..
         } => {
             // captured const is copied into closure env, not boxed
-            emit_expr(emitter, ctx, *value);
-            let value_ty = ctx.ta.expr(*value).ty.clone();
+            emit_expr(emitter, ctx, *value)?;
+            let value_ty = ctx
+                .ta
+                .try_expr(*value)
+                .map_err(crate::codegen::arena_failure)?
+                .ty
+                .clone();
             cast::emit_coerce_to_slot(emitter, ctx, &value_ty, ty);
             let slot = emitter.define_local(name, ctx.symbols.value_type(ty));
             emitter.instruction(Instruction::LocalSet(slot));
@@ -141,17 +166,27 @@ pub fn emit_statement(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: StmtI
                     .symbols
                     .box_type_idx(target_ty)
                     .expect("box type registered for every boxed AssignLocal");
-                let value_ty = ctx.ta.expr(*value).ty.clone();
+                let value_ty = ctx
+                    .ta
+                    .try_expr(*value)
+                    .map_err(crate::codegen::arena_failure)?
+                    .ty
+                    .clone();
                 emitter.instruction(Instruction::LocalGet(slot));
-                emit_expr(emitter, ctx, *value);
+                emit_expr(emitter, ctx, *value)?;
                 cast::emit_coerce_to_slot(emitter, ctx, &value_ty, target_ty);
                 emitter.instruction(Instruction::StructSet {
                     struct_type_index: box_idx,
                     field_index: 0,
                 });
             } else {
-                emit_expr(emitter, ctx, *value);
-                let value_ty = ctx.ta.expr(*value).ty.clone();
+                emit_expr(emitter, ctx, *value)?;
+                let value_ty = ctx
+                    .ta
+                    .try_expr(*value)
+                    .map_err(crate::codegen::arena_failure)?
+                    .ty
+                    .clone();
                 // If this assignment installs a narrowing, allocate a fresh
                 // shadow local of the narrowed type. `local.tee` keeps the RHS
                 // on the stack for the subsequent coerce+set while also storing
@@ -180,8 +215,13 @@ pub fn emit_statement(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: StmtI
             value,
             ..
         } => {
-            emit_expr(emitter, ctx, *value);
-            let value_ty = ctx.ta.expr(*value).ty.clone();
+            emit_expr(emitter, ctx, *value)?;
+            let value_ty = ctx
+                .ta
+                .try_expr(*value)
+                .map_err(crate::codegen::arena_failure)?
+                .ty
+                .clone();
             cast::emit_coerce_to_slot(emitter, ctx, &value_ty, target_ty);
             let idx = ctx
                 .symbols
@@ -194,7 +234,7 @@ pub fn emit_statement(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: StmtI
             name,
             value,
         } => {
-            emit_assign_field(emitter, ctx, *receiver, name, *value);
+            emit_assign_field(emitter, ctx, *receiver, name, *value)?;
         }
         TypedStmtKind::AssignIndex {
             receiver,
@@ -202,21 +242,26 @@ pub fn emit_statement(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: StmtI
             value,
             elem_ty,
         } => {
-            emit_assign_index(emitter, ctx, *receiver, *index, *value, elem_ty);
+            emit_assign_index(emitter, ctx, *receiver, *index, *value, elem_ty)?;
         }
         TypedStmtKind::If {
             condition,
             then_block,
             else_block,
         } => {
-            let cond_ty = ctx.ta.expr(*condition).ty.clone();
-            emit_expr(emitter, ctx, *condition);
+            let cond_ty = ctx
+                .ta
+                .try_expr(*condition)
+                .map_err(crate::codegen::arena_failure)?
+                .ty
+                .clone();
+            emit_expr(emitter, ctx, *condition)?;
             cast::emit_condition_to_i32(emitter, ctx, &cond_ty);
             emitter.emit_if(BlockType::Empty);
-            emit_statement(emitter, ctx, *then_block);
+            emit_statement(emitter, ctx, *then_block)?;
             if let Some(else_id) = else_block {
                 emitter.emit_else();
-                emit_statement(emitter, ctx, *else_id);
+                emit_statement(emitter, ctx, *else_id)?;
             }
             emitter.emit_end();
         }
@@ -224,13 +269,18 @@ pub fn emit_statement(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: StmtI
             // `block { loop { <cond>; i32.eqz; br_if 1; <body>; br 0; } }`
             // — break exits the outer block, continue restarts the loop.
             emitter.emit_while_open();
-            let cond_ty = ctx.ta.expr(*condition).ty.clone();
-            emit_expr(emitter, ctx, *condition);
+            let cond_ty = ctx
+                .ta
+                .try_expr(*condition)
+                .map_err(crate::codegen::arena_failure)?
+                .ty
+                .clone();
+            emit_expr(emitter, ctx, *condition)?;
             cast::emit_condition_to_i32(emitter, ctx, &cond_ty);
             emitter.instruction(Instruction::I32Eqz);
             let break_label = emitter.break_label();
             emitter.instruction(Instruction::BrIf(break_label));
-            emit_statement(emitter, ctx, *body);
+            emit_statement(emitter, ctx, *body)?;
             let continue_label = emitter.continue_label();
             emitter.instruction(Instruction::Br(continue_label));
             emitter.emit_while_close();
@@ -267,7 +317,7 @@ pub fn emit_statement(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: StmtI
                 discriminant_ty,
                 cases,
                 default.as_ref().copied(),
-            );
+            )?;
         }
         TypedStmtKind::NarrowRegion {
             path,
@@ -280,7 +330,7 @@ pub fn emit_statement(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: StmtI
             if path.chain.is_empty() {
                 let shadow_val = ctx.symbols.value_type(&cast_info.to_ty);
                 let shadow = emitter.add_anonymous_local(shadow_val);
-                emit_expr(emitter, ctx, *source);
+                emit_expr(emitter, ctx, *source)?;
                 cast::emit_narrowing_cast(emitter, ctx, cast_info);
                 emitter.instruction(Instruction::LocalSet(shadow));
                 emitter.install_narrow_shadow(&binding.name, shadow, shadow_val);
@@ -290,12 +340,12 @@ pub fn emit_statement(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: StmtI
                 // first re-read and checked cast until an actual use in the body.
                 emitter.register_narrow_source(&binding.name, *source);
             }
-            emit_statement(emitter, ctx, *body);
+            emit_statement(emitter, ctx, *body)?;
             emitter.pop_scope();
         }
         TypedStmtKind::Throw { value } => {
             // cast is unconditional: typechecker guarantees Error type; Wasm-level nullability comes from (ref null $Object) lowering
-            emit_expr(emitter, ctx, *value);
+            emit_expr(emitter, ctx, *value)?;
             crate::codegen::throw::emit_error_throw(emitter, ctx);
         }
         TypedStmtKind::Try {
@@ -303,24 +353,36 @@ pub fn emit_statement(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: StmtI
             catches,
             finally,
         } => {
-            emit_try(emitter, ctx, *body, catches, *finally);
+            emit_try(emitter, ctx, *body, catches, *finally)?;
         }
     }
-    if branches(&stmt.kind) {
+    let _: () = if branches(&stmt.kind) {
         emitter.clear_all_narrow_shadows();
-    }
+    };
+    Ok(())
 }
 
 /// Evaluate `expr` into an anonymous local and register the node as already
 /// evaluated, so a compound assignment's synthesized read — which shares the
 /// write's own receiver and index nodes — reads the local instead of running
 /// the expression a second time. Leaves the stack unchanged.
-fn emit_operand_once(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, expr: ExprId) -> u32 {
-    let slot = emitter.add_anonymous_local(ctx.symbols.value_type(&ctx.ta.expr(expr).ty));
-    emit_expr(emitter, ctx, expr);
+fn emit_operand_once(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    expr: ExprId,
+) -> Result<u32, crate::compiler_error::CompilerFailure> {
+    let slot = emitter.add_anonymous_local(
+        ctx.symbols.value_type(
+            &ctx.ta
+                .try_expr(expr)
+                .map_err(crate::codegen::arena_failure)?
+                .ty,
+        ),
+    );
+    emit_expr(emitter, ctx, expr)?;
     emitter.instruction(Instruction::LocalSet(slot));
     emitter.record_single_evaluation(expr, slot);
-    slot
+    Ok(slot)
 }
 
 fn emit_assign_field(
@@ -329,34 +391,48 @@ fn emit_assign_field(
     receiver: ExprId,
     name: &Ident,
     value: ExprId,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let mark = emitter.single_evaluation_mark();
-    let receiver_ty = ctx.ta.source_type(receiver).clone();
+    let receiver_ty = ctx
+        .ta
+        .source_type(receiver)
+        .map_err(crate::codegen::arena_failure)?
+        .clone();
     // The receiver runs before the value in both arms, which is both the
     // left-to-right order the language guarantees and the order
     // `emit_operand_once` needs: a read inside `value` can only reuse a slot
     // that is already filled.
-    let recv = emit_operand_once(emitter, ctx, receiver);
-    emit_operand_once(emitter, ctx, value);
+    let recv = emit_operand_once(emitter, ctx, receiver)?;
+    emit_operand_once(emitter, ctx, value)?;
     emitter.instruction(Instruction::LocalGet(recv));
-    if ctx.ta.expr(receiver).ty != receiver_ty {
+    if ctx
+        .ta
+        .try_expr(receiver)
+        .map_err(crate::codegen::arena_failure)?
+        .ty
+        != receiver_ty
+    {
         crate::codegen::cast_check::emit_operation_cast_on_stack(
             emitter,
             ctx,
-            &ctx.ta.expr(receiver).ty,
+            &ctx.ta
+                .try_expr(receiver)
+                .map_err(crate::codegen::arena_failure)?
+                .ty,
             &receiver_ty,
-        );
+        )?;
     }
     let recv = emitter.add_anonymous_local(ctx.symbols.value_type(&receiver_ty));
     emitter.instruction(Instruction::LocalSet(recv));
     match receiver_ty.peel() {
         // Class instance: nominal receiver, array-backed object payload.
         Type::ClassRef { mangled, .. } => {
-            emit_class_field_store(emitter, ctx, receiver, recv, mangled, name, value);
+            emit_class_field_store(emitter, ctx, receiver, recv, mangled, name, value)?;
         }
-        _ => emit_object_field_store(emitter, ctx, &receiver_ty, recv, name, value),
+        _ => emit_object_field_store(emitter, ctx, &receiver_ty, recv, name, value)?,
     }
     emitter.end_single_evaluations(mark);
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -368,7 +444,7 @@ fn emit_class_field_store(
     mangled: &crate::MangledName,
     name: &Ident,
     value: ExprId,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     // Accessor property (no data slot): dispatch the synthetic setter.
     let Some(slot) = ctx.symbols.class_field_slot(mangled, &name.name) else {
         let setter = crate::codegen::classes::accessor_setter_name(&name.name);
@@ -382,8 +458,8 @@ fn emit_class_field_store(
             None,
             None,
             &Type::Void,
-        );
-        return;
+        )?;
+        return Ok(());
     };
     let struct_idx = ctx
         .symbols
@@ -393,8 +469,13 @@ fn emit_class_field_store(
         .symbols
         .intrinsic_type_indices()
         .expect("intrinsics declared by codegen entry");
-    let value_ty = ctx.ta.expr(value).ty.clone();
-    emit_expr(emitter, ctx, value);
+    let value_ty = ctx
+        .ta
+        .try_expr(value)
+        .map_err(crate::codegen::arena_failure)?
+        .ty
+        .clone();
+    emit_expr(emitter, ctx, value)?;
     cast::emit_box(emitter, ctx, &value_ty);
     let stored = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown));
     emitter.instruction(Instruction::LocalSet(stored));
@@ -410,6 +491,7 @@ fn emit_class_field_store(
     emitter.instruction(Instruction::I32Const(slot as i32));
     emitter.instruction(Instruction::LocalSet(index));
     crate::codegen::field_names::emit_mark_present(emitter, ctx, recv, index);
+    Ok(())
 }
 
 fn emit_object_field_store(
@@ -419,7 +501,7 @@ fn emit_object_field_store(
     recv: u32,
     name: &Ident,
     value: ExprId,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let object_shape = ctx
         .symbols
         .intrinsic_type_indices()
@@ -429,7 +511,8 @@ fn emit_object_field_store(
     let rcv_local = stash_receiver_as_object_shape(emitter, receiver_ty, object_shape);
     // Accessor-aware: a data field writes its slot; an accessor property
     // invokes its `set <prop>` method closure.
-    emit_object_property_write(emitter, ctx, rcv_local, name, value);
+    emit_object_property_write(emitter, ctx, rcv_local, name, value)?;
+    Ok(())
 }
 
 fn emit_assign_index(
@@ -439,36 +522,65 @@ fn emit_assign_index(
     index: ExprId,
     value: ExprId,
     elem_ty: &Type,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let mark = emitter.single_evaluation_mark();
-    if ctx.ta.source_type(receiver).is_structural_object() {
-        let object = emit_operand_once(emitter, ctx, receiver);
-        let key = emit_operand_once(emitter, ctx, index);
-        let stored = emit_operand_once(emitter, ctx, value);
+    if ctx
+        .ta
+        .source_type(receiver)
+        .map_err(crate::codegen::arena_failure)?
+        .is_structural_object()
+    {
+        let object = emit_operand_once(emitter, ctx, receiver)?;
+        let key = emit_operand_once(emitter, ctx, index)?;
+        let stored = emit_operand_once(emitter, ctx, value)?;
         emitter.instruction(Instruction::LocalGet(object));
-        cast::emit_box(emitter, ctx, &ctx.ta.expr(receiver).ty);
+        cast::emit_box(
+            emitter,
+            ctx,
+            &ctx.ta
+                .try_expr(receiver)
+                .map_err(crate::codegen::arena_failure)?
+                .ty,
+        );
         emitter.instruction(Instruction::LocalGet(key));
         crate::codegen::cast_check::emit_operation_cast_on_stack(
             emitter,
             ctx,
-            &ctx.ta.expr(index).ty,
+            &ctx.ta
+                .try_expr(index)
+                .map_err(crate::codegen::arena_failure)?
+                .ty,
             &Type::String,
-        );
+        )?;
         emitter.instruction(Instruction::LocalGet(stored));
-        cast::emit_box(emitter, ctx, &ctx.ta.expr(value).ty);
+        cast::emit_box(
+            emitter,
+            ctx,
+            &ctx.ta
+                .try_expr(value)
+                .map_err(crate::codegen::arena_failure)?
+                .ty,
+        );
         let Some(symbol) = ctx.require(
             ctx.symbols.prelude_func_idx("ObjectConstructor##setField"),
             "dynamic write imported",
         ) else {
-            return;
+            return Ok(());
         };
         emitter.instruction(Instruction::Call(symbol));
-    } else if matches!(ctx.ta.source_type(receiver).peel(), Type::Uint8Array) {
-        emit_uint8_index_store(emitter, ctx, receiver, index, value);
+    } else if matches!(
+        ctx.ta
+            .source_type(receiver)
+            .map_err(crate::codegen::arena_failure)?
+            .peel(),
+        Type::Uint8Array
+    ) {
+        emit_uint8_index_store(emitter, ctx, receiver, index, value)?;
     } else {
-        emit_array_index_store(emitter, ctx, receiver, index, value, elem_ty);
+        emit_array_index_store(emitter, ctx, receiver, index, value, elem_ty)?;
     }
     emitter.end_single_evaluations(mark);
+    Ok(())
 }
 
 /// `u8[i] = v`. Packed `i8` storage, so the RHS is truncated to its low 8 bits.
@@ -478,7 +590,7 @@ fn emit_uint8_index_store(
     receiver: ExprId,
     index: ExprId,
     value: ExprId,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let raw_uint8_idx = ctx
         .symbols
         .raw_uint8_array_type_idx()
@@ -487,11 +599,11 @@ fn emit_uint8_index_store(
         .symbols
         .uint8_array_type_idx()
         .expect("Type::Uint8Array requires intrinsic types declared");
-    let recv_local = emit_operand_once(emitter, ctx, receiver);
-    let key = emit_operand_once(emitter, ctx, index);
+    let recv_local = emit_operand_once(emitter, ctx, receiver)?;
+    let key = emit_operand_once(emitter, ctx, index)?;
     // RHS evaluates before the bounds check throws, preserving left-to-right
     // evaluation order (`emit_array_index_store` does the same).
-    let original_value = emit_operand_once(emitter, ctx, value);
+    let original_value = emit_operand_once(emitter, ctx, value)?;
 
     // `$Uint8Array`'s backing field is immutable — no `push` exists to swap the
     // buffer out — so this read could sit anywhere after the receiver. It goes
@@ -504,15 +616,33 @@ fn emit_uint8_index_store(
     crate::codegen::cast_check::emit_operation_cast_on_stack(
         emitter,
         ctx,
-        &ctx.ta.expr(receiver).ty,
+        &ctx.ta
+            .try_expr(receiver)
+            .map_err(crate::codegen::arena_failure)?
+            .ty,
         &Type::Uint8Array,
-    );
+    )?;
     emitter.instruction(Instruction::LocalGet(key));
-    super::expr::emit_index_number(emitter, ctx, &ctx.ta.expr(index).ty);
+    super::expr::emit_index_number(
+        emitter,
+        ctx,
+        &ctx.ta
+            .try_expr(index)
+            .map_err(crate::codegen::arena_failure)?
+            .ty,
+    );
     let idx_f64_local = stash_index_operand(emitter);
     let value_local = emitter.add_anonymous_local(ValType::I32);
     emitter.instruction(Instruction::LocalGet(original_value));
-    cast::emit_coerce_to_slot(emitter, ctx, &ctx.ta.expr(value).ty, &Type::Number);
+    cast::emit_coerce_to_slot(
+        emitter,
+        ctx,
+        &ctx.ta
+            .try_expr(value)
+            .map_err(crate::codegen::arena_failure)?
+            .ty,
+        &Type::Number,
+    );
     emitter.instruction(Instruction::I32TruncSatF64U);
     emitter.instruction(Instruction::I32Const(0xff));
     emitter.instruction(Instruction::I32And);
@@ -527,6 +657,7 @@ fn emit_uint8_index_store(
     emitter.instruction(Instruction::LocalGet(idx_local));
     emitter.instruction(Instruction::LocalGet(value_local));
     emitter.instruction(Instruction::ArraySet(raw_uint8_idx));
+    Ok(())
 }
 
 /// `a[i] = v` on a `$Array`.
@@ -537,7 +668,7 @@ fn emit_array_index_store(
     index: ExprId,
     value: ExprId,
     _elem_ty: &Type,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let raw_array_idx = ctx
         .symbols
         .raw_array_type_idx()
@@ -551,16 +682,21 @@ fn emit_array_index_store(
         .intrinsic_type_indices()
         .expect("intrinsics declared")
         .object;
-    let recv_local = emit_operand_once(emitter, ctx, receiver);
-    let key = emit_operand_once(emitter, ctx, index);
+    let recv_local = emit_operand_once(emitter, ctx, receiver)?;
+    let key = emit_operand_once(emitter, ctx, index)?;
     // RHS evaluates before the store (and so before the bounds check throws),
     // preserving left-to-right evaluation order.
     let value_local = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: true,
         heap_type: HeapType::Concrete(object_idx),
     }));
-    let value_ty = ctx.ta.expr(value).ty.clone();
-    emit_expr(emitter, ctx, value);
+    let value_ty = ctx
+        .ta
+        .try_expr(value)
+        .map_err(crate::codegen::arena_failure)?
+        .ty
+        .clone();
+    emit_expr(emitter, ctx, value)?;
     // Preserve the actual RHS in the erased element slot.
     cast::emit_box(emitter, ctx, &value_ty);
     emitter.instruction(Instruction::LocalSet(value_local));
@@ -577,11 +713,21 @@ fn emit_array_index_store(
     crate::codegen::cast_check::emit_operation_cast_on_stack(
         emitter,
         ctx,
-        &ctx.ta.expr(receiver).ty,
+        &ctx.ta
+            .try_expr(receiver)
+            .map_err(crate::codegen::arena_failure)?
+            .ty,
         &Type::Array(Box::new(Type::Unknown)),
-    );
+    )?;
     emitter.instruction(Instruction::LocalGet(key));
-    super::expr::emit_index_number(emitter, ctx, &ctx.ta.expr(index).ty);
+    super::expr::emit_index_number(
+        emitter,
+        ctx,
+        &ctx.ta
+            .try_expr(index)
+            .map_err(crate::codegen::arena_failure)?
+            .ty,
+    );
     let idx_f64_local = stash_index_operand(emitter);
     emitter.instruction(Instruction::StructGet {
         struct_type_index: array_idx,
@@ -593,6 +739,7 @@ fn emit_array_index_store(
     emitter.instruction(Instruction::LocalGet(idx_local));
     emitter.instruction(Instruction::LocalGet(value_local));
     emitter.instruction(Instruction::ArraySet(raw_array_idx));
+    Ok(())
 }
 
 /// Catch handlers surround only the try body. A finally gets an outer
@@ -603,14 +750,14 @@ pub(super) fn emit_try(
     body: StmtId,
     catches: &[crate::TypedCatchClause],
     finally: Option<StmtId>,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     if let Some(finally) = finally {
-        super::finally::emit_try_finally(emitter, ctx, body, catches, finally);
-        return;
+        super::finally::emit_try_finally(emitter, ctx, body, catches, finally)?;
+        return Ok(());
     }
     if catches.is_empty() {
-        emit_statement(emitter, ctx, body);
-        return;
+        emit_statement(emitter, ctx, body)?;
+        return Ok(());
     }
     let error_idx = ctx
         .symbols
@@ -631,7 +778,7 @@ pub(super) fn emit_try(
         }]),
     ));
     emitter.bump_block_depth();
-    emit_statement(emitter, ctx, body);
+    emit_statement(emitter, ctx, body)?;
     emitter.emit_end();
     emitter.instruction(Instruction::Br(1));
     emitter.emit_end();
@@ -640,8 +787,9 @@ pub(super) fn emit_try(
         heap_type: HeapType::Concrete(error_idx),
     }));
     emitter.instruction(Instruction::LocalSet(err_stash));
-    emit_catch_dispatch(emitter, ctx, catches, err_stash);
+    emit_catch_dispatch(emitter, ctx, catches, err_stash)?;
     emitter.emit_end();
+    Ok(())
 }
 
 /// A `catch (e: MyError)` clause annotated with a proper `Error` subclass
@@ -680,7 +828,7 @@ fn emit_catch_dispatch(
     ctx: &CodegenCtx,
     catches: &[crate::TypedCatchClause],
     err_stash: u32,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     for clause in catches {
         let Some((vtable_global, struct_idx)) = catch_filter_class(ctx, &clause.ty) else {
             emitter.push_scope();
@@ -688,10 +836,10 @@ fn emit_catch_dispatch(
             emitter.instruction(Instruction::LocalGet(err_stash));
             emitter.instruction(Instruction::RefAsNonNull);
             emitter.instruction(Instruction::LocalSet(slot));
-            emit_statement(emitter, ctx, clause.body);
+            emit_statement(emitter, ctx, clause.body)?;
             emitter.pop_scope();
             // Falling through reaches the matched-arm exit in both topologies.
-            return;
+            return Ok(());
         };
         emitter.instruction(Instruction::LocalGet(err_stash));
         super::cast::emit_nominal_instance_test(emitter, ctx, vtable_global);
@@ -702,7 +850,7 @@ fn emit_catch_dispatch(
         // Shape-only cast is sound here: the brand matched.
         emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(struct_idx)));
         emitter.instruction(Instruction::LocalSet(slot));
-        emit_statement(emitter, ctx, clause.body);
+        emit_statement(emitter, ctx, clause.body)?;
         emitter.pop_scope();
         // Matched-arm exit is label 0 at chain level; +1 for the `if` frame.
         emitter.instruction(Instruction::Br(1));
@@ -712,6 +860,7 @@ fn emit_catch_dispatch(
     emitter.instruction(Instruction::LocalGet(err_stash));
     emitter.instruction(Instruction::RefAsNonNull);
     emitter.instruction(Instruction::Throw(tag_idx));
+    Ok(())
 }
 
 /// Emit a `switch` statement as a block-stack of per-case targets.
@@ -747,10 +896,10 @@ fn emit_switch(
     discriminant_ty: &Type,
     cases: &[TypedSwitchCase],
     default: Option<StmtId>,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     // Stash discriminant in an anonymous local; numeric enums unboxed to f64
     // so per-case tests use f64.eq instead of a structural-equality call.
-    emit_expr(emitter, ctx, discriminant);
+    emit_expr(emitter, ctx, discriminant)?;
     let disc_val = switch_disc_local_type(ctx, discriminant_ty);
     if matches!(discriminant_ty.peel(), Type::NumberEnum { .. }) {
         let boxed_idx = ctx
@@ -792,7 +941,7 @@ fn emit_switch(
     for case in cases {
         emitter.emit_end();
         emitter.push_scope();
-        emit_statement(emitter, ctx, case.body);
+        emit_statement(emitter, ctx, case.body)?;
         emitter.pop_scope();
         let end_label = emitter.break_label();
         emitter.instruction(Instruction::Br(end_label));
@@ -801,12 +950,13 @@ fn emit_switch(
     if let Some(default_body) = default {
         emitter.emit_end();
         emitter.push_scope();
-        emit_statement(emitter, ctx, default_body);
+        emit_statement(emitter, ctx, default_body)?;
         emitter.pop_scope();
         // Falls through to `$end` naturally — no explicit `br`.
     }
 
     emitter.emit_switch_close();
+    Ok(())
 }
 
 /// Numeric-enum discriminants are unboxed to `f64` here so per-case tests use `f64.eq`

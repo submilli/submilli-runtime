@@ -260,13 +260,13 @@ pub fn discover<'a>(
     ta: &TypedAst,
     dependency_types: impl IntoIterator<Item = &'a DependencyType<'a>>,
     bodies: &ValidatorBodies,
-) -> RecursiveValidators {
+) -> Result<RecursiveValidators, crate::compiler_error::CompilerFailure> {
     let mut discovery = Discovery::new(bodies);
-    discovery.scan_expressions(ta);
-    discovery.scan_runtime_tests(ta);
-    discovery.scan_local_class_fields(ta);
-    discovery.scan_dependency_class_fields(dependency_types);
-    discovery.finish()
+    discovery.scan_expressions(ta)?;
+    discovery.scan_runtime_tests(ta)?;
+    discovery.scan_local_class_fields(ta)?;
+    discovery.scan_dependency_class_fields(dependency_types)?;
+    Ok(discovery.finish())
 }
 
 struct Discovery<'a> {
@@ -288,7 +288,7 @@ impl<'a> Discovery<'a> {
         }
     }
 
-    fn walk(&mut self, ty: &Type) {
+    fn walk(&mut self, ty: &Type) -> Result<(), crate::compiler_error::CompilerFailure> {
         collect_descriptor_arguments(ty, &mut self.descriptor_types);
         Traversal::new(
             self.bodies,
@@ -296,62 +296,78 @@ impl<'a> Discovery<'a> {
             &mut self.rejected_keys,
             &mut self.shapes,
         )
-        .walk(ty);
+        .walk(ty)?;
+        Ok(())
     }
 
-    fn scan_expressions(&mut self, ta: &TypedAst) {
-        for i in 0..ta.exprs_len() {
-            let expr = ta.expr(crate::ExprId(i as u32));
+    fn scan_expressions(
+        &mut self,
+        ta: &TypedAst,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        for i in ta.expr_ids().map_err(crate::codegen::arena_failure)? {
+            let expr = ta.try_expr(i).map_err(crate::codegen::arena_failure)?;
             if let TypedExprKind::Cast {
                 check: Some(shape), ..
             } = &expr.kind
             {
-                self.walk(shape);
+                self.walk(shape)?;
             }
         }
+        Ok(())
     }
 
-    fn scan_runtime_tests(&mut self, ta: &TypedAst) {
+    fn scan_runtime_tests(
+        &mut self,
+        ta: &TypedAst,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         for (key, test) in &ta.runtime_type_tests {
             match test {
-                crate::FieldNarrowingTest::Shape(shape) => self.walk(shape),
+                crate::FieldNarrowingTest::Shape(shape) => self.walk(shape)?,
                 crate::FieldNarrowingTest::Interface(interface) => {
                     if let Some(index) = &interface.index {
-                        self.walk(&index.value);
+                        self.walk(&index.value)?;
                     }
                     for member in interface.members.values() {
-                        self.walk(&member.ty);
+                        self.walk(&member.ty)?;
                     }
                     if is_generic_interface_key(key)
                         || interface_test_is_recursive(ta, key, interface)
                     {
                         self.expanded_keys.insert(key.clone());
                     }
-                    self.scan_interface_carriers(interface);
+                    self.scan_interface_carriers(interface)?;
                 }
                 crate::FieldNarrowingTest::NonNull
                 | crate::FieldNarrowingTest::Substituted
                 | crate::FieldNarrowingTest::Representation => {}
             }
         }
+        Ok(())
     }
 
-    fn scan_interface_carriers(&mut self, interface: &crate::InterfaceNarrowingTest) {
+    fn scan_interface_carriers(
+        &mut self,
+        interface: &crate::InterfaceNarrowingTest,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         for carrier in &interface.non_shape_carriers {
             match carrier {
                 crate::InterfaceCarrier::Array(ty) | crate::InterfaceCarrier::Set(ty) => {
-                    self.walk(ty);
+                    self.walk(ty)?;
                 }
                 crate::InterfaceCarrier::Map(key, value) => {
-                    self.walk(key);
-                    self.walk(value);
+                    self.walk(key)?;
+                    self.walk(value)?;
                 }
                 _ => {}
             }
         }
+        Ok(())
     }
 
-    fn scan_local_class_fields(&mut self, ta: &TypedAst) {
+    fn scan_local_class_fields(
+        &mut self,
+        ta: &TypedAst,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         for decl in &ta.types {
             let TypedTypeDecl::Class(class) = decl else {
                 continue;
@@ -362,16 +378,17 @@ impl<'a> Discovery<'a> {
                 .filter_map(|field| field.narrowing_check.as_deref())
             {
                 if let crate::FieldNarrowingTest::Shape(shape) = &check.test {
-                    self.walk(shape);
+                    self.walk(shape)?;
                 }
             }
         }
+        Ok(())
     }
 
     fn scan_dependency_class_fields<'b>(
         &mut self,
         dependency_types: impl IntoIterator<Item = &'b DependencyType<'b>>,
-    ) {
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         for dependency_type in dependency_types {
             let TypeKind::Class {
                 narrowing_checks, ..
@@ -381,10 +398,11 @@ impl<'a> Discovery<'a> {
             };
             for check in narrowing_checks.values() {
                 if let crate::FieldNarrowingTest::Shape(shape) = &check.test {
-                    self.walk(shape);
+                    self.walk(shape)?;
                 }
             }
         }
+        Ok(())
     }
 
     fn finish(self) -> RecursiveValidators {
@@ -527,82 +545,98 @@ impl<'a, 'b> Traversal<'a, 'b> {
         }
     }
 
-    fn walk(&mut self, ty: &Type) {
+    fn walk(&mut self, ty: &Type) -> Result<(), crate::compiler_error::CompilerFailure> {
         let peeled = ty.peel();
-        match peeled {
+        let _: () = match peeled {
             Type::Object { fields, index } => {
                 if let Some(index) = index {
-                    self.walk(&index.value);
+                    self.walk(&index.value)?;
                 }
                 self.shapes.insert(Shape::Object {
                     index: index.clone(),
                     fields: fields.clone(),
                 });
                 for field in fields.values() {
-                    self.walk(&field.ty);
+                    self.walk(&field.ty)?;
                 }
             }
-            Type::Array(element) => self.walk(element),
+            Type::Array(element) => self.walk(element)?,
             Type::Tuple(elements) | Type::Union(elements) => {
                 for element in elements {
-                    self.walk(element);
+                    self.walk(element)?;
                 }
             }
             Type::Function { params, ret, .. } => {
                 for param in params {
-                    self.walk(param);
+                    self.walk(param)?;
                 }
-                self.walk(ret);
+                self.walk(ret)?;
             }
             Type::AliasRef { mangled, .. } if self.bodies.expand_one(peeled) != *peeled => {
-                self.walk_alias(peeled, mangled);
+                self.walk_alias(peeled, mangled)?;
             }
             Type::ClassRef { mangled, args, .. } if self.bodies.expand_one(peeled) != *peeled => {
                 for arg in args {
-                    self.walk(arg);
+                    self.walk(arg)?;
                 }
-                self.walk_interface(peeled, mangled);
+                self.walk_interface(peeled, mangled)?;
             }
             Type::InterfaceRef { mangled, .. } if self.bodies.expand_one(peeled) != *peeled => {
-                self.walk_interface(peeled, mangled);
+                self.walk_interface(peeled, mangled)?;
             }
             _ => {}
-        }
+        };
+        Ok(())
     }
 
-    fn walk_alias(&mut self, ty: &Type, identity: &MangledName) {
+    fn walk_alias(
+        &mut self,
+        ty: &Type,
+        identity: &MangledName,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         if !self.seen_instantiations.insert(ty.clone()) {
-            return;
+            return Ok(());
         }
-        self.walk_expanded_reference(ty, identity);
+        self.walk_expanded_reference(ty, identity)?;
+        Ok(())
     }
 
-    fn walk_interface(&mut self, ty: &Type, identity: &MangledName) {
+    fn walk_interface(
+        &mut self,
+        ty: &Type,
+        identity: &MangledName,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         if !self.seen_instantiations.insert(ty.clone()) {
             if self.active_declarations.contains(identity) {
                 self.validators.insert(ty.clone());
             }
-            return;
+            return Ok(());
         }
-        self.walk_expanded_reference(ty, identity);
+        self.walk_expanded_reference(ty, identity)?;
+        Ok(())
     }
 
-    fn walk_expanded_reference(&mut self, ty: &Type, identity: &MangledName) {
+    fn walk_expanded_reference(
+        &mut self,
+        ty: &Type,
+        identity: &MangledName,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         if !self.active_declarations.insert(identity.clone()) {
             if let Some(key) = self.bodies.generic_key(ty) {
                 if self.validators.insert(key.clone()) {
                     let body = self.bodies.expand_one(&key);
-                    self.walk(&body);
+                    self.walk(&body)?;
                 }
             } else {
                 self.rejected.insert(ty.clone());
             }
-            return;
+            return Ok(());
         }
         self.validators.insert(ty.clone());
         let body = self.bodies.expand_one(ty);
-        self.walk(&body);
+        self.walk(&body)?;
         self.active_declarations.remove(identity);
+        Ok(())
     }
 }
 

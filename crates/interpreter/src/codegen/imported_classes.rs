@@ -157,7 +157,7 @@ pub fn reconstruct(
     next_func_idx: &mut u32,
     next_global_idx: &mut u32,
     symbols: &mut SymbolTable,
-) -> BTreeMap<MangledName, ImportedClassLayout> {
+) -> Result<BTreeMap<MangledName, ImportedClassLayout>, crate::compiler_error::CompilerFailure> {
     let info = collect_class_info(dependencies);
     let order = needed_in_topo_order(&info, ta, usage);
 
@@ -194,7 +194,7 @@ pub fn reconstruct(
             symbols,
         );
     }
-    layouts
+    Ok(layouts)
 }
 
 /// Import the statics this module actually uses: self-less functions and

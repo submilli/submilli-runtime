@@ -32,7 +32,7 @@ fn render_all(source: &str) -> String {
         package_refs.extend(host_defs.iter());
         let (ta, infer_diags) = infer(source, "main", &ast, &package_refs);
         diags.extend(infer_diags);
-        diags.extend(check(&ta));
+        diags.extend(check(&ta).unwrap());
     }
 
     let (sources, _) = Sources::single(FILENAME, source).unwrap();

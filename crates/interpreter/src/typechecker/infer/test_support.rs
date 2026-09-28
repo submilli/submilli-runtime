@@ -56,18 +56,18 @@ pub(super) fn run_clean(source: &str) -> TypedAst {
 
 pub(super) fn nth_decl_value_ty(ta: &TypedAst, n: usize) -> Type {
     let stmt_id = ta.top_level_statements[n];
-    let value_id = match &ta.stmt(stmt_id).kind {
+    let value_id = match &ta.try_stmt(stmt_id).unwrap().kind {
         TypedStmtKind::AssignGlobal { value, .. } => *value,
         other => panic!("expected AssignGlobal, got {other:?}"),
     };
-    ta.expr(value_id).ty.clone()
+    ta.try_expr(value_id).unwrap().ty.clone()
 }
 
 pub(super) fn nth_expr_stmt_ty(ta: &TypedAst, n: usize) -> Type {
     let stmt_id = ta.top_level_statements[n];
-    let expr_id = match &ta.stmt(stmt_id).kind {
+    let expr_id = match &ta.try_stmt(stmt_id).unwrap().kind {
         TypedStmtKind::Expr(e) => *e,
         other => panic!("expected expr stmt, got {other:?}"),
     };
-    ta.expr(expr_id).ty.clone()
+    ta.try_expr(expr_id).unwrap().ty.clone()
 }

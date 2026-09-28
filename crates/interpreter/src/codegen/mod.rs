@@ -465,7 +465,7 @@ fn codegen_inner(
         .iter()
         .find(|function| function.name.name == "main")
         .map(|function| function.return_type.clone());
-    let lowered = runtime_values::lower(ta, dependencies);
+    let lowered = runtime_values::lower(ta, dependencies)?;
     let ta = &lowered;
     let lowered_dependencies: Vec<_> = dependencies
         .iter()
@@ -473,7 +473,7 @@ fn codegen_inner(
         .collect();
     let dependencies: Vec<_> = lowered_dependencies.iter().collect();
     let dependencies = dependencies.as_slice();
-    let analysis = CodegenAnalysis::collect(ta, dependencies);
+    let analysis = CodegenAnalysis::collect(ta, dependencies)?;
     let pool = analysis.string_pool;
     let bigint_pool = analysis.bigint_pool;
     let dependency_usage = analysis.dependency_usage.finish(dependencies);
@@ -532,7 +532,7 @@ fn codegen_inner(
     let validator_bodies =
         recursive_validators::ValidatorBodies::collect(ta, dependency_types.iter());
     let recursive_validators =
-        recursive_validators::discover(ta, dependency_types.iter(), &validator_bodies);
+        recursive_validators::discover(ta, dependency_types.iter(), &validator_bodies)?;
     let mut all_shapes = ta.shapes.clone();
     all_shapes.extend(recursive_validators.extra_shapes.iter().cloned());
 
@@ -582,10 +582,10 @@ fn codegen_inner(
         &mut types,
         &mut symbols,
         &mut next_type_idx,
-    );
+    )?;
 
     // Box types emitted after user subtypes and closure types so their field refs resolve.
-    let boxed_value_types = box_types::collect(ta, &symbols);
+    let boxed_value_types = box_types::collect(ta, &symbols)?;
     box_types::emit(
         &boxed_value_types,
         &mut types,
@@ -614,11 +614,11 @@ fn codegen_inner(
         &mut next_func_idx,
         &mut next_global_idx,
         &mut symbols,
-    );
+    )?;
 
     // Class rec group last among types so class field slots can resolve string /
     // array / closure / box field types via `value_type`.
-    let mut class_plan = classes::ClassPlan::collect(ta, &imported_class_layouts);
+    let mut class_plan = classes::ClassPlan::collect(ta, &imported_class_layouts)?;
     class_plan.reserve_and_emit_types(&mut types, &mut next_type_idx, &mut symbols, ta, intrinsics);
     for value in &dependency_values {
         let defs = value.package;
@@ -1075,7 +1075,7 @@ fn codegen_inner(
         &recursive_validators.descriptor_types,
         &mut symbols,
         &mut next_func_idx,
-    );
+    )?;
 
     let field_lookup_signature = field_lookup::allocate(
         &mut types,
@@ -1472,7 +1472,7 @@ fn codegen_inner(
         );
     }
     for &stmt_id in &ctx.ta.top_level_statements {
-        emit_statement(&mut start_emitter, &ctx, stmt_id);
+        emit_statement(&mut start_emitter, &ctx, stmt_id)?;
         ctx.check_failure()?;
     }
     // CodeSection::byte_len excludes the leading vec-count LEB128; adjust to get Code-section-content offsets for DWARF.
@@ -1488,7 +1488,7 @@ fn codegen_inner(
             &func.params,
             func.body,
             &func.return_type,
-        );
+        )?;
         ctx.check_failure()?;
         let body_len = built.byte_len() as u64;
         code.function(&built);
@@ -1502,13 +1502,13 @@ fn codegen_inner(
     }
 
     for meta in &closure_metas {
-        let (built, _lines) = function_emitter::emit_closure_function(&ctx, meta);
+        let (built, _lines) = function_emitter::emit_closure_function(&ctx, meta)?;
         ctx.check_failure()?;
         code.function(&built);
     }
 
-    function_adapters::emit_bodies(&adapter_metas, &mut code, &ctx);
-    closure_coercions::emit_bodies(&closure_coercion_targets, &mut code, &ctx);
+    function_adapters::emit_bodies(&adapter_metas, &mut code, &ctx)?;
+    closure_coercions::emit_bodies(&closure_coercion_targets, &mut code, &ctx)?;
 
     user_subtypes::emit_method_bodies(
         &mut code,
@@ -1518,12 +1518,12 @@ fn codegen_inner(
         pkg_string_global_idx,
     );
 
-    class_plan.emit_bodies(&mut code, &ctx);
+    class_plan.emit_bodies(&mut code, &ctx)?;
     for guard in &instance_field_guards {
-        code.function(&field_guards::body(&ctx, guard));
+        code.function(&field_guards::body(&ctx, guard)?);
     }
     for (ty, _) in &type_descriptors {
-        code.function(&runtime_descriptors::body(&ctx, ty));
+        code.function(&runtime_descriptors::body(&ctx, ty)?);
     }
 
     code.function(&field_lookup::body(&ctx));
@@ -1534,7 +1534,7 @@ fn codegen_inner(
             &plan.body,
             plan.rejects_polymorphic_edge,
             validator_id as i32,
-        ));
+        )?);
     }
 
     if let (Some(_), Some(main_func_idx), Some(main_return_ty)) =
@@ -1729,6 +1729,10 @@ fn emit_package_string_init(
     emitter.instruction(Instruction::GlobalSet(pkg_string_global_idx));
 }
 
+fn arena_failure(error: crate::arena::ArenaError) -> CompilerFailure {
+    error.into_compiler_failure(CompilerStage::Codegen)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::{SymbolTable, ValueSymbol, codegen, codegen_with_type_info};
@@ -1797,9 +1801,9 @@ pub(crate) mod tests {
         );
         let packages = runtime_packages(packages);
         let (mut ta, mut diags) = infer(source, "main", &ast, &packages);
-        diags.extend(check(&ta));
-        capture(&mut ta);
-        desugar(&mut ta, crate::FileId(0));
+        diags.extend(check(&ta).unwrap());
+        ta = capture(ta).unwrap();
+        ta = desugar(ta, crate::FileId(0)).unwrap();
         assert!(diags.is_empty(), "unexpected typecheck diags: {diags:?}");
         ta
     }
@@ -1888,13 +1892,13 @@ pub(crate) mod tests {
             std::collections::BTreeMap::new(),
         );
         assert!(diags.is_empty(), "unexpected package diags: {diags:?}");
-        capture(&mut ta);
+        ta = capture(ta).unwrap();
         let root_file = owned_modules
             .iter()
             .find(|(module, _, _)| module.as_str() == "lib")
             .map(|(_, file, _)| *file)
             .expect("test package has lib module");
-        desugar(&mut ta, root_file);
+        ta = desugar(ta, root_file).unwrap();
 
         let (prelude_defs, host_defs, internal_defs) =
             prelude::cached_runtime_package_declarations();
@@ -5105,10 +5109,10 @@ function main(): void { middle(); }
         let packages = runtime_packages(&[]);
         let (mut ta, infer_diags) = infer(source, "main", &ast, &packages);
         assert!(infer_diags.is_empty(), "{infer_diags:?}");
-        let chk = check(&ta);
+        let chk = check(&ta).unwrap();
         assert!(chk.is_empty(), "{chk:?}");
-        capture(&mut ta);
-        desugar(&mut ta, crate::FileId(0));
+        ta = capture(ta).unwrap();
+        ta = desugar(ta, crate::FileId(0)).unwrap();
         ta
     }
 
@@ -5137,7 +5141,7 @@ function main(): void { middle(); }
     }
 
     fn box_walk_stmt(ta: &mut TypedAst, id: StmtId, names: &[&str]) {
-        let kind = ta.stmt(id).kind.clone();
+        let kind = ta.try_stmt(id).unwrap().kind.clone();
         match kind {
             TypedStmtKind::Block(stmts) => {
                 for s in stmts {
@@ -5146,7 +5150,7 @@ function main(): void { middle(); }
             }
             TypedStmtKind::Let { name, value, .. } => {
                 if names.iter().any(|n| *n == name.name)
-                    && let TypedStmtKind::Let { boxed, .. } = &mut ta.stmt_mut(id).kind
+                    && let TypedStmtKind::Let { boxed, .. } = &mut ta.try_stmt_mut(id).unwrap().kind
                 {
                     *boxed = true;
                 }
@@ -5216,7 +5220,8 @@ function main(): void { middle(); }
             TypedStmtKind::Expr(e) => box_walk_expr(ta, e, names),
             TypedStmtKind::AssignLocal { ident, value, .. } => {
                 if names.iter().any(|n| *n == ident.name)
-                    && let TypedStmtKind::AssignLocal { boxed, .. } = &mut ta.stmt_mut(id).kind
+                    && let TypedStmtKind::AssignLocal { boxed, .. } =
+                        &mut ta.try_stmt_mut(id).unwrap().kind
                 {
                     *boxed = true;
                 }
@@ -5254,7 +5259,8 @@ function main(): void { middle(); }
                 box_walk_stmt(ta, body, names);
                 for (i, c) in catches.iter().enumerate() {
                     if names.iter().any(|n| *n == c.binding.name)
-                        && let TypedStmtKind::Try { catches: cs, .. } = &mut ta.stmt_mut(id).kind
+                        && let TypedStmtKind::Try { catches: cs, .. } =
+                            &mut ta.try_stmt_mut(id).unwrap().kind
                     {
                         cs[i].boxed = true;
                     }
@@ -5268,11 +5274,12 @@ function main(): void { middle(); }
     }
 
     fn box_walk_expr(ta: &mut TypedAst, id: ExprId, names: &[&str]) {
-        let kind = ta.expr(id).kind.clone();
+        let kind = ta.try_expr(id).unwrap().kind.clone();
         match kind {
             TypedExprKind::LocalRef { ident, .. } => {
                 if names.iter().any(|n| *n == ident.name)
-                    && let TypedExprKind::LocalRef { boxed, .. } = &mut ta.expr_mut(id).kind
+                    && let TypedExprKind::LocalRef { boxed, .. } =
+                        &mut ta.try_expr_mut(id).unwrap().kind
                 {
                     *boxed = true;
                 }
@@ -5281,7 +5288,8 @@ function main(): void { middle(); }
             TypedExprKind::Closure { params, body, .. } => {
                 for (i, p) in params.iter().enumerate() {
                     if names.iter().any(|n| *n == p.name.name)
-                        && let TypedExprKind::Closure { params, .. } = &mut ta.expr_mut(id).kind
+                        && let TypedExprKind::Closure { params, .. } =
+                            &mut ta.try_expr_mut(id).unwrap().kind
                     {
                         params[i].boxed = true;
                     }
@@ -5396,7 +5404,7 @@ function main(): void { middle(); }
                         && let TypedExprKind::PostfixUnary {
                             target: crate::PostfixTarget::Local { boxed, .. },
                             ..
-                        } = &mut ta.expr_mut(id).kind
+                        } = &mut ta.try_expr_mut(id).unwrap().kind
                     {
                         *boxed = true;
                     }
@@ -5543,14 +5551,14 @@ function main(): void { middle(); }
         assert_eq!(result, "answer");
         let mut ta = boxed_typed_ast(source);
         box_named(&mut ta, &["n", "s"]);
-        let collected = super::box_types::collect(&ta, &mock_symbols_with_intrinsics());
+        let collected = super::box_types::collect(&ta, &mock_symbols_with_intrinsics()).unwrap();
         assert_eq!(collected.len(), 2);
     }
 
     #[test]
     fn no_boxed_bindings_produces_no_box_types() {
         let ta = boxed_typed_ast("function main(): void { let x: number = 1; }");
-        let collected = super::box_types::collect(&ta, &mock_symbols_with_intrinsics());
+        let collected = super::box_types::collect(&ta, &mock_symbols_with_intrinsics()).unwrap();
         assert!(collected.is_empty(), "{collected:?}");
     }
 
@@ -5705,7 +5713,9 @@ function main(): void { middle(); }
             }
         ";
         let ta = boxed_typed_ast(source);
-        let metas = super::analysis::CodegenAnalysis::collect(&ta, &[]).closure_metas;
+        let metas = super::analysis::CodegenAnalysis::collect(&ta, &[])
+            .unwrap()
+            .closure_metas;
         assert_eq!(metas.len(), 2);
         assert_eq!(metas[0].signature, metas[1].signature);
         let bytes = compile_with_closures(source);
@@ -5737,7 +5747,9 @@ function main(): void { middle(); }
     #[test]
     fn no_closures_no_closure_types_emitted() {
         let ta = boxed_typed_ast("function main(): void { let x: number = 1; }");
-        let metas = super::analysis::CodegenAnalysis::collect(&ta, &[]).closure_metas;
+        let metas = super::analysis::CodegenAnalysis::collect(&ta, &[])
+            .unwrap()
+            .closure_metas;
         assert!(metas.is_empty(), "{metas:?}");
     }
 
@@ -5833,7 +5845,9 @@ function main(): void { middle(); }
             "function greet(x: number): number { return x + 1; }
              function main(): void { greet(5); }",
         );
-        let metas = super::analysis::CodegenAnalysis::collect(&ta, &[]).adapter_metas;
+        let metas = super::analysis::CodegenAnalysis::collect(&ta, &[])
+            .unwrap()
+            .adapter_metas;
         assert!(metas.is_empty(), "{metas:?}");
     }
 
@@ -5850,7 +5864,9 @@ function main(): void { middle(); }
                  outer(inner());
              }",
         );
-        let metas = super::analysis::CodegenAnalysis::collect(&ta, &[]).adapter_metas;
+        let metas = super::analysis::CodegenAnalysis::collect(&ta, &[])
+            .unwrap()
+            .adapter_metas;
         assert!(
             metas.is_empty(),
             "direct-only callsites should produce no adapters, got {metas:?}",
@@ -5869,7 +5885,9 @@ function main(): void { middle(); }
                  apply(f2, 0);
              }",
         );
-        let metas = super::analysis::CodegenAnalysis::collect(&ta, &[]).adapter_metas;
+        let metas = super::analysis::CodegenAnalysis::collect(&ta, &[])
+            .unwrap()
+            .adapter_metas;
         assert_eq!(metas.len(), 2, "{metas:?}");
         let names: Vec<&str> = metas.iter().map(|m| m.name.as_str()).collect();
         assert!(names.contains(&"f1"));

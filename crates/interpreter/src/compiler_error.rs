@@ -24,6 +24,15 @@ pub enum CompilerFailure {
     },
 }
 
+impl CompilerFailure {
+    pub(crate) fn with_stage(mut self, current_stage: CompilerStage) -> Self {
+        match &mut self {
+            Self::Limit { stage, .. } | Self::Internal { stage, .. } => *stage = current_stage,
+        }
+        self
+    }
+}
+
 impl std::fmt::Display for CompilerFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let (category, stage, message) = match self {

@@ -1008,7 +1008,7 @@ impl<'a> Inferer<'a> {
             }
             match member.kind {
                 MemberKind::Method => self.check_method_override(&member),
-                MemberKind::Field => self.check_field_redeclaration(&member),
+                MemberKind::Field => self.check_field_redeclaration(&member)?,
                 MemberKind::Accessor => self.check_accessor_redeclaration(&member),
             }
         }
@@ -1295,15 +1295,18 @@ impl<'a> Inferer<'a> {
     /// the child's storage. Sound only if the child's type still satisfies the
     /// parent's, and only if the redeclaration doesn't reach storage it has no
     /// business naming.
-    fn check_field_redeclaration(&mut self, member: &RedeclarationCandidate) {
+    fn check_field_redeclaration(
+        &mut self,
+        member: &RedeclarationCandidate,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         let Some(child_field) = self.class_own_field_sig(&member.child_class, &member.name) else {
-            return;
+            return Ok(());
         };
         let opaque = self.opaque_own_generics(&member.child_class);
         let Some((parent_field, parent_class)) =
             self.ancestor_field_decl(&member.child_class, &member.name, &opaque)
         else {
-            return;
+            return Ok(());
         };
 
         let child_ty = substitute_typevars(&field_read_ty(&child_field), &opaque);
@@ -1324,7 +1327,7 @@ impl<'a> Inferer<'a> {
                     ),
                 ],
             );
-            return;
+            return Ok(());
         }
 
         // `private` is module-scoped, so a field private to another module is a
@@ -1345,7 +1348,7 @@ impl<'a> Inferer<'a> {
                      `{owner}` encapsulates — rename the field"
                 )],
             );
-            return;
+            return Ok(());
         }
 
         if child_field.visibility != parent_field.visibility {
@@ -1368,7 +1371,8 @@ impl<'a> Inferer<'a> {
             );
         }
 
-        self.record_narrowing_check(member, &child_ty, &opaque);
+        self.record_narrowing_check(member, &child_ty, &opaque)?;
+        Ok(())
     }
 
     /// Records the read guard for a redeclaration that *narrows* the inherited
@@ -1381,21 +1385,21 @@ impl<'a> Inferer<'a> {
         member: &RedeclarationCandidate,
         child_ty: &Type,
         opaque: &BTreeMap<String, Type>,
-    ) {
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         // Against the *widest* ancestor, not the nearest: the slot is shared with
         // every declaration above, so an intermediate class narrowing it first
         // must not shrink what this guard defends against.
         let Some((widest_field, widest_class)) =
             self.widest_ancestor_field_decl(&member.child_class, &member.name, opaque)
         else {
-            return;
+            return Ok(());
         };
         let parent_ty = field_read_ty(&widest_field);
         if super::assignable(&parent_ty, child_ty, self.resolver()) {
-            return;
+            return Ok(());
         }
         let Some(test) = self.narrowing_test(&parent_ty, child_ty) else {
-            return;
+            return Ok(());
         };
         let child_name = self.class_name_of(&member.child_class);
         let parent_name = self.class_name_of(&widest_class);
@@ -1416,13 +1420,14 @@ impl<'a> Inferer<'a> {
         };
         self.field_narrowing_checks
             .insert((member.child_class.clone(), field.clone()), check.clone());
-        if let Some(symbol) = self.types.lookup_mut(&child_name)
+        let _: () = if let Some(symbol) = self.types.lookup_mut(&child_name)
             && let TypeKind::Class {
                 narrowing_checks, ..
             } = &mut symbol.kind
         {
             narrowing_checks.insert(field.clone(), check);
-        }
+        };
+        Ok(())
     }
 
     /// Only skip the element walk when every array the ancestor admits also
@@ -2991,13 +2996,29 @@ impl<'a> Inferer<'a> {
                 // ctor, field initializers, and accessors don't have their own
                 // erasure loops (methods do; a second pass over their ranges
                 // is a no-op).
-                for i in exprs_before..self.typed_ast.exprs_len() {
-                    let id = crate::ExprId(i as u32);
-                    erase_generic_params_in_expr(self.typed_ast.expr_mut(id));
+                for id in self
+                    .typed_ast
+                    .expr_ids()
+                    .map_err(crate::typechecker::arena_failure)?
+                    .skip(exprs_before)
+                {
+                    erase_generic_params_in_expr(
+                        self.typed_ast
+                            .try_expr_mut(id)
+                            .map_err(crate::typechecker::arena_failure)?,
+                    );
                 }
-                for i in stmts_before..self.typed_ast.stmts_len() {
-                    let id = crate::StmtId(i as u32);
-                    erase_generic_params_in_stmt(self.typed_ast.stmt_mut(id));
+                for id in self
+                    .typed_ast
+                    .stmt_ids()
+                    .map_err(crate::typechecker::arena_failure)?
+                    .skip(stmts_before)
+                {
+                    erase_generic_params_in_stmt(
+                        self.typed_ast
+                            .try_stmt_mut(id)
+                            .map_err(crate::typechecker::arena_failure)?,
+                    );
                 }
             }
 
@@ -3257,13 +3278,29 @@ impl<'a> Inferer<'a> {
             self.reachable = prev_reachable;
             self.scopes.pop();
             self.pop_body_generics();
-            for i in exprs_before..self.typed_ast.exprs_len() {
-                let id = crate::ExprId(i as u32);
-                erase_generic_params_in_expr(self.typed_ast.expr_mut(id));
+            for id in self
+                .typed_ast
+                .expr_ids()
+                .map_err(crate::typechecker::arena_failure)?
+                .skip(exprs_before)
+            {
+                erase_generic_params_in_expr(
+                    self.typed_ast
+                        .try_expr_mut(id)
+                        .map_err(crate::typechecker::arena_failure)?,
+                );
             }
-            for i in stmts_before..self.typed_ast.stmts_len() {
-                let id = crate::StmtId(i as u32);
-                erase_generic_params_in_stmt(self.typed_ast.stmt_mut(id));
+            for id in self
+                .typed_ast
+                .stmt_ids()
+                .map_err(crate::typechecker::arena_failure)?
+                .skip(stmts_before)
+            {
+                erase_generic_params_in_stmt(
+                    self.typed_ast
+                        .try_stmt_mut(id)
+                        .map_err(crate::typechecker::arena_failure)?,
+                );
             }
 
             out.push(TypedClassMethod {
@@ -3352,13 +3389,29 @@ impl<'a> Inferer<'a> {
             self.current_static = prev_static;
             self.scopes.pop();
             self.pop_body_generics();
-            for i in exprs_before..self.typed_ast.exprs_len() {
-                let id = crate::ExprId(i as u32);
-                erase_generic_params_in_expr(self.typed_ast.expr_mut(id));
+            for id in self
+                .typed_ast
+                .expr_ids()
+                .map_err(crate::typechecker::arena_failure)?
+                .skip(exprs_before)
+            {
+                erase_generic_params_in_expr(
+                    self.typed_ast
+                        .try_expr_mut(id)
+                        .map_err(crate::typechecker::arena_failure)?,
+                );
             }
-            for i in stmts_before..self.typed_ast.stmts_len() {
-                let id = crate::StmtId(i as u32);
-                erase_generic_params_in_stmt(self.typed_ast.stmt_mut(id));
+            for id in self
+                .typed_ast
+                .stmt_ids()
+                .map_err(crate::typechecker::arena_failure)?
+                .skip(stmts_before)
+            {
+                erase_generic_params_in_stmt(
+                    self.typed_ast
+                        .try_stmt_mut(id)
+                        .map_err(crate::typechecker::arena_failure)?,
+                );
             }
 
             self.add_typed_function(crate::TypedFunction {

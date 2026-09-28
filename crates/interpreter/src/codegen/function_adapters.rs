@@ -13,7 +13,11 @@ pub struct AdapterMeta {
     pub signature: Type,
 }
 
-pub fn emit_bodies(metas: &[AdapterMeta], code: &mut CodeSection, ctx: &CodegenCtx<'_>) {
+pub fn emit_bodies(
+    metas: &[AdapterMeta],
+    code: &mut CodeSection,
+    ctx: &CodegenCtx<'_>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
@@ -68,7 +72,7 @@ pub fn emit_bodies(metas: &[AdapterMeta], code: &mut CodeSection, ctx: &CodegenC
                 ctx,
                 &crate::Type::Unknown,
                 p_ty,
-            );
+            )?;
         }
         emitter.instruction(Instruction::Call(target_idx));
         if !ret.is_void() {
@@ -77,4 +81,5 @@ pub fn emit_bodies(metas: &[AdapterMeta], code: &mut CodeSection, ctx: &CodegenC
         let built = emitter.build();
         code.function(&built);
     }
+    Ok(())
 }

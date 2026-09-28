@@ -57,7 +57,10 @@ impl<'a> Inferer<'a> {
     /// `LocalRef`/`GlobalRef` reads, so they name no narrow binding at all.
     ///
     /// Call after the closure's params are in scope.
-    pub(super) fn enter_closure_narrow_boundary(&mut self, span: Span) -> narrowing::NarrowEnv {
+    pub(super) fn enter_closure_narrow_boundary(
+        &mut self,
+        span: Span,
+    ) -> Result<narrowing::NarrowEnv, crate::compiler_error::CompilerFailure> {
         let (active, _assigned) = self.snapshot_active_narrowings(0);
         self.suspend_narrow_scopes();
         let mut seed = narrowing::NarrowEnv::new();
@@ -65,17 +68,20 @@ impl<'a> Inferer<'a> {
             if !self.narrowing_survives_closure(&path, span) {
                 continue;
             }
-            let Some(source_kind) = self.synthesize_unnarrowed_source(&path, span) else {
+            let Some(source_kind) = self.synthesize_unnarrowed_source(&path, span)? else {
                 continue;
             };
             let Some(from_ty) = self.declared_root_ty(&path) else {
                 continue;
             };
-            let source = self.typed_ast.push_expr(TypedExpr {
-                kind: source_kind,
-                span,
-                ty: from_ty,
-            });
+            let source = self
+                .typed_ast
+                .try_push_expr(TypedExpr {
+                    kind: source_kind,
+                    span,
+                    ty: from_ty,
+                })
+                .map_err(crate::typechecker::arena_failure)?;
             // Fresh binding: reusing the outer `#narrow_N` is exactly the
             // dangling cross-frame reference the reset exists to prevent.
             let binding = self.mint_narrow_binding(span);
@@ -89,7 +95,7 @@ impl<'a> Inferer<'a> {
             );
         }
         self.push_narrow_frame(seed.clone());
-        seed
+        Ok(seed)
     }
 
     /// A boundary no narrowing crosses: a nested function declaration is
@@ -176,16 +182,24 @@ impl<'a> Inferer<'a> {
     /// because a view that can't be synthesized (`synthesize_*_source` bails on
     /// `PathElem::Index`) keeps the already-typed expression as its source, and
     /// that expression may read through an inner region's shadow.
-    fn source_root_narrow_binding(&self, source: ExprId) -> Option<String> {
+    fn source_root_narrow_binding(
+        &self,
+        source: ExprId,
+    ) -> Result<Option<String>, crate::compiler_error::CompilerFailure> {
         let mut id = source;
         loop {
-            match &self.typed_ast.expr(id).kind {
+            match &self
+                .typed_ast
+                .try_expr(id)
+                .map_err(crate::typechecker::arena_failure)?
+                .kind
+            {
                 crate::TypedExprKind::FieldAccess { receiver, .. }
                 | crate::TypedExprKind::IndexAccess { receiver, .. } => id = *receiver,
                 crate::TypedExprKind::LocalNarrowRef { binding, .. } => {
-                    return Some(binding.name.clone());
+                    return Ok(Some(binding.name.clone()));
                 }
-                _ => return None,
+                _ => return Ok(None),
             }
         }
     }
@@ -251,9 +265,13 @@ impl<'a> Inferer<'a> {
     /// enclosing `if` re-runs its predicate, so a source naming it is dangling;
     /// a shadow from an *enclosing* region that is still open is fine, and such
     /// sources are common (`typeof x === "object" && "k" in x`).
-    pub(super) fn source_shadow_is_live(&self, source: ExprId) -> bool {
-        self.source_root_narrow_binding(source)
-            .is_none_or(|name| self.shadow_binding_is_live(&name))
+    pub(super) fn source_shadow_is_live(
+        &self,
+        source: ExprId,
+    ) -> Result<bool, crate::compiler_error::CompilerFailure> {
+        Ok(self
+            .source_root_narrow_binding(source)?
+            .is_none_or(|name| self.shadow_binding_is_live(&name)))
     }
 
     /// As [`Self::source_shadow_is_live`], but a wrap site also has the env it
@@ -264,10 +282,14 @@ impl<'a> Inferer<'a> {
     /// the site that caused it, rather than as an opaque codegen panic. Reads
     /// the live `narrow_scopes`, never a suspended closure frame: inside a
     /// closure body only the fresh stack is in scope.
-    fn narrow_source_is_in_scope(&self, env: &narrowing::NarrowEnv, source: ExprId) -> bool {
-        self.source_root_narrow_binding(source).is_none_or(|name| {
+    fn narrow_source_is_in_scope(
+        &self,
+        env: &narrowing::NarrowEnv,
+        source: ExprId,
+    ) -> Result<bool, crate::compiler_error::CompilerFailure> {
+        Ok(self.source_root_narrow_binding(source)?.is_none_or(|name| {
             env.values().any(|v| v.binding.name == name) || self.shadow_binding_is_live(&name)
-        })
+        }))
     }
 
     /// Whether an enclosing (suspended) closure boundary narrows this path —
@@ -302,7 +324,10 @@ impl<'a> Inferer<'a> {
     /// Recreate body-exit facts in a region at a loop's condition or update.
     /// Body-local bindings have left scope; surviving paths get fresh shadows
     /// so the tail never refers to a region defined inside the body.
-    pub(super) fn loop_tail_env(&mut self, env: &narrowing::NarrowEnv) -> narrowing::NarrowEnv {
+    pub(super) fn loop_tail_env(
+        &mut self,
+        env: &narrowing::NarrowEnv,
+    ) -> Result<narrowing::NarrowEnv, crate::compiler_error::CompilerFailure> {
         let mut tail = narrowing::NarrowEnv::new();
         tail.dropped = env
             .dropped
@@ -314,7 +339,11 @@ impl<'a> Inferer<'a> {
             if !self.path_root_in_scope(path) || matches!(view.narrowed_ty, Type::Error) {
                 continue;
             }
-            let span = self.typed_ast.expr(view.source).span;
+            let span = self
+                .typed_ast
+                .try_expr(view.source)
+                .map_err(crate::typechecker::arena_failure)?
+                .span;
             tail.insert(
                 path.clone(),
                 narrowing::NarrowedView {
@@ -323,7 +352,7 @@ impl<'a> Inferer<'a> {
                 },
             );
         }
-        tail
+        Ok(tail)
     }
 
     pub(super) fn push_narrow_frame(&mut self, mut env: narrowing::NarrowEnv) {
@@ -459,7 +488,7 @@ impl<'a> Inferer<'a> {
             std::collections::BTreeSet<narrowing::ReferencePath>,
         )>,
         anchor_span: Span,
-    ) -> bool {
+    ) -> Result<bool, crate::compiler_error::CompilerFailure> {
         let mut all_assigned: std::collections::BTreeSet<narrowing::ReferencePath> =
             std::collections::BTreeSet::new();
         for (_, b_assigned) in &breaks {
@@ -472,7 +501,7 @@ impl<'a> Inferer<'a> {
             exits.push(natural);
         }
         let post_env = match exits.len() {
-            0 => return false,
+            0 => return Ok(false),
             1 => exits.pop().expect("len == 1"),
             _ => exits
                 .into_iter()
@@ -488,9 +517,9 @@ impl<'a> Inferer<'a> {
                 .expect("len >= 2"),
         };
         if !post_env.is_empty() {
-            self.install_joined_narrowings(post_env, anchor_span);
+            self.install_joined_narrowings(post_env, anchor_span)?;
         }
-        true
+        Ok(true)
     }
 
     /// Match the declaration, not its spelling: unrelated same-named locals stay stable.
@@ -875,23 +904,26 @@ impl<'a> Inferer<'a> {
         ident: Ident,
         narrowed_ty: Type,
         span: Span,
-    ) {
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         self.invalidate_for_reassignment(path.clone(), span);
         // The assignment still commits; only the narrowing is dropped.
         if self.path_root_is_captured_mutator(&path) {
-            return;
+            return Ok(());
         }
         // Assignment narrowings don't use `wrap_narrow_regions` (no shadow),
         // but `NarrowedView` requires a `source` field. Use a fresh `LocalRef`
         // as a placeholder.
-        let source = self.typed_ast.push_expr(TypedExpr {
-            kind: crate::TypedExprKind::LocalRef {
-                ident: ident.clone(),
-                boxed: false,
-            },
-            span,
-            ty: narrowed_ty.clone(),
-        });
+        let source = self
+            .typed_ast
+            .try_push_expr(TypedExpr {
+                kind: crate::TypedExprKind::LocalRef {
+                    ident: ident.clone(),
+                    boxed: false,
+                },
+                span,
+                ty: narrowed_ty.clone(),
+            })
+            .map_err(crate::typechecker::arena_failure)?;
         let view = narrowing::NarrowedView {
             narrowed_ty,
             facts: narrowing::TypeFacts::EMPTY,
@@ -903,9 +935,10 @@ impl<'a> Inferer<'a> {
             top_narrowings.insert(path.clone(), view);
         }
         self.last_write_spans.insert(path.clone(), span);
-        if let Some(top_assigned) = self.assigned_scopes.last_mut() {
+        let _: () = if let Some(top_assigned) = self.assigned_scopes.last_mut() {
             top_assigned.insert(path);
-        }
+        };
+        Ok(())
     }
 
     /// A field or index write falsified the guard on `path`.
@@ -920,20 +953,32 @@ impl<'a> Inferer<'a> {
         );
     }
 
-    pub(super) fn index_read_ty(&self, receiver: ExprId, index: ExprId, declared: &Type) -> Type {
+    pub(super) fn index_read_ty(
+        &self,
+        receiver: ExprId,
+        index: ExprId,
+        declared: &Type,
+    ) -> Result<Type, crate::compiler_error::CompilerFailure> {
         let kind = crate::TypedExprKind::IndexAccess { receiver, index };
-        self.kind_to_reference_path(&kind)
+        Ok(self
+            .kind_to_reference_path(&kind)?
             .and_then(|path| self.lookup_narrowed_view(&path))
-            .map_or_else(|| declared.clone(), |view| view.narrowed_ty.clone())
+            .map_or_else(|| declared.clone(), |view| view.narrowed_ty.clone()))
     }
 
     /// Literal writes kill one element path; computed writes can affect every
     /// guarded element below the receiver, but do not replace the receiver itself.
-    pub(super) fn invalidate_index_write(&mut self, receiver: ExprId, index: ExprId, span: Span) {
+    pub(super) fn invalidate_index_write(
+        &mut self,
+        receiver: ExprId,
+        index: ExprId,
+        span: Span,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         let kind = crate::TypedExprKind::IndexAccess { receiver, index };
-        if let Some(path) = self.kind_to_reference_path(&kind) {
+        let _: () = if let Some(path) = self.kind_to_reference_path(&kind)? {
             self.invalidate_for_write(path, span);
-        }
+        };
+        Ok(())
         // TypeScript retains literal-index facts across computed writes. The
         // live read lowering preserves the actual element if that fact is stale.
     }
@@ -1060,7 +1105,7 @@ impl<'a> Inferer<'a> {
         body: StmtId,
         env: &narrowing::NarrowEnv,
         span: Span,
-    ) -> StmtId {
+    ) -> Result<StmtId, crate::compiler_error::CompilerFailure> {
         let mut wrapped = body;
         // The wrap-around-body loop makes the last entry OUTERMOST, and codegen
         // resolves LocalNarrowRef receivers by walking scope inside-out — hence
@@ -1091,19 +1136,22 @@ impl<'a> Inferer<'a> {
             if path.chain.is_empty() && matches!(path.root, narrowing::BindingId::Global(_)) {
                 continue;
             }
-            let (source_id, cast_info) = self.wrap_time_source(env, path, view, span);
-            wrapped = self.typed_ast.push_stmt(TypedStmt {
-                kind: TypedStmtKind::NarrowRegion {
-                    path: (*path).clone(),
-                    source: source_id,
-                    binding: view.binding.clone(),
-                    cast_info,
-                    body: wrapped,
-                },
-                span,
-            });
+            let (source_id, cast_info) = self.wrap_time_source(env, path, view, span)?;
+            wrapped = self
+                .typed_ast
+                .try_push_stmt(TypedStmt {
+                    kind: TypedStmtKind::NarrowRegion {
+                        path: (*path).clone(),
+                        source: source_id,
+                        binding: view.binding.clone(),
+                        cast_info,
+                        body: wrapped,
+                    },
+                    span,
+                })
+                .map_err(crate::typechecker::arena_failure)?;
         }
-        wrapped
+        Ok(wrapped)
     }
 
     /// Field read type on a narrowing receiver, shared by narrow-time
@@ -1170,23 +1218,31 @@ impl<'a> Inferer<'a> {
         path: &narrowing::ReferencePath,
         view: &narrowing::NarrowedView,
         span: Span,
-    ) -> (ExprId, narrowing::CastInfo) {
+    ) -> Result<(ExprId, narrowing::CastInfo), crate::compiler_error::CompilerFailure> {
         let (source, from_ty) = self
-            .synthesize_wrap_time_source(env, path, span)
-            .unwrap_or_else(|| {
-                let from_ty = self.typed_ast.expr(view.source).ty.clone();
-                (view.source, from_ty)
-            });
-        debug_assert!(
-            self.narrow_source_is_in_scope(env, source),
-            "narrow source for `{}` names a shadow that is not in scope here",
-            path.render(),
-        );
+            .synthesize_wrap_time_source(env, path, span)?
+            .map_or_else(
+                || {
+                    let from_ty = self
+                        .typed_ast
+                        .try_expr(view.source)
+                        .map_err(crate::typechecker::arena_failure)?
+                        .ty
+                        .clone();
+                    Ok((view.source, from_ty))
+                },
+                Ok::<_, crate::compiler_error::CompilerFailure>,
+            )?;
+        if !self.narrow_source_is_in_scope(env, source)? {
+            return Err(super::inference_failure(
+                "narrow source names a shadow outside its scope",
+            ));
+        }
         self.record_runtime_type_test(&view.narrowed_ty);
-        (
+        Ok((
             source,
             narrowing::cast_info_for(from_ty, view.narrowed_ty.clone()),
-        )
+        ))
     }
 
     /// Rebuilds the un-narrowed read a root region evaluates at entry or a
@@ -1199,7 +1255,7 @@ impl<'a> Inferer<'a> {
         env: &narrowing::NarrowEnv,
         path: &narrowing::ReferencePath,
         span: Span,
-    ) -> Option<(ExprId, Type)> {
+    ) -> Result<Option<(ExprId, Type)>, crate::compiler_error::CompilerFailure> {
         let mut current_path = narrowing::ReferencePath::root(path.root.clone());
         // Only consult narrowings for PROPER prefixes — `path` itself is the
         // one we're narrowing right now; its binding hasn't been
@@ -1227,7 +1283,9 @@ impl<'a> Inferer<'a> {
             ),
             None => match &path.root {
                 narrowing::BindingId::Local { name, .. } => {
-                    let entry = self.scopes.get(name)?;
+                    let Some(entry) = self.scopes.get(name) else {
+                        return Ok(None);
+                    };
                     (
                         crate::TypedExprKind::LocalRef {
                             ident: crate::Ident {
@@ -1239,28 +1297,43 @@ impl<'a> Inferer<'a> {
                         entry.ty.clone(),
                     )
                 }
-                narrowing::BindingId::This => {
-                    (crate::TypedExprKind::This, self.current_class.clone()?)
-                }
+                narrowing::BindingId::This => (
+                    crate::TypedExprKind::This,
+                    match self.current_class.clone() {
+                        Some(value) => value,
+                        None => return Ok(None),
+                    },
+                ),
                 narrowing::BindingId::Global(_) => (
-                    self.synthesize_unnarrowed_source(&current_path, span)?,
-                    self.declared_root_ty(&current_path)?,
+                    match self.synthesize_unnarrowed_source(&current_path, span)? {
+                        Some(value) => value,
+                        None => return Ok(None),
+                    },
+                    match self.declared_root_ty(&current_path) {
+                        Some(value) => value,
+                        None => return Ok(None),
+                    },
                 ),
             },
         };
-        let mut current_id = self.typed_ast.push_expr(TypedExpr {
-            kind: current_kind.clone(),
-            span,
-            ty: current_ty.clone(),
-        });
+        let mut current_id = self
+            .typed_ast
+            .try_push_expr(TypedExpr {
+                kind: current_kind.clone(),
+                span,
+                ty: current_ty.clone(),
+            })
+            .map_err(crate::typechecker::arena_failure)?;
         let _ = &mut current_kind;
         let chain_len = path.chain.len();
         for (idx, elem) in path.chain.iter().enumerate() {
             let narrowing::PathElem::Field(field_name) = elem else {
-                return None;
+                return Ok(None);
             };
             current_path.chain.push(elem.clone());
-            let field_ty = self.narrow_source_field_ty(&current_ty, field_name)?;
+            let Some(field_ty) = self.narrow_source_field_ty(&current_ty, field_name) else {
+                return Ok(None);
+            };
             // Intermediate steps use the env-narrowed type so the next
             // FieldAccess dispatches against the right shape. The final
             // element keeps the raw field type — the surrounding NarrowRegion's
@@ -1300,18 +1373,24 @@ impl<'a> Inferer<'a> {
                                 span,
                             },
                         },
-                        non_null_form(field_ty)?,
+                        match non_null_form(field_ty) {
+                            Some(value) => value,
+                            None => return Ok(None),
+                        },
                     ),
                 }
             };
-            current_id = self.typed_ast.push_expr(TypedExpr {
-                kind,
-                span,
-                ty: ty.clone(),
-            });
+            current_id = self
+                .typed_ast
+                .try_push_expr(TypedExpr {
+                    kind,
+                    span,
+                    ty: ty.clone(),
+                })
+                .map_err(crate::typechecker::arena_failure)?;
             current_ty = ty;
         }
-        Some((current_id, current_ty))
+        Ok(Some((current_id, current_ty)))
     }
 
     /// Three cases:
@@ -1324,7 +1403,7 @@ impl<'a> Inferer<'a> {
         &mut self,
         joined_narrowings: narrowing::NarrowEnv,
         if_span: Span,
-    ) {
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         let mut joined_rebound: Vec<(narrowing::ReferencePath, narrowing::NarrowedView)> =
             Vec::new();
         let mut field_path_mats: Vec<(narrowing::ReferencePath, narrowing::NarrowedView)> =
@@ -1376,7 +1455,11 @@ impl<'a> Inferer<'a> {
                     continue;
                 }
             };
-            let source_span = self.typed_ast.expr(view.source).span;
+            let source_span = self
+                .typed_ast
+                .try_expr(view.source)
+                .map_err(crate::typechecker::arena_failure)?
+                .span;
             let rebound = narrowing::NarrowedView {
                 binding: crate::Ident {
                     name: binding_name,
@@ -1398,7 +1481,7 @@ impl<'a> Inferer<'a> {
             if matches!(view.narrowed_ty, Type::Error) {
                 continue;
             }
-            let (source, cast_info) = self.wrap_time_source(&rebound_env, &path, &view, if_span);
+            let (source, cast_info) = self.wrap_time_source(&rebound_env, &path, &view, if_span)?;
             let binding = self.mint_narrow_binding(if_span);
             self.pending_post_if_materializations
                 .push(narrowing::PendingPostIfMaterialization {
@@ -1411,11 +1494,12 @@ impl<'a> Inferer<'a> {
             let rebound = narrowing::NarrowedView { binding, ..view };
             joined_rebound.push((path, rebound));
         }
-        if let Some(outer) = self.narrow_scopes.last_mut() {
+        let _: () = if let Some(outer) = self.narrow_scopes.last_mut() {
             for (path, view) in joined_rebound {
                 outer.insert(path, view);
             }
-        }
+        };
+        Ok(())
     }
 
     /// Innermost-out, matching `wrap_narrow_regions`'s nesting order.
@@ -1423,21 +1507,24 @@ impl<'a> Inferer<'a> {
         &mut self,
         body: StmtId,
         pending: Vec<narrowing::PendingPostIfMaterialization>,
-    ) -> StmtId {
+    ) -> Result<StmtId, crate::compiler_error::CompilerFailure> {
         let mut wrapped = body;
         for mat in pending {
-            wrapped = self.typed_ast.push_stmt(TypedStmt {
-                kind: TypedStmtKind::NarrowRegion {
-                    path: mat.path,
-                    source: mat.source,
-                    binding: mat.binding,
-                    cast_info: mat.cast_info,
-                    body: wrapped,
-                },
-                span: mat.span,
-            });
+            wrapped = self
+                .typed_ast
+                .try_push_stmt(TypedStmt {
+                    kind: TypedStmtKind::NarrowRegion {
+                        path: mat.path,
+                        source: mat.source,
+                        binding: mat.binding,
+                        cast_info: mat.cast_info,
+                        body: wrapped,
+                    },
+                    span: mat.span,
+                })
+                .map_err(crate::typechecker::arena_failure)?;
         }
-        wrapped
+        Ok(wrapped)
     }
 
     /// Expression-level analogue of [`Self::wrap_narrow_regions`] for
@@ -1448,7 +1535,7 @@ impl<'a> Inferer<'a> {
         inner: ExprId,
         env: &narrowing::NarrowEnv,
         span: Span,
-    ) -> ExprId {
+    ) -> Result<ExprId, crate::compiler_error::CompilerFailure> {
         let mut wrapped = inner;
         // `wrap_order` puts root narrowings OUTERMOST so codegen defines each
         // shadow's slot before inner `LocalNarrowRef`s look it up. Unsorted, a
@@ -1467,21 +1554,29 @@ impl<'a> Inferer<'a> {
             if path.chain.is_empty() && matches!(path.root, narrowing::BindingId::Global(_)) {
                 continue;
             }
-            let (source_id, cast_info) = self.wrap_time_source(env, path, view, span);
-            let inner_ty = self.typed_ast.expr(wrapped).ty.clone();
-            wrapped = self.typed_ast.push_expr(TypedExpr {
-                kind: crate::TypedExprKind::Narrowed {
-                    path: (*path).clone(),
-                    source: source_id,
-                    binding: view.binding.clone(),
-                    cast_info,
-                    inner: wrapped,
-                },
-                span,
-                ty: inner_ty,
-            });
+            let (source_id, cast_info) = self.wrap_time_source(env, path, view, span)?;
+            let inner_ty = self
+                .typed_ast
+                .try_expr(wrapped)
+                .map_err(crate::typechecker::arena_failure)?
+                .ty
+                .clone();
+            wrapped = self
+                .typed_ast
+                .try_push_expr(TypedExpr {
+                    kind: crate::TypedExprKind::Narrowed {
+                        path: (*path).clone(),
+                        source: source_id,
+                        binding: view.binding.clone(),
+                        cast_info,
+                        inner: wrapped,
+                    },
+                    span,
+                    ty: inner_ty,
+                })
+                .map_err(crate::typechecker::arena_failure)?;
         }
-        wrapped
+        Ok(wrapped)
     }
 }
 

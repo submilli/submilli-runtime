@@ -8,23 +8,33 @@ use crate::codegen::symbol_table::may_hold_null;
 use crate::{ExprId, Type};
 use wasm_encoder::{BlockType, Function, HeapType, Instruction, RefType, ValType};
 
-pub(super) fn emit_stringify(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, args: &[ExprId]) {
+pub(super) fn emit_stringify(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    args: &[ExprId],
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     debug_assert!(
         (1..=3).contains(&args.len()),
         "JSON.stringify arity is enforced by the typechecker"
     );
     let arg = args[0];
-    let arg_ty = ctx.ta.expr(arg).ty.clone();
+    let arg_ty = ctx
+        .ta
+        .try_expr(arg)
+        .map_err(crate::codegen::arena_failure)?
+        .ty
+        .clone();
     if args.len() == 1 {
-        emit_expr(emitter, ctx, arg);
+        emit_expr(emitter, ctx, arg)?;
         emit_stringify_value(emitter, ctx, &arg_ty);
-        return;
+        return Ok(());
     }
 
-    emit_expr(emitter, ctx, arg);
+    emit_expr(emitter, ctx, arg)?;
     let arg_local = emitter.add_anonymous_local(ctx.symbols.value_type(&arg_ty));
     emitter.instruction(Instruction::LocalSet(arg_local));
-    emit_stringify_optional_args(emitter, ctx, args, arg_local, &arg_ty);
+    emit_stringify_optional_args(emitter, ctx, args, arg_local, &arg_ty)?;
+    Ok(())
 }
 
 /// Serializes a value of `arg_ty` already on the stack into a `(ref $string)`.
@@ -126,19 +136,19 @@ fn emit_stringify_optional_args(
     args: &[ExprId],
     arg_local: u32,
     arg_ty: &Type,
-) {
-    emit_expr(emitter, ctx, args[1]);
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    emit_expr(emitter, ctx, args[1])?;
     emitter.instruction(Instruction::Drop);
 
     let space = if args.len() == 3 {
-        emit_stringify_space_arg(emitter, ctx, args[2])
+        emit_stringify_space_arg(emitter, ctx, args[2])?
     } else {
         StringifySpace::None
     };
 
     emitter.instruction(Instruction::LocalGet(arg_local));
     emit_stringify_value(emitter, ctx, arg_ty);
-    match space {
+    let _: () = match space {
         StringifySpace::None => {}
         StringifySpace::Dynamic(local) => emit_dynamic_space(emitter, ctx, local),
         StringifySpace::Number(local) => {
@@ -154,7 +164,8 @@ fn emit_stringify_optional_args(
             emit_pretty_string_host(emitter, ctx);
             emit_wrap_raw_string(emitter, ctx);
         }
-    }
+    };
+    Ok(())
 }
 
 enum StringifySpace {
@@ -168,35 +179,40 @@ fn emit_stringify_space_arg(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     space: ExprId,
-) -> StringifySpace {
-    let space_ty = ctx.ta.expr(space).ty.clone();
-    match space_ty.peel() {
+) -> Result<StringifySpace, crate::compiler_error::CompilerFailure> {
+    let space_ty = ctx
+        .ta
+        .try_expr(space)
+        .map_err(crate::codegen::arena_failure)?
+        .ty
+        .clone();
+    Ok(match space_ty.peel() {
         Type::Number | Type::NumberLiteral(_) => {
-            emit_expr(emitter, ctx, space);
+            emit_expr(emitter, ctx, space)?;
             let local = emitter.add_anonymous_local(ValType::F64);
             emitter.instruction(Instruction::LocalSet(local));
             StringifySpace::Number(local)
         }
         Type::String | Type::StringLiteral(_) => {
-            emit_expr(emitter, ctx, space);
+            emit_expr(emitter, ctx, space)?;
             let local = emitter.add_anonymous_local(ctx.symbols.value_type(&space_ty));
             emitter.instruction(Instruction::LocalSet(local));
             StringifySpace::String(local)
         }
         Type::Null => {
-            emit_expr(emitter, ctx, space);
+            emit_expr(emitter, ctx, space)?;
             emitter.instruction(Instruction::Drop);
             StringifySpace::None
         }
         Type::Unknown => {
-            emit_expr(emitter, ctx, space);
+            emit_expr(emitter, ctx, space)?;
             let local = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown));
             emitter.instruction(Instruction::LocalSet(local));
             StringifySpace::Dynamic(local)
         }
         Type::Error => StringifySpace::None,
         other => panic!("JSON.stringify space type should be checked, got {other:?}"),
-    }
+    })
 }
 
 fn emit_dynamic_space(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, space: u32) {
@@ -405,7 +421,11 @@ fn emit_to_string_direct(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, iface:
     emitter.instruction(Instruction::Call(func_idx));
 }
 
-pub(super) fn emit_parse(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, args: &[ExprId]) {
+pub(super) fn emit_parse(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    args: &[ExprId],
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     debug_assert_eq!(
         args.len(),
         1,
@@ -414,8 +434,16 @@ pub(super) fn emit_parse(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, args: 
 
     // Emit arg (the source `$string`), then extract field 1 — the host fn
     // signature takes `(ref $rawString)`, not the wrapped struct.
-    emit_expr(emitter, ctx, args[0]);
-    super::cast::emit_coerce_to_slot(emitter, ctx, &ctx.ta.expr(args[0]).ty, &Type::String);
+    emit_expr(emitter, ctx, args[0])?;
+    super::cast::emit_coerce_to_slot(
+        emitter,
+        ctx,
+        &ctx.ta
+            .try_expr(args[0])
+            .map_err(crate::codegen::arena_failure)?
+            .ty,
+        &Type::String,
+    );
     let string_type_idx = ctx.symbols.string_type_idx().expect("$string registered");
     emitter.instruction(Instruction::StructGet {
         struct_type_index: string_type_idx,
@@ -432,6 +460,7 @@ pub(super) fn emit_parse(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, args: 
     // On invalid JSON the host fn raises a catchable Error directly. Valid JSON
     // returns the language's `unknown` representation: `(ref null $Object)`.
     emitter.instruction(Instruction::Call(parse_idx));
+    Ok(())
 }
 
 /// Builds a constant `(ref $rawString)` inline via `array.new_fixed` — the packed

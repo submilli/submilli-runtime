@@ -617,16 +617,19 @@ impl Inferer<'_> {
             // A value that reads at its declared type where a guard should have
             // narrowed it lands here (a `return`/assignment mismatch rather
             // than a field access), so explain the refused narrowing too.
-            if let Some((narrow_help, _)) = self.narrowing_refusal_hint(&kind, &ty, want) {
+            if let Some((narrow_help, _)) = self.narrowing_refusal_hint(&kind, &ty, want)? {
                 help.extend(narrow_help);
             }
             self.error_with_help(span, format!("expected `{want}`, got `{ty}`"), help);
         }
-        let id = self.typed_ast.push_expr(TypedExpr {
-            kind,
-            span,
-            ty: ty.clone(),
-        });
+        let id = self
+            .typed_ast
+            .try_push_expr(TypedExpr {
+                kind,
+                span,
+                ty: ty.clone(),
+            })
+            .map_err(crate::typechecker::arena_failure)?;
         self.record_runtime_type_test(&ty);
         Ok((id, ty))
     }
@@ -1044,7 +1047,7 @@ impl Inferer<'_> {
                                 (typed_rhs, &rt),
                                 |l, r| plus_result(l, r).is_some(),
                             );
-                            self.error_with_narrowing_hint(span, message, help, culprit);
+                            self.error_with_narrowing_hint(span, message, help, culprit)?;
                             Type::Error
                         }
                     }
@@ -1104,7 +1107,7 @@ impl Inferer<'_> {
                                 format!("`{}` not defined for `{lt}` and `{rt}`", op_symbol(op)),
                                 Vec::new(),
                                 culprit,
-                            );
+                            )?;
                             Type::Error
                         }
                     }
@@ -1157,7 +1160,7 @@ impl Inferer<'_> {
                         format!("`{}` not defined for `{lt}` and `{rt}`", op_symbol(op)),
                         Vec::new(),
                         culprit,
-                    );
+                    )?;
                 }
                 Ok((
                     TypedExprKind::Binary {
@@ -1189,8 +1192,12 @@ impl Inferer<'_> {
                 let contextual_rhs = equality_operand_needs_context(self.ast, rhs)?;
                 let rhs_hint = contextual_rhs.then_some(&lt);
                 let (typed_rhs, rt) = self.infer_expr(rhs, rhs_hint)?;
-                let comparison_rhs =
-                    literal_comparison_type(&self.typed_ast, self.typed_ast.expr(typed_rhs));
+                let comparison_rhs = literal_comparison_type(
+                    &self.typed_ast,
+                    self.typed_ast
+                        .try_expr(typed_rhs)
+                        .map_err(crate::typechecker::arena_failure)?,
+                )?;
                 if !either_is_null_literal
                     && !equality_types_overlap(&lt, &comparison_rhs, self.resolver())
                 {
@@ -1257,7 +1264,7 @@ impl Inferer<'_> {
                     let lhs_span = self.ast.try_expr(lhs).map_err(super::arena_failure)?.span;
                     self.error_non_condition_type(lhs_span, &lhs_ty);
                 }
-                let (true_env, false_env) = self.predicate_envs(typed_lhs);
+                let (true_env, false_env) = self.predicate_envs(typed_lhs)?;
                 let rhs_env = match op {
                     BinOp::And => true_env,
                     BinOp::Or => false_env,
@@ -1271,7 +1278,7 @@ impl Inferer<'_> {
                     self.error_non_condition_type(rhs_span, &rhs_ty);
                 }
                 let rhs_span = self.ast.try_expr(rhs).map_err(super::arena_failure)?.span;
-                let wrapped_rhs = self.wrap_narrow_exprs(typed_rhs, &rhs_env, rhs_span);
+                let wrapped_rhs = self.wrap_narrow_exprs(typed_rhs, &rhs_env, rhs_span)?;
                 let lhs_kept = match op {
                     BinOp::And => super::narrowing::falsy_part(&lhs_ty),
                     BinOp::Or => super::narrowing::truthy_part(&lhs_ty),
@@ -1422,7 +1429,7 @@ impl Inferer<'_> {
                         format!("unary `{symbol}` not defined for `{operand_ty}`"),
                         help,
                         culprit,
-                    );
+                    )?;
                     (id, Type::Error)
                 }
             }
@@ -1504,11 +1511,14 @@ impl Inferer<'_> {
             BinOp::NotEq => {
                 // Wrap in `Unary { Not, … }` — push the inner first
                 // so the Unary can reference its ExprId.
-                let inner_id = self.typed_ast.push_expr(TypedExpr {
-                    kind: inner_kind,
-                    span,
-                    ty: Type::Boolean,
-                });
+                let inner_id = self
+                    .typed_ast
+                    .try_push_expr(TypedExpr {
+                        kind: inner_kind,
+                        span,
+                        ty: Type::Boolean,
+                    })
+                    .map_err(crate::typechecker::arena_failure)?;
                 Some((
                     TypedExprKind::Unary {
                         op: UnOp::Not,
@@ -1912,7 +1922,11 @@ impl Inferer<'_> {
             // narrowing, not pretending toString doesn't exist.
             // Mirrors the old `to_string_intrinsic_for` behavior.
             if matches!(recv_ty, Type::Null) && name.name == "toString" {
-                let recv_span = self.typed_ast.expr(typed_receiver).span;
+                let recv_span = self
+                    .typed_ast
+                    .try_expr(typed_receiver)
+                    .map_err(crate::typechecker::arena_failure)?
+                    .span;
                 let help = self.nullable_string_fix_help(
                     recv_span,
                     super::diagnostics::NullableStringContext::ToStringCall,
@@ -2074,7 +2088,7 @@ impl Inferer<'_> {
                     format!("cannot call value of type `{callee_ty}`"),
                     help,
                     culprit,
-                );
+                )?;
                 (None, Type::Error)
             }
         };
@@ -2240,18 +2254,21 @@ impl Inferer<'_> {
             typed_args.push(typed_id);
         }
         if arity1_parse_int {
-            let radix_id = self.typed_ast.push_expr(TypedExpr {
-                kind: TypedExprKind::Number(10.0),
-                span,
-                ty: Type::Number,
-            });
+            let radix_id = self
+                .typed_ast
+                .try_push_expr(TypedExpr {
+                    kind: TypedExprKind::Number(10.0),
+                    span,
+                    ty: Type::Number,
+                })
+                .map_err(crate::typechecker::arena_failure)?;
             typed_args.push(radix_id);
         }
         if arity_ok && let Some(ps) = &named_params {
-            self.fill_omitted_defaults(ps, args.len(), span, &mut typed_args);
+            self.fill_omitted_defaults(ps, args.len(), span, &mut typed_args)?;
         }
         if arity_ok && let Some(elem_ty) = rest_elem_ty {
-            self.pack_rest_tail(fixed_count, elem_ty, span, &mut typed_args);
+            self.pack_rest_tail(fixed_count, elem_ty, span, &mut typed_args)?;
         }
 
         // Static dispatch when the callee is a bare top-level
@@ -2278,7 +2295,7 @@ impl Inferer<'_> {
                 symbol: &symbol,
                 mangled,
             };
-            return Ok(self.static_call_expr(target, typed_args, type_predicate, &ret_ty, span));
+            return self.static_call_expr(target, typed_args, type_predicate, &ret_ty, span);
         } else {
             TypedExprKind::CallClosure {
                 callee: typed_callee,
@@ -2359,7 +2376,12 @@ impl Inferer<'_> {
             "infer_method_call requires sig with no method generics; \
              interface bindings handled at the call-site dispatch",
         );
-        let receiver_ty = self.typed_ast.expr(typed_receiver).ty.clone();
+        let receiver_ty = self
+            .typed_ast
+            .try_expr(typed_receiver)
+            .map_err(crate::typechecker::arena_failure)?
+            .ty
+            .clone();
         if let Some(targs) = &type_args {
             let help = self.format_signature(SignatureKind::Method {
                 receiver_ty: &receiver_ty,
@@ -2467,7 +2489,7 @@ impl Inferer<'_> {
         default: &crate::DefaultValue,
         param_ty: &Type,
         span: Span,
-    ) -> ExprId {
+    ) -> Result<ExprId, crate::compiler_error::CompilerFailure> {
         // The primitive arms (`Number`/`String`/`Boolean`) carry the literal's
         // own type, not the parameter's. The call-boundary coercion boxes an
         // argument by comparing its typed-AST type against the parameter slot;
@@ -2536,7 +2558,9 @@ impl Inferer<'_> {
                 }
             }
         };
-        self.typed_ast.push_expr(TypedExpr { kind, span, ty })
+        self.typed_ast
+            .try_push_expr(TypedExpr { kind, span, ty })
+            .map_err(crate::typechecker::arena_failure)
     }
 
     /// Append an argument for each fixed slot past `supplied` that the call
@@ -2553,22 +2577,26 @@ impl Inferer<'_> {
         supplied: usize,
         span: Span,
         typed_args: &mut Vec<ExprId>,
-    ) {
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         let fixed_count = params.iter().take_while(|p| !p.rest).count();
         if supplied >= fixed_count {
-            return;
+            return Ok(());
         }
         for p in &params[supplied..fixed_count] {
             let id = match &p.default {
-                Some(default) => self.synthesize_default_arg(default, &p.ty, span),
-                None => self.typed_ast.push_expr(TypedExpr {
-                    kind: TypedExprKind::Null,
-                    span,
-                    ty: Type::Error,
-                }),
+                Some(default) => self.synthesize_default_arg(default, &p.ty, span)?,
+                None => self
+                    .typed_ast
+                    .try_push_expr(TypedExpr {
+                        kind: TypedExprKind::Null,
+                        span,
+                        ty: Type::Error,
+                    })
+                    .map_err(crate::typechecker::arena_failure)?,
             };
             typed_args.push(id);
         }
+        Ok(())
     }
 
     /// Collapse the trailing arguments past `fixed_count` into the single
@@ -2581,7 +2609,7 @@ impl Inferer<'_> {
         element_ty: Type,
         span: Span,
         typed_args: &mut Vec<ExprId>,
-    ) {
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         // The actual per-arg types ride through as elements; `element_ty`
         // carries the rest's declared element type for downstream consumers
         // (e.g. `PackageDeclaration::from_typed_ast`).
@@ -2593,15 +2621,19 @@ impl Inferer<'_> {
         } else {
             Vec::new()
         };
-        let array_id = self.typed_ast.push_expr(TypedExpr {
-            kind: TypedExprKind::ArrayLiteral {
-                elements,
-                element_ty: element_ty.clone(),
-            },
-            span,
-            ty: Type::Array(Box::new(element_ty)),
-        });
+        let array_id = self
+            .typed_ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::ArrayLiteral {
+                    elements,
+                    element_ty: element_ty.clone(),
+                },
+                span,
+                ty: Type::Array(Box::new(element_ty)),
+            })
+            .map_err(crate::typechecker::arena_failure)?;
         typed_args.push(array_id);
+        Ok(())
     }
 
     /// `new Foo(args)` typechecks as `Foo.new(args)`. The
@@ -2826,48 +2858,50 @@ impl Inferer<'_> {
         type_predicate: Option<Box<crate::TypePredicate>>,
         ret: &Type,
         span: Span,
-    ) -> (TypedExprKind, Type) {
-        if let Some(server) = self
-            .packages_by_name
-            .get(target.package)
-            .and_then(|defs| defs.mcp_server.clone())
-        {
-            let mcp_call = TypedExprKind::McpCall {
-                server,
-                tool: target.symbol.to_string(),
-                args: args.clone(),
-            };
-            if matches!(ret.peel(), Type::Unknown) {
-                return (mcp_call, Type::Unknown);
-            }
+    ) -> Result<(TypedExprKind, Type), crate::compiler_error::CompilerFailure> {
+        Ok({
+            if let Some(server) = self
+                .packages_by_name
+                .get(target.package)
+                .and_then(|defs| defs.mcp_server.clone())
+            {
+                let mcp_call = TypedExprKind::McpCall {
+                    server,
+                    tool: target.symbol.to_string(),
+                    args: args.clone(),
+                };
+                if matches!(ret.peel(), Type::Unknown) {
+                    return Ok((mcp_call, Type::Unknown));
+                }
 
-            return match self.checked_cast_around(mcp_call, ret, span) {
-                Ok(checked) => checked,
-                Err(reason) => {
-                    self.error_with_help(
-                        span,
-                        format!(
-                            "@mcp/{} return type `{ret}` is not runtime-verifiable: {reason}",
-                            target.symbol
-                        ),
-                        vec![
+                return Ok(match self.checked_cast_around(mcp_call, ret, span)? {
+                    Ok(checked) => checked,
+                    Err(reason) => {
+                        self.error_with_help(
+                            span,
+                            format!(
+                                "@mcp/{} return type `{ret}` is not runtime-verifiable: {reason}",
+                                target.symbol
+                            ),
+                            vec![
                             "declare the tool return as `unknown`, or use a return schema whose \
                              generated type is supported by `as` validation"
                                 .to_string(),
                         ],
-                    );
-                    (TypedExprKind::Null, Type::Error)
-                }
-            };
-        }
-        (
-            TypedExprKind::Call {
-                mangled: target.mangled,
-                args,
-                type_predicate,
-            },
-            ret.clone(),
-        )
+                        );
+                        (TypedExprKind::Null, Type::Error)
+                    }
+                });
+            }
+            (
+                TypedExprKind::Call {
+                    mangled: target.mangled,
+                    args,
+                    type_predicate,
+                },
+                ret.clone(),
+            )
+        })
     }
 
     /// Rewrite `session.get<T>(key)` into a runtime-checked cast.
@@ -2892,49 +2926,53 @@ impl Inferer<'_> {
         result_ty: &Type,
         type_args_written: bool,
         span: Span,
-    ) -> (TypedExprKind, Type) {
-        // An `unknown` target admits every value, and the cast machinery treats
-        // it as a no-op widen that emits no test at all. As the *default* that
-        // is the honest reading of `get(key)` — an unchecked read. Written out,
-        // it asks for a check that cannot exist, so only that form is an error.
-        if matches!(result_ty.peel(), Type::Unknown) && !type_args_written {
-            return (call, result_ty.clone());
-        }
-        if matches!(result_ty.peel(), Type::Unknown) {
-            self.error_with_help(
-                span,
-                "`session.get<unknown>` would not verify anything: `unknown` admits \
+    ) -> Result<(TypedExprKind, Type), crate::compiler_error::CompilerFailure> {
+        Ok({
+            // An `unknown` target admits every value, and the cast machinery treats
+            // it as a no-op widen that emits no test at all. As the *default* that
+            // is the honest reading of `get(key)` — an unchecked read. Written out,
+            // it asks for a check that cannot exist, so only that form is an error.
+            if matches!(result_ty.peel(), Type::Unknown) && !type_args_written {
+                return Ok((call, result_ty.clone()));
+            }
+            if matches!(result_ty.peel(), Type::Unknown) {
+                self.error_with_help(
+                    span,
+                    "`session.get<unknown>` would not verify anything: `unknown` admits \
                  every value, so no runtime check is possible"
-                    .to_string(),
-                vec![
-                    "name the shape you expect — `session.get<Progress>(key)` — or drop \
+                        .to_string(),
+                    vec![
+                        "name the shape you expect — `session.get<Progress>(key)` — or drop \
                      the type argument and narrow the result yourself with a \
                      runtime-checked `as`: `session.get(key) as Progress`. Use \
                      `session.get<Progress | null>(key)` when the key may be absent."
-                        .to_string(),
-                ],
-            );
-            return (TypedExprKind::Null, Type::Error);
-        }
+                            .to_string(),
+                    ],
+                );
+                return Ok((TypedExprKind::Null, Type::Error));
+            }
 
-        match self.checked_cast_around(call, result_ty, span) {
-            Ok(checked) => checked,
-            Err(reason) => {
-                self.error_with_help(
-                    span,
-                    format!("`session.get<{result_ty}>` cannot be verified at runtime: {reason}"),
-                    vec![format!(
-                        "`session.get` checks the stored value against its type argument, so \
+            match self.checked_cast_around(call, result_ty, span)? {
+                Ok(checked) => checked,
+                Err(reason) => {
+                    self.error_with_help(
+                        span,
+                        format!(
+                            "`session.get<{result_ty}>` cannot be verified at runtime: {reason}"
+                        ),
+                        vec![format!(
+                            "`session.get` checks the stored value against its type argument, so \
                          that argument must be one the runtime can test: an object, array, \
                          tuple, union, or primitive shape, optionally `| null`. Call it at a \
                          concrete type instead of `{result_ty}` — `session.get<Progress>(key)` \
                          — or drop the type argument and narrow the result yourself with a \
                          runtime-checked `as`."
-                    )],
-                );
-                (TypedExprKind::Null, Type::Error)
+                        )],
+                    );
+                    (TypedExprKind::Null, Type::Error)
+                }
             }
-        }
+        })
     }
 
     /// Rewrite `llm.call<T>(model, prompt)` into a runtime-checked cast, and
@@ -3084,14 +3122,16 @@ impl Inferer<'_> {
         call: TypedExprKind,
         result_ty: &Type,
         span: Span,
-    ) -> (TypedExprKind, Type) {
-        match self.checked_cast_around(call, result_ty, span) {
-            Ok(checked) => checked,
-            Err(reason) => unreachable!(
-                "llm.call<{result_ty}> passed the cast gate in llm_call_schema \
+    ) -> Result<(TypedExprKind, Type), crate::compiler_error::CompilerFailure> {
+        Ok({
+            match self.checked_cast_around(call, result_ty, span)? {
+                Ok(checked) => checked,
+                Err(reason) => unreachable!(
+                    "llm.call<{result_ty}> passed the cast gate in llm_call_schema \
                  but failed it here: {reason}"
-            ),
-        }
+                ),
+            }
+        })
     }
 
     /// Replace the trailing `schema` argument — which the declaration's `null`
@@ -3108,18 +3148,22 @@ impl Inferer<'_> {
         typed_args: &mut [ExprId],
         schema: &str,
         span: Span,
-    ) {
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         let Some(slot) = params.iter().position(|p| p.name == "schema") else {
-            return;
+            return Ok(());
         };
         let Some(arg) = typed_args.get_mut(slot) else {
-            return;
+            return Ok(());
         };
-        *arg = self.typed_ast.push_expr(TypedExpr {
-            kind: TypedExprKind::String(schema.to_string()),
-            span,
-            ty: Type::String,
-        });
+        *arg = self
+            .typed_ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::String(schema.to_string()),
+                span,
+                ty: Type::String,
+            })
+            .map_err(crate::typechecker::arena_failure)?;
+        Ok(())
     }
 
     /// The inlined JSON Schema for `target_ty`, as the compact string the host
@@ -3157,26 +3201,29 @@ impl Inferer<'_> {
         call: TypedExprKind,
         target_ty: &Type,
         span: Span,
-    ) -> Result<(TypedExprKind, Type), &'static str> {
+    ) -> Result<Result<(TypedExprKind, Type), &'static str>, CompilerFailure> {
         let shape = self.reduce_interfaces_to_shapes(target_ty, &mut Vec::new());
         if let Some(reason) =
             unsupported_cast_target_reason(&shape, self.resolver(), &mut Vec::new())
         {
-            return Err(reason);
+            return Ok(Err(reason));
         }
-        let value = self.typed_ast.push_expr(TypedExpr {
-            kind: call,
-            span,
-            ty: Type::Unknown,
-        });
-        Ok((
+        let value = self
+            .typed_ast
+            .try_push_expr(TypedExpr {
+                kind: call,
+                span,
+                ty: Type::Unknown,
+            })
+            .map_err(crate::typechecker::arena_failure)?;
+        Ok(Ok((
             TypedExprKind::Cast {
                 value,
                 target_ty: target_ty.clone(),
                 check: Some(Box::new(shape)),
             },
             target_ty.clone(),
-        ))
+        )))
     }
 
     /// dispatch a `<ns>.<member>(args)` call where `<ns>` is
@@ -3265,7 +3312,7 @@ impl Inferer<'_> {
             symbol: &member.name,
             mangled: sym.mangled_name.clone(),
         };
-        Ok(self.static_call_expr(target, typed_args, type_predicate, ret, span))
+        self.static_call_expr(target, typed_args, type_predicate, ret, span)
     }
 
     /// `ClassName.member(args)` — dispatch a static method as a direct `Call`
@@ -3349,14 +3396,17 @@ impl Inferer<'_> {
                         self.walk_rejected_call_args(&args)?;
                         return Ok((TypedExprKind::Null, Type::Error));
                     };
-                    let callee = self.typed_ast.push_expr(TypedExpr {
-                        kind: TypedExprKind::GlobalRef {
-                            mangled,
-                            name: member.clone(),
-                        },
-                        span: member.span,
-                        ty: field.ty.clone(),
-                    });
+                    let callee = self
+                        .typed_ast
+                        .try_push_expr(TypedExpr {
+                            kind: TypedExprKind::GlobalRef {
+                                mangled,
+                                name: member.clone(),
+                            },
+                            span: member.span,
+                            ty: field.ty.clone(),
+                        })
+                        .map_err(crate::typechecker::arena_failure)?;
                     let typed_args = self.bind_fn_type_call_args(
                         &params,
                         &ret,
@@ -3618,10 +3668,10 @@ impl Inferer<'_> {
                 .record_authored_arguments(span, typed_args.clone());
         }
         if arity_ok {
-            self.fill_omitted_defaults(params, args.len(), span, &mut typed_args);
+            self.fill_omitted_defaults(params, args.len(), span, &mut typed_args)?;
         }
         if arity_ok && let Some(elem_ty) = rest_elem_ty {
-            self.pack_rest_tail(fixed_count, elem_ty, span, &mut typed_args);
+            self.pack_rest_tail(fixed_count, elem_ty, span, &mut typed_args)?;
         }
         Ok(typed_args)
     }
@@ -3678,7 +3728,17 @@ impl Inferer<'_> {
                     .collect::<Result<_, _>>()?;
                 let arg_ty = typed_args
                     .first()
-                    .map_or(Type::Error, |&id| self.typed_ast.expr(id).ty.clone());
+                    .map(|&id| {
+                        Ok::<_, crate::compiler_error::CompilerFailure>(
+                            self.typed_ast
+                                .try_expr(id)
+                                .map_err(crate::typechecker::arena_failure)?
+                                .ty
+                                .clone(),
+                        )
+                    })
+                    .transpose()?
+                    .unwrap_or(Type::Error);
                 if !matches!(
                     arg_ty.peel(),
                     Type::String | Type::StringLiteral(_) | Type::Error
@@ -3995,18 +4055,21 @@ impl Inferer<'_> {
                 Type::Error,
             ));
         };
-        let body = self.typed_ast.push_expr(TypedExpr {
-            kind: TypedExprKind::InterfacePropertyAccess {
-                receiver: typed_receiver,
-                iface: iface_mangled,
-                name: Ident {
-                    name: "body".to_string(),
-                    span,
+        let body = self
+            .typed_ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::InterfacePropertyAccess {
+                    receiver: typed_receiver,
+                    iface: iface_mangled,
+                    name: Ident {
+                        name: "body".to_string(),
+                        span,
+                    },
                 },
-            },
-            span,
-            ty: body_prop.ty,
-        });
+                span,
+                ty: body_prop.ty,
+            })
+            .map_err(crate::typechecker::arena_failure)?;
 
         Ok((
             TypedExprKind::IntrinsicCall {
@@ -4046,7 +4109,7 @@ impl Inferer<'_> {
             typed_args.push(typed_id);
         }
         if omitted_have_defaults {
-            self.fill_omitted_defaults(&params, args.len(), span, &mut typed_args);
+            self.fill_omitted_defaults(&params, args.len(), span, &mut typed_args)?;
         }
         Ok((
             TypedExprKind::IntrinsicCall {
@@ -4089,12 +4152,12 @@ impl Inferer<'_> {
                 if matches!(ty, Type::Error) {
                     had_error = true;
                 }
-                let interp_span = self.typed_ast.expr(typed_id).span;
-                Ok::<_, CompilerFailure>(self.wrap_interpolation_in_to_string(
-                    typed_id,
-                    &ty,
-                    interp_span,
-                ))
+                let interp_span = self
+                    .typed_ast
+                    .try_expr(typed_id)
+                    .map_err(crate::typechecker::arena_failure)?
+                    .span;
+                self.wrap_interpolation_in_to_string(typed_id, &ty, interp_span)
             })
             .collect::<Result<_, _>>()?;
 
@@ -4103,11 +4166,14 @@ impl Inferer<'_> {
         let mut operands: Vec<ExprId> = Vec::with_capacity(parts.len() + typed_interps.len());
         for (i, part) in parts.iter().enumerate() {
             if !part.is_empty() {
-                let lit_id = self.typed_ast.push_expr(TypedExpr {
-                    kind: TypedExprKind::String(part.clone()),
-                    span,
-                    ty: Type::String,
-                });
+                let lit_id = self
+                    .typed_ast
+                    .try_push_expr(TypedExpr {
+                        kind: TypedExprKind::String(part.clone()),
+                        span,
+                        ty: Type::String,
+                    })
+                    .map_err(crate::typechecker::arena_failure)?;
                 operands.push(lit_id);
             }
             if i < typed_interps.len() {
@@ -4122,7 +4188,11 @@ impl Inferer<'_> {
         // outer `infer_expr` push re-uses the existing node's span /
         // ty rather than synthesising an extra wrapper.
         if operands.len() == 1 {
-            let single = self.typed_ast.expr(operands[0]).clone();
+            let single = self
+                .typed_ast
+                .try_expr(operands[0])
+                .map_err(crate::typechecker::arena_failure)?
+                .clone();
             return Ok((single.kind, single.ty));
         }
 
@@ -4143,15 +4213,18 @@ impl Inferer<'_> {
         let mut acc = operands[0];
         let last_idx = operands.len() - 1;
         for &next in &operands[1..last_idx] {
-            acc = self.typed_ast.push_expr(TypedExpr {
-                kind: TypedExprKind::Binary {
-                    op: BinOp::Add,
-                    lhs: acc,
-                    rhs: next,
-                },
-                span,
-                ty: result_ty.clone(),
-            });
+            acc = self
+                .typed_ast
+                .try_push_expr(TypedExpr {
+                    kind: TypedExprKind::Binary {
+                        op: BinOp::Add,
+                        lhs: acc,
+                        rhs: next,
+                    },
+                    span,
+                    ty: result_ty.clone(),
+                })
+                .map_err(crate::typechecker::arena_failure)?;
         }
         Ok((
             TypedExprKind::Binary {
@@ -4177,10 +4250,10 @@ impl Inferer<'_> {
         expr_id: ExprId,
         ty: &Type,
         span: Span,
-    ) -> ExprId {
+    ) -> Result<ExprId, crate::compiler_error::CompilerFailure> {
         let peeled = ty.primitive_behavior();
         if matches!(peeled, Type::String | Type::StringLiteral(_)) {
-            return expr_id;
+            return Ok(expr_id);
         }
         let method_name = crate::Ident {
             name: "toString".to_string(),
@@ -4212,7 +4285,7 @@ impl Inferer<'_> {
                     ),
                     help,
                     culprit,
-                );
+                )?;
             } else {
                 self.error(
                     span,
@@ -4222,17 +4295,20 @@ impl Inferer<'_> {
                     ),
                 );
             }
-            return self.typed_ast.push_expr(TypedExpr {
-                kind: TypedExprKind::MethodCall {
-                    receiver: expr_id,
-                    iface: crate::mangle::prelude("Null"),
-                    name: method_name,
-                    args: Vec::new(),
-                    type_predicate: None,
-                },
-                span,
-                ty: Type::Error,
-            });
+            return self
+                .typed_ast
+                .try_push_expr(TypedExpr {
+                    kind: TypedExprKind::MethodCall {
+                        receiver: expr_id,
+                        iface: crate::mangle::prelude("Null"),
+                        name: method_name,
+                        args: Vec::new(),
+                        type_predicate: None,
+                    },
+                    span,
+                    ty: Type::Error,
+                })
+                .map_err(crate::typechecker::arena_failure);
         }
         let resolved = self.find_method(ty, "toString");
         let iface_mangled = resolved.as_ref().map_or_else(
@@ -4241,30 +4317,37 @@ impl Inferer<'_> {
         );
         // Fill defaulted params (Number/BigInt `toString(radix = 10)`) the
         // same way a spelled-out call site would — the import is arity-N.
-        let args = resolved.map_or_else(Vec::new, |(sig, _, _, _)| {
-            sig.params
-                .iter()
-                .filter_map(|p| p.default.as_ref().map(|d| (d.clone(), p.ty.clone())))
-                .collect::<Vec<_>>()
-                .into_iter()
-                .map(|(default, param_ty)| self.synthesize_default_arg(&default, &param_ty, span))
-                .collect()
-        });
-        self.typed_ast.push_expr(TypedExpr {
-            kind: TypedExprKind::MethodCall {
-                receiver: expr_id,
-                iface: iface_mangled,
-                name: method_name,
-                args,
-                type_predicate: None,
-            },
-            span,
-            ty: if matches!(ty, Type::Error) {
-                Type::Error
-            } else {
-                Type::String
-            },
-        })
+        let args = resolved
+            .map(|(sig, _, _, _)| {
+                sig.params
+                    .iter()
+                    .filter_map(|p| p.default.as_ref().map(|d| (d.clone(), p.ty.clone())))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|(default, param_ty)| {
+                        self.synthesize_default_arg(&default, &param_ty, span)
+                    })
+                    .collect::<Result<Vec<_>, CompilerFailure>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
+        self.typed_ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::MethodCall {
+                    receiver: expr_id,
+                    iface: iface_mangled,
+                    name: method_name,
+                    args,
+                    type_predicate: None,
+                },
+                span,
+                ty: if matches!(ty, Type::Error) {
+                    Type::Error
+                } else {
+                    Type::String
+                },
+            })
+            .map_err(crate::typechecker::arena_failure)
     }
 
     /// Pick the union variant an object literal is constructing, so its
@@ -4631,19 +4714,24 @@ impl Inferer<'_> {
                                     crate::ObjectField::required(field_ty.clone()),
                                 )]),
                             };
-                            let source = self.typed_ast.push_expr(TypedExpr {
-                                kind: TypedExprKind::ObjectLiteral {
-                                    members: vec![crate::TypedObjectMember::Value(typed_value)],
-                                    fields: vec![crate::TypedObjectFieldOrigin {
-                                        name: field.name.clone(),
-                                        source: crate::TypedObjectFieldSource::Literal(typed_value),
-                                        optional: false,
-                                        ty: field_ty.clone(),
-                                    }],
-                                },
-                                span: value_span,
-                                ty: source_ty,
-                            });
+                            let source = self
+                                .typed_ast
+                                .try_push_expr(TypedExpr {
+                                    kind: TypedExprKind::ObjectLiteral {
+                                        members: vec![crate::TypedObjectMember::Value(typed_value)],
+                                        fields: vec![crate::TypedObjectFieldOrigin {
+                                            name: field.name.clone(),
+                                            source: crate::TypedObjectFieldSource::Literal(
+                                                typed_value,
+                                            ),
+                                            optional: false,
+                                            ty: field_ty.clone(),
+                                        }],
+                                    },
+                                    span: value_span,
+                                    ty: source_ty,
+                                })
+                                .map_err(crate::typechecker::arena_failure)?;
                             object_members.push(crate::TypedObjectMember::Spread {
                                 source,
                                 by_name: false,
@@ -4666,14 +4754,14 @@ impl Inferer<'_> {
                         } else {
                             self.infer_expr(value, None)?
                         };
-                    if let Some(value) = self.spread_source_index(typed_source, &source_ty) {
+                    if let Some(value) = self.spread_source_index(typed_source, &source_ty)? {
                         for (field, _) in merged.values_mut() {
                             field.ty = Type::union(vec![field.ty.clone(), value.clone()]);
                         }
                         spread_index_values.push(value);
                     }
                     let Some(SpreadFields { fields, by_name }) =
-                        self.spread_source_fields(typed_source, &source_ty, spread_span)
+                        self.spread_source_fields(typed_source, &source_ty, spread_span)?
                     else {
                         continue;
                     };
@@ -4796,11 +4884,14 @@ impl Inferer<'_> {
                     // `ref.null $Object` in codegen (
                     // null-fill rule), matching the original
                     // behavior of the non-spread path.
-                    let null_id = self.typed_ast.push_expr(TypedExpr {
-                        kind: TypedExprKind::Null,
-                        span,
-                        ty: Type::Null,
-                    });
+                    let null_id = self
+                        .typed_ast
+                        .try_push_expr(TypedExpr {
+                            kind: TypedExprKind::Null,
+                            span,
+                            ty: Type::Null,
+                        })
+                        .map_err(crate::typechecker::arena_failure)?;
                     if !has_spread {
                         object_members.push(crate::TypedObjectMember::Value(null_id));
                     }
@@ -4880,9 +4971,9 @@ impl Inferer<'_> {
         typed_source: ExprId,
         source_ty: &Type,
         span: Span,
-    ) -> Option<SpreadFields> {
+    ) -> Result<Option<SpreadFields>, crate::compiler_error::CompilerFailure> {
         let mut alternatives = Vec::new();
-        self.collect_spread_alternatives(typed_source, source_ty, &mut alternatives);
+        self.collect_spread_alternatives(typed_source, source_ty, &mut alternatives)?;
         let mut objects: Vec<ObjectFields> = Vec::new();
         for alternative in alternatives {
             match alternative {
@@ -4897,7 +4988,10 @@ impl Inferer<'_> {
                     ref args,
                     ..
                 } if self.resolver().index_signature(&alternative).is_some() => {
-                    let fields = self.resolver().interface_full_form(mangled, name, args)?;
+                    let Some(fields) = self.resolver().interface_full_form(mangled, name, args)
+                    else {
+                        return Ok(None);
+                    };
                     if !objects.contains(&fields) {
                         objects.push(fields);
                     }
@@ -4909,20 +5003,20 @@ impl Inferer<'_> {
                             "cannot spread interface `{name}` into an object literal — only structural object types are accepted",
                         ),
                     );
-                    return None;
+                    return Ok(None);
                 }
                 // Inner inference already reported it.
-                Type::Error => return None,
+                Type::Error => return Ok(None),
                 other => {
                     self.error(
                         span,
                         format!("cannot spread `{other}` into an object literal"),
                     );
-                    return None;
+                    return Ok(None);
                 }
             }
         }
-        Some(match objects.as_slice() {
+        Ok(Some(match objects.as_slice() {
             [only] => SpreadFields {
                 fields: only.clone(),
                 by_name: false,
@@ -4931,28 +5025,48 @@ impl Inferer<'_> {
                 fields: merge_spread_alternatives(&objects),
                 by_name: true,
             },
-        })
+        }))
     }
 
-    pub(super) fn spread_source_index(&self, source: ExprId, ty: &Type) -> Option<Type> {
+    pub(super) fn spread_source_index(
+        &self,
+        source: ExprId,
+        ty: &Type,
+    ) -> Result<Option<Type>, crate::compiler_error::CompilerFailure> {
         let mut alternatives = Vec::new();
-        self.collect_spread_alternatives(source, ty, &mut alternatives);
+        self.collect_spread_alternatives(source, ty, &mut alternatives)?;
         let values: Vec<Type> = alternatives
             .iter()
             .filter_map(|ty| self.resolver().index_signature(ty).map(|i| *i.value))
             .collect();
-        (!values.is_empty()).then(|| Type::union(values))
+        Ok((!values.is_empty()).then(|| Type::union(values)))
     }
 
-    fn collect_spread_alternatives(&self, id: ExprId, ty: &Type, out: &mut Vec<Type>) {
-        if let TypedExprKind::Ternary { then_, else_, .. } = self.typed_ast.expr(id).kind {
+    fn collect_spread_alternatives(
+        &self,
+        id: ExprId,
+        ty: &Type,
+        out: &mut Vec<Type>,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        if let TypedExprKind::Ternary { then_, else_, .. } = self
+            .typed_ast
+            .try_expr(id)
+            .map_err(crate::typechecker::arena_failure)?
+            .kind
+        {
             for branch in [then_, else_] {
-                let branch_ty = self.typed_ast.expr(branch).ty.clone();
-                self.collect_spread_alternatives(branch, &branch_ty, out);
+                let branch_ty = self
+                    .typed_ast
+                    .try_expr(branch)
+                    .map_err(crate::typechecker::arena_failure)?
+                    .ty
+                    .clone();
+                self.collect_spread_alternatives(branch, &branch_ty, out)?;
             }
-            return;
+            return Ok(());
         }
         collect_union_members(ty, out);
+        Ok(())
     }
 
     fn infer_array_literal(
@@ -5647,7 +5761,11 @@ impl Inferer<'_> {
         // non-path receivers (calls, binops, …) — the rewrite then
         // skips and we fall through to the normal field-access path.
         if let Some(path) = self
-            .expr_to_reference_path(self.typed_ast.expr(typed_receiver))
+            .expr_to_reference_path(
+                self.typed_ast
+                    .try_expr(typed_receiver)
+                    .map_err(crate::typechecker::arena_failure)?,
+            )?
             .map(|mut p| {
                 p.chain
                     .push(super::narrowing::PathElem::Field(name.name.clone()));
@@ -5776,7 +5894,11 @@ impl Inferer<'_> {
                 }
             }
             Type::Union(members) if members.iter().all(Self::is_field_bearing) => {
-                let path = self.expr_to_reference_path(self.typed_ast.expr(typed_receiver));
+                let path = self.expr_to_reference_path(
+                    self.typed_ast
+                        .try_expr(typed_receiver)
+                        .map_err(crate::typechecker::arena_failure)?,
+                )?;
                 self.union_field_read_ty(
                     name.span,
                     path.as_ref(),
@@ -5819,7 +5941,7 @@ impl Inferer<'_> {
                         typed_receiver,
                         &receiver_ty,
                         &name.name,
-                    );
+                    )?;
                 }
                 Type::Error
             }
@@ -6066,7 +6188,7 @@ impl Inferer<'_> {
                         format!("cannot index into non-array type `{receiver_ty}`"),
                         help,
                         culprit,
-                    );
+                    )?;
                 }
                 Type::Error
             }
@@ -6076,7 +6198,7 @@ impl Inferer<'_> {
             receiver: typed_receiver,
             index: typed_index,
         };
-        if let Some(path) = self.kind_to_reference_path(&kind)
+        if let Some(path) = self.kind_to_reference_path(&kind)?
             && let Some(view) = self.lookup_narrowed_view(&path)
         {
             return Ok((
@@ -6157,7 +6279,7 @@ impl Inferer<'_> {
                 id,
                 &ty,
                 self.ast.try_expr(value).map_err(super::arena_failure)?.span,
-            ) {
+            )? {
                 for name in spread.keys() {
                     method_sources.remove(name);
                 }
@@ -6710,7 +6832,7 @@ impl Inferer<'_> {
         // scope so a shadowed root is rejected. `pending_joins` is deliberately
         // left alone: a `break` inside the body snapshots an empty range over
         // the fresh, shorter stack.
-        let narrow_seed = self.enter_closure_narrow_boundary(span);
+        let narrow_seed = self.enter_closure_narrow_boundary(span)?;
         // The body's own `return`s end its flow, not the enclosing one's.
         let prev_reachable = std::mem::replace(&mut self.reachable, true);
         // Nor can its `break`/`continue` reach a loop or switch outside it.
@@ -6744,18 +6866,18 @@ impl Inferer<'_> {
         let (typed_body, body_ret) = match body {
             ArrowBody::Expr(e) => {
                 let (id, t) = self.infer_expr(e, ret_hint.as_ref())?;
-                self.validate_type_predicate_return(id, span);
+                self.validate_type_predicate_return(id, span)?;
                 // Re-emit the seeded regions inside the body, over a fresh read
                 // of the `const` — the closure then captures the ordinary
                 // binding and re-checks the cast per call.
-                let id = self.wrap_narrow_exprs(id, &narrow_seed, span);
+                let id = self.wrap_narrow_exprs(id, &narrow_seed, span)?;
                 (ClosureBody::Expr(id), t)
             }
             ArrowBody::Block(b) => {
                 let id = self.infer_stmt(b)?.ok_or_else(|| {
                     super::inference_failure("arrow block body is a Block, never a type-only decl")
                 })?;
-                let id = self.wrap_narrow_regions(id, &narrow_seed, span);
+                let id = self.wrap_narrow_regions(id, &narrow_seed, span)?;
                 let t = if let Some(t) = &annotated_ret {
                     t.clone()
                 } else {
@@ -6899,7 +7021,7 @@ impl Inferer<'_> {
             .kind
             .clone();
         Ok(match operand_kind {
-            ExprKind::Identifier(ident) => self.infer_postfix_ident(op, op_symbol, ident, span),
+            ExprKind::Identifier(ident) => self.infer_postfix_ident(op, op_symbol, ident, span)?,
             ExprKind::FieldAccess { receiver, name } => {
                 self.infer_postfix_field(op, op_symbol, receiver, name, span)?
             }
@@ -6983,7 +7105,7 @@ impl Inferer<'_> {
         op_symbol: &'static str,
         target: Ident,
         span: Span,
-    ) -> (TypedExprKind, Type) {
+    ) -> Result<(TypedExprKind, Type), crate::compiler_error::CompilerFailure> {
         // Function-local first, then top-level (mirrors `infer_assign`).
         if let Some(entry) = self.scopes.get(&target.name).cloned() {
             if entry.is_const {
@@ -7035,9 +7157,9 @@ impl Inferer<'_> {
                     target.clone(),
                     result_ty.clone(),
                     target.span,
-                );
+                )?;
             }
-            return (
+            return Ok((
                 TypedExprKind::PostfixUnary {
                     op,
                     target: crate::PostfixTarget::Local {
@@ -7047,15 +7169,15 @@ impl Inferer<'_> {
                     },
                 },
                 result_ty,
-            );
+            ));
         }
-        if let Some(entry) = self.top_symbols.get(&target.name) {
+        Ok(if let Some(entry) = self.top_symbols.get(&target.name) {
             let kind_clone = entry.kind.clone();
             let prev_span = entry.declaration_span;
             let mangled = entry.mangled_name.clone();
             match kind_clone {
                 ValueKind::Let { ty, .. } => {
-                    self.postfix_on_global(op, op_symbol, target, mangled, ty, span)
+                    self.postfix_on_global(op, op_symbol, target, mangled, ty, span)?
                 }
                 ValueKind::Const { ty, .. } => {
                     self.diagnostics.push(Diagnostic {
@@ -7123,7 +7245,7 @@ impl Inferer<'_> {
                 },
                 Type::Error,
             )
-        }
+        })
     }
 
     fn infer_postfix_field(
@@ -7141,7 +7263,7 @@ impl Inferer<'_> {
             StaticWrite::NotClassName => {}
             StaticWrite::Rejected { .. } => return Ok((TypedExprKind::Null, Type::Error)),
             StaticWrite::Resolved { mangled, ty } => {
-                return Ok(self.postfix_on_global(op, op_symbol, name, mangled, ty, span));
+                return self.postfix_on_global(op, op_symbol, name, mangled, ty, span);
             }
         }
         let recv_span = self
@@ -7222,7 +7344,11 @@ impl Inferer<'_> {
                 Type::Error
             }
         } else {
-            let recv_path = self.expr_to_reference_path(self.typed_ast.expr(typed_receiver));
+            let recv_path = self.expr_to_reference_path(
+                self.typed_ast
+                    .try_expr(typed_receiver)
+                    .map_err(crate::typechecker::arena_failure)?,
+            )?;
             self.report_unassignable_field_target(
                 recv_span,
                 &name,
@@ -7249,7 +7375,11 @@ impl Inferer<'_> {
                 format!("expected `{target_ty}`, got `{result_ty}`"),
             );
         }
-        if let Some(mut path) = self.expr_to_reference_path(self.typed_ast.expr(typed_receiver)) {
+        if let Some(mut path) = self.expr_to_reference_path(
+            self.typed_ast
+                .try_expr(typed_receiver)
+                .map_err(crate::typechecker::arena_failure)?,
+        )? {
             path.chain
                 .push(narrowing::PathElem::Field(name.name.clone()));
             self.invalidate_for_write(path, name.span);
@@ -7281,7 +7411,7 @@ impl Inferer<'_> {
         mangled: crate::MangledName,
         ty: Type,
         span: Span,
-    ) -> (TypedExprKind, Type) {
+    ) -> Result<(TypedExprKind, Type), crate::compiler_error::CompilerFailure> {
         let path = narrowing::ReferencePath::root(narrowing::BindingId::Global(mangled.clone()));
         let operand_ty = self
             .lookup_narrowed_view(&path)
@@ -7291,16 +7421,18 @@ impl Inferer<'_> {
             Type::Number | Type::NumberLiteral(_) | Type::BigInt | Type::Error
         ) {
             self.error(
-                name.span,
-                format!("postfix `{op_symbol}` expects `number` or `bigint`, found `{operand_ty}`",),
-            );
+                    name.span,
+                    format!(
+                        "postfix `{op_symbol}` expects `number` or `bigint`, found `{operand_ty}`",
+                    ),
+                );
         }
         let result_ty = postfix_result_ty(&operand_ty);
         if !matches!(ty, Type::Error) && !assignable(&result_ty, &ty, self.resolver()) {
             self.error(span, format!("expected `{ty}`, got `{result_ty}`"));
         }
-        self.renarrow_global_after_write(&name, &mangled, &ty, result_ty.clone());
-        (
+        self.renarrow_global_after_write(&name, &mangled, &ty, result_ty.clone())?;
+        Ok((
             TypedExprKind::PostfixUnary {
                 op,
                 target: crate::PostfixTarget::Global {
@@ -7310,7 +7442,7 @@ impl Inferer<'_> {
                 },
             },
             result_ty,
-        )
+        ))
     }
 
     /// The slot type `x.f++` reads and writes back on a class receiver.
@@ -7390,7 +7522,7 @@ impl Inferer<'_> {
         } else {
             elem_ty.clone()
         };
-        let read_ty = self.index_read_ty(typed_receiver, typed_index, &declared_read);
+        let read_ty = self.index_read_ty(typed_receiver, typed_index, &declared_read)?;
         if !matches!(
             read_ty.primitive_behavior(),
             Type::Number | Type::NumberLiteral(_) | Type::BigInt | Type::Error
@@ -7404,7 +7536,7 @@ impl Inferer<'_> {
         if !matches!(elem_ty, Type::Error) && !assignable(&result_ty, &elem_ty, self.resolver()) {
             self.error(span, format!("expected `{elem_ty}`, got `{result_ty}`"));
         }
-        self.invalidate_index_write(typed_receiver, typed_index, span);
+        self.invalidate_index_write(typed_receiver, typed_index, span)?;
         Ok((
             TypedExprKind::PostfixUnary {
                 op,
@@ -7437,15 +7569,15 @@ impl Inferer<'_> {
         let cond_span = self.ast.try_expr(cond).map_err(super::arena_failure)?.span;
         self.check_condition_ty(&cond_ty, cond_span);
 
-        let (true_env, false_env) = self.predicate_envs(typed_cond);
+        let (true_env, false_env) = self.predicate_envs(typed_cond)?;
 
         let (typed_then, then_ty) = self.infer_conditional_operand(then_, &true_env, expected)?;
         let then_span = self.ast.try_expr(then_).map_err(super::arena_failure)?.span;
-        let wrapped_then = self.wrap_narrow_exprs(typed_then, &true_env, then_span);
+        let wrapped_then = self.wrap_narrow_exprs(typed_then, &true_env, then_span)?;
 
         let (typed_else, else_ty) = self.infer_conditional_operand(else_, &false_env, expected)?;
         let else_span = self.ast.try_expr(else_).map_err(super::arena_failure)?.span;
-        let wrapped_else = self.wrap_narrow_exprs(typed_else, &false_env, else_span);
+        let wrapped_else = self.wrap_narrow_exprs(typed_else, &false_env, else_span)?;
 
         let result_ty = branch_result_type(then_ty, else_ty, self.resolver());
         Ok((
@@ -7533,11 +7665,14 @@ impl Inferer<'_> {
         if !asserts_chain {
             return Ok((kind, ty));
         }
-        let value = self.typed_ast.push_expr(TypedExpr {
-            kind,
-            span,
-            ty: ty.clone(),
-        });
+        let value = self
+            .typed_ast
+            .try_push_expr(TypedExpr {
+                kind,
+                span,
+                ty: ty.clone(),
+            })
+            .map_err(crate::typechecker::arena_failure)?;
         let result_ty = self.check_non_null_assert(&ty, span);
         Ok((TypedExprKind::NonNullAssert { value }, result_ty))
     }
@@ -7572,7 +7707,11 @@ impl Inferer<'_> {
         // narrowings are keyed on it, so a step whose path a guard has already
         // proven reads at the narrowed type, the way the same `o.b.y` does
         // outside a chain. `None` once a step has no path form.
-        let mut step_path = self.expr_to_reference_path(self.typed_ast.expr(typed_base));
+        let mut step_path = self.expr_to_reference_path(
+            self.typed_ast
+                .try_expr(typed_base)
+                .map_err(crate::typechecker::arena_failure)?,
+        )?;
         let mut typed_parts: Vec<TypedChainPart> = Vec::with_capacity(parts.len());
         // Set by a `Field` step that resolved to a method, consumed by the
         // `Call` step that lifts the pair into a `MethodCall`.
@@ -7633,7 +7772,7 @@ impl Inferer<'_> {
                 &mut typed_parts,
                 &mut pending_method,
             )?;
-            step_path = self.extend_chain_path(step_path, &typed_part);
+            step_path = self.extend_chain_path(step_path, &typed_part)?;
             receiver_ty = self.narrow_step_result(
                 step_path.as_ref(),
                 &pending_method,
@@ -8361,23 +8500,33 @@ impl Inferer<'_> {
         &self,
         path: Option<super::narrowing::ReferencePath>,
         part: &TypedChainPart,
-    ) -> Option<super::narrowing::ReferencePath> {
-        let mut path = path?;
-        match part {
+    ) -> Result<Option<super::narrowing::ReferencePath>, crate::compiler_error::CompilerFailure>
+    {
+        let Some(mut path) = path else {
+            return Ok(None);
+        };
+        Ok(match part {
             TypedChainPart::Field { name, .. } | TypedChainPart::InterfaceProperty { name, .. } => {
                 path.chain
                     .push(super::narrowing::PathElem::Field(name.name.clone()));
                 Some(path)
             }
             TypedChainPart::Index { idx, .. } => {
-                let lit =
-                    super::predicate_envs::index_literal_value(&self.typed_ast.expr(*idx).kind)?;
+                let Some(lit) = super::predicate_envs::index_literal_value(
+                    &self
+                        .typed_ast
+                        .try_expr(*idx)
+                        .map_err(crate::typechecker::arena_failure)?
+                        .kind,
+                ) else {
+                    return Ok(None);
+                };
                 path.chain.push(super::narrowing::PathElem::Index(lit));
                 Some(path)
             }
             TypedChainPart::NonNull { .. } => Some(path),
             TypedChainPart::Call { .. } | TypedChainPart::MethodCall { .. } => None,
-        }
+        })
     }
 
     /// A method resolved in chain position: its function type plus the owner's
@@ -9338,8 +9487,11 @@ fn equality_operand_needs_context(ast: &crate::Ast, id: ExprId) -> Result<bool, 
     )
 }
 
-pub(super) fn literal_comparison_type(ast: &crate::TypedAst, expr: &TypedExpr) -> Type {
-    match &expr.kind {
+pub(super) fn literal_comparison_type(
+    ast: &crate::TypedAst,
+    expr: &TypedExpr,
+) -> Result<Type, crate::compiler_error::CompilerFailure> {
+    Ok(match &expr.kind {
         TypedExprKind::String(value) => Type::StringLiteral(value.clone()),
         TypedExprKind::Number(value) => Type::NumberLiteral(crate::types::LiteralF64(*value)),
         TypedExprKind::Boolean(value) => Type::BooleanLiteral(*value),
@@ -9347,8 +9499,12 @@ pub(super) fn literal_comparison_type(ast: &crate::TypedAst, expr: &TypedExpr) -
             op: UnOp::Neg | UnOp::Pos,
             operand,
         } => {
-            let TypedExprKind::Number(value) = ast.expr(*operand).kind else {
-                return expr.ty.clone();
+            let TypedExprKind::Number(value) = ast
+                .try_expr(*operand)
+                .map_err(crate::typechecker::arena_failure)?
+                .kind
+            else {
+                return Ok(expr.ty.clone());
             };
             let negative = matches!(expr.kind, TypedExprKind::Unary { op: UnOp::Neg, .. });
             let signed = if negative { -value } else { value };
@@ -9356,7 +9512,7 @@ pub(super) fn literal_comparison_type(ast: &crate::TypedAst, expr: &TypedExpr) -
             Type::NumberLiteral(crate::types::LiteralF64(canonical))
         }
         _ => expr.ty.clone(),
-    }
+    })
 }
 
 fn equality_types_overlap(
@@ -9600,7 +9756,7 @@ mod tests {
     fn session_get_shapes(ta: &TypedAst) -> Vec<(bool, Option<Type>)> {
         let mut out = Vec::new();
         for i in 0..ta.exprs_len() {
-            let expr = ta.expr(crate::ExprId(i as u32));
+            let expr = ta.try_expr(crate::ExprId(i as u32)).unwrap();
             let TypedExprKind::Cast { value, check, .. } = &expr.kind else {
                 continue;
             };
@@ -9608,7 +9764,7 @@ mod tests {
                 mangled,
                 return_cast,
                 ..
-            } = &ta.expr(*value).kind
+            } = &ta.try_expr(*value).unwrap().kind
             else {
                 continue;
             };
@@ -9661,7 +9817,7 @@ mod tests {
         );
 
         for i in 0..ta.exprs_len() {
-            let expr = ta.expr(crate::ExprId(i as u32));
+            let expr = ta.try_expr(crate::ExprId(i as u32)).unwrap();
             if let TypedExprKind::GenericCall {
                 mangled,
                 return_cast,
@@ -9773,13 +9929,13 @@ mod tests {
     fn identifier_resolves_to_local_param() {
         let ta = run_clean("function f(n: number): number { return n; }");
         let body = ta.functions[0].body;
-        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+        let TypedStmtKind::Block(stmts) = &ta.try_stmt(body).unwrap().kind else {
             panic!("expected Block");
         };
-        let TypedStmtKind::Return(Some(ret_val)) = &ta.stmt(stmts[0]).kind else {
+        let TypedStmtKind::Return(Some(ret_val)) = &ta.try_stmt(stmts[0]).unwrap().kind else {
             panic!("expected Return(Some)");
         };
-        let ret_expr = ta.expr(*ret_val);
+        let ret_expr = ta.try_expr(*ret_val).unwrap();
         assert_eq!(ret_expr.ty, Type::Number);
         assert!(matches!(ret_expr.kind, TypedExprKind::LocalRef { .. }));
     }
@@ -9788,13 +9944,13 @@ mod tests {
     fn identifier_resolves_to_local_let() {
         let ta = run_clean("function f(): number { let n: number = 1; return n; }");
         let body = ta.functions[0].body;
-        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+        let TypedStmtKind::Block(stmts) = &ta.try_stmt(body).unwrap().kind else {
             panic!("expected Block");
         };
-        let TypedStmtKind::Return(Some(ret_val)) = &ta.stmt(stmts[1]).kind else {
+        let TypedStmtKind::Return(Some(ret_val)) = &ta.try_stmt(stmts[1]).unwrap().kind else {
             panic!("expected Return(Some)");
         };
-        assert_eq!(ta.expr(*ret_val).ty, Type::Number);
+        assert_eq!(ta.try_expr(*ret_val).unwrap().ty, Type::Number);
     }
 
     #[test]
@@ -9811,14 +9967,14 @@ mod tests {
     fn function_local_let_is_local_ref() {
         let ta = run_clean("function f(): number { let n: number = 1; return n; }");
         let body = ta.functions[0].body;
-        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+        let TypedStmtKind::Block(stmts) = &ta.try_stmt(body).unwrap().kind else {
             panic!("expected Block");
         };
-        let TypedStmtKind::Return(Some(ret_val)) = &ta.stmt(stmts[1]).kind else {
+        let TypedStmtKind::Return(Some(ret_val)) = &ta.try_stmt(stmts[1]).unwrap().kind else {
             panic!("expected Return(Some)");
         };
         assert!(matches!(
-            ta.expr(*ret_val).kind,
+            ta.try_expr(*ret_val).unwrap().kind,
             TypedExprKind::LocalRef { boxed: false, .. }
         ));
     }
@@ -9827,14 +9983,14 @@ mod tests {
     fn param_reference_is_local_ref() {
         let ta = run_clean("function f(n: number): number { return n; }");
         let body = ta.functions[0].body;
-        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+        let TypedStmtKind::Block(stmts) = &ta.try_stmt(body).unwrap().kind else {
             panic!("expected Block");
         };
-        let TypedStmtKind::Return(Some(ret_val)) = &ta.stmt(stmts[0]).kind else {
+        let TypedStmtKind::Return(Some(ret_val)) = &ta.try_stmt(stmts[0]).unwrap().kind else {
             panic!("expected Return(Some)");
         };
         assert!(matches!(
-            ta.expr(*ret_val).kind,
+            ta.try_expr(*ret_val).unwrap().kind,
             TypedExprKind::LocalRef { boxed: false, .. }
         ));
     }
@@ -9845,14 +10001,14 @@ mod tests {
         // `let r`, so it's a GlobalRef.
         let ta = run_clean("let r: number = 1; function f(): number { return r; }");
         let body = ta.functions[0].body;
-        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+        let TypedStmtKind::Block(stmts) = &ta.try_stmt(body).unwrap().kind else {
             panic!("expected Block");
         };
-        let TypedStmtKind::Return(Some(ret_val)) = &ta.stmt(stmts[0]).kind else {
+        let TypedStmtKind::Return(Some(ret_val)) = &ta.try_stmt(stmts[0]).unwrap().kind else {
             panic!("expected Return(Some)");
         };
         assert!(matches!(
-            ta.expr(*ret_val).kind,
+            ta.try_expr(*ret_val).unwrap().kind,
             TypedExprKind::GlobalRef { .. }
         ));
     }
@@ -9862,12 +10018,12 @@ mod tests {
         let ta = run_clean("function g(x: number): number { return x; } let r: number = g(1);");
         // top_level: [Let r (uses g), Function g]
         let assign = ta.top_level_statements[0];
-        let TypedStmtKind::AssignGlobal { value, .. } = &ta.stmt(assign).kind else {
+        let TypedStmtKind::AssignGlobal { value, .. } = &ta.try_stmt(assign).unwrap().kind else {
             panic!("expected AssignGlobal");
         };
         // The call resolves to a static `Call` carrying the callee's
         // mangled name directly — no callee expression indirection.
-        let TypedExprKind::Call { mangled, .. } = &ta.expr(*value).kind else {
+        let TypedExprKind::Call { mangled, .. } = &ta.try_expr(*value).unwrap().kind else {
             panic!("expected static Call (not CallClosure)");
         };
         assert_eq!(mangled.as_str(), "main#g");
@@ -9878,16 +10034,16 @@ mod tests {
         let (ta, diags) = run("let y: number = q;");
         assert_eq!(diags.len(), 1);
         let assign = ta.top_level_statements[0];
-        let TypedStmtKind::AssignGlobal { value, .. } = &ta.stmt(assign).kind else {
+        let TypedStmtKind::AssignGlobal { value, .. } = &ta.try_stmt(assign).unwrap().kind else {
             panic!("expected AssignGlobal");
         };
         // Placeholder for unresolved names; downstream suppression via
         // Type::Error means the variant choice doesn't propagate.
         assert!(matches!(
-            ta.expr(*value).kind,
+            ta.try_expr(*value).unwrap().kind,
             TypedExprKind::LocalRef { boxed: false, .. }
         ));
-        assert_eq!(ta.expr(*value).ty, Type::Error);
+        assert_eq!(ta.try_expr(*value).unwrap().ty, Type::Error);
     }
 
     // ----------------------- `+` -----------------------
@@ -10145,10 +10301,10 @@ mod tests {
     fn object_literal_no_annotation_infers_shape() {
         let ta = run_clean("function main(): void { let p = { x: 1, y: 2 }; }");
         let body = ta.functions[0].body;
-        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+        let TypedStmtKind::Block(stmts) = &ta.try_stmt(body).unwrap().kind else {
             panic!("expected Block");
         };
-        let TypedStmtKind::Let { ty, .. } = &ta.stmt(stmts[0]).kind else {
+        let TypedStmtKind::Let { ty, .. } = &ta.try_stmt(stmts[0]).unwrap().kind else {
             panic!("expected Let");
         };
         assert_eq!(*ty, point_ty());
@@ -10160,10 +10316,10 @@ mod tests {
             run("function main(): void { let p: { x: number; y: number } = { y: 2, x: 1 }; }");
         assert!(d.is_empty(), "unexpected diagnostics: {d:?}");
         let body = ta.functions[0].body;
-        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+        let TypedStmtKind::Block(stmts) = &ta.try_stmt(body).unwrap().kind else {
             panic!("expected Block");
         };
-        let TypedStmtKind::Let { ty, .. } = &ta.stmt(stmts[0]).kind else {
+        let TypedStmtKind::Let { ty, .. } = &ta.try_stmt(stmts[0]).unwrap().kind else {
             panic!("expected Let");
         };
         assert_eq!(*ty, point_ty());
@@ -10218,10 +10374,10 @@ mod tests {
     fn array_literal_infers_element_type() {
         let ta = run_clean("function main(): void { let xs = [1, 2, 3]; }");
         let body = ta.functions[0].body;
-        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+        let TypedStmtKind::Block(stmts) = &ta.try_stmt(body).unwrap().kind else {
             panic!("expected Block");
         };
-        let TypedStmtKind::Let { ty, .. } = &ta.stmt(stmts[0]).kind else {
+        let TypedStmtKind::Let { ty, .. } = &ta.try_stmt(stmts[0]).unwrap().kind else {
             panic!("expected Let");
         };
         assert_eq!(*ty, Type::Array(Box::new(Type::Number)));
@@ -10253,10 +10409,10 @@ mod tests {
         let (ta, d) = run("function main(): void { let xs: number[] = []; }");
         assert!(d.is_empty(), "unexpected diagnostics: {d:?}");
         let body = ta.functions[0].body;
-        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+        let TypedStmtKind::Block(stmts) = &ta.try_stmt(body).unwrap().kind else {
             panic!("expected Block");
         };
-        let TypedStmtKind::Let { ty, .. } = &ta.stmt(stmts[0]).kind else {
+        let TypedStmtKind::Let { ty, .. } = &ta.try_stmt(stmts[0]).unwrap().kind else {
             panic!("expected Let");
         };
         assert_eq!(*ty, Type::Array(Box::new(Type::Number)));
@@ -10266,10 +10422,10 @@ mod tests {
     fn field_access_returns_field_type() {
         let ta = run_clean("function main(): void { let p = { x: 1 }; let q = p.x; }");
         let body = ta.functions[0].body;
-        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+        let TypedStmtKind::Block(stmts) = &ta.try_stmt(body).unwrap().kind else {
             panic!("expected Block");
         };
-        let TypedStmtKind::Let { ty, .. } = &ta.stmt(stmts[1]).kind else {
+        let TypedStmtKind::Let { ty, .. } = &ta.try_stmt(stmts[1]).unwrap().kind else {
             panic!("expected Let");
         };
         assert_eq!(*ty, Type::Number);
@@ -10297,10 +10453,10 @@ mod tests {
     fn index_access_returns_element_type() {
         let ta = run_clean("function main(): void { let xs = [1, 2, 3]; let q = xs[0]; }");
         let body = ta.functions[0].body;
-        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+        let TypedStmtKind::Block(stmts) = &ta.try_stmt(body).unwrap().kind else {
             panic!("expected Block");
         };
-        let TypedStmtKind::Let { ty, .. } = &ta.stmt(stmts[1]).kind else {
+        let TypedStmtKind::Let { ty, .. } = &ta.try_stmt(stmts[1]).unwrap().kind else {
             panic!("expected Let");
         };
         assert_eq!(*ty, Type::Number);
@@ -10409,26 +10565,28 @@ function main(): void { if (result < 10) { } }
         let (ta, diags) = run(r#"function main(): void { console.log("hi"); }"#);
         assert!(diags.is_empty(), "expected clean typecheck, got {diags:?}");
         let body = ta.functions[0].body;
-        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+        let TypedStmtKind::Block(stmts) = &ta.try_stmt(body).unwrap().kind else {
             panic!("expected block body");
         };
-        let TypedStmtKind::Expr(call_id) = &ta.stmt(stmts[0]).kind else {
+        let TypedStmtKind::Expr(call_id) = &ta.try_stmt(stmts[0]).unwrap().kind else {
             panic!("expected expression statement");
         };
-        let TypedExprKind::GenericMethodCall { name, args, .. } = &ta.expr(*call_id).kind else {
+        let TypedExprKind::GenericMethodCall { name, args, .. } =
+            &ta.try_expr(*call_id).unwrap().kind
+        else {
             panic!(
                 "expected GenericMethodCall, got {:?}",
-                ta.expr(*call_id).kind,
+                ta.try_expr(*call_id).unwrap().kind,
             );
         };
         assert_eq!(name.name, "log");
         assert_eq!(args.len(), 2);
         assert!(args[0].is_generic);
         let rest = args[1].expr;
-        let TypedExprKind::ArrayLiteral { elements, .. } = &ta.expr(rest).kind else {
+        let TypedExprKind::ArrayLiteral { elements, .. } = &ta.try_expr(rest).unwrap().kind else {
             panic!(
                 "expected packed rest ArrayLiteral, got {:?}",
-                ta.expr(rest).kind
+                ta.try_expr(rest).unwrap().kind
             );
         };
         assert!(elements.is_empty());
@@ -10439,16 +10597,18 @@ function main(): void { if (result < 10) { } }
         let (ta, diags) = run(r#"function main(): void { console.log("a", 1, true); }"#);
         assert!(diags.is_empty(), "expected clean typecheck, got {diags:?}");
         let body = ta.functions[0].body;
-        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+        let TypedStmtKind::Block(stmts) = &ta.try_stmt(body).unwrap().kind else {
             panic!("expected block body");
         };
-        let TypedStmtKind::Expr(call_id) = &ta.stmt(stmts[0]).kind else {
+        let TypedStmtKind::Expr(call_id) = &ta.try_stmt(stmts[0]).unwrap().kind else {
             panic!("expected expression statement");
         };
-        let TypedExprKind::GenericMethodCall { name, args, .. } = &ta.expr(*call_id).kind else {
+        let TypedExprKind::GenericMethodCall { name, args, .. } =
+            &ta.try_expr(*call_id).unwrap().kind
+        else {
             panic!(
                 "expected GenericMethodCall, got {:?}",
-                ta.expr(*call_id).kind,
+                ta.try_expr(*call_id).unwrap().kind,
             );
         };
         assert_eq!(name.name, "log");
@@ -10458,11 +10618,11 @@ function main(): void { if (result < 10) { } }
         let TypedExprKind::ArrayLiteral {
             elements,
             element_ty,
-        } = &ta.expr(rest).kind
+        } = &ta.try_expr(rest).unwrap().kind
         else {
             panic!(
                 "expected packed rest ArrayLiteral, got {:?}",
-                ta.expr(rest).kind
+                ta.try_expr(rest).unwrap().kind
             );
         };
         assert_eq!(elements.len(), 2);
@@ -10507,7 +10667,7 @@ function main(): void { if (result < 10) { } }
             .find(|f| f.name.name == "main")
             .expect("main not found");
         let body_id = main_fn.body;
-        let stmts = match &ta.stmt(body_id).kind {
+        let stmts = match &ta.try_stmt(body_id).unwrap().kind {
             TypedStmtKind::Block(stmts) => stmts.clone(),
             _ => panic!("expected block body"),
         };
@@ -10515,16 +10675,16 @@ function main(): void { if (result < 10) { } }
             .into_iter()
             .find(|&sid| {
                 matches!(
-                    &ta.stmt(sid).kind,
+                    &ta.try_stmt(sid).unwrap().kind,
                     TypedStmtKind::Let { .. } | TypedStmtKind::Const { .. }
                 )
             })
             .expect("expected let/const in main body");
-        let value = match &ta.stmt(let_stmt).kind {
+        let value = match &ta.try_stmt(let_stmt).unwrap().kind {
             TypedStmtKind::Let { value, .. } | TypedStmtKind::Const { value, .. } => *value,
             _ => unreachable!(),
         };
-        let expr = ta.expr(value);
+        let expr = ta.try_expr(value).unwrap();
         match &expr.kind {
             TypedExprKind::Closure {
                 params,
@@ -10873,7 +11033,7 @@ function main(): void { if (result < 10) { } }
     /// interpolations must produce exactly one per slot.
     fn collect_to_string_calls(ta: &TypedAst, id: crate::ExprId) -> Vec<crate::ExprId> {
         fn walk(ta: &TypedAst, id: crate::ExprId, out: &mut Vec<crate::ExprId>) {
-            let e = ta.expr(id);
+            let e = ta.try_expr(id).unwrap();
             if let TypedExprKind::MethodCall { name, .. } = &e.kind
                 && name.name == "toString"
             {
@@ -10904,15 +11064,15 @@ function main(): void { if (result < 10) { } }
             r#"function main(): void { const n: number = 1; const s: string = `n=${n}`; }"#,
         );
         let body = ta.functions[0].body;
-        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+        let TypedStmtKind::Block(stmts) = &ta.try_stmt(body).unwrap().kind else {
             panic!("expected Block")
         };
         // stmts[0] = const n; stmts[1] = const s
-        let TypedStmtKind::Const { value, ty, .. } = &ta.stmt(stmts[1]).kind else {
+        let TypedStmtKind::Const { value, ty, .. } = &ta.try_stmt(stmts[1]).unwrap().kind else {
             panic!("expected Const for s")
         };
         assert_eq!(*ty, Type::String);
-        assert_eq!(ta.expr(*value).ty, Type::String);
+        assert_eq!(ta.try_expr(*value).unwrap().ty, Type::String);
         let calls = collect_to_string_calls(&ta, *value);
         assert_eq!(
             calls.len(),
@@ -10921,7 +11081,7 @@ function main(): void { if (result < 10) { } }
             calls.len()
         );
         // Confirm the resolved iface is the Number interface.
-        let TypedExprKind::MethodCall { iface, .. } = &ta.expr(calls[0]).kind else {
+        let TypedExprKind::MethodCall { iface, .. } = &ta.try_expr(calls[0]).unwrap().kind else {
             unreachable!();
         };
         assert_eq!(iface.as_str(), crate::mangle::prelude("Number").as_str());
@@ -10935,10 +11095,10 @@ function main(): void { if (result < 10) { } }
             r#"function main(): void { const x: string = "x"; const s: string = `s=${x}`; }"#,
         );
         let body = ta.functions[0].body;
-        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+        let TypedStmtKind::Block(stmts) = &ta.try_stmt(body).unwrap().kind else {
             panic!("expected Block")
         };
-        let TypedStmtKind::Const { value, ty, .. } = &ta.stmt(stmts[1]).kind else {
+        let TypedStmtKind::Const { value, ty, .. } = &ta.try_stmt(stmts[1]).unwrap().kind else {
             panic!("expected Const for s")
         };
         assert_eq!(*ty, Type::String);
@@ -10956,15 +11116,15 @@ function main(): void { if (result < 10) { } }
             r#"function main(): void { const b: boolean = true; const s: string = `b=${b}`; }"#,
         );
         let body = ta.functions[0].body;
-        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+        let TypedStmtKind::Block(stmts) = &ta.try_stmt(body).unwrap().kind else {
             panic!("expected Block")
         };
-        let TypedStmtKind::Const { value, .. } = &ta.stmt(stmts[1]).kind else {
+        let TypedStmtKind::Const { value, .. } = &ta.try_stmt(stmts[1]).unwrap().kind else {
             panic!("expected Const for s")
         };
         let calls = collect_to_string_calls(&ta, *value);
         assert_eq!(calls.len(), 1);
-        let TypedExprKind::MethodCall { iface, .. } = &ta.expr(calls[0]).kind else {
+        let TypedExprKind::MethodCall { iface, .. } = &ta.try_expr(calls[0]).unwrap().kind else {
             unreachable!();
         };
         assert_eq!(iface.as_str(), crate::mangle::prelude("Boolean").as_str());
@@ -10979,15 +11139,15 @@ function main(): void { if (result < 10) { } }
             r#"function main(): void { const n: number = 1; const s: string = `${n}`; }"#,
         );
         let body = ta.functions[0].body;
-        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+        let TypedStmtKind::Block(stmts) = &ta.try_stmt(body).unwrap().kind else {
             panic!("expected Block")
         };
-        let TypedStmtKind::Const { value, .. } = &ta.stmt(stmts[1]).kind else {
+        let TypedStmtKind::Const { value, .. } = &ta.try_stmt(stmts[1]).unwrap().kind else {
             panic!("expected Const for s")
         };
         // The top expression is the toString MethodCall itself
         // (no Binary wrapping with empty-string operands).
-        match &ta.expr(*value).kind {
+        match &ta.try_expr(*value).unwrap().kind {
             TypedExprKind::MethodCall { name, .. } => {
                 assert_eq!(name.name, "toString");
             }
@@ -11002,14 +11162,14 @@ function main(): void { if (result < 10) { } }
         // are indistinguishable from `"plain"`.
         let ta = run_clean(r#"function main(): void { const s: string = `plain`; }"#);
         let body = ta.functions[0].body;
-        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+        let TypedStmtKind::Block(stmts) = &ta.try_stmt(body).unwrap().kind else {
             panic!("expected Block")
         };
-        let TypedStmtKind::Const { value, .. } = &ta.stmt(stmts[0]).kind else {
+        let TypedStmtKind::Const { value, .. } = &ta.try_stmt(stmts[0]).unwrap().kind else {
             panic!("expected Const")
         };
         assert!(matches!(
-            &ta.expr(*value).kind,
+            &ta.try_expr(*value).unwrap().kind,
             TypedExprKind::String(s) if s == "plain"
         ));
     }
@@ -11087,7 +11247,7 @@ function main(): void { if (result < 10) { } }
     /// `Call` or, when generic, a `GenericCall`).
     fn first_call_arg_count(ta: &TypedAst) -> usize {
         for i in 0..ta.exprs_len() {
-            match &ta.expr(crate::ExprId(i as u32)).kind {
+            match &ta.try_expr(crate::ExprId(i as u32)).unwrap().kind {
                 TypedExprKind::Call { args, .. } => return args.len(),
                 TypedExprKind::GenericCall { args, .. } => return args.len(),
                 _ => {}
@@ -11164,7 +11324,7 @@ function main(): void { if (result < 10) { } }
     fn llm_call_shapes(ta: &TypedAst) -> Vec<(bool, Option<Type>)> {
         let mut out = Vec::new();
         for i in 0..ta.exprs_len() {
-            let expr = ta.expr(crate::ExprId(i as u32));
+            let expr = ta.try_expr(crate::ExprId(i as u32)).unwrap();
             let TypedExprKind::Cast { value, check, .. } = &expr.kind else {
                 continue;
             };
@@ -11172,7 +11332,7 @@ function main(): void { if (result < 10) { } }
                 mangled,
                 return_cast,
                 ..
-            } = &ta.expr(*value).kind
+            } = &ta.try_expr(*value).unwrap().kind
             else {
                 continue;
             };
@@ -11189,17 +11349,19 @@ function main(): void { if (result < 10) { } }
     fn llm_schemas(ta: &TypedAst) -> Vec<Option<String>> {
         let mut out = Vec::new();
         for i in 0..ta.exprs_len() {
-            let expr = ta.expr(crate::ExprId(i as u32));
+            let expr = ta.try_expr(crate::ExprId(i as u32)).unwrap();
             let TypedExprKind::GenericCall { mangled, args, .. } = &expr.kind else {
                 continue;
             };
             if !crate::stdlib::llm::declaration::is_checked_call(mangled) {
                 continue;
             }
-            let schema = args.last().and_then(|a| match &ta.expr(a.expr).kind {
-                TypedExprKind::String(s) => Some(s.clone()),
-                _ => None,
-            });
+            let schema = args
+                .last()
+                .and_then(|a| match &ta.try_expr(a.expr).unwrap().kind {
+                    TypedExprKind::String(s) => Some(s.clone()),
+                    _ => None,
+                });
             out.push(schema);
         }
         out
@@ -11325,7 +11487,7 @@ function main(): void { if (result < 10) { } }
         // And no raw `GenericCall` on the symbol survives with a `return_cast`,
         // whichever form produced it.
         for i in 0..ta.exprs_len() {
-            let expr = ta.expr(crate::ExprId(i as u32));
+            let expr = ta.try_expr(crate::ExprId(i as u32)).unwrap();
             if let TypedExprKind::GenericCall {
                 mangled,
                 return_cast,

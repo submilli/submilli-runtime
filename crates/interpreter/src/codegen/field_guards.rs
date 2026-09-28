@@ -48,7 +48,10 @@ pub(super) fn allocate(ta: &TypedAst, symbols: &mut SymbolTable, next: &mut u32)
     guards
 }
 
-pub(super) fn body(ctx: &CodegenCtx, guard: &Guard) -> Function {
+pub(super) fn body(
+    ctx: &CodegenCtx,
+    guard: &Guard,
+) -> Result<Function, crate::compiler_error::CompilerFailure> {
     let intr = ctx
         .symbols
         .intrinsic_type_indices()
@@ -86,9 +89,9 @@ pub(super) fn body(ctx: &CodegenCtx, guard: &Guard) -> Function {
     if !emitter.runtime_type_params.is_empty() {
         check.test = crate::FieldNarrowingTest::Shape(guard.target.clone());
     }
-    super::cast_check::emit_narrowed_field_read(&mut emitter, ctx, &check, &guard.target);
+    super::cast_check::emit_narrowed_field_read(&mut emitter, ctx, &check, &guard.target)?;
     cast::emit_box(&mut emitter, ctx, &guard.target);
-    emitter.build()
+    Ok(emitter.build())
 }
 
 pub(super) fn guarded_constructor(

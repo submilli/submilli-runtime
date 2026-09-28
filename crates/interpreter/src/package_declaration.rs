@@ -659,8 +659,8 @@ mod tests {
         packages.extend(host_defs.iter());
         let (mut ta, _) = infer(source, "main", &ast, &packages);
         let _ = check(&ta);
-        capture(&mut ta);
-        desugar(&mut ta, crate::FileId(0));
+        ta = capture(ta).unwrap();
+        ta = desugar(ta, crate::FileId(0)).unwrap();
         ta
     }
 

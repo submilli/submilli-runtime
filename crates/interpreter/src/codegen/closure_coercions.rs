@@ -45,10 +45,15 @@ pub fn emit_entries(
     }
 }
 
-pub fn emit_bodies(targets: &[ClosureSig], code: &mut CodeSection, ctx: &CodegenCtx<'_>) {
+pub fn emit_bodies(
+    targets: &[ClosureSig],
+    code: &mut CodeSection,
+    ctx: &CodegenCtx<'_>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     for &target in targets {
         code.function(&emit_body(target, ctx));
     }
+    Ok(())
 }
 
 fn emit_body(target: ClosureSig, ctx: &CodegenCtx<'_>) -> Function {

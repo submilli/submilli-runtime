@@ -76,11 +76,11 @@ mod tests {
         packages.extend(prelude_defs.iter());
         packages.extend(host_defs.iter());
         let (mut ta, mut diags) = infer(source, "main", &ast, &packages);
-        diags.extend(check(&ta));
-        capture(&mut ta);
-        desugar(&mut ta, crate::FileId(0));
+        diags.extend(check(&ta).unwrap());
+        ta = capture(ta).unwrap();
+        ta = desugar(ta, crate::FileId(0)).unwrap();
         assert!(diags.is_empty(), "unexpected typecheck diags: {diags:?}");
-        CodegenAnalysis::collect(&ta, &[]).string_pool
+        CodegenAnalysis::collect(&ta, &[]).unwrap().string_pool
     }
 
     #[test]

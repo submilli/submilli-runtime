@@ -351,10 +351,10 @@ impl<'a> Inferer<'a> {
             typed_args.push(typed_arg);
         }
         if arity_ok {
-            self.fill_omitted_defaults(&params, args.len(), span, &mut typed_args);
+            self.fill_omitted_defaults(&params, args.len(), span, &mut typed_args)?;
         }
         if arity_ok && let Some(elem_ty) = rest_elem_ty {
-            self.pack_rest_tail(fixed_count, elem_ty, span, &mut typed_args);
+            self.pack_rest_tail(fixed_count, elem_ty, span, &mut typed_args)?;
         }
         let type_predicate = match &value.kind {
             ValueKind::Function { type_predicate, .. } => type_predicate.clone().map(Box::new),
@@ -407,7 +407,7 @@ impl<'a> Inferer<'a> {
             );
             return Ok(error_call(ctor_value.mangled_name));
         };
-        let receiver_expr = self.synthetic_ctor_receiver(&ctor_value);
+        let receiver_expr = self.synthetic_ctor_receiver(&ctor_value)?;
         Ok(
             if interface_bindings.is_empty() && sig.generics.is_empty() {
                 self.infer_method_call(
@@ -472,7 +472,10 @@ impl<'a> Inferer<'a> {
         ))
     }
 
-    fn synthetic_ctor_receiver(&mut self, value: &ValueSymbol) -> ExprId {
+    fn synthetic_ctor_receiver(
+        &mut self,
+        value: &ValueSymbol,
+    ) -> Result<ExprId, crate::compiler_error::CompilerFailure> {
         let ty = match &value.kind {
             ValueKind::Const { ty, .. } | ValueKind::Let { ty, .. } => ty.clone(),
             ValueKind::Function { .. } => Type::Error,
@@ -484,11 +487,13 @@ impl<'a> Inferer<'a> {
                 span: value.declaration_span,
             },
         };
-        self.typed_ast.push_expr(crate::typed_ast::TypedExpr {
-            kind,
-            ty,
-            span: value.declaration_span,
-        })
+        self.typed_ast
+            .try_push_expr(crate::typed_ast::TypedExpr {
+                kind,
+                ty,
+                span: value.declaration_span,
+            })
+            .map_err(crate::typechecker::arena_failure)
     }
 
     fn namespace_member_not_found_error(

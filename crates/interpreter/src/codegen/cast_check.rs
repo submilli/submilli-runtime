@@ -48,32 +48,42 @@ pub fn emit_cast(
     value: ExprId,
     target_ty: &Type,
     check: Option<&Type>,
-) {
-    let source_ty = ctx.ta.expr(value).ty.clone();
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let source_ty = ctx
+        .ta
+        .try_expr(value)
+        .map_err(crate::codegen::arena_failure)?
+        .ty
+        .clone();
 
     // unknown accepts every value — box to $Object, no test.
     if matches!(target_ty.peel(), Type::Unknown) {
-        emit_expr(emitter, ctx, value);
+        emit_expr(emitter, ctx, value)?;
         cast::emit_box(emitter, ctx, &source_ty);
-        return;
+        return Ok(());
     }
 
     let Some(check_shape) = check else {
-        if &source_ty != ctx.ta.source_type(value) {
-            emit_expr(emitter, ctx, value);
-            emit_checked_cast_on_stack(emitter, ctx, &source_ty, target_ty);
-            return;
+        if &source_ty
+            != ctx
+                .ta
+                .source_type(value)
+                .map_err(crate::codegen::arena_failure)?
+        {
+            emit_expr(emitter, ctx, value)?;
+            emit_checked_cast_on_stack(emitter, ctx, &source_ty, target_ty)?;
+            return Ok(());
         }
         // Statically-proven upcast: box then narrow representation, no runtime test.
-        emit_expr(emitter, ctx, value);
+        emit_expr(emitter, ctx, value)?;
         cast::emit_box(emitter, ctx, &source_ty);
         cast::emit_cast_to(emitter, ctx, target_ty);
-        return;
+        return Ok(());
     };
 
     let mark = emitter.single_evaluation_mark();
-    let key = capture_session_key(emitter, ctx, value);
-    emit_expr(emitter, ctx, value);
+    let key = capture_session_key(emitter, ctx, value)?;
+    emit_expr(emitter, ctx, value)?;
     emitter.end_single_evaluations(mark);
     cast::emit_box(emitter, ctx, &source_ty);
 
@@ -91,7 +101,7 @@ pub fn emit_cast(
     let previous_diagnostic = diagnostic::begin(emitter, ctx);
     diagnostic::session_key(emitter, key);
 
-    emit_structural_test(emitter, ctx, scratch, check_shape);
+    emit_structural_test(emitter, ctx, scratch, check_shape)?;
 
     let target_val = ctx.symbols.value_type(target_ty);
     let block_ty = BlockType::Result(target_val);
@@ -102,25 +112,42 @@ pub fn emit_cast(
     emit_cast_throw(emitter, ctx, scratch, target_ty);
     emitter.emit_end();
     emitter.cast_diagnostic = previous_diagnostic;
+    Ok(())
 }
 
 fn capture_session_key(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     value: ExprId,
-) -> Option<u32> {
-    let crate::TypedExprKind::GenericCall { mangled, args, .. } = &ctx.ta.expr(value).kind else {
-        return None;
+) -> Result<Option<u32>, crate::compiler_error::CompilerFailure> {
+    let crate::TypedExprKind::GenericCall { mangled, args, .. } = &ctx
+        .ta
+        .try_expr(value)
+        .map_err(crate::codegen::arena_failure)?
+        .kind
+    else {
+        return Ok(None);
     };
     if !crate::stdlib::session::declaration::is_checked_get(mangled) {
-        return None;
+        return Ok(None);
     }
-    let key = args.first()?.expr;
-    emit_expr(emitter, ctx, key);
-    let slot = emitter.add_anonymous_local(ctx.symbols.value_type(&ctx.ta.expr(key).ty));
+    let key = match args.first() {
+        Some(value) => value,
+        None => return Ok(None),
+    }
+    .expr;
+    emit_expr(emitter, ctx, key)?;
+    let slot = emitter.add_anonymous_local(
+        ctx.symbols.value_type(
+            &ctx.ta
+                .try_expr(key)
+                .map_err(crate::codegen::arena_failure)?
+                .ty,
+        ),
+    );
     emitter.instruction(Instruction::LocalSet(slot));
     emitter.record_single_evaluation(key, slot);
-    Some(slot)
+    Ok(Some(slot))
 }
 
 /// `value!`. Converts a runtime `null` into a catchable `TypeError` instead
@@ -130,10 +157,16 @@ pub fn emit_non_null_assert(
     ctx: &CodegenCtx,
     value: ExprId,
     target_ty: &Type,
-) {
-    let source_ty = ctx.ta.expr(value).ty.clone();
-    emit_expr(emitter, ctx, value);
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let source_ty = ctx
+        .ta
+        .try_expr(value)
+        .map_err(crate::codegen::arena_failure)?
+        .ty
+        .clone();
+    emit_expr(emitter, ctx, value)?;
     emit_non_null_assert_on_stack(emitter, ctx, &source_ty, target_ty);
+    Ok(())
 }
 
 /// `!` applied to a value already on the stack at `source_ty`'s slot — the
@@ -180,7 +213,7 @@ pub(super) fn emit_structural_test(
     ctx: &CodegenCtx,
     value_local: u32,
     ty: &Type,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     emit_structural_test_inner(
         emitter,
         ctx,
@@ -188,7 +221,8 @@ pub(super) fn emit_structural_test(
         ty,
         &mut std::collections::BTreeSet::new(),
         None,
-    );
+    )?;
+    Ok(())
 }
 
 fn emit_structural_test_inner(
@@ -198,7 +232,7 @@ fn emit_structural_test_inner(
     ty: &Type,
     interface_stack: &mut std::collections::BTreeSet<Type>,
     validator_state: Option<ValidatorState>,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let checkpoint = diagnostic::checkpoint(emitter, ctx);
     let i32_block = BlockType::Result(ValType::I32);
     match ty.peel() {
@@ -214,7 +248,7 @@ fn emit_structural_test_inner(
                     m,
                     interface_stack,
                     validator_state,
-                );
+                )?;
                 diagnostic::union_keep(emitter, ctx, best);
                 if first {
                     first = false;
@@ -247,7 +281,7 @@ fn emit_structural_test_inner(
                     members,
                     interface_stack,
                     validator_state,
-                );
+                )?;
             } else {
                 emit_representation_test(emitter, ctx, value_local, ty);
             }
@@ -384,7 +418,7 @@ fn emit_structural_test_inner(
                     f,
                     interface_stack,
                     validator_state,
-                );
+                )?;
                 emitter.instruction(Instruction::I32And);
             }
             if let Some(index) = index {
@@ -395,7 +429,7 @@ fn emit_structural_test_inner(
                     index,
                     interface_stack,
                     validator_state,
-                );
+                )?;
                 emitter.instruction(Instruction::I32And);
             }
             emitter.emit_else();
@@ -455,7 +489,7 @@ fn emit_structural_test_inner(
                 elem,
                 interface_stack,
                 validator_state,
-            );
+            )?;
             diagnostic::pop(emitter, parent_path);
             emitter.instruction(Instruction::I32And);
             emitter.instruction(Instruction::LocalSet(acc));
@@ -518,7 +552,7 @@ fn emit_structural_test_inner(
                     et,
                     interface_stack,
                     validator_state,
-                );
+                )?;
                 diagnostic::pop(emitter, parent_path);
                 emitter.instruction(Instruction::I32And);
             }
@@ -549,7 +583,7 @@ fn emit_structural_test_inner(
             ty,
             interface_stack,
             validator_state,
-        ),
+        )?,
         // Nominal, not structural: same-shape sibling classes canonicalize to one
         // WasmGC type, so membership is the vtable-parent walk `instanceof` uses.
         // Unreachable from `as` (class targets are rejected at typecheck); reached
@@ -577,6 +611,7 @@ fn emit_structural_test_inner(
         _ => emitter.instruction(Instruction::I32Const(0)),
     }
     diagnostic::finish(emitter, ctx, checkpoint);
+    Ok(())
 }
 
 fn emit_interface_ref_test(
@@ -586,13 +621,13 @@ fn emit_interface_ref_test(
     ty: &Type,
     interface_stack: &mut std::collections::BTreeSet<Type>,
     validator_state: Option<ValidatorState>,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let key = ty.peel().clone();
     if ctx.symbols.generic_runtime_validator(&key).is_some() {
         emit_validator_or_representation(emitter, ctx, value_local, ty, &key, validator_state);
-        return;
+        return Ok(());
     }
-    match ctx.ta.runtime_type_tests.get(&key) {
+    let _: () = match ctx.ta.runtime_type_tests.get(&key) {
         Some(crate::FieldNarrowingTest::Shape(shape)) => emit_structural_test_inner(
             emitter,
             ctx,
@@ -600,7 +635,7 @@ fn emit_interface_ref_test(
             shape,
             interface_stack,
             validator_state,
-        ),
+        )?,
         Some(crate::FieldNarrowingTest::Interface(test)) => {
             if interface_stack.insert(key.clone()) {
                 emit_interface_test_inner(
@@ -610,7 +645,7 @@ fn emit_interface_ref_test(
                     test,
                     interface_stack,
                     validator_state,
-                );
+                )?;
                 interface_stack.remove(&key);
             } else {
                 emit_validator_or_representation(
@@ -624,7 +659,8 @@ fn emit_interface_ref_test(
             }
         }
         _ => emit_validator_or_representation(emitter, ctx, value_local, ty, &key, validator_state),
-    }
+    };
+    Ok(())
 }
 
 fn emit_validator_or_representation(
@@ -653,7 +689,7 @@ pub(crate) fn emit_checked_cast_on_stack(
     ctx: &CodegenCtx,
     source_ty: &Type,
     target_ty: &Type,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     cast::emit_box(emitter, ctx, source_ty);
     let scratch = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)));
     emitter.instruction(Instruction::LocalSet(scratch));
@@ -663,10 +699,10 @@ pub(crate) fn emit_checked_cast_on_stack(
     }
     match ctx.ta.runtime_type_tests.get(target_ty.peel()) {
         Some(crate::FieldNarrowingTest::Interface(test)) => {
-            emit_interface_test(emitter, ctx, scratch, test);
+            emit_interface_test(emitter, ctx, scratch, test)?;
         }
         Some(crate::FieldNarrowingTest::Shape(shape)) => {
-            emit_structural_test(emitter, ctx, scratch, shape);
+            emit_structural_test(emitter, ctx, scratch, shape)?;
         }
         _ => emit_representation_test(emitter, ctx, scratch, target_ty),
     }
@@ -677,6 +713,7 @@ pub(crate) fn emit_checked_cast_on_stack(
     emit_cast_throw(emitter, ctx, scratch, target_ty);
     emitter.emit_end();
     emitter.cast_diagnostic = previous_diagnostic;
+    Ok(())
 }
 
 /// Validate an erased parameter before rebinding it to the declaration's
@@ -689,10 +726,10 @@ pub(crate) fn emit_checked_parameter_cast_on_stack(
     ctx: &CodegenCtx,
     source_ty: &Type,
     target_ty: &Type,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     if !is_interface_parameter(target_ty) {
-        emit_checked_cast_on_stack(emitter, ctx, source_ty, target_ty);
-        return;
+        emit_checked_cast_on_stack(emitter, ctx, source_ty, target_ty)?;
+        return Ok(());
     }
 
     cast::emit_box(emitter, ctx, source_ty);
@@ -705,6 +742,7 @@ pub(crate) fn emit_checked_parameter_cast_on_stack(
     emitter.emit_else();
     emit_cast_throw(emitter, ctx, scratch, target_ty);
     emitter.emit_end();
+    Ok(())
 }
 
 fn is_interface_parameter(ty: &Type) -> bool {
@@ -730,7 +768,7 @@ pub(crate) fn emit_operation_cast_on_stack(
     ctx: &CodegenCtx,
     source_ty: &Type,
     target_ty: &Type,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     cast::emit_box(emitter, ctx, source_ty);
     let scratch = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)));
     emitter.instruction(Instruction::LocalSet(scratch));
@@ -770,7 +808,7 @@ pub(crate) fn emit_operation_cast_on_stack(
         ctx.symbols.value_type(target_ty),
         ValType::F64 | ValType::I32
     ) {
-        emit_structural_test(emitter, ctx, scratch, target_ty);
+        emit_structural_test(emitter, ctx, scratch, target_ty)?;
     } else {
         emit_representation_test(emitter, ctx, scratch, target_ty);
     }
@@ -781,6 +819,7 @@ pub(crate) fn emit_operation_cast_on_stack(
     emit_cast_throw(emitter, ctx, scratch, target_ty);
     emitter.emit_end();
     emitter.cast_diagnostic = previous_diagnostic;
+    Ok(())
 }
 
 /// The conservative fallback for types without a full structural validator.
@@ -838,7 +877,7 @@ fn emit_field_conformance(
     field: &crate::ObjectField,
     interface_stack: &mut std::collections::BTreeSet<Type>,
     validator_state: Option<ValidatorState>,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let checkpoint = diagnostic::checkpoint(emitter, ctx);
     let parent_path = diagnostic::field(emitter, ctx, fname);
     let i32_block = BlockType::Result(ValType::I32);
@@ -875,7 +914,7 @@ fn emit_field_conformance(
         &field.ty,
         interface_stack,
         validator_state,
-    );
+    )?;
     if field.optional {
         emitter.instruction(Instruction::LocalGet(locals.field));
         emitter.instruction(Instruction::RefIsNull);
@@ -900,6 +939,7 @@ fn emit_field_conformance(
     emitter.emit_end();
     diagnostic::finish(emitter, ctx, checkpoint);
     diagnostic::pop(emitter, parent_path);
+    Ok(())
 }
 
 pub fn emit_narrowed_field_read(
@@ -907,8 +947,9 @@ pub fn emit_narrowed_field_read(
     ctx: &CodegenCtx,
     check: &crate::FieldNarrowingCheck,
     result_ty: &Type,
-) {
-    emit_narrowed_field_read_as(emitter, ctx, check, result_ty, result_ty);
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    emit_narrowed_field_read_as(emitter, ctx, check, result_ty, result_ty)?;
+    Ok(())
 }
 
 pub(crate) fn emit_narrowed_field_read_as(
@@ -917,7 +958,7 @@ pub(crate) fn emit_narrowed_field_read_as(
     check: &crate::FieldNarrowingCheck,
     result_ty: &Type,
     check_ty: &Type,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let result_val = ctx.symbols.value_type(result_ty);
     let scratch = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)));
     emitter.instruction(Instruction::LocalSet(scratch));
@@ -971,7 +1012,7 @@ pub(crate) fn emit_narrowed_field_read_as(
             }
         }
         crate::FieldNarrowingTest::Shape(shape) => {
-            emit_structural_test(emitter, ctx, scratch, shape);
+            emit_structural_test(emitter, ctx, scratch, shape)?;
             // `emit_cast_to` lifts to non-null for every target it does not admit
             // a null for, so those are exactly the targets a `null` in the slot
             // would trap on.
@@ -981,7 +1022,7 @@ pub(crate) fn emit_narrowed_field_read_as(
             }
         }
         crate::FieldNarrowingTest::Interface(test) => {
-            emit_interface_test(emitter, ctx, scratch, test);
+            emit_interface_test(emitter, ctx, scratch, test)?;
         }
         crate::FieldNarrowingTest::Substituted => {
             emit_representation_test(emitter, ctx, scratch, check_ty);
@@ -999,6 +1040,7 @@ pub(crate) fn emit_narrowed_field_read_as(
     emit_type_error_from_message(emitter, ctx);
     emitter.emit_end();
     emitter.cast_diagnostic = previous_diagnostic;
+    Ok(())
 }
 
 fn emit_interface_test(
@@ -1006,7 +1048,7 @@ fn emit_interface_test(
     ctx: &CodegenCtx,
     value_local: u32,
     test: &crate::InterfaceNarrowingTest,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     emit_interface_test_inner(
         emitter,
         ctx,
@@ -1014,7 +1056,8 @@ fn emit_interface_test(
         test,
         &mut std::collections::BTreeSet::new(),
         None,
-    );
+    )?;
+    Ok(())
 }
 
 fn emit_interface_test_inner(
@@ -1024,7 +1067,7 @@ fn emit_interface_test_inner(
     test: &crate::InterfaceNarrowingTest,
     interface_stack: &mut std::collections::BTreeSet<Type>,
     validator_state: Option<ValidatorState>,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let checkpoint = diagnostic::checkpoint(emitter, ctx);
     if test.nullable {
         emitter.instruction(Instruction::LocalGet(value_local));
@@ -1035,11 +1078,11 @@ fn emit_interface_test_inner(
     }
 
     if !test.shape_allowed {
-        emit_non_shape_interface_test(emitter, ctx, value_local, test, validator_state);
+        emit_non_shape_interface_test(emitter, ctx, value_local, test, validator_state)?;
         if test.nullable {
             emitter.emit_end();
         }
-        return;
+        return Ok(());
     }
 
     let shape_idx = ctx
@@ -1079,7 +1122,7 @@ fn emit_interface_test_inner(
                 &field.ty,
                 interface_stack,
                 validator_state,
-            );
+            )?;
             diagnostic::pop(emitter, parent_path);
         } else {
             emit_field_conformance(
@@ -1093,7 +1136,7 @@ fn emit_interface_test_inner(
                 field,
                 interface_stack,
                 validator_state,
-            );
+            )?;
         }
         emitter.instruction(Instruction::I32And);
     }
@@ -1105,23 +1148,24 @@ fn emit_interface_test_inner(
             index,
             interface_stack,
             validator_state,
-        );
+        )?;
         emitter.instruction(Instruction::I32And);
     }
     // Some direct-dispatch interfaces intentionally use `$ObjectShape` only as
     // an inert receiver carrier (for example TextEncoder/TextDecoder); their
     // methods are host imports, not payload slots. Admit those exact carriers
     // alongside ordinary structural conformance.
-    emit_non_shape_interface_test(emitter, ctx, value_local, test, validator_state);
+    emit_non_shape_interface_test(emitter, ctx, value_local, test, validator_state)?;
     emitter.instruction(Instruction::I32Or);
     emitter.emit_else();
-    emit_non_shape_interface_test(emitter, ctx, value_local, test, validator_state);
+    emit_non_shape_interface_test(emitter, ctx, value_local, test, validator_state)?;
     emitter.emit_end();
 
     if test.nullable {
         emitter.emit_end();
     }
     diagnostic::finish(emitter, ctx, checkpoint);
+    Ok(())
 }
 
 fn emit_non_shape_interface_test(
@@ -1130,7 +1174,7 @@ fn emit_non_shape_interface_test(
     value_local: u32,
     test: &crate::InterfaceNarrowingTest,
     validator_state: Option<ValidatorState>,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     use crate::InterfaceCarrier;
 
     let matches_any = emitter.add_anonymous_local(ValType::I32);
@@ -1149,7 +1193,7 @@ fn emit_non_shape_interface_test(
                 &Type::Array(Box::new(Type::Unknown)),
                 &mut std::collections::BTreeSet::new(),
                 validator_state,
-            ),
+            )?,
             InterfaceCarrier::Array(ty) => {
                 emit_structural_test_inner(
                     emitter,
@@ -1158,7 +1202,7 @@ fn emit_non_shape_interface_test(
                     ty,
                     &mut std::collections::BTreeSet::new(),
                     validator_state,
-                );
+                )?;
             }
             InterfaceCarrier::Number => emit_ref_test(emitter, value_local, boxed_number_idx(ctx)),
             InterfaceCarrier::Boolean => {
@@ -1169,11 +1213,11 @@ fn emit_non_shape_interface_test(
             InterfaceCarrier::Uint8Array => emit_ref_test(emitter, value_local, intr.uint8_array),
             InterfaceCarrier::MapAny => emit_ref_test(emitter, value_local, intr.map),
             InterfaceCarrier::Map(key, value) => {
-                emit_map_carrier_test(emitter, ctx, value_local, key, value, validator_state);
+                emit_map_carrier_test(emitter, ctx, value_local, key, value, validator_state)?;
             }
             InterfaceCarrier::SetAny => emit_ref_test(emitter, value_local, intr.set),
             InterfaceCarrier::Set(element) => {
-                emit_set_carrier_test(emitter, ctx, value_local, element, validator_state);
+                emit_set_carrier_test(emitter, ctx, value_local, element, validator_state)?;
             }
             InterfaceCarrier::RegExp => emit_ref_test(emitter, value_local, intr.regex),
             InterfaceCarrier::RegExpMatch => {
@@ -1230,6 +1274,7 @@ fn emit_non_shape_interface_test(
         emitter.instruction(Instruction::LocalSet(matches_any));
     }
     emitter.instruction(Instruction::LocalGet(matches_any));
+    Ok(())
 }
 
 fn emit_set_carrier_test(
@@ -1238,7 +1283,7 @@ fn emit_set_carrier_test(
     value_local: u32,
     element: &Type,
     validator_state: Option<ValidatorState>,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let intr = ctx
         .symbols
         .intrinsic_type_indices()
@@ -1282,10 +1327,11 @@ fn emit_set_carrier_test(
         },
         &[(elements, element)],
         validator_state,
-    );
+    )?;
     emitter.emit_else();
     emitter.instruction(Instruction::I32Const(0));
     emitter.emit_end();
+    Ok(())
 }
 
 fn emit_map_carrier_test(
@@ -1295,7 +1341,7 @@ fn emit_map_carrier_test(
     key: &Type,
     value: &Type,
     validator_state: Option<ValidatorState>,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let intr = ctx
         .symbols
         .intrinsic_type_indices()
@@ -1349,10 +1395,11 @@ fn emit_map_carrier_test(
         },
         &[(keys, key), (values, value)],
         validator_state,
-    );
+    )?;
     emitter.emit_else();
     emitter.instruction(Instruction::I32Const(0));
     emitter.emit_end();
+    Ok(())
 }
 
 fn emit_ordered_collection_members_test(
@@ -1361,7 +1408,7 @@ fn emit_ordered_collection_members_test(
     storage: CollectionStorage,
     payloads: &[(u32, &Type)],
     validator_state: Option<ValidatorState>,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let intr = ctx
         .symbols
         .intrinsic_type_indices()
@@ -1414,7 +1461,7 @@ fn emit_ordered_collection_members_test(
             ty,
             &mut std::collections::BTreeSet::new(),
             validator_state,
-        );
+        )?;
         diagnostic::pop(emitter, member_path);
         diagnostic::pop(emitter, parent_path);
         emitter.instruction(Instruction::I32And);
@@ -1429,6 +1476,7 @@ fn emit_ordered_collection_members_test(
     emitter.emit_end();
     emitter.emit_end();
     emitter.instruction(Instruction::LocalGet(acc));
+    Ok(())
 }
 
 fn emit_validator_state(
@@ -1476,7 +1524,7 @@ pub(crate) fn emit_runtime_validator_body(
     body: &Type,
     rejects_polymorphic_edge: bool,
     validator_id: i32,
-) -> Function {
+) -> Result<Function, crate::compiler_error::CompilerFailure> {
     let intr = ctx
         .symbols
         .intrinsic_type_indices()
@@ -1518,7 +1566,7 @@ pub(crate) fn emit_runtime_validator_body(
     );
     if rejects_polymorphic_edge {
         emitter.instruction(Instruction::I32Const(0));
-        return emitter.build();
+        return Ok(emitter.build());
     }
     diagnostic::enter_recursive(&mut emitter, ctx);
     let checkpoint = diagnostic::checkpoint(&mut emitter, ctx);
@@ -1602,7 +1650,7 @@ pub(crate) fn emit_runtime_validator_body(
                 validator_ids: 2,
                 depth: 3,
             }),
-        );
+        )?;
     } else {
         emit_structural_test_inner(
             &mut emitter,
@@ -1615,13 +1663,13 @@ pub(crate) fn emit_runtime_validator_body(
                 validator_ids: 2,
                 depth: 3,
             }),
-        );
+        )?;
     }
     emitter.emit_end();
     emitter.emit_end();
     diagnostic::finish(&mut emitter, ctx, checkpoint);
     diagnostic::save_recursive(&mut emitter, ctx, 1);
-    emitter.build()
+    Ok(emitter.build())
 }
 
 fn emit_is_non_null(emitter: &mut FunctionEmitter, value_local: u32) {
@@ -1855,14 +1903,14 @@ fn emit_index_conformance(
     index: &crate::IndexSignature,
     interface_stack: &mut std::collections::BTreeSet<Type>,
     validator_state: Option<ValidatorState>,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     emitter.instruction(Instruction::LocalGet(object));
     let Some(symbol) = ctx.require(
         ctx.symbols
             .prelude_func_idx("ObjectConstructor##recordValues"),
         "record validator imported",
     ) else {
-        return;
+        return Ok(());
     };
     emitter.instruction(Instruction::Call(symbol));
     let values = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)));
@@ -1874,5 +1922,6 @@ fn emit_index_conformance(
         &Type::Array(index.value.clone()),
         interface_stack,
         validator_state,
-    );
+    )?;
+    Ok(())
 }

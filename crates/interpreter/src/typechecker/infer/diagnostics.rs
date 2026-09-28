@@ -299,13 +299,21 @@ impl<'a> Inferer<'a> {
     /// The two sources are mutually exclusive in practice — a path
     /// can't have both a live tombstone and a captured-mutator root
     /// at the same time without something else having gone wrong.
-    pub(super) fn narrowing_invalidation_hint(&self, receiver: ExprId) -> Option<DiagnosticAddon> {
-        let receiver_expr = self.typed_ast.expr(receiver);
-        if let Some(hint) = self.getter_narrowing_hint(&receiver_expr.kind) {
-            return Some(hint);
+    pub(super) fn narrowing_invalidation_hint(
+        &self,
+        receiver: ExprId,
+    ) -> Result<Option<DiagnosticAddon>, crate::compiler_error::CompilerFailure> {
+        let receiver_expr = self
+            .typed_ast
+            .try_expr(receiver)
+            .map_err(crate::typechecker::arena_failure)?;
+        if let Some(hint) = self.getter_narrowing_hint(&receiver_expr.kind)? {
+            return Ok(Some(hint));
         }
-        let path = self.expr_to_reference_path(receiver_expr)?;
-        self.narrowing_hint_for_path(&path)
+        let Some(path) = self.expr_to_reference_path(receiver_expr)? else {
+            return Ok(None);
+        };
+        Ok(self.narrowing_hint_for_path(&path))
     }
 
     /// The operand whose `null` is what breaks this site: it admits `null`, and
@@ -337,15 +345,18 @@ impl<'a> Inferer<'a> {
         message: String,
         mut help: Vec<String>,
         culprit: Option<ExprId>,
-    ) {
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         let mut notes = Vec::new();
-        if let Some((extra_help, extra_notes)) =
-            culprit.and_then(|e| self.narrowing_invalidation_hint(e))
+        if let Some((extra_help, extra_notes)) = culprit
+            .map(|e| self.narrowing_invalidation_hint(e))
+            .transpose()?
+            .flatten()
         {
             help.extend(extra_help);
             notes.extend(extra_notes);
         }
         self.error_with_help_and_notes(span, message, help, notes);
+        Ok(())
     }
 
     /// The culprit for a binary operator, given the operator's own rule for which
@@ -401,34 +412,43 @@ impl<'a> Inferer<'a> {
         kind: &crate::TypedExprKind,
         got: &Type,
         want: &Type,
-    ) -> Option<DiagnosticAddon> {
+    ) -> Result<Option<DiagnosticAddon>, crate::compiler_error::CompilerFailure> {
         if !spells_null(got) {
-            return None;
+            return Ok(None);
         }
-        let non_null = super::narrow_scopes::non_null_form(got.clone())?;
+        let Some(non_null) = super::narrow_scopes::non_null_form(got.clone()) else {
+            return Ok(None);
+        };
         if !super::assignable::assignable(&non_null, want, self.resolver()) {
-            return None;
+            return Ok(None);
         }
-        if let Some(hint) = self.getter_narrowing_hint(kind) {
-            return Some(hint);
+        if let Some(hint) = self.getter_narrowing_hint(kind)? {
+            return Ok(Some(hint));
         }
-        let path = self.kind_to_reference_path(kind)?;
-        self.narrowing_hint_for_path(&path)
+        let Some(path) = self.kind_to_reference_path(kind)? else {
+            return Ok(None);
+        };
+        Ok(self.narrowing_hint_for_path(&path))
     }
 
-    fn getter_narrowing_hint(&self, kind: &crate::TypedExprKind) -> Option<DiagnosticAddon> {
-        let state = self.kind_to_reference_path_state(kind)?;
+    fn getter_narrowing_hint(
+        &self,
+        kind: &crate::TypedExprKind,
+    ) -> Result<Option<DiagnosticAddon>, crate::compiler_error::CompilerFailure> {
+        let Some(state) = self.kind_to_reference_path_state(kind)? else {
+            return Ok(None);
+        };
         if !state.contains_getter {
-            return None;
+            return Ok(None);
         }
         let rendered = state.path.render();
         let tmp = self.fresh_hint_binding();
-        Some((
+        Ok(Some((
             vec![format!(
                 "`{rendered}` is getter-backed, so each read may return a different value and its guard cannot narrow later reads. Bind one read to a local `const` first: `const {tmp} = {rendered};` then guard `{tmp}`."
             )],
             Vec::new(),
-        ))
+        )))
     }
 
     /// A binding name the suggested rewrite can introduce without colliding
@@ -842,9 +862,17 @@ impl<'a> Inferer<'a> {
         receiver: ExprId,
         receiver_ty: &Type,
         name: &str,
-    ) {
-        let recv_span = self.typed_ast.expr(receiver).span;
-        let recv_path = self.expr_to_reference_path(self.typed_ast.expr(receiver));
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        let recv_span = self
+            .typed_ast
+            .try_expr(receiver)
+            .map_err(crate::typechecker::arena_failure)?
+            .span;
+        let recv_path = self.expr_to_reference_path(
+            self.typed_ast
+                .try_expr(receiver)
+                .map_err(crate::typechecker::arena_failure)?,
+        )?;
         let nullable = self.nullable_receiver_fix(
             recv_span,
             recv_path.as_ref(),
@@ -876,11 +904,12 @@ impl<'a> Inferer<'a> {
             ),
         };
         let mut notes: Vec<(Span, String)> = Vec::new();
-        if let Some((extra_help, extra_notes)) = self.narrowing_invalidation_hint(receiver) {
+        if let Some((extra_help, extra_notes)) = self.narrowing_invalidation_hint(receiver)? {
             help.extend(extra_help);
             notes.extend(extra_notes);
         }
         self.error_with_help_and_notes(span, message, help, notes);
+        Ok(())
     }
 
     /// A field read on a union whose members otherwise carry fields, where one

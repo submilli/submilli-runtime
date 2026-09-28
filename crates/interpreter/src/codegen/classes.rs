@@ -186,7 +186,10 @@ impl ClassPlan {
     /// Phase 0: gather class declarations from the typed AST, topologically
     /// ordered by `extends` (parents before children), and resolve each class's
     /// full field + method slot layout across the inheritance chain.
-    pub fn collect(ta: &TypedAst, imported: &BTreeMap<MangledName, ImportedClassLayout>) -> Self {
+    pub fn collect(
+        ta: &TypedAst,
+        imported: &BTreeMap<MangledName, ImportedClassLayout>,
+    ) -> Result<Self, crate::compiler_error::CompilerFailure> {
         let by_mangled: BTreeMap<&MangledName, &TypedClassDecl> = ta
             .types
             .iter()
@@ -426,11 +429,11 @@ impl ClassPlan {
             });
         }
 
-        ClassPlan {
+        Ok(ClassPlan {
             package_name: ta.package_name.to_string(),
             classes,
             universal_stubs: [0; UNIVERSAL_STUB_COUNT],
-        }
+        })
     }
 
     /// The class's instance `Type::ClassRef`, for constructor return types.
@@ -909,9 +912,13 @@ impl ClassPlan {
     /// closure adapters, then the retired getter/setter stubs (kept for stable
     /// numbering) and the four per-class universal vtable bodies
     /// (equals/toString/toJson/hash).
-    pub fn emit_bodies(&self, code: &mut CodeSection, ctx: &crate::codegen::CodegenCtx<'_>) {
+    pub fn emit_bodies(
+        &self,
+        code: &mut CodeSection,
+        ctx: &crate::codegen::CodegenCtx<'_>,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         if self.classes.is_empty() {
-            return;
+            return Ok(());
         }
         // The slot-2 stub is unreferenced (each class emits its own equals
         // body) but kept so function numbering stays in lockstep with
@@ -921,12 +928,12 @@ impl ClassPlan {
         }
         for class in &self.classes {
             code.function(&self.emit_ctor_body(class, ctx));
-            code.function(&self.emit_ctor_init(class, ctx));
+            code.function(&self.emit_ctor_init(class, ctx)?);
             for method in &class.own_methods {
-                code.function(&self.emit_method_body(class, method, ctx));
+                code.function(&self.emit_method_body(class, method, ctx)?);
             }
             for &i in &class.adapter_slots {
-                code.function(&self.emit_method_adapter_body(class, &class.methods[i], ctx));
+                code.function(&self.emit_method_adapter_body(class, &class.methods[i], ctx)?);
             }
             // getter, then setter.
             code.function(&stub_body());
@@ -948,16 +955,22 @@ impl ClassPlan {
             // A user `toString`/`toJson` method fills the universal slot (the
             // universal slots require strings even when the authored method's
             // physical return has widened to preserve live values).
-            let user_method_thunk = |name: &str| {
-                class.methods.iter().find(|s| s.name == name).map(|slot| {
-                    let idx = ctx
-                        .symbols
-                        .class_method_func_idx(&slot.owner, &slot.name)
-                        .expect("slot owner's method func allocated");
-                    emit_universal_slot_thunk(ctx, idx)
-                })
-            };
-            code.function(&user_method_thunk("toString").unwrap_or_else(|| {
+            let user_method_thunk =
+                |name: &str| -> Result<Option<Function>, crate::compiler_error::CompilerFailure> {
+                    class
+                        .methods
+                        .iter()
+                        .find(|s| s.name == name)
+                        .map(|slot| {
+                            let idx = ctx
+                                .symbols
+                                .class_method_func_idx(&slot.owner, &slot.name)
+                                .expect("slot owner's method func allocated");
+                            emit_universal_slot_thunk(ctx, idx)
+                        })
+                        .transpose()
+                };
+            code.function(&user_method_thunk("toString")?.unwrap_or_else(|| {
                 emit_class_to_string_body(intrinsics, string_vtable_global_idx)
             }));
             code.function(&super::vtable_walk::guarded_body(
@@ -977,11 +990,12 @@ impl ClassPlan {
                 intrinsics,
             ));
             code.function(
-                &user_method_thunk("toJson")
+                &user_method_thunk("toJson")?
                     .unwrap_or_else(|| emit_class_to_json_body(ctx.symbols)),
             );
             code.function(&emit_class_hash_body(class.fields.len() as u32, intrinsics));
         }
+        Ok(())
     }
 
     /// Closure-ABI adapter for one vtable slot: forward the boxed args, call the
@@ -1002,7 +1016,7 @@ impl ClassPlan {
         class: &ClassLayout,
         slot: &MethodSlot,
         ctx: &crate::codegen::CodegenCtx<'_>,
-    ) -> Function {
+    ) -> Result<Function, crate::compiler_error::CompilerFailure> {
         use crate::codegen::function_emitter::{FunctionEmitter, cast};
 
         let intrinsics = ctx
@@ -1064,7 +1078,7 @@ impl ClassPlan {
                     ctx,
                     &crate::Type::Unknown,
                     ty,
-                );
+                )?;
             }
         }
         emitter.instruction(Instruction::Call(method_func));
@@ -1078,7 +1092,7 @@ impl ClassPlan {
             }
             _ => {}
         }
-        emitter.build()
+        Ok(emitter.build())
     }
 
     /// Method body: bind `this` (`local.get 0 ; ref.cast (ref $Foo)` — the vtable
@@ -1098,11 +1112,11 @@ impl ClassPlan {
         class: &ClassLayout,
         method: &OwnMethod,
         ctx: &crate::codegen::CodegenCtx<'_>,
-    ) -> Function {
+    ) -> Result<Function, crate::compiler_error::CompilerFailure> {
         use crate::codegen::function_emitter::{FunctionEmitter, ReturnTarget, stmt};
 
         if method.generic {
-            return stub_body();
+            return Ok(stub_body());
         }
         let object_idx = ctx
             .symbols
@@ -1123,7 +1137,7 @@ impl ClassPlan {
         )];
         wasm_params.extend(slot_params(ctx, &method.params, &abi.params));
         let mut emitter = FunctionEmitter::new(ctx, &wasm_params);
-        let param_slots = rebind_erased_params(&mut emitter, ctx, &method.params, &abi.params);
+        let param_slots = rebind_erased_params(&mut emitter, ctx, &method.params, &abi.params)?;
         // Param prologue boxes captured-mutated method params.
         emitter.emit_boxed_param_prologue(&method.params, &param_slots);
 
@@ -1143,12 +1157,12 @@ impl ClassPlan {
                     .unwrap_or_else(|| ctx.symbols.slot_value_type(&method.return_type)),
             ));
         }
-        stmt::emit_statement(&mut emitter, ctx, method.body);
+        stmt::emit_statement(&mut emitter, ctx, method.body)?;
         if !method.return_type.is_void() {
             // Keep the function statically total even when control flow can't be proven to terminate.
             emitter.instruction(Instruction::Unreachable);
         }
-        emitter.build()
+        Ok(emitter.build())
     }
 
     /// Entry constructor (`new Foo(...)`): `struct.new $Foo` (header globals +
@@ -1306,7 +1320,7 @@ impl ClassPlan {
         &self,
         class: &ClassLayout,
         ctx: &crate::codegen::CodegenCtx<'_>,
-    ) -> Function {
+    ) -> Result<Function, crate::compiler_error::CompilerFailure> {
         use crate::codegen::function_emitter::{FunctionEmitter, cast, stmt};
 
         let object_idx = ctx
@@ -1324,7 +1338,7 @@ impl ClassPlan {
         let ctor_slots = ctor_slot_types(ctx, &class.mangled);
         wasm_params.extend(slot_params(ctx, &class.ctor_params, &ctor_slots));
         let mut emitter = FunctionEmitter::new(ctx, &wasm_params);
-        let param_slots = rebind_erased_params(&mut emitter, ctx, &class.ctor_params, &ctor_slots);
+        let param_slots = rebind_erased_params(&mut emitter, ctx, &class.ctor_params, &ctor_slots)?;
         // Box captured-mutated ctor params.
         emitter.emit_boxed_param_prologue(&class.ctor_params, &param_slots);
 
@@ -1347,9 +1361,9 @@ impl ClassPlan {
                     &mut emitter,
                     ctx,
                     &class.mangled,
-                );
+                )?;
             }
-            stmt::emit_statement(&mut emitter, ctx, body);
+            stmt::emit_statement(&mut emitter, ctx, body)?;
         } else {
             // Implicit constructor: forward all params to the parent init (if
             // any), then run this class's field setup.
@@ -1377,9 +1391,9 @@ impl ClassPlan {
                 &mut emitter,
                 ctx,
                 &class.mangled,
-            );
+            )?;
         }
-        emitter.build()
+        Ok(emitter.build())
     }
 
     /// `(export name, func index)` pairs for every class function a cross-package
@@ -1729,7 +1743,7 @@ fn rebind_erased_params(
     ctx: &CodegenCtx<'_>,
     params: &[crate::TypedParam],
     slot_types: &[ValType],
-) -> Vec<u32> {
+) -> Result<Vec<u32>, crate::compiler_error::CompilerFailure> {
     let mut param_slots: Vec<u32> = (1..=params.len() as u32).collect();
     for (i, p) in params.iter().enumerate() {
         let own_vt = ctx.symbols.value_type(&p.ty);
@@ -1743,12 +1757,12 @@ fn rebind_erased_params(
             ctx,
             &crate::Type::Unknown,
             &p.ty,
-        );
+        )?;
         emitter.instruction(Instruction::LocalSet(shadow));
         emitter.rebind_in_innermost_scope(&p.name.name, shadow, own_vt);
         param_slots[i] = shadow;
     }
-    param_slots
+    Ok(param_slots)
 }
 
 fn stub_body() -> Function {
@@ -1903,7 +1917,10 @@ fn emit_payload_slot_equals(f: &mut Function, slot: u32, intrinsics: IntrinsicTy
 
 /// Bridge an authored conversion method to the universal string-returning slot.
 /// Direct user calls still preserve the method's actual return value.
-fn emit_universal_slot_thunk(ctx: &CodegenCtx, method_func_idx: u32) -> Function {
+fn emit_universal_slot_thunk(
+    ctx: &CodegenCtx,
+    method_func_idx: u32,
+) -> Result<Function, crate::compiler_error::CompilerFailure> {
     let mut emitter = super::function_emitter::FunctionEmitter::new(
         ctx,
         &[(
@@ -1921,8 +1938,8 @@ fn emit_universal_slot_thunk(ctx: &CodegenCtx, method_func_idx: u32) -> Function
         ctx,
         &crate::Type::Unknown,
         &crate::Type::String,
-    );
-    emitter.build()
+    )?;
+    Ok(emitter.build())
 }
 
 fn emit_class_to_string_body(

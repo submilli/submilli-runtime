@@ -626,7 +626,7 @@ pub fn emit_function(
     params: &[crate::TypedParam],
     body: crate::StmtId,
     return_type: &crate::Type,
-) -> (Function, Vec<(u64, Span)>) {
+) -> Result<(Function, Vec<(u64, Span)>), crate::compiler_error::CompilerFailure> {
     let mut wasm_params: Vec<(Ident, ValType)> = params
         .iter()
         .map(|p| (p.name.clone(), ctx.symbols.value_type(&p.ty)))
@@ -648,12 +648,12 @@ pub fn emit_function(
     }
     let typed_slots: Vec<u32> = (0..params.len() as u32).collect();
     emitter.emit_boxed_param_prologue(params, &typed_slots);
-    stmt::emit_statement(&mut emitter, ctx, body);
+    stmt::emit_statement(&mut emitter, ctx, body)?;
     if !return_type.is_void() {
         // Keeps the function statically total even when Wasm validation can't prove all paths terminate.
         emitter.instruction(Instruction::Unreachable);
     }
-    emitter.build_with_lines()
+    Ok(emitter.build_with_lines())
 }
 
 /// ABI: `(func (param (ref any) N×(ref $Object)) (result (ref $Object)?))` —
@@ -661,7 +661,7 @@ pub fn emit_function(
 pub fn emit_closure_function(
     ctx: &CodegenCtx<'_>,
     meta: &crate::codegen::closures::ClosureMeta,
-) -> (Function, Vec<(u64, Span)>) {
+) -> Result<(Function, Vec<(u64, Span)>), crate::compiler_error::CompilerFailure> {
     let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
@@ -753,7 +753,7 @@ pub fn emit_closure_function(
             ctx,
             &crate::Type::Unknown,
             &p.ty,
-        );
+        )?;
         emitter
             .instructions
             .push(Instruction::LocalSet(typed_local));
@@ -816,18 +816,25 @@ pub fn emit_closure_function(
 
     match meta.body {
         crate::ClosureBody::Expr(e) => {
-            expr::emit_expr(&mut emitter, ctx, e);
-            cast::emit_coerce_to_return_slot(&mut emitter, ctx, &ctx.ta.expr(e).ty);
+            expr::emit_expr(&mut emitter, ctx, e)?;
+            cast::emit_coerce_to_return_slot(
+                &mut emitter,
+                ctx,
+                &ctx.ta
+                    .try_expr(e)
+                    .map_err(crate::codegen::arena_failure)?
+                    .ty,
+            );
         }
         crate::ClosureBody::Block(b) => {
-            stmt::emit_statement(&mut emitter, ctx, b);
+            stmt::emit_statement(&mut emitter, ctx, b)?;
             if !meta.return_type.is_void() {
                 emitter.instruction(Instruction::Unreachable);
             }
         }
     }
 
-    emitter.build_with_lines()
+    Ok(emitter.build_with_lines())
 }
 
 /// A closure's result is fixed by its funcref signature: the erased

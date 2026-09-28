@@ -12,7 +12,10 @@ use crate::{
     ClosureBody, ExprId, StmtId, Type, TypedAst, TypedExprKind, TypedParam, TypedStmtKind,
 };
 
-pub fn collect(ta: &TypedAst, symbols: &SymbolTable) -> Vec<ValType> {
+pub fn collect(
+    ta: &TypedAst,
+    symbols: &SymbolTable,
+) -> Result<Vec<ValType>, crate::compiler_error::CompilerFailure> {
     let mut state = Collector {
         ta,
         symbols,
@@ -30,11 +33,11 @@ pub fn collect(ta: &TypedAst, symbols: &SymbolTable) -> Vec<ValType> {
                 state.note(&p.ty);
             }
         }
-        state.walk_stmt(body);
+        state.walk_stmt(body)?;
     }
     let stmt_ids: Vec<StmtId> = ta.top_level_statements.clone();
     for sid in stmt_ids {
-        state.walk_stmt(sid);
+        state.walk_stmt(sid)?;
     }
     // Class member bodies and field initializers: a closure declared in either
     // can capture a mutable binding, and its box cell needs a type just like a
@@ -47,12 +50,12 @@ pub fn collect(ta: &TypedAst, symbols: &SymbolTable) -> Vec<ValType> {
         }
     }
     for body in ta.class_body_roots() {
-        state.walk_stmt(body);
+        state.walk_stmt(body)?;
     }
     for init in ta.class_field_initializers() {
-        state.walk_expr(init);
+        state.walk_expr(init)?;
     }
-    state.order
+    Ok(state.order)
 }
 
 /// Parameter lists of every class member that has one, so a captured-and-boxed
@@ -92,11 +95,16 @@ impl Collector<'_> {
         }
     }
 
-    fn walk_stmt(&mut self, id: StmtId) {
-        match &self.ta.stmt(id).kind {
+    fn walk_stmt(&mut self, id: StmtId) -> Result<(), crate::compiler_error::CompilerFailure> {
+        let _: () = match &self
+            .ta
+            .try_stmt(id)
+            .map_err(crate::codegen::arena_failure)?
+            .kind
+        {
             TypedStmtKind::Block(stmts) => {
                 for &s in stmts {
-                    self.walk_stmt(s);
+                    self.walk_stmt(s)?;
                 }
             }
             TypedStmtKind::Let {
@@ -105,23 +113,23 @@ impl Collector<'_> {
                 if *boxed {
                     self.note(ty);
                 }
-                self.walk_expr(*value);
+                self.walk_expr(*value)?;
             }
-            TypedStmtKind::Const { value, .. } => self.walk_expr(*value),
+            TypedStmtKind::Const { value, .. } => self.walk_expr(*value)?,
             TypedStmtKind::If {
                 condition,
                 then_block,
                 else_block,
             } => {
-                self.walk_expr(*condition);
-                self.walk_stmt(*then_block);
+                self.walk_expr(*condition)?;
+                self.walk_stmt(*then_block)?;
                 if let Some(eb) = else_block {
-                    self.walk_stmt(*eb);
+                    self.walk_stmt(*eb)?;
                 }
             }
             TypedStmtKind::While { condition, body } => {
-                self.walk_expr(*condition);
-                self.walk_stmt(*body);
+                self.walk_expr(*condition)?;
+                self.walk_stmt(*body)?;
             }
             TypedStmtKind::For {
                 init,
@@ -130,23 +138,23 @@ impl Collector<'_> {
                 body,
             } => {
                 if let Some(i) = init {
-                    self.walk_stmt(*i);
+                    self.walk_stmt(*i)?;
                 }
                 if let Some(c) = condition {
-                    self.walk_expr(*c);
+                    self.walk_expr(*c)?;
                 }
                 if let Some(u) = update {
-                    self.walk_stmt(*u);
+                    self.walk_stmt(*u)?;
                 }
-                self.walk_stmt(*body);
+                self.walk_stmt(*body)?;
             }
             TypedStmtKind::ForOf { iter, body, .. } => {
-                self.walk_expr(*iter);
-                self.walk_stmt(*body);
+                self.walk_expr(*iter)?;
+                self.walk_stmt(*body)?;
             }
             TypedStmtKind::DoWhile { body, condition } => {
-                self.walk_stmt(*body);
-                self.walk_expr(*condition);
+                self.walk_stmt(*body)?;
+                self.walk_expr(*condition)?;
             }
             TypedStmtKind::Switch {
                 discriminant,
@@ -154,28 +162,28 @@ impl Collector<'_> {
                 default,
                 ..
             } => {
-                self.walk_expr(*discriminant);
+                self.walk_expr(*discriminant)?;
                 for case in cases {
-                    self.walk_stmt(case.body);
+                    self.walk_stmt(case.body)?;
                 }
                 if let Some(d) = default {
-                    self.walk_stmt(*d);
+                    self.walk_stmt(*d)?;
                 }
             }
             TypedStmtKind::Break | TypedStmtKind::Continue | TypedStmtKind::ReboxLocal { .. } => {}
             TypedStmtKind::Return(value) => {
                 if let Some(v) = value {
-                    self.walk_expr(*v);
+                    self.walk_expr(*v)?;
                 }
             }
-            TypedStmtKind::Expr(e) => self.walk_expr(*e),
+            TypedStmtKind::Expr(e) => self.walk_expr(*e)?,
             TypedStmtKind::AssignLocal { value, .. }
-            | TypedStmtKind::AssignGlobal { value, .. } => self.walk_expr(*value),
+            | TypedStmtKind::AssignGlobal { value, .. } => self.walk_expr(*value)?,
             TypedStmtKind::AssignField {
                 receiver, value, ..
             } => {
-                self.walk_expr(*receiver);
-                self.walk_expr(*value);
+                self.walk_expr(*receiver)?;
+                self.walk_expr(*value)?;
             }
             TypedStmtKind::AssignIndex {
                 receiver,
@@ -183,33 +191,39 @@ impl Collector<'_> {
                 value,
                 ..
             } => {
-                self.walk_expr(*receiver);
-                self.walk_expr(*index);
-                self.walk_expr(*value);
+                self.walk_expr(*receiver)?;
+                self.walk_expr(*index)?;
+                self.walk_expr(*value)?;
             }
             TypedStmtKind::NarrowRegion { source, body, .. } => {
-                self.walk_expr(*source);
-                self.walk_stmt(*body);
+                self.walk_expr(*source)?;
+                self.walk_stmt(*body)?;
             }
-            TypedStmtKind::Throw { value } => self.walk_expr(*value),
+            TypedStmtKind::Throw { value } => self.walk_expr(*value)?,
             TypedStmtKind::Try {
                 body,
                 catches,
                 finally,
             } => {
-                self.walk_stmt(*body);
+                self.walk_stmt(*body)?;
                 for c in catches {
-                    self.walk_stmt(c.body);
+                    self.walk_stmt(c.body)?;
                 }
                 if let Some(f) = finally {
-                    self.walk_stmt(*f);
+                    self.walk_stmt(*f)?;
                 }
             }
-        }
+        };
+        Ok(())
     }
 
-    fn walk_expr(&mut self, id: ExprId) {
-        match &self.ta.expr(id).kind {
+    fn walk_expr(&mut self, id: ExprId) -> Result<(), crate::compiler_error::CompilerFailure> {
+        let _: () = match &self
+            .ta
+            .try_expr(id)
+            .map_err(crate::codegen::arena_failure)?
+            .kind
+        {
             TypedExprKind::Closure {
                 params,
                 captured,
@@ -227,109 +241,111 @@ impl Collector<'_> {
                     }
                 }
                 match *body {
-                    ClosureBody::Expr(e) => self.walk_expr(e),
-                    ClosureBody::Block(b) => self.walk_stmt(b),
+                    ClosureBody::Expr(e) => self.walk_expr(e)?,
+                    ClosureBody::Block(b) => self.walk_stmt(b)?,
                 }
             }
             TypedExprKind::Binary { lhs, rhs, .. } => {
-                self.walk_expr(*lhs);
-                self.walk_expr(*rhs);
+                self.walk_expr(*lhs)?;
+                self.walk_expr(*rhs)?;
             }
             TypedExprKind::EffectThen { effect, result } => {
-                self.walk_expr(*effect);
-                self.walk_expr(*result);
+                self.walk_expr(*effect)?;
+                self.walk_expr(*result)?;
             }
             TypedExprKind::Sequence { stmts, result } => {
                 for &stmt in stmts {
-                    self.walk_stmt(stmt);
+                    self.walk_stmt(stmt)?;
                 }
-                self.walk_expr(*result);
+                self.walk_expr(*result)?;
             }
-            TypedExprKind::Unary { operand, .. } => self.walk_expr(*operand),
+            TypedExprKind::Unary { operand, .. } => self.walk_expr(*operand)?,
             TypedExprKind::TypeofTag { value, .. } | TypedExprKind::InstanceOf { value, .. } => {
-                self.walk_expr(*value);
+                self.walk_expr(*value)?;
             }
             TypedExprKind::Call { args, .. }
             | TypedExprKind::McpCall { args, .. }
             | TypedExprKind::SuperCtorCall { args, .. }
             | TypedExprKind::SuperMethodCall { args, .. } => {
                 for &a in args {
-                    self.walk_expr(a);
+                    self.walk_expr(a)?;
                 }
             }
             TypedExprKind::CallClosure { callee, args } => {
-                self.walk_expr(*callee);
+                self.walk_expr(*callee)?;
                 for &a in args {
-                    self.walk_expr(a);
+                    self.walk_expr(a)?;
                 }
             }
             TypedExprKind::GenericCall { args, .. } => {
                 for a in args {
-                    self.walk_expr(a.expr);
+                    self.walk_expr(a.expr)?;
                 }
             }
             TypedExprKind::MethodCall { receiver, args, .. } => {
-                self.walk_expr(*receiver);
+                self.walk_expr(*receiver)?;
                 for &a in args {
-                    self.walk_expr(a);
+                    self.walk_expr(a)?;
                 }
             }
             TypedExprKind::GenericMethodCall { receiver, args, .. } => {
-                self.walk_expr(*receiver);
+                self.walk_expr(*receiver)?;
                 for a in args {
-                    self.walk_expr(a.expr);
+                    self.walk_expr(a.expr)?;
                 }
             }
             TypedExprKind::IntrinsicCall { args, .. } => {
                 for &a in args {
-                    self.walk_expr(a);
+                    self.walk_expr(a)?;
                 }
             }
             TypedExprKind::ObjectLiteral { members, .. } => {
                 for member in members {
                     for expression in member.expressions() {
-                        self.walk_expr(expression);
+                        self.walk_expr(expression)?;
                     }
                 }
             }
             TypedExprKind::ArrayLiteral { elements, .. } => {
                 for e in elements {
-                    self.walk_expr(e.expr_id());
+                    self.walk_expr(e.expr_id())?;
                 }
             }
             TypedExprKind::TupleLiteral { elements, .. } => {
                 for &e in elements {
-                    self.walk_expr(e);
+                    self.walk_expr(e)?;
                 }
             }
             TypedExprKind::FieldAccess { receiver, .. }
-            | TypedExprKind::InterfacePropertyAccess { receiver, .. } => self.walk_expr(*receiver),
+            | TypedExprKind::InterfacePropertyAccess { receiver, .. } => {
+                self.walk_expr(*receiver)?;
+            }
             TypedExprKind::IndexAccess { receiver, index } => {
-                self.walk_expr(*receiver);
-                self.walk_expr(*index);
+                self.walk_expr(*receiver)?;
+                self.walk_expr(*index)?;
             }
             TypedExprKind::Narrowed { source, inner, .. } => {
-                self.walk_expr(*source);
-                self.walk_expr(*inner);
+                self.walk_expr(*source)?;
+                self.walk_expr(*inner)?;
             }
             TypedExprKind::Ternary { cond, then_, else_ } => {
-                self.walk_expr(*cond);
-                self.walk_expr(*then_);
-                self.walk_expr(*else_);
+                self.walk_expr(*cond)?;
+                self.walk_expr(*then_)?;
+                self.walk_expr(*else_)?;
             }
             TypedExprKind::NullishCoalesce { lhs, rhs } => {
-                self.walk_expr(*lhs);
-                self.walk_expr(*rhs);
+                self.walk_expr(*lhs)?;
+                self.walk_expr(*rhs)?;
             }
             TypedExprKind::OptionalChain { base, parts } => {
-                self.walk_expr(*base);
+                self.walk_expr(*base)?;
                 for part in parts {
                     match part {
-                        crate::TypedChainPart::Index { idx, .. } => self.walk_expr(*idx),
+                        crate::TypedChainPart::Index { idx, .. } => self.walk_expr(*idx)?,
                         crate::TypedChainPart::Call { args, .. }
                         | crate::TypedChainPart::MethodCall { args, .. } => {
                             for a in args {
-                                self.walk_expr(*a);
+                                self.walk_expr(*a)?;
                             }
                         }
                         crate::TypedChainPart::Field { .. }
@@ -347,16 +363,16 @@ impl Collector<'_> {
                     }
                 }
                 crate::PostfixTarget::Global { .. } => {}
-                crate::PostfixTarget::Field { receiver, .. } => self.walk_expr(*receiver),
+                crate::PostfixTarget::Field { receiver, .. } => self.walk_expr(*receiver)?,
                 crate::PostfixTarget::Index {
                     receiver, index, ..
                 } => {
-                    self.walk_expr(*receiver);
-                    self.walk_expr(*index);
+                    self.walk_expr(*receiver)?;
+                    self.walk_expr(*index)?;
                 }
             },
             TypedExprKind::NonNullAssert { value } | TypedExprKind::Cast { value, .. } => {
-                self.walk_expr(*value);
+                self.walk_expr(*value)?;
             }
             TypedExprKind::Number(_)
             | TypedExprKind::BigInt(_)
@@ -371,7 +387,8 @@ impl Collector<'_> {
             | TypedExprKind::FunctionRef { .. }
             | TypedExprKind::NumberEnumMember { .. }
             | TypedExprKind::StringEnumMember { .. } => {}
-        }
+        };
+        Ok(())
     }
 }
 

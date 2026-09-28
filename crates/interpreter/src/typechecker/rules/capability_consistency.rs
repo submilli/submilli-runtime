@@ -5,7 +5,10 @@ use crate::{
     Span, StmtId, Type, TypedAst, TypedChainPart, TypedExprKind, TypedFunction, TypedStmtKind,
 };
 
-pub(super) fn run(ta: &TypedAst, diags: &mut Vec<Diagnostic>) {
+pub(super) fn run(
+    ta: &TypedAst,
+    diags: &mut Vec<Diagnostic>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let security_check =
         crate::mangle::package_symbol(crate::stdlib::security::MODULE_NAME, "check");
     for f in &ta.functions {
@@ -13,9 +16,10 @@ pub(super) fn run(ta: &TypedAst, diags: &mut Vec<Diagnostic>) {
         validate_param_bindings(f, diags);
 
         let mut checks = Vec::new();
-        collect_checks_in_stmt(ta, f.body, &security_check, &mut checks);
+        collect_checks_in_stmt(ta, f.body, &security_check, &mut checks)?;
         validate_check_tags(f, &checks, diags);
     }
+    Ok(())
 }
 
 fn validate_doc_parser_diagnostics(f: &TypedFunction, diags: &mut Vec<Diagnostic>) {
@@ -183,30 +187,34 @@ fn collect_checks_in_stmt(
     stmt_id: StmtId,
     security_check: &MangledName,
     out: &mut Vec<SecurityCheck>,
-) {
-    match &ta.stmt(stmt_id).kind {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let _: () = match &ta
+        .try_stmt(stmt_id)
+        .map_err(crate::typechecker::arena_failure)?
+        .kind
+    {
         TypedStmtKind::Let { value, .. }
         | TypedStmtKind::Const { value, .. }
         | TypedStmtKind::Expr(value)
         | TypedStmtKind::Throw { value }
         | TypedStmtKind::AssignLocal { value, .. }
         | TypedStmtKind::AssignGlobal { value, .. } => {
-            collect_checks_in_expr(ta, *value, security_check, out);
+            collect_checks_in_expr(ta, *value, security_check, out)?;
         }
         TypedStmtKind::If {
             condition,
             then_block,
             else_block,
         } => {
-            collect_checks_in_expr(ta, *condition, security_check, out);
-            collect_checks_in_stmt(ta, *then_block, security_check, out);
+            collect_checks_in_expr(ta, *condition, security_check, out)?;
+            collect_checks_in_stmt(ta, *then_block, security_check, out)?;
             if let Some(else_block) = else_block {
-                collect_checks_in_stmt(ta, *else_block, security_check, out);
+                collect_checks_in_stmt(ta, *else_block, security_check, out)?;
             }
         }
         TypedStmtKind::While { condition, body } | TypedStmtKind::DoWhile { body, condition } => {
-            collect_checks_in_expr(ta, *condition, security_check, out);
-            collect_checks_in_stmt(ta, *body, security_check, out);
+            collect_checks_in_expr(ta, *condition, security_check, out)?;
+            collect_checks_in_stmt(ta, *body, security_check, out)?;
         }
         TypedStmtKind::For {
             init,
@@ -215,19 +223,19 @@ fn collect_checks_in_stmt(
             body,
         } => {
             if let Some(init) = init {
-                collect_checks_in_stmt(ta, *init, security_check, out);
+                collect_checks_in_stmt(ta, *init, security_check, out)?;
             }
             if let Some(condition) = condition {
-                collect_checks_in_expr(ta, *condition, security_check, out);
+                collect_checks_in_expr(ta, *condition, security_check, out)?;
             }
             if let Some(update) = update {
-                collect_checks_in_stmt(ta, *update, security_check, out);
+                collect_checks_in_stmt(ta, *update, security_check, out)?;
             }
-            collect_checks_in_stmt(ta, *body, security_check, out);
+            collect_checks_in_stmt(ta, *body, security_check, out)?;
         }
         TypedStmtKind::ForOf { iter, body, .. } => {
-            collect_checks_in_expr(ta, *iter, security_check, out);
-            collect_checks_in_stmt(ta, *body, security_check, out);
+            collect_checks_in_expr(ta, *iter, security_check, out)?;
+            collect_checks_in_stmt(ta, *body, security_check, out)?;
         }
         TypedStmtKind::Switch {
             discriminant,
@@ -235,17 +243,17 @@ fn collect_checks_in_stmt(
             default,
             ..
         } => {
-            collect_checks_in_expr(ta, *discriminant, security_check, out);
+            collect_checks_in_expr(ta, *discriminant, security_check, out)?;
             for case in cases {
-                collect_checks_in_stmt(ta, case.body, security_check, out);
+                collect_checks_in_stmt(ta, case.body, security_check, out)?;
             }
             if let Some(default) = default {
-                collect_checks_in_stmt(ta, *default, security_check, out);
+                collect_checks_in_stmt(ta, *default, security_check, out)?;
             }
         }
         TypedStmtKind::Return(value) => {
             if let Some(value) = value {
-                collect_checks_in_expr(ta, *value, security_check, out);
+                collect_checks_in_expr(ta, *value, security_check, out)?;
             }
         }
         TypedStmtKind::Try {
@@ -253,24 +261,24 @@ fn collect_checks_in_stmt(
             catches,
             finally,
         } => {
-            collect_checks_in_stmt(ta, *body, security_check, out);
+            collect_checks_in_stmt(ta, *body, security_check, out)?;
             for clause in catches {
-                collect_checks_in_stmt(ta, clause.body, security_check, out);
+                collect_checks_in_stmt(ta, clause.body, security_check, out)?;
             }
             if let Some(finally) = finally {
-                collect_checks_in_stmt(ta, *finally, security_check, out);
+                collect_checks_in_stmt(ta, *finally, security_check, out)?;
             }
         }
         TypedStmtKind::Block(stmts) => {
             for stmt in stmts {
-                collect_checks_in_stmt(ta, *stmt, security_check, out);
+                collect_checks_in_stmt(ta, *stmt, security_check, out)?;
             }
         }
         TypedStmtKind::AssignField {
             receiver, value, ..
         } => {
-            collect_checks_in_expr(ta, *receiver, security_check, out);
-            collect_checks_in_expr(ta, *value, security_check, out);
+            collect_checks_in_expr(ta, *receiver, security_check, out)?;
+            collect_checks_in_expr(ta, *value, security_check, out)?;
         }
         TypedStmtKind::AssignIndex {
             receiver,
@@ -278,16 +286,17 @@ fn collect_checks_in_stmt(
             value,
             ..
         } => {
-            collect_checks_in_expr(ta, *receiver, security_check, out);
-            collect_checks_in_expr(ta, *index, security_check, out);
-            collect_checks_in_expr(ta, *value, security_check, out);
+            collect_checks_in_expr(ta, *receiver, security_check, out)?;
+            collect_checks_in_expr(ta, *index, security_check, out)?;
+            collect_checks_in_expr(ta, *value, security_check, out)?;
         }
         TypedStmtKind::NarrowRegion { source, body, .. } => {
-            collect_checks_in_expr(ta, *source, security_check, out);
-            collect_checks_in_stmt(ta, *body, security_check, out);
+            collect_checks_in_expr(ta, *source, security_check, out)?;
+            collect_checks_in_stmt(ta, *body, security_check, out)?;
         }
         TypedStmtKind::Break | TypedStmtKind::Continue | TypedStmtKind::ReboxLocal { .. } => {}
-    }
+    };
+    Ok(())
 }
 
 fn collect_checks_in_expr(
@@ -295,13 +304,15 @@ fn collect_checks_in_expr(
     expr_id: ExprId,
     security_check: &MangledName,
     out: &mut Vec<SecurityCheck>,
-) {
-    let expr = ta.expr(expr_id);
-    match &expr.kind {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let expr = ta
+        .try_expr(expr_id)
+        .map_err(crate::typechecker::arena_failure)?;
+    let _: () = match &expr.kind {
         TypedExprKind::Call { mangled, args, .. } if mangled == security_check => {
-            out.push(security_check_from_args(ta, expr.span, args));
+            out.push(security_check_from_args(ta, expr.span, args)?);
             for arg in args {
-                collect_checks_in_expr(ta, *arg, security_check, out);
+                collect_checks_in_expr(ta, *arg, security_check, out)?;
             }
         }
         TypedExprKind::Call { args, .. }
@@ -309,57 +320,57 @@ fn collect_checks_in_expr(
         | TypedExprKind::SuperCtorCall { args, .. }
         | TypedExprKind::SuperMethodCall { args, .. } => {
             for arg in args {
-                collect_checks_in_expr(ta, *arg, security_check, out);
+                collect_checks_in_expr(ta, *arg, security_check, out)?;
             }
         }
         TypedExprKind::GenericCall { mangled, args, .. } if mangled == security_check => {
             let check_args = args.iter().map(|arg| arg.expr).collect::<Vec<_>>();
-            out.push(security_check_from_args(ta, expr.span, &check_args));
+            out.push(security_check_from_args(ta, expr.span, &check_args)?);
             for arg in args {
-                collect_checks_in_expr(ta, arg.expr, security_check, out);
+                collect_checks_in_expr(ta, arg.expr, security_check, out)?;
             }
         }
         TypedExprKind::GenericCall { args, .. } => {
             for arg in args {
-                collect_checks_in_expr(ta, arg.expr, security_check, out);
+                collect_checks_in_expr(ta, arg.expr, security_check, out)?;
             }
         }
         TypedExprKind::CallClosure { callee, args } => {
-            collect_checks_in_expr(ta, *callee, security_check, out);
+            collect_checks_in_expr(ta, *callee, security_check, out)?;
             for arg in args {
-                collect_checks_in_expr(ta, *arg, security_check, out);
+                collect_checks_in_expr(ta, *arg, security_check, out)?;
             }
         }
         TypedExprKind::IntrinsicCall { args, .. } => {
             for arg in args {
-                collect_checks_in_expr(ta, *arg, security_check, out);
+                collect_checks_in_expr(ta, *arg, security_check, out)?;
             }
         }
         TypedExprKind::MethodCall { receiver, args, .. } => {
-            collect_checks_in_expr(ta, *receiver, security_check, out);
+            collect_checks_in_expr(ta, *receiver, security_check, out)?;
             for arg in args {
-                collect_checks_in_expr(ta, *arg, security_check, out);
+                collect_checks_in_expr(ta, *arg, security_check, out)?;
             }
         }
         TypedExprKind::GenericMethodCall { receiver, args, .. } => {
-            collect_checks_in_expr(ta, *receiver, security_check, out);
+            collect_checks_in_expr(ta, *receiver, security_check, out)?;
             for arg in args {
-                collect_checks_in_expr(ta, arg.expr, security_check, out);
+                collect_checks_in_expr(ta, arg.expr, security_check, out)?;
             }
         }
         TypedExprKind::Binary { lhs, rhs, .. } => {
-            collect_checks_in_expr(ta, *lhs, security_check, out);
-            collect_checks_in_expr(ta, *rhs, security_check, out);
+            collect_checks_in_expr(ta, *lhs, security_check, out)?;
+            collect_checks_in_expr(ta, *rhs, security_check, out)?;
         }
         TypedExprKind::EffectThen { effect, result } => {
-            collect_checks_in_expr(ta, *effect, security_check, out);
-            collect_checks_in_expr(ta, *result, security_check, out);
+            collect_checks_in_expr(ta, *effect, security_check, out)?;
+            collect_checks_in_expr(ta, *result, security_check, out)?;
         }
         TypedExprKind::Sequence { stmts, result } => {
             for &stmt in stmts {
-                collect_checks_in_stmt(ta, stmt, security_check, out);
+                collect_checks_in_stmt(ta, stmt, security_check, out)?;
             }
-            collect_checks_in_expr(ta, *result, security_check, out);
+            collect_checks_in_expr(ta, *result, security_check, out)?;
         }
         TypedExprKind::Unary { operand, .. }
         | TypedExprKind::FieldAccess {
@@ -372,60 +383,60 @@ fn collect_checks_in_expr(
         | TypedExprKind::InstanceOf { value: operand, .. }
         | TypedExprKind::NonNullAssert { value: operand }
         | TypedExprKind::Cast { value: operand, .. } => {
-            collect_checks_in_expr(ta, *operand, security_check, out);
+            collect_checks_in_expr(ta, *operand, security_check, out)?;
         }
         TypedExprKind::IndexAccess { receiver, index } => {
-            collect_checks_in_expr(ta, *receiver, security_check, out);
-            collect_checks_in_expr(ta, *index, security_check, out);
+            collect_checks_in_expr(ta, *receiver, security_check, out)?;
+            collect_checks_in_expr(ta, *index, security_check, out)?;
         }
         TypedExprKind::ObjectLiteral { members, .. } => {
             for member in members {
                 for expression in member.expressions() {
-                    collect_checks_in_expr(ta, expression, security_check, out);
+                    collect_checks_in_expr(ta, expression, security_check, out)?;
                 }
             }
         }
         TypedExprKind::ArrayLiteral { elements, .. } => {
             for elem in elements {
-                collect_checks_in_expr(ta, elem.expr_id(), security_check, out);
+                collect_checks_in_expr(ta, elem.expr_id(), security_check, out)?;
             }
         }
         TypedExprKind::TupleLiteral { elements, .. } => {
             for elem in elements {
-                collect_checks_in_expr(ta, *elem, security_check, out);
+                collect_checks_in_expr(ta, *elem, security_check, out)?;
             }
         }
         TypedExprKind::Closure { body, .. } => match body {
             crate::ClosureBody::Expr(expr) => {
-                collect_checks_in_expr(ta, *expr, security_check, out);
+                collect_checks_in_expr(ta, *expr, security_check, out)?;
             }
             crate::ClosureBody::Block(stmt) => {
-                collect_checks_in_stmt(ta, *stmt, security_check, out);
+                collect_checks_in_stmt(ta, *stmt, security_check, out)?;
             }
         },
         TypedExprKind::Narrowed { source, inner, .. } => {
-            collect_checks_in_expr(ta, *source, security_check, out);
-            collect_checks_in_expr(ta, *inner, security_check, out);
+            collect_checks_in_expr(ta, *source, security_check, out)?;
+            collect_checks_in_expr(ta, *inner, security_check, out)?;
         }
         TypedExprKind::Ternary { cond, then_, else_ } => {
-            collect_checks_in_expr(ta, *cond, security_check, out);
-            collect_checks_in_expr(ta, *then_, security_check, out);
-            collect_checks_in_expr(ta, *else_, security_check, out);
+            collect_checks_in_expr(ta, *cond, security_check, out)?;
+            collect_checks_in_expr(ta, *then_, security_check, out)?;
+            collect_checks_in_expr(ta, *else_, security_check, out)?;
         }
         TypedExprKind::NullishCoalesce { lhs, rhs } => {
-            collect_checks_in_expr(ta, *lhs, security_check, out);
-            collect_checks_in_expr(ta, *rhs, security_check, out);
+            collect_checks_in_expr(ta, *lhs, security_check, out)?;
+            collect_checks_in_expr(ta, *rhs, security_check, out)?;
         }
         TypedExprKind::OptionalChain { base, parts } => {
-            collect_checks_in_expr(ta, *base, security_check, out);
+            collect_checks_in_expr(ta, *base, security_check, out)?;
             for part in parts {
                 match part {
                     TypedChainPart::Index { idx, .. } => {
-                        collect_checks_in_expr(ta, *idx, security_check, out);
+                        collect_checks_in_expr(ta, *idx, security_check, out)?;
                     }
                     TypedChainPart::Call { args, .. } | TypedChainPart::MethodCall { args, .. } => {
                         for arg in args {
-                            collect_checks_in_expr(ta, *arg, security_check, out);
+                            collect_checks_in_expr(ta, *arg, security_check, out)?;
                         }
                     }
                     TypedChainPart::Field { .. }
@@ -436,13 +447,13 @@ fn collect_checks_in_expr(
         }
         TypedExprKind::PostfixUnary { target, .. } => match target {
             crate::PostfixTarget::Field { receiver, .. } => {
-                collect_checks_in_expr(ta, *receiver, security_check, out);
+                collect_checks_in_expr(ta, *receiver, security_check, out)?;
             }
             crate::PostfixTarget::Index {
                 receiver, index, ..
             } => {
-                collect_checks_in_expr(ta, *receiver, security_check, out);
-                collect_checks_in_expr(ta, *index, security_check, out);
+                collect_checks_in_expr(ta, *receiver, security_check, out)?;
+                collect_checks_in_expr(ta, *index, security_check, out)?;
             }
             crate::PostfixTarget::Local { .. } | crate::PostfixTarget::Global { .. } => {}
         },
@@ -459,28 +470,62 @@ fn collect_checks_in_expr(
         | TypedExprKind::FunctionRef { .. }
         | TypedExprKind::NumberEnumMember { .. }
         | TypedExprKind::StringEnumMember { .. } => {}
-    }
+    };
+    Ok(())
 }
 
-fn security_check_from_args(ta: &TypedAst, span: Span, args: &[ExprId]) -> SecurityCheck {
-    let capability = args.first().and_then(|id| match &ta.expr(*id).kind {
-        TypedExprKind::String(value) => Some((value.clone(), ta.expr(*id).span)),
-        _ => None,
-    });
-    let payload_keys = args.get(1).and_then(|id| match &ta.expr(*id).kind {
-        TypedExprKind::ObjectLiteral { fields, .. } => Some(
-            fields
-                .iter()
-                .map(|field| (field.name.name.clone(), field.name.span))
-                .collect::<BTreeMap<_, _>>(),
-        ),
-        _ => None,
-    });
-    SecurityCheck {
+fn security_check_from_args(
+    ta: &TypedAst,
+    span: Span,
+    args: &[ExprId],
+) -> Result<SecurityCheck, crate::compiler_error::CompilerFailure> {
+    let capability = args
+        .first()
+        .map(|id| {
+            Ok::<_, crate::compiler_error::CompilerFailure>(
+                match &ta
+                    .try_expr(*id)
+                    .map_err(crate::typechecker::arena_failure)?
+                    .kind
+                {
+                    TypedExprKind::String(value) => Some((
+                        value.clone(),
+                        ta.try_expr(*id)
+                            .map_err(crate::typechecker::arena_failure)?
+                            .span,
+                    )),
+                    _ => None,
+                },
+            )
+        })
+        .transpose()?
+        .flatten();
+    let payload_keys = args
+        .get(1)
+        .map(|id| {
+            Ok::<_, crate::compiler_error::CompilerFailure>(
+                match &ta
+                    .try_expr(*id)
+                    .map_err(crate::typechecker::arena_failure)?
+                    .kind
+                {
+                    TypedExprKind::ObjectLiteral { fields, .. } => Some(
+                        fields
+                            .iter()
+                            .map(|field| (field.name.name.clone(), field.name.span))
+                            .collect::<BTreeMap<_, _>>(),
+                    ),
+                    _ => None,
+                },
+            )
+        })
+        .transpose()?
+        .flatten();
+    Ok(SecurityCheck {
         span,
         capability,
         payload_keys,
-    }
+    })
 }
 
 fn warning(span: Span, message: String) -> Diagnostic {
@@ -521,7 +566,7 @@ mod tests {
         package_refs.extend(stdlib.iter());
         let (ta, infer_diags) = infer(source, "main", &ast, &package_refs);
         diags.extend(infer_diags);
-        diags.extend(crate::check(&ta));
+        diags.extend(crate::check(&ta).unwrap());
         diags
     }
 

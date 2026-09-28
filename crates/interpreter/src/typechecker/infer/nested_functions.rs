@@ -94,7 +94,7 @@ impl Inferer<'_> {
                 declaration.name.span,
                 index,
             );
-            opening.push(self.placeholder_binding(&declaration, &ty));
+            opening.push(self.placeholder_binding(&declaration, &ty)?);
         }
         for index in hoisted {
             opening.push(self.define_nested_function(index)?);
@@ -248,15 +248,22 @@ impl Inferer<'_> {
     /// `let name = <placeholder closure>`: the binding each nested function is
     /// assigned into. Every use before the real closure is assigned is
     /// rejected, so the placeholder never runs.
-    fn placeholder_binding(&mut self, declaration: &Declaration, ty: &Type) -> StmtId {
+    fn placeholder_binding(
+        &mut self,
+        declaration: &Declaration,
+        ty: &Type,
+    ) -> Result<StmtId, crate::compiler_error::CompilerFailure> {
         let Type::Function { params, ret, .. } = ty else {
             unreachable!("a nested function's type is a function type");
         };
         let span = declaration.name.span;
-        let body = self.typed_ast.push_stmt(TypedStmt {
-            kind: TypedStmtKind::Block(Vec::new()),
-            span,
-        });
+        let body = self
+            .typed_ast
+            .try_push_stmt(TypedStmt {
+                kind: TypedStmtKind::Block(Vec::new()),
+                span,
+            })
+            .map_err(crate::typechecker::arena_failure)?;
         let params = declaration
             .params
             .iter()
@@ -269,28 +276,33 @@ impl Inferer<'_> {
                 default: None,
             })
             .collect();
-        let placeholder = self.typed_ast.push_expr(TypedExpr {
-            kind: TypedExprKind::Closure {
-                runtime_generics: Vec::new(),
-                params,
-                return_type: (**ret).clone(),
-                body: ClosureBody::Block(body),
-                captured: Vec::new(),
-            },
-            span,
-            ty: ty.clone(),
-        });
-        self.typed_ast.placeholder_closures.insert(placeholder);
-        self.typed_ast.push_stmt(TypedStmt {
-            kind: TypedStmtKind::Let {
-                name: declaration.name.clone(),
+        let placeholder = self
+            .typed_ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::Closure {
+                    runtime_generics: Vec::new(),
+                    params,
+                    return_type: (**ret).clone(),
+                    body: ClosureBody::Block(body),
+                    captured: Vec::new(),
+                },
+                span,
                 ty: ty.clone(),
-                value: placeholder,
-                boxed: false,
-                doc: None,
-            },
-            span,
-        })
+            })
+            .map_err(crate::typechecker::arena_failure)?;
+        self.typed_ast.placeholder_closures.insert(placeholder);
+        self.typed_ast
+            .try_push_stmt(TypedStmt {
+                kind: TypedStmtKind::Let {
+                    name: declaration.name.clone(),
+                    ty: ty.clone(),
+                    value: placeholder,
+                    boxed: false,
+                    doc: None,
+                },
+                span,
+            })
+            .map_err(crate::typechecker::arena_failure)
     }
 
     /// Infer nested function `index`'s body as a closure and assign it to its
@@ -318,24 +330,29 @@ impl Inferer<'_> {
         self.exit_closure_narrow_boundary();
         self.nested_function_bodies.pop();
         self.nested_functions[index].defined = true;
-        let value = self.typed_ast.push_expr(TypedExpr {
-            kind,
-            span,
-            ty: closure_ty,
-        });
+        let value = self
+            .typed_ast
+            .try_push_expr(TypedExpr {
+                kind,
+                span,
+                ty: closure_ty,
+            })
+            .map_err(crate::typechecker::arena_failure)?;
         self.typed_ast
             .nested_function_names
             .insert(value, declaration.name.clone());
-        Ok(self.typed_ast.push_stmt(TypedStmt {
-            kind: TypedStmtKind::AssignLocal {
-                ident: declaration.name,
-                target_ty: ty,
-                value,
-                boxed: false,
-                narrowed_shadow_ty: None,
-            },
-            span,
-        }))
+        self.typed_ast
+            .try_push_stmt(TypedStmt {
+                kind: TypedStmtKind::AssignLocal {
+                    ident: declaration.name,
+                    target_ty: ty,
+                    value,
+                    boxed: false,
+                    narrowed_shadow_ty: None,
+                },
+                span,
+            })
+            .map_err(crate::typechecker::arena_failure)
     }
 }
 

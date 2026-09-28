@@ -154,26 +154,30 @@ pub(super) fn collect_from_stmt(
     ast: &TypedAst,
     stmt_id: crate::StmtId,
     c: &mut ShapeCollector<'_>,
-) {
-    match &ast.stmt(stmt_id).kind {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let _: () = match &ast
+        .try_stmt(stmt_id)
+        .map_err(crate::typechecker::arena_failure)?
+        .kind
+    {
         TypedStmtKind::Let { ty, value, .. } | TypedStmtKind::Const { ty, value, .. } => {
             c.collect(ty);
-            collect_from_expr(ast, *value, c);
+            collect_from_expr(ast, *value, c)?;
         }
         TypedStmtKind::If {
             condition,
             then_block,
             else_block,
         } => {
-            collect_from_expr(ast, *condition, c);
-            collect_from_stmt(ast, *then_block, c);
+            collect_from_expr(ast, *condition, c)?;
+            collect_from_stmt(ast, *then_block, c)?;
             if let Some(else_id) = else_block {
-                collect_from_stmt(ast, *else_id, c);
+                collect_from_stmt(ast, *else_id, c)?;
             }
         }
         TypedStmtKind::While { condition, body } => {
-            collect_from_expr(ast, *condition, c);
-            collect_from_stmt(ast, *body, c);
+            collect_from_expr(ast, *condition, c)?;
+            collect_from_stmt(ast, *body, c)?;
         }
         TypedStmtKind::For {
             init,
@@ -182,15 +186,15 @@ pub(super) fn collect_from_stmt(
             body,
         } => {
             if let Some(i) = init {
-                collect_from_stmt(ast, *i, c);
+                collect_from_stmt(ast, *i, c)?;
             }
             if let Some(cond) = condition {
-                collect_from_expr(ast, *cond, c);
+                collect_from_expr(ast, *cond, c)?;
             }
             if let Some(u) = update {
-                collect_from_stmt(ast, *u, c);
+                collect_from_stmt(ast, *u, c)?;
             }
-            collect_from_stmt(ast, *body, c);
+            collect_from_stmt(ast, *body, c)?;
         }
         TypedStmtKind::ForOf {
             element_ty,
@@ -237,12 +241,12 @@ pub(super) fn collect_from_stmt(
                 c.collect(&return_body);
                 c.collect(&Type::Union(vec![yield_body, return_body]));
             }
-            collect_from_expr(ast, *iter, c);
-            collect_from_stmt(ast, *body, c);
+            collect_from_expr(ast, *iter, c)?;
+            collect_from_stmt(ast, *body, c)?;
         }
         TypedStmtKind::DoWhile { body, condition } => {
-            collect_from_stmt(ast, *body, c);
-            collect_from_expr(ast, *condition, c);
+            collect_from_stmt(ast, *body, c)?;
+            collect_from_expr(ast, *condition, c)?;
         }
         TypedStmtKind::Switch {
             discriminant,
@@ -251,31 +255,31 @@ pub(super) fn collect_from_stmt(
             default,
         } => {
             c.collect(discriminant_ty);
-            collect_from_expr(ast, *discriminant, c);
+            collect_from_expr(ast, *discriminant, c)?;
             for case in cases {
-                collect_from_stmt(ast, case.body, c);
+                collect_from_stmt(ast, case.body, c)?;
             }
             if let Some(d) = default {
-                collect_from_stmt(ast, *d, c);
+                collect_from_stmt(ast, *d, c)?;
             }
         }
         TypedStmtKind::Break | TypedStmtKind::Continue | TypedStmtKind::ReboxLocal { .. } => {}
-        TypedStmtKind::Return(Some(value)) => collect_from_expr(ast, *value, c),
+        TypedStmtKind::Return(Some(value)) => collect_from_expr(ast, *value, c)?,
         TypedStmtKind::Return(None) => {}
-        TypedStmtKind::Expr(value) => collect_from_expr(ast, *value, c),
+        TypedStmtKind::Expr(value) => collect_from_expr(ast, *value, c)?,
         TypedStmtKind::Block(stmts) => {
             for s in stmts {
-                collect_from_stmt(ast, *s, c);
+                collect_from_stmt(ast, *s, c)?;
             }
         }
         TypedStmtKind::AssignLocal { value, .. } | TypedStmtKind::AssignGlobal { value, .. } => {
-            collect_from_expr(ast, *value, c);
+            collect_from_expr(ast, *value, c)?;
         }
         TypedStmtKind::AssignField {
             receiver, value, ..
         } => {
-            collect_from_expr(ast, *receiver, c);
-            collect_from_expr(ast, *value, c);
+            collect_from_expr(ast, *receiver, c)?;
+            collect_from_expr(ast, *value, c)?;
         }
         TypedStmtKind::AssignIndex {
             receiver,
@@ -283,9 +287,9 @@ pub(super) fn collect_from_stmt(
             value,
             elem_ty,
         } => {
-            collect_from_expr(ast, *receiver, c);
-            collect_from_expr(ast, *index, c);
-            collect_from_expr(ast, *value, c);
+            collect_from_expr(ast, *receiver, c)?;
+            collect_from_expr(ast, *index, c)?;
+            collect_from_expr(ast, *value, c)?;
             c.collect(elem_ty);
         }
         TypedStmtKind::NarrowRegion {
@@ -296,34 +300,37 @@ pub(super) fn collect_from_stmt(
         } => {
             c.collect(&cast_info.from_ty);
             c.collect(&cast_info.to_ty);
-            collect_from_expr(ast, *source, c);
-            collect_from_stmt(ast, *body, c);
+            collect_from_expr(ast, *source, c)?;
+            collect_from_stmt(ast, *body, c)?;
         }
-        TypedStmtKind::Throw { value } => collect_from_expr(ast, *value, c),
+        TypedStmtKind::Throw { value } => collect_from_expr(ast, *value, c)?,
         TypedStmtKind::Try {
             body,
             catches,
             finally,
         } => {
-            collect_from_stmt(ast, *body, c);
+            collect_from_stmt(ast, *body, c)?;
             for clause in catches {
-                collect_from_stmt(ast, clause.body, c);
+                collect_from_stmt(ast, clause.body, c)?;
             }
             if let Some(f) = finally {
-                collect_from_stmt(ast, *f, c);
+                collect_from_stmt(ast, *f, c)?;
             }
         }
-    }
+    };
+    Ok(())
 }
 
 pub(super) fn collect_from_expr(
     ast: &TypedAst,
     expr_id: crate::ExprId,
     c: &mut ShapeCollector<'_>,
-) {
-    let expr = ast.expr(expr_id);
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let expr = ast
+        .try_expr(expr_id)
+        .map_err(crate::typechecker::arena_failure)?;
     c.collect(&expr.ty);
-    match &expr.kind {
+    let _: () = match &expr.kind {
         TypedExprKind::Number(_)
         | TypedExprKind::BigInt(_)
         | TypedExprKind::String(_)
@@ -338,62 +345,67 @@ pub(super) fn collect_from_expr(
         | TypedExprKind::NumberEnumMember { .. }
         | TypedExprKind::StringEnumMember { .. } => {}
         TypedExprKind::Binary { lhs, rhs, .. } => {
-            collect_from_expr(ast, *lhs, c);
-            collect_from_expr(ast, *rhs, c);
+            collect_from_expr(ast, *lhs, c)?;
+            collect_from_expr(ast, *rhs, c)?;
         }
         TypedExprKind::EffectThen { effect, result } => {
-            collect_from_expr(ast, *effect, c);
-            collect_from_expr(ast, *result, c);
+            collect_from_expr(ast, *effect, c)?;
+            collect_from_expr(ast, *result, c)?;
         }
         TypedExprKind::Sequence { stmts, result } => {
             for &stmt in stmts {
-                collect_from_stmt(ast, stmt, c);
+                collect_from_stmt(ast, stmt, c)?;
             }
-            collect_from_expr(ast, *result, c);
+            collect_from_expr(ast, *result, c)?;
         }
-        TypedExprKind::Unary { operand, .. } => collect_from_expr(ast, *operand, c),
+        TypedExprKind::Unary { operand, .. } => collect_from_expr(ast, *operand, c)?,
         TypedExprKind::TypeofTag { value, .. } | TypedExprKind::InstanceOf { value, .. } => {
-            collect_from_expr(ast, *value, c);
+            collect_from_expr(ast, *value, c)?;
         }
         TypedExprKind::Call { args, .. }
         | TypedExprKind::McpCall { args, .. }
         | TypedExprKind::SuperCtorCall { args, .. }
         | TypedExprKind::SuperMethodCall { args, .. } => {
             for a in args {
-                collect_from_expr(ast, *a, c);
+                collect_from_expr(ast, *a, c)?;
             }
         }
         TypedExprKind::CallClosure { callee, args } => {
-            collect_from_expr(ast, *callee, c);
+            collect_from_expr(ast, *callee, c)?;
             for a in args {
-                collect_from_expr(ast, *a, c);
+                collect_from_expr(ast, *a, c)?;
             }
         }
         TypedExprKind::GenericCall { args, .. } => {
             for a in args {
-                collect_from_expr(ast, a.expr, c);
+                collect_from_expr(ast, a.expr, c)?;
             }
         }
         TypedExprKind::MethodCall { receiver, args, .. } => {
-            collect_from_expr(ast, *receiver, c);
+            collect_from_expr(ast, *receiver, c)?;
             for a in args {
-                collect_from_expr(ast, *a, c);
+                collect_from_expr(ast, *a, c)?;
             }
         }
         TypedExprKind::GenericMethodCall { receiver, args, .. } => {
-            collect_from_expr(ast, *receiver, c);
+            collect_from_expr(ast, *receiver, c)?;
             for a in args {
-                collect_from_expr(ast, a.expr, c);
+                collect_from_expr(ast, a.expr, c)?;
             }
         }
         TypedExprKind::IntrinsicCall { args, .. } => {
             for a in args {
-                collect_from_expr(ast, *a, c);
+                collect_from_expr(ast, *a, c)?;
             }
         }
         TypedExprKind::ObjectLiteral { members, fields } => {
             // when expr.ty is InterfaceRef, codegen still needs the structural shape registered
-            if matches!(&ast.expr(expr_id).ty, Type::InterfaceRef { .. }) {
+            if matches!(
+                &ast.try_expr(expr_id)
+                    .map_err(crate::typechecker::arena_failure)?
+                    .ty,
+                Type::InterfaceRef { .. }
+            ) {
                 let field_map: std::collections::BTreeMap<String, crate::ObjectField> = fields
                     .iter()
                     .map(|f| {
@@ -414,7 +426,7 @@ pub(super) fn collect_from_expr(
             }
             for member in members {
                 for expression in member.expressions() {
-                    collect_from_expr(ast, expression, c);
+                    collect_from_expr(ast, expression, c)?;
                 }
             }
         }
@@ -424,7 +436,7 @@ pub(super) fn collect_from_expr(
         } => {
             c.collect(element_ty);
             for e in elements {
-                collect_from_expr(ast, e.expr_id(), c);
+                collect_from_expr(ast, e.expr_id(), c)?;
             }
         }
         TypedExprKind::TupleLiteral {
@@ -435,16 +447,16 @@ pub(super) fn collect_from_expr(
                 c.collect(t);
             }
             for e in elements {
-                collect_from_expr(ast, *e, c);
+                collect_from_expr(ast, *e, c)?;
             }
         }
         TypedExprKind::FieldAccess { receiver, .. }
         | TypedExprKind::InterfacePropertyAccess { receiver, .. } => {
-            collect_from_expr(ast, *receiver, c);
+            collect_from_expr(ast, *receiver, c)?;
         }
         TypedExprKind::IndexAccess { receiver, index } => {
-            collect_from_expr(ast, *receiver, c);
-            collect_from_expr(ast, *index, c);
+            collect_from_expr(ast, *receiver, c)?;
+            collect_from_expr(ast, *index, c)?;
         }
         TypedExprKind::Closure {
             params,
@@ -457,8 +469,8 @@ pub(super) fn collect_from_expr(
             }
             c.collect(return_type);
             match *body {
-                crate::ClosureBody::Expr(e) => collect_from_expr(ast, e, c),
-                crate::ClosureBody::Block(b) => collect_from_stmt(ast, b, c),
+                crate::ClosureBody::Expr(e) => collect_from_expr(ast, e, c)?,
+                crate::ClosureBody::Block(b) => collect_from_stmt(ast, b, c)?,
             }
         }
         TypedExprKind::Narrowed {
@@ -469,20 +481,20 @@ pub(super) fn collect_from_expr(
         } => {
             c.collect(&cast_info.from_ty);
             c.collect(&cast_info.to_ty);
-            collect_from_expr(ast, *source, c);
-            collect_from_expr(ast, *inner, c);
+            collect_from_expr(ast, *source, c)?;
+            collect_from_expr(ast, *inner, c)?;
         }
         TypedExprKind::Ternary { cond, then_, else_ } => {
-            collect_from_expr(ast, *cond, c);
-            collect_from_expr(ast, *then_, c);
-            collect_from_expr(ast, *else_, c);
+            collect_from_expr(ast, *cond, c)?;
+            collect_from_expr(ast, *then_, c)?;
+            collect_from_expr(ast, *else_, c)?;
         }
         TypedExprKind::NullishCoalesce { lhs, rhs } => {
-            collect_from_expr(ast, *lhs, c);
-            collect_from_expr(ast, *rhs, c);
+            collect_from_expr(ast, *lhs, c)?;
+            collect_from_expr(ast, *rhs, c)?;
         }
         TypedExprKind::OptionalChain { base, parts } => {
-            collect_from_expr(ast, *base, c);
+            collect_from_expr(ast, *base, c)?;
             for part in parts {
                 match part {
                     crate::TypedChainPart::Field { result_ty, .. } => {
@@ -494,14 +506,14 @@ pub(super) fn collect_from_expr(
                     }
                     crate::TypedChainPart::Index { idx, result_ty, .. } => {
                         c.collect(result_ty);
-                        collect_from_expr(ast, *idx, c);
+                        collect_from_expr(ast, *idx, c)?;
                     }
                     crate::TypedChainPart::Call {
                         args, result_ty, ..
                     } => {
                         c.collect(result_ty);
                         for a in args {
-                            collect_from_expr(ast, *a, c);
+                            collect_from_expr(ast, *a, c)?;
                         }
                     }
                     crate::TypedChainPart::MethodCall {
@@ -509,7 +521,7 @@ pub(super) fn collect_from_expr(
                     } => {
                         c.collect(result_ty);
                         for a in args {
-                            collect_from_expr(ast, *a, c);
+                            collect_from_expr(ast, *a, c)?;
                         }
                     }
                 }
@@ -525,7 +537,7 @@ pub(super) fn collect_from_expr(
                 target_ty,
                 ..
             } => {
-                collect_from_expr(ast, *receiver, c);
+                collect_from_expr(ast, *receiver, c)?;
                 c.collect(target_ty);
             }
             crate::PostfixTarget::Index {
@@ -533,13 +545,13 @@ pub(super) fn collect_from_expr(
                 index,
                 elem_ty,
             } => {
-                collect_from_expr(ast, *receiver, c);
-                collect_from_expr(ast, *index, c);
+                collect_from_expr(ast, *receiver, c)?;
+                collect_from_expr(ast, *index, c)?;
                 c.collect(elem_ty);
             }
         },
         TypedExprKind::NonNullAssert { value } => {
-            collect_from_expr(ast, *value, c);
+            collect_from_expr(ast, *value, c)?;
             c.collect(&expr.ty);
         }
         TypedExprKind::Cast {
@@ -553,12 +565,16 @@ pub(super) fn collect_from_expr(
             if let Some(shape) = check {
                 c.collect(shape);
             }
-            collect_from_expr(ast, *value, c);
+            collect_from_expr(ast, *value, c)?;
         }
-    }
+    };
+    Ok(())
 }
 
-pub(super) fn collect(ta: &TypedAst, types: TypeResolver<'_>) -> Vec<Shape> {
+pub(super) fn collect(
+    ta: &TypedAst,
+    types: TypeResolver<'_>,
+) -> Result<Vec<Shape>, crate::compiler_error::CompilerFailure> {
     let mut c = ShapeCollector::new(types);
     for g in &ta.globals {
         c.collect(&g.ty);
@@ -568,19 +584,19 @@ pub(super) fn collect(ta: &TypedAst, types: TypeResolver<'_>) -> Vec<Shape> {
             c.collect(&p.ty);
         }
         c.collect(&f.return_type);
-        collect_from_stmt(ta, f.body, &mut c);
+        collect_from_stmt(ta, f.body, &mut c)?;
     }
     for &stmt_id in &ta.top_level_statements {
-        collect_from_stmt(ta, stmt_id, &mut c);
+        collect_from_stmt(ta, stmt_id, &mut c)?;
     }
     // Class member bodies are roots too: an object literal appearing only
     // inside a method has no other site to register its shape, and codegen
     // needs a vtable global for every shape it emits.
     for stmt_id in ta.class_body_roots() {
-        collect_from_stmt(ta, stmt_id, &mut c);
+        collect_from_stmt(ta, stmt_id, &mut c)?;
     }
     for expr_id in ta.class_field_initializers() {
-        collect_from_expr(ta, expr_id, &mut c);
+        collect_from_expr(ta, expr_id, &mut c)?;
     }
-    c.shapes
+    Ok(c.shapes)
 }

@@ -75,9 +75,15 @@ impl Inferer<'_> {
         &mut self,
         predicate: &crate::TypePredicate,
         args: &[ExprId],
-    ) -> Option<(narrowing::NarrowEnv, narrowing::NarrowEnv)> {
+    ) -> Result<
+        Option<(narrowing::NarrowEnv, narrowing::NarrowEnv)>,
+        crate::compiler_error::CompilerFailure,
+    > {
         let idx = predicate.parameter_index as usize;
-        let arg_id = *args.get(idx)?;
+        let arg_id = *match args.get(idx) {
+            Some(value) => value,
+            None => return Ok(None),
+        };
         self.narrow_path_to_asserted(arg_id, &predicate.asserted_type)
     }
 
@@ -91,35 +97,52 @@ impl Inferer<'_> {
         &mut self,
         target: ExprId,
         asserted: &Type,
-    ) -> Option<(narrowing::NarrowEnv, narrowing::NarrowEnv)> {
-        let arg_expr = self.typed_ast.expr(target);
-        let path = self.expr_to_reference_path(arg_expr)?;
+    ) -> Result<
+        Option<(narrowing::NarrowEnv, narrowing::NarrowEnv)>,
+        crate::compiler_error::CompilerFailure,
+    > {
+        let arg_expr = self
+            .typed_ast
+            .try_expr(target)
+            .map_err(crate::typechecker::arena_failure)?;
+        let Some(path) = self.expr_to_reference_path(arg_expr)? else {
+            return Ok(None);
+        };
         if self.path_root_is_captured_mutator(&path) {
-            return Some((narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new()));
+            return Ok(Some((
+                narrowing::NarrowEnv::new(),
+                narrowing::NarrowEnv::new(),
+            )));
         }
-        let from_ty = self.narrowing_source_ty(arg_expr);
+        let from_ty = self.narrowing_source_ty(arg_expr)?;
         let arg_span = arg_expr.span;
         let fallback_kind = arg_expr.kind.clone();
 
         // prefer un-narrowed source so NarrowRegion materialization doesn't depend on a chain-only shadow binding.
         let arg_kind = self
-            .synthesize_unnarrowed_source(&path, arg_span)
+            .synthesize_unnarrowed_source(&path, arg_span)?
             .unwrap_or(fallback_kind);
 
         // Intersect to keep element-type precision: Array.isArray(x: number[] | string) → number[], not Array<unknown>.
         let true_ty = self.intersect_asserted(&from_ty, asserted);
         let false_ty = self.subtract_asserted(&from_ty, asserted);
 
-        let source_true = self.typed_ast.push_expr(TypedExpr {
-            kind: arg_kind.clone(),
-            span: arg_span,
-            ty: from_ty.clone(),
-        });
-        let source_false = self.typed_ast.push_expr(TypedExpr {
-            kind: arg_kind,
-            span: arg_span,
-            ty: from_ty,
-        });
+        let source_true = self
+            .typed_ast
+            .try_push_expr(TypedExpr {
+                kind: arg_kind.clone(),
+                span: arg_span,
+                ty: from_ty.clone(),
+            })
+            .map_err(crate::typechecker::arena_failure)?;
+        let source_false = self
+            .typed_ast
+            .try_push_expr(TypedExpr {
+                kind: arg_kind,
+                span: arg_span,
+                ty: from_ty,
+            })
+            .map_err(crate::typechecker::arena_failure)?;
         let mut true_env = narrowing::NarrowEnv::new();
         let mut false_env = narrowing::NarrowEnv::new();
         true_env.insert(
@@ -142,7 +165,7 @@ impl Inferer<'_> {
                 source: source_false,
             },
         );
-        Some((true_env, false_env))
+        Ok(Some((true_env, false_env)))
     }
 
     fn intersect_asserted(&self, ty: &Type, asserted: &Type) -> Type {
@@ -210,25 +233,32 @@ impl Inferer<'_> {
         }
     }
 
-    pub(super) fn validate_type_predicate_return(&mut self, value_id: ExprId, span: crate::Span) {
+    pub(super) fn validate_type_predicate_return(
+        &mut self,
+        value_id: ExprId,
+        span: crate::Span,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         let Some((predicate, param_name)) = self.current_type_predicate.clone() else {
-            return;
+            return Ok(());
         };
         let Some(scope_entry) = self.scopes.get(&param_name).cloned() else {
-            return;
+            return Ok(());
         };
         // x is T only attaches on true returns; return false makes no narrowing claim.
         if matches!(
-            self.typed_ast.expr(value_id).kind,
+            self.typed_ast
+                .try_expr(value_id)
+                .map_err(crate::typechecker::arena_failure)?
+                .kind,
             crate::TypedExprKind::Boolean(false)
         ) {
-            return;
+            return Ok(());
         }
         let path = narrowing::ReferencePath::root(narrowing::BindingId::Local {
             name: param_name.clone(),
             decl_scope: scope_entry.decl_scope,
         });
-        let (return_true_env, _return_false_env) = self.predicate_envs(value_id);
+        let (return_true_env, _return_false_env) = self.predicate_envs(value_id)?;
         // Merge enclosing if-branch narrowings (narrow_scopes) with the return expr's env;
         // outer-frames-first so the return value's env is the final (innermost) override.
         let mut combined_env = narrowing::NarrowEnv::new();
@@ -251,7 +281,7 @@ impl Inferer<'_> {
             }
             _ => predicate.asserted_type.clone(),
         };
-        if !assignable(&narrowed_ty, &asserted_body, self.resolver()) {
+        let _: () = if !assignable(&narrowed_ty, &asserted_body, self.resolver()) {
             self.error_with_help(
                 span,
                 format!(
@@ -263,6 +293,7 @@ impl Inferer<'_> {
                     param_name, narrowed_ty,
                 )],
             );
-        }
+        };
+        Ok(())
     }
 }

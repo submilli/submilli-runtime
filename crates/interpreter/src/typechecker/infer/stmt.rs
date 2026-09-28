@@ -64,72 +64,13 @@ impl Inferer<'_> {
                 ty,
                 value,
                 doc,
-            } => {
-                let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
-                let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref())?;
-                // A `let` is reassignable, so an inferred literal type would be wrong
-                // the moment it is written to: `const a = 1; let b = a;` binds `number`,
-                // not `1`. An explicit annotation is honoured as written.
-                let bound = hint.unwrap_or_else(|| value_ty.widen_literal());
-                let bound = self.pattern_binding_storage_type(value, bound)?;
-                // Reject a void binding; poison the slot so codegen never
-                // sees a void value-type.
-                let bound = if self.reject_void_binding(&bound, span) {
-                    Type::Error
-                } else {
-                    bound
-                };
-                self.scopes
-                    .insert(name.name.clone(), bound.clone(), false, name.span);
-                let flow_ty = self.pattern_binding_flow_type(value)?.unwrap_or(value_ty);
-                self.narrow_local_initializer(&name, &bound, flow_ty);
-                Ok(TypedStmtKind::Let {
-                    name,
-                    ty: bound,
-                    value: typed_value,
-                    boxed: false,
-                    doc,
-                })
-            }
+            } => self.infer_let_statement(name, ty, value, doc, span),
             StmtKind::Const {
                 name,
                 ty,
                 value,
                 doc,
-            } => {
-                // An unannotated `const` bound to a bare literal keeps the literal type,
-                // as in TypeScript: the binding cannot be reassigned, so nothing can
-                // invalidate it. `let` widens (it is reassignable), and so does any
-                // initializer that is not itself a literal.
-                let hint = ty
-                    .as_ref()
-                    .map(|a| self.resolve_type(a))
-                    .transpose()?
-                    .map_or_else(|| literal_type_of(self.ast, value), |ty| Ok(Some(ty)))?;
-                let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref())?;
-                let bound = hint.unwrap_or_else(|| value_ty.clone());
-                let bound = self.pattern_binding_storage_type(value, bound)?;
-                // Reject a void binding; poison the slot so codegen never
-                // sees a void value-type.
-                let bound = if self.reject_void_binding(&bound, span) {
-                    Type::Error
-                } else {
-                    bound
-                };
-                self.scopes
-                    .insert(name.name.clone(), bound.clone(), true, name.span);
-                if name.name.starts_with("#pattern_dst_") {
-                    self.pattern_sources.insert(name.name.clone(), typed_value);
-                }
-                let flow_ty = self.pattern_binding_flow_type(value)?.unwrap_or(value_ty);
-                self.narrow_local_initializer(&name, &bound, flow_ty);
-                Ok(TypedStmtKind::Const {
-                    name,
-                    ty: bound,
-                    value: typed_value,
-                    doc,
-                })
-            }
+            } => self.infer_const_statement(name, ty, value, doc, span),
             // Declared and assigned by its block (`declare_nested_functions`). A
             // brace-less body is reported by the parser but still wrapped in a
             // block, so every one has one.
@@ -138,84 +79,14 @@ impl Inferer<'_> {
                 condition,
                 then_block,
                 else_block,
-            } => {
-                let (typed_cond, cond_ty) = self.infer_expr(condition, None)?;
-                let cond_span = self
-                    .ast
-                    .try_expr(condition)
-                    .map_err(super::arena_failure)?
-                    .span;
-                self.check_condition_ty(&cond_ty, cond_span);
-                let (true_env, false_env) = self.predicate_envs(typed_cond);
-                let entry_reachable = self.reachable;
-                let then_possible = self.condition_can_be(typed_cond, true);
-                let else_possible = self.condition_can_be(typed_cond, false);
-                let then_span = self
-                    .ast
-                    .try_stmt(then_block)
-                    .map_err(super::arena_failure)?
-                    .span;
-                self.push_narrow_frame(true_env.clone());
-                self.reachable = entry_reachable;
-                let typed_then = self.infer_if_branch(then_block)?;
-                let then_reachable = self.reachable && then_possible;
-                let then_narrowings = self.snapshot_active_narrowings(0).0;
-                let (_, then_assigned) = self.pop_narrow_frame_capture();
-                let typed_then = self.wrap_narrow_regions(typed_then, &true_env, then_span);
-                let (typed_else, else_narrowings, else_assigned, else_reachable) = if let Some(b) =
-                    else_block
-                {
-                    let else_span = self.ast.try_stmt(b).map_err(super::arena_failure)?.span;
-                    self.push_narrow_frame(false_env.clone());
-                    self.reachable = entry_reachable;
-                    let typed_else = self.infer_if_branch(b)?;
-                    let er = self.reachable && else_possible;
-                    let en = self.snapshot_active_narrowings(0).0;
-                    let (_, ea) = self.pop_narrow_frame_capture();
-                    let typed_else = self.wrap_narrow_regions(typed_else, &false_env, else_span);
-                    (Some(typed_else), en, ea, er)
-                } else {
-                    // Implicit-else carries the false-side narrowings so
-                    // `if (x === null) return;` propagates the non-null
-                    // narrowing past the `if` when the then-branch is unreachable.
-                    self.push_narrow_frame(false_env.clone());
-                    let unchanged = self.snapshot_active_narrowings(0).0;
-                    self.pop_narrow_frame();
-                    (
-                        None,
-                        unchanged,
-                        std::collections::BTreeSet::new(),
-                        entry_reachable && else_possible,
-                    )
-                };
-                let (joined_narrowings, joined_assigned) = match (then_reachable, else_reachable) {
-                    (true, true) => crate::typechecker::infer::narrowing::union_envs(
-                        then_narrowings,
-                        then_assigned,
-                        else_narrowings,
-                        else_assigned,
-                    ),
-                    (true, false) => (then_narrowings, then_assigned),
-                    (false, true) => (else_narrowings, else_assigned),
-                    (false, false) => (
-                        crate::typechecker::infer::narrowing::NarrowEnv::new(),
-                        std::collections::BTreeSet::new(),
-                    ),
-                };
-                self.reachable = then_reachable || else_reachable;
-                self.merge_assigned_into_outer(joined_assigned, span);
-                self.install_joined_narrowings(joined_narrowings, span);
-                Ok(TypedStmtKind::If {
-                    condition: typed_cond,
-                    then_block: typed_then,
-                    else_block: typed_else,
-                })
-            }
+            } => self.infer_if_statement(condition, then_block, else_block, span),
             StmtKind::While { condition, body } => {
                 let (condition, _, body) =
                     self.infer_condition_first_loop(Some(condition), None, body, span)?;
                 Ok(TypedStmtKind::While {
-                    condition: condition.expect("a `while` loop has a condition"),
+                    condition: condition.ok_or_else(|| {
+                        super::inference_failure("missing inferred while condition")
+                    })?,
                     body,
                 })
             }
@@ -249,122 +120,9 @@ impl Inferer<'_> {
                 ty: ann,
                 iter,
                 body,
-            } => {
-                let (typed_iter, iter_ty) = self.infer_expr(iter, None)?;
-                let classified = self.classify_for_of_source(&iter_ty);
-                let (element_ty, for_of_kind) = if let Some(pair) = classified {
-                    pair
-                } else {
-                    if !matches!(iter_ty.peel(), Type::Error) {
-                        // `classify_for_of_source` needs `&mut self`, so the
-                        // non-null form is classified up front and the probe
-                        // reads the answer. Same question `nullable_culprit`
-                        // would ask, since it applies `accepts` to exactly this
-                        // form.
-                        let non_null_iterates =
-                            super::narrow_scopes::non_null_form(iter_ty.clone())
-                                .is_some_and(|t| self.classify_for_of_source(&t).is_some());
-                        let culprit =
-                            self.nullable_culprit(&[(typed_iter, &iter_ty)], |_| non_null_iterates);
-                        self.error_with_narrowing_hint(
-                            self.ast.try_expr(iter).map_err(super::arena_failure)?.span,
-                            format!(
-                                "`for-of` requires an array, tuple, string, `Iterator<T>`, or `Iterable<T>`, got `{}`",
-                                iter_ty.peel(),
-                            ),
-                            Vec::new(),
-                            culprit,
-                        );
-                    }
-                    (Type::Error, crate::ForOfKind::Array)
-                };
-                let bound_ty = if let Some(a) = ann.as_ref() {
-                    let declared = self.resolve_type(a)?;
-                    if !matches!(element_ty, Type::Error)
-                        && !assignable(&element_ty, &declared, self.resolver())
-                    {
-                        self.error(
-                            a.span,
-                            format!(
-                                "loop variable type `{declared}` is not compatible with array element type `{element_ty}`",
-                            ),
-                        );
-                    }
-                    declared
-                } else {
-                    element_ty.clone()
-                };
-                // Floor taken before the loop-var scope: the loop variable is
-                // rebound each iteration, so back-edge narrowings on it don't
-                // carry to the next iteration's entry.
-                let body_scope_floor = self.scopes.next_scope_id();
-                self.scopes.push();
-                self.scopes.insert(
-                    name.name.clone(),
-                    bound_ty.clone(),
-                    matches!(binding_kind, BindingKind::Const),
-                    name.span,
-                );
-                let body_span = self.ast.try_stmt(body).map_err(super::arena_failure)?.span;
-                let (loop_entry, _) = self.snapshot_active_narrowings(0);
-                let entry_reachable = self.reachable;
-                self.push_pending_join_frame(narrowing::PendingJoinKind::Loop);
-                let outcome = self.run_loop_body_with_fixed_point(
-                    body,
-                    narrowing::NarrowEnv::new(),
-                    body_span,
-                    body_scope_floor,
-                    LoopTail::default(),
-                )?;
-                let frame = self.pop_pending_join_frame();
-                self.merge_assigned_into_outer(outcome.assigned.clone(), span);
-                // Natural exit always reachable — for-of terminates immediately on empty iterable.
-                let has_exit = self.fold_exits_into_outer(
-                    Some(loop_head_env(&loop_entry, &outcome)),
-                    frame.breaks,
-                    body_span,
-                );
-                self.reachable = entry_reachable && has_exit;
-                self.scopes.pop();
-                Ok(TypedStmtKind::ForOf {
-                    binding_kind,
-                    name,
-                    element_ty: bound_ty,
-                    iter: typed_iter,
-                    body: outcome.body,
-                    kind: for_of_kind,
-                })
-            }
+            } => self.infer_for_of_statement(binding_kind, name, ann, iter, body, span),
             StmtKind::DoWhile { body, condition } => {
-                // Condition runs after the body, so no entry narrowing for the body.
-                let body_span = self.ast.try_stmt(body).map_err(super::arena_failure)?.span;
-                let body_scope_floor = self.scopes.next_scope_id();
-                let entry_reachable = self.reachable;
-                self.push_pending_join_frame(narrowing::PendingJoinKind::Loop);
-                let outcome = self.run_loop_body_with_fixed_point(
-                    body,
-                    narrowing::NarrowEnv::new(),
-                    body_span,
-                    body_scope_floor,
-                    LoopTail {
-                        update: None,
-                        condition: Some(condition),
-                    },
-                )?;
-                let frame = self.pop_pending_join_frame();
-                self.merge_assigned_into_outer(outcome.assigned.clone(), span);
-                let (typed_cond, exit) = self.check_condition_at_loop_head(
-                    condition,
-                    &LoopHead::after_every_pass(&outcome),
-                    body_span,
-                )?;
-                let natural = exit.filter(|_| outcome.reaches_back_edge);
-                let has_exit = self.fold_exits_into_outer(natural, frame.breaks, body_span);
-                self.reachable = entry_reachable && has_exit;
-                Ok(TypedStmtKind::DoWhile {
-                    body: outcome.body,
-                    condition: typed_cond,
-                })
+                self.infer_do_while_statement(body, condition, span)
             }
             StmtKind::Switch {
                 discriminant,
@@ -415,7 +173,7 @@ impl Inferer<'_> {
                         collected.push((value_ty, span));
                     }
                     if self.reachable {
-                        self.validate_type_predicate_return(id, span);
+                        self.validate_type_predicate_return(id, span)?;
                     }
                     Some(id)
                 } else {
@@ -451,7 +209,7 @@ impl Inferer<'_> {
                 // Both assignments and guards describe the block's normal exit.
                 // Installation filters out bindings whose lexical scope just ended.
                 if !surviving.is_empty() {
-                    self.install_joined_narrowings(surviving, span);
+                    self.install_joined_narrowings(surviving, span)?;
                 }
                 Ok(TypedStmtKind::Block(typed_stmts))
             }
@@ -529,9 +287,9 @@ impl Inferer<'_> {
             StmtKind::LetPattern { .. }
             | StmtKind::ConstPattern { .. }
             | StmtKind::ForOfPattern { .. } => {
-                unreachable!(
-                    "destructuring patterns must be lowered before infer (see lower_patterns)"
-                );
+                return Err(super::inference_failure(
+                    "destructuring patterns must be lowered before inference",
+                ));
             }
             StmtKind::ConstRest {
                 name,
@@ -573,10 +331,301 @@ impl Inferer<'_> {
                 })
             }
         })?;
-        Ok(Some(self.typed_ast.push_stmt(TypedStmt {
-            kind: typed_kind,
-            span,
-        })))
+        Ok(Some(
+            self.typed_ast
+                .try_push_stmt(TypedStmt {
+                    kind: typed_kind,
+                    span,
+                })
+                .map_err(crate::typechecker::arena_failure)?,
+        ))
+    }
+
+    fn infer_let_statement(
+        &mut self,
+        name: Ident,
+        ty: Option<crate::TypeAnnotation>,
+        value: ExprId,
+        doc: Option<crate::DocComment>,
+        span: Span,
+    ) -> Result<TypedStmtKind, CompilerFailure> {
+        let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
+        let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref())?;
+        // A `let` is reassignable, so an inferred literal type would be wrong
+        // the moment it is written to: `const a = 1; let b = a;` binds `number`,
+        // not `1`. An explicit annotation is honoured as written.
+        let bound = hint.unwrap_or_else(|| value_ty.widen_literal());
+        let bound = self.pattern_binding_storage_type(value, bound)?;
+        // Reject a void binding; poison the slot so codegen never
+        // sees a void value-type.
+        let bound = if self.reject_void_binding(&bound, span) {
+            Type::Error
+        } else {
+            bound
+        };
+        self.scopes
+            .insert(name.name.clone(), bound.clone(), false, name.span);
+        let flow_ty = self.pattern_binding_flow_type(value)?.unwrap_or(value_ty);
+        self.narrow_local_initializer(&name, &bound, flow_ty)?;
+        Ok(TypedStmtKind::Let {
+            name,
+            ty: bound,
+            value: typed_value,
+            boxed: false,
+            doc,
+        })
+    }
+
+    fn infer_const_statement(
+        &mut self,
+        name: Ident,
+        ty: Option<crate::TypeAnnotation>,
+        value: ExprId,
+        doc: Option<crate::DocComment>,
+        span: Span,
+    ) -> Result<TypedStmtKind, CompilerFailure> {
+        // An unannotated `const` bound to a bare literal keeps the literal type,
+        // as in TypeScript: the binding cannot be reassigned, so nothing can
+        // invalidate it. `let` widens (it is reassignable), and so does any
+        // initializer that is not itself a literal.
+        let hint = ty
+            .as_ref()
+            .map(|a| self.resolve_type(a))
+            .transpose()?
+            .map_or_else(|| literal_type_of(self.ast, value), |ty| Ok(Some(ty)))?;
+        let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref())?;
+        let bound = hint.unwrap_or_else(|| value_ty.clone());
+        let bound = self.pattern_binding_storage_type(value, bound)?;
+        // Reject a void binding; poison the slot so codegen never
+        // sees a void value-type.
+        let bound = if self.reject_void_binding(&bound, span) {
+            Type::Error
+        } else {
+            bound
+        };
+        self.scopes
+            .insert(name.name.clone(), bound.clone(), true, name.span);
+        if name.name.starts_with("#pattern_dst_") {
+            self.pattern_sources.insert(name.name.clone(), typed_value);
+        }
+        let flow_ty = self.pattern_binding_flow_type(value)?.unwrap_or(value_ty);
+        self.narrow_local_initializer(&name, &bound, flow_ty)?;
+        Ok(TypedStmtKind::Const {
+            name,
+            ty: bound,
+            value: typed_value,
+            doc,
+        })
+    }
+
+    fn infer_if_statement(
+        &mut self,
+        condition: ExprId,
+        then_block: StmtId,
+        else_block: Option<StmtId>,
+        span: Span,
+    ) -> Result<TypedStmtKind, CompilerFailure> {
+        let (typed_cond, cond_ty) = self.infer_expr(condition, None)?;
+        let cond_span = self
+            .ast
+            .try_expr(condition)
+            .map_err(super::arena_failure)?
+            .span;
+        self.check_condition_ty(&cond_ty, cond_span);
+        let (true_env, false_env) = self.predicate_envs(typed_cond)?;
+        let entry_reachable = self.reachable;
+        let then_possible = self.condition_can_be(typed_cond, true)?;
+        let else_possible = self.condition_can_be(typed_cond, false)?;
+        let then_span = self
+            .ast
+            .try_stmt(then_block)
+            .map_err(super::arena_failure)?
+            .span;
+        self.push_narrow_frame(true_env.clone());
+        self.reachable = entry_reachable;
+        let typed_then = self.infer_if_branch(then_block)?;
+        let then_reachable = self.reachable && then_possible;
+        let then_narrowings = self.snapshot_active_narrowings(0).0;
+        let (_, then_assigned) = self.pop_narrow_frame_capture();
+        let typed_then = self.wrap_narrow_regions(typed_then, &true_env, then_span)?;
+        let (typed_else, else_narrowings, else_assigned, else_reachable) =
+            if let Some(b) = else_block {
+                let else_span = self.ast.try_stmt(b).map_err(super::arena_failure)?.span;
+                self.push_narrow_frame(false_env.clone());
+                self.reachable = entry_reachable;
+                let typed_else = self.infer_if_branch(b)?;
+                let er = self.reachable && else_possible;
+                let en = self.snapshot_active_narrowings(0).0;
+                let (_, ea) = self.pop_narrow_frame_capture();
+                let typed_else = self.wrap_narrow_regions(typed_else, &false_env, else_span)?;
+                (Some(typed_else), en, ea, er)
+            } else {
+                // Implicit-else carries the false-side narrowings so
+                // `if (x === null) return;` propagates the non-null
+                // narrowing past the `if` when the then-branch is unreachable.
+                self.push_narrow_frame(false_env.clone());
+                let unchanged = self.snapshot_active_narrowings(0).0;
+                self.pop_narrow_frame();
+                (
+                    None,
+                    unchanged,
+                    std::collections::BTreeSet::new(),
+                    entry_reachable && else_possible,
+                )
+            };
+        let (joined_narrowings, joined_assigned) = match (then_reachable, else_reachable) {
+            (true, true) => crate::typechecker::infer::narrowing::union_envs(
+                then_narrowings,
+                then_assigned,
+                else_narrowings,
+                else_assigned,
+            ),
+            (true, false) => (then_narrowings, then_assigned),
+            (false, true) => (else_narrowings, else_assigned),
+            (false, false) => (
+                crate::typechecker::infer::narrowing::NarrowEnv::new(),
+                std::collections::BTreeSet::new(),
+            ),
+        };
+        self.reachable = then_reachable || else_reachable;
+        self.merge_assigned_into_outer(joined_assigned, span);
+        self.install_joined_narrowings(joined_narrowings, span)?;
+        Ok(TypedStmtKind::If {
+            condition: typed_cond,
+            then_block: typed_then,
+            else_block: typed_else,
+        })
+    }
+
+    fn infer_for_of_statement(
+        &mut self,
+        binding_kind: crate::BindingKind,
+        name: Ident,
+        ann: Option<crate::TypeAnnotation>,
+        iter: ExprId,
+        body: StmtId,
+        span: Span,
+    ) -> Result<TypedStmtKind, CompilerFailure> {
+        let (typed_iter, iter_ty) = self.infer_expr(iter, None)?;
+        let classified = self.classify_for_of_source(&iter_ty);
+        let (element_ty, for_of_kind) = if let Some(pair) = classified {
+            pair
+        } else {
+            if !matches!(iter_ty.peel(), Type::Error) {
+                // `classify_for_of_source` needs `&mut self`, so the
+                // non-null form is classified up front and the probe
+                // reads the answer. Same question `nullable_culprit`
+                // would ask, since it applies `accepts` to exactly this
+                // form.
+                let non_null_iterates = super::narrow_scopes::non_null_form(iter_ty.clone())
+                    .is_some_and(|t| self.classify_for_of_source(&t).is_some());
+                let culprit =
+                    self.nullable_culprit(&[(typed_iter, &iter_ty)], |_| non_null_iterates);
+                self.error_with_narrowing_hint(
+                            self.ast.try_expr(iter).map_err(super::arena_failure)?.span,
+                            format!(
+                                "`for-of` requires an array, tuple, string, `Iterator<T>`, or `Iterable<T>`, got `{}`",
+                                iter_ty.peel(),
+                            ),
+                            Vec::new(),
+                            culprit,
+                        )?;
+            }
+            (Type::Error, crate::ForOfKind::Array)
+        };
+        let bound_ty = if let Some(a) = ann.as_ref() {
+            let declared = self.resolve_type(a)?;
+            if !matches!(element_ty, Type::Error)
+                && !assignable(&element_ty, &declared, self.resolver())
+            {
+                self.error(
+                            a.span,
+                            format!(
+                                "loop variable type `{declared}` is not compatible with array element type `{element_ty}`",
+                            ),
+                        );
+            }
+            declared
+        } else {
+            element_ty.clone()
+        };
+        // Floor taken before the loop-var scope: the loop variable is
+        // rebound each iteration, so back-edge narrowings on it don't
+        // carry to the next iteration's entry.
+        let body_scope_floor = self.scopes.next_scope_id();
+        self.scopes.push();
+        self.scopes.insert(
+            name.name.clone(),
+            bound_ty.clone(),
+            matches!(binding_kind, BindingKind::Const),
+            name.span,
+        );
+        let body_span = self.ast.try_stmt(body).map_err(super::arena_failure)?.span;
+        let (loop_entry, _) = self.snapshot_active_narrowings(0);
+        let entry_reachable = self.reachable;
+        self.push_pending_join_frame(narrowing::PendingJoinKind::Loop);
+        let outcome = self.run_loop_body_with_fixed_point(
+            body,
+            narrowing::NarrowEnv::new(),
+            body_span,
+            body_scope_floor,
+            LoopTail::default(),
+        )?;
+        let frame = self.pop_pending_join_frame();
+        self.merge_assigned_into_outer(outcome.assigned.clone(), span);
+        // Natural exit always reachable — for-of terminates immediately on empty iterable.
+        let has_exit = self.fold_exits_into_outer(
+            Some(loop_head_env(&loop_entry, &outcome)),
+            frame.breaks,
+            body_span,
+        )?;
+        self.reachable = entry_reachable && has_exit;
+        self.scopes.pop();
+        Ok(TypedStmtKind::ForOf {
+            binding_kind,
+            name,
+            element_ty: bound_ty,
+            iter: typed_iter,
+            body: outcome.body,
+            kind: for_of_kind,
+        })
+    }
+
+    fn infer_do_while_statement(
+        &mut self,
+        body: StmtId,
+        condition: ExprId,
+        span: Span,
+    ) -> Result<TypedStmtKind, CompilerFailure> {
+        // Condition runs after the body, so no entry narrowing for the body.
+        let body_span = self.ast.try_stmt(body).map_err(super::arena_failure)?.span;
+        let body_scope_floor = self.scopes.next_scope_id();
+        let entry_reachable = self.reachable;
+        self.push_pending_join_frame(narrowing::PendingJoinKind::Loop);
+        let outcome = self.run_loop_body_with_fixed_point(
+            body,
+            narrowing::NarrowEnv::new(),
+            body_span,
+            body_scope_floor,
+            LoopTail {
+                update: None,
+                condition: Some(condition),
+            },
+        )?;
+        let frame = self.pop_pending_join_frame();
+        self.merge_assigned_into_outer(outcome.assigned.clone(), span);
+        let (typed_cond, exit) = self.check_condition_at_loop_head(
+            condition,
+            &LoopHead::after_every_pass(&outcome),
+            body_span,
+        )?;
+        let natural = exit.filter(|_| outcome.reaches_back_edge);
+        let has_exit = self.fold_exits_into_outer(natural, frame.breaks, body_span)?;
+        self.reachable = entry_reachable && has_exit;
+        Ok(TypedStmtKind::DoWhile {
+            body: outcome.body,
+            condition: typed_cond,
+        })
     }
 
     fn infer_try(
@@ -640,7 +689,7 @@ impl Inferer<'_> {
         self.reachable = entry_reachable && post.is_some();
         self.merge_assigned_into_outer(all_assigned, span);
         if let Some(post) = post {
-            self.install_joined_narrowings(post, span);
+            self.install_joined_narrowings(post, span)?;
         }
 
         Ok(TypedStmtKind::Try {
@@ -774,11 +823,14 @@ impl Inferer<'_> {
             if !pending.is_empty() {
                 let mut tail = typed;
                 tail.extend(self.block_stmts_with_drain(&stmts[i + 1..], outer_span)?);
-                let tail_block = self.typed_ast.push_stmt(TypedStmt {
-                    kind: TypedStmtKind::Block(tail),
-                    span: outer_span,
-                });
-                let wrapped = self.wrap_pending_materializations(tail_block, pending);
+                let tail_block = self
+                    .typed_ast
+                    .try_push_stmt(TypedStmt {
+                        kind: TypedStmtKind::Block(tail),
+                        span: outer_span,
+                    })
+                    .map_err(crate::typechecker::arena_failure)?;
+                let wrapped = self.wrap_pending_materializations(tail_block, pending)?;
                 typed_stmts.push(wrapped);
                 break;
             }
@@ -889,39 +941,48 @@ impl Inferer<'_> {
         let (synth_lhs, lhs_ty) = if let Some(view) = self.lookup_narrowed_view(&lhs_path) {
             let binding = view.binding.clone();
             let narrowed_ty = view.narrowed_ty.clone();
-            let id = self.typed_ast.push_expr(TypedExpr {
-                kind: TypedExprKind::LocalNarrowRef {
-                    binding,
-                    path: lhs_path,
-                },
-                span: ident.span,
-                ty: narrowed_ty.clone(),
-            });
+            let id = self
+                .typed_ast
+                .try_push_expr(TypedExpr {
+                    kind: TypedExprKind::LocalNarrowRef {
+                        binding,
+                        path: lhs_path,
+                    },
+                    span: ident.span,
+                    ty: narrowed_ty.clone(),
+                })
+                .map_err(crate::typechecker::arena_failure)?;
             (id, narrowed_ty)
         } else {
-            let id = self.typed_ast.push_expr(TypedExpr {
-                kind: TypedExprKind::GlobalRef {
-                    mangled: mangled.clone(),
-                    name: ident.clone(),
-                },
-                span: ident.span,
-                ty: ty.clone(),
-            });
+            let id = self
+                .typed_ast
+                .try_push_expr(TypedExpr {
+                    kind: TypedExprKind::GlobalRef {
+                        mangled: mangled.clone(),
+                        name: ident.clone(),
+                    },
+                    span: ident.span,
+                    ty: ty.clone(),
+                })
+                .map_err(crate::typechecker::arena_failure)?;
             (id, ty.clone())
         };
         let (typed_value, value_ty) = self.infer_expr(value, Some(&lhs_ty))?;
         let result_ty =
-            self.check_compound_arith(op, (synth_lhs, &lhs_ty), (typed_value, &value_ty), op_span);
-        let synth_binary = self.typed_ast.push_expr(TypedExpr {
-            kind: TypedExprKind::Binary {
-                op,
-                lhs: synth_lhs,
-                rhs: typed_value,
-            },
-            span,
-            ty: result_ty.clone(),
-        });
-        self.renarrow_global_after_write(&ident, &mangled, &ty, result_ty);
+            self.check_compound_arith(op, (synth_lhs, &lhs_ty), (typed_value, &value_ty), op_span)?;
+        let synth_binary = self
+            .typed_ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::Binary {
+                    op,
+                    lhs: synth_lhs,
+                    rhs: typed_value,
+                },
+                span,
+                ty: result_ty.clone(),
+            })
+            .map_err(crate::typechecker::arena_failure)?;
+        self.renarrow_global_after_write(&ident, &mangled, &ty, result_ty)?;
         Ok(TypedStmtKind::AssignGlobal {
             ident,
             mangled,
@@ -940,17 +1001,18 @@ impl Inferer<'_> {
         mangled: &crate::MangledName,
         declared_ty: &Type,
         written_ty: Type,
-    ) {
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         if matches!(written_ty, Type::Error) {
-            return;
+            return Ok(());
         }
         let path = narrowing::ReferencePath::root(narrowing::BindingId::Global(mangled.clone()));
         let written_ty = self.assignment_narrowed_ty(declared_ty, written_ty);
         if written_ty == *declared_ty {
             self.invalidate_for_reassignment(path, ident.span);
-            return;
+            return Ok(());
         }
-        self.install_assignment_narrowing(path, ident.clone(), written_ty, ident.span);
+        self.install_assignment_narrowing(path, ident.clone(), written_ty, ident.span)?;
+        Ok(())
     }
 
     /// Poison for a rejected class-name write: the diagnostic is already
@@ -962,14 +1024,17 @@ impl Inferer<'_> {
         name: &Ident,
         value: ExprId,
     ) -> Result<TypedStmtKind, CompilerFailure> {
-        let typed_receiver = self.typed_ast.push_expr(crate::TypedExpr {
-            kind: TypedExprKind::LocalRef {
-                ident: receiver,
-                boxed: false,
-            },
-            span: recv_span,
-            ty: Type::Error,
-        });
+        let typed_receiver = self
+            .typed_ast
+            .try_push_expr(crate::TypedExpr {
+                kind: TypedExprKind::LocalRef {
+                    ident: receiver,
+                    boxed: false,
+                },
+                span: recv_span,
+                ty: Type::Error,
+            })
+            .map_err(crate::typechecker::arena_failure)?;
         let (typed_value, _) = self.infer_expr(value, None)?;
         Ok(TypedStmtKind::AssignField {
             receiver: typed_receiver,
@@ -1012,7 +1077,11 @@ impl Inferer<'_> {
         // Compute target path before RHS inference: write invalidates after the RHS
         // is evaluated so `obj.foo = obj.foo + 1` still reads the narrowed shadow.
         let target_path = self
-            .expr_to_reference_path(self.typed_ast.expr(typed_receiver))
+            .expr_to_reference_path(
+                self.typed_ast
+                    .try_expr(typed_receiver)
+                    .map_err(crate::typechecker::arena_failure)?,
+            )?
             .map(|mut p| {
                 p.chain
                     .push(super::narrowing::PathElem::Field(name.name.clone()));
@@ -1195,7 +1264,11 @@ impl Inferer<'_> {
                 placeholder(self, None)?
             }
         } else {
-            let recv_path = self.expr_to_reference_path(self.typed_ast.expr(typed_receiver));
+            let recv_path = self.expr_to_reference_path(
+                self.typed_ast
+                    .try_expr(typed_receiver)
+                    .map_err(crate::typechecker::arena_failure)?,
+            )?;
             self.report_unassignable_field_target(
                 recv_span,
                 &name,
@@ -1209,7 +1282,7 @@ impl Inferer<'_> {
         if let Some(path) = target_path {
             self.invalidate_for_write(path.clone(), name.span);
             if let TypedStmtKind::AssignField { value, .. } = &result {
-                self.narrow_field_after_write(path, typed_receiver, &receiver_ty, &name, *value);
+                self.narrow_field_after_write(path, typed_receiver, &receiver_ty, &name, *value)?;
             }
         }
         Ok(result)
@@ -1222,31 +1295,40 @@ impl Inferer<'_> {
         receiver_ty: &Type,
         name: &Ident,
         value: ExprId,
-    ) {
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         let kind = TypedExprKind::FieldAccess {
             receiver,
             name: name.clone(),
         };
-        if self.kind_to_reference_path(&kind).is_none() || self.path_root_is_captured_mutator(&path)
+        if self.kind_to_reference_path(&kind)?.is_none()
+            || self.path_root_is_captured_mutator(&path)
         {
-            return;
+            return Ok(());
         }
         let Some(declared) = self.write_target_ty(receiver_ty, &name.name) else {
-            return;
+            return Ok(());
         };
-        let written = self.typed_ast.expr(value).ty.clone();
+        let written = self
+            .typed_ast
+            .try_expr(value)
+            .map_err(crate::typechecker::arena_failure)?
+            .ty
+            .clone();
         if matches!(written, Type::Error) || !assignable(&written, &declared, self.resolver()) {
-            return;
+            return Ok(());
         }
         let narrowed_ty = self.assignment_narrowed_ty(&declared, written);
         if narrowed_ty == declared {
-            return;
+            return Ok(());
         }
-        let source = self.typed_ast.push_expr(TypedExpr {
-            kind,
-            span: name.span,
-            ty: declared,
-        });
+        let source = self
+            .typed_ast
+            .try_push_expr(TypedExpr {
+                kind,
+                span: name.span,
+                ty: declared,
+            })
+            .map_err(crate::typechecker::arena_failure)?;
         let view = narrowing::NarrowedView {
             narrowed_ty,
             facts: narrowing::TypeFacts::EMPTY,
@@ -1254,7 +1336,8 @@ impl Inferer<'_> {
             binding: self.mint_narrow_binding(name.span),
             source,
         };
-        self.install_joined_narrowings([(path, view)].into_iter().collect(), name.span);
+        self.install_joined_narrowings([(path, view)].into_iter().collect(), name.span)?;
+        Ok(())
     }
 
     pub(super) fn infer_assign_index(
@@ -1306,7 +1389,7 @@ impl Inferer<'_> {
             typed_receiver,
             typed_index,
             self.ast.try_expr(index).map_err(super::arena_failure)?.span,
-        );
+        )?;
         Ok(TypedStmtKind::AssignIndex {
             receiver: typed_receiver,
             index: typed_index,
@@ -1380,7 +1463,7 @@ impl Inferer<'_> {
         let Some((source, element)) = self.pattern_binding_source(value)? else {
             return Ok(declared);
         };
-        Ok(self.pattern_source_view(source, &element).map_or_else(
+        Ok(self.pattern_source_view(source, &element)?.map_or_else(
             || declared.clone(),
             |view| self.initializer_narrowed_ty(&declared, view),
         ))
@@ -1391,7 +1474,7 @@ impl Inferer<'_> {
         let Some((source, element)) = self.pattern_binding_source(value)? else {
             return Ok(None);
         };
-        if let Some(narrowed) = self.pattern_source_view(source, &element) {
+        if let Some(narrowed) = self.pattern_source_view(source, &element)? {
             return Ok(Some(narrowed));
         }
         Ok(match element {
@@ -1441,10 +1524,11 @@ impl Inferer<'_> {
         };
         let source = self
             .typed_ast
-            .expr(*match self.pattern_sources.get(&source.name) {
+            .try_expr(*match self.pattern_sources.get(&source.name) {
                 Some(value) => value,
                 None => return Ok(None),
-            });
+            })
+            .map_err(crate::typechecker::arena_failure)?;
         Ok(Some((source, element)))
     }
 
@@ -1452,16 +1536,19 @@ impl Inferer<'_> {
         &self,
         source: &TypedExpr,
         element: &narrowing::PathElem,
-    ) -> Option<Type> {
+    ) -> Result<Option<Type>, crate::compiler_error::CompilerFailure> {
         if let narrowing::PathElem::Field(field) = element
             && self.type_has_getter(&source.ty, field)
         {
-            return None;
+            return Ok(None);
         }
-        let mut path = self.expr_to_reference_path(source)?;
+        let Some(mut path) = self.expr_to_reference_path(source)? else {
+            return Ok(None);
+        };
         path.chain.push(element.clone());
-        self.lookup_narrowed_view(&path)
-            .map(|view| view.narrowed_ty.clone())
+        Ok(self
+            .lookup_narrowed_view(&path)
+            .map(|view| view.narrowed_ty.clone()))
     }
 
     fn pattern_index_flow_type(source: &Type, index: usize) -> Option<Type> {
@@ -1479,12 +1566,17 @@ impl Inferer<'_> {
 
     /// Keep the declared storage type while a union initializer establishes its
     /// current member. Non-union annotations still define the object's surface.
-    fn narrow_local_initializer(&mut self, name: &Ident, declared: &Type, value: Type) {
+    fn narrow_local_initializer(
+        &mut self,
+        name: &Ident,
+        declared: &Type,
+        value: Type,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         if !matches!(declared.peel(), Type::Union(_))
             || matches!(value, Type::Error)
             || value == *declared
         {
-            return;
+            return Ok(());
         }
         let scope = self
             .scopes
@@ -1496,10 +1588,11 @@ impl Inferer<'_> {
             decl_scope: scope,
         });
         if self.path_root_is_captured_mutator(&path) {
-            return;
+            return Ok(());
         }
         let narrowed = self.initializer_narrowed_ty(declared, value);
-        self.renarrow_local_after_write(name, scope, declared, narrowed);
+        self.renarrow_local_after_write(name, scope, declared, narrowed)?;
+        Ok(())
     }
 
     /// Re-narrows a local after a write to it. A value whose type *differs* from
@@ -1514,12 +1607,12 @@ impl Inferer<'_> {
         decl_scope: narrowing::ScopeId,
         declared_ty: &Type,
         written_ty: Type,
-    ) -> Option<Type> {
+    ) -> Result<Option<Type>, crate::compiler_error::CompilerFailure> {
         // A poisoned RHS leaves the narrowing exactly as it was: the diagnostic for
         // whatever went wrong upstream already stands, and adding "re-narrow after
         // the reassignment" on top of it points at an edit that fixes nothing.
         if matches!(written_ty, Type::Error) {
-            return None;
+            return Ok(None);
         }
         let path = narrowing::ReferencePath::root(narrowing::BindingId::Local {
             name: target.name.clone(),
@@ -1528,10 +1621,10 @@ impl Inferer<'_> {
         let written_ty = self.assignment_narrowed_ty(declared_ty, written_ty);
         if written_ty == *declared_ty {
             self.invalidate_for_reassignment(path, target.span);
-            return None;
+            return Ok(None);
         }
-        self.install_assignment_narrowing(path, target.clone(), written_ty.clone(), target.span);
-        Some(written_ty)
+        self.install_assignment_narrowing(path, target.clone(), written_ty.clone(), target.span)?;
+        Ok(Some(written_ty))
     }
 
     /// Infer an assigned value against its target's type, and whether that
@@ -1574,7 +1667,7 @@ impl Inferer<'_> {
                 );
             }
             let narrowed_shadow_ty =
-                self.renarrow_local_after_write(&target, entry.decl_scope, &entry.ty, value_ty);
+                self.renarrow_local_after_write(&target, entry.decl_scope, &entry.ty, value_ty)?;
             return Ok(TypedStmtKind::AssignLocal {
                 ident: target,
                 target_ty: entry.ty.clone(),
@@ -1595,7 +1688,7 @@ impl Inferer<'_> {
                     if !reported && !assignable(&value_ty, &ty, self.resolver()) {
                         self.error(value_span, format!("expected `{ty}`, got `{value_ty}`"));
                     }
-                    self.renarrow_global_after_write(&target, &mangled, &ty, value_ty);
+                    self.renarrow_global_after_write(&target, &mangled, &ty, value_ty)?;
                     TypedStmtKind::AssignGlobal {
                         ident: target,
                         mangled,
@@ -1689,24 +1782,30 @@ impl Inferer<'_> {
             let (synth_lhs, lhs_ty) = if let Some(view) = self.lookup_narrowed_view(&lhs_path) {
                 let binding = view.binding.clone();
                 let narrowed_ty = view.narrowed_ty.clone();
-                let id = self.typed_ast.push_expr(TypedExpr {
-                    kind: TypedExprKind::LocalNarrowRef {
-                        binding,
-                        path: lhs_path,
-                    },
-                    span: target.span,
-                    ty: narrowed_ty.clone(),
-                });
+                let id = self
+                    .typed_ast
+                    .try_push_expr(TypedExpr {
+                        kind: TypedExprKind::LocalNarrowRef {
+                            binding,
+                            path: lhs_path,
+                        },
+                        span: target.span,
+                        ty: narrowed_ty.clone(),
+                    })
+                    .map_err(crate::typechecker::arena_failure)?;
                 (id, narrowed_ty)
             } else {
-                let id = self.typed_ast.push_expr(TypedExpr {
-                    kind: TypedExprKind::LocalRef {
-                        ident: target.clone(),
-                        boxed: false,
-                    },
-                    span: target.span,
-                    ty: target_ty.clone(),
-                });
+                let id = self
+                    .typed_ast
+                    .try_push_expr(TypedExpr {
+                        kind: TypedExprKind::LocalRef {
+                            ident: target.clone(),
+                            boxed: false,
+                        },
+                        span: target.span,
+                        ty: target_ty.clone(),
+                    })
+                    .map_err(crate::typechecker::arena_failure)?;
                 (id, target_ty.clone())
             };
             let (typed_value, value_ty) = self.infer_expr(value, Some(&lhs_ty))?;
@@ -1715,7 +1814,7 @@ impl Inferer<'_> {
                 (synth_lhs, &lhs_ty),
                 (typed_value, &value_ty),
                 op_span,
-            );
+            )?;
             // Re-check assignability: catches literal-refined slots (e.g. `1|2|3`)
             // where arithmetic widens the result to `number`.
             let value_span = self.ast.try_expr(value).map_err(super::arena_failure)?.span;
@@ -1728,17 +1827,20 @@ impl Inferer<'_> {
                     format!("expected `{target_ty}`, got `{result_ty}`"),
                 );
             }
-            let synth_binary = self.typed_ast.push_expr(TypedExpr {
-                kind: TypedExprKind::Binary {
-                    op,
-                    lhs: synth_lhs,
-                    rhs: typed_value,
-                },
-                span,
-                ty: result_ty.clone(),
-            });
+            let synth_binary = self
+                .typed_ast
+                .try_push_expr(TypedExpr {
+                    kind: TypedExprKind::Binary {
+                        op,
+                        lhs: synth_lhs,
+                        rhs: typed_value,
+                    },
+                    span,
+                    ty: result_ty.clone(),
+                })
+                .map_err(crate::typechecker::arena_failure)?;
             let narrowed_shadow_ty =
-                self.renarrow_local_after_write(&target, entry.decl_scope, &target_ty, result_ty);
+                self.renarrow_local_after_write(&target, entry.decl_scope, &target_ty, result_ty)?;
             return Ok(TypedStmtKind::AssignLocal {
                 ident: target,
                 target_ty,
@@ -1850,7 +1952,11 @@ impl Inferer<'_> {
         let rw_op = super::diagnostics::RwOp::Compound(op);
         let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None)?;
         let target_path = self
-            .expr_to_reference_path(self.typed_ast.expr(typed_receiver))
+            .expr_to_reference_path(
+                self.typed_ast
+                    .try_expr(typed_receiver)
+                    .map_err(crate::typechecker::arena_failure)?,
+            )?
             .map(|mut p| {
                 p.chain
                     .push(super::narrowing::PathElem::Field(name.name.clone()));
@@ -1970,7 +2076,11 @@ impl Inferer<'_> {
                 placeholder(self)?
             }
         } else {
-            let recv_path = self.expr_to_reference_path(self.typed_ast.expr(typed_receiver));
+            let recv_path = self.expr_to_reference_path(
+                self.typed_ast
+                    .try_expr(typed_receiver)
+                    .map_err(crate::typechecker::arena_failure)?,
+            )?;
             self.report_unassignable_field_target(
                 recv_span,
                 &name,
@@ -2001,16 +2111,23 @@ impl Inferer<'_> {
         let (typed_value, value_ty) = self.infer_expr(value, Some(&rw.read))?;
         // Built before the operator check so the check can name it as the
         // narrowing culprit.
-        let synth_lhs = self.typed_ast.push_expr(TypedExpr {
-            kind: TypedExprKind::FieldAccess {
-                receiver: typed_receiver,
-                name: name.clone(),
-            },
-            span: name.span,
-            ty: rw.read.clone(),
-        });
-        let result_ty =
-            self.check_compound_arith(op, (synth_lhs, &rw.read), (typed_value, &value_ty), op_span);
+        let synth_lhs = self
+            .typed_ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::FieldAccess {
+                    receiver: typed_receiver,
+                    name: name.clone(),
+                },
+                span: name.span,
+                ty: rw.read.clone(),
+            })
+            .map_err(crate::typechecker::arena_failure)?;
+        let result_ty = self.check_compound_arith(
+            op,
+            (synth_lhs, &rw.read),
+            (typed_value, &value_ty),
+            op_span,
+        )?;
         if !matches!(result_ty, Type::Error)
             && !matches!(rw.write, Type::Error)
             && !assignable(&result_ty, &rw.write, self.resolver())
@@ -2020,15 +2137,18 @@ impl Inferer<'_> {
                 format!("expected `{}`, got `{result_ty}`", rw.write),
             );
         }
-        let synth_binary = self.typed_ast.push_expr(TypedExpr {
-            kind: TypedExprKind::Binary {
-                op,
-                lhs: synth_lhs,
-                rhs: typed_value,
-            },
-            span: stmt_span,
-            ty: result_ty,
-        });
+        let synth_binary = self
+            .typed_ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::Binary {
+                    op,
+                    lhs: synth_lhs,
+                    rhs: typed_value,
+                },
+                span: stmt_span,
+                ty: result_ty,
+            })
+            .map_err(crate::typechecker::arena_failure)?;
         Ok(TypedStmtKind::AssignField {
             receiver: typed_receiver,
             name,
@@ -2081,20 +2201,27 @@ impl Inferer<'_> {
         } else {
             elem_ty.clone()
         };
-        let read_ty = self.index_read_ty(typed_receiver, typed_index, &declared_read);
+        let read_ty = self.index_read_ty(typed_receiver, typed_index, &declared_read)?;
         let (typed_value, value_ty) = self.infer_expr(value, Some(&elem_ty))?;
         // Built before the operator check so the check can name it as the
         // narrowing culprit.
-        let synth_lhs = self.typed_ast.push_expr(TypedExpr {
-            kind: TypedExprKind::IndexAccess {
-                receiver: typed_receiver,
-                index: typed_index,
-            },
-            span: recv_span,
-            ty: read_ty.clone(),
-        });
-        let result_ty =
-            self.check_compound_arith(op, (synth_lhs, &read_ty), (typed_value, &value_ty), op_span);
+        let synth_lhs = self
+            .typed_ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::IndexAccess {
+                    receiver: typed_receiver,
+                    index: typed_index,
+                },
+                span: recv_span,
+                ty: read_ty.clone(),
+            })
+            .map_err(crate::typechecker::arena_failure)?;
+        let result_ty = self.check_compound_arith(
+            op,
+            (synth_lhs, &read_ty),
+            (typed_value, &value_ty),
+            op_span,
+        )?;
         if !matches!(result_ty, Type::Error)
             && !matches!(elem_ty, Type::Error)
             && !assignable(&result_ty, &elem_ty, self.resolver())
@@ -2104,20 +2231,23 @@ impl Inferer<'_> {
                 format!("expected `{elem_ty}`, got `{result_ty}`"),
             );
         }
-        let synth_binary = self.typed_ast.push_expr(TypedExpr {
-            kind: TypedExprKind::Binary {
-                op,
-                lhs: synth_lhs,
-                rhs: typed_value,
-            },
-            span: stmt_span,
-            ty: result_ty,
-        });
+        let synth_binary = self
+            .typed_ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::Binary {
+                    op,
+                    lhs: synth_lhs,
+                    rhs: typed_value,
+                },
+                span: stmt_span,
+                ty: result_ty,
+            })
+            .map_err(crate::typechecker::arena_failure)?;
         self.invalidate_index_write(
             typed_receiver,
             typed_index,
             self.ast.try_expr(index).map_err(super::arena_failure)?.span,
-        );
+        )?;
         Ok(TypedStmtKind::AssignIndex {
             receiver: typed_receiver,
             index: typed_index,
@@ -2136,10 +2266,10 @@ impl Inferer<'_> {
         lhs: (ExprId, &Type),
         rhs: (ExprId, &Type),
         op_span: Span,
-    ) -> Type {
+    ) -> Result<Type, crate::compiler_error::CompilerFailure> {
         let (lt, rt) = (lhs.1, rhs.1);
         if let Some(ty) = compound_arith_result(op, lt, rt) {
-            return ty;
+            return Ok(ty);
         }
         let sym = binary_op_text(op);
         let culprit = self
@@ -2149,8 +2279,8 @@ impl Inferer<'_> {
             format!("`{sym}=` not defined for `{lt}` and `{rt}`"),
             Vec::new(),
             culprit,
-        );
-        Type::Error
+        )?;
+        Ok(Type::Error)
     }
 }
 
@@ -2401,11 +2531,20 @@ fn next_pass_falsifies(
     })
 }
 
-fn cond_is_static_true(_inferer: &Inferer<'_>, expr_id: ExprId) -> bool {
-    matches!(
-        _inferer.typed_ast.expr(expr_id).kind,
-        crate::TypedExprKind::Boolean(true)
-    )
+fn cond_is_static_true(
+    _inferer: &Inferer<'_>,
+    expr_id: ExprId,
+) -> Result<bool, crate::compiler_error::CompilerFailure> {
+    Ok({
+        matches!(
+            _inferer
+                .typed_ast
+                .try_expr(expr_id)
+                .map_err(crate::typechecker::arena_failure)?
+                .kind,
+            crate::TypedExprKind::Boolean(true)
+        )
+    })
 }
 
 /// A disproved loop-entry view, keyed by its declaration rather than the
@@ -2632,7 +2771,7 @@ impl Inferer<'_> {
             update: typed_update,
             head_edge,
             reaches_back_edge,
-            body: self.wrap_narrow_regions(typed_body, entry_env, body_span),
+            body: self.wrap_narrow_regions(typed_body, entry_env, body_span)?,
             assigned,
             next_pass,
         })
@@ -2649,10 +2788,10 @@ impl Inferer<'_> {
     ) -> Result<ConditionEffects, CompilerFailure> {
         let diag_len = self.diagnostics.len();
         let mats_len = self.pending_post_if_materializations.len();
-        self.enter_loop_head(state, body_span);
+        self.enter_loop_head(state, body_span)?;
         let (typed_condition, _) = self.infer_expr(condition, None)?;
-        let (true_env, _) = self.predicate_envs(typed_condition);
-        let after = self.condition_can_hold(typed_condition).then(|| {
+        let (true_env, _) = self.predicate_envs(typed_condition)?;
+        let after = self.condition_can_hold(typed_condition)?.then(|| {
             let mut after = self.snapshot_active_narrowings(0).0;
             after.extend_env(true_env);
             after
@@ -2678,19 +2817,17 @@ impl Inferer<'_> {
         ),
         CompilerFailure,
     > {
-        let tail_env = self.enter_loop_head(state, body_span);
+        let tail_env = self.enter_loop_head(state, body_span)?;
         let typed = self
             .infer_stmt(update)?
             .map(|body| {
-                Ok::<_, CompilerFailure>(
-                    self.wrap_narrow_regions(
-                        body,
-                        &tail_env,
-                        self.ast
-                            .try_stmt(update)
-                            .map_err(super::arena_failure)?
-                            .span,
-                    ),
+                self.wrap_narrow_regions(
+                    body,
+                    &tail_env,
+                    self.ast
+                        .try_stmt(update)
+                        .map_err(super::arena_failure)?
+                        .span,
                 )
             })
             .transpose()?;
@@ -2703,14 +2840,18 @@ impl Inferer<'_> {
     /// `state.dropped`, with `state.env` on top under fresh bindings. Returns
     /// that env, for wrapping what is inferred in it. Pair with
     /// `leave_loop_head`.
-    fn enter_loop_head(&mut self, state: &LoopHead, span: Span) -> narrowing::NarrowEnv {
+    fn enter_loop_head(
+        &mut self,
+        state: &LoopHead,
+        span: Span,
+    ) -> Result<narrowing::NarrowEnv, crate::compiler_error::CompilerFailure> {
         self.push_narrow_frame(narrowing::NarrowEnv::new());
         for path in &state.dropped {
             self.drop_narrowings_under(path, narrowing::InvalidationReason::Write { span });
         }
-        let env = self.loop_tail_env(&state.env);
+        let env = self.loop_tail_env(&state.env)?;
         self.push_narrow_frame(env.clone());
-        env
+        Ok(env)
     }
 
     /// Leave the state `enter_loop_head` entered, and give the paths written
@@ -2765,7 +2906,7 @@ impl Inferer<'_> {
             // `for (;;)` has no natural exit.
             None => (None, None),
         };
-        let has_exit = self.fold_exits_into_outer(natural, frame.breaks, body_span);
+        let has_exit = self.fold_exits_into_outer(natural, frame.breaks, body_span)?;
         self.reachable = entry_reachable && has_exit;
         Ok((typed_cond, outcome.update, outcome.body))
     }
@@ -2790,7 +2931,7 @@ impl Inferer<'_> {
             .clause_write_scopes
             .pop()
             .expect("condition write collector");
-        let (true_env, _) = self.predicate_envs(typed);
+        let (true_env, _) = self.predicate_envs(typed)?;
         Ok(FirstConditionCheck {
             condition,
             true_env,
@@ -2807,7 +2948,7 @@ impl Inferer<'_> {
         head: &LoopHead,
         body_span: Span,
     ) -> Result<(ExprId, Option<narrowing::NarrowEnv>), CompilerFailure> {
-        let head_env = self.enter_loop_head(head, body_span);
+        let head_env = self.enter_loop_head(head, body_span)?;
         let cond_span = self
             .ast
             .try_expr(condition)
@@ -2815,13 +2956,16 @@ impl Inferer<'_> {
             .span;
         let (typed, ty) = self.infer_expr(condition, None)?;
         self.check_condition_ty(&ty, cond_span);
-        let (_, false_env) = self.predicate_envs(typed);
+        let (_, false_env) = self.predicate_envs(typed)?;
         let mut exit = self.snapshot_active_narrowings(0).0;
         exit.extend_env(false_env);
         let condition_assigned = self.leave_loop_head();
         self.merge_assigned_into_outer(condition_assigned, cond_span);
-        let natural = (!cond_is_static_true(self, typed)).then_some(exit);
-        Ok((self.wrap_narrow_exprs(typed, &head_env, cond_span), natural))
+        let natural = (!cond_is_static_true(self, typed)?).then_some(exit);
+        Ok((
+            self.wrap_narrow_exprs(typed, &head_env, cond_span)?,
+            natural,
+        ))
     }
 
     /// Capture the normal exit before the body's lexical frame is removed.
@@ -2844,10 +2988,13 @@ impl Inferer<'_> {
         typed_stmts.extend(self.block_stmts_with_drain(&stmts, stmt.span)?);
         let post = self.snapshot_active_narrowings(0).0;
         self.scopes.pop();
-        let typed = self.typed_ast.push_stmt(TypedStmt {
-            kind: TypedStmtKind::Block(typed_stmts),
-            span: stmt.span,
-        });
+        let typed = self
+            .typed_ast
+            .try_push_stmt(TypedStmt {
+                kind: TypedStmtKind::Block(typed_stmts),
+                span: stmt.span,
+            })
+            .map_err(crate::typechecker::arena_failure)?;
         Ok((typed, post))
     }
 

@@ -3,42 +3,54 @@
 
 use crate::{Diagnostic, Severity, StmtId, TypedAst, TypedStmtKind};
 
-pub(super) fn run(ta: &TypedAst, diags: &mut Vec<Diagnostic>) {
+pub(super) fn run(
+    ta: &TypedAst,
+    diags: &mut Vec<Diagnostic>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     for f in &ta.functions {
-        walk(ta, f.body, diags);
+        walk(ta, f.body, diags)?;
     }
     for &id in &ta.top_level_statements {
-        walk(ta, id, diags);
+        walk(ta, id, diags)?;
     }
+    Ok(())
 }
 
-fn walk(ta: &TypedAst, id: StmtId, diags: &mut Vec<Diagnostic>) {
-    match &ta.stmt(id).kind {
+fn walk(
+    ta: &TypedAst,
+    id: StmtId,
+    diags: &mut Vec<Diagnostic>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let _: () = match &ta
+        .try_stmt(id)
+        .map_err(crate::typechecker::arena_failure)?
+        .kind
+    {
         TypedStmtKind::Switch { cases, default, .. } => {
             for case in cases {
-                if !body_terminates(ta, case.body) {
+                if !body_terminates(ta, case.body)? {
                     diags.push(Diagnostic {
-                        severity: Severity::Error,
-                        span: case.span,
-                        message:
-                            "`switch` case body must end with `break` or `return` — no fallthrough"
-                                .to_string(),
-                        help: vec![
-                            "add `break;` at the end of the case body, or `return …;` if the body returns from the enclosing function"
-                                .to_string(),
-                        ],
-                        notes: vec![],
-                    });
+                    severity: Severity::Error,
+                    span: case.span,
+                    message:
+                        "`switch` case body must end with `break` or `return` — no fallthrough"
+                            .to_string(),
+                    help: vec![
+                        "add `break;` at the end of the case body, or `return …;` if the body returns from the enclosing function"
+                            .to_string(),
+                    ],
+                    notes: vec![],
+                });
                 }
-                walk(ta, case.body, diags);
+                walk(ta, case.body, diags)?;
             }
             if let Some(d) = default {
-                walk(ta, *d, diags);
+                walk(ta, *d, diags)?;
             }
         }
         TypedStmtKind::Block(stmts) => {
             for &s in stmts {
-                walk(ta, s, diags);
+                walk(ta, s, diags)?;
             }
         }
         TypedStmtKind::If {
@@ -46,27 +58,27 @@ fn walk(ta: &TypedAst, id: StmtId, diags: &mut Vec<Diagnostic>) {
             else_block,
             ..
         } => {
-            walk(ta, *then_block, diags);
+            walk(ta, *then_block, diags)?;
             if let Some(eb) = else_block {
-                walk(ta, *eb, diags);
+                walk(ta, *eb, diags)?;
             }
         }
         TypedStmtKind::While { body, .. }
         | TypedStmtKind::For { body, .. }
         | TypedStmtKind::ForOf { body, .. }
-        | TypedStmtKind::DoWhile { body, .. } => walk(ta, *body, diags),
-        TypedStmtKind::NarrowRegion { body, .. } => walk(ta, *body, diags),
+        | TypedStmtKind::DoWhile { body, .. } => walk(ta, *body, diags)?,
+        TypedStmtKind::NarrowRegion { body, .. } => walk(ta, *body, diags)?,
         TypedStmtKind::Try {
             body,
             catches,
             finally,
         } => {
-            walk(ta, *body, diags);
+            walk(ta, *body, diags)?;
             for c in catches {
-                walk(ta, c.body, diags);
+                walk(ta, c.body, diags)?;
             }
             if let Some(f) = finally {
-                walk(ta, *f, diags);
+                walk(ta, *f, diags)?;
             }
         }
         TypedStmtKind::Let { .. }
@@ -81,10 +93,14 @@ fn walk(ta: &TypedAst, id: StmtId, diags: &mut Vec<Diagnostic>) {
         | TypedStmtKind::AssignGlobal { .. }
         | TypedStmtKind::AssignField { .. }
         | TypedStmtKind::AssignIndex { .. } => {}
-    }
+    };
+    Ok(())
 }
 
-fn body_terminates(ta: &TypedAst, id: StmtId) -> bool {
+fn body_terminates(
+    ta: &TypedAst,
+    id: StmtId,
+) -> Result<bool, crate::compiler_error::CompilerFailure> {
     super::control_flow::case_terminates(ta, id)
 }
 

@@ -60,15 +60,18 @@ impl<'a> Inferer<'a> {
                         doc,
                         span,
                     })?;
-                    let assign_id = self.typed_ast.push_stmt(TypedStmt {
-                        kind: TypedStmtKind::AssignGlobal {
-                            ident: name,
-                            mangled,
-                            target_ty: bound,
-                            value: typed_value,
-                        },
-                        span,
-                    });
+                    let assign_id = self
+                        .typed_ast
+                        .try_push_stmt(TypedStmt {
+                            kind: TypedStmtKind::AssignGlobal {
+                                ident: name,
+                                mangled,
+                                target_ty: bound,
+                                value: typed_value,
+                            },
+                            span,
+                        })
+                        .map_err(crate::typechecker::arena_failure)?;
                     self.typed_ast.top_level_statements.push(assign_id);
                 }
                 StmtKind::Const {
@@ -107,15 +110,18 @@ impl<'a> Inferer<'a> {
                         doc,
                         span,
                     })?;
-                    let assign_id = self.typed_ast.push_stmt(TypedStmt {
-                        kind: TypedStmtKind::AssignGlobal {
-                            ident: name,
-                            mangled,
-                            target_ty: bound,
-                            value: typed_value,
-                        },
-                        span,
-                    });
+                    let assign_id = self
+                        .typed_ast
+                        .try_push_stmt(TypedStmt {
+                            kind: TypedStmtKind::AssignGlobal {
+                                ident: name,
+                                mangled,
+                                target_ty: bound,
+                                value: typed_value,
+                            },
+                            span,
+                        })
+                        .map_err(crate::typechecker::arena_failure)?;
                     self.typed_ast.top_level_statements.push(assign_id);
                 }
                 _ => {
@@ -193,15 +199,18 @@ impl<'a> Inferer<'a> {
                 doc: doc.clone(),
                 span: *span,
             })?;
-            let assign_id = self.typed_ast.push_stmt(TypedStmt {
-                kind: TypedStmtKind::AssignGlobal {
-                    ident,
-                    mangled,
-                    target_ty: sig.ty.clone(),
-                    value: typed_value,
-                },
-                span: *span,
-            });
+            let assign_id = self
+                .typed_ast
+                .try_push_stmt(TypedStmt {
+                    kind: TypedStmtKind::AssignGlobal {
+                        ident,
+                        mangled,
+                        target_ty: sig.ty.clone(),
+                        value: typed_value,
+                    },
+                    span: *span,
+                })
+                .map_err(crate::typechecker::arena_failure)?;
             self.typed_ast.top_level_statements.push(assign_id);
         }
 

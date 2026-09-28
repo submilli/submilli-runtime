@@ -3,28 +3,43 @@ use crate::{
     ClosureBody, Diagnostic, ExprId, Severity, StmtId, TypedAst, TypedExprKind, TypedStmtKind,
 };
 
-pub(super) fn run(ta: &TypedAst, diags: &mut Vec<Diagnostic>) {
+pub(super) fn run(
+    ta: &TypedAst,
+    diags: &mut Vec<Diagnostic>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     for f in &ta.functions {
-        walk(ta, f.body, diags);
+        walk(ta, f.body, diags)?;
     }
     for &id in &ta.top_level_statements {
-        walk(ta, id, diags);
+        walk(ta, id, diags)?;
     }
+    Ok(())
 }
 
-fn walk(ta: &TypedAst, id: StmtId, diags: &mut Vec<Diagnostic>) {
-    match &ta.stmt(id).kind {
+fn walk(
+    ta: &TypedAst,
+    id: StmtId,
+    diags: &mut Vec<Diagnostic>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let _: () = match &ta
+        .try_stmt(id)
+        .map_err(crate::typechecker::arena_failure)?
+        .kind
+    {
         TypedStmtKind::Block(stmts) => {
             let mut returned_idx: Option<usize> = None;
             for (i, &s) in stmts.iter().enumerate() {
-                if returned_idx.is_none() && control_flow(ta, s) == ControlFlow::Returns {
+                if returned_idx.is_none() && control_flow(ta, s)? == ControlFlow::Returns {
                     returned_idx = Some(i);
                 }
             }
             if let Some(idx) = returned_idx
                 && idx + 1 < stmts.len()
             {
-                let span = ta.stmt(stmts[idx + 1]).span;
+                let span = ta
+                    .try_stmt(stmts[idx + 1])
+                    .map_err(crate::typechecker::arena_failure)?
+                    .span;
                 diags.push(Diagnostic {
                     severity: Severity::Error,
                     span,
@@ -34,7 +49,7 @@ fn walk(ta: &TypedAst, id: StmtId, diags: &mut Vec<Diagnostic>) {
                 });
             }
             for &s in stmts {
-                walk(ta, s, diags);
+                walk(ta, s, diags)?;
             }
         }
         TypedStmtKind::If {
@@ -42,15 +57,15 @@ fn walk(ta: &TypedAst, id: StmtId, diags: &mut Vec<Diagnostic>) {
             then_block,
             else_block,
         } => {
-            walk_expr(ta, *condition, diags);
-            walk(ta, *then_block, diags);
+            walk_expr(ta, *condition, diags)?;
+            walk(ta, *then_block, diags)?;
             if let Some(eb) = else_block {
-                walk(ta, *eb, diags);
+                walk(ta, *eb, diags)?;
             }
         }
         TypedStmtKind::While { condition, body } => {
-            walk_expr(ta, *condition, diags);
-            walk(ta, *body, diags);
+            walk_expr(ta, *condition, diags)?;
+            walk(ta, *body, diags)?;
         }
         TypedStmtKind::For {
             init,
@@ -59,23 +74,23 @@ fn walk(ta: &TypedAst, id: StmtId, diags: &mut Vec<Diagnostic>) {
             body,
         } => {
             if let Some(i) = init {
-                walk(ta, *i, diags);
+                walk(ta, *i, diags)?;
             }
             if let Some(c) = condition {
-                walk_expr(ta, *c, diags);
+                walk_expr(ta, *c, diags)?;
             }
             if let Some(u) = update {
-                walk(ta, *u, diags);
+                walk(ta, *u, diags)?;
             }
-            walk(ta, *body, diags);
+            walk(ta, *body, diags)?;
         }
         TypedStmtKind::ForOf { iter, body, .. } => {
-            walk_expr(ta, *iter, diags);
-            walk(ta, *body, diags);
+            walk_expr(ta, *iter, diags)?;
+            walk(ta, *body, diags)?;
         }
         TypedStmtKind::DoWhile { body, condition } => {
-            walk(ta, *body, diags);
-            walk_expr(ta, *condition, diags);
+            walk(ta, *body, diags)?;
+            walk_expr(ta, *condition, diags)?;
         }
         TypedStmtKind::Switch {
             discriminant,
@@ -83,31 +98,31 @@ fn walk(ta: &TypedAst, id: StmtId, diags: &mut Vec<Diagnostic>) {
             default,
             ..
         } => {
-            walk_expr(ta, *discriminant, diags);
+            walk_expr(ta, *discriminant, diags)?;
             for case in cases {
-                walk(ta, case.body, diags);
+                walk(ta, case.body, diags)?;
             }
             if let Some(d) = default {
-                walk(ta, *d, diags);
+                walk(ta, *d, diags)?;
             }
         }
         TypedStmtKind::Break | TypedStmtKind::Continue | TypedStmtKind::ReboxLocal { .. } => {}
         TypedStmtKind::Return(value) => {
             if let Some(v) = value {
-                walk_expr(ta, *v, diags);
+                walk_expr(ta, *v, diags)?;
             }
         }
         TypedStmtKind::Let { value, .. } | TypedStmtKind::Const { value, .. } => {
-            walk_expr(ta, *value, diags);
+            walk_expr(ta, *value, diags)?;
         }
         TypedStmtKind::AssignLocal { value, .. } | TypedStmtKind::AssignGlobal { value, .. } => {
-            walk_expr(ta, *value, diags);
+            walk_expr(ta, *value, diags)?;
         }
         TypedStmtKind::AssignField {
             receiver, value, ..
         } => {
-            walk_expr(ta, *receiver, diags);
-            walk_expr(ta, *value, diags);
+            walk_expr(ta, *receiver, diags)?;
+            walk_expr(ta, *value, diags)?;
         }
         TypedStmtKind::AssignIndex {
             receiver,
@@ -115,139 +130,148 @@ fn walk(ta: &TypedAst, id: StmtId, diags: &mut Vec<Diagnostic>) {
             value,
             ..
         } => {
-            walk_expr(ta, *receiver, diags);
-            walk_expr(ta, *index, diags);
-            walk_expr(ta, *value, diags);
+            walk_expr(ta, *receiver, diags)?;
+            walk_expr(ta, *index, diags)?;
+            walk_expr(ta, *value, diags)?;
         }
         TypedStmtKind::NarrowRegion { source, body, .. } => {
-            walk_expr(ta, *source, diags);
-            walk(ta, *body, diags);
+            walk_expr(ta, *source, diags)?;
+            walk(ta, *body, diags)?;
         }
-        TypedStmtKind::Throw { value } => walk_expr(ta, *value, diags),
+        TypedStmtKind::Throw { value } => walk_expr(ta, *value, diags)?,
         TypedStmtKind::Try {
             body,
             catches,
             finally,
         } => {
-            walk(ta, *body, diags);
+            walk(ta, *body, diags)?;
             for c in catches {
-                walk(ta, c.body, diags);
+                walk(ta, c.body, diags)?;
             }
             if let Some(f) = finally {
-                walk(ta, *f, diags);
+                walk(ta, *f, diags)?;
             }
         }
-        TypedStmtKind::Expr(e) => walk_expr(ta, *e, diags),
-    }
+        TypedStmtKind::Expr(e) => walk_expr(ta, *e, diags)?,
+    };
+    Ok(())
 }
 
-fn walk_expr(ta: &TypedAst, expr_id: ExprId, diags: &mut Vec<Diagnostic>) {
-    match &ta.expr(expr_id).kind {
+fn walk_expr(
+    ta: &TypedAst,
+    expr_id: ExprId,
+    diags: &mut Vec<Diagnostic>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let _: () = match &ta
+        .try_expr(expr_id)
+        .map_err(crate::typechecker::arena_failure)?
+        .kind
+    {
         TypedExprKind::Closure { body, .. } => match body {
-            ClosureBody::Expr(e) => walk_expr(ta, *e, diags),
-            ClosureBody::Block(b) => walk(ta, *b, diags),
+            ClosureBody::Expr(e) => walk_expr(ta, *e, diags)?,
+            ClosureBody::Block(b) => walk(ta, *b, diags)?,
         },
         TypedExprKind::Binary { lhs, rhs, .. } => {
-            walk_expr(ta, *lhs, diags);
-            walk_expr(ta, *rhs, diags);
+            walk_expr(ta, *lhs, diags)?;
+            walk_expr(ta, *rhs, diags)?;
         }
         TypedExprKind::EffectThen { effect, result } => {
-            walk_expr(ta, *effect, diags);
-            walk_expr(ta, *result, diags);
+            walk_expr(ta, *effect, diags)?;
+            walk_expr(ta, *result, diags)?;
         }
         TypedExprKind::Sequence { stmts, result } => {
             for &stmt in stmts {
-                walk(ta, stmt, diags);
+                walk(ta, stmt, diags)?;
             }
-            walk_expr(ta, *result, diags);
+            walk_expr(ta, *result, diags)?;
         }
-        TypedExprKind::Unary { operand, .. } => walk_expr(ta, *operand, diags),
+        TypedExprKind::Unary { operand, .. } => walk_expr(ta, *operand, diags)?,
         TypedExprKind::TypeofTag { value, .. } | TypedExprKind::InstanceOf { value, .. } => {
-            walk_expr(ta, *value, diags);
+            walk_expr(ta, *value, diags)?;
         }
         TypedExprKind::Call { args, .. }
         | TypedExprKind::McpCall { args, .. }
         | TypedExprKind::SuperCtorCall { args, .. }
         | TypedExprKind::SuperMethodCall { args, .. } => {
             for &a in args {
-                walk_expr(ta, a, diags);
+                walk_expr(ta, a, diags)?;
             }
         }
         TypedExprKind::CallClosure { callee, args } => {
-            walk_expr(ta, *callee, diags);
+            walk_expr(ta, *callee, diags)?;
             for &a in args {
-                walk_expr(ta, a, diags);
+                walk_expr(ta, a, diags)?;
             }
         }
         TypedExprKind::GenericCall { args, .. } => {
             for a in args {
-                walk_expr(ta, a.expr, diags);
+                walk_expr(ta, a.expr, diags)?;
             }
         }
         TypedExprKind::MethodCall { receiver, args, .. } => {
-            walk_expr(ta, *receiver, diags);
+            walk_expr(ta, *receiver, diags)?;
             for &a in args {
-                walk_expr(ta, a, diags);
+                walk_expr(ta, a, diags)?;
             }
         }
         TypedExprKind::GenericMethodCall { receiver, args, .. } => {
-            walk_expr(ta, *receiver, diags);
+            walk_expr(ta, *receiver, diags)?;
             for a in args {
-                walk_expr(ta, a.expr, diags);
+                walk_expr(ta, a.expr, diags)?;
             }
         }
         TypedExprKind::IntrinsicCall { args, .. } => {
             for &a in args {
-                walk_expr(ta, a, diags);
+                walk_expr(ta, a, diags)?;
             }
         }
         TypedExprKind::ObjectLiteral { members, .. } => {
             for member in members {
                 for expression in member.expressions() {
-                    walk_expr(ta, expression, diags);
+                    walk_expr(ta, expression, diags)?;
                 }
             }
         }
         TypedExprKind::ArrayLiteral { elements, .. } => {
             for e in elements {
-                walk_expr(ta, e.expr_id(), diags);
+                walk_expr(ta, e.expr_id(), diags)?;
             }
         }
         TypedExprKind::TupleLiteral { elements, .. } => {
             for &e in elements {
-                walk_expr(ta, e, diags);
+                walk_expr(ta, e, diags)?;
             }
         }
         TypedExprKind::FieldAccess { receiver, .. }
         | TypedExprKind::InterfacePropertyAccess { receiver, .. } => {
-            walk_expr(ta, *receiver, diags);
+            walk_expr(ta, *receiver, diags)?;
         }
         TypedExprKind::IndexAccess { receiver, index } => {
-            walk_expr(ta, *receiver, diags);
-            walk_expr(ta, *index, diags);
+            walk_expr(ta, *receiver, diags)?;
+            walk_expr(ta, *index, diags)?;
         }
         TypedExprKind::Narrowed { source, inner, .. } => {
-            walk_expr(ta, *source, diags);
-            walk_expr(ta, *inner, diags);
+            walk_expr(ta, *source, diags)?;
+            walk_expr(ta, *inner, diags)?;
         }
         TypedExprKind::Ternary { cond, then_, else_ } => {
-            walk_expr(ta, *cond, diags);
-            walk_expr(ta, *then_, diags);
-            walk_expr(ta, *else_, diags);
+            walk_expr(ta, *cond, diags)?;
+            walk_expr(ta, *then_, diags)?;
+            walk_expr(ta, *else_, diags)?;
         }
         TypedExprKind::NullishCoalesce { lhs, rhs } => {
-            walk_expr(ta, *lhs, diags);
-            walk_expr(ta, *rhs, diags);
+            walk_expr(ta, *lhs, diags)?;
+            walk_expr(ta, *rhs, diags)?;
         }
         TypedExprKind::OptionalChain { base, parts } => {
-            walk_expr(ta, *base, diags);
+            walk_expr(ta, *base, diags)?;
             for part in parts {
                 match part {
-                    crate::TypedChainPart::Index { idx, .. } => walk_expr(ta, *idx, diags),
+                    crate::TypedChainPart::Index { idx, .. } => walk_expr(ta, *idx, diags)?,
                     crate::TypedChainPart::Call { args, .. }
                     | crate::TypedChainPart::MethodCall { args, .. } => {
                         for a in args {
-                            walk_expr(ta, *a, diags);
+                            walk_expr(ta, *a, diags)?;
                         }
                     }
                     crate::TypedChainPart::Field { .. }
@@ -257,17 +281,17 @@ fn walk_expr(ta: &TypedAst, expr_id: ExprId, diags: &mut Vec<Diagnostic>) {
             }
         }
         TypedExprKind::PostfixUnary { target, .. } => match target {
-            crate::PostfixTarget::Field { receiver, .. } => walk_expr(ta, *receiver, diags),
+            crate::PostfixTarget::Field { receiver, .. } => walk_expr(ta, *receiver, diags)?,
             crate::PostfixTarget::Index {
                 receiver, index, ..
             } => {
-                walk_expr(ta, *receiver, diags);
-                walk_expr(ta, *index, diags);
+                walk_expr(ta, *receiver, diags)?;
+                walk_expr(ta, *index, diags)?;
             }
             crate::PostfixTarget::Local { .. } | crate::PostfixTarget::Global { .. } => {}
         },
         TypedExprKind::NonNullAssert { value } | TypedExprKind::Cast { value, .. } => {
-            walk_expr(ta, *value, diags);
+            walk_expr(ta, *value, diags)?;
         }
         TypedExprKind::Number(_)
         | TypedExprKind::BigInt(_)
@@ -282,7 +306,8 @@ fn walk_expr(ta: &TypedAst, expr_id: ExprId, diags: &mut Vec<Diagnostic>) {
         | TypedExprKind::FunctionRef { .. }
         | TypedExprKind::NumberEnumMember { .. }
         | TypedExprKind::StringEnumMember { .. } => {}
-    }
+    };
+    Ok(())
 }
 
 #[cfg(test)]

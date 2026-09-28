@@ -393,7 +393,8 @@ pub fn emit_func_and_struct_types<I>(
     types: &mut TypeSection,
     symbols: &mut SymbolTable,
     next_type_idx: &mut u32,
-) where
+) -> Result<(), crate::compiler_error::CompilerFailure>
+where
     I: IntoIterator<Item = ClosureSig>,
 {
     let intrinsics = symbols
@@ -415,6 +416,7 @@ pub fn emit_func_and_struct_types<I>(
         symbols.record_closure_struct_type(sig, struct_idx);
         symbols.record_struct_supertype(struct_idx, closure_struct_supertype(intrinsics));
     }
+    Ok(())
 }
 
 /// Structural canonicalization unifies prelude and consumer copies at instantiation time.

@@ -95,6 +95,22 @@ and `is_effect_free`. Propagate errors explicitly, without placeholder nodes/typ
 or continued processing after failure. Remove legacy typed APIs after migration.
 Failed compilation must not return Wasm or package artifacts.
 
+Implementation: all typed arena readers, mutations, allocations and ID scans use
+checked APIs, including `source_type` and `is_effect_free`. Inference, semantic
+rules, capture, desugaring, capability derivation and Wasm analysis/emission
+propagate failures. The old typed accessors are removed. Capture and desugaring
+consume the tree and return it only on success; codegen transformations use a
+private copy. Script/package boundaries retain earlier diagnostics, including
+capability warnings, and return no artifact on failure.
+
+Focused coverage injects invalid expression/statement IDs, invalid postfix node
+kinds and small typed-arena capacities. It checks direct phase APIs, script and
+package compilation, diagnostic retention and successful operations after a
+failure. Substantial statement-inference arms are separate helpers to keep the
+existing debug/release 2 MiB and 8 MiB worker-stack regression viable. This does
+not establish arbitrary compiler-recursion or global-allocation bounds; those,
+and independent symbol/layout/flow invariants, remain separate inventory work.
+
 ## Verification and completion
 
 Each stage gets focused tests and the repository's independent clean-code,

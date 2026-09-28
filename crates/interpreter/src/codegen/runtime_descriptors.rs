@@ -76,13 +76,15 @@ pub fn allocate(
     extra: &BTreeSet<Type>,
     symbols: &mut SymbolTable,
     next: &mut u32,
-) -> Vec<(Type, u32)> {
+) -> Result<Vec<(Type, u32)>, crate::compiler_error::CompilerFailure> {
     let mut targets = BTreeSet::from([Type::Unknown]);
     targets.extend(extra.iter().cloned());
     let mut has_generic_calls = false;
-    for index in 0..ta.exprs_len() {
-        if let TypedExprKind::GenericCall { type_args, .. } =
-            &ta.expr(crate::ExprId(index as u32)).kind
+    for index in ta.expr_ids().map_err(crate::codegen::arena_failure)? {
+        if let TypedExprKind::GenericCall { type_args, .. } = &ta
+            .try_expr(index)
+            .map_err(crate::codegen::arena_failure)?
+            .kind
         {
             has_generic_calls = true;
             targets.extend(type_args.iter().cloned());
@@ -102,7 +104,7 @@ pub fn allocate(
             .flatten()
             .any(|guard| !parameters(&guard.target).is_empty())
     {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let mut descriptors = Vec::new();
     for ty in targets {
@@ -113,7 +115,7 @@ pub fn allocate(
         descriptors.push((ty, *next));
         *next += 1;
     }
-    descriptors
+    Ok(descriptors)
 }
 
 /// Closed predicates are singletons so recursive calls retain effective type identity.
@@ -287,7 +289,10 @@ pub fn test_parameter(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, name: &st
     cast::emit_cast_to(emitter, ctx, &Type::Boolean);
 }
 
-pub fn body(ctx: &CodegenCtx, ty: &Type) -> Function {
+pub fn body(
+    ctx: &CodegenCtx,
+    ty: &Type,
+) -> Result<Function, crate::compiler_error::CompilerFailure> {
     let ident = |name: &str| Ident {
         name: name.into(),
         span: Span::at(ctx.file),
@@ -304,7 +309,7 @@ pub fn body(ctx: &CodegenCtx, ty: &Type) -> Function {
     ];
     let mut emitter = FunctionEmitter::new(ctx, &params);
     bind(&mut emitter, &parameters(ty), 0);
-    super::cast_check::emit_structural_test(&mut emitter, ctx, 1, ty);
+    super::cast_check::emit_structural_test(&mut emitter, ctx, 1, ty)?;
     cast::emit_box(&mut emitter, ctx, &Type::Boolean);
-    emitter.build()
+    Ok(emitter.build())
 }

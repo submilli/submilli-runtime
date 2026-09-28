@@ -18,24 +18,40 @@ pub(crate) fn derive_package_requirements(
     ta: &TypedAst,
     stdlib_defs: &[PackageDeclaration],
     dependencies: &[&PackageDeclaration],
-) -> (Vec<DerivedCapability>, Vec<Diagnostic>) {
+) -> Result<(Vec<DerivedCapability>, Vec<Diagnostic>), crate::compiler_error::CompileError> {
     let lookup = dependency_capability_lookup(package_name, stdlib_defs, dependencies);
     let mut required = Vec::new();
     let mut warnings = Vec::new();
-    for index in 0..ta.exprs_len() {
-        let expr_id = ExprId(index as u32);
-        match &ta.expr(expr_id).kind {
+    for expr_id in ta.expr_ids().map_err(|error| {
+        crate::compiler_error::CompileError::from(crate::typechecker::arena_failure(error))
+            .with_prior_diagnostics(&warnings)
+    })? {
+        match &ta
+            .try_expr(expr_id)
+            .map_err(|error| {
+                crate::compiler_error::CompileError::from(crate::typechecker::arena_failure(error))
+                    .with_prior_diagnostics(&warnings)
+            })?
+            .kind
+        {
             TypedExprKind::Call { mangled, args, .. } => {
-                derive_call_requirements(ta, &lookup, mangled, args, &mut required, &mut warnings);
+                derive_call_requirements(ta, &lookup, mangled, args, &mut required, &mut warnings)?;
             }
             TypedExprKind::GenericCall { mangled, args, .. } => {
                 let args = args.iter().map(|arg| arg.expr).collect::<Vec<_>>();
-                derive_call_requirements(ta, &lookup, mangled, &args, &mut required, &mut warnings);
+                derive_call_requirements(
+                    ta,
+                    &lookup,
+                    mangled,
+                    &args,
+                    &mut required,
+                    &mut warnings,
+                )?;
             }
             _ => {}
         }
     }
-    (required, warnings)
+    Ok((required, warnings))
 }
 
 fn dependency_capability_lookup(
@@ -86,13 +102,15 @@ fn derive_call_requirements(
     args: &[ExprId],
     required: &mut Vec<DerivedCapability>,
     warnings: &mut Vec<Diagnostic>,
-) {
+) -> Result<(), crate::compiler_error::CompileError> {
     let Some(callee) = lookup.get(mangled) else {
-        return;
+        return Ok(());
     };
     for capability in &callee.capabilities {
-        let mut derived = derive_call_site_capability(capability, &callee.params, ta, args);
+        let mut derived = derive_call_site_capability(capability, &callee.params, ta, args)
+            .map_err(|error| error.with_prior_diagnostics(warnings))?;
         warnings.append(&mut derived.warnings);
         required.push(derived);
     }
+    Ok(())
 }

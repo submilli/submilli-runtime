@@ -207,7 +207,7 @@ fn front_end_with_transitive(
         error
     })?;
     diags.extend(infer_diags);
-    diags.extend(check(&ta));
+    diags.extend(check(&ta).map_err(|error| error.with_prior_diagnostics(&diags))?);
     timings.typecheck = typecheck_start.elapsed();
 
     Ok((ta, diags, timings))
@@ -371,11 +371,17 @@ fn compile_parsed_script_owned_by(
         return Err(diags.into());
     }
     let capture_start = Instant::now();
-    capture(&mut ta);
+    ta = capture(ta).map_err(|fatal| CompileError {
+        diagnostics: diags.clone(),
+        fatal: Some(fatal),
+    })?;
     timings.capture = capture_start.elapsed();
 
     let desugar_start = Instant::now();
-    desugar(&mut ta, parsed.file);
+    ta = desugar(ta, parsed.file).map_err(|fatal| CompileError {
+        diagnostics: diags.clone(),
+        fatal: Some(fatal),
+    })?;
     timings.desugar = desugar_start.elapsed();
 
     let (prelude_defs, host_defs, internal_defs) = prelude::cached_runtime_package_declarations();
@@ -515,9 +521,13 @@ pub fn compile_package_with_transitive_checked(
             &ta,
             &stdlib_defs,
             dependencies,
-        );
+        )
+        .map_err(|error| error.with_prior_diagnostics(&diagnostics))?;
     diagnostics.extend(capability_warnings);
-    capture(&mut ta);
+    ta = capture(ta).map_err(|fatal| CompileError {
+        diagnostics: diagnostics.clone(),
+        fatal: Some(fatal),
+    })?;
     let root_file = parsed_modules
         .iter()
         .find(|(path, _, _)| *path == root_module)
@@ -527,7 +537,10 @@ pub fn compile_package_with_transitive_checked(
             span: None,
             message: "compiled package root module is missing".into(),
         })?;
-    desugar(&mut ta, root_file);
+    ta = desugar(ta, root_file).map_err(|fatal| CompileError {
+        diagnostics: diagnostics.clone(),
+        fatal: Some(fatal),
+    })?;
 
     let (prelude_defs, host_defs, internal_defs) = prelude::cached_runtime_package_declarations();
     let stdlib_defs = runtime::stdlib_package_declarations();
@@ -1242,5 +1255,121 @@ mod untyped_arena_failures {
             error.fatal,
             Some(CompilerFailure::Internal { span: None, .. })
         ));
+    }
+}
+
+#[cfg(test)]
+mod typed_arena_failures {
+    use super::*;
+    use crate::arena::{ArenaKind, with_node_limit};
+
+    fn assert_limit(error: CompileError) {
+        assert!(
+            matches!(error.fatal, Some(CompilerFailure::Limit { span: None, .. })),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn typed_allocation_failure_stops_script_and_package_compilation() {
+        let source = "function main(): number { return 1; }";
+        let modules = [PackageSourceModule {
+            path: ModulePath::from("lib"),
+            source: "export function value(): number { return 1; }",
+        }];
+        for arena in [ArenaKind::TypedExpressions, ArenaKind::TypedStatements] {
+            assert_limit(
+                with_node_limit(arena, 0, || {
+                    compile_script_checked(source, "limit.ts", FileId(0), &[], &[])
+                })
+                .unwrap_err(),
+            );
+            assert_limit(
+                with_node_limit(arena, 0, || {
+                    compile_package_checked("test", ModulePath::from("lib"), &modules, &[])
+                })
+                .unwrap_err(),
+            );
+        }
+        assert!(
+            !compile_script_checked(source, "healthy.ts", FileId(0), &[], &[])
+                .unwrap()
+                .wasm
+                .is_empty()
+        );
+        assert!(
+            !compile_package_checked("test", ModulePath::from("lib"), &modules, &[])
+                .unwrap()
+                .wasm
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn typed_allocation_failure_keeps_prior_inference_diagnostics() {
+        let source = "function main(): number { let value: number = \"wrong\"; return 2; }";
+        let (ast, diagnostics) = typecheck_to_typed_ast(source, FileId(0));
+        assert!(!diagnostics.is_empty());
+        for (arena, count) in [
+            (ArenaKind::TypedExpressions, ast.exprs_len()),
+            (ArenaKind::TypedStatements, ast.stmts_len()),
+        ] {
+            let error = with_node_limit(arena, u32::try_from(count - 1).unwrap(), || {
+                compile_script_checked(source, "limit.ts", FileId(0), &[], &[])
+            })
+            .unwrap_err();
+            assert!(!error.diagnostics.is_empty(), "{error:?}");
+            assert_limit(error);
+        }
+    }
+
+    #[test]
+    fn codegen_allocation_failure_returns_no_wasm() {
+        let source = "function main(): number { let value: number | null = 1; if (value !== null) { return value; } return 0; }";
+        let (ast, diagnostics) = typecheck_to_typed_ast(source, FileId(0));
+        assert!(diagnostics.is_empty());
+        let ast = desugar(capture(ast).unwrap(), FileId(0)).unwrap();
+        let (prelude, host, internal) = prelude::cached_runtime_package_declarations();
+        let dependencies: Vec<_> = prelude.iter().chain(host).chain(internal).collect();
+        let failure = with_node_limit(
+            ArenaKind::TypedExpressions,
+            u32::try_from(ast.exprs_len()).unwrap(),
+            || crate::codegen::codegen(source, "limit.ts", FileId(0), &ast, &dependencies),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(
+                failure,
+                CompilerFailure::Limit {
+                    stage: CompilerStage::Codegen,
+                    span: None,
+                    ..
+                }
+            ),
+            "{failure}"
+        );
+        assert!(
+            !crate::codegen::codegen(source, "healthy.ts", FileId(0), &ast, &dependencies)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn desugaring_capacity_failure_does_not_return_a_transformed_tree() {
+        let source = "function main(): void { do {} while (false); }";
+        let (ast, diagnostics) = typecheck_to_typed_ast(source, FileId(0));
+        assert!(diagnostics.is_empty());
+        for (arena, count) in [
+            (ArenaKind::TypedExpressions, ast.exprs_len()),
+            (ArenaKind::TypedStatements, ast.stmts_len()),
+        ] {
+            let failure = with_node_limit(arena, u32::try_from(count).unwrap(), || {
+                desugar(ast.clone(), FileId(0))
+            })
+            .unwrap_err();
+            assert_limit(failure.into());
+        }
+        desugar(ast, FileId(0)).unwrap();
     }
 }
