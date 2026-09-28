@@ -118,7 +118,10 @@ impl TypeParamSubstitution {
                     })
                 }),
             },
-            Type::Object { fields } => Type::Object {
+            Type::Object { fields, index } => Type::Object {
+                index: index
+                    .as_ref()
+                    .map(|i| i.map_value(|v| self.apply_rec(v, substituting))),
                 fields: fields
                     .iter()
                     .map(|(k, v)| {
@@ -372,7 +375,37 @@ impl<'a> Unifier<'a> {
                 }
                 self.unify(ra, rb)
             }
-            (Type::Object { fields: a }, Type::Object { fields: b }) => {
+            (
+                Type::Object {
+                    fields: a,
+                    index: ai,
+                },
+                Type::Object {
+                    fields: b,
+                    index: bi,
+                },
+            ) => {
+                if let Some(index) = ai {
+                    if let Some(actual) = bi {
+                        self.unify(&index.value, &actual.value)?;
+                    }
+                    for field in b.values() {
+                        self.unify(&index.value, &field.ty)?;
+                    }
+                    for (name, expected) in a {
+                        let Some(actual) = b.get(name) else {
+                            if expected.optional {
+                                continue;
+                            }
+                            return Err(UnifyError::Mismatch {
+                                expected: param_ty.clone(),
+                                got: arg_ty.clone(),
+                            });
+                        };
+                        self.unify(&expected.ty, &actual.ty)?;
+                    }
+                    return Ok(());
+                }
                 if a.len() != b.len() || !a.keys().eq(b.keys()) {
                     return Err(UnifyError::Mismatch {
                         expected: param_ty.clone(),
@@ -701,7 +734,10 @@ mod tests {
         for (k, v) in pairs {
             fields.insert((*k).to_string(), crate::ObjectField::required(v.clone()));
         }
-        Type::Object { fields }
+        Type::Object {
+            index: None,
+            fields,
+        }
     }
 
     #[test]

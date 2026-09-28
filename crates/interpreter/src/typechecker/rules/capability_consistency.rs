@@ -59,7 +59,7 @@ fn validate_param_bindings(f: &TypedFunction, diags: &mut Vec<Diagnostic>) {
 fn missing_path_segment(ty: &Type, path: &[String]) -> Option<String> {
     let mut current = ty;
     for segment in path {
-        let Type::Object { fields } = current else {
+        let Type::Object { fields, .. } = current else {
             return Some(segment.clone());
         };
         let Some(field) = fields.get(segment) else {
@@ -380,7 +380,9 @@ fn collect_checks_in_expr(
         }
         TypedExprKind::ObjectLiteral { members, .. } => {
             for member in members {
-                collect_checks_in_expr(ta, member.expr_id(), security_check, out);
+                for expression in member.expressions() {
+                    collect_checks_in_expr(ta, expression, security_check, out);
+                }
             }
         }
         TypedExprKind::ArrayLiteral { elements, .. } => {

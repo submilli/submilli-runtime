@@ -1,0 +1,2 @@
+@test/records lib -
+main app @test/records root

@@ -62,7 +62,7 @@ pub fn declare_optional_name_type(
 pub fn collect(shapes: &[Type]) -> Vec<Vec<FieldName>> {
     let mut keys: BTreeSet<Vec<FieldName>> = BTreeSet::new();
     for shape in shapes {
-        if let Type::Object { fields } = shape {
+        if let Type::Object { fields, .. } = shape {
             keys.insert(
                 fields
                     .iter()
@@ -347,7 +347,16 @@ mod tests {
         a.insert("x".to_string(), ObjectField::required(Type::Number));
         let mut b = BTreeMap::new();
         b.insert("x".to_string(), ObjectField::required(Type::String));
-        let shapes = vec![Type::Object { fields: a }, Type::Object { fields: b }];
+        let shapes = vec![
+            Type::Object {
+                index: None,
+                fields: a,
+            },
+            Type::Object {
+                index: None,
+                fields: b,
+            },
+        ];
         let keys = collect(&shapes);
         assert_eq!(keys.len(), 1);
         assert_eq!(
@@ -368,7 +377,16 @@ mod tests {
         a.insert("x".to_string(), ObjectField::required(Type::Number));
         let mut b = BTreeMap::new();
         b.insert("y".to_string(), ObjectField::required(Type::Number));
-        let shapes = vec![Type::Object { fields: a }, Type::Object { fields: b }];
+        let shapes = vec![
+            Type::Object {
+                index: None,
+                fields: a,
+            },
+            Type::Object {
+                index: None,
+                fields: b,
+            },
+        ];
         let keys = collect(&shapes);
         assert_eq!(keys.len(), 2);
         assert_eq!(

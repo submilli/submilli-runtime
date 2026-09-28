@@ -964,6 +964,17 @@ impl<'a> Parser<'a> {
             Vec::new()
         };
 
+        let mut extends = Vec::new();
+        if matches!(self.peek().kind, TokenKind::Extends) {
+            self.advance();
+            loop {
+                extends.push(self.parse_type_annotation()?);
+                if !matches!(self.peek().kind, TokenKind::Comma) {
+                    break;
+                }
+                self.advance();
+            }
+        }
         if !matches!(self.peek().kind, TokenKind::LeftBrace) {
             self.error_at_peek("expected `{` after interface name");
             return None;
@@ -1007,6 +1018,12 @@ impl<'a> Parser<'a> {
                 return None;
             }
             let readonly = self.eat_readonly_property_modifier();
+            if matches!(self.peek().kind, TokenKind::LeftBracket) {
+                let signature = self.parse_index_signature(readonly)?;
+                self.finish_interface_member(signature.span.end)?;
+                members.push(crate::InterfaceMember::IndexSignature(signature));
+                continue;
+            }
             let member_name = self.expect_property_ident("expected interface member name")?;
             let optional = matches!(self.peek().kind, TokenKind::Question);
             if optional {
@@ -1073,6 +1090,7 @@ impl<'a> Parser<'a> {
             kind: StmtKind::InterfaceDecl {
                 name,
                 generics,
+                extends,
                 members,
                 doc,
             },
@@ -3151,12 +3169,60 @@ impl<'a> Parser<'a> {
         );
     }
 
+    fn parse_index_signature(&mut self, readonly: bool) -> Option<crate::IndexSignatureAnnotation> {
+        let open = self.advance();
+        self.expect_property_ident("expected index parameter name")?;
+        if !matches!(self.peek().kind, TokenKind::Colon) {
+            self.error_at_peek("expected `:` after index parameter name");
+            return None;
+        }
+        self.advance();
+        if !self.peek_identifier_text_is("string") {
+            self.error_at_peek("index signatures require string keys; use `[key: string]: V`");
+            return None;
+        }
+        self.advance();
+        if !matches!(self.peek().kind, TokenKind::RightBracket) {
+            self.error_at_peek("expected `]` after string index key type");
+            return None;
+        }
+        self.advance();
+        if !matches!(self.peek().kind, TokenKind::Colon) {
+            self.error_at_peek("expected `:` before index value type");
+            return None;
+        }
+        self.advance();
+        let value = self.parse_type_annotation()?;
+        Some(crate::IndexSignatureAnnotation {
+            span: self.span(open.span.start, value.span.end),
+            value,
+            readonly,
+        })
+    }
+
     fn parse_object_type_annotation(&mut self) -> Option<TypeAnnotation> {
         let open = self.advance();
         let mut fields: Vec<TypeAnnotationField> = Vec::new();
+        let mut index = None;
         if !matches!(self.peek().kind, TokenKind::RightBrace) {
             loop {
                 let readonly = self.eat_readonly_property_modifier();
+                if matches!(self.peek().kind, TokenKind::LeftBracket) {
+                    let signature = self.parse_index_signature(readonly)?;
+                    if index.is_some() {
+                        self.error_at_with_help(
+                            signature.span,
+                            "duplicate string index signature",
+                            vec![],
+                        );
+                    }
+                    index = Some(Box::new(signature));
+                    self.finish_interface_member(self.peek().span.start)?;
+                    if matches!(self.peek().kind, TokenKind::RightBrace) {
+                        break;
+                    }
+                    continue;
+                }
                 let name = self.expect_property_ident("expected field name in object type")?;
                 // `name?: T` — omittable at construction; reads widen to `T | null`.
                 let optional = matches!(self.peek().kind, TokenKind::Question);
@@ -3210,7 +3276,7 @@ impl<'a> Parser<'a> {
         }
         let close = self.advance();
         Some(TypeAnnotation {
-            kind: TypeAnnotationKind::Object { fields },
+            kind: TypeAnnotationKind::Object { index, fields },
             span: self.span(open.span.start, close.span.end),
         })
     }
@@ -3297,7 +3363,10 @@ impl<'a> Parser<'a> {
     }
 
     fn eat_readonly_property_modifier(&mut self) -> bool {
-        if self.peek_identifier_text_is("readonly") && self.peek_starts_property_after_readonly() {
+        if self.peek_identifier_text_is("readonly")
+            && (self.peek_starts_property_after_readonly()
+                || matches!(self.peek_at(1).kind, TokenKind::LeftBracket))
+        {
             self.advance();
             return true;
         }
@@ -4536,6 +4605,21 @@ impl<'a> Parser<'a> {
                         value,
                         span: self.span(dots.span.start, value_span.end),
                     });
+                } else if matches!(self.peek().kind, TokenKind::LeftBracket) {
+                    self.advance();
+                    let key = self.parse_expression()?;
+                    if !matches!(self.peek().kind, TokenKind::RightBracket) {
+                        self.error_at_peek("expected `]` after computed property key");
+                        return None;
+                    }
+                    self.advance();
+                    if !matches!(self.peek().kind, TokenKind::Colon) {
+                        self.error_at_peek("expected `:` after computed property key; computed methods are not supported");
+                        return None;
+                    }
+                    self.advance();
+                    let value = self.parse_expression()?;
+                    members.push(ObjectLiteralMember::Computed { key, value });
                 } else {
                     let field = self.parse_object_literal_field()?;
                     // Spread members are dynamic — only literal fields participate in
@@ -7910,7 +7994,8 @@ mod tests {
     fn object_literal_field(m: &crate::ObjectLiteralMember) -> &crate::ObjectLiteralField {
         match m {
             crate::ObjectLiteralMember::Field(f) => f,
-            crate::ObjectLiteralMember::Spread { .. } => {
+            crate::ObjectLiteralMember::Spread { .. }
+            | crate::ObjectLiteralMember::Computed { .. } => {
                 panic!("expected Field member, got Spread")
             }
         }
@@ -8474,7 +8559,7 @@ mod tests {
         let (ast, diags) = parse_str("let p: { x: number; y: number } = null;");
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
         let ty = type_of_let(single_stmt(&ast));
-        let crate::TypeAnnotationKind::Object { ref fields } = ty.kind else {
+        let crate::TypeAnnotationKind::Object { ref fields, .. } = ty.kind else {
             panic!("expected Object, got {:?}", ty.kind);
         };
         assert_eq!(fields.len(), 2);
@@ -8491,7 +8576,7 @@ mod tests {
         );
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
         let ty = type_of_let(single_stmt(&ast));
-        let crate::TypeAnnotationKind::Object { ref fields } = ty.kind else {
+        let crate::TypeAnnotationKind::Object { ref fields, .. } = ty.kind else {
             panic!("expected Object, got {:?}", ty.kind);
         };
         assert_eq!(fields.len(), 3);
@@ -8517,7 +8602,7 @@ mod tests {
         let (ast, diags) = parse_str("let p: { x: number, y: number } = null;");
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
         let ty = type_of_let(single_stmt(&ast));
-        let crate::TypeAnnotationKind::Object { ref fields } = ty.kind else {
+        let crate::TypeAnnotationKind::Object { ref fields, .. } = ty.kind else {
             panic!("expected Object");
         };
         assert_eq!(fields.len(), 2);
@@ -8528,7 +8613,7 @@ mod tests {
         let (ast, diags) = parse_str("let p: {} = null;");
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
         let ty = type_of_let(single_stmt(&ast));
-        let crate::TypeAnnotationKind::Object { ref fields } = ty.kind else {
+        let crate::TypeAnnotationKind::Object { ref fields, .. } = ty.kind else {
             panic!("expected Object");
         };
         assert!(fields.is_empty());
@@ -8539,7 +8624,7 @@ mod tests {
         let (ast, diags) = parse_str("let p: { id: number; nick?: string } = null;");
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
         let ty = type_of_let(single_stmt(&ast));
-        let crate::TypeAnnotationKind::Object { ref fields } = ty.kind else {
+        let crate::TypeAnnotationKind::Object { ref fields, .. } = ty.kind else {
             panic!("expected Object");
         };
         assert_eq!(fields.len(), 2);
@@ -8556,7 +8641,7 @@ mod tests {
         );
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
         let ty = type_of_let(single_stmt(&ast));
-        let crate::TypeAnnotationKind::Object { ref fields } = ty.kind else {
+        let crate::TypeAnnotationKind::Object { ref fields, .. } = ty.kind else {
             panic!("expected Object");
         };
         let fields: Vec<(&str, bool, bool)> = fields
@@ -8578,7 +8663,7 @@ mod tests {
         let (ast, diags) = parse_str("let p: { a?: number; b: string; c?: boolean } = null;");
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
         let ty = type_of_let(single_stmt(&ast));
-        let crate::TypeAnnotationKind::Object { ref fields } = ty.kind else {
+        let crate::TypeAnnotationKind::Object { ref fields, .. } = ty.kind else {
             panic!("expected Object");
         };
         let opt: Vec<(&str, bool)> = fields
@@ -8594,7 +8679,7 @@ mod tests {
             parse_str("let p: { type: string; default?: number; null: boolean } = null;");
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
         let ty = type_of_let(single_stmt(&ast));
-        let crate::TypeAnnotationKind::Object { ref fields } = ty.kind else {
+        let crate::TypeAnnotationKind::Object { ref fields, .. } = ty.kind else {
             panic!("expected Object");
         };
         let opt: Vec<(&str, bool)> = fields
@@ -8613,7 +8698,7 @@ mod tests {
             parse_str(r#"let p: { "content-type": string; "x\u002drequest-id"?: string } = null;"#);
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
         let ty = type_of_let(single_stmt(&ast));
-        let crate::TypeAnnotationKind::Object { ref fields } = ty.kind else {
+        let crate::TypeAnnotationKind::Object { ref fields, .. } = ty.kind else {
             panic!("expected Object");
         };
         let opt: Vec<(&str, bool)> = fields
@@ -8698,7 +8783,7 @@ mod tests {
         );
 
         let ty = type_of_let(ast.stmt(ast.top_level[1]));
-        let crate::TypeAnnotationKind::Object { ref fields } = ty.kind else {
+        let crate::TypeAnnotationKind::Object { ref fields, .. } = ty.kind else {
             panic!("expected Object");
         };
         assert_eq!(fields[0].name.name, "readonly");
@@ -8719,6 +8804,7 @@ mod tests {
             .map(|m| match m {
                 crate::InterfaceMember::Method { name, .. }
                 | crate::InterfaceMember::Property { name, .. } => name.name.as_str(),
+                crate::InterfaceMember::IndexSignature(_) => panic!("unexpected index signature"),
             })
             .collect();
         assert_eq!(names, vec!["type", "default", "null"]);
@@ -8821,7 +8907,7 @@ mod tests {
         let (ast, diags) = parse_str("let p: { xs: number[] } = null;");
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
         let ty = type_of_let(single_stmt(&ast));
-        let crate::TypeAnnotationKind::Object { ref fields } = ty.kind else {
+        let crate::TypeAnnotationKind::Object { ref fields, .. } = ty.kind else {
             panic!("expected Object");
         };
         assert_eq!(fields[0].name.name, "xs");
@@ -9250,7 +9336,7 @@ mod tests {
         let (ast, diags) = parse_str("let p: { x: number | string } = null;");
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
         let ty = type_of_let(single_stmt(&ast));
-        let crate::TypeAnnotationKind::Object { ref fields } = ty.kind else {
+        let crate::TypeAnnotationKind::Object { ref fields, .. } = ty.kind else {
             panic!("expected Object, got {:?}", ty.kind);
         };
         assert_eq!(fields.len(), 1);

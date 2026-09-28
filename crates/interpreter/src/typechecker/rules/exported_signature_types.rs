@@ -96,8 +96,12 @@ fn run_symbols<'a>(
             TypeKind::Interface {
                 methods,
                 properties,
+                index,
                 ..
             } => {
+                if let Some(index) = index {
+                    collect_signature_named_types(package_name, &index.value, &mut used);
+                }
                 for method in methods.values() {
                     for param in &method.params {
                         collect_signature_named_types(package_name, &param.ty, &mut used);
@@ -282,7 +286,10 @@ fn collect_signature_named_types(
                 collect_signature_named_types(package_name, &predicate.asserted_type, out);
             }
         }
-        Type::Object { fields } => {
+        Type::Object { fields, index } => {
+            if let Some(index) = index {
+                collect_signature_named_types(package_name, &index.value, out);
+            }
             for field in fields.values() {
                 collect_signature_named_types(package_name, &field.ty, out);
             }

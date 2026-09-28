@@ -441,7 +441,29 @@ fn emit_assign_index(
     elem_ty: &Type,
 ) {
     let mark = emitter.single_evaluation_mark();
-    if matches!(ctx.ta.source_type(receiver).peel(), Type::Uint8Array) {
+    if ctx.ta.source_type(receiver).is_structural_object() {
+        let object = emit_operand_once(emitter, ctx, receiver);
+        let key = emit_operand_once(emitter, ctx, index);
+        let stored = emit_operand_once(emitter, ctx, value);
+        emitter.instruction(Instruction::LocalGet(object));
+        cast::emit_box(emitter, ctx, &ctx.ta.expr(receiver).ty);
+        emitter.instruction(Instruction::LocalGet(key));
+        crate::codegen::cast_check::emit_operation_cast_on_stack(
+            emitter,
+            ctx,
+            &ctx.ta.expr(index).ty,
+            &Type::String,
+        );
+        emitter.instruction(Instruction::LocalGet(stored));
+        cast::emit_box(emitter, ctx, &ctx.ta.expr(value).ty);
+        let Some(symbol) = ctx.require(
+            ctx.symbols.prelude_func_idx("ObjectConstructor##setField"),
+            "dynamic write imported",
+        ) else {
+            return;
+        };
+        emitter.instruction(Instruction::Call(symbol));
+    } else if matches!(ctx.ta.source_type(receiver).peel(), Type::Uint8Array) {
         emit_uint8_index_store(emitter, ctx, receiver, index, value);
     } else {
         emit_array_index_store(emitter, ctx, receiver, index, value, elem_ty);

@@ -202,7 +202,10 @@ impl ValidatorBodies {
                         )
                     })
                     .collect();
-                Type::Object { fields }
+                Type::Object {
+                    index: None,
+                    fields,
+                }
             }
             other => other.clone(),
         }
@@ -313,6 +316,9 @@ impl<'a> Discovery<'a> {
             match test {
                 crate::FieldNarrowingTest::Shape(shape) => self.walk(shape),
                 crate::FieldNarrowingTest::Interface(interface) => {
+                    if let Some(index) = &interface.index {
+                        self.walk(&index.value);
+                    }
                     for member in interface.members.values() {
                         self.walk(&member.ty);
                     }
@@ -402,7 +408,10 @@ impl<'a> Discovery<'a> {
             collect_descriptor_arguments(&plan.body, &mut descriptor_types);
         }
         for shape in &self.shapes {
-            if let Shape::Object { fields } = shape {
+            if let Shape::Object { fields, index } = shape {
+                if let Some(index) = index {
+                    collect_descriptor_arguments(&index.value, &mut descriptor_types);
+                }
                 for field in fields.values() {
                     collect_descriptor_arguments(&field.ty, &mut descriptor_types);
                 }
@@ -423,9 +432,13 @@ fn interface_test_is_recursive(
 ) -> bool {
     let mut visiting = BTreeSet::from([key.clone()]);
     interface
-        .members
-        .values()
-        .any(|member| type_reaches_interface(&member.ty, key.peel(), ta, &mut visiting))
+        .index
+        .as_ref()
+        .is_some_and(|index| type_reaches_interface(&index.value, key.peel(), ta, &mut visiting))
+        || interface
+            .members
+            .values()
+            .any(|member| type_reaches_interface(&member.ty, key.peel(), ta, &mut visiting))
 }
 
 fn type_reaches_interface(
@@ -443,9 +456,14 @@ fn type_reaches_interface(
         Type::Tuple(elements) | Type::Union(elements) => elements
             .iter()
             .any(|element| type_reaches_interface(element, target, ta, visiting)),
-        Type::Object { fields } => fields
-            .values()
-            .any(|field| type_reaches_interface(&field.ty, target, ta, visiting)),
+        Type::Object { fields, index } => {
+            index
+                .as_ref()
+                .is_some_and(|i| type_reaches_interface(&i.value, target, ta, visiting))
+                || fields
+                    .values()
+                    .any(|field| type_reaches_interface(&field.ty, target, ta, visiting))
+        }
         Type::Function { params, ret, .. } => {
             params
                 .iter()
@@ -512,8 +530,12 @@ impl<'a, 'b> Traversal<'a, 'b> {
     fn walk(&mut self, ty: &Type) {
         let peeled = ty.peel();
         match peeled {
-            Type::Object { fields } => {
+            Type::Object { fields, index } => {
+                if let Some(index) = index {
+                    self.walk(&index.value);
+                }
                 self.shapes.insert(Shape::Object {
+                    index: index.clone(),
                     fields: fields.clone(),
                 });
                 for field in fields.values() {
@@ -600,7 +622,10 @@ fn collect_descriptor_arguments(ty: &Type, out: &mut BTreeSet<Type>) {
                 collect_descriptor_arguments(ty, out);
             }
         }
-        Type::Object { fields } => {
+        Type::Object { fields, index } => {
+            if let Some(i) = index {
+                collect_descriptor_arguments(&i.value, out);
+            }
             for field in fields.values() {
                 collect_descriptor_arguments(&field.ty, out);
             }

@@ -40,7 +40,8 @@ pub fn collect_object_shapes<'a>(
 
 fn canonical_type(shape: &Shape) -> Type {
     match shape {
-        Shape::Object { fields } => Type::Object {
+        Shape::Object { fields, index } => Type::Object {
+            index: index.clone(),
             fields: fields.clone(),
         },
         Shape::Array(elem) => Type::Array(elem.clone()),
@@ -66,7 +67,7 @@ fn topo_visit_kind(
     visited.insert(ty.clone());
     // Peel so aliased child types (`type Inner = { … }`) hit the entries map lookup.
     match ty {
-        Type::Object { fields } => {
+        Type::Object { fields, .. } => {
             for inner in fields.values() {
                 topo_visit_kind(inner.ty.peel(), entries, visited, sorted);
             }
@@ -120,7 +121,7 @@ pub fn allocate_methods(ty: &Type, next_func_idx: &mut u32) -> UserSubtype {
 
 pub fn needs_host_object_to_json_adapter(types: &[Type]) -> bool {
     types.iter().any(|ty| match ty.peel() {
-        Type::Object { fields } => !fields.contains_key("toJson"),
+        Type::Object { fields, .. } => !fields.contains_key("toJson"),
         _ => false,
     })
 }
@@ -234,7 +235,7 @@ fn emit_subtype_to_string_body(
     symbols: &SymbolTable,
     string_vtable_global_idx: u32,
 ) -> Function {
-    let Type::Object { fields } = &subtype.ty else {
+    let Type::Object { fields, .. } = &subtype.ty else {
         unreachable!(
             "emit_subtype_to_string_body called on non-Object subtype: {:?}",
             subtype.ty,
@@ -329,7 +330,7 @@ fn emit_subtype_to_json_body(
     string_concat_func_idx: u32,
     string_vtable_global_idx: u32,
 ) -> Function {
-    let Type::Object { fields } = &subtype.ty else {
+    let Type::Object { fields, .. } = &subtype.ty else {
         unreachable!(
             "emit_subtype_to_json_body called on non-Object subtype: {:?}",
             subtype.ty,
@@ -418,7 +419,7 @@ fn emit_subtype_to_json_vtable_body(
     string_vtable_global_idx: u32,
     symbols: &SymbolTable,
 ) -> Function {
-    let Type::Object { fields } = &subtype.ty else {
+    let Type::Object { fields, .. } = &subtype.ty else {
         unreachable!(
             "emit_subtype_to_json_vtable_body called on non-Object subtype: {:?}",
             subtype.ty,
@@ -647,7 +648,7 @@ fn emit_subtype_equals_body(
     intrinsics: IntrinsicTypeIndices,
     string_eq_func_idx: u32,
 ) -> Function {
-    let Type::Object { fields } = &subtype.ty else {
+    let Type::Object { fields, .. } = &subtype.ty else {
         unreachable!(
             "emit_subtype_equals_body called on non-Object subtype: {:?}",
             subtype.ty
@@ -946,7 +947,7 @@ fn emit_field_compare(
 
 /// FNV-1a-32 field-by-field hash. Must use same field order and dispatch as `equals`.
 fn emit_subtype_hash_body(subtype: &UserSubtype, intrinsics: IntrinsicTypeIndices) -> Function {
-    let Type::Object { fields } = &subtype.ty else {
+    let Type::Object { fields, .. } = &subtype.ty else {
         unreachable!(
             "emit_subtype_hash_body called on non-Object subtype: {:?}",
             subtype.ty,
@@ -1304,7 +1305,7 @@ pub fn declared_method_funcs(subtypes: &[UserSubtype]) -> Vec<u32> {
 
 /// Payload-array index for a named field.
 pub fn field_index(ty: &Type, field_name: &str) -> Option<u32> {
-    let Type::Object { fields } = ty else {
+    let Type::Object { fields, .. } = ty else {
         return None;
     };
     let pos = fields.keys().position(|k| k == field_name)?;

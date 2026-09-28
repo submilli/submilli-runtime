@@ -529,7 +529,10 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             "value".to_string(),
             crate::ObjectField::required(Type::TypeVar("T".to_string())),
         );
-        Type::Object { fields }
+        Type::Object {
+            index: None,
+            fields,
+        }
     };
     defs.types.insert(
         "IteratorYieldResult".to_string(),
@@ -553,7 +556,10 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             "done".to_string(),
             crate::ObjectField::required(Type::Boolean),
         );
-        Type::Object { fields }
+        Type::Object {
+            index: None,
+            fields,
+        }
     };
     defs.types.insert(
         "IteratorReturnResult".to_string(),
@@ -611,7 +617,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "Iterator".to_string(),
             mangled_name: crate::mangle::prelude("Iterator"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface {
+            kind: TypeKind::Interface { index: None,
                 generics: vec!["T".to_string()],
                 methods: BTreeMap::from([(
                     "next".to_string(),
@@ -659,7 +665,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "Iterable".to_string(),
             mangled_name: crate::mangle::prelude("Iterable"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface {
+            kind: TypeKind::Interface { index: None,
                 generics: vec!["T".to_string()],
                 methods: BTreeMap::from([(
                     "iterator".to_string(),

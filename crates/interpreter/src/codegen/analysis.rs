@@ -194,6 +194,7 @@ impl CodegenAnalysis {
             }
             crate::FieldNarrowingTest::Interface(test) => {
                 let shape = Type::Object {
+                    index: test.index.clone(),
                     fields: test.members.clone(),
                 };
                 self.visit_type(&shape);
@@ -224,7 +225,11 @@ impl CodegenAnalysis {
     /// nesting arm in `emit_structural_test` needs one here too.
     fn note_shape_member_names(&mut self, ty: &Type) {
         match ty.peel() {
-            Type::Object { fields } => {
+            Type::Object { fields, index } => {
+                if let Some(index) = index {
+                    self.note_record_helpers();
+                    self.note_shape_member_names(&index.value);
+                }
                 if !fields.is_empty() {
                     self.mentioned_closure_sigs.push(
                         crate::codegen::classes::accessor_closure_sig(AccessorKind::Get),
@@ -262,8 +267,24 @@ impl CodegenAnalysis {
     /// bypassing it drops the closure half silently, and the failure surfaces as
     /// a codegen panic far from the omission.
     fn visit_type(&mut self, ty: &Type) {
+        if let Type::Object {
+            index: Some(index), ..
+        } = ty.peel()
+        {
+            self.note_record_helpers();
+            self.visit_type(&index.value);
+        }
         self.dependency_usage.collect_type(ty);
         crate::codegen::closures::walk_type(ty, &mut self.mentioned_closure_sigs);
+    }
+
+    fn note_record_helpers(&mut self) {
+        for helper in ["#getField", "#setField", "#recordValues", "#hasField"] {
+            self.dependency_usage.note_member(crate::mangle::extend(
+                &crate::mangle::prelude("ObjectConstructor"),
+                helper,
+            ));
+        }
     }
 
     fn walk_stmt(&mut self, ta: &TypedAst, id: StmtId) {
@@ -444,7 +465,9 @@ impl CodegenAnalysis {
             }
             TypedExprKind::ObjectLiteral { members, .. } => {
                 for member in members {
-                    self.walk_expr(ta, member.expr_id());
+                    for expression in member.expressions() {
+                        self.walk_expr(ta, expression);
+                    }
                 }
             }
             TypedExprKind::ArrayLiteral { elements, .. } => {
@@ -561,7 +584,12 @@ impl CodegenAnalysis {
                     AccessorKind::Set,
                 );
             }
-            TypedStmtKind::AssignIndex { elem_ty, .. } => {
+            TypedStmtKind::AssignIndex {
+                receiver, elem_ty, ..
+            } => {
+                if ta.source_type(*receiver).is_structural_object() {
+                    self.note_record_helpers();
+                }
                 self.visit_type(elem_ty);
                 self.note_index_check();
             }
@@ -613,6 +641,19 @@ impl CodegenAnalysis {
 
     fn note_expr_pre(&mut self, ta: &TypedAst, id: ExprId) {
         let expr = ta.expr(id);
+        if matches!(
+            expr.kind,
+            TypedExprKind::IndexAccess { .. }
+                | TypedExprKind::Binary {
+                    op: crate::BinOp::In,
+                    ..
+                }
+        ) {
+            self.note_record_helpers();
+        }
+        if matches!(expr.kind, TypedExprKind::PostfixUnary { .. }) {
+            self.note_record_helpers();
+        }
         self.visit_type(&expr.ty);
         match &expr.kind {
             TypedExprKind::String(text) => {
@@ -750,8 +791,17 @@ impl CodegenAnalysis {
             TypedExprKind::ObjectLiteral { fields, members } => {
                 if members
                     .iter()
-                    .any(|member| matches!(member, crate::TypedObjectMember::Spread { .. }))
+                    .any(|m| matches!(m, crate::TypedObjectMember::Computed { .. }))
                 {
+                    self.note_record_helpers();
+                }
+                if members.iter().any(|member| {
+                    matches!(
+                        member,
+                        crate::TypedObjectMember::Spread { .. }
+                            | crate::TypedObjectMember::Computed { .. }
+                    )
+                }) {
                     self.dependency_usage.note_member(crate::mangle::extend(
                         &crate::mangle::prelude("ObjectConstructor"),
                         "#spread",
@@ -983,6 +1033,7 @@ impl CodegenAnalysis {
                     self.visit_type(result_ty);
                 }
                 TypedChainPart::Index { result_ty, .. } => {
+                    self.note_record_helpers();
                     self.visit_type(result_ty);
                     // A chain index is bounds-checked like any other, so it
                     // needs the same message in the pool.

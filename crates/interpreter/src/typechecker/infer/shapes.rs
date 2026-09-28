@@ -66,7 +66,10 @@ impl<'a> ShapeCollector<'a> {
 
     fn walk(&mut self, ty: &Type) {
         match ty {
-            Type::Object { fields } => {
+            Type::Object { fields, index } => {
+                if let Some(i) = index {
+                    self.collect(&i.value);
+                }
                 if let Some(shape) = Shape::from_type(ty)
                     && self.emitted_shapes.insert(shape.clone())
                 {
@@ -214,7 +217,10 @@ pub(super) fn collect_from_stmt(
                         "value".to_string(),
                         crate::ObjectField::required(element_ty.clone()),
                     );
-                    Type::Object { fields }
+                    Type::Object {
+                        index: None,
+                        fields,
+                    }
                 };
                 let return_body = {
                     let mut fields = std::collections::BTreeMap::new();
@@ -222,7 +228,10 @@ pub(super) fn collect_from_stmt(
                         "done".to_string(),
                         crate::ObjectField::required(Type::Boolean),
                     );
-                    Type::Object { fields }
+                    Type::Object {
+                        index: None,
+                        fields,
+                    }
                 };
                 c.collect(&yield_body);
                 c.collect(&return_body);
@@ -398,10 +407,15 @@ pub(super) fn collect_from_expr(
                         )
                     })
                     .collect();
-                c.collect(&Type::Object { fields: field_map });
+                c.collect(&Type::Object {
+                    index: None,
+                    fields: field_map,
+                });
             }
             for member in members {
-                collect_from_expr(ast, member.expr_id(), c);
+                for expression in member.expressions() {
+                    collect_from_expr(ast, expression, c);
+                }
             }
         }
         TypedExprKind::ArrayLiteral {

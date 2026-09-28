@@ -256,6 +256,32 @@ fn import_json_host_function(
 
 pub use symbol_table::SymbolTable;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CodegenError {
+    message: &'static str,
+    span: crate::Span,
+}
+
+impl std::fmt::Display for CodegenError {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(out, "internal code generation error: {}", self.message)
+    }
+}
+
+impl std::error::Error for CodegenError {}
+
+impl CodegenError {
+    pub fn diagnostic(self) -> crate::Diagnostic {
+        crate::Diagnostic {
+            severity: crate::Severity::Error,
+            span: self.span,
+            message: self.to_string(),
+            help: vec!["report this compiler error with the source program".into()],
+            notes: Vec::new(),
+        }
+    }
+}
+
 pub struct CodegenCtx<'a> {
     pub ta: &'a TypedAst,
     pub strings: &'a StringPool,
@@ -270,6 +296,33 @@ pub struct CodegenCtx<'a> {
     pub validator_bodies: &'a recursive_validators::ValidatorBodies,
     pub type_info: &'a crate::TypeInfoTable,
     pub package_string_global_idx: Option<u32>,
+    failure: std::cell::Cell<Option<CodegenError>>,
+}
+
+impl CodegenCtx<'_> {
+    /// Emission accumulates bytes locally; an internal failure discards the whole
+    /// module at the codegen boundary, never returning partial Wasm to a caller.
+    fn require<T>(&self, value: Option<T>, message: &'static str) -> Option<T> {
+        if value.is_none() {
+            self.fail(message);
+        }
+        value
+    }
+
+    fn check_failure(&self) -> Result<(), CodegenError> {
+        match self.failure.take() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    fn fail(&self, message: &'static str) {
+        let first = self.failure.take().unwrap_or(CodegenError {
+            message,
+            span: crate::Span::at(self.file),
+        });
+        self.failure.set(Some(first));
+    }
 }
 
 pub fn codegen(
@@ -278,8 +331,8 @@ pub fn codegen(
     file: crate::FileId,
     ta: &TypedAst,
     dependencies: &[&PackageDeclaration],
-) -> Vec<u8> {
-    codegen_with_type_info(source, filename, file, ta, dependencies).wasm
+) -> Result<Vec<u8>, CodegenError> {
+    codegen_with_type_info(source, filename, file, ta, dependencies).map(|generated| generated.wasm)
 }
 
 /// Like [`codegen_with_type_info`], but names the module after `owning_package` instead of
@@ -296,7 +349,7 @@ pub fn codegen_owned_by(
     file: crate::FileId,
     ta: &TypedAst,
     dependencies: &[&PackageDeclaration],
-) -> GeneratedModule {
+) -> Result<GeneratedModule, CodegenError> {
     codegen_inner(source, filename, file, ta, dependencies, owning_package)
 }
 
@@ -314,7 +367,7 @@ pub fn codegen_with_type_info(
     file: crate::FileId,
     ta: &TypedAst,
     dependencies: &[&PackageDeclaration],
-) -> GeneratedModule {
+) -> Result<GeneratedModule, CodegenError> {
     codegen_inner(source, filename, file, ta, dependencies, &ta.package_name)
 }
 
@@ -325,7 +378,7 @@ fn codegen_inner(
     ta: &TypedAst,
     dependencies: &[&PackageDeclaration],
     owning_package: &str,
-) -> GeneratedModule {
+) -> Result<GeneratedModule, CodegenError> {
     let source_main_return_ty = ta
         .functions
         .iter()
@@ -1323,6 +1376,7 @@ fn codegen_inner(
         validator_bodies: &validator_bodies,
         type_info: &type_info,
         package_string_global_idx: pkg_string_global_idx,
+        failure: std::cell::Cell::new(None),
     };
 
     let mut code = CodeSection::new();
@@ -1339,6 +1393,7 @@ fn codegen_inner(
     }
     for &stmt_id in &ctx.ta.top_level_statements {
         emit_statement(&mut start_emitter, &ctx, stmt_id);
+        ctx.check_failure()?;
     }
     // CodeSection::byte_len excludes the leading vec-count LEB128; adjust to get Code-section-content offsets for DWARF.
     let start_body = start_emitter.build();
@@ -1354,6 +1409,7 @@ fn codegen_inner(
             func.body,
             &func.return_type,
         );
+        ctx.check_failure()?;
         let body_len = built.byte_len() as u64;
         code.function(&built);
         let low_in_buf = code.byte_len() as u64 - body_len;
@@ -1367,6 +1423,7 @@ fn codegen_inner(
 
     for meta in &closure_metas {
         let (built, _lines) = function_emitter::emit_closure_function(&ctx, meta);
+        ctx.check_failure()?;
         code.function(&built);
     }
 
@@ -1411,6 +1468,7 @@ fn codegen_inner(
         ));
     }
 
+    ctx.check_failure()?;
     module.section(&code);
 
     // DWARF sections appear after Code, before Data — LLVM/Emscripten convention.
@@ -1464,12 +1522,12 @@ fn codegen_inner(
         module.section(&data);
     }
 
-    GeneratedModule {
+    Ok(GeneratedModule {
         wasm: module.finish(),
         type_info,
         runtime_functions: runtime_values::signatures(ta),
         runtime_globals: runtime_values::global_types(ta),
-    }
+    })
 }
 
 struct UserFunc {
@@ -1600,6 +1658,36 @@ pub(crate) mod tests {
         parse,
     };
     use wasmparser::{Parser, Payload};
+
+    #[test]
+    fn missing_record_import_returns_an_internal_error_without_wasm() {
+        let source = "function main(): number | null { const d: Record<string, number> = {}; const key: string = 'x'; return d[key]; }";
+        let ta = type_check(source);
+        let (prelude_defs, host_defs, internal_defs) =
+            prelude::cached_runtime_package_declarations();
+        let mut dependencies: Vec<_> = prelude_defs
+            .iter()
+            .chain(host_defs.iter())
+            .chain(internal_defs.iter())
+            .cloned()
+            .collect();
+        for declaration in &mut dependencies {
+            declaration.values.retain(|_, value| {
+                !value
+                    .mangled_name
+                    .as_str()
+                    .ends_with("ObjectConstructor##getField")
+            });
+        }
+        let refs: Vec<_> = dependencies.iter().collect();
+        let error = codegen_with_type_info(source, "record.ts", crate::FileId(0), &ta, &refs)
+            .expect_err("missing internal import must not return a module");
+        assert!(
+            error.to_string().contains("dynamic read imported"),
+            "{error}"
+        );
+        super::tests::compile("function main(): number { return 42; }");
+    }
 
     fn type_check(source: &str) -> TypedAst {
         type_check_with_packages(source, &[])
@@ -1740,7 +1828,8 @@ pub(crate) mod tests {
             .map(|source| source.text.as_str())
             .unwrap_or_default();
         let generated =
-            codegen_with_type_info(root_source, "lib.subm", root_file, &ta, &dependencies);
+            codegen_with_type_info(root_source, "lib.subm", root_file, &ta, &dependencies)
+                .expect("code generation");
         package.runtime_functions = generated.runtime_functions;
         package.runtime_globals = generated.runtime_globals;
         (generated.wasm, package, generated.type_info)
@@ -1765,6 +1854,7 @@ function main(): string {
             crate::compile::compile_script(source, "script.subm", crate::FileId(0), &[], &[])
                 .expect("script should compile");
         let ty = Type::Object {
+            index: None,
             fields: std::collections::BTreeMap::from([
                 ("id".to_string(), ObjectField::required(Type::Number)),
                 ("name".to_string(), ObjectField::required(Type::String)),
@@ -3379,6 +3469,7 @@ function main(): string {
         dependencies.extend(internal_defs.iter());
         dependencies.extend_from_slice(packages);
         codegen(source, "script.subm", crate::FileId(0), &ta, &dependencies)
+            .expect("code generation")
     }
 
     fn imports_with_kind(bytes: &[u8]) -> Vec<(String, String, &'static str, bool)> {
@@ -3514,7 +3605,8 @@ function main(): number { return counter + max_iterations; }"#,
         let mut dependencies: Vec<&crate::PackageDeclaration> = prelude_defs.iter().collect();
         dependencies.extend(host_defs.iter());
         dependencies.extend(internal_defs.iter());
-        let bytes = codegen(src, "script.subm", crate::FileId(0), &ta, &dependencies);
+        let bytes = codegen(src, "script.subm", crate::FileId(0), &ta, &dependencies)
+            .expect("code generation");
         let imp = imports_with_kind(&bytes);
 
         // Used ported methods route through the Rust prelude-host package under
@@ -5168,7 +5260,9 @@ function main(): void { middle(); }
             }
             TypedExprKind::ObjectLiteral { members, .. } => {
                 for member in members {
-                    box_walk_expr(ta, member.expr_id(), names);
+                    for expression in member.expressions() {
+                        box_walk_expr(ta, expression, names);
+                    }
                 }
             }
             TypedExprKind::ArrayLiteral { elements, .. } => {
@@ -5280,6 +5374,7 @@ function main(): void { middle(); }
         // now routes its JSON encoding through `submilli:json.stringify`.
         dependencies.extend(internal_defs.iter());
         codegen(source, "script.subm", crate::FileId(0), &ta, &dependencies)
+            .expect("code generation")
     }
 
     fn run_main_f64_boxed(source: &str, names: &[&str]) -> f64 {

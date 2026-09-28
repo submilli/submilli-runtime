@@ -316,7 +316,9 @@ fn visit_expr(ast: &Ast, id: ExprId, out: &mut Analysis) {
         }
         ExprKind::ObjectLiteral { members } => {
             for m in members {
-                visit_expr(ast, m.value(), out);
+                for expression in m.expressions() {
+                    visit_expr(ast, expression, out);
+                }
             }
         }
         ExprKind::ArrayLiteral { elements } => {

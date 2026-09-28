@@ -142,7 +142,7 @@ fn binding_type(kind: &DocCapabilityBindingKind, params: &[Param]) -> String {
 fn type_at_path(ty: &Type, path: &[String]) -> String {
     let mut current = ty;
     for segment in path {
-        let Type::Object { fields } = current.peel() else {
+        let Type::Object { fields, .. } = current.peel() else {
             return current.peel().to_string();
         };
         let Some(field) = fields.get(segment) else {

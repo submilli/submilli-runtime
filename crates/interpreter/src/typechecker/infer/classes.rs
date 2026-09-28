@@ -1495,6 +1495,7 @@ impl<'a> Inferer<'a> {
         let non_shape_carriers =
             self.non_shape_interface_carriers(&target, package, name, dispatch, &members);
         Some(crate::InterfaceNarrowingTest {
+            index: self.resolver().index_signature(interface_ty),
             members,
             methods: methods.keys().cloned().collect(),
             shape_allowed: *dispatch == crate::Dispatch::VTable
@@ -1788,6 +1789,13 @@ impl<'a> Inferer<'a> {
                 );
                 crate::FieldNarrowingTest::Interface(interface)
             } else {
+                if let Some(index) = &interface.index {
+                    self.record_runtime_type_test_inner(
+                        &index.value,
+                        RuntimeTestMode::AllowAliasRefs,
+                        active_interfaces,
+                    );
+                }
                 for member in interface.members.values() {
                     self.record_runtime_type_test_inner(
                         &member.ty,
@@ -1898,7 +1906,10 @@ impl<'a> Inferer<'a> {
                 active,
             );
         }
-        let shape = Type::Object { fields };
+        let shape = Type::Object {
+            index: None,
+            fields,
+        };
         self.typed_ast
             .runtime_class_fields
             .insert(ty.clone(), shape.clone());
@@ -1927,7 +1938,10 @@ impl<'a> Inferer<'a> {
                     record(element);
                 }
             }
-            Type::Object { fields } => {
+            Type::Object { fields, index } => {
+                if let Some(i) = index {
+                    record(&i.value);
+                }
                 for field in fields.values() {
                     record(&field.ty);
                 }
@@ -3425,7 +3439,10 @@ fn collect_runtime_carrier_candidates(ty: &Type, out: &mut Vec<Type>) {
                 collect_runtime_carrier_candidates(element, out);
             }
         }
-        Type::Object { fields } => {
+        Type::Object { fields, index } => {
+            if let Some(index) = index {
+                collect_runtime_carrier_candidates(&index.value, out);
+            }
             for field in fields.values() {
                 collect_runtime_carrier_candidates(&field.ty, out);
             }
@@ -3458,7 +3475,10 @@ fn collect_interface_instantiations(ty: &Type, identity: &MangledName, out: &mut
                 collect_interface_instantiations(element, identity, out);
             }
         }
-        Type::Object { fields } => {
+        Type::Object { fields, index } => {
+            if let Some(index) = index {
+                collect_interface_instantiations(&index.value, identity, out);
+            }
             for field in fields.values() {
                 collect_interface_instantiations(&field.ty, identity, out);
             }
@@ -3837,9 +3857,14 @@ fn type_mentions_erased_parameter(ty: &Type) -> bool {
         Type::TypeVar(_) | Type::GenericParam { .. } => true,
         Type::Array(elem) => type_mentions_erased_parameter(elem),
         Type::Tuple(elems) | Type::Union(elems) => elems.iter().any(type_mentions_erased_parameter),
-        Type::Object { fields } => fields
-            .values()
-            .any(|field| type_mentions_erased_parameter(&field.ty)),
+        Type::Object { fields, index } => {
+            index
+                .as_ref()
+                .is_some_and(|i| type_mentions_erased_parameter(&i.value))
+                || fields
+                    .values()
+                    .any(|field| type_mentions_erased_parameter(&field.ty))
+        }
         Type::Function { params, ret, .. } => {
             params.iter().any(type_mentions_erased_parameter) || type_mentions_erased_parameter(ret)
         }

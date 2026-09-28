@@ -31,7 +31,21 @@ pub(super) fn format_type_diff(expected: &Type, got: &Type) -> Option<String> {
         ));
     }
     match (expected, got) {
-        (Type::Object { fields: a }, Type::Object { fields: b }) => Some(format_object_diff(a, b)),
+        (
+            Type::Object {
+                fields: a,
+                index: ai,
+            },
+            Type::Object {
+                fields: b,
+                index: bi,
+            },
+        ) => {
+            if ai != bi {
+                return Some(format!("expected `{expected}`, got `{got}`"));
+            }
+            Some(format_object_diff(a, b))
+        }
         (
             Type::Function {
                 params: pa,
@@ -176,7 +190,10 @@ mod tests {
         for (k, v) in pairs {
             fields.insert((*k).to_string(), ObjectField::required(v.clone()));
         }
-        Type::Object { fields }
+        Type::Object {
+            index: None,
+            fields,
+        }
     }
 
     #[test]

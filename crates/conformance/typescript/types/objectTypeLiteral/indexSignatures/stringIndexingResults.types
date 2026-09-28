@@ -1,0 +1,146 @@
+=== stringIndexingResults.ts ===
+/*pruned*/
+/*pruned*/
+/*pruned*/
+/*pruned*/
+
+/*pruned*/
+/*pruned*/
+/*pruned*/
+/*pruned*/
+
+interface I {
+>I : I
+>  : ^
+
+    [x: string]: string;
+>x : string
+>  : ^^^^^^
+
+    y: string;
+>y : string
+>  : ^^^^^^
+
+}
+
+let i: I = null as unknown as (I);
+>i : I
+>  : ^
+>null as unknown as (I) : I
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let r4 = i['y'];
+>r4 : string
+>   : ^^^^^^
+>i['y'] : string
+>       : ^^^^^^
+>i : I
+>  : ^
+>'y' : "y"
+>    : ^^^
+
+let r5 = i['a'];
+>r5 : string
+>   : ^^^^^^
+>i['a'] : string
+>       : ^^^^^^
+>i : I
+>  : ^
+>'a' : "a"
+>    : ^^^
+
+/*pruned*/
+
+let a: {
+>a : { [x: string]: string; y: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    [x: string]: string;
+>x : string
+>  : ^^^^^^
+
+    y: string;
+>y : string
+>  : ^^^^^^
+
+} = null as unknown as ({
+>null as unknown as ({     [x: string]: string;     y: string; }) : { [x: string]: string; y: string; }
+>                                                                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    [x: string]: string;
+>x : string
+>  : ^^^^^^
+
+    y: string;
+>y : string
+>  : ^^^^^^
+
+});
+
+let r7 = a['y'];
+>r7 : string
+>   : ^^^^^^
+>a['y'] : string
+>       : ^^^^^^
+>a : { [x: string]: string; y: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>'y' : "y"
+>    : ^^^
+
+let r8 = a['a'];
+>r8 : string
+>   : ^^^^^^
+>a['a'] : string
+>       : ^^^^^^
+>a : { [x: string]: string; y: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>'a' : "a"
+>    : ^^^
+
+/*pruned*/
+
+let b: { [x: string]: string } = { y: '' }
+>b : { [x: string]: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>{ y: '' } : { y: string; }
+>          : ^^^^^^^^^^^^^^
+>y : string
+>  : ^^^^^^
+>'' : ""
+>   : ^^
+
+
+let r10 = b['y'];
+>r10 : string
+>    : ^^^^^^
+>b['y'] : string
+>       : ^^^^^^
+>b : { [x: string]: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^
+>'y' : "y"
+>    : ^^^
+
+let r11 = b['a'];
+>r11 : string
+>    : ^^^^^^
+>b['a'] : string
+>       : ^^^^^^
+>b : { [x: string]: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^
+>'a' : "a"
+>    : ^^^
+
+/*pruned*/
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

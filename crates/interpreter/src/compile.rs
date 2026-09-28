@@ -344,7 +344,8 @@ fn compile_parsed_script_owned_by(
             &ta,
             &dependencies,
         ),
-    };
+    }
+    .map_err(|error| vec![error.diagnostic()])?;
     timings.codegen = codegen_start.elapsed();
 
     Ok(CompiledScript {
@@ -464,7 +465,8 @@ pub fn compile_package_with_transitive(
         root_file,
         &ta,
         &codegen_deps,
-    );
+    )
+    .map_err(|error| vec![error.diagnostic()])?;
     declaration.runtime_functions = generated.runtime_functions;
     declaration.runtime_globals = generated.runtime_globals;
     Ok(CompiledPackage {
@@ -600,6 +602,7 @@ mod importless_library_tests {
                 mangled_name: package_symbol(SYNTH, "Widget"),
                 declaration_span: Span::at(crate::FileId(0)),
                 kind: TypeKind::Interface {
+                    index: None,
                     generics: Vec::new(),
                     methods,
                     properties,
@@ -638,7 +641,10 @@ mod importless_library_tests {
                 "children".to_string(),
                 ObjectField::required(Type::Array(Box::new(tree_ref()))),
             );
-            Type::Object { fields }
+            Type::Object {
+                index: None,
+                fields,
+            }
         };
         defs.types.insert(
             "Tree".to_string(),

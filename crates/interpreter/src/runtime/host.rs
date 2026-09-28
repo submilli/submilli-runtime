@@ -1110,6 +1110,23 @@ pub fn throw_error(caller: &mut Caller<'_, StoreData>, message: &str) -> wasmtim
     )
 }
 
+/// A broken host invariant or exhausted host allocation must terminate the run,
+/// rather than becoming an exception that guest code can catch and ignore.
+#[derive(Debug)]
+pub(crate) struct FatalHostError(String);
+
+impl std::fmt::Display for FatalHostError {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(out, "internal host error: {}", self.0)
+    }
+}
+
+impl std::error::Error for FatalHostError {}
+
+pub(crate) fn fatal_host_error(message: impl std::fmt::Display) -> wasmtime::Error {
+    wasmtime::Error::new(FatalHostError(message.to_string()))
+}
+
 /// Convert a host body's `Err` into the guest throw of the matching built-in
 /// class, carrying any structured own fields the marker holds.
 ///
@@ -1120,6 +1137,9 @@ pub(crate) fn throw_host_error(
     caller: &mut Caller<'_, StoreData>,
     err: wasmtime::Error,
 ) -> wasmtime::Error {
+    if err.is::<FatalHostError>() {
+        return err;
+    }
     let class = builtin_class_of(&err);
     let own = own_field_texts(&err);
     throw_error_as(caller, class, &err.to_string(), &own)
@@ -1171,8 +1191,8 @@ pub(crate) fn string_array_type(engine: &Engine) -> ArrayType {
 ///
 /// `_deterministic` is reserved for Phase-2 durable-log wrapping; unused today.
 ///
-/// Every host body is wrapped so that any `Err` it returns becomes a *catchable*
-/// `Error` (via [`throw_error`]) rather than an uncatchable Wasm trap. A body
+/// Ordinary host errors become a *catchable*
+/// `Error` (via [`throw_error`]); [`FatalHostError`] terminates execution. A body
 /// that already raised a throw (its `Err` is a `ThrownException`) is passed
 /// through untouched, so the pending exception isn't clobbered. Bodies receive
 /// `&mut Caller` (not an owned `Caller`) so the wrapper can still use the caller
@@ -1413,6 +1433,53 @@ mod tests {
             .call(&mut store, &[], &mut [])
             .expect_err("the body fails");
         assert!(format!("{err}").contains("boom"), "got: {err}");
+    }
+
+    #[test]
+    fn fatal_host_errors_preserve_their_marker() {
+        let (engine, mut store, mut linker) = async_store();
+        let name = crate::mangle::host(TEST_MODULE, "fatal");
+        register_host_fn(
+            &mut linker,
+            TEST_MODULE,
+            name.clone(),
+            FuncType::new(&engine, [], []),
+            true,
+            |_, _, _| Err(super::fatal_host_error("broken dynamic object ABI")),
+        )
+        .expect("register");
+        let func = resolve(&linker, &mut store, &name);
+        let error = func
+            .call(&mut store, &[], &mut [])
+            .expect_err("fatal host error");
+        assert!(
+            error.is::<super::FatalHostError>(),
+            "fatal errors must bypass guest conversion: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn async_fatal_host_errors_preserve_their_marker() {
+        let (engine, mut store, mut linker) = async_store();
+        let name = crate::mangle::host(TEST_MODULE, "fatal_async");
+        super::register_host_fn_async(
+            &mut linker,
+            TEST_MODULE,
+            name.clone(),
+            FuncType::new(&engine, [], []),
+            true,
+            |_, _, _| Box::pin(async { Err(super::fatal_host_error("broken dynamic object ABI")) }),
+        )
+        .expect("register");
+        let func = resolve(&linker, &mut store, &name);
+        let error = func
+            .call_async(&mut store, &[], &mut [])
+            .await
+            .expect_err("fatal host error");
+        assert!(
+            error.is::<super::FatalHostError>(),
+            "fatal errors must bypass guest conversion: {error}"
+        );
     }
 
     /// A body that already threw hands back a `ThrownException`; converting it

@@ -322,6 +322,7 @@ fn insert_interface(
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, name),
             declaration_span: Span::at(crate::FileId::LLM),
             kind: TypeKind::Interface {
+                index: None,
                 generics: Vec::new(),
                 methods: BTreeMap::new(),
                 properties,

@@ -27,7 +27,8 @@ use crate::CapabilitySchema;
 // v7: optional field names carry per-instance presence bits. Older artifacts
 // conflate absent fields with explicit null and cannot share the new markers.
 // v8: replaceable object-shape arrays and explicitly marked accessor payload names.
-pub const ARTIFACT_SCHEMA_VERSION: u32 = 8;
+// v9: structural objects and interface declarations carry string index signatures.
+pub const ARTIFACT_SCHEMA_VERSION: u32 = 9;
 
 const WASM_FILE: &str = "pkg.wasm";
 const CAPABILITIES_FILE: &str = "capabilities.yaml";
@@ -489,6 +490,7 @@ mod tests {
                 mangled_name: mangle::package_symbol("@acme/util", "Thing"),
                 declaration_span: Span::new(file, 20, 40),
                 kind: TypeKind::Interface {
+                    index: None,
                     generics: Vec::new(),
                     methods,
                     properties,
@@ -527,7 +529,10 @@ mod tests {
         let mut fields = BTreeMap::new();
         fields.insert("label".to_string(), ObjectField::required(Type::String));
         fields.insert("count".to_string(), ObjectField::optional(Type::Number));
-        defs.shapes.push(interpreter::Shape::Object { fields });
+        defs.shapes.push(interpreter::Shape::Object {
+            index: None,
+            fields,
+        });
         defs
     }
 

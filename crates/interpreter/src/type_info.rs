@@ -106,7 +106,11 @@ impl TypeInfoTable {
     }
 
     pub fn supports_host_json_object(&self, ty: &Type) -> bool {
-        let Type::Object { fields } = ty.peel() else {
+        let Type::Object {
+            fields,
+            index: None,
+        } = ty.peel()
+        else {
             return false;
         };
         fields
@@ -173,7 +177,12 @@ impl TypeInfoTable {
                         .zip(expected)
                         .all(|(id, ty)| self.type_info_matches_type(*id, ty, seen))
             }
-            (TypeInfoKind::Object { fields }, Type::Object { fields: expected }) => {
+            (
+                TypeInfoKind::Object { fields },
+                Type::Object {
+                    fields: expected, ..
+                },
+            ) => {
                 fields.len() == expected.len()
                     && fields.iter().zip(expected).all(|(info, (name, field))| {
                         info.name == *name
@@ -250,7 +259,7 @@ impl TypeInfoBuilder {
                     .map(|element| self.intern_type(element))
                     .collect(),
             },
-            Type::Object { fields } => TypeInfoKind::Object {
+            Type::Object { fields, .. } => TypeInfoKind::Object {
                 fields: fields
                     .iter()
                     .map(|(name, field)| FieldInfo {
@@ -275,7 +284,8 @@ impl TypeInfoBuilder {
 
 fn canonical_type(shape: &Shape) -> Type {
     match shape {
-        Shape::Object { fields } => Type::Object {
+        Shape::Object { fields, index } => Type::Object {
+            index: index.clone(),
             fields: fields.clone(),
         },
         Shape::Array(elem) => Type::Array(elem.clone()),
@@ -297,9 +307,16 @@ mod tests {
             ("name".to_string(), ObjectField::required(Type::String)),
         ]);
         let ty = Type::Object {
+            index: None,
             fields: fields.clone(),
         };
-        let table = TypeInfoTable::collect_from_shapes("main", &[Shape::Object { fields }]);
+        let table = TypeInfoTable::collect_from_shapes(
+            "main",
+            &[Shape::Object {
+                index: None,
+                fields,
+            }],
+        );
         let id = table
             .object_type_id(&ty)
             .expect("collected object shape should have TypeInfo");

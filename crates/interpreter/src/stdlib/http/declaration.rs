@@ -162,6 +162,7 @@ fn nullable_body_type() -> Type {
         // assignable to it by width subtyping, so this accepts arbitrary object
         // bodies (JSON-encoded at runtime via the `$Object` `toJson` vtable slot).
         Type::Object {
+            index: None,
             fields: BTreeMap::new(),
         },
         Type::Array(Box::new(Type::Unknown)),
@@ -301,7 +302,7 @@ fn insert_response_interface(defs: &mut PackageDeclaration) {
             name: "Response".to_string(),
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "Response"),
             declaration_span: Span::at(crate::FileId::HTTP),
-            kind: TypeKind::Interface {
+            kind: TypeKind::Interface { index: None,
                 generics: Vec::new(),
                 methods,
                 properties,
@@ -353,7 +354,7 @@ fn insert_download_options_interface(defs: &mut PackageDeclaration) {
             name: "DownloadOptions".to_string(),
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "DownloadOptions"),
             declaration_span: Span::at(crate::FileId::HTTP),
-            kind: TypeKind::Interface {
+            kind: TypeKind::Interface { index: None,
                 generics: Vec::new(),
                 methods: BTreeMap::new(),
                 properties,
@@ -444,7 +445,7 @@ fn insert_download_result_interface(defs: &mut PackageDeclaration) {
             name: "DownloadResult".to_string(),
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "DownloadResult"),
             declaration_span: Span::at(crate::FileId::HTTP),
-            kind: TypeKind::Interface {
+            kind: TypeKind::Interface { index: None,
                 generics: Vec::new(),
                 methods,
                 properties,

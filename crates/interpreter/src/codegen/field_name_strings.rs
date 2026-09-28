@@ -19,7 +19,7 @@ use crate::codegen::symbol_table::SymbolTable;
 pub fn collect(shapes: &[Type], extra_names: &[String]) -> Vec<String> {
     let mut names: BTreeSet<String> = BTreeSet::new();
     for shape in shapes {
-        if let Type::Object { fields } = shape {
+        if let Type::Object { fields, .. } = shape {
             for k in fields.keys() {
                 names.insert(k.clone());
             }
@@ -96,7 +96,16 @@ mod tests {
         b.insert("kind".to_string(), ObjectField::required(Type::Number));
         b.insert("height".to_string(), ObjectField::required(Type::Number));
         b.insert("width".to_string(), ObjectField::required(Type::Number));
-        let shapes = vec![Type::Object { fields: a }, Type::Object { fields: b }];
+        let shapes = vec![
+            Type::Object {
+                index: None,
+                fields: a,
+            },
+            Type::Object {
+                index: None,
+                fields: b,
+            },
+        ];
         let names = collect(&shapes, &[]);
         assert_eq!(
             names,

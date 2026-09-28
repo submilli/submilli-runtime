@@ -33,10 +33,10 @@ pub use asi::Asi;
 pub use ast::{
     AccessorKind, ArrayLiteralElement, ArrowBody, Ast, BinOp, Binding, BindingKind, CatchClause,
     ChainPart, ClassMember, ClassModifiers, EnumInitializer, EnumMember, ExportedDecl, Expr,
-    ExprId, ExprKind, Ident, ImportKind, ImportSpecifier, InterfaceMember, ObjectLiteralField,
-    ObjectLiteralMember, ObjectPatternField, ParamDecl, PatternOrigin, PostfixOp, Stmt, StmtId,
-    StmtKind, SwitchCase, SwitchDefault, TypeAnnotation, TypeAnnotationField, TypeAnnotationKind,
-    TypePredicateAnnotation, UnOp, Visibility,
+    ExprId, ExprKind, Ident, ImportKind, ImportSpecifier, IndexSignatureAnnotation,
+    InterfaceMember, ObjectLiteralField, ObjectLiteralMember, ObjectPatternField, ParamDecl,
+    PatternOrigin, PostfixOp, Stmt, StmtId, StmtKind, SwitchCase, SwitchDefault, TypeAnnotation,
+    TypeAnnotationField, TypeAnnotationKind, TypePredicateAnnotation, UnOp, Visibility,
 };
 pub use backtrace::{BacktraceMode, render as render_backtrace};
 pub use capability_derivation::{DerivedCapability, derive_call_site_capability};
@@ -79,4 +79,4 @@ pub use typed_ast::{
     TypedParam, TypedStmt, TypedStmtKind, TypedStringEnumDecl, TypedStringEnumMember,
     TypedSwitchCase, TypedSwitchValue, TypedTypeAliasDecl, TypedTypeDecl, TypeofTagKind,
 };
-pub use types::{ObjectField, Package, Type, TypePredicate};
+pub use types::{IndexSignature, ObjectField, Package, Type, TypePredicate};

@@ -613,7 +613,9 @@ impl State<'_> {
             }
             TypedExprKind::ObjectLiteral { members, .. } => {
                 for member in members {
-                    self.walk_expr(member.expr_id());
+                    for expression in member.expressions() {
+                        self.walk_expr(expression);
+                    }
                 }
             }
             TypedExprKind::ArrayLiteral { elements, .. } => {
@@ -1119,7 +1121,9 @@ mod tests {
             }
             TypedExprKind::ObjectLiteral { members, .. } => {
                 for member in members {
-                    walk_expr(ta, member.expr_id(), out);
+                    for expression in member.expressions() {
+                        walk_expr(ta, expression, out);
+                    }
                 }
             }
             TypedExprKind::ArrayLiteral { elements, .. } => {
@@ -1321,7 +1325,8 @@ mod tests {
             }
             TypedExprKind::ObjectLiteral { members, .. } => members
                 .iter()
-                .find_map(|member| scan_expr(ta, member.expr_id())),
+                .flat_map(|member| member.expressions())
+                .find_map(|expression| scan_expr(ta, expression)),
             TypedExprKind::ArrayLiteral { elements, .. } => {
                 elements.iter().find_map(|e| scan_expr(ta, e.expr_id()))
             }

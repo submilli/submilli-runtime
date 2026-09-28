@@ -1,6 +1,3 @@
-// expect-error: `in` operator requires a string literal on the left
-// expect-error: dynamic key lookup is not supported
-
 function check(o: { a: number }, key: string): boolean {
   return key in o;
 }

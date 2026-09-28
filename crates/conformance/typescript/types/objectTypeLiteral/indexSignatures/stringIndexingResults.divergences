@@ -1,0 +1,33 @@
+types: 26 of 43 tsc entries compared, 8 differ
+
+line 19: r5
+  tsc:  string
+  ours: string | null
+
+line 19: i['a']
+  tsc:  string
+  ours: string | null
+
+line 31: r8
+  tsc:  string
+  ours: string | null
+
+line 31: a['a']
+  tsc:  string
+  ours: string | null
+
+line 36: r10
+  tsc:  string
+  ours: string | null
+
+line 36: b['y']
+  tsc:  string
+  ours: string | null
+
+line 37: r11
+  tsc:  string
+  ours: string | null
+
+line 37: b['a']
+  tsc:  string
+  ours: string | null

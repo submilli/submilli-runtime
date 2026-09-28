@@ -252,7 +252,7 @@ fn try_literal_tag_value(variants: &[Type], expand: AliasExpander<'_>) -> Option
     let field_maps: Vec<&BTreeMap<String, ObjectField>> = expanded
         .iter()
         .map(|t| match t.peel() {
-            Type::Object { fields } => fields,
+            Type::Object { fields, .. } => fields,
             _ => unreachable!("object bucket holds only object-shaped types"),
         })
         .collect();
@@ -349,7 +349,7 @@ fn try_required_field_name(
 
 fn required_field_names(ty: &Type) -> BTreeSet<&str> {
     match ty.peel() {
-        Type::Object { fields } => fields
+        Type::Object { fields, .. } => fields
             .iter()
             .filter(|(_, f)| !f.optional)
             .map(|(k, _)| k.as_str())
@@ -360,7 +360,7 @@ fn required_field_names(ty: &Type) -> BTreeSet<&str> {
 
 fn all_field_names(ty: &Type) -> BTreeSet<&str> {
     match ty.peel() {
-        Type::Object { fields } => fields.keys().map(std::string::String::as_str).collect(),
+        Type::Object { fields, .. } => fields.keys().map(std::string::String::as_str).collect(),
         _ => unreachable!("object bucket holds only Type::Object"),
     }
 }
@@ -388,7 +388,10 @@ mod tests {
                 },
             );
         }
-        Type::Object { fields: map }
+        Type::Object {
+            index: None,
+            fields: map,
+        }
     }
 
     fn canonical(members: Vec<Type>) -> Vec<Type> {

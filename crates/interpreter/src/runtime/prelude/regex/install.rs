@@ -433,7 +433,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "RegExp".to_string(),
             mangled_name: crate::mangle::prelude("RegExp"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface {
+            kind: TypeKind::Interface { index: None,
                 generics: Vec::new(),
                 methods: BTreeMap::from([
                     (
@@ -522,7 +522,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "RegExpMatch".to_string(),
             mangled_name: crate::mangle::prelude("RegExpMatch"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface {
+            kind: TypeKind::Interface { index: None,
                 generics: Vec::new(),
                 methods: BTreeMap::new(),
                 properties: BTreeMap::from([
@@ -600,7 +600,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "RegExpConstructor".to_string(),
             mangled_name: crate::mangle::prelude("RegExpConstructor"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface {
+            kind: TypeKind::Interface { index: None,
                 generics: Vec::new(),
                 methods: BTreeMap::from([(
                     "new".to_string(),

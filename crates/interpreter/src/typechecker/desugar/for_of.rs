@@ -233,7 +233,10 @@ fn lower_iterator_like(
             "value".to_string(),
             crate::ObjectField::required(element_ty.clone()),
         );
-        Type::Object { fields }
+        Type::Object {
+            index: None,
+            fields,
+        }
     };
     let return_body = {
         let mut fields = std::collections::BTreeMap::new();
@@ -241,7 +244,10 @@ fn lower_iterator_like(
             "done".to_string(),
             crate::ObjectField::required(Type::Boolean),
         );
-        Type::Object { fields }
+        Type::Object {
+            index: None,
+            fields,
+        }
     };
     let yield_alias_ty = Type::alias_ty(
         crate::Package::prelude(),

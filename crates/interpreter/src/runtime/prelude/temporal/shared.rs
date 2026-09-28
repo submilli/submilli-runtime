@@ -1525,7 +1525,10 @@ pub(super) fn object_shape_type(optional_numbers: &[&str]) -> Type {
         .iter()
         .map(|name| (name.to_string(), ObjectField::optional(Type::Number)))
         .collect();
-    Type::Object { fields }
+    Type::Object {
+        index: None,
+        fields,
+    }
 }
 
 pub(super) fn declare_direct_fn(
@@ -2341,7 +2344,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "Temporal.Instant".to_string(),
             mangled_name: crate::mangle::extend(&temporal_prefix, "Instant"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface {
+            kind: TypeKind::Interface { index: None,
                 generics: Vec::new(),
                 methods: BTreeMap::from([
                     (
@@ -2485,7 +2488,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "Temporal.InstantConstructor".to_string(),
             mangled_name: crate::mangle::extend(&temporal_prefix, "InstantConstructor"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface {
+            kind: TypeKind::Interface { index: None,
                 generics: Vec::new(),
                 methods: BTreeMap::from([
                     (
@@ -2579,7 +2582,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "Temporal.DurationFields".to_string(),
             mangled_name: crate::mangle::extend(&temporal_prefix, "DurationFields"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface {
+            kind: TypeKind::Interface { index: None,
                 generics: Vec::new(),
                 methods: BTreeMap::new(),
                 properties: BTreeMap::from([
@@ -2612,7 +2615,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     name: format!("Temporal.{local}"),
                     mangled_name: crate::mangle::extend(&temporal_prefix, local),
                     declaration_span: Span::at(crate::FileId::PRELUDE),
-                    kind: TypeKind::Interface {
+                    kind: TypeKind::Interface { index: None,
                         generics: Vec::new(),
                         methods: BTreeMap::new(),
                         properties: names
@@ -2678,6 +2681,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     mangled_name: crate::mangle::extend(&temporal_prefix, local),
                     declaration_span: Span::at(crate::FileId::PRELUDE),
                     kind: TypeKind::Interface {
+                        index: None,
                         generics: Vec::new(),
                         methods: BTreeMap::new(),
                         properties: BTreeMap::from([(
@@ -2714,6 +2718,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 mangled_name: crate::mangle::extend(&temporal_prefix, "PlainDateToZonedOptions"),
                 declaration_span: Span::at(crate::FileId::PRELUDE),
                 kind: TypeKind::Interface {
+                    index: None,
                     generics: Vec::new(),
                     methods: BTreeMap::new(),
                     properties: BTreeMap::from([
@@ -2767,6 +2772,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
         mangled_name: crate::mangle::extend(&temporal_prefix, name),
         declaration_span: Span::at(FileId::PRELUDE),
         kind: TypeKind::Interface {
+            index: None,
             generics: Vec::new(),
             methods: BTreeMap::new(),
             properties,
@@ -2927,7 +2933,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "Temporal.Duration".to_string(),
             mangled_name: crate::mangle::extend(&temporal_prefix, "Duration"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface {
+            kind: TypeKind::Interface { index: None,
                 generics: Vec::new(),
                 methods: BTreeMap::from([
                     (
@@ -3076,7 +3082,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "Temporal.DurationConstructor".to_string(),
             mangled_name: crate::mangle::extend(&temporal_prefix, "DurationConstructor"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface {
+            kind: TypeKind::Interface { index: None,
                 generics: Vec::new(),
                 methods: BTreeMap::from([
                     (
@@ -3165,7 +3171,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "Temporal.ZonedDateTime".to_string(),
             mangled_name: crate::mangle::extend(&temporal_prefix, "ZonedDateTime"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface {
+            kind: TypeKind::Interface { index: None,
                 generics: Vec::new(),
                 methods: BTreeMap::from([
                     (
@@ -3458,7 +3464,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "Temporal.ZonedDateTimeConstructor".to_string(),
             mangled_name: crate::mangle::extend(&temporal_prefix, "ZonedDateTimeConstructor"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface {
+            kind: TypeKind::Interface { index: None,
                 generics: Vec::new(),
                 methods: BTreeMap::from([
                     (

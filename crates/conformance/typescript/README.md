@@ -235,3 +235,41 @@ The baselines come from the `typescript` version in `typescript-baselines/packag
 not from the TypeScript commit above. After changing it, run `npm install`, then
 `node write-baselines.cjs`, then update the divergences (step 2 above), and review the
 diff: every case's baselines can change.
+
+## String-index support ports
+
+The following cases from the pinned upstream revision exercise the string-index
+representation used by `Record<string, V>`. They use the mechanical port above;
+where an upstream file mixes supported and unsupported features, only the listed
+sections are retained. `/*pruned*/` marks omitted source. Baselines are generated
+from the retained program.
+
+| Case | Retained coverage | Omitted upstream sections |
+|:-----|:------------------|:--------------------------|
+| `expressions/propertyAccess/propertyAccessStringIndexSignature` | Dot/bracket reads through an interface indexer; missing members on an empty interface | None |
+| `types/objectTypeLiteral/indexSignatures/stringIndexingResults` | Named and absent string-key reads through interface and object indexers | Class index signatures and numeric-key reads |
+| `types/spread/objectSpreadIndexSignature` | Spreads with named fields, overlapping index values, and readonly-to-writable indexers | Numeric-key reads and spreading a possibly absent object |
+| `types/typeRelationships/typeInference/genericCallWithObjectTypeArgsAndStringIndexer` | Generic identity inference with string-indexed values | `Date` and constrained-generic examples |
+| `types/typeRelationships/assignmentCompatibility/optionalPropertyAssignableToStringIndexSignature` | Optional string properties versus explicitly nullable values assigned to a dictionary | Numeric indexers and the separate generic/undefined-only examples |
+| `interfaces/interfaceDeclarations/interfaceWithStringIndexerHidingBaseTypeIndexer` | A narrowed inherited indexer rejects an incompatible named property | None |
+
+These are typechecker comparisons, not runtime tests: declaration placeholders
+are intentionally not executed. The executable Record regressions live in the
+[interpreter fixtures](../../interpreter/tests/fixtures/records/).
+The generic dictionary local uses `{}` instead of the usual placeholder cast,
+because casting to an erased generic parameter is unsupported. Both compilers
+retain its declared index value type `T`.
+
+Open reads include `null` in Submilli even when an upstream case does not enable
+TypeScript's `noUncheckedIndexedAccess`; the committed divergences retain this
+intentional difference. Numeric/symbol keys, class index signatures, generic key
+parameters, and general mapped types remain outside these ports.
+
+The spread port records two substantive inference differences: Submilli retains
+an open index when adding named fields, and includes a later spread's index value
+in a potentially overwritten named field. These are not normalized away.
+The inherited-indexer negative case is rejected by both compilers; its divergence
+records that TypeScript points at the incompatible property while Submilli points
+at the containing interface. It checks rejection diagnostics, with no expression
+types compared. The runner excludes missing-member recovery expressions from
+type comparisons and checks their rejection diagnostics instead.

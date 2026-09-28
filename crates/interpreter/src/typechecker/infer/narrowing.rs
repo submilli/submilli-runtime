@@ -310,7 +310,7 @@ pub fn union_discriminant(members: &[Type]) -> Option<Discriminant> {
     let shapes: Vec<BTreeMap<String, crate::types::ObjectField>> = members
         .iter()
         .map(|m| match m.peel() {
-            Type::Object { fields } => Some(fields.clone()),
+            Type::Object { fields, .. } => Some(fields.clone()),
             _ => None,
         })
         .collect::<Option<_>>()?;
@@ -446,9 +446,15 @@ pub fn narrow_field_presence(
                 field.to_string(),
                 crate::ObjectField::required(Type::Unknown),
             )]);
-            (Type::Object { fields }, Type::Unknown)
+            (
+                Type::Object {
+                    index: None,
+                    fields,
+                },
+                Type::Unknown,
+            )
         }
-        Type::Object { fields } => {
+        Type::Object { fields, .. } => {
             let mut present = fields.clone();
             let entry = present
                 .entry(field.to_string())
@@ -458,7 +464,13 @@ pub fn narrow_field_presence(
                 Some(f) if !f.optional => Type::Error,
                 _ => receiver_ty.clone(),
             };
-            (Type::Object { fields: present }, absent)
+            (
+                Type::Object {
+                    index: None,
+                    fields: present,
+                },
+                absent,
+            )
         }
         Type::Union(members) => {
             let has = members

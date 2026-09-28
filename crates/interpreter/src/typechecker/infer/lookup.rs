@@ -203,9 +203,10 @@ impl<'a> Inferer<'a> {
             return Err(MemberFieldMiss::Method);
         }
         match member.peel() {
-            Type::Object { fields } => fields
+            Type::Object { fields, index } => fields
                 .get(field)
                 .map(ObjectField::read_ty)
+                .or_else(|| index.as_ref().map(crate::IndexSignature::read_ty))
                 .ok_or(MemberFieldMiss::Absent),
             Type::InterfaceRef { .. } => {
                 let (sig, bindings, _, dispatch) = self
@@ -244,7 +245,7 @@ impl<'a> Inferer<'a> {
     /// here so none of them can disagree about what a member holds.
     pub(super) fn member_shape(&self, member: &Type) -> Option<BTreeMap<String, ObjectField>> {
         match member.peel() {
-            Type::Object { fields } => Some(fields.clone()),
+            Type::Object { fields, .. } => Some(fields.clone()),
             Type::InterfaceRef {
                 mangled,
                 name,
@@ -313,7 +314,12 @@ impl<'a> Inferer<'a> {
                 && args.iter().all(|a| self.name_resolves_here(a));
         }
         match ty.peel() {
-            Type::Object { fields } => fields.values().all(|f| self.name_resolves_here(&f.ty)),
+            Type::Object { fields, index } => {
+                index
+                    .as_ref()
+                    .is_none_or(|i| self.name_resolves_here(&i.value))
+                    && fields.values().all(|f| self.name_resolves_here(&f.ty))
+            }
             Type::Array(elem) => self.name_resolves_here(elem),
             Type::Tuple(elements) | Type::Union(elements) => {
                 elements.iter().all(|e| self.name_resolves_here(e))
@@ -362,8 +368,13 @@ impl<'a> Inferer<'a> {
             return None;
         }
         match member.peel() {
-            Type::Object { fields } => {
-                let f = fields.get(field)?;
+            Type::Object { fields, index } => {
+                let Some(f) = fields.get(field) else {
+                    return index.as_ref().map(|i| FieldWrite {
+                        ty: (*i.value).clone(),
+                        writable: !i.readonly,
+                    });
+                };
                 Some(FieldWrite {
                     ty: ObjectField::widen_optional(f.optional, f.ty.clone()),
                     writable: !f.readonly,
@@ -493,7 +504,7 @@ impl<'a> Inferer<'a> {
         recv_ty: &Type,
     ) -> Option<BTreeMap<String, ObjectField>> {
         match recv_ty.peel() {
-            Type::Object { fields } => Some(fields.clone()),
+            Type::Object { fields, .. } => Some(fields.clone()),
             Type::InterfaceRef {
                 mangled,
                 name,

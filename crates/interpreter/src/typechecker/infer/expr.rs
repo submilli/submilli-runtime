@@ -313,7 +313,12 @@ pub(crate) fn type_contains_type_var(ty: &Type) -> bool {
         Type::Function { params, ret, .. } => {
             params.iter().any(type_contains_type_var) || type_contains_type_var(ret)
         }
-        Type::Object { fields } => fields.values().any(|f| type_contains_type_var(&f.ty)),
+        Type::Object { fields, index } => {
+            index
+                .as_ref()
+                .is_some_and(|i| type_contains_type_var(&i.value))
+                || fields.values().any(|f| type_contains_type_var(&f.ty))
+        }
         Type::InterfaceRef { args, .. }
         | Type::ClassRef { args, .. }
         | Type::AliasRef { args, .. } => args.iter().any(type_contains_type_var),
@@ -1276,18 +1281,11 @@ impl Inferer<'_> {
     /// type-level shape.
     fn infer_in_operator(&mut self, lhs: ExprId, rhs: ExprId, span: Span) -> (TypedExprKind, Type) {
         let lhs_span = self.ast.expr(lhs).span;
-        let (typed_lhs, _lhs_ty) = self.infer_expr(lhs, None);
-        let lhs_kind = self.typed_ast.expr(typed_lhs).kind.clone();
-        let lhs_is_string_literal = matches!(lhs_kind, TypedExprKind::String(_));
-        if !lhs_is_string_literal {
-            self.error_with_help(
+        let (typed_lhs, lhs_ty) = self.infer_expr(lhs, Some(&Type::String));
+        if !assignable(&lhs_ty, &Type::String, self.resolver()) {
+            self.error(
                 lhs_span,
-                "`in` operator requires a string literal on the left".to_string(),
-                vec![
-                    "write `\"<name>\" in <expr>` — dynamic key lookup is \
-                     not supported"
-                        .to_string(),
-                ],
+                "`in` operator requires a string on the left".into(),
             );
         }
         let (typed_rhs, rhs_ty) = self.infer_expr(rhs, None);
@@ -4205,14 +4203,15 @@ impl Inferer<'_> {
             .iter()
             .filter_map(|m| match m {
                 crate::ObjectLiteralMember::Field(f) => Some(f.name.name.as_str()),
-                crate::ObjectLiteralMember::Spread { .. } => None,
+                crate::ObjectLiteralMember::Spread { .. }
+                | crate::ObjectLiteralMember::Computed { .. } => None,
             })
             .collect();
 
         let mut selected: Option<&Type> = None;
         for member in members {
             let matched = match member.peel() {
-                Type::Object { fields } => variant_matches(fields, &lit_names),
+                Type::Object { fields, .. } => variant_matches(fields, &lit_names),
                 Type::InterfaceRef {
                     mangled,
                     name,
@@ -4239,6 +4238,12 @@ impl Inferer<'_> {
         expected: Option<&Type>,
         span: Span,
     ) -> (TypedExprKind, Type) {
+        if members
+            .iter()
+            .any(|member| matches!(member, crate::ObjectLiteralMember::Computed { .. }))
+        {
+            return self.infer_computed_object(members, expected, span);
+        }
         // Pull `expected` apart at the *Object* shape if it has one,
         // so each field gets a hint matching its declared type.
         // peel the hint so a `type Point = { x: number }`
@@ -4299,13 +4304,15 @@ impl Inferer<'_> {
             };
         let expected_fields: Option<std::collections::BTreeMap<String, crate::ObjectField>> =
             match (peeled, &interface_target) {
-                (Some(Type::Object { fields }), _) => Some(fields.clone()),
+                (Some(Type::Object { fields, .. }), _) => Some(fields.clone()),
                 (_, Some((_iface_package, iface_name, iface_mangled, iface_args))) => {
                     self.structural_form(iface_mangled, iface_name, iface_args)
                 }
                 _ => None,
             };
+        let expected_index = expected.and_then(|ty| self.resolver().index_signature(ty));
         if let Some(want) = expected_fields.as_ref()
+            && expected_index.is_none()
             && !want.is_empty()
         {
             for member in &members {
@@ -4340,6 +4347,7 @@ impl Inferer<'_> {
             .any(|member| matches!(member, crate::ObjectLiteralMember::Spread { .. }));
         let mut object_members: Vec<crate::TypedObjectMember> = Vec::new();
         let mut spread_count = 0;
+        let mut spread_index_values = Vec::new();
         let mut merged: std::collections::BTreeMap<
             String,
             (crate::ObjectField, crate::TypedObjectFieldSource),
@@ -4347,6 +4355,12 @@ impl Inferer<'_> {
 
         for member in members {
             match member {
+                crate::ObjectLiteralMember::Computed { .. } => {
+                    self.error(
+                        span,
+                        "internal compiler error: computed literal was not lowered".into(),
+                    );
+                }
                 crate::ObjectLiteralMember::Field(field) => {
                     if is_reserved_object_field(&field.name.name) {
                         self.error(field.name.span, reserved_field_message(&field.name.name));
@@ -4368,6 +4382,7 @@ impl Inferer<'_> {
                             .as_ref()
                             .and_then(|m| m.get(&field.name.name))
                             .map(|f| f.ty.clone())
+                            .or_else(|| expected_index.as_ref().map(|i| (*i.value).clone()))
                     });
                     let previous_hint = self.object_this_hint.take();
                     if matches!(
@@ -4469,6 +4484,7 @@ impl Inferer<'_> {
                         });
                         if has_spread {
                             let source_ty = Type::Object {
+                                index: None,
                                 fields: std::collections::BTreeMap::from([(
                                     field.name.name.clone(),
                                     crate::ObjectField::required(field_ty.clone()),
@@ -4509,6 +4525,12 @@ impl Inferer<'_> {
                         } else {
                             self.infer_expr(value, None)
                         };
+                    if let Some(value) = self.spread_source_index(typed_source, &source_ty) {
+                        for (field, _) in merged.values_mut() {
+                            field.ty = Type::union(vec![field.ty.clone(), value.clone()]);
+                        }
+                        spread_index_values.push(value);
+                    }
                     let Some(SpreadFields { fields, by_name }) =
                         self.spread_source_fields(typed_source, &source_ty, spread_span)
                     else {
@@ -4521,6 +4543,7 @@ impl Inferer<'_> {
                         by_name,
                     });
                     let source_ty_for_origin = Type::Object {
+                        index: None,
                         fields: fields.clone(),
                     };
                     for (name, field) in fields {
@@ -4690,7 +4713,18 @@ impl Inferer<'_> {
                 members: object_members,
                 fields: field_origins,
             },
-            Type::Object { fields: resolved },
+            Type::Object {
+                index: if spread_index_values.is_empty() {
+                    None
+                } else {
+                    spread_index_values.extend(resolved.values().map(|f| f.ty.clone()));
+                    Some(crate::IndexSignature {
+                        value: Box::new(Type::union(spread_index_values)),
+                        readonly: false,
+                    })
+                },
+                fields: resolved,
+            },
         )
     }
 
@@ -4700,7 +4734,7 @@ impl Inferer<'_> {
     /// is chosen — and a union contributes each member. Over more than one alternative, a
     /// field some lack is optional and its type is the union of theirs, as in
     /// TypeScript. Only structural object types spread; anything else is reported.
-    fn spread_source_fields(
+    pub(super) fn spread_source_fields(
         &mut self,
         typed_source: ExprId,
         source_ty: &Type,
@@ -4711,7 +4745,18 @@ impl Inferer<'_> {
         let mut objects: Vec<ObjectFields> = Vec::new();
         for alternative in alternatives {
             match alternative {
-                Type::Object { fields } => {
+                Type::Object { fields, .. } => {
+                    if !objects.contains(&fields) {
+                        objects.push(fields);
+                    }
+                }
+                Type::InterfaceRef {
+                    ref mangled,
+                    ref name,
+                    ref args,
+                    ..
+                } if self.resolver().index_signature(&alternative).is_some() => {
+                    let fields = self.resolver().interface_full_form(mangled, name, args)?;
                     if !objects.contains(&fields) {
                         objects.push(fields);
                     }
@@ -4746,6 +4791,16 @@ impl Inferer<'_> {
                 by_name: true,
             },
         })
+    }
+
+    pub(super) fn spread_source_index(&self, source: ExprId, ty: &Type) -> Option<Type> {
+        let mut alternatives = Vec::new();
+        self.collect_spread_alternatives(source, ty, &mut alternatives);
+        let values: Vec<Type> = alternatives
+            .iter()
+            .filter_map(|ty| self.resolver().index_signature(ty).map(|i| *i.value))
+            .collect();
+        (!values.is_empty()).then(|| Type::union(values))
     }
 
     fn collect_spread_alternatives(&self, id: ExprId, ty: &Type, out: &mut Vec<Type>) {
@@ -5504,6 +5559,17 @@ impl Inferer<'_> {
                 Type::Error,
             );
         }
+        if matches!(receiver_ty.peel(), Type::InterfaceRef { .. })
+            && let Some(index) = self.resolver().index_signature(&receiver_ty)
+        {
+            return (
+                TypedExprKind::FieldAccess {
+                    receiver: typed_receiver,
+                    name,
+                },
+                index.read_ty(),
+            );
+        }
         if matches!(receiver_ty.peel(), Type::InterfaceRef { .. }) {
             if !self.try_report_method_reference(name.span, &receiver_ty, &name.name) {
                 self.report_missing_field(name.span, &receiver_ty, &name.name);
@@ -5521,9 +5587,11 @@ impl Inferer<'_> {
         // Union form. Error messages still use the un-peeled
         // `receiver_ty` so the alias name surfaces in diagnostics.
         let field_ty = match receiver_ty.peel() {
-            Type::Object { fields } => {
+            Type::Object { fields, index } => {
                 if let Some(field) = fields.get(&name.name) {
                     field.read_ty()
+                } else if let Some(index) = index {
+                    index.read_ty()
                 } else {
                     // An object literal still resolves the prelude `Object`
                     // members, so the name can be a real method here too.
@@ -5608,6 +5676,17 @@ impl Inferer<'_> {
         // messages anchored on the user's pattern bracket.
         let pattern_origin = self.ast.pattern_origins.get(&expr_id).cloned();
         let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None);
+        if receiver_ty.is_structural_object() {
+            let (typed_index, key_ty) = self.infer_object_key(index);
+            let ty = self.object_index_read_type(&receiver_ty, &key_ty, self.ast.expr(index).span);
+            return (
+                TypedExprKind::IndexAccess {
+                    receiver: typed_receiver,
+                    index: typed_index,
+                },
+                ty,
+            );
+        }
         // Peel: an array or tuple reached through an alias (`type Pair = [A, B]`)
         // is indexable on the same terms as the type it names.
         let elem_ty = match receiver_ty.peel() {
@@ -5764,12 +5843,7 @@ impl Inferer<'_> {
             // (which routes to property access above) — a dynamic index here
             // is the real error. Distinguish it from genuinely non-indexable
             // receivers (`number`, etc.), which keep the message below.
-            _ if pattern_origin.is_none()
-                && matches!(
-                    receiver_ty.peel(),
-                    Type::Object { .. } | Type::InterfaceRef { .. }
-                ) =>
-            {
+            _ if pattern_origin.is_none() && receiver_ty.is_structural_object() => {
                 self.error_with_help(
                     span,
                     "objects can only be indexed by a string literal".to_string(),
@@ -5840,7 +5914,7 @@ impl Inferer<'_> {
 
     /// Infer data fields before method bodies so receiver types do not depend on
     /// member order. Cached expressions still execute in their original source order.
-    fn infer_object_receiver(
+    pub(super) fn infer_object_receiver(
         &mut self,
         members: &[crate::ObjectLiteralMember],
         expected: Option<&std::collections::BTreeMap<String, crate::ObjectField>>,
@@ -5853,12 +5927,13 @@ impl Inferer<'_> {
         let mut method_sources = std::collections::BTreeMap::new();
         if expected.is_some() || !members.iter().any(|member| matches!(member,
             crate::ObjectLiteralMember::Field(field) if matches!(self.ast.expr(field.value).kind, ExprKind::FunctionExpression { .. }))) {
-            return (Type::Object { fields }, inferred);
+            return (Type::Object { index: None, fields }, inferred);
         }
         for member in members {
             let (value, name) = match member {
                 crate::ObjectLiteralMember::Field(field) => (field.value, Some(&field.name.name)),
-                crate::ObjectLiteralMember::Spread { value, .. } => (*value, None),
+                crate::ObjectLiteralMember::Spread { value, .. }
+                | crate::ObjectLiteralMember::Computed { value, .. } => (*value, None),
             };
             let signature = match self.ast.expr(value).kind {
                 ExprKind::FunctionExpression { function, .. } => {
@@ -5894,7 +5969,13 @@ impl Inferer<'_> {
             }
         }
         self.infer_receiver_methods(members, &method_sources, &mut fields, &mut inferred);
-        (Type::Object { fields }, inferred)
+        (
+            Type::Object {
+                index: None,
+                fields,
+            },
+            inferred,
+        )
     }
 
     fn infer_receiver_methods(
@@ -5933,6 +6014,7 @@ impl Inferer<'_> {
                 .unwrap_or(0);
             let (name, value) = pending.remove(index);
             let previous_hint = self.object_this_hint.replace(Type::Object {
+                index: None,
                 fields: fields.clone(),
             });
             let errors_before = self.error_count();
@@ -6828,7 +6910,15 @@ impl Inferer<'_> {
         } else if matches!(receiver_ty, Type::Error) {
             Type::Error
         } else if let Some(fields) = self.assignment_target_fields(&receiver_ty) {
-            if let Some(field) = fields.get(&name.name).cloned() {
+            if let Some(field) = fields.get(&name.name).cloned().or_else(|| {
+                self.resolver()
+                    .index_signature(&receiver_ty)
+                    .map(|index| crate::ObjectField {
+                        ty: *index.value,
+                        optional: true,
+                        readonly: index.readonly,
+                    })
+            }) {
                 if field.readonly {
                     self.error(
                         name.span,
@@ -6999,9 +7089,23 @@ impl Inferer<'_> {
     ) -> (TypedExprKind, Type) {
         let recv_span = self.ast.expr(receiver).span;
         let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None);
-        let elem_ty = self.indexed_write_elem_ty(&receiver_ty, recv_span, span);
-        let (typed_index, _) = self.infer_expr(index, Some(&Type::Number));
-        let read_ty = self.index_read_ty(typed_receiver, typed_index, &elem_ty);
+        let object = receiver_ty.is_structural_object();
+        let (typed_index, key_ty) = if object {
+            self.infer_object_key(index)
+        } else {
+            self.infer_expr(index, Some(&Type::Number))
+        };
+        let elem_ty = if object {
+            self.object_index_write_type(&receiver_ty, &key_ty, self.ast.expr(index).span)
+        } else {
+            self.indexed_write_elem_ty(&receiver_ty, recv_span, span)
+        };
+        let declared_read = if object {
+            self.object_index_read_type(&receiver_ty, &key_ty, self.ast.expr(index).span)
+        } else {
+            elem_ty.clone()
+        };
+        let read_ty = self.index_read_ty(typed_receiver, typed_index, &declared_read);
         if !matches!(
             read_ty.primitive_behavior(),
             Type::Number | Type::NumberLiteral(_) | Type::BigInt | Type::Error
@@ -7328,8 +7432,24 @@ impl Inferer<'_> {
                 optional,
                 span,
             } => {
-                let (typed_idx, idx_ty) = self.infer_expr(idx, None);
+                let (typed_idx, idx_ty) = if receiver_ty.is_structural_object() {
+                    self.infer_object_key(idx)
+                } else {
+                    self.infer_expr(idx, None)
+                };
                 let idx_span = self.ast.expr(idx).span;
+                if receiver_ty.is_structural_object() {
+                    let ty = self.object_index_read_type(receiver_ty, &idx_ty, idx_span);
+                    return (
+                        TypedChainPart::Index {
+                            idx: typed_idx,
+                            optional,
+                            result_ty: ty.clone(),
+                            span,
+                        },
+                        ty,
+                    );
+                }
                 if !matches!(
                     idx_ty.peel(),
                     Type::Number | Type::NumberLiteral(_) | Type::Error
@@ -7773,7 +7893,7 @@ impl Inferer<'_> {
             // An object literal carries the prelude `Object` interface's members
             // (`toJson`, …) beside its own fields, so a miss on the field map is
             // not yet a miss on the receiver.
-            Type::Object { fields } => {
+            Type::Object { fields, index } => {
                 if let Some(f) = fields.get(&name.name) {
                     let ty = if f.optional {
                         Type::union(vec![f.ty.clone(), Type::Null])
@@ -7781,6 +7901,9 @@ impl Inferer<'_> {
                         f.ty.clone()
                     };
                     return ChainField::plain(ty);
+                }
+                if let Some(index) = index {
+                    return ChainField::plain(index.read_ty());
                 }
                 if let Some(found) = self.chain_method_lookup(receiver_ty, name, span) {
                     return found;
@@ -7849,6 +7972,9 @@ impl Inferer<'_> {
                 }
                 if let Some(found) = self.chain_method_lookup(receiver_ty, name, span) {
                     return found;
+                }
+                if let Some(index) = self.resolver().index_signature(receiver_ty) {
+                    return ChainField::plain(index.read_ty());
                 }
                 self.report_missing_field(span, receiver_ty, &name.name);
                 ChainField::plain(Type::Error)
@@ -8509,10 +8635,20 @@ impl Inferer<'_> {
                         )
                     })
                     .collect();
+                let index = self
+                    .resolver()
+                    .index_signature(ty)
+                    .map(|i| i.map_value(|v| self.reduce_interfaces_to_shapes(v, seen)));
                 seen.pop();
-                Type::Object { fields: reduced }
+                Type::Object {
+                    index,
+                    fields: reduced,
+                }
             }
-            Type::Object { fields } => Type::Object {
+            Type::Object { fields, index } => Type::Object {
+                index: index
+                    .as_ref()
+                    .map(|i| i.map_value(|v| self.reduce_interfaces_to_shapes(v, seen))),
                 fields: fields
                     .iter()
                     .map(|(k, f)| {
@@ -8682,7 +8818,15 @@ fn optional_vs_required_blockers(
         s = &**se;
         t = &**te;
     }
-    let (Type::Object { fields: s_fields }, Type::Object { fields: t_fields }) = (s, t) else {
+    let (
+        Type::Object {
+            fields: s_fields, ..
+        },
+        Type::Object {
+            fields: t_fields, ..
+        },
+    ) = (s, t)
+    else {
         return Vec::new();
     };
     let mut blockers = Vec::new();
@@ -8722,9 +8866,11 @@ fn unsupported_cast_target_reason(
         | Type::Uint8Array
         | Type::Function { .. }
         | Type::Unknown => None,
-        Type::Object { fields } => fields
+        Type::Object { fields, index } => fields
             .values()
-            .find_map(|f| unsupported_cast_target_reason(&f.ty, types, seen)),
+            .map(|f| &f.ty)
+            .chain(index.iter().map(|i| i.value.as_ref()))
+            .find_map(|ty| unsupported_cast_target_reason(ty, types, seen)),
         Type::Array(elem) => unsupported_cast_target_reason(elem, types, seen),
         Type::Tuple(elems) => elems
             .iter()
@@ -8997,9 +9143,9 @@ type ObjectFields = std::collections::BTreeMap<String, crate::ObjectField>;
 
 /// The fields a spread copies. `by_name`: the source has no one layout, so each
 /// field is found by name at run time.
-struct SpreadFields {
-    fields: ObjectFields,
-    by_name: bool,
+pub(super) struct SpreadFields {
+    pub(super) fields: ObjectFields,
+    pub(super) by_name: bool,
 }
 
 /// A spread's field, merged over what an earlier member wrote to the same name.
@@ -9655,7 +9801,10 @@ mod tests {
         let mut fields = std::collections::BTreeMap::new();
         fields.insert("x".to_string(), crate::ObjectField::required(Type::Number));
         fields.insert("y".to_string(), crate::ObjectField::required(Type::Number));
-        Type::Object { fields }
+        Type::Object {
+            index: None,
+            fields,
+        }
     }
 
     #[test]

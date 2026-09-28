@@ -52,10 +52,15 @@ impl Scan<'_> {
             Type::Tuple(elements) | Type::Union(elements) => {
                 elements.iter().find_map(|t| self.visit(t, false))
             }
-            Type::Object { fields } => fields.iter().find_map(|(name, field)| {
-                self.visit(&field.ty, false)
-                    .map(|where_| format!("property `{name}` ({where_})"))
-            }),
+            Type::Object { fields, index } => index
+                .as_ref()
+                .and_then(|i| self.visit(&i.value, false))
+                .or_else(|| {
+                    fields.iter().find_map(|(name, field)| {
+                        self.visit(&field.ty, false)
+                            .map(|where_| format!("property `{name}` ({where_})"))
+                    })
+                }),
             Type::InterfaceRef {
                 mangled,
                 name,
@@ -176,7 +181,10 @@ fn contains_void(ty: &Type) -> bool {
         Type::Function { params, ret, .. } => {
             params.iter().any(contains_void) || contains_void(ret)
         }
-        Type::Object { fields } => fields.values().any(|field| contains_void(&field.ty)),
+        Type::Object { fields, index } => {
+            index.as_ref().is_some_and(|i| contains_void(&i.value))
+                || fields.values().any(|field| contains_void(&field.ty))
+        }
         Type::InterfaceRef { args, .. }
         | Type::ClassRef { args, .. }
         | Type::AliasRef { args, .. } => args.iter().any(contains_void),

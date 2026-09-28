@@ -1,0 +1,76 @@
+=== genericCallWithObjectTypeArgsAndStringIndexer.ts ===
+// Type inference infers from indexers in target type, no errors expected
+
+function foo<T>(x: T): T {
+>foo : <T>(x: T) => T
+>    : ^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+
+    return x;
+>x : T
+>  : ^
+
+}
+
+/*pruned*/
+/*pruned*/
+
+function other<T>(arg: T): void {
+>other : <T>(arg: T) => void
+>      : ^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>arg : T
+>    : ^
+
+    let b: { [x: string]: T } = {};
+>b : { [x: string]: T; }
+>  : ^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>{} : {}
+>   : ^^
+
+    let r2 = foo(b); // T
+>r2 : { [x: string]: T; }
+>   : ^^^^^^^^^^^^^^^^^^^
+>foo(b) : { [x: string]: T; }
+>       : ^^^^^^^^^^^^^^^^^^^
+>foo : <T>(x: T) => T
+>    : ^^^^^^^^^^^^^^
+>b : { [x: string]: T; }
+>  : ^^^^^^^^^^^^^^^^^^^
+
+}
+
+/*pruned*/
+/*pruned*/
+/*pruned*/
+/*pruned*/
+/*pruned*/
+
+/*pruned*/
+/*pruned*/
+/*pruned*/
+/*pruned*/
+/*pruned*/
+/*pruned*/
+/*pruned*/
+
+/*pruned*/
+/*pruned*/
+/*pruned*/
+/*pruned*/
+/*pruned*/
+/*pruned*/
+/*pruned*/
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

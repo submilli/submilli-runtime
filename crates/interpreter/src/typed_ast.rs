@@ -446,19 +446,36 @@ impl TypedObjectFieldSource {
 /// One member of an object literal, in source order.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TypedObjectMember {
+    Computed {
+        key: ExprId,
+        value: ExprId,
+    },
     /// A field's value.
     Value(ExprId),
     /// A spread's source object. `by_name` is set when the source has no one
     /// layout — its type is a union of object types, or it is a conditional
     /// whose branches differ — so each field is found by name at run time, and
     /// one the object lacks reads as absent.
-    Spread { source: ExprId, by_name: bool },
+    Spread {
+        source: ExprId,
+        by_name: bool,
+    },
 }
 
 impl TypedObjectMember {
+    pub fn expressions(self) -> impl Iterator<Item = ExprId> {
+        let key = match self {
+            Self::Computed { key, .. } => Some(key),
+            _ => None,
+        };
+        key.into_iter().chain(std::iter::once(self.expr_id()))
+    }
+
     pub fn expr_id(self) -> ExprId {
         match self {
-            TypedObjectMember::Value(id) | TypedObjectMember::Spread { source: id, .. } => id,
+            TypedObjectMember::Value(id)
+            | TypedObjectMember::Spread { source: id, .. }
+            | TypedObjectMember::Computed { value: id, .. } => id,
         }
     }
 }
@@ -1049,6 +1066,7 @@ pub enum FieldNarrowingTest {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct InterfaceNarrowingTest {
+    pub index: Option<crate::IndexSignature>,
     pub members: std::collections::BTreeMap<String, crate::ObjectField>,
     pub methods: std::collections::BTreeSet<String>,
     pub non_shape_carriers: std::collections::BTreeSet<InterfaceCarrier>,
@@ -1136,9 +1154,14 @@ fn runtime_type_is_testable_inner(ty: &Type, allow_recursive_ref: bool) -> bool 
         Type::Tuple(elems) | Type::Union(elems) => elems
             .iter()
             .all(|elem| runtime_type_is_testable_inner(elem, allow_recursive_ref)),
-        Type::Object { fields } => fields
-            .values()
-            .all(|field| runtime_type_is_testable_inner(&field.ty, allow_recursive_ref)),
+        Type::Object { fields, index } => {
+            index
+                .as_ref()
+                .is_none_or(|i| runtime_type_is_testable_inner(&i.value, allow_recursive_ref))
+                && fields
+                    .values()
+                    .all(|field| runtime_type_is_testable_inner(&field.ty, allow_recursive_ref))
+        }
         _ => false,
     }
 }
@@ -1175,6 +1198,7 @@ pub struct TypedClassMethod {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TypedInterfaceDecl {
+    pub index: Option<crate::IndexSignature>,
     pub name: Ident,
     pub generics: Vec<String>,
     pub members: Vec<TypedInterfaceMember>,
@@ -1238,6 +1262,18 @@ pub struct TypedTypeAliasDecl {
 }
 
 impl TypedAst {
+    pub(crate) fn has_string_index(&self, ty: &Type) -> bool {
+        match ty.peel() {
+            Type::Object { index, .. } => index.is_some(),
+            Type::Union(members) => members.iter().any(|member| self.has_string_index(member)),
+            Type::InterfaceRef { .. } => matches!(
+                self.runtime_type_tests.get(ty.peel()),
+                Some(FieldNarrowingTest::Interface(interface)) if interface.index.is_some()
+            ),
+            _ => false,
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             package_name: crate::mangle::USER_PACKAGE.to_string(),

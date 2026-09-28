@@ -1,0 +1,5 @@
+types: 0 of 13 tsc entries compared, 0 differ
+
+errors:
+line 14: tsc TS2411: Property 'y' of type '{ a: number; }' is not assignable to 'string' index type '{ a: number; b: number; }'. (we accept)
+line 9: ours: property `y` of type `{ a: number }` does not satisfy string index value type `{ a: number; b: number }` (tsc accepts)

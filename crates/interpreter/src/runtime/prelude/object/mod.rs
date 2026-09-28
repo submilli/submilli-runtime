@@ -6,6 +6,8 @@
 //! a catchable `Error`, matching the Wasm bodies in
 //! `codegen/prelude/object_shape.rs`.
 
+mod dynamic;
+
 use wasmtime::{
     ArrayRef, ArrayRefPre, Caller, FuncType, HeapType, Linker, RefType, Rooted, StructRef,
     StructRefPre, StructType, Val, ValType,
@@ -262,8 +264,29 @@ fn insert_field(
     let values = field_array(caller, &object, 2)?;
     let named_len = names.len(&mut *caller)?;
     let value_len = values.len(&mut *caller)?;
+    let row_width = named_len
+        .checked_add(1)
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("object field row width overflow"))?;
+    let hidden = value_len.checked_sub(named_len).ok_or_else(|| {
+        crate::runtime::host::fatal_host_error("object payload is shorter than its names")
+    })?;
+    if hidden % row_width != 0 {
+        return Err(crate::runtime::host::fatal_host_error(
+            "malformed object field guard rows",
+        ));
+    }
+    let new_value_len = value_len
+        .checked_add(1)
+        .and_then(|len| len.checked_add(hidden / row_width))
+        .ok_or_else(|| crate::runtime::host::fatal_host_error("object field count overflow"))?;
     let mut new_names = Vec::new();
     let mut new_values = Vec::new();
+    new_names
+        .try_reserve_exact(row_width as usize)
+        .map_err(crate::runtime::host::fatal_host_error)?;
+    new_values
+        .try_reserve_exact(new_value_len as usize)
+        .map_err(crate::runtime::host::fatal_host_error)?;
     for index in 0..named_len {
         new_names.push(names.get(&mut *caller, index)?);
         new_values.push(values.get(&mut *caller, index)?);
@@ -273,7 +296,6 @@ fn insert_field(
     // Each hidden guard row has one slot per named field followed by its
     // generic context. Grow every row along with the named payload so the
     // compiler's depth/field indexing continues to address the same guards.
-    let row_width = named_len + 1;
     for row_start in (named_len..value_len).step_by(row_width as usize) {
         for index in row_start..row_start + named_len {
             new_values.push(values.get(&mut *caller, index)?);
@@ -412,6 +434,7 @@ async fn same_value(
 }
 
 pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    dynamic::install(linker)?;
     let engine = linker.engine().clone();
     let intr = build_intrinsic_types(&engine)?;
     let obj = ValType::Ref(RefType::new(
@@ -524,6 +547,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
 }
 
 pub fn declare(defs: &mut PackageDeclaration) {
+    dynamic::declare(defs);
     declare_method(
         defs,
         "#toJson",
@@ -554,6 +578,7 @@ pub fn declare(defs: &mut PackageDeclaration) {
             Param::new("mask", Type::Unknown),
         ],
         Type::Object {
+            index: None,
             fields: Default::default(),
         },
     );
@@ -616,7 +641,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "Object".to_string(),
             mangled_name: crate::mangle::prelude("Object"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface {
+            kind: TypeKind::Interface { index: None,
                 generics: Vec::new(),
                 methods: BTreeMap::from([
                     (
@@ -658,7 +683,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "ObjectConstructor".to_string(),
             mangled_name: crate::mangle::prelude("ObjectConstructor"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface {
+            kind: TypeKind::Interface { index: None,
                 generics: Vec::new(),
                 methods: BTreeMap::from([
                     (

@@ -100,7 +100,10 @@ pub fn collect_from_dependencies<'a>(
     }
     for shape in shapes {
         match shape {
-            crate::Shape::Object { fields } => {
+            crate::Shape::Object { fields, index } => {
+                if let Some(index) = index {
+                    walk_type(&index.value, &mut out);
+                }
                 for f in fields.values() {
                     walk_type(&f.ty, &mut out);
                 }
@@ -337,7 +340,10 @@ pub(crate) fn walk_type(ty: &Type, out: &mut Vec<ClosureSig>) {
                 walk_type(e, out);
             }
         }
-        Type::Object { fields } => {
+        Type::Object { fields, index } => {
+            if let Some(index) = index {
+                walk_type(&index.value, out);
+            }
             for f in fields.values() {
                 walk_type(&f.ty, out);
             }

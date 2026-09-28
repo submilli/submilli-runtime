@@ -123,7 +123,10 @@ pub(crate) fn string_units(
         }
     };
     let len = raw.len(&mut *caller)?;
-    let mut units = Vec::with_capacity(len as usize);
+    let mut units = Vec::new();
+    units
+        .try_reserve_exact(len as usize)
+        .map_err(crate::runtime::host::fatal_host_error)?;
     for i in 0..len {
         if let Val::I32(c) = raw.get(&mut *caller, i)? {
             units.push(c as u16);

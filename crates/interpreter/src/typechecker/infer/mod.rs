@@ -22,6 +22,7 @@ mod narrow_scopes;
 pub mod narrowing;
 mod nested_functions;
 mod predicate_envs;
+mod records;
 mod reserved;
 mod resolve_type;
 mod scopes;
@@ -135,13 +136,16 @@ pub fn infer_with_transitive<'a>(
         switch_depth: 0,
         pending_joins: Vec::new(),
         pending_aliases: BTreeMap::new(),
+        pending_index_checks: None,
         field_narrowing_checks: BTreeMap::new(),
         alias_resolution_stack: Vec::new(),
     };
     tc.populate_prelude();
     tc.populate_type_registry();
     tc.populate_imports();
-    tc.signatures();
+    if !tc.signatures() {
+        return (tc.typed_ast, tc.diagnostics);
+    }
     tc.infer_global_variables();
     tc.infer_functions();
     tc.infer_classes();
@@ -273,6 +277,7 @@ pub fn infer_package<'a>(
         switch_depth: 0,
         pending_joins: Vec::new(),
         pending_aliases: BTreeMap::new(),
+        pending_index_checks: None,
         field_narrowing_checks: BTreeMap::new(),
         alias_resolution_stack: Vec::new(),
     };
@@ -292,7 +297,10 @@ pub fn infer_package<'a>(
         tc.populate_type_registry();
         tc.populate_module_type_registry();
         tc.populate_imports();
-        tc.signatures();
+        if !tc.signatures() {
+            diagnostics.extend(tc.diagnostics);
+            return (tc.typed_ast, package_declaration, diagnostics);
+        }
         tc.infer_global_variables();
         tc.infer_functions();
         tc.infer_classes();
@@ -538,6 +546,8 @@ pub(super) struct Inferer<'a> {
     /// after the signatures walk are drained so declared-but-unused
     /// aliases still validate.
     pub(super) pending_aliases: BTreeMap<String, PendingAlias>,
+    /// Index compatibility waits until all nominal signature placeholders are filled.
+    pending_index_checks: Option<Vec<records::PendingIndexCheck>>,
     /// Produced by `check_field_redeclaration` in the signature pass, consumed
     /// when `infer_classes` builds the typed field. See
     /// [`crate::FieldNarrowingCheck`].
@@ -921,7 +931,7 @@ mod tests {
             .shapes
             .iter()
             .filter_map(|shape| match shape {
-                crate::Shape::Object { fields } => Some(fields),
+                crate::Shape::Object { fields, .. } => Some(fields),
                 _ => None,
             })
             .collect();

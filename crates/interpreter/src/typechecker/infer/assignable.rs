@@ -746,10 +746,17 @@ fn assignable_rec(
                     None => exp.optional,
                 })
         }
-        (Type::ClassRef { mangled, args, .. }, Type::Object { fields }) => {
+        (Type::ClassRef { mangled, args, .. }, Type::Object { fields, index }) => {
             let Some(class_form) = types.class_full_form(mangled, args) else {
                 return false;
             };
+            if index.as_ref().is_some_and(|i| {
+                class_form
+                    .values()
+                    .any(|f| !assignable_rec(&f.ty, &i.value, types, seen))
+            }) {
+                return false;
+            }
             if weak_type_rejects(&class_form, fields) {
                 return false;
             }
@@ -819,7 +826,29 @@ fn assignable_rec(
         }
         // `readonly` is shallow (TS-faithful): it gates direct writes, not
         // assignability. Object width subtyping stays covariant per field.
-        (Type::Object { fields: a_fields }, Type::Object { fields: e_fields }) => {
+        (
+            Type::Object {
+                fields: a_fields,
+                index: a_index,
+            },
+            Type::Object {
+                fields: e_fields,
+                index: e_index,
+            },
+        ) => {
+            if let Some(expected_index) = e_index {
+                if !a_fields
+                    .values()
+                    .all(|f| assignable_rec(&f.ty, &expected_index.value, types, seen))
+                {
+                    return false;
+                }
+                if let Some(actual_index) = a_index
+                    && !assignable_rec(&actual_index.value, &expected_index.value, types, seen)
+                {
+                    return false;
+                }
+            }
             // `{a: T|null}` into `{a?: T}` is still rejected — `assignable(T|null, T)` fails.
             e_fields.iter().all(|(k, e_field)| match a_fields.get(k) {
                 Some(a_field) => {
@@ -960,6 +989,25 @@ fn satisfies_structurally(
     if weak_type_rejects(&actual_form, &expected_form) {
         return false;
     }
+    if let Some(index) = types.index_signature(expected) {
+        if !matches!(
+            actual.peel(),
+            Type::Object { .. } | Type::ClassRef { .. } | Type::InterfaceRef { .. }
+        ) {
+            return false;
+        }
+        seen.push(key.clone());
+        let compatible = actual_form
+            .values()
+            .all(|field| assignable_rec(&field.ty, &index.value, types, seen))
+            && types
+                .index_signature(actual)
+                .is_none_or(|actual| assignable_rec(&actual.value, &index.value, types, seen));
+        seen.pop();
+        if !compatible {
+            return false;
+        }
+    }
     seen.push(key);
     let ok = expected_form
         .iter()
@@ -1048,9 +1096,10 @@ fn type_nesting_depth(ty: &Type) -> usize {
             type_argument_depth(params).max(type_nesting_depth(ret))
         }
         Type::Refined { original, ty } => type_nesting_depth(original).max(type_nesting_depth(ty)),
-        Type::Object { fields } => fields
+        Type::Object { fields, index } => fields
             .values()
             .map(|field| type_nesting_depth(&field.ty))
+            .chain(index.iter().map(|i| type_nesting_depth(&i.value)))
             .max()
             .unwrap_or(0),
         _ => 0,
@@ -1076,7 +1125,7 @@ fn weak_type_rejects(
 /// `Type::Object` of its properties. Returns `None` for non-interfaces,
 /// method-bearing interfaces, or unresolvable names — callers treat `None` as
 /// "not structurally assignable".
-fn expand_interface_data_shape(ty: &Type, types: TypeResolver) -> Option<Type> {
+pub(super) fn expand_interface_data_shape(ty: &Type, types: TypeResolver) -> Option<Type> {
     let Type::InterfaceRef {
         mangled,
         name,
@@ -1087,6 +1136,7 @@ fn expand_interface_data_shape(ty: &Type, types: TypeResolver) -> Option<Type> {
         return None;
     };
     Some(Type::Object {
+        index: types.index_signature(ty),
         fields: types.interface_data_shape(mangled, name, args)?,
     })
 }
@@ -1325,6 +1375,7 @@ mod tests {
             Type::Null,
             Type::Array(Box::new(Type::Number)),
             Type::Object {
+                index: None,
                 fields: std::collections::BTreeMap::new(),
             },
             Type::union(vec![Type::Number, Type::String]),
@@ -1371,6 +1422,7 @@ mod tests {
 
     fn obj(fields: Vec<(&str, Type, bool)>) -> Type {
         Type::Object {
+            index: None,
             fields: fields
                 .into_iter()
                 .map(|(k, ty, optional)| {
@@ -1443,6 +1495,7 @@ mod tests {
                 mangled_name: crate::mangle::package_symbol(crate::mangle::USER_PACKAGE, name),
                 declaration_span: crate::Span::at(crate::FileId(0)),
                 kind: TypeKind::Interface {
+                    index: None,
                     generics: Vec::new(),
                     methods,
                     properties,

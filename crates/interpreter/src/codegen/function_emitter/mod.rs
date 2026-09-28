@@ -898,6 +898,7 @@ mod tests {
             validator_bodies: &f.validator_bodies,
             type_info: &f.type_info,
             package_string_global_idx: None,
+            failure: std::cell::Cell::new(None),
         }
     }
 

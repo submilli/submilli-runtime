@@ -201,7 +201,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "BigInt".to_string(),
             mangled_name: crate::mangle::prelude("BigInt"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface {
+            kind: TypeKind::Interface { index: None,
                 generics: Vec::new(),
                 methods: BTreeMap::from([
                     (
@@ -247,7 +247,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "BigIntConstructor".to_string(),
             mangled_name: crate::mangle::prelude("BigIntConstructor"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface {
+            kind: TypeKind::Interface { index: None,
                 generics: Vec::new(),
                 methods: BTreeMap::from([(
                     "@call".to_string(),

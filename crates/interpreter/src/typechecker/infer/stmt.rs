@@ -518,11 +518,14 @@ impl Inferer<'_> {
                 let hint = ty.as_ref().map(|a| self.resolve_type(a));
                 let (typed_value, source_ty) = self.infer_expr(source, hint.as_ref());
                 let narrowed = match source_ty.clone() {
-                    Type::Object { mut fields } => {
+                    Type::Object { mut fields, .. } => {
                         for excl in &exclude {
                             fields.remove(&excl.name);
                         }
-                        Type::Object { fields }
+                        Type::Object {
+                            index: None,
+                            fields,
+                        }
                     }
                     other => {
                         self.error(
@@ -1095,7 +1098,15 @@ impl Inferer<'_> {
         } else if matches!(receiver_ty, Type::Error) {
             placeholder(self, None)
         } else if let Some(fields) = self.assignment_target_fields(&receiver_ty) {
-            let field_lookup = fields.get(&name.name).cloned();
+            let field_lookup = fields.get(&name.name).cloned().or_else(|| {
+                self.resolver()
+                    .index_signature(&receiver_ty)
+                    .map(|i| crate::ObjectField {
+                        ty: *i.value,
+                        optional: false,
+                        readonly: i.readonly,
+                    })
+            });
             if let Some(field) = field_lookup {
                 if field.readonly {
                     self.error(
@@ -1209,17 +1220,30 @@ impl Inferer<'_> {
         let recv_span = self.ast.expr(receiver).span;
         let value_span = self.ast.expr(value).span;
         let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None);
-        let elem_ty = self.indexed_write_elem_ty(&receiver_ty, recv_span, recv_span);
-        let (typed_index, _) = self.infer_expr(index, Some(&Type::Number));
-        let (typed_value, value_ty, reported) = self.infer_assigned_value(value, Some(&elem_ty));
-        if !matches!(elem_ty, Type::Error)
-            && !reported
-            && !assignable(&value_ty, &elem_ty, self.resolver())
+        let object = receiver_ty.is_structural_object();
+        let (typed_index, key_ty) = if object {
+            self.infer_object_key(index)
+        } else {
+            self.infer_expr(index, Some(&Type::Number))
+        };
+        let targets = if object {
+            self.object_index_write_targets(&receiver_ty, &key_ty, self.ast.expr(index).span)
+        } else {
+            vec![self.indexed_write_elem_ty(&receiver_ty, recv_span, recv_span)]
+        };
+        let elem_ty = self.common_index_write_type(&targets);
+        let hint = (!matches!(elem_ty, Type::Never)).then_some(&elem_ty);
+        let (typed_value, value_ty, reported) = self.infer_assigned_value(value, hint);
+        if !reported
+            && !matches!(value_ty, Type::Error)
+            && let Some(target) = targets.iter().find(|target| {
+                !matches!(target, Type::Error) && !assignable(&value_ty, target, self.resolver())
+            })
         {
-            let help = super::type_diff::type_mismatch_help(&elem_ty, &value_ty);
+            let help = super::type_diff::type_mismatch_help(target, &value_ty);
             self.error_with_help(
                 value_span,
-                format!("expected `{elem_ty}`, got `{value_ty}`"),
+                format!("expected `{target}`, got `{value_ty}`"),
                 help,
             );
         }
@@ -1801,7 +1825,15 @@ impl Inferer<'_> {
         } else if matches!(receiver_ty, Type::Error) {
             placeholder(self)
         } else if let Some(fields) = self.assignment_target_fields(&receiver_ty) {
-            if let Some(field) = fields.get(&name.name).cloned() {
+            if let Some(field) = fields.get(&name.name).cloned().or_else(|| {
+                self.resolver()
+                    .index_signature(&receiver_ty)
+                    .map(|index| crate::ObjectField {
+                        ty: *index.value,
+                        optional: true,
+                        readonly: index.readonly,
+                    })
+            }) {
                 if field.readonly {
                     self.error(
                         name.span,
@@ -1921,9 +1953,23 @@ impl Inferer<'_> {
         let value_span = self.ast.expr(value).span;
         let stmt_span = recv_span.merge(value_span);
         let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None);
-        let elem_ty = self.indexed_write_elem_ty(&receiver_ty, recv_span, recv_span);
-        let (typed_index, _) = self.infer_expr(index, Some(&Type::Number));
-        let read_ty = self.index_read_ty(typed_receiver, typed_index, &elem_ty);
+        let object = receiver_ty.is_structural_object();
+        let (typed_index, key_ty) = if object {
+            self.infer_object_key(index)
+        } else {
+            self.infer_expr(index, Some(&Type::Number))
+        };
+        let elem_ty = if object {
+            self.object_index_write_type(&receiver_ty, &key_ty, self.ast.expr(index).span)
+        } else {
+            self.indexed_write_elem_ty(&receiver_ty, recv_span, recv_span)
+        };
+        let declared_read = if object {
+            self.object_index_read_type(&receiver_ty, &key_ty, self.ast.expr(index).span)
+        } else {
+            elem_ty.clone()
+        };
+        let read_ty = self.index_read_ty(typed_receiver, typed_index, &declared_read);
         let (typed_value, value_ty) = self.infer_expr(value, Some(&elem_ty));
         // Built before the operator check so the check can name it as the
         // narrowing culprit.

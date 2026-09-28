@@ -355,7 +355,7 @@ fn emit_structural_test_inner(
             emitter.instruction(Instruction::I32Const(0));
             emitter.emit_end();
         }
-        Type::Object { fields } => {
+        Type::Object { fields, index } => {
             let shape_idx = ctx
                 .symbols
                 .object_shape_type_idx()
@@ -382,6 +382,17 @@ fn emit_structural_test_inner(
                     },
                     fname,
                     f,
+                    interface_stack,
+                    validator_state,
+                );
+                emitter.instruction(Instruction::I32And);
+            }
+            if let Some(index) = index {
+                emit_index_conformance(
+                    emitter,
+                    ctx,
+                    obj_local,
+                    index,
                     interface_stack,
                     validator_state,
                 );
@@ -1084,6 +1095,17 @@ fn emit_interface_test_inner(
                 validator_state,
             );
         }
+        emitter.instruction(Instruction::I32And);
+    }
+    if let Some(index) = &test.index {
+        emit_index_conformance(
+            emitter,
+            ctx,
+            object_local,
+            index,
+            interface_stack,
+            validator_state,
+        );
         emitter.instruction(Instruction::I32And);
     }
     // Some direct-dispatch interfaces intentionally use `$ObjectShape` only as
@@ -1824,4 +1846,33 @@ fn emit_store_validator_environment(emitter: &mut FunctionEmitter, ctx: &Codegen
     emitter.instruction(Instruction::LocalGet(4));
     emitter.instruction(Instruction::StructNew(closure));
     emitter.instruction(Instruction::ArraySet(intr.raw_array));
+}
+
+fn emit_index_conformance(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    object: u32,
+    index: &crate::IndexSignature,
+    interface_stack: &mut std::collections::BTreeSet<Type>,
+    validator_state: Option<ValidatorState>,
+) {
+    emitter.instruction(Instruction::LocalGet(object));
+    let Some(symbol) = ctx.require(
+        ctx.symbols
+            .prelude_func_idx("ObjectConstructor##recordValues"),
+        "record validator imported",
+    ) else {
+        return;
+    };
+    emitter.instruction(Instruction::Call(symbol));
+    let values = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)));
+    emitter.instruction(Instruction::LocalSet(values));
+    emit_structural_test_inner(
+        emitter,
+        ctx,
+        values,
+        &Type::Array(index.value.clone()),
+        interface_stack,
+        validator_state,
+    );
 }

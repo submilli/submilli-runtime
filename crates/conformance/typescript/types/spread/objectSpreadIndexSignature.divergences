@@ -1,0 +1,17 @@
+types: 26 of 45 tsc entries compared, 4 differ
+
+line 6: i
+  tsc:  { b: number; a: number; }
+  ours: { a: number; b: number; [key: string]: number }
+
+line 6: { ...indexed1, b: 11 }
+  tsc:  { b: number; a: number; }
+  ours: { a: number; b: number; [key: string]: number }
+
+line 9: ii
+  tsc:  { [x: string]: number | boolean; c: boolean; a: number; }
+  ours: { a: number | boolean; c: boolean; [key: string]: number | boolean }
+
+line 9: { ...indexed1, ...indexed2 }
+  tsc:  { [x: string]: number | boolean; c: boolean; a: number; }
+  ours: { a: number | boolean; c: boolean; [key: string]: number | boolean }

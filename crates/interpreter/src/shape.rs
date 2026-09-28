@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 pub enum Shape {
     Object {
         fields: BTreeMap<String, ObjectField>,
+        index: Option<crate::IndexSignature>,
     },
     Array(Box<Type>),
     /// Lowers to `$Array`; no distinct Wasm type is emitted.
@@ -20,7 +21,8 @@ pub enum Shape {
 impl Shape {
     pub fn from_type(ty: &Type) -> Option<Shape> {
         match ty {
-            Type::Object { fields } => Some(Shape::Object {
+            Type::Object { fields, index } => Some(Shape::Object {
+                index: index.clone(),
                 fields: fields.clone(),
             }),
             Type::Array(elem) => Some(Shape::Array(elem.clone())),
@@ -39,20 +41,11 @@ impl Shape {
 impl fmt::Display for Shape {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Shape::Object { fields } => {
-                if fields.is_empty() {
-                    return f.write_str("{}");
-                }
-                f.write_str("{ ")?;
-                for (i, (name, field)) in fields.iter().enumerate() {
-                    if i > 0 {
-                        f.write_str("; ")?;
-                    }
-                    let marker = if field.optional { "?" } else { "" };
-                    write!(f, "{}{}: {}", name, marker, field.ty)?;
-                }
-                f.write_str(" }")
+            Shape::Object { fields, index } => Type::Object {
+                fields: fields.clone(),
+                index: index.clone(),
             }
+            .fmt(f),
             // Mirrors `Type`'s array arm — `canonical_display` is a dedup key
             // compared against it.
             Shape::Array(elem) => match &**elem {
@@ -96,10 +89,17 @@ mod tests {
         fields.insert("x".to_string(), ObjectField::required(Type::Number));
         fields.insert("y".to_string(), ObjectField::required(Type::Number));
         let ty = Type::Object {
+            index: None,
             fields: fields.clone(),
         };
         let shape = Shape::from_type(&ty).expect("Object is a shape");
-        assert_eq!(shape, Shape::Object { fields });
+        assert_eq!(
+            shape,
+            Shape::Object {
+                index: None,
+                fields
+            }
+        );
         assert_eq!(shape.canonical_display(), "{ x: number; y: number }");
     }
 
@@ -109,10 +109,17 @@ mod tests {
         fields.insert("x".to_string(), ObjectField::required(Type::Number));
         fields.insert("y".to_string(), ObjectField::optional(Type::String));
         let ty = Type::Object {
+            index: None,
             fields: fields.clone(),
         };
         let shape = Shape::from_type(&ty).expect("Object is a shape");
-        assert_eq!(shape, Shape::Object { fields });
+        assert_eq!(
+            shape,
+            Shape::Object {
+                index: None,
+                fields
+            }
+        );
         assert_eq!(shape.canonical_display(), "{ x: number; y?: string }");
     }
 
@@ -205,8 +212,14 @@ mod tests {
         fields_a.insert("x".to_string(), ObjectField::required(Type::Number));
         let mut fields_b = BTreeMap::new();
         fields_b.insert("x".to_string(), ObjectField::required(Type::Number));
-        set.insert(Shape::Object { fields: fields_a });
-        set.insert(Shape::Object { fields: fields_b });
+        set.insert(Shape::Object {
+            index: None,
+            fields: fields_a,
+        });
+        set.insert(Shape::Object {
+            index: None,
+            fields: fields_b,
+        });
         set.insert(Shape::Array(Box::new(Type::Number)));
         assert_eq!(set.len(), 2);
     }
@@ -216,9 +229,13 @@ mod tests {
         let mut fields = BTreeMap::new();
         fields.insert("x".to_string(), ObjectField::required(Type::Number));
         let ty = Type::Object {
+            index: None,
             fields: fields.clone(),
         };
-        let shape = Shape::Object { fields };
+        let shape = Shape::Object {
+            index: None,
+            fields,
+        };
         assert_eq!(shape.canonical_display(), ty.to_string());
 
         let ty = Type::Array(Box::new(Type::String));

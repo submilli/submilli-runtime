@@ -112,12 +112,14 @@ fn is_headline_type(name: &str) -> bool {
 pub fn builtins() -> Builtins {
     let defs = builtin_package_declaration();
     // `defs.types`/`namespaces` are `BTreeMap`s, so keys arrive sorted.
-    let types = defs
+    let mut types: Vec<String> = defs
         .types
         .keys()
         .filter(|n| is_headline_type(n))
         .cloned()
         .collect();
+    types.push("Record".into());
+    types.sort();
     let mut namespaces: Vec<String> = defs.namespaces.keys().cloned().collect();
     namespaces.push(JSON_BUILTIN.to_string());
     namespaces.sort();
@@ -172,6 +174,9 @@ pub fn builtin_lookup(name: &str) -> BuiltinLookup {
         return BuiltinLookup::Unknown;
     };
 
+    if head.eq_ignore_ascii_case("Record") && rest.is_empty() {
+        return BuiltinLookup::Found("/** Record<K, V> accepts string keys. With K = string, reads return V | null and writes require V. Finite string-literal keys are all required. Equivalent open syntax: { [key: string]: V }. */\ntype Record<K extends string, V> = { [P in K]: V };\n".into());
+    }
     if head.eq_ignore_ascii_case(JSON_BUILTIN) {
         let defs = json_package_declaration();
         return walk_namespace(JSON_BUILTIN, &defs.namespaces[JSON_BUILTIN], rest);
@@ -1045,6 +1050,7 @@ fn render_ts_type(
             generics,
             methods,
             properties,
+            index,
             ..
         } => {
             let _ = writeln!(
@@ -1052,6 +1058,10 @@ fn render_ts_type(
                 "{indent}{export_prefix}interface {name}{} {{",
                 ts_interface_generics(name, generics, export_prefix)
             );
+            if let Some(index) = index {
+                let ro = if index.readonly { "readonly " } else { "" };
+                let _ = writeln!(out, "{inner}{ro}[key: string]: {};", ts_type(&index.value));
+            }
             for (pname, prop) in properties {
                 push_doc(out, &prop.doc, &inner);
                 let ro = if prop.readonly { "readonly " } else { "" };
@@ -1353,19 +1363,24 @@ fn ts_type(ty: &Type) -> String {
             );
             format!("({params}) => {ret}")
         }
-        Type::Object { fields } => {
-            if fields.is_empty() {
-                return "{}".to_string();
-            }
-            let fields = fields
+        Type::Object { fields, index } => {
+            let mut members: Vec<String> = fields
                 .iter()
                 .map(|(name, field)| {
                     let opt = if field.optional { "?" } else { "" };
-                    format!("{name}{opt}: {}", ts_type(&field.ty))
+                    let ro = if field.readonly { "readonly " } else { "" };
+                    format!("{ro}{name}{opt}: {}", ts_type(&field.ty))
                 })
-                .collect::<Vec<_>>()
-                .join("; ");
-            format!("{{ {fields} }}")
+                .collect();
+            if let Some(index) = index {
+                let ro = if index.readonly { "readonly " } else { "" };
+                members.push(format!("{ro}[key: string]: {}", ts_type(&index.value)));
+            }
+            if members.is_empty() {
+                "{}".into()
+            } else {
+                format!("{{ {} }}", members.join("; "))
+            }
         }
         Type::Array(elem) => format!("{}[]", ts_type_array_element(elem)),
         Type::Tuple(elements) => {

@@ -146,7 +146,7 @@ mod tests {
                 }
                 Ok(())
             }
-            Type::Object { fields } => {
+            Type::Object { fields, .. } => {
                 let obj = value.as_object().ok_or_else(|| err("object"))?;
                 for (name, field) in fields {
                     match obj.get(name) {

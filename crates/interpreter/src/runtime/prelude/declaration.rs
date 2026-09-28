@@ -105,6 +105,7 @@ pub(crate) fn insert_temporal_plain_type(
             mangled_name: crate::mangle::extend(temporal_prefix, local),
             declaration_span: Span::at(FileId::PRELUDE),
             kind: TypeKind::Interface {
+                index: None,
                 generics: Vec::new(),
                 methods,
                 properties,
@@ -148,6 +149,7 @@ pub(crate) fn insert_temporal_plain_type(
             mangled_name: crate::mangle::extend(temporal_prefix, &ctor_local),
             declaration_span: Span::at(FileId::PRELUDE),
             kind: TypeKind::Interface {
+                index: None,
                 generics: Vec::new(),
                 methods: ctor_methods,
                 properties: BTreeMap::new(),

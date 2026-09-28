@@ -255,10 +255,21 @@ impl<'a> Inferer<'a> {
             );
             return Type::Error;
         }
+        if let Some(index) = self.resolver().index_signature(&resolved)
+            && let Type::InterfaceRef {
+                mangled,
+                name,
+                args,
+                ..
+            } = resolved.peel()
+            && let Some(fields) = self.resolver().interface_full_form(mangled, name, args)
+        {
+            self.check_index_fields(&fields, Some(&index), annot.span);
+        }
         resolved
     }
 
-    fn resolve_type_inner(&mut self, annot: &TypeAnnotation) -> Type {
+    pub(super) fn resolve_type_inner(&mut self, annot: &TypeAnnotation) -> Type {
         match &annot.kind {
             TypeAnnotationKind::Name { name_span, args } => {
                 let text = &self.source[name_span.start as usize..name_span.end as usize];
@@ -455,14 +466,7 @@ impl<'a> Inferer<'a> {
                     return Type::Error;
                 }
                 if text == "Record" {
-                    self.error_with_help(
-                        annot.span,
-                        "`Record<K, V>` is not supported".to_string(),
-                        vec![
-                            "use `Map<K, V>` instead — Submilli has no index signatures. e.g. `const m = new Map<string, number>()`".to_string(),
-                        ],
-                    );
-                    return Type::Error;
+                    return self.resolve_record(args, annot.span);
                 }
                 let help: Vec<String> = self
                     .closest_type_name(text)
@@ -589,7 +593,7 @@ impl<'a> Inferer<'a> {
                 Type::Tuple(resolved)
             }
             TypeAnnotationKind::Readonly(operand) => readonly_of(self.resolve_type(operand)),
-            TypeAnnotationKind::Object { fields } => {
+            TypeAnnotationKind::Object { fields, index } => {
                 let mut resolved: std::collections::BTreeMap<String, crate::ObjectField> =
                     std::collections::BTreeMap::new();
                 for field in fields {
@@ -629,7 +633,14 @@ impl<'a> Inferer<'a> {
                             readonly: field.readonly,
                         });
                 }
-                Type::Object { fields: resolved }
+                let index = index
+                    .as_ref()
+                    .map(|annotation| self.resolve_index_signature(annotation));
+                self.check_index_fields(&resolved, index.as_ref(), annot.span);
+                Type::Object {
+                    index,
+                    fields: resolved,
+                }
             }
             TypeAnnotationKind::Function {
                 params,
@@ -725,7 +736,10 @@ impl<'a> Inferer<'a> {
     /// directly; an interface reference resolves through its declaring symbol.
     fn field_type_of(&self, ty: &Type, field: &str) -> Option<Type> {
         match ty.peel() {
-            Type::Object { fields } => fields.get(field).map(crate::types::ObjectField::read_ty),
+            Type::Object { fields, index } => fields
+                .get(field)
+                .map(crate::types::ObjectField::read_ty)
+                .or_else(|| index.as_ref().map(crate::IndexSignature::read_ty)),
             Type::InterfaceRef { .. } => {
                 let (mangled, _package, name, _args) = ty.interface_routing()?;
                 let sym = self.lookup_structural_type(&mangled, name)?;
@@ -742,6 +756,9 @@ impl<'a> Inferer<'a> {
 
     fn resolve_keyof(&mut self, operand: &TypeAnnotation) -> Type {
         let resolved = self.resolve_value_type(operand, ValuePosition::UnionMember);
+        if self.resolver().index_signature(&resolved).is_some() {
+            return Type::String;
+        }
         let Some(names) = self.member_names_of(&resolved) else {
             if !matches!(resolved.peel(), Type::Error) {
                 self.error(
@@ -759,7 +776,7 @@ impl<'a> Inferer<'a> {
     /// on the symbol are the whole surface.
     fn member_names_of(&self, ty: &Type) -> Option<Vec<String>> {
         match ty.peel() {
-            Type::Object { fields } => Some(fields.keys().cloned().collect()),
+            Type::Object { fields, .. } => Some(fields.keys().cloned().collect()),
             Type::InterfaceRef { .. } => {
                 let (mangled, _package, name, _args) = ty.interface_routing()?;
                 let sym = self.lookup_structural_type(&mangled, name)?;
@@ -795,6 +812,7 @@ mod tests {
             mangled_name: crate::mangle::package_symbol("test:ns", "SearchResult"),
             declaration_span: Span::at(crate::FileId(0)),
             kind: TypeKind::Interface {
+                index: None,
                 generics: Vec::new(),
                 methods: BTreeMap::new(),
                 properties: BTreeMap::new(),
@@ -807,6 +825,7 @@ mod tests {
             mangled_name: crate::mangle::package_symbol("test:ns", "Box"),
             declaration_span: Span::at(crate::FileId(0)),
             kind: TypeKind::Interface {
+                index: None,
                 generics: vec!["T".to_string()],
                 methods: BTreeMap::new(),
                 properties: BTreeMap::new(),

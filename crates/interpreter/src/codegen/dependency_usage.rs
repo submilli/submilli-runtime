@@ -394,7 +394,16 @@ impl DependencyUsage {
             self.shapes.insert(shape);
         }
         match ty.peel() {
-            Type::Object { fields } => {
+            Type::Object { fields, index } => {
+                if let Some(index) = index {
+                    self.collect_type(&index.value);
+                    for helper in ["#getField", "#setField", "#recordValues", "#hasField"] {
+                        self.note_member(crate::mangle::extend(
+                            &crate::mangle::prelude("ObjectConstructor"),
+                            helper,
+                        ));
+                    }
+                }
                 for field in fields.values() {
                     self.collect_type(&field.ty);
                 }

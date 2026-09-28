@@ -38,7 +38,8 @@ fn classify_default_ident(ident: &Ident, param_names: &BTreeSet<&str>) -> Defaul
 }
 
 impl<'a> Inferer<'a> {
-    pub(super) fn signatures(&mut self) {
+    pub(super) fn signatures(&mut self) -> bool {
+        self.pending_index_checks = Some(Vec::new());
         // Enums first — their bodies are value initializers, never type
         // references, so they have no forward-reference concern and
         // their names must be visible before any other body resolves.
@@ -56,21 +57,8 @@ impl<'a> Inferer<'a> {
         // runs in the pre-pass; the returned `skip` set names the decls
         // that hit one of those so the body binders below skip them.
         let skip = self.pre_register_type_names(&top_level);
-        // Interface bodies (alias references resolve on demand).
-        for stmt_id in &top_level {
-            let stmt = self.ast.stmt(*stmt_id).clone();
-            if let StmtKind::InterfaceDecl {
-                name,
-                generics,
-                members,
-                doc,
-            } = stmt.kind
-            {
-                if skip.contains(&name.name) {
-                    continue;
-                }
-                self.bind_interface(name, generics, members, doc);
-            }
+        if !self.bind_interfaces_in_order(&top_level, &skip) {
+            return false;
         }
         // Class signatures. Names are forward-declared, so `extends` /
         // field+method types may reference any class or interface.
@@ -153,6 +141,9 @@ impl<'a> Inferer<'a> {
         for name in pending {
             self.resolve_alias_body(&name);
         }
+        self.validate_bound_interfaces(&top_level, &skip);
+        self.check_pending_indexes();
+        true
     }
 
     /// forward-declare every interface + alias name with a
@@ -191,6 +182,7 @@ impl<'a> Inferer<'a> {
                             mangled_name: mangled,
                             declaration_span: name.span,
                             kind: TypeKind::Interface {
+                                index: None,
                                 generics: generic_names,
                                 methods: BTreeMap::new(),
                                 properties: BTreeMap::new(),
@@ -297,11 +289,12 @@ impl<'a> Inferer<'a> {
         skip
     }
 
-    fn bind_interface(
+    pub(super) fn bind_interface(
         &mut self,
         name: Ident,
         generics: Vec<Ident>,
         members: Vec<InterfaceMember>,
+        extends: Vec<crate::TypeAnnotation>,
         doc: Option<crate::DocComment>,
     ) {
         // Duplicate detection happened in `pre_register_type_names`;
@@ -312,8 +305,22 @@ impl<'a> Inferer<'a> {
         let mut method_sigs: BTreeMap<String, MethodSig> = BTreeMap::new();
         let mut property_sigs: BTreeMap<String, PropertySig> = BTreeMap::new();
         let mut typed_members: Vec<crate::TypedInterfaceMember> = Vec::new();
+        let mut index = None;
+        for base in extends {
+            self.inherit_interface(&base, &mut method_sigs, &mut property_sigs, &mut index);
+        }
+        let mut own_names = BTreeSet::new();
+        let mut own_index = false;
         for member in members {
             match member {
+                InterfaceMember::IndexSignature(annotation) => {
+                    let resolved = self.resolve_index_signature(&annotation);
+                    if own_index {
+                        self.error(annotation.span, "duplicate string index signature".into());
+                    }
+                    own_index = true;
+                    index = Some(resolved);
+                }
                 InterfaceMember::Method {
                     name: m_name,
                     generics: m_generics,
@@ -322,9 +329,7 @@ impl<'a> Inferer<'a> {
                     span: _,
                     doc: m_doc,
                 } => {
-                    if method_sigs.contains_key(&m_name.name)
-                        || property_sigs.contains_key(&m_name.name)
-                    {
+                    if !own_names.insert(m_name.name.clone()) {
                         // `@call` is the call-signature sentinel — give it a distinct duplicate message.
                         let message = if m_name.name == "@call" {
                             format!("duplicate call signature on interface `{}`", name.name,)
@@ -391,6 +396,7 @@ impl<'a> Inferer<'a> {
                         return_type: resolved_ret.clone(),
                         doc: m_doc.clone(),
                     });
+                    property_sigs.remove(&m_name.name);
                     method_sigs.insert(
                         m_name.name,
                         MethodSig {
@@ -410,9 +416,7 @@ impl<'a> Inferer<'a> {
                     span: _,
                     doc: p_doc,
                 } => {
-                    if method_sigs.contains_key(&p_name.name)
-                        || property_sigs.contains_key(&p_name.name)
-                    {
+                    if !own_names.insert(p_name.name.clone()) {
                         self.diagnostics.push(Diagnostic {
                             severity: Severity::Error,
                             span: p_name.span,
@@ -433,6 +437,7 @@ impl<'a> Inferer<'a> {
                         optional,
                         doc: p_doc.clone(),
                     });
+                    method_sigs.remove(&p_name.name);
                     property_sigs.insert(
                         p_name.name,
                         PropertySig {
@@ -451,6 +456,7 @@ impl<'a> Inferer<'a> {
             name: name.clone(),
             generics: generic_names.clone(),
             members: typed_members,
+            index: index.clone(),
             doc: doc.clone(),
         });
         let mangled = self.mangle_top_symbol(&name.name);
@@ -459,6 +465,7 @@ impl<'a> Inferer<'a> {
             mangled_name: mangled,
             declaration_span: name.span,
             kind: TypeKind::Interface {
+                index,
                 generics: generic_names,
                 methods: method_sigs,
                 properties: property_sigs,

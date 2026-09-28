@@ -12,7 +12,7 @@ fn compose_param_narrowing(
     let base = env
         .get(path)
         .map_or_else(|| param_ty.clone(), |view| view.narrowed_ty.clone());
-    let Type::Object { fields } = base.peel().clone() else {
+    let Type::Object { fields, index } = base.peel().clone() else {
         return base;
     };
     let mut refined = fields;
@@ -36,7 +36,10 @@ fn compose_param_narrowing(
             }
         }
     }
-    Type::Object { fields: refined }
+    Type::Object {
+        index,
+        fields: refined,
+    }
 }
 
 impl Inferer<'_> {

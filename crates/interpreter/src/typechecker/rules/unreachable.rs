@@ -203,7 +203,9 @@ fn walk_expr(ta: &TypedAst, expr_id: ExprId, diags: &mut Vec<Diagnostic>) {
         }
         TypedExprKind::ObjectLiteral { members, .. } => {
             for member in members {
-                walk_expr(ta, member.expr_id(), diags);
+                for expression in member.expressions() {
+                    walk_expr(ta, expression, diags);
+                }
             }
         }
         TypedExprKind::ArrayLiteral { elements, .. } => {

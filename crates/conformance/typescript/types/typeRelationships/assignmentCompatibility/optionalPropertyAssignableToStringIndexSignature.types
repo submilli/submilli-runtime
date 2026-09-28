@@ -1,0 +1,74 @@
+=== optionalPropertyAssignableToStringIndexSignature.ts ===
+
+let optionalProperties: { k1?: string } = null as unknown as ({ k1?: string });
+>optionalProperties : { k1?: string; }
+>                   : ^^^^^^^^^^^^^^^^
+>k1 : string | undefined
+>   : ^^^^^^^^^^^^^^^^^^
+>null as unknown as ({ k1?: string }) : { k1?: string; }
+>                                     : ^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>k1 : string | undefined
+>   : ^^^^^^^^^^^^^^^^^^
+
+let undefinedProperties: { k1: string | null } = null as unknown as ({ k1: string | null });
+>undefinedProperties : { k1: string | null; }
+>                    : ^^^^^^^^^^^^^^^^^^^^^^
+>k1 : string | null
+>   : ^^^^^^^^^^^^^
+>null as unknown as ({ k1: string | null }) : { k1: string | null; }
+>                                           : ^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>k1 : string | null
+>   : ^^^^^^^^^^^^^
+
+
+let stringDictionary: { [key: string]: string } = null as unknown as ({ [key: string]: string });
+>stringDictionary : { [key: string]: string; }
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>key : string
+>    : ^^^^^^
+>null as unknown as ({ [key: string]: string }) : { [key: string]: string; }
+>                                               : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>key : string
+>    : ^^^^^^
+
+stringDictionary = optionalProperties;  // ok
+>stringDictionary = optionalProperties : { k1?: string; }
+>                                      : ^^^^^^^^^^^^^^^^
+>stringDictionary : { [key: string]: string; }
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>optionalProperties : { k1?: string; }
+>                   : ^^^^^^^^^^^^^^^^
+
+stringDictionary = undefinedProperties; // error
+>stringDictionary = undefinedProperties : { k1: string | null; }
+>                                       : ^^^^^^^^^^^^^^^^^^^^^^
+>stringDictionary : { [key: string]: string; }
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>undefinedProperties : { k1: string | null; }
+>                    : ^^^^^^^^^^^^^^^^^^^^^^
+
+
+/*pruned*/
+/*pruned*/
+/*pruned*/
+
+/*pruned*/
+/*pruned*/
+
+/*pruned*/
+/*pruned*/
+/*pruned*/
+/*pruned*/
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

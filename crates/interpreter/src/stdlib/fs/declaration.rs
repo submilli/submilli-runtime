@@ -272,7 +272,7 @@ fn insert_stat_interface(defs: &mut PackageDeclaration) {
             name: "Stat".to_string(),
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "Stat"),
             declaration_span: Span::at(crate::FileId::FS),
-            kind: TypeKind::Interface {
+            kind: TypeKind::Interface { index: None,
                 generics: Vec::new(),
                 methods: BTreeMap::new(),
                 properties,
@@ -317,7 +317,7 @@ fn insert_peek_interface(defs: &mut PackageDeclaration) {
             name: "Peek".to_string(),
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "Peek"),
             declaration_span: Span::at(crate::FileId::FS),
-            kind: TypeKind::Interface {
+            kind: TypeKind::Interface { index: None,
                 generics: Vec::new(),
                 methods: BTreeMap::new(),
                 properties,
@@ -362,7 +362,7 @@ fn insert_dir_entry_interface(defs: &mut PackageDeclaration) {
             name: "DirEntry".to_string(),
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "DirEntry"),
             declaration_span: Span::at(crate::FileId::FS),
-            kind: TypeKind::Interface {
+            kind: TypeKind::Interface { index: None,
                 generics: Vec::new(),
                 methods: BTreeMap::new(),
                 properties,
@@ -401,7 +401,7 @@ fn insert_info_interface(defs: &mut PackageDeclaration) {
             name: "Info".to_string(),
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "Info"),
             declaration_span: Span::at(crate::FileId::FS),
-            kind: TypeKind::Interface {
+            kind: TypeKind::Interface { index: None,
                 generics: Vec::new(),
                 methods: BTreeMap::new(),
                 properties,
@@ -458,7 +458,7 @@ fn insert_file_writer_interface(defs: &mut PackageDeclaration) {
             name: "FileWriter".to_string(),
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "FileWriter"),
             declaration_span: Span::at(crate::FileId::FS),
-            kind: TypeKind::Interface {
+            kind: TypeKind::Interface { index: None,
                 generics: Vec::new(),
                 methods,
                 properties: BTreeMap::new(),

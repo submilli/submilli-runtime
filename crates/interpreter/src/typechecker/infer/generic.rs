@@ -108,7 +108,10 @@ pub(super) fn substitute_typevars(ty: &Type, bindings: &BTreeMap<String, Type>) 
             }),
             has_rest: *has_rest,
         },
-        Type::Object { fields } => Type::Object {
+        Type::Object { fields, index } => Type::Object {
+            index: index
+                .as_ref()
+                .map(|i| i.map_value(|v| substitute_typevars(v, bindings))),
             fields: fields
                 .iter()
                 .map(|(k, v)| {
@@ -215,7 +218,8 @@ pub(super) fn erase_generic_params(ty: &Type) -> Type {
             ty: Box::new(erase_generic_params(ty)),
         },
         Type::GenericParam { name, .. } => Type::TypeVar(name.clone()),
-        Type::Object { fields } => Type::Object {
+        Type::Object { fields, index } => Type::Object {
+            index: index.as_ref().map(|i| i.map_value(erase_generic_params)),
             fields: fields
                 .iter()
                 .map(|(k, v)| {
@@ -1533,7 +1537,7 @@ mod tests {
                 }
                 collect_gps(ret, out);
             }
-            Type::Object { fields } => {
+            Type::Object { fields, .. } => {
                 for v in fields.values() {
                     collect_gps(&v.ty, out);
                 }
@@ -1688,7 +1692,9 @@ mod tests {
             }
             crate::TypedExprKind::ObjectLiteral { members, .. } => {
                 for member in members {
-                    collect_expr_types(ta, member.expr_id(), out);
+                    for expression in member.expressions() {
+                        collect_expr_types(ta, expression, out);
+                    }
                 }
             }
             crate::TypedExprKind::ArrayLiteral { elements, .. } => {

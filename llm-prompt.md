@@ -104,16 +104,21 @@ class methods; arrow functions can infer them.
 No runtime reflection: of `Object.prototype` only `.toString()` is
 available — no `.hasOwnProperty()`. The type system tells you what
 fields a value has; narrow optional values with `obj.field !== null`.
-`"field" in obj` (string-literal key only) narrows `unknown` or unions
-distinguished by field presence.
+`"field" in obj` narrows `unknown` or unions distinguished by field presence.
+Dynamic string keys also work with `key in obj`, without narrowing.
 Identifiers follow TypeScript — `type`, `from`,
 `of`, `as`, and `is` are contextual and may name variables — with one
 exception: `namespace` is reserved here, so rename it (`ns`). Reserved
 words are fine as object keys (`{ type: "x" }`, read back as
 `obj.type`); for keys that aren't valid identifiers, quote them and
 index with a string literal (`{ "content-length": 5 }` →
-`obj["content-length"]`). There is no dynamic `obj[key]` — use
-`Map<string, V>` for dynamic string keys.
+`obj["content-length"]`). Use `Record<string, V>` or `{ [key: string]: V }`
+for dynamic `obj[key]` reads and writes. Missing reads return `null`, so their
+read type is `V | null`; writes require `V`. `Record<"a" | "b", V>` requires
+both keys and reads them as `V`. Computed literals (`{ [key]: value }`), spread,
+and readonly string index signatures are supported. Keys must be strings;
+`keyof` an open string-indexed type is `string`. General mapped types and
+unresolved generic Record keys are unsupported.
 Every program needs `function main()`; its return
 value is the output, delivered as a string: a `string` is emitted
 verbatim (so don't `JSON.stringify` it yourself — that double-encodes),

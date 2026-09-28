@@ -327,7 +327,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "Set".to_string(),
             mangled_name: crate::mangle::prelude("Set"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface {
+            kind: TypeKind::Interface { index: None,
                 generics: vec!["T".to_string()],
                 methods: BTreeMap::from([
                     (
@@ -623,7 +623,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "SetConstructor".to_string(),
             mangled_name: crate::mangle::prelude("SetConstructor"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface {
+            kind: TypeKind::Interface { index: None,
                 generics: Vec::new(),
                 methods: BTreeMap::from([(
                     "new".to_string(),

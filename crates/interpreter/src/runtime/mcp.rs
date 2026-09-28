@@ -196,13 +196,22 @@ mod tests {
 
         let mut arg_fields = BTreeMap::new();
         arg_fields.insert("msg".to_string(), ObjectField::required(Type::String));
-        let arg_obj = Type::Object { fields: arg_fields };
+        let arg_obj = Type::Object {
+            index: None,
+            fields: arg_fields,
+        };
         let mut ret_fields = BTreeMap::new();
         ret_fields.insert("reply".to_string(), ObjectField::required(Type::String));
-        let ret_obj = Type::Object { fields: ret_fields };
+        let ret_obj = Type::Object {
+            index: None,
+            fields: ret_fields,
+        };
         let mut opt_fields = BTreeMap::new();
         opt_fields.insert("user".to_string(), ObjectField::optional(Type::String));
-        let opt_arg_obj = Type::Object { fields: opt_fields };
+        let opt_arg_obj = Type::Object {
+            index: None,
+            fields: opt_fields,
+        };
         defs.shapes.push(Shape::from_type(&arg_obj).unwrap());
         defs.shapes.push(Shape::from_type(&ret_obj).unwrap());
         defs.shapes.push(Shape::from_type(&opt_arg_obj).unwrap());

@@ -178,8 +178,12 @@ impl PackageShapeCollector {
             TypeKind::Interface {
                 methods,
                 properties,
+                index,
                 ..
             } => {
+                if let Some(index) = index {
+                    self.collect_type(&index.value);
+                }
                 for method in methods.values() {
                     for param in &method.params {
                         self.collect_type(&param.ty);
@@ -238,7 +242,7 @@ impl PackageShapeCollector {
 
     fn collect_type(&mut self, ty: &Type) {
         match ty {
-            Type::Object { fields } => {
+            Type::Object { fields, .. } => {
                 self.collect_shape(ty);
                 for field in fields.values() {
                     self.collect_type(&field.ty);
@@ -455,6 +459,7 @@ pub enum TypeKind {
         /// Read via `expr.name` (not `expr.name()`). Writable unless the
         /// declaration carries a `readonly` modifier (`PropertySig.readonly`).
         properties: BTreeMap<String, PropertySig>,
+        index: Option<crate::IndexSignature>,
         dispatch: Dispatch,
         doc: Option<crate::DocComment>,
     },
@@ -667,7 +672,7 @@ mod tests {
             .shapes
             .iter()
             .find_map(|s| match s {
-                crate::Shape::Object { fields } => Some(fields),
+                crate::Shape::Object { fields, .. } => Some(fields),
                 _ => None,
             })
             .expect("object shape in defs.shapes");
@@ -690,7 +695,7 @@ mod tests {
             .shapes
             .iter()
             .filter_map(|shape| {
-                let crate::Shape::Object { fields } = shape else {
+                let crate::Shape::Object { fields, .. } = shape else {
                     return None;
                 };
                 fields.get("x").map(|field| field.readonly)

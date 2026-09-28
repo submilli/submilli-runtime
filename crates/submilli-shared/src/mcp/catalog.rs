@@ -317,7 +317,10 @@ fn object_type(
         };
         fields.insert(name.clone(), field);
     }
-    Some(Type::Object { fields })
+    Some(Type::Object {
+        index: None,
+        fields,
+    })
 }
 
 /// Map an `anyOf`/`oneOf` of scalar members to a union (e.g. a nullable field
@@ -414,7 +417,7 @@ fn collect_shapes(ty: &Type, out: &mut Vec<Shape>) {
         out.push(shape);
     }
     match ty {
-        Type::Object { fields } => {
+        Type::Object { fields, .. } => {
             for field in fields.values() {
                 collect_shapes(&field.ty, out);
             }
@@ -576,7 +579,7 @@ mod tests {
             panic!("expected function");
         };
         match &params[0].ty {
-            Type::Object { fields } => fields,
+            Type::Object { fields, .. } => fields,
             other => panic!("expected an object arg, got {other:?}"),
         }
     }
@@ -694,7 +697,10 @@ mod tests {
         inner.insert("since".to_string(), ObjectField::required(Type::String));
         assert_eq!(
             args_fields(&defs, "search")["filter"].ty,
-            Type::Object { fields: inner }
+            Type::Object {
+                index: None,
+                fields: inner
+            }
         );
     }
 
@@ -847,7 +853,13 @@ mod tests {
         let mut fields = BTreeMap::new();
         fields.insert("id".to_string(), ObjectField::required(Type::String));
         fields.insert("age".to_string(), ObjectField::required(Type::Number));
-        assert_eq!(func_ret(&defs, "getUser"), Type::Object { fields });
+        assert_eq!(
+            func_ret(&defs, "getUser"),
+            Type::Object {
+                index: None,
+                fields
+            }
+        );
         assert!(warnings.is_empty(), "fully typed tool warns nothing");
     }
 
@@ -867,7 +879,10 @@ mod tests {
         let mut fields = BTreeMap::new();
         fields.insert("id".to_string(), ObjectField::required(Type::String));
         assert!(
-            defs.shapes.contains(&Shape::Object { fields }),
+            defs.shapes.contains(&Shape::Object {
+                index: None,
+                fields
+            }),
             "return object shape must be registered: {:?}",
             defs.shapes
         );
@@ -1014,7 +1029,13 @@ mod tests {
             build_mcp_definitions("x", &[tool("act", r#"{"type":"object"}"#)], Some(&p));
         let mut fields = BTreeMap::new();
         fields.insert("id".to_string(), ObjectField::required(Type::String));
-        assert_eq!(func_ret(&defs, "act"), Type::Object { fields });
+        assert_eq!(
+            func_ret(&defs, "act"),
+            Type::Object {
+                index: None,
+                fields
+            }
+        );
         assert!(
             warnings.is_empty(),
             "an overlaid tool must not warn about an untyped output"
@@ -1043,7 +1064,13 @@ mod tests {
             "fromServer".to_string(),
             ObjectField::required(Type::String),
         );
-        assert_eq!(func_ret(&defs, "act"), Type::Object { fields });
+        assert_eq!(
+            func_ret(&defs, "act"),
+            Type::Object {
+                index: None,
+                fields
+            }
+        );
     }
 
     #[test]
@@ -1115,7 +1142,7 @@ mod tests {
         let entry = tool("get_me", r#"{"type":"object","properties":{}}"#);
         let (defs, warnings) = build_mcp_definitions("gh", &[entry], Some(pack));
 
-        let Type::Object { fields } = func_ret(&defs, "get_me") else {
+        let Type::Object { fields, .. } = func_ret(&defs, "get_me") else {
             panic!("get_me should have a structured return");
         };
         assert_eq!(

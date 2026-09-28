@@ -192,13 +192,44 @@ Use `||` to also replace values such as `0`, `false`, and an empty string.
 The non-null assertion `value!` checks at runtime and throws `TypeError` if
 the value is null.
 
+## String-keyed records
+
+Use `Record<string, V>` for an object whose property names are known at runtime.
+The equivalent index-signature syntax is `{ [key: string]: V }`.
+
+```typescript
+function main(): number {
+  const counts: Record<string, number> = {};
+  const word = "hello";
+  counts[word] = (counts[word] ?? 0) + 1;
+  return counts[word]!;
+}
+```
+
+Open-record reads return `V | null`; a missing key returns `null`. Writes require
+`V`. A present property can also contain `null` when `V` allows it; use
+`key in record` or `Object.hasOwn(record, key)` to distinguish presence.
+Computed literals (`{ [key]: value }`), object spread, enumeration, and JSON
+serialization use the object's actual properties. Casts such as
+`JSON.parse(text) as Record<string, number>` validate the present values.
+
+Finite records such as `Record<"name" | "email", string>` require both properties
+and read them as `string`. Aliases, generic value types, string index signatures
+in interfaces, and interface inheritance are supported. A `readonly` index
+signature prohibits writes through that view.
+
+Only string keys are supported. `keyof` an open string-indexed object is
+`string`; numeric keys, symbol keys, general mapped types, unresolved generic
+key parameters, and `delete` are unsupported. Dynamic `in` checks return a
+boolean without introducing new narrowing facts.
+
 ## Other TypeScript differences
 
 | Feature | Submilli behavior |
 | --- | --- |
 | `==` and `!=` | Aliases for strict equality. `1 == "1"` fails at compile time. |
 | `items[index]` | Out-of-range array reads and writes throw at runtime. Use `push` to append. |
-| `object[key]` | Dynamic object keys are rejected at compile time. Use `Map<string, V>`. |
+| `object[key]` | Arbitrary string keys require `Record<string, V>` or a string index signature. Missing keys return `null`. |
 | Runtime APIs | Use Submilli's standard library and installed Submilli packages. Node.js APIs, browser globals, and npm packages aren't available. |
 | `Date` | Use the built-in `Temporal` API. |
 | `Symbol`, `Proxy`, prototype reflection | Not available. |

@@ -912,7 +912,12 @@ impl TypeText<'_> {
         let mut fields = Vec::new();
         self.eat(" ");
         while !self.eat("}") {
-            let name = self.word()?;
+            let readonly = if self.eat("readonly ") {
+                "readonly "
+            } else {
+                ""
+            };
+            let name = self.object_member_name()?;
             let optional = if self.eat("?") { "?" } else { "" };
             let ty = if self.rest().starts_with('(') {
                 // A method signature, `m(a: T): R`, is the field `m: (a: T) => R`.
@@ -927,7 +932,7 @@ impl TypeText<'_> {
             } else {
                 return None;
             };
-            fields.push(format!("{name}{optional}: {ty}"));
+            fields.push(format!("{readonly}{name}{optional}: {ty}"));
             let separated = self.eat(";") || self.eat(",");
             self.eat(" ");
             if !separated && !self.rest().starts_with('}') {
@@ -940,6 +945,19 @@ impl TypeText<'_> {
         } else {
             format!("{{ {} }}", fields.join("; "))
         })
+    }
+
+    /// Index parameter names are labels; their key types remain significant.
+    fn object_member_name(&mut self) -> Option<String> {
+        if !self.eat("[") {
+            return self.word();
+        }
+        self.word()?;
+        if !self.eat(": ") {
+            return None;
+        }
+        let key = self.union_text()?;
+        self.eat("]").then(|| format!("[key: {key}]"))
     }
 
     /// Items read by `item`, separated by `, `, through the closing `close`.
@@ -1082,6 +1100,25 @@ fn normalizing_equates_equivalent_spellings() {
         normalize_type("string | readonly (number | null)[]"),
         normalize_type("readonly (null | number)[] | string")
     );
+}
+
+#[test]
+fn normalizing_index_signatures_ignores_only_parameter_names() {
+    assert_eq!(
+        normalize_type("{ readonly [name: string]: number | null; x: number; }"),
+        normalize_type("{ x: number; readonly [key: string]: null | number }")
+    );
+    for distinct in [
+        "{ [key: number]: number }",
+        "{ readonly [key: string]: number }",
+        "{ [key: string]: string }",
+        "{ key: number }",
+    ] {
+        assert_ne!(
+            normalize_type("{ [name: string]: number }"),
+            normalize_type(distinct)
+        );
+    }
 }
 
 #[test]

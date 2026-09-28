@@ -406,6 +406,13 @@ fn emit_expr_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) 
             );
         }
         TypedExprKind::ObjectLiteral { members, fields } => {
+            if members
+                .iter()
+                .any(|member| matches!(member, TypedObjectMember::Computed { .. }))
+            {
+                emit_computed_object(emitter, ctx, members);
+                return;
+            }
             // Interface contextual typing keeps the result nominal; recover the
             // structural shape from the literal's field metadata for allocation.
             let structural_ty: Type = match &expr.ty {
@@ -424,7 +431,10 @@ fn emit_expr_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) 
                             )
                         })
                         .collect();
-                    Type::Object { fields: field_map }
+                    Type::Object {
+                        index: None,
+                        fields: field_map,
+                    }
                 }
                 other => {
                     panic!("ObjectLiteral expr.ty must be Object or InterfaceRef, got {other:?}",)
@@ -447,6 +457,7 @@ fn emit_expr_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) 
                 .expect("object shape type recorded during object-emission pass");
             let Type::Object {
                 fields: declared_fields,
+                ..
             } = &structural_ty
             else {
                 unreachable!("structural_ty is Type::Object by construction above");
@@ -509,6 +520,33 @@ fn emit_expr_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) 
         }
         TypedExprKind::FieldAccess { receiver, name } => {
             let receiver_ty = ctx.ta.source_type(*receiver).clone();
+            if ctx.ta.has_string_index(&receiver_ty) {
+                emit_expr(emitter, ctx, *receiver);
+                cast::emit_box(emitter, ctx, &ctx.ta.expr(*receiver).ty);
+                let Some(symbol) = ctx.require(
+                    ctx.symbols.field_name_string_global_idx(&name.name),
+                    "property name collected",
+                ) else {
+                    return;
+                };
+                emitter.instruction(Instruction::GlobalGet(symbol));
+                let Some(symbol) = ctx.require(
+                    ctx.symbols.prelude_func_idx("ObjectConstructor##getField"),
+                    "record read imported",
+                ) else {
+                    return;
+                };
+                emitter.instruction(Instruction::Call(symbol));
+                let checked_ty = ctx.ta.source_type(id);
+                crate::codegen::cast_check::emit_checked_cast_on_stack(
+                    emitter,
+                    ctx,
+                    &Type::Unknown,
+                    checked_ty,
+                );
+                cast::emit_coerce_to_slot(emitter, ctx, checked_ty, &expr.ty);
+                return;
+            }
             // Class instance: nominal receiver, array-backed object payload.
             if let Type::ClassRef { mangled, .. } = receiver_ty.peel() {
                 // Accessor property (no data slot): dispatch the synthetic getter.
@@ -733,7 +771,32 @@ fn emit_expr_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) 
             // recipe forks on the static receiver type. Tuples lower
             // to `$Array` and fall through to the default arm.
             let recv_ty = ctx.ta.source_type(*receiver).clone();
-            if recv_ty.peel() == &Type::Uint8Array {
+            if recv_ty.is_structural_object() {
+                emit_expr(emitter, ctx, *receiver);
+                cast::emit_box(emitter, ctx, &ctx.ta.expr(*receiver).ty);
+                emit_expr(emitter, ctx, *index);
+                crate::codegen::cast_check::emit_operation_cast_on_stack(
+                    emitter,
+                    ctx,
+                    &ctx.ta.expr(*index).ty,
+                    &Type::String,
+                );
+                let Some(symbol) = ctx.require(
+                    ctx.symbols.prelude_func_idx("ObjectConstructor##getField"),
+                    "dynamic read imported",
+                ) else {
+                    return;
+                };
+                emitter.instruction(Instruction::Call(symbol));
+                let checked_ty = ctx.ta.source_type(id);
+                crate::codegen::cast_check::emit_checked_cast_on_stack(
+                    emitter,
+                    ctx,
+                    &Type::Unknown,
+                    checked_ty,
+                );
+                cast::emit_coerce_to_slot(emitter, ctx, checked_ty, &expr.ty);
+            } else if recv_ty.peel() == &Type::Uint8Array {
                 emit_expr(emitter, ctx, *receiver);
                 emit_uint8_index_with_receiver_on_stack(emitter, ctx, *index);
             } else {
@@ -1085,7 +1148,23 @@ fn emit_expr_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: ExprId) 
             );
         }
         TypedExprKind::PostfixUnary { op, target } => {
-            emit_postfix_unary(emitter, ctx, *op, target, &expr.ty);
+            if let crate::PostfixTarget::Index {
+                receiver, index, ..
+            } = target
+                && ctx.ta.source_type(*receiver).is_structural_object()
+            {
+                emit_object_index_postfix(
+                    emitter,
+                    ctx,
+                    *receiver,
+                    *index,
+                    *op,
+                    ctx.ta.source_type(id),
+                );
+                cast::emit_coerce_to_slot(emitter, ctx, &Type::Unknown, &expr.ty);
+            } else {
+                emit_postfix_unary(emitter, ctx, *op, target, &expr.ty);
+            }
         }
         TypedExprKind::NonNullAssert { value } => {
             crate::codegen::cast_check::emit_non_null_assert(emitter, ctx, *value, &expr.ty);
@@ -2124,7 +2203,7 @@ fn emit_spread_mask(
 
 fn collect_spread_field_types(ty: &Type, fields: &mut std::collections::BTreeMap<String, Type>) {
     match ty.peel() {
-        Type::Object { fields: source } => {
+        Type::Object { fields: source, .. } => {
             for (name, field) in source {
                 fields
                     .entry(name.clone())
@@ -2144,7 +2223,7 @@ fn collect_spread_field_types(ty: &Type, fields: &mut std::collections::BTreeMap
 /// The final merge restores optional markers and writable absent slots from
 /// the inferred result shape, while retaining unnamed runtime fields.
 fn emit_spread_shape(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, shape: &Type) {
-    let Type::Object { fields } = shape else {
+    let Type::Object { fields, .. } = shape else {
         unreachable!("structural spread shape")
     };
     let intrinsics = ctx
@@ -2240,6 +2319,30 @@ fn emit_chain_access(
         crate::TypedChainPart::Field {
             name, result_ty, ..
         } => {
+            if ctx.ta.has_string_index(receiver_ty) {
+                let Some(symbol) = ctx.require(
+                    ctx.symbols.field_name_string_global_idx(&name.name),
+                    "property name collected",
+                ) else {
+                    return;
+                };
+                emitter.instruction(Instruction::GlobalGet(symbol));
+                let Some(symbol) = ctx.require(
+                    ctx.symbols.prelude_func_idx("ObjectConstructor##getField"),
+                    "record read imported",
+                ) else {
+                    return;
+                };
+                emitter.instruction(Instruction::Call(symbol));
+                crate::codegen::cast_check::emit_checked_cast_on_stack(
+                    emitter,
+                    ctx,
+                    &Type::Unknown,
+                    check_ty,
+                );
+                cast::emit_coerce_to_slot(emitter, ctx, check_ty, result_ty);
+                return;
+            }
             let intrinsics = ctx
                 .symbols
                 .intrinsic_type_indices()
@@ -2285,7 +2388,29 @@ fn emit_chain_access(
             emit_object_property_read_as(emitter, ctx, rcv_local, &name.name, result_ty, check_ty);
         }
         crate::TypedChainPart::Index { idx, result_ty, .. } => {
-            if receiver_ty.peel() == &Type::Uint8Array {
+            if receiver_ty.is_structural_object() {
+                emit_expr(emitter, ctx, *idx);
+                crate::codegen::cast_check::emit_operation_cast_on_stack(
+                    emitter,
+                    ctx,
+                    &ctx.ta.expr(*idx).ty,
+                    &Type::String,
+                );
+                let Some(symbol) = ctx.require(
+                    ctx.symbols.prelude_func_idx("ObjectConstructor##getField"),
+                    "record read imported",
+                ) else {
+                    return;
+                };
+                emitter.instruction(Instruction::Call(symbol));
+                crate::codegen::cast_check::emit_checked_cast_on_stack(
+                    emitter,
+                    ctx,
+                    &Type::Unknown,
+                    check_ty,
+                );
+                cast::emit_coerce_to_slot(emitter, ctx, check_ty, result_ty);
+            } else if receiver_ty.peel() == &Type::Uint8Array {
                 emit_uint8_index_with_receiver_on_stack(emitter, ctx, *idx);
             } else {
                 let source_ty = match receiver_ty.peel() {
@@ -2745,45 +2870,25 @@ fn emit_primitive_operand(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, expr:
 ///
 /// Presence uses the same slot scan as reads, without invoking accessors.
 fn emit_in_operator(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, lhs: ExprId, rhs: ExprId) {
-    let crate::TypedExprKind::String(name) = &ctx.ta.expr(lhs).kind else {
-        unreachable!("typechecker enforces string-literal LHS for `in`");
-    };
-    let intrinsics = ctx
-        .symbols
-        .intrinsic_type_indices()
-        .expect("intrinsics declared");
-    let name_global = ctx
-        .symbols
-        .field_name_string_global_idx(name)
-        .expect("in property interned");
-    let receiver_ty = &ctx.ta.expr(rhs).ty;
+    emit_expr(emitter, ctx, lhs);
+    crate::codegen::cast_check::emit_operation_cast_on_stack(
+        emitter,
+        ctx,
+        &ctx.ta.expr(lhs).ty,
+        &Type::String,
+    );
+    let key = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::String));
+    emitter.instruction(Instruction::LocalSet(key));
     emit_expr(emitter, ctx, rhs);
-    let object = stash_receiver_as_object_shape(emitter, receiver_ty, intrinsics.object_shape);
-    let index = emitter.add_anonymous_local(ValType::I32);
-    emit_object_field_index_by_name(emitter, ctx, object, name_global);
-    emitter.instruction(Instruction::LocalTee(index));
-    emitter.instruction(Instruction::I32Const(0));
-    emitter.instruction(Instruction::I32GeS);
-    emitter.emit_if(BlockType::Result(ValType::I32));
-    emitter.instruction(Instruction::LocalGet(object));
-    emitter.instruction(Instruction::StructGet {
-        struct_type_index: intrinsics.object_shape,
-        field_index: 1,
-    });
-    emitter.instruction(Instruction::LocalGet(index));
-    emitter.instruction(Instruction::ArrayGet(intrinsics.field_names));
-    crate::codegen::field_names::emit_name_presence(emitter, ctx);
-    emit_field_slot_get(emitter, intrinsics, object, index);
-    emitter.instruction(Instruction::RefIsNull);
-    emitter.instruction(Instruction::I32Eqz);
-    emitter.instruction(Instruction::I32Or);
-    emitter.emit_else();
-    let getter = crate::codegen::classes::accessor_getter_name(name);
-    let setter = crate::codegen::classes::accessor_setter_name(name);
-    emit_is_accessor_backed(emitter, ctx, object, &getter, crate::AccessorKind::Get);
-    emit_is_accessor_backed(emitter, ctx, object, &setter, crate::AccessorKind::Set);
-    emitter.instruction(Instruction::I32Or);
-    emitter.emit_end();
+    cast::emit_box(emitter, ctx, &ctx.ta.expr(rhs).ty);
+    emitter.instruction(Instruction::LocalGet(key));
+    let Some(symbol) = ctx.require(
+        ctx.symbols.prelude_func_idx("ObjectConstructor##hasField"),
+        "presence helper imported",
+    ) else {
+        return;
+    };
+    emitter.instruction(Instruction::Call(symbol));
 }
 
 /// Emit the constructor field-setup sequence for `mangled`: each own-field
@@ -5067,4 +5172,117 @@ pub(super) fn emit_index_number(emitter: &mut FunctionEmitter, ctx: &CodegenCtx,
     } else {
         cast::emit_coerce_to_slot(emitter, ctx, ty, &Type::Number);
     }
+}
+
+fn emit_computed_object(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    members: &[TypedObjectMember],
+) {
+    let Some(intr) = ctx.require(ctx.symbols.intrinsic_type_indices(), "intrinsics declared")
+    else {
+        return;
+    };
+    let Some(merge) = ctx.require(
+        ctx.symbols.prelude_func_idx("ObjectConstructor##spread"),
+        "spread helper imported",
+    ) else {
+        return;
+    };
+    let object = emitter.add_anonymous_local(ValType::Ref(RefType {
+        nullable: false,
+        heap_type: HeapType::Concrete(intr.object_shape),
+    }));
+    for _ in 0..4 {
+        emitter.instruction(Instruction::RefNull(HeapType::Concrete(intr.object)));
+    }
+    emitter.instruction(Instruction::Call(merge));
+    emitter.instruction(Instruction::LocalSet(object));
+    for member in members {
+        emitter.instruction(Instruction::LocalGet(object));
+        match member {
+            TypedObjectMember::Computed { key, value } => {
+                emit_expr(emitter, ctx, *key);
+                crate::codegen::cast_check::emit_operation_cast_on_stack(
+                    emitter,
+                    ctx,
+                    &ctx.ta.expr(*key).ty,
+                    &Type::String,
+                );
+                emit_expr(emitter, ctx, *value);
+                cast::emit_box(emitter, ctx, &ctx.ta.expr(*value).ty);
+                let Some(symbol) = ctx.require(
+                    ctx.symbols.prelude_func_idx("ObjectConstructor##setField"),
+                    "dynamic write imported",
+                ) else {
+                    return;
+                };
+                emitter.instruction(Instruction::Call(symbol));
+            }
+            TypedObjectMember::Spread { source, .. } => {
+                emit_expr(emitter, ctx, *source);
+                for _ in 0..2 {
+                    emitter.instruction(Instruction::RefNull(HeapType::Concrete(intr.object)));
+                }
+                emitter.instruction(Instruction::Call(merge));
+                emitter.instruction(Instruction::LocalSet(object));
+            }
+            TypedObjectMember::Value(_) => {
+                ctx.fail("computed literal contains an unlowered named field");
+                return;
+            }
+        }
+    }
+    emitter.instruction(Instruction::LocalGet(object));
+}
+
+fn emit_object_index_postfix(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    receiver: ExprId,
+    index: ExprId,
+    op: crate::PostfixOp,
+    read_ty: &Type,
+) {
+    emit_expr(emitter, ctx, receiver);
+    cast::emit_box(emitter, ctx, &ctx.ta.expr(receiver).ty);
+    let object = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown));
+    emitter.instruction(Instruction::LocalSet(object));
+    emit_expr(emitter, ctx, index);
+    crate::codegen::cast_check::emit_operation_cast_on_stack(
+        emitter,
+        ctx,
+        &ctx.ta.expr(index).ty,
+        &Type::String,
+    );
+    let key = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::String));
+    emitter.instruction(Instruction::LocalSet(key));
+    emitter.instruction(Instruction::LocalGet(object));
+    emitter.instruction(Instruction::LocalGet(key));
+    let Some(symbol) = ctx.require(
+        ctx.symbols.prelude_func_idx("ObjectConstructor##getField"),
+        "record read imported",
+    ) else {
+        return;
+    };
+    emitter.instruction(Instruction::Call(symbol));
+    crate::codegen::cast_check::emit_operation_cast_on_stack(emitter, ctx, &Type::Unknown, read_ty);
+    cast::emit_box(emitter, ctx, read_ty);
+    emit_postfix_numeric(emitter, ctx, &Type::Unknown);
+    let old = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown));
+    emitter.instruction(Instruction::LocalTee(old));
+    emit_postfix_delta(emitter, ctx, op, &Type::Unknown);
+    let updated = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown));
+    emitter.instruction(Instruction::LocalSet(updated));
+    emitter.instruction(Instruction::LocalGet(object));
+    emitter.instruction(Instruction::LocalGet(key));
+    emitter.instruction(Instruction::LocalGet(updated));
+    let Some(symbol) = ctx.require(
+        ctx.symbols.prelude_func_idx("ObjectConstructor##setField"),
+        "record write imported",
+    ) else {
+        return;
+    };
+    emitter.instruction(Instruction::Call(symbol));
+    emitter.instruction(Instruction::LocalGet(old));
 }

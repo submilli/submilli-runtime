@@ -287,7 +287,9 @@ impl Collector<'_> {
             }
             TypedExprKind::ObjectLiteral { members, .. } => {
                 for member in members {
-                    self.walk_expr(member.expr_id());
+                    for expression in member.expressions() {
+                        self.walk_expr(expression);
+                    }
                 }
             }
             TypedExprKind::ArrayLiteral { elements, .. } => {

@@ -202,6 +202,10 @@ pub struct ObjectLiteralField {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ObjectLiteralMember {
+    Computed {
+        key: ExprId,
+        value: ExprId,
+    },
     Field(ObjectLiteralField),
     Spread {
         value: ExprId,
@@ -211,10 +215,19 @@ pub enum ObjectLiteralMember {
 }
 
 impl ObjectLiteralMember {
+    pub fn expressions(&self) -> impl Iterator<Item = ExprId> {
+        let key = match self {
+            Self::Computed { key, .. } => Some(*key),
+            _ => None,
+        };
+        key.into_iter().chain(std::iter::once(self.value()))
+    }
+
     pub fn value(&self) -> ExprId {
         match self {
             ObjectLiteralMember::Field(f) => f.value,
-            ObjectLiteralMember::Spread { value, .. } => *value,
+            ObjectLiteralMember::Spread { value, .. }
+            | ObjectLiteralMember::Computed { value, .. } => *value,
         }
     }
 }
@@ -420,10 +433,11 @@ pub enum StmtKind {
         op_span: Span,
         value: ExprId,
     },
-    /// Interface declaration. Single declaration site per name; no reopening, no `extends`.
+    /// Interface declaration. Single declaration site per name; no reopening.
     InterfaceDecl {
         name: Ident,
         generics: Vec<Ident>,
+        extends: Vec<TypeAnnotation>,
         members: Vec<InterfaceMember>,
         doc: Option<DocComment>,
     },
@@ -485,6 +499,7 @@ pub struct ImportSpecifier {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum InterfaceMember {
+    IndexSignature(IndexSignatureAnnotation),
     Method {
         name: Ident,
         generics: Vec<Ident>,
@@ -716,6 +731,7 @@ pub enum TypeAnnotationKind {
     Readonly(Box<TypeAnnotation>),
     Object {
         fields: Vec<TypeAnnotationField>,
+        index: Option<Box<IndexSignatureAnnotation>>,
     },
     /// Function type annotation. Only the named-parameter form is accepted.
     Function {
@@ -914,4 +930,12 @@ mod tests {
         let ast = Ast::new();
         assert!(ast.top_level.is_empty());
     }
+}
+
+/// A string index signature; the parameter name is documentation only.
+#[derive(Clone, Debug, PartialEq)]
+pub struct IndexSignatureAnnotation {
+    pub value: TypeAnnotation,
+    pub readonly: bool,
+    pub span: Span,
 }

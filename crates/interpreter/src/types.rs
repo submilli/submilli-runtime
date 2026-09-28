@@ -137,6 +137,26 @@ impl ObjectField {
     }
 }
 
+/// Values available under arbitrary string property names.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct IndexSignature {
+    pub value: Box<Type>,
+    pub readonly: bool,
+}
+
+impl IndexSignature {
+    pub fn map_value(&self, transform: impl FnOnce(&Type) -> Type) -> Self {
+        Self {
+            value: Box::new(transform(&self.value)),
+            readonly: self.readonly,
+        }
+    }
+
+    pub fn read_ty(&self) -> Type {
+        Type::union(vec![(*self.value).clone(), Type::Null])
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct TypePredicate {
     pub parameter_index: u32,
@@ -174,6 +194,7 @@ pub enum Type {
     /// `BTreeMap` gives structural `==`, deterministic iteration, and canonical field order for codegen.
     Object {
         fields: BTreeMap<String, ObjectField>,
+        index: Option<IndexSignature>,
     },
     Array(Box<Type>),
     /// Parser rejects empty tuples. Index access requires an integer literal; out-of-range and
@@ -271,6 +292,15 @@ pub enum Type {
 }
 
 impl Type {
+    /// A receiver whose computed string keys use the object property carrier.
+    pub fn is_structural_object(&self) -> bool {
+        match self.peel() {
+            Self::Object { .. } | Self::InterfaceRef { .. } => true,
+            Self::Union(members) => members.iter().all(Self::is_structural_object),
+            _ => false,
+        }
+    }
+
     /// Build an [`Type::InterfaceRef`]. `mangled` is the declaring symbol's mangled
     /// name (its nominal identity) — pass the symbol's own `mangled_name`, never a
     /// value recomputed from `package`/`name`, so two construction sites for the same
@@ -783,8 +813,8 @@ impl fmt::Display for Type {
                 write_synthetic_params(f, params, *has_rest)?;
                 write!(f, " => {ret}")
             }
-            Type::Object { fields } => {
-                if fields.is_empty() {
+            Type::Object { fields, index } => {
+                if fields.is_empty() && index.is_none() {
                     return f.write_str("{}");
                 }
                 f.write_str("{ ")?;
@@ -794,6 +824,13 @@ impl fmt::Display for Type {
                     }
                     let marker = if field.optional { "?" } else { "" };
                     write!(f, "{}{}: {}", name, marker, field.ty)?;
+                }
+                if let Some(index) = index {
+                    if !fields.is_empty() {
+                        f.write_str("; ")?;
+                    }
+                    let readonly = if index.readonly { "readonly " } else { "" };
+                    write!(f, "{readonly}[key: string]: {}", index.value)?;
                 }
                 f.write_str(" }")
             }
@@ -1031,7 +1068,10 @@ mod tests {
         let mut fields = std::collections::BTreeMap::new();
         fields.insert("x".to_string(), crate::ObjectField::required(Type::Number));
         fields.insert("y".to_string(), crate::ObjectField::required(Type::Number));
-        Type::Object { fields }
+        Type::Object {
+            index: None,
+            fields,
+        }
     }
 
     #[test]
@@ -1044,7 +1084,16 @@ mod tests {
         b.insert("x".to_string(), crate::ObjectField::required(Type::Number));
         b.insert("y".to_string(), crate::ObjectField::required(Type::Number));
 
-        assert_eq!(Type::Object { fields: a }, Type::Object { fields: b });
+        assert_eq!(
+            Type::Object {
+                index: None,
+                fields: a
+            },
+            Type::Object {
+                index: None,
+                fields: b
+            }
+        );
     }
 
     #[test]
@@ -1053,13 +1102,23 @@ mod tests {
         a.insert("x".to_string(), crate::ObjectField::required(Type::Number));
         let mut b = std::collections::BTreeMap::new();
         b.insert("y".to_string(), crate::ObjectField::required(Type::Number));
-        assert_ne!(Type::Object { fields: a }, Type::Object { fields: b });
+        assert_ne!(
+            Type::Object {
+                index: None,
+                fields: a
+            },
+            Type::Object {
+                index: None,
+                fields: b
+            }
+        );
     }
 
     #[test]
     fn object_display() {
         assert_eq!(point_type().to_string(), "{ x: number; y: number }");
         let empty = Type::Object {
+            index: None,
             fields: std::collections::BTreeMap::new(),
         };
         assert_eq!(empty.to_string(), "{}");
@@ -1070,7 +1129,10 @@ mod tests {
         let mut fields = std::collections::BTreeMap::new();
         fields.insert("x".to_string(), crate::ObjectField::required(Type::Number));
         fields.insert("y".to_string(), crate::ObjectField::optional(Type::String));
-        let t = Type::Object { fields };
+        let t = Type::Object {
+            index: None,
+            fields,
+        };
         assert_eq!(t.to_string(), "{ x: number; y?: string }");
     }
 
@@ -1080,7 +1142,16 @@ mod tests {
         a.insert("x".to_string(), crate::ObjectField::required(Type::Number));
         let mut b = std::collections::BTreeMap::new();
         b.insert("x".to_string(), crate::ObjectField::optional(Type::Number));
-        assert_ne!(Type::Object { fields: a }, Type::Object { fields: b });
+        assert_ne!(
+            Type::Object {
+                index: None,
+                fields: a
+            },
+            Type::Object {
+                index: None,
+                fields: b
+            }
+        );
     }
 
     #[test]

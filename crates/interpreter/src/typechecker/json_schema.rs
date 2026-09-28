@@ -103,7 +103,7 @@ fn walk(
         Type::Boolean => Ok(json!({ "type": "boolean" })),
         Type::BooleanLiteral(b) => Ok(json!({ "const": b })),
         Type::Null => Ok(json!({ "type": "null" })),
-        Type::Object { fields } => {
+        Type::Object { fields, index } => {
             // `BTreeMap` iteration is field-name order, so `properties` and
             // `required` come out canonical without sorting here.
             let mut properties = serde_json::Map::new();
@@ -124,7 +124,7 @@ fn walk(
                 "type": "object",
                 "properties": Value::Object(properties),
                 "required": Value::Array(required),
-                "additionalProperties": false,
+                "additionalProperties": match index { Some(index) => walk(&index.value, expand, path, seen)?, None => Value::Bool(false) },
             }))
         }
         Type::Array(elem) => {
@@ -250,6 +250,7 @@ mod tests {
 
     fn obj(fields: &[(&str, Type, bool)]) -> Type {
         Type::Object {
+            index: None,
             fields: fields
                 .iter()
                 .map(|(name, ty, optional)| {

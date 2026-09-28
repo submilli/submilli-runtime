@@ -45,7 +45,10 @@ fn collect_parameters(ty: &Type, names: &mut BTreeSet<String>) {
                 collect_parameters(ty, names);
             }
         }
-        Type::Object { fields } => {
+        Type::Object { fields, index } => {
+            if let Some(i) = index {
+                collect_parameters(&i.value, names);
+            }
             for field in fields.values() {
                 collect_parameters(&field.ty, names);
             }

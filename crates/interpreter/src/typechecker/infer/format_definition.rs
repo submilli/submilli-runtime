@@ -82,7 +82,10 @@ pub(super) fn format_definition(
             args,
             ..
         } => format_named_class(types, registry, mangled, name, args),
-        Type::Object { fields } => {
+        Type::Object { fields, index } => {
+            if index.is_some() {
+                return ty.to_string();
+            }
             if fields.is_empty() {
                 return "{}".to_string();
             }
@@ -486,12 +489,13 @@ fn format_named_interface(
             generics,
             methods,
             properties,
+            index,
             doc,
             ..
-        } => Some((generics, methods, properties, doc)),
+        } => Some((generics, methods, properties, index, doc)),
         _ => None,
     });
-    if let Some((_, _, _, Some(doc))) = interface {
+    if let Some((_, _, _, _, Some(doc))) = interface {
         write_doc_block(&mut out, "", doc);
     }
     write!(out, "interface {name}").unwrap();
@@ -506,12 +510,12 @@ fn format_named_interface(
         out.push('>');
     }
 
-    let Some((generics, methods, properties, _doc)) = interface else {
+    let Some((generics, methods, properties, index, _doc)) = interface else {
         out.push_str(" {}");
         return out;
     };
 
-    if methods.is_empty() && properties.is_empty() {
+    if methods.is_empty() && properties.is_empty() && index.is_none() {
         out.push_str(" {}");
         return out;
     }
@@ -520,6 +524,13 @@ fn format_named_interface(
     let sub = TypeParamSubstitution::from_pairs(generics, args);
 
     out.push_str(" {\n");
+    if let Some(index) = index {
+        let ro = if index.readonly { "readonly " } else { "" };
+        out.push_str(&format!(
+            "  {ro}[key: string]: {};\n",
+            sub.apply(&index.value)
+        ));
+    }
     for (pname, prop) in properties {
         if let Some(doc) = &prop.doc {
             write_doc_block(&mut out, "  ", doc);
@@ -662,6 +673,7 @@ mod tests {
                 mangled_name: crate::mangle::package_symbol("test", iface),
                 declaration_span: Span::at(crate::FileId(0)),
                 kind: TypeKind::Interface {
+                    index: None,
                     generics,
                     methods: m,
                     properties: p,
@@ -736,7 +748,14 @@ mod tests {
         let mut fields = BTreeMap::new();
         fields.insert("x".to_string(), ObjectField::required(Type::Number));
         fields.insert("name".to_string(), ObjectField::required(Type::String));
-        let out = format_definition(&Type::Object { fields }, &empty_ns(), &TypeRegistry::new());
+        let out = format_definition(
+            &Type::Object {
+                index: None,
+                fields,
+            },
+            &empty_ns(),
+            &TypeRegistry::new(),
+        );
         insta::assert_snapshot!(out);
     }
 
@@ -875,6 +894,7 @@ mod tests {
             mangled_name: crate::mangle::package_symbol("submilli:lib", "Resp"),
             declaration_span: Span::at(crate::FileId(0)),
             kind: TypeKind::Interface {
+                index: None,
                 generics: vec![],
                 methods: BTreeMap::new(),
                 properties: m,
