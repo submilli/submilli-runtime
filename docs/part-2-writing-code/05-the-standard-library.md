@@ -229,7 +229,7 @@ omitted fetch branch requests all branches, while an omitted pull branch uses
 the current branch. HTTPS remotes must support Git's smart HTTP protocol v0 or v1.
 For private repositories, use the [blueprint's authentication
 setup](/docs/blueprints#let-the-program-commit). The [permission
-reference](/docs/security#git-capabilities) lists each operation's grants and
+reference](/docs/permissions#git-capabilities) lists each operation's grants and
 explains branch and remote filters.
 
 This version has no push, SSH, merge, force checkout, submodule, or linked
@@ -239,7 +239,7 @@ Native indexes must use version 2 or 3, without split indexes, sparse entries,
 or intent-to-add entries. Convert a version 4 index with native Git's
 `git update-index --index-version=2` before handing it to Submilli.
 Native packfiles must be self-contained; partial-clone and cruft-pack metadata
-are unsupported. See [Git security](/docs/security#git-capabilities) for
+are unsupported. See [Git security](/docs/permissions#git-capabilities) for
 metadata protection and handing repositories to native Git, and [resource
 limits](/docs/resource-limits#git-work) for repository sizes and timeouts.
 

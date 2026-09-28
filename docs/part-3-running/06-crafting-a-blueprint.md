@@ -170,7 +170,7 @@ Filters compare a field with `==`, `!=`, `<`, `<=`, `>`, `>=`, test a pattern
 with `glob` or `matches`, and combine with `and`, `or`, `not`. A field the
 operation didn't report never matches. `capability list` with no argument
 prints the standard library's capabilities and their fields as well; the full
-grammar is in [security and permissions](/docs/security).
+grammar is in [permissions](/docs/permissions).
 
 ## Declare the secret
 
@@ -335,7 +335,7 @@ submilli blueprint capability add git.clone \
 
 Public reads need no token. The clone grant includes authentication when
 needed; grant `git.fetch` separately for later fetches and pulls. The
-[Git permission reference](/docs/security#git-capabilities) explains the four
+[Git permission reference](/docs/permissions#git-capabilities) explains the four
 grants and their filter fields.
 
 The [standard library](/docs/standard-library#git-repositories) shows programs

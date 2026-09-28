@@ -215,7 +215,7 @@ unreadable altogether.
 - Blueprint variables are read only by rule evaluation. No function returns
   them, so generated code can't read the value it is held to or set one.
 
-[Security and permissions](/docs/security) covers the rule syntax, and
+[Permissions](/docs/permissions) covers the rule syntax, and
 [crafting a blueprint](/docs/blueprints) covers secrets and variables.
 
 ## An in-process sandbox instead of a virtual machine
