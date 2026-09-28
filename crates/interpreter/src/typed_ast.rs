@@ -1,3 +1,4 @@
+use crate::arena::{self, ArenaError, ArenaKind};
 use crate::typechecker::infer::narrowing::{CastInfo, ReferencePath};
 use crate::{BinOp, BindingKind, ExprId, Ident, MangledName, Span, StmtId, Type, UnOp};
 
@@ -1296,6 +1297,42 @@ impl TypedAst {
     pub fn authored_call_arguments(&self, span: Span) -> Option<&Vec<ExprId>> {
         self.authored_arguments
             .get(&(span.file.0, span.start, span.end))
+    }
+
+    /// Checked allocation; failure leaves the arena unchanged.
+    pub fn try_push_expr(&mut self, expr: TypedExpr) -> Result<ExprId, ArenaError> {
+        arena::push(&mut self.exprs, expr, ArenaKind::TypedExpressions).map(ExprId)
+    }
+
+    /// Checked allocation; failure leaves the arena unchanged.
+    pub fn try_push_stmt(&mut self, stmt: TypedStmt) -> Result<StmtId, ArenaError> {
+        arena::push(&mut self.stmts, stmt, ArenaKind::TypedStatements).map(StmtId)
+    }
+
+    pub fn try_expr(&self, id: ExprId) -> Result<&TypedExpr, ArenaError> {
+        arena::get(&self.exprs, id.0, ArenaKind::TypedExpressions)
+    }
+
+    pub fn try_stmt(&self, id: StmtId) -> Result<&TypedStmt, ArenaError> {
+        arena::get(&self.stmts, id.0, ArenaKind::TypedStatements)
+    }
+
+    pub fn try_expr_mut(&mut self, id: ExprId) -> Result<&mut TypedExpr, ArenaError> {
+        arena::get_mut(&mut self.exprs, id.0, ArenaKind::TypedExpressions)
+    }
+
+    pub fn try_stmt_mut(&mut self, id: StmtId) -> Result<&mut TypedStmt, ArenaError> {
+        arena::get_mut(&mut self.stmts, id.0, ArenaKind::TypedStatements)
+    }
+
+    /// Snapshot of allocated expression IDs, usable while appending new nodes.
+    pub fn expr_ids(&self) -> Result<impl DoubleEndedIterator<Item = ExprId> + use<>, ArenaError> {
+        Ok(arena::ids(self.exprs.len(), ArenaKind::TypedExpressions)?.map(ExprId))
+    }
+
+    /// Snapshot of allocated statement IDs, usable while appending new nodes.
+    pub fn stmt_ids(&self) -> Result<impl DoubleEndedIterator<Item = StmtId> + use<>, ArenaError> {
+        Ok(arena::ids(self.stmts.len(), ArenaKind::TypedStatements)?.map(StmtId))
     }
 
     pub fn push_expr(&mut self, expr: TypedExpr) -> ExprId {

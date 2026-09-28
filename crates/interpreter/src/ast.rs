@@ -1,3 +1,4 @@
+use crate::arena::{self, ArenaError, ArenaKind};
 use crate::{DocComment, Span};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -801,6 +802,42 @@ pub struct Ast {
 impl Ast {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Checked allocation; failure leaves the arena unchanged.
+    pub fn try_push_expr(&mut self, expr: Expr) -> Result<ExprId, ArenaError> {
+        arena::push(&mut self.exprs, expr, ArenaKind::Expressions).map(ExprId)
+    }
+
+    /// Checked allocation; failure leaves the arena unchanged.
+    pub fn try_push_stmt(&mut self, stmt: Stmt) -> Result<StmtId, ArenaError> {
+        arena::push(&mut self.stmts, stmt, ArenaKind::Statements).map(StmtId)
+    }
+
+    pub fn try_expr(&self, id: ExprId) -> Result<&Expr, ArenaError> {
+        arena::get(&self.exprs, id.0, ArenaKind::Expressions)
+    }
+
+    pub fn try_stmt(&self, id: StmtId) -> Result<&Stmt, ArenaError> {
+        arena::get(&self.stmts, id.0, ArenaKind::Statements)
+    }
+
+    pub fn try_expr_mut(&mut self, id: ExprId) -> Result<&mut Expr, ArenaError> {
+        arena::get_mut(&mut self.exprs, id.0, ArenaKind::Expressions)
+    }
+
+    pub fn try_stmt_mut(&mut self, id: StmtId) -> Result<&mut Stmt, ArenaError> {
+        arena::get_mut(&mut self.stmts, id.0, ArenaKind::Statements)
+    }
+
+    /// Snapshot of allocated expression IDs, usable while appending new nodes.
+    pub fn expr_ids(&self) -> Result<impl DoubleEndedIterator<Item = ExprId> + use<>, ArenaError> {
+        Ok(arena::ids(self.exprs.len(), ArenaKind::Expressions)?.map(ExprId))
+    }
+
+    /// Snapshot of allocated statement IDs, usable while appending new nodes.
+    pub fn stmt_ids(&self) -> Result<impl DoubleEndedIterator<Item = StmtId> + use<>, ArenaError> {
+        Ok(arena::ids(self.stmts.len(), ArenaKind::Statements)?.map(StmtId))
     }
 
     pub fn push_expr(&mut self, expr: Expr) -> ExprId {

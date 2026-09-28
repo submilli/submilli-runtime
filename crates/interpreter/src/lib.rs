@@ -1,6 +1,7 @@
 //! Submilli interpreter library.
 //!
 
+pub mod arena;
 pub(crate) mod artifact_f64;
 pub mod asi;
 pub mod ast;
