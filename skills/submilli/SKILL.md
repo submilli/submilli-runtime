@@ -43,7 +43,7 @@ that general knowledge gets wrong; what goes wrong without it is named.
   "it ran once". Delegate to the `submilli-verifier` subagent when installed;
   otherwise run it yourself as a separate pass. Report its findings.
 
-For topics these references do not cover, fetch https://submilli.ai/llms.txt
+For topics these references do not cover, fetch https://submilli.ai/docs/llms.txt
 and follow the relevant Markdown chapter links. Fetch only the chapters needed
 for the task. If the site is unavailable, continue with local references and
 CLI/MCP documentation, and identify any documentation gap that affects the answer.

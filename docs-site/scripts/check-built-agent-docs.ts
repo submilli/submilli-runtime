@@ -12,9 +12,9 @@ for (const chapter of chapters) {
 	const html = await readFile(new URL(path, directory), 'utf8');
 	const markdown = markdownPath(chapter.slug);
 	assert.ok(html.includes(`rel="alternate" type="text/markdown" href="https://submilli.ai${markdown}"`), path);
-	assert.ok(html.includes('rel="describedby" href="https://submilli.ai/llms.txt"'), path);
+	assert.ok(html.includes('rel="describedby" href="https://submilli.ai/docs/llms.txt"'), path);
 	assert.match(html, new RegExp(`href="${markdown.replace('.', '\\.')}"[^>]*>View Markdown</a>`), path);
-	assert.match(html, /href="\/llms\.txt"[^>]*>Documentation for agents<\/a>/, path);
+	assert.match(html, /href="\/docs\/llms\.txt"[^>]*>Documentation for agents<\/a>/, path);
 }
 const files = await readdir(new URL('docs/', directory), { recursive: true });
 const expectedMarkdown = chapters.map((chapter) => markdownPath(chapter.slug)).sort();
