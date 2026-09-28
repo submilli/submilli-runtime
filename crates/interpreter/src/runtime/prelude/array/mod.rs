@@ -517,7 +517,7 @@ async fn sort_elems(
             let a = elements[j - 1];
             let b = elements[j];
             let greater = if let Some(c) = cmp {
-                c.call_number(caller, a, b).await? > 0.0
+                c.compare(caller, a, b).await? > 0.0
             } else {
                 let sa = sort_key(caller, a).await?;
                 let sb = sort_key(caller, b).await?;
@@ -576,64 +576,118 @@ fn with(elements: &[Val], index: f64, value: Val) -> Option<Vec<Val>> {
 // Higher-order methods (re-enter a guest closure per element)
 // ---------------------------------------------------------------------------
 
+/// An element callback, called with `(value, index, array)` as TypeScript
+/// types it — or `(value, index)` without an array, as `Array.from`'s `mapFn`.
+/// Its slot is erased, so it may be any function: it is passed only the
+/// arguments it reads, and the index is boxed only when it reads that.
+pub(in crate::runtime::prelude) struct ElementCallback<'a> {
+    f: &'a Closure,
+    reads: usize,
+    array: Option<Val>,
+}
+
+impl<'a> ElementCallback<'a> {
+    pub(in crate::runtime::prelude) fn new(
+        caller: &mut Caller<'_, StoreData>,
+        f: &'a Closure,
+        array: Option<Val>,
+    ) -> wasmtime::Result<Self> {
+        let reads = f.arguments_read(caller)?;
+        Ok(Self { f, reads, array })
+    }
+
+    /// Call on the element at `index`, after `leading` (`reduce`'s accumulator).
+    pub(in crate::runtime::prelude) async fn call(
+        &self,
+        caller: &mut Caller<'_, StoreData>,
+        leading: Option<Val>,
+        value: Val,
+        index: usize,
+    ) -> wasmtime::Result<Val> {
+        let mut args: Vec<Val> = leading.into_iter().chain([value]).collect();
+        if args.len() < self.reads {
+            args.push(box_number(caller, index as f64)?);
+        }
+        if let Some(array) = self.array
+            && args.len() < self.reads
+        {
+            args.push(array);
+        }
+        self.f.call_dynamic(caller, &args).await
+    }
+
+    pub(in crate::runtime::prelude) async fn test(
+        &self,
+        caller: &mut Caller<'_, StoreData>,
+        value: Val,
+        index: usize,
+    ) -> wasmtime::Result<bool> {
+        let result = self.call(caller, None, value, index).await?;
+        super::value::truthy(caller, &result)
+    }
+}
+
 /// `Array.prototype.forEach`: invoke `f` once per element, left to right.
 pub async fn for_each(
     caller: &mut Caller<'_, StoreData>,
+    array: Val,
     elements: Vec<Val>,
     f: &Closure,
 ) -> wasmtime::Result<()> {
-    for elem in elements {
-        f.call_void(caller, elem).await?;
+    let f = ElementCallback::new(caller, f, Some(array))?;
+    for (index, elem) in elements.into_iter().enumerate() {
+        f.call(caller, None, elem, index).await?;
     }
     Ok(())
 }
 
 async fn map(
     caller: &mut Caller<'_, StoreData>,
+    array: Val,
     elements: Vec<Val>,
     f: &Closure,
 ) -> wasmtime::Result<Vec<Val>> {
+    let f = ElementCallback::new(caller, f, Some(array))?;
     let mut out = Vec::with_capacity(elements.len());
-    for elem in elements {
-        out.push(f.call(caller, &[elem]).await?);
+    for (index, elem) in elements.into_iter().enumerate() {
+        out.push(f.call(caller, None, elem, index).await?);
     }
     Ok(out)
 }
 
 async fn filter(
     caller: &mut Caller<'_, StoreData>,
+    array: Val,
     elements: Vec<Val>,
     pred: &Closure,
 ) -> wasmtime::Result<Vec<Val>> {
+    let pred = ElementCallback::new(caller, pred, Some(array))?;
     let mut out = Vec::new();
-    for elem in elements {
-        if pred.call_predicate(caller, elem).await? {
+    for (index, elem) in elements.into_iter().enumerate() {
+        if pred.test(caller, elem, index).await? {
             out.push(elem);
         }
     }
     Ok(out)
 }
 
+/// `reduce`, or with `reverse` `reduceRight`: fold `(acc, value, index, array)`
+/// over the elements.
 async fn reduce(
     caller: &mut Caller<'_, StoreData>,
+    array: Val,
     elements: Vec<Val>,
     f: &Closure,
     mut acc: Val,
+    reverse: bool,
 ) -> wasmtime::Result<Val> {
-    for elem in elements {
-        acc = f.call(caller, &[acc, elem]).await?;
+    let f = ElementCallback::new(caller, f, Some(array))?;
+    let mut indexed: Vec<(usize, Val)> = elements.into_iter().enumerate().collect();
+    if reverse {
+        indexed.reverse();
     }
-    Ok(acc)
-}
-
-async fn reduce_right(
-    caller: &mut Caller<'_, StoreData>,
-    elements: Vec<Val>,
-    f: &Closure,
-    mut acc: Val,
-) -> wasmtime::Result<Val> {
-    for elem in elements.into_iter().rev() {
-        acc = f.call(caller, &[acc, elem]).await?;
+    for (index, elem) in indexed {
+        acc = f.call(caller, Some(acc), elem, index).await?;
     }
     Ok(acc)
 }
@@ -641,17 +695,19 @@ async fn reduce_right(
 /// Index of the first (or, with `reverse`, last) element matching `pred`.
 async fn find_match(
     caller: &mut Caller<'_, StoreData>,
+    array: Val,
     elements: &[Val],
     pred: &Closure,
     reverse: bool,
 ) -> wasmtime::Result<Option<usize>> {
+    let pred = ElementCallback::new(caller, pred, Some(array))?;
     let order: Vec<usize> = if reverse {
         (0..elements.len()).rev().collect()
     } else {
         (0..elements.len()).collect()
     };
     for i in order {
-        if pred.call_predicate(caller, elements[i]).await? {
+        if pred.test(caller, elements[i], i).await? {
             return Ok(Some(i));
         }
     }
@@ -660,11 +716,13 @@ async fn find_match(
 
 async fn some(
     caller: &mut Caller<'_, StoreData>,
+    array: Val,
     elements: Vec<Val>,
     pred: &Closure,
 ) -> wasmtime::Result<bool> {
-    for elem in elements {
-        if pred.call_predicate(caller, elem).await? {
+    let pred = ElementCallback::new(caller, pred, Some(array))?;
+    for (index, elem) in elements.into_iter().enumerate() {
+        if pred.test(caller, elem, index).await? {
             return Ok(true);
         }
     }
@@ -673,11 +731,13 @@ async fn some(
 
 async fn every(
     caller: &mut Caller<'_, StoreData>,
+    array: Val,
     elements: Vec<Val>,
     pred: &Closure,
 ) -> wasmtime::Result<bool> {
-    for elem in elements {
-        if !pred.call_predicate(caller, elem).await? {
+    let pred = ElementCallback::new(caller, pred, Some(array))?;
+    for (index, elem) in elements.into_iter().enumerate() {
+        if !pred.test(caller, elem, index).await? {
             return Ok(false);
         }
     }
@@ -705,12 +765,14 @@ fn flat_into(
 
 async fn flat_map(
     caller: &mut Caller<'_, StoreData>,
+    array: Val,
     elements: Vec<Val>,
     f: &Closure,
 ) -> wasmtime::Result<Vec<Val>> {
+    let f = ElementCallback::new(caller, f, Some(array))?;
     let mut out = Vec::new();
-    for elem in elements {
-        let mapped = f.call(caller, &[elem]).await?;
+    for (index, elem) in elements.into_iter().enumerate() {
+        let mapped = f.call(caller, None, elem, index).await?;
         out.extend(read_array(
             caller,
             &mapped,
@@ -787,10 +849,14 @@ pub(super) async fn from(
     use crate::runtime::prelude::closure;
     use crate::runtime::prelude::collection::{is_a, object_field, string_code_points, unbox_bool};
 
-    let map_fn = if is_null(map_fn) {
+    let map_closure = if is_null(map_fn) {
         None
     } else {
-        Some(closure::read(caller, map_fn, "Array.from mapFn")?)
+        Some(closure::read_callback(caller, map_fn, "Array.from mapFn")?)
+    };
+    let map_fn = match &map_closure {
+        Some(c) => Some(ElementCallback::new(caller, c, None)?),
+        None => None,
     };
     let intr = build_intrinsic_types(caller.engine())?;
     let mut out = Vec::new();
@@ -806,7 +872,8 @@ pub(super) async fn from(
                 break;
             }
             let elem = backing.get(&mut *caller, pos)?;
-            out.push(apply_map(caller, &map_fn, elem).await?);
+            let mapped = apply_map(caller, &map_fn, elem, out.len()).await?;
+            out.push(mapped);
             pos += 1;
         }
         return build_array(caller, &out);
@@ -815,7 +882,8 @@ pub(super) async fn from(
         let cps = string_code_points(caller, src)?;
         out.reserve(cps.len());
         for cp in cps {
-            out.push(apply_map(caller, &map_fn, cp).await?);
+            let mapped = apply_map(caller, &map_fn, cp, out.len()).await?;
+            out.push(mapped);
         }
         return build_array(caller, &out);
     }
@@ -851,18 +919,20 @@ pub(super) async fn from(
         }
         let value = object_field(caller, &result, "value")?
             .ok_or_else(|| wasmtime::Error::msg("Array.from: iterator result missing `value`"))?;
-        out.push(apply_map(caller, &map_fn, value).await?);
+        let mapped = apply_map(caller, &map_fn, value, out.len()).await?;
+        out.push(mapped);
     }
     build_array(caller, &out)
 }
 
 async fn apply_map(
     caller: &mut Caller<'_, StoreData>,
-    map_fn: &Option<Closure>,
+    map_fn: &Option<ElementCallback<'_>>,
     value: Val,
+    index: usize,
 ) -> wasmtime::Result<Val> {
     match map_fn {
-        Some(c) => c.call(caller, &[value]).await,
+        Some(f) => f.call(caller, None, value, index).await,
         None => Ok(value),
     }
 }

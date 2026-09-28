@@ -222,7 +222,7 @@ function main(): void {
 #[test]
 fn b5_function_type_assign_diff() {
     insta::assert_snapshot!(render_inside_main(
-        "  let f: (a: number, b: number) => boolean = (x: string) => true;"
+        "  const g = (x: string) => true;\n  let f: (a: number, b: number) => boolean = g;"
     ));
 }
 

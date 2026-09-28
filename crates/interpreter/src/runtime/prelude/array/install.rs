@@ -3,13 +3,9 @@
 //! and declares the value symbols codegen routes through. The operations
 //! themselves live in the parent module.
 
-use wasmtime::{
-    FieldType, Finality, FuncType, HeapType, Linker, Mutability, RefType, StorageType, StructType,
-    Val, ValType,
-};
+use wasmtime::{FuncType, HeapType, Linker, RefType, StructType, Val, ValType};
 
 use crate::runtime::StoreData;
-use crate::runtime::gc_singleton::{singleton_func, singleton_struct};
 use crate::runtime::host::{
     intrinsic_array_type, intrinsic_string_type, register_host_fn, register_host_fn_async,
     write_submilli_string_struct_units,
@@ -28,6 +24,16 @@ fn ctor_key(method: &str) -> MangledName {
     crate::mangle::extend(&crate::mangle::prelude("ArrayConstructor"), method)
 }
 
+/// TypeScript's `(value: T, index: number, array: T[])` callback parameters,
+/// after `leading` (`reduce`'s accumulator). A callback may declare fewer.
+fn element_callback_params(leading: Vec<Type>) -> Vec<Type> {
+    let t = Type::TypeVar("T".to_string());
+    leading
+        .into_iter()
+        .chain([t.clone(), Type::Number, Type::Array(Box::new(t))])
+        .collect()
+}
+
 fn ref_to(struct_ty: StructType) -> ValType {
     ValType::Ref(RefType::new(false, HeapType::ConcreteStruct(struct_ty)))
 }
@@ -40,50 +46,6 @@ fn object_ref(intr: &IntrinsicTypes) -> ValType {
         true,
         HeapType::ConcreteStruct(intr.object.clone()),
     ))
-}
-
-/// The `(ref $closure)` type for an `(arity, is_void)` callback, declared to
-/// canonicalize with `codegen::closures` so a guest closure flows in unchanged.
-fn closure_ty(
-    engine: &wasmtime::Engine,
-    intr: &IntrinsicTypes,
-    arity: usize,
-    is_void: bool,
-) -> wasmtime::Result<ValType> {
-    let imm = Mutability::Const;
-    let mut params = vec![ValType::Ref(RefType::new(false, HeapType::Any))];
-    for _ in 0..arity {
-        params.push(ValType::Ref(RefType::new(true, intr.object.clone().into())));
-    }
-    let results = if is_void {
-        Vec::new()
-    } else {
-        vec![ValType::Ref(RefType::new(true, intr.object.clone().into()))]
-    };
-    let func = singleton_func(engine, params, results)?;
-    let st = singleton_struct(
-        engine,
-        Finality::NonFinal,
-        Some(intr.closure.clone()),
-        vec![
-            FieldType::new(
-                imm,
-                StorageType::ValType(ValType::Ref(RefType::new(
-                    false,
-                    intr.vtable.clone().into(),
-                ))),
-            ),
-            FieldType::new(
-                imm,
-                StorageType::ValType(ValType::Ref(RefType::new(false, func.into()))),
-            ),
-            FieldType::new(
-                imm,
-                StorageType::ValType(ValType::Ref(RefType::new(false, HeapType::Any))),
-            ),
-        ],
-    )?;
-    Ok(ref_to(st))
 }
 
 fn f64v(v: &Val) -> f64 {
@@ -102,9 +64,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     let elem = object_ref(&intr);
     let num = ValType::F64;
     let boolean = ValType::I32;
-    let cb1_value = closure_ty(&engine, &intr, 1, false)?;
-    let cb1_void = closure_ty(&engine, &intr, 1, true)?;
-    let cb2_value = closure_ty(&engine, &intr, 2, false)?;
+    // Callbacks cross erased, like `sort`'s comparator: whatever parameters a
+    // callback declares, it is called with that many (see `ElementCallback`).
+    let callback = elem.clone();
 
     let ft = |params: Vec<ValType>, results: Vec<ValType>| FuncType::new(&engine, params, results);
 
@@ -365,7 +327,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let cmp = if matches!(params[1], Val::AnyRef(None)) {
                     None
                 } else {
-                    Some(closure::read(caller, &params[1], "Array#sort comparator")?)
+                    Some(closure::read_callback(
+                        caller,
+                        &params[1],
+                        "Array#sort comparator",
+                    )?)
                 };
                 results[0] = super::sort(caller, &params[0], elements, cmp).await?;
                 Ok(())
@@ -378,13 +344,13 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         linker,
         MODULE_NAME,
         method_key("forEach"),
-        ft(vec![array.clone(), cb1_void.clone()], vec![]),
+        ft(vec![array.clone(), callback.clone()], vec![]),
         true,
         |caller, params, _results| {
             Box::pin(async move {
                 let elements = super::read_array(caller, &params[0], "Array#forEach receiver")?;
-                let f = closure::read(caller, &params[1], "Array#forEach callback")?;
-                super::for_each(caller, elements, &f).await
+                let f = closure::read_callback(caller, &params[1], "Array#forEach callback")?;
+                super::for_each(caller, params[0], elements, &f).await
             })
         },
     )?;
@@ -392,13 +358,13 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         linker,
         MODULE_NAME,
         method_key("map"),
-        ft(vec![array.clone(), cb1_value.clone()], vec![array.clone()]),
+        ft(vec![array.clone(), callback.clone()], vec![array.clone()]),
         true,
         |caller, params, results| {
             Box::pin(async move {
                 let elements = super::read_array(caller, &params[0], "Array#map")?;
-                let f = closure::read(caller, &params[1], "Array#map callback")?;
-                let out = super::map(caller, elements, &f).await?;
+                let f = closure::read_callback(caller, &params[1], "Array#map callback")?;
+                let out = super::map(caller, params[0], elements, &f).await?;
                 results[0] = super::build_array(caller, &out)?;
                 Ok(())
             })
@@ -408,13 +374,13 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         linker,
         MODULE_NAME,
         method_key("filter"),
-        ft(vec![array.clone(), cb1_value.clone()], vec![array.clone()]),
+        ft(vec![array.clone(), callback.clone()], vec![array.clone()]),
         true,
         |caller, params, results| {
             Box::pin(async move {
                 let elements = super::read_array(caller, &params[0], "Array#filter")?;
-                let f = closure::read(caller, &params[1], "Array#filter predicate")?;
-                let out = super::filter(caller, elements, &f).await?;
+                let f = closure::read_callback(caller, &params[1], "Array#filter predicate")?;
+                let out = super::filter(caller, params[0], elements, &f).await?;
                 results[0] = super::build_array(caller, &out)?;
                 Ok(())
             })
@@ -425,15 +391,16 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("reduce"),
         ft(
-            vec![array.clone(), cb2_value.clone(), elem.clone()],
+            vec![array.clone(), callback.clone(), elem.clone()],
             vec![elem.clone()],
         ),
         true,
         |caller, params, results| {
             Box::pin(async move {
                 let elements = super::read_array(caller, &params[0], "Array#reduce")?;
-                let f = closure::read(caller, &params[1], "Array#reduce callback")?;
-                results[0] = super::reduce(caller, elements, &f, params[2]).await?;
+                let f = closure::read_callback(caller, &params[1], "Array#reduce callback")?;
+                results[0] =
+                    super::reduce(caller, params[0], elements, &f, params[2], false).await?;
                 Ok(())
             })
         },
@@ -443,15 +410,16 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("reduceRight"),
         ft(
-            vec![array.clone(), cb2_value.clone(), elem.clone()],
+            vec![array.clone(), callback.clone(), elem.clone()],
             vec![elem.clone()],
         ),
         true,
         |caller, params, results| {
             Box::pin(async move {
                 let elements = super::read_array(caller, &params[0], "Array#reduceRight")?;
-                let f = closure::read(caller, &params[1], "Array#reduceRight callback")?;
-                results[0] = super::reduce_right(caller, elements, &f, params[2]).await?;
+                let f = closure::read_callback(caller, &params[1], "Array#reduceRight callback")?;
+                results[0] =
+                    super::reduce(caller, params[0], elements, &f, params[2], true).await?;
                 Ok(())
             })
         },
@@ -461,16 +429,19 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             linker,
             MODULE_NAME,
             method_key(name),
-            ft(vec![array.clone(), cb1_value.clone()], vec![elem.clone()]),
+            ft(vec![array.clone(), callback.clone()], vec![elem.clone()]),
             true,
             move |caller, params, results| {
                 Box::pin(async move {
                     let elements = super::read_array(caller, &params[0], "Array#find")?;
-                    let pred = closure::read(caller, &params[1], "Array#find predicate")?;
-                    results[0] = match super::find_match(caller, &elements, &pred, reverse).await? {
-                        Some(i) => elements[i],
-                        None => Val::null_any_ref(),
-                    };
+                    let pred = closure::read_callback(caller, &params[1], "Array#find predicate")?;
+                    results[0] =
+                        match super::find_match(caller, params[0], &elements, &pred, reverse)
+                            .await?
+                        {
+                            Some(i) => elements[i],
+                            None => Val::null_any_ref(),
+                        };
                     Ok(())
                 })
             },
@@ -481,13 +452,15 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             linker,
             MODULE_NAME,
             method_key(name),
-            ft(vec![array.clone(), cb1_value.clone()], vec![num.clone()]),
+            ft(vec![array.clone(), callback.clone()], vec![num.clone()]),
             true,
             move |caller, params, results| {
                 Box::pin(async move {
                     let elements = super::read_array(caller, &params[0], "Array#findIndex")?;
-                    let pred = closure::read(caller, &params[1], "Array#findIndex predicate")?;
-                    let idx = super::find_match(caller, &elements, &pred, reverse).await?;
+                    let pred =
+                        closure::read_callback(caller, &params[1], "Array#findIndex predicate")?;
+                    let idx =
+                        super::find_match(caller, params[0], &elements, &pred, reverse).await?;
                     let r = idx.map_or(-1.0, |i| i as f64);
                     results[0] = Val::F64(r.to_bits());
                     Ok(())
@@ -499,16 +472,13 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         linker,
         MODULE_NAME,
         method_key("some"),
-        ft(
-            vec![array.clone(), cb1_value.clone()],
-            vec![boolean.clone()],
-        ),
+        ft(vec![array.clone(), callback.clone()], vec![boolean.clone()]),
         true,
         |caller, params, results| {
             Box::pin(async move {
                 let elements = super::read_array(caller, &params[0], "Array#some")?;
-                let pred = closure::read(caller, &params[1], "Array#some predicate")?;
-                let r = super::some(caller, elements, &pred).await?;
+                let pred = closure::read_callback(caller, &params[1], "Array#some predicate")?;
+                let r = super::some(caller, params[0], elements, &pred).await?;
                 results[0] = Val::I32(i32::from(r));
                 Ok(())
             })
@@ -518,16 +488,13 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         linker,
         MODULE_NAME,
         method_key("every"),
-        ft(
-            vec![array.clone(), cb1_value.clone()],
-            vec![boolean.clone()],
-        ),
+        ft(vec![array.clone(), callback.clone()], vec![boolean.clone()]),
         true,
         |caller, params, results| {
             Box::pin(async move {
                 let elements = super::read_array(caller, &params[0], "Array#every")?;
-                let pred = closure::read(caller, &params[1], "Array#every predicate")?;
-                let r = super::every(caller, elements, &pred).await?;
+                let pred = closure::read_callback(caller, &params[1], "Array#every predicate")?;
+                let r = super::every(caller, params[0], elements, &pred).await?;
                 results[0] = Val::I32(i32::from(r));
                 Ok(())
             })
@@ -552,13 +519,13 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         linker,
         MODULE_NAME,
         method_key("flatMap"),
-        ft(vec![array.clone(), cb1_value.clone()], vec![array.clone()]),
+        ft(vec![array.clone(), callback.clone()], vec![array.clone()]),
         true,
         |caller, params, results| {
             Box::pin(async move {
                 let elements = super::read_array(caller, &params[0], "Array#flatMap")?;
-                let f = closure::read(caller, &params[1], "Array#flatMap callback")?;
-                let out = super::flat_map(caller, elements, &f).await?;
+                let f = closure::read_callback(caller, &params[1], "Array#flatMap callback")?;
+                let out = super::flat_map(caller, params[0], elements, &f).await?;
                 results[0] = super::build_array(caller, &out)?;
                 Ok(())
             })
@@ -591,7 +558,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let cmp = if matches!(params[1], Val::AnyRef(None)) {
                     None
                 } else {
-                    Some(closure::read(
+                    Some(closure::read_callback(
                         caller,
                         &params[1],
                         "Array#toSorted comparator",
@@ -765,7 +732,9 @@ pub fn declare(defs: &mut PackageDeclaration) {
         predicate: None,
         has_rest: false,
     };
-    let pred = || func(vec![t()], Type::Boolean);
+    // An element callback's slot is erased (see `install`); its type for
+    // checking calls is in `declare_types`.
+    let callback = || Param::new("f", Type::Unknown);
     let comparator_or_null = || Type::Union(vec![func(vec![t(), t()], Type::Number), Type::Null]);
 
     let m = |defs: &mut PackageDeclaration, name: &str, params: Vec<Param>, ret: Type| {
@@ -851,80 +820,39 @@ pub fn declare(defs: &mut PackageDeclaration) {
         arr_ty(),
     );
 
-    m(
-        defs,
-        "forEach",
-        vec![arr(), Param::new("f", func(vec![t()], Type::Void))],
-        Type::Void,
-    );
+    m(defs, "forEach", vec![arr(), callback()], Type::Void);
     m(
         defs,
         "map",
-        vec![arr(), Param::new("f", func(vec![t()], u()))],
+        vec![arr(), callback()],
         Type::Array(Box::new(u())),
     );
-    m(
-        defs,
-        "filter",
-        vec![arr(), Param::new("f", pred())],
-        arr_ty(),
-    );
+    m(defs, "filter", vec![arr(), callback()], arr_ty());
     m(
         defs,
         "reduce",
-        vec![
-            arr(),
-            Param::new("f", func(vec![u(), t()], u())),
-            Param::new("initial", u()),
-        ],
+        vec![arr(), callback(), Param::new("initial", u())],
         u(),
     );
     m(
         defs,
         "reduceRight",
-        vec![
-            arr(),
-            Param::new("f", func(vec![u(), t()], u())),
-            Param::new("initial", u()),
-        ],
+        vec![arr(), callback(), Param::new("initial", u())],
         u(),
     );
     for name in ["find", "findLast"] {
-        m(
-            defs,
-            name,
-            vec![arr(), Param::new("f", pred())],
-            t_or_null(),
-        );
+        m(defs, name, vec![arr(), callback()], t_or_null());
     }
     for name in ["findIndex", "findLastIndex"] {
-        m(
-            defs,
-            name,
-            vec![arr(), Param::new("f", pred())],
-            Type::Number,
-        );
+        m(defs, name, vec![arr(), callback()], Type::Number);
     }
-    m(
-        defs,
-        "some",
-        vec![arr(), Param::new("f", pred())],
-        Type::Boolean,
-    );
-    m(
-        defs,
-        "every",
-        vec![arr(), Param::new("f", pred())],
-        Type::Boolean,
-    );
+    m(defs, "some", vec![arr(), callback()], Type::Boolean);
+    m(defs, "every", vec![arr(), callback()], Type::Boolean);
     m(defs, "flat", vec![arr(), n("depth")], arr_ty());
     m(
         defs,
         "flatMap",
-        vec![
-            arr(),
-            Param::new("f", func(vec![t()], Type::Array(Box::new(u())))),
-        ],
+        vec![arr(), callback()],
         Type::Array(Box::new(u())),
     );
 
@@ -986,7 +914,10 @@ pub fn declare(defs: &mut PackageDeclaration) {
                     Type::prelude_interface("Iterable".to_string(), vec![t()]),
                 ]),
             ),
-            Param::new("mapFn", Type::Union(vec![func(vec![t()], t()), Type::Null])),
+            Param::new(
+                "mapFn",
+                Type::Union(vec![func(vec![t(), Type::Number], u()), Type::Null]),
+            ),
         ],
         arr_ty(),
     );
@@ -1096,7 +1027,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             params: vec![Param::new(
                                 "callback",
                                 Type::Function {
-                                    params: vec![Type::TypeVar("T".to_string())],
+                                    params: element_callback_params(Vec::new()),
                                     ret: Box::new(Type::TypeVar("U".to_string())),
                                     predicate: None,
                                     has_rest: false,
@@ -1105,7 +1036,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::Array(Box::new(Type::TypeVar("U".to_string()))),
                             predicate: None,
                             doc: doc(
-                                "/**\n * Returns a new array produced by applying `callback` to each element.\n * @param callback Function called once per element.\n * @returns A new array of length equal to this array.\n */",
+                                "/**\n * Returns a new array produced by applying `callback` to each element.\n * @param callback Function called with `(value, index, array)` for each element.\n * @returns A new array of length equal to this array.\n */",
                             ),
                         },
                     ),
@@ -1160,7 +1091,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             params: vec![Param::new(
                                 "callback",
                                 Type::Function {
-                                    params: vec![Type::TypeVar("T".to_string())],
+                                    params: element_callback_params(Vec::new()),
                                     ret: Box::new(Type::Boolean),
                                     predicate: None,
                                     has_rest: false,
@@ -1172,7 +1103,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ]),
                             predicate: None,
                             doc: doc(
-                                "/**\n * Returns the first element for which `callback` returns `true`, or `null` if none match.\n * Short-circuits on the first match.\n * @param callback Function called once per element until it returns `true`.\n */",
+                                "/**\n * Returns the first element for which `callback` returns `true`, or `null` if none match.\n * Short-circuits on the first match.\n * @param callback Function called with `(value, index, array)` for each element until it returns `true`.\n */",
                             ),
                         },
                     ),
@@ -1183,7 +1114,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             params: vec![Param::new(
                                 "callback",
                                 Type::Function {
-                                    params: vec![Type::TypeVar("T".to_string())],
+                                    params: element_callback_params(Vec::new()),
                                     ret: Box::new(Type::Boolean),
                                     predicate: None,
                                     has_rest: false,
@@ -1195,7 +1126,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ]),
                             predicate: None,
                             doc: doc(
-                                "/**\n * Returns the last element for which `callback` returns `true`, or `null` if none match.\n * Scans from the end; short-circuits on the first match.\n * @param callback Function called once per element until it returns `true`.\n */",
+                                "/**\n * Returns the last element for which `callback` returns `true`, or `null` if none match.\n * Scans from the end; short-circuits on the first match.\n * @param callback Function called with `(value, index, array)` for each element until it returns `true`.\n */",
                             ),
                         },
                     ),
@@ -1206,7 +1137,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             params: vec![Param::new(
                                 "callback",
                                 Type::Function {
-                                    params: vec![Type::TypeVar("T".to_string())],
+                                    params: element_callback_params(Vec::new()),
                                     ret: Box::new(Type::Boolean),
                                     predicate: None,
                                     has_rest: false,
@@ -1215,7 +1146,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::Number,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Returns the index of the first element for which `callback` returns `true`, or `-1` if none match.\n * @param callback Function called once per element until it returns `true`.\n */",
+                                "/**\n * Returns the index of the first element for which `callback` returns `true`, or `-1` if none match.\n * @param callback Function called with `(value, index, array)` for each element until it returns `true`.\n */",
                             ),
                         },
                     ),
@@ -1226,7 +1157,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             params: vec![Param::new(
                                 "callback",
                                 Type::Function {
-                                    params: vec![Type::TypeVar("T".to_string())],
+                                    params: element_callback_params(Vec::new()),
                                     ret: Box::new(Type::Boolean),
                                     predicate: None,
                                     has_rest: false,
@@ -1235,7 +1166,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::Number,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Returns the index of the last element for which `callback` returns `true`, or `-1` if none match.\n * Scans from the end.\n * @param callback Function called once per element until it returns `true`.\n */",
+                                "/**\n * Returns the index of the last element for which `callback` returns `true`, or `-1` if none match.\n * Scans from the end.\n * @param callback Function called with `(value, index, array)` for each element until it returns `true`.\n */",
                             ),
                         },
                     ),
@@ -1264,7 +1195,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             params: vec![Param::new(
                                 "callback",
                                 Type::Function {
-                                    params: vec![Type::TypeVar("T".to_string())],
+                                    params: element_callback_params(Vec::new()),
                                     ret: Box::new(Type::Array(Box::new(Type::TypeVar(
                                         "U".to_string(),
                                     )))),
@@ -1275,7 +1206,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::Array(Box::new(Type::TypeVar("U".to_string()))),
                             predicate: None,
                             doc: doc(
-                                "/**\n * Maps each element to an array via `callback`, then flattens the results one level.\n * @param callback Function returning an array for each element.\n */",
+                                "/**\n * Maps each element to an array via `callback`, then flattens the results one level.\n * @param callback Function called with `(value, index, array)`, returning an array for each element.\n */",
                             ),
                         },
                     ),
@@ -1396,7 +1327,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             params: vec![Param::new(
                                 "predicate",
                                 Type::Function {
-                                    params: vec![Type::TypeVar("T".to_string())],
+                                    params: element_callback_params(Vec::new()),
                                     ret: Box::new(Type::Boolean),
                                     predicate: None,
                                     has_rest: false,
@@ -1405,7 +1336,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::Array(Box::new(Type::TypeVar("T".to_string()))),
                             predicate: None,
                             doc: doc(
-                                "/**\n * Returns a new array of the elements for which `predicate` returned `true`.\n * Order is preserved; the receiver is not modified.\n * @param predicate Function called once per element.\n */",
+                                "/**\n * Returns a new array of the elements for which `predicate` returned `true`.\n * Order is preserved; the receiver is not modified.\n * @param predicate Function called with `(value, index, array)` for each element.\n */",
                             ),
                         },
                     ),
@@ -1417,10 +1348,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                                 Param::new(
                                     "callback",
                                     Type::Function {
-                                        params: vec![
-                                            Type::TypeVar("U".to_string()),
-                                            Type::TypeVar("T".to_string()),
-                                        ],
+                                        params: element_callback_params(vec![Type::TypeVar("U".to_string())]),
                                         ret: Box::new(Type::TypeVar("U".to_string())),
                                     predicate: None,
                                         has_rest: false,
@@ -1431,7 +1359,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::TypeVar("U".to_string()),
                             predicate: None,
                             doc: doc(
-                                "/**\n * Reduces the array to a single value.\n * Calls `callback(acc, elem)` for each element left-to-right, threading the result as the next `acc`.\n * @param callback Combining function; receives the accumulator then the current element.\n * @param initial Starting accumulator value.\n * @returns The final accumulator.\n */",
+                                "/**\n * Reduces the array to a single value.\n * Calls `callback(acc, value, index, array)` for each element left-to-right, threading the result as the next `acc`.\n * @param callback Combining function; receives the accumulator, the current element, its index, and the array.\n * @param initial Starting accumulator value.\n * @returns The final accumulator.\n */",
                             ),
                         },
                     ),
@@ -1442,7 +1370,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             params: vec![Param::new(
                                 "callback",
                                 Type::Function {
-                                    params: vec![Type::TypeVar("T".to_string())],
+                                    params: element_callback_params(Vec::new()),
                                     ret: Box::new(Type::Void),
                                     predicate: None,
                                     has_rest: false,
@@ -1451,7 +1379,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::Void,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Calls `callback` once for each element in order.\n * @param callback Function called once per element.\n */",
+                                "/**\n * Calls `callback(value, index, array)` once for each element in order.\n * @param callback Function called once per element.\n */",
                             ),
                         },
                     ),
@@ -1462,7 +1390,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             params: vec![Param::new(
                                 "predicate",
                                 Type::Function {
-                                    params: vec![Type::TypeVar("T".to_string())],
+                                    params: element_callback_params(Vec::new()),
                                     ret: Box::new(Type::Boolean),
                                     predicate: None,
                                     has_rest: false,
@@ -1471,7 +1399,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::Boolean,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Returns `true` if `predicate` returned `true` for at least one element.\n * Short-circuits on the first match.\n * @param predicate Function called once per element until it returns `true`.\n */",
+                                "/**\n * Returns `true` if `predicate` returned `true` for at least one element.\n * Short-circuits on the first match.\n * @param predicate Function called with `(value, index, array)` for each element until it returns `true`.\n */",
                             ),
                         },
                     ),
@@ -1482,7 +1410,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             params: vec![Param::new(
                                 "predicate",
                                 Type::Function {
-                                    params: vec![Type::TypeVar("T".to_string())],
+                                    params: element_callback_params(Vec::new()),
                                     ret: Box::new(Type::Boolean),
                                     predicate: None,
                                     has_rest: false,
@@ -1491,7 +1419,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::Boolean,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Returns `true` if `predicate` returned `true` for every element.\n * Short-circuits on the first `false`. An empty array returns `true`.\n * @param predicate Function called once per element until it returns `false`.\n */",
+                                "/**\n * Returns `true` if `predicate` returned `true` for every element.\n * Short-circuits on the first `false`. An empty array returns `true`.\n * @param predicate Function called with `(value, index, array)` for each element until it returns `false`.\n */",
                             ),
                         },
                     ),
@@ -1549,10 +1477,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                                 Param::new(
                                     "callback",
                                     Type::Function {
-                                        params: vec![
-                                            Type::TypeVar("U".to_string()),
-                                            Type::TypeVar("T".to_string()),
-                                        ],
+                                        params: element_callback_params(vec![Type::TypeVar("U".to_string())]),
                                         ret: Box::new(Type::TypeVar("U".to_string())),
                                         predicate: None,
                                         has_rest: false,
@@ -1563,7 +1488,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::TypeVar("U".to_string()),
                             predicate: None,
                             doc: doc(
-                                "/**\n * Reduces the array right-to-left.\n * Calls `callback(acc, elem)` for each element from the last to the first, threading the result as the next `acc`.\n * @param callback Combining function; receives the accumulator then the current element.\n * @param initial Starting accumulator value.\n * @returns The final accumulator.\n */",
+                                "/**\n * Reduces the array right-to-left.\n * Calls `callback(acc, value, index, array)` for each element from the last to the first, threading the result as the next `acc`.\n * @param callback Combining function; receives the accumulator, the current element, its index, and the array.\n * @param initial Starting accumulator value.\n * @returns The final accumulator.\n */",
                             ),
                         },
                     ),
@@ -1792,7 +1717,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                                 "mapFn",
                                 Type::union(vec![
                                     Type::Function {
-                                        params: vec![Type::TypeVar("T".to_string())],
+                                        params: vec![Type::TypeVar("T".to_string()), Type::Number],
                                         ret: Box::new(Type::TypeVar("U".to_string())),
                                         predicate: None,
                                         has_rest: false,
@@ -1860,85 +1785,4 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             },
         },
     );
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::codegen::closures::{ClosureSig, emit_arity_closures};
-    use crate::codegen::intrinsics::declare_intrinsic_types;
-    use wasm_encoder::{
-        ConstExpr, ExportKind, ExportSection, GlobalSection, GlobalType, HeapType as EncHeapType,
-        Module, RefType as EncRefType, TypeSection, ValType as EncValType,
-    };
-    use wasmtime::{Config, Engine};
-
-    /// The `(ref $closure)` types `install` declares for the callbacks must be
-    /// canonically equal to the ones `codegen::closures` emits, so a host param
-    /// can't drift from the guest. Mirrors `install`'s construction for the three
-    /// arities the Array port uses; the higher-order fixtures are the runtime
-    /// backstop that the two actually agree.
-    #[test]
-    fn callback_closures_match_codegen() {
-        let mut config = Config::new();
-        config.wasm_gc(true);
-        config.wasm_function_references(true);
-        let engine = Engine::new(&config).unwrap();
-        let intr = build_intrinsic_types(&engine).unwrap();
-
-        for (arity, is_void) in [(1usize, true), (1, false), (2, false)] {
-            let host = closure_ty(&engine, &intr, arity, is_void).unwrap();
-            let ValType::Ref(host_ref) = host else {
-                panic!("closure_ty returned a non-ref");
-            };
-            let host_struct = host_ref.heap_type().as_concrete_struct().unwrap().clone();
-
-            let sig = ClosureSig {
-                arity: arity as u8,
-                is_void,
-            };
-            let mut module = Module::new();
-            let mut types = TypeSection::new();
-            let intrinsics = declare_intrinsic_types(&mut types);
-            let mut next_idx = crate::codegen::intrinsics::INTRINSIC_TYPE_COUNT;
-            let assigned = emit_arity_closures([sig], &mut types, intrinsics, &mut next_idx);
-            let (_fn_idx, struct_idx) = assigned[&sig];
-            module.section(&types);
-
-            let mut globals = GlobalSection::new();
-            globals.global(
-                GlobalType {
-                    val_type: EncValType::Ref(EncRefType {
-                        nullable: true,
-                        heap_type: EncHeapType::Concrete(struct_idx),
-                    }),
-                    mutable: false,
-                    shared: false,
-                },
-                &ConstExpr::ref_null(EncHeapType::Concrete(struct_idx)),
-            );
-            let mut exports = ExportSection::new();
-            exports.export("closure", ExportKind::Global, 0);
-            module.section(&globals);
-            module.section(&exports);
-
-            let module = wasmtime::Module::new(&engine, module.finish()).unwrap();
-            let recovered = module
-                .get_export("closure")
-                .unwrap()
-                .global()
-                .unwrap()
-                .content()
-                .as_ref()
-                .map(|r| r.heap_type().clone())
-                .unwrap()
-                .as_concrete_struct()
-                .unwrap()
-                .clone();
-            assert!(
-                StructType::eq(&host_struct, &recovered),
-                "closure ({arity}, void={is_void}) drifted from codegen"
-            );
-        }
-    }
 }

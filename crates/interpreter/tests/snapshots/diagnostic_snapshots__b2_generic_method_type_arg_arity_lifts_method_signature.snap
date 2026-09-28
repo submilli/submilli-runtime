@@ -12,8 +12,8 @@ error: method `map` expects 1 type argument(s), got 2
   |
 help: /**
  * Returns a new array produced by applying `callback` to each element.
- * @param callback Function called once per element.
+ * @param callback Function called with `(value, index, array)` for each element.
  * @returns A new array of length equal to this array.
  */
-number[].map<U>(callback: (arg0: number) => U): U[]
+number[].map<U>(callback: (arg0: number, arg1: number, arg2: number[]) => U): U[]
 ---

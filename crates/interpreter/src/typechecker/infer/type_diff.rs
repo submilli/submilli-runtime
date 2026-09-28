@@ -145,9 +145,9 @@ fn format_object_diff(
 
 fn format_function_diff(pa: &[Type], ra: &Type, pb: &[Type], rb: &Type) -> String {
     let mut rows: Vec<String> = Vec::new();
-    if pa.len() != pb.len() {
+    if pb.len() > pa.len() {
         rows.push(format!(
-            "arity: expected {} param(s), got {}",
+            "arity: expected at most {} param(s), got {}",
             pa.len(),
             pb.len(),
         ));
@@ -229,13 +229,13 @@ mod tests {
     fn function_arity_diff() {
         let out = format_type_diff(
             &Type::Function {
-                params: vec![Type::Number, Type::Number],
+                params: vec![Type::Number],
                 ret: Box::new(Type::Void),
                 predicate: None,
                 has_rest: false,
             },
             &Type::Function {
-                params: vec![Type::Number],
+                params: vec![Type::Number, Type::Number],
                 ret: Box::new(Type::Void),
                 predicate: None,
                 has_rest: false,

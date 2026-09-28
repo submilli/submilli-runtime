@@ -1,8 +1,16 @@
-types: 78 of 258 tsc entries compared, 27 differ
+types: 80 of 258 tsc entries compared, 29 differ
+
+line 12: { produce: () => 0, consume: n => n.toFixed() }
+  tsc:  { produce: () => number; consume: (n: number) => string; }
+  ours: { consume: (arg0: T) => <error>; produce: () => number }
 
 line 17: { produce: _a => 0, consume: n => n.toFixed(), }
   tsc:  { produce: (_a: number) => number; consume: (n: number) => string; }
   ours: { consume: (arg0: T) => <error>; produce: (arg0: number) => number }
+
+line 22: { produce() { return 0; }, consume: n => n.toFixed() }
+  tsc:  { produce(): number; consume: (n: number) => string; }
+  ours: { consume: (arg0: T) => <error>; produce: () => number }
 
 line 31: [() => 0, n => n.toFixed()]
   tsc:  [() => number, (n: number) => string]
@@ -109,17 +117,12 @@ line 186: (number) => String(number)
   ours: (arg0: TDone) => string
 
 errors:
-line 12: ours: expected `{ consume: (arg0: T) => void; produce: (arg0: number) => T }`, got `{ consume: (arg0: T) => <error>; produce: () => number }` (tsc accepts)
-line 13: ours: expected `(arg0: number) => T`, got `() => number` (tsc accepts)
 line 14: ours: field `toFixed` does not exist on `T` (tsc accepts)
 line 19: ours: field `toFixed` does not exist on `T` (tsc accepts)
-line 22: ours: expected `{ consume: (arg0: T) => void; produce: (arg0: number) => T }`, got `{ consume: (arg0: T) => <error>; produce: () => number }` (tsc accepts)
-line 23: ours: expected `(arg0: number) => T`, got `() => number` (tsc accepts)
 line 26: ours: field `toFixed` does not exist on `T` (tsc accepts)
-line 31: ours: expected `(arg0: number) => T`, got `() => number` (tsc accepts)
+line 31: ours: field `toFixed` does not exist on `T` (tsc accepts)
 line 32: ours: field `toFixed` does not exist on `T` (tsc accepts)
 line 56: ours: field `foo` does not exist on `M` (tsc accepts)
 line 174: ours: cannot infer type parameter(s) `TParams`, `TDone`, `TMapped`; consider adding an explicit type argument (tsc accepts)
-line 175: ours: field `fetch`: expected `(arg0: TParams, arg1: number) => TDone`, got `(arg0: Params) => number` (tsc accepts)
 line 179: ours: cannot infer type parameter(s) `TParams`, `TDone`, `TMapped`; consider adding an explicit type argument (tsc accepts)
 line 184: ours: cannot infer type parameter(s) `TParams`, `TDone`, `TMapped`; consider adding an explicit type argument (tsc accepts)

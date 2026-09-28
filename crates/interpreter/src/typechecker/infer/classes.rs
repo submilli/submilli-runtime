@@ -1212,6 +1212,25 @@ impl<'a> Inferer<'a> {
         };
         let child_fn = substitute_typevars(&method_fn_type(&child_sig), &opaque);
         let parent_fn = method_fn_type(&parent_sig);
+        // TypeScript lets an override declare fewer parameters, as any function
+        // may. Here the override fills the inherited method's vtable slot, whose
+        // Wasm signature is fixed, so it must declare them all.
+        if child_sig.params.len() < parent_sig.params.len() {
+            self.error_with_help(
+                member.span,
+                format!(
+                    "override of method `{}` must declare the inherited method's {} parameter(s)",
+                    member.name,
+                    parent_sig.params.len()
+                ),
+                vec![
+                    format!("inherited: {parent_fn}"),
+                    format!("override:  {child_fn}"),
+                    "declare the parameters it ignores too".to_string(),
+                ],
+            );
+            return;
+        }
         if !super::assignable(&child_fn, &parent_fn, self.resolver()) {
             self.error_with_help(
                 member.span,
@@ -4473,10 +4492,11 @@ mod tests {
 
     #[test]
     fn implements_wrong_arity_rejected() {
+        // A method may declare fewer parameters, as in TypeScript, but not more.
         let src = r#"
             interface Greeter { greet(n: number): number; }
             class Bad implements Greeter {
-              greet(): number { return 0; }
+              greet(n: number, m: number): number { return n + m; }
             }
         "#;
         let (_, diags) = run(src);

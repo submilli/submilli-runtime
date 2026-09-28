@@ -1,4 +1,5 @@
-//! Bridges closure return conventions and omitted default arguments without changing the callee.
+//! Bridges closure return conventions, omitted default arguments, and ignored
+//! trailing arguments without changing the callee.
 
 use wasm_encoder::{
     CodeSection, Function, FunctionSection, HeapType, Instruction, RefType, ValType,
@@ -51,15 +52,6 @@ pub fn emit_bodies(targets: &[ClosureSig], code: &mut CodeSection, ctx: &Codegen
 }
 
 fn emit_body(target: ClosureSig, ctx: &CodegenCtx<'_>) -> Function {
-    let source = opposite(target);
-    let structure = ctx
-        .symbols
-        .closure_struct_type_idx(source)
-        .expect("source closure type");
-    let signature = ctx
-        .symbols
-        .closure_func_type_idx(source)
-        .expect("source function type");
     let wrapper = ctx.symbols.this_environment_type.expect("this environment");
     let object = ctx
         .symbols
@@ -107,16 +99,72 @@ fn emit_body(target: ClosureSig, ctx: &CodegenCtx<'_>) -> Function {
     });
     body.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(object)));
     body.instruction(&Instruction::LocalSet(original));
-    body.instruction(&Instruction::LocalGet(original));
-    body.instruction(&Instruction::RefTestNonNull(HeapType::Concrete(structure)));
+    // Call what an adapter of an adapter ultimately wraps, which takes every
+    // argument JavaScript would pass it: an inner adapter would drop those
+    // past its own arity. An adapter binds no receiver of its own.
+    emit_original_identity(&mut body, ctx.symbols, original);
     let result = if target.is_void {
         wasm_encoder::BlockType::Empty
     } else {
         wasm_encoder::BlockType::Result(ctx.symbols.value_type(&crate::Type::Unknown))
     };
-    body.instruction(&Instruction::If(result));
-    // The wrapper's environment is the original closure. Preserve its own
-    // environment and pass every erased argument through unchanged.
+    let sources = direct_sources(target, ctx.symbols);
+    for &source in &sources {
+        let structure = ctx
+            .symbols
+            .closure_struct_type_idx(source)
+            .expect("source closure type");
+        body.instruction(&Instruction::LocalGet(original));
+        body.instruction(&Instruction::RefTestNonNull(HeapType::Concrete(structure)));
+        body.instruction(&Instruction::If(result));
+        emit_direct_call(&mut body, ctx, source, target, original, receiver, env);
+        body.instruction(&Instruction::Else);
+    }
+    emit_default_adapter_call(&mut body, ctx, target, original, receiver);
+    for _ in &sources {
+        body.instruction(&Instruction::End);
+    }
+    body.instruction(&Instruction::End);
+    body
+}
+
+/// The closures an adapter to `target` calls without re-entering the host: the
+/// other return convention at the same arity, and every smaller arity, whose
+/// closures ignore the trailing arguments. Every argument such a closure
+/// declares is supplied, so its defaults are never needed. A rest closure is
+/// not expected here: the typechecker never lets it stand for another arity and
+/// `__value_defaults_fit` rejects it. A cast from `unknown` still can mislabel
+/// one at its own Wasm arity, because that cast tests only the closure struct.
+fn direct_sources(target: ClosureSig, symbols: &SymbolTable) -> Vec<ClosureSig> {
+    let smaller = (0..target.arity)
+        .rev()
+        .flat_map(|arity| [false, true].map(|is_void| ClosureSig { arity, is_void }));
+    std::iter::once(opposite(target))
+        .chain(smaller)
+        .filter(|source| symbols.closure_struct_type_idx(*source).is_some())
+        .collect()
+}
+
+/// Call the original closure with its own environment and the leading
+/// `source.arity` arguments, then convert its result to `target`'s convention.
+fn emit_direct_call(
+    body: &mut Function,
+    ctx: &CodegenCtx<'_>,
+    source: ClosureSig,
+    target: ClosureSig,
+    original: u32,
+    receiver: u32,
+    env: u32,
+) {
+    let wrapper = ctx.symbols.this_environment_type.expect("this environment");
+    let structure = ctx
+        .symbols
+        .closure_struct_type_idx(source)
+        .expect("source closure type");
+    let signature = ctx
+        .symbols
+        .closure_func_type_idx(source)
+        .expect("source function type");
     body.instruction(&Instruction::LocalGet(original));
     body.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(structure)));
     body.instruction(&Instruction::StructGet {
@@ -126,7 +174,7 @@ fn emit_body(target: ClosureSig, ctx: &CodegenCtx<'_>) -> Function {
     for instruction in super::this_binding::binding_instructions(wrapper, env, receiver) {
         body.instruction(&instruction);
     }
-    for i in 1..=u32::from(target.arity) {
+    for i in 1..=u32::from(source.arity) {
         body.instruction(&Instruction::LocalGet(i));
     }
     body.instruction(&Instruction::LocalGet(original));
@@ -136,9 +184,10 @@ fn emit_body(target: ClosureSig, ctx: &CodegenCtx<'_>) -> Function {
         field_index: 1,
     });
     body.instruction(&Instruction::CallRef(signature));
-    if target.is_void {
+    if !source.is_void && target.is_void {
         body.instruction(&Instruction::Drop);
-    } else {
+    }
+    if source.is_void && !target.is_void {
         let object = ctx
             .symbols
             .intrinsic_type_indices()
@@ -146,11 +195,6 @@ fn emit_body(target: ClosureSig, ctx: &CodegenCtx<'_>) -> Function {
             .object;
         body.instruction(&Instruction::RefNull(HeapType::Concrete(object)));
     }
-    body.instruction(&Instruction::Else);
-    emit_default_adapter_call(&mut body, ctx, target, original, receiver);
-    body.instruction(&Instruction::End);
-    body.instruction(&Instruction::End);
-    body
 }
 
 fn emit_default_adapter_call(
@@ -211,8 +255,24 @@ pub fn emit_coercion(
     let Some(target) = target else {
         return false;
     };
-    emit_erased_cast(emitter, ctx, target);
+    if takes_fewer_arguments(source, target) {
+        let original = emitter.add_anonymous_local(ctx.symbols.value_type(&crate::Type::Unknown));
+        emitter.instruction(Instruction::LocalSet(original));
+        emit_wrap(emitter, ctx, target, original);
+    } else {
+        emit_erased_cast(emitter, ctx, target);
+    }
     true
+}
+
+/// A function statically known to declare fewer parameters than `target`
+/// passes, and no rest parameter, always needs the adapter, so the runtime
+/// check [`emit_erased_cast`] makes is skipped.
+fn takes_fewer_arguments(source: &crate::Type, target: ClosureSig) -> bool {
+    matches!(
+        source.peel(),
+        crate::Type::Function { params, has_rest: false, .. } if params.len() < usize::from(target.arity)
+    )
 }
 
 /// An erased field can carry either return convention or a method with trailing
@@ -255,6 +315,22 @@ pub fn emit_erased_cast(
     emit_defaults_fit(emitter, ctx, original, target.arity, None);
     emitter.emit_end();
     emitter.emit_if(wasm_encoder::BlockType::Result(target_slot));
+    emit_wrap(emitter, ctx, target, original);
+    emitter.emit_else();
+    emitter.instruction(Instruction::LocalGet(original));
+    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
+        target_struct,
+    )));
+    emitter.emit_end();
+}
+
+/// Wrap the function in `original` in `target`'s adapter, keeping its identity.
+fn emit_wrap(
+    emitter: &mut FunctionEmitter<'_>,
+    ctx: &CodegenCtx<'_>,
+    target: ClosureSig,
+    original: u32,
+) {
     emit_identity_vtable(emitter, ctx, original);
     emitter.instruction(Instruction::RefFunc(
         ctx.symbols
@@ -264,23 +340,21 @@ pub fn emit_erased_cast(
     emitter.instruction(Instruction::LocalGet(original));
     emitter.instruction(Instruction::RefAsNonNull);
     super::this_binding::wrap(emitter, ctx);
-    emitter.instruction(Instruction::StructNew(target_struct));
-    emitter.emit_else();
-    emitter.instruction(Instruction::LocalGet(original));
-    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
-        target_struct,
-    )));
-    emitter.emit_end();
+    emitter.instruction(Instruction::StructNew(
+        ctx.symbols
+            .closure_struct_type_idx(target)
+            .expect("target closure"),
+    ));
 }
 
 pub(super) fn emit_defaults_fit(
     emitter: &mut FunctionEmitter<'_>,
     ctx: &CodegenCtx<'_>,
-    original: u32,
+    function: u32,
     arity: u8,
     is_void: Option<bool>,
 ) {
-    emitter.instruction(Instruction::LocalGet(original));
+    emitter.instruction(Instruction::LocalGet(function));
     emitter.instruction(Instruction::F64Const(f64::from(arity).into()));
     super::function_emitter::cast::emit_box(emitter, ctx, &crate::Type::Number);
     let results = is_void.map_or(-1.0, |is_void| if is_void { 0.0 } else { 1.0 });
@@ -294,8 +368,14 @@ pub(super) fn emit_defaults_fit(
     super::function_emitter::cast::emit_cast_to(emitter, ctx, &crate::Type::Boolean);
 }
 
-/// The fifth field distinguishes adapter vtables from ordinary and class
-/// vtables and carries the original function identity across module boundaries.
+/// The adapter vtable's field holding the function the adapter wraps. The
+/// host reads it too (`closure::original`), so it must stay in step with
+/// [`emit_vtable_type`].
+pub(crate) const ADAPTER_ORIGINAL_FIELD: u32 = 4;
+
+/// The fifth field ([`ADAPTER_ORIGINAL_FIELD`]) distinguishes adapter vtables
+/// from ordinary and class vtables and carries the original function identity
+/// across module boundaries.
 pub fn emit_vtable_type(
     types: &mut wasm_encoder::TypeSection,
     symbols: &mut SymbolTable,
@@ -393,7 +473,7 @@ fn emit_original_identity(body: &mut Function, symbols: &SymbolTable, local: u32
     body.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(wrapper)));
     body.instruction(&Instruction::StructGet {
         struct_type_index: wrapper,
-        field_index: 4,
+        field_index: ADAPTER_ORIGINAL_FIELD,
     });
     body.instruction(&Instruction::LocalSet(local));
     body.instruction(&Instruction::Br(0));

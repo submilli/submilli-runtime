@@ -26,6 +26,7 @@ use crate::runtime::host::{
 };
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::number::format_number_js;
+use crate::runtime::prelude::array::ElementCallback;
 use crate::runtime::prelude::closure::Closure;
 use crate::runtime::prelude::iterator::as_struct;
 use crate::runtime::prelude::vtable::read_object_entries;
@@ -341,7 +342,7 @@ async fn sort_bytes(
         while j > 0 {
             let a = box_byte(caller, bytes[j - 1])?;
             let b = box_byte(caller, bytes[j])?;
-            if c.call_number(caller, a, b).await? > 0.0 {
+            if c.compare(caller, a, b).await? > 0.0 {
                 bytes.swap(j - 1, j);
                 j -= 1;
             } else {
@@ -388,25 +389,29 @@ async fn to_sorted(
 
 async fn for_each(
     caller: &mut Caller<'_, StoreData>,
+    array: Val,
     bytes: Vec<u8>,
     f: &Closure,
 ) -> wasmtime::Result<()> {
-    for b in bytes {
+    let f = ElementCallback::new(caller, f, Some(array))?;
+    for (index, b) in bytes.into_iter().enumerate() {
         let boxed = box_byte(caller, b)?;
-        f.call_void(caller, boxed).await?;
+        f.call(caller, None, boxed, index).await?;
     }
     Ok(())
 }
 
 async fn map(
     caller: &mut Caller<'_, StoreData>,
+    array: Val,
     bytes: Vec<u8>,
     f: &Closure,
 ) -> wasmtime::Result<Vec<u8>> {
+    let f = ElementCallback::new(caller, f, Some(array))?;
     let mut out = Vec::with_capacity(bytes.len());
-    for b in bytes {
+    for (index, b) in bytes.into_iter().enumerate() {
         let boxed = box_byte(caller, b)?;
-        let r = f.call(caller, &[boxed]).await?;
+        let r = f.call(caller, None, boxed, index).await?;
         out.push(unbox_byte(caller, &r, "Uint8Array#map")?);
     }
     Ok(out)
@@ -414,13 +419,15 @@ async fn map(
 
 async fn filter(
     caller: &mut Caller<'_, StoreData>,
+    array: Val,
     bytes: Vec<u8>,
     pred: &Closure,
 ) -> wasmtime::Result<Vec<u8>> {
+    let pred = ElementCallback::new(caller, pred, Some(array))?;
     let mut out = Vec::new();
-    for b in bytes {
+    for (index, b) in bytes.into_iter().enumerate() {
         let boxed = box_byte(caller, b)?;
-        if pred.call_predicate(caller, boxed).await? {
+        if pred.test(caller, boxed, index).await? {
             out.push(b);
         }
     }
@@ -429,11 +436,13 @@ async fn filter(
 
 async fn reduce(
     caller: &mut Caller<'_, StoreData>,
+    array: Val,
     bytes: Vec<u8>,
     f: &Closure,
     mut acc: Val,
     reverse: bool,
 ) -> wasmtime::Result<Val> {
+    let f = ElementCallback::new(caller, f, Some(array))?;
     let order: Vec<usize> = if reverse {
         (0..bytes.len()).rev().collect()
     } else {
@@ -441,19 +450,21 @@ async fn reduce(
     };
     for i in order {
         let boxed = box_byte(caller, bytes[i])?;
-        acc = f.call(caller, &[acc, boxed]).await?;
+        acc = f.call(caller, Some(acc), boxed, i).await?;
     }
     Ok(acc)
 }
 
 async fn some(
     caller: &mut Caller<'_, StoreData>,
+    array: Val,
     bytes: Vec<u8>,
     pred: &Closure,
 ) -> wasmtime::Result<bool> {
-    for b in bytes {
+    let pred = ElementCallback::new(caller, pred, Some(array))?;
+    for (index, b) in bytes.into_iter().enumerate() {
         let boxed = box_byte(caller, b)?;
-        if pred.call_predicate(caller, boxed).await? {
+        if pred.test(caller, boxed, index).await? {
             return Ok(true);
         }
     }
@@ -462,12 +473,14 @@ async fn some(
 
 async fn every(
     caller: &mut Caller<'_, StoreData>,
+    array: Val,
     bytes: Vec<u8>,
     pred: &Closure,
 ) -> wasmtime::Result<bool> {
-    for b in bytes {
+    let pred = ElementCallback::new(caller, pred, Some(array))?;
+    for (index, b) in bytes.into_iter().enumerate() {
         let boxed = box_byte(caller, b)?;
-        if !pred.call_predicate(caller, boxed).await? {
+        if !pred.test(caller, boxed, index).await? {
             return Ok(false);
         }
     }
@@ -477,10 +490,12 @@ async fn every(
 /// Index of the first (or, with `reverse`, last) byte matching `pred`.
 async fn find_match(
     caller: &mut Caller<'_, StoreData>,
+    array: Val,
     bytes: &[u8],
     pred: &Closure,
     reverse: bool,
 ) -> wasmtime::Result<Option<usize>> {
+    let pred = ElementCallback::new(caller, pred, Some(array))?;
     let order: Vec<usize> = if reverse {
         (0..bytes.len()).rev().collect()
     } else {
@@ -488,7 +503,7 @@ async fn find_match(
     };
     for i in order {
         let boxed = box_byte(caller, bytes[i])?;
-        if pred.call_predicate(caller, boxed).await? {
+        if pred.test(caller, boxed, i).await? {
             return Ok(Some(i));
         }
     }

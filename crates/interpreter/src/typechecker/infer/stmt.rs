@@ -113,13 +113,10 @@ impl Inferer<'_> {
                     doc,
                 }
             }
-            StmtKind::Function { .. } => {
-                self.error(
-                    span,
-                    "nested function declarations are not supported".to_string(),
-                );
-                return None;
-            }
+            // Declared and assigned by its block (`declare_nested_functions`). A
+            // brace-less body is reported by the parser but still wrapped in a
+            // block, so every one has one.
+            StmtKind::Function { .. } => return None,
             StmtKind::If {
                 condition,
                 then_block,
@@ -415,7 +412,8 @@ impl Inferer<'_> {
                 self.scopes.push();
                 // Propagate `assigned` so enclosing blocks invalidate narrowings on reassigned paths.
                 self.push_narrow_frame(crate::typechecker::infer::narrowing::NarrowEnv::new());
-                let typed_stmts = self.block_stmts_with_drain(&stmts, span);
+                let mut typed_stmts = self.declare_nested_functions(stmt_id, &stmts);
+                typed_stmts.extend(self.block_stmts_with_drain(&stmts, span));
                 let (inner_narrowings, inner_assigned) = self.pop_narrow_frame_capture();
                 let exits_normally = self.reachable;
                 let surviving = if exits_normally {
@@ -733,10 +731,11 @@ impl Inferer<'_> {
     fn block_stmts_with_drain(&mut self, stmts: &[StmtId], outer_span: Span) -> Vec<StmtId> {
         let mut typed_stmts: Vec<StmtId> = Vec::new();
         for (i, &stmt) in stmts.iter().enumerate() {
-            let typed = self.infer_stmt(stmt);
+            let mut typed: Vec<StmtId> = self.infer_stmt(stmt).into_iter().collect();
+            typed.extend(self.define_nested_functions_after(stmt));
             let pending = std::mem::take(&mut self.pending_post_if_materializations);
             if !pending.is_empty() {
-                let mut tail: Vec<StmtId> = typed.into_iter().collect();
+                let mut tail = typed;
                 tail.extend(self.block_stmts_with_drain(&stmts[i + 1..], outer_span));
                 let tail_block = self.typed_ast.push_stmt(TypedStmt {
                     kind: TypedStmtKind::Block(tail),
@@ -1032,10 +1031,9 @@ impl Inferer<'_> {
                         field.ty.clone()
                     }
                 };
-                let (typed_value, value_ty) = self.infer_expr(value, Some(&field_ty));
-                if !matches!(value_ty, Type::Error)
-                    && !assignable(&value_ty, &field_ty, self.resolver())
-                {
+                let (typed_value, value_ty, reported) =
+                    self.infer_assigned_value(value, Some(&field_ty));
+                if !reported && !assignable(&value_ty, &field_ty, self.resolver()) {
                     let help = super::type_diff::type_mismatch_help(&field_ty, &value_ty);
                     self.error_with_help(
                         value_span,
@@ -1078,10 +1076,9 @@ impl Inferer<'_> {
                 } else {
                     prop_sig.ty.clone()
                 };
-                let (typed_value, value_ty) = self.infer_expr(value, Some(&field_ty));
-                if !matches!(value_ty, Type::Error)
-                    && !assignable(&value_ty, &field_ty, self.resolver())
-                {
+                let (typed_value, value_ty, reported) =
+                    self.infer_assigned_value(value, Some(&field_ty));
+                if !reported && !assignable(&value_ty, &field_ty, self.resolver()) {
                     let help = super::type_diff::type_mismatch_help(&field_ty, &value_ty);
                     self.error_with_help(
                         value_span,
@@ -1115,8 +1112,9 @@ impl Inferer<'_> {
                 } else {
                     field.ty.clone()
                 };
-                let (typed_value, value_ty) = self.infer_expr(value, Some(&field_ty));
-                if !assignable(&value_ty, &field_ty, self.resolver()) {
+                let (typed_value, value_ty, reported) =
+                    self.infer_assigned_value(value, Some(&field_ty));
+                if !reported && !assignable(&value_ty, &field_ty, self.resolver()) {
                     let help = super::type_diff::type_mismatch_help(&field_ty, &value_ty);
                     self.error_with_help(
                         value_span,
@@ -1213,9 +1211,9 @@ impl Inferer<'_> {
         let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None);
         let elem_ty = self.indexed_write_elem_ty(&receiver_ty, recv_span, recv_span);
         let (typed_index, _) = self.infer_expr(index, Some(&Type::Number));
-        let (typed_value, value_ty) = self.infer_expr(value, Some(&elem_ty));
+        let (typed_value, value_ty, reported) = self.infer_assigned_value(value, Some(&elem_ty));
         if !matches!(elem_ty, Type::Error)
-            && !matches!(value_ty, Type::Error)
+            && !reported
             && !assignable(&value_ty, &elem_ty, self.resolver())
         {
             let help = super::type_diff::type_mismatch_help(&elem_ty, &value_ty);
@@ -1430,6 +1428,20 @@ impl Inferer<'_> {
         Some(written_ty)
     }
 
+    /// Infer an assigned value against its target's type, and whether that
+    /// reported an error. The caller still checks assignability, since
+    /// `infer_expr` skips hints holding type variables, but an error already
+    /// reported covers the value.
+    fn infer_assigned_value(
+        &mut self,
+        value: ExprId,
+        target_ty: Option<&Type>,
+    ) -> (ExprId, Type, bool) {
+        let errors_before = self.error_count();
+        let (typed_value, value_ty) = self.infer_expr(value, target_ty);
+        (typed_value, value_ty, self.error_count() > errors_before)
+    }
+
     pub(super) fn infer_assign(
         &mut self,
         target: Ident,
@@ -1438,16 +1450,7 @@ impl Inferer<'_> {
     ) -> TypedStmtKind {
         if let Some(entry) = self.scopes.get(&target.name).cloned() {
             if entry.is_const {
-                self.diagnostics.push(Diagnostic {
-                    severity: Severity::Error,
-                    span: target.span,
-                    message: format!("cannot assign to const binding `{}`", target.name),
-                    help: vec![format!(
-                        "declare with `let` if reassignment is required: `let {} = …;`",
-                        target.name
-                    )],
-                    notes: vec![(entry.decl_span, "declared as `const` here".to_string())],
-                });
+                self.report_const_local_write(&target, &entry);
             }
             let value_span = self.ast.expr(value).span;
             // Reassigning a const is already an error. Hinting the declared type would
@@ -1456,10 +1459,8 @@ impl Inferer<'_> {
             // no new value can match. Infer unhinted; nested errors still surface.
             // Paired with the `is_const` guard on the re-check below: both must stay.
             let hint = (!entry.is_const).then(|| entry.ty.clone());
-            let (typed_value, value_ty) = self.infer_expr(value, hint.as_ref());
-            // Re-check assignability: `infer_expr` skips when the hint contains `Type::Var`,
-            // but assignment is always a real semantic constraint.
-            if !entry.is_const && !assignable(&value_ty, &entry.ty, self.resolver()) {
+            let (typed_value, value_ty, reported) = self.infer_assigned_value(value, hint.as_ref());
+            if !entry.is_const && !reported && !assignable(&value_ty, &entry.ty, self.resolver()) {
                 self.error(
                     value_span,
                     format!("expected `{}`, got `{}`", entry.ty, value_ty),
@@ -1482,8 +1483,9 @@ impl Inferer<'_> {
             match kind_clone {
                 ValueKind::Let { ty, .. } => {
                     let value_span = self.ast.expr(value).span;
-                    let (typed_value, value_ty) = self.infer_expr(value, Some(&ty));
-                    if !assignable(&value_ty, &ty, self.resolver()) {
+                    let (typed_value, value_ty, reported) =
+                        self.infer_assigned_value(value, Some(&ty));
+                    if !reported && !assignable(&value_ty, &ty, self.resolver()) {
                         self.error(value_span, format!("expected `{ty}`, got `{value_ty}`"));
                     }
                     self.renarrow_global_after_write(&target, &mangled, &ty, value_ty);
@@ -1569,16 +1571,7 @@ impl Inferer<'_> {
     ) -> TypedStmtKind {
         if let Some(entry) = self.scopes.get(&target.name).cloned() {
             if entry.is_const {
-                self.diagnostics.push(Diagnostic {
-                    severity: Severity::Error,
-                    span: target.span,
-                    message: format!("cannot assign to const binding `{}`", target.name),
-                    help: vec![format!(
-                        "declare with `let` if reassignment is required: `let {} = …;`",
-                        target.name
-                    )],
-                    notes: vec![(entry.decl_span, "declared as `const` here".to_string())],
-                });
+                self.report_const_local_write(&target, &entry);
             }
             let target_ty = entry.ty.clone();
             let lhs_path =
@@ -2644,7 +2637,8 @@ impl Inferer<'_> {
             unreachable!("loop bodies are blocks");
         };
         self.scopes.push();
-        let typed_stmts = self.block_stmts_with_drain(&stmts, stmt.span);
+        let mut typed_stmts = self.declare_nested_functions(body, &stmts);
+        typed_stmts.extend(self.block_stmts_with_drain(&stmts, stmt.span));
         let post = self.snapshot_active_narrowings(0).0;
         self.scopes.pop();
         let typed = self.typed_ast.push_stmt(TypedStmt {

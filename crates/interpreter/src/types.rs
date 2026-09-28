@@ -429,6 +429,15 @@ impl Type {
         matches!(self.peel(), Type::Void)
     }
 
+    /// Whether a function taking `actual` parameters can stand where one taking
+    /// `expected` is called. As in TypeScript, it may declare fewer and ignore
+    /// the rest of the arguments; a closure adapter drops them at runtime. Rest
+    /// functions keep an exact arity, since their packed array has a slot of its
+    /// own.
+    pub fn function_arity_fits(actual: usize, expected: usize, has_rest: bool) -> bool {
+        actual == expected || (!has_rest && actual < expected)
+    }
+
     /// Whether a value of this type would need a `void` slot at runtime:
     /// `void` itself, or a union that lists it (`f() ?? 1` and
     /// `cond ? f() : 1` both build one).

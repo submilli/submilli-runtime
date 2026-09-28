@@ -60,9 +60,6 @@ arguments.
   access (no `Array#shift`).
 - `instanceof Set` assertions dropped — the type system fixes the return
   type as `Set<T>`.
-- `Set#forEach` callbacks take the value only; the standard's
-  `(value, entry, set)` extra arguments don't exist (entry === value
-  assertions dropped, the outer binding replaces `set`).
 - `add`/`clear` return-value identity asserts rewritten against observable
   mutation (`add/returns-this.ts`) or dropped (`clear` returns void).
 - Exhausted iterator results carry no `value` field; ports assert

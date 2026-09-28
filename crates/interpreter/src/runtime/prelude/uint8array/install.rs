@@ -3,13 +3,9 @@
 //! under its dispatch key, and declares the value symbols codegen routes through.
 //! The byte operations themselves live in the parent module.
 
-use wasmtime::{
-    FieldType, Finality, FuncType, HeapType, Linker, Mutability, RefType, StorageType, StructType,
-    Val, ValType,
-};
+use wasmtime::{FuncType, HeapType, Linker, RefType, StructType, Val, ValType};
 
 use crate::runtime::StoreData;
-use crate::runtime::gc_singleton::{singleton_func, singleton_struct};
 use crate::runtime::host::{
     intrinsic_array_type, intrinsic_string_type, intrinsic_uint8_array_type, register_host_fn,
     register_host_fn_async, write_submilli_string_struct, write_submilli_string_struct_units,
@@ -41,50 +37,6 @@ fn object_ref(intr: &IntrinsicTypes) -> ValType {
     ))
 }
 
-/// The `(ref $closure)` type for an `(arity, is_void)` callback, declared to
-/// canonicalize with `codegen::closures` (identical to the Array port's helper).
-fn closure_ty(
-    engine: &wasmtime::Engine,
-    intr: &IntrinsicTypes,
-    arity: usize,
-    is_void: bool,
-) -> wasmtime::Result<ValType> {
-    let imm = Mutability::Const;
-    let mut params = vec![ValType::Ref(RefType::new(false, HeapType::Any))];
-    for _ in 0..arity {
-        params.push(ValType::Ref(RefType::new(true, intr.object.clone().into())));
-    }
-    let results = if is_void {
-        Vec::new()
-    } else {
-        vec![ValType::Ref(RefType::new(true, intr.object.clone().into()))]
-    };
-    let func = singleton_func(engine, params, results)?;
-    let st = singleton_struct(
-        engine,
-        Finality::NonFinal,
-        Some(intr.closure.clone()),
-        vec![
-            FieldType::new(
-                imm,
-                StorageType::ValType(ValType::Ref(RefType::new(
-                    false,
-                    intr.vtable.clone().into(),
-                ))),
-            ),
-            FieldType::new(
-                imm,
-                StorageType::ValType(ValType::Ref(RefType::new(false, func.into()))),
-            ),
-            FieldType::new(
-                imm,
-                StorageType::ValType(ValType::Ref(RefType::new(false, HeapType::Any))),
-            ),
-        ],
-    )?;
-    Ok(ref_to(st))
-}
-
 fn f64v(v: &Val) -> f64 {
     match v {
         Val::F64(bits) => f64::from_bits(*bits),
@@ -107,9 +59,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     let obj = object_ref(&intr);
     let num = ValType::F64;
     let boolean = ValType::I32;
-    let cb1_value = closure_ty(&engine, &intr, 1, false)?;
-    let cb1_void = closure_ty(&engine, &intr, 1, true)?;
-    let cb2_value = closure_ty(&engine, &intr, 2, false)?;
+    // Callbacks cross erased, as `Array`'s do.
+    let callback = obj.clone();
 
     let ft = |params: Vec<ValType>, results: Vec<ValType>| FuncType::new(&engine, params, results);
 
@@ -436,13 +387,13 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         linker,
         MODULE_NAME,
         method_key("forEach"),
-        ft(vec![uint8.clone(), cb1_void.clone()], vec![]),
+        ft(vec![uint8.clone(), callback.clone()], vec![]),
         true,
         |caller, params, _results| {
             Box::pin(async move {
                 let bytes = super::read_bytes(caller, &params[0], "Uint8Array#forEach")?;
-                let f = closure::read(caller, &params[1], "Uint8Array#forEach callback")?;
-                super::for_each(caller, bytes, &f).await
+                let f = closure::read_callback(caller, &params[1], "Uint8Array#forEach callback")?;
+                super::for_each(caller, params[0], bytes, &f).await
             })
         },
     )?;
@@ -450,13 +401,13 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         linker,
         MODULE_NAME,
         method_key("map"),
-        ft(vec![uint8.clone(), cb1_value.clone()], vec![uint8.clone()]),
+        ft(vec![uint8.clone(), callback.clone()], vec![uint8.clone()]),
         true,
         |caller, params, results| {
             Box::pin(async move {
                 let bytes = super::read_bytes(caller, &params[0], "Uint8Array#map")?;
-                let f = closure::read(caller, &params[1], "Uint8Array#map callback")?;
-                let out = super::map(caller, bytes, &f).await?;
+                let f = closure::read_callback(caller, &params[1], "Uint8Array#map callback")?;
+                let out = super::map(caller, params[0], bytes, &f).await?;
                 results[0] = super::build(caller, &out)?;
                 Ok(())
             })
@@ -466,13 +417,14 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         linker,
         MODULE_NAME,
         method_key("filter"),
-        ft(vec![uint8.clone(), cb1_value.clone()], vec![uint8.clone()]),
+        ft(vec![uint8.clone(), callback.clone()], vec![uint8.clone()]),
         true,
         |caller, params, results| {
             Box::pin(async move {
                 let bytes = super::read_bytes(caller, &params[0], "Uint8Array#filter")?;
-                let pred = closure::read(caller, &params[1], "Uint8Array#filter predicate")?;
-                let out = super::filter(caller, bytes, &pred).await?;
+                let pred =
+                    closure::read_callback(caller, &params[1], "Uint8Array#filter predicate")?;
+                let out = super::filter(caller, params[0], bytes, &pred).await?;
                 results[0] = super::build(caller, &out)?;
                 Ok(())
             })
@@ -484,15 +436,17 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             MODULE_NAME,
             method_key(name),
             ft(
-                vec![uint8.clone(), cb2_value.clone(), obj.clone()],
+                vec![uint8.clone(), callback.clone(), obj.clone()],
                 vec![obj.clone()],
             ),
             true,
             move |caller, params, results| {
                 Box::pin(async move {
                     let bytes = super::read_bytes(caller, &params[0], "Uint8Array#reduce")?;
-                    let f = closure::read(caller, &params[1], "Uint8Array#reduce callback")?;
-                    results[0] = super::reduce(caller, bytes, &f, params[2], reverse).await?;
+                    let f =
+                        closure::read_callback(caller, &params[1], "Uint8Array#reduce callback")?;
+                    results[0] =
+                        super::reduce(caller, params[0], bytes, &f, params[2], reverse).await?;
                     Ok(())
                 })
             },
@@ -503,16 +457,18 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             linker,
             MODULE_NAME,
             method_key(name),
-            ft(vec![uint8.clone(), cb1_value.clone()], vec![obj.clone()]),
+            ft(vec![uint8.clone(), callback.clone()], vec![obj.clone()]),
             true,
             move |caller, params, results| {
                 Box::pin(async move {
                     let bytes = super::read_bytes(caller, &params[0], "Uint8Array#find")?;
-                    let pred = closure::read(caller, &params[1], "Uint8Array#find predicate")?;
-                    results[0] = match super::find_match(caller, &bytes, &pred, reverse).await? {
-                        Some(i) => super::box_byte(caller, bytes[i])?,
-                        None => Val::null_any_ref(),
-                    };
+                    let pred =
+                        closure::read_callback(caller, &params[1], "Uint8Array#find predicate")?;
+                    results[0] =
+                        match super::find_match(caller, params[0], &bytes, &pred, reverse).await? {
+                            Some(i) => super::box_byte(caller, bytes[i])?,
+                            None => Val::null_any_ref(),
+                        };
                     Ok(())
                 })
             },
@@ -523,13 +479,17 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             linker,
             MODULE_NAME,
             method_key(name),
-            ft(vec![uint8.clone(), cb1_value.clone()], vec![num.clone()]),
+            ft(vec![uint8.clone(), callback.clone()], vec![num.clone()]),
             true,
             move |caller, params, results| {
                 Box::pin(async move {
                     let bytes = super::read_bytes(caller, &params[0], "Uint8Array#findIndex")?;
-                    let pred = closure::read(caller, &params[1], "Uint8Array#findIndex predicate")?;
-                    let idx = super::find_match(caller, &bytes, &pred, reverse).await?;
+                    let pred = closure::read_callback(
+                        caller,
+                        &params[1],
+                        "Uint8Array#findIndex predicate",
+                    )?;
+                    let idx = super::find_match(caller, params[0], &bytes, &pred, reverse).await?;
                     let r = idx.map_or(-1.0, |i| i as f64);
                     results[0] = Val::F64(r.to_bits());
                     Ok(())
@@ -541,16 +501,13 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         linker,
         MODULE_NAME,
         method_key("some"),
-        ft(
-            vec![uint8.clone(), cb1_value.clone()],
-            vec![boolean.clone()],
-        ),
+        ft(vec![uint8.clone(), callback.clone()], vec![boolean.clone()]),
         true,
         |caller, params, results| {
             Box::pin(async move {
                 let bytes = super::read_bytes(caller, &params[0], "Uint8Array#some")?;
-                let pred = closure::read(caller, &params[1], "Uint8Array#some predicate")?;
-                let r = super::some(caller, bytes, &pred).await?;
+                let pred = closure::read_callback(caller, &params[1], "Uint8Array#some predicate")?;
+                let r = super::some(caller, params[0], bytes, &pred).await?;
                 results[0] = Val::I32(i32::from(r));
                 Ok(())
             })
@@ -560,16 +517,14 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         linker,
         MODULE_NAME,
         method_key("every"),
-        ft(
-            vec![uint8.clone(), cb1_value.clone()],
-            vec![boolean.clone()],
-        ),
+        ft(vec![uint8.clone(), callback.clone()], vec![boolean.clone()]),
         true,
         |caller, params, results| {
             Box::pin(async move {
                 let bytes = super::read_bytes(caller, &params[0], "Uint8Array#every")?;
-                let pred = closure::read(caller, &params[1], "Uint8Array#every predicate")?;
-                let r = super::every(caller, bytes, &pred).await?;
+                let pred =
+                    closure::read_callback(caller, &params[1], "Uint8Array#every predicate")?;
+                let r = super::every(caller, params[0], bytes, &pred).await?;
                 results[0] = Val::I32(i32::from(r));
                 Ok(())
             })
@@ -689,22 +644,25 @@ fn read_comparator(
     if matches!(val, Val::AnyRef(None)) {
         Ok(None)
     } else {
-        Ok(Some(closure::read(caller, val, name)?))
+        Ok(Some(closure::read_callback(caller, val, name)?))
     }
 }
 
-/// A `(byte) => R` callback type (only arity + void-ness reach codegen).
-fn byte_callback(ret: Type) -> Type {
-    Type::Function {
-        params: vec![Type::Number],
-        ret: Box::new(ret),
-        predicate: None,
-        has_rest: false,
-    }
+/// TypeScript's `(value: number, index: number, array: Uint8Array)` callback
+/// parameters, after `leading` (`reduce`'s accumulator). A callback may declare
+/// fewer.
+fn byte_callback_params(leading: Vec<Type>) -> Vec<Type> {
+    leading
+        .into_iter()
+        .chain([Type::Number, Type::Number, Type::Uint8Array])
+        .collect()
 }
 
 pub fn declare(defs: &mut PackageDeclaration) {
     let u8a = || Param::new("a", Type::Uint8Array);
+    // A callback's slot is erased (see `install`); its type for checking calls
+    // is in `declare_types`.
+    let callback = || Param::new("f", Type::Unknown);
     let n = |name: &str| Param::new(name, Type::Number);
     let u8_ret = Type::Uint8Array;
     let comparator = || {
@@ -820,36 +778,16 @@ pub fn declare(defs: &mut PackageDeclaration) {
         u8_ret.clone(),
     );
 
-    m(
-        defs,
-        "forEach",
-        vec![u8a(), Param::new("f", byte_callback(Type::Void))],
-        Type::Void,
-    );
-    for (name, cb_ret) in [("map", Type::Number), ("filter", Type::Boolean)] {
-        m(
-            defs,
-            name,
-            vec![u8a(), Param::new("f", byte_callback(cb_ret))],
-            u8_ret.clone(),
-        );
+    m(defs, "forEach", vec![u8a(), callback()], Type::Void);
+    for name in ["map", "filter"] {
+        m(defs, name, vec![u8a(), callback()], u8_ret.clone());
     }
     let u = || Type::TypeVar("U".to_string());
-    let reducer = || Type::Function {
-        params: vec![u(), Type::Number],
-        ret: Box::new(u()),
-        predicate: None,
-        has_rest: false,
-    };
     for name in ["reduce", "reduceRight"] {
         m(
             defs,
             name,
-            vec![
-                u8a(),
-                Param::new("f", reducer()),
-                Param::new("initial", u()),
-            ],
+            vec![u8a(), callback(), Param::new("initial", u())],
             u(),
         );
     }
@@ -857,25 +795,15 @@ pub fn declare(defs: &mut PackageDeclaration) {
         m(
             defs,
             name,
-            vec![u8a(), Param::new("f", byte_callback(Type::Boolean))],
+            vec![u8a(), callback()],
             Type::Union(vec![Type::Number, Type::Null]),
         );
     }
     for name in ["findIndex", "findLastIndex"] {
-        m(
-            defs,
-            name,
-            vec![u8a(), Param::new("f", byte_callback(Type::Boolean))],
-            Type::Number,
-        );
+        m(defs, name, vec![u8a(), callback()], Type::Number);
     }
     for name in ["some", "every"] {
-        m(
-            defs,
-            name,
-            vec![u8a(), Param::new("f", byte_callback(Type::Boolean))],
-            Type::Boolean,
-        );
+        m(defs, name, vec![u8a(), callback()], Type::Boolean);
     }
 
     let items = || Param::new("items", Type::Array(Box::new(Type::Number)));
@@ -1095,14 +1023,14 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         MethodSig {
                             generics: Vec::new(),
                             params: vec![Param::new("callback", Type::Function {
-                                params: vec![Type::Number],
+                                params: byte_callback_params(Vec::new()),
                                 ret: Box::new(Type::Void),
                                 predicate: None,
                                 has_rest: false,
                             })],
                             ret: Type::Void,
                             predicate: None,
-                            doc: doc("/** Invokes `callback(byte)` for every byte in order. */"),
+                            doc: doc("/** Invokes `callback(byte, index, array)` for every byte in order. */"),
                         },
                     ),
                     (
@@ -1110,14 +1038,14 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         MethodSig {
                             generics: Vec::new(),
                             params: vec![Param::new("callback", Type::Function {
-                                params: vec![Type::Number],
+                                params: byte_callback_params(Vec::new()),
                                 ret: Box::new(Type::Number),
                                 predicate: None,
                                 has_rest: false,
                             })],
                             ret: Type::Uint8Array,
                             predicate: None,
-                            doc: doc("/** Returns a new `Uint8Array` whose i-th byte is `callback(this[i]) & 0xff`. */"),
+                            doc: doc("/** Returns a new `Uint8Array` whose i-th byte is `callback(this[i], i, this) & 0xff`. */"),
                         },
                     ),
                     (
@@ -1125,14 +1053,14 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         MethodSig {
                             generics: Vec::new(),
                             params: vec![Param::new("predicate", Type::Function {
-                                params: vec![Type::Number],
+                                params: byte_callback_params(Vec::new()),
                                 ret: Box::new(Type::Boolean),
                                 predicate: None,
                                 has_rest: false,
                             })],
                             ret: Type::Uint8Array,
                             predicate: None,
-                            doc: doc("/** Returns a new `Uint8Array` containing every byte for which `predicate` returns `true`. */"),
+                            doc: doc("/** Returns a new `Uint8Array` containing every byte for which `predicate(byte, index, array)` returns `true`. */"),
                         },
                     ),
                     (
@@ -1140,7 +1068,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         MethodSig {
                             generics: Vec::new(),
                             params: vec![Param::new("predicate", Type::Function {
-                                params: vec![Type::Number],
+                                params: byte_callback_params(Vec::new()),
                                 ret: Box::new(Type::Boolean),
                                 predicate: None,
                                 has_rest: false,
@@ -1155,14 +1083,14 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         MethodSig {
                             generics: Vec::new(),
                             params: vec![Param::new("predicate", Type::Function {
-                                params: vec![Type::Number],
+                                params: byte_callback_params(Vec::new()),
                                 ret: Box::new(Type::Boolean),
                                 predicate: None,
                                 has_rest: false,
                             })],
                             ret: Type::Boolean,
                             predicate: None,
-                            doc: doc("/** Returns `true` iff `predicate` returns `true` for every byte. */"),
+                            doc: doc("/** Returns `true` iff `predicate(byte, index, array)` returns `true` for every byte. */"),
                         },
                     ),
                     (
@@ -1171,7 +1099,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             generics: vec!["U".to_string()],
                             params: vec![
                                 Param::new("callback", Type::Function {
-                                    params: vec![Type::TypeVar("U".to_string()), Type::Number],
+                                    params: byte_callback_params(vec![Type::TypeVar("U".to_string())]),
                                     ret: Box::new(Type::TypeVar("U".to_string())),
                                     predicate: None,
                                     has_rest: false,
@@ -1180,7 +1108,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ],
                             ret: Type::TypeVar("U".to_string()),
                             predicate: None,
-                            doc: doc("/** Folds bytes left-to-right with `callback(acc, byte)`. */"),
+                            doc: doc("/** Folds bytes left-to-right with `callback(acc, byte, index, array)`. */"),
                         },
                     ),
                     (
@@ -1189,7 +1117,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             generics: vec!["U".to_string()],
                             params: vec![
                                 Param::new("callback", Type::Function {
-                                    params: vec![Type::TypeVar("U".to_string()), Type::Number],
+                                    params: byte_callback_params(vec![Type::TypeVar("U".to_string())]),
                                     ret: Box::new(Type::TypeVar("U".to_string())),
                                     predicate: None,
                                     has_rest: false,
@@ -1198,7 +1126,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ],
                             ret: Type::TypeVar("U".to_string()),
                             predicate: None,
-                            doc: doc("/** Folds bytes right-to-left with `callback(acc, byte)`. */"),
+                            doc: doc("/** Folds bytes right-to-left with `callback(acc, byte, index, array)`. */"),
                         },
                     ),
                     (
@@ -1255,14 +1183,14 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         MethodSig {
                             generics: Vec::new(),
                             params: vec![Param::new("predicate", Type::Function {
-                                params: vec![Type::Number],
+                                params: byte_callback_params(Vec::new()),
                                 ret: Box::new(Type::Boolean),
                                 predicate: None,
                                 has_rest: false,
                             })],
                             ret: Type::Union(vec![Type::Number, Type::Null]),
                             predicate: None,
-                            doc: doc("/** Returns the first byte for which `predicate` returns `true`, or `null`. */"),
+                            doc: doc("/** Returns the first byte for which `predicate(byte, index, array)` returns `true`, or `null`. */"),
                         },
                     ),
                     (
@@ -1270,14 +1198,14 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         MethodSig {
                             generics: Vec::new(),
                             params: vec![Param::new("predicate", Type::Function {
-                                params: vec![Type::Number],
+                                params: byte_callback_params(Vec::new()),
                                 ret: Box::new(Type::Boolean),
                                 predicate: None,
                                 has_rest: false,
                             })],
                             ret: Type::Union(vec![Type::Number, Type::Null]),
                             predicate: None,
-                            doc: doc("/** Returns the last byte for which `predicate` returns `true`, or `null`. */"),
+                            doc: doc("/** Returns the last byte for which `predicate(byte, index, array)` returns `true`, or `null`. */"),
                         },
                     ),
                     (
@@ -1285,7 +1213,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         MethodSig {
                             generics: Vec::new(),
                             params: vec![Param::new("predicate", Type::Function {
-                                params: vec![Type::Number],
+                                params: byte_callback_params(Vec::new()),
                                 ret: Box::new(Type::Boolean),
                                 predicate: None,
                                 has_rest: false,
@@ -1300,7 +1228,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         MethodSig {
                             generics: Vec::new(),
                             params: vec![Param::new("predicate", Type::Function {
-                                params: vec![Type::Number],
+                                params: byte_callback_params(Vec::new()),
                                 ret: Box::new(Type::Boolean),
                                 predicate: None,
                                 has_rest: false,

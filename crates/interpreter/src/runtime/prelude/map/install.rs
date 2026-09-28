@@ -6,14 +6,11 @@
 //! `struct.get` of the backing's size field and works unchanged on host-built
 //! `$MapBacking` instances, so it stays on the Wasm path.
 
-use wasmtime::{
-    FieldType, Finality, FuncType, HeapType, Linker, Mutability, RefType, StorageType, ValType,
-};
+use wasmtime::{FuncType, HeapType, Linker, RefType, ValType};
 
 use crate::runtime::StoreData;
-use crate::runtime::gc_singleton::{singleton_func, singleton_struct};
 use crate::runtime::host::{register_host_fn, register_host_fn_async};
-use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
+use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::prelude::{MODULE_NAME, closure, declare_method};
 use crate::{MangledName, PackageDeclaration, Param, Type};
 
@@ -27,45 +24,6 @@ fn ctor_key(method: &str) -> MangledName {
     crate::mangle::extend(&crate::mangle::prelude("MapConstructor"), method)
 }
 
-/// The `(ref $closure)` type for `Map#forEach`'s `(value, key) => void` callback,
-/// declared to canonicalize with `codegen::closures` so a guest closure flows in
-/// unchanged. Mirrors the array port's `closure_ty`.
-fn callback_2_void(engine: &wasmtime::Engine, intr: &IntrinsicTypes) -> wasmtime::Result<ValType> {
-    let imm = Mutability::Const;
-    let params = vec![
-        ValType::Ref(RefType::new(false, HeapType::Any)),
-        ValType::Ref(RefType::new(true, intr.object.clone().into())),
-        ValType::Ref(RefType::new(true, intr.object.clone().into())),
-    ];
-    let func = singleton_func(engine, params, Vec::new())?;
-    let st = singleton_struct(
-        engine,
-        Finality::NonFinal,
-        Some(intr.closure.clone()),
-        vec![
-            FieldType::new(
-                imm,
-                StorageType::ValType(ValType::Ref(RefType::new(
-                    false,
-                    intr.vtable.clone().into(),
-                ))),
-            ),
-            FieldType::new(
-                imm,
-                StorageType::ValType(ValType::Ref(RefType::new(false, func.into()))),
-            ),
-            FieldType::new(
-                imm,
-                StorageType::ValType(ValType::Ref(RefType::new(false, HeapType::Any))),
-            ),
-        ],
-    )?;
-    Ok(ValType::Ref(RefType::new(
-        false,
-        HeapType::ConcreteStruct(st),
-    )))
-}
-
 pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     let engine = linker.engine().clone();
     let intr = build_intrinsic_types(&engine)?;
@@ -74,7 +32,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         HeapType::ConcreteStruct(intr.object.clone()),
     ));
     let boolean = ValType::I32;
-    let cb2_void = callback_2_void(&engine, &intr)?;
     let ft = |params: Vec<ValType>, results: Vec<ValType>| FuncType::new(&engine, params, results);
 
     register_host_fn_async(
@@ -160,11 +117,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         linker,
         MODULE_NAME,
         method_key("forEach"),
-        ft(vec![obj.clone(), cb2_void], vec![]),
+        // The callback crosses erased, as `Array`'s do.
+        ft(vec![obj.clone(), obj.clone()], vec![]),
         true,
         |caller, params, _results| {
             Box::pin(async move {
-                let f = closure::read(caller, &params[1], "Map#forEach callback")?;
+                let f = closure::read_callback(caller, &params[1], "Map#forEach callback")?;
                 super::for_each(caller, &params[0], &f).await
             })
         },
@@ -252,12 +210,9 @@ pub fn declare(defs: &mut PackageDeclaration) {
     m(defs, "delete", vec![map(), key()], Type::Boolean);
     m(defs, "clear", vec![map()], Type::Void);
 
-    let callback = Type::Function {
-        params: vec![v(), k()],
-        ret: Box::new(Type::Void),
-        predicate: None,
-        has_rest: false,
-    };
+    // The callback's slot is erased (see `install`); its type for checking calls
+    // is in `declare_types`.
+    let callback = Type::Unknown;
     m(
         defs,
         "forEach",
@@ -413,6 +368,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                                     params: vec![
                                         Type::TypeVar("V".to_string()),
                                         Type::TypeVar("K".to_string()),
+                                        Type::prelude_interface(
+                                            "Map".to_string(),
+                                            vec![
+                                                Type::TypeVar("K".to_string()),
+                                                Type::TypeVar("V".to_string()),
+                                            ],
+                                        ),
                                     ],
                                     ret: Box::new(Type::Void),
                                     predicate: None,
@@ -422,7 +384,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::Void,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Calls `callback(value, key)` once for each entry in insertion order.\n * @param callback Function called once per entry — value first, key second, matching JS.\n */",
+                                "/**\n * Calls `callback(value, key, map)` once for each entry in insertion order.\n * @param callback Function called once per entry — value first, key second, matching JS.\n */",
                             ),
                         },
                     ),

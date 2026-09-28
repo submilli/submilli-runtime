@@ -29,11 +29,10 @@ Porting adaptations used throughout (README rules):
   (`x[0] = 0; x[3] = 3`); ports keep the dense rows and drop the holes.
 - `x[i] === undefined` probes past the end become `x.at(i) === null`
   (indexed OOB reads throw here — pinned in `cases/Array/divergence/`).
-- HOF callbacks receive only the element: callbacks that branched on the
-  `idx` argument are rewritten to branch on the element value over
-  `[0, 1, 2, ...]` arrays, which preserves the visit-order/short-circuit
-  intent. The (value, index, array) signature itself is pinned as a known
-  gap (`find/predicate-call-parameters`).
+- HOF callbacks receive `(value, index, array)`, pinned by
+  `find/predicate-call-parameters`. Ports written before they did branch on
+  the element value over `[0, 1, 2, ...]` arrays instead of on the index,
+  which preserves the visit-order/short-circuit intent.
 - `reduce`/`reduceRight` ports pass an explicit initial value (required
   here); the absent-initial fold result is unchanged for the ported cases.
 - `IteratorResult.value` is read through a runtime-checked
@@ -48,7 +47,6 @@ Porting adaptations used throughout (README rules):
 | `prototype/includes/samevaluezero` | `includes` dispatches through the `equals` vtable (NaN !== NaN) instead of SameValueZero — `[NaN].includes(NaN)` returns `false`, standard says `true`. (`indexOf`'s StrictEquality NaN behavior is correct — `indexOf/15.4.4.14-9-10` passes.) |
 | `prototype/push/S15.4.4.7_A1_T2` | Standard `push` is variadic; ours is `push(elem: T)` — a multi-argument push is a compile-time arity error. (`unshift` *is* variadic.) |
 | `prototype/concat/S15.4.4.4_A1_T2` | Standard `concat` appends non-array arguments as elements; ours is `concat(...others: T[][])` — a scalar argument is a compile-time type error. |
-| `prototype/find/predicate-call-parameters` | Standard HOF callbacks receive `(value, index, array)`; every Array callback type here is single-parameter (`(T) => ...`), so a multi-parameter callback is a compile error. One representative pinned; the same applies to forEach/map/filter/some/every/findIndex/findLast(Index)/flatMap, `sort`'s comparator excepted. `Array.from` now supports type-changing `(T) => U` mappers, but still has no index argument. |
 
 ## Rejected (design decisions)
 
@@ -78,7 +76,7 @@ Porting adaptations used throughout (README rules):
 
 | Pattern | Reason |
 |:--|:--|
-| The HOF bulk (`every`/`some`/`forEach`/`map`/`filter`/`reduce`/`reduceRight`, ~1600 files: `-7-b-*`/`-8-b-*` deleted/added-element visibility, `-7-c-i-*`/`-8-c-i-*` element-kind matrices, thisArg cases, callback-arity rows) | Per-method one strong order/short-circuit case is ported; the matrices vary receiver kind and coercion vehicle (rejected categories above), thisArg doesn't exist, and the callback-arity intent is pinned once by the expect-fail `find/predicate-call-parameters`. |
+| The HOF bulk (`every`/`some`/`forEach`/`map`/`filter`/`reduce`/`reduceRight`, ~1600 files: `-7-b-*`/`-8-b-*` deleted/added-element visibility, `-7-c-i-*`/`-8-c-i-*` element-kind matrices, thisArg cases, callback-arity rows) | Per-method one strong order/short-circuit case is ported; the matrices vary receiver kind and coercion vehicle (rejected categories above), thisArg doesn't exist, and the callback-arity intent is pinned once by `find/predicate-call-parameters`. |
 | `indexOf`/`lastIndexOf`/`includes` remainder (~380 files: per-type found/not-found rows, fromIndex coercion vehicles) | StrictEquality/SameValueZero intent carried by the ported NaN/±0/fromIndex cases plus `includes/using-fromindex`; remaining rows differ only in element kind or coercion vehicle. |
 | `concat` remainder (Symbol.isConcatSpreadable, array-likes, large-index rows) | Spreadability is type-determined here (arrays spread, nothing else accepted); the scalar-argument gap is pinned by the expect-fail `S15.4.4.4_A1_T2`. |
 | `sort` remainder (other `stability-*` sizes, `bug_596_*` ToString-call counts, comparator-throws ordering) | `stability-5-elements` pins stability; default lexicographic order is pinned by `toSorted/comparefn-default` (ours matches JS); comparator-abrupt cases are getter/this-coercion territory. |

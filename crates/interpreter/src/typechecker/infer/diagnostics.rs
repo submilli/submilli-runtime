@@ -235,6 +235,37 @@ impl<'a> Inferer<'a> {
         );
     }
 
+    /// Report a write to a block-scoped binding that cannot be reassigned: a
+    /// `const`, or a nested function, which is immutable as in TypeScript.
+    pub(super) fn report_const_local_write(
+        &mut self,
+        target: &crate::Ident,
+        entry: &super::scopes::ScopeEntry,
+    ) {
+        let (message, help, note) = if entry.nested_function.is_some() {
+            (
+                format!("cannot assign to function `{}`", target.name),
+                "functions are immutable; declare a `let f = …` binding to reassign".to_string(),
+                "declared as a function here",
+            )
+        } else {
+            (
+                format!("cannot assign to const binding `{}`", target.name),
+                format!(
+                    "declare with `let` if reassignment is required: `let {} = …;`",
+                    target.name
+                ),
+                "declared as `const` here",
+            )
+        };
+        self.error_with_help_and_notes(
+            target.span,
+            message,
+            vec![help],
+            vec![(entry.decl_span, note.to_string())],
+        );
+    }
+
     /// Like [`Self::error_with_help`] but also attaches span-anchored
     /// secondary notes. Used by diagnostic sites that lift both a
     /// fix-shape help block and a "this is what killed you" pointer

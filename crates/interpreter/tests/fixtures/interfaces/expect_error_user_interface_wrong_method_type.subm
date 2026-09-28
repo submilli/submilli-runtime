@@ -1,4 +1,4 @@
-// expect-error: field `log`: expected
+// expect-error: parameter `m`: expected `string`, got `number`
 
 interface Logger { log(msg: string): void; }
 

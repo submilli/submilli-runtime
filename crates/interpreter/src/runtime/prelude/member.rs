@@ -142,12 +142,18 @@ async fn invoke(
 }
 
 fn defaults_fit(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime::Result<Val> {
-    let count = host::read_boxed_number(caller, &params[1], "arity")? as usize;
+    let argument_count = host::read_boxed_number(caller, &params[1], "arity")? as usize;
     let results = host::read_boxed_number(caller, &params[2], "return convention")?;
     let results = (results >= 0.0).then_some(results as usize);
-    let fits = value::is_callable(caller, &params[0])?
-        && super::closure::read(caller, &params[0], "function")?
-            .accepts_omitted_defaults(caller, count, results)?;
+    let fits = value::is_callable(caller, &params[0])? && {
+        // The cast wraps this function as it is, so its own return convention
+        // must fit; but an adapter takes whatever the function it wraps takes.
+        let function = super::closure::read(caller, &params[0], "function")?;
+        let original = super::closure::original(caller, params[0])?;
+        results.is_none_or(|expected_results| function.result_count(caller) == expected_results)
+            && super::closure::read(caller, &original, "function")?
+                .accepts_arguments(caller, argument_count)?
+    };
     box_result(caller, Val::I32(i32::from(fits)))
 }
 
@@ -159,8 +165,9 @@ async fn invoke_defaults(
         return Err(host::type_error("Value is not callable"));
     }
     let args = super::array::read_array(caller, &params[2], "arguments")?;
-    super::closure::read(caller, &params[0], "function")?
-        .call_with_omitted_defaults(caller, params[1], &args)
+    let function = super::closure::original(caller, params[0])?;
+    super::closure::read(caller, &function, "function")?
+        .call_with_arguments(caller, params[1], &args)
         .await
 }
 

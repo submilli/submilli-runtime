@@ -156,16 +156,24 @@ fn walk_expr(ta: &TypedAst, expr_id: ExprId, diags: &mut Vec<Diagnostic>) {
         TypedExprKind::Closure {
             return_type, body, ..
         } => {
+            if ta.placeholder_closures.contains(&expr_id) {
+                return;
+            }
             if let ClosureBody::Block(b) = body {
-                let span = ta.expr(expr_id).span;
-                check_returns(
-                    ta,
-                    *b,
-                    return_type,
-                    span,
-                    "arrow function does not return a value on all paths".into(),
-                    diags,
-                );
+                let (span, message) = match ta.nested_function_names.get(&expr_id) {
+                    Some(name) => (
+                        name.span,
+                        format!(
+                            "function `{}` does not return a value on all paths",
+                            name.name
+                        ),
+                    ),
+                    None => (
+                        ta.expr(expr_id).span,
+                        "arrow function does not return a value on all paths".to_string(),
+                    ),
+                };
+                check_returns(ta, *b, return_type, span, message, diags);
                 walk_stmt(ta, *b, diags);
             } else if let ClosureBody::Expr(inner) = body {
                 walk_expr(ta, *inner, diags);

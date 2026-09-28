@@ -26,6 +26,9 @@ pub(super) struct ScopeEntry {
     pub(super) decl_span: Span,
     /// Disambiguates shadowed bindings for the narrowing engine.
     pub(super) decl_scope: narrowing::ScopeId,
+    /// For a function declared inside another function, its index in
+    /// `Inferer::nested_functions`.
+    pub(super) nested_function: Option<usize>,
 }
 
 impl Scopes {
@@ -43,6 +46,28 @@ impl Scopes {
     }
 
     pub(super) fn insert(&mut self, name: String, ty: Type, is_const: bool, decl_span: Span) {
+        self.insert_entry(name, ty, is_const, decl_span, None);
+    }
+
+    /// Bind a nested function declaration's name, which cannot be reassigned.
+    pub(super) fn insert_nested_function(
+        &mut self,
+        name: String,
+        ty: Type,
+        decl_span: Span,
+        index: usize,
+    ) {
+        self.insert_entry(name, ty, true, decl_span, Some(index));
+    }
+
+    fn insert_entry(
+        &mut self,
+        name: String,
+        ty: Type,
+        is_const: bool,
+        decl_span: Span,
+        nested_function: Option<usize>,
+    ) {
         if let Some(top) = self.stack.last_mut() {
             let decl_scope = top.id;
             top.bindings.insert(
@@ -52,6 +77,7 @@ impl Scopes {
                     is_const,
                     decl_span,
                     decl_scope,
+                    nested_function,
                 },
             );
         }

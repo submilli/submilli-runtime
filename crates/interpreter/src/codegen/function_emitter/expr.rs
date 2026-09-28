@@ -2663,7 +2663,7 @@ fn emit_binary(
                     emit_expr(emitter, ctx, rhs);
                     let rhs_ty = ctx.ta.expr(rhs).ty.clone();
                     cast::emit_box(emitter, ctx, &rhs_ty);
-                    emit_object_or_array_equality(emitter, ctx, &operand_ty, op);
+                    emit_vtable_equality(emitter, ctx, op);
                 }
                 other => {
                     unreachable!("typechecker rejects equality on Wasm value-type `{other:?}`")
@@ -4238,7 +4238,7 @@ pub(super) fn emit_vtable_dispatch_on_object_stack(
         1 => intrinsics.to_json_fn,
         _ => panic!(
             "emit_vtable_dispatch: slot {slot} not yet routed through this helper; \
-             equals (2) goes through `emit_object_or_array_equality`, hash (3) \
+             equals (2) goes through `emit_vtable_equality`, hash (3) \
              has no method-call shape yet",
         ),
     };
@@ -4522,21 +4522,21 @@ fn emit_intrinsic_call(
     }
 }
 
-/// Emit `lhs.vtable.equals(lhs, rhs)` for two same-typed operands
-/// of `Type::Object` or `Type::Array`. Stack at entry: `[lhs, rhs]`.
+/// Emit `lhs.vtable.equals(lhs, rhs)` for two operands of `$Object`
+/// subtypes (objects, arrays, functions, boxed values). Stack at entry: `[lhs, rhs]`.
 /// Stack at exit: `[i32]` (1 if equal, 0 otherwise — flipped via
 /// `I32Eqz` for `BinOp::NotEq`).
-fn emit_object_or_array_equality(
-    emitter: &mut FunctionEmitter,
-    ctx: &CodegenCtx,
-    operand_ty: &Type,
-    op: BinOp,
-) {
+fn emit_vtable_equality(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, op: BinOp) {
     let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
         .expect("intrinsics declared by codegen entry");
-    let operand_ref = ctx.symbols.value_type(operand_ty);
+    // The operands' own types may differ (two function types of different
+    // arities), so both are stashed at the common `$Object` shape.
+    let operand_ref = ValType::Ref(RefType {
+        nullable: true,
+        heap_type: HeapType::Concrete(intrinsics.object),
+    });
     let object_ref = ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(intrinsics.object),
