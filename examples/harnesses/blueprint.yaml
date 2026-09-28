@@ -47,7 +47,6 @@ permissions:
   # What the package itself may do: reach Jina, and read its key.
   '@submilli/jina':
   - capability: fs.write
-    filter: op == "download"
     action: allow
   - capability: http.download
     filter: host == "r.jina.ai"

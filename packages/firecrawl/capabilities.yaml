@@ -64,13 +64,10 @@ provides:
   fields:
     max_bytes:
       type: number
-    op:
-      type: string
     path:
       type: string
 requires:
 - capability: fs.write
-  filter: op == "download"
 - capability: http.delete
   filter: host == "api.firecrawl.dev"
 - capability: http.download

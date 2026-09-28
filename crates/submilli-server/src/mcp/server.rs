@@ -521,7 +521,7 @@ impl SubmilliMcp {
             Arc::clone(&blueprint),
             session_id.as_deref(),
             "fs.read",
-            serde_json::json!({ "op": "readText", "path": &args.path }),
+            serde_json::json!({ "path": &args.path }),
         )?;
         let (vfs, _info) = self.acquire_vfs(&blueprint, session_id.as_deref()).await?;
 
@@ -566,7 +566,7 @@ impl SubmilliMcp {
             Arc::clone(&blueprint),
             session_id.as_deref(),
             "fs.list",
-            serde_json::json!({ "op": "list", "path": dir, "recursive": recursive }),
+            serde_json::json!({ "path": dir, "recursive": recursive }),
         )?;
         let (vfs, _info) = self.acquire_vfs(&blueprint, session_id.as_deref()).await?;
 

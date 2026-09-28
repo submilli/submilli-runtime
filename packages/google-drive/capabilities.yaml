@@ -79,11 +79,8 @@ provides:
       type: string
 requires:
 - capability: fs.read
-  filter: op == "readBytes"
 - capability: fs.stat
-  filter: op == "stat"
 - capability: fs.write
-  filter: op == "download"
 - capability: http.delete
   filter: host == "www.googleapis.com"
 - capability: http.download

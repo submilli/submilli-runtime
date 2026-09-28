@@ -10,7 +10,6 @@ provides:
   fields: {}
 requires:
 - capability: fs.write
-  filter: op == "download"
 - capability: http.download
   filter: host == "r.jina.ai"
 - capability: http.download

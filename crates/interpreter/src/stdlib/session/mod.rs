@@ -73,7 +73,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params, results| {
             Box::pin(async move {
                 let key = read_key(caller, &params[0], "get")?;
-                gate(caller, "session.read", "get", &key)?;
+                gate(caller, "session.read", &key)?;
                 let store = provider(caller, "get")?;
                 let Some(payload) = store.get(&key).map_err(|e| trap(&e))? else {
                     results[0] = Val::AnyRef(None);
@@ -94,7 +94,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params, results| {
             Box::pin(async move {
                 let key = read_key(caller, &params[0], "has")?;
-                gate(caller, "session.read", "has", &key)?;
+                gate(caller, "session.read", &key)?;
                 let store = provider(caller, "has")?;
                 results[0] = Val::I32(i32::from(store.has(&key).map_err(|e| trap(&e))?));
                 Ok(())
@@ -111,7 +111,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params, _results| {
             Box::pin(async move {
                 let key = read_key(caller, &params[0], "set")?;
-                gate(caller, "session.write", "set", &key)?;
+                gate(caller, "session.write", &key)?;
                 // Serialization runs before the provider is consulted: a value
                 // with no JSON form must leave the previous entry intact.
                 let payload = value::serialize(caller, &params[1]).await?;
@@ -130,7 +130,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params, results| {
             Box::pin(async move {
                 let key = read_key(caller, &params[0], "remove")?;
-                gate(caller, "session.remove", "remove", &key)?;
+                gate(caller, "session.remove", &key)?;
                 let store = provider(caller, "remove")?;
                 results[0] = Val::I32(i32::from(store.remove(&key).map_err(|e| trap(&e))?));
                 Ok(())
@@ -244,7 +244,7 @@ fn list(
     check_security(
         &*caller,
         "session.list",
-        serde_json::json!({ "op": "list", "prefix": String::from_utf16_lossy(&prefix) }),
+        serde_json::json!({ "prefix": String::from_utf16_lossy(&prefix) }),
     )?;
     let resume_after = read_cursor(caller, cursor_val, &prefix)?;
     let store = provider(caller, "list")?;
@@ -338,7 +338,7 @@ fn read_cursor(
 /// failing the call: a listing that threw on the first forbidden key would
 /// itself disclose that the key exists.
 fn may_read(caller: &wasmtime::Caller<'_, StoreData>, key: &[u16]) -> wasmtime::Result<bool> {
-    let Err(err) = gate(caller, "session.read", "list", key) else {
+    let Err(err) = gate(caller, "session.read", key) else {
         return Ok(true);
     };
     // Only the policy's own answer filters. An invariant denial means the check
@@ -395,13 +395,12 @@ fn read_key(
 fn gate(
     caller: &wasmtime::Caller<'_, StoreData>,
     capability: &str,
-    op: &str,
     key: &[u16],
 ) -> wasmtime::Result<()> {
     check_security(
         caller,
         capability,
-        serde_json::json!({ "op": op, "key": String::from_utf16_lossy(key) }),
+        serde_json::json!({ "key": String::from_utf16_lossy(key) }),
     )
 }
 

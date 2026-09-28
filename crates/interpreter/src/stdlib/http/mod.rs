@@ -533,7 +533,6 @@ async fn perform_download(
         &*caller,
         "fs.write",
         serde_json::json!({
-            "op": "download",
             "path": guest_path,
             "max_bytes": options.max_bytes,
         }),

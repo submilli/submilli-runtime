@@ -11,16 +11,16 @@
 //! — the rule `submilli:session` follows for its store.
 //!
 //! **One capability, double-gated.** `call`, `batch`, and `models()` are the
-//! same grant, discriminated by `op` and `prompt_count` in the filter context
-//! rather than by separate names: enumerating the operator's models is not a
+//! same grant, with `prompt_count` in the filter context rather than separate
+//! names: enumerating the operator's models is not a
 //! distinct risk class from calling one. `models()` gates the operation and
 //! then filters each candidate through the same `model` filter that gates
 //! calling, so a listing never offers a model the caller would be denied at
 //! call time — the `session.list` / `session.read` shape.
 //!
 //! **No prompt or completion text crosses this boundary in metadata.** Not in
-//! the filter context, not in an error, not in a log. The context carries `op`,
-//! `model`, and `prompt_count` — the numbers, never the payload.
+//! the filter context, not in an error, not in a log. The context carries
+//! `model` and `prompt_count` — the numbers, never the payload.
 
 pub mod declaration;
 
@@ -253,7 +253,7 @@ async fn dispatch(
     prompts: Vec<String>,
     schema: Option<String>,
 ) -> wasmtime::Result<Vec<LlmOutcome>> {
-    gate(caller, op, model, prompts.len())?;
+    gate(caller, model, prompts.len())?;
 
     let budget = budget(caller);
     let limits = budget
@@ -295,20 +295,19 @@ async fn dispatch(
 
 /// The capability check, run before any bytes leave the process.
 ///
-/// The context is exactly `op`, `model`, and `prompt_count`. A policy can
+/// The context is exactly `model` and `prompt_count`. A policy can
 /// constrain which models a caller reaches and how wide a fan-out it may
 /// request; it cannot see what is being asked, because prompt text is what this
 /// boundary exists to keep in.
 fn gate(
     caller: &wasmtime::Caller<'_, StoreData>,
-    op: &str,
     model: &str,
     prompt_count: usize,
 ) -> wasmtime::Result<()> {
     check_security(
         caller,
         CAPABILITY,
-        serde_json::json!({ "op": op, "model": model, "prompt_count": prompt_count }),
+        serde_json::json!({ "model": model, "prompt_count": prompt_count }),
     )
 }
 
@@ -323,7 +322,7 @@ fn gate(
 /// count, not an index, not a gap. The visible list is byte-identical to what a
 /// runtime configured with only those models would return.
 async fn models(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Result<Val> {
-    gate(caller, "models", "", 0)?;
+    gate(caller, "", 0)?;
     let provider = provider(caller, "models", "")?;
     let candidates = provider.models().await.map_err(|e| throw("models", e))?;
 
@@ -345,7 +344,7 @@ async fn models(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Resul
 /// than failing the call: a listing that threw on the first forbidden model
 /// would itself disclose that the operator configured it.
 fn may_call(caller: &wasmtime::Caller<'_, StoreData>, model: &str) -> wasmtime::Result<bool> {
-    filters_candidate(gate(caller, "models", model, 0))
+    filters_candidate(gate(caller, model, 0))
 }
 
 /// Whether a per-candidate check's answer removes the candidate (`Ok(false)`),
@@ -975,8 +974,7 @@ mod tests {
         }
     }
 
-    /// R13/KTD6: the filter context is exactly `op`, `model`, and
-    /// `prompt_count`. A policy that could see the prompt would put it in
+    /// R13/KTD6: the filter context is exactly `model` and `prompt_count`. A policy that could see the prompt would put it in
     /// operator logs and in every denial message, which is the disclosure this
     /// boundary exists to prevent.
     #[tokio::test]
@@ -1006,10 +1004,9 @@ mod tests {
         keys.sort_unstable();
         assert_eq!(
             keys,
-            ["model", "op", "prompt_count"],
-            "the context is exactly these three fields"
+            ["model", "prompt_count"],
+            "the context is exactly these two fields"
         );
-        assert_eq!(ctx["op"], "call");
         assert_eq!(ctx["model"], "claude-haiku-4-5");
         assert_eq!(ctx["prompt_count"], 1);
 
@@ -1042,28 +1039,22 @@ mod tests {
             .expect("program completes");
 
         let contexts = contexts.lock().expect("contexts");
-        let ops: Vec<(String, u64)> = contexts
+        let counts: Vec<u64> = contexts
             .iter()
-            .map(|c| {
-                (
-                    c["op"].as_str().expect("op").to_string(),
-                    c["prompt_count"].as_u64().expect("prompt_count"),
-                )
-            })
+            .map(|c| c["prompt_count"].as_u64().expect("prompt_count"))
             .collect();
 
-        assert_eq!(ops[0], ("call".to_string(), 1));
-        assert_eq!(ops[1], ("batch".to_string(), 3));
-        // The op-level `models` check, then one per candidate — every one of
-        // them a zero-prompt discovery, never a dispatch.
+        assert_eq!(counts[0], 1, "call: {counts:?}");
+        assert_eq!(counts[1], 3, "batch: {counts:?}");
+        // The listing's own check, then one per candidate — every one of them a
+        // zero-prompt discovery, never a dispatch.
         assert_eq!(
-            ops.len(),
+            counts.len(),
             5,
-            "op-level check plus one per candidate: {ops:?}"
+            "listing check plus one per candidate: {counts:?}"
         );
-        for (op, count) in &ops[2..] {
-            assert_eq!(op, "models", "{ops:?}");
-            assert_eq!(*count, 0, "discovery dispatches no prompts: {ops:?}");
+        for count in &counts[2..] {
+            assert_eq!(*count, 0, "discovery dispatches no prompts: {counts:?}");
         }
     }
 

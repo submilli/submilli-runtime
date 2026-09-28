@@ -24,7 +24,7 @@ pub fn package_declaration() -> PackageDeclaration {
         "init",
         vec![string("path"), options(&[("branch", Type::String)])],
         repository_type(),
-        "/** Initialize a repository, default branch main. Requires blueprint Git identity.\n * @capability git.init { op: \"init\", path }\n */",
+        "/** Initialize a repository, default branch main. Requires blueprint Git identity.\n * @capability git.init { path }\n */",
     );
     insert_static(
         &mut statics,
@@ -35,7 +35,7 @@ pub fn package_declaration() -> PackageDeclaration {
             options(&[("branch", Type::String)]),
         ],
         repository_type(),
-        "/** Clone HTTPS into an empty VFS directory, following remote HEAD unless branch is specified. Requires only git.clone; authentication uses host-only GIT_TOKEN when needed.\n * @capability git.clone { op: \"clone\", path, remote: url, remoteName: \"origin\", branch: string }\n */",
+        "/** Clone HTTPS into an empty VFS directory, following remote HEAD unless branch is specified. Requires only git.clone; authentication uses host-only GIT_TOKEN when needed.\n * @capability git.clone { path, remote: url, remoteName: \"origin\", branch: string }\n */",
     );
     insert_repository_class(&mut defs, statics);
     defs
@@ -199,7 +199,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
             params: vec![string("message")],
             ret: Type::String,
             predicate: None,
-            doc: crate::doc(FileId::GIT, "/** Commit staged changes with blueprint identity and return the commit ID. Empty commits are refused.\n * @capability git.commit { op: \"commit\", path: string, branch: string }\n */"),
+            doc: crate::doc(FileId::GIT, "/** Commit staged changes with blueprint identity and return the commit ID. Empty commits are refused.\n * @capability git.commit { path: string, branch: string }\n */"),
         },
     );
     methods.insert(
@@ -261,7 +261,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
             ],
             ret: object(&[("branches", array(Type::String))], false),
             predicate: None,
-            doc: crate::doc(FileId::GIT, "/** Fetch remote-tracking branches. Empty branch requests every remote branch; every selected branch must be authorized. GIT_TOKEN is optional for public repositories.\n * @capability git.fetch { op: \"fetch\", path: string, remoteName: remote, remote: string, branch }\n */"),
+            doc: crate::doc(FileId::GIT, "/** Fetch remote-tracking branches. Empty branch requests every remote branch; every selected branch must be authorized. GIT_TOKEN is optional for public repositories.\n * @capability git.fetch { path: string, remoteName: remote, remote: string, branch }\n */"),
         },
     );
     methods.insert(
@@ -277,7 +277,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
                 false,
             ),
             predicate: None,
-            doc: crate::doc(FileId::GIT, "/** Fetch and fast-forward the current branch under git.fetch. Divergence and dirty worktrees are refused.\n * @capability git.fetch { op: \"pull\", path: string, remoteName: remote, remote: string, branch: string }\n */"),
+            doc: crate::doc(FileId::GIT, "/** Fetch and fast-forward the current branch under git.fetch. Divergence and dirty worktrees are refused.\n * @capability git.fetch { path: string, remoteName: remote, remote: string, branch: string }\n */"),
         },
     );
     defs.types.insert(

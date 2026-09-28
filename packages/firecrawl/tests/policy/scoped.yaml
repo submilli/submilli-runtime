@@ -29,7 +29,7 @@ permissions:
       filter: kind == "batch" and jobId == "33333333-3333-4333-8333-333333333333"
       action: allow
     - capability: fs.write
-      filter: op == "download" and path == "/approved.json" and max_bytes <= 1000
+      filter: path == "/approved.json" and max_bytes <= 1000
       action: allow
   # Deliberate sentinel: permitted operations must reach secrets.get, which is
   # denied here before a key can be read or a network request can happen.

@@ -49,7 +49,7 @@ pub fn fetch(
     validate_url(url)?;
     job.check(
         job.remote_capability(),
-        json!({"op":job.op,"path":job.path,"remote":url,"remoteName":remote_name,"branch":branch}),
+        json!({"path":job.path,"remote":url,"remoteName":remote_name,"branch":branch}),
     )?;
     let mut graph = super::history::validate_fetch_graph(snapshot)?;
     let remote = snapshot
@@ -94,7 +94,10 @@ pub fn fetch(
             let name = local.to_string();
             let prefix = format!("refs/remotes/{remote_name}/");
             if let Some(branch) = name.strip_prefix(&prefix) {
-                job.check(job.remote_capability(), json!({"op":job.op,"path":job.path,"remote":url,"remoteName":remote_name,"branch":branch}))?;
+                job.check(
+                    job.remote_capability(),
+                    json!({"path":job.path,"remote":url,"remoteName":remote_name,"branch":branch}),
+                )?;
                 branches.push(branch.to_owned());
             }
         }

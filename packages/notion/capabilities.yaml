@@ -209,9 +209,7 @@ provides:
       type: string
 requires:
 - capability: fs.read
-  filter: op == "readBytes"
 - capability: fs.stat
-  filter: op == "stat"
 - capability: http.get
   filter: host == "api.notion.com"
 - capability: http.patch

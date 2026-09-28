@@ -122,7 +122,7 @@ pub fn package_declaration() -> PackageDeclaration {
          ever quotes the prompt or the completion.\n * @param model Model name. Call \
          `models()` for the ones this runtime serves; an undeclared name throws.\n * \
          @param prompt The prompt text. Bounded in bytes independently of the token \
-         ceiling.\n * @capability llm.call { op: \"call\", model: $model, \
+         ceiling.\n * @capability llm.call { model: $model, \
          prompt_count: 1 }\n */",
     );
     insert_generic_fn(
@@ -152,7 +152,7 @@ pub fn package_declaration() -> PackageDeclaration {
          prompts are expected to fail.\n * @param model Model name. \
          Call `models()` for the ones this runtime serves.\n * @param prompts The \
          prompts, in the order the results come back. Bounded in count, and each in \
-         bytes.\n * @capability llm.call { op: \"batch\", model: $model, \
+         bytes.\n * @capability llm.call { model: $model, \
          prompt_count: $prompts.length }\n */",
     );
     insert_fn(
@@ -174,7 +174,7 @@ pub fn package_declaration() -> PackageDeclaration {
          for a chunk-size decision, because you should not size against a number \
          nobody asserted.\n *\n * Treat `description` as advice, not fact: it is \
          operator-authored free text that steers which model your program calls.\n * \
-         @capability llm.call { op: \"models\", model: \"\", prompt_count: 0 } for \
+         @capability llm.call { model: \"\", prompt_count: 0 } for \
          the call, then per candidate with that candidate's `model`\n */",
     );
     defs

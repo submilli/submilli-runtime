@@ -393,7 +393,7 @@ export function cancelJob(kind: JobKind, jobId: string): Cancellation {
 
 /** Save one raw status/results envelope to VFS. Inspect status and JSON next explicitly.
  * @capability firecrawl.dev/jobs.read { kind: string, jobId: string }
- * @capability fs.write { op: "download", path: string, max_bytes: number }
+ * @capability fs.write { path: string, max_bytes: number }
  */
 export function downloadJobPage(kind: JobKind, jobId: string, path: string, next: string | null = null,
     options: SaveOptions | null = null): DownloadResult {
@@ -402,7 +402,7 @@ export function downloadJobPage(kind: JobKind, jobId: string, path: string, next
     const maxBytes = opts.maxBytes ?? 20000000;
     integerRange(maxBytes, 1, 9007199254740991, "maxBytes");
     check("firecrawl.dev/jobs.read", { kind: kind, jobId: jobId });
-    check("fs.write", { op: "download", path: path, max_bytes: maxBytes });
+    check("fs.write", { path: path, max_bytes: maxBytes });
     return download(BASE + endpoint, path, { headers: authHeaders(), maxBytes: maxBytes, overwrite: opts.overwrite ?? false });
 }
 

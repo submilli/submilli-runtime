@@ -2283,10 +2283,10 @@ variables:
 permissions:
   main:
     - capability: fs.read
-      filter: 'op == "readText" and path == "/${vars.user}/secret.txt"'
+      filter: 'path == "/${vars.user}/secret.txt"'
       action: allow
     - capability: fs.list
-      filter: 'op == "list" and path == "/${vars.user}" and recursive == false'
+      filter: 'path == "/${vars.user}" and recursive == false'
       action: allow
 "#,
     )

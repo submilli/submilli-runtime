@@ -39,7 +39,7 @@ pub(super) fn run(
         "commit" => {
             job.check(
                 "git.commit",
-                json!({"op":op,"path":job.path,"branch":operations::current_branch(&snapshot)?}),
+                json!({"path":job.path,"branch":operations::current_branch(&snapshot)?}),
             )?;
             let id = operations::commit(&snapshot, operations::text_arg(args, 0)?, &job.config)?;
             changed = true;
@@ -122,12 +122,12 @@ fn requested_branch<'a>(op: &str, args: &'a [Value]) -> Result<&'a str> {
 
 fn authorize_operation(job: &Job, op: &str, args: &[Value], branch: &str) -> Result<()> {
     match op {
-        "init" => job.check("git.init", json!({"op":op,"path":job.path})),
+        "init" => job.check("git.init", json!({"path":job.path})),
         "clone" => {
             let url = transport::canonical_url(operations::text_arg(args, 0)?)?;
             job.check(
                 "git.clone",
-                json!({"op":op,"path":job.path,"remote":url,"remoteName":"origin","branch":branch}),
+                json!({"path":job.path,"remote":url,"remoteName":"origin","branch":branch}),
             )
         }
         _ => Ok(()),
@@ -213,7 +213,7 @@ fn clone_repository(
     };
     job.check(
         "git.clone",
-        json!({"op":"clone","path":job.path,"remote":transport::canonical_url(url)?,"remoteName":"origin","branch":branch}),
+        json!({"path":job.path,"remote":transport::canonical_url(url)?,"remoteName":"origin","branch":branch}),
     )?;
     let next = operations::resolve_tree(snapshot, &format!("refs/remotes/origin/{branch}"))?;
     operations::replace_worktree(snapshot, &next)?;

@@ -56,7 +56,7 @@ pub fn package_declaration() -> PackageDeclaration {
          generic parameter of the calling function, a class, or an interface with \
          methods is rejected at compile time.\n * @param key Session key. Exact UTF-16 \
          code units; no normalization, no path semantics.\n * @capability session.read \
-         { op: \"get\", key: $key }\n */",
+         { key: $key }\n */",
     );
     insert_fn(
         &mut defs,
@@ -65,7 +65,7 @@ pub fn package_declaration() -> PackageDeclaration {
         Type::Boolean,
         "/**\n * Whether the session holds an entry for `key`. A stored `null` is an \
          entry and answers `true`.\n * @param key Session key.\n * @capability \
-         session.read { op: \"has\", key: $key }\n */",
+         session.read { key: $key }\n */",
     );
     insert_fn(
         &mut defs,
@@ -81,7 +81,7 @@ pub fn package_declaration() -> PackageDeclaration {
          or a value reachable from itself is rejected and the previous entry is left \
          intact. Traps if the value or the session exceeds its configured size \
          limits.\n * @param key Session key.\n * @param value The data to store.\n * \
-         @capability session.write { op: \"set\", key: $key }\n */",
+         @capability session.write { key: $key }\n */",
     );
     insert_fn(
         &mut defs,
@@ -89,7 +89,7 @@ pub fn package_declaration() -> PackageDeclaration {
         vec![Param::new("key", Type::String)],
         Type::Boolean,
         "/**\n * Delete `key`. Returns `true` when an entry existed.\n * @param key \
-         Session key.\n * @capability session.remove { op: \"remove\", key: $key }\n */",
+         Session key.\n * @capability session.remove { key: $key }\n */",
     );
     insert_fn(
         &mut defs,
@@ -118,8 +118,8 @@ pub fn package_declaration() -> PackageDeclaration {
              matches every key.\n * @param limit Maximum entries in the page; 1 to \
              {MAX_LIST_LIMIT}. Outside that range throws.\n * @param cursor The previous \
              page's `nextCursor`, or `null` to start at the first key.\n * @capability \
-             session.list {{ op: \"list\", prefix: $prefix }}\n * @capability \
-             session.read {{ op: \"list\", key: $key }} per candidate key\n */"
+             session.list {{ prefix: $prefix }}\n * @capability \
+             session.read {{ key: $key }} per candidate key\n */"
         ),
     );
     defs

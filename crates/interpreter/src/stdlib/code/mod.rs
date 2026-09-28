@@ -213,7 +213,7 @@ fn mutate(
     check_security(
         &*caller,
         "fs.write",
-        json!({"op": format!("code.{op}"), "path":path, "length": change.text.len(), "diff": patch}),
+        json!({"path":path, "length": change.text.len(), "diff": patch}),
     )?;
     // Allocate the return value before commit so a guest allocation failure cannot hide a write.
     let result =
@@ -289,12 +289,8 @@ fn normalize(path: &str) -> Result<String> {
     crate::runtime::fs::guest_normalize("/", path)
         .map_err(|e| wasmtime::Error::msg(format!("code: {e}")))
 }
-fn gate(caller: &Caller<'_, StoreData>, capability: &str, path: &str, op: &str) -> Result<()> {
-    check_security(
-        caller,
-        capability,
-        json!({"op":format!("code.{op}"),"path":path,"recursive":true}),
-    )
+fn gate(caller: &Caller<'_, StoreData>, capability: &str, path: &str) -> Result<()> {
+    check_security(caller, capability, json!({"path":path,"recursive":true}))
 }
 fn read_file(
     caller: &mut Caller<'_, StoreData>,
@@ -311,7 +307,7 @@ fn read_contents(
     op: &str,
     skip_binary: bool,
 ) -> Result<String> {
-    gate(caller, "fs.read", path, op)?;
+    gate(caller, "fs.read", path)?;
     let resolved = resolve_content_or_trap(caller.data(), path, op)?;
     let (file, metadata) = resolved
         .open_regular()

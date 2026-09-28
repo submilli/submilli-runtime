@@ -269,7 +269,7 @@ Provider format/content selection and page limits still apply.
 | Scrape, Map, Batch and Crawl submission | Also `firecrawl.dev/delegatedFetch {}` |
 | Read status/results/errors or download | `firecrawl.dev/jobs.read { kind, jobId }` |
 | Cancel | `firecrawl.dev/jobs.cancel { kind, jobId }` |
-| Download destination | Also caller `fs.write { op: "download", path, max_bytes }` |
+| Download destination | Also caller `fs.write { path, max_bytes }` |
 
 A submitted-host check cannot restrict Firecrawl's downstream requests.
 `delegatedFetch` explicitly authorizes provider-controlled redirects,

@@ -204,11 +204,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, params, results| {
             let path = read_string_arg(&mut *caller, &params[0], "fs.exists")?;
-            check_security(
-                &*caller,
-                "fs.stat",
-                serde_json::json!({ "op": "exists", "path": &path }),
-            )?;
+            check_security(&*caller, "fs.stat", serde_json::json!({ "path": &path }))?;
             let resolved = resolve_content_or_trap(caller.data(), &path, "fs.exists")?;
             // A path the sandbox cannot reach is reported absent, not trapped: that
             // preserves the documented broken-link behaviour and denies the guest an
@@ -236,11 +232,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, params, results| {
             let path = read_string_arg(&mut *caller, &params[0], "fs.size")?;
-            check_security(
-                &*caller,
-                "fs.stat",
-                serde_json::json!({ "op": "size", "path": &path }),
-            )?;
+            check_security(&*caller, "fs.stat", serde_json::json!({ "path": &path }))?;
             let resolved = resolve_content_or_trap(caller.data(), &path, "fs.size")?;
             let meta = resolved
                 .metadata()
@@ -261,11 +253,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, params, results| {
             let path = read_string_arg(&mut *caller, &params[0], "fs.stat")?;
-            check_security(
-                &*caller,
-                "fs.stat",
-                serde_json::json!({ "op": "stat", "path": &path }),
-            )?;
+            check_security(&*caller, "fs.stat", serde_json::json!({ "path": &path }))?;
             results[0] = stat_entry(caller, &path)?;
             Ok(())
         },
@@ -279,11 +267,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, params, results| {
             let path = read_string_arg(&mut *caller, &params[0], "fs.peek")?;
-            check_security(
-                &*caller,
-                "fs.stat",
-                serde_json::json!({ "op": "peek", "path": &path }),
-            )?;
+            check_security(&*caller, "fs.stat", serde_json::json!({ "path": &path }))?;
             results[0] = peek_file(caller, &path)?;
             Ok(())
         },
@@ -350,7 +334,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 &*caller,
                 "fs.read",
                 serde_json::json!({
-                    "op": "readBytes",
                     "path": &path,
                     "length": length,
                 }),
@@ -393,7 +376,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     &*caller,
                     "fs.write",
                     serde_json::json!({
-                        "op": op,
                         "path": &path,
                         "length": bytes.len(),
                     }),
@@ -423,7 +405,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             check_security(
                 &*caller,
                 "fs.mkdir",
-                serde_json::json!({ "op": "mkdir", "path": &path, "recursive": recursive }),
+                serde_json::json!({ "path": &path, "recursive": recursive }),
             )?;
             let resolved = resolve_content_or_trap(caller.data(), &path, "fs.mkdir")?;
             let res = if recursive {
@@ -448,7 +430,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             check_security(
                 &*caller,
                 "fs.remove",
-                serde_json::json!({ "op": "remove", "path": &path, "recursive": recursive }),
+                serde_json::json!({ "path": &path, "recursive": recursive }),
             )?;
             let resolved = resolve_link_or_trap(caller.data(), &path, "fs.remove")?;
             // `remove_dir_all(".")` drains the root and only then fails on the self-unlink,
@@ -491,7 +473,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             check_security(
                 &*caller,
                 "fs.move",
-                serde_json::json!({ "op": "move", "from": &from, "to": &to }),
+                serde_json::json!({ "from": &from, "to": &to }),
             )?;
             let from_resolved = resolve_link_or_trap(caller.data(), &from, "fs.move")?;
             let to_resolved = resolve_link_or_trap(caller.data(), &to, "fs.move")?;
@@ -516,7 +498,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 &*caller,
                 "fs.copy",
                 serde_json::json!({
-                    "op": "copy",
                     "from": &from,
                     "to": &to,
                     "recursive": recursive,
@@ -548,11 +529,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, params, results| {
             let path = read_string_arg(&mut *caller, &params[0], "fs.writer (path)")?;
-            check_security(
-                &*caller,
-                "fs.write",
-                serde_json::json!({ "op": "writer", "path": &path }),
-            )?;
+            check_security(&*caller, "fs.write", serde_json::json!({ "path": &path }))?;
             results[0] = open_writer(caller, &path)?;
             Ok(())
         },
@@ -566,11 +543,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, params, results| {
             let path = read_string_arg(&mut *caller, &params[0], "fs.lines (path)")?;
-            check_security(
-                &*caller,
-                "fs.read",
-                serde_json::json!({ "op": "lines", "path": &path }),
-            )?;
+            check_security(&*caller, "fs.read", serde_json::json!({ "path": &path }))?;
             let resolved = resolve_content_or_trap(caller.data(), &path, "fs.lines")?;
             let file = resolved
                 .open()
@@ -609,7 +582,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             check_security(
                 &*caller,
                 "fs.read",
-                serde_json::json!({ "op": "bytes", "path": &path, "chunkSize": chunk_size }),
+                serde_json::json!({ "path": &path, "chunkSize": chunk_size }),
             )?;
             let resolved = resolve_content_or_trap(caller.data(), &path, "fs.bytes")?;
             let file = resolved
@@ -645,7 +618,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             check_security(
                 &*caller,
                 "fs.list",
-                serde_json::json!({ "op": "list", "path": &path, "recursive": recursive }),
+                serde_json::json!({ "path": &path, "recursive": recursive }),
             )?;
             let resolved = resolve_content_or_trap(caller.data(), &path, "fs.list")?;
             let meta = resolved
@@ -809,11 +782,7 @@ fn read_whole_capped(
     op: &str,
 ) -> wasmtime::Result<Option<Vec<u8>>> {
     let ctx = format!("fs.{op}");
-    check_security(
-        &*caller,
-        "fs.read",
-        serde_json::json!({ "op": op, "path": path }),
-    )?;
+    check_security(&*caller, "fs.read", serde_json::json!({ "path": path }))?;
     let resolved = resolve_content_or_trap(caller.data(), path, &ctx)?;
     let meta = resolved
         .metadata()
@@ -1583,7 +1552,7 @@ function main(): void {
         let seen = recording.seen.lock().unwrap();
         let context = seen
             .iter()
-            .find(|context| context["op"] == "readBytes")
+            .find(|context| context.get("length").is_some())
             .expect("readBytes capability context");
         assert_eq!(context["path"], "/x.txt");
         assert_eq!(context["length"], 3);

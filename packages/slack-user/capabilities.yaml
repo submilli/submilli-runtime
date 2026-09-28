@@ -73,7 +73,6 @@ provides:
       type: string
 requires:
 - capability: fs.write
-  filter: op == "download"
 - capability: http.download
   filter: host == "files.slack.com"
 - capability: http.get

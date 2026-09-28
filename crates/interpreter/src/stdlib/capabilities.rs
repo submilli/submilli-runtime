@@ -68,11 +68,6 @@ pub struct CapabilityGroup {
     pub capabilities: &'static [Capability],
 }
 
-const OP: FilterField = field(
-    "op",
-    "string",
-    "The specific operation within the capability, e.g. \"read\", \"readText\"",
-);
 const PATH: FilterField = field(
     "path",
     "string",
@@ -93,56 +88,56 @@ const FS: &[Capability] = &[
         name: "fs.read",
         main_denial: None,
         summary: "Read files and code workspace content (including search and ignore rules)",
-        filter_fields: &[OP, PATH],
+        filter_fields: &[PATH],
         example_filter: "path glob \"*.csv\"",
     },
     Capability {
         name: "fs.write",
         main_denial: None,
         summary: "Create, write, append, or apply code edits to files",
-        filter_fields: &[OP, PATH],
+        filter_fields: &[PATH],
         example_filter: "path glob \"/out/*\"",
     },
     Capability {
         name: "fs.stat",
         main_denial: None,
         summary: "Inspect metadata (including code workspace discovery)",
-        filter_fields: &[OP, PATH],
+        filter_fields: &[PATH],
         example_filter: "path glob \"/data/*\"",
     },
     Capability {
         name: "fs.list",
         main_denial: None,
         summary: "List directory entries (including code search, glob and tree)",
-        filter_fields: &[OP, PATH, RECURSIVE],
+        filter_fields: &[PATH, RECURSIVE],
         example_filter: "path glob \"/data/*\"",
     },
     Capability {
         name: "fs.mkdir",
         main_denial: None,
         summary: "Create directories",
-        filter_fields: &[OP, PATH, RECURSIVE],
+        filter_fields: &[PATH, RECURSIVE],
         example_filter: "path glob \"/tmp/*\"",
     },
     Capability {
         name: "fs.remove",
         main_denial: None,
         summary: "Delete files or directories",
-        filter_fields: &[OP, PATH, RECURSIVE],
+        filter_fields: &[PATH, RECURSIVE],
         example_filter: "path glob \"/tmp/*\"",
     },
     Capability {
         name: "fs.move",
         main_denial: None,
         summary: "Move or rename a path",
-        filter_fields: &[OP, FROM, TO],
+        filter_fields: &[FROM, TO],
         example_filter: "to glob \"/archive/*\"",
     },
     Capability {
         name: "fs.copy",
         main_denial: None,
         summary: "Copy a path",
-        filter_fields: &[OP, FROM, TO, RECURSIVE],
+        filter_fields: &[FROM, TO, RECURSIVE],
         example_filter: "to glob \"/backup/*\"",
     },
 ];
@@ -155,28 +150,28 @@ const GIT: &[Capability] = &[
         name: "git.init",
         main_denial: None,
         summary: "Create a local repository and its VFS directory",
-        filter_fields: &[OP, PATH],
+        filter_fields: &[PATH],
         example_filter: "path == \"/repo\"",
     },
     Capability {
         name: "git.clone",
         main_denial: None,
         summary: "Clone an HTTPS repository into a VFS directory",
-        filter_fields: &[OP, PATH, REMOTE_NAME, REMOTE, BRANCH],
+        filter_fields: &[PATH, REMOTE_NAME, REMOTE, BRANCH],
         example_filter: "path == \"/repo\" and remote == \"https://github.com/acme/project.git\"",
     },
     Capability {
         name: "git.fetch",
         main_denial: None,
         summary: "Fetch or pull HTTPS remote branches into an existing repository",
-        filter_fields: &[OP, PATH, REMOTE_NAME, REMOTE, BRANCH],
+        filter_fields: &[PATH, REMOTE_NAME, REMOTE, BRANCH],
         example_filter: "path == \"/repo\" and remote == \"https://github.com/acme/project.git\"",
     },
     Capability {
         name: "git.commit",
         main_denial: None,
         summary: "Commit staged changes with blueprint identity",
-        filter_fields: &[OP, PATH, BRANCH],
+        filter_fields: &[PATH, BRANCH],
         example_filter: "path == \"/repo\" and branch == \"main\"",
     },
 ];
@@ -301,11 +296,6 @@ const LLM: &[Capability] = &[Capability {
               caller would be denied at call time",
     filter_fields: &[
         field(
-            "op",
-            "string",
-            "Which operation: \"call\", \"batch\", or \"models\"",
-        ),
-        field(
             "model",
             "string",
             "Model name the call targets; \"\" on the `models` op itself, then each \
@@ -338,28 +328,28 @@ const SESSION: &[Capability] = &[
         name: "session.read",
         main_denial: None,
         summary: "Read session state (get, has), and decide which keys a list may reveal",
-        filter_fields: &[OP, KEY],
+        filter_fields: &[KEY],
         example_filter: "key glob \"triage/*\"",
     },
     Capability {
         name: "session.write",
         main_denial: None,
         summary: "Store or overwrite a session value (set)",
-        filter_fields: &[OP, KEY],
+        filter_fields: &[KEY],
         example_filter: "key glob \"triage/*\"",
     },
     Capability {
         name: "session.remove",
         main_denial: None,
         summary: "Delete a session key",
-        filter_fields: &[OP, KEY],
+        filter_fields: &[KEY],
         example_filter: "key glob \"triage/*\"",
     },
     Capability {
         name: "session.list",
         main_denial: None,
         summary: "Enumerate session keys under a prefix",
-        filter_fields: &[OP, PREFIX],
+        filter_fields: &[PREFIX],
         example_filter: "prefix == \"triage/\"",
     },
 ];
@@ -487,7 +477,7 @@ mod tests {
                 .unwrap()
                 .field_names()
                 .collect::<Vec<_>>(),
-            ["op", "prefix"]
+            ["prefix"]
         );
     }
 
@@ -501,7 +491,7 @@ mod tests {
         assert_eq!(names, ["llm.call"]);
         assert_eq!(
             find("llm.call").unwrap().field_names().collect::<Vec<_>>(),
-            ["op", "model", "prompt_count"]
+            ["model", "prompt_count"]
         );
         // The double gate lives in the summary wording and the host fn, not in
         // the struct, so an operator reading only the catalog still has to learn

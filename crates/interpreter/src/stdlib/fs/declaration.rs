@@ -47,14 +47,14 @@ pub fn package_declaration() -> PackageDeclaration {
         "exists",
         vec![path_param.clone()],
         Type::Boolean,
-        "/**\n * Returns `true` iff `path` resolves to a filesystem entry under the VFS root. Symlinks count as existing; broken symlinks count as not existing (mirrors `std::path::exists`).\n * @param path File path under the VFS root.\n * @capability fs.stat { op: \"exists\", path }\n */",
+        "/**\n * Returns `true` iff `path` resolves to a filesystem entry under the VFS root. Symlinks count as existing; broken symlinks count as not existing (mirrors `std::path::exists`).\n * @param path File path under the VFS root.\n * @capability fs.stat { path }\n */",
     );
     insert_fn(
         &mut defs,
         "size",
         vec![path_param.clone()],
         Type::Number,
-        "/**\n * File size in bytes. Traps on directories or missing paths — call `exists(path)` first or use `stat(path)` if you need to handle absence.\n * @param path File path under the VFS root.\n * @capability fs.stat { op: \"size\", path }\n */",
+        "/**\n * File size in bytes. Traps on directories or missing paths — call `exists(path)` first or use `stat(path)` if you need to handle absence.\n * @param path File path under the VFS root.\n * @capability fs.stat { path }\n */",
     );
     insert_fn(
         &mut defs,
@@ -69,7 +69,7 @@ pub fn package_declaration() -> PackageDeclaration {
             },
             Type::Null,
         ]),
-        "/**\n * Metadata about an entry under the VFS root. Returns `null` when the path does not exist; otherwise returns a `Stat` carrying `kind` / `size` / `modifiedAt`.\n * @param path File path under the VFS root.\n * @capability fs.stat { op: \"stat\", path }\n */",
+        "/**\n * Metadata about an entry under the VFS root. Returns `null` when the path does not exist; otherwise returns a `Stat` carrying `kind` / `size` / `modifiedAt`.\n * @param path File path under the VFS root.\n * @capability fs.stat { path }\n */",
     );
     insert_fn(
         &mut defs,
@@ -81,49 +81,49 @@ pub fn package_declaration() -> PackageDeclaration {
             name: "Peek".to_string(),
             args: Vec::new(),
         },
-        "/**\n * Quick file-only inspection: preview (first ~256 bytes decoded UTF-8 lossy), detected `encoding` (`utf-8` / `utf-16le` / `utf-16be` / `latin1`), `lineEnding` (`lf` / `crlf`), and total `size`. Traps on directories / missing paths.\n * @param path File path under the VFS root.\n * @capability fs.stat { op: \"peek\", path }\n */",
+        "/**\n * Quick file-only inspection: preview (first ~256 bytes decoded UTF-8 lossy), detected `encoding` (`utf-8` / `utf-16le` / `utf-16be` / `latin1`), `lineEnding` (`lf` / `crlf`), and total `size`. Traps on directories / missing paths.\n * @param path File path under the VFS root.\n * @capability fs.stat { path }\n */",
     );
     insert_fn(
         &mut defs,
         "read",
         vec![path_param.clone()],
         bytes_or_null.clone(),
-        "/**\n * Read the whole file as a `Uint8Array`. Returns `null` when the file is larger than `maxReadSize()` — the typechecker forces narrowing before use. Traps on missing paths or directories.\n * @param path File path under the VFS root.\n * @capability fs.read { op: \"read\", path }\n */",
+        "/**\n * Read the whole file as a `Uint8Array`. Returns `null` when the file is larger than `maxReadSize()` — the typechecker forces narrowing before use. Traps on missing paths or directories.\n * @param path File path under the VFS root.\n * @capability fs.read { path }\n */",
     );
     insert_fn(
         &mut defs,
         "readText",
         vec![path_param.clone()],
         string_or_null.clone(),
-        "/**\n * Read the whole file as a UTF-8 string. Returns `null` when the file is larger than `maxReadSize()`. Strips a leading UTF-8 BOM by default; invalid bytes are replaced by U+FFFD.\n * @param path File path under the VFS root.\n * @capability fs.read { op: \"readText\", path }\n */",
+        "/**\n * Read the whole file as a UTF-8 string. Returns `null` when the file is larger than `maxReadSize()`. Strips a leading UTF-8 BOM by default; invalid bytes are replaced by U+FFFD.\n * @param path File path under the VFS root.\n * @capability fs.read { path }\n */",
     );
     insert_fn(
         &mut defs,
         "write",
         vec![path_param.clone(), Param::new("content", Type::Uint8Array)],
         Type::Void,
-        "/**\n * Write `content` to `path` atomically (temp-file + rename). Throws when the parent directory does not exist — agents must `mkdir(parent, { recursive: true })` first.\n * @param path File path under the VFS root.\n * @param content Bytes to write.\n * @capability fs.write { op: \"write\", path, length: number }\n */",
+        "/**\n * Write `content` to `path` atomically (temp-file + rename). Throws when the parent directory does not exist — agents must `mkdir(parent, { recursive: true })` first.\n * @param path File path under the VFS root.\n * @param content Bytes to write.\n * @capability fs.write { path, length: number }\n */",
     );
     insert_fn(
         &mut defs,
         "writeText",
         vec![path_param.clone(), Param::new("content", Type::String)],
         Type::Void,
-        "/**\n * UTF-8 atomic write. Same parent-directory rule as `write`.\n * @param path File path under the VFS root.\n * @param content Text to write as UTF-8.\n * @capability fs.write { op: \"writeText\", path, length: number }\n */",
+        "/**\n * UTF-8 atomic write. Same parent-directory rule as `write`.\n * @param path File path under the VFS root.\n * @param content Text to write as UTF-8.\n * @capability fs.write { path, length: number }\n */",
     );
     insert_fn(
         &mut defs,
         "append",
         vec![path_param.clone(), Param::new("content", Type::Uint8Array)],
         Type::Void,
-        "/**\n * Append `content` to `path`. Creates the file if missing; throws when the parent directory does not exist. NOT atomic — concurrent writers race.\n * @param path File path under the VFS root.\n * @param content Bytes to append.\n * @capability fs.write { op: \"append\", path, length: number }\n */",
+        "/**\n * Append `content` to `path`. Creates the file if missing; throws when the parent directory does not exist. NOT atomic — concurrent writers race.\n * @param path File path under the VFS root.\n * @param content Bytes to append.\n * @capability fs.write { path, length: number }\n */",
     );
     insert_fn(
         &mut defs,
         "appendText",
         vec![path_param.clone(), Param::new("content", Type::String)],
         Type::Void,
-        "/**\n * UTF-8 append. Same parent-directory rule as `append`.\n * @param path File path under the VFS root.\n * @param content Text to append as UTF-8.\n * @capability fs.write { op: \"appendText\", path, length: number }\n */",
+        "/**\n * UTF-8 append. Same parent-directory rule as `append`.\n * @param path File path under the VFS root.\n * @param content Text to append as UTF-8.\n * @capability fs.write { path, length: number }\n */",
     );
     insert_fn(
         &mut defs,
@@ -134,21 +134,21 @@ pub fn package_declaration() -> PackageDeclaration {
             Param::new("length", Type::Number),
         ],
         Type::Uint8Array,
-        "/**\n * Random-access byte-range read. Traps if `length > maxReadSize()`, if `offset` is negative, or on I/O errors. The returned `Uint8Array` may be shorter than `length` if the request runs past EOF.\n * @param path File path under the VFS root.\n * @param offset Zero-based byte offset.\n * @param length Maximum number of bytes to read.\n * @capability fs.read { op: \"readBytes\", path, length }\n */",
+        "/**\n * Random-access byte-range read. Traps if `length > maxReadSize()`, if `offset` is negative, or on I/O errors. The returned `Uint8Array` may be shorter than `length` if the request runs past EOF.\n * @param path File path under the VFS root.\n * @param offset Zero-based byte offset.\n * @param length Maximum number of bytes to read.\n * @capability fs.read { path, length }\n */",
     );
     insert_fn(
         &mut defs,
         "mkdir",
         vec![path_param.clone(), Param::new("recursive", Type::Boolean)],
         Type::Void,
-        "/**\n * Create the directory at `path`. `recursive=true` creates intermediate directories (like `mkdir -p`); `recursive=false` throws when the parent is missing or the target already exists. Until options objects land, the flag is positional.\n * @param path Directory path under the VFS root.\n * @param recursive Whether to create missing parents.\n * @capability fs.mkdir { op: \"mkdir\", path, recursive }\n */",
+        "/**\n * Create the directory at `path`. `recursive=true` creates intermediate directories (like `mkdir -p`); `recursive=false` throws when the parent is missing or the target already exists. Until options objects land, the flag is positional.\n * @param path Directory path under the VFS root.\n * @param recursive Whether to create missing parents.\n * @capability fs.mkdir { path, recursive }\n */",
     );
     insert_fn(
         &mut defs,
         "remove",
         vec![path_param.clone(), Param::new("recursive", Type::Boolean)],
         Type::Void,
-        "/**\n * Remove the entry at `path`. Files unconditionally; directories require `recursive=true` (matches `rm -rf`). Without the flag, a non-empty directory throws.\n * @param path File or directory path under the VFS root.\n * @param recursive Whether to remove directories recursively.\n * @capability fs.remove { op: \"remove\", path, recursive }\n */",
+        "/**\n * Remove the entry at `path`. Files unconditionally; directories require `recursive=true` (matches `rm -rf`). Without the flag, a non-empty directory throws.\n * @param path File or directory path under the VFS root.\n * @param recursive Whether to remove directories recursively.\n * @capability fs.remove { path, recursive }\n */",
     );
     insert_fn(
         &mut defs,
@@ -158,7 +158,7 @@ pub fn package_declaration() -> PackageDeclaration {
             Param::new("to", Type::String),
         ],
         Type::Void,
-        "/**\n * Move / rename. Atomic when source and destination share a filesystem (true within the VFS by construction).\n * @param from Source path under the VFS root.\n * @param to Destination path under the VFS root.\n * @capability fs.move { op: \"move\", from, to }\n */",
+        "/**\n * Move / rename. Atomic when source and destination share a filesystem (true within the VFS by construction).\n * @param from Source path under the VFS root.\n * @param to Destination path under the VFS root.\n * @capability fs.move { from, to }\n */",
     );
     insert_fn(
         &mut defs,
@@ -169,7 +169,7 @@ pub fn package_declaration() -> PackageDeclaration {
             Param::new("recursive", Type::Boolean),
         ],
         Type::Void,
-        "/**\n * Copy `from` to `to`. Directories require `recursive=true`. Symlinks are copied as links (the link target is preserved; the file it points at is not followed) so a writable VFS area can't be used to exfiltrate the target.\n * @param from Source path under the VFS root.\n * @param to Destination path under the VFS root.\n * @param recursive Whether to copy directories recursively.\n * @capability fs.copy { op: \"copy\", from, to, recursive }\n */",
+        "/**\n * Copy `from` to `to`. Directories require `recursive=true`. Symlinks are copied as links (the link target is preserved; the file it points at is not followed) so a writable VFS area can't be used to exfiltrate the target.\n * @param from Source path under the VFS root.\n * @param to Destination path under the VFS root.\n * @param recursive Whether to copy directories recursively.\n * @capability fs.copy { from, to, recursive }\n */",
     );
     insert_fn(
         &mut defs,
@@ -181,7 +181,7 @@ pub fn package_declaration() -> PackageDeclaration {
             name: "FileWriter".to_string(),
             args: Vec::new(),
         },
-        "/**\n * Open `path` as an append-only `FileWriter`. The writer buffers internally and only commits on `close()` (atomic temp-file + rename) — half-written outputs from a crashed transform don't leak. Throws when the parent directory does not exist.\n * @param path Destination path under the VFS root.\n * @capability fs.write { op: \"writer\", path }\n */",
+        "/**\n * Open `path` as an append-only `FileWriter`. The writer buffers internally and only commits on `close()` (atomic temp-file + rename) — half-written outputs from a crashed transform don't leak. Throws when the parent directory does not exist.\n * @param path Destination path under the VFS root.\n * @capability fs.write { path }\n */",
     );
     insert_fn(
         &mut defs,
@@ -193,7 +193,7 @@ pub fn package_declaration() -> PackageDeclaration {
             name: "Iterator".to_string(),
             args: vec![Type::String],
         },
-        "/**\n * Stream the file at `path` as a constant-memory line iterator. Each `next()` returns one line stripped of its trailing CR/LF. A leading UTF-8 BOM on the first line is dropped. The file descriptor is released when the iterator is closed (a `for...of` loop closes it on exit, including `break`/`throw`) or, failing that, when it is garbage-collected.\n * @param path File path under the VFS root.\n * @capability fs.read { op: \"lines\", path }\n */",
+        "/**\n * Stream the file at `path` as a constant-memory line iterator. Each `next()` returns one line stripped of its trailing CR/LF. A leading UTF-8 BOM on the first line is dropped. The file descriptor is released when the iterator is closed (a `for...of` loop closes it on exit, including `break`/`throw`) or, failing that, when it is garbage-collected.\n * @param path File path under the VFS root.\n * @capability fs.read { path }\n */",
     );
     insert_fn(
         &mut defs,
@@ -205,7 +205,7 @@ pub fn package_declaration() -> PackageDeclaration {
             name: "Iterator".to_string(),
             args: vec![Type::Uint8Array],
         },
-        "/**\n * Stream the file at `path` as a constant-memory byte iterator. Each `next()` returns up to `chunkSize` bytes; the last chunk may be shorter. Sized for large binary inputs that don't fit `maxReadSize`.\n * @param path File path under the VFS root.\n * @param chunkSize Maximum bytes per iterator chunk.\n * @capability fs.read { op: \"bytes\", path, chunkSize }\n */",
+        "/**\n * Stream the file at `path` as a constant-memory byte iterator. Each `next()` returns up to `chunkSize` bytes; the last chunk may be shorter. Sized for large binary inputs that don't fit `maxReadSize`.\n * @param path File path under the VFS root.\n * @param chunkSize Maximum bytes per iterator chunk.\n * @capability fs.read { path, chunkSize }\n */",
     );
     insert_fn(
         &mut defs,
@@ -222,7 +222,7 @@ pub fn package_declaration() -> PackageDeclaration {
                 args: Vec::new(),
             }],
         },
-        "/**\n * List the children of the directory at `path` as a constant-memory iterator of `DirEntry`. `recursive=true` walks descendants as well; `recursive=false` yields only direct children.\n *\n * Order: a directory is always yielded before its contents, and a directory's whole subtree is yielded as one consecutive run — no entry from outside a subtree is interleaved into it. Down to 32 levels of nesting that is exactly depth-first (matching `find` / `os.walk`); deeper than that the walk runs out of directory handles and a subdirectory's contents follow the rest of its parent's entries instead of coming directly after it, so don't depend on strict depth-first order past that depth. Siblings come in whatever order the filesystem reports — not sorted.\n *\n * Symlinks surface as `kind=\"symlink\"` and are not followed. A recursive walk is best-effort: a subdirectory it cannot read — or, past a fixed ceiling on how many postponed descents one walk holds, cannot afford to remember — is skipped and the walk continues, so a listing is not proof that a path is absent.\n * @param path Directory path under the VFS root.\n * @param recursive Whether to walk descendants recursively.\n * @capability fs.list { op: \"list\", path, recursive }\n */",
+        "/**\n * List the children of the directory at `path` as a constant-memory iterator of `DirEntry`. `recursive=true` walks descendants as well; `recursive=false` yields only direct children.\n *\n * Order: a directory is always yielded before its contents, and a directory's whole subtree is yielded as one consecutive run — no entry from outside a subtree is interleaved into it. Down to 32 levels of nesting that is exactly depth-first (matching `find` / `os.walk`); deeper than that the walk runs out of directory handles and a subdirectory's contents follow the rest of its parent's entries instead of coming directly after it, so don't depend on strict depth-first order past that depth. Siblings come in whatever order the filesystem reports — not sorted.\n *\n * Symlinks surface as `kind=\"symlink\"` and are not followed. A recursive walk is best-effort: a subdirectory it cannot read — or, past a fixed ceiling on how many postponed descents one walk holds, cannot afford to remember — is skipped and the walk continues, so a listing is not proof that a path is absent.\n * @param path Directory path under the VFS root.\n * @param recursive Whether to walk descendants recursively.\n * @capability fs.list { path, recursive }\n */",
     );
 
     defs

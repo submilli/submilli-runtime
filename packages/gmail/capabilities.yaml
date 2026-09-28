@@ -68,11 +68,8 @@ provides:
   fields: {}
 requires:
 - capability: fs.read
-  filter: op == "read"
 - capability: fs.stat
-  filter: op == "stat"
 - capability: fs.write
-  filter: op == "write"
 - capability: http.delete
   filter: host == "gmail.googleapis.com"
 - capability: http.get

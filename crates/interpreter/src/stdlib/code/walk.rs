@@ -228,7 +228,7 @@ fn walk(
         if dir.depth >= depth {
             continue;
         }
-        gate(caller, "fs.list", &dir.path, op)?;
+        gate(caller, "fs.list", &dir.path)?;
         load_ignores(caller, budget, &dir.path, op, &mut dir.ignores)?;
         let resolved = resolve_content_or_trap(caller.data(), &dir.path, op)?;
         for item in resolved
@@ -267,7 +267,7 @@ fn validate_root(caller: &mut Caller<'_, StoreData>, root: &str, op: &str) -> Re
     for component in root.split('/').filter(|component| !component.is_empty()) {
         path.push('/');
         path.push_str(component);
-        gate(caller, "fs.stat", &path, op)?;
+        gate(caller, "fs.stat", &path)?;
         let resolved = resolve_link_or_trap(caller.data(), &path, op)?;
         let metadata = resolved
             .symlink_metadata()
@@ -312,7 +312,7 @@ fn inspect_entry(
     }
     let path = format!("{}/{}", dir.path.trim_end_matches('/'), name);
     budget.charge(caller, path.len() + 256)?;
-    gate(caller, "fs.stat", &path, op)?;
+    gate(caller, "fs.stat", &path)?;
     let link = resolve_link_or_trap(caller.data(), &path, op)?;
     let metadata = link
         .symlink_metadata()
@@ -362,7 +362,7 @@ fn load_ignores(
 ) -> Result<()> {
     for name in [".gitignore", ".ignore"] {
         let path = format!("{}/{}", dir.trim_end_matches('/'), name);
-        gate(caller, "fs.stat", &path, op)?;
+        gate(caller, "fs.stat", &path)?;
         let resolved = resolve_link_or_trap(caller.data(), &path, op)?;
         let metadata = match resolved.symlink_metadata() {
             Ok(metadata) => metadata,

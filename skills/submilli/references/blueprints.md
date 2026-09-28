@@ -118,11 +118,11 @@ Stdlib gates and their fields, from `submilli blueprint capability list`:
 | --- | --- |
 | `http.get` `post` `put` `patch` `delete` `head` `options` | `host`, `path`, `body_size`, `timeout_ms` |
 | `http.download` | `host`, `url_path`, `vfs_path`, `max_bytes`, `overwrite`, `decompress` |
-| `fs.read` `write` `stat` `list` `mkdir` `remove` `move` `copy` | `op`, `path` (or `from`, `to`), `recursive` |
-| `session.read` `write` `remove` `list` | `op`, `key` or `prefix` |
+| `fs.read` `write` `stat` `list` `mkdir` `remove` `move` `copy` | `path` (or `from`, `to`), `recursive` |
+| `session.read` `write` `remove` `list` | `key` or `prefix` |
 | `secrets.get` (packages only) | `name` |
 | `mcp.<server>` | `tool`, `transport` |
-| `llm.call` (covers `call`, `batch`, `models()`) | `op`, `model`, `prompt_count`; narrowing `model` also narrows what `models()` lists |
+| `llm.call` (covers `call`, `batch`, `models()`) | `model`, `prompt_count`; narrowing `model` also narrows what `models()` lists |
 
 ## A real service
 
