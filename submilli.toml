@@ -92,6 +92,6 @@ path = "packages/firecrawl"
 [[package]]
 name = "@submilli/typesafe"
 version = "0.1.0"
-description = "TypeSafe semantic judgments for routing, ranking, evidence checks, and selecting known values. Batch Choice, Noul, and Score questions; combine typed answers and probabilities in code."
-keywords = ["typesafe", "jev", "classification", "ranking", "verification", "agents"]
+description = "Use TypeSafe's Jev model when code needs language understanding: classify or route requests, rank relevance, select values from known candidates, and verify claims against supplied evidence. Ask yes/no, choice, or rubric-based scoring questions and get typed answers with probabilities. Batch independent judgments over shared state, then let code decide what to do."
+keywords = ["typesafe", "jev", "classification", "routing", "ranking", "relevance", "extraction", "verification", "agents"]
 path = "packages/typesafe"
