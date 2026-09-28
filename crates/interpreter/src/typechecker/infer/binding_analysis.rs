@@ -9,16 +9,28 @@ use crate::{Ast, Diagnostic, ExprId, Ident, Severity, Span, StmtId};
 pub(super) struct Analysis {
     pub(super) mutators: HashSet<(String, Span)>,
     pub(super) last_assignments: HashMap<Span, u32>,
+    /// Nested function declarations, by name span, whose bodies read or write a
+    /// `let`/`const` of the block they are declared in, with the last declared
+    /// of those. Their closure can exist only once it is declared; any other is
+    /// hoisted to the block's start.
+    pub(super) nested_function_creation_points: HashMap<Span, Ident>,
     pub(super) diagnostics: Vec<Diagnostic>,
     scopes: Vec<BTreeMap<String, Binding>>,
     function_depth: usize,
     assignment_regions: Vec<Span>,
+    /// The nested function declarations whose bodies are being scanned: each
+    /// one's name span and the index in `scopes` of the block declaring it.
+    nested_functions: Vec<(Span, usize)>,
 }
 
+#[derive(Clone, Copy)]
 struct Binding {
     span: Span,
     function_depth: usize,
     initialized: bool,
+    /// Declared by a `let`/`const` statement, so it has no value before that
+    /// statement runs. Parameters and hoisted functions have one from the start.
+    block_local: bool,
 }
 
 pub(super) fn analyze(ast: &Ast) -> Analysis {
@@ -69,8 +81,21 @@ fn visit_stmt(ast: &Ast, id: StmtId, out: &mut Analysis) {
             visit_expr(ast, *source, out);
             out.initialize(name);
         }
-        StmtKind::Function { params, body, .. } => {
+        StmtKind::Function {
+            name, params, body, ..
+        } => {
+            // At the top level there is no scope, and the function is no closure.
+            let declaring_scope = out.scopes.len().checked_sub(1);
+            if declaring_scope.is_some() && out.function_depth == 0 {
+                out.reject_top_level_block_function(name);
+            }
+            if let Some(scope) = declaring_scope {
+                out.nested_functions.push((name.span, scope));
+            }
             scan_function(ast, params, crate::ArrowBody::Block(*body), out);
+            if declaring_scope.is_some() {
+                out.nested_functions.pop();
+            }
         }
         StmtKind::If {
             condition,
@@ -237,6 +262,7 @@ fn visit_expr(ast: &Ast, id: ExprId, out: &mut Analysis) {
                                 span: name.span,
                                 function_depth: out.function_depth,
                                 initialized: true,
+                                block_local: false,
                             },
                         )
                     })
@@ -356,6 +382,15 @@ fn visit_iterable(ast: &Ast, loop_id: StmtId, iter: ExprId, out: &mut Analysis) 
 
 impl Analysis {
     fn declare(&mut self, ident: &Ident, initialized: bool) {
+        self.insert_binding(ident, initialized, false);
+    }
+
+    /// A `let`/`const` of the block, uninitialized until its statement runs.
+    fn declare_block_local(&mut self, ident: &Ident) {
+        self.insert_binding(ident, false, true);
+    }
+
+    fn insert_binding(&mut self, ident: &Ident, initialized: bool, block_local: bool) {
         let Some(scope) = self.scopes.last_mut() else {
             return;
         };
@@ -377,17 +412,24 @@ impl Analysis {
                 span: ident.span,
                 function_depth: self.function_depth,
                 initialized,
+                block_local,
             },
         );
     }
 
+    /// Declare a block's bindings before walking it. A `let`/`const` is
+    /// uninitialized until its statement; a function declaration is hoisted,
+    /// usable anywhere in the block.
     fn reserve_statements(&mut self, ast: &Ast, stmts: &[StmtId]) {
         for &id in stmts {
-            if let crate::StmtKind::Let { name, .. }
-            | crate::StmtKind::Const { name, .. }
-            | crate::StmtKind::ConstRest { name, .. } = &ast.stmt(id).kind
-            {
-                self.declare(name, false);
+            match &ast.stmt(id).kind {
+                crate::StmtKind::Let { name, .. }
+                | crate::StmtKind::Const { name, .. }
+                | crate::StmtKind::ConstRest { name, .. } => {
+                    self.declare_block_local(name);
+                }
+                crate::StmtKind::Function { name, .. } => self.declare(name, true),
+                _ => {}
             }
         }
     }
@@ -398,12 +440,66 @@ impl Analysis {
         }
     }
 
-    fn lookup(&self, name: &str) -> Option<&Binding> {
-        self.scopes.iter().rev().find_map(|s| s.get(name))
+    /// The binding `name` resolves to, and the index of its scope.
+    fn lookup(&self, name: &str) -> Option<(usize, &Binding)> {
+        self.scopes
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, s)| s.get(name).map(|binding| (index, binding)))
+    }
+
+    /// The binding a use of `ident` resolves to. A `let`/`const` it names is
+    /// captured by each nested function being scanned that is declared in the
+    /// same block, which keeps the last declared of those.
+    fn resolve_use(&mut self, ident: &Ident) -> Option<Binding> {
+        let (scope, binding) = self.lookup(&ident.name)?;
+        let binding = *binding;
+        if binding.block_local {
+            self.note_capture(
+                scope,
+                Ident {
+                    name: ident.name.clone(),
+                    span: binding.span,
+                },
+            );
+        }
+        Some(binding)
+    }
+
+    /// A closure in a top-level block can't yet capture that block's bindings
+    /// (SUB-1070), which a function declared there nearly always needs, even
+    /// just to call itself.
+    fn reject_top_level_block_function(&mut self, name: &Ident) {
+        self.diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            span: name.span,
+            message: "a function can't be declared in a top-level block yet".to_string(),
+            help: vec![
+                "declare it at the top level of the module, or inside a function".to_string(),
+            ],
+            notes: Vec::new(),
+        });
+    }
+
+    fn note_capture(&mut self, scope: usize, local: Ident) {
+        for &(function, declaring_scope) in &self.nested_functions {
+            if declaring_scope != scope {
+                continue;
+            }
+            self.nested_function_creation_points
+                .entry(function)
+                .and_modify(|last| {
+                    if local.span.start > last.span.start {
+                        *last = local.clone();
+                    }
+                })
+                .or_insert_with(|| local.clone());
+        }
     }
 
     fn read(&mut self, ident: &Ident) {
-        let Some(binding) = self.lookup(&ident.name) else {
+        let Some(binding) = self.resolve_use(ident) else {
             return;
         };
         if binding.initialized {
@@ -420,7 +516,7 @@ impl Analysis {
     }
 
     fn write(&mut self, ident: &Ident) {
-        let Some(binding) = self.lookup(&ident.name) else {
+        let Some(binding) = self.resolve_use(ident) else {
             return;
         };
         let declaration = binding.span;
@@ -473,6 +569,7 @@ fn scan_function(
                 span: param.name.span,
                 function_depth: out.function_depth,
                 initialized: true,
+                block_local: false,
             });
     }
     match body {

@@ -431,7 +431,8 @@ pub(super) async fn for_each(
         }
         let elem = elements.get(&mut *caller, idx as u32)?;
         let elem = decode_key(caller, elem)?;
-        f.call_void(caller, elem).await?;
+        // JS passes the element twice, keeping Map's `(value, key, map)` shape.
+        f.call_dynamic(caller, &[elem, elem, *recv]).await?;
     }
     Ok(())
 }

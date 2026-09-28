@@ -490,7 +490,7 @@ pub(super) async fn for_each(
         let value = values.get(&mut *caller, idx as u32)?;
         let key = keys.get(&mut *caller, idx as u32)?;
         let key = decode_key(caller, key)?;
-        f.call_void_args(caller, &[value, key]).await?;
+        f.call_dynamic(caller, &[value, key, *recv]).await?;
     }
     Ok(())
 }

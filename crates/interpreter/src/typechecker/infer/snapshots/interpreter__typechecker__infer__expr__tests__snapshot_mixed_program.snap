@@ -1,11 +1,12 @@
 ---
 source: crates/interpreter/src/typechecker/infer/expr.rs
-assertion_line: 9201
 expression: ta
 ---
 TypedAst {
     closure_this: {},
     closure_names: {},
+    nested_function_names: {},
+    placeholder_closures: {},
     authored_arguments: {},
     runtime_source_types: {},
     runtime_chain_types: {},

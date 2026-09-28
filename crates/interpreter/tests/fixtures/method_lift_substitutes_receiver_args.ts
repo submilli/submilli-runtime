@@ -4,7 +4,7 @@
 // but this pins the routing that builds it. A `find_method` change would print
 // `Map<string, number>.get(key: K): V | null` and no test would fail.
 // expect-error: Map<string, number>.get(key: string): number | null
-// expect-error: number[].map<U>(callback: (arg0: number) => U): U[]
+// expect-error: number[].map<U>(callback: (arg0: number, arg1: number, arg2: number[]) => U): U[]
 // expect-error: string.repeat(count: number): string
 // expect-error: Set<number>.add(value: number): Set<number>
 

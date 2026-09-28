@@ -6,7 +6,7 @@
 // inference reports the mismatch before unification is consulted, so
 // `Unifier::without_subtype_widening` — the guard that would refuse it a second
 // time — is belt-and-braces rather than the layer that decides this program.
-// expect-error: got `(arg0: Sub) => number`
+// expect-error: parameter `a`: expected `Base`, got `Sub`
 class Base { x: number = 1; }
 class Sub extends Base { y: number = 2; }
 

@@ -1,5 +1,4 @@
 // test262: test/built-ins/Array/prototype/find/predicate-call-parameters.js
-// expect-fail: standard predicates receive (value, index, array); our find callback type is (T) => boolean, so a three-parameter predicate is a compile error
 
 function main(): void {
   const arr = ["Mike", "Rick", "Leo"];

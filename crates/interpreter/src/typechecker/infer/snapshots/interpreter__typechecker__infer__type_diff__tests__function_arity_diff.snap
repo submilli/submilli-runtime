@@ -2,4 +2,4 @@
 source: crates/interpreter/src/typechecker/infer/type_diff.rs
 expression: out.unwrap()
 ---
-arity: expected 2 param(s), got 1
+arity: expected at most 1 param(s), got 2

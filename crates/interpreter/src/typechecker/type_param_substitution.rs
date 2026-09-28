@@ -351,15 +351,17 @@ impl<'a> Unifier<'a> {
                 Type::Function {
                     params: pa,
                     ret: ra,
+                    has_rest: rest_a,
                     ..
                 },
                 Type::Function {
                     params: pb,
                     ret: rb,
+                    has_rest: rest_b,
                     ..
                 },
             ) => {
-                if pa.len() != pb.len() {
+                if !Type::function_arity_fits(pb.len(), pa.len(), *rest_a || *rest_b) {
                     return Err(UnifyError::Mismatch {
                         expected: param_ty.clone(),
                         got: arg_ty.clone(),
@@ -911,6 +913,26 @@ mod tests {
         };
         let err = unify_bare(&mut s, &param, &arg).expect_err("arity mismatch");
         assert!(matches!(err, UnifyError::Mismatch { .. }));
+    }
+
+    #[test]
+    fn unify_function_with_fewer_params_binds_the_return() {
+        let mut s = TypeParamSubstitution::new();
+        let param = Type::Function {
+            params: vec![t("T"), Type::Number],
+            ret: Box::new(t("U")),
+            predicate: None,
+            has_rest: false,
+        };
+        let arg = Type::Function {
+            params: vec![Type::String],
+            ret: Box::new(Type::Boolean),
+            predicate: None,
+            has_rest: false,
+        };
+        unify_bare(&mut s, &param, &arg).unwrap();
+        assert_eq!(s.get("T"), Some(&Type::String));
+        assert_eq!(s.get("U"), Some(&Type::Boolean));
     }
 
     #[test]

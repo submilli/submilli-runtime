@@ -5,4 +5,4 @@ line 42: this
   ours: C
 
 errors:
-line 54: ours: override of method `foo` is not compatible with the inherited signature (tsc accepts)
+line 54: ours: override of method `foo` must declare the inherited method's 3 parameter(s) (tsc accepts)

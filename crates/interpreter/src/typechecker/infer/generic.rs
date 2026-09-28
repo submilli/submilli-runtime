@@ -8,11 +8,12 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    ExprId, Ident, MethodSig, Span, StmtId, StmtKind, Type, TypeAnnotation, TypedExprKind,
-    TypedParam, TypedStmt, TypedStmtKind, ValueKind,
+    ExprId, ExprKind, Ident, MethodSig, Span, StmtId, StmtKind, Type, TypeAnnotation,
+    TypedExprKind, TypedParam, TypedStmt, TypedStmtKind, ValueKind,
 };
 
 use super::Inferer;
+use crate::typechecker::type_param_substitution::{TypeParamSubstitution, UnifyError};
 
 /// What a receiver-less generic call is calling. Only diagnostics differ: a
 /// constructor has to be described as one, because `function Box<T>(…)` is not
@@ -654,8 +655,6 @@ impl Inferer<'_> {
         expected: Option<&Type>,
         span: Span,
     ) -> (TypedExprKind, Type) {
-        use crate::typechecker::type_param_substitution::{TypeParamSubstitution, UnifyError};
-
         // The no-mapper form preserves the source type; the mapped form has
         // an independent result parameter, like TypeScript's two overloads.
         let mut sig = sig;
@@ -707,9 +706,7 @@ impl Inferer<'_> {
             }
         }
 
-        if let Some(want) = expected
-            && !matches!(want, Type::Error)
-        {
+        if let Some(want) = expected.filter(|want| pins_type_parameters(want)) {
             let _ = sub.unify(&sig.ret, want, self.resolver());
         }
 
@@ -767,76 +764,21 @@ impl Inferer<'_> {
             Type::Error
         };
 
-        // Two-pass: non-closure args infer first to seed the substitution map;
-        // closure args infer second so their hints see already-bound generics.
-        // e.g. `reduce((acc, x) => acc + x, 0)` binds U from `0` before the closure.
-        let mut typed_slots: Vec<Option<ExprId>> = vec![None; args.len()];
-        for closures_pass in [false, true] {
-            for (i, &arg_id) in args.iter().enumerate() {
-                if typed_slots[i].is_some() {
-                    continue;
-                }
-                let param_ty = if i < fixed_count {
-                    sig.params[i].ty.clone()
-                } else if has_rest {
-                    rest_elem_ty.clone()
-                } else {
-                    Type::Error
-                };
-                let is_closure = matches!(param_ty, Type::Function { .. });
-                if is_closure != closures_pass {
-                    continue;
-                }
-                let hint = sub.apply(&param_ty);
-                let diags_before = self.diagnostics.len();
-                let (typed_id, arg_ty) = self.infer_expr(arg_id, Some(&hint));
-                typed_slots[i] = Some(typed_id);
-                let missing_slot = i >= fixed_count && !has_rest;
-                if missing_slot || matches!(arg_ty, Type::Error) {
-                    continue;
-                }
-                let arg_already_errored = self.diagnostics.len() > diags_before;
-                match sub.unify_argument(&param_ty, &arg_ty, self.resolver()) {
-                    Ok(()) => {}
-                    Err(UnifyError::Conflict {
-                        name: gname,
-                        prev,
-                        new,
-                    }) => {
-                        if !arg_already_errored {
-                            let arg_span = self.typed_ast.expr(typed_id).span;
-                            self.error(
-                                arg_span,
-                                format!(
-                                    "type parameter `{gname}` already bound to `{prev}`, cannot bind to `{new}`",
-                                ),
-                            );
-                        }
-                    }
-                    Err(UnifyError::Mismatch { expected, got }) => {
-                        if self.structural_member_unify(&mut sub, &param_ty, &arg_ty) {
-                            continue;
-                        }
-                        if !arg_already_errored {
-                            let arg_span = self.typed_ast.expr(typed_id).span;
-                            let sig_lift = self.format_signature(SignatureKind::Method {
-                                receiver_ty: &receiver_ty,
-                                name: &name.name,
-                                sig: &sig,
-                            });
-                            let mut help = vec![sig_lift];
-                            help.extend(super::type_diff::type_mismatch_help(&expected, &got));
-                            self.error_with_help(
-                                arg_span,
-                                format!("expected `{expected}`, got `{got}`"),
-                                help,
-                            );
-                        }
-                    }
-                }
-            }
-        }
-        let mut typed_args: Vec<ExprId> = typed_slots.into_iter().flatten().collect();
+        let signature_help = |this: &mut Self| {
+            this.format_signature(SignatureKind::Method {
+                receiver_ty: &receiver_ty,
+                name: &name.name,
+                sig: &sig,
+            })
+        };
+        let errors_before_args = self.error_count();
+        let mut typed_args = self.infer_generic_arguments(
+            &args,
+            &sig.params,
+            &rest_elem_ty,
+            &mut sub,
+            signature_help,
+        );
 
         if has_rest || typed_args.len() < sig.params.len() {
             self.typed_ast
@@ -863,6 +805,13 @@ impl Inferer<'_> {
             sub.insert("U".into(), sub.apply(&Type::TypeVar("T".into())));
         }
 
+        self.bind_leftover_type_parameters(
+            &mut sub,
+            &sig.generics,
+            &sig.ret,
+            expected,
+            errors_before_args,
+        );
         if let Err(unbound) = sub.resolve_all(&sig.generics) {
             self.error_with_help(
                 span,
@@ -988,6 +937,173 @@ impl Inferer<'_> {
         }
     }
 
+    /// Bind the type parameters the arguments left open: from an `unknown`
+    /// expected result, which [`pins_type_parameters`] kept out of the
+    /// bindings made before the arguments; then, if an argument was reported
+    /// wrong (it may be what would have bound one), to `Error`, so the
+    /// parameter isn't reported as uninferable too.
+    fn bind_leftover_type_parameters(
+        &self,
+        sub: &mut TypeParamSubstitution,
+        generics: &[String],
+        ret: &Type,
+        expected: Option<&Type>,
+        errors_before_args: usize,
+    ) {
+        if let Some(want) = expected.filter(|want| !pins_type_parameters(want)) {
+            let _ = sub.unify(ret, want, self.resolver());
+        }
+        if self.error_count() > errors_before_args {
+            bind_remaining(sub, generics, Type::Error);
+        }
+    }
+
+    /// Bind type parameters from the annotated parameters of a function
+    /// literal whose inference is deferred, so the arguments inferred before
+    /// it see them: `reduce((acc: number[], x) => …, [])` types `[]` as
+    /// `number[]`. The annotations are resolved again, and any error in them
+    /// reported, when the literal itself is inferred.
+    fn bind_from_annotated_params(
+        &mut self,
+        literal: ExprId,
+        param_ty: &Type,
+        sub: &mut TypeParamSubstitution,
+    ) {
+        let Some(Type::Function { params, .. }) = function_part(param_ty) else {
+            return;
+        };
+        let Some(declared_params) = self.function_literal_params(literal) else {
+            return;
+        };
+        let diagnostics_before = self.diagnostics.len();
+        for (declared, param) in declared_params.iter().zip(params) {
+            if let Some(annotation) = &declared.ty {
+                let annotated = self.resolve_type(annotation);
+                let _ = sub.unify_argument(param, &annotated, self.resolver());
+            }
+        }
+        self.diagnostics.truncate(diagnostics_before);
+    }
+
+    fn function_literal_params(&self, expr: ExprId) -> Option<Vec<crate::ParamDecl>> {
+        match &self.ast.expr(expr).kind {
+            ExprKind::Paren(inner) => self.function_literal_params(*inner),
+            ExprKind::FunctionExpression { function, .. } => {
+                self.function_literal_params(*function)
+            }
+            ExprKind::Arrow { params, .. } => Some(params.clone()),
+            _ => None,
+        }
+    }
+
+    /// A function literal with a parameter left for its context to type,
+    /// which is what TypeScript infers after the other arguments.
+    fn is_context_sensitive_function(&self, expr: ExprId) -> bool {
+        self.function_literal_params(expr)
+            .is_some_and(|params| params.iter().any(|p| p.ty.is_none()))
+    }
+
+    /// Infer a generic call's arguments against `params`, binding its type
+    /// parameters in `sub`. A function literal with an unannotated parameter,
+    /// passed for a function-typed parameter, is inferred after the others,
+    /// so its hint sees what they bound: `reduce((acc, x) => acc + x, 0)` binds
+    /// `U` from `0` before typing `acc`. Only such a literal is deferred:
+    /// creating it runs nothing and its body sees no outer narrowing, so
+    /// checking it late can't observe a later argument's assignment, while any
+    /// other argument could. A fully annotated one binds from its annotations
+    /// in order, as in TypeScript.
+    /// `signature_help` renders the callee for a mismatch diagnostic.
+    fn infer_generic_arguments(
+        &mut self,
+        args: &[ExprId],
+        params: &[Param],
+        rest_elem_ty: &Type,
+        sub: &mut TypeParamSubstitution,
+        signature_help: impl Fn(&mut Self) -> String,
+    ) -> Vec<ExprId> {
+        let has_rest = params.last().is_some_and(|p| p.rest);
+        let fixed_count = params.iter().take_while(|p| !p.rest).count();
+        let mut typed_slots: Vec<Option<ExprId>> = vec![None; args.len()];
+        for deferred_pass in [false, true] {
+            for (i, &arg_id) in args.iter().enumerate() {
+                if typed_slots[i].is_some() {
+                    continue;
+                }
+                let param_ty = if i < fixed_count {
+                    params[i].ty.clone()
+                } else if has_rest {
+                    rest_elem_ty.clone()
+                } else {
+                    Type::Error
+                };
+                let deferred = function_part(&param_ty).is_some()
+                    && self.is_context_sensitive_function(arg_id);
+                if deferred && !deferred_pass {
+                    self.bind_from_annotated_params(arg_id, &param_ty, sub);
+                }
+                if deferred != deferred_pass {
+                    continue;
+                }
+                let hint = sub.apply(&param_ty);
+                let errors_before = self.error_count();
+                let (typed_id, arg_ty) = self.infer_expr(arg_id, Some(&hint));
+                typed_slots[i] = Some(typed_id);
+                let missing_slot = i >= fixed_count && !has_rest;
+                if missing_slot || matches!(arg_ty, Type::Error) {
+                    continue;
+                }
+                // An error inferring the argument already covers a mismatch here.
+                let already_reported = self.error_count() > errors_before;
+                if let Err(error) = sub.unify_argument(&param_ty, &arg_ty, self.resolver()) {
+                    self.unify_argument_error(
+                        error,
+                        sub,
+                        (&param_ty, &arg_ty),
+                        typed_id,
+                        already_reported,
+                        &signature_help,
+                    );
+                }
+            }
+        }
+        typed_slots.into_iter().flatten().collect()
+    }
+
+    /// Handle an argument that didn't unify with its parameter: a structural
+    /// match may still bind it; otherwise report it, unless `already_reported`.
+    fn unify_argument_error(
+        &mut self,
+        error: UnifyError,
+        sub: &mut TypeParamSubstitution,
+        (param_ty, arg_ty): (&Type, &Type),
+        arg: ExprId,
+        already_reported: bool,
+        signature_help: &impl Fn(&mut Self) -> String,
+    ) {
+        let arg_span = self.typed_ast.expr(arg).span;
+        match error {
+            UnifyError::Conflict { .. } if already_reported => {}
+            UnifyError::Conflict { name, prev, new } => self.error(
+                arg_span,
+                format!(
+                    "type parameter `{name}` already bound to `{prev}`, cannot bind to `{new}`"
+                ),
+            ),
+            UnifyError::Mismatch { expected, got } => {
+                if self.structural_member_unify(sub, param_ty, arg_ty) || already_reported {
+                    return;
+                }
+                let mut help = vec![signature_help(self)];
+                help.extend(super::type_diff::type_mismatch_help(&expected, &got));
+                self.error_with_help(
+                    arg_span,
+                    format!("expected `{expected}`, got `{got}`"),
+                    help,
+                );
+            }
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn infer_generic_call(
         &mut self,
@@ -1003,8 +1119,6 @@ impl Inferer<'_> {
         span: Span,
         callee: GenericCallee,
     ) -> (TypedExprKind, Type) {
-        use crate::typechecker::type_param_substitution::{TypeParamSubstitution, UnifyError};
-
         let mut sub = TypeParamSubstitution::new();
         let type_args_written = type_args.is_some();
         // `session.get<T>` is lowered as a runtime-checked cast rather than an
@@ -1044,9 +1158,7 @@ impl Inferer<'_> {
             }
         }
 
-        if let Some(want) = expected
-            && !matches!(want, Type::Error)
-        {
+        if let Some(want) = expected.filter(|want| pins_type_parameters(want)) {
             // Mismatch surfaces later at the outer infer_expr site with a better span.
             let _ = sub.unify(&ret, want, self.resolver());
         }
@@ -1094,64 +1206,12 @@ impl Inferer<'_> {
             Type::Error
         };
 
-        let mut typed_args = Vec::with_capacity(args.len().max(params.len()));
-        for (i, &arg_id) in args.iter().enumerate() {
-            let param_ty = if i < fixed_count {
-                params[i].ty.clone()
-            } else if has_rest {
-                rest_elem_ty.clone()
-            } else {
-                Type::Error
-            };
-            let hint = sub.apply(&param_ty);
-            // Track diag count to suppress redundant unify-conflict errors when
-            // infer_expr already emitted a cleaner assignability diagnostic for this arg.
-            let diags_before = self.diagnostics.len();
-            let (typed_id, arg_ty) = self.infer_expr(arg_id, Some(&hint));
-            typed_args.push(typed_id);
-
-            let missing_slot = i >= fixed_count && !has_rest;
-            if missing_slot || matches!(arg_ty, Type::Error) {
-                continue;
-            }
-            let arg_already_errored = self.diagnostics.len() > diags_before;
-            match sub.unify_argument(&param_ty, &arg_ty, self.resolver()) {
-                Ok(()) => {}
-                Err(UnifyError::Conflict { name, prev, new }) => {
-                    if !arg_already_errored {
-                        let arg_span = self.typed_ast.expr(typed_id).span;
-                        self.error(
-                            arg_span,
-                            format!(
-                                "type parameter `{name}` already bound to `{prev}`, cannot bind to `{new}`",
-                            ),
-                        );
-                    }
-                }
-                Err(UnifyError::Mismatch { expected, got }) => {
-                    if self.structural_member_unify(&mut sub, &param_ty, &arg_ty) {
-                        continue;
-                    }
-                    if !arg_already_errored {
-                        let arg_span = self.typed_ast.expr(typed_id).span;
-                        let sig_lift = self.generic_callee_lift(
-                            callee,
-                            &callee_ident,
-                            &generics,
-                            &params,
-                            &ret,
-                        );
-                        let mut help = vec![sig_lift];
-                        help.extend(super::type_diff::type_mismatch_help(&expected, &got));
-                        self.error_with_help(
-                            arg_span,
-                            format!("expected `{expected}`, got `{got}`"),
-                            help,
-                        );
-                    }
-                }
-            }
-        }
+        let signature_help = |this: &mut Self| {
+            this.generic_callee_lift(callee, &callee_ident, &generics, &params, &ret)
+        };
+        let errors_before_args = self.error_count();
+        let mut typed_args =
+            self.infer_generic_arguments(&args, &params, &rest_elem_ty, &mut sub, signature_help);
 
         if has_rest || typed_args.len() < params.len() {
             self.typed_ast
@@ -1187,6 +1247,7 @@ impl Inferer<'_> {
             );
         }
 
+        self.bind_leftover_type_parameters(&mut sub, &generics, &ret, expected, errors_before_args);
         if let Err(unbound) = sub.resolve_all(&generics) {
             self.error_with_help(
                 span,
@@ -1306,6 +1367,32 @@ impl Inferer<'_> {
         }
         (call, result_ty)
     }
+}
+
+/// The function type a parameter holds: itself through aliases, or the one
+/// function member of a union such as `((x: T) => U) | null`.
+fn function_part(ty: &Type) -> Option<&Type> {
+    match ty.peel() {
+        function @ Type::Function { .. } => Some(function),
+        Type::Union(members) => {
+            let mut functions = members
+                .iter()
+                .map(Type::peel)
+                .filter(|member| matches!(member, Type::Function { .. }));
+            let function = functions.next()?;
+            functions.next().is_none().then_some(function)
+        }
+        _ => None,
+    }
+}
+
+/// Whether a call's expected result type is worth binding its type parameters
+/// from before the arguments are inferred. `unknown` is not: every type is
+/// assignable to it, so binding a parameter to it first would hide what the
+/// arguments say (`console.log(xs.reduce((a, b) => a + b, 0))` would type `a`
+/// as `unknown`). It only fills the parameters the arguments leave unbound.
+fn pins_type_parameters(want: &Type) -> bool {
+    !matches!(want.peel(), Type::Error | Type::Unknown)
 }
 
 /// Bind every type parameter inference left unsolved to `fallback`, so the call

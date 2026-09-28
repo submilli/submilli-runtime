@@ -63,8 +63,6 @@ works — has/get/set/delete treat them as one key — so only iteration over
   `value: undefined`); ports assert `!("value" in result)`. Yield results
   are narrowed via `"value" in r` and copied to a local first, because any
   call invalidates the narrowing.
-- `Map#forEach` callbacks declare exactly `(value, key)` — fewer-arity JS
-  callbacks gain the second parameter.
 - Mixed-entry `new Map([...])` initializers are rewritten as `set()` calls
   except in `clear/clear-map.ts`, which pins the codegen gap.
 - TypeError distinctions are erased: `assertThrows` matches the base `Error`.

@@ -521,7 +521,9 @@ impl<'a> Parser<'a> {
         let (return_type, type_predicate) =
             self.parse_predicate_or_return_type(TypePos::Anywhere)?;
 
-        let body = self.parse_block()?;
+        // A declaration nested in a method has no receiver of its own, and
+        // must not see the method's.
+        let body = self.parse_outer_this_boundary(Self::parse_block)?;
         let body_end = self.ast.stmt(body).span.end;
 
         Some(self.ast.push_stmt(Stmt {
@@ -1928,23 +1930,33 @@ impl<'a> Parser<'a> {
             return self.parse_block();
         }
         // A binding here would go out of scope as soon as it was made. TypeScript
-        // rejects it too, so it is reported and then parsed as usual. Only a
-        // declaration is reported: a `let` followed by anything else already fails
-        // to parse.
+        // or JavaScript rejects each of these, so it is reported and then parsed
+        // as usual. Only a declaration is reported: a `let` followed by
+        // anything else already fails to parse.
         let keyword = match self.peek().kind {
-            TokenKind::Let => Some("let"),
-            TokenKind::Const => Some("const"),
+            TokenKind::Let => Some(("a", "let")),
+            TokenKind::Const => Some(("a", "const")),
+            TokenKind::Function => Some(("a", "function")),
+            TokenKind::Class => Some(("a", "class")),
+            TokenKind::Interface => Some(("an", "interface")),
+            TokenKind::Enum => Some(("an", "enum")),
+            _ if self.peek_identifier_text_is("type") => Some(("a", "type")),
             _ => None,
         };
-        if let Some(keyword) = keyword
-            && matches!(
-                self.peek_at(1).kind,
-                TokenKind::Identifier | TokenKind::LeftBracket | TokenKind::LeftBrace
-            )
+        // After `let`/`const`, a bracket or brace starts a destructuring
+        // pattern; after `type`, which is also an ordinary identifier, it is an
+        // index or nothing a declaration can be.
+        let declares = match self.peek_at(1).kind {
+            TokenKind::Identifier => true,
+            TokenKind::LeftBracket | TokenKind::LeftBrace => !matches!(keyword, Some((_, "type"))),
+            _ => false,
+        };
+        if let Some((article, keyword)) = keyword
+            && declares
         {
             self.error_at_peek_with_help(
                 format!(
-                    "a `{keyword}` declaration can't be the body of a statement without braces"
+                    "{article} `{keyword}` declaration can't be the body of a statement without braces"
                 ),
                 vec![format!("wrap it in braces: `{{ {keyword} … }}`")],
             );

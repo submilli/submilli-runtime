@@ -20,6 +20,7 @@ pub(in crate::typechecker) mod module_symbols;
 mod namespace_symbol;
 mod narrow_scopes;
 pub mod narrowing;
+mod nested_functions;
 mod predicate_envs;
 mod reserved;
 mod resolve_type;
@@ -88,6 +89,9 @@ pub fn infer_with_transitive<'a>(
         pattern_sources: BTreeMap::new(),
         captured_mutators: bindings.mutators,
         last_assignments: bindings.last_assignments,
+        nested_function_creation_points: bindings.nested_function_creation_points,
+        nested_functions: Vec::new(),
+        nested_function_bodies: Vec::new(),
         reachable: true,
         next_narrow_counter: 0,
         current_return: None,
@@ -231,6 +235,9 @@ pub fn infer_package<'a>(
         pattern_sources: BTreeMap::new(),
         captured_mutators: Default::default(),
         last_assignments: Default::default(),
+        nested_function_creation_points: Default::default(),
+        nested_functions: Vec::new(),
+        nested_function_bodies: Vec::new(),
         reachable: true,
         next_narrow_counter: 0,
         current_return: None,
@@ -429,6 +436,13 @@ pub(super) struct Inferer<'a> {
     /// Bindings reassigned inside closures; narrowings on these paths are dropped (a closure could invalidate the narrowing between check and use).
     pub(super) captured_mutators: std::collections::HashSet<(String, Span)>,
     pub(super) last_assignments: std::collections::HashMap<Span, u32>,
+    /// From the binding analysis: nested functions that capture a local of
+    /// their block, by name span, with the last declared of those locals. See
+    /// [`nested_functions`].
+    pub(super) nested_function_creation_points: std::collections::HashMap<Span, crate::Ident>,
+    pub(super) nested_functions: Vec<nested_functions::NestedFunction>,
+    /// The nested functions whose bodies are being inferred, outermost first.
+    pub(super) nested_function_bodies: Vec<usize>,
     pub(super) reachable: bool,
     /// All clause writes, including terminating branches, for exceptional entry.
     pub(super) clause_write_scopes: Vec<std::collections::BTreeSet<narrowing::ReferencePath>>,
@@ -572,6 +586,8 @@ impl<'a> Inferer<'a> {
         let bindings = binding_analysis::analyze(ast);
         self.captured_mutators = bindings.mutators;
         self.last_assignments = bindings.last_assignments;
+        self.nested_function_creation_points = bindings.nested_function_creation_points;
+        self.nested_functions.clear();
         self.diagnostics.extend(bindings.diagnostics);
         self.reachable = true;
         self.next_narrow_counter = 0;

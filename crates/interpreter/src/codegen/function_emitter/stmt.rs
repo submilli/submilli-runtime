@@ -156,14 +156,21 @@ pub fn emit_statement(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, id: StmtI
                 // shadow local of the narrowed type. `local.tee` keeps the RHS
                 // on the stack for the subsequent coerce+set while also storing
                 // into the shadow. Installing it makes `LocalNarrowRef` reads
-                // resolve there — no per-use cast needed.
-                if let Some(narrowed_ty) = narrowed_shadow_ty {
-                    let narrowed_val = ctx.symbols.value_type(narrowed_ty);
-                    let shadow_idx = emitter.add_anonymous_local(narrowed_val);
-                    emitter.instruction(Instruction::LocalTee(shadow_idx));
-                    emitter.install_narrow_shadow(&ident.name, shadow_idx, narrowed_val);
-                }
-                cast::emit_coerce_to_slot(emitter, ctx, &value_ty, target_ty);
+                // resolve there — no per-use cast needed. The narrowed type can
+                // differ from the RHS's own: a function narrows to the declared
+                // member it fits, which may take more parameters.
+                let stored_ty = match narrowed_shadow_ty {
+                    Some(narrowed_ty) => {
+                        cast::emit_coerce_to_slot(emitter, ctx, &value_ty, narrowed_ty);
+                        let narrowed_val = ctx.symbols.value_type(narrowed_ty);
+                        let shadow_idx = emitter.add_anonymous_local(narrowed_val);
+                        emitter.instruction(Instruction::LocalTee(shadow_idx));
+                        emitter.install_narrow_shadow(&ident.name, shadow_idx, narrowed_val);
+                        narrowed_ty
+                    }
+                    None => &value_ty,
+                };
+                cast::emit_coerce_to_slot(emitter, ctx, stored_ty, target_ty);
                 emitter.instruction(Instruction::LocalSet(slot));
             }
         }

@@ -808,7 +808,7 @@ fn assignable_rec(
                 (None, None) => true,
             };
             predicate_ok
-                && pa.len() == pe.len()
+                && Type::function_arity_fits(pa.len(), pe.len(), *rest_a)
                 && pa
                     .iter()
                     .zip(pe.iter())
@@ -1150,11 +1150,11 @@ mod tests {
     }
 
     #[test]
-    fn assignable_function_arity_mismatch() {
-        let a = fn_ty(vec![Type::Number], Type::Void);
-        let b = fn_ty(vec![Type::Number, Type::Number], Type::Void);
-        assert!(!assignable(&a, &b));
-        assert!(!assignable(&b, &a));
+    fn assignable_function_may_take_fewer_params_but_not_more() {
+        let one = fn_ty(vec![Type::Number], Type::Void);
+        let two = fn_ty(vec![Type::Number, Type::Number], Type::Void);
+        assert!(assignable(&one, &two));
+        assert!(!assignable(&two, &one));
     }
 
     #[test]

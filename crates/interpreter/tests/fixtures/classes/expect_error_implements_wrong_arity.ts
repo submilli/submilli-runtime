@@ -1,14 +1,14 @@
 // expect-error: does not implement
 // expect-error: member `scale` has an incompatible signature
-// `Circle.scale` takes no parameters, but `Shape.scale` requires one. Arity is
-// part of the structural contract, so conformance fails.
+// `Circle.scale` requires two parameters, but `Shape.scale` passes one. As in
+// TypeScript, a method may declare fewer parameters than the contract, not more.
 interface Shape {
   scale(factor: number): number;
 }
 
 class Circle implements Shape {
-  scale(): number {
-    return 0;
+  scale(factor: number, origin: number): number {
+    return factor + origin;
   }
 }
 

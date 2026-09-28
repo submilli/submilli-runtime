@@ -776,6 +776,13 @@ pub struct TypedAst {
     pub closure_this: std::collections::BTreeMap<ExprId, Type>,
     /// Named function-expression bindings, scoped to their closure body.
     pub closure_names: std::collections::BTreeMap<ExprId, Ident>,
+    /// The closures nested function declarations become, by declared name, so
+    /// a diagnostic about one can name it as the function it is.
+    pub nested_function_names: std::collections::BTreeMap<ExprId, Ident>,
+    /// Closures with empty bodies that hold a nested function's binding until
+    /// its real closure is assigned. The typechecker rejects every use before
+    /// then, so they are never called: a non-void one traps if it is.
+    pub placeholder_closures: std::collections::BTreeSet<ExprId>,
     /// Arguments before omitted defaults and rest packing, keyed by call span.
     pub authored_arguments: std::collections::BTreeMap<(u32, u32, u32), Vec<ExprId>>,
     /// Authored expression types retained by runtime-value lowering for member

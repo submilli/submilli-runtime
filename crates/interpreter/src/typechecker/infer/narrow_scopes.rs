@@ -57,13 +57,7 @@ impl<'a> Inferer<'a> {
     /// Call after the closure's params are in scope.
     pub(super) fn enter_closure_narrow_boundary(&mut self, span: Span) -> narrowing::NarrowEnv {
         let (active, _assigned) = self.snapshot_active_narrowings(0);
-        self.suspended_narrow_scopes.push(SuspendedNarrowing {
-            narrow_scopes: std::mem::take(&mut self.narrow_scopes),
-            assigned_scopes: std::mem::take(&mut self.assigned_scopes),
-            clause_write_scopes: std::mem::take(&mut self.clause_write_scopes),
-            tombstone_scopes: std::mem::take(&mut self.tombstone_scopes),
-            pending_materializations: std::mem::take(&mut self.pending_post_if_materializations),
-        });
+        self.suspend_narrow_scopes();
         let mut seed = narrowing::NarrowEnv::new();
         for (path, view) in active {
             if !self.narrowing_survives_closure(&path, span) {
@@ -94,6 +88,25 @@ impl<'a> Inferer<'a> {
         }
         self.push_narrow_frame(seed.clone());
         seed
+    }
+
+    /// A boundary no narrowing crosses: a nested function declaration is
+    /// hoisted, so TypeScript types its body with the declared types of the
+    /// variables it reads, however they are narrowed where it is declared.
+    /// Leave it with [`Self::exit_closure_narrow_boundary`].
+    pub(super) fn enter_function_declaration_narrow_boundary(&mut self) {
+        self.suspend_narrow_scopes();
+        self.push_narrow_frame(narrowing::NarrowEnv::new());
+    }
+
+    fn suspend_narrow_scopes(&mut self) {
+        self.suspended_narrow_scopes.push(SuspendedNarrowing {
+            narrow_scopes: std::mem::take(&mut self.narrow_scopes),
+            assigned_scopes: std::mem::take(&mut self.assigned_scopes),
+            clause_write_scopes: std::mem::take(&mut self.clause_write_scopes),
+            tombstone_scopes: std::mem::take(&mut self.tombstone_scopes),
+            pending_materializations: std::mem::take(&mut self.pending_post_if_materializations),
+        });
     }
 
     /// Drops the seed frame and restores the enclosing narrowing state. The
@@ -490,12 +503,14 @@ impl<'a> Inferer<'a> {
 
     /// The type a binding declared `declared` narrows to after a write of a
     /// `written` value. It is the value's own type, as for any write, unless the
-    /// declaration has something `readonly` in it: a `readonly` array, field, or
-    /// property the declaration names must survive `o = { xs: [1] }`. Then the
+    /// declaration has something `readonly` in it, or the value is a function.
+    /// A `readonly` array, field, or property the declaration names must survive
+    /// `o = { xs: [1] }`, and a function may declare fewer parameters than the
+    /// declared type passes: `f = (x) => …` must still take `f(1, 2)`. Then the
     /// binding narrows to declared members, as TypeScript's assignment narrowing
     /// does (see [`Self::narrowed_part`]).
     pub(super) fn assignment_narrowed_ty(&self, declared: &Type, written: Type) -> Type {
-        if !self.declares_readonly(declared) {
+        if !self.declares_readonly(declared) && !has_function_part(&written) {
             return written;
         }
         self.initializer_narrowed_ty(declared, written)
@@ -1455,6 +1470,18 @@ impl<'a> Inferer<'a> {
             });
         }
         wrapped
+    }
+}
+
+/// Whether a written value is, may be, or holds a function, whose own type may
+/// declare fewer parameters than the declared one it stands for.
+fn has_function_part(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Function { .. } => true,
+        Type::Union(members) | Type::Tuple(members) => members.iter().any(has_function_part),
+        Type::Array(elem) => has_function_part(elem),
+        Type::Object { fields } => fields.values().any(|field| has_function_part(&field.ty)),
+        _ => false,
     }
 }
 

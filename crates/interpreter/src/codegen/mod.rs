@@ -9,6 +9,7 @@ pub mod cast_check;
 mod cast_diagnostics;
 pub mod classes;
 mod closure_coercions;
+pub(crate) use closure_coercions::ADAPTER_ORIGINAL_FIELD;
 pub mod closures;
 pub mod dependency_usage;
 pub mod dwarf;

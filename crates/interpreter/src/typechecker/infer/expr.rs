@@ -388,6 +388,9 @@ impl Inferer<'_> {
         }
         let expr = self.ast.expr(expr_id).clone();
         let span = expr.span;
+        // An arrow whose own errors explain its mismatch with `expected` isn't
+        // reported again as a whole.
+        let mut arrow_reported = false;
         let (kind, ty) = match expr.kind {
             // narrow primitive literals to their literal type
             // when the expected hint (directly or as a member of an
@@ -452,7 +455,12 @@ impl Inferer<'_> {
                 return_type,
                 type_predicate,
                 body,
-            } => self.infer_arrow(params, return_type, type_predicate, body, expected, span),
+            } => {
+                let (kind, ty, reported) =
+                    self.infer_arrow(params, return_type, type_predicate, body, expected, span);
+                arrow_reported = reported;
+                (kind, ty)
+            }
             ExprKind::Delete { operand } => {
                 // An object can't record one of its fields as absent unless it
                 // was built with that field optional: other objects share one
@@ -573,6 +581,7 @@ impl Inferer<'_> {
         // is strict, so `let n: number = x` (where x is GP) does
         // reject as expected.
         if let Some(want) = expected
+            && !arrow_reported
             && !assignable(&ty, want, self.resolver())
         {
             let has_structural_diff = super::type_diff::format_type_diff(want, &ty).is_some();
@@ -602,6 +611,13 @@ impl Inferer<'_> {
     }
 
     fn resolve_ident(&mut self, ident: Ident, span: Span) -> (TypedExprKind, Type) {
+        if let Some(index) = self
+            .scopes
+            .get(&ident.name)
+            .and_then(|entry| entry.nested_function)
+        {
+            self.check_nested_function_use(index, span);
+        }
         if let Some(entry) = self.scopes.get(&ident.name) {
             // Plan 75.8: consult the active narrow-scope stack. If
             // this binding has been narrowed in an enclosing branch,
@@ -6080,6 +6096,23 @@ impl Inferer<'_> {
         else {
             unreachable!("function expression wraps its function body");
         };
+        self.declared_function_type(
+            &params,
+            return_type.as_ref(),
+            type_predicate.as_ref(),
+            expected,
+        )
+    }
+
+    /// The type a function's own declaration gives it: its annotated parameter
+    /// and return types, with any it leaves out taken from `expected`.
+    pub(super) fn declared_function_type(
+        &mut self,
+        params: &[ParamDecl],
+        return_type: Option<&TypeAnnotation>,
+        type_predicate: Option<&crate::TypePredicateAnnotation>,
+        expected: Option<&Type>,
+    ) -> Type {
         let hint = expected.and_then(|ty| match ty.peel() {
             Type::Function { params, ret, .. } => Some((params, ret)),
             _ => None,
@@ -6105,7 +6138,6 @@ impl Inferer<'_> {
             self.resolve_type_predicate(predicate, &signature_params)
         });
         let ret = return_type
-            .as_ref()
             .map(|ty| self.resolve_type(ty))
             .or_else(|| hint.map(|(_, ret)| (**ret).clone()))
             .unwrap_or(Type::Unknown);
@@ -6123,7 +6155,7 @@ impl Inferer<'_> {
 
     /// arrow function inference. Two-mode:
     /// * **Hint mode** — `expected` is `Some(Type::Function { … })` with
-    ///   the same arity. The hint fills in any unannotated params and
+    ///   the same arity or more. The hint fills in any unannotated params and
     ///   provides the body's `expected` return-type hint. Annotated
     ///   params still typecheck against the hint and produce a
     ///   diagnostic on mismatch.
@@ -6133,7 +6165,13 @@ impl Inferer<'_> {
     ///   paths via the `inferred_returns` collector frame this method
     ///   pushes/pops. Conflicting block returns produce a diagnostic
     ///   pointing at / Layer 3 union widening.
-    fn infer_arrow(
+    ///
+    /// Also returns whether the arrow's own errors already explain a mismatch
+    /// with `expected`: with a function hint its parameters line up with, a
+    /// mismatch can only be a parameter or a returned value, and each is
+    /// reported where it is written. Without such a hint, the caller still
+    /// reports the whole type.
+    pub(super) fn infer_arrow(
         &mut self,
         params: Vec<ParamDecl>,
         return_ty_ann: Option<TypeAnnotation>,
@@ -6141,37 +6179,51 @@ impl Inferer<'_> {
         body: ArrowBody,
         expected: Option<&Type>,
         span: Span,
-    ) -> (TypedExprKind, Type) {
+    ) -> (TypedExprKind, Type, bool) {
+        let errors_before = self.error_count();
         // Arrow parameters never reach `resolve_params`, so the duplicate check
         // has to be repeated here rather than inherited.
         self.report_duplicate_params(params.iter().map(|p| &p.name));
-        // Take a hint from `expected` only when it's a function type
-        // with a matching arity. We clone out into owned data so we can
-        // continue mutating `self` without borrow-checker complaints.
+        // Take a hint from `expected` when it's a function type whose
+        // parameters the arrow's line up with: the arrow's take the hint's
+        // leading types, and any past the hint's are reported, which is
+        // clearer than asking each to be annotated. Only a rest parameter
+        // needs an exact arity. We clone out into owned data so
+        // we can continue mutating `self` without borrow-checker complaints.
         // Peel aliases, and look through a `T | null`-style union to its
         // sole function member so an optional callback param (e.g. a
         // nullable `sort` comparator) still gives the arrow its contextual
         // parameter types.
+        let arrow_rest = params.last().is_some_and(|p| p.rest);
+        let lines_up = |hint_params: &[Type], hint_rest: bool| {
+            hint_params.len() == params.len() || !(arrow_rest || hint_rest)
+        };
+        let leading =
+            |hint_params: &[Type]| hint_params[..params.len().min(hint_params.len())].to_vec();
         let hint_owned: Option<(Vec<Type>, Type)> = match expected.map(crate::types::Type::peel) {
             Some(Type::Function {
                 params: hp,
                 ret: hr,
+                has_rest,
                 ..
-            }) if hp.len() == params.len() => Some((hp.clone(), (**hr).clone())),
+            }) if lines_up(hp, *has_rest) => Some((leading(hp), (**hr).clone())),
             Some(Type::Union(members)) => {
                 let functions: Vec<_> = members
                     .iter()
                     .filter_map(|member| match member.peel() {
                         Type::Function {
-                            params: hp, ret, ..
-                        } if hp.len() == params.len() => Some((hp, ret)),
+                            params: hp,
+                            ret,
+                            has_rest,
+                            ..
+                        } if lines_up(hp, *has_rest) => Some((leading(hp), ret)),
                         _ => None,
                     })
                     .collect();
                 functions.first().and_then(|(params, _)| {
                     functions.iter().all(|(other, _)| other == params).then(|| {
                         (
-                            (*params).clone(),
+                            params.clone(),
                             Type::union(
                                 functions.iter().map(|(_, ret)| (***ret).clone()).collect(),
                             ),
@@ -6183,6 +6235,7 @@ impl Inferer<'_> {
         };
 
         let mut typed_params: Vec<TypedParam> = Vec::with_capacity(params.len());
+        let mut params_reported = false;
         for (i, p) in params.iter().enumerate() {
             let ann_ty =
                 p.ty.as_ref()
@@ -6204,19 +6257,34 @@ impl Inferer<'_> {
                     // source of truth for the closure body, and the
                     // call site's `TypeParamSubstitution::unify`
                     // walks the resulting closure type to bind T/U.
-                    if !assignable(&hp[i], t, self.resolver()) {
+                    if let Some(h) = hp.get(i)
+                        && !assignable(h, t, self.resolver())
+                    {
                         self.error(
                             p.name.span,
-                            format!(
-                                "parameter `{}`: expected `{}`, got `{}`",
-                                p.name.name, hp[i], t
-                            ),
+                            format!("parameter `{}`: expected `{}`, got `{}`", p.name.name, h, t),
                         );
+                        params_reported = true;
                     }
                     t.clone()
                 }
                 (Some(t), None) => t.clone(),
-                (None, Some((hp, _))) => hp[i].clone(),
+                (None, Some((hp, _))) => {
+                    if let Some(h) = hp.get(i) {
+                        h.clone()
+                    } else {
+                        self.error_with_help(
+                            p.name.span,
+                            format!("parameter `{}` is never passed an argument", p.name.name),
+                            vec![format!(
+                                "the expected function type takes {} parameter(s)",
+                                hp.len()
+                            )],
+                        );
+                        params_reported = true;
+                        Type::Error
+                    }
+                }
                 (None, None) => {
                     self.error_with_help(
                         p.name.span,
@@ -6267,11 +6335,14 @@ impl Inferer<'_> {
             }
             (Some(ann), Some((_, hr))) => {
                 let t = self.resolve_type(ann);
+                // After a parameter that doesn't fit, the hint's return is
+                // moot: the whole function is already reported.
                 // Skip when the hint return contains an unresolved
                 // generic — same logic as the param contravariance
                 // check above. The closure's annotation is the truth;
                 // the call site's unify binds the var.
-                if !hr.is_void()
+                if !params_reported
+                    && !hr.is_void()
                     && !type_contains_type_var(hr)
                     && !assignable(&t, hr, self.resolver())
                 {
@@ -6285,7 +6356,11 @@ impl Inferer<'_> {
                 annotated_ret = Some(t.clone());
                 Some(t)
             }
-            (None, Some((_, hr))) if matches!(hr.peel(), Type::TypeVar(_) | Type::Void) => None,
+            (None, Some((_, hr)))
+                if params_reported || matches!(hr.peel(), Type::TypeVar(_) | Type::Void) =>
+            {
+                None
+            }
             (None, Some((_, hr))) => Some(hr.clone()),
             (None, None) => None,
         };
@@ -6302,6 +6377,11 @@ impl Inferer<'_> {
         // left alone: a `break` inside the body snapshots an empty range over
         // the fresh, shorter stack.
         let narrow_seed = self.enter_closure_narrow_boundary(span);
+        // The body's own `return`s end its flow, not the enclosing one's.
+        let prev_reachable = std::mem::replace(&mut self.reachable, true);
+        // Nor can its `break`/`continue` reach a loop or switch outside it.
+        let prev_loop_depth = std::mem::replace(&mut self.loop_depth, 0);
+        let prev_switch_depth = std::mem::replace(&mut self.switch_depth, 0);
         let prev_predicate = std::mem::replace(
             &mut self.current_type_predicate,
             predicate.as_ref().map(|pred| {
@@ -6354,6 +6434,9 @@ impl Inferer<'_> {
 
         // Restore frames.
         self.exit_closure_narrow_boundary();
+        self.reachable = prev_reachable;
+        self.loop_depth = prev_loop_depth;
+        self.switch_depth = prev_switch_depth;
         self.current_type_predicate = prev_predicate;
         self.inferred_returns = prev_collect;
         self.current_return = prev_return;
@@ -6414,6 +6497,7 @@ impl Inferer<'_> {
                 captured: Vec::new(),
             },
             arrow_ty,
+            hint_owned.is_some() && self.error_count() > errors_before,
         )
     }
 
@@ -6553,16 +6637,7 @@ impl Inferer<'_> {
         // Function-local first, then top-level (mirrors `infer_assign`).
         if let Some(entry) = self.scopes.get(&target.name).cloned() {
             if entry.is_const {
-                self.diagnostics.push(Diagnostic {
-                    severity: Severity::Error,
-                    span: target.span,
-                    message: format!("cannot assign to const binding `{}`", target.name),
-                    help: vec![format!(
-                        "declare with `let` if reassignment is required: `let {} = …;`",
-                        target.name
-                    )],
-                    notes: vec![(entry.decl_span, "declared as `const` here".to_string())],
-                });
+                self.report_const_local_write(&target, &entry);
             }
             let path = narrowing::ReferencePath::root(narrowing::BindingId::Local {
                 name: target.name.clone(),
