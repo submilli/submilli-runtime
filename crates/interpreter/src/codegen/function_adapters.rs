@@ -21,7 +21,7 @@ pub fn emit_bodies(
     let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
-        .expect("intrinsics declared by codegen entry");
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared by codegen entry"))?;
     // adapter erased-arg slots are nullable to match the
     // closure ABI.
     let object_ref = ValType::Ref(RefType {
@@ -33,16 +33,18 @@ pub fn emit_bodies(
         heap_type: HeapType::ANY,
     });
     for meta in metas {
-        let target_idx = ctx
-            .symbols
-            .func_idx(&meta.mangled)
-            .expect("adapter target function recorded during user-function pre-pass");
+        let target_idx = ctx.symbols.func_idx(&meta.mangled).ok_or_else(|| {
+            crate::codegen::internal_failure(
+                "adapter target function recorded during user-function pre-pass",
+            )
+        })?;
         let Type::Function { params, ret, .. } = &meta.signature else {
-            panic!(
-                "AdapterMeta.signature must be Type::Function, got {:?}",
-                meta.signature
-            );
+            return Err(super::internal_failure(
+                "adapter signature requires a function type",
+            ));
         };
+
+        super::closures::classify(&meta.signature)?;
 
         // names are unused; adapter bodies access params by Wasm slot index
         let env_name = Ident {
@@ -64,7 +66,12 @@ pub fn emit_bodies(
         let target = ctx
             .symbols
             .top_level_fn(&meta.mangled)
-            .expect("adapter target signature recorded");
+            .ok_or_else(|| crate::codegen::internal_failure("adapter target signature recorded"))?;
+        if target.params.len() != params.len() || target.ret.is_void() != ret.is_void() {
+            return Err(super::internal_failure(
+                "adapter signature disagrees with its target",
+            ));
+        }
         for (i, p_ty) in target.params.iter().enumerate() {
             emitter.instruction(Instruction::LocalGet((i + 1) as u32));
             crate::codegen::cast_check::emit_checked_parameter_cast_on_stack(
@@ -76,7 +83,7 @@ pub fn emit_bodies(
         }
         emitter.instruction(Instruction::Call(target_idx));
         if !ret.is_void() {
-            cast::emit_box(&mut emitter, ctx, &target.ret);
+            cast::emit_box(&mut emitter, ctx, &target.ret)?;
         }
         let built = emitter.build();
         code.function(&built);

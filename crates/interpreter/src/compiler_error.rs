@@ -25,6 +25,14 @@ pub enum CompilerFailure {
 }
 
 impl CompilerFailure {
+    pub(crate) fn with_span(mut self, source_span: Span) -> Self {
+        let (Self::Limit { span, .. } | Self::Internal { span, .. }) = &mut self;
+        if span.is_none() {
+            *span = Some(source_span);
+        }
+        self
+    }
+
     pub(crate) fn with_stage(mut self, current_stage: CompilerStage) -> Self {
         match &mut self {
             Self::Limit { stage, .. } | Self::Internal { stage, .. } => *stage = current_stage,

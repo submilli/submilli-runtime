@@ -349,32 +349,34 @@ impl<'a> FunctionEmitter<'a> {
     /// `typed_slots[i]` is the Wasm slot holding the typed-form value of `params[i]` —
     /// index `i` for top-level functions, a prologue-allocated local for closure bodies.
     /// Boxing is body-internal; the Wasm signature is unchanged.
-    pub fn emit_boxed_param_prologue(&mut self, params: &[crate::TypedParam], typed_slots: &[u32]) {
-        assert_eq!(
-            params.len(),
-            typed_slots.len(),
-            "typed_slots must have one entry per param"
-        );
-        for (param_idx, p) in params.iter().enumerate() {
+    pub fn emit_boxed_param_prologue(
+        &mut self,
+        params: &[crate::TypedParam],
+        typed_slots: &[u32],
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        if params.len() != typed_slots.len() {
+            return Err(crate::codegen::internal_failure(
+                "typed slots must have one entry per parameter",
+            ));
+        }
+        for (p, &typed_slot) in params.iter().zip(typed_slots) {
             if !p.boxed {
                 continue;
             }
-            let box_idx = self
-                .ctx
-                .symbols
-                .box_type_idx(&p.ty)
-                .expect("box type registered for every boxed param");
+            let box_idx = self.ctx.symbols.box_type_idx(&p.ty)?.ok_or_else(|| {
+                crate::codegen::internal_failure("box type registered for every boxed param")
+            })?;
             let box_val = ValType::Ref(wasm_encoder::RefType {
                 nullable: false,
                 heap_type: wasm_encoder::HeapType::Concrete(box_idx),
             });
             let shadow_idx = self.add_anonymous_local(box_val);
-            self.instructions
-                .push(Instruction::LocalGet(typed_slots[param_idx]));
+            self.instructions.push(Instruction::LocalGet(typed_slot));
             self.instructions.push(Instruction::StructNew(box_idx));
             self.instructions.push(Instruction::LocalSet(shadow_idx));
             self.rebind_in_innermost_scope(&p.name.name, shadow_idx, box_val);
         }
+        Ok(())
     }
 
     /// Prefer the structured helpers (emit_block/if/loop) to keep depth tracking consistent.
@@ -418,12 +420,15 @@ impl<'a> FunctionEmitter<'a> {
     }
 
     /// The Wasm result this body's signature declares, or `None` when it has none.
-    pub fn wasm_result_type(&self, ctx: &CodegenCtx) -> Option<ValType> {
-        match &self.return_target {
+    pub fn wasm_result_type(
+        &self,
+        ctx: &CodegenCtx,
+    ) -> Result<Option<ValType>, crate::compiler_error::CompilerFailure> {
+        Ok(match &self.return_target {
             ReturnTarget::Slot(slot) => Some(*slot),
-            ReturnTarget::Declared(ret) => Some(ctx.symbols.value_type(ret)),
+            ReturnTarget::Declared(ret) => Some(ctx.symbols.value_type(ret)?),
             ReturnTarget::VoidClosure | ReturnTarget::NoResult => None,
-        }
+        })
     }
 
     pub fn break_finally_floor(&self) -> usize {
@@ -629,15 +634,15 @@ pub fn emit_function(
 ) -> Result<(Function, Vec<(u64, Span)>), crate::compiler_error::CompilerFailure> {
     let mut wasm_params: Vec<(Ident, ValType)> = params
         .iter()
-        .map(|p| (p.name.clone(), ctx.symbols.value_type(&p.ty)))
-        .collect();
+        .map(|p| Ok((p.name.clone(), ctx.symbols.value_type(&p.ty)?)))
+        .collect::<Result<_, crate::compiler_error::CompilerFailure>>()?;
     if !generics.is_empty() {
         wasm_params.push((
             Ident {
                 name: "$types".into(),
                 span: Span::at(ctx.file),
             },
-            crate::codegen::runtime_descriptors::environment_type(ctx.symbols),
+            crate::codegen::runtime_descriptors::environment_type(ctx.symbols)?,
         ));
     }
     let mut emitter = FunctionEmitter::new(ctx, &wasm_params);
@@ -647,7 +652,7 @@ pub fn emit_function(
         emitter.set_return_target(ReturnTarget::Declared(return_type.clone()));
     }
     let typed_slots: Vec<u32> = (0..params.len() as u32).collect();
-    emitter.emit_boxed_param_prologue(params, &typed_slots);
+    emitter.emit_boxed_param_prologue(params, &typed_slots)?;
     stmt::emit_statement(&mut emitter, ctx, body)?;
     if !return_type.is_void() {
         // Keeps the function statically total even when Wasm validation can't prove all paths terminate.
@@ -662,10 +667,18 @@ pub fn emit_closure_function(
     ctx: &CodegenCtx<'_>,
     meta: &crate::codegen::closures::ClosureMeta,
 ) -> Result<(Function, Vec<(u64, Span)>), crate::compiler_error::CompilerFailure> {
+    let signature = crate::codegen::closures::classify(&meta.signature)?;
+    if usize::from(signature.arity) != meta.params.len()
+        || signature.is_void != meta.return_type.is_void()
+    {
+        return Err(crate::codegen::internal_failure(
+            "closure body disagrees with its registered signature",
+        ));
+    }
     let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
-        .expect("intrinsics declared by codegen entry");
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared by codegen entry"))?;
     let object_ref = ValType::Ref(wasm_encoder::RefType {
         nullable: true,
         heap_type: wasm_encoder::HeapType::Concrete(intrinsics.object),
@@ -685,27 +698,31 @@ pub fn emit_closure_function(
     }
     let mut emitter = FunctionEmitter::new(ctx, &wasm_params);
 
-    let env_type_idx = ctx
-        .symbols
-        .env_type_idx(meta.expr_id)
-        .expect("env type registered for every closure expression");
+    let env_type_idx = ctx.symbols.env_type_idx(meta.expr_id).ok_or_else(|| {
+        crate::codegen::internal_failure("env type registered for every closure expression")
+    })?;
     let env_typed_val = ValType::Ref(wasm_encoder::RefType {
         nullable: false,
         heap_type: wasm_encoder::HeapType::Concrete(env_type_idx),
     });
     let env_typed_local = emitter.add_anonymous_local(env_typed_val);
     if meta.this_type.is_some() {
-        crate::codegen::this_binding::load_receiver(&mut emitter, ctx);
+        crate::codegen::this_binding::load_receiver(&mut emitter, ctx)?;
     }
     emitter.instructions.push(Instruction::LocalGet(0));
     if meta.this_type.is_some() {
         emitter.instruction(Instruction::RefCastNonNull(
             wasm_encoder::HeapType::Concrete(
-                ctx.symbols.this_environment_type.expect("this environment"),
+                ctx.symbols
+                    .this_environment_type
+                    .ok_or_else(|| crate::codegen::internal_failure("this environment"))?,
             ),
         ));
         emitter.instruction(Instruction::StructGet {
-            struct_type_index: ctx.symbols.this_environment_type.expect("this environment"),
+            struct_type_index: ctx
+                .symbols
+                .this_environment_type
+                .ok_or_else(|| crate::codegen::internal_failure("this environment"))?,
             field_index: 0,
         });
     }
@@ -720,19 +737,19 @@ pub fn emit_closure_function(
         .push(Instruction::LocalSet(env_typed_local));
 
     if let Some(name) = &meta.self_name {
-        let slot = emitter.define_local(name, ctx.symbols.value_type(&meta.signature));
+        let slot = emitter.define_local(name, ctx.symbols.value_type(&meta.signature)?);
         emitter.instruction(Instruction::LocalGet(env_typed_local));
         emitter.instruction(Instruction::StructGet {
             struct_type_index: env_type_idx,
             field_index: (meta.captured.len() + usize::from(!meta.runtime_generics.is_empty()))
                 as u32,
         });
-        cast::emit_cast_to(&mut emitter, ctx, &meta.signature);
+        cast::emit_cast_to(&mut emitter, ctx, &meta.signature)?;
         emitter.instruction(Instruction::LocalSet(slot));
     }
     if !meta.runtime_generics.is_empty() {
         let types = emitter.add_anonymous_local(
-            crate::codegen::runtime_descriptors::environment_type(ctx.symbols),
+            crate::codegen::runtime_descriptors::environment_type(ctx.symbols)?,
         );
         emitter.instruction(Instruction::LocalGet(env_typed_local));
         emitter.instruction(Instruction::StructGet {
@@ -745,7 +762,7 @@ pub fn emit_closure_function(
     let mut typed_slots: Vec<u32> = Vec::with_capacity(meta.params.len());
     for (i, p) in meta.params.iter().enumerate() {
         let wasm_slot = (i + 1) as u32;
-        let typed_ty = ctx.symbols.value_type(&p.ty);
+        let typed_ty = ctx.symbols.value_type(&p.ty)?;
         let typed_local = emitter.add_anonymous_local(typed_ty);
         emitter.instructions.push(Instruction::LocalGet(wasm_slot));
         crate::codegen::cast_check::emit_checked_parameter_cast_on_stack(
@@ -764,16 +781,15 @@ pub fn emit_closure_function(
     // Boxed captures share the outer scope's box cell; unboxed captures copy the value directly.
     for (i, c) in meta.captured.iter().enumerate() {
         let local_ty = if c.boxed {
-            let box_idx = ctx
-                .symbols
-                .box_type_idx(&c.ty)
-                .expect("box type registered for every boxed capture");
+            let box_idx = ctx.symbols.box_type_idx(&c.ty)?.ok_or_else(|| {
+                crate::codegen::internal_failure("box type registered for every boxed capture")
+            })?;
             ValType::Ref(wasm_encoder::RefType {
                 nullable: false,
                 heap_type: wasm_encoder::HeapType::Concrete(box_idx),
             })
         } else {
-            ctx.symbols.value_type(&c.ty)
+            ctx.symbols.value_type(&c.ty)?
         };
         let captured_local = emitter.define_local(&c.name, local_ty);
         emitter
@@ -787,7 +803,7 @@ pub fn emit_closure_function(
         // types are emitted before class type indices are recorded, so a
         // class-typed capture's field widens while the local resolves concrete.
         if !c.boxed && matches!(c.ty.peel(), crate::Type::ClassRef { .. }) {
-            cast::emit_cast_to(&mut emitter, ctx, &c.ty);
+            cast::emit_cast_to(&mut emitter, ctx, &c.ty)?;
         } else if !c.boxed
             && let ValType::Ref(local_ref) = local_ty
             && !local_ref.nullable
@@ -810,7 +826,7 @@ pub fn emit_closure_function(
         }
     }
 
-    emitter.emit_boxed_param_prologue(&meta.params, &typed_slots);
+    emitter.emit_boxed_param_prologue(&meta.params, &typed_slots)?;
 
     emitter.set_return_target(closure_return_target(ctx, &meta.return_type));
 
@@ -824,7 +840,7 @@ pub fn emit_closure_function(
                     .try_expr(e)
                     .map_err(crate::codegen::arena_failure)?
                     .ty,
-            );
+            )?;
         }
         crate::ClosureBody::Block(b) => {
             stmt::emit_statement(&mut emitter, ctx, b)?;

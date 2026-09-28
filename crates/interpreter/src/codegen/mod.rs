@@ -21,6 +21,8 @@ pub mod function_adapters;
 pub mod function_emitter;
 pub mod imported_classes;
 pub mod intrinsics;
+#[cfg(test)]
+mod invariant_tests;
 pub mod recursive_validators;
 mod runtime_descriptors;
 mod runtime_values;
@@ -51,6 +53,14 @@ use bigint_pool::BigIntPool;
 use function_emitter::FunctionEmitter;
 use function_emitter::stmt::emit_statement;
 use string_pool::StringPool;
+
+pub(crate) fn internal_failure(message: impl Into<String>) -> CompilerFailure {
+    CompilerFailure::Internal {
+        stage: CompilerStage::Codegen,
+        span: None,
+        message: message.into(),
+    }
+}
 
 /// The `Dispatch::Static` interface `ty` names in `defs`, if any. Constructor
 /// and namespace receiver bindings (`console`, `Map`, `Temporal.Instant`) are
@@ -100,7 +110,7 @@ fn import_value_symbol(
     types: &mut wasm_encoder::TypeSection,
     import_section: &mut wasm_encoder::ImportSection,
     symbols: &mut SymbolTable,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     use wasm_encoder::{EntityType, GlobalType, ValType};
     match &value.kind {
         ValueKind::Function { params, ret, .. } => {
@@ -112,18 +122,21 @@ fn import_value_symbol(
             // so it goes through the normal `value_type` path, same as user modules.
             let raw_string_abi = defs.package_name.as_str() == crate::runtime::JSON_MODULE_NAME;
             let (mut param_types, result_types): (Vec<ValType>, Vec<ValType>) = if raw_string_abi {
-                json_host_signature(name, params, symbols, intrinsics)
+                json_host_signature(name, params, symbols, intrinsics)?
             } else {
                 (
-                    params.iter().map(|p| symbols.value_type(&p.ty)).collect(),
-                    symbols.wasm_result(ret),
+                    params
+                        .iter()
+                        .map(|p| symbols.value_type(&p.ty))
+                        .collect::<Result<_, _>>()?,
+                    symbols.wasm_result(ret)?,
                 )
             };
             if defs.runtime_generics.contains(&value.mangled_name) {
                 symbols
                     .runtime_generic_functions
                     .insert(value.mangled_name.clone());
-                param_types.push(runtime_descriptors::environment_type(symbols));
+                param_types.push(runtime_descriptors::environment_type(symbols)?);
             }
             types.ty().function(param_types, result_types);
             import_section.import(
@@ -155,14 +168,14 @@ fn import_value_symbol(
             // references to a typed null, and import nothing.
             if let Some(ts) = static_interface_of(defs, ty) {
                 symbols.record_iface_dispatch(ts.mangled_name.clone(), crate::Dispatch::Static);
-                return;
+                return Ok(());
             }
             // Every exported value-global is Wasm-mutable across the board — a
             // codegen-compiled package needs its `_start` to initialize them, and
             // the prelude/host packages match that so the import type lines up.
             // Const immutability is typechecker-enforced, not Wasm-enforced.
             let global_ty = GlobalType {
-                val_type: global_val_type(ty, symbols),
+                val_type: global_val_type(ty, symbols)?,
                 mutable: true,
                 shared: false,
             };
@@ -174,7 +187,8 @@ fn import_value_symbol(
             symbols.record_typed_global(value.mangled_name.clone(), *next_global_idx, ty.clone());
             *next_global_idx += 1;
         }
-    }
+    };
+    Ok(())
 }
 
 /// The physical Wasm signature a Direct/Static-dispatch interface method is
@@ -202,29 +216,29 @@ fn declared_wrapper_abi(
     mangled: &crate::MangledName,
     sig: &crate::MethodSig,
     has_receiver: bool,
-) -> symbol_table::MethodSlotAbi {
+) -> Result<symbol_table::MethodSlotAbi, crate::compiler_error::CompilerFailure> {
     let receiver_offset = usize::from(has_receiver);
     if let Some(imported) = symbols.top_level_fn(mangled)
         && imported.params.len() == sig.params.len() + receiver_offset
     {
-        return symbol_table::MethodSlotAbi {
+        return Ok(symbol_table::MethodSlotAbi {
             params: imported
                 .params
                 .iter()
                 .skip(receiver_offset)
                 .map(|ty| symbols.value_type(ty))
-                .collect(),
-            ret: symbols.wasm_result(&imported.ret).first().copied(),
-        };
+                .collect::<Result<_, _>>()?,
+            ret: symbols.wasm_result(&imported.ret)?.first().copied(),
+        });
     }
-    symbol_table::MethodSlotAbi {
+    Ok(symbol_table::MethodSlotAbi {
         params: sig
             .params
             .iter()
             .map(|p| symbols.value_type(&p.ty))
-            .collect(),
-        ret: symbols.wasm_result(&sig.ret).first().copied(),
-    }
+            .collect::<Result<_, _>>()?,
+        ret: symbols.wasm_result(&sig.ret)?.first().copied(),
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -236,15 +250,15 @@ fn import_json_host_function(
     types: &mut wasm_encoder::TypeSection,
     import_section: &mut wasm_encoder::ImportSection,
     symbols: &mut SymbolTable,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let mangled = crate::mangle::host(crate::runtime::JSON_MODULE_NAME, name);
     if symbols.func_idx(&mangled).is_some() {
-        return;
+        return Ok(());
     }
 
     let sig_idx = *next_type_idx;
     *next_type_idx += 1;
-    let (param_types, result_types) = json_host_signature(name, &[], symbols, intrinsics);
+    let (param_types, result_types) = json_host_signature(name, &[], symbols, intrinsics)?;
     types.ty().function(param_types, result_types);
     import_section.import(
         crate::runtime::JSON_MODULE_NAME,
@@ -253,6 +267,8 @@ fn import_json_host_function(
     );
     symbols.record_func(mangled, *next_func_idx);
     *next_func_idx += 1;
+
+    Ok(())
 }
 
 pub use symbol_table::SymbolTable;
@@ -563,8 +579,8 @@ fn codegen_inner(
         dependency_shapes.iter().copied(),
         dependency_types.iter(),
         &dependency_usage,
-    );
-    let class_member_sigs = closures::class_member_sigs(ta, dependencies);
+    )?;
+    let class_member_sigs = closures::class_member_sigs(ta, dependencies)?;
     // The closures this module builds, then the three collectors for shapes it
     // only names — see the `closures` module doc for why each is needed.
     closures::emit_func_and_struct_types(
@@ -576,6 +592,8 @@ fn codegen_inner(
                     .iter()
                     .map(|a| closures::classify(&a.signature)),
             )
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
             .chain(hof_dependency_sigs.iter().copied())
             .chain(class_member_sigs.iter().copied())
             .chain(mentioned_closure_sigs.iter().copied()),
@@ -594,7 +612,7 @@ fn codegen_inner(
     );
 
     // Env structs must come after box_types::emit.
-    closures::emit_env_types(&closure_metas, &mut types, &mut symbols, &mut next_type_idx);
+    closures::emit_env_types(&closure_metas, &mut types, &mut symbols, &mut next_type_idx)?;
 
     // Wasm uses separate index spaces for functions and globals.
     let mut next_global_idx: u32 = 0;
@@ -619,7 +637,13 @@ fn codegen_inner(
     // Class rec group last among types so class field slots can resolve string /
     // array / closure / box field types via `value_type`.
     let mut class_plan = classes::ClassPlan::collect(ta, &imported_class_layouts)?;
-    class_plan.reserve_and_emit_types(&mut types, &mut next_type_idx, &mut symbols, ta, intrinsics);
+    class_plan.reserve_and_emit_types(
+        &mut types,
+        &mut next_type_idx,
+        &mut symbols,
+        ta,
+        intrinsics,
+    )?;
     for value in &dependency_values {
         let defs = value.package;
         // `@mcp/<server>` tools aren't per-tool Wasm imports: every call lowers to
@@ -640,7 +664,7 @@ fn codegen_inner(
             &mut types,
             &mut import_section,
             &mut symbols,
-        );
+        )?;
     }
 
     // VTable globals are not in PackageDeclaration — there is no language-level Type for $VTable.
@@ -876,7 +900,7 @@ fn codegen_inner(
             // Recorded above the host-implemented `continue` below, not after it:
             // the methods that take that branch are precisely the ones whose call
             // sites have no other record of the erased slots.
-            let abi = declared_wrapper_abi(&symbols, &mangled, sig, receiver_wasm.is_some());
+            let abi = declared_wrapper_abi(&symbols, &mangled, sig, receiver_wasm.is_some())?;
             symbols.record_iface_method_abi(mangled.clone(), abi.clone());
             // Routing invariant: a method whose dispatch key resolved in the
             // earlier value-symbol loop is host-implemented (every prelude
@@ -933,7 +957,7 @@ fn codegen_inner(
                     defs.package_name.as_str(),
                     mangled.as_str(),
                     EntityType::Global(wasm_encoder::GlobalType {
-                        val_type: symbols.value_type(&sig.ty),
+                        val_type: symbols.value_type(&sig.ty)?,
                         mutable: true,
                         shared: false,
                     }),
@@ -943,7 +967,7 @@ fn codegen_inner(
                 continue;
             };
             let params = vec![recv];
-            let results = symbols.wasm_result(&sig.ty);
+            let results = symbols.wasm_result(&sig.ty)?;
             let sig_idx = next_type_idx;
             next_type_idx += 1;
             types.ty().function(params, results);
@@ -965,7 +989,7 @@ fn codegen_inner(
             &mut types,
             &mut import_section,
             &mut symbols,
-        );
+        )?;
     }
     import_json_host_function(
         "parse",
@@ -975,7 +999,7 @@ fn codegen_inner(
         &mut types,
         &mut import_section,
         &mut symbols,
-    );
+    )?;
 
     // _start is always emitted even when empty, for uniform module shape.
     let start_type_idx = next_type_idx;
@@ -992,16 +1016,20 @@ fn codegen_inner(
     for f in &ta.functions {
         let sig_idx = next_type_idx;
         next_type_idx += 1;
-        let mut params: Vec<_> = f.params.iter().map(|p| symbols.value_type(&p.ty)).collect();
+        let mut params: Vec<_> = f
+            .params
+            .iter()
+            .map(|p| symbols.value_type(&p.ty))
+            .collect::<Result<_, _>>()?;
         if !f.generics.is_empty() {
             symbols
                 .runtime_generic_functions
                 .insert(f.mangled_name.clone());
-            params.push(runtime_descriptors::environment_type(&symbols));
+            params.push(runtime_descriptors::environment_type(&symbols)?);
         }
         types
             .ty()
-            .function(params, symbols.wasm_result(&f.return_type));
+            .function(params, symbols.wasm_result(&f.return_type)?);
         let func_idx = next_func_idx;
         next_func_idx += 1;
         let param_types: Vec<Type> = f.params.iter().map(|p| p.ty.clone()).collect();
@@ -1038,7 +1066,7 @@ fn codegen_inner(
     {
         None
     } else {
-        Some(closures::allocate_methods(&mut next_func_idx))
+        Some(closures::allocate_methods(&mut next_func_idx)?)
     };
 
     for meta in &closure_metas {
@@ -1054,7 +1082,7 @@ fn codegen_inner(
     }
 
     let closure_coercion_targets = if closure_methods.is_some() {
-        closure_coercions::allocate(&mut symbols, &mut next_func_idx)
+        closure_coercions::allocate(&mut symbols, &mut next_func_idx)?
     } else {
         Vec::new()
     };
@@ -1082,7 +1110,7 @@ fn codegen_inner(
         &mut symbols,
         &mut next_type_idx,
         &mut next_func_idx,
-    );
+    )?;
 
     // Recursive runtime validators. Allocate signatures and indices, then
     // register each back-edge key so structural checks can call its plan.
@@ -1108,7 +1136,7 @@ fn codegen_inner(
                 raw_array_ref,
                 raw_index_array_ref,
                 ValType::I32,
-                runtime_descriptors::environment_type(&symbols),
+                runtime_descriptors::environment_type(&symbols)?,
             ],
             [ValType::I32],
         );
@@ -1172,24 +1200,32 @@ fn codegen_inner(
     }
     for meta in &closure_metas {
         let sig_idx = symbols
-            .closure_func_type_idx(closures::classify(&meta.signature))
-            .expect("closures::emit_func_and_struct_types registered the funcref type");
+            .closure_func_type_idx(closures::classify(&meta.signature)?)
+            .ok_or_else(|| {
+                crate::codegen::internal_failure(
+                    "closures::emit_func_and_struct_types registered the funcref type",
+                )
+            })?;
         functions.function(sig_idx);
     }
     for meta in &adapter_metas {
         let sig_idx = symbols
-            .closure_func_type_idx(closures::classify(&meta.signature))
-            .expect("closures::emit_func_and_struct_types registered the adapter signature");
+            .closure_func_type_idx(closures::classify(&meta.signature)?)
+            .ok_or_else(|| {
+                crate::codegen::internal_failure(
+                    "closures::emit_func_and_struct_types registered the adapter signature",
+                )
+            })?;
         functions.function(sig_idx);
     }
-    closure_coercions::emit_entries(&closure_coercion_targets, &mut functions, &symbols);
+    closure_coercions::emit_entries(&closure_coercion_targets, &mut functions, &symbols)?;
     user_subtypes::emit_method_function_entries(&mut functions, &user_subtypes_alloc, intrinsics);
-    class_plan.emit_function_entries(&mut functions, &symbols, intrinsics);
+    class_plan.emit_function_entries(&mut functions, &symbols, intrinsics)?;
     for _ in 0..instance_field_guards.len() + type_descriptors.len() {
         functions.function(
             symbols
                 .closure_func_type_idx(field_guards::signature())
-                .expect("guard signature registered"),
+                .ok_or_else(|| crate::codegen::internal_failure("guard signature registered"))?,
         );
     }
     functions.function(field_lookup_signature);
@@ -1219,7 +1255,7 @@ fn codegen_inner(
         globals_count += 1;
     }
     for g in &ta.globals {
-        let val_type = global_val_type(&g.ty, &symbols);
+        let val_type = global_val_type(&g.ty, &symbols)?;
         globals.global(
             GlobalType {
                 val_type,
@@ -1329,13 +1365,13 @@ fn codegen_inner(
             &mut symbols,
             &mut next_global_idx,
             intrinsics,
-        );
+        )?;
         1
     } else {
         0
     };
     let descriptor_globals_count =
-        runtime_descriptors::allocate_globals(&mut globals, &mut symbols, &mut next_global_idx);
+        runtime_descriptors::allocate_globals(&mut globals, &mut symbols, &mut next_global_idx)?;
     if descriptor_globals_count
         + globals_count
         + vtable_globals_count
@@ -1498,7 +1534,7 @@ fn codegen_inner(
     }
 
     if let Some(methods) = closure_methods_for_emit {
-        closures::emit_method_bodies(&mut code, methods, &symbols);
+        closures::emit_method_bodies(&mut code, methods, &symbols)?;
     }
 
     for meta in &closure_metas {
@@ -1516,7 +1552,7 @@ fn codegen_inner(
         &symbols,
         &type_info,
         pkg_string_global_idx,
-    );
+    )?;
 
     class_plan.emit_bodies(&mut code, &ctx)?;
     for guard in &instance_field_guards {
@@ -1526,7 +1562,7 @@ fn codegen_inner(
         code.function(&runtime_descriptors::body(&ctx, ty)?);
     }
 
-    code.function(&field_lookup::body(&ctx));
+    code.function(&field_lookup::body(&ctx)?);
     for (validator_id, plan) in recursive_validators.plans.iter().enumerate() {
         code.function(&cast_check::emit_runtime_validator_body(
             &ctx,
@@ -1640,14 +1676,17 @@ fn json_host_signature(
     params: &[Param],
     symbols: &SymbolTable,
     intrinsics: &intrinsics::IntrinsicTypeIndices,
-) -> (Vec<wasm_encoder::ValType>, Vec<wasm_encoder::ValType>) {
+) -> Result<
+    (Vec<wasm_encoder::ValType>, Vec<wasm_encoder::ValType>),
+    crate::compiler_error::CompilerFailure,
+> {
     use wasm_encoder::{HeapType, RefType, ValType};
 
     let raw_string_ref = ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(intrinsics.raw_string),
     });
-    match name {
+    Ok(match name {
         // json.parse returns the language's `unknown` slot.
         "parse" => (
             vec![raw_string_ref],
@@ -1677,10 +1716,10 @@ fn json_host_signature(
             params
                 .iter()
                 .map(|p| symbols.host_value_type(&p.ty))
-                .collect(),
+                .collect::<Result<_, _>>()?,
             vec![],
         ),
-    }
+    })
 }
 
 /// Reference-typed globals are nullable so the `ref.null` initializer validates;
@@ -1689,14 +1728,17 @@ fn json_host_signature(
 /// Every consumer that *imports* such a global must declare it the same way:
 /// the engine's import check is invariant on a mutable global's content type,
 /// so `(mut (ref null $string))` and `(mut (ref $string))` do not link.
-fn global_val_type(ty: &Type, im: &SymbolTable) -> ValType {
-    match im.value_type(ty) {
+fn global_val_type(
+    ty: &Type,
+    im: &SymbolTable,
+) -> Result<ValType, crate::compiler_error::CompilerFailure> {
+    Ok(match im.value_type(ty)? {
         ValType::Ref(r) => ValType::Ref(RefType {
             nullable: true,
             ..r
         }),
         other => other,
-    }
+    })
 }
 
 /// Zero/null const-expr placeholder — value is overwritten by _start before any user code runs.
@@ -5568,9 +5610,9 @@ function main(): void { middle(); }
         use wasm_encoder::ValType;
         let mut symbols = SymbolTable::default();
         symbols.record_box_type(ValType::F64, 42);
-        assert_eq!(symbols.box_type_idx(&Type::Number), Some(42));
+        assert_eq!(symbols.box_type_idx(&Type::Number).unwrap(), Some(42));
         symbols.record_box_type(ValType::F64, 42);
-        assert_eq!(symbols.box_type_idx(&Type::Number), Some(42));
+        assert_eq!(symbols.box_type_idx(&Type::Number).unwrap(), Some(42));
     }
 
     #[test]
@@ -5580,14 +5622,16 @@ function main(): void { middle(); }
         use wasm_encoder::ValType;
         let mut symbols = SymbolTable::default();
         symbols.record_box_type(ValType::F64, 7);
-        assert_eq!(symbols.box_type_idx(&Type::Number), Some(7));
+        assert_eq!(symbols.box_type_idx(&Type::Number).unwrap(), Some(7));
         assert_eq!(
-            symbols.box_type_idx(&Type::NumberLiteral(LiteralF64(42.0))),
+            symbols
+                .box_type_idx(&Type::NumberLiteral(LiteralF64(42.0)))
+                .unwrap(),
             Some(7),
         );
     }
 
-    fn mock_symbols_with_intrinsics() -> SymbolTable {
+    pub(super) fn mock_symbols_with_intrinsics() -> SymbolTable {
         let mut map = SymbolTable::default();
         map.set_intrinsic_type_indices(super::intrinsics::IntrinsicTypeIndices {
             raw_string: 0,

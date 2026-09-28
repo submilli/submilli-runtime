@@ -59,7 +59,7 @@ pub fn emit_cast(
     // unknown accepts every value — box to $Object, no test.
     if matches!(target_ty.peel(), Type::Unknown) {
         emit_expr(emitter, ctx, value)?;
-        cast::emit_box(emitter, ctx, &source_ty);
+        cast::emit_box(emitter, ctx, &source_ty)?;
         return Ok(());
     }
 
@@ -76,8 +76,8 @@ pub fn emit_cast(
         }
         // Statically-proven upcast: box then narrow representation, no runtime test.
         emit_expr(emitter, ctx, value)?;
-        cast::emit_box(emitter, ctx, &source_ty);
-        cast::emit_cast_to(emitter, ctx, target_ty);
+        cast::emit_box(emitter, ctx, &source_ty)?;
+        cast::emit_cast_to(emitter, ctx, target_ty)?;
         return Ok(());
     };
 
@@ -85,7 +85,7 @@ pub fn emit_cast(
     let key = capture_session_key(emitter, ctx, value)?;
     emit_expr(emitter, ctx, value)?;
     emitter.end_single_evaluations(mark);
-    cast::emit_box(emitter, ctx, &source_ty);
+    cast::emit_box(emitter, ctx, &source_ty)?;
 
     let object_idx = ctx
         .symbols
@@ -103,11 +103,11 @@ pub fn emit_cast(
 
     emit_structural_test(emitter, ctx, scratch, check_shape)?;
 
-    let target_val = ctx.symbols.value_type(target_ty);
+    let target_val = ctx.symbols.value_type(target_ty)?;
     let block_ty = BlockType::Result(target_val);
     emitter.emit_if(block_ty);
     emitter.instruction(Instruction::LocalGet(scratch));
-    cast::emit_cast_to(emitter, ctx, target_ty);
+    cast::emit_cast_to(emitter, ctx, target_ty)?;
     emitter.emit_else();
     emit_cast_throw(emitter, ctx, scratch, target_ty);
     emitter.emit_end();
@@ -143,7 +143,7 @@ fn capture_session_key(
                 .try_expr(key)
                 .map_err(crate::codegen::arena_failure)?
                 .ty,
-        ),
+        )?,
     );
     emitter.instruction(Instruction::LocalSet(slot));
     emitter.record_single_evaluation(key, slot);
@@ -165,7 +165,7 @@ pub fn emit_non_null_assert(
         .ty
         .clone();
     emit_expr(emitter, ctx, value)?;
-    emit_non_null_assert_on_stack(emitter, ctx, &source_ty, target_ty);
+    emit_non_null_assert_on_stack(emitter, ctx, &source_ty, target_ty)?;
     Ok(())
 }
 
@@ -177,8 +177,8 @@ pub fn emit_non_null_assert_on_stack(
     ctx: &CodegenCtx,
     source_ty: &Type,
     target_ty: &Type,
-) {
-    cast::emit_box(emitter, ctx, source_ty);
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    cast::emit_box(emitter, ctx, source_ty)?;
 
     let object_idx = object_idx_of(ctx);
     let scratch = emitter.add_anonymous_local(scratch_object_ty(object_idx));
@@ -186,7 +186,7 @@ pub fn emit_non_null_assert_on_stack(
 
     emitter.instruction(Instruction::LocalGet(scratch));
     emitter.instruction(Instruction::RefIsNull);
-    emitter.emit_if(BlockType::Result(ctx.symbols.value_type(target_ty)));
+    emitter.emit_if(BlockType::Result(ctx.symbols.value_type(target_ty)?));
     crate::codegen::throw::emit_type_error_throw(
         emitter,
         ctx,
@@ -194,8 +194,10 @@ pub fn emit_non_null_assert_on_stack(
     );
     emitter.emit_else();
     emitter.instruction(Instruction::LocalGet(scratch));
-    cast::emit_cast_to(emitter, ctx, target_ty);
+    cast::emit_cast_to(emitter, ctx, target_ty)?;
     emitter.emit_end();
+
+    Ok(())
 }
 
 /// Pushes i32 1 if the `(ref null $Object)` in `value_local` structurally conforms to
@@ -283,7 +285,7 @@ fn emit_structural_test_inner(
                     validator_state,
                 )?;
             } else {
-                emit_representation_test(emitter, ctx, value_local, ty);
+                emit_representation_test(emitter, ctx, value_local, ty)?;
             }
         }
         Type::BigInt => emit_ref_test(
@@ -301,13 +303,17 @@ fn emit_structural_test_inner(
                 .expect("$Uint8Array intrinsic registered"),
         ),
         Type::Function { has_rest, .. } => {
-            let signature = crate::codegen::closures::classify(ty);
+            let signature = crate::codegen::closures::classify(ty)?;
             emit_ref_test(
                 emitter,
                 value_local,
                 ctx.symbols
                     .closure_struct_type_idx(signature)
-                    .expect("closure signature registered during analysis"),
+                    .ok_or_else(|| {
+                        crate::codegen::internal_failure(
+                            "closure signature registered during analysis",
+                        )
+                    })?,
             );
             if !has_rest {
                 emitter.emit_if(BlockType::Result(ValType::I32));
@@ -319,14 +325,14 @@ fn emit_structural_test_inner(
                     value_local,
                     signature.arity,
                     Some(signature.is_void),
-                );
+                )?;
                 emitter.emit_end();
             }
         }
         // Generic leaves use the caller's concrete predicate when available.
         // Legacy entry points without descriptors retain their erased checks.
         Type::TypeVar(name) | Type::GenericParam { name, .. } => {
-            super::runtime_descriptors::test_parameter(emitter, ctx, name, value_local);
+            super::runtime_descriptors::test_parameter(emitter, ctx, name, value_local)?;
         }
         Type::NumberLiteral(n) => {
             let boxed = boxed_number_idx(ctx);
@@ -572,7 +578,7 @@ fn emit_structural_test_inner(
                 .expect("recursive runtime validator pre-allocated during discovery");
             emitter.instruction(Instruction::LocalGet(value_local));
             let visited = emit_validator_state(emitter, ctx, validator_state);
-            super::runtime_descriptors::validator_environment(emitter, ctx, ty);
+            super::runtime_descriptors::validator_environment(emitter, ctx, ty)?;
             emitter.instruction(Instruction::Call(func_idx));
             diagnostic::load_recursive(emitter, ctx, visited);
         }
@@ -594,12 +600,12 @@ fn emit_structural_test_inner(
                 .class_vtable_global_idx(mangled)
                 .expect("class vtable global recorded");
             emitter.instruction(Instruction::LocalGet(value_local));
-            cast::emit_nominal_instance_test(emitter, ctx, vtable_global);
+            cast::emit_nominal_instance_test(emitter, ctx, vtable_global)?;
             if let Some(validator) = ctx.symbols.runtime_validator_idx(ty.peel()) {
                 emitter.emit_if(BlockType::Result(ValType::I32));
                 emitter.instruction(Instruction::LocalGet(value_local));
                 let visited = emit_validator_state(emitter, ctx, validator_state);
-                super::runtime_descriptors::validator_environment(emitter, ctx, ty);
+                super::runtime_descriptors::validator_environment(emitter, ctx, ty)?;
                 emitter.instruction(Instruction::Call(validator));
                 diagnostic::load_recursive(emitter, ctx, visited);
                 emitter.emit_else();
@@ -624,7 +630,7 @@ fn emit_interface_ref_test(
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let key = ty.peel().clone();
     if ctx.symbols.generic_runtime_validator(&key).is_some() {
-        emit_validator_or_representation(emitter, ctx, value_local, ty, &key, validator_state);
+        emit_validator_or_representation(emitter, ctx, value_local, ty, &key, validator_state)?;
         return Ok(());
     }
     let _: () = match ctx.ta.runtime_type_tests.get(&key) {
@@ -636,29 +642,20 @@ fn emit_interface_ref_test(
             interface_stack,
             validator_state,
         )?,
-        Some(crate::FieldNarrowingTest::Interface(test)) => {
-            if interface_stack.insert(key.clone()) {
-                emit_interface_test_inner(
-                    emitter,
-                    ctx,
-                    value_local,
-                    test,
-                    interface_stack,
-                    validator_state,
-                )?;
-                interface_stack.remove(&key);
-            } else {
-                emit_validator_or_representation(
-                    emitter,
-                    ctx,
-                    value_local,
-                    ty,
-                    &key,
-                    validator_state,
-                );
-            }
+        Some(crate::FieldNarrowingTest::Interface(test)) if interface_stack.insert(key.clone()) => {
+            emit_interface_test_inner(
+                emitter,
+                ctx,
+                value_local,
+                test,
+                interface_stack,
+                validator_state,
+            )?;
+            interface_stack.remove(&key);
         }
-        _ => emit_validator_or_representation(emitter, ctx, value_local, ty, &key, validator_state),
+        _ => {
+            emit_validator_or_representation(emitter, ctx, value_local, ty, &key, validator_state)?;
+        }
     };
     Ok(())
 }
@@ -670,16 +667,17 @@ fn emit_validator_or_representation(
     ty: &Type,
     key: &Type,
     validator_state: Option<ValidatorState>,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     if let Some(func_idx) = ctx.symbols.runtime_validator_idx(key) {
         emitter.instruction(Instruction::LocalGet(value_local));
         let visited = emit_validator_state(emitter, ctx, validator_state);
-        super::runtime_descriptors::validator_environment(emitter, ctx, key);
+        super::runtime_descriptors::validator_environment(emitter, ctx, key)?;
         emitter.instruction(Instruction::Call(func_idx));
         diagnostic::load_recursive(emitter, ctx, visited);
     } else {
-        emit_representation_test(emitter, ctx, value_local, ty);
-    }
+        emit_representation_test(emitter, ctx, value_local, ty)?;
+    };
+    Ok(())
 }
 
 /// Validate an erased value against its declared target before casting it.
@@ -690,7 +688,7 @@ pub(crate) fn emit_checked_cast_on_stack(
     source_ty: &Type,
     target_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    cast::emit_box(emitter, ctx, source_ty);
+    cast::emit_box(emitter, ctx, source_ty)?;
     let scratch = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)));
     emitter.instruction(Instruction::LocalSet(scratch));
     let previous_diagnostic = emitter.cast_diagnostic.take();
@@ -704,11 +702,11 @@ pub(crate) fn emit_checked_cast_on_stack(
         Some(crate::FieldNarrowingTest::Shape(shape)) => {
             emit_structural_test(emitter, ctx, scratch, shape)?;
         }
-        _ => emit_representation_test(emitter, ctx, scratch, target_ty),
+        _ => emit_representation_test(emitter, ctx, scratch, target_ty)?,
     }
-    emitter.emit_if(BlockType::Result(ctx.symbols.value_type(target_ty)));
+    emitter.emit_if(BlockType::Result(ctx.symbols.value_type(target_ty)?));
     emitter.instruction(Instruction::LocalGet(scratch));
-    cast::emit_cast_to(emitter, ctx, target_ty);
+    cast::emit_cast_to(emitter, ctx, target_ty)?;
     emitter.emit_else();
     emit_cast_throw(emitter, ctx, scratch, target_ty);
     emitter.emit_end();
@@ -732,13 +730,13 @@ pub(crate) fn emit_checked_parameter_cast_on_stack(
         return Ok(());
     }
 
-    cast::emit_box(emitter, ctx, source_ty);
+    cast::emit_box(emitter, ctx, source_ty)?;
     let scratch = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)));
     emitter.instruction(Instruction::LocalSet(scratch));
-    emit_representation_test(emitter, ctx, scratch, target_ty);
-    emitter.emit_if(BlockType::Result(ctx.symbols.value_type(target_ty)));
+    emit_representation_test(emitter, ctx, scratch, target_ty)?;
+    emitter.emit_if(BlockType::Result(ctx.symbols.value_type(target_ty)?));
     emitter.instruction(Instruction::LocalGet(scratch));
-    cast::emit_cast_to(emitter, ctx, target_ty);
+    cast::emit_cast_to(emitter, ctx, target_ty)?;
     emitter.emit_else();
     emit_cast_throw(emitter, ctx, scratch, target_ty);
     emitter.emit_end();
@@ -769,14 +767,14 @@ pub(crate) fn emit_operation_cast_on_stack(
     source_ty: &Type,
     target_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    cast::emit_box(emitter, ctx, source_ty);
+    cast::emit_box(emitter, ctx, source_ty)?;
     let scratch = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)));
     emitter.instruction(Instruction::LocalSet(scratch));
     // Operation checks validate only the carrier, so they have no nested path.
     let previous_diagnostic = emitter.cast_diagnostic.take();
     if matches!(target_ty.peel(), Type::Function { .. }) {
-        let signature = crate::codegen::closures::classify(target_ty.peel());
-        emit_representation_test(emitter, ctx, scratch, target_ty);
+        let signature = crate::codegen::closures::classify(target_ty.peel())?;
+        emit_representation_test(emitter, ctx, scratch, target_ty)?;
         let opposite = crate::codegen::closures::ClosureSig {
             is_void: !signature.is_void,
             ..signature
@@ -801,20 +799,20 @@ pub(crate) fn emit_operation_cast_on_stack(
                 scratch,
                 signature.arity,
                 None,
-            );
+            )?;
             emitter.emit_end();
         }
     } else if matches!(
-        ctx.symbols.value_type(target_ty),
+        ctx.symbols.value_type(target_ty)?,
         ValType::F64 | ValType::I32
     ) {
         emit_structural_test(emitter, ctx, scratch, target_ty)?;
     } else {
-        emit_representation_test(emitter, ctx, scratch, target_ty);
+        emit_representation_test(emitter, ctx, scratch, target_ty)?;
     }
-    emitter.emit_if(BlockType::Result(ctx.symbols.value_type(target_ty)));
+    emitter.emit_if(BlockType::Result(ctx.symbols.value_type(target_ty)?));
     emitter.instruction(Instruction::LocalGet(scratch));
-    cast::emit_cast_to(emitter, ctx, target_ty);
+    cast::emit_cast_to(emitter, ctx, target_ty)?;
     emitter.emit_else();
     emit_cast_throw(emitter, ctx, scratch, target_ty);
     emitter.emit_end();
@@ -831,11 +829,13 @@ fn emit_representation_test(
     ctx: &CodegenCtx,
     value_local: u32,
     target_ty: &Type,
-) {
-    let ValType::Ref(target) = ctx.symbols.value_type(target_ty) else {
-        unreachable!("every non-structurally-testable narrowing target is a reference type")
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let ValType::Ref(target) = ctx.symbols.value_type(target_ty)? else {
+        return Err(crate::codegen::internal_failure(
+            "representation test requires a reference type",
+        ));
     };
-    let allows_null = cast::target_allows_null(ctx, target_ty);
+    let allows_null = cast::target_allows_null(ctx, target_ty)?;
     if allows_null {
         emitter.instruction(Instruction::LocalGet(value_local));
         emitter.instruction(Instruction::RefIsNull);
@@ -847,7 +847,8 @@ fn emit_representation_test(
     emitter.instruction(Instruction::RefTestNonNull(target.heap_type));
     if allows_null {
         emitter.emit_end();
-    }
+    };
+    Ok(())
 }
 
 /// The read of a class field whose declaration narrows an inherited one. The
@@ -932,7 +933,7 @@ fn emit_field_conformance(
             locals.object,
             &getter,
             crate::AccessorKind::Get,
-        );
+        )?;
     } else {
         emitter.instruction(Instruction::I32Const(0));
     }
@@ -959,7 +960,7 @@ pub(crate) fn emit_narrowed_field_read_as(
     result_ty: &Type,
     check_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let result_val = ctx.symbols.value_type(result_ty);
+    let result_val = ctx.symbols.value_type(result_ty)?;
     let scratch = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)));
     emitter.instruction(Instruction::LocalSet(scratch));
     // Prefer the concrete read-time descriptor. It includes generic
@@ -1005,7 +1006,7 @@ pub(crate) fn emit_narrowed_field_read_as(
         // the cast lets it through anyway. `result_ty` is substituted, so it
         // answers what the declaration could not.
         crate::FieldNarrowingTest::NonNull => {
-            if cast::target_allows_null(ctx, check_ty) {
+            if cast::target_allows_null(ctx, check_ty)? {
                 emitter.instruction(Instruction::I32Const(1));
             } else {
                 emit_is_non_null(emitter, scratch);
@@ -1016,7 +1017,7 @@ pub(crate) fn emit_narrowed_field_read_as(
             // `emit_cast_to` lifts to non-null for every target it does not admit
             // a null for, so those are exactly the targets a `null` in the slot
             // would trap on.
-            if !cast::target_allows_null(ctx, check_ty) {
+            if !cast::target_allows_null(ctx, check_ty)? {
                 emit_is_non_null(emitter, scratch);
                 emitter.instruction(Instruction::I32And);
             }
@@ -1025,15 +1026,15 @@ pub(crate) fn emit_narrowed_field_read_as(
             emit_interface_test(emitter, ctx, scratch, test)?;
         }
         crate::FieldNarrowingTest::Substituted => {
-            emit_representation_test(emitter, ctx, scratch, check_ty);
+            emit_representation_test(emitter, ctx, scratch, check_ty)?;
         }
         crate::FieldNarrowingTest::Representation => {
-            emit_representation_test(emitter, ctx, scratch, check_ty);
+            emit_representation_test(emitter, ctx, scratch, check_ty)?;
         }
     }
     emitter.emit_if(BlockType::Result(result_val));
     emitter.instruction(Instruction::LocalGet(scratch));
-    cast::emit_cast_to(emitter, ctx, result_ty);
+    cast::emit_cast_to(emitter, ctx, result_ty)?;
     emitter.emit_else();
     emit_inline_string(emitter, ctx, &check.message);
     diagnostic::append_failure(emitter, ctx);
@@ -1555,7 +1556,7 @@ pub(crate) fn emit_runtime_validator_body(
             (ident("depth"), ValType::I32),
             (
                 ident("types"),
-                super::runtime_descriptors::environment_type(ctx.symbols),
+                super::runtime_descriptors::environment_type(ctx.symbols)?,
             ),
         ],
     );
@@ -1597,7 +1598,7 @@ pub(crate) fn emit_runtime_validator_body(
     emitter.instruction(Instruction::I32Eq);
     emitter.instruction(Instruction::I32And);
     emitter.emit_if(BlockType::Empty);
-    emit_same_validator_environment(&mut emitter, ctx, index, parameters.len());
+    emit_same_validator_environment(&mut emitter, ctx, index, parameters.len())?;
     emitter.instruction(Instruction::LocalSet(seen));
     emitter.instruction(Instruction::LocalGet(seen));
     emitter.emit_if(BlockType::Empty);
@@ -1628,7 +1629,7 @@ pub(crate) fn emit_runtime_validator_body(
     emitter.instruction(Instruction::LocalGet(0));
     emitter.instruction(Instruction::ArraySet(intr.raw_array));
     if !parameters.is_empty() {
-        emit_store_validator_environment(&mut emitter, ctx);
+        emit_store_validator_environment(&mut emitter, ctx)?;
     }
     emitter.instruction(Instruction::LocalGet(2));
     emitter.instruction(Instruction::LocalGet(3));
@@ -1835,16 +1836,19 @@ fn emit_same_validator_environment(
     ctx: &CodegenCtx,
     index: u32,
     count: usize,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     emitter.instruction(Instruction::I32Const(1));
     if count == 0 {
-        return;
+        return Ok(());
     }
-    let intr = ctx.symbols.intrinsic_type_indices().expect("intrinsics");
+    let intr = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics"))?;
     let closure = ctx
         .symbols
         .closure_struct_type_idx(super::field_guards::signature())
-        .expect("descriptor closure");
+        .ok_or_else(|| crate::codegen::internal_failure("descriptor closure"))?;
     for slot in 0..count {
         emitter.instruction(Instruction::LocalGet(1));
         emitter.instruction(Instruction::LocalGet(index));
@@ -1869,14 +1873,21 @@ fn emit_same_validator_environment(
         emitter.instruction(Instruction::RefEq);
         emitter.instruction(Instruction::I32And);
     }
+    Ok(())
 }
 
-fn emit_store_validator_environment(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
-    let intr = ctx.symbols.intrinsic_type_indices().expect("intrinsics");
+fn emit_store_validator_environment(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let intr = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics"))?;
     let closure = ctx
         .symbols
         .closure_struct_type_idx(super::field_guards::signature())
-        .expect("descriptor closure");
+        .ok_or_else(|| crate::codegen::internal_failure("descriptor closure"))?;
     emitter.instruction(Instruction::LocalGet(1));
     emitter.instruction(Instruction::LocalGet(3));
     emitter.instruction(Instruction::I32Const(2));
@@ -1886,14 +1897,23 @@ fn emit_store_validator_environment(emitter: &mut FunctionEmitter, ctx: &Codegen
     emitter.instruction(Instruction::GlobalGet(
         ctx.symbols
             .closure_vtable_global_idx()
-            .expect("closure vtable"),
+            .ok_or_else(|| crate::codegen::internal_failure("closure vtable"))?,
     ));
     emitter.instruction(Instruction::RefFunc(
-        ctx.symbols.type_descriptor_functions[&Type::Unknown],
+        *ctx.symbols
+            .type_descriptor_functions
+            .get(&Type::Unknown)
+            .ok_or_else(|| {
+                crate::codegen::internal_failure(
+                    "validator environment descriptor is not registered",
+                )
+            })?,
     ));
     emitter.instruction(Instruction::LocalGet(4));
     emitter.instruction(Instruction::StructNew(closure));
     emitter.instruction(Instruction::ArraySet(intr.raw_array));
+
+    Ok(())
 }
 
 fn emit_index_conformance(
@@ -1924,4 +1944,24 @@ fn emit_index_conformance(
         validator_state,
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod representation_invariant_tests {
+    use super::*;
+    use crate::codegen::invariant_tests::{assert_internal, with_context};
+
+    #[test]
+    fn primitive_representation_test_returns_internal_failure() {
+        with_context(
+            &crate::TypedAst::new(),
+            &crate::codegen::SymbolTable::default(),
+            |ctx| {
+                let mut emitter = FunctionEmitter::new(ctx, &[]);
+                assert_internal(
+                    emit_representation_test(&mut emitter, ctx, 0, &Type::Number).unwrap_err(),
+                );
+            },
+        );
+    }
 }

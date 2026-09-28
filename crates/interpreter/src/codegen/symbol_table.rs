@@ -416,8 +416,11 @@ impl SymbolTable {
     /// key a binding registers during collection still resolves once class
     /// struct types are recorded. A cell for an erased type therefore holds
     /// `(ref null $Object)`; reads out of it need `emit_unerase`.
-    pub fn box_type_idx(&self, ty: &Type) -> Option<u32> {
-        self.box_type_idx.get(&self.slot_value_type(ty)).copied()
+    pub fn box_type_idx(
+        &self,
+        ty: &Type,
+    ) -> Result<Option<u32>, crate::compiler_error::CompilerFailure> {
+        Ok(self.box_type_idx.get(&self.slot_value_type(ty)?).copied())
     }
 
     /// A box struct is the `(ref $box_T)` wrapper a captured-and-mutated binding
@@ -442,9 +445,12 @@ impl SymbolTable {
         self.closure_coercion_vtable_type = Some(index);
     }
 
-    pub fn closure_coercion_vtable_type(&self) -> u32 {
-        self.closure_coercion_vtable_type
-            .expect("closure coercion vtable declared")
+    pub fn closure_coercion_vtable_type(
+        &self,
+    ) -> Result<u32, crate::compiler_error::CompilerFailure> {
+        self.closure_coercion_vtable_type.ok_or_else(|| {
+            crate::codegen::internal_failure("closure coercion vtable is not registered")
+        })
     }
 
     pub fn closure_signatures(&self) -> impl Iterator<Item = ClosureSig> + '_ {
@@ -843,24 +849,20 @@ impl SymbolTable {
         self.intrinsic_members.contains(mangled)
     }
 
-    pub fn value_type(&self, ty: &Type) -> ValType {
+    pub fn value_type(&self, ty: &Type) -> Result<ValType, crate::compiler_error::CompilerFailure> {
         let ty = ty.peel();
-        match ty {
+        Ok(match ty {
             Type::Number | Type::NumberLiteral(_) => ValType::F64,
             Type::Boolean | Type::BooleanLiteral(_) => ValType::I32,
             Type::String | Type::StringLiteral(_) => {
-                let idx = self.string_type_idx().expect(
-                    "Type::String requires the intrinsic types to be declared (declare_intrinsic_types)",
-                );
+                let idx = self.string_type_idx().ok_or_else(|| crate::codegen::internal_failure("Type::String requires the intrinsic types to be declared (declare_intrinsic_types)"))?;
                 ValType::Ref(RefType {
                     nullable: false,
                     heap_type: HeapType::Concrete(idx),
                 })
             }
             Type::BigInt => {
-                let idx = self.bigint_type_idx().expect(
-                    "Type::BigInt requires the intrinsic types to be declared (declare_intrinsic_types)",
-                );
+                let idx = self.bigint_type_idx().ok_or_else(|| crate::codegen::internal_failure("Type::BigInt requires the intrinsic types to be declared (declare_intrinsic_types)"))?;
                 ValType::Ref(RefType {
                     nullable: false,
                     heap_type: HeapType::Concrete(idx),
@@ -873,7 +875,9 @@ impl SymbolTable {
                 // common supertype.
                 let idx = self
                     .intrinsic_type_indices()
-                    .expect("intrinsics declared by codegen entry")
+                    .ok_or_else(|| {
+                        crate::codegen::internal_failure("intrinsics declared by codegen entry")
+                    })?
                     .object_shape;
                 ValType::Ref(RefType {
                     nullable: false,
@@ -881,9 +885,7 @@ impl SymbolTable {
                 })
             }
             Type::Array(_) => {
-                let idx = self.array_type_idx().expect(
-                    "Type::Array requires the intrinsic types to be declared (declare_intrinsic_types)",
-                );
+                let idx = self.array_type_idx().ok_or_else(|| crate::codegen::internal_failure("Type::Array requires the intrinsic types to be declared (declare_intrinsic_types)"))?;
                 ValType::Ref(RefType {
                     nullable: false,
                     heap_type: HeapType::Concrete(idx),
@@ -892,18 +894,14 @@ impl SymbolTable {
             Type::Tuple(_) => {
                 // Tuples lower to `$Array` — they are arrays at runtime; positional
                 // element types are tracked by the typechecker only.
-                let idx = self.array_type_idx().expect(
-                    "Type::Tuple requires the intrinsic types to be declared (declare_intrinsic_types)",
-                );
+                let idx = self.array_type_idx().ok_or_else(|| crate::codegen::internal_failure("Type::Tuple requires the intrinsic types to be declared (declare_intrinsic_types)"))?;
                 ValType::Ref(RefType {
                     nullable: false,
                     heap_type: HeapType::Concrete(idx),
                 })
             }
             Type::Uint8Array => {
-                let idx = self.uint8_array_type_idx().expect(
-                    "Type::Uint8Array requires the intrinsic types to be declared (declare_intrinsic_types)",
-                );
+                let idx = self.uint8_array_type_idx().ok_or_else(|| crate::codegen::internal_failure("Type::Uint8Array requires the intrinsic types to be declared (declare_intrinsic_types)"))?;
                 ValType::Ref(RefType {
                     nullable: false,
                     heap_type: HeapType::Concrete(idx),
@@ -914,7 +912,9 @@ impl SymbolTable {
                 // nullable so `null` literals can flow in via WasmGC subtyping.
                 let object_idx = self
                     .intrinsic_type_indices()
-                    .expect("intrinsics declared by codegen entry")
+                    .ok_or_else(|| {
+                        crate::codegen::internal_failure("intrinsics declared by codegen entry")
+                    })?
                     .object;
                 ValType::Ref(RefType {
                     nullable: true,
@@ -922,13 +922,12 @@ impl SymbolTable {
                 })
             }
             Type::Function { .. } => {
-                let sig = crate::codegen::closures::classify(ty);
-                let idx = self.closure_struct_type_idx(sig).unwrap_or_else(|| {
-                    panic!(
-                        "ClosureSig {sig:?} (from {ty:?}) not registered — \
-                         closures::emit_func_and_struct_types should have recorded it"
-                    )
-                });
+                let sig = crate::codegen::closures::classify(ty)?;
+                let idx = self.closure_struct_type_idx(sig).ok_or_else(|| {
+                    crate::codegen::internal_failure(format!(
+                        "closure signature {sig:?} is not registered"
+                    ))
+                })?;
                 ValType::Ref(RefType {
                     nullable: false,
                     heap_type: HeapType::Concrete(idx),
@@ -937,7 +936,9 @@ impl SymbolTable {
             Type::Null => {
                 let object_idx = self
                     .intrinsic_type_indices()
-                    .expect("intrinsics declared by codegen entry")
+                    .ok_or_else(|| {
+                        crate::codegen::internal_failure("intrinsics declared by codegen entry")
+                    })?
                     .object;
                 ValType::Ref(RefType {
                     nullable: true,
@@ -947,7 +948,9 @@ impl SymbolTable {
             Type::Void | Type::Error => {
                 // `void` is a return type only; `Error` only follows a reported typecheck
                 // failure. Either arm here is a compiler bug.
-                unreachable!("value_type called on {ty:?}: void/error never occupy a value slot")
+                return Err(crate::codegen::internal_failure(
+                    "void/error cannot occupy a value slot",
+                ));
             }
             Type::Never => {
                 // The surrounding expression always diverges, but a `: never` function's
@@ -956,7 +959,9 @@ impl SymbolTable {
                 // the slot.
                 let object_idx = self
                     .intrinsic_type_indices()
-                    .expect("intrinsics declared by codegen entry")
+                    .ok_or_else(|| {
+                        crate::codegen::internal_failure("intrinsics declared by codegen entry")
+                    })?
                     .object;
                 ValType::Ref(RefType {
                     nullable: true,
@@ -964,10 +969,15 @@ impl SymbolTable {
                 })
             }
             Type::Union(members) => {
-                let lowered: Vec<ValType> = members.iter().map(|m| self.value_type(m)).collect();
-                let first_lowering = *lowered.first().expect("Type::Union holds ≥2 members");
+                let lowered: Vec<ValType> = members
+                    .iter()
+                    .map(|m| self.value_type(m))
+                    .collect::<Result<_, _>>()?;
+                let first_lowering = *lowered.first().ok_or_else(|| {
+                    crate::codegen::internal_failure("Type::Union holds ≥2 members")
+                })?;
                 if lowered.iter().all(|&lowering| lowering == first_lowering) {
-                    return first_lowering;
+                    return Ok(first_lowering);
                 }
                 // Object-only union → `$ObjectShape`; mixed union → `$Object`.
                 let all_object_or_null = members
@@ -975,11 +985,15 @@ impl SymbolTable {
                     .all(|m| matches!(m.peel(), Type::Object { .. } | Type::Null));
                 let heap_idx = if all_object_or_null {
                     self.intrinsic_type_indices()
-                        .expect("intrinsics declared by codegen entry")
+                        .ok_or_else(|| {
+                            crate::codegen::internal_failure("intrinsics declared by codegen entry")
+                        })?
                         .object_shape
                 } else {
                     self.intrinsic_type_indices()
-                        .expect("intrinsics declared by codegen entry")
+                        .ok_or_else(|| {
+                            crate::codegen::internal_failure("intrinsics declared by codegen entry")
+                        })?
                         .object
                 };
                 // Nullable iff some member *lowers* nullable, not iff one is
@@ -1008,7 +1022,11 @@ impl SymbolTable {
                     nullable: true,
                     heap_type: HeapType::Concrete(
                         self.intrinsic_type_indices()
-                            .expect("intrinsics declared by codegen entry")
+                            .ok_or_else(|| {
+                                crate::codegen::internal_failure(
+                                    "intrinsics declared by codegen entry",
+                                )
+                            })?
                             .object,
                     ),
                 }),
@@ -1016,7 +1034,9 @@ impl SymbolTable {
             Type::InterfaceRef { .. } => {
                 let object_idx = self
                     .intrinsic_type_indices()
-                    .expect("intrinsics declared by codegen entry")
+                    .ok_or_else(|| {
+                        crate::codegen::internal_failure("intrinsics declared by codegen entry")
+                    })?
                     .object;
                 ValType::Ref(RefType {
                     nullable: true,
@@ -1031,7 +1051,9 @@ impl SymbolTable {
                 // only at the typechecker layer.
                 let object_idx = self
                     .intrinsic_type_indices()
-                    .expect("intrinsics declared by codegen entry")
+                    .ok_or_else(|| {
+                        crate::codegen::internal_failure("intrinsics declared by codegen entry")
+                    })?
                     .object;
                 ValType::Ref(RefType {
                     nullable: true,
@@ -1039,34 +1061,43 @@ impl SymbolTable {
                 })
             }
             Type::NumberEnum { .. } => {
-                let idx = self
-                    .boxed_number_type_idx()
-                    .expect("Type::NumberEnum requires the intrinsic types to be declared");
+                let idx = self.boxed_number_type_idx().ok_or_else(|| {
+                    crate::codegen::internal_failure(
+                        "Type::NumberEnum requires the intrinsic types to be declared",
+                    )
+                })?;
                 ValType::Ref(RefType {
                     nullable: false,
                     heap_type: HeapType::Concrete(idx),
                 })
             }
             Type::StringEnum { .. } => {
-                let idx = self
-                    .string_type_idx()
-                    .expect("Type::StringEnum requires the intrinsic types to be declared");
+                let idx = self.string_type_idx().ok_or_else(|| {
+                    crate::codegen::internal_failure(
+                        "Type::StringEnum requires the intrinsic types to be declared",
+                    )
+                })?;
                 ValType::Ref(RefType {
                     nullable: false,
                     heap_type: HeapType::Concrete(idx),
                 })
             }
             Type::Alias { .. } | Type::Refined { .. } | Type::Readonly(_) => {
-                unreachable!("peel guarantees no alias here (SUB-242)")
+                return Err(crate::codegen::internal_failure(
+                    "unpeeled alias in value type lowering",
+                ));
             }
-        }
+        })
     }
 
-    pub fn wasm_result(&self, ty: &Type) -> Vec<ValType> {
+    pub fn wasm_result(
+        &self,
+        ty: &Type,
+    ) -> Result<Vec<ValType>, crate::compiler_error::CompilerFailure> {
         if ty.is_void() {
-            return vec![];
+            return Ok(vec![]);
         }
-        vec![self.value_type(ty)]
+        Ok(vec![self.value_type(ty)?])
     }
 
     /// Wasm value type of a class-method **vtable-slot** parameter or result,
@@ -1082,45 +1113,54 @@ impl SymbolTable {
     /// identical between a producer and a cross-package consumer, and keeps it
     /// in step with the types recorded for each slot ([`MethodSlotAbi`] for a
     /// method, `class_ctor_abi` for a constructor).
-    pub fn slot_value_type(&self, ty: &Type) -> ValType {
+    pub fn slot_value_type(
+        &self,
+        ty: &Type,
+    ) -> Result<ValType, crate::compiler_error::CompilerFailure> {
         if is_erased(ty) {
             let object = self
                 .intrinsic_type_indices()
-                .expect("intrinsics declared before class slot signatures")
+                .ok_or_else(|| {
+                    crate::codegen::internal_failure(
+                        "intrinsics declared before class slot signatures",
+                    )
+                })?
                 .object;
-            return ValType::Ref(RefType {
+            return Ok(ValType::Ref(RefType {
                 nullable: true,
                 heap_type: HeapType::Concrete(object),
-            });
+            }));
         }
         self.value_type(ty)
     }
 
-    pub fn slot_wasm_result(&self, ty: &Type) -> Vec<ValType> {
+    pub fn slot_wasm_result(
+        &self,
+        ty: &Type,
+    ) -> Result<Vec<ValType>, crate::compiler_error::CompilerFailure> {
         if ty.is_void() {
-            return vec![];
+            return Ok(vec![]);
         }
-        vec![self.slot_value_type(ty)]
+        Ok(vec![self.slot_value_type(ty)?])
     }
 
-    pub fn host_value_type(&self, ty: &Type) -> ValType {
+    pub fn host_value_type(
+        &self,
+        ty: &Type,
+    ) -> Result<ValType, crate::compiler_error::CompilerFailure> {
         if matches!(ty, Type::String | Type::StringLiteral(_)) {
-            let idx = self.raw_string_type_idx().expect(
-                "Type::String requires the intrinsic types to be declared (declare_intrinsic_types)",
-            );
-            return ValType::Ref(RefType {
+            let idx = self.raw_string_type_idx().ok_or_else(|| crate::codegen::internal_failure("Type::String requires the intrinsic types to be declared (declare_intrinsic_types)"))?;
+            return Ok(ValType::Ref(RefType {
                 nullable: false,
                 heap_type: HeapType::Concrete(idx),
-            });
+            }));
         }
         if matches!(ty, Type::Uint8Array) {
-            let idx = self.raw_uint8_array_type_idx().expect(
-                "Type::Uint8Array requires the intrinsic types to be declared (declare_intrinsic_types)",
-            );
-            return ValType::Ref(RefType {
+            let idx = self.raw_uint8_array_type_idx().ok_or_else(|| crate::codegen::internal_failure("Type::Uint8Array requires the intrinsic types to be declared (declare_intrinsic_types)"))?;
+            return Ok(ValType::Ref(RefType {
                 nullable: false,
                 heap_type: HeapType::Concrete(idx),
-            });
+            }));
         }
         self.value_type(ty)
     }

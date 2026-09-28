@@ -177,6 +177,50 @@ discard local module construction; no script or package artifact may escape.
 This stage can be split into compiling prerequisite commits, but item 02 remains
 open until both internal checks and source diagnostics are complete.
 
+### Stage 2 implementation and evidence
+
+The checked arity conversion now runs in production. `ClosureSig::of` and
+`classify` return `CompilerFailure`; excess slots are `Limit`, and non-function
+classifier input or missing required registrations are `Internal`. Collection,
+analysis, method slots, symbol value/slot/host/result lowering, closure adapters,
+casts and their callers propagate those failures with `?`. Fallible iterators
+collect a `Result` before their output is used. Script/package entry points keep
+the existing fatal-error contracts and do not return an artifact after failure.
+
+Expression and local method collection attach available source spans; dependency
+metadata without a known source remains source-less. Closure type/environment
+and adapter registration checks cover affected lookups and index capacity.
+Malformed value-slot types and empty unions return internal errors. The closure
+ABI remains 255 declared slots; no argument clamping or placeholder Wasm types
+were introduced. This contributes to items 13/15/17–19 without completing them.
+
+`closure_lowering_errors.rs` checks source-triggered limits for arrows, direct
+named calls, named adapters, methods, void closures and a package-exported
+closure; each failed compilation is followed by a healthy compilation. Injected
+state tests cover non-function classification, missing closure/intrinsic
+registration, invalid value-slot types, all symbol-lowering wrappers, and index
+exhaustion before mutation. Additional injected emitter tests cover incompatible
+Wasm representations, mismatched parameter slots, missing class-method ABI,
+receiver environments and staged descriptor registration. Required companion
+registrations in descriptor/guard/class closures now return errors, including
+missing guard closures that previously skipped emission. A collector unit test covers nested dependency
+callable types. The existing 21 supported-boundary programs still execute and
+match strict TypeScript 6.0.3 / Node v24.14.1, using the stage 1 oracle harness
+with `/tmp/sub633-stage2-oracle` as the output directory.
+
+Result propagation initially enlarged the debug expression dispatcher's stack
+frame enough to fail the existing production-worker regression. Extracting its
+generic-call, object-literal, field-access and closure-construction arms into
+focused helpers fixed that regression while retaining the exhaustive match.
+The existing bounded subprocess test again compiles nested finally transfers,
+a binary chain and a healthy program on both 2 MiB and 8 MiB worker stacks.
+Broader recursion/allocation bounds remain separate SUB-633 work.
+
+Stage 3 remains necessary: `check` still needs source-level arity validation;
+this stage rejects unsupported representations when codegen encounters them.
+Stage 4 remains responsible for the full transport/diagnostic completion matrix.
+Do not mark item 02 complete based on this stage alone.
+
 ## Stage 3: source diagnostics and imported signature validation
 
 Use the shared limit during signature checking so `check` rejects unsupported

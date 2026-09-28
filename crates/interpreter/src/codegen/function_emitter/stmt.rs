@@ -66,7 +66,7 @@ pub fn emit_statement(
                         .try_expr(*expr_id)
                         .map_err(crate::codegen::arena_failure)?
                         .ty,
-                );
+                )?;
             }
             super::finally::emit_transfer(emitter, super::finally::Transfer::Return);
         }
@@ -98,11 +98,11 @@ pub fn emit_statement(
                 .map_err(crate::codegen::arena_failure)?
                 .ty
                 .clone();
-            cast::emit_coerce_to_slot(emitter, ctx, &value_ty, ty);
+            cast::emit_coerce_to_slot(emitter, ctx, &value_ty, ty)?;
             if *boxed {
                 let box_idx = ctx
                     .symbols
-                    .box_type_idx(ty)
+                    .box_type_idx(ty)?
                     .expect("box type registered for every boxed Let");
                 emitter.instruction(Instruction::StructNew(box_idx));
                 let box_val = ValType::Ref(RefType {
@@ -112,7 +112,7 @@ pub fn emit_statement(
                 let slot = emitter.define_local(name, box_val);
                 emitter.instruction(Instruction::LocalSet(slot));
             } else {
-                let slot = emitter.define_local(name, ctx.symbols.value_type(ty));
+                let slot = emitter.define_local(name, ctx.symbols.value_type(ty)?);
                 emitter.instruction(Instruction::LocalSet(slot));
             }
         }
@@ -122,7 +122,7 @@ pub fn emit_statement(
                 .expect("Inferer guarantees the binding exists");
             let box_idx = ctx
                 .symbols
-                .box_type_idx(ty)
+                .box_type_idx(ty)?
                 .expect("box type registered for every boxed Let");
             emitter.instruction(Instruction::LocalGet(slot));
             emitter.instruction(Instruction::StructGet {
@@ -143,8 +143,8 @@ pub fn emit_statement(
                 .map_err(crate::codegen::arena_failure)?
                 .ty
                 .clone();
-            cast::emit_coerce_to_slot(emitter, ctx, &value_ty, ty);
-            let slot = emitter.define_local(name, ctx.symbols.value_type(ty));
+            cast::emit_coerce_to_slot(emitter, ctx, &value_ty, ty)?;
+            let slot = emitter.define_local(name, ctx.symbols.value_type(ty)?);
             emitter.instruction(Instruction::LocalSet(slot));
         }
         TypedStmtKind::AssignLocal {
@@ -164,7 +164,7 @@ pub fn emit_statement(
                 // boxed primitive in the right box variant.
                 let box_idx = ctx
                     .symbols
-                    .box_type_idx(target_ty)
+                    .box_type_idx(target_ty)?
                     .expect("box type registered for every boxed AssignLocal");
                 let value_ty = ctx
                     .ta
@@ -174,7 +174,7 @@ pub fn emit_statement(
                     .clone();
                 emitter.instruction(Instruction::LocalGet(slot));
                 emit_expr(emitter, ctx, *value)?;
-                cast::emit_coerce_to_slot(emitter, ctx, &value_ty, target_ty);
+                cast::emit_coerce_to_slot(emitter, ctx, &value_ty, target_ty)?;
                 emitter.instruction(Instruction::StructSet {
                     struct_type_index: box_idx,
                     field_index: 0,
@@ -196,8 +196,8 @@ pub fn emit_statement(
                 // member it fits, which may take more parameters.
                 let stored_ty = match narrowed_shadow_ty {
                     Some(narrowed_ty) => {
-                        cast::emit_coerce_to_slot(emitter, ctx, &value_ty, narrowed_ty);
-                        let narrowed_val = ctx.symbols.value_type(narrowed_ty);
+                        cast::emit_coerce_to_slot(emitter, ctx, &value_ty, narrowed_ty)?;
+                        let narrowed_val = ctx.symbols.value_type(narrowed_ty)?;
                         let shadow_idx = emitter.add_anonymous_local(narrowed_val);
                         emitter.instruction(Instruction::LocalTee(shadow_idx));
                         emitter.install_narrow_shadow(&ident.name, shadow_idx, narrowed_val);
@@ -205,7 +205,7 @@ pub fn emit_statement(
                     }
                     None => &value_ty,
                 };
-                cast::emit_coerce_to_slot(emitter, ctx, stored_ty, target_ty);
+                cast::emit_coerce_to_slot(emitter, ctx, stored_ty, target_ty)?;
                 emitter.instruction(Instruction::LocalSet(slot));
             }
         }
@@ -222,7 +222,7 @@ pub fn emit_statement(
                 .map_err(crate::codegen::arena_failure)?
                 .ty
                 .clone();
-            cast::emit_coerce_to_slot(emitter, ctx, &value_ty, target_ty);
+            cast::emit_coerce_to_slot(emitter, ctx, &value_ty, target_ty)?;
             let idx = ctx
                 .symbols
                 .global_idx(mangled)
@@ -256,7 +256,7 @@ pub fn emit_statement(
                 .ty
                 .clone();
             emit_expr(emitter, ctx, *condition)?;
-            cast::emit_condition_to_i32(emitter, ctx, &cond_ty);
+            cast::emit_condition_to_i32(emitter, ctx, &cond_ty)?;
             emitter.emit_if(BlockType::Empty);
             emit_statement(emitter, ctx, *then_block)?;
             if let Some(else_id) = else_block {
@@ -276,7 +276,7 @@ pub fn emit_statement(
                 .ty
                 .clone();
             emit_expr(emitter, ctx, *condition)?;
-            cast::emit_condition_to_i32(emitter, ctx, &cond_ty);
+            cast::emit_condition_to_i32(emitter, ctx, &cond_ty)?;
             emitter.instruction(Instruction::I32Eqz);
             let break_label = emitter.break_label();
             emitter.instruction(Instruction::BrIf(break_label));
@@ -328,10 +328,10 @@ pub fn emit_statement(
         } => {
             emitter.push_scope();
             if path.chain.is_empty() {
-                let shadow_val = ctx.symbols.value_type(&cast_info.to_ty);
+                let shadow_val = ctx.symbols.value_type(&cast_info.to_ty)?;
                 let shadow = emitter.add_anonymous_local(shadow_val);
                 emit_expr(emitter, ctx, *source)?;
-                cast::emit_narrowing_cast(emitter, ctx, cast_info);
+                cast::emit_narrowing_cast(emitter, ctx, cast_info)?;
                 emitter.instruction(Instruction::LocalSet(shadow));
                 emitter.install_narrow_shadow(&binding.name, shadow, shadow_val);
             } else {
@@ -377,7 +377,7 @@ fn emit_operand_once(
                 .try_expr(expr)
                 .map_err(crate::codegen::arena_failure)?
                 .ty,
-        ),
+        )?,
     );
     emit_expr(emitter, ctx, expr)?;
     emitter.instruction(Instruction::LocalSet(slot));
@@ -422,7 +422,7 @@ fn emit_assign_field(
             &receiver_ty,
         )?;
     }
-    let recv = emitter.add_anonymous_local(ctx.symbols.value_type(&receiver_ty));
+    let recv = emitter.add_anonymous_local(ctx.symbols.value_type(&receiver_ty)?);
     emitter.instruction(Instruction::LocalSet(recv));
     match receiver_ty.peel() {
         // Class instance: nominal receiver, array-backed object payload.
@@ -476,8 +476,8 @@ fn emit_class_field_store(
         .ty
         .clone();
     emit_expr(emitter, ctx, value)?;
-    cast::emit_box(emitter, ctx, &value_ty);
-    let stored = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown));
+    cast::emit_box(emitter, ctx, &value_ty)?;
+    let stored = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?);
     emitter.instruction(Instruction::LocalSet(stored));
     emitter.instruction(Instruction::LocalGet(recv));
     emitter.instruction(Instruction::StructGet {
@@ -541,7 +541,7 @@ fn emit_assign_index(
                 .try_expr(receiver)
                 .map_err(crate::codegen::arena_failure)?
                 .ty,
-        );
+        )?;
         emitter.instruction(Instruction::LocalGet(key));
         crate::codegen::cast_check::emit_operation_cast_on_stack(
             emitter,
@@ -560,7 +560,7 @@ fn emit_assign_index(
                 .try_expr(value)
                 .map_err(crate::codegen::arena_failure)?
                 .ty,
-        );
+        )?;
         let Some(symbol) = ctx.require(
             ctx.symbols.prelude_func_idx("ObjectConstructor##setField"),
             "dynamic write imported",
@@ -630,7 +630,7 @@ fn emit_uint8_index_store(
             .try_expr(index)
             .map_err(crate::codegen::arena_failure)?
             .ty,
-    );
+    )?;
     let idx_f64_local = stash_index_operand(emitter);
     let value_local = emitter.add_anonymous_local(ValType::I32);
     emitter.instruction(Instruction::LocalGet(original_value));
@@ -642,7 +642,7 @@ fn emit_uint8_index_store(
             .map_err(crate::codegen::arena_failure)?
             .ty,
         &Type::Number,
-    );
+    )?;
     emitter.instruction(Instruction::I32TruncSatF64U);
     emitter.instruction(Instruction::I32Const(0xff));
     emitter.instruction(Instruction::I32And);
@@ -698,7 +698,7 @@ fn emit_array_index_store(
         .clone();
     emit_expr(emitter, ctx, value)?;
     // Preserve the actual RHS in the erased element slot.
-    cast::emit_box(emitter, ctx, &value_ty);
+    cast::emit_box(emitter, ctx, &value_ty)?;
     emitter.instruction(Instruction::LocalSet(value_local));
 
     // Read the backing array *after* the RHS: `push` swaps in a fresh
@@ -727,7 +727,7 @@ fn emit_array_index_store(
             .try_expr(index)
             .map_err(crate::codegen::arena_failure)?
             .ty,
-    );
+    )?;
     let idx_f64_local = stash_index_operand(emitter);
     emitter.instruction(Instruction::StructGet {
         struct_type_index: array_idx,
@@ -832,7 +832,7 @@ fn emit_catch_dispatch(
     for clause in catches {
         let Some((vtable_global, struct_idx)) = catch_filter_class(ctx, &clause.ty) else {
             emitter.push_scope();
-            let slot = emitter.define_local(&clause.binding, ctx.symbols.value_type(&clause.ty));
+            let slot = emitter.define_local(&clause.binding, ctx.symbols.value_type(&clause.ty)?);
             emitter.instruction(Instruction::LocalGet(err_stash));
             emitter.instruction(Instruction::RefAsNonNull);
             emitter.instruction(Instruction::LocalSet(slot));
@@ -842,10 +842,10 @@ fn emit_catch_dispatch(
             return Ok(());
         };
         emitter.instruction(Instruction::LocalGet(err_stash));
-        super::cast::emit_nominal_instance_test(emitter, ctx, vtable_global);
+        super::cast::emit_nominal_instance_test(emitter, ctx, vtable_global)?;
         emitter.emit_if(BlockType::Empty);
         emitter.push_scope();
-        let slot = emitter.define_local(&clause.binding, ctx.symbols.value_type(&clause.ty));
+        let slot = emitter.define_local(&clause.binding, ctx.symbols.value_type(&clause.ty)?);
         emitter.instruction(Instruction::LocalGet(err_stash));
         // Shape-only cast is sound here: the brand matched.
         emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(struct_idx)));
@@ -900,7 +900,7 @@ fn emit_switch(
     // Stash discriminant in an anonymous local; numeric enums unboxed to f64
     // so per-case tests use f64.eq instead of a structural-equality call.
     emit_expr(emitter, ctx, discriminant)?;
-    let disc_val = switch_disc_local_type(ctx, discriminant_ty);
+    let disc_val = switch_disc_local_type(ctx, discriminant_ty)?;
     if matches!(discriminant_ty.peel(), Type::NumberEnum { .. }) {
         let boxed_idx = ctx
             .symbols
@@ -928,7 +928,7 @@ fn emit_switch(
     for (source_idx, case) in cases.iter().enumerate() {
         emitter.record_span(case.span);
         for value in &case.values {
-            emit_case_comparison(emitter, ctx, disc_local, discriminant_ty, value);
+            emit_case_comparison(emitter, ctx, disc_local, discriminant_ty, value)?;
             emitter.instruction(Instruction::BrIf(source_idx as u32));
         }
     }
@@ -961,12 +961,15 @@ fn emit_switch(
 
 /// Numeric-enum discriminants are unboxed to `f64` here so per-case tests use `f64.eq`
 /// instead of a structural-equality call on every comparison.
-fn switch_disc_local_type(ctx: &CodegenCtx, ty: &Type) -> ValType {
-    if matches!(ty.peel(), Type::NumberEnum { .. }) {
+fn switch_disc_local_type(
+    ctx: &CodegenCtx,
+    ty: &Type,
+) -> Result<ValType, crate::compiler_error::CompilerFailure> {
+    Ok(if matches!(ty.peel(), Type::NumberEnum { .. }) {
         ValType::F64
     } else {
-        ctx.symbols.value_type(ty)
-    }
+        ctx.symbols.value_type(ty)?
+    })
 }
 
 /// Internal `if/else` uses `BlockType::Result(ValType::I32)` so the i32 result
@@ -977,14 +980,14 @@ fn emit_case_comparison(
     disc_local: u32,
     disc_ty: &Type,
     value: &TypedSwitchValue,
-) {
-    let disc_val = switch_disc_local_type(ctx, disc_ty);
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let disc_val = switch_disc_local_type(ctx, disc_ty)?;
     if let Some(case_ty) = switch_case_primitive_type(value)
         && matches!(disc_val, ValType::Ref(_))
-        && disc_val != ctx.symbols.value_type(&case_ty)
+        && disc_val != ctx.symbols.value_type(&case_ty)?
     {
-        emit_boxed_case_comparison(emitter, ctx, disc_local, &case_ty, value);
-        return;
+        emit_boxed_case_comparison(emitter, ctx, disc_local, &case_ty, value)?;
+        return Ok(());
     }
     match value {
         TypedSwitchValue::Null { .. } => {
@@ -1015,7 +1018,8 @@ fn emit_case_comparison(
                 emit_string_compare(emitter, ctx, disc_local, disc_val, s);
             }
         },
-    }
+    };
+    Ok(())
 }
 
 /// A union discriminant may carry a different primitive kind or null. Test
@@ -1026,7 +1030,7 @@ fn emit_boxed_case_comparison(
     disc_local: u32,
     case_ty: &Type,
     value: &TypedSwitchValue,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let heap_index = match case_ty {
         Type::Number => ctx.symbols.boxed_number_type_idx(),
         Type::Boolean => ctx.symbols.boxed_boolean_type_idx(),
@@ -1038,13 +1042,15 @@ fn emit_boxed_case_comparison(
     emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(heap_index)));
     emitter.emit_if(BlockType::Result(ValType::I32));
     emitter.instruction(Instruction::LocalGet(disc_local));
-    cast::emit_cast_to(emitter, ctx, case_ty);
-    let unboxed = emitter.add_anonymous_local(ctx.symbols.value_type(case_ty));
+    cast::emit_cast_to(emitter, ctx, case_ty)?;
+    let unboxed = emitter.add_anonymous_local(ctx.symbols.value_type(case_ty)?);
     emitter.instruction(Instruction::LocalSet(unboxed));
-    emit_case_comparison(emitter, ctx, unboxed, case_ty, value);
+    emit_case_comparison(emitter, ctx, unboxed, case_ty, value)?;
     emitter.emit_else();
     emitter.instruction(Instruction::I32Const(0));
     emitter.emit_end();
+
+    Ok(())
 }
 
 fn switch_case_primitive_type(value: &TypedSwitchValue) -> Option<Type> {

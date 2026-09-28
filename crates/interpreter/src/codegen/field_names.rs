@@ -209,8 +209,8 @@ pub(crate) fn emit_instance_names(
 pub(crate) fn emit_name_is_accessor(
     emitter: &mut super::function_emitter::FunctionEmitter,
     ctx: &super::CodegenCtx,
-) {
-    let name = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::String));
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let name = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::String)?);
     let marked = ctx.symbols.optional_field_name_type();
     emitter.instruction(Instruction::LocalTee(name));
     emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(marked)));
@@ -226,6 +226,8 @@ pub(crate) fn emit_name_is_accessor(
     emitter.emit_else();
     emitter.instruction(Instruction::I32Const(0));
     emitter.emit_end();
+
+    Ok(())
 }
 
 /// Push the presence flag for a field name already on the stack.

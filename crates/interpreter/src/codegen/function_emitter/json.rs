@@ -31,7 +31,7 @@ pub(super) fn emit_stringify(
     }
 
     emit_expr(emitter, ctx, arg)?;
-    let arg_local = emitter.add_anonymous_local(ctx.symbols.value_type(&arg_ty));
+    let arg_local = emitter.add_anonymous_local(ctx.symbols.value_type(&arg_ty)?);
     emitter.instruction(Instruction::LocalSet(arg_local));
     emit_stringify_optional_args(emitter, ctx, args, arg_local, &arg_ty)?;
     Ok(())
@@ -150,7 +150,7 @@ fn emit_stringify_optional_args(
     emit_stringify_value(emitter, ctx, arg_ty);
     let _: () = match space {
         StringifySpace::None => {}
-        StringifySpace::Dynamic(local) => emit_dynamic_space(emitter, ctx, local),
+        StringifySpace::Dynamic(local) => emit_dynamic_space(emitter, ctx, local)?,
         StringifySpace::Number(local) => {
             emit_string_on_stack_raw(emitter, ctx);
             emitter.instruction(Instruction::LocalGet(local));
@@ -195,7 +195,7 @@ fn emit_stringify_space_arg(
         }
         Type::String | Type::StringLiteral(_) => {
             emit_expr(emitter, ctx, space)?;
-            let local = emitter.add_anonymous_local(ctx.symbols.value_type(&space_ty));
+            let local = emitter.add_anonymous_local(ctx.symbols.value_type(&space_ty)?);
             emitter.instruction(Instruction::LocalSet(local));
             StringifySpace::String(local)
         }
@@ -206,7 +206,7 @@ fn emit_stringify_space_arg(
         }
         Type::Unknown => {
             emit_expr(emitter, ctx, space)?;
-            let local = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown));
+            let local = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?);
             emitter.instruction(Instruction::LocalSet(local));
             StringifySpace::Dynamic(local)
         }
@@ -215,8 +215,12 @@ fn emit_stringify_space_arg(
     })
 }
 
-fn emit_dynamic_space(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, space: u32) {
-    let string_type = ctx.symbols.value_type(&Type::String);
+fn emit_dynamic_space(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    space: u32,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let string_type = ctx.symbols.value_type(&Type::String)?;
     let json = emitter.add_anonymous_local(string_type);
     emitter.instruction(Instruction::LocalSet(json));
     let number = ctx
@@ -230,7 +234,7 @@ fn emit_dynamic_space(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, space: u3
     emitter.instruction(Instruction::LocalGet(json));
     emit_string_on_stack_raw(emitter, ctx);
     emitter.instruction(Instruction::LocalGet(space));
-    super::cast::emit_cast_to(emitter, ctx, &Type::Number);
+    super::cast::emit_cast_to(emitter, ctx, &Type::Number)?;
     emit_pretty_number_host(emitter, ctx);
     emit_wrap_raw_string(emitter, ctx);
     emitter.emit_else();
@@ -240,7 +244,7 @@ fn emit_dynamic_space(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, space: u3
     emitter.instruction(Instruction::LocalGet(json));
     emit_string_on_stack_raw(emitter, ctx);
     emitter.instruction(Instruction::LocalGet(space));
-    super::cast::emit_cast_to(emitter, ctx, &Type::String);
+    super::cast::emit_cast_to(emitter, ctx, &Type::String)?;
     emit_string_on_stack_raw(emitter, ctx);
     emit_pretty_string_host(emitter, ctx);
     emit_wrap_raw_string(emitter, ctx);
@@ -248,6 +252,8 @@ fn emit_dynamic_space(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, space: u3
     emitter.instruction(Instruction::LocalGet(json));
     emitter.emit_end();
     emitter.emit_end();
+
+    Ok(())
 }
 
 fn emit_string_on_stack_raw(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
@@ -443,7 +449,7 @@ pub(super) fn emit_parse(
             .map_err(crate::codegen::arena_failure)?
             .ty,
         &Type::String,
-    );
+    )?;
     let string_type_idx = ctx.symbols.string_type_idx().expect("$string registered");
     emitter.instruction(Instruction::StructGet {
         struct_type_index: string_type_idx,

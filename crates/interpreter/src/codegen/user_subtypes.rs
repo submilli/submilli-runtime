@@ -178,7 +178,7 @@ pub fn emit_method_bodies(
     symbols: &SymbolTable,
     type_info: &TypeInfoTable,
     pkg_string_global_idx: Option<u32>,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let intrinsics = symbols
         .intrinsic_type_indices()
         .expect("intrinsics declared by codegen entry");
@@ -198,7 +198,7 @@ pub fn emit_method_bodies(
             intrinsics,
             symbols,
             string_vtable_global_idx,
-        ));
+        )?);
 
         for (body, params, result) in [
             (subtype.hash_func + 1, 1, ref_to(intrinsics.string)),
@@ -217,7 +217,7 @@ pub fn emit_method_bodies(
             pkg_string_global_idx,
             string_concat_func_idx,
             string_vtable_global_idx,
-        ));
+        )?);
 
         code.function(&emit_subtype_equals_body(
             subtype,
@@ -227,6 +227,7 @@ pub fn emit_method_bodies(
 
         code.function(&emit_subtype_hash_body(subtype, intrinsics));
     }
+    Ok(())
 }
 
 fn emit_subtype_to_string_body(
@@ -234,7 +235,7 @@ fn emit_subtype_to_string_body(
     intrinsics: IntrinsicTypeIndices,
     symbols: &SymbolTable,
     string_vtable_global_idx: u32,
-) -> Function {
+) -> Result<Function, crate::compiler_error::CompilerFailure> {
     let Type::Object { fields, .. } = &subtype.ty else {
         unreachable!(
             "emit_subtype_to_string_body called on non-Object subtype: {:?}",
@@ -251,7 +252,7 @@ fn emit_subtype_to_string_body(
             "[object Object]",
         );
         f.instruction(&Instruction::End);
-        return f;
+        return Ok(f);
     }
 
     // The typechecker guarantees `toString` field is non-optional `() => string`, so the slot is non-null.
@@ -259,13 +260,21 @@ fn emit_subtype_to_string_body(
         arity: 0,
         is_void: false,
     };
-    let closure_struct_idx = symbols.closure_struct_type_idx(to_string_sig).expect(
-        "closure struct for `() => string` registered when any shape declares a toString \
+    let closure_struct_idx = symbols
+        .closure_struct_type_idx(to_string_sig)
+        .ok_or_else(|| {
+            crate::codegen::internal_failure(
+                "closure struct for `() => string` registered when any shape declares a toString \
          override (collect_from_dependencies walks every shape field type)",
-    );
+            )
+        })?;
     let closure_func_type_idx = symbols
         .closure_func_type_idx(to_string_sig)
-        .expect("closure funcref type for `() => string` registered alongside its struct");
+        .ok_or_else(|| {
+            crate::codegen::internal_failure(
+                "closure funcref type for `() => string` registered alongside its struct",
+            )
+        })?;
 
     let object_shape_ref = ref_to(intrinsics.object_shape);
     let closure_ref = ref_to(closure_struct_idx);
@@ -318,7 +327,7 @@ fn emit_subtype_to_string_body(
         intrinsics.string,
     )));
     f.instruction(&Instruction::End);
-    f
+    Ok(f)
 }
 
 fn emit_subtype_to_json_body(
@@ -329,7 +338,7 @@ fn emit_subtype_to_json_body(
     pkg_string_global_idx: Option<u32>,
     string_concat_func_idx: u32,
     string_vtable_global_idx: u32,
-) -> Function {
+) -> Result<Function, crate::compiler_error::CompilerFailure> {
     let Type::Object { fields, .. } = &subtype.ty else {
         unreachable!(
             "emit_subtype_to_json_body called on non-Object subtype: {:?}",
@@ -345,13 +354,13 @@ fn emit_subtype_to_json_body(
         .object_type_id(&subtype.ty)
         .filter(|_| type_info.supports_host_json_object(&subtype.ty));
     let Some(type_id) = type_id else {
-        return emit_subtype_to_json_vtable_body(
+        return Ok(emit_subtype_to_json_vtable_body(
             subtype,
             intrinsics,
             string_concat_func_idx,
             string_vtable_global_idx,
             symbols,
-        );
+        ));
     };
     let pkg_string_global_idx =
         pkg_string_global_idx.expect("host object toJson requires package string global");
@@ -380,7 +389,7 @@ fn emit_subtype_to_json_body(
     f.instruction(&Instruction::Call(stringify_func_idx));
     f.instruction(&Instruction::StructNew(intrinsics.string));
     f.instruction(&Instruction::End);
-    f
+    Ok(f)
 }
 
 /// Static serializers fall back to the dynamic walker after shape growth.
@@ -579,18 +588,24 @@ fn emit_subtype_to_json_override_body(
     subtype: &UserSubtype,
     intrinsics: IntrinsicTypeIndices,
     symbols: &SymbolTable,
-) -> Function {
+) -> Result<Function, crate::compiler_error::CompilerFailure> {
     let to_json_sig = crate::codegen::closures::ClosureSig {
         arity: 0,
         is_void: false,
     };
-    let closure_struct_idx = symbols.closure_struct_type_idx(to_json_sig).expect(
-        "closure struct for `() => string` registered when any shape declares a toJson \
+    let closure_struct_idx = symbols
+        .closure_struct_type_idx(to_json_sig)
+        .ok_or_else(|| {
+            crate::codegen::internal_failure(
+                "closure struct for `() => string` registered when any shape declares a toJson \
          override (collect_from_dependencies walks every shape field type)",
-    );
-    let closure_func_type_idx = symbols
-        .closure_func_type_idx(to_json_sig)
-        .expect("closure funcref type for `() => string` registered alongside its struct");
+            )
+        })?;
+    let closure_func_type_idx = symbols.closure_func_type_idx(to_json_sig).ok_or_else(|| {
+        crate::codegen::internal_failure(
+            "closure funcref type for `() => string` registered alongside its struct",
+        )
+    })?;
 
     let object_shape_ref = ref_to(intrinsics.object_shape);
     let closure_ref = ref_to(closure_struct_idx);
@@ -640,7 +655,7 @@ fn emit_subtype_to_json_override_body(
         intrinsics.string,
     )));
     f.instruction(&Instruction::End);
-    f
+    Ok(f)
 }
 
 fn emit_subtype_equals_body(

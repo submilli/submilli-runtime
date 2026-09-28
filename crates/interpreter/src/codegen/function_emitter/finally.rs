@@ -62,7 +62,7 @@ pub(super) fn emit_try_finally(
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let action = emitter.add_anonymous_local(ValType::I32);
     let exception = emitter.add_anonymous_local(ValType::EXNREF);
-    let result = emitter.wasm_result_type(ctx).map(|ty| {
+    let result = emitter.wasm_result_type(ctx)?.map(|ty| {
         let (storage, non_null) = match ty {
             ValType::Ref(mut reference) => {
                 let non_null = !reference.nullable;

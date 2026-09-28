@@ -30,7 +30,7 @@ pub fn collect(
     for (params, body) in function_bodies {
         for p in &params {
             if p.boxed {
-                state.note(&p.ty);
+                state.note(&p.ty)?;
             }
         }
         state.walk_stmt(body)?;
@@ -45,7 +45,7 @@ pub fn collect(
     for member in class_member_params(ta) {
         for p in member {
             if p.boxed {
-                state.note(&p.ty);
+                state.note(&p.ty)?;
             }
         }
     }
@@ -88,11 +88,12 @@ struct Collector<'a> {
 
 impl Collector<'_> {
     /// Keyed on `slot_value_type`; see [`SymbolTable::box_type_idx`].
-    fn note(&mut self, ty: &Type) {
-        let valtype = self.symbols.slot_value_type(ty);
+    fn note(&mut self, ty: &Type) -> Result<(), crate::compiler_error::CompilerFailure> {
+        let valtype = self.symbols.slot_value_type(ty)?;
         if self.seen.insert(valtype) {
             self.order.push(valtype);
-        }
+        };
+        Ok(())
     }
 
     fn walk_stmt(&mut self, id: StmtId) -> Result<(), crate::compiler_error::CompilerFailure> {
@@ -111,7 +112,7 @@ impl Collector<'_> {
                 ty, value, boxed, ..
             } => {
                 if *boxed {
-                    self.note(ty);
+                    self.note(ty)?;
                 }
                 self.walk_expr(*value)?;
             }
@@ -232,12 +233,12 @@ impl Collector<'_> {
             } => {
                 for p in params {
                     if p.boxed {
-                        self.note(&p.ty);
+                        self.note(&p.ty)?;
                     }
                 }
                 for c in captured {
                     if c.boxed {
-                        self.note(&c.ty);
+                        self.note(&c.ty)?;
                     }
                 }
                 match *body {
@@ -359,7 +360,7 @@ impl Collector<'_> {
                     boxed, target_ty, ..
                 } => {
                     if *boxed {
-                        self.note(target_ty);
+                        self.note(target_ty)?;
                     }
                 }
                 crate::PostfixTarget::Global { .. } => {}

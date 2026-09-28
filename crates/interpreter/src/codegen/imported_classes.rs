@@ -177,7 +177,7 @@ pub fn reconstruct(
             next_func_idx,
             next_global_idx,
             symbols,
-        );
+        )?;
         layouts.insert(mangled.clone(), layout);
     }
     // Statics come last — see `import_statics`.
@@ -192,7 +192,7 @@ pub fn reconstruct(
             next_func_idx,
             next_global_idx,
             symbols,
-        );
+        )?;
     }
     Ok(layouts)
 }
@@ -230,7 +230,7 @@ fn import_statics(
     next_func_idx: &mut u32,
     next_global_idx: &mut u32,
     symbols: &mut SymbolTable,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     for (name, sig) in class.public_statics() {
         let key = crate::mangle::static_member(mangled, name);
         if !usage.is_value_used(&key) {
@@ -240,12 +240,12 @@ fn import_statics(
             .params
             .iter()
             .map(|p| symbols.value_type(&p.ty))
-            .collect();
+            .collect::<Result<_, _>>()?;
         if class.runtime_generics.contains(&key) {
             symbols.runtime_generic_functions.insert(key.clone());
-            param_types.push(super::runtime_descriptors::environment_type(symbols));
+            param_types.push(super::runtime_descriptors::environment_type(symbols)?);
         }
-        let results = symbols.wasm_result(&sig.ret);
+        let results = symbols.wasm_result(&sig.ret)?;
         types.ty().function(param_types, results);
         let sig_idx = take(next_type_idx);
         imports.import(
@@ -273,13 +273,14 @@ fn import_statics(
             host_module_for(class),
             key.as_str(),
             EntityType::Global(GlobalType {
-                val_type: super::global_val_type(&field.ty, symbols),
+                val_type: super::global_val_type(&field.ty, symbols)?,
                 mutable: true,
                 shared: false,
             }),
         );
         symbols.record_typed_global(key, take(next_global_idx), field.ty.clone());
     }
+    Ok(())
 }
 
 fn collect_class_info<'a>(
@@ -402,7 +403,7 @@ fn reconstruct_one(
     next_func_idx: &mut u32,
     next_global_idx: &mut u32,
     symbols: &mut SymbolTable,
-) -> ImportedClassLayout {
+) -> Result<ImportedClassLayout, crate::compiler_error::CompilerFailure> {
     // Full field list = inherited prefix (already reconstructed) + own *data*
     // fields. Accessor properties are in `fields` for typing/docs but back no data
     // slot, so they're excluded — matching the producer's payload layout.
@@ -515,9 +516,10 @@ fn reconstruct_one(
         params.extend(
             param_tys
                 .iter()
-                .map(|_| symbols.value_type(&crate::Type::Unknown)),
+                .map(|_| symbols.value_type(&crate::Type::Unknown))
+                .collect::<Result<Vec<_>, _>>()?,
         );
-        let results = symbols.slot_wasm_result(ret);
+        let results = symbols.slot_wasm_result(ret)?;
         let abi = MethodSlotAbi {
             params: params[1..].to_vec(),
             ret: results.first().copied(),
@@ -654,7 +656,7 @@ fn reconstruct_one(
         .constructor
         .iter()
         .map(|p| symbols.slot_value_type(&p.ty))
-        .collect();
+        .collect::<Result<_, _>>()?;
     let ctor_param_tys: Vec<crate::Type> = class.constructor.iter().map(|p| p.ty.clone()).collect();
     symbols.record_class_ctor_abi(mangled.clone(), ctor_params.clone());
     let class_ref = crate::Type::class_ref(
@@ -746,14 +748,14 @@ fn reconstruct_one(
             private_members.insert(super::classes::accessor_setter_name(accessor.name()));
         }
     }
-    ImportedClassLayout {
+    Ok(ImportedClassLayout {
         private_members,
         fields,
         optional_fields,
         narrowing_checks,
         methods: slots,
         ctor_params: ctor_typed_params,
-    }
+    })
 }
 
 /// Walk the `extends` chain to find the class that originates `method`, returning

@@ -47,8 +47,14 @@ impl CodegenAnalysis {
             "#toJson",
         ));
 
-        for ty in ta.runtime_source_types.values() {
-            analysis.visit_type(ty);
+        for (id, ty) in &ta.runtime_source_types {
+            let span = ta
+                .try_expr(*id)
+                .map_err(crate::codegen::arena_failure)?
+                .span;
+            analysis
+                .visit_type(ty)
+                .map_err(|error| error.with_span(span))?;
             analysis
                 .string_pool
                 .intern_text(&cast_check::error_prefix(ty));
@@ -73,10 +79,14 @@ impl CodegenAnalysis {
                     .note_value(crate::mangle::prelude(&format!("__value_{name}")));
             }
         }
-        for types in ta.runtime_chain_types.values() {
+        for (id, types) in &ta.runtime_chain_types {
+            let span = ta
+                .try_expr(*id)
+                .map_err(crate::codegen::arena_failure)?
+                .span;
             for ty in types {
                 let ty = crate::typechecker::infer::narrowing::strip_null(ty);
-                analysis.visit_type(&ty);
+                analysis.visit_type_at(&ty, span)?;
                 analysis
                     .string_pool
                     .intern_text(&cast_check::error_prefix(&ty));
@@ -92,14 +102,16 @@ impl CodegenAnalysis {
             analysis.dependency_usage.note_shape(shape.clone());
         }
         for g in &ta.globals {
-            analysis.visit_type(&g.ty);
+            analysis.visit_type_at(&g.ty, g.span)?;
         }
 
         for f in &ta.functions {
             for p in &f.params {
-                analysis.visit_type(&p.ty);
+                analysis
+                    .visit_type(&p.ty)
+                    .map_err(|error| error.with_span(p.name.span))?;
             }
-            analysis.visit_type(&f.return_type);
+            analysis.visit_type_at(&f.return_type, f.span)?;
             analysis.walk_stmt(ta, f.body)?;
         }
         for &stmt_id in &ta.top_level_statements {
@@ -116,11 +128,11 @@ impl CodegenAnalysis {
                 .mentioned_closure_sigs
                 .push(super::field_guards::signature());
         }
-        analysis.note_narrowing_checks(ta);
+        analysis.note_narrowing_checks(ta)?;
         for test in ta.runtime_type_tests.values() {
-            analysis.note_narrowing_test(test);
+            analysis.note_narrowing_test(test)?;
         }
-        analysis.note_dependency_narrowing_checks(dependencies);
+        analysis.note_dependency_narrowing_checks(dependencies)?;
 
         // Imported class members can add closure adapters after dependency
         // selection, even when the source mentions no function-valued types.
@@ -142,7 +154,10 @@ impl CodegenAnalysis {
     /// is structural, tests a shape; both need the same interning and imports a
     /// `Cast` gets, and neither is reachable from any expression, so no walk above
     /// finds them.
-    fn note_narrowing_checks(&mut self, ta: &TypedAst) {
+    fn note_narrowing_checks(
+        &mut self,
+        ta: &TypedAst,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         for decl in &ta.types {
             let crate::TypedTypeDecl::Class(class) = decl else {
                 continue;
@@ -163,12 +178,16 @@ impl CodegenAnalysis {
                 .iter()
                 .filter_map(|f| f.narrowing_check.as_ref())
             {
-                self.note_narrowing_check(check);
+                self.note_narrowing_check(check)?;
             }
         }
+        Ok(())
     }
 
-    fn note_dependency_narrowing_checks(&mut self, dependencies: &[&crate::PackageDeclaration]) {
+    fn note_dependency_narrowing_checks(
+        &mut self,
+        dependencies: &[&crate::PackageDeclaration],
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         for package in dependencies {
             for symbol in package.runtime_types.values().chain(package.types.values()) {
                 let crate::TypeKind::Class {
@@ -178,21 +197,30 @@ impl CodegenAnalysis {
                     continue;
                 };
                 for check in narrowing_checks.values() {
-                    self.note_narrowing_check(check);
+                    self.note_narrowing_check(check)?;
                 }
             }
         }
+        Ok(())
     }
 
-    fn note_narrowing_check(&mut self, check: &crate::FieldNarrowingCheck) {
+    fn note_narrowing_check(
+        &mut self,
+        check: &crate::FieldNarrowingCheck,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         self.string_pool.intern_text(&check.message);
-        self.note_narrowing_test(&check.test);
+        self.note_narrowing_test(&check.test)?;
+
+        Ok(())
     }
 
-    fn note_narrowing_test(&mut self, test: &crate::FieldNarrowingTest) {
+    fn note_narrowing_test(
+        &mut self,
+        test: &crate::FieldNarrowingTest,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         match test {
             crate::FieldNarrowingTest::Shape(shape) => {
-                self.visit_type(shape);
+                self.visit_type(shape)?;
                 self.note_shape_member_names(shape);
             }
             crate::FieldNarrowingTest::Interface(test) => {
@@ -200,13 +228,14 @@ impl CodegenAnalysis {
                     index: test.index.clone(),
                     fields: test.members.clone(),
                 };
-                self.visit_type(&shape);
+                self.visit_type(&shape)?;
                 self.note_shape_member_names(&shape);
             }
             crate::FieldNarrowingTest::NonNull
             | crate::FieldNarrowingTest::Substituted
             | crate::FieldNarrowingTest::Representation => {}
-        }
+        };
+        Ok(())
     }
 
     /// The per-name `$string` globals the shape's field scan reads: for each
@@ -268,17 +297,27 @@ impl CodegenAnalysis {
     ///
     /// Call this rather than `dependency_usage.collect_type` directly —
     /// bypassing it drops the closure half silently, and the failure surfaces as
-    /// a codegen panic far from the omission.
-    fn visit_type(&mut self, ty: &Type) {
+    /// an internal compiler failure far from the omission.
+    fn visit_type_at(
+        &mut self,
+        ty: &Type,
+        span: crate::Span,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        self.visit_type(ty).map_err(|error| error.with_span(span))
+    }
+
+    fn visit_type(&mut self, ty: &Type) -> Result<(), crate::compiler_error::CompilerFailure> {
         if let Type::Object {
             index: Some(index), ..
         } = ty.peel()
         {
             self.note_record_helpers();
-            self.visit_type(&index.value);
+            self.visit_type(&index.value)?;
         }
         self.dependency_usage.collect_type(ty);
-        crate::codegen::closures::walk_type(ty, &mut self.mentioned_closure_sigs);
+        crate::codegen::closures::walk_type(ty, &mut self.mentioned_closure_sigs)?;
+
+        Ok(())
     }
 
     fn note_record_helpers(&mut self) {
@@ -412,8 +451,10 @@ impl CodegenAnalysis {
         ta: &TypedAst,
         id: ExprId,
     ) -> Result<(), crate::compiler_error::CompilerFailure> {
-        self.note_expr_pre(ta, id)?;
-        let _: () = match &ta.try_expr(id).map_err(crate::codegen::arena_failure)?.kind {
+        let expr = ta.try_expr(id).map_err(crate::codegen::arena_failure)?;
+        self.note_expr_pre(ta, id)
+            .map_err(|error| error.with_span(expr.span))?;
+        let _: () = match &expr.kind {
             TypedExprKind::Call { args, .. }
             | TypedExprKind::McpCall { args, .. }
             | TypedExprKind::SuperCtorCall { args, .. }
@@ -435,7 +476,7 @@ impl CodegenAnalysis {
                 self.mentioned_closure_sigs
                     .push(super::field_guards::signature());
                 for ty in type_args {
-                    self.visit_type(ty);
+                    self.visit_type(ty)?;
                 }
                 for arg in args {
                     self.walk_expr(ta, arg.expr)?;
@@ -565,19 +606,20 @@ impl CodegenAnalysis {
         ta: &TypedAst,
         id: StmtId,
     ) -> Result<(), crate::compiler_error::CompilerFailure> {
-        let _: () = match &ta.try_stmt(id).map_err(crate::codegen::arena_failure)?.kind {
+        let stmt = ta.try_stmt(id).map_err(crate::codegen::arena_failure)?;
+        let _: () = match &stmt.kind {
             TypedStmtKind::Let { ty, .. } | TypedStmtKind::Const { ty, .. } => {
-                self.visit_type(ty);
+                self.visit_type_at(ty, stmt.span)?;
             }
             TypedStmtKind::ForOf { element_ty, .. } => {
-                self.visit_type(element_ty);
+                self.visit_type_at(element_ty, stmt.span)?;
             }
             TypedStmtKind::Switch {
                 discriminant_ty,
                 cases,
                 ..
             } => {
-                self.visit_type(discriminant_ty);
+                self.visit_type_at(discriminant_ty, stmt.span)?;
                 for case in cases {
                     for value in &case.values {
                         if let TypedSwitchValue::Enum { enum_name, .. } = value {
@@ -587,13 +629,13 @@ impl CodegenAnalysis {
                 }
             }
             TypedStmtKind::AssignLocal { target_ty, .. } => {
-                self.visit_type(target_ty);
+                self.visit_type_at(target_ty, stmt.span)?;
             }
             TypedStmtKind::AssignGlobal {
                 mangled, target_ty, ..
             } => {
                 self.dependency_usage.note_value(mangled.clone());
-                self.visit_type(target_ty);
+                self.visit_type_at(target_ty, stmt.span)?;
             }
             TypedStmtKind::AssignField { receiver, name, .. } => {
                 self.extra_field_names.push(name.name.clone());
@@ -614,18 +656,18 @@ impl CodegenAnalysis {
                 {
                     self.note_record_helpers();
                 }
-                self.visit_type(elem_ty);
+                self.visit_type_at(elem_ty, stmt.span)?;
                 self.note_index_check();
             }
             TypedStmtKind::NarrowRegion { cast_info, .. } => {
-                self.visit_type(&cast_info.from_ty);
-                self.visit_type(&cast_info.to_ty);
+                self.visit_type_at(&cast_info.from_ty, stmt.span)?;
+                self.visit_type_at(&cast_info.to_ty, stmt.span)?;
             }
             TypedStmtKind::Try { catches, .. } => {
                 // A cross-package subclass used only in a catch annotation
                 // still needs its class reconstructed.
                 for clause in catches {
-                    self.visit_type(&clause.ty);
+                    self.visit_type_at(&clause.ty, stmt.span)?;
                 }
             }
             TypedStmtKind::If { .. }
@@ -690,7 +732,8 @@ impl CodegenAnalysis {
         if matches!(expr.kind, TypedExprKind::PostfixUnary { .. }) {
             self.note_record_helpers();
         }
-        self.visit_type(&expr.ty);
+        self.visit_type(&expr.ty)
+            .map_err(|error| error.with_span(expr.span))?;
         let _: () = match &expr.kind {
             TypedExprKind::String(text) => {
                 self.string_pool.record_expr(id, text);
@@ -827,7 +870,7 @@ impl CodegenAnalysis {
                     name,
                     args.len(),
                     &expr.ty,
-                );
+                )?;
             }
             TypedExprKind::GenericMethodCall {
                 receiver,
@@ -843,7 +886,7 @@ impl CodegenAnalysis {
                     name,
                     args.len(),
                     &expr.ty,
-                );
+                )?;
             }
             TypedExprKind::InterfacePropertyAccess { iface, name, .. } => {
                 self.dependency_usage
@@ -877,7 +920,7 @@ impl CodegenAnalysis {
                         ..
                     }) = source
                     {
-                        self.visit_type(source_ty);
+                        self.visit_type(source_ty)?;
                         // A spread read by name looks its field up by name and tests
                         // the value against the field's type, which reads names too.
                         self.extra_field_names.push(field_name.clone());
@@ -887,11 +930,11 @@ impl CodegenAnalysis {
                 }
             }
             TypedExprKind::ArrayLiteral { element_ty, .. } => {
-                self.visit_type(element_ty);
+                self.visit_type(element_ty)?;
             }
             TypedExprKind::TupleLiteral { element_types, .. } => {
                 for ty in element_types {
-                    self.visit_type(ty);
+                    self.visit_type(ty)?;
                 }
             }
             TypedExprKind::FieldAccess { receiver, name } => {
@@ -926,27 +969,27 @@ impl CodegenAnalysis {
                     return_type: return_type.clone(),
                 });
                 for p in params {
-                    self.visit_type(&p.ty);
+                    self.visit_type(&p.ty)?;
                 }
-                self.visit_type(return_type);
+                self.visit_type(return_type)?;
             }
             TypedExprKind::Narrowed { cast_info, .. } => {
-                self.visit_type(&cast_info.from_ty);
-                self.visit_type(&cast_info.to_ty);
+                self.visit_type(&cast_info.from_ty)?;
+                self.visit_type(&cast_info.to_ty)?;
             }
             TypedExprKind::OptionalChain { base, parts } => {
                 self.note_chain_parts(ta, id, *base, parts)?;
             }
             TypedExprKind::PostfixUnary { target, .. } => match target {
                 PostfixTarget::Local { .. } => {
-                    self.note_postfix_target(&expr.ty);
+                    self.note_postfix_target(&expr.ty)?;
                 }
                 PostfixTarget::Global { mangled, .. } => {
                     self.dependency_usage.note_value(mangled.clone());
-                    self.note_postfix_target(&expr.ty);
+                    self.note_postfix_target(&expr.ty)?;
                 }
                 PostfixTarget::Field { receiver, name, .. } => {
-                    self.note_postfix_target(&expr.ty);
+                    self.note_postfix_target(&expr.ty)?;
                     let receiver_ty = ta
                         .source_type(*receiver)
                         .map_err(crate::codegen::arena_failure)?;
@@ -954,7 +997,7 @@ impl CodegenAnalysis {
                     self.note_shaped_property_access(receiver_ty, &name.name, AccessorKind::Set);
                 }
                 PostfixTarget::Index { elem_ty, .. } => {
-                    self.note_postfix_target(elem_ty);
+                    self.note_postfix_target(elem_ty)?;
                     self.note_index_check();
                 }
             },
@@ -969,9 +1012,9 @@ impl CodegenAnalysis {
                 for tag in cast_check::TYPE_TAG_STRINGS {
                     self.string_pool.intern_text(tag);
                 }
-                self.visit_type(target_ty);
+                self.visit_type(target_ty)?;
                 if let Some(check) = check {
-                    self.visit_type(check);
+                    self.visit_type(check)?;
                     self.note_shape_member_names(check);
                 }
             }
@@ -993,7 +1036,7 @@ impl CodegenAnalysis {
             TypedExprKind::InstanceOf { class, .. } => {
                 // `ref.test (ref $Foo)` needs the class's type (and its rec group, for an
                 // imported class) pulled into the dependency set; `expr.ty` is just `boolean`.
-                self.visit_type(class);
+                self.visit_type(class)?;
             }
             TypedExprKind::Number(_)
             | TypedExprKind::Boolean(_)
@@ -1021,14 +1064,16 @@ impl CodegenAnalysis {
         name: &crate::Ident,
         arity: usize,
         ret: &Type,
-    ) {
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         self.dependency_usage
             .note_member(crate::mangle::extend(iface, &name.name));
         self.string_pool.intern_text("Value is not callable");
         self.string_pool
             .intern_text("Unbound function has no this receiver");
         self.extra_field_names.push(name.name.clone());
-        self.note_shape_dispatch(receiver_ty, arity, ret);
+        self.note_shape_dispatch(receiver_ty, arity, ret)?;
+
+        Ok(())
     }
 
     /// A method reached through an `$ObjectShape` receiver dispatches as a
@@ -1041,16 +1086,24 @@ impl CodegenAnalysis {
     /// `InterfaceRef` only, unlike [`Self::note_shaped_property_access`]: a method on
     /// an anonymous object type is a function-typed *field*, so it lowers to a
     /// property read followed by a closure call, never to method dispatch.
-    fn note_shape_dispatch(&mut self, receiver_ty: &Type, arity: usize, ret: &Type) {
+    fn note_shape_dispatch(
+        &mut self,
+        receiver_ty: &Type,
+        arity: usize,
+        ret: &Type,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         self.string_pool.intern_text("Value is not callable");
         self.string_pool
             .intern_text("Unbound function has no this receiver");
         // An optional chain dispatches on the non-null half of its receiver.
         let receiver_ty = crate::typechecker::infer::narrowing::strip_null(receiver_ty);
         if !matches!(receiver_ty.peel(), Type::InterfaceRef { .. }) {
-            return;
+            return Ok(());
         }
-        self.mentioned_closure_sigs.push(ClosureSig::of(arity, ret));
+        self.mentioned_closure_sigs
+            .push(ClosureSig::of(arity, ret)?);
+
+        Ok(())
     }
 
     /// Each step's receiver is the previous step's result, so a chain has to be
@@ -1078,7 +1131,7 @@ impl CodegenAnalysis {
                     name, result_ty, ..
                 } => {
                     self.extra_field_names.push(name.name.clone());
-                    self.visit_type(result_ty);
+                    self.visit_type(result_ty)?;
                     self.note_shaped_property_access(receiver_ty, &name.name, AccessorKind::Get);
                 }
                 TypedChainPart::InterfaceProperty {
@@ -1099,11 +1152,11 @@ impl CodegenAnalysis {
                     self.extra_field_names.push(name.name.clone());
                     self.dependency_usage
                         .note_member(crate::mangle::extend(iface, &name.name));
-                    self.visit_type(result_ty);
+                    self.visit_type(result_ty)?;
                 }
                 TypedChainPart::Index { result_ty, .. } => {
                     self.note_record_helpers();
-                    self.visit_type(result_ty);
+                    self.visit_type(result_ty)?;
                     // A chain index is bounds-checked like any other, so it
                     // needs the same message in the pool.
                     self.note_index_check();
@@ -1111,10 +1164,10 @@ impl CodegenAnalysis {
                 TypedChainPart::Call { result_ty, .. } => {
                     self.dependency_usage
                         .note_value(crate::mangle::prelude("__value_invoke_defaults"));
-                    self.visit_type(result_ty);
+                    self.visit_type(result_ty)?;
                 }
                 TypedChainPart::NonNull { result_ty, .. } => {
-                    self.visit_type(result_ty);
+                    self.visit_type(result_ty)?;
                     self.string_pool.intern_text(throw::NON_NULL_ASSERT_MESSAGE);
                 }
                 TypedChainPart::MethodCall {
@@ -1136,8 +1189,8 @@ impl CodegenAnalysis {
                     self.extra_field_names.push(name.name.clone());
                     self.dependency_usage
                         .note_member(crate::mangle::extend(iface, &name.name));
-                    self.visit_type(result_ty);
-                    self.note_shape_dispatch(receiver_ty, args.len(), result_ty);
+                    self.visit_type(result_ty)?;
+                    self.note_shape_dispatch(receiver_ty, args.len(), result_ty)?;
                 }
             }
             receiver_ty = source_types.map_or_else(|| part.result_ty(), |types| &types[index + 1]);
@@ -1205,9 +1258,14 @@ impl CodegenAnalysis {
         }
     }
 
-    fn note_postfix_target(&mut self, ty: &Type) {
+    fn note_postfix_target(
+        &mut self,
+        ty: &Type,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         self.dependency_usage.collect_postfix_bigint_ops(ty);
-        self.visit_type(ty);
+        self.visit_type(ty)?;
+
+        Ok(())
     }
 }
 

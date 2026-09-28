@@ -476,9 +476,9 @@ impl ClassPlan {
         symbols: &mut SymbolTable,
         _ta: &TypedAst,
         intrinsics: IntrinsicTypeIndices,
-    ) {
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         if self.classes.is_empty() {
-            return;
+            return Ok(());
         }
         // 1. A standalone fn-type sig per method slot first introduced (base
         //    method or subclass-new method); overrides reuse the parent's sig.
@@ -528,11 +528,12 @@ impl ClassPlan {
                     method
                         .params
                         .iter()
-                        .map(|_| symbols.value_type(&crate::Type::Unknown)),
+                        .map(|_| symbols.value_type(&crate::Type::Unknown))
+                        .collect::<Result<Vec<_>, _>>()?,
                 );
-                let results = symbols.slot_wasm_result(&method.return_type);
+                let results = symbols.slot_wasm_result(&method.return_type)?;
                 let abi = MethodSlotAbi {
-                    params: params[1..].to_vec(),
+                    params: params.iter().skip(1).copied().collect(),
                     ret: results.first().copied(),
                 };
                 types.ty().function(params, results);
@@ -641,7 +642,7 @@ impl ClassPlan {
                 .ctor_params
                 .iter()
                 .map(|p| symbols.slot_value_type(&p.ty))
-                .collect();
+                .collect::<Result<_, _>>()?;
             symbols.record_class_ctor_abi(class.mangled.clone(), params.clone());
             let ret = ref_to(class.struct_type_idx);
             let mut entry_params = params.clone();
@@ -659,6 +660,7 @@ impl ClassPlan {
             types.ty().function(init_params, Vec::new());
             class.ctor_init_sig_idx = take(next_type_idx);
         }
+        Ok(())
     }
 
     fn vtable_subtype(
@@ -798,9 +800,9 @@ impl ClassPlan {
         functions: &mut FunctionSection,
         symbols: &SymbolTable,
         intrinsics: IntrinsicTypeIndices,
-    ) {
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         if self.classes.is_empty() {
-            return;
+            return Ok(());
         }
         functions.function(intrinsics.to_string_fn);
         functions.function(intrinsics.to_json_fn);
@@ -820,8 +822,18 @@ impl ClassPlan {
             }
             for &i in &class.adapter_slots {
                 let ty = symbols
-                    .closure_func_type_idx(slot_closure_sig(&class.methods[i]))
-                    .expect("class method closure sig registered (closures::class_member_sigs)");
+                    .closure_func_type_idx(slot_closure_sig(class.methods.get(i).ok_or_else(
+                        || {
+                            crate::codegen::internal_failure(
+                                "class adapter refers to a missing method slot",
+                            )
+                        },
+                    )?)?)
+                    .ok_or_else(|| {
+                        crate::codegen::internal_failure(
+                            "class method closure sig registered (closures::class_member_sigs)",
+                        )
+                    })?;
                 functions.function(ty);
             }
             functions.function(intrinsics.field_getter);
@@ -834,6 +846,7 @@ impl ClassPlan {
             functions.function(intrinsics.to_json_fn);
             functions.function(intrinsics.hash_fn);
         }
+        Ok(())
     }
 
     /// Phase: vtable instance, getter, and setter globals (the field-names array
@@ -927,13 +940,21 @@ impl ClassPlan {
             code.function(&stub_body());
         }
         for class in &self.classes {
-            code.function(&self.emit_ctor_body(class, ctx));
+            code.function(&self.emit_ctor_body(class, ctx)?);
             code.function(&self.emit_ctor_init(class, ctx)?);
             for method in &class.own_methods {
                 code.function(&self.emit_method_body(class, method, ctx)?);
             }
             for &i in &class.adapter_slots {
-                code.function(&self.emit_method_adapter_body(class, &class.methods[i], ctx)?);
+                code.function(&self.emit_method_adapter_body(
+                    class,
+                    class.methods.get(i).ok_or_else(|| {
+                        crate::codegen::internal_failure(
+                            "class adapter refers to a missing method slot",
+                        )
+                    })?,
+                    ctx,
+                )?);
             }
             // getter, then setter.
             code.function(&stub_body());
@@ -1019,10 +1040,10 @@ impl ClassPlan {
     ) -> Result<Function, crate::compiler_error::CompilerFailure> {
         use crate::codegen::function_emitter::{FunctionEmitter, cast};
 
-        let intrinsics = ctx
-            .symbols
-            .intrinsic_type_indices()
-            .expect("intrinsics declared by codegen entry");
+        slot_closure_sig(slot)?;
+        let intrinsics = ctx.symbols.intrinsic_type_indices().ok_or_else(|| {
+            crate::codegen::internal_failure("intrinsics declared by codegen entry")
+        })?;
         let object_ref_null = ValType::Ref(RefType {
             nullable: true,
             heap_type: HeapType::Concrete(intrinsics.object),
@@ -1053,7 +1074,9 @@ impl ClassPlan {
         let method_func = ctx
             .symbols
             .class_method_func_idx(&slot.owner, &slot.name)
-            .expect("method body func allocated or imported");
+            .ok_or_else(|| {
+                crate::codegen::internal_failure("method body func allocated or imported")
+            })?;
 
         // self = env, cast to the method body's `(ref $Object)` self param.
         // The callee's physical signature is the slot's. Arguments are boxed;
@@ -1062,7 +1085,14 @@ impl ClassPlan {
             .symbols
             .class_method_abi(&class.mangled, &slot.name)
             .cloned()
-            .unwrap_or_default();
+            .ok_or_else(|| {
+                crate::codegen::internal_failure("class method slot ABI is not registered")
+            })?;
+        if abi.params.len() != slot.param_tys.len() {
+            return Err(crate::codegen::internal_failure(
+                "class method slot ABI has the wrong parameter count",
+            ));
+        }
         emitter.instruction(Instruction::LocalGet(0));
         if slot.argument_metadata.is_some() {
             super::call_arguments::unwrap(&mut emitter, ctx);
@@ -1083,8 +1113,8 @@ impl ClassPlan {
         }
         emitter.instruction(Instruction::Call(method_func));
         match abi.ret {
-            Some(ValType::F64) => cast::emit_box(&mut emitter, ctx, &crate::Type::Number),
-            Some(ValType::I32) => cast::emit_box(&mut emitter, ctx, &crate::Type::Boolean),
+            Some(ValType::F64) => cast::emit_box(&mut emitter, ctx, &crate::Type::Number)?,
+            Some(ValType::I32) => cast::emit_box(&mut emitter, ctx, &crate::Type::Boolean)?,
             // A never-returning override can inherit a void slot. Its closure
             // convention has a result, but the inherited call cannot return.
             None if matches!(slot.ret_ty.peel(), crate::Type::Never) => {
@@ -1135,11 +1165,11 @@ impl ClassPlan {
             },
             ref_to(object_idx),
         )];
-        wasm_params.extend(slot_params(ctx, &method.params, &abi.params));
+        wasm_params.extend(slot_params(ctx, &method.params, &abi.params)?);
         let mut emitter = FunctionEmitter::new(ctx, &wasm_params);
         let param_slots = rebind_erased_params(&mut emitter, ctx, &method.params, &abi.params)?;
         // Param prologue boxes captured-mutated method params.
-        emitter.emit_boxed_param_prologue(&method.params, &param_slots);
+        emitter.emit_boxed_param_prologue(&method.params, &param_slots)?;
 
         // `this` = ref.cast of the self param to the concrete class.
         let this_slot = emitter.add_anonymous_local(ref_to(class.struct_type_idx));
@@ -1149,13 +1179,13 @@ impl ClassPlan {
         )));
         emitter.instruction(Instruction::LocalSet(this_slot));
         emitter.set_this_local(this_slot);
-        super::field_guards::bind_receiver(&mut emitter, ctx, this_slot, &class.mangled);
+        super::field_guards::bind_receiver(&mut emitter, ctx, this_slot, &class.mangled)?;
 
         if !method.return_type.is_void() {
-            emitter.set_return_target(ReturnTarget::Slot(
-                abi.ret
-                    .unwrap_or_else(|| ctx.symbols.slot_value_type(&method.return_type)),
-            ));
+            emitter.set_return_target(ReturnTarget::Slot(match abi.ret {
+                Some(ty) => ty,
+                None => ctx.symbols.slot_value_type(&method.return_type)?,
+            }));
         }
         stmt::emit_statement(&mut emitter, ctx, method.body)?;
         if !method.return_type.is_void() {
@@ -1174,13 +1204,13 @@ impl ClassPlan {
         &self,
         class: &ClassLayout,
         ctx: &crate::codegen::CodegenCtx<'_>,
-    ) -> Function {
+    ) -> Result<Function, crate::compiler_error::CompilerFailure> {
         use crate::codegen::function_emitter::FunctionEmitter;
 
         // Parameters stay at their (possibly erased) slot types: this body only
         // forwards them to the init fn, which takes the same slots.
         let ctor_slots = ctor_slot_types(ctx, &class.mangled);
-        let mut wasm_params = slot_params(ctx, &class.ctor_params, &ctor_slots);
+        let mut wasm_params = slot_params(ctx, &class.ctor_params, &ctor_slots)?;
         let guarded = ctx
             .symbols
             .class_guard_layout(&class.mangled)
@@ -1189,7 +1219,7 @@ impl ClassPlan {
             let intr = ctx
                 .symbols
                 .intrinsic_type_indices()
-                .expect("intrinsics declared");
+                .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?;
             wasm_params.push((
                 crate::Ident {
                     name: "$field_guards".into(),
@@ -1217,13 +1247,12 @@ impl ClassPlan {
             &mut emitter,
             ctx.symbols
                 .class_vtable_global_idx(&class.mangled)
-                .expect("vtable global"),
+                .ok_or_else(|| crate::codegen::internal_failure("vtable global"))?,
         );
         super::field_names::emit_instance_names(&mut emitter, ctx, &field_names, |_| false);
-        let intrinsics = ctx
-            .symbols
-            .intrinsic_type_indices()
-            .expect("intrinsics declared by codegen entry");
+        let intrinsics = ctx.symbols.intrinsic_type_indices().ok_or_else(|| {
+            crate::codegen::internal_failure("intrinsics declared by codegen entry")
+        })?;
         // Instance validators live after the named payload, indexed by data
         // slot. Keeping them out of field_names preserves object enumeration.
         let layout = ctx.symbols.class_guard_layout(&class.mangled);
@@ -1266,19 +1295,26 @@ impl ClassPlan {
         // this }` into each method's payload slot, so an interface-typed receiver
         // dispatches it through the shared field-name scan.
         if !dynamic_methods.is_empty() {
-            let closure_vtable = ctx
-                .symbols
-                .closure_vtable_global_idx()
-                .expect("closure vtable global emitted when class methods exist");
+            let closure_vtable = ctx.symbols.closure_vtable_global_idx().ok_or_else(|| {
+                crate::codegen::internal_failure(
+                    "closure vtable global emitted when class methods exist",
+                )
+            })?;
             for (j, method) in dynamic_methods.iter().enumerate() {
                 let closure_struct = ctx
                     .symbols
-                    .closure_struct_type_idx(slot_closure_sig(method))
-                    .expect("class method closure struct registered");
+                    .closure_struct_type_idx(slot_closure_sig(method)?)
+                    .ok_or_else(|| {
+                        crate::codegen::internal_failure("class method closure struct registered")
+                    })?;
                 let adapter = ctx
                     .symbols
                     .class_method_adapter_func_idx(&class.mangled, &method.name)
-                    .expect("class method adapter allocated or reused from the owner");
+                    .ok_or_else(|| {
+                        crate::codegen::internal_failure(
+                            "class method adapter allocated or reused from the owner",
+                        )
+                    })?;
                 emitter.instruction(Instruction::LocalGet(this_slot));
                 emitter.instruction(Instruction::StructGet {
                     struct_type_index: class.struct_type_idx,
@@ -1308,7 +1344,7 @@ impl ClassPlan {
         // Implicit `return this`. (Explicit `return;` inside a constructor is not
         // supported in this slice — the fixtures don't use it.)
         emitter.instruction(Instruction::LocalGet(this_slot));
-        emitter.build()
+        Ok(emitter.build())
     }
 
     /// Constructor init fn: self-first ABI `((ref $Object), params...) -> ()` that
@@ -1336,11 +1372,11 @@ impl ClassPlan {
             ref_to(object_idx),
         )];
         let ctor_slots = ctor_slot_types(ctx, &class.mangled);
-        wasm_params.extend(slot_params(ctx, &class.ctor_params, &ctor_slots));
+        wasm_params.extend(slot_params(ctx, &class.ctor_params, &ctor_slots)?);
         let mut emitter = FunctionEmitter::new(ctx, &wasm_params);
         let param_slots = rebind_erased_params(&mut emitter, ctx, &class.ctor_params, &ctor_slots)?;
         // Box captured-mutated ctor params.
-        emitter.emit_boxed_param_prologue(&class.ctor_params, &param_slots);
+        emitter.emit_boxed_param_prologue(&class.ctor_params, &param_slots)?;
 
         // `this` = ref.cast of the self param to the concrete class.
         let this_slot = emitter.add_anonymous_local(ref_to(class.struct_type_idx));
@@ -1350,7 +1386,7 @@ impl ClassPlan {
         )));
         emitter.instruction(Instruction::LocalSet(this_slot));
         emitter.set_this_local(this_slot);
-        super::field_guards::bind_receiver(&mut emitter, ctx, this_slot, &class.mangled);
+        super::field_guards::bind_receiver(&mut emitter, ctx, this_slot, &class.mangled)?;
         emitter.set_ctor_class(class.mangled.clone());
 
         if let Some(body) = class.ctor_body {
@@ -1382,7 +1418,7 @@ impl ClassPlan {
                 for (i, p) in class.ctor_params.iter().enumerate() {
                     emitter.instruction(Instruction::LocalGet(param_slots[i]));
                     if let Some(slot) = parent_slots.get(i).copied() {
-                        cast::emit_coerce_to_wasm_slot(&mut emitter, ctx, &p.ty, slot);
+                        cast::emit_coerce_to_wasm_slot(&mut emitter, ctx, &p.ty, slot)?;
                     }
                 }
                 emitter.instruction(Instruction::Call(parent_init));
@@ -1636,7 +1672,9 @@ fn accessor_methods(decl: &TypedClassDecl) -> Vec<crate::TypedClassMethod> {
         .collect()
 }
 
-fn slot_closure_sig(slot: &MethodSlot) -> crate::codegen::closures::ClosureSig {
+fn slot_closure_sig(
+    slot: &MethodSlot,
+) -> Result<crate::codegen::closures::ClosureSig, crate::compiler_error::CompilerFailure> {
     let sig = crate::Type::Function {
         params: slot.param_tys.clone(),
         ret: Box::new(slot.ret_ty.clone()),
@@ -1701,11 +1739,11 @@ fn slot_param_type(
     slot_types: &[ValType],
     i: usize,
     p: &crate::TypedParam,
-) -> ValType {
-    slot_types
-        .get(i)
-        .copied()
-        .unwrap_or_else(|| ctx.symbols.slot_value_type(&p.ty))
+) -> Result<ValType, crate::compiler_error::CompilerFailure> {
+    Ok(match slot_types.get(i) {
+        Some(ty) => *ty,
+        None => ctx.symbols.slot_value_type(&p.ty)?,
+    })
 }
 
 /// The constructor parameter slots recorded when the class's ctor fn-types were
@@ -1724,12 +1762,12 @@ fn slot_params(
     ctx: &CodegenCtx<'_>,
     params: &[crate::TypedParam],
     slot_types: &[ValType],
-) -> Vec<(crate::Ident, ValType)> {
+) -> Result<Vec<(crate::Ident, ValType)>, crate::compiler_error::CompilerFailure> {
     params
         .iter()
         .enumerate()
-        .map(|(i, p)| (p.name.clone(), slot_param_type(ctx, slot_types, i, p)))
-        .collect()
+        .map(|(i, p)| Ok((p.name.clone(), slot_param_type(ctx, slot_types, i, p)?)))
+        .collect::<Result<_, crate::compiler_error::CompilerFailure>>()
 }
 
 /// Unbox every param whose slot is erased but whose declared type is concrete
@@ -1746,8 +1784,8 @@ fn rebind_erased_params(
 ) -> Result<Vec<u32>, crate::compiler_error::CompilerFailure> {
     let mut param_slots: Vec<u32> = (1..=params.len() as u32).collect();
     for (i, p) in params.iter().enumerate() {
-        let own_vt = ctx.symbols.value_type(&p.ty);
-        if slot_param_type(ctx, slot_types, i, p) == own_vt {
+        let own_vt = ctx.symbols.value_type(&p.ty)?;
+        if slot_param_type(ctx, slot_types, i, p)? == own_vt {
             continue;
         }
         let shadow = emitter.add_anonymous_local(own_vt);
@@ -1928,7 +1966,7 @@ fn emit_universal_slot_thunk(
                 name: "self".into(),
                 span: crate::Span::at(crate::FileId(0)),
             },
-            ctx.symbols.value_type(&crate::Type::Unknown),
+            ctx.symbols.value_type(&crate::Type::Unknown)?,
         )],
     );
     emitter.instruction(Instruction::LocalGet(0));
@@ -2257,5 +2295,42 @@ mod tests {
             &recovered("vtable")
         ));
         assert!(wasmtime::StructType::eq(&intr.error, &recovered("struct")));
+    }
+}
+
+#[cfg(test)]
+mod closure_adapter_invariant_tests {
+    use super::*;
+    use crate::codegen::invariant_tests::{assert_internal, with_context};
+
+    #[test]
+    fn class_closure_adapter_requires_registered_method_and_slot_abi() {
+        let (ta, diagnostics) = crate::compile::typecheck_to_typed_ast(
+            "class C { f(a: number): number { return a; } } function main(): number { return new C().f(1); }",
+            crate::FileId(0),
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let plan = ClassPlan::collect(&ta, &BTreeMap::new()).unwrap();
+        let class = &plan.classes[0];
+        let slot = &class.methods[0];
+        let mut symbols = crate::codegen::tests::mock_symbols_with_intrinsics();
+        with_context(&ta, &symbols, |ctx| {
+            assert_internal(plan.emit_method_adapter_body(class, slot, ctx).unwrap_err());
+        });
+        symbols.record_class_method_func(slot.owner.clone(), slot.name.clone(), 1);
+        with_context(&ta, &symbols, |ctx| {
+            assert_internal(plan.emit_method_adapter_body(class, slot, ctx).unwrap_err());
+        });
+        symbols.record_class_method_abi(
+            class.mangled.clone(),
+            slot.name.clone(),
+            MethodSlotAbi {
+                params: vec![],
+                ret: Some(ValType::F64),
+            },
+        );
+        with_context(&ta, &symbols, |ctx| {
+            assert_internal(plan.emit_method_adapter_body(class, slot, ctx).unwrap_err());
+        });
     }
 }
