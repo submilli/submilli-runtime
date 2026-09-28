@@ -24,3 +24,6 @@ node_modules/
 
 # Claude Design handoff bundle, read locally and never published
 /docs-site/design-export/
+
+# Local security research pending remediation
+/research/SUB-633-panic-audit.md
