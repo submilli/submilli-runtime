@@ -152,7 +152,7 @@ don't survive.
 | `blueprint variable add\|list\|remove` | The `variables` block |
 | `blueprint secret add\|list\|remove` | The `secrets` block: `--store`, `--harness`, `--env`, or `--file` |
 | `blueprint git set\|show\|remove` | Manage the blueprint's [Git configuration](#configure-git) |
-| `blueprint auth-proxy add\|list\|remove` | Credentials the runtime adds to outbound requests by host |
+| `blueprint auth-proxy add\|list\|remove` | Credentials the runtime adds by host; `add --allow-insecure-http` opts that rule into HTTP, requiring a separate top-level YAML opt-in |
 | `blueprint capability list [library]` | Every capability a rule can name, with its filter fields and any rules already present |
 | `blueprint capability add <name> [--filter …] [--action allow\|deny] [--caller <id>]` | Append a rule; refuses a capability name nothing provides unless `--force` |
 | `blueprint capability remove <name> [--caller <id>]` | Drop every rule for a capability |

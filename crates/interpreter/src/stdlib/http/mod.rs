@@ -10,6 +10,9 @@
 mod declaration;
 pub mod policy;
 pub mod transport;
+mod transport_policy;
+#[cfg(test)]
+mod transport_policy_tests;
 
 use wasmtime::{
     Caller, FuncType, HeapType, Linker, RefType, Rooted, StructRef, StructType, Val, ValType,
@@ -41,6 +44,7 @@ pub use transport::{
     AuthProxy, AuthProxyError, HttpClient, HttpError, HttpRequest, HttpResponse, NoopAuthProxy,
     ReqwestHttpClient, default_auth_proxy, default_http_client, describe_error_chain,
 };
+pub use transport_policy::{HttpTransportPolicy, TransportPolicyError};
 
 /// Verb-form helpers' per-request timeout; `download` defaults to
 /// [`DOWNLOAD_TIMEOUT_MS`] instead (downloads are usually larger).
@@ -369,6 +373,7 @@ async fn perform_request(
         timeout_ms: DEFAULT_TIMEOUT_MS,
         max_response_size: caller.data().http_max_response_size,
         decompress: false,
+        transport_policy: None,
     };
     // The running code, not the last export entered: injection is main-only, so a package
     // misattributed to `main` would be handed the operator's credentials. An unresolvable
@@ -380,7 +385,7 @@ async fn perform_request(
     let req = auth_proxy
         .transform(req, &who)
         .await
-        .map_err(|e| wasmtime::Error::msg(format!("http {method} {url}: auth proxy: {e}")))?;
+        .map_err(|e| wasmtime::Error::msg(format!("http {method}: auth proxy: {e}")))?;
 
     let metrics = std::sync::Arc::clone(&caller.data().metrics);
     let start = std::time::Instant::now();
@@ -396,13 +401,14 @@ async fn perform_request(
             .map(|resp| (resp.status, resp.body.len() as u64)),
     );
     let resp = send_result.map_err(|e| {
-        let msg = format!("http {method} {url}: {e}");
+        let msg = format!("http {method}: {e}");
         // An over-limit response body is a spec `RangeError` (out-of-range
         // size) and a bad verb a `TypeError`; other transport failures stay
         // base `Error`s.
         match e {
             HttpError::TooLarge { .. } => crate::runtime::host::range_error(msg),
             HttpError::UnsupportedMethod(_) => crate::runtime::host::type_error(msg),
+            HttpError::Internal(_) => crate::runtime::host::fatal_host_error(msg),
             _ => wasmtime::Error::msg(msg),
         }
     })?;
@@ -560,6 +566,7 @@ async fn perform_download(
         timeout_ms: options.timeout_ms,
         max_response_size: options.max_bytes,
         decompress: options.decompress,
+        transport_policy: None,
     };
     // The running code, not the last export entered: injection is main-only, so a package
     // misattributed to `main` would be handed the operator's credentials. An unresolvable
@@ -570,7 +577,7 @@ async fn perform_download(
     let req = auth_proxy
         .transform(req, &who)
         .await
-        .map_err(|e| wasmtime::Error::msg(format!("http.download {url}: auth proxy: {e}")))?;
+        .map_err(|e| wasmtime::Error::msg(format!("http.download: auth proxy: {e}")))?;
 
     // No auto-mkdir; a missing parent surfaces when the temp sibling is created, which
     // is also where an escaping parent is refused.
@@ -619,6 +626,9 @@ impl DownloadFailure {
             DownloadFailure::Transport(HttpError::UnsupportedMethod(_), msg) => {
                 crate::runtime::host::type_error(msg)
             }
+            DownloadFailure::Transport(HttpError::Internal(_), msg) => {
+                crate::runtime::host::fatal_host_error(msg)
+            }
             DownloadFailure::Transport(_, msg) => wasmtime::Error::msg(msg),
             DownloadFailure::Fs(err) => err,
         }
@@ -655,7 +665,7 @@ async fn stream_to_temp(
         Ok(meta) => Ok((meta, inner)),
         Err(e) => {
             let _ = tmp.remove_file();
-            let msg = format!("http.download {url}: {e}", url = req.url);
+            let msg = format!("http.download: {e}");
             Err(DownloadFailure::Transport(e, msg))
         }
     }
@@ -1712,6 +1722,60 @@ function main(): void {
         // Host fn upper-cases the method before storing it on the
         // `HttpRequest`.
         assert_eq!(seen[0].method, "POST");
+    }
+
+    #[tokio::test]
+    async fn internal_http_setup_failure_bypasses_catch_and_cleans_download() {
+        struct BrokenSetup;
+        #[async_trait::async_trait]
+        impl HttpClient for BrokenSetup {
+            async fn send(&self, _: &HttpRequest) -> Result<HttpResponse, HttpError> {
+                Err(HttpError::Internal("injected setup failure".into()))
+            }
+            async fn download(
+                &self,
+                _: &HttpRequest,
+                _: &mut (dyn std::io::Write + Send),
+            ) -> Result<DownloadMeta, HttpError> {
+                Err(HttpError::Internal("injected setup failure".into()))
+            }
+        }
+        for operation in [
+            "get(\"https://example.com/\");",
+            "download(\"https://example.com/\", \"/payload\");",
+        ] {
+            let source = format!(
+                r#"
+                import {{ get, download }} from "submilli:http";
+                function main(): void {{
+                    try {{ {operation} }} catch (error) {{ return; }}
+                }}
+            "#
+            );
+            let compiled = compile_script(&source, "test.ts", crate::FileId(0), &[], &[]).unwrap();
+            let cfg = RuntimeConfig::default();
+            let engine = cfg.engine().unwrap();
+            let mut data = StoreData::with_vfs(Vfs::tempdir().unwrap());
+            data.http_client = Arc::new(BrokenSetup);
+            let mut store = cfg.store(&engine, data).unwrap();
+            let module = wasmtime::Module::new(&engine, &compiled.wasm).unwrap();
+            let mut linker = wasmtime::Linker::<StoreData>::new(&engine);
+            install_runtime_async(&mut linker, &mut store)
+                .await
+                .unwrap();
+            let instance = linker.instantiate_async(&mut store, &module).await.unwrap();
+            let error = dispatch_main_async(&mut store, &instance)
+                .await
+                .unwrap_err();
+            assert!(
+                format!("{error:?}").contains("injected setup failure"),
+                "{error:?}"
+            );
+            assert_eq!(
+                store.data().vfs.dir().unwrap().entries().unwrap().count(),
+                0
+            );
+        }
     }
 
     #[tokio::test]

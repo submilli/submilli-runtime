@@ -3005,6 +3005,7 @@ dependencies = [
  "submilli-wasm",
  "tempfile",
  "tokio",
+ "tokio-rustls",
  "unicode-ident",
  "unicode-normalization",
  "unicode-width",

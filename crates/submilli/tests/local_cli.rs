@@ -971,3 +971,42 @@ fn lint_does_not_warn_on_the_same_rule_under_a_package() {
         "a package may hold this rule; got: {err}"
     );
 }
+
+#[test]
+fn blueprint_http_denial_is_enforced_by_local_run() {
+    let temp = tempfile::tempdir().unwrap();
+    let script = temp.path().join("probe.ts");
+    let blueprint = temp.path().join("blueprint.yaml");
+    fs::write(
+        &script,
+        r#"
+        import { get } from "submilli:http";
+        function main(): string {
+            try { get("http://127.0.0.1:1/?token=never-print-this"); return "allowed"; }
+            catch (error) { return (error as Error).message; }
+        }
+    "#,
+    )
+    .unwrap();
+    for (allow, rule) in [(false, false), (false, true), (true, false)] {
+        fs::write(&blueprint, format!("name: gates\ndefault: allow\nallow_insecure_http: {allow}\nauth_proxy:\n- host: 127.0.0.1\n  allow_insecure_http: {rule}\n  headers: {{ X-Test: dummy }}\n")).unwrap();
+        let result = run_with_home(
+            &[
+                os("run"),
+                script.as_os_str(),
+                os("--blueprint"),
+                blueprint.as_os_str(),
+            ],
+            temp.path(),
+        );
+        assert!(result.status.success(), "{}", stderr(&result));
+        let message = stdout(&result);
+        assert!(message.contains("HTTPS required"), "{message}");
+        assert!(!message.contains("never-print-this"), "{message}");
+        assert!(message.contains(if allow {
+            "auth_proxy rule"
+        } else {
+            "blueprint"
+        }));
+    }
+}

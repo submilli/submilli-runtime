@@ -42,6 +42,9 @@ pub struct Blueprint {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     pub name: String,
+    /// Permit cleartext submilli:http traffic; auth-proxy rules must opt in separately.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_insecure_http: bool,
     /// Idle window before a session is closed and reaped. Applies to every
     /// session regardless of VFS mode — a session always exists to hold the
     /// `lastRun` result; `per_session` mode additionally owns a directory the
@@ -109,6 +112,7 @@ impl Default for Blueprint {
             git: None,
             kind: None,
             name: String::new(),
+            allow_insecure_http: false,
             idle_timeout: DEFAULT_IDLE_TIMEOUT,
             vfs: VfsConfig::default(),
             secrets: BTreeMap::new(),
@@ -1944,5 +1948,40 @@ permissions:
             fault.message.contains("no `mode:`"),
             "the message must say the mode was never written: {fault:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod insecure_http_tests {
+    use super::*;
+
+    #[test]
+    fn insecure_http_flags_default_false_and_round_trip_independently() {
+        let base =
+            "name: transport\nauth_proxy:\n- host: localhost\n  headers: { X-Test: value }\n";
+        let omitted = parse(base).unwrap();
+        assert!(!omitted.allow_insecure_http);
+        assert!(!omitted.auth_proxy[0].allow_insecure_http);
+        assert!(
+            !serde_yml::to_string(&omitted)
+                .unwrap()
+                .contains("allow_insecure_http")
+        );
+        for blueprint in [false, true] {
+            for rule in [false, true] {
+                let yaml = format!(
+                    "{base}  allow_insecure_http: {rule}\nallow_insecure_http: {blueprint}\n"
+                );
+                let parsed = parse(&yaml).unwrap();
+                assert_eq!(parsed.allow_insecure_http, blueprint);
+                assert_eq!(parsed.auth_proxy[0].allow_insecure_http, rule);
+                assert_eq!(
+                    parse(&serde_yml::to_string(&parsed).unwrap()).unwrap(),
+                    parsed
+                );
+            }
+        }
+        assert!(parse(&format!("{base}allow_insecure_http: sometimes\n")).is_err());
+        assert!(parse(&format!("{base}  allow_insecure_http: sometimes\n")).is_err());
     }
 }

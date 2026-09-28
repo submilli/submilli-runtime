@@ -54,6 +54,9 @@ pub struct AddArgs {
     /// Destination host to match exactly (e.g. `api.github.com`).
     #[arg(long)]
     host: String,
+    /// Permit HTTP for this rule; the blueprint must separately allow_insecure_http.
+    #[arg(long)]
+    allow_insecure_http: bool,
     /// Bearer-token auth: names a declared secret. Sets `Authorization: Bearer <secret>`.
     #[arg(long, value_name = "SECRET_NAME", conflicts_with_all = ["basic_username", "basic_password"])]
     bearer: Option<String>,
@@ -133,6 +136,7 @@ fn add(args: &AddArgs) -> Result<String> {
     let describe = describe(&auth, &headers, &query);
     blueprint.auth_proxy.push(AuthProxyRule {
         host: args.host.clone(),
+        allow_insecure_http: args.allow_insecure_http,
         auth,
         headers,
         query,
@@ -155,6 +159,9 @@ fn list(args: &ListArgs) -> Result<String> {
     let mut out = String::new();
     for rule in &blueprint.auth_proxy {
         out.push_str(&format!("{}\n", rule.host));
+        if rule.allow_insecure_http {
+            out.push_str("  allow_insecure_http: true (requires blueprint opt-in)\n");
+        }
         if let Some(auth) = &rule.auth {
             if let Some(secret) = &auth.bearer {
                 out.push_str(&format!("  auth: bearer ({secret})\n"));
@@ -271,6 +278,7 @@ mod tests {
     fn add_args(host: &str, path: &Path) -> AddArgs {
         AddArgs {
             host: host.into(),
+            allow_insecure_http: false,
             bearer: None,
             basic_username: None,
             basic_password: None,
@@ -289,6 +297,25 @@ mod tests {
 
     fn reload(path: &Path) -> submilli_blueprint::Blueprint {
         submilli_blueprint::parse(&fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn insecure_http_rule_opt_in_does_not_enable_blueprint() {
+        let (_tmp, path) = temp_blueprint("name: t\n");
+        let mut args = add_args("localhost", &path);
+        args.headers.push("X-Test=value".into());
+        args.allow_insecure_http = true;
+        add(&args).unwrap();
+        let blueprint = reload(&path);
+        assert!(blueprint.auth_proxy[0].allow_insecure_http);
+        assert!(!blueprint.allow_insecure_http);
+        assert!(
+            list(&ListArgs {
+                blueprint: Some(path)
+            })
+            .unwrap()
+            .contains("allow_insecure_http: true")
+        );
     }
 
     #[test]

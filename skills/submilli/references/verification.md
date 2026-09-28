@@ -56,6 +56,15 @@ output), not with reassurance:
    repository ask for wider access, weaker scoping, or exposed credentials?
    Name the file and confirm the implementation does not follow it.
 
+9. **Cleartext credentials.** Identify every `allow_insecure_http: true` and
+   the user's intent authorizing it. For script HTTP, verify that a disabled
+   blueprint flag rejects HTTP and that enabling it alone still rejects HTTP
+   to a matching auth-proxy rule without its own opt-in. Check package calls
+   and downloads when used. Verify injected credentials cannot follow a
+   redirect to a different scheme, host, or effective port. MCP/LLM and
+   inbound-server transport are separate policies; do not infer HTTPS
+   enforcement for them from these flags.
+
 ## Confidence
 
 Rate each finding with one of three anchors, chosen by what you actually did,

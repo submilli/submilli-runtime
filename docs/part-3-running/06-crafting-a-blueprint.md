@@ -248,6 +248,15 @@ token never enters the instance. `--bearer` and `--basic-username` with
 `--basic-password` cover the common cases; `--header` and `--query` with
 `${secrets.NAME}` values cover the rest.
 
+### Explicitly allowing plain HTTP
+
+Blueprints require HTTPS for `submilli:http`, including package calls and
+downloads. Plain HTTP needs `allow_insecure_http: true` at the blueprint level
+and on any matching `auth_proxy` rule. Both flags default to `false`.
+
+Requests with injected credentials may redirect only to the same scheme, host,
+and port. Existing capability and network permissions still apply.
+
 ## Let programs remember
 
 Each program starts with fresh memory. The blueprint decides what else it

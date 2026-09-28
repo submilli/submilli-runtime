@@ -1,3 +1,4 @@
+allow_insecure_http: true
 name: auth-demo
 
 secrets:
@@ -5,7 +6,8 @@ secrets:
     env: SUB_E2E_AUTHPROXY_TOKEN
 
 auth_proxy:
-  - host: 127.0.0.1
+  - allow_insecure_http: true
+    host: 127.0.0.1
     headers:
       Authorization: "Bearer ${secrets.DEMO_TOKEN}"
 

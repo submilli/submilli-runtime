@@ -1,6 +1,6 @@
 //! Blocking gix transport over the embedder's policy-controlled HTTP client.
 use super::{Job, operations, storage::Snapshot};
-use crate::stdlib::http::transport::{HttpRequest, HttpResponse};
+use crate::stdlib::http::transport::{HttpError, HttpRequest, HttpResponse};
 use base64::Engine;
 use gix::protocol::transport::client::blocking_io::http;
 use serde_json::json;
@@ -37,6 +37,23 @@ pub struct FetchResult {
 
 #[allow(clippy::result_large_err)] // Gix fixes the credentials callback error type.
 pub fn fetch(
+    snapshot: &Snapshot,
+    job: &Job,
+    remote_name: &str,
+    branch: &str,
+) -> Result<FetchResult> {
+    fetch_inner(snapshot, job, remote_name, branch).map_err(preserve_http_setup_failure)
+}
+
+fn preserve_http_setup_failure(error: wasmtime::Error) -> wasmtime::Error {
+    if let Some(message) = http_setup_failure(&error) {
+        return crate::runtime::host::fatal_host_error(message);
+    }
+    error
+}
+
+#[allow(clippy::result_large_err)]
+fn fetch_inner(
     snapshot: &Snapshot,
     job: &Job,
     remote_name: &str,
@@ -104,13 +121,38 @@ pub fn fetch(
     }
     prepared
         .receive(gix::progress::Discard, &job.cancelled)
-        .map_err(|_error| {
-            wasmtime::Error::msg("git: fetch failed while receiving repository data")
-        })?;
+        .map_err(|error| redact_fetch_failure(error.into()))?;
     Ok(FetchResult {
         branches,
         default_branch,
     })
+}
+
+fn redact_fetch_failure(error: wasmtime::Error) -> wasmtime::Error {
+    if let Some(message) = http_setup_failure(&error) {
+        return crate::runtime::host::fatal_host_error(message);
+    }
+    wasmtime::Error::msg("git: fetch failed while receiving repository data")
+}
+
+fn http_setup_failure(error: &wasmtime::Error) -> Option<&str> {
+    let root = error.root_cause();
+    // io::Error::source skips its contained error; inspect the payload too.
+    let cause = root
+        .downcast_ref::<io::Error>()
+        .and_then(io::Error::get_ref)
+        .map_or(root, |error| error as &(dyn std::error::Error + 'static));
+    match cause.downcast_ref::<HttpError>() {
+        Some(HttpError::Internal(message)) => Some(message),
+        _ => None,
+    }
+}
+
+fn http_error(error: HttpError) -> io::Error {
+    match error {
+        HttpError::Internal(_) => io::Error::other(error),
+        _ => io_error(error),
+    }
 }
 
 fn fetch_options(remote_name: &str, branch: &str) -> Result<gix::remote::ref_map::Options> {
@@ -196,7 +238,7 @@ impl Client {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
         let mut response = self
             .wait(deadline, self.job.http.send_without_redirects(request))?
-            .map_err(io_error)?;
+            .map_err(http_error)?;
         if !same_url(&response.final_url, &request.url) {
             return Err(io_error("git: redirects are unsupported"));
         }
@@ -221,7 +263,10 @@ impl Client {
                     deadline,
                     self.job.http.send_without_redirects(&authenticated),
                 )?
-                .map_err(|_| io_error("git: authenticated request failed"))?;
+                .map_err(|error| match error {
+                    HttpError::Internal(_) => http_error(error),
+                    _ => io_error("git: authenticated request failed"),
+                })?;
         }
         if !same_url(&response.final_url, &request.url) || !(200..300).contains(&response.status) {
             return Err(io_error(format!(
@@ -292,6 +337,7 @@ impl Client {
                 timeout_ms: 60_000,
                 max_response_size: self.job.max_bytes,
                 decompress: false,
+                transport_policy: None,
             },
             response: None,
             body_closed: method == "GET",
@@ -498,6 +544,16 @@ mod tests {
     use crate::runtime::{HttpClient, SecretProvider, StoreData};
     use crate::stdlib::http::transport::{DownloadMeta, HttpError};
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+    #[test]
+    fn http_setup_errors_keep_the_fatal_host_marker() {
+        let error = http_error(HttpError::Internal("injected setup failure".into()));
+        let error = preserve_http_setup_failure(error.into());
+        assert!(
+            format!("{error:?}").contains("internal host error"),
+            "{error:?}"
+        );
+    }
 
     #[derive(Clone, Copy, PartialEq)]
     enum Stall {

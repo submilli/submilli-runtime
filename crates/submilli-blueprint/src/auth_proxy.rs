@@ -21,6 +21,9 @@ const PLACEHOLDER_PREFIX: &str = "${secrets.";
 #[serde(deny_unknown_fields)]
 pub struct AuthProxyRule {
     pub host: String,
+    /// Also requires the blueprint-wide opt-in to permit cleartext requests.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_insecure_http: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<AuthSpec>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

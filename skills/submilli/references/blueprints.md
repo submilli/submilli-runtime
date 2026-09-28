@@ -53,7 +53,8 @@ Every top-level key, all optional except `name`:
 | `variables` | Session variables. Each has `required: true` or `default: "value"`, never both. Referenced as `${vars.NAME}` in filters |
 | `packages` | Packages the program may import. Unlisted packages do not exist for it |
 | `secrets` | Declared secret names and sources: `{ env: VAR }`, `{ file: /path }`, `{ store: key }`, or `{ harness: { required: true } }` for a value the trusted application binds per session. A server accepts only `store` and `harness` sources in a blueprint registered over its API (see Workflow) |
-| `auth_proxy` | Host-keyed credential injection for direct HTTP: `host`, then `auth: { bearer: "${secrets.X}" }`, `auth: { basic: { username, password } }`, `headers`, or `query` |
+| `allow_insecure_http` | Defaults to `false`: script HTTP (including packages/downloads) requires HTTPS. Does not govern MCP/LLM connections or inbound server HTTP |
+| `auth_proxy` | Host-keyed credential injection for direct HTTP: `host`, optional `allow_insecure_http: true` (also requires the blueprint flag), then `auth: { bearer: X }`, `auth: { basic: { username, password } }`, `headers`, or `query` |
 | `default` | Fall-through action: `deny` (the default and the norm), `allow`, or `ask-human` |
 | `permissions` | Per-caller rule lists; see below |
 | `mcp` | Outbound MCP servers keyed by local name: `url`, optional `transport` (`streamable_http`), `headers` with `${secrets.X}`, or `auth: { type: oauth2, ... }`. Imported as `@mcp/<name>`; gated by the `mcp.<name>` capability with a `tool` field; see MCP servers below |
@@ -213,6 +214,22 @@ permission check runs first; then, for a request whose host exactly matches
 an `auth_proxy` entry, the runtime adds the header. The token never enters the
 program. A model call works the same way: the provider key stays in
 `secrets`, the program names a model, and the response comes back.
+
+Use HTTPS URLs. Do not enable `allow_insecure_http` merely to make a failing
+request work: establish that the user intends cleartext traffic for this
+blueprint and, separately, for each affected auth-proxy credential. The
+blueprint flag alone permits no HTTP to a matching auth-proxy host; that
+rule must also set `allow_insecure_http: true`. Both flags default to false,
+including for localhost, and denial occurs before secret resolution.
+`blueprint auth-proxy add --allow-insecure-http` sets only the rule flag;
+edit the top-level flag in YAML. Existing HTTP blueprints need explicit
+opt-ins or HTTPS URLs when upgrading.
+
+Redirect destinations obey the same gates. Injected headers and query values
+restrict redirects to the same scheme, host, and effective port; redirects
+do not inject new credentials. Capability and network restrictions still
+apply. Runs without a blueprint, MCP/LLM connections, and inbound server HTTP
+retain their existing behavior; Git remains HTTPS-only.
 
 ```yaml
 kind: blueprint

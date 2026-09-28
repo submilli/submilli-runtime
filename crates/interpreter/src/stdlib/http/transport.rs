@@ -3,7 +3,9 @@
 //! bounded download/decompression plumbing. No Wasm ABI here; the package's
 //! host fns live in [`super`].
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
+
+use super::{HttpTransportPolicy, TransportPolicyError};
 use std::time::Duration;
 
 use futures::StreamExt as _;
@@ -22,6 +24,8 @@ pub struct HttpRequest {
     pub max_response_size: u64,
     /// `http.download`-only: opt-in transparent decompression via `Content-Encoding` or URL suffix.
     pub decompress: bool,
+    /// Custom transports must enforce this on the initial URL and every redirect.
+    pub transport_policy: Option<Arc<HttpTransportPolicy>>,
 }
 
 /// 4xx/5xx are not errors at this layer — only transport failures become [`HttpError`].
@@ -48,6 +52,9 @@ pub struct DownloadMeta {
 #[derive(Debug)]
 pub enum HttpError {
     Network(String),
+    /// Host setup failure: must terminate execution, not enter a guest catch.
+    Internal(String),
+    Policy(TransportPolicyError),
     Timeout,
     /// Message includes the cap and suggests `http.download`.
     TooLarge {
@@ -61,6 +68,8 @@ pub enum HttpError {
 impl std::fmt::Display for HttpError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            HttpError::Internal(msg) => write!(f, "internal HTTP transport error: {msg}"),
+            HttpError::Policy(error) => error.fmt(f),
             HttpError::Network(msg) => write!(f, "network error: {msg}"),
             HttpError::Timeout => write!(f, "request timed out"),
             HttpError::TooLarge { limit } => write!(
@@ -79,6 +88,8 @@ impl std::error::Error for HttpError {}
 
 /// Embedder-supplied HTTP transport. 4xx/5xx are not errors; only transport
 /// failures return `Err(HttpError)`. `Send + Sync` for sharing across stores.
+/// Implementations must enforce `HttpRequest::transport_policy`, including
+/// redirect destinations. Preserve `HttpError::Internal` as a fatal host failure.
 #[async_trait::async_trait]
 pub trait HttpClient: Send + Sync {
     async fn send(&self, req: &HttpRequest) -> Result<HttpResponse, HttpError>;
@@ -100,17 +111,44 @@ pub trait HttpClient: Send + Sync {
     ) -> Result<DownloadMeta, HttpError>;
 }
 
-/// Default `HttpClient` — async `reqwest`. Holds one `Client` (connection pool)
+/// Default `HttpClient` — async `reqwest`. Caches bounded policy-specific pools
 /// built with the SSRF policy resolver. The `cookies` feature is intentionally
 /// never enabled, so the client carries **no** cross-request state; the server
 /// builds one per session (see `submilli-server`) for tenant isolation.
 pub struct ReqwestHttpClient {
-    client: reqwest::Client,
-    no_redirect_client: reqwest::Client,
+    // At most two policy variants (ordinary and authenticated) retain pools.
+    // The cache belongs to this session client, never to a shared blueprint.
+    clients: Mutex<std::collections::VecDeque<CachedClient>>,
+    no_redirect_client: OnceLock<Result<reqwest::Client, String>>,
     /// Also kept here (not just in the DNS resolver) so a **literal-IP** URL —
     /// which reqwest connects to without ever calling the resolver — is still
     /// checked. Without this, `http://127.0.0.1` would bypass the SSRF guard.
     policy: Arc<crate::stdlib::http::policy::NetworkPolicy>,
+}
+
+struct CachedClient {
+    policy: Option<Arc<HttpTransportPolicy>>,
+    client: reqwest::Client,
+}
+
+fn redirect_policy(
+    policy: Option<Arc<HttpTransportPolicy>>,
+    network: Arc<super::NetworkPolicy>,
+) -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(move |attempt| {
+        if let Some(policy) = &policy {
+            let Some(initial) = attempt.previous().first() else {
+                return attempt.error("redirect is missing its initial destination");
+            };
+            if let Err(error) = policy.check_redirect(initial, attempt.url()) {
+                return attempt.error(error);
+            }
+        }
+        if let Err(error) = network.check_literal_host(attempt.url().as_str()) {
+            return attempt.error(error);
+        }
+        reqwest::redirect::Policy::default().redirect(attempt)
+    })
 }
 
 impl Default for ReqwestHttpClient {
@@ -123,21 +161,53 @@ impl Default for ReqwestHttpClient {
 
 impl ReqwestHttpClient {
     pub fn new(policy: Arc<crate::stdlib::http::policy::NetworkPolicy>) -> Self {
-        let client = policy
-            .client_builder()
-            .redirect(reqwest::redirect::Policy::default())
-            .build()
-            .expect("reqwest client builds with static config");
-        let no_redirect_client = policy
-            .client_builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .expect("reqwest client builds with static config");
         Self {
-            client,
-            no_redirect_client,
+            clients: Mutex::new(std::collections::VecDeque::new()),
+            no_redirect_client: OnceLock::new(),
             policy,
         }
+    }
+
+    fn client(
+        &self,
+        policy: &Option<Arc<HttpTransportPolicy>>,
+    ) -> Result<reqwest::Client, HttpError> {
+        let mut clients = self
+            .clients
+            .lock()
+            .map_err(|_| HttpError::Internal("HTTP client cache lock poisoned".into()))?;
+        if let Some(cached) = clients.iter().find(|cached| &cached.policy == policy) {
+            return Ok(cached.client.clone());
+        }
+        let client = self
+            .policy
+            .client_builder()
+            .redirect(redirect_policy(policy.clone(), Arc::clone(&self.policy)))
+            // Redirect Referer headers must not copy injected query credentials.
+            .referer(policy.is_none())
+            .build()
+            .map_err(|error| HttpError::Internal(error.to_string()))?;
+        if clients.len() >= 2 {
+            clients.pop_front();
+        }
+        clients.push_back(CachedClient {
+            policy: policy.clone(),
+            client: client.clone(),
+        });
+        Ok(client)
+    }
+
+    fn no_redirect_client(&self) -> Result<&reqwest::Client, HttpError> {
+        self.no_redirect_client
+            .get_or_init(|| {
+                self.policy
+                    .client_builder()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .build()
+                    .map_err(|error| error.to_string())
+            })
+            .as_ref()
+            .map_err(|error| HttpError::Internal(error.clone()))
     }
 
     /// Block a literal-IP host the policy forbids. Hostnames go through the DNS
@@ -150,7 +220,7 @@ impl ReqwestHttpClient {
 
     /// Shared request setup: method, URL, per-call timeout, headers.
     fn request(&self, req: &HttpRequest) -> Result<reqwest::RequestBuilder, HttpError> {
-        self.request_with_client(req, &self.client)
+        self.request_with_client(req, &self.client(&req.transport_policy)?)
     }
 
     fn request_with_client(
@@ -158,6 +228,11 @@ impl ReqwestHttpClient {
         req: &HttpRequest,
         client: &reqwest::Client,
     ) -> Result<reqwest::RequestBuilder, HttpError> {
+        if let Some(policy) = &req.transport_policy {
+            let url = url::Url::parse(&req.url)
+                .map_err(|_| HttpError::Network("invalid HTTP URL".into()))?;
+            policy.check_destination(&url).map_err(HttpError::Policy)?;
+        }
         self.check_literal_ip(&req.url)?;
         let method = reqwest::Method::from_bytes(req.method.to_ascii_uppercase().as_bytes())
             .map_err(|_| HttpError::UnsupportedMethod(req.method.clone()))?;
@@ -174,11 +249,12 @@ impl ReqwestHttpClient {
 #[async_trait::async_trait]
 impl HttpClient for ReqwestHttpClient {
     async fn send(&self, req: &HttpRequest) -> Result<HttpResponse, HttpError> {
-        self.send_with_client(req, &self.client).await
+        self.send_with_client(req, &self.client(&req.transport_policy)?)
+            .await
     }
 
     async fn send_without_redirects(&self, req: &HttpRequest) -> Result<HttpResponse, HttpError> {
-        self.send_with_client(req, &self.no_redirect_client).await
+        self.send_with_client(req, self.no_redirect_client()?).await
     }
 
     async fn download(
@@ -365,7 +441,11 @@ pub(super) fn http_failure_outcome(err: &HttpError) -> &'static str {
     match err {
         HttpError::Timeout => "timeout",
         HttpError::TooLarge { .. } => "too_large",
-        HttpError::Network(_) | HttpError::UnsupportedMethod(_) | HttpError::Other(_) => "error",
+        HttpError::Network(_)
+        | HttpError::Internal(_)
+        | HttpError::Policy(_)
+        | HttpError::UnsupportedMethod(_)
+        | HttpError::Other(_) => "error",
     }
 }
 
@@ -379,7 +459,7 @@ fn map_reqwest_error(err: reqwest::Error) -> HttpError {
     if err.is_timeout() {
         return HttpError::Timeout;
     }
-    HttpError::Network(describe_error_chain(&err))
+    HttpError::Network(describe_error_chain(&err.without_url()))
 }
 
 pub fn describe_error_chain(err: &dyn std::error::Error) -> String {
@@ -514,3 +594,7 @@ mod tests {
         assert_eq!(describe_error_chain(&bare), "plain");
     }
 }
+
+#[cfg(test)]
+#[path = "transport_tls_tests.rs"]
+mod tls_tests;
