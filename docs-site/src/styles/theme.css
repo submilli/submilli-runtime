@@ -1,8 +1,9 @@
+@import './design-system.css';
+
 /*
  * Submilli documentation theme for Starlight.
  *
- * Brand tokens come from the Submilli design system (dark canvas #131313,
- * Light Blue accent, SF Pro Rounded / Nunito with IBM Plex Mono). The docs
+ * Canonical tokens are imported from design-system.css. The docs
  * flatten the deck's dramatic canvases into a calm reading surface: solid
  * backgrounds, hairline borders, one accent, and mono only for labels.
  *
@@ -14,31 +15,26 @@
 /* ------------------------------------------------------------------ */
 
 :root {
-	/* Palette */
-	--sub-ink-850: #131313;
-	--sub-ink-800: #161718;
-	--sub-grey-900: #202020;
-	--sub-blue-300: #c4e4f9;
-	--sub-blue-350: #abd8f7;
-	--sub-blue-600: #6badda;
-	/* Derived deeper blue: the palette's mid blue fails AA on white. */
+	/* Compatibility aliases map docs and Starlight onto semantic source tokens. */
+	--sub-ink-850: var(--surface-canvas);
+	--sub-ink-800: var(--surface-raised);
+	--sub-grey-900: var(--text-on-light);
+	--sub-blue-300: var(--accent);
+	--sub-blue-350: var(--blue-350);
+	--sub-blue-600: var(--blue-600);
+	/* Docs-only AA light-link adaptation; see DESIGN-SYSTEM.md. */
 	--sub-blue-800: #2b6d99;
-	--sub-cyan-300: #88e5ff;
-	--sub-yellow: #f5d632;
-	--sub-red: #ff8181;
-	--sub-slate-700: #31415c;
+	--sub-cyan-300: var(--positive);
+	--sub-yellow: var(--warn);
+	--sub-red: var(--danger);
+	--sub-slate-700: var(--slate-700);
 
-	/* Fonts. SF Pro Rounded renders natively on Apple devices; Nunito is the
-	   self-hosted fallback everywhere else. */
-	--sl-font:
-		'SF Pro Rounded', 'Nunito Variable', 'Nunito', -apple-system, BlinkMacSystemFont, 'Segoe UI',
-		Roboto, 'Helvetica Neue', Arial, sans-serif;
-	--sl-font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-
-	/* Motion: short settles on a threshold curve, no bounce. */
-	--sub-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-	--sub-dur-fast: 140ms;
-	--sub-dur-base: 240ms;
+	/* Preserve the self-hosted Nunito Variable face before the canonical fallback. */
+	--sl-font: 'SF Pro Rounded', 'Nunito Variable', var(--font-rounded);
+	--sl-font-mono: var(--font-mono);
+	--sub-ease-out: var(--ease-out);
+	--sub-dur-fast: var(--dur-fast);
+	--sub-dur-base: var(--dur-base);
 
 	/* Layout */
 	--sl-nav-height: 3.5rem;
@@ -89,24 +85,24 @@
 
 /* Dark is the brand default. */
 :root {
-	--sub-bg: var(--sub-ink-850);
-	--sub-side: var(--sub-ink-800);
-	--sub-line: rgba(255, 255, 255, 0.1);
-	--sub-line-strong: rgba(255, 255, 255, 0.22);
-	--sub-fg: #ffffff;
-	--sub-fg2: rgba(255, 255, 255, 0.74);
-	--sub-fg3: #9a9a9a;
-	--sub-link: var(--sub-blue-300);
-	--sub-link-underline: rgba(196, 228, 249, 0.4);
-	--sub-accent: var(--sub-blue-300);
-	--sub-accent-ink: #000000;
+	--sub-bg: var(--surface-canvas);
+	--sub-side: var(--surface-raised);
+	--sub-line: var(--border-subtle);
+	--sub-line-strong: var(--border-strong);
+	--sub-fg: var(--text-primary);
+	--sub-fg2: var(--text-secondary);
+	--sub-fg3: var(--grey-400);
+	--sub-link: var(--text-accent);
+	--sub-link-underline: color-mix(in srgb, var(--text-accent) 40%, transparent);
+	--sub-accent: var(--accent);
+	--sub-accent-ink: var(--accent-ink);
 	--sub-code-bg: #1b1c1f;
 	--sub-code-hl: rgba(196, 228, 249, 0.09);
-	--sub-inline: rgba(255, 255, 255, 0.09);
-	--sub-current: rgba(196, 228, 249, 0.12);
-	--sub-hover: rgba(255, 255, 255, 0.05);
-	--sub-card: rgba(255, 255, 255, 0.04);
-	--sub-kbd: rgba(255, 255, 255, 0.08);
+	--sub-inline: color-mix(in srgb, var(--text-primary) 9%, transparent);
+	--sub-current: var(--accent-soft);
+	--sub-hover: color-mix(in srgb, var(--text-primary) 5%, transparent);
+	--sub-card: var(--surface-card);
+	--sub-kbd: color-mix(in srgb, var(--text-primary) 8%, transparent);
 	--sub-tip: var(--sub-cyan-300);
 	--sub-warn: var(--sub-yellow);
 	--sub-danger: var(--sub-red);
@@ -116,22 +112,22 @@
 	--sub-warn-bg: rgba(245, 214, 50, 0.07);
 	--sub-danger-bg: rgba(255, 129, 129, 0.08);
 	--sub-security-bg: rgba(107, 173, 218, 0.09);
-	--sub-scrim: rgba(0, 0, 0, 0.6);
-	--sub-logo-mark: var(--sub-blue-350);
-	--sub-logo-word: #ffffff;
+	--sub-scrim: color-mix(in srgb, var(--black) 60%, transparent);
+	--sub-logo-mark: var(--blue-350);
+	--sub-logo-word: var(--text-primary);
 
 	--sl-color-white: var(--sub-fg);
-	--sl-color-gray-1: #eceef2;
+	--sl-color-gray-1: var(--grey-300);
 	--sl-color-gray-2: var(--sub-fg2);
 	--sl-color-gray-3: var(--sub-fg3);
-	--sl-color-gray-4: #545861;
+	--sl-color-gray-4: var(--slate-600);
 	--sl-color-gray-5: var(--sub-line);
 	--sl-color-gray-6: var(--sub-side);
 	--sl-color-gray-7: var(--sub-code-bg);
 	--sl-color-black: var(--sub-bg);
 	--sl-color-accent-low: var(--sub-current);
 	--sl-color-accent: var(--sub-accent);
-	--sl-color-accent-high: #e8f6ff;
+	--sl-color-accent-high: var(--blue-100);
 	--sl-color-text: var(--sub-fg2);
 	--sl-color-text-accent: var(--sub-link);
 	--sl-color-text-invert: var(--sub-accent-ink);
@@ -144,29 +140,32 @@
 	--sl-color-hairline-light: var(--sub-line);
 	--sl-color-hairline-shade: var(--sub-line);
 	--sl-color-backdrop-overlay: var(--sub-scrim);
-	--sl-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-	--sl-shadow-md: 0 8px 24px rgba(0, 0, 0, 0.45);
-	--sl-shadow-lg: 0 24px 64px rgba(0, 0, 0, 0.55);
+	--sl-shadow-sm: var(--shadow-sm);
+	--sl-shadow-md: var(--shadow-md);
+	--sl-shadow-lg: var(--shadow-lg);
 }
 
-:root[data-theme='light'] {
-	--sub-bg: #ffffff;
-	--sub-side: #f5faff;
-	--sub-line: rgba(32, 32, 32, 0.1);
-	--sub-line-strong: rgba(32, 32, 32, 0.22);
-	--sub-fg: var(--sub-grey-900);
+
+:root[data-theme='light'],
+.theme-light {
+	--sub-bg: var(--surface-canvas);
+	--sub-side: var(--surface-raised);
+	--sub-line: var(--border-subtle);
+	--sub-line-strong: var(--border-strong);
+	--sub-fg: var(--text-primary);
+	/* Docs-only AA-muted-text adaptation; see DESIGN-SYSTEM.md. */
 	--sub-fg2: rgba(32, 32, 32, 0.76);
 	--sub-fg3: #6b6b6b;
 	--sub-link: var(--sub-blue-800);
 	--sub-link-underline: rgba(43, 109, 153, 0.4);
-	--sub-accent: var(--sub-blue-300);
-	--sub-accent-ink: #000000;
+	--sub-accent: var(--accent);
+	--sub-accent-ink: var(--accent-ink);
 	--sub-code-bg: #f3f8fc;
 	--sub-code-hl: rgba(107, 173, 218, 0.14);
 	--sub-inline: rgba(107, 173, 218, 0.14);
 	--sub-current: rgba(107, 173, 218, 0.16);
 	--sub-hover: rgba(32, 32, 32, 0.04);
-	--sub-card: #ffffff;
+	--sub-card: var(--surface-card);
 	--sub-kbd: rgba(32, 32, 32, 0.06);
 	--sub-tip: #0f6f8f;
 	--sub-warn: #8a6d00;
@@ -178,8 +177,8 @@
 	--sub-danger-bg: rgba(180, 35, 24, 0.06);
 	--sub-security-bg: rgba(49, 65, 92, 0.06);
 	--sub-scrim: rgba(32, 32, 32, 0.45);
-	--sub-logo-mark: #000000;
-	--sub-logo-word: #000000;
+	--sub-logo-mark: var(--text-primary);
+	--sub-logo-word: var(--text-primary);
 
 	--sl-color-white: var(--sub-fg);
 	--sl-color-gray-1: #2a2a2a;
@@ -205,9 +204,9 @@
 	--sl-color-hairline-light: var(--sub-line);
 	--sl-color-hairline-shade: var(--sub-line);
 	--sl-color-backdrop-overlay: var(--sub-scrim);
-	--sl-shadow-sm: 0 1px 2px rgba(49, 65, 92, 0.1);
-	--sl-shadow-md: 0 18px 50px -24px rgba(49, 65, 92, 0.45);
-	--sl-shadow-lg: 0 24px 64px rgba(49, 65, 92, 0.25);
+	--sl-shadow-sm: var(--shadow-sm);
+	--sl-shadow-md: var(--shadow-card-light);
+	--sl-shadow-lg: var(--shadow-lg);
 }
 
 /* ------------------------------------------------------------------ */
@@ -227,7 +226,7 @@ body {
 :focus-visible {
 	outline: 2px solid var(--sl-color-text-accent);
 	outline-offset: 2px;
-	border-radius: 6px;
+	border-radius: var(--radius-xs);
 }
 
 /* ------------------------------------------------------------------ */
@@ -241,7 +240,7 @@ starlight-menu-button button {
 	width: var(--sl-menu-button-size);
 	height: var(--sl-menu-button-size);
 	padding: 0.75rem;
-	border-radius: 10px;
+	border-radius: var(--radius-md);
 	background-color: transparent;
 	color: var(--sl-color-white);
 	box-shadow: none;
@@ -277,7 +276,7 @@ site-search button[data-open-modal] {
 		width: 2.75rem;
 		height: 2.75rem;
 		justify-content: center;
-		border-radius: 10px;
+		border-radius: var(--radius-md);
 		font-size: 0;
 	}
 	site-search button[data-open-modal] svg {
@@ -293,7 +292,7 @@ site-search button[data-open-modal] {
 		padding-inline-start: 0.75rem;
 		padding-inline-end: 0.625rem;
 		border: 1px solid var(--sub-line);
-		border-radius: 10px;
+		border-radius: var(--radius-md);
 		background: var(--sub-card);
 		color: var(--sl-color-gray-3);
 		font: 500 0.875rem/1 var(--sl-font);
@@ -316,7 +315,7 @@ site-search button[data-open-modal] {
 		font: 500 0.6875rem/1 var(--sl-font-mono);
 		padding: 0.1875rem 0.375rem;
 		border: 1px solid var(--sub-line);
-		border-radius: 5px;
+		border-radius: var(--radius-xs);
 		background: var(--sub-kbd);
 		color: var(--sl-color-gray-2);
 	}
@@ -336,7 +335,7 @@ site-search dialog::backdrop {
 @media (min-width: 50rem) {
 	site-search dialog {
 		margin-top: 4.5rem;
-		border-radius: 16px;
+		border-radius: var(--radius-lg);
 		max-width: 42.5rem;
 	}
 }
@@ -347,7 +346,7 @@ site-search dialog::backdrop {
 	--pagefind-ui-background: var(--sub-side);
 	--pagefind-ui-border: var(--sub-line);
 	--pagefind-ui-tag: var(--sub-kbd);
-	--pagefind-ui-border-radius: 10px;
+	--pagefind-ui-border-radius: var(--radius-md);
 }
 #starlight__search .pagefind-ui__search-input {
 	font: 500 1.0625rem/1 var(--sl-font);
@@ -387,7 +386,7 @@ site-search dialog::backdrop {
 }
 #starlight__search .pagefind-ui__button {
 	border: 1px solid var(--sub-line);
-	border-radius: 10px;
+	border-radius: var(--radius-md);
 	background: transparent;
 	color: var(--sl-color-white);
 	font: 600 0.875rem/1 var(--sl-font);
@@ -411,7 +410,7 @@ site-search dialog::backdrop {
 }
 .sidebar-content summary {
 	padding: 0.4375rem 0.625rem;
-	border-radius: 8px;
+	border-radius: var(--radius-sm);
 	line-height: 1.2;
 	transition: background-color var(--sub-dur-base) var(--sub-ease-out);
 }
@@ -443,7 +442,7 @@ site-search dialog::backdrop {
 }
 .sidebar-content a {
 	padding: 0.4375rem 0.625rem;
-	border-radius: 8px;
+	border-radius: var(--radius-sm);
 	font-size: 0.875rem;
 	font-weight: 500;
 	line-height: 1.35;
@@ -664,7 +663,7 @@ mobile-starlight-toc .isMobile a[aria-current='true'] {
 	font-size: var(--sl-text-code-sm);
 	font-weight: 500;
 	padding: 0.125rem 0.375rem;
-	border-radius: 6px;
+	border-radius: var(--radius-xs);
 	background: var(--sub-inline);
 	color: var(--sl-color-white);
 }
@@ -687,7 +686,7 @@ mobile-starlight-toc .isMobile a[aria-current='true'] {
 	font: 500 0.6875rem/1 var(--sl-font-mono);
 	padding: 0.1875rem 0.375rem;
 	border: 1px solid var(--sub-line);
-	border-radius: 5px;
+	border-radius: var(--radius-xs);
 	background: var(--sub-kbd);
 	color: var(--sl-color-gray-2);
 }
@@ -697,7 +696,7 @@ mobile-starlight-toc .isMobile a[aria-current='true'] {
 	width: fit-content;
 	max-width: 100%;
 	border: 1px solid var(--sub-line);
-	border-radius: 12px;
+	border-radius: var(--radius-md);
 	border-collapse: collapse;
 	font-size: 0.9375rem;
 	line-height: 1.5;
@@ -789,7 +788,7 @@ mobile-starlight-toc .isMobile a[aria-current='true'] {
 }
 .expressive-code .frame .copy button {
 	border: 1px solid var(--sub-line);
-	border-radius: 8px;
+	border-radius: var(--radius-sm);
 	color: var(--sl-color-gray-2);
 	transition:
 		background-color var(--sub-dur-base) var(--sub-ease-out),
@@ -801,7 +800,7 @@ mobile-starlight-toc .isMobile a[aria-current='true'] {
 }
 .expressive-code .frame .copy .feedback {
 	font: 500 0.75rem/1 var(--sl-font-mono);
-	border-radius: 8px;
+	border-radius: var(--radius-sm);
 }
 
 /* ------------------------------------------------------------------ */
@@ -815,7 +814,7 @@ mobile-starlight-toc .isMobile a[aria-current='true'] {
 	row-gap: 0.375rem;
 	padding: 1rem 1.125rem;
 	border: 1px solid var(--sl-color-asides-border);
-	border-radius: 12px;
+	border-radius: var(--radius-md);
 	background: var(--sl-color-asides-bg);
 	color: var(--sl-color-gray-2);
 }

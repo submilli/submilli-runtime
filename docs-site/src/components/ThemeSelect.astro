@@ -1,9 +1,5 @@
 ---
-/**
- * Two-state theme toggle. The site keeps Starlight's ThemeProvider, so the
- * system preference ("auto") still applies until the reader clicks once;
- * after that the choice is stored the same way Starlight's own picker does.
- */
+/** Two-state picker using the same pre-paint provider as theme handoff links. */
 ---
 
 <starlight-theme-select>
@@ -43,9 +39,12 @@
 
 <script>
 	type Theme = 'dark' | 'light';
+	declare global {
+		interface Window {
+			StarlightThemeProvider: { setTheme: (theme: Theme) => void; updatePickers: () => void };
+		}
+	}
 
-	/** Same key Starlight's ThemeProvider reads before first paint. */
-	const storageKey = 'starlight-theme';
 
 	const currentTheme = (): Theme =>
 		document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
@@ -61,13 +60,7 @@
 			};
 			button.addEventListener('click', () => {
 				const next: Theme = currentTheme() === 'light' ? 'dark' : 'light';
-				document.documentElement.dataset.theme = next;
-				try {
-					localStorage.setItem(storageKey, next);
-				} catch {}
-				document.querySelectorAll('starlight-theme-select button').forEach((b) => {
-					b.setAttribute('aria-label', `Switch to ${next === 'light' ? 'dark' : 'light'} theme`);
-				});
+				window.StarlightThemeProvider.setTheme(next);
 			});
 			sync();
 		}
@@ -86,7 +79,7 @@
 		width: 2.25rem;
 		height: 2.25rem;
 		border: 1px solid var(--sub-line);
-		border-radius: 10px;
+		border-radius: var(--radius-md);
 		background: transparent;
 		color: var(--sl-color-gray-2);
 		cursor: pointer;

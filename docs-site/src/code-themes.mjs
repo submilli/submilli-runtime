@@ -1,9 +1,10 @@
 // Expressive Code / Shiki themes for the documentation.
 //
-// Both themes use the same small vocabulary the design specifies: keywords in
-// the brand blue, strings in the refraction cyan, comments in a quiet grey and
-// punctuation slightly dimmed. Everything else stays in the body text colour so
-// code reads as text with a few accents rather than a rainbow.
+// Both themes use the same canonical vocabulary: keywords in --blue-300,
+// strings in --cyan-300, comments in a quiet grey and punctuation slightly
+// dimmed. CSS custom properties cannot be consumed by Shiki, so these literal
+// values mirror the vendored design-system.css snapshot. Light code colours are
+// the documented docs-only AA adaptations in styles/DESIGN-SYSTEM.md.
 
 function makeTheme({ name, type, background, foreground, keyword, string, comment, punctuation, muted }) {
 	const rule = (scope, foreground, fontStyle) => ({

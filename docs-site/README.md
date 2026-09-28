@@ -36,11 +36,12 @@ directories are relative to this application because the book lives outside it.
 
 ## Theme
 
-The look follows the Submilli design system: `#131313` dark canvas (light
+The look uses a versioned snapshot of the shared Submilli design-system tokens: `#131313` dark canvas (light
 optional), SF Pro Rounded with a self-hosted Nunito fallback for text, IBM Plex
 Mono for labels and code, and Light Blue as the single accent.
 
-- `src/styles/theme.css` — brand tokens mapped onto Starlight's CSS variables,
+- `src/styles/design-system.css` — shared token snapshot, with provenance and reading-surface adaptations documented alongside it.
+- `src/styles/theme.css` — shared tokens mapped onto Starlight's CSS variables,
   plus restyles for the sidebar, table of contents, search, content, and asides.
 - `src/components/` — Starlight component overrides registered in
   `astro.config.mjs`: header, logo lockup, GitHub link with build-time star
@@ -51,6 +52,14 @@ Mono for labels and code, and Light Blue as the single accent.
 - `src/plugins/satteri-security-aside.mjs` — adds `:::security` to the four
   built-in asides for facts the runtime enforces.
 - `src/content/i18n/en.json` — UI strings such as the search placeholder.
+
+Website links pass `?theme=dark` so the docs match the dark marketing page,
+including when opening from a preview on a different origin. The inline theme
+provider applies that choice before content paints, persists it using Starlight's
+storage key, and removes the handoff parameter while preserving other parameters
+and anchors. Readers can then switch themes normally. Direct visits retain the
+saved preference or use the system preference if none is saved. Blocked browser
+storage does not prevent the current page's theme handoff or toggle.
 
 Chapters can use `:::note`, `:::tip`, `:::caution`, `:::danger`, and
 `:::security` callouts, and `title="file.ts"` on code fences for a file tab.

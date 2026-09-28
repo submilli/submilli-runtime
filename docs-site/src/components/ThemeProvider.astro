@@ -1,0 +1,35 @@
+{/* Apply the theme before page content is painted, including cross-origin preview links. */}
+<script is:inline>
+  window.StarlightThemeProvider = (() => {
+    const key = 'starlight-theme';
+    const isTheme = (value) => value === 'dark' || value === 'light';
+    const url = new URL(window.location.href);
+    const requested = url.searchParams.get('theme');
+    let stored;
+    try { stored = localStorage.getItem(key); } catch {}
+    let current = isTheme(requested) ? requested : isTheme(stored) ? stored
+      : window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    function updatePickers() {
+      document.documentElement.dataset.theme = current;
+      document.documentElement.classList.toggle('theme-light', current === 'light');
+      document.querySelectorAll('starlight-theme-select button').forEach((button) => {
+        button.setAttribute('aria-label', `Switch to ${current === 'light' ? 'dark' : 'light'} theme`);
+      });
+    }
+    function setTheme(theme) {
+      if (!isTheme(theme)) return;
+      current = theme;
+      try { localStorage.setItem(key, theme); } catch {}
+      updatePickers();
+    }
+    if (isTheme(requested)) {
+      setTheme(requested);
+      // Consume the handoff so a reader's later toggle survives reloads and shared links.
+      url.searchParams.delete('theme');
+      try { window.history.replaceState(window.history.state, '', url.href); } catch {}
+    } else {
+      updatePickers();
+    }
+    return { updatePickers, setTheme };
+  })();
+</script>
