@@ -364,6 +364,28 @@ fn lint_errors_for_missing_requires_rule() {
 }
 
 #[test]
+fn lint_keeps_a_narrowed_requires_rule() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_capability_packages(home.path());
+    let file = home.path().join("blueprint.yaml");
+    let blueprint = "name: x\npackages:\n  - \"@acme/app\"\npermissions:\n  \"@acme/app\":\n    - capability: acme.com/charge\n      filter: customer == \"cus_123\" and amount < 500\n      action: allow\n";
+    write_file(&file, blueprint);
+
+    let out = run_with_home(
+        &[os("blueprint"), os("lint"), os("--fix"), file.as_os_str()],
+        home.path(),
+    );
+
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("warning:"), "missing warning in {err}");
+    assert!(err.contains("grants it differently"), "got: {err}");
+    let updated = fs::read_to_string(&file).expect("read blueprint");
+    let parsed = submilli_blueprint::parse(&updated).expect("blueprint parses");
+    assert_eq!(parsed.permissions["@acme/app"].len(), 1, "{updated}");
+}
+
+#[test]
 fn lint_fix_adds_missing_capability_rules() {
     let home = tempfile::tempdir().expect("home tempdir");
     let _project = publish_capability_packages(home.path());
