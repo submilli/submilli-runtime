@@ -44,10 +44,11 @@ not launch this loop recursively or create a PR.
    repeat lint findings, or manufacture findings.
 2. **Correctness:** trace changes through callers and shared mechanisms;
    challenge assumptions, invariants, interactions, and TypeScript compatibility
-   where applicable.
+   where applicable. Apply the no-panic review below to execution-path changes.
 3. **Edge cases and coverage:** probe boundaries, error paths, sibling sites,
    and regression-test gaps with concrete counterexamples. Challenge the
-   compatibility evidence where applicable.
+   compatibility evidence where applicable; verify no-panic failure handling
+   and cleanup where execution is affected.
 
 Give every reviewer a self-contained packet containing:
 
@@ -58,6 +59,9 @@ Give every reviewer a self-contained packet containing:
   repository or assume personal skills are installed.
 - Concrete hypotheses, checks and results (including differential evidence),
   changes since the last round, and prior findings with their dispositions.
+- For execution-path changes, the affected no-panic boundaries, error categories,
+  resource/cleanup invariants, and evidence for failure paths. Distinguish
+  source-triggered reproducers from injected internal-state failures.
 - Explicit read-only scope: no source edits, staging, stashing, checkout,
   restore, rebase, or Git-ref changes. Scratch reproductions belong outside
   tracked source. Specify allowed focused checks; prohibit repeated full
@@ -66,6 +70,85 @@ Give every reviewer a self-contained packet containing:
   behavior for bugs, and introduced versus pre-existing classification.
   Clean-code findings require a concrete rubric violation, not a reproduction.
   An empty findings list is valid.
+
+### No-panic review
+
+For execution-path changes, apply the canonical
+[no-panic policy](../../../CLAUDE.md#no-panic-execution-paths) to new/changed code
+and directly affected callers and mechanisms. This includes compilation, setup,
+Rust host operations, diagnostics and cleanup, not only guest execution.
+
+- Identify explicit panic macros, panicking `unwrap`/`expect`, assertions and
+  rethrown panics. "Impossible" internal states still require errors or
+  structurally non-panicking code. Test assertions are allowed; inspect an API's
+  actual contract rather than flagging a fallible `unwrap_*` by name alone.
+- Inspect implicit failures: indexing/slicing, arithmetic/conversions, borrowing,
+  runtime-context requirements, recursion/drop, allocation sizes and dependency
+  preconditions. For each finding, identify the operation and violated assumption;
+  a text match alone does not prove a panic or input reachability.
+- Trace returned errors through every affected entry point. Reject ignored
+  errors, fabricated defaults, partial compiler output and accidental conversion
+  of internal host/setup/ABI failures into guest-catchable exceptions. Preserve
+  ordinary guest error semantics and diagnostic/source context.
+- Verify cancellation and cleanup still run before resources are released,
+  including blocking workers, store/VFS ownership, budgets and idempotency.
+  Treat panic containment as defense in depth, not a replacement for this policy;
+  native stack overflow and allocator aborts need prevention/resource bounds.
+- Require focused boundary/failure evidence appropriate to the change, including
+  a healthy subsequent request when shared state is affected. Run potential
+  process-abort reproducers in bounded child processes. Request debug/release and
+  production-sized-stack coverage when changing recursion or stack limits.
+
+A reachable explicit panicking operation can violate the policy without a known
+guest-input trigger: report the execution path and evidence, and label exploit
+reachability unproven when appropriate. Track unrelated pre-existing violations
+in SUB-633 as required below; do not expand every review into the full no-panic
+backlog or clear an in-scope violation merely by filing it elsewhere. Do not
+claim panic freedom from passing tests, `catch_unwind`, or a clean search alone.
+
+### Record existing panic sites in SUB-633
+
+When a review encounters a confirmed existing production execution-path panic
+or other no-panic policy violation, the parent agent must ensure it is recorded
+in [SUB-633](https://linear.app/submilli/issue/SUB-633/no-panic), even if fixing it
+is outside the current patch. Reviewers remain read-only. Invoking this review
+skill authorizes the parent to update SUB-633 and its attached inventory and to
+reopen it when unresolved findings require further work. This is a narrow
+exception to the external-write restrictions below, not permission to create
+other issues, change unrelated metadata, or close SUB-633.
+
+1. Confirm the operation and execution path, distinguish a policy violation from
+   proven input reachability, and check the current integration base as well as
+   the working branch. Test-only assertions and fallible APIs are not findings
+   merely because their names match a panic search.
+2. Read the current issue, relevant comments and attached inventory before
+   writing. Reuse the matching item/site and add only materially new evidence.
+   If already recorded accurately, report the existing entry rather than adding
+   a duplicate. For an uncovered site, add it to the relevant item/inventory;
+   append a new unchecked item only when no existing item covers the work.
+3. Record file:line and revision, the panicking operation or implicit failure,
+   affected entry point, invariant, reproduction or injected-state evidence when
+   available, status on the integration base, and a fix direction if known.
+   Include the originating review/PR when available. Preserve stable numbering
+   and baseline references; use narrow patches and re-read changed anchors so
+   concurrent edits are not overwritten.
+4. If a matching item/file was marked complete but still has unresolved work,
+   uncheck the affected entry and explain the evidence. If SUB-633 is closed or
+   completed and the finding remains unresolved on the current integration base,
+   discover the team's actual open/backlog state and move SUB-633 there. Keep an
+   already-open issue's state. Do not reopen solely because a stale working branch
+   lacks a fix already present on the base; record the integration need instead.
+   If the base cannot be verified, record that uncertainty before claiming the
+   completed work has regressed or changing completion state.
+5. Read back each update and state change. Report the linked entry, additions or
+   deduplication, and any reopening in the handoff. If Linear access, a required
+   state transition, or write verification is unavailable, report the pending
+   update explicitly rather than claiming it was recorded or reopened.
+
+Recording an unrelated finding does not require implementing it in this patch.
+An in-scope violation must still be fixed before the review can pass. A failed
+tracking update leaves the review workflow incomplete; do not silently discard
+the finding or claim all required review steps completed.
 
 ### Clean-code rubric
 
@@ -92,8 +175,9 @@ context; report untouched readability issues only if the change worsens them.
 
 The parent agent owns fixes and triage; reviewers remain read-only.
 
-1. Reproduce behavioral failures or establish the specific rubric violation.
-   Reject unsupported speculation with a short reason.
+1. Reproduce behavioral failures, establish the specific rubric violation, or
+   demonstrate a concrete no-panic policy violation as described above. Reject
+   unsupported speculation with a short reason.
 2. Check relevant code on local `main` and changes since the branch's merge
    base before implementing a finding. Report missing `main` as a limitation.
    Classify introduced versus pre-existing defects; neither is automatically
@@ -103,15 +187,19 @@ The parent agent owns fixes and triage; reviewers remain read-only.
    instances of the same cause. Run focused regression checks. Resolve routine
    implementation choices autonomously; ask about unresolved product semantics.
 4. Track confirmed unrelated defects or separate design work outside the patch.
-   If Linear access and authorization to file/comment already exist, search two
-   or three distinctive queries and read plausible matches first. Reuse existing
+   For existing no-panic violations, follow the mandatory SUB-633 workflow above.
+   For other findings, if Linear access and authorization to file/comment already
+   exist, search two or three distinctive queries and read plausible matches
+   first. Reuse existing
    issues; comment only with materially new evidence. Verify the destination
    (Submilli team/interpreter project for runtime issues), group shared causes,
    and include reproduction, expected/actual behavior, mechanism with file:line,
    status on `main`, fix sketch if known, and originating issue/PR if available.
    Do not set labels, priority, or estimates unless requested. This review skill
-   alone does not authorize external writes or closing issues. Without access
-   or authorization, report the finding and filing limitation in the handoff.
+   authorizes only the SUB-633 updates and reopening specified above; other
+   external writes require separate authorization. It never authorizes closing
+   issues. Without access or authorization, report the finding and filing
+   limitation in the handoff.
 5. Carry every disposition and the latest delta into another complete round
    after fixes. Stop successfully only when a complete round has no new
    confirmed findings and no unresolved in-scope findings. Filing an issue is

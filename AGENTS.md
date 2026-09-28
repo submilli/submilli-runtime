@@ -6,6 +6,15 @@
 If any instruction here conflicts with `CLAUDE.md`, follow `CLAUDE.md` unless
 the current user request explicitly says otherwise.
 
+## No-panic execution requirement
+
+Follow [CLAUDE.md's no-panic policy](CLAUDE.md#no-panic-execution-paths) when
+implementing or reviewing execution-path changes. Internal invariants must use
+typed error propagation or structurally non-panicking operations, even when a
+failure "should never happen." Review implicit panic sources and error cleanup
+as well as explicit panic calls. Apply the policy to the affected code and track
+unrelated existing violations separately.
+
 ## Mandatory review before pull requests
 
 Use `$open-pr`, following

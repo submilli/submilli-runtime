@@ -36,10 +36,43 @@ When adding or removing a gated capability, update
 change, including its summary, filter fields, and example filter. Blueprint
 scaffolding reads this catalog.
 
+## No-panic execution paths
+
+Production script execution must not panic, including when an internal invariant
+is violated. This covers parsing, typechecking, compiler transformations, codegen,
+module loading/setup, runtime and host functions, request preparation, diagnostics,
+and cleanup. It applies through CLI, HTTP, MCP, and direct library entry points.
+
+- Use typed `Result` errors and propagate failures to the caller, or express the
+  invariant structurally so the operation cannot panic. "Should never happen"
+  and "the previous phase guarantees this" do not justify a panicking operation.
+- Do not use `panic!`, `unreachable!`, `todo!`, `unimplemented!`, panicking
+  `unwrap`/`expect`, or assertions (including debug assertions) on these paths.
+  Tests may assert or panic to report test failures. Fallible APIs whose names
+  contain `unwrap` are not violations merely because of their names.
+- Review implicit panic and abort sources too: indexing/slicing, arithmetic and
+  narrowing, borrowing, runtime-context APIs, recursive traversal/drop, unchecked
+  allocation sizes, and dependency calls. Use checked or structurally safe
+  operations and enforce resource/depth limits before exhaustion. A broad
+  `catch_unwind` wrapper or a clean text search does not satisfy this requirement.
+- Preserve source context and distinguish ordinary language errors from internal
+  failures. Never replace a failure with a successful default, partial Wasm, or
+  an emitted guest trap that hides a compiler error. Internal host/setup/ABI
+  failures must terminate execution rather than become guest-catchable exceptions.
+- Error propagation must preserve capability checks, caller attribution, resource
+  limits, cancellation, and cleanup. Drain owned work before releasing resources
+  it still uses; preserve session/idempotency and uncertain-side-effect semantics.
+- Fix violations in new/changed code and directly affected mechanisms. Track
+  unrelated pre-existing sites separately without expanding every change into a
+  repository-wide rewrite. Existing violations do not excuse new ones. Review
+  must distinguish a confirmed policy violation from a demonstrated input-triggered
+  failure; an exploit reproducer is not required to remove an explicit panic.
+
 ## Code style
 
 - Rust 2024; typed errors in library APIs. `anyhow` is appropriate at the CLI
-  boundary. Avoid `unwrap()` outside tests, CLI code, and infallible paths.
+  boundary. Production execution paths follow the no-panic requirement above,
+  including internal operations believed to be infallible.
 - Keep functions focused, names descriptive, and control flow easy to follow.
   Prefer early returns to nesting. Keep helpers below their callers.
 - Preserve ordered tables and exhaustive dispatchers: they encode layout or
