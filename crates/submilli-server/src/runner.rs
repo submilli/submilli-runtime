@@ -521,6 +521,18 @@ mod tests {
     use interpreter::runtime::{InMemorySessionKv, install_runtime_host_functions};
     use std::time::Duration;
 
+    #[test]
+    fn fatal_host_failure_is_reported_as_a_runtime_error() {
+        let (sources, file) = Sources::single("test.ts", "function main(): void {}");
+        let cause = interpreter::runtime::host::fatal_host_error("host ABI: invalid result buffer");
+        let err = cause.context("executing host call");
+        let payload = classify_runtime_error(&err, &sources, file);
+        assert!(matches!(payload.kind, ErrorKind::RuntimeError));
+        assert!(payload.message.contains("internal host error: host ABI"));
+        assert!(payload.message.contains("invalid result buffer"));
+        assert!(payload.diagnostics.is_empty());
+    }
+
     /// Neither the program's source nor the rendered error, which quotes its
     /// lines, reaches a telemetry report without the explicit opt-in.
     #[test]

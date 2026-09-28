@@ -47,6 +47,11 @@ pub(crate) fn map_uncaught_exception(
     let Err(err) = result else {
         return Ok(());
     };
+    if err.is::<super::host::FatalHostError>() {
+        // A pending guest exception must not replace the actual fatal cause.
+        store.take_pending_exception();
+        return Err(err);
+    }
     let Some(exn) = store.take_pending_exception() else {
         return Err(err);
     };

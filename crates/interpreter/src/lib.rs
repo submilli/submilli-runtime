@@ -9,6 +9,7 @@ pub mod capability_derivation;
 pub mod codegen;
 pub mod compile;
 mod compile_capabilities;
+pub mod compiler_error;
 pub mod diagnostics;
 pub mod did_you_mean;
 pub mod doc_comment;

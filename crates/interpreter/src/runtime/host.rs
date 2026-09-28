@@ -1113,7 +1113,7 @@ pub fn throw_error(caller: &mut Caller<'_, StoreData>, message: &str) -> wasmtim
 /// A broken host invariant or exhausted host allocation must terminate the run,
 /// rather than becoming an exception that guest code can catch and ignore.
 #[derive(Debug)]
-pub(crate) struct FatalHostError(String);
+pub struct FatalHostError(String);
 
 impl std::fmt::Display for FatalHostError {
     fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1123,7 +1123,7 @@ impl std::fmt::Display for FatalHostError {
 
 impl std::error::Error for FatalHostError {}
 
-pub(crate) fn fatal_host_error(message: impl std::fmt::Display) -> wasmtime::Error {
+pub fn fatal_host_error(message: impl std::fmt::Display) -> wasmtime::Error {
     wasmtime::Error::new(FatalHostError(message.to_string()))
 }
 
@@ -1137,7 +1137,7 @@ pub(crate) fn throw_host_error(
     caller: &mut Caller<'_, StoreData>,
     err: wasmtime::Error,
 ) -> wasmtime::Error {
-    if err.is::<FatalHostError>() {
+    if err.is::<FatalHostError>() || err.is::<wasmtime::ThrownException>() {
         return err;
     }
     let class = builtin_class_of(&err);
@@ -1153,7 +1153,7 @@ fn throw_error_as(
 ) -> wasmtime::Error {
     match throw_error_inner(caller, class, message, own_fields) {
         Ok(err) => err,
-        Err(_) => wasmtime::Error::msg(message.to_string()),
+        Err(cause) => fatal_host_error(format!("{message}; error construction failed: {cause:#}")),
     }
 }
 
@@ -1176,7 +1176,9 @@ fn throw_error_inner(
     match caller.as_context_mut().throw::<()>(exn) {
         Err(thrown) => Ok(wasmtime::Error::new(thrown)),
         // `throw` always returns the pending-exception error.
-        Ok(()) => unreachable!("Store::throw returns Err by construction"),
+        Ok(()) => Err(fatal_host_error(
+            "engine did not return its pending-exception error",
+        )),
     }
 }
 
@@ -1191,8 +1193,8 @@ pub(crate) fn string_array_type(engine: &Engine) -> ArrayType {
 ///
 /// `_deterministic` is reserved for Phase-2 durable-log wrapping; unused today.
 ///
-/// Ordinary host errors become a *catchable*
-/// `Error` (via [`throw_error`]); [`FatalHostError`] terminates execution. A body
+/// Ordinary host errors become catchable guest errors via [`throw_error`].
+/// [`FatalHostError`] bypasses conversion and terminates execution. A body
 /// that already raised a throw (its `Err` is a `ThrownException`) is passed
 /// through untouched, so the pending exception isn't clobbered. Bodies receive
 /// `&mut Caller` (not an owned `Caller`) so the wrapper can still use the caller
@@ -1353,6 +1355,89 @@ fn number_module_definitions() -> PackageDeclaration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn fatal_host_errors_bypass_guest_catch_in_both_wrappers() {
+        for asynchronous in [false, true] {
+            for fatal in [false, true] {
+                let (engine, mut store, mut linker) = async_store();
+                crate::runtime::install_runtime_async(&mut linker, &mut store)
+                    .await
+                    .expect("runtime");
+                let name = crate::mangle::host(TEST_MODULE, "failure");
+                let failure = move || {
+                    if fatal {
+                        fatal_host_error("test operation: invalid state")
+                            .context("outer host context")
+                    } else {
+                        wasmtime::Error::msg("ordinary operation failure")
+                    }
+                };
+                let ty = FuncType::new(&engine, [], []);
+                if asynchronous {
+                    register_host_fn_async(
+                        &mut linker,
+                        TEST_MODULE,
+                        name.clone(),
+                        ty,
+                        true,
+                        move |_, _, _| Box::pin(async move { Err(failure()) }),
+                    )
+                    .expect("async registration");
+                } else {
+                    register_host_fn(
+                        &mut linker,
+                        TEST_MODULE,
+                        name.clone(),
+                        ty,
+                        true,
+                        move |_, _, _| Err(failure()),
+                    )
+                    .expect("sync registration");
+                }
+                let source = format!(
+                    r#"(module
+                    (import "{TEST_MODULE}" "{name}" (func $failure))
+                    (func (export "attempt") (result i32)
+                        (block $caught
+                            (try_table (catch_all $caught) (call $failure))
+                            (return (i32.const 0)))
+                        (i32.const 1))
+                    (func (export "healthy") (result i32) (i32.const 42)))"#
+                );
+                let buffer = wast::parser::ParseBuffer::new(&source).expect("WAT tokens");
+                let mut wat = wast::parser::parse::<wast::Wat>(&buffer).expect("WAT");
+                let module =
+                    wasmtime::Module::new(&engine, wat.encode().expect("encode")).expect("module");
+                let instance = linker
+                    .instantiate_async(&mut store, &module)
+                    .await
+                    .expect("instance");
+                let attempt = instance
+                    .get_typed_func::<(), i32>(&mut store, "attempt")
+                    .expect("attempt");
+                let result = attempt.call_async(&mut store, ()).await;
+                if fatal {
+                    let err =
+                        result.expect_err("fatal failure cannot enter the guest catch handler");
+                    assert!(err.is::<FatalHostError>(), "typed cause lost: {err:#}");
+                    assert!(format!("{err:#}").contains("invalid state"));
+                } else {
+                    assert_eq!(result.expect("guest catches ordinary failure"), 1);
+                }
+                let healthy = instance
+                    .get_typed_func::<(), i32>(&mut store, "healthy")
+                    .expect("healthy");
+                assert_eq!(
+                    healthy
+                        .call_async(&mut store, ())
+                        .await
+                        .expect("subsequent call"),
+                    42
+                );
+            }
+        }
+    }
 
     const TEST_MODULE: &str = "test:sync";
 

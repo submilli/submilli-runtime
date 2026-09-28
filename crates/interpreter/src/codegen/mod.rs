@@ -31,6 +31,7 @@ pub mod throw;
 pub mod user_subtypes;
 mod vtable_walk;
 
+use crate::compiler_error::{CompilerFailure, CompilerStage};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -270,6 +271,16 @@ impl std::fmt::Display for CodegenError {
 
 impl std::error::Error for CodegenError {}
 
+impl From<CodegenError> for CompilerFailure {
+    fn from(error: CodegenError) -> Self {
+        Self::Internal {
+            stage: CompilerStage::Codegen,
+            span: Some(error.span),
+            message: error.message.to_owned(),
+        }
+    }
+}
+
 impl CodegenError {
     pub fn diagnostic(self) -> crate::Diagnostic {
         crate::Diagnostic {
@@ -331,8 +342,8 @@ pub fn codegen(
     file: crate::FileId,
     ta: &TypedAst,
     dependencies: &[&PackageDeclaration],
-) -> Result<Vec<u8>, CodegenError> {
-    codegen_with_type_info(source, filename, file, ta, dependencies).map(|generated| generated.wasm)
+) -> Result<Vec<u8>, CompilerFailure> {
+    Ok(codegen_with_type_info(source, filename, file, ta, dependencies)?.wasm)
 }
 
 /// Like [`codegen_with_type_info`], but names the module after `owning_package` instead of
@@ -349,7 +360,7 @@ pub fn codegen_owned_by(
     file: crate::FileId,
     ta: &TypedAst,
     dependencies: &[&PackageDeclaration],
-) -> Result<GeneratedModule, CodegenError> {
+) -> Result<GeneratedModule, CompilerFailure> {
     codegen_inner(source, filename, file, ta, dependencies, owning_package)
 }
 
@@ -367,7 +378,7 @@ pub fn codegen_with_type_info(
     file: crate::FileId,
     ta: &TypedAst,
     dependencies: &[&PackageDeclaration],
-) -> Result<GeneratedModule, CodegenError> {
+) -> Result<GeneratedModule, CompilerFailure> {
     codegen_inner(source, filename, file, ta, dependencies, &ta.package_name)
 }
 
@@ -378,7 +389,13 @@ fn codegen_inner(
     ta: &TypedAst,
     dependencies: &[&PackageDeclaration],
     owning_package: &str,
-) -> Result<GeneratedModule, CodegenError> {
+) -> Result<GeneratedModule, CompilerFailure> {
+    u32::try_from(source.len()).map_err(|_| CompilerFailure::Limit {
+        stage: CompilerStage::Codegen,
+        span: None,
+        message: "source exceeds the 32-bit source-offset limit".into(),
+        help: vec!["split the source into smaller modules".into()],
+    })?;
     let source_main_return_ty = ta
         .functions
         .iter()

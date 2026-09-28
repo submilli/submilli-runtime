@@ -82,7 +82,9 @@ fn load_namespaces<'a>(
 }
 
 impl<'a> Inferer<'a> {
-    pub(super) fn populate_prelude(&mut self) {
+    pub(super) fn populate_prelude(
+        &mut self,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         // Constructor bindings (`Const { ty: InterfaceRef }`) are public by
         // shape; everything else in `prelude.values` is an internal helper
         // (string_concat, …) except the bare globals named here.
@@ -100,7 +102,9 @@ impl<'a> Inferer<'a> {
             .packages_by_name
             .get(crate::mangle::PRELUDE_PACKAGE)
             .copied()
-            .expect("typechecker requires prelude package declaration");
+            .ok_or_else(|| {
+                super::inference_failure("typechecker requires prelude package declaration")
+            })?;
         for (name, sym) in &prelude.types {
             if matches!(
                 sym.kind,
@@ -182,6 +186,7 @@ impl<'a> Inferer<'a> {
                 &defs.namespaces,
             );
         }
+        Ok(())
     }
 
     /// Build the import-independent FQN type registry: every prelude, host, and

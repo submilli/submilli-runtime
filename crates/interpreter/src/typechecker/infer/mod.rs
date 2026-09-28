@@ -45,6 +45,7 @@ use scopes::Scopes;
 use type_namespace::TypeNamespace;
 use type_registry::TypeRegistry;
 
+use crate::compiler_error::{CompileError, CompilerFailure, CompilerStage};
 use crate::{Ast, Diagnostic, ModulePath, PackageDeclaration, Span, Type, TypedAst, ValueKind};
 
 pub fn infer<'a>(
@@ -63,8 +64,23 @@ pub fn infer_with_transitive<'a>(
     packages: &'a [&'a PackageDeclaration],
     transitive: &'a [&'a PackageDeclaration],
 ) -> (TypedAst, Vec<Diagnostic>) {
-    #[cfg(debug_assertions)]
-    debug_assert_no_patterns(ast);
+    match infer_with_transitive_checked(source, package_name, ast, packages, transitive) {
+        Ok(result) => result,
+        Err(error) => (
+            TypedAst::with_package(package_name),
+            error.into_diagnostics(crate::FileId(0)),
+        ),
+    }
+}
+
+pub fn infer_with_transitive_checked<'a>(
+    source: &'a str,
+    package_name: &'a str,
+    ast: &'a Ast,
+    packages: &'a [&'a PackageDeclaration],
+    transitive: &'a [&'a PackageDeclaration],
+) -> Result<(TypedAst, Vec<Diagnostic>), CompileError> {
+    validate_lowered_patterns(ast)?;
     let packages_by_name: BTreeMap<&'a str, &'a PackageDeclaration> = packages
         .iter()
         .map(|d| (d.package_name.as_str(), *d))
@@ -140,11 +156,14 @@ pub fn infer_with_transitive<'a>(
         field_narrowing_checks: BTreeMap::new(),
         alias_resolution_stack: Vec::new(),
     };
-    tc.populate_prelude();
+    tc.populate_prelude().map_err(|fatal| CompileError {
+        diagnostics: tc.diagnostics.clone(),
+        fatal: Some(fatal),
+    })?;
     tc.populate_type_registry();
     tc.populate_imports();
     if !tc.signatures() {
-        return (tc.typed_ast, tc.diagnostics);
+        return Ok((tc.typed_ast, tc.diagnostics));
     }
     tc.infer_global_variables();
     tc.infer_functions();
@@ -153,7 +172,7 @@ pub fn infer_with_transitive<'a>(
     // The `&tc` borrow has to end before the `&mut tc.typed_ast` assignment.
     let shapes = shapes::collect(&tc.typed_ast, tc.resolver());
     tc.typed_ast.shapes = shapes;
-    (tc.typed_ast, tc.diagnostics)
+    Ok((tc.typed_ast, tc.diagnostics))
 }
 
 pub fn infer_package<'a>(
@@ -164,6 +183,31 @@ pub fn infer_package<'a>(
     external_packages: BTreeMap<String, PackageDeclaration>,
     transitive_packages: BTreeMap<String, PackageDeclaration>,
 ) -> (TypedAst, PackageDeclaration, Vec<Diagnostic>) {
+    match infer_package_checked(
+        package_name,
+        root_module,
+        modules,
+        sources,
+        external_packages,
+        transitive_packages,
+    ) {
+        Ok(result) => result,
+        Err(error) => (
+            TypedAst::with_package(package_name),
+            PackageDeclaration::with_package(package_name),
+            error.into_diagnostics(crate::FileId(0)),
+        ),
+    }
+}
+
+pub fn infer_package_checked<'a>(
+    package_name: &'a str,
+    root_module: ModulePath,
+    modules: Vec<(ModulePath, crate::FileId, &'a Ast)>,
+    sources: &'a crate::Sources,
+    external_packages: BTreeMap<String, PackageDeclaration>,
+    transitive_packages: BTreeMap<String, PackageDeclaration>,
+) -> Result<(TypedAst, PackageDeclaration, Vec<Diagnostic>), CompileError> {
     let mut diagnostics = Vec::new();
     let module_map: BTreeMap<ModulePath, (crate::FileId, &'a Ast)> = modules
         .into_iter()
@@ -177,36 +221,40 @@ pub fn infer_package<'a>(
             help: import_graph::available_modules_help_from_paths(module_map.keys()),
             notes: Vec::new(),
         });
-        return (
+        return Ok((
             TypedAst::with_package(package_name),
             PackageDeclaration::with_package(package_name),
             diagnostics,
-        );
+        ));
     }
 
     let Some(order) = import_graph::topo_order(&module_map, &mut diagnostics) else {
-        return (
+        return Ok((
             TypedAst::with_package(package_name),
             PackageDeclaration::with_package(package_name),
             diagnostics,
-        );
+        ));
     };
 
     let mut inferred_modules: BTreeMap<ModulePath, ModuleSymbols> = BTreeMap::new();
     let mut module_exports: BTreeMap<ModulePath, Vec<crate::ExportEntry>> = BTreeMap::new();
     let mut root_public_exports = Vec::new();
     let mut package_declaration = PackageDeclaration::with_package(package_name);
-    let first_module = order
-        .first()
-        .expect("root existence implies at least one module");
-    let (first_file, first_ast) = module_map
-        .get(first_module)
-        .copied()
-        .expect("topo module exists");
+    let first_module = order.first().ok_or_else(|| {
+        CompileError::from(inference_failure("root module absent from inference order"))
+            .with_prior_diagnostics(&diagnostics)
+    })?;
+    let (first_file, first_ast) = module_map.get(first_module).copied().ok_or_else(|| {
+        CompileError::from(inference_failure("module absent from inference map"))
+            .with_prior_diagnostics(&diagnostics)
+    })?;
     let first_source = sources
         .get(first_file)
         .map(|f| f.text.as_str())
-        .unwrap_or_default();
+        .ok_or_else(|| {
+            CompileError::from(inference_failure("module source is missing"))
+                .with_prior_diagnostics(&diagnostics)
+        })?;
     let packages_by_name: BTreeMap<&str, &PackageDeclaration> = external_packages
         .values()
         .map(|d| (d.package_name.as_str(), d))
@@ -283,23 +331,34 @@ pub fn infer_package<'a>(
     };
 
     for module in order {
-        let (file, ast) = module_map
-            .get(&module)
-            .copied()
-            .expect("topo module exists");
-        let source = sources
-            .get(file)
-            .map(|f| f.text.as_str())
-            .unwrap_or_default();
+        let (file, ast) = module_map.get(&module).copied().ok_or_else(|| {
+            CompileError::from(inference_failure("module absent from inference map"))
+                .with_prior_diagnostics(&tc.diagnostics)
+                .with_prior_diagnostics(&diagnostics)
+        })?;
+        let source = sources.get(file).map(|f| f.text.as_str()).ok_or_else(|| {
+            CompileError::from(inference_failure("module source is missing"))
+                .with_prior_diagnostics(&tc.diagnostics)
+                .with_prior_diagnostics(&diagnostics)
+        })?;
         let starts = ModuleTypedAstStarts::new(&tc.typed_ast);
-        tc.reset_for_package_module(source, ast, module.clone(), &inferred_modules);
-        tc.populate_prelude();
+        tc.reset_for_package_module(source, ast, module.clone(), &inferred_modules)
+            .map_err(|error| {
+                error
+                    .with_prior_diagnostics(&tc.diagnostics)
+                    .with_prior_diagnostics(&diagnostics)
+            })?;
+        tc.populate_prelude().map_err(|fatal| {
+            CompileError::from(fatal)
+                .with_prior_diagnostics(&tc.diagnostics)
+                .with_prior_diagnostics(&diagnostics)
+        })?;
         tc.populate_type_registry();
         tc.populate_module_type_registry();
         tc.populate_imports();
         if !tc.signatures() {
             diagnostics.extend(tc.diagnostics);
-            return (tc.typed_ast, package_declaration, diagnostics);
+            return Ok((tc.typed_ast, package_declaration, diagnostics));
         }
         tc.infer_global_variables();
         tc.infer_functions();
@@ -371,7 +430,7 @@ pub fn infer_package<'a>(
             module_surfaces,
         ));
     diagnostics.extend(tc.diagnostics);
-    (tc.typed_ast, package_declaration, diagnostics)
+    Ok((tc.typed_ast, package_declaration, diagnostics))
 }
 
 #[derive(Clone, Copy)]
@@ -567,9 +626,8 @@ impl<'a> Inferer<'a> {
         ast: &'a Ast,
         module: ModulePath,
         inferred_modules: &BTreeMap<ModulePath, ModuleSymbols>,
-    ) {
-        #[cfg(debug_assertions)]
-        debug_assert_no_patterns(ast);
+    ) -> Result<(), CompileError> {
+        validate_lowered_patterns(ast)?;
         self.source = source;
         self.ast = ast;
         self.module = module;
@@ -589,10 +647,9 @@ impl<'a> Inferer<'a> {
         self.last_write_spans.clear();
         self.suspended_narrow_scopes.clear();
         self.pending_post_if_materializations.clear();
-        debug_assert!(
-            self.pending_implements.is_empty(),
-            "the signature pass must drain `implements` checks before the next module",
-        );
+        if !self.pending_implements.is_empty() {
+            return Err(inference_failure("signature pass left pending implements checks").into());
+        }
         let bindings = binding_analysis::analyze(ast);
         self.captured_mutators = bindings.mutators;
         self.last_assignments = bindings.last_assignments;
@@ -618,6 +675,7 @@ impl<'a> Inferer<'a> {
         self.pending_joins.clear();
         self.pending_aliases.clear();
         self.alias_resolution_stack.clear();
+        Ok(())
     }
 
     pub(super) fn populate_module_type_registry(&mut self) {
@@ -727,46 +785,48 @@ pub(super) struct PendingAlias {
 // Without this, `super::assignable` names the module, not the function.
 pub(in crate::typechecker::infer) use assignable::assignable;
 
-#[cfg(debug_assertions)]
-fn debug_assert_no_patterns(ast: &Ast) {
+fn inference_failure(message: &str) -> CompilerFailure {
+    CompilerFailure::Internal {
+        stage: CompilerStage::Infer,
+        span: None,
+        message: message.into(),
+    }
+}
+
+fn validate_lowered_patterns(ast: &Ast) -> Result<(), CompileError> {
     use crate::{ExprKind, StmtKind};
     for i in 0..ast.stmts_len() {
-        let s = ast.stmt(crate::StmtId(i as u32));
-        debug_assert!(
-            !matches!(
-                s.kind,
-                StmtKind::LetPattern { .. }
-                    | StmtKind::ConstPattern { .. }
-                    | StmtKind::ForOfPattern { .. }
-            ),
-            "lower_patterns did not eliminate StmtKind::{} at stmt #{i}",
-            match s.kind {
-                StmtKind::LetPattern { .. } => "LetPattern",
-                StmtKind::ConstPattern { .. } => "ConstPattern",
-                StmtKind::ForOfPattern { .. } => "ForOfPattern",
-                _ => "<unreachable>",
-            },
-        );
-        if let StmtKind::Function { params, .. } = &s.kind {
-            for (pi, p) in params.iter().enumerate() {
-                debug_assert!(
-                    p.pattern.is_none(),
-                    "lower_patterns left a pattern on function param #{pi} of stmt #{i}",
-                );
+        let stmt = ast.stmt(crate::StmtId(i as u32));
+        let unlowered = match &stmt.kind {
+            StmtKind::LetPattern { .. }
+            | StmtKind::ConstPattern { .. }
+            | StmtKind::ForOfPattern { .. } => true,
+            StmtKind::Function { params, .. } => params.iter().any(|param| param.pattern.is_some()),
+            _ => false,
+        };
+        if unlowered {
+            return Err(CompilerFailure::Internal {
+                stage: CompilerStage::Infer,
+                span: Some(stmt.span),
+                message: "pattern lowering left an unlowered statement or parameter".into(),
             }
+            .into());
         }
     }
     for i in 0..ast.exprs_len() {
-        let e = ast.expr(crate::ExprId(i as u32));
-        if let ExprKind::Arrow { params, .. } = &e.kind {
-            for (pi, p) in params.iter().enumerate() {
-                debug_assert!(
-                    p.pattern.is_none(),
-                    "lower_patterns left a pattern on arrow param #{pi} of expr #{i}",
-                );
+        let expr = ast.expr(crate::ExprId(i as u32));
+        if let ExprKind::Arrow { params, .. } = &expr.kind
+            && params.iter().any(|param| param.pattern.is_some())
+        {
+            return Err(CompilerFailure::Internal {
+                stage: CompilerStage::Infer,
+                span: Some(expr.span),
+                message: "pattern lowering left an unlowered closure parameter".into(),
             }
+            .into());
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -776,6 +836,72 @@ mod tests {
     use crate::{Asi, Sources, Token, TokenKind, lower_patterns, parse};
 
     use super::*;
+
+    #[test]
+    fn missing_prelude_is_a_typed_inference_failure() {
+        let ast = Ast::new();
+        let error = infer_with_transitive_checked("", "main", &ast, &[], &[])
+            .expect_err("prelude metadata is required");
+        assert!(matches!(
+            error.fatal,
+            Some(CompilerFailure::Internal {
+                stage: CompilerStage::Infer,
+                ..
+            })
+        ));
+        assert!(error.to_string().contains("prelude package declaration"));
+    }
+
+    #[test]
+    fn later_module_failure_keeps_earlier_diagnostics() {
+        let mut sources = Sources::new();
+        let (path, file, ast) = parse_module(
+            &mut sources,
+            "a",
+            "export function bad(): number { return false; }",
+        );
+        let (_, _, expected) = infer_package_checked(
+            "test",
+            path.clone(),
+            vec![(path.clone(), file, &ast)],
+            &sources,
+            runtime_external_packages(),
+            BTreeMap::new(),
+        )
+        .expect("ordinary diagnostics");
+        assert!(
+            expected
+                .iter()
+                .any(|diagnostic| diagnostic.severity == crate::Severity::Error)
+        );
+        assert!(
+            expected
+                .iter()
+                .any(|diagnostic| diagnostic.severity == crate::Severity::Warning)
+        );
+
+        let missing = Ast::new();
+        let error = infer_package_checked(
+            "test",
+            path.clone(),
+            vec![
+                (path, file, &ast),
+                (ModulePath::from("b"), crate::FileId(999), &missing),
+            ],
+            &sources,
+            runtime_external_packages(),
+            BTreeMap::new(),
+        )
+        .expect_err("later module has no source");
+        // Export-documentation warnings are generated only after all modules
+        // finish. The first module's already-emitted type error must survive.
+        let expected: Vec<_> = expected
+            .into_iter()
+            .filter(|diagnostic| diagnostic.severity == crate::Severity::Error)
+            .collect();
+        assert_eq!(error.diagnostics, expected);
+        assert!(error.to_string().contains("module source is missing"));
+    }
 
     fn runtime_external_packages() -> BTreeMap<String, PackageDeclaration> {
         let (prelude_defs, host_defs, _) =

@@ -162,6 +162,10 @@ impl<'a> Asi<'a> {
         can_continue(kind)
     }
 
+    pub fn finish(self) -> Result<Vec<Diagnostic>, crate::compiler_error::CompileError> {
+        self.lexer.finish()
+    }
+
     pub fn into_diagnostics(self) -> Vec<Diagnostic> {
         self.lexer.into_diagnostics()
     }

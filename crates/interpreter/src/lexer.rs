@@ -1,3 +1,4 @@
+use crate::compiler_error::{CompileError, CompilerFailure, CompilerStage};
 use num_bigint::BigUint;
 use num_traits::Num;
 use unicode_ident::{is_xid_continue, is_xid_start};
@@ -16,6 +17,7 @@ pub struct Lexer<'a> {
     file: FileId,
     pos: u32,
     diagnostics: Vec<Diagnostic>,
+    fatal: Option<CompilerFailure>,
     /// Only the last doc comment before a declaration attaches (JSDoc convention); earlier ones are dropped.
     pending_docs: Vec<RawDoc>,
     /// Brace depth for each active `${ … }` interpolation. A `}` with the top
@@ -47,6 +49,12 @@ impl<'a> Lexer<'a> {
                 0
             },
             diagnostics: Vec::new(),
+            fatal: (source.len() > (u32::MAX - 4) as usize).then(|| CompilerFailure::Limit {
+                stage: CompilerStage::Parse,
+                span: None,
+                message: "source exceeds the 32-bit lexer offset limit".into(),
+                help: vec!["split the source into smaller modules".into()],
+            }),
             pending_docs: Vec::new(),
             template_frames: Vec::new(),
             last_significant_token: None,
@@ -59,6 +67,9 @@ impl<'a> Lexer<'a> {
     }
 
     pub fn next_token(&mut self) -> Token {
+        if self.fatal.is_some() {
+            return self.eof_token();
+        }
         loop {
             self.skip_trivia();
             let Some(b) = self.peek() else {
@@ -131,19 +142,46 @@ impl<'a> Lexer<'a> {
     }
 
     pub fn into_diagnostics(self) -> Vec<Diagnostic> {
-        self.diagnostics
+        let file = self.file;
+        self.finish()
+            .unwrap_or_else(|error| error.into_diagnostics(file))
+    }
+
+    pub fn finish(self) -> Result<Vec<Diagnostic>, CompileError> {
+        match self.fatal {
+            Some(fatal) => Err(CompileError {
+                diagnostics: self.diagnostics,
+                fatal: Some(fatal),
+            }),
+            None => Ok(self.diagnostics),
+        }
+    }
+
+    fn fail(&mut self, message: &str) -> Token {
+        self.fatal.get_or_insert_with(|| CompilerFailure::Internal {
+            stage: CompilerStage::Parse,
+            span: None,
+            message: message.into(),
+        });
+        self.eof_token()
     }
 
     fn peek(&self) -> Option<u8> {
+        if self.fatal.is_some() {
+            return None;
+        }
         self.bytes.get(self.pos as usize).copied()
     }
 
     fn peek_at(&self, offset: usize) -> Option<u8> {
-        self.bytes.get(self.pos as usize + offset).copied()
+        (self.pos as usize)
+            .checked_add(offset)
+            .and_then(|index| self.bytes.get(index))
+            .copied()
     }
 
     fn peek_char(&self) -> Option<char> {
-        self.source[self.pos as usize..].chars().next()
+        self.source.get(self.pos as usize..)?.chars().next()
     }
 
     fn eof_token(&self) -> Token {
@@ -261,7 +299,11 @@ impl<'a> Lexer<'a> {
                 Some(b'*') if self.peek_at(1) == Some(b'/') => {
                     self.pos += 2;
                     let span = self.span(start, self.pos);
-                    let text = self.source[start as usize..self.pos as usize].to_string();
+                    let Some(text) = self.source.get(start as usize..self.pos as usize) else {
+                        self.fail("invalid documentation span");
+                        return;
+                    };
+                    let text = text.to_string();
                     self.pending_docs.push(RawDoc { text, span });
                     return;
                 }
@@ -288,7 +330,7 @@ impl<'a> Lexer<'a> {
                 }
             }
             Some(b'\n') => self.pos += 1,
-            _ => unreachable!("lex_newline called on non-newline byte"),
+            _ => return self.fail("newline lexer dispatched on a non-newline byte"),
         }
         Token::new(TokenKind::Newline, self.span(start, self.pos))
     }
@@ -348,15 +390,23 @@ impl<'a> Lexer<'a> {
                      remove the `.` / exponent or drop the `n` suffix",
                 );
                 // Recovery: keep the integer prefix as the bigint payload.
-                let digits = self.source[start as usize..int_end as usize].to_string();
+                let Some(digits) = self.source.get(start as usize..int_end as usize) else {
+                    return self.fail("invalid numeric literal span");
+                };
+                let digits = digits.to_string();
                 return Token::new(TokenKind::BigIntLiteral(digits), span);
             }
-            let digits = self.source[start as usize..(self.pos - 1) as usize].to_string();
+            let Some(digits) = self.source.get(start as usize..(self.pos - 1) as usize) else {
+                return self.fail("invalid numeric literal span");
+            };
+            let digits = digits.to_string();
             return Token::new(TokenKind::BigIntLiteral(digits), span);
         }
 
         let span = self.span(start, self.pos);
-        let lexeme = &self.source[start as usize..self.pos as usize];
+        let Some(lexeme) = self.source.get(start as usize..self.pos as usize) else {
+            return self.fail("invalid token source span");
+        };
         let value = if let Ok(v) = lexeme.parse::<f64>() {
             v
         } else {
@@ -381,7 +431,10 @@ impl<'a> Lexer<'a> {
             self.error(span, format!("missing digits after `{}`", radix.prefix()));
             return Token::new(TokenKind::NumberLiteral(f64::NAN), span);
         }
-        let digits = self.source[digits_start as usize..self.pos as usize].to_string();
+        let Some(digits) = self.source.get(digits_start as usize..self.pos as usize) else {
+            return self.fail("invalid numeric literal span");
+        };
+        let digits = digits.to_string();
 
         if self.peek() == Some(b'n') {
             self.pos += 1;
@@ -424,9 +477,9 @@ impl<'a> Lexer<'a> {
                     value.push('\n');
                 }
                 Some(_) => {
-                    let c = self
-                        .peek_char()
-                        .expect("peek returned Some, so peek_char must too");
+                    let Some(c) = self.peek_char() else {
+                        return self.fail("lexer cursor is not at a source character");
+                    };
                     value.push(c);
                     self.pos += c.len_utf8() as u32;
                 }
@@ -485,9 +538,9 @@ impl<'a> Lexer<'a> {
                     );
                 }
                 Some(_) => {
-                    let c = self
-                        .peek_char()
-                        .expect("peek returned Some, so peek_char must too");
+                    let Some(c) = self.peek_char() else {
+                        return self.fail("lexer cursor is not at a source character");
+                    };
                     source.push(c);
                     self.pos += c.len_utf8() as u32;
                 }
@@ -569,7 +622,10 @@ impl<'a> Lexer<'a> {
                 self.read_unicode_escape(esc_start, out);
             }
             Some(_) => {
-                let c = self.peek_char().expect("peek returned Some");
+                let Some(c) = self.peek_char() else {
+                    self.fail("escape cursor is not at a source character");
+                    return;
+                };
                 let end = self.pos + c.len_utf8() as u32;
                 self.error_with_help(
                     self.span(esc_start, end),
@@ -605,7 +661,10 @@ impl<'a> Lexer<'a> {
                 return;
             }
             self.pos += 1;
-            let hex = &self.source[hex_start as usize..hex_end as usize];
+            let Some(hex) = self.source.get(hex_start as usize..hex_end as usize) else {
+                self.fail("invalid Unicode escape span");
+                return;
+            };
             if hex.len() > 6 {
                 self.error(
                     self.span(esc_start, self.pos),
@@ -666,14 +725,8 @@ impl<'a> Lexer<'a> {
     fn read_four_hex(&mut self, esc_start: u32) -> Option<u32> {
         let mut value = 0u32;
         for _ in 0..4 {
-            if let Some(b @ (b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F')) = self.peek() {
-                let d = match b {
-                    b'0'..=b'9' => b - b'0',
-                    b'a'..=b'f' => b - b'a' + 10,
-                    b'A'..=b'F' => b - b'A' + 10,
-                    _ => unreachable!(),
-                };
-                value = value * 16 + d as u32;
+            if let Some(d) = self.peek().and_then(|byte| char::from(byte).to_digit(16)) {
+                value = value * 16 + d;
                 self.pos += 1;
             } else {
                 self.error(
@@ -688,7 +741,9 @@ impl<'a> Lexer<'a> {
 
     fn lex_ident(&mut self) -> Token {
         let start = self.pos;
-        let first = self.peek_char().expect("dispatch guaranteed a char here");
+        let Some(first) = self.peek_char() else {
+            return self.fail("identifier lexer has no source character");
+        };
         self.pos += first.len_utf8() as u32;
         while let Some(c) = self.peek_char() {
             if c == '_' || c == '$' || is_xid_continue(c) {
@@ -698,7 +753,9 @@ impl<'a> Lexer<'a> {
             }
         }
         let span = self.span(start, self.pos);
-        let lexeme = &self.source[start as usize..self.pos as usize];
+        let Some(lexeme) = self.source.get(start as usize..self.pos as usize) else {
+            return self.fail("invalid token source span");
+        };
         let kind = match lexeme {
             "true" => TokenKind::BooleanLiteral(true),
             "false" => TokenKind::BooleanLiteral(false),
@@ -742,7 +799,9 @@ impl<'a> Lexer<'a> {
 
     fn lex_operator(&mut self) -> Token {
         let start = self.pos;
-        let b = self.peek().expect("dispatch guaranteed a byte here");
+        let Some(b) = self.peek() else {
+            return self.fail("lexer dispatch has no source byte");
+        };
         let kind = match b {
             b'=' => {
                 self.pos += 1;
@@ -886,25 +945,30 @@ impl<'a> Lexer<'a> {
                     TokenKind::Dot
                 }
             }
-            _ => unreachable!("lex_operator dispatched on unexpected byte"),
+            _ => return self.fail("operator lexer dispatched on an unexpected byte"),
         };
         Token::new(kind, self.span(start, self.pos))
     }
 
     fn lex_delimiter(&mut self) -> Token {
         let start = self.pos;
-        let b = self.peek().expect("dispatch guaranteed a byte here");
-        if b == b'{' && !self.template_frames.is_empty() {
-            *self.template_frames.last_mut().unwrap() += 1;
-        }
-        if b == b'}' && !self.template_frames.is_empty() {
-            let top = self.template_frames.last().copied().unwrap();
-            if top == 0 {
-                self.template_frames.pop();
-                self.pos += 1; // consume `}`
-                return self.lex_template_part(start, false);
+        let Some(b) = self.peek() else {
+            return self.fail("lexer dispatch has no source byte");
+        };
+        if let Some(depth) = self.template_frames.last_mut() {
+            if b == b'{' {
+                let Some(next) = depth.checked_add(1) else {
+                    return self.fail("template brace depth overflow");
+                };
+                *depth = next;
+            } else if b == b'}' {
+                if *depth == 0 {
+                    self.template_frames.pop();
+                    self.pos += 1;
+                    return self.lex_template_part(start, false);
+                }
+                *depth -= 1;
             }
-            *self.template_frames.last_mut().unwrap() = top - 1;
         }
         self.pos += 1;
         let kind = match b {
@@ -928,7 +992,7 @@ impl<'a> Lexer<'a> {
                 }
                 _ => TokenKind::Question,
             },
-            _ => unreachable!("lex_delimiter dispatched on unexpected byte"),
+            _ => return self.fail("delimiter lexer dispatched on an unexpected byte"),
         };
         Token::new(kind, self.span(start, self.pos))
     }
@@ -978,9 +1042,9 @@ impl<'a> Lexer<'a> {
                     value.push('\n');
                 }
                 Some(_) => {
-                    let c = self
-                        .peek_char()
-                        .expect("peek returned Some, so peek_char must too");
+                    let Some(c) = self.peek_char() else {
+                        return self.fail("lexer cursor is not at a source character");
+                    };
                     value.push(c);
                     self.pos += c.len_utf8() as u32;
                 }
@@ -1152,6 +1216,41 @@ mod tests {
     use crate::{Diagnostic, FileId, Span, Token, TokenKind, diagnostics};
 
     const F: FileId = FileId(0);
+
+    #[test]
+    fn invalid_dispatch_and_unicode_cursor_return_fatal_errors() {
+        let mut lexer = Lexer::new("é", F);
+        lexer.pos = 1;
+        assert!(matches!(lexer.lex_ident().kind, TokenKind::Eof));
+        assert!(
+            lexer
+                .finish()
+                .expect_err("invalid UTF-8 cursor")
+                .fatal
+                .is_some()
+        );
+
+        let mut lexer = Lexer::new("a", F);
+        assert!(matches!(lexer.lex_operator().kind, TokenKind::Eof));
+        assert!(
+            lexer
+                .finish()
+                .expect_err("invalid operator dispatch")
+                .fatal
+                .is_some()
+        );
+
+        let mut lexer = Lexer::new("{", F);
+        lexer.template_frames.push(u32::MAX);
+        assert!(matches!(lexer.lex_delimiter().kind, TokenKind::Eof));
+        assert!(
+            lexer
+                .finish()
+                .expect_err("template depth overflow")
+                .fatal
+                .is_some()
+        );
+    }
 
     fn sources(text: &str) -> Sources {
         let (sources, _) = Sources::single("script.subm", text);

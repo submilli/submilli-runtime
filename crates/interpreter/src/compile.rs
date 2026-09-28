@@ -4,11 +4,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 use crate::compile_capabilities;
+use crate::compiler_error::{CompileError, CompilerFailure, CompilerStage};
 use crate::runtime::prelude;
 use crate::typed_ast::TypedAst;
 use crate::{
     Asi, Ast, DerivedCapability, Diagnostic, FileId, ModulePath, PackageDeclaration, Severity,
-    Sources, StmtKind, Token, TokenKind, capture, check, desugar, lower_patterns, parse, runtime,
+    Sources, StmtKind, Token, TokenKind, capture, check, desugar, lower_patterns, runtime,
 };
 
 /// Wall-clock spent in each compile phase, filled in as the pipeline runs. A
@@ -37,6 +38,8 @@ pub struct ScriptImports {
 #[derive(Clone, Debug)]
 pub struct ParsedScript {
     file: FileId,
+    source: String,
+    failure: Option<CompileError>,
     ast: Ast,
     diagnostics: Vec<Diagnostic>,
     timings: PhaseTimings,
@@ -68,7 +71,7 @@ impl ParsedScript {
     }
 
     pub fn has_errors(&self) -> bool {
-        has_errors(&self.diagnostics)
+        self.failure.is_some() || has_errors(&self.diagnostics)
     }
 
     pub fn diagnostics(&self) -> &[Diagnostic] {
@@ -90,18 +93,38 @@ pub fn parse_script(source: &str, file: FileId) -> ParsedScript {
             break;
         }
     }
-    let mut diagnostics = asi.into_diagnostics();
+    let (mut diagnostics, mut failure) = match asi.finish() {
+        Ok(diagnostics) => (diagnostics, None),
+        Err(error) => (error.clone().into_diagnostics(file), Some(error)),
+    };
     timings.lex = lex_start.elapsed();
 
     let parse_start = Instant::now();
-    let (mut ast, parse_diags) = parse(source, tokens, file);
+    let (mut ast, parse_diags) = if failure.is_some() {
+        (Ast::new(), Vec::new())
+    } else {
+        match crate::parser::parse_checked(source, tokens, file) {
+            Ok(result) => result,
+            Err(mut error) => {
+                error.diagnostics.splice(0..0, diagnostics.clone());
+                let rendered = error.clone().into_diagnostics(file);
+                diagnostics.clear();
+                failure = Some(error);
+                (Ast::new(), rendered)
+            }
+        }
+    };
     diagnostics.extend(parse_diags);
     // must run before type-checking; the typechecker assumes patterns are already lowered
-    lower_patterns(&mut ast);
+    if failure.is_none() {
+        lower_patterns(&mut ast);
+    }
     timings.parse = parse_start.elapsed();
 
     ParsedScript {
         file,
+        source: source.to_owned(),
+        failure,
         ast,
         diagnostics,
         timings,
@@ -121,7 +144,7 @@ fn front_end(
     parsed: &ParsedScript,
     stdlib_defs: &[PackageDeclaration],
     packages: &[&PackageDeclaration],
-) -> (TypedAst, Vec<Diagnostic>, PhaseTimings) {
+) -> Result<(TypedAst, Vec<Diagnostic>, PhaseTimings), CompileError> {
     front_end_with_transitive(source, parsed, stdlib_defs, packages, &[])
 }
 
@@ -131,28 +154,42 @@ fn front_end_with_transitive(
     stdlib_defs: &[PackageDeclaration],
     packages: &[&PackageDeclaration],
     transitive: &[&PackageDeclaration],
-) -> (TypedAst, Vec<Diagnostic>, PhaseTimings) {
+) -> Result<(TypedAst, Vec<Diagnostic>, PhaseTimings), CompileError> {
+    if source != parsed.source {
+        return Err(CompilerFailure::Internal {
+            stage: CompilerStage::Infer,
+            span: None,
+            message: "parsed script does not belong to the supplied source".into(),
+        }
+        .into());
+    }
+    if let Some(error) = &parsed.failure {
+        return Err(error.clone());
+    }
     let mut timings = parsed.timings;
     let mut diags = parsed.diagnostics.clone();
-
     let typecheck_start = Instant::now();
     let (prelude_defs, host_defs, _) = prelude::cached_runtime_package_declarations();
     let mut infer_refs: Vec<&crate::PackageDeclaration> = prelude_defs.iter().collect();
     infer_refs.extend(host_defs.iter());
     infer_refs.extend(stdlib_defs.iter());
     infer_refs.extend_from_slice(packages);
-    let (ta, infer_diags) = crate::typechecker::infer::infer_with_transitive(
+    let (ta, infer_diags) = crate::typechecker::infer::infer_with_transitive_checked(
         source,
         crate::mangle::USER_PACKAGE,
         &parsed.ast,
         &infer_refs,
         transitive,
-    );
+    )
+    .map_err(|mut error| {
+        error.diagnostics.splice(0..0, diags.clone());
+        error
+    })?;
     diags.extend(infer_diags);
     diags.extend(check(&ta));
     timings.typecheck = typecheck_start.elapsed();
 
-    (ta, diags, timings)
+    Ok((ta, diags, timings))
 }
 
 #[derive(Clone, Debug)]
@@ -181,12 +218,12 @@ pub struct CompiledScript {
 /// Typecheck only — runs the front-end and stops before codegen. Returns
 /// `Ok(warnings)` when the program is error-free (warnings are non-fatal),
 /// `Err(diagnostics)` if any phase errors. Backs `submilli check`.
-pub fn typecheck(source: &str, file: FileId) -> Result<Vec<Diagnostic>, Vec<Diagnostic>> {
+pub fn typecheck_checked(source: &str, file: FileId) -> Result<Vec<Diagnostic>, CompileError> {
     let parsed = parse_script(source, file);
     let stdlib_defs = runtime::stdlib_package_declarations();
-    let (_ta, diags, _timings) = front_end(source, &parsed, &stdlib_defs, &[]);
+    let (_ta, diags, _timings) = front_end(source, &parsed, &stdlib_defs, &[])?;
     if has_errors(&diags) {
-        return Err(diags);
+        return Err(diags.into());
     }
     Ok(warnings_only(diags))
 }
@@ -198,8 +235,10 @@ pub fn typecheck(source: &str, file: FileId) -> Result<Vec<Diagnostic>, Vec<Diag
 pub fn typecheck_to_typed_ast(source: &str, file: FileId) -> (TypedAst, Vec<Diagnostic>) {
     let parsed = parse_script(source, file);
     let stdlib_defs = runtime::stdlib_package_declarations();
-    let (ta, diags, _timings) = front_end(source, &parsed, &stdlib_defs, &[]);
-    (ta, diags)
+    match front_end(source, &parsed, &stdlib_defs, &[]) {
+        Ok((ta, diags, _)) => (ta, diags),
+        Err(error) => (TypedAst::new(), error.into_diagnostics(file)),
+    }
 }
 
 /// Compile a script module. `filename` is the DWARF compile-unit name for
@@ -211,30 +250,30 @@ pub fn typecheck_to_typed_ast(source: &str, file: FileId) -> (TypedAst, Vec<Diag
 /// Returns [`CompiledScript`] on success. Warnings are non-fatal and should be
 /// surfaced without aborting; callers that only need Wasm bytes can read
 /// [`CompiledScript::wasm`]. Returns `Err(diagnostics)` if any phase errors.
-pub fn compile_script(
+pub fn compile_script_checked(
     source: &str,
     filename: &str,
     file: FileId,
     packages: &[&PackageDeclaration],
     mcps: &[&PackageDeclaration],
-) -> Result<CompiledScript, Vec<Diagnostic>> {
+) -> Result<CompiledScript, CompileError> {
     let parsed = parse_script(source, file);
     let stdlib_defs = runtime::stdlib_package_declarations();
-    compile_parsed_script_timed(source, filename, &parsed, &stdlib_defs, packages, mcps)
+    compile_parsed_script_timed_checked(source, filename, &parsed, &stdlib_defs, packages, mcps)
 }
 
 /// Compiles a script whose code belongs to `owning_package` rather than to `main`.
 ///
 /// The one caller is a package's test file: it compiles as a script, so its entry point stays
 /// mangled as `main`, but its gated calls must be attributed to the package that ships it.
-pub fn compile_script_owned_by(
+pub fn compile_script_owned_by_checked(
     owning_package: &str,
     source: &str,
     filename: &str,
     file: FileId,
     packages: &[&PackageDeclaration],
     mcps: &[&PackageDeclaration],
-) -> Result<CompiledScript, Vec<Diagnostic>> {
+) -> Result<CompiledScript, CompileError> {
     let parsed = parse_script(source, file);
     let stdlib_defs = runtime::stdlib_package_declarations();
     let declarations = [packages, mcps].concat();
@@ -249,15 +288,15 @@ pub fn compile_script_owned_by(
     )
 }
 
-pub fn compile_parsed_script_timed(
+pub fn compile_parsed_script_timed_checked(
     source: &str,
     filename: &str,
     parsed: &ParsedScript,
     stdlib_defs: &[PackageDeclaration],
     packages: &[&PackageDeclaration],
     mcps: &[&PackageDeclaration],
-) -> Result<CompiledScript, Vec<Diagnostic>> {
-    compile_parsed_script_with_transitive(
+) -> Result<CompiledScript, CompileError> {
+    compile_parsed_script_with_transitive_checked(
         source,
         filename,
         parsed,
@@ -270,7 +309,7 @@ pub fn compile_parsed_script_timed(
 
 /// Compile with declarations needed to reconstruct imported types without
 /// exposing those transitive packages to source-level imports.
-pub fn compile_parsed_script_with_transitive(
+pub fn compile_parsed_script_with_transitive_checked(
     source: &str,
     filename: &str,
     parsed: &ParsedScript,
@@ -278,7 +317,7 @@ pub fn compile_parsed_script_with_transitive(
     packages: &[&PackageDeclaration],
     mcps: &[&PackageDeclaration],
     transitive: &[&PackageDeclaration],
-) -> Result<CompiledScript, Vec<Diagnostic>> {
+) -> Result<CompiledScript, CompileError> {
     let declarations = [packages, mcps].concat();
     compile_parsed_script_owned_by(
         None,
@@ -299,16 +338,16 @@ fn compile_parsed_script_owned_by(
     stdlib_defs: &[PackageDeclaration],
     external_declarations: &[&PackageDeclaration],
     transitive: &[&PackageDeclaration],
-) -> Result<CompiledScript, Vec<Diagnostic>> {
+) -> Result<CompiledScript, CompileError> {
     let (mut ta, diags, mut timings) = front_end_with_transitive(
         source,
         parsed,
         stdlib_defs,
         external_declarations,
         transitive,
-    );
+    )?;
     if has_errors(&diags) {
-        return Err(diags);
+        return Err(diags.into());
     }
     let capture_start = Instant::now();
     capture(&mut ta);
@@ -345,7 +384,10 @@ fn compile_parsed_script_owned_by(
             &dependencies,
         ),
     }
-    .map_err(|error| vec![error.diagnostic()])?;
+    .map_err(|fatal| CompileError {
+        diagnostics: diags.clone(),
+        fatal: Some(fatal),
+    })?;
     timings.codegen = codegen_start.elapsed();
 
     Ok(CompiledScript {
@@ -356,13 +398,13 @@ fn compile_parsed_script_owned_by(
     })
 }
 
-pub fn compile_package(
+pub fn compile_package_checked(
     package_name: &str,
     root_module: ModulePath,
     modules: &[PackageSourceModule<'_>],
     dependencies: &[&PackageDeclaration],
-) -> Result<CompiledPackage, Vec<Diagnostic>> {
-    compile_package_with_transitive(package_name, root_module, modules, dependencies, &[])
+) -> Result<CompiledPackage, CompileError> {
+    compile_package_with_transitive_checked(package_name, root_module, modules, dependencies, &[])
 }
 
 /// [`compile_package`] with the rest of the dependency closure supplied
@@ -376,24 +418,28 @@ pub fn compile_package(
 /// truncates silently and codegen reconstructs a layout that doesn't
 /// canonicalize against the producer's, which surfaces at link time as
 /// `imported global type mismatch`.
-pub fn compile_package_with_transitive(
+pub fn compile_package_with_transitive_checked(
     package_name: &str,
     root_module: ModulePath,
     modules: &[PackageSourceModule<'_>],
     dependencies: &[&PackageDeclaration],
     transitive: &[&PackageDeclaration],
-) -> Result<CompiledPackage, Vec<Diagnostic>> {
+) -> Result<CompiledPackage, CompileError> {
     let mut sources = Sources::new();
     let mut parsed_modules = Vec::with_capacity(modules.len());
     let mut diagnostics = Vec::new();
     for module in modules {
         let file = sources.add(module.path.as_str().to_string(), module.source.to_string());
-        let (ast, mut module_diags) = parse_package_module(module.source, file);
+        let (ast, mut module_diags) =
+            parse_package_module(module.source, file).map_err(|mut error| {
+                error.diagnostics.splice(0..0, diagnostics.clone());
+                error
+            })?;
         diagnostics.append(&mut module_diags);
         parsed_modules.push((module.path.clone(), file, ast));
     }
     if has_errors(&diagnostics) {
-        return Err(diagnostics);
+        return Err(diagnostics.into());
     }
 
     let module_refs: Vec<_> = parsed_modules
@@ -420,17 +466,22 @@ pub fn compile_package_with_transitive(
         .filter(|defs| !external_packages.contains_key(&defs.package_name))
         .map(|defs| (defs.package_name.clone(), (*defs).clone()))
         .collect();
-    let (mut ta, mut declaration, mut package_diags) = crate::typechecker::infer_package(
-        package_name,
-        root_module.clone(),
-        module_refs,
-        &sources,
-        external_packages,
-        transitive_packages,
-    );
+    let (mut ta, mut declaration, mut package_diags) =
+        crate::typechecker::infer::infer_package_checked(
+            package_name,
+            root_module.clone(),
+            module_refs,
+            &sources,
+            external_packages,
+            transitive_packages,
+        )
+        .map_err(|mut error| {
+            error.diagnostics.splice(0..0, diagnostics.clone());
+            error
+        })?;
     diagnostics.append(&mut package_diags);
     if has_errors(&diagnostics) {
-        return Err(diagnostics);
+        return Err(diagnostics.into());
     }
     let (required_capabilities, capability_warnings) =
         compile_capabilities::derive_package_requirements(
@@ -444,7 +495,12 @@ pub fn compile_package_with_transitive(
     let root_file = parsed_modules
         .iter()
         .find(|(path, _, _)| *path == root_module)
-        .map_or(FileId(0), |(_, file, _)| *file);
+        .map(|(_, file, _)| *file)
+        .ok_or_else(|| CompilerFailure::Internal {
+            stage: CompilerStage::Infer,
+            span: None,
+            message: "compiled package root module is missing".into(),
+        })?;
     desugar(&mut ta, root_file);
 
     let (prelude_defs, host_defs, internal_defs) = prelude::cached_runtime_package_declarations();
@@ -458,7 +514,11 @@ pub fn compile_package_with_transitive(
     let root_source = sources
         .get(root_file)
         .map(|source| source.text.as_str())
-        .unwrap_or_default();
+        .ok_or_else(|| CompilerFailure::Internal {
+            stage: CompilerStage::Codegen,
+            span: None,
+            message: "compiled package root source is missing".into(),
+        })?;
     let generated = crate::codegen::codegen_with_type_info(
         root_source,
         root_module.as_str(),
@@ -466,7 +526,10 @@ pub fn compile_package_with_transitive(
         &ta,
         &codegen_deps,
     )
-    .map_err(|error| vec![error.diagnostic()])?;
+    .map_err(|fatal| CompileError {
+        diagnostics: diagnostics.clone(),
+        fatal: Some(fatal),
+    })?;
     declaration.runtime_functions = generated.runtime_functions;
     declaration.runtime_globals = generated.runtime_globals;
     Ok(CompiledPackage {
@@ -478,7 +541,10 @@ pub fn compile_package_with_transitive(
     })
 }
 
-fn parse_package_module(source: &str, file: FileId) -> (crate::Ast, Vec<Diagnostic>) {
+fn parse_package_module(
+    source: &str,
+    file: FileId,
+) -> Result<(crate::Ast, Vec<Diagnostic>), CompileError> {
     let mut asi = Asi::new(source, file);
     let mut tokens: Vec<Token> = Vec::new();
     loop {
@@ -489,11 +555,17 @@ fn parse_package_module(source: &str, file: FileId) -> (crate::Ast, Vec<Diagnost
             break;
         }
     }
-    let mut diagnostics = asi.into_diagnostics();
-    let (mut ast, parse_diags) = parse(source, tokens, file);
+    let mut diagnostics = asi.finish()?;
+    let (mut ast, parse_diags) =
+        crate::parser::parse_checked(source, tokens, file).map_err(|mut error| {
+            error.diagnostics.splice(0..0, diagnostics.clone());
+            error
+        })?;
     diagnostics.extend(parse_diags);
-    lower_patterns(&mut ast);
-    (ast, diagnostics)
+    if !has_errors(&diagnostics) {
+        lower_patterns(&mut ast);
+    }
+    Ok((ast, diagnostics))
 }
 
 fn has_errors(diags: &[Diagnostic]) -> bool {
@@ -507,9 +579,158 @@ fn warnings_only(diags: Vec<Diagnostic>) -> Vec<Diagnostic> {
         .collect()
 }
 
+/// Compatibility adapter returning source and fatal failures as diagnostics.
+pub fn typecheck(source: &str, file: FileId) -> Result<Vec<Diagnostic>, Vec<Diagnostic>> {
+    typecheck_checked(source, file).map_err(|error| error.into_diagnostics(file))
+}
+
+/// Compatibility adapter returning source and fatal failures as diagnostics.
+pub fn compile_script(
+    source: &str,
+    filename: &str,
+    file: FileId,
+    packages: &[&PackageDeclaration],
+    mcps: &[&PackageDeclaration],
+) -> Result<CompiledScript, Vec<Diagnostic>> {
+    compile_script_checked(source, filename, file, packages, mcps)
+        .map_err(|error| error.into_diagnostics(file))
+}
+
+/// Compatibility adapter returning source and fatal failures as diagnostics.
+pub fn compile_script_owned_by(
+    owning_package: &str,
+    source: &str,
+    filename: &str,
+    file: FileId,
+    packages: &[&PackageDeclaration],
+    mcps: &[&PackageDeclaration],
+) -> Result<CompiledScript, Vec<Diagnostic>> {
+    compile_script_owned_by_checked(owning_package, source, filename, file, packages, mcps)
+        .map_err(|error| error.into_diagnostics(file))
+}
+
+/// Compatibility adapter returning source and fatal failures as diagnostics.
+pub fn compile_parsed_script_timed(
+    source: &str,
+    filename: &str,
+    parsed: &ParsedScript,
+    stdlib_defs: &[PackageDeclaration],
+    packages: &[&PackageDeclaration],
+    mcps: &[&PackageDeclaration],
+) -> Result<CompiledScript, Vec<Diagnostic>> {
+    compile_parsed_script_timed_checked(source, filename, parsed, stdlib_defs, packages, mcps)
+        .map_err(|error| error.into_diagnostics(parsed.file))
+}
+
+/// Compatibility adapter returning source and fatal failures as diagnostics.
+pub fn compile_parsed_script_with_transitive(
+    source: &str,
+    filename: &str,
+    parsed: &ParsedScript,
+    stdlib_defs: &[PackageDeclaration],
+    packages: &[&PackageDeclaration],
+    mcps: &[&PackageDeclaration],
+    transitive: &[&PackageDeclaration],
+) -> Result<CompiledScript, Vec<Diagnostic>> {
+    compile_parsed_script_with_transitive_checked(
+        source,
+        filename,
+        parsed,
+        stdlib_defs,
+        packages,
+        mcps,
+        transitive,
+    )
+    .map_err(|error| error.into_diagnostics(parsed.file))
+}
+
+/// Compatibility adapter returning source and fatal failures as diagnostics.
+pub fn compile_package(
+    package_name: &str,
+    root_module: ModulePath,
+    modules: &[PackageSourceModule<'_>],
+    dependencies: &[&PackageDeclaration],
+) -> Result<CompiledPackage, Vec<Diagnostic>> {
+    compile_package_checked(package_name, root_module, modules, dependencies)
+        .map_err(|error| error.into_diagnostics(FileId(0)))
+}
+
+/// Compatibility adapter returning source and fatal failures as diagnostics.
+pub fn compile_package_with_transitive(
+    package_name: &str,
+    root_module: ModulePath,
+    modules: &[PackageSourceModule<'_>],
+    dependencies: &[&PackageDeclaration],
+    transitive: &[&PackageDeclaration],
+) -> Result<CompiledPackage, Vec<Diagnostic>> {
+    compile_package_with_transitive_checked(
+        package_name,
+        root_module,
+        modules,
+        dependencies,
+        transitive,
+    )
+    .map_err(|error| error.into_diagnostics(FileId(0)))
+}
+
 #[cfg(test)]
 mod parsed_script_tests {
     use super::*;
+
+    #[test]
+    fn typed_compile_errors_distinguish_source_limits_and_internal_failures() {
+        let source_error = compile_script_checked(
+            "function main(): number { return false; }",
+            "test.ts",
+            FileId(0),
+            &[],
+            &[],
+        )
+        .expect_err("source type mismatch");
+        assert!(source_error.fatal.is_none());
+        assert!(!source_error.diagnostics.is_empty());
+
+        let nested = format!(
+            "function main(): number {{ return {}1{}; }}",
+            "(".repeat(2048),
+            ")".repeat(2048)
+        );
+        let limit = compile_script_checked(&nested, "test.ts", FileId(0), &[], &[])
+            .expect_err("parser limit");
+        assert!(matches!(
+            limit.fatal,
+            Some(CompilerFailure::Limit {
+                stage: CompilerStage::Parse,
+                ..
+            })
+        ));
+        let rendered = limit.into_diagnostics(FileId(0));
+        assert_eq!(
+            rendered
+                .iter()
+                .filter(|d| d.message.contains("parser recursion limit exceeded"))
+                .count(),
+            1
+        );
+
+        let parsed = parse_script("function main(): number { return 42; }", FileId(0));
+        let internal = compile_parsed_script_timed_checked(
+            "different source",
+            "test.ts",
+            &parsed,
+            &[],
+            &[],
+            &[],
+        )
+        .expect_err("source metadata mismatch");
+        assert!(matches!(
+            internal.fatal,
+            Some(CompilerFailure::Internal {
+                stage: CompilerStage::Infer,
+                ..
+            })
+        ));
+    }
 
     #[test]
     fn external_imports_come_from_parsed_imports_only() {
@@ -734,7 +955,8 @@ mod importless_library_tests {
     fn errors(source: &str, packages: &[&PackageDeclaration]) -> Vec<String> {
         let parsed = super::parse_script(source, crate::FileId(0));
         let stdlib_defs = crate::runtime::stdlib_package_declarations();
-        let (_ta, diags, _timings) = super::front_end(source, &parsed, &stdlib_defs, packages);
+        let (_ta, diags, _timings) =
+            super::front_end(source, &parsed, &stdlib_defs, packages).expect("front end");
         diags
             .into_iter()
             .filter(|d| d.severity == crate::Severity::Error)

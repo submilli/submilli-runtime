@@ -1,3 +1,4 @@
+use crate::compiler_error::{CompileError, CompilerFailure, CompilerStage};
 use crate::{
     ArrayLiteralElement, ArrowBody, Ast, BinOp, Binding, CatchClause, Diagnostic, EnumInitializer,
     EnumMember, ExportedDecl, Expr, ExprId, ExprKind, FileId, Ident, ImportKind, ImportSpecifier,
@@ -37,7 +38,28 @@ enum TypePos {
     ArrowReturn,
 }
 
+/// Compatibility adapter for tools that consume parser diagnostics.
 pub fn parse(source: &str, tokens: Vec<Token>, file: FileId) -> (Ast, Vec<Diagnostic>) {
+    match parse_checked(source, tokens, file) {
+        Ok(result) => result,
+        Err(error) => (Ast::new(), error.into_diagnostics(file)),
+    }
+}
+
+pub fn parse_checked(
+    source: &str,
+    tokens: Vec<Token>,
+    file: FileId,
+) -> Result<(Ast, Vec<Diagnostic>), CompileError> {
+    validate_token_stream(source, &tokens, file).map_err(|message| CompilerFailure::Internal {
+        stage: CompilerStage::Parse,
+        span: None,
+        message: message.into(),
+    })?;
+    let eof = tokens
+        .last()
+        .cloned()
+        .unwrap_or_else(|| Token::new(TokenKind::Eof, Span::at(file)));
     let mut p = Parser {
         source,
         tokens,
@@ -50,19 +72,59 @@ pub fn parse(source: &str, tokens: Vec<Token>, file: FileId) -> (Ast, Vec<Diagno
         function_expression_body_depth: 0,
         recursion_depth: 0,
         recursion_limit_span: None,
+        eof,
+        fatal: None,
     };
     p.parse_program();
     if let Some(span) = p.recursion_limit_span {
-        // Speculative generic parsing can rewind both the cursor and diagnostics.
-        // Keep a limit failure outside that rollback and discard the partial AST.
-        p.error_at_with_help(
-            span,
-            "parser recursion limit exceeded",
-            vec!["simplify nested syntax or split it into separate declarations".into()],
-        );
-        return (Ast::new(), p.diagnostics);
+        p.fatal = Some(CompilerFailure::Limit {
+            stage: CompilerStage::Parse,
+            span: Some(span),
+            message: "parser recursion limit exceeded".into(),
+            help: vec!["simplify nested syntax or split it into separate declarations".into()],
+        });
     }
-    (p.ast, p.diagnostics)
+    if let Some(fatal) = p.fatal {
+        return Err(CompileError {
+            diagnostics: p.diagnostics,
+            fatal: Some(fatal),
+        });
+    }
+    Ok((p.ast, p.diagnostics))
+}
+
+fn validate_token_stream(source: &str, tokens: &[Token], file: FileId) -> Result<(), &'static str> {
+    if !matches!(tokens.last().map(|token| &token.kind), Some(TokenKind::Eof)) {
+        return Err("token stream must end with EOF");
+    }
+    let mut previous = 0;
+    for (index, token) in tokens.iter().enumerate() {
+        let span = token.span;
+        if span.file != file
+            || span.start < previous
+            || span.start > span.end
+            || source.get(span.start as usize..span.end as usize).is_none()
+        {
+            return Err("token span is outside its source or out of order");
+        }
+        if matches!(token.kind, TokenKind::Eof) && index != tokens.len() - 1 {
+            return Err("tokens follow EOF");
+        }
+        if let Some(doc) = &token.leading_doc {
+            let span = doc.span;
+            if span.file != file
+                || span.start > span.end
+                || span.end > token.span.start
+                || source.get(span.start as usize..span.end as usize) != Some(doc.text.as_str())
+                || !doc.text.starts_with("/**")
+                || !doc.text.ends_with("*/")
+            {
+                return Err("documentation metadata does not match its source");
+            }
+        }
+        previous = span.start;
+    }
+    Ok(())
 }
 
 pub(crate) struct Parser<'a> {
@@ -79,6 +141,8 @@ pub(crate) struct Parser<'a> {
     function_expression_body_depth: u32,
     recursion_depth: usize,
     recursion_limit_span: Option<Span>,
+    eof: Token,
+    fatal: Option<CompilerFailure>,
 }
 
 impl<'a> Parser<'a> {
@@ -156,13 +220,13 @@ impl<'a> Parser<'a> {
         }
         let semi = self.advance();
         let span = self.span(expr_span.start, semi.span.end);
-        let kind = self.statement_kind_for(expr_id);
+        let kind = self.statement_kind_for(expr_id)?;
         Some(self.ast.push_stmt(Stmt { kind, span }))
     }
 
     /// An assignment in statement position becomes an assignment statement;
     /// only one used as a value stays an `ExprKind::Assign`.
-    fn statement_kind_for(&self, expr_id: ExprId) -> StmtKind {
+    fn statement_kind_for(&mut self, expr_id: ExprId) -> Option<StmtKind> {
         let ExprKind::Assign {
             target,
             op,
@@ -170,9 +234,9 @@ impl<'a> Parser<'a> {
             value,
         } = self.ast.expr(expr_id).kind.clone()
         else {
-            return StmtKind::Expr(expr_id);
+            return Some(StmtKind::Expr(expr_id));
         };
-        match (self.ast.expr(target).kind.clone(), op) {
+        Some(match (self.ast.expr(target).kind.clone(), op) {
             (ExprKind::Identifier(target), None) => StmtKind::Assign { target, value },
             (ExprKind::Identifier(target), Some(op)) => StmtKind::CompoundAssign {
                 target,
@@ -206,8 +270,8 @@ impl<'a> Parser<'a> {
                     value,
                 }
             }
-            _ => unreachable!("parse_expression only builds assignments to valid targets"),
-        }
+            _ => return self.invariant_failure("invalid assignment target"),
+        })
     }
 
     fn parse_let_or_const(&mut self, is_const: bool) -> Option<StmtId> {
@@ -294,7 +358,7 @@ impl<'a> Parser<'a> {
                     }
                 }
             }
-            (None, None) => unreachable!("either binding or name must be Some"),
+            (None, None) => return self.invariant_failure("either binding or name must be Some"),
         };
         Some(self.ast.push_stmt(Stmt { kind, span }))
     }
@@ -1285,7 +1349,11 @@ impl<'a> Parser<'a> {
             // Carry any doc comment that attached to `export` onto the
             // declaration token so the declaration parser still sees it.
             if export_tok.leading_doc.is_some() && self.peek().leading_doc.is_none() {
-                self.tokens[self.pos].leading_doc = export_tok.leading_doc;
+                if let Some(token) = self.tokens.get_mut(self.pos) {
+                    token.leading_doc = export_tok.leading_doc;
+                } else {
+                    return self.invariant_failure("export cursor is outside token stream");
+                }
             }
             let id = self.parse_statement()?;
             if nested {
@@ -2204,7 +2272,7 @@ impl<'a> Parser<'a> {
     fn parse_for_update_stmt(&mut self) -> Option<StmtId> {
         let expr_id = self.parse_expression()?;
         let span = self.ast.expr(expr_id).span;
-        let kind = self.statement_kind_for(expr_id);
+        let kind = self.statement_kind_for(expr_id)?;
         Some(self.ast.push_stmt(Stmt { kind, span }))
     }
 
@@ -2213,7 +2281,7 @@ impl<'a> Parser<'a> {
         let binding_kind = match binding_tok.kind {
             TokenKind::Let => crate::BindingKind::Let,
             TokenKind::Const => crate::BindingKind::Const,
-            _ => unreachable!("scan_for_of_shape gated this"),
+            _ => return self.invariant_failure("scan_for_of_shape gated this"),
         };
         let (name, binding) = match self.peek().kind {
             TokenKind::LeftBracket => {
@@ -2270,7 +2338,7 @@ impl<'a> Parser<'a> {
                 iter,
                 body,
             },
-            (None, None) => unreachable!("either binding or name must be Some"),
+            (None, None) => return self.invariant_failure("either binding or name must be Some"),
         };
         Some(self.ast.push_stmt(Stmt {
             kind,
@@ -2383,7 +2451,10 @@ impl<'a> Parser<'a> {
                         );
                         return None;
                     }
-                    let body = self.parse_switch_arm_body(pending_label_start.unwrap())?;
+                    let Some(label_start) = pending_label_start else {
+                        return self.invariant_failure("switch arm has no label");
+                    };
+                    let body = self.parse_switch_arm_body(label_start)?;
                     let arm_span = self.ast.stmt(body).span;
                     if !pending_values.is_empty() {
                         let case_span =
@@ -2688,12 +2759,14 @@ impl<'a> Parser<'a> {
             return Some(first);
         }
         let start = first.span.start;
+        let mut end = first.span.end;
         let mut members = vec![first];
         while matches!(self.peek().kind, TokenKind::Pipe) {
             self.advance();
-            members.push(self.parse_type_array(type_pos)?);
+            let member = self.parse_type_array(type_pos)?;
+            end = member.span.end;
+            members.push(member);
         }
-        let end = members.last().expect("≥1 member").span.end;
         Some(TypeAnnotation {
             kind: TypeAnnotationKind::Union(members),
             span: self.span(start, end),
@@ -2748,6 +2821,7 @@ impl<'a> Parser<'a> {
                 let leading_is_identifier = matches!(self.peek().kind, TokenKind::Identifier);
                 let tok = self.advance();
                 let first_span = tok.span;
+                let mut path_end = first_span.end;
                 let mut path: Vec<Span> = vec![first_span];
                 if leading_is_identifier {
                     while matches!(self.peek().kind, TokenKind::Dot) {
@@ -2757,13 +2831,14 @@ impl<'a> Parser<'a> {
                             return None;
                         }
                         let seg = self.advance();
+                        path_end = seg.span.end;
                         path.push(seg.span);
                     }
                 }
                 let (args, end) = if matches!(self.peek().kind, TokenKind::LessThan) {
                     self.parse_type_argument_list()?
                 } else {
-                    (Vec::new(), path.last().unwrap().end)
+                    (Vec::new(), path_end)
                 };
                 let outer_span = self.span(first_span.start, end);
                 let kind = if path.len() == 1 {
@@ -2806,7 +2881,7 @@ impl<'a> Parser<'a> {
                 let tok = self.advance();
                 let span = tok.span;
                 let TokenKind::StringLiteral(s) = tok.kind else {
-                    unreachable!("just matched StringLiteral");
+                    return self.invariant_failure("just matched StringLiteral");
                 };
                 TypeAnnotation {
                     kind: TypeAnnotationKind::StringLiteral(s),
@@ -2817,7 +2892,7 @@ impl<'a> Parser<'a> {
                 let tok = self.advance();
                 let span = tok.span;
                 let TokenKind::NumberLiteral(v) = tok.kind else {
-                    unreachable!("just matched NumberLiteral");
+                    return self.invariant_failure("just matched NumberLiteral");
                 };
                 // Canonicalize `-0.0` → `0.0` so literal type `0` matches both signs.
                 let canonical = if v == 0.0 { 0.0 } else { v };
@@ -2870,8 +2945,14 @@ impl<'a> Parser<'a> {
         let operand = self.parse_type_array(type_pos)?;
         // `readonly (T[])` is rejected as TypeScript rejects it: the operand must be
         // written as an array or tuple type, not grouped into one.
-        let grouped =
-            opens_group && matches!(self.tokens[self.pos - 1].kind, TokenKind::RightParen);
+        let grouped = opens_group
+            && matches!(
+                self.pos
+                    .checked_sub(1)
+                    .and_then(|index| self.tokens.get(index))
+                    .map(|token| &token.kind),
+                Some(TokenKind::RightParen)
+            );
         if grouped
             || !matches!(
                 operand.kind,
@@ -3517,10 +3598,12 @@ impl<'a> Parser<'a> {
     /// Index just past the `)` matching the `(` at `index`; `None` when the parens
     /// never balance. Pure lookahead — emits no diagnostics.
     fn index_after_matching_paren(&self, index: usize) -> Option<usize> {
-        debug_assert!(matches!(
+        if !matches!(
             self.tokens.get(index).map(|t| &t.kind),
             Some(TokenKind::LeftParen)
-        ));
+        ) {
+            return None;
+        }
         self.scan_past_balanced(
             index,
             |k| matches!(k, TokenKind::LeftParen),
@@ -3699,7 +3782,8 @@ impl<'a> Parser<'a> {
         let mut depth: i32 = 1;
         let mut i = start + 1;
         while i < self.tokens.len() && depth > 0 {
-            let kind = &self.tokens[i].kind;
+            let token = self.tokens.get(i)?;
+            let kind = &token.kind;
             if is_open(kind) {
                 depth += 1;
             } else if is_close(kind) {
@@ -3742,7 +3826,7 @@ impl<'a> Parser<'a> {
                 self.advance();
                 params
             }
-            _ => unreachable!("is_arrow_start guarded the entry"),
+            _ => return self.invariant_failure("is_arrow_start guarded the entry"),
         };
 
         let (return_type, type_predicate) = if matches!(self.peek().kind, TokenKind::Colon) {
@@ -4406,7 +4490,9 @@ impl<'a> Parser<'a> {
     }
 
     fn try_parse_type_args_only(&mut self) -> Option<Vec<TypeAnnotation>> {
-        debug_assert!(matches!(self.peek().kind, TokenKind::LessThan));
+        if !matches!(self.peek().kind, TokenKind::LessThan) {
+            return self.invariant_failure("type argument parser expected `<`");
+        }
         self.advance();
 
         if matches!(self.peek().kind, TokenKind::GreaterThan) {
@@ -4524,7 +4610,7 @@ impl<'a> Parser<'a> {
                 span,
             }),
             TokenKind::RegexLiteral { source, flags } => ExprKind::Regex { source, flags },
-            _ => unreachable!("dispatch above already filtered"),
+            _ => return self.invariant_failure("dispatch above already filtered"),
         };
         Some(self.ast.push_expr(Expr { kind, span }))
     }
@@ -4562,7 +4648,7 @@ impl<'a> Parser<'a> {
     fn parse_template_literal(&mut self) -> Option<ExprId> {
         let head_tok = self.advance();
         let TokenKind::TemplateHead(head) = head_tok.kind else {
-            unreachable!("dispatch guaranteed TemplateHead");
+            return self.invariant_failure("dispatch guaranteed TemplateHead");
         };
         let start = head_tok.span.start;
         let mut parts: Vec<String> = vec![head];
@@ -4822,6 +4908,9 @@ impl<'a> Parser<'a> {
     }
 
     fn with_recursion_limit<T>(&mut self, parse: impl FnOnce(&mut Self) -> Option<T>) -> Option<T> {
+        if self.fatal.is_some() {
+            return None;
+        }
         if self.recursion_limit_span.is_some() || self.recursion_depth >= MAX_PARSE_DEPTH {
             self.recursion_limit_span.get_or_insert(self.peek().span);
             // Stop recovery and enclosing block loops as well as recursive calls.
@@ -4859,17 +4948,19 @@ impl<'a> Parser<'a> {
     }
 
     fn peek(&self) -> &Token {
-        &self.tokens[self.pos]
+        self.tokens.get(self.pos).unwrap_or(&self.eof)
     }
 
     fn peek_at(&self, offset: usize) -> &Token {
-        let idx = (self.pos + offset).min(self.tokens.len() - 1);
-        &self.tokens[idx]
+        self.pos
+            .checked_add(offset)
+            .and_then(|index| self.tokens.get(index))
+            .unwrap_or(&self.eof)
     }
 
     fn advance(&mut self) -> Token {
-        let tok = self.tokens[self.pos].clone();
-        if self.pos + 1 < self.tokens.len() {
+        let tok = self.peek().clone();
+        if self.pos < self.tokens.len().saturating_sub(1) {
             self.pos += 1;
         }
         tok
@@ -4882,7 +4973,11 @@ impl<'a> Parser<'a> {
     /// End offset of the most recently consumed token (the body of the file's first
     /// token if nothing has been consumed yet).
     fn prev_token_end(&self) -> u32 {
-        self.tokens[self.pos.saturating_sub(1)].span.end
+        self.tokens
+            .get(self.pos.saturating_sub(1))
+            .unwrap_or(&self.eof)
+            .span
+            .end
     }
 
     fn take_leading_doc(&self) -> Option<crate::DocComment> {
@@ -4910,6 +5005,16 @@ impl<'a> Parser<'a> {
             help,
             notes: vec![],
         });
+    }
+
+    fn invariant_failure<T>(&mut self, message: &str) -> Option<T> {
+        self.fatal.get_or_insert_with(|| CompilerFailure::Internal {
+            stage: CompilerStage::Parse,
+            span: None,
+            message: message.into(),
+        });
+        self.pos = self.tokens.len();
+        None
     }
 
     fn error_at_peek(&mut self, message: impl Into<String>) {
@@ -5093,6 +5198,87 @@ mod tests {
 
     const F: FileId = FileId(0);
 
+    #[test]
+    fn malformed_direct_token_streams_return_typed_failures() {
+        use crate::compiler_error::CompilerFailure;
+        for tokens in [
+            Vec::new(),
+            vec![Token::new(TokenKind::Identifier, crate::Span::new(F, 0, 2))],
+            vec![
+                Token::new(
+                    TokenKind::Identifier,
+                    crate::Span {
+                        file: F,
+                        start: 1,
+                        end: 2,
+                    },
+                ),
+                Token::new(TokenKind::Eof, crate::Span::new(F, 2, 2)),
+            ],
+            vec![
+                Token::new(TokenKind::Eof, crate::Span::at(F)),
+                Token::new(TokenKind::Eof, crate::Span::at(F)),
+            ],
+            vec![
+                Token::new(
+                    TokenKind::Identifier,
+                    crate::Span {
+                        file: F,
+                        start: 2,
+                        end: 0,
+                    },
+                ),
+                Token::new(TokenKind::Eof, crate::Span::new(F, 2, 2)),
+            ],
+            vec![Token::new(TokenKind::Eof, crate::Span::at(FileId(9)))],
+        ] {
+            let error = super::parse_checked("é", tokens, F).expect_err("invalid token metadata");
+            assert!(matches!(
+                error.fatal,
+                Some(CompilerFailure::Internal { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn malformed_documentation_metadata_returns_a_fatal_error() {
+        let source = "/** hello */ function main(): void {}";
+        let valid = tokens_of(source);
+        for doc in [
+            crate::RawDoc {
+                text: "/** hi */".into(),
+                span: crate::Span {
+                    file: F,
+                    start: u32::MAX,
+                    end: u32::MAX,
+                },
+            },
+            crate::RawDoc {
+                text: "/** different */".into(),
+                span: crate::Span::new(F, 0, 12),
+            },
+            crate::RawDoc {
+                text: "/** hello */".into(),
+                span: crate::Span::new(FileId(9), 0, 12),
+            },
+        ] {
+            let mut tokens = valid.clone();
+            tokens[0].leading_doc = Some(doc);
+            let error = super::parse_checked(source, tokens, F).expect_err("invalid doc metadata");
+            assert!(error.to_string().contains("documentation metadata"));
+        }
+        assert!(super::parse_checked(source, valid, F).is_ok());
+    }
+
+    #[test]
+    fn invalid_parser_dispatch_survives_diagnostic_rollback() {
+        let mut parser = parser_from_source("let x = 1;");
+        assert!(parser.try_parse_type_args_only().is_none());
+        parser.diagnostics.clear();
+        assert!(parser.fatal.is_some());
+        assert!(parser.parse_expression().is_none());
+    }
+
     fn tokens_of(source: &str) -> Vec<Token> {
         let mut asi = Asi::new(source, crate::FileId(0));
         let mut tokens = Vec::new();
@@ -5126,6 +5312,11 @@ mod tests {
             function_expression_body_depth: 0,
             recursion_depth: 0,
             recursion_limit_span: None,
+            eof: Token::new(
+                TokenKind::Eof,
+                crate::Span::new(F, source.len() as u32, source.len() as u32),
+            ),
+            fatal: None,
         }
     }
 
