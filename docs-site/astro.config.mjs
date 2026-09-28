@@ -36,6 +36,7 @@ export default defineConfig({
       // heading anchors) on it.
       markdown: { processedDirs: ["../docs"] },
       components: {
+        ThemeProvider: "./src/components/ThemeProvider.astro",
         Head: "./src/components/Head.astro",
         Header: "./src/components/Header.astro",
         SiteTitle: "./src/components/SiteTitle.astro",

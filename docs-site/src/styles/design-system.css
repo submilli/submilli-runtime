@@ -1,0 +1,196 @@
+/* Submilli design tokens: the single source for every Submilli surface.
+   Dark is the default (:root); add .theme-light to an ancestor for light.
+   tokens.json is generated from this file: node design-system/scripts/tokens-json.mjs */
+
+/* Colors */
+:root {
+  /* Base neutrals */
+  --black: #000000;
+  --ink-900: #090a0a;
+  --ink-850: #131313;
+  --ink-800: #161718;
+  --grey-900: #202020;
+  --grey-800: #2a2b2e;
+  --grey-700: #373b47;
+  --slate-700: #31415c;
+  --slate-600: #4d6183;
+
+  --grey-500: #737373;
+  --grey-400: #929292;
+  --grey-300: #b6b6b6;
+
+  --white: #ffffff;
+
+  /* Brand blues */
+  --blue-300: #c4e4f9;
+  --blue-350: #abd8f7;
+  --blue-200: #d6efff;
+  --blue-100: #e8f6ff;
+  --blue-50: #f2f9ff;
+  --cyan-300: #88e5ff;
+  --blue-600: #6badda;
+  --blue-700: #61a4d0;
+
+  /* Semantic */
+  --danger: #ff8181;
+  --danger-strong: #ff0000;
+  --warn: #f5d632;
+  --positive: #88e5ff;
+
+  /* Semantic aliases — prefer these in components */
+  --surface-canvas: var(--ink-850);
+  --surface-raised: var(--ink-800);
+  --surface-card: rgba(255, 255, 255, 0.04);
+  --surface-chip: var(--grey-800);
+  --surface-inverse: var(--white);
+
+  --text-primary: var(--white);
+  --text-secondary: rgba(255, 255, 255, 0.64);
+  --text-muted: var(--grey-500);
+  --text-on-light: var(--grey-900);
+  --text-accent: var(--blue-300);
+
+  --border-subtle: rgba(255, 255, 255, 0.1);
+  --border-strong: rgba(255, 255, 255, 0.2);
+  --border-accent: var(--blue-300);
+  --border-danger: var(--danger);
+
+  --accent: var(--blue-300);
+  --accent-ink: #0c0c0c;
+  --accent-soft: rgba(196, 228, 249, 0.14);
+
+  /* Scrollbars. Alpha, not solid, so one thumb reads correctly over every
+     surface — cards, the canvas, and the near-black code blocks alike. At rest
+     it sits between --border-subtle and --border-strong: present, not loud. */
+  --scrollbar-thumb: rgba(255, 255, 255, 0.14);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.26);
+  --scrollbar-thumb-active: rgba(196, 228, 249, 0.45);
+}
+
+.theme-light {
+  --surface-canvas: var(--blue-100);
+  --surface-raised: var(--white);
+  --surface-card: rgba(255, 255, 255, 0.6);
+  --surface-chip: rgba(107, 173, 218, 0.18);
+  --surface-inverse: var(--ink-850);
+
+  --text-primary: var(--grey-900);
+  --text-secondary: rgba(32, 32, 32, 0.66);
+  --text-muted: var(--grey-400);
+  --text-on-light: var(--grey-900);
+  --text-accent: var(--blue-700);
+
+  --border-subtle: rgba(32, 32, 32, 0.1);
+  --border-strong: rgba(32, 32, 32, 0.2);
+
+  --scrollbar-thumb: rgba(32, 32, 32, 0.18);
+  --scrollbar-thumb-hover: rgba(32, 32, 32, 0.32);
+  --scrollbar-thumb-active: rgba(97, 164, 208, 0.6);
+}
+
+/* Typography */
+:root {
+  --font-rounded: "SF Pro Rounded", "Nunito", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --font-display: var(--font-rounded);
+  --font-title: var(--font-rounded);
+  --font-body: var(--font-rounded);
+  --font-label: var(--font-mono);
+
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+
+  --fs-display-xl: 96px;
+  --fs-display: 72px;
+  --fs-h1: 58px;
+  --fs-h2: 48px;
+  --fs-h3: 40px;
+  --fs-h4: 32px;
+  --fs-title: 30px;
+  --fs-lead: 24px;
+  --fs-body: 22px;
+  --fs-base: 18px;
+  --fs-sm: 16px;
+  --fs-label: 18px;
+  --fs-caption: 14px;
+
+  --lh-tight: 1.04;
+  --lh-snug: 1.12;
+  --lh-title: 1.22;
+  --lh-body: 1.4;
+  --lh-relaxed: 1.55;
+
+  --ls-tight: -0.02em;
+  --ls-normal: 0em;
+  --ls-label: 0.02em;
+  --ls-caps: 0.08em;
+}
+
+/* Spacing */
+:root {
+  --space-0: 0;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --space-20: 80px;
+  --space-24: 96px;
+  --space-32: 128px;
+
+  --gap-inline: var(--space-3);
+  --gap-stack: var(--space-4);
+  --pad-card: var(--space-6);
+
+  --measure-prose: 46ch;
+}
+
+/* Radius */
+:root {
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-2xl: 28px;
+  --radius-pill: 999px;
+  --radius-mark: 21%;
+}
+
+/* Effects */
+:root {
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 24px 64px rgba(0, 0, 0, 0.55);
+  --shadow-card: 0 20px 60px -20px rgba(9, 10, 10, 0.7);
+  --shadow-card-light: 0 18px 50px -24px rgba(49, 65, 92, 0.45);
+
+  --glow-blue: 0 0 60px rgba(136, 229, 255, 0.16);
+  --glow-blue-soft: 0 0 80px rgba(196, 228, 249, 0.18);
+
+  --bg-dark-radial: radial-gradient(750px 535px at 49% 29%, var(--grey-700) 0%, var(--ink-850) 100%);
+  --bg-dark-spot: radial-gradient(1100px 760px at 60% 8%, rgba(49, 65, 92, 0.5) 0%, var(--ink-850) 62%);
+  --bg-light: linear-gradient(180deg, var(--blue-300) 0%, var(--blue-100) 38%, var(--white) 100%);
+  --bg-light-soft: linear-gradient(180deg, var(--blue-200) 0%, var(--white) 70%);
+
+  --grad-mask-x: linear-gradient(90deg, transparent, var(--white) 50%, transparent);
+  --grad-accent: linear-gradient(150deg, var(--blue-200), var(--blue-300));
+  --grad-ink: linear-gradient(150deg, var(--grey-900), var(--ink-900));
+
+  --blur-glass: 18px;
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-inout: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-fast: 140ms;
+  --dur-base: 240ms;
+  --dur-slow: 420ms;
+}
