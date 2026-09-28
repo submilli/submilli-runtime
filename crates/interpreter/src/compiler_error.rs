@@ -51,8 +51,8 @@ impl CompileError {
     }
 
     /// Explicit compatibility adapter for APIs that historically returned only
-    /// diagnostics. Source-less failures use the caller's compilation file.
-    pub fn into_diagnostics(mut self, file: FileId) -> Vec<Diagnostic> {
+    /// diagnostics. Source-less failures retain a virtual compiler location.
+    pub fn into_diagnostics(mut self, _file: FileId) -> Vec<Diagnostic> {
         if let Some(fatal) = self.fatal {
             let span = match &fatal {
                 CompilerFailure::Limit { span, .. } | CompilerFailure::Internal { span, .. } => {
@@ -68,7 +68,7 @@ impl CompileError {
             };
             self.diagnostics.push(Diagnostic {
                 severity: Severity::Error,
-                span: span.unwrap_or(Span::at(file)),
+                span: span.unwrap_or(Span::at(FileId::COMPILER)),
                 message,
                 help,
                 notes: Vec::new(),

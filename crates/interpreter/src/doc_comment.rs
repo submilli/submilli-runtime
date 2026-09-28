@@ -100,7 +100,23 @@ pub struct DocUnknownTag {
     pub text: String,
 }
 
-pub fn parse_doc_comment(raw: &RawDoc) -> DocComment {
+pub fn parse_doc_comment(raw: &RawDoc) -> Result<DocComment, crate::source::SourceError> {
+    use crate::source::SourceError;
+    SourceError::check_source_len(raw.span.end as usize)?;
+    if raw
+        .span
+        .end
+        .checked_sub(raw.span.start)
+        .map(|len| len as usize)
+        != Some(raw.text.len())
+        || !raw.text.starts_with("/**")
+        || !raw.text.ends_with("*/")
+    {
+        return Err(SourceError::InvalidSpan {
+            span: raw.span,
+            reason: "documentation text does not match its span",
+        });
+    }
     let mut doc = DocComment {
         span: raw.span,
         summary: String::new(),
@@ -128,13 +144,13 @@ pub fn parse_doc_comment(raw: &RawDoc) -> DocComment {
         if let Some(tag_offset) = first_at_offset(text) {
             // Flush whatever tag was being accumulated.
             if let Some(t) = current_tag.take() {
-                push_tag(&mut doc, t);
+                push_tag(&mut doc, t)?;
             }
             let tag_byte = *offset + tag_offset as u32;
             let after_at = &text[tag_offset + 1..];
             let (tag_name, name_end) = read_tag_name(after_at);
             let tag_name_str = tag_name.to_string();
-            let tag_span = Span::new(raw.span.file, tag_byte, tag_byte + 1 + name_end as u32);
+            let tag_span = Span::new(raw.span.file, tag_byte, tag_byte + 1 + name_end as u32)?;
             let body_start = tag_offset + 1 + name_end;
             let body = text[body_start..].trim_start();
             let body_offset = *offset + (text.len() - body.len()) as u32;
@@ -142,7 +158,11 @@ pub fn parse_doc_comment(raw: &RawDoc) -> DocComment {
                 tag_span,
                 name: tag_name_str,
                 body: body.to_string(),
-                body_offset,
+                segments: vec![BodySegment {
+                    start: 0,
+                    len: body.len(),
+                    source_start: body_offset,
+                }],
             });
         } else if let Some(tag) = &mut current_tag {
             let trimmed = text.trim();
@@ -150,6 +170,14 @@ pub fn parse_doc_comment(raw: &RawDoc) -> DocComment {
                 if !tag.body.is_empty() {
                     tag.body.push(' ');
                 }
+                tag.segments
+                    .try_reserve(1)
+                    .map_err(SourceError::Allocation)?;
+                tag.segments.push(BodySegment {
+                    start: tag.body.len(),
+                    len: trimmed.len(),
+                    source_start: *offset + (text.len() - text.trim_start().len()) as u32,
+                });
                 tag.body.push_str(trimmed);
             }
         } else {
@@ -163,9 +191,9 @@ pub fn parse_doc_comment(raw: &RawDoc) -> DocComment {
         }
     }
     if let Some(t) = current_tag {
-        push_tag(&mut doc, t);
+        push_tag(&mut doc, t)?;
     }
-    doc
+    Ok(doc)
 }
 
 /// Build a [`DocComment`] from a literal that has no real source range —
@@ -176,28 +204,57 @@ pub fn doc(file: FileId, literal: &str) -> Option<DocComment> {
     }
     let raw = RawDoc {
         text: literal.to_string(),
-        span: Span::new(file, 0, literal.len() as u32),
+        span: Span::new(file, 0, u32::try_from(literal.len()).ok()?).ok()?,
     };
-    Some(parse_doc_comment(&raw))
+    parse_doc_comment(&raw).ok()
 }
 
 struct PendingTag {
     tag_span: Span,
     name: String,
     body: String,
-    body_offset: u32,
+    segments: Vec<BodySegment>,
 }
 
-fn push_tag(doc: &mut DocComment, t: PendingTag) {
-    let body = strip_jsdoc_type(t.body.trim());
+struct BodySegment {
+    start: usize,
+    len: usize,
+    source_start: u32,
+}
+
+impl PendingTag {
+    /// Normalization joins lines and strips their prefixes; map token boundaries
+    /// back to the original text rather than treating the joined body as source.
+    fn source_span(&self, start: usize, end: usize) -> Result<Span, crate::source::SourceError> {
+        let offset = |offset: usize| {
+            self.segments
+                .iter()
+                .rev()
+                .find_map(|segment| {
+                    let relative = offset
+                        .checked_sub(segment.start)
+                        .filter(|n| *n <= segment.len)?;
+                    segment
+                        .source_start
+                        .checked_add(u32::try_from(relative).ok()?)
+                })
+                .ok_or(crate::source::SourceError::InvalidSpan {
+                    span: self.tag_span,
+                    reason: "documentation offset has no source segment",
+                })
+        };
+        Span::new(self.tag_span.file, offset(start)?, offset(end)?)
+    }
+}
+
+fn push_tag(doc: &mut DocComment, t: PendingTag) -> Result<(), crate::source::SourceError> {
+    let trimmed = t.body.trim();
+    let body = strip_jsdoc_type(trimmed);
+    let body_start = t.body.len() - t.body.trim_start().len() + trimmed.len() - body.len();
     match t.name.as_str() {
         "param" => {
-            let (param_name, name_len_with_ws) = read_param_name(&body);
-            let name_span = Span::new(
-                t.tag_span.file,
-                t.body_offset,
-                t.body_offset + param_name.len() as u32,
-            );
+            let (param_name, name_len_with_ws) = read_param_name(body);
+            let name_span = t.source_span(body_start, body_start + param_name.len())?;
             let description = body[name_len_with_ws..].trim().to_string();
             doc.params.push(DocParam {
                 tag_span: t.tag_span,
@@ -213,8 +270,27 @@ fn push_tag(doc: &mut DocComment, t: PendingTag) {
             });
         }
         "capability" => {
-            doc.capabilities
-                .push(parse_capability_tag(t.tag_span, &body, t.body_offset));
+            let mut capability = parse_capability_tag(t.tag_span, body, 0);
+            let remap = |span: &mut Span| -> Result<(), crate::source::SourceError> {
+                *span = t.source_span(
+                    body_start + span.start as usize,
+                    body_start + span.end as usize,
+                )?;
+                Ok(())
+            };
+            remap(&mut capability.capability_span)?;
+            for binding in &mut capability.bindings {
+                remap(&mut binding.field_span)?;
+                match &mut binding.kind {
+                    DocCapabilityBindingKind::Parameter { span, .. }
+                    | DocCapabilityBindingKind::Type { span, .. }
+                    | DocCapabilityBindingKind::Literal { span, .. } => remap(span)?,
+                }
+            }
+            for diagnostic in &mut capability.diagnostics {
+                remap(&mut diagnostic.span)?;
+            }
+            doc.capabilities.push(capability);
         }
         "throws" | "throw" => doc.throws.push(DocText {
             tag_span: t.tag_span,
@@ -236,6 +312,7 @@ fn push_tag(doc: &mut DocComment, t: PendingTag) {
             text: body.to_string(),
         }),
     }
+    Ok(())
 }
 
 fn strip_delimiters(text: &str) -> &str {
@@ -329,10 +406,10 @@ fn read_param_name(body: &str) -> (&str, usize) {
 }
 
 /// Strips leading `{type}` since Submilli has TS-style annotations.
-fn strip_jsdoc_type(s: &str) -> String {
+fn strip_jsdoc_type(s: &str) -> &str {
     let s = s.trim_start();
     if !s.starts_with('{') {
-        return s.to_string();
+        return s;
     }
     let mut depth = 0u32;
     for (i, c) in s.char_indices() {
@@ -341,14 +418,14 @@ fn strip_jsdoc_type(s: &str) -> String {
             '}' => {
                 depth -= 1;
                 if depth == 0 {
-                    return s[i + 1..].trim_start().to_string();
+                    return s[i + 1..].trim_start();
                 }
             }
             _ => {}
         }
     }
     // Unterminated `{` — keep as-is.
-    s.to_string()
+    s
 }
 
 fn parse_capability_tag(tag_span: Span, body: &str, body_offset: u32) -> DocCapability {
@@ -654,16 +731,21 @@ impl CapabilityParser<'_> {
     }
 
     fn span(&self, start: usize, end: usize) -> Span {
-        Span::new(
-            self.file,
-            self.body_offset + start as u32,
-            self.body_offset + end as u32,
-        )
+        Span {
+            file: self.file,
+            start: self.body_offset + start as u32,
+            end: self.body_offset + end as u32,
+        }
     }
 
     fn error(&mut self, pos: usize, message: &str) {
+        let end = self
+            .body
+            .get(pos..)
+            .and_then(|tail| tail.chars().next())
+            .map_or(pos, |character| pos + character.len_utf8());
         self.diagnostics.push(DocCapabilityDiagnostic {
-            span: self.span(pos, pos.saturating_add(1).min(self.body.len())),
+            span: self.span(pos, end),
             message: message.to_string(),
         });
     }
@@ -676,8 +758,9 @@ mod tests {
     fn parse(text: &str) -> DocComment {
         parse_doc_comment(&RawDoc {
             text: text.to_string(),
-            span: Span::new(crate::FileId(0), 0, text.len() as u32),
+            span: Span::new(crate::FileId(0), 0, text.len() as u32).unwrap(),
         })
+        .unwrap()
     }
 
     #[test]
@@ -863,9 +946,9 @@ mod tests {
     fn param_name_span_anchors_to_source_offset() {
         let raw = RawDoc {
             text: "/** @param foo desc */".to_string(),
-            span: Span::new(crate::FileId(0), 100, 100 + 22),
+            span: Span::new(crate::FileId(0), 100, 100 + 22).unwrap(),
         };
-        let d = parse_doc_comment(&raw);
+        let d = parse_doc_comment(&raw).unwrap();
         // `@param` is at byte 4 of the raw text → source offset 104.
         assert_eq!(d.params[0].tag_span.start, 104);
         // `foo` starts at byte 11 of the raw text → 111.

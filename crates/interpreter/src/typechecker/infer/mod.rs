@@ -80,6 +80,14 @@ pub fn infer_with_transitive_checked<'a>(
     packages: &'a [&'a PackageDeclaration],
     transitive: &'a [&'a PackageDeclaration],
 ) -> Result<(TypedAst, Vec<Diagnostic>), CompileError> {
+    let file = ast
+        .source_statements()
+        .first()
+        .map(|stmt| stmt.span.file)
+        .or_else(|| ast.source_expressions().first().map(|expr| expr.span.file))
+        .unwrap_or(crate::FileId(0));
+    ast.validate_source(source, file)
+        .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?;
     validate_lowered_patterns(ast)?;
     let packages_by_name: BTreeMap<&'a str, &'a PackageDeclaration> = packages
         .iter()
@@ -228,7 +236,25 @@ pub fn infer_package_checked<'a>(
         ));
     }
 
+    // Graph diagnostics also consume import/export spans. Validate available
+    // modules before graph traversal; missing sources still fail in inference
+    // order so earlier module diagnostics remain available.
+    for (file, ast) in module_map.values() {
+        if let Some(source) = sources.get(*file) {
+            ast.validate_source(source.text(), *file)
+                .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?;
+        }
+    }
     let Some(order) = import_graph::topo_order(&module_map, &mut diagnostics) else {
+        if module_map
+            .values()
+            .any(|(file, _)| sources.get(*file).is_none())
+        {
+            return Err(
+                CompileError::from(inference_failure("module source is missing"))
+                    .with_prior_diagnostics(&diagnostics),
+            );
+        }
         return Ok((
             TypedAst::with_package(package_name),
             PackageDeclaration::with_package(package_name),
@@ -250,7 +276,7 @@ pub fn infer_package_checked<'a>(
     })?;
     let first_source = sources
         .get(first_file)
-        .map(|f| f.text.as_str())
+        .map(crate::source::SourceFile::text)
         .ok_or_else(|| {
             CompileError::from(inference_failure("module source is missing"))
                 .with_prior_diagnostics(&diagnostics)
@@ -336,8 +362,16 @@ pub fn infer_package_checked<'a>(
                 .with_prior_diagnostics(&tc.diagnostics)
                 .with_prior_diagnostics(&diagnostics)
         })?;
-        let source = sources.get(file).map(|f| f.text.as_str()).ok_or_else(|| {
-            CompileError::from(inference_failure("module source is missing"))
+        let source = sources
+            .get(file)
+            .map(crate::source::SourceFile::text)
+            .ok_or_else(|| {
+                CompileError::from(inference_failure("module source is missing"))
+                    .with_prior_diagnostics(&tc.diagnostics)
+                    .with_prior_diagnostics(&diagnostics)
+            })?;
+        ast.validate_source(source, file).map_err(|error| {
+            CompileError::from(error.into_compiler_failure(CompilerStage::Infer))
                 .with_prior_diagnostics(&tc.diagnostics)
                 .with_prior_diagnostics(&diagnostics)
         })?;
@@ -1072,7 +1106,7 @@ mod tests {
         module: &str,
         source: &str,
     ) -> (ModulePath, crate::FileId, Ast) {
-        let file = sources.add(module.to_string(), source.to_string());
+        let file = sources.add(module.to_string(), source).unwrap();
         let mut asi = Asi::new(source, file);
         let mut tokens: Vec<Token> = Vec::new();
         loop {

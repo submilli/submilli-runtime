@@ -23,6 +23,7 @@ pub mod parser;
 pub mod runtime;
 pub mod shape;
 pub mod source;
+mod source_validation;
 pub mod span;
 pub mod stdlib;
 pub mod token;

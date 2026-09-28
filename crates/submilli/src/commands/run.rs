@@ -198,7 +198,7 @@ pub(crate) fn execute_with_dispatch(
     let filename = args.script.to_string_lossy().into_owned();
     // The script's `file` id stamps compile diagnostics; package sources are
     // added after package resolution so runtime package frames can render source.
-    let (mut sources, file) = Sources::single(filename.clone(), source.clone());
+    let (mut sources, file) = Sources::single(filename.clone(), source.clone())?;
 
     let blueprint = match &args.blueprint {
         Some(path) => {
@@ -234,7 +234,7 @@ pub(crate) fn execute_with_dispatch(
         },
         None => Vec::new(),
     };
-    register_package_sources(&mut sources, &package_artifacts);
+    register_package_sources(&mut sources, &package_artifacts)?;
 
     // The closure may hold packages the blueprint doesn't list; those are
     // linked but stay out of the script's importable surface.
@@ -481,12 +481,16 @@ fn compile_package_modules(
         .collect()
 }
 
-fn register_package_sources(sources: &mut Sources, artifacts: &[Artifact]) {
+fn register_package_sources(
+    sources: &mut Sources,
+    artifacts: &[Artifact],
+) -> Result<(), interpreter::source::SourceError> {
     for artifact in artifacts {
         for source in &artifact.sources {
-            sources.add(source.path.clone(), source.text.clone());
+            sources.add(source.path.clone(), source.text.clone())?;
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]

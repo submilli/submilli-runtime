@@ -204,7 +204,16 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
         harness_secrets,
     } = inputs;
 
-    let parsed = runner::parse(code);
+    let parsed = match runner::parse(code) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return ExecuteOutcome::undispatched(error_response(
+                session_id,
+                ErrorKind::RuntimeError,
+                error.to_string(),
+            ));
+        }
+    };
     let script_imports = parsed.imports();
 
     let manager = state.session_manager();

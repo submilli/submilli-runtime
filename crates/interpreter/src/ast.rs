@@ -709,14 +709,14 @@ pub struct TypePredicateAnnotation {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TypeAnnotationKind {
-    /// `name_span` covers the identifier only; outer span includes any `<…>` args.
+    /// `name.span` covers the identifier only; outer span includes any `<…>` args.
     Name {
-        name_span: Span,
+        name: Ident,
         args: Vec<TypeAnnotation>,
     },
     /// Dotted type like `Temporal.Instant`. `path.len() >= 2`; last segment is the type name.
     Qualified {
-        path: Vec<Span>,
+        path: Vec<Ident>,
         args: Vec<TypeAnnotation>,
     },
     StringLiteral(String),
@@ -748,7 +748,7 @@ pub enum TypeAnnotationKind {
     /// rather than the type namespace. `path` is the dotted reference, one span per
     /// segment (`typeof o.k` has two). Resolved eagerly, like [`KeyOf`](Self::KeyOf).
     TypeOf {
-        path: Vec<Span>,
+        path: Vec<Ident>,
     },
 }
 
@@ -800,6 +800,21 @@ pub struct Ast {
 }
 
 impl Ast {
+    pub(crate) fn source_expressions(&self) -> &[Expr] {
+        &self.exprs
+    }
+    pub(crate) fn source_statements(&self) -> &[Stmt] {
+        &self.stmts
+    }
+
+    pub fn validate_source(
+        &self,
+        source: &str,
+        file: crate::FileId,
+    ) -> Result<(), crate::source::SourceError> {
+        crate::source_validation::validate(self, source, file)
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -890,11 +905,14 @@ mod tests {
         let mut ast = Ast::new();
         let id = ast.push_expr(Expr {
             kind: ExprKind::Number(42.0),
-            span: Span::new(crate::FileId(0), 0, 2),
+            span: Span::new(crate::FileId(0), 0, 2).unwrap(),
         });
         assert_eq!(id.0, 0);
         assert_eq!(ast.expr(id).kind, ExprKind::Number(42.0));
-        assert_eq!(ast.expr(id).span, Span::new(crate::FileId(0), 0, 2));
+        assert_eq!(
+            ast.expr(id).span,
+            Span::new(crate::FileId(0), 0, 2).unwrap()
+        );
     }
 
     #[test]
@@ -902,14 +920,17 @@ mod tests {
         let mut ast = Ast::new();
         let expr_id = ast.push_expr(Expr {
             kind: ExprKind::Null,
-            span: Span::new(crate::FileId(0), 0, 4),
+            span: Span::new(crate::FileId(0), 0, 4).unwrap(),
         });
         let stmt_id = ast.push_stmt(Stmt {
             kind: StmtKind::Expr(expr_id),
-            span: Span::new(crate::FileId(0), 0, 5),
+            span: Span::new(crate::FileId(0), 0, 5).unwrap(),
         });
         assert_eq!(stmt_id.0, 0);
-        assert_eq!(ast.stmt(stmt_id).span, Span::new(crate::FileId(0), 0, 5));
+        assert_eq!(
+            ast.stmt(stmt_id).span,
+            Span::new(crate::FileId(0), 0, 5).unwrap()
+        );
         assert!(matches!(ast.stmt(stmt_id).kind, StmtKind::Expr(_)));
     }
 
@@ -918,11 +939,11 @@ mod tests {
         let mut ast = Ast::new();
         let lhs = ast.push_expr(Expr {
             kind: ExprKind::Number(1.0),
-            span: Span::new(crate::FileId(0), 0, 1),
+            span: Span::new(crate::FileId(0), 0, 1).unwrap(),
         });
         let rhs = ast.push_expr(Expr {
             kind: ExprKind::Number(2.0),
-            span: Span::new(crate::FileId(0), 4, 5),
+            span: Span::new(crate::FileId(0), 4, 5).unwrap(),
         });
         let sum = ast.push_expr(Expr {
             kind: ExprKind::Binary {
@@ -930,11 +951,11 @@ mod tests {
                 lhs,
                 rhs,
             },
-            span: Span::new(crate::FileId(0), 0, 5),
+            span: Span::new(crate::FileId(0), 0, 5).unwrap(),
         });
         let stmt_id = ast.push_stmt(Stmt {
             kind: StmtKind::Expr(sum),
-            span: Span::new(crate::FileId(0), 0, 6),
+            span: Span::new(crate::FileId(0), 0, 6).unwrap(),
         });
         ast.top_level.push(stmt_id);
 

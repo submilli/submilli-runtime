@@ -271,8 +271,8 @@ impl<'a> Inferer<'a> {
 
     pub(super) fn resolve_type_inner(&mut self, annot: &TypeAnnotation) -> Type {
         match &annot.kind {
-            TypeAnnotationKind::Name { name_span, args } => {
-                let text = &self.source[name_span.start as usize..name_span.end as usize];
+            TypeAnnotationKind::Name { name, args } => {
+                let text = name.name.as_str();
                 // Body context checked first: `T` in a function body resolves to GenericParam, not the signature TypeVar.
                 if let Some(gp) = self.lookup_body_gp(text) {
                     if !args.is_empty() {
@@ -476,10 +476,9 @@ impl<'a> Inferer<'a> {
                 Type::Error
             }
             TypeAnnotationKind::Qualified { path, args } => {
-                debug_assert!(path.len() >= 2, "Qualified path has ≥2 segments");
                 let text: String = path
                     .iter()
-                    .map(|s| &self.source[s.start as usize..s.end as usize])
+                    .map(|s| s.name.as_str())
                     .collect::<Vec<&str>>()
                     .join(".");
                 if let Some(sym) = self.lookup_named_type(&text) {
@@ -553,12 +552,15 @@ impl<'a> Inferer<'a> {
                         }
                     };
                 }
-                let root = &self.source[path[0].start as usize..path[0].end as usize];
+                let Some((root_name, rest)) = path.split_first() else {
+                    return Type::Error;
+                };
+                let root = root_name.name.as_str();
                 if let Some(ns) = self.namespace_bindings.get(root) {
                     let package_name = ns.members.package_name().to_string();
-                    let member_name = path[1..]
+                    let member_name = rest
                         .iter()
-                        .map(|s| &self.source[s.start as usize..s.end as usize])
+                        .map(|s| s.name.as_str())
                         .collect::<Vec<&str>>()
                         .join(".");
                     if let Some(sym) = ns.members.type_symbol(&member_name).cloned() {
@@ -689,21 +691,21 @@ impl<'a> Inferer<'a> {
     ///
     /// Locals shadow globals, as everywhere else. A dotted path walks object fields
     /// from the root value, which is what makes `typeof o.k` work.
-    fn resolve_typeof(&mut self, path: &[crate::Span]) -> Type {
+    fn resolve_typeof(&mut self, path: &[crate::Ident]) -> Type {
         let Some((root_span, rest)) = path.split_first() else {
             return Type::Error;
         };
-        let name = self.source[root_span.start as usize..root_span.end as usize].to_string();
+        let name = root_span.name.clone();
 
         let Some(mut ty) = self.lookup_value_type(&name) else {
-            self.error(*root_span, format!("unresolved identifier `{name}`"));
+            self.error(root_span.span, format!("unresolved identifier `{name}`"));
             return Type::Error;
         };
 
         for seg in rest {
-            let field = self.source[seg.start as usize..seg.end as usize].to_string();
+            let field = seg.name.clone();
             let Some(next) = self.field_type_of(&ty, &field) else {
-                self.error(*seg, format!("`{field}` is not a field of `{ty}`"));
+                self.error(seg.span, format!("`{field}` is not a field of `{ty}`"));
                 return Type::Error;
             };
             ty = next;

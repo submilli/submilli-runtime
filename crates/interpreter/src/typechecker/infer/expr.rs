@@ -7572,7 +7572,11 @@ impl Inferer<'_> {
                     // step. The combined span covers
                     // property-start..call-end so diagnostics point
                     // at the whole `o?.m(args)` form.
-                    let combined_span = prop_span.merge(span);
+                    let combined_span = Span {
+                        file: prop_span.file,
+                        start: prop_span.start.min(span.start),
+                        end: prop_span.end.max(span.end),
+                    };
                     let _ = optional;
                     // A method resolved through `find_method` binds against its
                     // full signature; a function-typed *property* has only the
@@ -8535,12 +8539,10 @@ impl Inferer<'_> {
     /// not included.
     pub(super) fn annotation_type_name(&self, annot: &TypeAnnotation) -> Option<String> {
         match &annot.kind {
-            crate::TypeAnnotationKind::Name { name_span, .. } => {
-                Some(self.source[name_span.start as usize..name_span.end as usize].to_string())
-            }
+            crate::TypeAnnotationKind::Name { name, .. } => Some(name.name.clone()),
             crate::TypeAnnotationKind::Qualified { path, .. } => Some(
                 path.iter()
-                    .map(|s| &self.source[s.start as usize..s.end as usize])
+                    .map(|s| s.name.as_str())
                     .collect::<Vec<&str>>()
                     .join("."),
             ),
@@ -8563,9 +8565,8 @@ impl Inferer<'_> {
             _ => None,
         };
         match &ty.kind {
-            crate::TypeAnnotationKind::Name { name_span, args } if args.is_empty() => {
-                let text =
-                    self.source[name_span.start as usize..name_span.end as usize].to_string();
+            crate::TypeAnnotationKind::Name { name, args } if args.is_empty() => {
+                let text = name.name.clone();
                 // A type parameter shadows a class of the same name, exactly as
                 // it does in `resolve_type`.
                 if self.lookup_body_gp(&text).is_some() || self.is_generic_in_scope(&text) {
@@ -8576,18 +8577,19 @@ impl Inferer<'_> {
                 Some((package, text, mangled, arity))
             }
             crate::TypeAnnotationKind::Qualified { path, args } if args.is_empty() => {
-                let root = &self.source[path[0].start as usize..path[0].end as usize];
+                let (root_name, rest) = path.split_first()?;
+                let root = root_name.name.as_str();
                 let ns = self.namespace_bindings.get(root)?;
-                let member = path[1..]
+                let member = rest
                     .iter()
-                    .map(|s| &self.source[s.start as usize..s.end as usize])
+                    .map(|s| s.name.as_str())
                     .collect::<Vec<&str>>()
                     .join(".");
                 let package = crate::Package(ns.members.package_name().to_string());
                 let (mangled, arity) = ns.members.type_symbol(&member).and_then(generic_class)?;
                 let display: String = path
                     .iter()
-                    .map(|s| &self.source[s.start as usize..s.end as usize])
+                    .map(|s| s.name.as_str())
                     .collect::<Vec<&str>>()
                     .join(".");
                 Some((package, display, mangled, arity))

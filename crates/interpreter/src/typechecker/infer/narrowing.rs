@@ -1289,7 +1289,7 @@ mod tests {
             excluded_literals: BTreeSet::new(),
             binding: Ident {
                 name: "#narrow_0".to_string(),
-                span: Span::new(crate::FileId(0), 0, 1),
+                span: Span::new(crate::FileId(0), 0, 1).unwrap(),
             },
             source: crate::ExprId(0),
         };

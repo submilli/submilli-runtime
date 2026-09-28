@@ -51,6 +51,8 @@ pub fn parse_checked(
     tokens: Vec<Token>,
     file: FileId,
 ) -> Result<(Ast, Vec<Diagnostic>), CompileError> {
+    crate::source::SourceError::check_source_len(source.len())
+        .map_err(|error| error.into_compiler_failure(CompilerStage::Parse))?;
     validate_token_stream(source, &tokens, file).map_err(|message| CompilerFailure::Internal {
         stage: CompilerStage::Parse,
         span: None,
@@ -90,6 +92,12 @@ pub fn parse_checked(
             fatal: Some(fatal),
         });
     }
+    p.ast
+        .validate_source(source, file)
+        .map_err(|error| CompileError {
+            diagnostics: p.diagnostics.clone(),
+            fatal: Some(error.into_compiler_failure(CompilerStage::Parse)),
+        })?;
     Ok((p.ast, p.diagnostics))
 }
 
@@ -147,7 +155,24 @@ pub(crate) struct Parser<'a> {
 
 impl<'a> Parser<'a> {
     fn span(&self, start: u32, end: u32) -> Span {
-        Span::new(self.file, start, end)
+        Span {
+            file: self.file,
+            start,
+            end,
+        }
+    }
+
+    fn type_name(&mut self, span: Span) -> Option<Ident> {
+        match span.text(self.source, self.file) {
+            Ok(name) => Some(Ident {
+                name: name.to_string(),
+                span,
+            }),
+            Err(error) => {
+                self.fatal = Some(error.into_compiler_failure(CompilerStage::Parse));
+                None
+            }
+        }
     }
 
     fn parse_program(&mut self) {
@@ -1373,7 +1398,7 @@ impl<'a> Parser<'a> {
                 let doc = export_tok
                     .leading_doc
                     .as_ref()
-                    .map(crate::parse_doc_comment)
+                    .and_then(|raw| self.parse_doc(raw))
                     .or_else(|| self.take_leading_doc());
                 self.parse_export_from(export_span, nested, doc)
             }
@@ -2803,13 +2828,13 @@ impl<'a> Parser<'a> {
             TokenKind::Typeof => {
                 let kw = self.advance();
                 let first = self.expect_identifier("expected a value name after `typeof`")?;
-                let mut path = vec![first.span];
+                let mut path = vec![self.type_name(first.span)?];
                 let mut end = first.span.end;
                 while matches!(self.peek().kind, TokenKind::Dot) {
                     self.advance();
                     let seg = self.expect_identifier("expected a property name after `.`")?;
                     end = seg.span.end;
-                    path.push(seg.span);
+                    path.push(self.type_name(seg.span)?);
                 }
                 TypeAnnotation {
                     kind: TypeAnnotationKind::TypeOf { path },
@@ -2822,7 +2847,8 @@ impl<'a> Parser<'a> {
                 let tok = self.advance();
                 let first_span = tok.span;
                 let mut path_end = first_span.end;
-                let mut path: Vec<Span> = vec![first_span];
+                let first_name = self.type_name(first_span)?;
+                let mut path = vec![first_name.clone()];
                 if leading_is_identifier {
                     while matches!(self.peek().kind, TokenKind::Dot) {
                         self.advance();
@@ -2832,7 +2858,7 @@ impl<'a> Parser<'a> {
                         }
                         let seg = self.advance();
                         path_end = seg.span.end;
-                        path.push(seg.span);
+                        path.push(self.type_name(seg.span)?);
                     }
                 }
                 let (args, end) = if matches!(self.peek().kind, TokenKind::LessThan) {
@@ -2842,7 +2868,7 @@ impl<'a> Parser<'a> {
                 };
                 let outer_span = self.span(first_span.start, end);
                 let kind = if path.len() == 1 {
-                    if &self.source[first_span.start as usize..first_span.end as usize] == "any" {
+                    if first_name.name == "any" {
                         self.error_at_with_help(
                             first_span,
                             "`any` is not supported",
@@ -2855,7 +2881,7 @@ impl<'a> Parser<'a> {
                         );
                     }
                     TypeAnnotationKind::Name {
-                        name_span: first_span,
+                        name: first_name,
                         args,
                     }
                 } else {
@@ -2871,7 +2897,7 @@ impl<'a> Parser<'a> {
                 let tok = self.advance();
                 TypeAnnotation {
                     kind: TypeAnnotationKind::Name {
-                        name_span: tok.span,
+                        name: self.type_name(tok.span)?,
                         args: Vec::new(),
                     },
                     span: tok.span,
@@ -4980,11 +5006,30 @@ impl<'a> Parser<'a> {
             .end
     }
 
-    fn take_leading_doc(&self) -> Option<crate::DocComment> {
-        self.peek()
+    fn take_leading_doc(&mut self) -> Option<crate::DocComment> {
+        let parsed = self
+            .peek()
             .leading_doc
             .as_ref()
             .map(crate::parse_doc_comment)
+            .transpose();
+        match parsed {
+            Ok(doc) => doc,
+            Err(error) => {
+                self.fatal = Some(error.into_compiler_failure(CompilerStage::Parse));
+                None
+            }
+        }
+    }
+
+    fn parse_doc(&mut self, raw: &crate::RawDoc) -> Option<crate::DocComment> {
+        match crate::parse_doc_comment(raw) {
+            Ok(doc) => Some(doc),
+            Err(error) => {
+                self.fatal = Some(error.into_compiler_failure(CompilerStage::Parse));
+                None
+            }
+        }
     }
 
     fn error_at(&mut self, span: Span, message: impl Into<String>) {
@@ -5203,7 +5248,10 @@ mod tests {
         use crate::compiler_error::CompilerFailure;
         for tokens in [
             Vec::new(),
-            vec![Token::new(TokenKind::Identifier, crate::Span::new(F, 0, 2))],
+            vec![Token::new(
+                TokenKind::Identifier,
+                crate::Span::new(F, 0, 2).unwrap(),
+            )],
             vec![
                 Token::new(
                     TokenKind::Identifier,
@@ -5213,7 +5261,7 @@ mod tests {
                         end: 2,
                     },
                 ),
-                Token::new(TokenKind::Eof, crate::Span::new(F, 2, 2)),
+                Token::new(TokenKind::Eof, crate::Span::new(F, 2, 2).unwrap()),
             ],
             vec![
                 Token::new(TokenKind::Eof, crate::Span::at(F)),
@@ -5228,7 +5276,7 @@ mod tests {
                         end: 0,
                     },
                 ),
-                Token::new(TokenKind::Eof, crate::Span::new(F, 2, 2)),
+                Token::new(TokenKind::Eof, crate::Span::new(F, 2, 2).unwrap()),
             ],
             vec![Token::new(TokenKind::Eof, crate::Span::at(FileId(9)))],
         ] {
@@ -5255,11 +5303,11 @@ mod tests {
             },
             crate::RawDoc {
                 text: "/** different */".into(),
-                span: crate::Span::new(F, 0, 12),
+                span: crate::Span::new(F, 0, 12).unwrap(),
             },
             crate::RawDoc {
                 text: "/** hello */".into(),
-                span: crate::Span::new(FileId(9), 0, 12),
+                span: crate::Span::new(FileId(9), 0, 12).unwrap(),
             },
         ] {
             let mut tokens = valid.clone();
@@ -5314,7 +5362,7 @@ mod tests {
             recursion_limit_span: None,
             eof: Token::new(
                 TokenKind::Eof,
-                crate::Span::new(F, source.len() as u32, source.len() as u32),
+                crate::Span::new(F, source.len() as u32, source.len() as u32).unwrap(),
             ),
             fatal: None,
         }
@@ -5504,7 +5552,7 @@ mod tests {
     fn snapshot_multi_error_render() {
         let source = "foo bar;\nbaz qux;\nhello world;";
         let (_, diags) = parse_str(source);
-        let (sources, _) = Sources::single("script.subm", source);
+        let (sources, _) = Sources::single("script.subm", source).unwrap();
         let rendered: String = diags
             .iter()
             .map(|d| diagnostics::render(d, &sources))
@@ -5532,7 +5580,7 @@ mod tests {
         assert!(diags.is_empty());
         let expr = expr_of_single_stmt(&ast);
         assert_eq!(expr.kind, crate::ExprKind::Number(42.0));
-        assert_eq!(expr.span, crate::Span::new(F, 0, 2));
+        assert_eq!(expr.span, crate::Span::new(F, 0, 2).unwrap());
     }
 
     #[test]
@@ -5541,7 +5589,7 @@ mod tests {
         assert!(diags.is_empty());
         let expr = expr_of_single_stmt(&ast);
         assert_eq!(expr.kind, crate::ExprKind::String("s".to_string()));
-        assert_eq!(expr.span, crate::Span::new(F, 0, 3));
+        assert_eq!(expr.span, crate::Span::new(F, 0, 3).unwrap());
     }
 
     #[test]
@@ -5550,7 +5598,7 @@ mod tests {
         assert!(diags.is_empty());
         let expr = expr_of_single_stmt(&ast);
         assert_eq!(expr.kind, crate::ExprKind::Boolean(true));
-        assert_eq!(expr.span, crate::Span::new(F, 0, 4));
+        assert_eq!(expr.span, crate::Span::new(F, 0, 4).unwrap());
     }
 
     #[test]
@@ -5559,7 +5607,7 @@ mod tests {
         assert!(diags.is_empty());
         let expr = expr_of_single_stmt(&ast);
         assert_eq!(expr.kind, crate::ExprKind::Boolean(false));
-        assert_eq!(expr.span, crate::Span::new(F, 0, 5));
+        assert_eq!(expr.span, crate::Span::new(F, 0, 5).unwrap());
     }
 
     #[test]
@@ -5568,7 +5616,7 @@ mod tests {
         assert!(diags.is_empty());
         let expr = expr_of_single_stmt(&ast);
         assert_eq!(expr.kind, crate::ExprKind::Null);
-        assert_eq!(expr.span, crate::Span::new(F, 0, 4));
+        assert_eq!(expr.span, crate::Span::new(F, 0, 4).unwrap());
     }
 
     #[test]
@@ -5577,7 +5625,7 @@ mod tests {
         assert!(diags.is_empty());
         let expr = expr_of_single_stmt(&ast);
         assert!(matches!(expr.kind, crate::ExprKind::Identifier(_)));
-        assert_eq!(expr.span, crate::Span::new(F, 0, 1));
+        assert_eq!(expr.span, crate::Span::new(F, 0, 1).unwrap());
     }
 
     #[test]
@@ -5693,10 +5741,10 @@ mod tests {
         let crate::ExprKind::Paren(inner_id) = expr.kind else {
             panic!("expected Paren, got {:?}", expr.kind);
         };
-        assert_eq!(expr.span, crate::Span::new(F, 0, 3));
+        assert_eq!(expr.span, crate::Span::new(F, 0, 3).unwrap());
         let inner = ast.expr(inner_id);
         assert!(matches!(inner.kind, crate::ExprKind::Identifier(_)));
-        assert_eq!(inner.span, crate::Span::new(F, 1, 2));
+        assert_eq!(inner.span, crate::Span::new(F, 1, 2).unwrap());
     }
 
     #[test]
@@ -5707,15 +5755,15 @@ mod tests {
         let crate::ExprKind::Paren(mid_id) = outer.kind else {
             panic!("expected outer Paren");
         };
-        assert_eq!(outer.span, crate::Span::new(F, 0, 5));
+        assert_eq!(outer.span, crate::Span::new(F, 0, 5).unwrap());
         let mid = ast.expr(mid_id);
         let crate::ExprKind::Paren(inner_id) = mid.kind else {
             panic!("expected inner Paren");
         };
-        assert_eq!(mid.span, crate::Span::new(F, 1, 4));
+        assert_eq!(mid.span, crate::Span::new(F, 1, 4).unwrap());
         let inner = ast.expr(inner_id);
         assert!(matches!(inner.kind, crate::ExprKind::Identifier(_)));
-        assert_eq!(inner.span, crate::Span::new(F, 2, 3));
+        assert_eq!(inner.span, crate::Span::new(F, 2, 3).unwrap());
     }
 
     #[test]
@@ -5766,7 +5814,7 @@ mod tests {
         assert_eq!(op, crate::BinOp::Add);
         assert!(matches!(ast.expr(lhs).kind, crate::ExprKind::Identifier(_)));
         assert!(matches!(ast.expr(rhs).kind, crate::ExprKind::Identifier(_)));
-        assert_eq!(outer.span, crate::Span::new(F, 0, 5));
+        assert_eq!(outer.span, crate::Span::new(F, 0, 5).unwrap());
     }
 
     #[test]
@@ -5906,7 +5954,7 @@ mod tests {
             ast.expr(operand).kind,
             crate::ExprKind::Identifier(_)
         ));
-        assert_eq!(outer.span, crate::Span::new(F, 0, 2));
+        assert_eq!(outer.span, crate::Span::new(F, 0, 2).unwrap());
     }
 
     #[test]
@@ -6058,7 +6106,7 @@ mod tests {
             }
             other => panic!("expected Name target, got {other:?}"),
         }
-        assert_eq!(outer.span, crate::Span::new(F, 0, 11));
+        assert_eq!(outer.span, crate::Span::new(F, 0, 11).unwrap());
     }
 
     #[test]
@@ -6189,7 +6237,7 @@ mod tests {
                     tp.asserted.kind,
                     crate::TypeAnnotationKind::Name { .. }
                 ));
-                assert_eq!(tp.span, crate::Span::new(F, 29, 40));
+                assert_eq!(tp.span, crate::Span::new(F, 29, 40).unwrap());
             }
             _ => panic!("expected Function"),
         }
@@ -6258,7 +6306,7 @@ mod tests {
             ast.expr(operand).kind,
             crate::ExprKind::Identifier(_)
         ));
-        assert_eq!(outer.span, crate::Span::new(F, 0, 8));
+        assert_eq!(outer.span, crate::Span::new(F, 0, 8).unwrap());
     }
 
     #[test]
@@ -6280,7 +6328,7 @@ mod tests {
         let (ast, diags) = parse_str("let x = 1;");
         assert!(diags.is_empty());
         let stmt = single_stmt(&ast);
-        assert_eq!(stmt.span, crate::Span::new(F, 0, 10));
+        assert_eq!(stmt.span, crate::Span::new(F, 0, 10).unwrap());
         match stmt.kind {
             crate::StmtKind::Let {
                 ref name,
@@ -6289,7 +6337,7 @@ mod tests {
                 ..
             } => {
                 assert_eq!(name.name, "x");
-                assert_eq!(name.span, crate::Span::new(F, 4, 5));
+                assert_eq!(name.span, crate::Span::new(F, 4, 5).unwrap());
                 assert!(ty.is_none());
                 assert_eq!(ast.expr(value).kind, crate::ExprKind::Number(1.0));
             }
@@ -6310,10 +6358,10 @@ mod tests {
                 ..
             } => {
                 assert_eq!(name.name, "y");
-                assert_eq!(name.span, crate::Span::new(F, 6, 7));
+                assert_eq!(name.span, crate::Span::new(F, 6, 7).unwrap());
                 let ty = ty.as_ref().expect("expected type annotation");
                 assert!(matches!(ty.kind, crate::TypeAnnotationKind::Name { .. }));
-                assert_eq!(ty.span, crate::Span::new(F, 9, 15));
+                assert_eq!(ty.span, crate::Span::new(F, 9, 15).unwrap());
                 assert_eq!(
                     ast.expr(value).kind,
                     crate::ExprKind::String("hi".to_string())
@@ -6347,7 +6395,7 @@ mod tests {
             crate::StmtKind::Let { ref ty, .. } => {
                 let ty = ty.as_ref().unwrap();
                 assert!(matches!(ty.kind, crate::TypeAnnotationKind::Name { .. }));
-                assert_eq!(ty.span, crate::Span::new(F, 7, 11));
+                assert_eq!(ty.span, crate::Span::new(F, 7, 11).unwrap());
             }
             _ => panic!("expected Let"),
         }
@@ -6960,30 +7008,30 @@ mod tests {
                 ..
             } => {
                 assert_eq!(name.name, "f");
-                assert_eq!(name.span, crate::Span::new(F, 9, 10));
+                assert_eq!(name.span, crate::Span::new(F, 9, 10).unwrap());
                 assert!(generics.is_empty());
                 assert_eq!(params.len(), 2);
                 assert_eq!(params[0].name.name, "a");
-                assert_eq!(params[0].name.span, crate::Span::new(F, 11, 12));
+                assert_eq!(params[0].name.span, crate::Span::new(F, 11, 12).unwrap());
                 let p0_ty = params[0]
                     .ty
                     .as_ref()
                     .expect("function-decl param requires annotation");
                 assert!(matches!(p0_ty.kind, crate::TypeAnnotationKind::Name { .. }));
-                assert_eq!(p0_ty.span, crate::Span::new(F, 14, 20)); // `number`
+                assert_eq!(p0_ty.span, crate::Span::new(F, 14, 20).unwrap()); // `number`
                 assert_eq!(params[1].name.name, "b");
-                assert_eq!(params[1].name.span, crate::Span::new(F, 22, 23));
+                assert_eq!(params[1].name.span, crate::Span::new(F, 22, 23).unwrap());
                 let p1_ty = params[1]
                     .ty
                     .as_ref()
                     .expect("function-decl param requires annotation");
-                assert_eq!(p1_ty.span, crate::Span::new(F, 25, 31)); // `string`
+                assert_eq!(p1_ty.span, crate::Span::new(F, 25, 31).unwrap()); // `string`
                 let return_type = return_type.as_ref().expect("plain return type");
                 assert!(matches!(
                     return_type.kind,
                     crate::TypeAnnotationKind::Name { .. }
                 ));
-                assert_eq!(return_type.span, crate::Span::new(F, 34, 41)); // `boolean`
+                assert_eq!(return_type.span, crate::Span::new(F, 34, 41).unwrap()); // `boolean`
                 let block = ast.stmt(body);
                 assert!(matches!(block.kind, crate::StmtKind::Block(ref v) if v.is_empty()));
             }
@@ -7540,7 +7588,7 @@ mod tests {
             crate::ExprKind::Identifier(_)
         ));
         assert!(args.is_empty());
-        assert_eq!(outer.span, crate::Span::new(F, 0, 3));
+        assert_eq!(outer.span, crate::Span::new(F, 0, 3).unwrap());
     }
 
     #[test]
@@ -8555,7 +8603,7 @@ mod tests {
             ast.expr(operand).kind,
             crate::ExprKind::Identifier(_)
         ));
-        assert_eq!(expr.span, crate::Span::new(F, 0, 3));
+        assert_eq!(expr.span, crate::Span::new(F, 0, 3).unwrap());
     }
 
     #[test]
@@ -8582,7 +8630,7 @@ mod tests {
             ast.expr(operand).kind,
             crate::ExprKind::Identifier(_)
         ));
-        assert_eq!(expr.span, crate::Span::new(F, 0, 2));
+        assert_eq!(expr.span, crate::Span::new(F, 0, 2).unwrap());
     }
 
     #[test]
@@ -9257,15 +9305,11 @@ mod tests {
         let (ast, diags) = parse_str("let x: Foo<number> = null;");
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
         let ty = type_of_let(single_stmt(&ast));
-        let crate::TypeAnnotationKind::Name {
-            name_span,
-            ref args,
-        } = ty.kind
-        else {
+        let crate::TypeAnnotationKind::Name { ref name, ref args } = ty.kind else {
             panic!("expected Name, got {:?}", ty.kind);
         };
-        assert_eq!(name_span, crate::Span::new(F, 7, 10));
-        assert_eq!(ty.span, crate::Span::new(F, 7, 18));
+        assert_eq!(name.span, crate::Span::new(F, 7, 10).unwrap());
+        assert_eq!(ty.span, crate::Span::new(F, 7, 18).unwrap());
         assert_eq!(args.len(), 1);
         assert!(matches!(
             args[0].kind,
@@ -9353,10 +9397,10 @@ mod tests {
         };
         assert_eq!(path.len(), 2);
         // `Foo` at 7..10, `Bar` at 11..14.
-        assert_eq!(path[0], crate::Span::new(F, 7, 10));
-        assert_eq!(path[1], crate::Span::new(F, 11, 14));
+        assert_eq!(path[0].span, crate::Span::new(F, 7, 10).unwrap());
+        assert_eq!(path[1].span, crate::Span::new(F, 11, 14).unwrap());
         assert!(args.is_empty());
-        assert_eq!(ty.span, crate::Span::new(F, 7, 14));
+        assert_eq!(ty.span, crate::Span::new(F, 7, 14).unwrap());
     }
 
     #[test]
@@ -9436,13 +9480,13 @@ mod tests {
             members[0].kind,
             crate::TypeAnnotationKind::Name { .. }
         ));
-        assert_eq!(members[0].span, crate::Span::new(F, 7, 13)); // `number`
+        assert_eq!(members[0].span, crate::Span::new(F, 7, 13).unwrap()); // `number`
         assert!(matches!(
             members[1].kind,
             crate::TypeAnnotationKind::Name { .. }
         ));
-        assert_eq!(members[1].span, crate::Span::new(F, 16, 22)); // `string`
-        assert_eq!(ty.span, crate::Span::new(F, 7, 22));
+        assert_eq!(members[1].span, crate::Span::new(F, 16, 22).unwrap()); // `string`
+        assert_eq!(ty.span, crate::Span::new(F, 7, 22).unwrap());
     }
 
     #[test]
@@ -9482,12 +9526,12 @@ mod tests {
         let ty = type_of_let(single_stmt(&ast));
         let members = union_members(ty);
         assert_eq!(members.len(), 2);
-        assert_eq!(members[0].span, crate::Span::new(F, 7, 13)); // `number`
+        assert_eq!(members[0].span, crate::Span::new(F, 7, 13).unwrap()); // `number`
         assert!(matches!(
             members[1].kind,
             crate::TypeAnnotationKind::Name { .. }
         ));
-        assert_eq!(members[1].span, crate::Span::new(F, 16, 20)); // `null`
+        assert_eq!(members[1].span, crate::Span::new(F, 16, 20).unwrap()); // `null`
     }
 
     #[test]

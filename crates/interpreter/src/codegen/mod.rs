@@ -361,7 +361,15 @@ pub fn codegen_owned_by(
     ta: &TypedAst,
     dependencies: &[&PackageDeclaration],
 ) -> Result<GeneratedModule, CompilerFailure> {
-    codegen_inner(source, filename, file, ta, dependencies, owning_package)
+    codegen_inner(
+        source,
+        filename,
+        file,
+        ta,
+        dependencies,
+        owning_package,
+        None,
+    )
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -379,7 +387,36 @@ pub fn codegen_with_type_info(
     ta: &TypedAst,
     dependencies: &[&PackageDeclaration],
 ) -> Result<GeneratedModule, CompilerFailure> {
-    codegen_inner(source, filename, file, ta, dependencies, &ta.package_name)
+    codegen_inner(
+        source,
+        filename,
+        file,
+        ta,
+        dependencies,
+        &ta.package_name,
+        None,
+    )
+}
+
+pub fn codegen_package_with_type_info(
+    sources: &crate::Sources,
+    file: crate::FileId,
+    ta: &TypedAst,
+    dependencies: &[&PackageDeclaration],
+) -> Result<GeneratedModule, CompilerFailure> {
+    let source = sources.get(file).ok_or_else(|| {
+        crate::source::SourceError::UnknownFile { file }
+            .into_compiler_failure(CompilerStage::Codegen)
+    })?;
+    codegen_inner(
+        source.text(),
+        source.path.as_str(),
+        file,
+        ta,
+        dependencies,
+        &ta.package_name,
+        Some(sources),
+    )
 }
 
 fn codegen_inner(
@@ -389,6 +426,7 @@ fn codegen_inner(
     ta: &TypedAst,
     dependencies: &[&PackageDeclaration],
     owning_package: &str,
+    sources: Option<&crate::Sources>,
 ) -> Result<GeneratedModule, CompilerFailure> {
     u32::try_from(source.len()).map_err(|_| CompilerFailure::Limit {
         stage: CompilerStage::Codegen,
@@ -396,6 +434,32 @@ fn codegen_inner(
         message: "source exceeds the 32-bit source-offset limit".into(),
         help: vec!["split the source into smaller modules".into()],
     })?;
+    let line_index = LineIndex::new(source)
+        .map_err(|error| error.into_compiler_failure(CompilerStage::Codegen))?;
+    let debug_sources = dwarf::DebugSources {
+        file,
+        filename,
+        index: &line_index,
+        sources,
+    };
+    for id in ta
+        .expr_ids()
+        .map_err(|error| error.into_compiler_failure(CompilerStage::Codegen))?
+    {
+        let expr = ta
+            .try_expr(id)
+            .map_err(|error| error.into_compiler_failure(CompilerStage::Codegen))?;
+        debug_sources.location(expr.span)?;
+    }
+    for id in ta
+        .stmt_ids()
+        .map_err(|error| error.into_compiler_failure(CompilerStage::Codegen))?
+    {
+        let stmt = ta
+            .try_stmt(id)
+            .map_err(|error| error.into_compiler_failure(CompilerStage::Codegen))?;
+        debug_sources.location(stmt.span)?;
+    }
     let source_main_return_ty = ta
         .functions
         .iter()
@@ -412,7 +476,6 @@ fn codegen_inner(
     let analysis = CodegenAnalysis::collect(ta, dependencies);
     let pool = analysis.string_pool;
     let bigint_pool = analysis.bigint_pool;
-    let line_index = LineIndex::new(source);
     let dependency_usage = analysis.dependency_usage.finish(dependencies);
 
     let mut module = Module::new();
@@ -1498,12 +1561,11 @@ fn codegen_inner(
         .zip(user_func_lines)
         .map(|((uf, (low_in_buf, body_len)), lines)| {
             let abs_low = low_in_buf + vec_count_size;
-            let (decl_line, _decl_col) = line_index.line_col(uf.decl_span.start);
             dwarf::FuncDebugInfo {
                 name: uf.name.clone(),
                 low_pc: abs_low,
                 body_len: *body_len,
-                decl_line: decl_line as u64,
+                decl_span: uf.decl_span,
                 lines: lines
                     .into_iter()
                     .map(|(off, span)| (abs_low + off, span))
@@ -1511,7 +1573,9 @@ fn codegen_inner(
             }
         })
         .collect();
-    for (sect_name, bytes) in dwarf::build_dwarf(&funcs, code_content_size, filename, &line_index) {
+    for (sect_name, bytes) in
+        dwarf::build_dwarf(&funcs, code_content_size, filename, &debug_sources)?
+    {
         module.section(&CustomSection {
             name: Cow::Borrowed(sect_name),
             data: Cow::Owned(bytes),
@@ -1760,7 +1824,7 @@ pub(crate) mod tests {
         module: &str,
         source: &str,
     ) -> (ModulePath, crate::FileId, crate::Ast) {
-        let file = sources.add(module.to_string(), source.to_string());
+        let file = sources.add(module.to_string(), source).unwrap();
         let mut asi = Asi::new(source, file);
         let mut tokens: Vec<Token> = Vec::new();
         loop {
@@ -1840,12 +1904,8 @@ pub(crate) mod tests {
         dependencies.extend(internal_defs.iter());
         dependencies.extend(stdlib_defs.iter());
         dependencies.extend_from_slice(packages);
-        let root_source = sources
-            .get(root_file)
-            .map(|source| source.text.as_str())
-            .unwrap_or_default();
         let generated =
-            codegen_with_type_info(root_source, "lib.subm", root_file, &ta, &dependencies)
+            super::codegen_package_with_type_info(&sources, root_file, &ta, &dependencies)
                 .expect("code generation");
         package.runtime_functions = generated.runtime_functions;
         package.runtime_globals = generated.runtime_globals;
@@ -2731,7 +2791,7 @@ function main(): string {
         // throw renders with its stashed backtrace like a trap does.
         let err = crate::runtime::exec::map_uncaught_exception(&mut store, result)
             .expect_err("expected main() to trap or throw");
-        let (sources, file) = crate::Sources::single("script.subm", source);
+        let (sources, file) = crate::Sources::single("script.subm", source).unwrap();
         crate::render_backtrace(&err, &sources, file, crate::BacktraceMode::Full)
             .expect("backtrace empty — was wasm_backtrace_details enabled?")
     }
@@ -4719,7 +4779,7 @@ function main(): void { middle(); }
         }
         impl std::error::Error for Plain {}
         let err: wasmtime::Error = wasmtime::Error::new(Plain);
-        let (sources, file) = crate::Sources::single("script.subm", "");
+        let (sources, file) = crate::Sources::single("script.subm", "").unwrap();
         assert!(
             crate::render_backtrace(&err, &sources, file, crate::BacktraceMode::Full).is_none()
         );
@@ -4736,7 +4796,7 @@ function main(): void { middle(); }
             .expect("main signature is `() -> void` in expecting-trap fixtures");
         let err = pollster::block_on(main.call_async(&mut store, ()))
             .expect_err("expected main() to trap");
-        let (sources, file) = crate::Sources::single("script.subm", source);
+        let (sources, file) = crate::Sources::single("script.subm", source).unwrap();
         crate::render_backtrace(&err, &sources, file, crate::BacktraceMode::Full)
             .expect("backtrace empty — was wasm_backtrace_details enabled?")
     }

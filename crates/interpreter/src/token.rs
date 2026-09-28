@@ -147,16 +147,19 @@ mod tests {
     fn construct_literal_keyword_operator() {
         let num = Token::new(
             TokenKind::NumberLiteral(42.5),
-            Span::new(crate::FileId(0), 0, 4),
+            Span::new(crate::FileId(0), 0, 4).unwrap(),
         );
         assert_eq!(num.kind, TokenKind::NumberLiteral(42.5));
-        assert_eq!(num.span, Span::new(crate::FileId(0), 0, 4));
+        assert_eq!(num.span, Span::new(crate::FileId(0), 0, 4).unwrap());
         assert!(num.leading_doc.is_none());
 
-        let kw = Token::new(TokenKind::Let, Span::new(crate::FileId(0), 5, 8));
+        let kw = Token::new(TokenKind::Let, Span::new(crate::FileId(0), 5, 8).unwrap());
         assert_eq!(kw.kind, TokenKind::Let);
 
-        let op = Token::new(TokenKind::EqEqEq, Span::new(crate::FileId(0), 10, 13));
+        let op = Token::new(
+            TokenKind::EqEqEq,
+            Span::new(crate::FileId(0), 10, 13).unwrap(),
+        );
         assert_eq!(op.kind, TokenKind::EqEqEq);
     }
 
@@ -164,7 +167,7 @@ mod tests {
     fn clone_and_equality() {
         let t = Token::new(
             TokenKind::StringLiteral("hello".to_string()),
-            Span::new(crate::FileId(0), 0, 7),
+            Span::new(crate::FileId(0), 0, 7).unwrap(),
         );
         assert_eq!(t.clone(), t);
     }

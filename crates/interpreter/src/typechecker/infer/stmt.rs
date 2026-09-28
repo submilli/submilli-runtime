@@ -1739,7 +1739,12 @@ impl Inferer<'_> {
         value: ExprId,
     ) -> TypedStmtKind {
         let recv_span = self.ast.expr(receiver).span;
-        let stmt_span = recv_span.merge(self.ast.expr(value).span);
+        let value_span = self.ast.expr(value).span;
+        let stmt_span = Span {
+            file: recv_span.file,
+            start: recv_span.start.min(value_span.start),
+            end: recv_span.end.max(value_span.end),
+        };
         match self.resolve_static_field_write(receiver, &name) {
             StaticWrite::NotClassName => {}
             StaticWrite::Rejected { receiver } => {
@@ -1951,7 +1956,11 @@ impl Inferer<'_> {
     ) -> TypedStmtKind {
         let recv_span = self.ast.expr(receiver).span;
         let value_span = self.ast.expr(value).span;
-        let stmt_span = recv_span.merge(value_span);
+        let stmt_span = Span {
+            file: recv_span.file,
+            start: recv_span.start.min(value_span.start),
+            end: recv_span.end.max(value_span.end),
+        };
         let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None);
         let object = receiver_ty.is_structural_object();
         let (typed_index, key_ty) = if object {

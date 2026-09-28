@@ -1446,13 +1446,13 @@ mod tests {
         let mut ast = TypedAst::new();
         let id = ast.push_expr(TypedExpr {
             kind: TypedExprKind::Number(42.0),
-            span: Span::new(crate::FileId(0), 0, 2),
+            span: Span::new(crate::FileId(0), 0, 2).unwrap(),
             ty: Type::Number,
         });
         assert_eq!(id.0, 0);
         let e = ast.expr(id);
         assert_eq!(e.kind, TypedExprKind::Number(42.0));
-        assert_eq!(e.span, Span::new(crate::FileId(0), 0, 2));
+        assert_eq!(e.span, Span::new(crate::FileId(0), 0, 2).unwrap());
         assert_eq!(e.ty, Type::Number);
     }
 
@@ -1461,16 +1461,16 @@ mod tests {
         let mut ast = TypedAst::new();
         let expr_id = ast.push_expr(TypedExpr {
             kind: TypedExprKind::Boolean(true),
-            span: Span::new(crate::FileId(0), 0, 4),
+            span: Span::new(crate::FileId(0), 0, 4).unwrap(),
             ty: Type::Boolean,
         });
         let stmt_id = ast.push_stmt(TypedStmt {
             kind: TypedStmtKind::Expr(expr_id),
-            span: Span::new(crate::FileId(0), 0, 5),
+            span: Span::new(crate::FileId(0), 0, 5).unwrap(),
         });
         assert_eq!(stmt_id.0, 0);
         let s = ast.stmt(stmt_id);
-        assert_eq!(s.span, Span::new(crate::FileId(0), 0, 5));
+        assert_eq!(s.span, Span::new(crate::FileId(0), 0, 5).unwrap());
         assert!(matches!(s.kind, TypedStmtKind::Expr(_)));
     }
 
@@ -1479,12 +1479,12 @@ mod tests {
         let mut ast = TypedAst::new();
         let lhs = ast.push_expr(TypedExpr {
             kind: TypedExprKind::Number(1.0),
-            span: Span::new(crate::FileId(0), 0, 1),
+            span: Span::new(crate::FileId(0), 0, 1).unwrap(),
             ty: Type::Number,
         });
         let rhs = ast.push_expr(TypedExpr {
             kind: TypedExprKind::Number(2.0),
-            span: Span::new(crate::FileId(0), 4, 5),
+            span: Span::new(crate::FileId(0), 4, 5).unwrap(),
             ty: Type::Number,
         });
         let sum = ast.push_expr(TypedExpr {
@@ -1493,7 +1493,7 @@ mod tests {
                 lhs,
                 rhs,
             },
-            span: Span::new(crate::FileId(0), 0, 5),
+            span: Span::new(crate::FileId(0), 0, 5).unwrap(),
             ty: Type::Number,
         });
 
@@ -1512,21 +1512,21 @@ mod tests {
         let mut ast = TypedAst::new();
         let one = ast.push_expr(TypedExpr {
             kind: TypedExprKind::Number(1.0),
-            span: Span::new(crate::FileId(0), 31, 32),
+            span: Span::new(crate::FileId(0), 31, 32).unwrap(),
             ty: Type::Number,
         });
         let ret = ast.push_stmt(TypedStmt {
             kind: TypedStmtKind::Return(Some(one)),
-            span: Span::new(crate::FileId(0), 24, 33),
+            span: Span::new(crate::FileId(0), 24, 33).unwrap(),
         });
         let body = ast.push_stmt(TypedStmt {
             kind: TypedStmtKind::Block(vec![ret]),
-            span: Span::new(crate::FileId(0), 22, 35),
+            span: Span::new(crate::FileId(0), 22, 35).unwrap(),
         });
         ast.functions.push(crate::TypedFunction {
             name: Ident {
                 name: "f".to_string(),
-                span: Span::new(crate::FileId(0), 9, 10),
+                span: Span::new(crate::FileId(0), 9, 10).unwrap(),
             },
             mangled_name: crate::mangle::package_symbol("main", "f"),
             generics: vec![],
@@ -1535,7 +1535,7 @@ mod tests {
             type_predicate: None,
             body,
             doc: None,
-            span: Span::new(crate::FileId(0), 0, 35),
+            span: Span::new(crate::FileId(0), 0, 35).unwrap(),
         });
 
         let f = &ast.functions[0];
@@ -1557,7 +1557,7 @@ mod tests {
         let p = TypedParam {
             name: Ident {
                 name: "param".to_string(),
-                span: Span::new(crate::FileId(0), 10, 15),
+                span: Span::new(crate::FileId(0), 10, 15).unwrap(),
             },
             ty: Type::String,
             boxed: false,
@@ -1565,7 +1565,7 @@ mod tests {
             default: None,
         };
         assert_eq!(p.name.name, "param");
-        assert_eq!(p.name.span, Span::new(crate::FileId(0), 10, 15));
+        assert_eq!(p.name.span, Span::new(crate::FileId(0), 10, 15).unwrap());
         assert_eq!(p.ty, Type::String);
         assert!(!p.boxed);
     }
@@ -1577,17 +1577,17 @@ mod tests {
             kind: TypedExprKind::LocalRef {
                 ident: Ident {
                     name: "x".to_string(),
-                    span: Span::new(crate::FileId(0), 0, 1),
+                    span: Span::new(crate::FileId(0), 0, 1).unwrap(),
                 },
                 boxed: false,
             },
-            span: Span::new(crate::FileId(0), 0, 1),
+            span: Span::new(crate::FileId(0), 0, 1).unwrap(),
             ty: Type::Number,
         });
         match ast.expr(id).kind {
             TypedExprKind::LocalRef { ref ident, boxed } => {
                 assert_eq!(ident.name, "x");
-                assert_eq!(ident.span, Span::new(crate::FileId(0), 0, 1));
+                assert_eq!(ident.span, Span::new(crate::FileId(0), 0, 1).unwrap());
                 assert!(!boxed);
             }
             _ => panic!("expected LocalRef"),
@@ -1603,10 +1603,10 @@ mod tests {
                 mangled: mangled.clone(),
                 name: Ident {
                     name: "y".to_string(),
-                    span: Span::new(crate::FileId(0), 2, 3),
+                    span: Span::new(crate::FileId(0), 2, 3).unwrap(),
                 },
             },
-            span: Span::new(crate::FileId(0), 2, 3),
+            span: Span::new(crate::FileId(0), 2, 3).unwrap(),
             ty: Type::Number,
         });
         match ast.expr(id).kind {
@@ -1615,7 +1615,7 @@ mod tests {
                 ref mangled,
             } => {
                 assert_eq!(name.name, "y");
-                assert_eq!(name.span, Span::new(crate::FileId(0), 2, 3));
+                assert_eq!(name.span, Span::new(crate::FileId(0), 2, 3).unwrap());
                 assert_eq!(mangled.as_str(), "main#y");
             }
             _ => panic!("expected GlobalRef"),

@@ -43,6 +43,24 @@ backtrace and debug-info callers. Invalid metadata is fatal; rendering retains t
 original failure without fabricating a source location. Make singleton union
 normalization structurally safe without making all type operations fallible.
 
+Implementation: `SourceError` distinguishes invalid metadata from source/file
+capacity and reservation limits. `LineIndex` owns its text; `Sources` reserves
+IDs below the virtual-file range. Checked span/line APIs propagate through CLI,
+HTTP/MCP preparation, diagnostic rendering, and codegen. Source-less compiler
+failures use a dedicated virtual file instead of pointing at script line 1.
+
+Type annotations retain their parsed names rather than slicing source during
+inference. An iterative metadata validator checks all AST nodes and annotations
+before inference, including callers of direct phase APIs. Package DWARF resolves
+each span against its owning source and checks writer path/address preconditions.
+Reserved definitions retain virtual paths without claiming source coordinates.
+
+Boundary coverage includes reversed/cross-file/UTF-8 spans, invalid line/column
+positions, unknown and reserved files, capacity classification, corrupt AST
+metadata, diagnostic preservation, and decoded multi-file DWARF. These tests
+inject internal-state failures; they do not establish guest exploit reachability
+or whole-compiler panic freedom. Arena migrations remain stages 3 and 4.
+
 ## Stage 3: untyped arena and consumers
 
 Migrate parser allocation/access, pattern lowering and inference reads to checked

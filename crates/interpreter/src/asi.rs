@@ -175,7 +175,14 @@ impl<'a> Asi<'a> {
         let pos = tok.span.start;
         let file = tok.span.file;
         self.buffered = Some(tok);
-        let semi = Token::new(TokenKind::Semicolon, Span::new(file, pos, pos));
+        let semi = Token::new(
+            TokenKind::Semicolon,
+            Span {
+                file,
+                start: pos,
+                end: pos,
+            },
+        );
         self.track(&semi.kind);
         semi
     }

@@ -429,7 +429,12 @@ pub fn compile_package_with_transitive_checked(
     let mut parsed_modules = Vec::with_capacity(modules.len());
     let mut diagnostics = Vec::new();
     for module in modules {
-        let file = sources.add(module.path.as_str().to_string(), module.source.to_string());
+        let file = sources
+            .add(module.path.clone(), module.source)
+            .map_err(|error| {
+                CompileError::from(error.into_compiler_failure(CompilerStage::Parse))
+                    .with_prior_diagnostics(&diagnostics)
+            })?;
         let (ast, mut module_diags) =
             parse_package_module(module.source, file).map_err(|mut error| {
                 error.diagnostics.splice(0..0, diagnostics.clone());
@@ -511,25 +516,12 @@ pub fn compile_package_with_transitive_checked(
     codegen_deps.extend(stdlib_defs.iter());
     codegen_deps.extend_from_slice(dependencies);
     codegen_deps.extend_from_slice(transitive);
-    let root_source = sources
-        .get(root_file)
-        .map(|source| source.text.as_str())
-        .ok_or_else(|| CompilerFailure::Internal {
-            stage: CompilerStage::Codegen,
-            span: None,
-            message: "compiled package root source is missing".into(),
-        })?;
-    let generated = crate::codegen::codegen_with_type_info(
-        root_source,
-        root_module.as_str(),
-        root_file,
-        &ta,
-        &codegen_deps,
-    )
-    .map_err(|fatal| CompileError {
-        diagnostics: diagnostics.clone(),
-        fatal: Some(fatal),
-    })?;
+    let generated =
+        crate::codegen::codegen_package_with_type_info(&sources, root_file, &ta, &codegen_deps)
+            .map_err(|fatal| CompileError {
+                diagnostics: diagnostics.clone(),
+                fatal: Some(fatal),
+            })?;
     declaration.runtime_functions = generated.runtime_functions;
     declaration.runtime_globals = generated.runtime_globals;
     Ok(CompiledPackage {

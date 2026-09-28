@@ -284,7 +284,7 @@ fn run_case(
                 )),
                 (Err(_), Some(_)) => Ok(CaseOutcome::KnownGap),
                 (Err(err), None) => {
-                    let (sources, file) = Sources::single(filename.as_str(), &src);
+                    let (sources, file) = Sources::single(filename.as_str(), &src).unwrap();
                     // The rendered backtrace already carries the `error: …` header.
                     Err(
                         match render_backtrace(&err, &sources, file, BacktraceMode::Full) {
@@ -349,7 +349,7 @@ fn assert_diagnostics(
 }
 
 fn render_diags(diags: &[Diagnostic], filename: &str, src: &str) -> String {
-    let (sources, _) = Sources::single(filename, src);
+    let (sources, _) = Sources::single(filename, src).unwrap();
     diags
         .iter()
         .map(|d| diagnostics::render(d, &sources))

@@ -737,12 +737,10 @@ impl<'a> Inferer<'a> {
     /// whole inherited surface as unknown.
     fn errored_extends_parent(&self, annot: &TypeAnnotation) -> Option<crate::ClassExtends> {
         let name = match &annot.kind {
-            crate::TypeAnnotationKind::Name { name_span, .. } => {
-                self.source[name_span.start as usize..name_span.end as usize].to_string()
-            }
+            crate::TypeAnnotationKind::Name { name, .. } => name.name.clone(),
             crate::TypeAnnotationKind::Qualified { path, .. } => path
                 .iter()
-                .map(|s| &self.source[s.start as usize..s.end as usize])
+                .map(|s| s.name.as_str())
                 .collect::<Vec<&str>>()
                 .join("."),
             _ => return None,

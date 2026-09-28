@@ -877,7 +877,7 @@ mod tests {
             strings: StringPool::default(),
             bigints: BigIntPool::default(),
             symbols: SymbolTable::default(),
-            line_index: LineIndex::new(""),
+            line_index: LineIndex::new("").unwrap(),
             validator_bodies: crate::codegen::recursive_validators::ValidatorBodies::collect(
                 &TypedAst::new(),
                 &[],
@@ -1113,19 +1113,19 @@ mod tests {
         let cx = cx_of(&f);
         let mut emitter = FunctionEmitter::new(&cx, &[]);
 
-        emitter.record_span(Span::new(crate::FileId(0), 0, 5));
+        emitter.record_span(Span::new(crate::FileId(0), 0, 5).unwrap());
         emitter.instruction(Instruction::I32Const(1));
-        emitter.record_span(Span::new(crate::FileId(0), 7, 9));
+        emitter.record_span(Span::new(crate::FileId(0), 7, 9).unwrap());
         emitter.instruction(Instruction::I32Const(2));
-        emitter.record_span(Span::new(crate::FileId(0), 11, 15));
+        emitter.record_span(Span::new(crate::FileId(0), 11, 15).unwrap());
         emitter.instruction(Instruction::I32Add);
 
         assert_eq!(
             emitter.source_mappings,
             vec![
-                (0, Span::new(crate::FileId(0), 0, 5)),
-                (1, Span::new(crate::FileId(0), 7, 9)),
-                (2, Span::new(crate::FileId(0), 11, 15)),
+                (0, Span::new(crate::FileId(0), 0, 5).unwrap()),
+                (1, Span::new(crate::FileId(0), 7, 9).unwrap()),
+                (2, Span::new(crate::FileId(0), 11, 15).unwrap()),
             ]
         );
     }

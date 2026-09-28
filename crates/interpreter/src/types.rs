@@ -610,11 +610,12 @@ impl Type {
         });
         flat.dedup_by(|a, b| a.without_aliases() == b.without_aliases());
         fold_boolean_literals(&mut flat);
-        match flat.len() {
-            // All members were Never → return Never (the bottom type), not Error.
-            0 => Type::Never,
-            1 => flat.pop().expect("len == 1"),
-            _ => Type::Union(flat),
+        if flat.len() > 1 {
+            return Type::Union(flat);
+        }
+        match flat.into_iter().next() {
+            Some(member) => member,
+            None => Type::Never,
         }
     }
 

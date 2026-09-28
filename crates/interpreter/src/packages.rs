@@ -2395,7 +2395,7 @@ mod tests {
             TypeSymbol {
                 name: "Animal".to_string(),
                 mangled_name: crate::mangle::package_symbol("@acme/zoo", "Animal"),
-                declaration_span: Span::new(FileId(0), 0, 0),
+                declaration_span: Span::new(FileId(0), 0, 0).unwrap(),
                 kind: TypeKind::Class {
                     generics: Vec::new(),
                     fields,
@@ -2471,7 +2471,7 @@ mod tests {
             TypeSymbol {
                 name: "Shape".to_string(),
                 mangled_name: crate::mangle::package_symbol("@acme/geo", "Shape"),
-                declaration_span: Span::new(FileId(0), 0, 0),
+                declaration_span: Span::new(FileId(0), 0, 0).unwrap(),
                 kind: TypeKind::Class {
                     generics: Vec::new(),
                     fields,
@@ -2571,7 +2571,7 @@ mod tests {
             TypeSymbol {
                 name: "Calc".to_string(),
                 mangled_name: crate::mangle::package_symbol("@acme/calc", "Calc"),
-                declaration_span: Span::new(FileId(0), 0, 0),
+                declaration_span: Span::new(FileId(0), 0, 0).unwrap(),
                 kind: TypeKind::Class {
                     generics: Vec::new(),
                     fields: BTreeMap::new(),

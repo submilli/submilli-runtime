@@ -52,14 +52,14 @@ impl ParsedExecute {
     }
 }
 
-pub(crate) fn parse(code: &str) -> ParsedExecute {
-    let (sources, file) = Sources::single(FILENAME, code);
+pub(crate) fn parse(code: &str) -> Result<ParsedExecute, interpreter::source::SourceError> {
+    let (sources, file) = Sources::single(FILENAME, code)?;
     let parsed = parse_script(code, file);
-    ParsedExecute {
+    Ok(ParsedExecute {
         sources,
         file,
         parsed,
-    }
+    })
 }
 
 /// The per-request host capabilities a script runs against: outbound-auth
@@ -184,7 +184,9 @@ async fn run_inner(
     let mcp_refs = imports.mcps.defs_refs();
     // The script's `file` id stamps compile diagnostics. Package sources are
     // also registered so package-originated traps render source context.
-    register_package_sources(&mut parsed.sources, imports.packages);
+    if let Err(error) = register_package_sources(&mut parsed.sources, imports.packages) {
+        return internal_failure(&error.to_string());
+    }
     let compiled = match compile_parsed_script_timed(
         code,
         FILENAME,
@@ -307,41 +309,51 @@ async fn run_inner(
 
 fn compile_failure(
     sources: &Sources,
-    file: FileId,
+    _file: FileId,
     diags: &[Diagnostic],
     discovery_warnings: Vec<String>,
 ) -> RunOutcome {
-    let line_index = sources
-        .get(file)
-        .expect("script file is registered")
-        .line_index();
     let mut message = String::new();
-    let mut diagnostics_out = Vec::with_capacity(diags.len());
-    for d in diags {
-        message.push_str(&diagnostics::render(d, sources));
-        let (line, column) = line_index.line_col(d.span.start);
-        diagnostics_out.push(DiagnosticPayload {
-            severity: match d.severity {
-                Severity::Error => "error",
-                Severity::Warning => "warning",
-            },
-            line,
-            column,
-            message: d.message.clone(),
-            notes: d
+    for diagnostic in diags {
+        message.push_str(&diagnostics::render(diagnostic, sources));
+    }
+    let payloads = diags
+        .iter()
+        .map(|diagnostic| {
+            let (line, column) = diagnostic_position(sources, diagnostic.span)?;
+            let notes = diagnostic
                 .notes
                 .iter()
-                .map(|(span, msg)| {
-                    let (l, c) = line_index.line_col(span.start);
-                    DiagnosticNote {
-                        line: l,
-                        column: c,
-                        message: msg.clone(),
-                    }
+                .map(|(span, message)| {
+                    let (line, column) = diagnostic_position(sources, *span)?;
+                    Ok(DiagnosticNote {
+                        line,
+                        column,
+                        message: message.clone(),
+                    })
                 })
-                .collect(),
-        });
-    }
+                .collect::<Result<Vec<_>, interpreter::source::SourceError>>()?;
+            Ok(DiagnosticPayload {
+                severity: match diagnostic.severity {
+                    Severity::Error => "error",
+                    Severity::Warning => "warning",
+                },
+                line,
+                column,
+                message: diagnostic.message.clone(),
+                notes,
+            })
+        })
+        .collect::<Result<Vec<_>, interpreter::source::SourceError>>();
+    let diagnostics_out = match payloads {
+        Ok(payloads) => payloads,
+        Err(error) => {
+            let mut outcome =
+                internal_failure(&format!("{message}invalid diagnostic metadata: {error}"));
+            outcome.discovery_warnings = discovery_warnings;
+            return outcome;
+        }
+    };
     RunOutcome {
         value: None,
         console_raw: String::new(),
@@ -352,6 +364,21 @@ fn compile_failure(
         }),
         discovery_warnings,
     }
+}
+
+fn diagnostic_position(
+    sources: &Sources,
+    span: interpreter::Span,
+) -> Result<(u32, u32), interpreter::source::SourceError> {
+    interpreter::Span::new(span.file, span.start, span.end)?;
+    if span.file.reserved_path().is_some() {
+        return Ok((0, 0));
+    }
+    let source = sources
+        .get(span.file)
+        .ok_or(interpreter::source::SourceError::UnknownFile { file: span.file })?;
+    source.span_text(span)?;
+    source.line_index().line_col(span.start)
 }
 
 fn classify_runtime_error(err: &wasmtime::Error, sources: &Sources, file: FileId) -> ExecuteError {
@@ -412,12 +439,16 @@ fn log_phase_breakdown(
     );
 }
 
-fn register_package_sources(sources: &mut Sources, packages: &PreparedBlueprintPackages) {
+fn register_package_sources(
+    sources: &mut Sources,
+    packages: &PreparedBlueprintPackages,
+) -> Result<(), interpreter::source::SourceError> {
     for package in &packages.modules {
         for source in &package.sources {
-            sources.add(source.path.clone(), source.text.clone());
+            sources.add(source.path.clone(), &source.text)?;
         }
     }
+    Ok(())
 }
 
 /// Whether [`report_to_sentry`] attaches the failed program's source and the
@@ -522,8 +553,56 @@ mod tests {
     use std::time::Duration;
 
     #[test]
+    fn compile_metadata_failure_preserves_error_and_discovery_warnings() {
+        let (sources, file) = Sources::single("test.ts", "é").unwrap();
+        let diagnostic = Diagnostic {
+            severity: Severity::Error,
+            span: interpreter::Span {
+                file,
+                start: 1,
+                end: 2,
+            },
+            message: "original compile error".into(),
+            help: vec![],
+            notes: vec![],
+        };
+        let outcome = compile_failure(
+            &sources,
+            file,
+            &[diagnostic],
+            vec!["discovery warning".into()],
+        );
+        let error = outcome.error.unwrap();
+        assert!(matches!(error.kind, ErrorKind::RuntimeError));
+        assert!(error.message.contains("original compile error"));
+        assert!(error.message.contains("invalid diagnostic metadata"));
+        assert_eq!(outcome.discovery_warnings, ["discovery warning"]);
+        assert_eq!(
+            diagnostic_position(&sources, interpreter::Span::at(file)).unwrap(),
+            (1, 1)
+        );
+    }
+
+    #[test]
+    fn diagnostic_positions_use_each_file_and_no_position_for_compiler_errors() {
+        let mut sources = Sources::new();
+        sources.add("root.ts", "x").unwrap();
+        let dependency = sources.add("dep.ts", "first\nsecond").unwrap();
+        assert_eq!(
+            diagnostic_position(&sources, interpreter::Span::new(dependency, 6, 12).unwrap())
+                .unwrap(),
+            (2, 1)
+        );
+        assert_eq!(
+            diagnostic_position(&sources, interpreter::Span::at(FileId::COMPILER)).unwrap(),
+            (0, 0)
+        );
+        assert!(diagnostic_position(&sources, interpreter::Span::at(FileId(999))).is_err());
+    }
+
+    #[test]
     fn fatal_host_failure_is_reported_as_a_runtime_error() {
-        let (sources, file) = Sources::single("test.ts", "function main(): void {}");
+        let (sources, file) = Sources::single("test.ts", "function main(): void {}").unwrap();
         let cause = interpreter::runtime::host::fatal_host_error("host ABI: invalid result buffer");
         let err = cause.context("executing host call");
         let payload = classify_runtime_error(&err, &sources, file);
@@ -641,7 +720,7 @@ mod tests {
         "#;
         let mut request = Box::pin(run(
             code,
-            parse(code),
+            parse(code).unwrap(),
             RunnerRuntime {
                 engine: &engine,
                 base_linker: &linker,

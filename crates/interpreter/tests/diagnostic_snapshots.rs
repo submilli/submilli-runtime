@@ -35,7 +35,7 @@ fn render_all(source: &str) -> String {
         diags.extend(check(&ta));
     }
 
-    let (sources, _) = Sources::single(FILENAME, source);
+    let (sources, _) = Sources::single(FILENAME, source).unwrap();
     let mut out = String::new();
     for diag in &diags {
         out.push_str(&diagnostics::render(diag, &sources));

@@ -395,7 +395,7 @@ fn run_one(
             match outcome {
                 Ok(_) => Ok(()),
                 Err(err) => {
-                    let (sources, file) = Sources::single(filename.as_str(), src);
+                    let (sources, file) = Sources::single(filename.as_str(), src).unwrap();
                     // The rendered backtrace already carries the `error: …` header.
                     Err(
                         match render_backtrace(&err, &sources, file, BacktraceMode::Full) {
@@ -441,7 +441,7 @@ fn run_multi(path: &Path) -> Result<(), String> {
             }
             return Err(message);
         }
-        let file_id = sources.add(module.clone(), src.clone());
+        let file_id = sources.add(module.clone(), src.clone()).unwrap();
         let (mut ast, mut diags) = parse_source(&src, file_id);
         lower_patterns(&mut ast);
         all_diags.append(&mut diags);
@@ -1201,7 +1201,7 @@ fn assert_multi_diagnostics(
 }
 
 fn render_diags(diags: &[Diagnostic], filename: &str, src: &str) -> String {
-    let (sources, _) = Sources::single(filename, src);
+    let (sources, _) = Sources::single(filename, src).unwrap();
     diags
         .iter()
         .map(|d| diagnostics::render(d, &sources))

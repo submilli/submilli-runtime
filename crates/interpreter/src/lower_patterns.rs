@@ -796,7 +796,7 @@ mod tests {
                 ..
             } => {
                 // `{ a }` starts at offset 6 and ends at 11 (inclusive of `}`).
-                assert_eq!(*span, crate::Span::new(crate::FileId(0), 6, 11));
+                assert_eq!(*span, crate::Span::new(crate::FileId(0), 6, 11).unwrap());
             }
             other => panic!("expected ConstPattern Object, got {other:?}"),
         }

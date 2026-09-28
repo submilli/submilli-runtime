@@ -640,10 +640,10 @@ impl Inferer<'_> {
         // Bound alias expansion separately from parser nesting: each alias can
         // be a shallow declaration while the chain consumes compiler resources.
         for _ in 0..64 {
-            let crate::TypeAnnotationKind::Name { name_span, args } = &base.kind else {
+            let crate::TypeAnnotationKind::Name { name, args } = &base.kind else {
                 return Ok(false);
             };
-            let name = self.annotation_name(*name_span)?;
+            let name = name.name.as_str();
             if pending.contains_key(name) {
                 return Ok(true);
             }
@@ -659,15 +659,6 @@ impl Inferer<'_> {
         Err((base.span, "interface inheritance alias limit exceeded"))
     }
 
-    fn annotation_name(&self, span: crate::Span) -> Result<&str, (crate::Span, &'static str)> {
-        self.source
-            .get(span.start as usize..span.end as usize)
-            .ok_or((
-                crate::Span::at(span.file),
-                "internal compiler error: invalid type name span",
-            ))
-    }
-
     fn substitute_base_names(
         &self,
         annotation: &TypeAnnotation,
@@ -681,8 +672,8 @@ impl Inferer<'_> {
             ));
         }
         let mut result = annotation.clone();
-        if let crate::TypeAnnotationKind::Name { name_span, args } = &mut result.kind {
-            let name = self.annotation_name(*name_span)?;
+        if let crate::TypeAnnotationKind::Name { name, args } = &mut result.kind {
+            let name = name.name.as_str();
             if let Some(replacement) = bindings.get(name) {
                 return Ok(replacement.clone());
             }

@@ -187,7 +187,7 @@ mod tests {
             ValueSymbol {
                 name: "charge".to_string(),
                 mangled_name: mangle::package_symbol("@stripe/sdk", "charge"),
-                declaration_span: Span::new(FileId(0), 0, 1),
+                declaration_span: Span::new(FileId(0), 0, 1).unwrap(),
                 kind: ValueKind::Function {
                     generics: Vec::new(),
                     params: vec![
@@ -234,7 +234,7 @@ mod tests {
                 ValueSymbol {
                     name: func.to_string(),
                     mangled_name: mangle::package_symbol("@jina/reader", func),
-                    declaration_span: Span::new(FileId(0), 0, 1),
+                    declaration_span: Span::new(FileId(0), 0, 1).unwrap(),
                     kind: ValueKind::Function {
                         generics: Vec::new(),
                         params: vec![
@@ -282,7 +282,7 @@ mod tests {
             ValueSymbol {
                 name: "getIssue".to_string(),
                 mangled_name: mangle::package_symbol("@acme/sdk", "getIssue"),
-                declaration_span: Span::new(FileId(0), 0, 1),
+                declaration_span: Span::new(FileId(0), 0, 1).unwrap(),
                 kind: ValueKind::Function {
                     generics: Vec::new(),
                     params: vec![Param::new("id", id_alias)],
@@ -308,7 +308,7 @@ mod tests {
             ValueSymbol {
                 name: "send".to_string(),
                 mangled_name: mangle::package_symbol("@acme/mail", "send"),
-                declaration_span: Span::new(FileId(0), 0, 1),
+                declaration_span: Span::new(FileId(0), 0, 1).unwrap(),
                 kind: ValueKind::Function {
                     generics: Vec::new(),
                     params: vec![Param::new("input", Type::Unknown)],
