@@ -144,7 +144,9 @@ export function downloadRead(
     const headers = readerHeaders(options);
     authorize(headers);
     const downloadOptions: DownloadOptions = { headers: headers };
-    return download(READER_ENDPOINT + url, path, downloadOptions);
+    // Keep target path segments, queries, and fragments out of the Reader URL's
+    // syntax so normalization cannot replace the host checked above.
+    return download(READER_ENDPOINT + encodeURIComponent(url), path, downloadOptions);
 }
 
 /**
