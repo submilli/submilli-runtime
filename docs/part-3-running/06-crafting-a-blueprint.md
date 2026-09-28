@@ -502,4 +502,58 @@ anything.
 The file is finished. Registering it with a running server, so applications
 can name it, is covered in [Submilli server](/docs/server).
 
+## With a coding agent
+
+A coding agent with the [Submilli skill](/docs/skill) builds a blueprint the
+way this chapter does, then tests what it built. These prompts were run with Claude Code in a project where
+`submilli blueprint init support` had just run, with the skill installed and
+`@acme/billing` in the local package store.
+
+**Grant an operation, tied to the session.**
+
+```text
+Let my support agent credit customers through @acme/billing, but only the customer the session is for, and only premium ones.
+```
+
+The agent reads the package with `capability list` and `docs`, adds it with
+`--no-capabilities`, declares the `customerId` variable, and writes the rule
+this chapter wrote:
+
+```yaml
+permissions:
+  main:
+  - capability: acme.com/credits.apply
+    filter: customerId == ${vars.customerId} and customerClass == "premium"
+    action: allow
+```
+
+It tests the rule with `submilli run --var`, which binds a customer the way
+your application will. A credit to the bound premium customer goes through.
+A credit to another customer, a credit to a standard customer, and a run
+with no customer bound are each refused. Then it removes each half of the
+filter in turn and shows the refused case going through, which proves that
+both halves are doing the work.
+
+The report ends with questions instead of guesses. Nothing in the rule
+limits the amount, so it asks what the largest credit should be, and whether
+zero and negative amounts should be refused, and offers to add
+`amount > 0 and amount <= …` once you say.
+
+**Call an API without handing over its token.**
+
+```text
+The agent also needs to read our status API at status.acme.com. The token is in STATUS_TOKEN, and the program must never see it.
+```
+
+The agent chooses the auth proxy over a package and runs the three commands
+from [call an endpoint with a credential](#call-an-endpoint-with-a-credential):
+`secret add`, `auth-proxy add`, and `capability add http.get` filtered to the
+host. Its tests show a GET to status.acme.com passing the policy, and a GET
+to another host, a POST, and a program calling `secrets.get` each refused. It
+doesn't ask for the token. It gives you the `submilli secret put` command to
+run yourself, so the value never passes through the conversation.
+
+Each request took the agent between three and nine minutes, most of it
+testing and review.
+
 Next: [using the CLI](/docs/cli).

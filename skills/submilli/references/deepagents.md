@@ -115,7 +115,7 @@ Pass `ScriptedModel(code=..., offered=[])` as `model=` inside the same `async wi
 3. Without the `submilli-variables` header the server rejects `initialize` with HTTP 400, so entering `client.session(...)` raises an exception group before any agent exists. Assert on the raised error.
 4. `offered` records the model's real tool surface. With the defaults verified above it is Submilli's eight MCP tools plus `ls`, `read_file`, `write_file`, `edit_file`, `delete`, `glob`, `grep` and `task`. There is no `execute` tool under the default StateBackend; assert that, because a backend that adds it opens a path around blueprint policy.
 
-`Session termination failed: 202` in the adapter log on close is harmless. A scripted run is adapter and policy evidence, not a live model result.
+A scripted run is adapter and policy evidence, not a live model result.
 
 ## Concrete TypeScript harness
 

@@ -121,8 +121,11 @@ Mistakes to avoid:
 - A package that calls the user's internal service works under `submilli run`
   and fails on the server with a generic `network error: error sending
   request`: the server blocks loopback, private, and link-local addresses.
-  Allow the narrowest address with `SUBMILLI_ALLOW_IP` (comma-separated;
-  `extraEnv` in the chart) or `network.allow_ip` in the config file.
+  Allow the narrowest address with `--allow-ip`, `SUBMILLI_ALLOW_IP`
+  (comma-separated; `extraEnv` in the chart), or `network.allow_ip` in the
+  config file. `--allow-localhost` opens loopback for development;
+  `--allow-private` opens every private range and doesn't belong in
+  production. Grants add up across sources, and none can revoke another.
 - Chart `replicaCount` above 1 gives independent servers that share nothing;
   a client must stay on one pod through the headless Service
   (`submilli-0.submilli-headless.<namespace>.svc:8128`). Don't suggest it for

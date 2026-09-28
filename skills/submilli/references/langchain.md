@@ -210,7 +210,5 @@ node that returns an `AIMessage` with one `tool_calls` entry for
    `ainvoke(None, config)` on a graph rebuilt from a new session for the same
    trusted identity, after the first session has closed.
 
-The adapter logs `Session termination failed: 202` when a session closes;
-the server has already accepted the close and the message is harmless.
 A successful scripted run is adapter and policy evidence, not a live model
 quality result.

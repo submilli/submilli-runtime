@@ -253,7 +253,8 @@ mistake stops it before any program runs.
 | Finding | Level |
 | --- | --- |
 | A package provides an operation that `main` has no rule for | Warning |
-| A package requires a permission that its own list doesn't grant | Error |
+| A package requires a permission that its own list has no rule for | Error |
+| A package requires a permission that its own list grants with a different filter, or denies | Warning |
 | `default: allow` | Warning |
 | A `secrets.get` rule under `main`, which can have no effect | Warning |
 | A list for a caller that isn't among the blueprint's packages | Warning |

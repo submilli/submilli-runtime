@@ -424,6 +424,51 @@ To stop, send SIGTERM or SIGINT, run `submilli server stop`, or `POST
 that point is cut off and its caller gets no response. Keep the grace period a
 few seconds under the container runtime's own stop timeout.
 
+## With a coding agent
+
+A coding agent with the [Submilli skill](/docs/skill) drives the server
+through the same `submilli server` commands. These prompts were run with
+Claude Code, a local server started with a secret store, and a project
+holding the research blueprint from [connecting to your
+harness](/docs/harness#the-example-a-research-agent-with-a-notebook).
+
+**Put a blueprint on the server and prove it.**
+
+```text
+Put this blueprint on my local server with Jina's key, and show me it works.
+```
+
+The agent checks the server's status, its secret store, and its packages
+before changing anything. The key isn't there, so it stops and asks for it,
+and suggests you store it yourself with `submilli server secret put
+jina_api_key`, so the value never passes through the conversation. Told the
+key is stored, it applies the blueprint and runs programs with `run-code` as
+two users. As `alice`, a search and a page read return real results, and a
+note written in one run is read back in the next. Writing to `bob`'s
+directory, reading `bob`'s notes, calling Jina's API directly, and running
+with no `userId` are each refused.
+
+In the run for this book, it also found a hole. The blueprint's rules
+confined the program to the user's directory, but not the package: through
+`@submilli/jina`'s download function, `alice` saved a file into `bob`'s
+directory. The agent reported it with a fix and left the change to you. The
+example blueprint now has that fix.
+
+**Find out why the server behaves differently.**
+
+```text
+stock.ts works with submilli run, but on my server it fails. Why, and what should I change?
+```
+
+`stock.ts` reads an inventory service on `localhost`. The agent reads the
+program, the blueprint, and the service's log, which shows a request from
+the local run and none from the server. It explains that the blueprint's
+rule matched, and the [outbound network](#outbound-network) block stopped
+the connection. It recommends `network.allow_ip: ["127.0.0.1"]` rather than
+opening every private range, and warns that `localhost` means the server's
+own machine or container, so a server in a container needs the service's
+real address instead.
+
 Next: [using MCP servers](/docs/mcp-servers), which turns tool servers you
 already have into packages; then
 [connecting to your harness](/docs/harness), where an application or an agent

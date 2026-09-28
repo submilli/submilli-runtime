@@ -159,7 +159,8 @@ don't survive.
 | `blueprint prompt` | Print the tool description the agent receives, with this blueprint's policy filled in |
 
 `lint` exits 1 on an error, such as a package that requires an operation its
-own rules don't allow, and 0 on warnings, so it can gate a commit.
+own rules don't mention, and 0 on warnings, so it can gate a commit. A package
+rule you narrowed on purpose is a warning, and `--fix` leaves it as it is.
 
 ### Configure Git
 

@@ -14,9 +14,10 @@ limits). If the policy was never stated, that is the first finding.
 
 Run the mechanical checks first and stop if they fail:
 `submilli build check`, `submilli build test`, and
-`submilli blueprint lint <file>`. Then, if a server is available, the
-allowed / cross-identity-denied / missing-variable matrix from
-[harnesses](harnesses.md).
+`submilli blueprint lint <file>`. Then the allowed / cross-identity-denied /
+missing-variable matrix: locally with `submilli run --blueprint <file>
+--var NAME=VALUE`, and through the server as in [harnesses](harnesses.md)
+when the agent will run there.
 
 Then answer each question with evidence (file and line, or a command and its
 output), not with reassurance:

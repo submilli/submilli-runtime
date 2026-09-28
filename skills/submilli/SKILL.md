@@ -31,8 +31,9 @@ that general knowledge gets wrong; what goes wrong without it is named.
   guard fields the model can choose.
 - Package implementation: [packages](references/packages.md); without it the
   package is written as Node.js and fails `build`.
-- Policy design and verification: [blueprints](references/blueprints.md);
-  without it the blueprint lints but the server rejects it.
+- Policy design and verification, including MCP servers and direct HTTP:
+  [blueprints](references/blueprints.md); without it the blueprint lints but
+  the server rejects it, or an MCP server is allowed whole.
 - Ideas or suitability: [use cases](references/use-cases.md).
 - Agent implementation: [harness integration](references/harnesses.md), then
   the user's harness reference; without it the adapter or identity binding is

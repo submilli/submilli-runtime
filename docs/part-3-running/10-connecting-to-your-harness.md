@@ -92,6 +92,12 @@ file, and can't list the volume's root.
 The fragment leaves out the package's own permissions and the secret. The
 whole file is
 [`blueprint.yaml`](https://github.com/submilli/submilli-runtime/blob/main/examples/harnesses/blueprint.yaml).
+It confines the package too. `@submilli/jina` can save a page straight to a
+file, at a path the program chooses, and `add-package` grants it `fs.write`
+anywhere. Left that way, a program could write into another user's directory
+through the package, where the rules above don't reach. The file gives the
+package's `fs.write` and `http.download` rules the same user directory, and
+`lint` notes that they are narrower than the package declared.
 
 The server needs the volume, a secret store for Jina's API key, and the
 package. From `examples/harnesses/`:
@@ -916,5 +922,56 @@ the blueprint allowed only `browser_navigate`, `browser_snapshot`, and
 `browser_click`. The model's program called `browser_evaluate`, was denied,
 and the model reported the denial and stopped. Allow the tools the task
 needs, and expect a model to reach for the others.
+
+## With a coding agent
+
+A coding agent with the [Submilli skill](/docs/skill) connects your harness
+for you, in the code you already have. These prompts were run with Claude
+Code, the skill installed, and the server from this chapter running.
+
+**Connect an existing agent.**
+
+The project was a small Mastra app with no Submilli in it: an agent, and an
+HTTP handler that takes the signed-in user from an `x-user-id` header set by
+the company's login proxy.
+
+```text
+Connect this app's Mastra agent to the research blueprint on my local Submilli server, so it does its research by running programs there, as the signed-in user.
+```
+
+The agent adds `@mastra/mcp` and writes a `research` function that follows
+this chapter's [Mastra](#mastra) section: a new `MCPClient` for each
+request, the user in the `submilli-variables` header, the tools passed to
+`generate` as `toolsets`, a check that the Submilli toolset loaded, and
+`disconnect` in a `finally`. The handler answers 502 when the tools are
+missing. The agent noticed on its own that the user id ends up in the
+blueprint's path filters, and accepts only ids of letters, digits, and
+`_ . @ -`. It then says it guessed that format and asks what your ids
+look like.
+
+It tests with a real MCP client and no model: the eight tools load, the
+user's own directory can be read, while another user's directory, the
+volume's root, and a look-alike directory that starts with the user's id are
+refused, and a connection with no user gets no tools. It reports that it did not run a model. Run with Gemini
+afterwards, the app answered the question from
+[one conversation](#one-conversation-start-to-finish) in about a minute and
+saved its note under `/u_ada`.
+
+**Find a session bug.**
+
+This project was a deepagents agent that loads its tools with
+`MultiServerMCPClient.get_tools()`, under a blueprint whose `vfs` is
+`per_session`.
+
+```text
+My deepagents agent saves pages under /pages in one program, and the next program can't find them. Why?
+```
+
+The agent reads `agent.py` and the blueprint and names the cause in a few
+steps. Tools loaded without a session open a new MCP session for every call.
+Under `per_session`, each program therefore gets a new, empty filesystem.
+Its fix is the one in the [deepagents](#langchain-deepagents) section: one
+session, held open for the whole run. It adds that files still won't survive
+between separate runs of the script, which takes a `persistent` volume.
 
 Next: [deploying](/docs/deploying), which puts the server in a container.

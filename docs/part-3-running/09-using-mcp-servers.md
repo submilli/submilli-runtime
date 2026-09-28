@@ -98,6 +98,14 @@ Submilli:
 error: PermissionDeniedError: permission denied: caller=main capability=mcp.playwright: policy denied mcp.playwright for main. …
 ```
 
+A rule sees the tool's name and nothing else. It can't see what a tool is
+asked to do, and some tools' arguments carry as much power as the tools you
+left out. Asked to navigate to a `javascript:` address, `browser_navigate`
+runs that script in the page, as `browser_evaluate` would. When an allowed
+tool is that broad, restrict it where the MCP server runs (Playwright's takes
+`--allowed-origins`), or put a package in front of it that checks the
+arguments and grant the package instead.
+
 In a blueprint without a `permissions` block, `add-mcp` writes no rule, and
 the server is denied by `default: deny`.
 
@@ -478,6 +486,46 @@ Discovery gives a server ten seconds to answer.
   Progress messages are ignored.
 - **Sixty seconds per call.** A call that takes longer, counting login and
   connection, fails with a transport error. The limit isn't configurable.
+
+## With a coding agent
+
+A coding agent with the [Submilli skill](/docs/skill) declares an MCP server
+and chooses its tools for you. This prompt was run with Claude Code in a
+project where `submilli blueprint init browse` had just run, with the skill
+installed and Playwright's server started as above.
+
+```text
+Add Playwright's MCP server, running at http://localhost:8931/mcp, so programs can open and read web pages but can't run JavaScript in them.
+```
+
+The agent runs `add-mcp`, lists the server's 25 tools with
+`submilli docs @mcp/playwright`, and allows the six that open and read
+pages:
+
+```yaml
+permissions:
+  main:
+  - capability: mcp.playwright
+    filter: tool == "browser_navigate" or tool == "browser_navigate_back" or tool == "browser_snapshot" or tool == "browser_find" or tool == "browser_wait_for" or tool == "browser_close"
+    action: allow
+  - capability: mcp.playwright
+    action: deny
+```
+
+It tests the rules with `submilli run`. Opening example.com and taking a
+snapshot returns the page. `browser_evaluate`, `browser_run_code_unsafe`,
+and `browser_click` are each refused before the call reaches Playwright.
+With the filter removed, `browser_evaluate` runs, which shows the filter is
+what refuses it.
+
+Then its review looked past the tool names, and the report says the request
+isn't fully met. `browser_navigate` to a `javascript:` or `data:` address
+runs script, the limit described in [allow its tools](#allow-its-tools), and
+`browser_snapshot` takes a `filename` that writes a file on Playwright's
+machine. No blueprint rule can close either. The agent proposes restricting
+Playwright's server, or putting a package in front of it that accepts only
+`http` and `https` addresses. It asks whether "can't run JavaScript"
+includes the pages' own scripts, since that decides which fix fits.
 
 Next: [connecting to your harness](/docs/harness), where an agent uses
 all of this.
