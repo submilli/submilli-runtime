@@ -1,5 +1,6 @@
 ---
 import Search from '@astrojs/starlight/components/Search.astro';
+import DiscordLink from './DiscordLink.astro';
 import GitHubLink from './GitHubLink.astro';
 import SiteTitle from './SiteTitle.astro';
 import ThemeSelect from './ThemeSelect.astro';
@@ -31,10 +32,12 @@ const WEBSITE_URL = 'https://submilli.ai';
 				<path d="M7 17 17 7M8 7h9v9"></path>
 			</svg>
 		</a>
+		<DiscordLink variant="label" />
 		<GitHubLink variant="label" />
 		<ThemeSelect />
 	</div>
 	<div class="sl-flex md:sl-hidden print:hidden mobile-group">
+		<DiscordLink variant="icon" />
 		<GitHubLink variant="icon" />
 	</div>
 </div>
