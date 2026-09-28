@@ -159,19 +159,18 @@ fn oversized_sources_return_no_artifact_and_allow_a_healthy_followup() {
     ];
     for (index, source) in cases.into_iter().enumerate() {
         let error = compile_script_checked(&source, "limit.ts", FileId(0), &[], &[]).unwrap_err();
-        let fatal = error.fatal.expect("codegen limit remains typed");
+        assert!(error.fatal.is_none(), "{error:?}");
+        let diagnostic = error
+            .diagnostics
+            .iter()
+            .find(|d| d.message.contains("256 parameter slots"))
+            .expect("source limit diagnostic");
+        assert!(diagnostic.message.contains("255"));
         if index == 0 {
-            let CompilerFailure::Limit {
-                span: Some(span), ..
-            } = &fatal
-            else {
-                panic!("local closure limit must retain its source span: {fatal:?}");
-            };
-            assert_eq!(span.file, FileId(0));
-            assert!(span.start < span.end && span.end as usize <= source.len());
-            assert!(source[span.start as usize..span.end as usize].contains("const f"));
+            assert_eq!(diagnostic.span.file, FileId(0));
+            let text = diagnostic.span.text(&source, FileId(0)).unwrap();
+            assert!(text.contains("a0") && text.contains("a255"));
         }
-        assert_limit(fatal);
         compile_script_checked(
             "function main(): number { return 42; }",
             "healthy.ts",
@@ -194,8 +193,13 @@ fn oversized_sources_return_no_artifact_and_allow_a_healthy_followup() {
         &[],
     )
     .unwrap_err();
-    assert!(error.fatal.is_some(), "{error:?}");
-    assert_limit(error.fatal.expect("package codegen limit remains typed"));
+    assert!(error.fatal.is_none(), "{error:?}");
+    assert!(
+        error
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("256 parameter slots"))
+    );
     compile_package_checked(
         "healthy",
         ModulePath::from("lib"),
@@ -221,4 +225,43 @@ fn closure_index_exhaustion_is_reported_before_mutation() {
     assert!(matches!(error, CompilerFailure::Limit { .. }));
     assert_eq!(next, u32::MAX);
     assert_eq!(types.len(), 0);
+}
+
+#[test]
+fn arity_failure_preserves_other_script_and_package_diagnostics() {
+    let params = (0..256)
+        .map(|i| format!("a{i}: number"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let source = format!(
+        "const invalid: number = \"wrong\"; export function f({params}): number {{ return a255; }} function main(): number {{ return invalid; }}"
+    );
+    let script = compile_script_checked(&source, "limit.ts", FileId(0), &[], &[]).unwrap_err();
+    let package = compile_package_checked(
+        "oversized",
+        ModulePath::from("lib"),
+        &[PackageSourceModule {
+            path: ModulePath::from("lib"),
+            source: &source,
+        }],
+        &[],
+    )
+    .unwrap_err();
+    for error in [script, package] {
+        assert!(error.fatal.is_none(), "{error:?}");
+        assert!(
+            error
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("256 parameter slots")),
+            "{error:?}"
+        );
+        assert!(
+            error
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("string") && d.message.contains("number")),
+            "{error:?}"
+        );
+    }
 }

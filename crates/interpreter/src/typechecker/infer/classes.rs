@@ -362,7 +362,7 @@ impl<'a> Inferer<'a> {
                         continue;
                     }
                     seen_constructor = true;
-                    constructor = self.resolve_params(params)?;
+                    constructor = self.resolve_parameter_types(params)?;
                     // Parameter properties declare a field with the param's type.
                     for (decl, resolved) in params.iter().zip(constructor.iter()) {
                         let Some(modifiers) = &decl.modifiers else {

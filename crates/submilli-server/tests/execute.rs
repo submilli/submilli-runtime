@@ -831,3 +831,17 @@ fn http_parser_depth_is_bounded() {
         }
     });
 }
+
+#[test]
+fn http_closure_arity_returns_diagnostics() {
+    parser_depth::isolated_worker("http_closure_arity_returns_diagnostics", async {
+        let app = router();
+        let (status, body) = execute_on(&app, &parser_depth::oversized_closure_source()).await;
+        assert_eq!(status, StatusCode::OK);
+        parser_depth::assert_closure_diagnostic(&body);
+        let (status, body) = execute_on(&app, "function main(): number { return 42; }").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["error"].is_null(), "{body}");
+        assert_eq!(body["result"], "42", "{body}");
+    });
+}

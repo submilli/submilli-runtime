@@ -527,6 +527,16 @@ impl<'a> Inferer<'a> {
         &mut self,
         params: &[crate::ParamDecl],
     ) -> Result<Vec<Param>, CompilerFailure> {
+        self.check_parameter_arity(params)?;
+        self.resolve_parameter_types(params)
+    }
+
+    /// Resolve slot types/defaults without imposing a callable ABI. Constructors
+    /// use this directly because they have no closure slot of their own.
+    pub(super) fn resolve_parameter_types(
+        &mut self,
+        params: &[crate::ParamDecl],
+    ) -> Result<Vec<Param>, CompilerFailure> {
         self.report_duplicate_params(params.iter().map(|p| &p.name));
         let names: BTreeSet<&str> = params.iter().map(|p| p.name.name.as_str()).collect();
         params

@@ -622,6 +622,7 @@ impl Inferer<'_> {
             }
             self.error_with_help(span, format!("expected `{want}`, got `{ty}`"), help);
         }
+        self.check_expression_arity(&kind, &ty, span);
         let id = self
             .typed_ast
             .try_push_expr(TypedExpr {
@@ -3335,6 +3336,7 @@ impl Inferer<'_> {
         Ok(
             match self.class_static_in_chain(&class_mangled, &member.name) {
                 Some((StaticResolution::Method(sig, vis), owner)) => {
+                    self.check_class_callable_types(&owner, span);
                     self.check_static_privacy(vis, &owner, &class_name, &member);
                     let mangled = crate::mangle::static_member(&owner, &member.name);
                     if !sig.generics.is_empty() {
@@ -3383,6 +3385,7 @@ impl Inferer<'_> {
                     )
                 }
                 Some((StaticResolution::Field(field), owner)) => {
+                    self.check_class_callable_types(&owner, span);
                     self.check_static_privacy(field.visibility, &owner, &class_name, &member);
                     let mangled = crate::mangle::static_member(&owner, &member.name);
                     let Type::Function {
@@ -3444,6 +3447,7 @@ impl Inferer<'_> {
         use super::classes::StaticResolution;
         match self.class_static_in_chain(&class_mangled, &member.name) {
             Some((StaticResolution::Method(sig, vis), owner)) => {
+                self.check_class_callable_types(&owner, span);
                 self.check_static_privacy(vis, &owner, &class_name, &member);
                 if !sig.generics.is_empty() {
                     self.error(
@@ -3472,6 +3476,7 @@ impl Inferer<'_> {
                 )
             }
             Some((StaticResolution::Field(field), owner)) => {
+                self.check_class_callable_types(&owner, span);
                 self.check_static_privacy(field.visibility, &owner, &class_name, &member);
                 let mangled = crate::mangle::static_member(&owner, &member.name);
                 (
@@ -3575,6 +3580,7 @@ impl Inferer<'_> {
         args: &[ExprId],
         span: Span,
     ) -> Result<Vec<ExprId>, CompilerFailure> {
+        self.check_call_signature_types(params, ret, lift, span);
         let has_rest = params.last().is_some_and(|p| p.rest);
         let fixed_count = params.iter().take_while(|p| !p.rest).count();
         let max_args = if has_rest { usize::MAX } else { params.len() };
@@ -3689,6 +3695,7 @@ impl Inferer<'_> {
         args: &[ExprId],
         span: Span,
     ) -> Result<Vec<ExprId>, CompilerFailure> {
+        self.report_closure_arity(param_types.len(), span, None);
         let mut params: Vec<crate::Param> = param_types
             .iter()
             .enumerate()
@@ -6556,6 +6563,7 @@ impl Inferer<'_> {
         type_predicate: Option<&crate::TypePredicateAnnotation>,
         expected: Option<&Type>,
     ) -> Result<Type, CompilerFailure> {
+        self.check_parameter_arity(params)?;
         let hint = expected.and_then(|ty| match ty.peel() {
             Type::Function { params, ret, .. } => Some((params, ret)),
             _ => None,
@@ -6632,6 +6640,7 @@ impl Inferer<'_> {
         span: Span,
     ) -> Result<(TypedExprKind, Type, bool), CompilerFailure> {
         let errors_before = self.error_count();
+        self.check_parameter_arity(&params)?;
         // Arrow parameters never reach `resolve_params`, so the duplicate check
         // has to be repeated here rather than inherited.
         self.report_duplicate_params(params.iter().map(|p| &p.name));

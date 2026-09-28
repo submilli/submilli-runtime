@@ -2565,3 +2565,24 @@ fn mcp_parser_depth_is_bounded() {
         assert_eq!(output(&rpc)["result"], "2", "{rpc}");
     });
 }
+
+#[test]
+fn mcp_closure_arity_returns_diagnostics() {
+    parser_depth::isolated_worker("mcp_closure_arity_returns_diagnostics", async {
+        let h = Harness::new();
+        let session = h.handshake(EPH).await;
+        let (status, _, rpc) = h
+            .post(
+                EPH,
+                tools_call(1, &parser_depth::oversized_closure_source()),
+                Some(&session),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        parser_depth::assert_closure_diagnostic(output(&rpc));
+        let (status, _, rpc) = h.post(EPH, tools_call(2, SUM), Some(&session)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(output(&rpc)["error"].is_null(), "{rpc}");
+        assert_eq!(output(&rpc)["result"], "2", "{rpc}");
+    });
+}

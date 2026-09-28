@@ -245,6 +245,43 @@ rejecting an entire unused package surface.
 The checked internal conversion remains mandatory even after source validation.
 Public phase APIs and malformed external declarations can bypass normal checks.
 
+### Stage 3 implementation
+
+Inference now applies the shared slot limit to declared functions, arrows,
+function expressions, nested functions, function annotations and class/interface
+methods. Constructor argument counts remain outside the closure ABI limit.
+Diagnostics carry the actual and maximum slot counts, a source range and the
+object/rest-parameter suggestion. Revisited or enclosing signature checks merge
+matching diagnostics instead of reporting the same range repeatedly.
+
+An iterative callable-type scan checks nested and imported types, including
+nominal back-edges and inherited class members. Dependency metadata is not
+assigned a source file from the consumer's unrelated registry: failures use the
+importing expression or annotation and identify the dependency symbol where
+available. Completely unused package declarations/imports remain allowed. A
+reachable interface value requires its full surface, matching dependency usage;
+class instances and static-only class usage also require inherited method
+payload signatures. Static calls and references validate the resolved declaring
+class, so an inherited member does not make unused subclass payloads reachable.
+Regressions cover inherited method calls, method values, generic calls and
+callback fields, including rejection when the declaring class itself is invalid. Constructors (including imported generic constructors) and raw namespace host calls retain their separate argument ABIs. A named host
+function reference still requires the existing closure representation, even
+when used as the callee of a direct call; source checking now diagnoses that
+existing lowering limit. Codegen's
+checked conversions remain in place for direct phase callers and invalid IR.
+
+Generated source tests exercise check-time diagnostics, unused declarations,
+nested callable types, imported values and generic instantiations, inherited
+methods, unused package surfaces and successful follow-up compilation. Stage 2's
+source regressions now expect inference diagnostics; its direct-codegen tests
+still verify typed Limit/Internal failures. The 21 supported boundary programs
+continue to match strict TypeScript 6.0.3 and Node v24.14.1 using the stage 1
+harness with `/tmp/sub633-stage3-oracle` as its export directory. Rejection above
+255 remains an intentional Submilli implementation limit.
+
+Stage 4 adds the remaining transport and completion coverage described below.
+Item 02 remains open until the combined changes pass review and verification.
+
 ## Stage 4: verification and completion
 
 Focused tests must cover:
@@ -285,6 +322,40 @@ Report skipped coverage separately. Use the open-pr skill if creating a PR.
 Close only item 02 after its complete boundary, propagation, diagnostic and
 verification conditions hold. Record contributions to other inventory entries
 without marking their broader work complete.
+
+### Stage 4 implementation and verification coverage
+
+The generated source matrix now checks both 255-slot acceptance and 256-slot
+rejection for named/generic functions, interfaces, aliases, nested callbacks,
+class/static methods, arrows, function expressions, nested functions and packed
+rest declarations. Supported runtime coverage adds static method adapters,
+annotated callbacks, void named-function adapters and generic static methods.
+Generic instance methods remain an existing unsupported language feature.
+Together with the earlier boundary programs, 25 programs exercise argument
+values, return values, mutation and evaluation order. The strict TypeScript/Node
+oracle uses TypeScript 6.0.3 (`--ignoreConfig --strict --target ES2022 --module
+commonjs`) and Node v24.14.1, exporting the exact sources to
+`/tmp/sub633-stage4-oracle`; only `console.log(main())`, module isolation and the
+package import path are adapted. Rejection above 255 is intentional; TypeScript
+accepts those signatures.
+
+`closure_lowering_errors` verifies that script and package failures retain the
+arity diagnostic alongside another type error and return no compiled artifact.
+Existing tests retain healthy subsequent compilation and injected codegen
+Limit/Internal failures, including missing registration and non-function input.
+
+CLI `check` and `run` regressions use children with a 30-second deadline. HTTP
+and MCP tests call the actual in-process handlers in isolated children with a
+60-second deadline and a 2 MiB Tokio worker stack. They require source-located
+compile diagnostics, no successful result or panic/task-join output, and healthy
+follow-ups on the same router or MCP session. They run with the routine HTTP
+skip setting because no sockets or live services are involved. Existing debug
+and release inference regressions cover both 2 MiB and 8 MiB worker stacks.
+
+Stages 3 and 4 are reviewed together, with the entire proposed diff since the
+item 06 integration base included. Final verification uses the commands above
+and the release worker-stack regression. Review and verification results belong
+in the handoff; this plan does not claim upstream integration or close SUB-633.
 
 ## Revised investment
 

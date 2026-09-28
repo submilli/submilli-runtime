@@ -1,5 +1,4 @@
-//! Supported closure ABI boundaries. Oversized source diagnostics belong to
-//! SUB-633 item 02 stages 2–3; stage 1 checks the shared conversion separately.
+//! Supported closure ABI boundaries; rejection cases live in closure_arity_diagnostics.
 
 use interpreter::compiler_limits::MAX_CLOSURE_ARITY;
 use interpreter::runtime::{
@@ -157,6 +156,41 @@ fn imported_signatures_and_inherited_methods_link_at_boundary() {
     );
     export_oracle("arity", &library);
     assert_eq!(run(&source, &[package]), (3 * (arity + 1)).to_string());
+}
+
+#[test]
+fn method_adapters_and_annotated_callbacks_run_at_boundary() {
+    let params = parameters(MAX_CLOSURE_ARITY, "number");
+    let args = arguments(MAX_CLOSURE_ARITY);
+    let cases = [
+        (
+            "static_adapter",
+            format!(
+                "class C {{ static f({params}): number {{ return a0 + a254; }} }} function main(): number {{ const f = C.f; return f({args}); }}"
+            ),
+        ),
+        (
+            "annotated_callback",
+            format!(
+                "type Callback = ({params}) => number; function main(): number {{ const f: Callback = ({params}): number => a0 + a254; return f({args}); }}"
+            ),
+        ),
+        (
+            "void_named_adapter",
+            format!(
+                "let result = 0; function f({params}): void {{ result = a0 + a254; }} function main(): number {{ const g = f; g({args}); return result; }}"
+            ),
+        ),
+    ];
+    // Generic descriptors are separate from the 255 user parameter slots.
+    for (name, source) in cases {
+        check_script(name, &source, 256);
+    }
+    let generic_params = parameters(MAX_CLOSURE_ARITY, "T");
+    let source = format!(
+        "class C {{ static f<T>({generic_params}): T {{ return a254!; }} }} function main(): number {{ return C.f<number>({args}); }}"
+    );
+    check_script("generic_method", &source, 255);
 }
 
 fn parameters(arity: usize, ty: &str) -> String {

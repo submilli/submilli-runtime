@@ -42,3 +42,38 @@ pub fn nested_source() -> String {
         ")".repeat(2048)
     )
 }
+
+pub fn oversized_closure_source() -> String {
+    let params = (0..256)
+        .map(|i| format!("a{i}: number"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "function f({params}): number {{ return a255; }} function main(): number {{ return 42; }}"
+    )
+}
+
+pub fn assert_closure_diagnostic(body: &serde_json::Value) {
+    assert_eq!(body["error"]["kind"], "compile_error", "{body}");
+    assert!(body["result"].is_null(), "{body}");
+    let diagnostics = body["error"]["diagnostics"].as_array().unwrap();
+    let diagnostic = diagnostics
+        .iter()
+        .find(|d| {
+            d["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("256 parameter slots"))
+        })
+        .expect("arity diagnostic");
+    assert!(
+        diagnostic["message"]
+            .as_str()
+            .unwrap()
+            .contains("maximum is 255"),
+        "{diagnostic}"
+    );
+    assert_eq!(diagnostic["line"], 1, "{diagnostic}");
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(!message.contains("panicked"), "{message}");
+    assert!(!message.contains("task join"), "{message}");
+}

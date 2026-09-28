@@ -257,6 +257,7 @@ impl<'a> Inferer<'a> {
 
     pub(super) fn resolve_type(&mut self, annot: &TypeAnnotation) -> Result<Type, CompilerFailure> {
         let resolved = self.resolve_type_inner(annot)?;
+        self.check_callable_type(&resolved, annot.span);
         if matches!(
             resolved.peel(),
             Type::InterfaceRef { .. } | Type::AliasRef { .. }

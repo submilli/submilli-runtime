@@ -4,6 +4,7 @@ mod assign_expr;
 pub(crate) mod assignable;
 mod binding_analysis;
 mod classes;
+mod closure_arity;
 mod diagnostics;
 mod enums;
 mod exports;

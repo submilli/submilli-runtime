@@ -31,6 +31,35 @@ fn cli_parser_depth_is_bounded() {
     );
 }
 
+#[test]
+fn cli_closure_arity_returns_diagnostics() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("arity.ts");
+    let params = (0..256)
+        .map(|i| format!("a{i}: number"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    std::fs::write(&source, format!("function f({params}): number {{ return a255; }} function main(): number {{ return 42; }}")).unwrap();
+    for command in ["check", "run"] {
+        let output = bounded_cli(command, &source);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        for expected in ["256 parameter slots", "maximum is 255", "arity.ts:1:"] {
+            assert!(stderr.contains(expected), "{stderr}");
+        }
+        assert!(!stderr.contains("panicked"), "{stderr}");
+        assert!(!stderr.contains("task join"), "{stderr}");
+    }
+    std::fs::write(&source, "function main(): number { return 42; }").unwrap();
+    for command in ["check", "run"] {
+        let output = bounded_cli(command, &source);
+        assert!(output.status.success(), "{output:?}");
+        if command == "run" {
+            assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "42");
+        }
+    }
+}
+
 fn bounded_cli(command: &str, source: &std::path::Path) -> std::process::Output {
     // File-backed output cannot fill a pipe while the parent waits for exit.
     let stdout = tempfile::tempfile().unwrap();
