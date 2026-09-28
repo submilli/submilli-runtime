@@ -1,6 +1,8 @@
 //! Lexical binding checks and closure-write analysis before inference.
 //! Declaration spans remain stable when inference revisits a loop or generic body.
 
+use crate::compiler_error::CompilerFailure;
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::{Ast, Diagnostic, ExprId, Ident, Severity, Span, StmtId};
@@ -33,22 +35,27 @@ struct Binding {
     block_local: bool,
 }
 
-pub(super) fn analyze(ast: &Ast) -> Analysis {
+pub(super) fn analyze(ast: &Ast) -> Result<Analysis, crate::compiler_error::CompileError> {
     let mut analysis = Analysis::default();
     for &id in &ast.top_level {
-        visit_stmt(ast, id, &mut analysis);
+        visit_stmt(ast, id, &mut analysis).map_err(|fatal| {
+            crate::compiler_error::CompileError {
+                diagnostics: analysis.diagnostics.clone(),
+                fatal: Some(fatal),
+            }
+        })?;
     }
-    analysis
+    Ok(analysis)
 }
 
 /// No `_` arm: a statement kind that stops the walk hides every arrow below it,
 /// and the resulting narrowing is unsound rather than merely imprecise — the
 /// enclosing frame reads a stale shadow while the closure has already written
 /// the slot. A new statement kind should fail the build here, not go unscanned.
-fn visit_stmt(ast: &Ast, id: StmtId, out: &mut Analysis) {
+fn visit_stmt(ast: &Ast, id: StmtId, out: &mut Analysis) -> Result<(), CompilerFailure> {
     use crate::StmtKind;
     let extends_assignment = matches!(
-        ast.stmt(id).kind,
+        ast.try_stmt(id).map_err(super::arena_failure)?.kind,
         StmtKind::Let { .. }
             | StmtKind::Assign { .. }
             | StmtKind::CompoundAssign { .. }
@@ -64,21 +71,22 @@ fn visit_stmt(ast: &Ast, id: StmtId, out: &mut Analysis) {
             | StmtKind::ClassDecl { .. }
     );
     if extends_assignment {
-        out.assignment_regions.push(ast.stmt(id).span);
+        out.assignment_regions
+            .push(ast.try_stmt(id).map_err(super::arena_failure)?.span);
     }
-    match &ast.stmt(id).kind {
+    match &ast.try_stmt(id).map_err(super::arena_failure)?.kind {
         StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
             out.read(target);
             out.write(target);
-            visit_expr(ast, *value, out);
+            visit_expr(ast, *value, out)?;
         }
         StmtKind::Let { name, value, .. } | StmtKind::Const { name, value, .. } => {
-            visit_expr(ast, *value, out);
+            visit_expr(ast, *value, out)?;
             out.initialize(name);
             out.write(name);
         }
         StmtKind::ConstRest { name, source, .. } => {
-            visit_expr(ast, *source, out);
+            visit_expr(ast, *source, out)?;
             out.initialize(name);
         }
         StmtKind::Function {
@@ -92,7 +100,7 @@ fn visit_stmt(ast: &Ast, id: StmtId, out: &mut Analysis) {
             if let Some(scope) = declaring_scope {
                 out.nested_functions.push((name.span, scope));
             }
-            scan_function(ast, params, crate::ArrowBody::Block(*body), out);
+            scan_function(ast, params, crate::ArrowBody::Block(*body), out)?;
             if declaring_scope.is_some() {
                 out.nested_functions.pop();
             }
@@ -102,15 +110,15 @@ fn visit_stmt(ast: &Ast, id: StmtId, out: &mut Analysis) {
             then_block,
             else_block,
         } => {
-            visit_expr(ast, *condition, out);
-            visit_stmt(ast, *then_block, out);
+            visit_expr(ast, *condition, out)?;
+            visit_stmt(ast, *then_block, out)?;
             if let Some(e) = else_block {
-                visit_stmt(ast, *e, out);
+                visit_stmt(ast, *e, out)?;
             }
         }
         StmtKind::While { condition, body } | StmtKind::DoWhile { body, condition } => {
-            visit_expr(ast, *condition, out);
-            visit_stmt(ast, *body, out);
+            visit_expr(ast, *condition, out)?;
+            visit_stmt(ast, *body, out)?;
         }
         StmtKind::For {
             init,
@@ -120,15 +128,15 @@ fn visit_stmt(ast: &Ast, id: StmtId, out: &mut Analysis) {
         } => {
             out.scopes.push(Default::default());
             if let Some(init) = init {
-                out.reserve_statements(ast, &[*init]);
+                out.reserve_statements(ast, &[*init])?;
             }
             for s in [init, update].into_iter().flatten() {
-                visit_stmt(ast, *s, out);
+                visit_stmt(ast, *s, out)?;
             }
             if let Some(c) = condition {
-                visit_expr(ast, *c, out);
+                visit_expr(ast, *c, out)?;
             }
-            visit_stmt(ast, *body, out);
+            visit_stmt(ast, *body, out)?;
             out.scopes.pop();
         }
         StmtKind::ForOf {
@@ -136,9 +144,9 @@ fn visit_stmt(ast: &Ast, id: StmtId, out: &mut Analysis) {
         } => {
             out.scopes.push(Default::default());
             out.declare(name, false);
-            visit_iterable(ast, id, *iter, out);
+            visit_iterable(ast, id, *iter, out)?;
             out.initialize(name);
-            visit_stmt(ast, *body, out);
+            visit_stmt(ast, *body, out)?;
             out.scopes.pop();
         }
         StmtKind::Switch {
@@ -146,15 +154,15 @@ fn visit_stmt(ast: &Ast, id: StmtId, out: &mut Analysis) {
             cases,
             default,
         } => {
-            visit_expr(ast, *discriminant, out);
+            visit_expr(ast, *discriminant, out)?;
             for case in cases {
                 for &value in &case.values {
-                    visit_expr(ast, value, out);
+                    visit_expr(ast, value, out)?;
                 }
-                visit_stmt(ast, case.body, out);
+                visit_stmt(ast, case.body, out)?;
             }
             if let Some(d) = default {
-                visit_stmt(ast, d.body, out);
+                visit_stmt(ast, d.body, out)?;
             }
         }
         StmtKind::Try {
@@ -162,28 +170,28 @@ fn visit_stmt(ast: &Ast, id: StmtId, out: &mut Analysis) {
             catches,
             finally,
         } => {
-            visit_stmt(ast, *body, out);
+            visit_stmt(ast, *body, out)?;
             for clause in catches {
                 out.scopes.push(Default::default());
                 out.declare(&clause.binding, true);
-                scan_body(ast, clause.body, out);
+                scan_body(ast, clause.body, out)?;
                 out.scopes.pop();
             }
             if let Some(f) = finally {
-                visit_stmt(ast, *f, out);
+                visit_stmt(ast, *f, out)?;
             }
         }
         StmtKind::Return(value) => {
             if let Some(v) = value {
-                visit_expr(ast, *v, out);
+                visit_expr(ast, *v, out)?;
             }
         }
         StmtKind::Throw { value } | StmtKind::Expr(value) => {
-            visit_expr(ast, *value, out);
+            visit_expr(ast, *value, out)?;
         }
         StmtKind::Block(_) => {
             out.scopes.push(Default::default());
-            scan_body(ast, id, out);
+            scan_body(ast, id, out)?;
             out.scopes.pop();
         }
         StmtKind::AssignField {
@@ -192,8 +200,8 @@ fn visit_stmt(ast: &Ast, id: StmtId, out: &mut Analysis) {
         | StmtKind::CompoundAssignField {
             receiver, value, ..
         } => {
-            visit_expr(ast, *receiver, out);
-            visit_expr(ast, *value, out);
+            visit_expr(ast, *receiver, out)?;
+            visit_expr(ast, *value, out)?;
         }
         StmtKind::AssignIndex {
             receiver,
@@ -206,24 +214,24 @@ fn visit_stmt(ast: &Ast, id: StmtId, out: &mut Analysis) {
             value,
             ..
         } => {
-            visit_expr(ast, *receiver, out);
-            visit_expr(ast, *index, out);
-            visit_expr(ast, *value, out);
+            visit_expr(ast, *receiver, out)?;
+            visit_expr(ast, *index, out)?;
+            visit_expr(ast, *value, out)?;
         }
         StmtKind::ClassDecl { members, .. } => {
             for member in members {
                 match member {
                     crate::ClassMember::Method { params, body, .. }
                     | crate::ClassMember::Constructor { params, body, .. } => {
-                        scan_function(ast, params, crate::ArrowBody::Block(*body), out);
+                        scan_function(ast, params, crate::ArrowBody::Block(*body), out)?;
                     }
                     crate::ClassMember::Accessor { param, body, .. } => {
                         let params: Vec<_> = param.iter().map(|p| (**p).clone()).collect();
-                        scan_function(ast, &params, crate::ArrowBody::Block(*body), out);
+                        scan_function(ast, &params, crate::ArrowBody::Block(*body), out)?;
                     }
                     crate::ClassMember::Field { initializer, .. } => {
                         if let Some(init) = initializer {
-                            visit_expr(ast, *init, out);
+                            visit_expr(ast, *init, out)?;
                         }
                     }
                 }
@@ -242,16 +250,17 @@ fn visit_stmt(ast: &Ast, id: StmtId, out: &mut Analysis) {
         | StmtKind::Import { .. }
         | StmtKind::ExportFrom { .. } => {}
     }
-    if extends_assignment {
+    let _: () = if extends_assignment {
         out.assignment_regions.pop();
-    }
+    };
+    Ok(())
 }
 
 /// Exhaustive for the same reason as [`visit_stmt`]: an arrow can
 /// hide under any sub-expression.
-fn visit_expr(ast: &Ast, id: ExprId, out: &mut Analysis) {
+fn visit_expr(ast: &Ast, id: ExprId, out: &mut Analysis) -> Result<(), CompilerFailure> {
     use crate::{ChainPart, ExprKind};
-    match &ast.expr(id).kind {
+    let _: () = match &ast.try_expr(id).map_err(super::arena_failure)?.kind {
         ExprKind::FunctionExpression { name, function, .. } => {
             out.scopes.push(
                 name.iter()
@@ -268,34 +277,37 @@ fn visit_expr(ast: &Ast, id: ExprId, out: &mut Analysis) {
                     })
                     .collect(),
             );
-            visit_expr(ast, *function, out);
+            visit_expr(ast, *function, out)?;
             out.scopes.pop();
         }
-        ExprKind::Arrow { params, body, .. } => scan_function(ast, params, *body, out),
+        ExprKind::Arrow { params, body, .. } => scan_function(ast, params, *body, out)?,
         ExprKind::Identifier(ident) => out.read(ident),
         // `x++` and `x--` write `x` exactly as `x = x + 1` does. `x!` is the
         // third `PostfixOp` and is a pure read — counting it would refuse
         // narrowing on every binding a closure merely asserts non-null.
         ExprKind::PostfixUnary { op, operand } => {
             if matches!(op, crate::PostfixOp::Inc | crate::PostfixOp::Dec)
-                && let ExprKind::Identifier(ident) = &ast.expr(*operand).kind
+                && let ExprKind::Identifier(ident) =
+                    &ast.try_expr(*operand).map_err(super::arena_failure)?.kind
             {
                 out.write(ident);
             }
-            visit_expr(ast, *operand, out);
+            visit_expr(ast, *operand, out)?;
         }
         ExprKind::Assign { target, value, .. } => {
-            if let ExprKind::Identifier(ident) = &ast.expr(*target).kind {
+            if let ExprKind::Identifier(ident) =
+                &ast.try_expr(*target).map_err(super::arena_failure)?.kind
+            {
                 out.read(ident);
                 out.write(ident);
             } else {
-                visit_expr(ast, *target, out);
+                visit_expr(ast, *target, out)?;
             }
-            visit_expr(ast, *value, out);
+            visit_expr(ast, *value, out)?;
         }
         ExprKind::Binary { lhs, rhs, .. } => {
-            visit_expr(ast, *lhs, out);
-            visit_expr(ast, *rhs, out);
+            visit_expr(ast, *lhs, out)?;
+            visit_expr(ast, *rhs, out)?;
         }
         ExprKind::Unary { operand: inner, .. }
         | ExprKind::Typeof { operand: inner }
@@ -306,50 +318,50 @@ fn visit_expr(ast: &Ast, id: ExprId, out: &mut Analysis) {
         | ExprKind::FieldAccess {
             receiver: inner, ..
         } => {
-            visit_expr(ast, *inner, out);
+            visit_expr(ast, *inner, out)?;
         }
         ExprKind::Call { callee, args, .. } | ExprKind::New { callee, args, .. } => {
-            visit_expr(ast, *callee, out);
+            visit_expr(ast, *callee, out)?;
             for &a in args {
-                visit_expr(ast, a, out);
+                visit_expr(ast, a, out)?;
             }
         }
         ExprKind::ObjectLiteral { members } => {
             for m in members {
                 for expression in m.expressions() {
-                    visit_expr(ast, expression, out);
+                    visit_expr(ast, expression, out)?;
                 }
             }
         }
         ExprKind::ArrayLiteral { elements } => {
             for e in elements {
-                visit_expr(ast, e.value(), out);
+                visit_expr(ast, e.value(), out)?;
             }
         }
         ExprKind::IndexAccess { receiver, index } => {
-            visit_expr(ast, *receiver, out);
-            visit_expr(ast, *index, out);
+            visit_expr(ast, *receiver, out)?;
+            visit_expr(ast, *index, out)?;
         }
         ExprKind::TemplateLiteral { exprs, .. } => {
             for &e in exprs {
-                visit_expr(ast, e, out);
+                visit_expr(ast, e, out)?;
             }
         }
         ExprKind::Ternary { cond, then_, else_ } => {
             for &e in [cond, then_, else_] {
-                visit_expr(ast, e, out);
+                visit_expr(ast, e, out)?;
             }
         }
         ExprKind::OptionalChain { base, parts } => {
-            visit_expr(ast, *base, out);
+            visit_expr(ast, *base, out)?;
             for part in parts {
                 match part {
                     ChainPart::Index { idx, .. } => {
-                        visit_expr(ast, *idx, out);
+                        visit_expr(ast, *idx, out)?;
                     }
                     ChainPart::Call { args, .. } => {
                         for &a in args {
-                            visit_expr(ast, a, out);
+                            visit_expr(ast, a, out)?;
                         }
                     }
                     ChainPart::Field { .. } | ChainPart::NonNull { .. } => {}
@@ -366,20 +378,28 @@ fn visit_expr(ast: &Ast, id: ExprId, out: &mut Analysis) {
         | ExprKind::ThisOutsideReceiver
         | ExprKind::Super
         | ExprKind::Regex { .. } => {}
-    }
+    };
+    Ok(())
 }
 
-fn visit_iterable(ast: &Ast, loop_id: StmtId, iter: ExprId, out: &mut Analysis) {
+fn visit_iterable(
+    ast: &Ast,
+    loop_id: StmtId,
+    iter: ExprId,
+    out: &mut Analysis,
+) -> Result<(), CompilerFailure> {
     let Some(bindings) = ast.for_of_pattern_bindings.get(&loop_id) else {
-        visit_expr(ast, iter, out);
-        return;
+        visit_expr(ast, iter, out)?;
+        return Ok(());
     };
     out.scopes.push(Default::default());
     for binding in bindings {
         out.declare(binding, false);
     }
-    visit_expr(ast, iter, out);
+    visit_expr(ast, iter, out)?;
     out.scopes.pop();
+
+    Ok(())
 }
 
 impl Analysis {
@@ -422,9 +442,9 @@ impl Analysis {
     /// Declare a block's bindings before walking it. A `let`/`const` is
     /// uninitialized until its statement; a function declaration is hoisted,
     /// usable anywhere in the block.
-    fn reserve_statements(&mut self, ast: &Ast, stmts: &[StmtId]) {
+    fn reserve_statements(&mut self, ast: &Ast, stmts: &[StmtId]) -> Result<(), CompilerFailure> {
         for &id in stmts {
-            match &ast.stmt(id).kind {
+            match &ast.try_stmt(id).map_err(super::arena_failure)?.kind {
                 crate::StmtKind::Let { name, .. }
                 | crate::StmtKind::Const { name, .. }
                 | crate::StmtKind::ConstRest { name, .. } => {
@@ -434,6 +454,8 @@ impl Analysis {
                 _ => {}
             }
         }
+
+        Ok(())
     }
 
     fn initialize(&mut self, ident: &Ident) {
@@ -542,15 +564,18 @@ impl Analysis {
     }
 }
 
-fn scan_body(ast: &Ast, body: StmtId, out: &mut Analysis) {
-    let crate::StmtKind::Block(stmts) = &ast.stmt(body).kind else {
-        visit_stmt(ast, body, out);
-        return;
+fn scan_body(ast: &Ast, body: StmtId, out: &mut Analysis) -> Result<(), CompilerFailure> {
+    let crate::StmtKind::Block(stmts) = &ast.try_stmt(body).map_err(super::arena_failure)?.kind
+    else {
+        visit_stmt(ast, body, out)?;
+        return Ok(());
     };
-    out.reserve_statements(ast, stmts);
+    out.reserve_statements(ast, stmts)?;
     for &id in stmts {
-        visit_stmt(ast, id, out);
+        visit_stmt(ast, id, out)?;
     }
+
+    Ok(())
 }
 
 fn scan_function(
@@ -558,7 +583,7 @@ fn scan_function(
     params: &[crate::ParamDecl],
     body: crate::ArrowBody,
     out: &mut Analysis,
-) {
+) -> Result<(), CompilerFailure> {
     out.function_depth += 1;
     out.scopes.push(Default::default());
     // Duplicate parameters have a dedicated diagnostic during signature resolution.
@@ -575,9 +600,11 @@ fn scan_function(
             });
     }
     match body {
-        crate::ArrowBody::Expr(expr) => visit_expr(ast, expr, out),
-        crate::ArrowBody::Block(body) => scan_body(ast, body, out),
+        crate::ArrowBody::Expr(expr) => visit_expr(ast, expr, out)?,
+        crate::ArrowBody::Block(body) => scan_body(ast, body, out)?,
     }
     out.scopes.pop();
     out.function_depth -= 1;
+
+    Ok(())
 }

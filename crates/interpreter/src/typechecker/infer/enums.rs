@@ -1,3 +1,5 @@
+use crate::compiler_error::CompilerFailure;
+
 use crate::{Diagnostic, Ident, Severity, Span, TypeKind, TypeSymbol};
 
 use super::Inferer;
@@ -8,9 +10,9 @@ impl<'a> Inferer<'a> {
         name: Ident,
         members: Vec<crate::EnumMember>,
         doc: Option<crate::DocComment>,
-    ) {
+    ) -> Result<(), CompilerFailure> {
         if self.reject_intrinsic_name(&name) {
-            return;
+            return Ok(());
         }
         if let Some(prev) = self.types.lookup(&name.name) {
             let prev_span = prev.declaration_span;
@@ -21,17 +23,18 @@ impl<'a> Inferer<'a> {
                 help: Vec::new(),
                 notes: vec![(prev_span, "previously declared here".into())],
             });
-            return;
+            return Ok(());
         }
 
         let is_string = members
             .iter()
             .any(|m| matches!(m.value, Some(crate::EnumInitializer::String { .. })));
-        if is_string {
-            self.bind_string_enum(name, members, doc);
+        let _: () = if is_string {
+            self.bind_string_enum(name, members, doc)?;
         } else {
-            self.bind_number_enum(name, members, doc);
-        }
+            self.bind_number_enum(name, members, doc)?;
+        };
+        Ok(())
     }
 
     fn bind_number_enum(
@@ -39,7 +42,7 @@ impl<'a> Inferer<'a> {
         name: Ident,
         members: Vec<crate::EnumMember>,
         doc: Option<crate::DocComment>,
-    ) {
+    ) -> Result<(), CompilerFailure> {
         let mut variants: Vec<(String, f64)> = Vec::with_capacity(members.len());
         let mut seen: std::collections::BTreeMap<String, Span> = std::collections::BTreeMap::new();
         let mut next_implicit: f64 = 0.0;
@@ -88,16 +91,18 @@ impl<'a> Inferer<'a> {
             members: typed_members,
             doc: doc.clone(),
         });
-        let mangled = self.mangle_top_symbol(&name.name);
+        let mangled = self.mangle_top_symbol(&name.name)?;
         let symbol = TypeSymbol {
             name: name.name.clone(),
             mangled_name: mangled,
             declaration_span: name.span,
             kind: TypeKind::NumberEnum { variants, doc },
         };
-        self.add_typed_type_decl(typed_decl, symbol.clone());
+        self.add_typed_type_decl(typed_decl, symbol.clone())?;
         self.types
             .insert(name.name.clone(), self.package_name.to_string(), symbol);
+
+        Ok(())
     }
 
     fn bind_string_enum(
@@ -105,7 +110,7 @@ impl<'a> Inferer<'a> {
         name: Ident,
         members: Vec<crate::EnumMember>,
         doc: Option<crate::DocComment>,
-    ) {
+    ) -> Result<(), CompilerFailure> {
         let mut variants: Vec<(String, String)> = Vec::with_capacity(members.len());
         let mut seen: std::collections::BTreeMap<String, Span> = std::collections::BTreeMap::new();
         let mut typed_members: Vec<crate::TypedStringEnumMember> =
@@ -159,16 +164,18 @@ impl<'a> Inferer<'a> {
             members: typed_members,
             doc: doc.clone(),
         });
-        let mangled = self.mangle_top_symbol(&name.name);
+        let mangled = self.mangle_top_symbol(&name.name)?;
         let symbol = TypeSymbol {
             name: name.name.clone(),
             mangled_name: mangled,
             declaration_span: name.span,
             kind: TypeKind::StringEnum { variants, doc },
         };
-        self.add_typed_type_decl(typed_decl, symbol.clone());
+        self.add_typed_type_decl(typed_decl, symbol.clone())?;
         self.types
             .insert(name.name.clone(), self.package_name.to_string(), symbol);
+
+        Ok(())
     }
 }
 

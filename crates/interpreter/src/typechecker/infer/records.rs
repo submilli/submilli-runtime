@@ -1,4 +1,6 @@
 //! String index signatures share the structural object representation.
+use crate::compiler_error::CompilerFailure;
+
 use std::collections::BTreeMap;
 
 use crate::{IndexSignature, ObjectField, Span, Type, TypeAnnotation};
@@ -40,45 +42,49 @@ pub(super) struct PendingIndexCheck {
 }
 
 impl Inferer<'_> {
-    pub(super) fn resolve_record(&mut self, args: &[TypeAnnotation], span: Span) -> Type {
+    pub(super) fn resolve_record(
+        &mut self,
+        args: &[TypeAnnotation],
+        span: Span,
+    ) -> Result<Type, CompilerFailure> {
         let [key, value] = args else {
             self.error(span, "`Record<K, V>` expects two type arguments".into());
-            return Type::Error;
+            return Ok(Type::Error);
         };
-        let key = self.resolve_type(key);
-        let value = self.resolve_value_type(value, ValuePosition::FieldType);
+        let key = self.resolve_type(key)?;
+        let value = self.resolve_value_type(value, ValuePosition::FieldType)?;
         if matches!(key.peel(), Type::String) {
-            return Type::Object {
+            return Ok(Type::Object {
                 fields: BTreeMap::new(),
                 index: Some(IndexSignature {
                     value: Box::new(value),
                     readonly: false,
                 }),
-            };
+            });
         }
         let Some(keys) = string_literal_keys(&key) else {
             if !matches!(key, Type::Error) {
                 self.error_with_help(span, format!("unsupported Record key type `{key}`"), vec!["use `string` or a finite union of string literals; unresolved generic keys are not supported".into()]);
             }
-            return Type::Error;
+            return Ok(Type::Error);
         };
-        Type::Object {
+        Ok(Type::Object {
             fields: keys
                 .into_iter()
                 .map(|k| (k, ObjectField::required(value.clone())))
                 .collect(),
             index: None,
-        }
+        })
     }
 
     pub(super) fn resolve_index_signature(
         &mut self,
         annotation: &crate::IndexSignatureAnnotation,
-    ) -> IndexSignature {
-        IndexSignature {
-            value: Box::new(self.resolve_value_type(&annotation.value, ValuePosition::FieldType)),
+    ) -> Result<IndexSignature, CompilerFailure> {
+        Ok(IndexSignature {
+            value: Box::new(self.resolve_value_type(&annotation.value, ValuePosition::FieldType)?),
             readonly: annotation.readonly,
-        }
+        })
     }
 
     pub(super) fn check_index_fields(
@@ -142,9 +148,12 @@ impl Inferer<'_> {
         }
     }
 
-    pub(super) fn infer_object_key(&mut self, key: crate::ExprId) -> (crate::ExprId, Type) {
-        let (key, _) = self.infer_expr(key, Some(&Type::String));
-        (key, self.object_key_type(key))
+    pub(super) fn infer_object_key(
+        &mut self,
+        key: crate::ExprId,
+    ) -> Result<(crate::ExprId, Type), CompilerFailure> {
+        let (key, _) = self.infer_expr(key, Some(&Type::String))?;
+        Ok((key, self.object_key_type(key)))
     }
 
     // Key alternatives retain their literal values even where ordinary expression
@@ -337,18 +346,18 @@ impl Inferer<'_> {
         members: Vec<crate::ObjectLiteralMember>,
         expected: Option<&Type>,
         span: Span,
-    ) -> (crate::TypedExprKind, Type) {
+    ) -> Result<(crate::TypedExprKind, Type), CompilerFailure> {
         use crate::{ObjectLiteralMember, TypedExpr, TypedExprKind, TypedObjectMember};
         let expected_index = expected.and_then(|ty| self.resolver().index_signature(ty));
         let expected_fields = expected
             .and_then(|ty| self.assignment_target_fields(ty))
             .unwrap_or_default();
         let mut inferred_keys = BTreeMap::new();
-        let receiver_members = self.computed_receiver_members(&members, &mut inferred_keys);
+        let receiver_members = self.computed_receiver_members(&members, &mut inferred_keys)?;
         let (receiver_hint, mut inferred_fields) = self.infer_object_receiver(
             &receiver_members,
             (!expected_fields.is_empty()).then_some(&expected_fields),
-        );
+        )?;
         let mut fields: BTreeMap<String, ObjectField> = BTreeMap::new();
         let mut values = Vec::new();
         let mut dynamic = false;
@@ -366,7 +375,7 @@ impl Inferer<'_> {
                 ObjectLiteralMember::Computed { key, value } => {
                     let (key, ty) = inferred_keys
                         .remove(&key)
-                        .unwrap_or_else(|| self.infer_object_key(key));
+                        .map_or_else(|| self.infer_object_key(key), Ok)?;
                     if !assignable(&ty, &Type::String, self.resolver()) {
                         self.error(
                             span,
@@ -376,9 +385,10 @@ impl Inferer<'_> {
                     (key, ty, value)
                 }
                 ObjectLiteralMember::Spread { value, .. } => {
-                    let (source, ty) = inferred_fields
-                        .remove(&value)
-                        .map_or_else(|| self.infer_expr(value, None), |(id, ty, _)| (id, ty));
+                    let (source, ty) = match inferred_fields.remove(&value) {
+                        Some((id, ty, _)) => (id, ty),
+                        None => self.infer_expr(value, None)?,
+                    };
                     let Some(source_fields) = self.spread_source_fields(source, &ty, span) else {
                         continue;
                     };
@@ -420,7 +430,7 @@ impl Inferer<'_> {
                 .or_else(|| expected_index.as_ref().map(|i| (*i.value).clone()));
             let previous_hint = self.object_this_hint.take();
             if matches!(
-                self.ast.expr(value).kind,
+                self.ast.try_expr(value).map_err(super::arena_failure)?.kind,
                 crate::ExprKind::FunctionExpression { .. }
             ) {
                 self.object_this_hint = Some(receiver_hint.clone());
@@ -430,7 +440,7 @@ impl Inferer<'_> {
                 hint.as_ref(),
                 ValuePosition::FieldValue,
                 inferred_fields.remove(&value),
-            );
+            )?;
             self.object_this_hint = previous_hint;
             let value = operand.typed_expr;
             let value_ty = operand.ty;
@@ -462,55 +472,69 @@ impl Inferer<'_> {
             readonly: false,
         });
         let ty = Type::Object { fields, index };
-        (
+        Ok((
             TypedExprKind::ObjectLiteral {
                 members: typed,
                 fields: Vec::new(),
             },
             ty,
-        )
+        ))
     }
 
     fn computed_receiver_members(
         &mut self,
         members: &[crate::ObjectLiteralMember],
         inferred_keys: &mut BTreeMap<crate::ExprId, (crate::ExprId, Type)>,
-    ) -> Vec<crate::ObjectLiteralMember> {
-        let has_receiver_method = members.iter().any(|member| {
-            matches!(
-                self.ast.expr(member.value()).kind,
+    ) -> Result<Vec<crate::ObjectLiteralMember>, CompilerFailure> {
+        let mut has_receiver_method = false;
+        for member in members {
+            if matches!(
+                self.ast
+                    .try_expr(member.value())
+                    .map_err(super::arena_failure)?
+                    .kind,
                 crate::ExprKind::FunctionExpression { .. }
-            )
-        });
+            ) {
+                has_receiver_method = true;
+                break;
+            }
+        }
         if !has_receiver_method {
-            return members
+            return Ok(members
                 .iter()
                 .filter(|member| !matches!(member, crate::ObjectLiteralMember::Computed { .. }))
                 .cloned()
-                .collect();
+                .collect());
         }
         members
             .iter()
-            .filter_map(|member| match member {
-                crate::ObjectLiteralMember::Computed { key, value } => {
-                    let (typed_key, ty) = self.infer_object_key(*key);
-                    inferred_keys.insert(*key, (typed_key, ty.clone()));
-                    let Type::StringLiteral(name) = ty.peel() else {
-                        return None;
-                    };
-                    Some(crate::ObjectLiteralMember::Field(
-                        crate::ObjectLiteralField {
-                            name: crate::Ident {
-                                name: name.clone(),
-                                span: self.ast.expr(*key).span,
+            .map(|member| {
+                Ok::<_, CompilerFailure>(match member {
+                    crate::ObjectLiteralMember::Computed { key, value } => {
+                        let (typed_key, ty) = self.infer_object_key(*key)?;
+                        inferred_keys.insert(*key, (typed_key, ty.clone()));
+                        let Type::StringLiteral(name) = ty.peel() else {
+                            return Ok(None);
+                        };
+                        Some(crate::ObjectLiteralMember::Field(
+                            crate::ObjectLiteralField {
+                                name: crate::Ident {
+                                    name: name.clone(),
+                                    span: self
+                                        .ast
+                                        .try_expr(*key)
+                                        .map_err(super::arena_failure)?
+                                        .span,
+                                },
+                                value: *value,
                             },
-                            value: *value,
-                        },
-                    ))
-                }
-                other => Some(other.clone()),
+                        ))
+                    }
+                    other => Some(other.clone()),
+                })
             })
-            .collect()
+            .filter_map(Result::transpose)
+            .collect::<Result<_, _>>()
     }
 }
 
@@ -519,43 +543,55 @@ impl Inferer<'_> {
         &mut self,
         top_level: &[crate::StmtId],
         skip: &std::collections::BTreeSet<String>,
-    ) -> bool {
+    ) -> Result<bool, CompilerFailure> {
         let aliases: BTreeMap<String, (Vec<String>, TypeAnnotation)> = top_level
             .iter()
-            .filter_map(|id| match &self.ast.stmt(*id).kind {
-                crate::StmtKind::TypeAliasDecl {
-                    name, generics, ty, ..
-                } => Some((
-                    name.name.clone(),
-                    (
-                        generics.iter().map(|g| g.name.clone()).collect(),
-                        ty.clone(),
-                    ),
-                )),
-                _ => None,
+            .map(|id| {
+                Ok::<_, CompilerFailure>(
+                    match &self.ast.try_stmt(*id).map_err(super::arena_failure)?.kind {
+                        crate::StmtKind::TypeAliasDecl {
+                            name, generics, ty, ..
+                        } => Some((
+                            name.name.clone(),
+                            (
+                                generics.iter().map(|g| g.name.clone()).collect(),
+                                ty.clone(),
+                            ),
+                        )),
+                        _ => None,
+                    },
+                )
             })
-            .collect();
+            .filter_map(Result::transpose)
+            .collect::<Result<_, _>>()?;
         let mut pending: BTreeMap<String, crate::StmtId> = top_level
             .iter()
-            .filter_map(|id| match &self.ast.stmt(*id).kind {
-                crate::StmtKind::InterfaceDecl { name, .. } if !skip.contains(&name.name) => {
-                    Some((name.name.clone(), *id))
-                }
-                _ => None,
+            .map(|id| {
+                Ok::<_, CompilerFailure>(
+                    match &self.ast.try_stmt(*id).map_err(super::arena_failure)?.kind {
+                        crate::StmtKind::InterfaceDecl { name, .. }
+                            if !skip.contains(&name.name) =>
+                        {
+                            Some((name.name.clone(), *id))
+                        }
+                        _ => None,
+                    },
+                )
             })
-            .collect();
+            .filter_map(Result::transpose)
+            .collect::<Result<_, _>>()?;
         while !pending.is_empty() {
-            let ready = match self.next_ready_interface(&pending, &aliases) {
+            let ready = match self.next_ready_interface(&pending, &aliases)? {
                 Ok(ready) => ready,
                 Err((span, message)) => {
                     self.error(span, message.into());
-                    return false;
+                    return Ok(false);
                 }
             };
             let Some(ready) = ready else {
                 for id in pending.values() {
                     self.error(
-                        self.ast.stmt(*id).span,
+                        self.ast.try_stmt(*id).map_err(super::arena_failure)?.span,
                         "cyclic interface inheritance".into(),
                     );
                 }
@@ -565,12 +601,16 @@ impl Inferer<'_> {
                 self.error(
                     top_level
                         .first()
-                        .map_or(crate::Span::at(crate::FileId(0)), |id| {
-                            self.ast.stmt(*id).span
-                        }),
+                        .map(|id| {
+                            Ok::<_, CompilerFailure>(
+                                self.ast.try_stmt(*id).map_err(super::arena_failure)?.span,
+                            )
+                        })
+                        .transpose()?
+                        .unwrap_or(crate::Span::at(crate::FileId(0))),
                     "internal compiler error: ready interface is not pending".into(),
                 );
-                return false;
+                return Ok(false);
             };
             if let crate::StmtKind::InterfaceDecl {
                 name,
@@ -578,19 +618,24 @@ impl Inferer<'_> {
                 members,
                 extends,
                 doc,
-            } = self.ast.stmt(id).kind.clone()
+            } = self
+                .ast
+                .try_stmt(id)
+                .map_err(super::arena_failure)?
+                .kind
+                .clone()
             {
-                self.bind_interface(name, generics, members, extends, doc);
+                self.bind_interface(name, generics, members, extends, doc)?;
             }
         }
-        true
+        Ok(true)
     }
 
     pub(super) fn validate_bound_interfaces(
         &mut self,
         top_level: &[crate::StmtId],
         skip: &std::collections::BTreeSet<String>,
-    ) {
+    ) -> Result<(), CompilerFailure> {
         for id in top_level {
             if let crate::StmtKind::InterfaceDecl {
                 name,
@@ -598,35 +643,44 @@ impl Inferer<'_> {
                 members,
                 extends,
                 ..
-            } = self.ast.stmt(*id).kind.clone()
+            } = self
+                .ast
+                .try_stmt(*id)
+                .map_err(super::arena_failure)?
+                .kind
+                .clone()
                 && !skip.contains(&name.name)
             {
-                self.validate_bound_interface(&name, &generics, &members, &extends);
+                self.validate_bound_interface(&name, &generics, &members, &extends)?;
             }
         }
+
+        Ok(())
     }
 
     fn next_ready_interface(
         &self,
         pending: &BTreeMap<String, crate::StmtId>,
         aliases: &BTreeMap<String, (Vec<String>, TypeAnnotation)>,
-    ) -> Result<Option<String>, (crate::Span, &'static str)> {
+    ) -> Result<Result<Option<String>, (crate::Span, &'static str)>, CompilerFailure> {
         for (name, id) in pending {
-            let crate::StmtKind::InterfaceDecl { extends, .. } = &self.ast.stmt(*id).kind else {
-                return Err((
-                    self.ast.stmt(*id).span,
-                    "internal compiler error: expected interface declaration",
-                ));
+            let crate::StmtKind::InterfaceDecl { extends, .. } =
+                &self.ast.try_stmt(*id).map_err(super::arena_failure)?.kind
+            else {
+                return Err(super::inference_failure("expected interface declaration"));
             };
             let mut waits = false;
             for base in extends {
-                waits |= self.interface_base_pending(base, pending, aliases)?;
+                match self.interface_base_pending(base, pending, aliases) {
+                    Ok(pending) => waits |= pending,
+                    Err(error) => return Ok(Err(error)),
+                }
             }
             if !waits {
-                return Ok(Some(name.clone()));
+                return Ok(Ok(Some(name.clone())));
             }
         }
-        Ok(None)
+        Ok(Ok(None))
     }
 
     fn interface_base_pending(
@@ -691,9 +745,9 @@ impl Inferer<'_> {
         methods: &mut BTreeMap<String, crate::MethodSig>,
         properties: &mut BTreeMap<String, crate::PropertySig>,
         index: &mut Option<IndexSignature>,
-    ) {
-        let Some(base) = self.interface_base_contract(base) else {
-            return;
+    ) -> Result<(), CompilerFailure> {
+        let Some(base) = self.interface_base_contract(base)? else {
+            return Ok(());
         };
         for name in base.methods.keys() {
             properties.remove(name);
@@ -703,9 +757,10 @@ impl Inferer<'_> {
         }
         methods.extend(base.methods);
         properties.extend(base.properties);
-        if index.is_none() {
+        let _: () = if index.is_none() {
             *index = base.index;
-        }
+        };
+        Ok(())
     }
 
     fn validate_bound_interface(
@@ -714,9 +769,9 @@ impl Inferer<'_> {
         generics: &[crate::Ident],
         members: &[crate::InterfaceMember],
         bases: &[TypeAnnotation],
-    ) {
+    ) -> Result<(), CompilerFailure> {
         let Some(symbol) = self.types.lookup(&name.name).cloned() else {
-            return;
+            return Ok(());
         };
         let crate::TypeKind::Interface {
             methods,
@@ -725,7 +780,7 @@ impl Inferer<'_> {
             ..
         } = symbol.kind
         else {
-            return;
+            return Ok(());
         };
         let mut fields = interface_member_contracts(&properties, &methods);
         let declared: std::collections::BTreeSet<_> = members
@@ -743,7 +798,7 @@ impl Inferer<'_> {
             .collect();
         let mut inherited = BTreeMap::new();
         for annotation in bases {
-            let Some(base) = self.interface_base_contract(annotation) else {
+            let Some(base) = self.interface_base_contract(annotation)? else {
                 continue;
             };
             for (member, field) in interface_member_contracts(&base.properties, &base.methods) {
@@ -788,6 +843,8 @@ impl Inferer<'_> {
             .collect();
         self.check_index_fields(&fields, index.as_ref(), name.span);
         self.pop_signature_generics();
+
+        Ok(())
     }
 
     fn check_generic_method_indexes(
@@ -866,10 +923,13 @@ impl Inferer<'_> {
         )
     }
 
-    fn interface_base_contract(&mut self, base: &TypeAnnotation) -> Option<InterfaceContract> {
+    fn interface_base_contract(
+        &mut self,
+        base: &TypeAnnotation,
+    ) -> Result<Option<InterfaceContract>, CompilerFailure> {
         // Keep the named interface while copying signatures so method generics
         // and calling conventions survive inheritance.
-        let ty = self.resolve_type_inner(base);
+        let ty = self.resolve_type_inner(base)?;
         let (methods, properties, index) = match ty.peel() {
             Type::InterfaceRef {
                 mangled,
@@ -877,7 +937,9 @@ impl Inferer<'_> {
                 args,
                 ..
             } => {
-                let symbol = self.resolver().lookup(mangled, name).cloned()?;
+                let Some(symbol) = self.resolver().lookup(mangled, name).cloned() else {
+                    return Ok(None);
+                };
                 let crate::TypeKind::Interface {
                     methods,
                     properties,
@@ -886,7 +948,7 @@ impl Inferer<'_> {
                     ..
                 } = symbol.kind
                 else {
-                    return None;
+                    return Ok(None);
                 };
                 let bindings = generics.into_iter().zip(args.iter().cloned()).collect();
                 let methods = methods
@@ -935,14 +997,14 @@ impl Inferer<'_> {
                     base.span,
                     "interface base must be an interface or structural object type".into(),
                 );
-                return None;
+                return Ok(None);
             }
         };
-        Some(InterfaceContract {
+        Ok(Some(InterfaceContract {
             methods,
             properties,
             index,
-        })
+        }))
     }
 }
 

@@ -177,7 +177,7 @@ impl<'a> Parser<'a> {
 
     fn parse_program(&mut self) {
         while !self.is_at_eof() {
-            if self.error_count() >= MAX_ERRORS {
+            if self.fatal.is_some() || self.error_count() >= MAX_ERRORS {
                 break;
             }
             if matches!(self.peek().kind, TokenKind::Semicolon) {
@@ -188,6 +188,9 @@ impl<'a> Parser<'a> {
             if let Some(id) = self.parse_statement() {
                 self.ast.top_level.push(id);
             } else {
+                if self.fatal.is_some() {
+                    break;
+                }
                 self.recover();
                 if self.pos != pos_before && matches!(self.peek().kind, TokenKind::RightBrace) {
                     self.advance();
@@ -233,9 +236,12 @@ impl<'a> Parser<'a> {
 
     fn parse_expression_statement(&mut self) -> Option<StmtId> {
         let expr_id = self.parse_expression()?;
-        let expr_span = self.ast.expr(expr_id).span;
+        let expr_span = parse_arena_result(self.ast.try_expr(expr_id), &mut self.fatal)?.span;
         if !matches!(self.peek().kind, TokenKind::Semicolon) {
-            let what = if matches!(self.ast.expr(expr_id).kind, ExprKind::Assign { .. }) {
+            let what = if matches!(
+                parse_arena_result(self.ast.try_expr(expr_id), &mut self.fatal)?.kind,
+                ExprKind::Assign { .. }
+            ) {
                 "assignment"
             } else {
                 "expression"
@@ -246,7 +252,7 @@ impl<'a> Parser<'a> {
         let semi = self.advance();
         let span = self.span(expr_span.start, semi.span.end);
         let kind = self.statement_kind_for(expr_id)?;
-        Some(self.ast.push_stmt(Stmt { kind, span }))
+        parse_arena_result(self.ast.try_push_stmt(Stmt { kind, span }), &mut self.fatal)
     }
 
     /// An assignment in statement position becomes an assignment statement;
@@ -257,46 +263,57 @@ impl<'a> Parser<'a> {
             op,
             op_span,
             value,
-        } = self.ast.expr(expr_id).kind.clone()
+        } = parse_arena_result(self.ast.try_expr(expr_id), &mut self.fatal)?
+            .kind
+            .clone()
         else {
             return Some(StmtKind::Expr(expr_id));
         };
-        Some(match (self.ast.expr(target).kind.clone(), op) {
-            (ExprKind::Identifier(target), None) => StmtKind::Assign { target, value },
-            (ExprKind::Identifier(target), Some(op)) => StmtKind::CompoundAssign {
-                target,
+        Some(
+            match (
+                parse_arena_result(self.ast.try_expr(target), &mut self.fatal)?
+                    .kind
+                    .clone(),
                 op,
-                op_span,
-                value,
-            },
-            (ExprKind::FieldAccess { receiver, name }, None) => StmtKind::AssignField {
-                receiver,
-                field_name: name,
-                value,
-            },
-            (ExprKind::FieldAccess { receiver, name }, Some(op)) => StmtKind::CompoundAssignField {
-                receiver,
-                field_name: name,
-                op,
-                op_span,
-                value,
-            },
-            (ExprKind::IndexAccess { receiver, index }, None) => StmtKind::AssignIndex {
-                receiver,
-                index,
-                value,
-            },
-            (ExprKind::IndexAccess { receiver, index }, Some(op)) => {
-                StmtKind::CompoundAssignIndex {
-                    receiver,
-                    index,
+            ) {
+                (ExprKind::Identifier(target), None) => StmtKind::Assign { target, value },
+                (ExprKind::Identifier(target), Some(op)) => StmtKind::CompoundAssign {
+                    target,
                     op,
                     op_span,
                     value,
+                },
+                (ExprKind::FieldAccess { receiver, name }, None) => StmtKind::AssignField {
+                    receiver,
+                    field_name: name,
+                    value,
+                },
+                (ExprKind::FieldAccess { receiver, name }, Some(op)) => {
+                    StmtKind::CompoundAssignField {
+                        receiver,
+                        field_name: name,
+                        op,
+                        op_span,
+                        value,
+                    }
                 }
-            }
-            _ => return self.invariant_failure("invalid assignment target"),
-        })
+                (ExprKind::IndexAccess { receiver, index }, None) => StmtKind::AssignIndex {
+                    receiver,
+                    index,
+                    value,
+                },
+                (ExprKind::IndexAccess { receiver, index }, Some(op)) => {
+                    StmtKind::CompoundAssignIndex {
+                        receiver,
+                        index,
+                        op,
+                        op_span,
+                        value,
+                    }
+                }
+                _ => return self.invariant_failure("invalid assignment target"),
+            },
+        )
     }
 
     fn parse_let_or_const(&mut self, is_const: bool) -> Option<StmtId> {
@@ -385,7 +402,7 @@ impl<'a> Parser<'a> {
             }
             (None, None) => return self.invariant_failure("either binding or name must be Some"),
         };
-        Some(self.ast.push_stmt(Stmt { kind, span }))
+        parse_arena_result(self.ast.try_push_stmt(Stmt { kind, span }), &mut self.fatal)
     }
 
     // One level only; nested patterns are rejected.
@@ -634,20 +651,25 @@ impl<'a> Parser<'a> {
         // A declaration nested in a method has no receiver of its own, and
         // must not see the method's.
         let body = self.parse_outer_this_boundary(Self::parse_block)?;
-        let body_end = self.ast.stmt(body).span.end;
+        let body_end = parse_arena_result(self.ast.try_stmt(body), &mut self.fatal)?
+            .span
+            .end;
 
-        Some(self.ast.push_stmt(Stmt {
-            kind: StmtKind::Function {
-                name,
-                generics,
-                params,
-                return_type,
-                type_predicate,
-                body,
-                doc,
-            },
-            span: self.span(kw.span.start, body_end),
-        }))
+        parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind: StmtKind::Function {
+                    name,
+                    generics,
+                    params,
+                    return_type,
+                    type_predicate,
+                    body,
+                    doc,
+                },
+                span: self.span(kw.span.start, body_end),
+            }),
+            &mut self.fatal,
+        )
     }
 
     fn parse_class_decl(&mut self) -> Option<StmtId> {
@@ -703,17 +725,20 @@ impl<'a> Parser<'a> {
         }
         let close = self.advance();
 
-        Some(self.ast.push_stmt(Stmt {
-            kind: StmtKind::ClassDecl {
-                name,
-                generics,
-                extends,
-                implements,
-                members,
-                doc,
-            },
-            span: self.span(kw.span.start, close.span.end),
-        }))
+        parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind: StmtKind::ClassDecl {
+                    name,
+                    generics,
+                    extends,
+                    implements,
+                    members,
+                    doc,
+                },
+                span: self.span(kw.span.start, close.span.end),
+            }),
+            &mut self.fatal,
+        )
     }
 
     fn parse_class_member(&mut self) -> Option<crate::ClassMember> {
@@ -809,7 +834,9 @@ impl<'a> Parser<'a> {
             self.advance();
             let return_type = self.parse_type_annotation()?;
             let body = self.parse_class_member_body()?;
-            let body_end = self.ast.stmt(body).span.end;
+            let body_end = parse_arena_result(self.ast.try_stmt(body), &mut self.fatal)?
+                .span
+                .end;
             return Some(crate::ClassMember::Method {
                 name,
                 modifiers,
@@ -899,7 +926,9 @@ impl<'a> Parser<'a> {
             );
         }
         let body = self.parse_class_member_body()?;
-        let body_end = self.ast.stmt(body).span.end;
+        let body_end = parse_arena_result(self.ast.try_stmt(body), &mut self.fatal)?
+            .span
+            .end;
         Some(crate::ClassMember::Constructor {
             params,
             body,
@@ -944,7 +973,9 @@ impl<'a> Parser<'a> {
             None
         };
         let body = self.parse_class_member_body()?;
-        let body_end = self.ast.stmt(body).span.end;
+        let body_end = parse_arena_result(self.ast.try_stmt(body), &mut self.fatal)?
+            .span
+            .end;
         Some(crate::ClassMember::Accessor {
             name,
             modifiers,
@@ -1175,16 +1206,19 @@ impl<'a> Parser<'a> {
         }
         let close = self.advance();
 
-        Some(self.ast.push_stmt(Stmt {
-            kind: StmtKind::InterfaceDecl {
-                name,
-                generics,
-                extends,
-                members,
-                doc,
-            },
-            span: self.span(kw.span.start, close.span.end),
-        }))
+        parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind: StmtKind::InterfaceDecl {
+                    name,
+                    generics,
+                    extends,
+                    members,
+                    doc,
+                },
+                span: self.span(kw.span.start, close.span.end),
+            }),
+            &mut self.fatal,
+        )
     }
 
     /// Consume the separator after an interface member and return where the member
@@ -1228,15 +1262,18 @@ impl<'a> Parser<'a> {
         }
         let semi = self.advance();
 
-        Some(self.ast.push_stmt(Stmt {
-            kind: StmtKind::TypeAliasDecl {
-                name,
-                generics,
-                ty,
-                doc,
-            },
-            span: self.span(kw.span.start, semi.span.end),
-        }))
+        parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind: StmtKind::TypeAliasDecl {
+                    name,
+                    generics,
+                    ty,
+                    doc,
+                },
+                span: self.span(kw.span.start, semi.span.end),
+            }),
+            &mut self.fatal,
+        )
     }
 
     // Parser enforces kind-coherence: an enum cannot mix numeric and string initializers.
@@ -1326,10 +1363,13 @@ impl<'a> Parser<'a> {
         }
         let close = self.advance();
 
-        Some(self.ast.push_stmt(Stmt {
-            kind: StmtKind::EnumDecl { name, members, doc },
-            span: self.span(kw.span.start, close.span.end),
-        }))
+        parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind: StmtKind::EnumDecl { name, members, doc },
+                span: self.span(kw.span.start, close.span.end),
+            }),
+            &mut self.fatal,
+        )
     }
 
     /// `export` on a top-level declaration. Two forms (multi-file.md §3):
@@ -1470,10 +1510,13 @@ impl<'a> Parser<'a> {
             return None;
         }
 
-        Some(self.ast.push_stmt(Stmt {
-            kind: StmtKind::ExportFrom { specs, source, doc },
-            span: self.span(export_span.start, semi.span.end),
-        }))
+        parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind: StmtKind::ExportFrom { specs, source, doc },
+                span: self.span(export_span.start, semi.span.end),
+            }),
+            &mut self.fatal,
+        )
     }
 
     fn parse_import_decl(&mut self) -> Option<StmtId> {
@@ -1519,15 +1562,18 @@ impl<'a> Parser<'a> {
             return None;
         }
 
-        Some(self.ast.push_stmt(Stmt {
-            kind: StmtKind::Import {
-                module,
-                module_span,
-                kind,
-                doc,
-            },
-            span: self.span(kw_span.start, semi.span.end),
-        }))
+        parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind: StmtKind::Import {
+                    module,
+                    module_span,
+                    kind,
+                    doc,
+                },
+                span: self.span(kw_span.start, semi.span.end),
+            }),
+            &mut self.fatal,
+        )
     }
 
     fn parse_import_kind(&mut self) -> Option<ImportKind> {
@@ -2047,10 +2093,13 @@ impl<'a> Parser<'a> {
         let close = self.advance();
 
         let span = self.span(open.span.start, close.span.end);
-        Some(self.ast.push_stmt(Stmt {
-            kind: StmtKind::Block(stmts),
-            span,
-        }))
+        parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind: StmtKind::Block(stmts),
+                span,
+            }),
+            &mut self.fatal,
+        )
     }
 
     // Control-flow bodies accept either a braced block or a single statement;
@@ -2097,11 +2146,14 @@ impl<'a> Parser<'a> {
         let stmt = self.parse_statement();
         self.block_depth -= 1;
         let stmt = stmt?;
-        let span = self.ast.stmt(stmt).span;
-        Some(self.ast.push_stmt(Stmt {
-            kind: StmtKind::Block(vec![stmt]),
-            span,
-        }))
+        let span = parse_arena_result(self.ast.try_stmt(stmt), &mut self.fatal)?.span;
+        parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind: StmtKind::Block(vec![stmt]),
+                span,
+            }),
+            &mut self.fatal,
+        )
     }
 
     /// A loop body may also be a lone `;`: `while (advance());` does all its work in
@@ -2110,7 +2162,7 @@ impl<'a> Parser<'a> {
         if !matches!(self.peek().kind, TokenKind::Semicolon) {
             return self.parse_control_body();
         }
-        Some(self.empty_body_at_semicolon())
+        self.empty_body_at_semicolon()
     }
 
     /// An `if` or `else` body. Unlike a loop, a branch cannot be a lone `;`: `if (c);`
@@ -2124,16 +2176,19 @@ impl<'a> Parser<'a> {
             format!("`{keyword}` has an empty body"),
             vec![format!("remove the `;` after `{keyword}`")],
         );
-        Some(self.empty_body_at_semicolon())
+        self.empty_body_at_semicolon()
     }
 
     /// Consumes a lone `;` as an empty block spanning it.
-    fn empty_body_at_semicolon(&mut self) -> StmtId {
+    fn empty_body_at_semicolon(&mut self) -> Option<StmtId> {
         let semi = self.advance();
-        self.ast.push_stmt(Stmt {
-            kind: StmtKind::Block(vec![]),
-            span: semi.span,
-        })
+        parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind: StmtKind::Block(vec![]),
+                span: semi.span,
+            }),
+            &mut self.fatal,
+        )
     }
 
     fn parse_if(&mut self) -> Option<StmtId> {
@@ -2157,30 +2212,46 @@ impl<'a> Parser<'a> {
         };
 
         let end = match else_block {
-            Some(id) => self.ast.stmt(id).span.end,
-            None => self.ast.stmt(then_block).span.end,
+            Some(id) => {
+                parse_arena_result(self.ast.try_stmt(id), &mut self.fatal)?
+                    .span
+                    .end
+            }
+            None => {
+                parse_arena_result(self.ast.try_stmt(then_block), &mut self.fatal)?
+                    .span
+                    .end
+            }
         };
 
-        Some(self.ast.push_stmt(Stmt {
-            kind: StmtKind::If {
-                condition,
-                then_block,
-                else_block,
-            },
-            span: self.span(kw.span.start, end),
-        }))
+        parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind: StmtKind::If {
+                    condition,
+                    then_block,
+                    else_block,
+                },
+                span: self.span(kw.span.start, end),
+            }),
+            &mut self.fatal,
+        )
     }
 
     fn parse_while(&mut self) -> Option<StmtId> {
         let kw = self.advance();
         let condition = self.parse_paren_condition()?;
         let body = self.parse_loop_body()?;
-        let body_end = self.ast.stmt(body).span.end;
+        let body_end = parse_arena_result(self.ast.try_stmt(body), &mut self.fatal)?
+            .span
+            .end;
 
-        Some(self.ast.push_stmt(Stmt {
-            kind: StmtKind::While { condition, body },
-            span: self.span(kw.span.start, body_end),
-        }))
+        parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind: StmtKind::While { condition, body },
+                span: self.span(kw.span.start, body_end),
+            }),
+            &mut self.fatal,
+        )
     }
 
     // Disambiguates C-style for and for-of via non-consuming lookahead for `of`.
@@ -2282,23 +2353,28 @@ impl<'a> Parser<'a> {
         self.advance();
 
         let body = self.parse_loop_body()?;
-        let body_end = self.ast.stmt(body).span.end;
-        Some(self.ast.push_stmt(Stmt {
-            kind: StmtKind::For {
-                init,
-                condition,
-                update,
-                body,
-            },
-            span: self.span(kw.span.start, body_end),
-        }))
+        let body_end = parse_arena_result(self.ast.try_stmt(body), &mut self.fatal)?
+            .span
+            .end;
+        parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind: StmtKind::For {
+                    init,
+                    condition,
+                    update,
+                    body,
+                },
+                span: self.span(kw.span.start, body_end),
+            }),
+            &mut self.fatal,
+        )
     }
 
     fn parse_for_update_stmt(&mut self) -> Option<StmtId> {
         let expr_id = self.parse_expression()?;
-        let span = self.ast.expr(expr_id).span;
+        let span = parse_arena_result(self.ast.try_expr(expr_id), &mut self.fatal)?.span;
         let kind = self.statement_kind_for(expr_id)?;
-        Some(self.ast.push_stmt(Stmt { kind, span }))
+        parse_arena_result(self.ast.try_push_stmt(Stmt { kind, span }), &mut self.fatal)
     }
 
     fn parse_for_of_tail(&mut self, kw: Token) -> Option<StmtId> {
@@ -2347,7 +2423,9 @@ impl<'a> Parser<'a> {
         self.advance();
 
         let body = self.parse_loop_body()?;
-        let body_end = self.ast.stmt(body).span.end;
+        let body_end = parse_arena_result(self.ast.try_stmt(body), &mut self.fatal)?
+            .span
+            .end;
         let kind = match (binding, name) {
             (Some(binding), _) => StmtKind::ForOfPattern {
                 binding_kind,
@@ -2365,10 +2443,13 @@ impl<'a> Parser<'a> {
             },
             (None, None) => return self.invariant_failure("either binding or name must be Some"),
         };
-        Some(self.ast.push_stmt(Stmt {
-            kind,
-            span: self.span(kw.span.start, body_end),
-        }))
+        parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind,
+                span: self.span(kw.span.start, body_end),
+            }),
+            &mut self.fatal,
+        )
     }
 
     fn parse_do_while(&mut self) -> Option<StmtId> {
@@ -2387,12 +2468,17 @@ impl<'a> Parser<'a> {
         let end = if matches!(self.peek().kind, TokenKind::Semicolon) {
             self.advance().span.end
         } else {
-            self.ast.expr(condition).span.end
+            parse_arena_result(self.ast.try_expr(condition), &mut self.fatal)?
+                .span
+                .end
         };
-        Some(self.ast.push_stmt(Stmt {
-            kind: StmtKind::DoWhile { body, condition },
-            span: self.span(kw.span.start, end),
-        }))
+        parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind: StmtKind::DoWhile { body, condition },
+                span: self.span(kw.span.start, end),
+            }),
+            &mut self.fatal,
+        )
     }
 
     // Multiple consecutive `case`/`default` labels share the next body.
@@ -2480,10 +2566,16 @@ impl<'a> Parser<'a> {
                         return self.invariant_failure("switch arm has no label");
                     };
                     let body = self.parse_switch_arm_body(label_start)?;
-                    let arm_span = self.ast.stmt(body).span;
+                    let arm_span =
+                        parse_arena_result(self.ast.try_stmt(body), &mut self.fatal)?.span;
                     if !pending_values.is_empty() {
-                        let case_span =
-                            self.span(self.ast.expr(pending_values[0]).span.start, arm_span.end);
+                        let first = parse_arena_result(
+                            self.ast.try_expr(pending_values[0]),
+                            &mut self.fatal,
+                        )?
+                        .span
+                        .start;
+                        let case_span = self.span(first, arm_span.end);
                         cases.push(SwitchCase {
                             values: std::mem::take(&mut pending_values),
                             body,
@@ -2509,14 +2601,17 @@ impl<'a> Parser<'a> {
         let close = self.advance();
 
         let _ = open;
-        Some(self.ast.push_stmt(Stmt {
-            kind: StmtKind::Switch {
-                discriminant,
-                cases,
-                default,
-            },
-            span: self.span(kw.span.start, close.span.end),
-        }))
+        parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind: StmtKind::Switch {
+                    discriminant,
+                    cases,
+                    default,
+                },
+                span: self.span(kw.span.start, close.span.end),
+            }),
+            &mut self.fatal,
+        )
     }
 
     // `body_start` is the label keyword's offset so diagnostics point at the label.
@@ -2537,7 +2632,9 @@ impl<'a> Parser<'a> {
             }
             let pos_before = self.pos;
             if let Some(id) = self.parse_statement() {
-                end_offset = self.ast.stmt(id).span.end;
+                end_offset = parse_arena_result(self.ast.try_stmt(id), &mut self.fatal)?
+                    .span
+                    .end;
                 stmts.push(id);
             } else {
                 self.recover();
@@ -2550,10 +2647,13 @@ impl<'a> Parser<'a> {
             }
         }
         let span = self.span(body_start, end_offset);
-        Some(self.ast.push_stmt(Stmt {
-            kind: StmtKind::Block(stmts),
-            span,
-        }))
+        parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind: StmtKind::Block(stmts),
+                span,
+            }),
+            &mut self.fatal,
+        )
     }
 
     fn parse_break(&mut self) -> Option<StmtId> {
@@ -2563,10 +2663,13 @@ impl<'a> Parser<'a> {
             return None;
         }
         let semi = self.advance();
-        Some(self.ast.push_stmt(Stmt {
-            kind: StmtKind::Break,
-            span: self.span(kw.span.start, semi.span.end),
-        }))
+        parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind: StmtKind::Break,
+                span: self.span(kw.span.start, semi.span.end),
+            }),
+            &mut self.fatal,
+        )
     }
 
     fn parse_continue(&mut self) -> Option<StmtId> {
@@ -2576,10 +2679,13 @@ impl<'a> Parser<'a> {
             return None;
         }
         let semi = self.advance();
-        Some(self.ast.push_stmt(Stmt {
-            kind: StmtKind::Continue,
-            span: self.span(kw.span.start, semi.span.end),
-        }))
+        parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind: StmtKind::Continue,
+                span: self.span(kw.span.start, semi.span.end),
+            }),
+            &mut self.fatal,
+        )
     }
 
     fn parse_return(&mut self) -> Option<StmtId> {
@@ -2597,10 +2703,13 @@ impl<'a> Parser<'a> {
         }
         let semi = self.advance();
 
-        Some(self.ast.push_stmt(Stmt {
-            kind: StmtKind::Return(value),
-            span: self.span(kw.span.start, semi.span.end),
-        }))
+        parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind: StmtKind::Return(value),
+                span: self.span(kw.span.start, semi.span.end),
+            }),
+            &mut self.fatal,
+        )
     }
 
     fn parse_throw(&mut self) -> Option<StmtId> {
@@ -2622,10 +2731,13 @@ impl<'a> Parser<'a> {
         }
         let semi = self.advance();
 
-        Some(self.ast.push_stmt(Stmt {
-            kind: StmtKind::Throw { value },
-            span: self.span(kw.span.start, semi.span.end),
-        }))
+        parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind: StmtKind::Throw { value },
+                span: self.span(kw.span.start, semi.span.end),
+            }),
+            &mut self.fatal,
+        )
     }
 
     fn parse_try(&mut self) -> Option<StmtId> {
@@ -2635,7 +2747,9 @@ impl<'a> Parser<'a> {
 
         let mut catches: Vec<CatchClause> = Vec::new();
         let mut finally: Option<StmtId> = None;
-        let mut tail_end = self.ast.stmt(body).span.end;
+        let mut tail_end = parse_arena_result(self.ast.try_stmt(body), &mut self.fatal)?
+            .span
+            .end;
 
         loop {
             match self.peek().kind {
@@ -2655,7 +2769,9 @@ impl<'a> Parser<'a> {
                     }
                     self.advance();
                     let block = self.parse_block()?;
-                    tail_end = self.ast.stmt(block).span.end;
+                    tail_end = parse_arena_result(self.ast.try_stmt(block), &mut self.fatal)?
+                        .span
+                        .end;
                     finally = Some(block);
                 }
                 _ => break,
@@ -2670,14 +2786,17 @@ impl<'a> Parser<'a> {
             return None;
         }
 
-        Some(self.ast.push_stmt(Stmt {
-            kind: StmtKind::Try {
-                body,
-                catches,
-                finally,
-            },
-            span: self.span(kw.span.start, tail_end),
-        }))
+        parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind: StmtKind::Try {
+                    body,
+                    catches,
+                    finally,
+                },
+                span: self.span(kw.span.start, tail_end),
+            }),
+            &mut self.fatal,
+        )
     }
 
     fn parse_catch_clause(&mut self) -> Option<CatchClause> {
@@ -2697,7 +2816,9 @@ impl<'a> Parser<'a> {
         };
 
         let body = self.parse_block()?;
-        let body_end = self.ast.stmt(body).span.end;
+        let body_end = parse_arena_result(self.ast.try_stmt(body), &mut self.fatal)?
+            .span
+            .end;
 
         Some(CatchClause {
             binding,
@@ -3546,37 +3667,43 @@ impl<'a> Parser<'a> {
         if !is_assign_lookahead(&self.peek().kind) {
             return Some(written);
         }
-        let target_span = self.ast.expr(written).span;
+        let target_span = parse_arena_result(self.ast.try_expr(written), &mut self.fatal)?.span;
         let target = self.assignment_target(written)?;
         let op_tok = self.advance();
         let value = self.parse_expression()?;
-        let value_span = self.ast.expr(value).span;
-        Some(self.ast.push_expr(Expr {
-            kind: ExprKind::Assign {
-                target,
-                op: compound_op_for_token(&op_tok.kind),
-                op_span: op_tok.span,
-                value,
-            },
-            span: self.span(target_span.start, value_span.end),
-        }))
+        let value_span = parse_arena_result(self.ast.try_expr(value), &mut self.fatal)?.span;
+        parse_arena_result(
+            self.ast.try_push_expr(Expr {
+                kind: ExprKind::Assign {
+                    target,
+                    op: compound_op_for_token(&op_tok.kind),
+                    op_span: op_tok.span,
+                    value,
+                },
+                span: self.span(target_span.start, value_span.end),
+            }),
+            &mut self.fatal,
+        )
     }
 
     /// The binding, field, or element `written` names, through any parentheses:
     /// `(a) = 1` assigns `a`, as in JavaScript.
     fn assignment_target(&mut self, written: ExprId) -> Option<ExprId> {
         let mut target = written;
-        while let ExprKind::Paren(inner) = self.ast.expr(target).kind {
+        while let ExprKind::Paren(inner) =
+            parse_arena_result(self.ast.try_expr(target), &mut self.fatal)?.kind
+        {
             target = inner;
         }
         if matches!(
-            self.ast.expr(target).kind,
+            parse_arena_result(self.ast.try_expr(target), &mut self.fatal)?.kind,
             ExprKind::Identifier(_) | ExprKind::FieldAccess { .. } | ExprKind::IndexAccess { .. }
         ) {
             return Some(target);
         }
+        let error_span = parse_arena_result(self.ast.try_expr(written), &mut self.fatal)?.span;
         self.error_at_with_help(
-            self.ast.expr(written).span,
+            error_span,
             "invalid assignment target",
             vec![
                 "assign to a variable, a field (`o.f = …`), or an element (`a[i] = …`)".to_string(),
@@ -3605,12 +3732,15 @@ impl<'a> Parser<'a> {
         }
         self.advance();
         let else_ = self.parse_expression()?;
-        let cond_span = self.ast.expr(cond).span;
-        let else_span = self.ast.expr(else_).span;
-        Some(self.ast.push_expr(Expr {
-            kind: ExprKind::Ternary { cond, then_, else_ },
-            span: self.span(cond_span.start, else_span.end),
-        }))
+        let cond_span = parse_arena_result(self.ast.try_expr(cond), &mut self.fatal)?.span;
+        let else_span = parse_arena_result(self.ast.try_expr(else_), &mut self.fatal)?.span;
+        parse_arena_result(
+            self.ast.try_push_expr(Expr {
+                kind: ExprKind::Ternary { cond, then_, else_ },
+                span: self.span(cond_span.start, else_span.end),
+            }),
+            &mut self.fatal,
+        )
     }
 
     fn is_arrow_start(&self) -> bool {
@@ -3870,23 +4000,26 @@ impl<'a> Parser<'a> {
 
         let (body, end_pos) = if matches!(self.peek().kind, TokenKind::LeftBrace) {
             let block = self.parse_block()?;
-            let span = self.ast.stmt(block).span;
+            let span = parse_arena_result(self.ast.try_stmt(block), &mut self.fatal)?.span;
             (ArrowBody::Block(block), span.end)
         } else {
             let expr = self.parse_expression()?;
-            let span = self.ast.expr(expr).span;
+            let span = parse_arena_result(self.ast.try_expr(expr), &mut self.fatal)?.span;
             (ArrowBody::Expr(expr), span.end)
         };
 
-        Some(self.ast.push_expr(Expr {
-            kind: ExprKind::Arrow {
-                params,
-                return_type,
-                type_predicate,
-                body,
-            },
-            span: self.span(start_span.start, end_pos),
-        }))
+        parse_arena_result(
+            self.ast.try_push_expr(Expr {
+                kind: ExprKind::Arrow {
+                    params,
+                    return_type,
+                    type_predicate,
+                    body,
+                },
+                span: self.span(start_span.start, end_pos),
+            }),
+            &mut self.fatal,
+        )
     }
 
     /// Function expressions share parameter/body parsing with arrows, but retain
@@ -3961,25 +4094,33 @@ impl<'a> Parser<'a> {
         self.function_expression_body_depth -= 1;
         self.class_member_body_depth = saved;
         let block = block?;
-        let end = self.ast.stmt(block).span.end;
+        let end = parse_arena_result(self.ast.try_stmt(block), &mut self.fatal)?
+            .span
+            .end;
 
-        let function = self.ast.push_expr(Expr {
-            kind: ExprKind::Arrow {
-                params,
-                return_type,
-                type_predicate,
-                body: ArrowBody::Block(block),
-            },
-            span: self.span(kw.span.start, end),
-        });
-        Some(self.ast.push_expr(Expr {
-            kind: ExprKind::FunctionExpression {
-                name: self_name,
-                this_type,
-                function,
-            },
-            span: self.span(kw.span.start, end),
-        }))
+        let function = parse_arena_result(
+            self.ast.try_push_expr(Expr {
+                kind: ExprKind::Arrow {
+                    params,
+                    return_type,
+                    type_predicate,
+                    body: ArrowBody::Block(block),
+                },
+                span: self.span(kw.span.start, end),
+            }),
+            &mut self.fatal,
+        )?;
+        parse_arena_result(
+            self.ast.try_push_expr(Expr {
+                kind: ExprKind::FunctionExpression {
+                    name: self_name,
+                    this_type,
+                    function,
+                },
+                span: self.span(kw.span.start, end),
+            }),
+            &mut self.fatal,
+        )
     }
 
     /// Shorthand methods still use arrow lowering. Reject their receiver syntax
@@ -4114,12 +4255,13 @@ impl<'a> Parser<'a> {
             }
             if op == BinOp::Pow
                 && matches!(
-                    self.ast.expr(lhs).kind,
+                    parse_arena_result(self.ast.try_expr(lhs), &mut self.fatal)?.kind,
                     ExprKind::Unary { .. } | ExprKind::Typeof { .. } | ExprKind::Delete { .. }
                 )
             {
+                let error_span = parse_arena_result(self.ast.try_expr(lhs), &mut self.fatal)?.span;
                 self.error_at_with_help(
-                    self.ast.expr(lhs).span,
+                    error_span,
                     "an unparenthesized unary expression cannot be the left operand of `**`",
                     vec!["choose the grouping explicitly: `(-x) ** 2` or `-(x ** 2)`".into()],
                 );
@@ -4132,12 +4274,15 @@ impl<'a> Parser<'a> {
                 prec + 1
             };
             let rhs = self.parse_binary(next_min)?;
-            let lhs_span = self.ast.expr(lhs).span;
-            let rhs_span = self.ast.expr(rhs).span;
-            lhs = self.ast.push_expr(Expr {
-                kind: ExprKind::Binary { op, lhs, rhs },
-                span: self.span(lhs_span.start, rhs_span.end),
-            });
+            let lhs_span = parse_arena_result(self.ast.try_expr(lhs), &mut self.fatal)?.span;
+            let rhs_span = parse_arena_result(self.ast.try_expr(rhs), &mut self.fatal)?.span;
+            lhs = parse_arena_result(
+                self.ast.try_push_expr(Expr {
+                    kind: ExprKind::Binary { op, lhs, rhs },
+                    span: self.span(lhs_span.start, rhs_span.end),
+                }),
+                &mut self.fatal,
+            )?;
             last_op = Some(op);
         }
         Some(lhs)
@@ -4152,17 +4297,22 @@ impl<'a> Parser<'a> {
             let is_instanceof = matches!(self.peek().kind, TokenKind::Instanceof);
             self.advance();
             let ty = self.parse_type_annotation()?;
-            let start = self.ast.expr(expr).span.start;
+            let start = parse_arena_result(self.ast.try_expr(expr), &mut self.fatal)?
+                .span
+                .start;
             let end = ty.span.end;
             let kind = if is_instanceof {
                 ExprKind::InstanceOf { value: expr, ty }
             } else {
                 ExprKind::As { expr, ty }
             };
-            expr = self.ast.push_expr(Expr {
-                kind,
-                span: self.span(start, end),
-            });
+            expr = parse_arena_result(
+                self.ast.try_push_expr(Expr {
+                    kind,
+                    span: self.span(start, end),
+                }),
+                &mut self.fatal,
+            )?;
         }
         Some(expr)
     }
@@ -4191,15 +4341,19 @@ impl<'a> Parser<'a> {
                 }
                 let ident_tok = self.advance();
                 let name = self.ident_from_token(&ident_tok);
-                let receiver_span = self.ast.expr(callee).span;
+                let receiver_span =
+                    parse_arena_result(self.ast.try_expr(callee), &mut self.fatal)?.span;
                 let combined_span = self.span(receiver_span.start, ident_tok.span.end);
-                callee = self.ast.push_expr(Expr {
-                    kind: ExprKind::FieldAccess {
-                        receiver: callee,
-                        name,
-                    },
-                    span: combined_span,
-                });
+                callee = parse_arena_result(
+                    self.ast.try_push_expr(Expr {
+                        kind: ExprKind::FieldAccess {
+                            receiver: callee,
+                            name,
+                        },
+                        span: combined_span,
+                    }),
+                    &mut self.fatal,
+                )?;
             }
             let type_args = if matches!(self.peek().kind, TokenKind::LessThan) {
                 let saved_pos = self.pos;
@@ -4229,14 +4383,17 @@ impl<'a> Parser<'a> {
                 return None;
             }
             let close = self.advance();
-            let new_expr = self.ast.push_expr(Expr {
-                kind: ExprKind::New {
-                    callee,
-                    type_args,
-                    args,
-                },
-                span: self.span(op_tok.span.start, close.span.end),
-            });
+            let new_expr = parse_arena_result(
+                self.ast.try_push_expr(Expr {
+                    kind: ExprKind::New {
+                        callee,
+                        type_args,
+                        args,
+                    },
+                    span: self.span(op_tok.span.start, close.span.end),
+                }),
+                &mut self.fatal,
+            )?;
             // `new Foo()` is a postfix primary: `new Map().set(...)`, `new Map().size`,
             // `new Foo()[i]` all continue the chain off the constructor result.
             return self.parse_postfix_from(new_expr);
@@ -4254,11 +4411,14 @@ impl<'a> Parser<'a> {
     fn parse_prefix_expr(&mut self, kind: impl FnOnce(ExprId) -> ExprKind) -> Option<ExprId> {
         let op_tok = self.advance();
         let operand = self.parse_unary()?;
-        let operand_span = self.ast.expr(operand).span;
-        Some(self.ast.push_expr(Expr {
-            kind: kind(operand),
-            span: self.span(op_tok.span.start, operand_span.end),
-        }))
+        let operand_span = parse_arena_result(self.ast.try_expr(operand), &mut self.fatal)?.span;
+        parse_arena_result(
+            self.ast.try_push_expr(Expr {
+                kind: kind(operand),
+                span: self.span(op_tok.span.start, operand_span.end),
+            }),
+            &mut self.fatal,
+        )
     }
 
     fn parse_postfix(&mut self) -> Option<ExprId> {
@@ -4344,14 +4504,19 @@ impl<'a> Parser<'a> {
                         continue;
                     }
                     let tok = self.advance();
-                    let start = self.ast.expr(expr).span.start;
-                    expr = self.ast.push_expr(Expr {
-                        kind: ExprKind::PostfixUnary {
-                            op: PostfixOp::NonNullAssert,
-                            operand: expr,
-                        },
-                        span: self.span(start, tok.span.end),
-                    });
+                    let start = parse_arena_result(self.ast.try_expr(expr), &mut self.fatal)?
+                        .span
+                        .start;
+                    expr = parse_arena_result(
+                        self.ast.try_push_expr(Expr {
+                            kind: ExprKind::PostfixUnary {
+                                op: PostfixOp::NonNullAssert,
+                                operand: expr,
+                            },
+                            span: self.span(start, tok.span.end),
+                        }),
+                        &mut self.fatal,
+                    )?;
                 }
                 // Postfix `++`/`--` terminates the chain; `a?.b++` is rejected.
                 TokenKind::PlusPlus | TokenKind::MinusMinus => {
@@ -4364,23 +4529,31 @@ impl<'a> Parser<'a> {
                     } else {
                         PostfixOp::Dec
                     };
-                    let start = self.ast.expr(expr).span.start;
-                    expr = self.ast.push_expr(Expr {
-                        kind: ExprKind::PostfixUnary { op, operand: expr },
-                        span: self.span(start, tok.span.end),
-                    });
+                    let start = parse_arena_result(self.ast.try_expr(expr), &mut self.fatal)?
+                        .span
+                        .start;
+                    expr = parse_arena_result(
+                        self.ast.try_push_expr(Expr {
+                            kind: ExprKind::PostfixUnary { op, operand: expr },
+                            span: self.span(start, tok.span.end),
+                        }),
+                        &mut self.fatal,
+                    )?;
                     break;
                 }
                 _ => break,
             }
         }
         if let Some((base, parts)) = chain_parts {
-            let base_span = self.ast.expr(base).span;
+            let base_span = parse_arena_result(self.ast.try_expr(base), &mut self.fatal)?.span;
             let end = parts.last().map_or(base_span.end, |p| p.span().end);
-            Some(self.ast.push_expr(Expr {
-                kind: ExprKind::OptionalChain { base, parts },
-                span: self.span(base_span.start, end),
-            }))
+            Some(parse_arena_result(
+                self.ast.try_push_expr(Expr {
+                    kind: ExprKind::OptionalChain { base, parts },
+                    span: self.span(base_span.start, end),
+                }),
+                &mut self.fatal,
+            )?)
         } else {
             Some(expr)
         }
@@ -4453,14 +4626,17 @@ impl<'a> Parser<'a> {
             return None;
         };
         let name = self.ident_from_token(&name_tok);
-        let receiver_span = self.ast.expr(receiver).span;
-        Some(self.ast.push_expr(Expr {
-            kind: ExprKind::FieldAccess {
-                receiver,
-                name: name.clone(),
-            },
-            span: self.span(receiver_span.start, name.span.end),
-        }))
+        let receiver_span = parse_arena_result(self.ast.try_expr(receiver), &mut self.fatal)?.span;
+        parse_arena_result(
+            self.ast.try_push_expr(Expr {
+                kind: ExprKind::FieldAccess {
+                    receiver,
+                    name: name.clone(),
+                },
+                span: self.span(receiver_span.start, name.span.end),
+            }),
+            &mut self.fatal,
+        )
     }
 
     fn parse_index_access_tail(&mut self, receiver: ExprId) -> Option<ExprId> {
@@ -4471,11 +4647,14 @@ impl<'a> Parser<'a> {
             return None;
         }
         let close = self.advance();
-        let receiver_span = self.ast.expr(receiver).span;
-        Some(self.ast.push_expr(Expr {
-            kind: ExprKind::IndexAccess { receiver, index },
-            span: self.span(receiver_span.start, close.span.end),
-        }))
+        let receiver_span = parse_arena_result(self.ast.try_expr(receiver), &mut self.fatal)?.span;
+        parse_arena_result(
+            self.ast.try_push_expr(Expr {
+                kind: ExprKind::IndexAccess { receiver, index },
+                span: self.span(receiver_span.start, close.span.end),
+            }),
+            &mut self.fatal,
+        )
     }
 
     fn parse_call_tail(
@@ -4495,15 +4674,18 @@ impl<'a> Parser<'a> {
         }
         let close = self.advance();
 
-        let callee_span = self.ast.expr(callee).span;
-        Some(self.ast.push_expr(Expr {
-            kind: ExprKind::Call {
-                callee,
-                type_args,
-                args,
-            },
-            span: self.span(callee_span.start, close.span.end),
-        }))
+        let callee_span = parse_arena_result(self.ast.try_expr(callee), &mut self.fatal)?.span;
+        parse_arena_result(
+            self.ast.try_push_expr(Expr {
+                kind: ExprKind::Call {
+                    callee,
+                    type_args,
+                    args,
+                },
+                span: self.span(callee_span.start, close.span.end),
+            }),
+            &mut self.fatal,
+        )
     }
 
     // Caller restores position + diagnostics on `None` so `<` is re-interpreted as comparison.
@@ -4583,11 +4765,16 @@ impl<'a> Parser<'a> {
         }
         self.advance();
         let expr = self.parse_unary()?;
-        let end = self.ast.expr(expr).span.end;
-        Some(self.ast.push_expr(Expr {
-            kind: ExprKind::As { expr, ty },
-            span: self.span(open.span.start, end),
-        }))
+        let end = parse_arena_result(self.ast.try_expr(expr), &mut self.fatal)?
+            .span
+            .end;
+        parse_arena_result(
+            self.ast.try_push_expr(Expr {
+                kind: ExprKind::As { expr, ty },
+                span: self.span(open.span.start, end),
+            }),
+            &mut self.fatal,
+        )
     }
 
     fn parse_atom(&mut self) -> Option<ExprId> {
@@ -4638,7 +4825,7 @@ impl<'a> Parser<'a> {
             TokenKind::RegexLiteral { source, flags } => ExprKind::Regex { source, flags },
             _ => return self.invariant_failure("dispatch above already filtered"),
         };
-        Some(self.ast.push_expr(Expr { kind, span }))
+        parse_arena_result(self.ast.try_push_expr(Expr { kind, span }), &mut self.fatal)
     }
 
     /// Ordinary functions establish a `this` boundary and exclude an enclosing
@@ -4667,7 +4854,7 @@ impl<'a> Parser<'a> {
         } else {
             ExprKind::Super
         };
-        Some(self.ast.push_expr(Expr { kind, span }))
+        parse_arena_result(self.ast.try_push_expr(Expr { kind, span }), &mut self.fatal)
     }
 
     // The lexer guarantees: TemplateHead → expr → (TemplateMiddle → expr)* → TemplateTail.
@@ -4690,10 +4877,13 @@ impl<'a> Parser<'a> {
                 TokenKind::TemplateTail(s) => {
                     let tok = self.advance();
                     parts.push(s);
-                    return Some(self.ast.push_expr(Expr {
-                        kind: ExprKind::TemplateLiteral { parts, exprs },
-                        span: self.span(start, tok.span.end),
-                    }));
+                    return parse_arena_result(
+                        self.ast.try_push_expr(Expr {
+                            kind: ExprKind::TemplateLiteral { parts, exprs },
+                            span: self.span(start, tok.span.end),
+                        }),
+                        &mut self.fatal,
+                    );
                 }
                 _ => {
                     self.error_at_peek("expected `}` to close template interpolation");
@@ -4712,7 +4902,8 @@ impl<'a> Parser<'a> {
                 if matches!(self.peek().kind, TokenKind::DotDotDot) {
                     let dots = self.advance();
                     let value = self.parse_expression()?;
-                    let value_span = self.ast.expr(value).span;
+                    let value_span =
+                        parse_arena_result(self.ast.try_expr(value), &mut self.fatal)?.span;
                     members.push(ObjectLiteralMember::Spread {
                         value,
                         span: self.span(dots.span.start, value_span.end),
@@ -4776,10 +4967,13 @@ impl<'a> Parser<'a> {
         }
         let close = self.advance();
 
-        Some(self.ast.push_expr(Expr {
-            kind: ExprKind::ObjectLiteral { members },
-            span: self.span(open.span.start, close.span.end),
-        }))
+        parse_arena_result(
+            self.ast.try_push_expr(Expr {
+                kind: ExprKind::ObjectLiteral { members },
+                span: self.span(open.span.start, close.span.end),
+            }),
+            &mut self.fatal,
+        )
     }
 
     fn parse_object_literal_field(&mut self) -> Option<ObjectLiteralField> {
@@ -4816,10 +5010,13 @@ impl<'a> Parser<'a> {
             // `{ x }` is shorthand for `{ x: x }`. Only identifier keys can use
             // it — a string key like `{ "x" }` has no binding to reference.
             if shorthandable {
-                let value = self.ast.push_expr(Expr {
-                    kind: ExprKind::Identifier(name.clone()),
-                    span: name.span,
-                });
+                let value = parse_arena_result(
+                    self.ast.try_push_expr(Expr {
+                        kind: ExprKind::Identifier(name.clone()),
+                        span: name.span,
+                    }),
+                    &mut self.fatal,
+                )?;
                 return Some(ObjectLiteralField { name, value });
             }
             self.error_at_peek("expected `:` after field name");
@@ -4859,17 +5056,22 @@ impl<'a> Parser<'a> {
             return None;
         }
         let block = self.parse_outer_this_boundary(Self::parse_block)?;
-        let end = self.ast.stmt(block).span.end;
+        let end = parse_arena_result(self.ast.try_stmt(block), &mut self.fatal)?
+            .span
+            .end;
 
-        Some(self.ast.push_expr(Expr {
-            kind: ExprKind::Arrow {
-                params,
-                return_type,
-                type_predicate,
-                body: ArrowBody::Block(block),
-            },
-            span: self.span(name_span.start, end),
-        }))
+        parse_arena_result(
+            self.ast.try_push_expr(Expr {
+                kind: ExprKind::Arrow {
+                    params,
+                    return_type,
+                    type_predicate,
+                    body: ArrowBody::Block(block),
+                },
+                span: self.span(name_span.start, end),
+            }),
+            &mut self.fatal,
+        )
     }
 
     fn parse_array_literal(&mut self) -> Option<ExprId> {
@@ -4881,7 +5083,8 @@ impl<'a> Parser<'a> {
                 let element = if matches!(self.peek().kind, TokenKind::DotDotDot) {
                     let dots = self.advance();
                     let value = self.parse_expression()?;
-                    let value_span = self.ast.expr(value).span;
+                    let value_span =
+                        parse_arena_result(self.ast.try_expr(value), &mut self.fatal)?.span;
                     ArrayLiteralElement::Spread {
                         value,
                         span: self.span(dots.span.start, value_span.end),
@@ -4912,10 +5115,13 @@ impl<'a> Parser<'a> {
         }
         let close = self.advance();
 
-        Some(self.ast.push_expr(Expr {
-            kind: ExprKind::ArrayLiteral { elements },
-            span: self.span(open.span.start, close.span.end),
-        }))
+        parse_arena_result(
+            self.ast.try_push_expr(Expr {
+                kind: ExprKind::ArrayLiteral { elements },
+                span: self.span(open.span.start, close.span.end),
+            }),
+            &mut self.fatal,
+        )
     }
 
     fn parse_paren(&mut self) -> Option<ExprId> {
@@ -4927,10 +5133,13 @@ impl<'a> Parser<'a> {
         }
         let close = self.advance();
         let span = self.span(open.span.start, close.span.end);
-        Some(self.ast.push_expr(Expr {
-            kind: ExprKind::Paren(inner),
-            span,
-        }))
+        parse_arena_result(
+            self.ast.try_push_expr(Expr {
+                kind: ExprKind::Paren(inner),
+                span,
+            }),
+            &mut self.fatal,
+        )
     }
 
     fn with_recursion_limit<T>(&mut self, parse: impl FnOnce(&mut Self) -> Option<T>) -> Option<T> {
@@ -4993,7 +5202,7 @@ impl<'a> Parser<'a> {
     }
 
     fn is_at_eof(&self) -> bool {
-        matches!(self.peek().kind, TokenKind::Eof)
+        self.fatal.is_some() || matches!(self.peek().kind, TokenKind::Eof)
     }
 
     /// End offset of the most recently consumed token (the body of the file's first
@@ -5235,6 +5444,21 @@ fn is_assign_lookahead(kind: &TokenKind) -> bool {
     matches!(kind, TokenKind::Equals) || compound_op_for_token(kind).is_some()
 }
 
+/// Parser productions use `None` for recovery; arena errors also latch a fatal
+/// cause so speculative parsing cannot turn them into ordinary syntax errors.
+fn parse_arena_result<T>(
+    result: Result<T, crate::arena::ArenaError>,
+    fatal: &mut Option<CompilerFailure>,
+) -> Option<T> {
+    match result {
+        Ok(value) => Some(value),
+        Err(error) => {
+            fatal.get_or_insert_with(|| error.into_compiler_failure(CompilerStage::Parse));
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{MAX_ERRORS, MAX_PARSE_DEPTH, Parser, parse};
@@ -5325,6 +5549,30 @@ mod tests {
         parser.diagnostics.clear();
         assert!(parser.fatal.is_some());
         assert!(parser.parse_expression().is_none());
+    }
+
+    #[test]
+    fn invalid_arena_read_stops_parser_and_survives_diagnostic_rollback() {
+        use crate::{
+            ExprId,
+            compiler_error::{CompilerFailure, CompilerStage},
+        };
+        let mut parser = parser_from_source("let x = 1;");
+        assert!(parser.statement_kind_for(ExprId(u32::MAX)).is_none());
+        assert!(matches!(
+            parser.fatal,
+            Some(CompilerFailure::Internal {
+                stage: CompilerStage::Parse,
+                span: None,
+                ..
+            })
+        ));
+        parser.diagnostics.clear();
+        let position = parser.pos;
+        assert!(parser.parse_statement().is_none());
+        parser.recover();
+        assert_eq!(parser.pos, position);
+        assert!(parser.ast.expr_ids().unwrap().next().is_none());
     }
 
     fn tokens_of(source: &str) -> Vec<Token> {
@@ -5563,13 +5811,13 @@ mod tests {
 
     fn single_stmt(ast: &Ast) -> &crate::Stmt {
         assert_eq!(ast.top_level.len(), 1);
-        ast.stmt(ast.top_level[0])
+        ast.try_stmt(ast.top_level[0]).unwrap()
     }
 
     fn expr_of_single_stmt(ast: &Ast) -> &crate::Expr {
         let stmt = single_stmt(ast);
         match stmt.kind {
-            crate::StmtKind::Expr(id) => ast.expr(id),
+            crate::StmtKind::Expr(id) => ast.try_expr(id).unwrap(),
             _ => panic!("expected expression statement, got {:?}", stmt.kind),
         }
     }
@@ -5685,7 +5933,7 @@ mod tests {
         let (ast, diags) = parse_str("type X = number;");
         assert!(diags.is_empty(), "{diags:#?}");
         assert!(matches!(
-            ast.stmt(ast.top_level[0]).kind,
+            ast.try_stmt(ast.top_level[0]).unwrap().kind,
             crate::StmtKind::TypeAliasDecl { .. }
         ));
 
@@ -5698,7 +5946,7 @@ mod tests {
             );
             assert!(
                 !matches!(
-                    ast.stmt(ast.top_level[0]).kind,
+                    ast.try_stmt(ast.top_level[0]).unwrap().kind,
                     crate::StmtKind::TypeAliasDecl { .. }
                 ),
                 "{src:?} must not parse as a type alias"
@@ -5720,7 +5968,7 @@ mod tests {
         assert!(diags.is_empty(), "{diags:#?}");
         assert_eq!(ast.exported_decls.len(), 1);
         assert!(matches!(
-            ast.stmt(ast.exported_decls[0].stmt).kind,
+            ast.try_stmt(ast.exported_decls[0].stmt).unwrap().kind,
             crate::StmtKind::TypeAliasDecl { .. }
         ));
 
@@ -5742,7 +5990,7 @@ mod tests {
             panic!("expected Paren, got {:?}", expr.kind);
         };
         assert_eq!(expr.span, crate::Span::new(F, 0, 3).unwrap());
-        let inner = ast.expr(inner_id);
+        let inner = ast.try_expr(inner_id).unwrap();
         assert!(matches!(inner.kind, crate::ExprKind::Identifier(_)));
         assert_eq!(inner.span, crate::Span::new(F, 1, 2).unwrap());
     }
@@ -5756,12 +6004,12 @@ mod tests {
             panic!("expected outer Paren");
         };
         assert_eq!(outer.span, crate::Span::new(F, 0, 5).unwrap());
-        let mid = ast.expr(mid_id);
+        let mid = ast.try_expr(mid_id).unwrap();
         let crate::ExprKind::Paren(inner_id) = mid.kind else {
             panic!("expected inner Paren");
         };
         assert_eq!(mid.span, crate::Span::new(F, 1, 4).unwrap());
-        let inner = ast.expr(inner_id);
+        let inner = ast.try_expr(inner_id).unwrap();
         assert!(matches!(inner.kind, crate::ExprKind::Identifier(_)));
         assert_eq!(inner.span, crate::Span::new(F, 2, 3).unwrap());
     }
@@ -5812,8 +6060,14 @@ mod tests {
         let outer = expr_of_single_stmt(&ast);
         let (op, lhs, rhs) = binary(outer);
         assert_eq!(op, crate::BinOp::Add);
-        assert!(matches!(ast.expr(lhs).kind, crate::ExprKind::Identifier(_)));
-        assert!(matches!(ast.expr(rhs).kind, crate::ExprKind::Identifier(_)));
+        assert!(matches!(
+            ast.try_expr(lhs).unwrap().kind,
+            crate::ExprKind::Identifier(_)
+        ));
+        assert!(matches!(
+            ast.try_expr(rhs).unwrap().kind,
+            crate::ExprKind::Identifier(_)
+        ));
         assert_eq!(outer.span, crate::Span::new(F, 0, 5).unwrap());
     }
 
@@ -5824,15 +6078,18 @@ mod tests {
         let outer = expr_of_single_stmt(&ast);
         let (op, lhs, rhs) = binary(outer);
         assert_eq!(op, crate::BinOp::Add);
-        assert!(matches!(ast.expr(lhs).kind, crate::ExprKind::Identifier(_)));
-        let (rop, rlhs, rrhs) = binary(ast.expr(rhs));
+        assert!(matches!(
+            ast.try_expr(lhs).unwrap().kind,
+            crate::ExprKind::Identifier(_)
+        ));
+        let (rop, rlhs, rrhs) = binary(ast.try_expr(rhs).unwrap());
         assert_eq!(rop, crate::BinOp::Mul);
         assert!(matches!(
-            ast.expr(rlhs).kind,
+            ast.try_expr(rlhs).unwrap().kind,
             crate::ExprKind::Identifier(_)
         ));
         assert!(matches!(
-            ast.expr(rrhs).kind,
+            ast.try_expr(rrhs).unwrap().kind,
             crate::ExprKind::Identifier(_)
         ));
     }
@@ -5844,9 +6101,12 @@ mod tests {
         let outer = expr_of_single_stmt(&ast);
         let (op, lhs, rhs) = binary(outer);
         assert_eq!(op, crate::BinOp::Add);
-        let (lop, ..) = binary(ast.expr(lhs));
+        let (lop, ..) = binary(ast.try_expr(lhs).unwrap());
         assert_eq!(lop, crate::BinOp::Mul);
-        assert!(matches!(ast.expr(rhs).kind, crate::ExprKind::Identifier(_)));
+        assert!(matches!(
+            ast.try_expr(rhs).unwrap().kind,
+            crate::ExprKind::Identifier(_)
+        ));
     }
 
     #[test]
@@ -5856,17 +6116,20 @@ mod tests {
         let outer = expr_of_single_stmt(&ast);
         let (op, lhs, rhs) = binary(outer);
         assert_eq!(op, crate::BinOp::Sub);
-        let (lop, llhs, lrhs) = binary(ast.expr(lhs));
+        let (lop, llhs, lrhs) = binary(ast.try_expr(lhs).unwrap());
         assert_eq!(lop, crate::BinOp::Sub);
         assert!(matches!(
-            ast.expr(llhs).kind,
+            ast.try_expr(llhs).unwrap().kind,
             crate::ExprKind::Identifier(_)
         ));
         assert!(matches!(
-            ast.expr(lrhs).kind,
+            ast.try_expr(lrhs).unwrap().kind,
             crate::ExprKind::Identifier(_)
         ));
-        assert!(matches!(ast.expr(rhs).kind, crate::ExprKind::Identifier(_)));
+        assert!(matches!(
+            ast.try_expr(rhs).unwrap().kind,
+            crate::ExprKind::Identifier(_)
+        ));
     }
 
     #[test]
@@ -5876,9 +6139,9 @@ mod tests {
         let outer = expr_of_single_stmt(&ast);
         let (op, lhs, rhs) = binary(outer);
         assert_eq!(op, crate::BinOp::And);
-        let (lop, ..) = binary(ast.expr(lhs));
+        let (lop, ..) = binary(ast.try_expr(lhs).unwrap());
         assert_eq!(lop, crate::BinOp::Eq);
-        let (rop, ..) = binary(ast.expr(rhs));
+        let (rop, ..) = binary(ast.try_expr(rhs).unwrap());
         assert_eq!(rop, crate::BinOp::Eq);
     }
 
@@ -5904,7 +6167,7 @@ mod tests {
         let outer = expr_of_single_stmt(&ast);
         let (op, lhs, _) = binary(outer);
         assert_eq!(op, crate::BinOp::And);
-        let (lop, ..) = binary(ast.expr(lhs));
+        let (lop, ..) = binary(ast.try_expr(lhs).unwrap());
         assert_eq!(lop, crate::BinOp::Lt);
     }
 
@@ -5921,12 +6184,15 @@ mod tests {
         let outer = expr_of_single_stmt(&ast);
         let (op, lhs, rhs) = binary(outer);
         assert_eq!(op, crate::BinOp::Mul);
-        let crate::ExprKind::Paren(inner_id) = ast.expr(lhs).kind else {
+        let crate::ExprKind::Paren(inner_id) = ast.try_expr(lhs).unwrap().kind else {
             panic!("expected Paren on lhs");
         };
-        let (inner_op, ..) = binary(ast.expr(inner_id));
+        let (inner_op, ..) = binary(ast.try_expr(inner_id).unwrap());
         assert_eq!(inner_op, crate::BinOp::Add);
-        assert!(matches!(ast.expr(rhs).kind, crate::ExprKind::Identifier(_)));
+        assert!(matches!(
+            ast.try_expr(rhs).unwrap().kind,
+            crate::ExprKind::Identifier(_)
+        ));
     }
 
     #[test]
@@ -5951,7 +6217,7 @@ mod tests {
         let (op, operand) = unary(outer);
         assert_eq!(op, crate::UnOp::Not);
         assert!(matches!(
-            ast.expr(operand).kind,
+            ast.try_expr(operand).unwrap().kind,
             crate::ExprKind::Identifier(_)
         ));
         assert_eq!(outer.span, crate::Span::new(F, 0, 2).unwrap());
@@ -5977,10 +6243,10 @@ mod tests {
         let outer = expr_of_single_stmt(&ast);
         let (op, operand) = unary(outer);
         assert_eq!(op, crate::UnOp::Not);
-        let (inner_op, inner_operand) = unary(ast.expr(operand));
+        let (inner_op, inner_operand) = unary(ast.try_expr(operand).unwrap());
         assert_eq!(inner_op, crate::UnOp::Not);
         assert!(matches!(
-            ast.expr(inner_operand).kind,
+            ast.try_expr(inner_operand).unwrap().kind,
             crate::ExprKind::Identifier(_)
         ));
     }
@@ -5991,9 +6257,12 @@ mod tests {
         let outer = expr_of_single_stmt(&ast);
         let (op, lhs, rhs) = binary(outer);
         assert_eq!(op, crate::BinOp::Add);
-        let (unop, _) = unary(ast.expr(lhs));
+        let (unop, _) = unary(ast.try_expr(lhs).unwrap());
         assert_eq!(unop, crate::UnOp::Neg);
-        assert_eq!(ast.expr(rhs).kind, crate::ExprKind::Number(1.0));
+        assert_eq!(
+            ast.try_expr(rhs).unwrap().kind,
+            crate::ExprKind::Number(1.0)
+        );
     }
 
     #[test]
@@ -6002,10 +6271,10 @@ mod tests {
         let outer = expr_of_single_stmt(&ast);
         let (op, operand) = unary(outer);
         assert_eq!(op, crate::UnOp::Neg);
-        let crate::ExprKind::Paren(inner_id) = ast.expr(operand).kind else {
+        let crate::ExprKind::Paren(inner_id) = ast.try_expr(operand).unwrap().kind else {
             panic!("expected Paren");
         };
-        let (inner_op, ..) = binary(ast.expr(inner_id));
+        let (inner_op, ..) = binary(ast.try_expr(inner_id).unwrap());
         assert_eq!(inner_op, crate::BinOp::Add);
     }
 
@@ -6031,7 +6300,7 @@ mod tests {
             panic!("expected ExprKind::InstanceOf, got {:?}", outer.kind);
         };
         assert!(matches!(
-            ast.expr(*value).kind,
+            ast.try_expr(*value).unwrap().kind,
             crate::ExprKind::Identifier(_)
         ));
         assert!(matches!(ty.kind, crate::TypeAnnotationKind::Name { .. }));
@@ -6046,10 +6315,13 @@ mod tests {
         let (op, lhs, rhs) = binary(outer);
         assert_eq!(op, crate::BinOp::And);
         assert!(matches!(
-            ast.expr(lhs).kind,
+            ast.try_expr(lhs).unwrap().kind,
             crate::ExprKind::InstanceOf { .. }
         ));
-        assert!(matches!(ast.expr(rhs).kind, crate::ExprKind::Identifier(_)));
+        assert!(matches!(
+            ast.try_expr(rhs).unwrap().kind,
+            crate::ExprKind::Identifier(_)
+        ));
     }
 
     /// `<T>x` produces the same node as `x as T`, so everything downstream of the
@@ -6061,7 +6333,7 @@ mod tests {
         let outer = expr_of_single_stmt(&ast);
         let (inner, ty) = as_cast(outer);
         assert!(matches!(
-            ast.expr(inner).kind,
+            ast.try_expr(inner).unwrap().kind,
             crate::ExprKind::Identifier(_)
         ));
         assert!(matches!(ty.kind, crate::TypeAnnotationKind::Name { .. }));
@@ -6097,7 +6369,7 @@ mod tests {
         let outer = expr_of_single_stmt(&ast);
         let (inner, ty) = as_cast(outer);
         assert!(matches!(
-            ast.expr(inner).kind,
+            ast.try_expr(inner).unwrap().kind,
             crate::ExprKind::Identifier(_)
         ));
         match &ty.kind {
@@ -6157,8 +6429,14 @@ mod tests {
         let outer = expr_of_single_stmt(&ast);
         let (op, lhs, rhs) = binary(outer);
         assert_eq!(op, crate::BinOp::Add);
-        assert!(matches!(ast.expr(lhs).kind, crate::ExprKind::As { .. }));
-        assert!(matches!(ast.expr(rhs).kind, crate::ExprKind::Number(_)));
+        assert!(matches!(
+            ast.try_expr(lhs).unwrap().kind,
+            crate::ExprKind::As { .. }
+        ));
+        assert!(matches!(
+            ast.try_expr(rhs).unwrap().kind,
+            crate::ExprKind::Number(_)
+        ));
     }
 
     #[test]
@@ -6168,7 +6446,7 @@ mod tests {
         let outer = expr_of_single_stmt(&ast);
         let (inner, _) = as_cast(outer);
         assert!(matches!(
-            ast.expr(inner).kind,
+            ast.try_expr(inner).unwrap().kind,
             crate::ExprKind::Unary {
                 op: crate::UnOp::Not,
                 ..
@@ -6182,9 +6460,9 @@ mod tests {
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
         let outer = expr_of_single_stmt(&ast);
         let (inner, _outer_ty) = as_cast(outer);
-        let (innermost, _inner_ty) = as_cast(ast.expr(inner));
+        let (innermost, _inner_ty) = as_cast(ast.try_expr(inner).unwrap());
         assert!(matches!(
-            ast.expr(innermost).kind,
+            ast.try_expr(innermost).unwrap().kind,
             crate::ExprKind::Identifier(_)
         ));
     }
@@ -6197,7 +6475,10 @@ mod tests {
         match &outer.kind {
             crate::ExprKind::Call { args, .. } => {
                 assert_eq!(args.len(), 1);
-                assert!(matches!(ast.expr(args[0]).kind, crate::ExprKind::As { .. }));
+                assert!(matches!(
+                    ast.try_expr(args[0]).unwrap().kind,
+                    crate::ExprKind::As { .. }
+                ));
             }
             other => panic!("expected Call, got {other:?}"),
         }
@@ -6210,7 +6491,7 @@ mod tests {
         let outer = expr_of_single_stmt(&ast);
         let (inner, _) = as_cast(outer);
         assert!(matches!(
-            ast.expr(inner).kind,
+            ast.try_expr(inner).unwrap().kind,
             crate::ExprKind::FieldAccess { .. }
         ));
     }
@@ -6248,11 +6529,11 @@ mod tests {
         let src = "const f = (s: Shape): s is Circle => true;";
         let (ast, diags) = parse_str(src);
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
-        let value = match &ast.stmt(ast.top_level[0]).kind {
+        let value = match &ast.try_stmt(ast.top_level[0]).unwrap().kind {
             crate::StmtKind::Const { value, .. } => *value,
             _ => panic!("expected const"),
         };
-        match &ast.expr(value).kind {
+        match &ast.try_expr(value).unwrap().kind {
             crate::ExprKind::Arrow {
                 return_type,
                 type_predicate,
@@ -6303,7 +6584,7 @@ mod tests {
             panic!("expected Typeof, got {:?}", outer.kind);
         };
         assert!(matches!(
-            ast.expr(operand).kind,
+            ast.try_expr(operand).unwrap().kind,
             crate::ExprKind::Identifier(_)
         ));
         assert_eq!(outer.span, crate::Span::new(F, 0, 8).unwrap());
@@ -6316,9 +6597,12 @@ mod tests {
         let outer = expr_of_single_stmt(&ast);
         let (op, lhs, rhs) = binary(outer);
         assert_eq!(op, crate::BinOp::Eq);
-        assert!(matches!(ast.expr(lhs).kind, crate::ExprKind::Typeof { .. }));
         assert!(matches!(
-            ast.expr(rhs).kind,
+            ast.try_expr(lhs).unwrap().kind,
+            crate::ExprKind::Typeof { .. }
+        ));
+        assert!(matches!(
+            ast.try_expr(rhs).unwrap().kind,
             crate::ExprKind::String(ref s) if s == "number"
         ));
     }
@@ -6339,7 +6623,10 @@ mod tests {
                 assert_eq!(name.name, "x");
                 assert_eq!(name.span, crate::Span::new(F, 4, 5).unwrap());
                 assert!(ty.is_none());
-                assert_eq!(ast.expr(value).kind, crate::ExprKind::Number(1.0));
+                assert_eq!(
+                    ast.try_expr(value).unwrap().kind,
+                    crate::ExprKind::Number(1.0)
+                );
             }
             _ => panic!("expected Let"),
         }
@@ -6363,7 +6650,7 @@ mod tests {
                 assert!(matches!(ty.kind, crate::TypeAnnotationKind::Name { .. }));
                 assert_eq!(ty.span, crate::Span::new(F, 9, 15).unwrap());
                 assert_eq!(
-                    ast.expr(value).kind,
+                    ast.try_expr(value).unwrap().kind,
                     crate::ExprKind::String("hi".to_string())
                 );
             }
@@ -6379,7 +6666,7 @@ mod tests {
         match stmt.kind {
             crate::StmtKind::Let { ref ty, value, .. } => {
                 assert!(ty.is_some());
-                let (op, ..) = binary(ast.expr(value));
+                let (op, ..) = binary(ast.try_expr(value).unwrap());
                 assert_eq!(op, crate::BinOp::Add);
             }
             _ => panic!("expected Let"),
@@ -6675,7 +6962,7 @@ mod tests {
             panic!("expected Const, got {:?}", stmt.kind);
         };
         assert!(matches!(
-            ast.expr(value).kind,
+            ast.try_expr(value).unwrap().kind,
             crate::ExprKind::Ternary { .. }
         ));
     }
@@ -6688,11 +6975,11 @@ mod tests {
         let crate::StmtKind::Const { value, .. } = stmt.kind else {
             panic!("expected Const");
         };
-        let crate::ExprKind::Ternary { else_, .. } = ast.expr(value).kind else {
+        let crate::ExprKind::Ternary { else_, .. } = ast.try_expr(value).unwrap().kind else {
             panic!("expected outer Ternary");
         };
         assert!(matches!(
-            ast.expr(else_).kind,
+            ast.try_expr(else_).unwrap().kind,
             crate::ExprKind::Ternary { .. }
         ));
     }
@@ -6716,7 +7003,7 @@ mod tests {
         let crate::StmtKind::Const { value, .. } = stmt.kind else {
             panic!("expected Const");
         };
-        match ast.expr(value).kind {
+        match ast.try_expr(value).unwrap().kind {
             crate::ExprKind::Binary { op, .. } => {
                 assert_eq!(op, crate::BinOp::NullishCoalesce);
             }
@@ -6732,10 +7019,10 @@ mod tests {
         let crate::StmtKind::Const { value, .. } = stmt.kind else {
             panic!("expected Const");
         };
-        let crate::ExprKind::Binary { lhs, .. } = ast.expr(value).kind else {
+        let crate::ExprKind::Binary { lhs, .. } = ast.try_expr(value).unwrap().kind else {
             panic!("expected outer Binary");
         };
-        match ast.expr(lhs).kind {
+        match ast.try_expr(lhs).unwrap().kind {
             crate::ExprKind::Binary { op, .. } => {
                 assert_eq!(op, crate::BinOp::NullishCoalesce);
             }
@@ -6751,11 +7038,11 @@ mod tests {
         let crate::StmtKind::Const { value, .. } = stmt.kind else {
             panic!("expected Const");
         };
-        let crate::ExprKind::Binary { op, rhs, .. } = ast.expr(value).kind else {
+        let crate::ExprKind::Binary { op, rhs, .. } = ast.try_expr(value).unwrap().kind else {
             panic!("expected outer Binary");
         };
         assert_eq!(op, crate::BinOp::Pow);
-        match ast.expr(rhs).kind {
+        match ast.try_expr(rhs).unwrap().kind {
             crate::ExprKind::Binary { op: inner_op, .. } => {
                 assert_eq!(inner_op, crate::BinOp::Pow);
             }
@@ -6771,11 +7058,11 @@ mod tests {
         let crate::StmtKind::Const { value, .. } = stmt.kind else {
             panic!("expected Const");
         };
-        let crate::ExprKind::Binary { op, rhs, .. } = ast.expr(value).kind else {
+        let crate::ExprKind::Binary { op, rhs, .. } = ast.try_expr(value).unwrap().kind else {
             panic!("expected outer Binary");
         };
         assert_eq!(op, crate::BinOp::Mul);
-        match ast.expr(rhs).kind {
+        match ast.try_expr(rhs).unwrap().kind {
             crate::ExprKind::Binary { op: inner_op, .. } => {
                 assert_eq!(inner_op, crate::BinOp::Pow);
             }
@@ -6788,19 +7075,23 @@ mod tests {
         let (ast, diags) = parse_str("function main(): void { let x: number = 0; x += 5; }");
         assert!(diags.is_empty(), "unexpected: {diags:?}");
         let func = ast.top_level.iter().find_map(|sid| {
-            if let crate::StmtKind::Function { body, .. } = &ast.stmt(*sid).kind {
+            if let crate::StmtKind::Function { body, .. } = &ast.try_stmt(*sid).unwrap().kind {
                 Some(*body)
             } else {
                 None
             }
         });
-        let crate::StmtKind::Block(stmts) = &ast.stmt(func.expect("main")).kind else {
+        let crate::StmtKind::Block(stmts) = &ast.try_stmt(func.expect("main")).unwrap().kind else {
             panic!("expected function body to be a block");
         };
-        let target = stmts.iter().find_map(|sid| match &ast.stmt(*sid).kind {
-            crate::StmtKind::CompoundAssign { target, op, .. } => Some((target.name.clone(), *op)),
-            _ => None,
-        });
+        let target = stmts
+            .iter()
+            .find_map(|sid| match &ast.try_stmt(*sid).unwrap().kind {
+                crate::StmtKind::CompoundAssign { target, op, .. } => {
+                    Some((target.name.clone(), *op))
+                }
+                _ => None,
+            });
         let (name, op) = target.expect("expected a CompoundAssign in the body");
         assert_eq!(name, "x");
         assert_eq!(op, crate::BinOp::Add);
@@ -6842,7 +7133,7 @@ mod tests {
         let crate::StmtKind::Const { value, .. } = stmt.kind else {
             panic!("expected Const");
         };
-        match ast.expr(value).kind {
+        match ast.try_expr(value).unwrap().kind {
             crate::ExprKind::OptionalChain { ref parts, .. } => {
                 assert_eq!(parts.len(), 1);
                 match &parts[0] {
@@ -6865,7 +7156,7 @@ mod tests {
         let crate::StmtKind::Const { value, .. } = stmt.kind else {
             panic!("expected Const");
         };
-        match ast.expr(value).kind {
+        match ast.try_expr(value).unwrap().kind {
             crate::ExprKind::OptionalChain { ref parts, .. } => {
                 assert_eq!(parts.len(), 2);
                 if let crate::ChainPart::Field { optional, .. } = &parts[0] {
@@ -6887,7 +7178,8 @@ mod tests {
         let crate::StmtKind::Const { value, .. } = stmt.kind else {
             panic!("expected Const");
         };
-        let crate::ExprKind::OptionalChain { parts, .. } = &ast.expr(value).kind else {
+        let crate::ExprKind::OptionalChain { parts, .. } = &ast.try_expr(value).unwrap().kind
+        else {
             panic!("expected OptionalChain");
         };
         assert_eq!(parts.len(), 2);
@@ -6914,11 +7206,14 @@ mod tests {
         let crate::StmtKind::Const { value, .. } = stmt.kind else {
             panic!("expected Const");
         };
-        let crate::ExprKind::Ternary { cond, .. } = ast.expr(value).kind else {
-            panic!("expected top-level Ternary, got {:?}", ast.expr(value).kind);
+        let crate::ExprKind::Ternary { cond, .. } = ast.try_expr(value).unwrap().kind else {
+            panic!(
+                "expected top-level Ternary, got {:?}",
+                ast.try_expr(value).unwrap().kind
+            );
         };
         assert!(matches!(
-            ast.expr(cond).kind,
+            ast.try_expr(cond).unwrap().kind,
             crate::ExprKind::OptionalChain { .. }
         ));
     }
@@ -6931,10 +7226,10 @@ mod tests {
         let crate::StmtKind::Const { value, .. } = stmt.kind else {
             panic!("expected Const");
         };
-        let crate::ExprKind::Ternary { cond, .. } = ast.expr(value).kind else {
+        let crate::ExprKind::Ternary { cond, .. } = ast.try_expr(value).unwrap().kind else {
             panic!("expected top-level Ternary");
         };
-        match ast.expr(cond).kind {
+        match ast.try_expr(cond).unwrap().kind {
             crate::ExprKind::Binary { op, .. } => {
                 assert_eq!(op, crate::BinOp::NullishCoalesce);
             }
@@ -7032,7 +7327,7 @@ mod tests {
                     crate::TypeAnnotationKind::Name { .. }
                 ));
                 assert_eq!(return_type.span, crate::Span::new(F, 34, 41).unwrap()); // `boolean`
-                let block = ast.stmt(body);
+                let block = ast.try_stmt(body).unwrap();
                 assert!(matches!(block.kind, crate::StmtKind::Block(ref v) if v.is_empty()));
             }
             _ => panic!("expected Function"),
@@ -7289,7 +7584,7 @@ mod tests {
         let crate::StmtKind::Expr(call_id) = stmt.kind else {
             panic!("expected Expr stmt");
         };
-        match &ast.expr(call_id).kind {
+        match &ast.try_expr(call_id).unwrap().kind {
             crate::ExprKind::Call {
                 type_args, args, ..
             } => {
@@ -7309,7 +7604,7 @@ mod tests {
         let crate::StmtKind::Expr(call_id) = stmt.kind else {
             panic!("expected Expr stmt");
         };
-        match &ast.expr(call_id).kind {
+        match &ast.try_expr(call_id).unwrap().kind {
             crate::ExprKind::Call {
                 type_args, args, ..
             } => {
@@ -7328,7 +7623,7 @@ mod tests {
         let crate::StmtKind::Expr(call_id) = stmt.kind else {
             panic!("expected Expr stmt");
         };
-        match &ast.expr(call_id).kind {
+        match &ast.try_expr(call_id).unwrap().kind {
             crate::ExprKind::Call { type_args, .. } => {
                 let ta = type_args.as_ref().expect("type_args set for generic call");
                 assert_eq!(ta.len(), 2);
@@ -7362,7 +7657,7 @@ mod tests {
         let crate::StmtKind::Expr(call_id) = stmt.kind else {
             panic!("expected Expr stmt");
         };
-        match &ast.expr(call_id).kind {
+        match &ast.try_expr(call_id).unwrap().kind {
             crate::ExprKind::Call {
                 type_args, args, ..
             } => {
@@ -7375,7 +7670,7 @@ mod tests {
 
     fn ast_contains_call_with_type_args(ast: &crate::Ast) -> bool {
         for id in 0..ast.top_level.len() {
-            let stmt = ast.stmt(ast.top_level[id]);
+            let stmt = ast.try_stmt(ast.top_level[id]).unwrap();
             if walk_stmt_for_typed_call(ast, stmt) {
                 return true;
             }
@@ -7391,13 +7686,13 @@ mod tests {
             crate::StmtKind::Expr(e) => walk_expr_for_typed_call(ast, *e),
             crate::StmtKind::Block(stmts) => stmts
                 .iter()
-                .any(|sid| walk_stmt_for_typed_call(ast, ast.stmt(*sid))),
+                .any(|sid| walk_stmt_for_typed_call(ast, ast.try_stmt(*sid).unwrap())),
             _ => false,
         }
     }
 
     fn walk_expr_for_typed_call(ast: &crate::Ast, id: crate::ExprId) -> bool {
-        match &ast.expr(id).kind {
+        match &ast.try_expr(id).unwrap().kind {
             crate::ExprKind::Call {
                 type_args: Some(_), ..
             } => true,
@@ -7427,7 +7722,7 @@ mod tests {
         let stmt = single_stmt(&ast);
         match stmt.kind {
             crate::StmtKind::Function { body, .. } => {
-                let block = ast.stmt(body);
+                let block = ast.try_stmt(body).unwrap();
                 match block.kind {
                     crate::StmtKind::Block(ref v) => assert_eq!(v.len(), 2),
                     _ => panic!("expected Block"),
@@ -7584,7 +7879,7 @@ mod tests {
         let outer = expr_of_single_stmt(&ast);
         let (callee, args) = call(outer);
         assert!(matches!(
-            ast.expr(callee).kind,
+            ast.try_expr(callee).unwrap().kind,
             crate::ExprKind::Identifier(_)
         ));
         assert!(args.is_empty());
@@ -7598,11 +7893,14 @@ mod tests {
         let outer = expr_of_single_stmt(&ast);
         let (callee, args) = call(outer);
         assert!(matches!(
-            ast.expr(callee).kind,
+            ast.try_expr(callee).unwrap().kind,
             crate::ExprKind::Identifier(_)
         ));
         assert_eq!(args.len(), 1);
-        assert_eq!(ast.expr(args[0]).kind, crate::ExprKind::Number(1.0));
+        assert_eq!(
+            ast.try_expr(args[0]).unwrap().kind,
+            crate::ExprKind::Number(1.0)
+        );
     }
 
     #[test]
@@ -7612,9 +7910,18 @@ mod tests {
         let outer = expr_of_single_stmt(&ast);
         let (_callee, args) = call(outer);
         assert_eq!(args.len(), 3);
-        assert_eq!(ast.expr(args[0]).kind, crate::ExprKind::Number(1.0));
-        assert_eq!(ast.expr(args[1]).kind, crate::ExprKind::Number(2.0));
-        assert_eq!(ast.expr(args[2]).kind, crate::ExprKind::Number(3.0));
+        assert_eq!(
+            ast.try_expr(args[0]).unwrap().kind,
+            crate::ExprKind::Number(1.0)
+        );
+        assert_eq!(
+            ast.try_expr(args[1]).unwrap().kind,
+            crate::ExprKind::Number(2.0)
+        );
+        assert_eq!(
+            ast.try_expr(args[2]).unwrap().kind,
+            crate::ExprKind::Number(3.0)
+        );
     }
 
     #[test]
@@ -7624,10 +7931,10 @@ mod tests {
         let outer = expr_of_single_stmt(&ast);
         let (_callee, args) = call(outer);
         assert_eq!(args.len(), 1);
-        let (_inner_callee, inner_args) = call(ast.expr(args[0]));
+        let (_inner_callee, inner_args) = call(ast.try_expr(args[0]).unwrap());
         assert_eq!(inner_args.len(), 1);
         assert!(matches!(
-            ast.expr(inner_args[0]).kind,
+            ast.try_expr(inner_args[0]).unwrap().kind,
             crate::ExprKind::Identifier(_)
         ));
     }
@@ -7639,7 +7946,7 @@ mod tests {
         let outer = expr_of_single_stmt(&ast);
         let (callee, args) = call(outer);
         assert_eq!(args.len(), 1);
-        let (_inner_callee, inner_args) = call(ast.expr(callee));
+        let (_inner_callee, inner_args) = call(ast.try_expr(callee).unwrap());
         assert!(inner_args.is_empty());
     }
 
@@ -7650,7 +7957,7 @@ mod tests {
         let outer = expr_of_single_stmt(&ast);
         let (op, operand) = unary(outer);
         assert_eq!(op, crate::UnOp::Neg);
-        let (_callee, args) = call(ast.expr(operand));
+        let (_callee, args) = call(ast.try_expr(operand).unwrap());
         assert!(args.is_empty());
     }
 
@@ -7661,9 +7968,12 @@ mod tests {
         let outer = expr_of_single_stmt(&ast);
         let (op, lhs, rhs) = binary(outer);
         assert_eq!(op, crate::BinOp::Add);
-        let (_callee, args) = call(ast.expr(lhs));
+        let (_callee, args) = call(ast.try_expr(lhs).unwrap());
         assert!(args.is_empty());
-        assert_eq!(ast.expr(rhs).kind, crate::ExprKind::Number(1.0));
+        assert_eq!(
+            ast.try_expr(rhs).unwrap().kind,
+            crate::ExprKind::Number(1.0)
+        );
     }
 
     #[test]
@@ -7673,9 +7983,9 @@ mod tests {
         let outer = expr_of_single_stmt(&ast);
         let (_callee, args) = call(outer);
         assert_eq!(args.len(), 2);
-        let (op, ..) = binary(ast.expr(args[0]));
+        let (op, ..) = binary(ast.try_expr(args[0]).unwrap());
         assert_eq!(op, crate::BinOp::Add);
-        let (_, inner_args) = call(ast.expr(args[1]));
+        let (_, inner_args) = call(ast.try_expr(args[1]).unwrap());
         assert_eq!(inner_args.len(), 1);
     }
 
@@ -7702,12 +8012,12 @@ mod tests {
         let outer = expr_of_single_stmt(&ast);
         let (callee, args) = call(outer);
         assert!(matches!(
-            ast.expr(callee).kind,
+            ast.try_expr(callee).unwrap().kind,
             crate::ExprKind::Identifier(_)
         ));
         assert_eq!(args.len(), 1);
         assert_eq!(
-            ast.expr(args[0]).kind,
+            ast.try_expr(args[0]).unwrap().kind,
             crate::ExprKind::String("world".to_string())
         );
     }
@@ -7732,11 +8042,11 @@ mod tests {
                 else_block,
             } => {
                 assert!(matches!(
-                    ast.expr(condition).kind,
+                    ast.try_expr(condition).unwrap().kind,
                     crate::ExprKind::Identifier(_)
                 ));
                 assert!(matches!(
-                    ast.stmt(then_block).kind,
+                    ast.try_stmt(then_block).unwrap().kind,
                     crate::StmtKind::Block(ref v) if v.is_empty()
                 ));
                 assert!(else_block.is_none());
@@ -7754,7 +8064,7 @@ mod tests {
             crate::StmtKind::If { else_block, .. } => {
                 let else_id = else_block.expect("expected else block");
                 assert!(matches!(
-                    ast.stmt(else_id).kind,
+                    ast.try_stmt(else_id).unwrap().kind,
                     crate::StmtKind::Block(ref v) if v.is_empty()
                 ));
             }
@@ -7774,7 +8084,7 @@ mod tests {
         else {
             panic!("expected outer If with else_block");
         };
-        let inner = ast.stmt(inner_id);
+        let inner = ast.try_stmt(inner_id).unwrap();
         let crate::StmtKind::If {
             else_block: Some(tail_id),
             ..
@@ -7782,7 +8092,10 @@ mod tests {
         else {
             panic!("expected inner If for `else if`");
         };
-        assert!(matches!(ast.stmt(tail_id).kind, crate::StmtKind::Block(_)));
+        assert!(matches!(
+            ast.try_stmt(tail_id).unwrap().kind,
+            crate::StmtKind::Block(_)
+        ));
     }
 
     #[test]
@@ -7792,7 +8105,8 @@ mod tests {
         let stmt = single_stmt(&ast);
         match stmt.kind {
             crate::StmtKind::If { then_block, .. } => {
-                let crate::StmtKind::Block(ref body) = ast.stmt(then_block).kind else {
+                let crate::StmtKind::Block(ref body) = ast.try_stmt(then_block).unwrap().kind
+                else {
                     panic!("expected Block")
                 };
                 assert_eq!(body.len(), 1);
@@ -7814,11 +8128,14 @@ mod tests {
         else {
             panic!("expected If");
         };
-        let crate::StmtKind::Block(ref body) = ast.stmt(then_block).kind else {
+        let crate::StmtKind::Block(ref body) = ast.try_stmt(then_block).unwrap().kind else {
             panic!("braceless body should wrap in a Block");
         };
         assert_eq!(body.len(), 1);
-        assert!(matches!(ast.stmt(body[0]).kind, crate::StmtKind::Return(_)));
+        assert!(matches!(
+            ast.try_stmt(body[0]).unwrap().kind,
+            crate::StmtKind::Return(_)
+        ));
         assert!(else_block.is_none());
     }
 
@@ -7836,13 +8153,13 @@ mod tests {
             panic!("expected outer If");
         };
         assert!(outer_else.is_none(), "else must bind to the inner if");
-        let crate::StmtKind::Block(ref body) = ast.stmt(then_block).kind else {
+        let crate::StmtKind::Block(ref body) = ast.try_stmt(then_block).unwrap().kind else {
             panic!("expected wrapped Block");
         };
         let crate::StmtKind::If {
             else_block: Some(_),
             ..
-        } = ast.stmt(body[0]).kind
+        } = ast.try_stmt(body[0]).unwrap().kind
         else {
             panic!("inner If should own the else");
         };
@@ -7856,7 +8173,7 @@ mod tests {
             panic!("expected While");
         };
         assert!(matches!(
-            ast.stmt(body).kind,
+            ast.try_stmt(body).unwrap().kind,
             crate::StmtKind::Block(ref v) if v.len() == 1
         ));
     }
@@ -7879,7 +8196,7 @@ mod tests {
                 ref other => panic!("{src}: expected a loop, got {other:?}"),
             };
             assert!(
-                matches!(ast.stmt(body).kind, crate::StmtKind::Block(ref v) if v.is_empty()),
+                matches!(ast.try_stmt(body).unwrap().kind, crate::StmtKind::Block(ref v) if v.is_empty()),
                 "{src}"
             );
         }
@@ -7920,7 +8237,7 @@ mod tests {
             panic!("expected ForOf");
         };
         assert!(matches!(
-            ast.stmt(body).kind,
+            ast.try_stmt(body).unwrap().kind,
             crate::StmtKind::Block(ref v) if v.len() == 1
         ));
     }
@@ -7933,11 +8250,14 @@ mod tests {
         let crate::StmtKind::If { then_block, .. } = outer.kind else {
             panic!("expected outer If");
         };
-        let crate::StmtKind::Block(ref body) = ast.stmt(then_block).kind else {
+        let crate::StmtKind::Block(ref body) = ast.try_stmt(then_block).unwrap().kind else {
             panic!("expected Block")
         };
         assert_eq!(body.len(), 1);
-        assert!(matches!(ast.stmt(body[0]).kind, crate::StmtKind::If { .. }));
+        assert!(matches!(
+            ast.try_stmt(body[0]).unwrap().kind,
+            crate::StmtKind::If { .. }
+        ));
     }
 
     #[test]
@@ -7964,7 +8284,7 @@ mod tests {
             panic!("expected If");
         };
         assert!(matches!(
-            ast.stmt(then_block).kind,
+            ast.try_stmt(then_block).unwrap().kind,
             crate::StmtKind::Block(ref v) if v.len() == 1
         ));
     }
@@ -7984,11 +8304,11 @@ mod tests {
         match stmt.kind {
             crate::StmtKind::While { condition, body } => {
                 assert!(matches!(
-                    ast.expr(condition).kind,
+                    ast.try_expr(condition).unwrap().kind,
                     crate::ExprKind::Identifier(_)
                 ));
                 assert!(matches!(
-                    ast.stmt(body).kind,
+                    ast.try_stmt(body).unwrap().kind,
                     crate::StmtKind::Block(ref v) if v.is_empty()
                 ));
             }
@@ -8004,7 +8324,7 @@ mod tests {
         let crate::StmtKind::While { body, .. } = stmt.kind else {
             panic!("expected While");
         };
-        let crate::StmtKind::Block(ref stmts) = ast.stmt(body).kind else {
+        let crate::StmtKind::Block(ref stmts) = ast.try_stmt(body).unwrap().kind else {
             panic!("expected Block")
         };
         assert_eq!(stmts.len(), 2);
@@ -8035,7 +8355,10 @@ mod tests {
         assert!(init.is_some(), "init missing");
         assert!(condition.is_some(), "condition missing");
         assert!(update.is_some(), "update missing");
-        assert!(matches!(ast.stmt(body).kind, crate::StmtKind::Block(_)));
+        assert!(matches!(
+            ast.try_stmt(body).unwrap().kind,
+            crate::StmtKind::Block(_)
+        ));
     }
 
     #[test]
@@ -8107,11 +8430,17 @@ mod tests {
         let crate::StmtKind::While { body, .. } = stmt.kind else {
             panic!("expected While");
         };
-        let crate::StmtKind::Block(ref stmts) = ast.stmt(body).kind else {
+        let crate::StmtKind::Block(ref stmts) = ast.try_stmt(body).unwrap().kind else {
             panic!("expected Block");
         };
-        assert!(matches!(ast.stmt(stmts[0]).kind, crate::StmtKind::Break));
-        assert!(matches!(ast.stmt(stmts[1]).kind, crate::StmtKind::Continue));
+        assert!(matches!(
+            ast.try_stmt(stmts[0]).unwrap().kind,
+            crate::StmtKind::Break
+        ));
+        assert!(matches!(
+            ast.try_stmt(stmts[1]).unwrap().kind,
+            crate::StmtKind::Continue
+        ));
     }
 
     #[test]
@@ -8122,11 +8451,11 @@ mod tests {
         let crate::StmtKind::Function { body, .. } = f.kind else {
             panic!("expected Function");
         };
-        let crate::StmtKind::Block(ref stmts) = ast.stmt(body).kind else {
+        let crate::StmtKind::Block(ref stmts) = ast.try_stmt(body).unwrap().kind else {
             panic!("expected Block")
         };
         assert_eq!(stmts.len(), 1);
-        match ast.stmt(stmts[0]).kind {
+        match ast.try_stmt(stmts[0]).unwrap().kind {
             crate::StmtKind::Return(None) => {}
             _ => panic!("expected Return(None)"),
         }
@@ -8140,12 +8469,15 @@ mod tests {
         let crate::StmtKind::Function { body, .. } = f.kind else {
             panic!("expected Function");
         };
-        let crate::StmtKind::Block(ref stmts) = ast.stmt(body).kind else {
+        let crate::StmtKind::Block(ref stmts) = ast.try_stmt(body).unwrap().kind else {
             panic!("expected Block")
         };
-        match ast.stmt(stmts[0]).kind {
+        match ast.try_stmt(stmts[0]).unwrap().kind {
             crate::StmtKind::Return(Some(value)) => {
-                assert_eq!(ast.expr(value).kind, crate::ExprKind::Number(1.0));
+                assert_eq!(
+                    ast.try_expr(value).unwrap().kind,
+                    crate::ExprKind::Number(1.0)
+                );
             }
             _ => panic!("expected Return(Some)"),
         }
@@ -8159,12 +8491,12 @@ mod tests {
         let crate::StmtKind::Function { body, .. } = f.kind else {
             panic!("expected Function");
         };
-        let crate::StmtKind::Block(ref stmts) = ast.stmt(body).kind else {
+        let crate::StmtKind::Block(ref stmts) = ast.try_stmt(body).unwrap().kind else {
             panic!("expected Block")
         };
-        match ast.stmt(stmts[0]).kind {
+        match ast.try_stmt(stmts[0]).unwrap().kind {
             crate::StmtKind::Return(Some(value)) => {
-                let (op, ..) = binary(ast.expr(value));
+                let (op, ..) = binary(ast.try_expr(value).unwrap());
                 assert_eq!(op, crate::BinOp::Add);
             }
             _ => panic!("expected Return(Some(Binary))"),
@@ -8210,7 +8542,7 @@ mod tests {
         };
         assert_eq!(stmts.len(), 1);
         assert!(matches!(
-            ast.stmt(stmts[0]).kind,
+            ast.try_stmt(stmts[0]).unwrap().kind,
             crate::StmtKind::Block(ref v) if v.is_empty()
         ));
     }
@@ -8263,7 +8595,7 @@ mod tests {
         let crate::StmtKind::Let { value, .. } = single_stmt(&ast).kind else {
             panic!("expected Let");
         };
-        assert!(object_literal(ast.expr(value)).is_empty());
+        assert!(object_literal(ast.try_expr(value).unwrap()).is_empty());
     }
 
     #[test]
@@ -8273,14 +8605,20 @@ mod tests {
         let crate::StmtKind::Let { value, .. } = single_stmt(&ast).kind else {
             panic!("expected Let");
         };
-        let members = object_literal(ast.expr(value));
+        let members = object_literal(ast.try_expr(value).unwrap());
         assert_eq!(members.len(), 2);
         let f0 = object_literal_field(&members[0]);
         let f1 = object_literal_field(&members[1]);
         assert_eq!(f0.name.name, "x");
         assert_eq!(f1.name.name, "y");
-        assert_eq!(ast.expr(f0.value).kind, crate::ExprKind::Number(1.0));
-        assert_eq!(ast.expr(f1.value).kind, crate::ExprKind::Number(2.0));
+        assert_eq!(
+            ast.try_expr(f0.value).unwrap().kind,
+            crate::ExprKind::Number(1.0)
+        );
+        assert_eq!(
+            ast.try_expr(f1.value).unwrap().kind,
+            crate::ExprKind::Number(2.0)
+        );
     }
 
     #[test]
@@ -8290,7 +8628,7 @@ mod tests {
         let crate::StmtKind::Let { value, .. } = single_stmt(&ast).kind else {
             panic!("expected Let");
         };
-        let names: Vec<&str> = object_literal(ast.expr(value))
+        let names: Vec<&str> = object_literal(ast.try_expr(value).unwrap())
             .iter()
             .map(object_literal_field)
             .map(|f| f.name.name.as_str())
@@ -8305,7 +8643,7 @@ mod tests {
         let crate::StmtKind::Let { value, .. } = single_stmt(&ast).kind else {
             panic!("expected Let");
         };
-        let members = object_literal(ast.expr(value));
+        let members = object_literal(ast.try_expr(value).unwrap());
         assert_eq!(members.len(), 1);
         let f0 = object_literal_field(&members[0]);
         assert_eq!(f0.name.name, "hello");
@@ -8318,7 +8656,7 @@ mod tests {
         let crate::StmtKind::Let { value, .. } = single_stmt(&ast).kind else {
             panic!("expected Let");
         };
-        let members = object_literal(ast.expr(value));
+        let members = object_literal(ast.try_expr(value).unwrap());
         assert_eq!(members.len(), 1);
         let f0 = object_literal_field(&members[0]);
         assert_eq!(f0.name.name, "content-type");
@@ -8331,13 +8669,13 @@ mod tests {
         let crate::StmtKind::Let { value, .. } = single_stmt(&ast).kind else {
             panic!("expected Let");
         };
-        let members = object_literal(ast.expr(value));
+        let members = object_literal(ast.try_expr(value).unwrap());
         assert_eq!(members.len(), 2);
         let f0 = object_literal_field(&members[0]);
         assert_eq!(f0.name.name, "x");
         // `{ x }` desugars to `{ x: x }` — value is an identifier reference.
         assert_eq!(
-            ast.expr(f0.value).kind,
+            ast.try_expr(f0.value).unwrap().kind,
             crate::ExprKind::Identifier(crate::Ident {
                 name: "x".into(),
                 span: f0.name.span,
@@ -8345,7 +8683,10 @@ mod tests {
         );
         let f1 = object_literal_field(&members[1]);
         assert_eq!(f1.name.name, "y");
-        assert_eq!(ast.expr(f1.value).kind, crate::ExprKind::Number(2.0));
+        assert_eq!(
+            ast.try_expr(f1.value).unwrap().kind,
+            crate::ExprKind::Number(2.0)
+        );
     }
 
     #[test]
@@ -8366,7 +8707,7 @@ mod tests {
         let crate::StmtKind::Let { value, .. } = single_stmt(&ast).kind else {
             panic!("expected Let");
         };
-        assert_eq!(object_literal(ast.expr(value)).len(), 2);
+        assert_eq!(object_literal(ast.try_expr(value).unwrap()).len(), 2);
     }
 
     #[test]
@@ -8383,7 +8724,7 @@ mod tests {
         let crate::StmtKind::Let { value, .. } = single_stmt(&ast).kind else {
             panic!("expected Let");
         };
-        assert!(array_literal(ast.expr(value)).is_empty());
+        assert!(array_literal(ast.try_expr(value).unwrap()).is_empty());
     }
 
     #[test]
@@ -8393,14 +8734,18 @@ mod tests {
         let crate::StmtKind::Let { value, .. } = single_stmt(&ast).kind else {
             panic!("expected Let");
         };
-        let elements = array_literal(ast.expr(value));
+        let elements = array_literal(ast.try_expr(value).unwrap());
         assert_eq!(elements.len(), 3);
         assert_eq!(
-            ast.expr(array_literal_value(&elements[0])).kind,
+            ast.try_expr(array_literal_value(&elements[0]))
+                .unwrap()
+                .kind,
             crate::ExprKind::Number(1.0)
         );
         assert_eq!(
-            ast.expr(array_literal_value(&elements[2])).kind,
+            ast.try_expr(array_literal_value(&elements[2]))
+                .unwrap()
+                .kind,
             crate::ExprKind::Number(3.0)
         );
     }
@@ -8412,7 +8757,7 @@ mod tests {
         let crate::StmtKind::Let { value, .. } = single_stmt(&ast).kind else {
             panic!("expected Let");
         };
-        assert_eq!(array_literal(ast.expr(value)).len(), 2);
+        assert_eq!(array_literal(ast.try_expr(value).unwrap()).len(), 2);
     }
 
     #[test]
@@ -8422,10 +8767,10 @@ mod tests {
         let crate::StmtKind::Let { value, .. } = single_stmt(&ast).kind else {
             panic!("expected Let");
         };
-        let members = object_literal(ast.expr(value));
+        let members = object_literal(ast.try_expr(value).unwrap());
         let f0 = object_literal_field(&members[0]);
         assert_eq!(f0.name.name, "items");
-        let inner = array_literal(ast.expr(f0.value));
+        let inner = array_literal(ast.try_expr(f0.value).unwrap());
         assert_eq!(inner.len(), 2);
     }
 
@@ -8436,14 +8781,14 @@ mod tests {
         let crate::StmtKind::Let { value, .. } = single_stmt(&ast).kind else {
             panic!("expected Let");
         };
-        let elements = array_literal(ast.expr(value));
+        let elements = array_literal(ast.try_expr(value).unwrap());
         assert_eq!(elements.len(), 2);
         assert_eq!(
-            object_literal(ast.expr(array_literal_value(&elements[0]))).len(),
+            object_literal(ast.try_expr(array_literal_value(&elements[0])).unwrap()).len(),
             1
         );
         assert_eq!(
-            object_literal(ast.expr(array_literal_value(&elements[1]))).len(),
+            object_literal(ast.try_expr(array_literal_value(&elements[1])).unwrap()).len(),
             1
         );
     }
@@ -8478,7 +8823,7 @@ mod tests {
         let outer = expr_of_single_stmt(&ast);
         let (receiver, name) = field_access(outer);
         assert!(matches!(
-            ast.expr(receiver).kind,
+            ast.try_expr(receiver).unwrap().kind,
             crate::ExprKind::Identifier(_)
         ));
         assert_eq!(name, "b");
@@ -8491,9 +8836,9 @@ mod tests {
         let outer = expr_of_single_stmt(&ast);
         let (receiver, name) = field_access(outer);
         assert_eq!(name, "null");
-        let (receiver, name) = field_access(ast.expr(receiver));
+        let (receiver, name) = field_access(ast.try_expr(receiver).unwrap());
         assert_eq!(name, "default");
-        let (_receiver, name) = field_access(ast.expr(receiver));
+        let (_receiver, name) = field_access(ast.try_expr(receiver).unwrap());
         assert_eq!(name, "type");
     }
 
@@ -8504,10 +8849,10 @@ mod tests {
         let outer = expr_of_single_stmt(&ast);
         let (mid_id, c) = field_access(outer);
         assert_eq!(c, "c");
-        let (a_id, b) = field_access(ast.expr(mid_id));
+        let (a_id, b) = field_access(ast.try_expr(mid_id).unwrap());
         assert_eq!(b, "b");
         assert!(matches!(
-            ast.expr(a_id).kind,
+            ast.try_expr(a_id).unwrap().kind,
             crate::ExprKind::Identifier(_)
         ));
     }
@@ -8519,10 +8864,13 @@ mod tests {
         let outer = expr_of_single_stmt(&ast);
         let (receiver, idx) = index_access(outer);
         assert!(matches!(
-            ast.expr(receiver).kind,
+            ast.try_expr(receiver).unwrap().kind,
             crate::ExprKind::Identifier(_)
         ));
-        assert_eq!(ast.expr(idx).kind, crate::ExprKind::Number(0.0));
+        assert_eq!(
+            ast.try_expr(idx).unwrap().kind,
+            crate::ExprKind::Number(0.0)
+        );
     }
 
     #[test]
@@ -8531,11 +8879,17 @@ mod tests {
         assert!(diags.is_empty());
         let outer = expr_of_single_stmt(&ast);
         let (mid_id, one) = index_access(outer);
-        assert_eq!(ast.expr(one).kind, crate::ExprKind::Number(1.0));
-        let (a_id, zero) = index_access(ast.expr(mid_id));
-        assert_eq!(ast.expr(zero).kind, crate::ExprKind::Number(0.0));
+        assert_eq!(
+            ast.try_expr(one).unwrap().kind,
+            crate::ExprKind::Number(1.0)
+        );
+        let (a_id, zero) = index_access(ast.try_expr(mid_id).unwrap());
+        assert_eq!(
+            ast.try_expr(zero).unwrap().kind,
+            crate::ExprKind::Number(0.0)
+        );
         assert!(matches!(
-            ast.expr(a_id).kind,
+            ast.try_expr(a_id).unwrap().kind,
             crate::ExprKind::Identifier(_)
         ));
     }
@@ -8547,17 +8901,17 @@ mod tests {
         let outer = expr_of_single_stmt(&ast);
         let (callee, args) = call(outer);
         assert!(args.is_empty());
-        let (idx_id, d_name) = field_access(ast.expr(callee));
+        let (idx_id, d_name) = field_access(ast.try_expr(callee).unwrap());
         assert_eq!(d_name, "d");
-        let (b_id, c_idx) = index_access(ast.expr(idx_id));
+        let (b_id, c_idx) = index_access(ast.try_expr(idx_id).unwrap());
         assert!(matches!(
-            ast.expr(c_idx).kind,
+            ast.try_expr(c_idx).unwrap().kind,
             crate::ExprKind::Identifier(_)
         ));
-        let (a_id, b_name) = field_access(ast.expr(b_id));
+        let (a_id, b_name) = field_access(ast.try_expr(b_id).unwrap());
         assert_eq!(b_name, "b");
         assert!(matches!(
-            ast.expr(a_id).kind,
+            ast.try_expr(a_id).unwrap().kind,
             crate::ExprKind::Identifier(_)
         ));
     }
@@ -8569,7 +8923,7 @@ mod tests {
         let outer = expr_of_single_stmt(&ast);
         let (call_id, x_name) = field_access(outer);
         assert_eq!(x_name, "x");
-        let (_callee, args) = call(ast.expr(call_id));
+        let (_callee, args) = call(ast.try_expr(call_id).unwrap());
         assert!(args.is_empty());
     }
 
@@ -8579,7 +8933,7 @@ mod tests {
         assert!(diags.is_empty());
         let outer = expr_of_single_stmt(&ast);
         let (_, idx) = index_access(outer);
-        let (op, ..) = binary(ast.expr(idx));
+        let (op, ..) = binary(ast.try_expr(idx).unwrap());
         assert_eq!(op, crate::BinOp::Add);
     }
 
@@ -8600,7 +8954,7 @@ mod tests {
         };
         assert_eq!(op, crate::PostfixOp::Inc);
         assert!(matches!(
-            ast.expr(operand).kind,
+            ast.try_expr(operand).unwrap().kind,
             crate::ExprKind::Identifier(_)
         ));
         assert_eq!(expr.span, crate::Span::new(F, 0, 3).unwrap());
@@ -8627,7 +8981,7 @@ mod tests {
         };
         assert_eq!(op, crate::PostfixOp::NonNullAssert);
         assert!(matches!(
-            ast.expr(operand).kind,
+            ast.try_expr(operand).unwrap().kind,
             crate::ExprKind::Identifier(_)
         ));
         assert_eq!(expr.span, crate::Span::new(F, 0, 2).unwrap());
@@ -8643,7 +8997,7 @@ mod tests {
         };
         assert_eq!(name.name, "y");
         assert!(matches!(
-            ast.expr(*receiver).kind,
+            ast.try_expr(*receiver).unwrap().kind,
             crate::ExprKind::PostfixUnary {
                 op: crate::PostfixOp::NonNullAssert,
                 ..
@@ -8660,7 +9014,7 @@ mod tests {
             panic!("expected PostfixUnary");
         };
         assert!(matches!(
-            ast.expr(operand).kind,
+            ast.try_expr(operand).unwrap().kind,
             crate::ExprKind::FieldAccess { .. }
         ));
     }
@@ -8674,7 +9028,7 @@ mod tests {
             panic!("expected PostfixUnary");
         };
         assert!(matches!(
-            ast.expr(operand).kind,
+            ast.try_expr(operand).unwrap().kind,
             crate::ExprKind::IndexAccess { .. }
         ));
     }
@@ -8693,10 +9047,10 @@ mod tests {
         let crate::StmtKind::Let { value, .. } = single_stmt(&ast).kind else {
             panic!("expected Let");
         };
-        let (op, lhs, _) = binary(ast.expr(value));
+        let (op, lhs, _) = binary(ast.try_expr(value).unwrap());
         assert_eq!(op, crate::BinOp::Add);
         assert!(matches!(
-            ast.expr(lhs).kind,
+            ast.try_expr(lhs).unwrap().kind,
             crate::ExprKind::PostfixUnary { .. }
         ));
     }
@@ -8715,11 +9069,17 @@ mod tests {
             panic!("expected AssignIndex, got {:?}", stmt.kind);
         };
         assert!(matches!(
-            ast.expr(receiver).kind,
+            ast.try_expr(receiver).unwrap().kind,
             crate::ExprKind::Identifier(_)
         ));
-        assert_eq!(ast.expr(index).kind, crate::ExprKind::Number(0.0));
-        assert_eq!(ast.expr(value).kind, crate::ExprKind::Number(1.0));
+        assert_eq!(
+            ast.try_expr(index).unwrap().kind,
+            crate::ExprKind::Number(0.0)
+        );
+        assert_eq!(
+            ast.try_expr(value).unwrap().kind,
+            crate::ExprKind::Number(1.0)
+        );
     }
 
     #[test]
@@ -8751,9 +9111,9 @@ mod tests {
         let crate::StmtKind::Let { value, .. } = single_stmt(&ast).kind else {
             panic!("expected Let");
         };
-        let (recv_id, name) = field_access(ast.expr(value));
+        let (recv_id, name) = field_access(ast.try_expr(value).unwrap());
         assert_eq!(name, "foo");
-        assert_eq!(object_literal(ast.expr(recv_id)).len(), 1);
+        assert_eq!(object_literal(ast.try_expr(recv_id).unwrap()).len(), 1);
     }
 
     fn type_of_let(stmt: &crate::Stmt) -> &crate::TypeAnnotation {
@@ -9005,7 +9365,8 @@ mod tests {
             "interface Meta { readonly: boolean; }\nlet meta: { readonly: boolean } = null;",
         );
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
-        let crate::StmtKind::InterfaceDecl { ref members, .. } = ast.stmt(ast.top_level[0]).kind
+        let crate::StmtKind::InterfaceDecl { ref members, .. } =
+            ast.try_stmt(ast.top_level[0]).unwrap().kind
         else {
             panic!("expected interface decl");
         };
@@ -9021,7 +9382,7 @@ mod tests {
             "`readonly` here is the property name, not a modifier"
         );
 
-        let ty = type_of_let(ast.stmt(ast.top_level[1]));
+        let ty = type_of_let(ast.try_stmt(ast.top_level[1]).unwrap());
         let crate::TypeAnnotationKind::Object { ref fields, .. } = ty.kind else {
             panic!("expected Object");
         };
@@ -9648,16 +10009,16 @@ mod tests {
         let (ast, diags) = parse_str(source);
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
         assert_eq!(ast.top_level.len(), 1);
-        let stmt = ast.stmt(ast.top_level[0]);
+        let stmt = ast.try_stmt(ast.top_level[0]).unwrap();
         let value = match &stmt.kind {
             StmtKind::Const { value, .. } => *value,
             _ => panic!("expected const declaration"),
         };
-        let value = match ast.expr(value).kind {
+        let value = match ast.try_expr(value).unwrap().kind {
             ExprKind::FunctionExpression { function, .. } => function,
             _ => value,
         };
-        let expr = ast.expr(value).clone();
+        let expr = ast.try_expr(value).unwrap().clone();
         let (params, return_type, body) = match expr.kind {
             ExprKind::Arrow {
                 params,
@@ -9765,7 +10126,7 @@ mod tests {
         );
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
         assert!((0..ast.exprs_len()).any(|index| matches!(
-            ast.expr(crate::ExprId(index as u32)).kind,
+            ast.try_expr(crate::ExprId(index as u32)).unwrap().kind,
             ExprKind::ThisOutsideReceiver
         )));
     }
@@ -9786,12 +10147,12 @@ mod tests {
     fn object_literal_member_values(source: &str) -> (Ast, Vec<crate::ExprId>) {
         let (ast, diags) = parse_str(source);
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
-        let stmt = ast.stmt(ast.top_level[0]);
+        let stmt = ast.try_stmt(ast.top_level[0]).unwrap();
         let value = match &stmt.kind {
             StmtKind::Const { value, .. } => *value,
             other => panic!("expected a const declaration, got {other:?}"),
         };
-        let members = match &ast.expr(value).kind {
+        let members = match &ast.try_expr(value).unwrap().kind {
             ExprKind::ObjectLiteral { members } => members
                 .iter()
                 .map(crate::ObjectLiteralMember::value)
@@ -9806,7 +10167,7 @@ mod tests {
         let (ast, members) =
             object_literal_member_values("const o = { m(x: number): number { return x; } };");
         assert_eq!(members.len(), 1);
-        match &ast.expr(members[0]).kind {
+        match &ast.try_expr(members[0]).unwrap().kind {
             ExprKind::Arrow { params, body, .. } => {
                 assert_eq!(params.len(), 1);
                 assert_eq!(params[0].name.name, "x");
@@ -9821,7 +10182,10 @@ mod tests {
     fn parses_method_shorthand_with_a_keyword_name() {
         let (ast, members) =
             object_literal_member_values("const o = { if(x: number): number { return x; } };");
-        assert!(matches!(ast.expr(members[0]).kind, ExprKind::Arrow { .. }));
+        assert!(matches!(
+            ast.try_expr(members[0]).unwrap().kind,
+            ExprKind::Arrow { .. }
+        ));
     }
 
     #[test]
@@ -9829,7 +10193,10 @@ mod tests {
         let (ast, members) =
             object_literal_member_values("const o = { a: 1, m(): void {}, b: 2 };");
         assert_eq!(members.len(), 3);
-        assert!(matches!(ast.expr(members[1]).kind, ExprKind::Arrow { .. }));
+        assert!(matches!(
+            ast.try_expr(members[1]).unwrap().kind,
+            ExprKind::Arrow { .. }
+        ));
     }
 
     #[test]
@@ -9918,9 +10285,9 @@ mod tests {
     fn arrow_inside_call_argument_parses() {
         let (ast, diags) = parse_str("f((x: number) => x + 1, 2);");
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
-        let stmt = ast.stmt(ast.top_level[0]);
+        let stmt = ast.try_stmt(ast.top_level[0]).unwrap();
         let call = match &stmt.kind {
-            StmtKind::Expr(eid) => ast.expr(*eid),
+            StmtKind::Expr(eid) => ast.try_expr(*eid).unwrap(),
             _ => panic!("expected expression statement"),
         };
         let args = match &call.kind {
@@ -9928,7 +10295,10 @@ mod tests {
             other => panic!("expected Call, got {other:?}"),
         };
         assert_eq!(args.len(), 2);
-        assert!(matches!(ast.expr(args[0]).kind, ExprKind::Arrow { .. }));
+        assert!(matches!(
+            ast.try_expr(args[0]).unwrap().kind,
+            ExprKind::Arrow { .. }
+        ));
     }
 
     #[test]
@@ -9944,12 +10314,15 @@ mod tests {
     fn paren_expression_still_parses_when_no_arrow() {
         let (ast, diags) = parse_str("const a = (1 + 2);");
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
-        let stmt = ast.stmt(ast.top_level[0]);
+        let stmt = ast.try_stmt(ast.top_level[0]).unwrap();
         let value = match &stmt.kind {
             StmtKind::Const { value, .. } => *value,
             _ => panic!("expected const declaration"),
         };
-        assert!(matches!(ast.expr(value).kind, ExprKind::Paren(_)));
+        assert!(matches!(
+            ast.try_expr(value).unwrap().kind,
+            ExprKind::Paren(_)
+        ));
     }
 
     #[test]
@@ -9957,7 +10330,7 @@ mod tests {
         let (ast, diags) = parse_str("import { v4 } from \"submilli:uuid\";");
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
         assert_eq!(ast.top_level.len(), 1);
-        let stmt = ast.stmt(ast.top_level[0]);
+        let stmt = ast.try_stmt(ast.top_level[0]).unwrap();
         let (module, kind) = match &stmt.kind {
             StmtKind::Import { module, kind, .. } => (module, kind),
             other => panic!("expected Import, got {other:?}"),
@@ -9977,7 +10350,7 @@ mod tests {
         let (ast, diags) =
             parse_str("import { v4, v7 as makeId, validate } from \"submilli:uuid\";");
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
-        let specs = match &ast.stmt(ast.top_level[0]).kind {
+        let specs = match &ast.try_stmt(ast.top_level[0]).unwrap().kind {
             StmtKind::Import {
                 kind: ImportKind::Named(s),
                 ..
@@ -9997,7 +10370,7 @@ mod tests {
     fn parse_namespace_import() {
         let (ast, diags) = parse_str("import uuid from \"submilli:uuid\";");
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
-        let kind = match &ast.stmt(ast.top_level[0]).kind {
+        let kind = match &ast.try_stmt(ast.top_level[0]).unwrap().kind {
             StmtKind::Import { kind, .. } => kind.clone(),
             other => panic!("expected import, got {other:?}"),
         };
@@ -10012,7 +10385,7 @@ mod tests {
     fn parse_wildcard_namespace_import_synonym() {
         let (ast, diags) = parse_str("import * as uuid from \"submilli:uuid\";");
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
-        let kind = match &ast.stmt(ast.top_level[0]).kind {
+        let kind = match &ast.try_stmt(ast.top_level[0]).unwrap().kind {
             StmtKind::Import { kind, .. } => kind.clone(),
             other => panic!("expected import, got {other:?}"),
         };
@@ -10152,7 +10525,7 @@ mod tests {
         let (ast, diags) = parse_str("function main(): void {}\nexport { main };");
         assert!(diags.is_empty(), "unexpected diags: {diags:?}");
         assert_eq!(ast.top_level.len(), 2, "function + export-from");
-        let export = ast.stmt(ast.top_level[1]);
+        let export = ast.try_stmt(ast.top_level[1]).unwrap();
         let crate::StmtKind::ExportFrom { specs, source, .. } = &export.kind else {
             panic!("expected ExportFrom, got {:?}", export.kind);
         };
@@ -10166,7 +10539,7 @@ mod tests {
     fn parse_export_from_with_source_and_alias_parses() {
         let (ast, diags) = parse_str("export { foo, bar as baz } from \"./util\";");
         assert!(diags.is_empty(), "unexpected diags: {diags:?}");
-        let export = ast.stmt(ast.top_level[0]);
+        let export = ast.try_stmt(ast.top_level[0]).unwrap();
         let crate::StmtKind::ExportFrom { specs, source, .. } = &export.kind else {
             panic!("expected ExportFrom, got {:?}", export.kind);
         };
@@ -10198,7 +10571,10 @@ mod tests {
         let crate::StmtKind::Throw { value } = stmt.kind else {
             panic!("expected Throw, got {:?}", stmt.kind);
         };
-        assert!(matches!(ast.expr(value).kind, crate::ExprKind::New { .. }));
+        assert!(matches!(
+            ast.try_expr(value).unwrap().kind,
+            crate::ExprKind::New { .. }
+        ));
     }
 
     #[test]
@@ -10208,10 +10584,10 @@ mod tests {
         let crate::StmtKind::Expr(expr_id) = single_stmt(&ast).kind else {
             panic!("expected expression statement");
         };
-        let crate::ExprKind::New { callee, .. } = &ast.expr(expr_id).kind else {
+        let crate::ExprKind::New { callee, .. } = &ast.try_expr(expr_id).unwrap().kind else {
             panic!("expected New");
         };
-        let crate::ExprKind::FieldAccess { name, .. } = &ast.expr(*callee).kind else {
+        let crate::ExprKind::FieldAccess { name, .. } = &ast.try_expr(*callee).unwrap().kind else {
             panic!("expected FieldAccess callee");
         };
         assert_eq!(name.name, "Duration");
@@ -10224,14 +10600,17 @@ mod tests {
         let crate::StmtKind::Expr(expr_id) = single_stmt(&ast).kind else {
             panic!("expected expression statement");
         };
-        let crate::ExprKind::New { callee, .. } = &ast.expr(expr_id).kind else {
+        let crate::ExprKind::New { callee, .. } = &ast.try_expr(expr_id).unwrap().kind else {
             panic!("expected New");
         };
-        let crate::ExprKind::FieldAccess { receiver, name } = &ast.expr(*callee).kind else {
+        let crate::ExprKind::FieldAccess { receiver, name } = &ast.try_expr(*callee).unwrap().kind
+        else {
             panic!("expected outer FieldAccess");
         };
         assert_eq!(name.name, "Baz");
-        let crate::ExprKind::FieldAccess { name: mid_name, .. } = &ast.expr(*receiver).kind else {
+        let crate::ExprKind::FieldAccess { name: mid_name, .. } =
+            &ast.try_expr(*receiver).unwrap().kind
+        else {
             panic!("expected inner FieldAccess");
         };
         assert_eq!(mid_name.name, "Bar");
@@ -10273,7 +10652,7 @@ mod tests {
             panic!("expected Try, got {:?}", stmt.kind);
         };
         assert!(matches!(
-            ast.stmt(body).kind,
+            ast.try_stmt(body).unwrap().kind,
             crate::StmtKind::Block(ref v) if v.is_empty()
         ));
         let [clause] = catches.as_slice() else {
@@ -10300,7 +10679,7 @@ mod tests {
         assert!(catches.is_empty());
         let finally_id = finally.expect("finally block");
         assert!(matches!(
-            ast.stmt(finally_id).kind,
+            ast.try_stmt(finally_id).unwrap().kind,
             crate::StmtKind::Block(_)
         ));
     }

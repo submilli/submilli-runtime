@@ -1,5 +1,7 @@
 //! User-defined type guard machinery.
 
+use crate::compiler_error::CompilerFailure;
+
 use crate::{ExprId, Param, Type, TypedExpr, types::ObjectField};
 
 use super::{Inferer, assignable, narrowing};
@@ -47,7 +49,7 @@ impl Inferer<'_> {
         &mut self,
         pred: &crate::TypePredicateAnnotation,
         params: &[Param],
-    ) -> Option<crate::TypePredicate> {
+    ) -> Result<Option<crate::TypePredicate>, CompilerFailure> {
         let idx = params.iter().position(|p| p.name == pred.param.name);
         let Some(idx) = idx else {
             self.error(
@@ -57,16 +59,16 @@ impl Inferer<'_> {
                     pred.param.name,
                 ),
             );
-            return None;
+            return Ok(None);
         };
-        let asserted_type = self.resolve_type(&pred.asserted);
+        let asserted_type = self.resolve_type(&pred.asserted)?;
         if matches!(asserted_type, Type::Error) {
-            return None;
+            return Ok(None);
         }
-        Some(crate::TypePredicate {
+        Ok(Some(crate::TypePredicate {
             parameter_index: idx as u32,
             asserted_type,
-        })
+        }))
     }
 
     pub(super) fn predicate_envs_user_guard(

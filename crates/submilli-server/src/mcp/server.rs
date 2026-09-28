@@ -282,8 +282,10 @@ impl SubmilliMcp {
 
         let parsed = runner::parse(&args.code)
             .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+        let script_imports = parsed
+            .imports()
+            .map_err(|message| ErrorData::internal_error(message, None))?;
         let (vfs, vfs_info) = self.acquire_vfs(&blueprint, session_id.as_deref()).await?;
-        let script_imports = parsed.imports();
 
         let manager = self.state.session_manager();
         let http_client = manager.http_client(session_id.as_deref().unwrap_or(""));

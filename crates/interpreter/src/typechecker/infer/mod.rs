@@ -93,7 +93,7 @@ pub fn infer_with_transitive_checked<'a>(
         .iter()
         .map(|d| (d.package_name.as_str(), *d))
         .collect();
-    let bindings = binding_analysis::analyze(ast);
+    let bindings = binding_analysis::analyze(ast)?;
     let mut tc = Inferer {
         source,
         package_name,
@@ -169,14 +169,32 @@ pub fn infer_with_transitive_checked<'a>(
         fatal: Some(fatal),
     })?;
     tc.populate_type_registry();
-    tc.populate_imports();
-    if !tc.signatures() {
+    tc.populate_imports().map_err(|fatal| CompileError {
+        diagnostics: tc.diagnostics.clone(),
+        fatal: Some(fatal),
+    })?;
+    if !tc.signatures().map_err(|fatal| CompileError {
+        diagnostics: tc.diagnostics.clone(),
+        fatal: Some(fatal),
+    })? {
         return Ok((tc.typed_ast, tc.diagnostics));
     }
-    tc.infer_global_variables();
-    tc.infer_functions();
-    tc.infer_classes();
-    tc.collect_exports();
+    tc.infer_global_variables().map_err(|fatal| CompileError {
+        diagnostics: tc.diagnostics.clone(),
+        fatal: Some(fatal),
+    })?;
+    tc.infer_functions().map_err(|fatal| CompileError {
+        diagnostics: tc.diagnostics.clone(),
+        fatal: Some(fatal),
+    })?;
+    tc.infer_classes().map_err(|fatal| CompileError {
+        diagnostics: tc.diagnostics.clone(),
+        fatal: Some(fatal),
+    })?;
+    tc.collect_exports().map_err(|fatal| CompileError {
+        diagnostics: tc.diagnostics.clone(),
+        fatal: Some(fatal),
+    })?;
     // The `&tc` borrow has to end before the `&mut tc.typed_ast` assignment.
     let shapes = shapes::collect(&tc.typed_ast, tc.resolver());
     tc.typed_ast.shapes = shapes;
@@ -245,7 +263,12 @@ pub fn infer_package_checked<'a>(
                 .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?;
         }
     }
-    let Some(order) = import_graph::topo_order(&module_map, &mut diagnostics) else {
+    let Some(order) =
+        import_graph::topo_order(&module_map, &mut diagnostics).map_err(|fatal| CompileError {
+            diagnostics: diagnostics.clone(),
+            fatal: Some(fatal),
+        })?
+    else {
         if module_map
             .values()
             .any(|(file, _)| sources.get(*file).is_none())
@@ -389,14 +412,44 @@ pub fn infer_package_checked<'a>(
         })?;
         tc.populate_type_registry();
         tc.populate_module_type_registry();
-        tc.populate_imports();
-        if !tc.signatures() {
+        tc.populate_imports().map_err(|fatal| {
+            CompileError {
+                diagnostics: tc.diagnostics.clone(),
+                fatal: Some(fatal),
+            }
+            .with_prior_diagnostics(&diagnostics)
+        })?;
+        if !tc.signatures().map_err(|fatal| {
+            CompileError {
+                diagnostics: tc.diagnostics.clone(),
+                fatal: Some(fatal),
+            }
+            .with_prior_diagnostics(&diagnostics)
+        })? {
             diagnostics.extend(tc.diagnostics);
             return Ok((tc.typed_ast, package_declaration, diagnostics));
         }
-        tc.infer_global_variables();
-        tc.infer_functions();
-        tc.infer_classes();
+        tc.infer_global_variables().map_err(|fatal| {
+            CompileError {
+                diagnostics: tc.diagnostics.clone(),
+                fatal: Some(fatal),
+            }
+            .with_prior_diagnostics(&diagnostics)
+        })?;
+        tc.infer_functions().map_err(|fatal| {
+            CompileError {
+                diagnostics: tc.diagnostics.clone(),
+                fatal: Some(fatal),
+            }
+            .with_prior_diagnostics(&diagnostics)
+        })?;
+        tc.infer_classes().map_err(|fatal| {
+            CompileError {
+                diagnostics: tc.diagnostics.clone(),
+                fatal: Some(fatal),
+            }
+            .with_prior_diagnostics(&diagnostics)
+        })?;
         for f in &tc.typed_ast.functions {
             if !f.generics.is_empty() {
                 package_declaration
@@ -405,7 +458,13 @@ pub fn infer_package_checked<'a>(
             }
         }
         diagnose_package_main_since(&tc.typed_ast, starts.functions, &mut tc.diagnostics);
-        tc.resolve_package_export_statements();
+        tc.resolve_package_export_statements().map_err(|fatal| {
+            CompileError {
+                diagnostics: tc.diagnostics.clone(),
+                fatal: Some(fatal),
+            }
+            .with_prior_diagnostics(&diagnostics)
+        })?;
         let module_symbols = std::mem::take(&mut tc.current_module_symbols);
         for symbol in module_symbols.all_types() {
             let mut symbol = symbol.clone();
@@ -684,7 +743,7 @@ impl<'a> Inferer<'a> {
         if !self.pending_implements.is_empty() {
             return Err(inference_failure("signature pass left pending implements checks").into());
         }
-        let bindings = binding_analysis::analyze(ast);
+        let bindings = binding_analysis::analyze(ast)?;
         self.captured_mutators = bindings.mutators;
         self.last_assignments = bindings.last_assignments;
         self.nested_function_creation_points = bindings.nested_function_creation_points;
@@ -718,25 +777,40 @@ impl<'a> Inferer<'a> {
         }
     }
 
-    pub(super) fn mangle_top_symbol(&self, name: &str) -> crate::MangledName {
+    pub(super) fn mangle_top_symbol(
+        &self,
+        name: &str,
+    ) -> Result<crate::MangledName, crate::compiler_error::CompilerFailure> {
         if !self.package_inference {
-            return crate::mangle::package_symbol(self.package_name, name);
+            return Ok(crate::mangle::package_symbol(self.package_name, name));
         }
-        if self.module == self.root_module && self.is_exported_top_symbol(name) {
-            crate::mangle::package_symbol(self.package_name, name)
-        } else {
-            crate::mangle::package_module_symbol(self.package_name, self.module.as_str(), name)
-        }
+        Ok(
+            if self.module == self.root_module && self.is_exported_top_symbol(name)? {
+                crate::mangle::package_symbol(self.package_name, name)
+            } else {
+                crate::mangle::package_module_symbol(self.package_name, self.module.as_str(), name)
+            },
+        )
     }
 
-    fn is_exported_top_symbol(&self, name: &str) -> bool {
-        self.ast.exported_decls.iter().any(|ed| {
-            exports::exported_decl_name(&self.ast.stmt(ed.stmt).kind)
-                .is_some_and(|exported| exported.name == name)
-        })
+    fn is_exported_top_symbol(
+        &self,
+        name: &str,
+    ) -> Result<bool, crate::compiler_error::CompilerFailure> {
+        for ed in &self.ast.exported_decls {
+            let stmt = self.ast.try_stmt(ed.stmt).map_err(arena_failure)?;
+            if exports::exported_decl_name(&stmt.kind).is_some_and(|exported| exported.name == name)
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
-    pub(super) fn add_typed_global(&mut self, global: crate::TypedGlobal) {
+    pub(super) fn add_typed_global(
+        &mut self,
+        global: crate::TypedGlobal,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         if self.package_inference {
             let symbol = crate::ValueSymbol {
                 name: global.name.name.clone(),
@@ -757,12 +831,17 @@ impl<'a> Inferer<'a> {
                 .values
                 .entry(symbol.name.clone())
                 .or_insert((false, symbol));
-            self.mark_direct_package_export(&global.name.name);
+            self.mark_direct_package_export(&global.name.name)?;
         }
         self.typed_ast.globals.push(global);
+
+        Ok(())
     }
 
-    pub(super) fn add_typed_function(&mut self, function: crate::TypedFunction) {
+    pub(super) fn add_typed_function(
+        &mut self,
+        function: crate::TypedFunction,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         if self.package_inference {
             let symbol = crate::ValueSymbol {
                 name: function.name.name.clone(),
@@ -784,25 +863,29 @@ impl<'a> Inferer<'a> {
                 .values
                 .entry(symbol.name.clone())
                 .or_insert((false, symbol));
-            self.mark_direct_package_export(&function.name.name);
+            self.mark_direct_package_export(&function.name.name)?;
         }
         self.typed_ast.functions.push(function);
+
+        Ok(())
     }
 
     pub(super) fn add_typed_type_decl(
         &mut self,
         decl: crate::TypedTypeDecl,
         symbol: crate::TypeSymbol,
-    ) {
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         if self.package_inference {
             let name = symbol.name.clone();
             self.current_module_symbols
                 .types
                 .entry(name.clone())
                 .or_insert((false, symbol));
-            self.mark_direct_package_export(&name);
+            self.mark_direct_package_export(&name)?;
         }
         self.typed_ast.types.push(decl);
+
+        Ok(())
     }
 }
 
@@ -829,8 +912,7 @@ fn inference_failure(message: &str) -> CompilerFailure {
 
 fn validate_lowered_patterns(ast: &Ast) -> Result<(), CompileError> {
     use crate::{ExprKind, StmtKind};
-    for i in 0..ast.stmts_len() {
-        let stmt = ast.stmt(crate::StmtId(i as u32));
+    for stmt in ast.source_statements() {
         let unlowered = match &stmt.kind {
             StmtKind::LetPattern { .. }
             | StmtKind::ConstPattern { .. }
@@ -847,8 +929,7 @@ fn validate_lowered_patterns(ast: &Ast) -> Result<(), CompileError> {
             .into());
         }
     }
-    for i in 0..ast.exprs_len() {
-        let expr = ast.expr(crate::ExprId(i as u32));
+    for expr in ast.source_expressions() {
         if let ExprKind::Arrow { params, .. } = &expr.kind
             && params.iter().any(|param| param.pattern.is_some())
         {
@@ -1127,10 +1208,14 @@ mod tests {
             parse_diags.is_empty(),
             "unexpected parser diags: {parse_diags:?}",
         );
-        lower_patterns(&mut ast);
+        ast = lower_patterns(ast).unwrap();
         (ModulePath::from(module), file, ast)
     }
 }
 
 #[cfg(test)]
 mod test_support;
+
+fn arena_failure(error: crate::arena::ArenaError) -> CompilerFailure {
+    error.into_compiler_failure(CompilerStage::Infer)
+}

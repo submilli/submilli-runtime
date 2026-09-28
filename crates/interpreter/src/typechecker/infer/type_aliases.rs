@@ -6,6 +6,8 @@
 //! source order, and lets a recursive alias close its cycle through a
 //! lazy [`Type::AliasRef`] back-edge instead of an infinite inline body.
 
+use crate::compiler_error::CompilerFailure;
+
 use std::collections::BTreeSet;
 
 use crate::mangle::MangledName;
@@ -94,15 +96,15 @@ impl<'a> Inferer<'a> {
         name: &str,
         arg_annots: &[TypeAnnotation],
         span: crate::Span,
-    ) -> Type {
+    ) -> Result<Type, CompilerFailure> {
         // Arity check against the forward-declared placeholder's
         // generic-param list (known before the body is resolved).
         let (generics, mangled): (Vec<String>, crate::MangledName) = match self.types.lookup(name) {
             Some(sym) => match &sym.kind {
                 TypeKind::Alias { generics, .. } => (generics.clone(), sym.mangled_name.clone()),
-                _ => return Type::Error,
+                _ => return Ok(Type::Error),
             },
-            None => return Type::Error,
+            None => return Ok(Type::Error),
         };
         let alias_package = self.type_package(name);
         if arg_annots.len() != generics.len() {
@@ -121,17 +123,25 @@ impl<'a> Inferer<'a> {
                     arg_annots.len(),
                 ),
             );
-            return Type::Error;
+            return Ok(Type::Error);
         }
-        let resolved_args: Vec<Type> = arg_annots.iter().map(|a| self.resolve_type(a)).collect();
+        let resolved_args: Vec<Type> = arg_annots
+            .iter()
+            .map(|a| self.resolve_type(a))
+            .collect::<Result<_, _>>()?;
 
         // Recursion back-edge: emit the lazy by-name reference.
         if self.alias_resolution_stack.iter().any(|n| n == name) {
-            return Type::alias_ref(alias_package, name.to_string(), mangled, resolved_args);
+            return Ok(Type::alias_ref(
+                alias_package,
+                name.to_string(),
+                mangled,
+                resolved_args,
+            ));
         }
 
         // Ensure the body is resolved (no-op if already done).
-        self.resolve_alias_body(name);
+        self.resolve_alias_body(name)?;
         let body = match self.types.lookup(name) {
             Some(sym) => match &sym.kind {
                 TypeKind::Alias { ty, .. } => ty.clone(),
@@ -149,13 +159,13 @@ impl<'a> Inferer<'a> {
                 );
             sub.apply(&body)
         };
-        Type::alias_ty(
+        Ok(Type::alias_ty(
             alias_package,
             name.to_string(),
             mangled,
             resolved_args,
             Box::new(body),
-        )
+        ))
     }
 
     /// Resolve alias `name`'s body, fill in its placeholder symbol, and
@@ -163,15 +173,15 @@ impl<'a> Inferer<'a> {
     /// in an isolated generic scope (only the alias's own params), so a
     /// reference triggered from inside an interface / function signature
     /// doesn't leak that context's generics into the alias body.
-    pub(super) fn resolve_alias_body(&mut self, name: &str) {
+    pub(super) fn resolve_alias_body(&mut self, name: &str) -> Result<(), CompilerFailure> {
         let Some(pending) = self.pending_aliases.remove(name) else {
-            return;
+            return Ok(());
         };
         self.alias_resolution_stack.push(name.to_string());
         let saved_generics = std::mem::take(&mut self.generics_in_scope);
         let saved_bodies = std::mem::take(&mut self.body_instantiations);
         self.push_signature_generics(pending.generics.clone());
-        let resolved_body = self.resolve_type(&pending.annotation);
+        let resolved_body = self.resolve_type(&pending.annotation)?;
         self.pop_signature_generics();
         self.generics_in_scope = saved_generics;
         self.body_instantiations = saved_bodies;
@@ -191,9 +201,11 @@ impl<'a> Inferer<'a> {
             doc: pending.doc,
         });
         let Some(symbol) = final_symbol else {
-            return;
+            return Ok(());
         };
-        self.add_typed_type_decl(typed_decl, symbol);
+        self.add_typed_type_decl(typed_decl, symbol)?;
+
+        Ok(())
     }
 
     /// [`rehydrate_alias_refs`] against this inferer's type registry.

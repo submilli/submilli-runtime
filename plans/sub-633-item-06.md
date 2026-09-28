@@ -70,6 +70,23 @@ transformations before another phase can consume them. Use ID iterators instead
 of reconstructing IDs with narrowing casts. Remove legacy untyped accessors once
 all callers have migrated.
 
+Implementation: all untyped arena consumers now use checked reads, mutations and
+allocation. Pattern lowering takes ownership and returns the transformed AST only
+on success. Parser fatal failures stop recovery; inference propagates failures
+through recursive helpers, binding analysis, import graphs and export metadata.
+Script/package boundaries retain diagnostics accumulated before the failure.
+Legacy untyped accessors are removed; scans use checked ID iterators or stored
+node references. Recursive inference dispatchers return arm results directly to
+avoid excessive debug-stack temporaries. An isolated regression compiles nested
+finally blocks and binary chains on explicit 2 MiB and 8 MiB worker stacks.
+Typed-arena consumers remain stage 4.
+
+Failure coverage injects invalid expression/statement/export/body IDs and scoped
+small allocation limits, checks fatal classification and diagnostic retention,
+and compiles healthy programs after failure. These are internal-state tests,
+not evidence of a guest-input exploit. Normal destructuring, closure, evaluation
+order and exception behavior are compared with strict TypeScript and Node.
+
 ## Stage 4: typed arena and remaining propagation
 
 Migrate inference writes, checking, capture, desugaring, capability analysis,

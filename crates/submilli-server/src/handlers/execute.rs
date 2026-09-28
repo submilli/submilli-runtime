@@ -214,7 +214,16 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
             ));
         }
     };
-    let script_imports = parsed.imports();
+    let script_imports = match parsed.imports() {
+        Ok(imports) => imports,
+        Err(message) => {
+            return ExecuteOutcome::undispatched(error_response(
+                session_id,
+                ErrorKind::RuntimeError,
+                message,
+            ));
+        }
+    };
 
     let manager = state.session_manager();
     if let Err(err) = manager.ensure(session_id, &blueprint).await {

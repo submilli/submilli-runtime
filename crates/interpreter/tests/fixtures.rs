@@ -443,7 +443,7 @@ fn run_multi(path: &Path) -> Result<(), String> {
         }
         let file_id = sources.add(module.clone(), src.clone()).unwrap();
         let (mut ast, mut diags) = parse_source(&src, file_id);
-        lower_patterns(&mut ast);
+        ast = lower_patterns(ast).unwrap();
         all_diags.append(&mut diags);
         owned_asts.push((module, file_id, ast));
     }

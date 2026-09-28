@@ -47,8 +47,14 @@ pub(crate) struct ParsedExecute {
 }
 
 impl ParsedExecute {
-    pub(crate) fn imports(&self) -> ScriptImports {
-        self.parsed.external_imports()
+    pub(crate) fn imports(&self) -> Result<ScriptImports, String> {
+        self.parsed.external_imports().map_err(|error| {
+            error
+                .into_diagnostics(self.file)
+                .iter()
+                .map(|diagnostic| diagnostics::render(diagnostic, &self.sources))
+                .collect()
+        })
     }
 }
 

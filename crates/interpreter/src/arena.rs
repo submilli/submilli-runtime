@@ -138,7 +138,16 @@ pub(crate) fn get_mut<T>(nodes: &mut [T], id: u32, arena: ArenaKind) -> Result<&
 }
 
 pub(crate) fn push<T>(nodes: &mut Vec<T>, node: T, arena: ArenaKind) -> Result<u32, ArenaError> {
-    push_with_limit(nodes, node, arena, u32::MAX)
+    #[cfg(test)]
+    let limit = TEST_NODE_LIMIT.with(|limit| {
+        limit
+            .get()
+            .filter(|(kind, _)| *kind == arena)
+            .map_or(u32::MAX, |(_, limit)| limit)
+    });
+    #[cfg(not(test))]
+    let limit = u32::MAX;
+    push_with_limit(nodes, node, arena, limit)
 }
 
 pub(crate) fn ids(len: usize, arena: ArenaKind) -> Result<Range<u32>, ArenaError> {
@@ -183,6 +192,25 @@ fn reserve<T>(nodes: &mut Vec<T>, additional: usize, arena: ArenaKind) -> Result
             len: nodes.len(),
             source,
         })
+}
+
+// A scoped, thread-local cap exercises real phase allocation failures without
+// allocating billions of nodes or leaking fault injection into parallel tests.
+#[cfg(test)]
+thread_local! {
+    static TEST_NODE_LIMIT: std::cell::Cell<Option<(ArenaKind, u32)>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn with_node_limit<T>(arena: ArenaKind, limit: u32, run: impl FnOnce() -> T) -> T {
+    struct Restore(Option<(ArenaKind, u32)>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TEST_NODE_LIMIT.with(|limit| limit.set(self.0));
+        }
+    }
+    let _restore = Restore(TEST_NODE_LIMIT.with(|cell| cell.replace(Some((arena, limit)))));
+    run()
 }
 
 #[cfg(test)]

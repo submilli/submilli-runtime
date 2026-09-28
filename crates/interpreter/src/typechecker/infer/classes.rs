@@ -4,6 +4,8 @@
 //! pass ([`super::generic::Inferer::infer_functions`]) for bodies. Codegen is a
 //! later slice (SUB-480+); this pass only typechecks.
 
+use crate::compiler_error::CompilerFailure;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::ControlFlow;
 
@@ -125,15 +127,15 @@ impl<'a> Inferer<'a> {
         implements: Vec<TypeAnnotation>,
         members: Vec<ClassMember>,
         doc: Option<crate::DocComment>,
-    ) {
+    ) -> Result<(), CompilerFailure> {
         let generic_names: Vec<String> = generics.iter().map(|g| g.name.clone()).collect();
         // Push class-level generics so member annotations can name them. Generic
         // classes are not otherwise resolved in v1 (rejected as type args in
         // `resolve_type`), but a `class Box<T> { value: T }` still binds cleanly.
         self.push_signature_generics(generic_names.clone());
 
-        let mangled = self.mangle_top_symbol(&name.name);
-        let extends_clause = match self.resolve_extends_target(extends.as_ref()) {
+        let mangled = self.mangle_top_symbol(&name.name)?;
+        let extends_clause = match self.resolve_extends_target(extends.as_ref())? {
             ExtendsTarget::Class(e) => Some(e),
             ExtendsTarget::Absent => None,
             ExtendsTarget::Unresolved => {
@@ -141,7 +143,7 @@ impl<'a> Inferer<'a> {
                 None
             }
         };
-        let implements_types = self.resolve_implements_targets(&implements);
+        let implements_types = self.resolve_implements_targets(&implements)?;
         let implements_mangled: Vec<MangledName> = implements_types
             .iter()
             .filter_map(|t| match t.peel() {
@@ -189,7 +191,7 @@ impl<'a> Inferer<'a> {
                         );
                         continue;
                     }
-                    let resolved = self.resolve_value_type(ty, ValuePosition::FieldType);
+                    let resolved = self.resolve_value_type(ty, ValuePosition::FieldType)?;
                     if self.reject_class_generic_in_static(
                         f_name,
                         &generic_names,
@@ -224,8 +226,8 @@ impl<'a> Inferer<'a> {
                     let m_generic_names: Vec<String> =
                         m_generics.iter().map(|g| g.name.clone()).collect();
                     self.push_signature_generics(m_generic_names.clone());
-                    let resolved_params: Vec<Param> = self.resolve_params(params);
-                    let resolved_ret = self.resolve_type(return_type);
+                    let resolved_params: Vec<Param> = self.resolve_params(params)?;
+                    let resolved_ret = self.resolve_type(return_type)?;
                     self.pop_signature_generics();
                     if self.reject_class_generic_in_static(
                         m_name,
@@ -258,7 +260,7 @@ impl<'a> Inferer<'a> {
                     if self.reject_duplicate_member(&fields, &methods, f_name, &name) {
                         continue;
                     }
-                    let resolved = self.resolve_value_type(ty, ValuePosition::FieldType);
+                    let resolved = self.resolve_value_type(ty, ValuePosition::FieldType)?;
                     fields.insert(
                         f_name.name.clone(),
                         FieldSig {
@@ -314,8 +316,8 @@ impl<'a> Inferer<'a> {
                         );
                     }
                     self.push_signature_generics(m_generic_names.clone());
-                    let resolved_params: Vec<Param> = self.resolve_params(params);
-                    let resolved_ret = self.resolve_type(return_type);
+                    let resolved_params: Vec<Param> = self.resolve_params(params)?;
+                    let resolved_ret = self.resolve_type(return_type)?;
                     self.pop_signature_generics();
                     // These two names fill the class's universal vtable slots
                     // (used by `String(x)`, interpolation, `JSON.stringify`),
@@ -360,7 +362,7 @@ impl<'a> Inferer<'a> {
                         continue;
                     }
                     seen_constructor = true;
-                    constructor = self.resolve_params(params);
+                    constructor = self.resolve_params(params)?;
                     // Parameter properties declare a field with the param's type.
                     for (decl, resolved) in params.iter().zip(constructor.iter()) {
                         let Some(modifiers) = &decl.modifiers else {
@@ -417,7 +419,9 @@ impl<'a> Inferer<'a> {
                         AccessorKind::Get => {
                             let ret_ty = return_type
                                 .as_ref()
-                                .map_or(Type::Error, |t| self.resolve_type(t));
+                                .map(|t| self.resolve_type(t))
+                                .transpose()?
+                                .unwrap_or(Type::Error);
                             fields
                                 .entry(a_name.name.clone())
                                 .and_modify(|f| f.ty = ret_ty.clone())
@@ -437,9 +441,9 @@ impl<'a> Inferer<'a> {
                             let write_ty = param
                                 .as_ref()
                                 .and_then(|p| p.ty.as_ref())
-                                .map_or(Type::Error, |t| {
-                                    self.resolve_value_type(t, ValuePosition::Parameter)
-                                });
+                                .map(|t| self.resolve_value_type(t, ValuePosition::Parameter))
+                                .transpose()?
+                                .unwrap_or(Type::Error);
                             let param_name = param
                                 .as_ref()
                                 .map_or_else(|| "value".to_string(), |p| p.name.name.clone());
@@ -508,6 +512,8 @@ impl<'a> Inferer<'a> {
                 .zip(implements_types)
                 .collect(),
         });
+
+        Ok(())
     }
 
     /// Check that every class satisfies each interface it declares. Runs once
@@ -757,17 +763,20 @@ impl<'a> Inferer<'a> {
         })
     }
 
-    fn resolve_extends_target(&mut self, extends: Option<&TypeAnnotation>) -> ExtendsTarget {
+    fn resolve_extends_target(
+        &mut self,
+        extends: Option<&TypeAnnotation>,
+    ) -> Result<ExtendsTarget, CompilerFailure> {
         let Some(annot) = extends else {
-            return ExtendsTarget::Absent;
+            return Ok(ExtendsTarget::Absent);
         };
         // Runs inside the class's signature-generics scope, so a generic
         // parent's args may name the child's own type params
         // (`class Tagged<T> extends Box<T>` → args `[TypeVar(T)]`).
         // Arity/void violations surface in `resolve_class_reference` and come
         // back as `Type::Error`.
-        let ty = self.resolve_type(annot);
-        match ty.peel() {
+        let ty = self.resolve_type(annot)?;
+        Ok(match ty.peel() {
             Type::ClassRef { mangled, args, .. } => ExtendsTarget::Class(crate::ClassExtends {
                 parent: mangled.clone(),
                 args: args.clone(),
@@ -795,16 +804,19 @@ impl<'a> Inferer<'a> {
                 );
                 ExtendsTarget::Unresolved
             }
-        }
+        })
     }
 
     /// Resolve each `implements` target to its `Type`. Non-interface targets are
     /// diagnosed and resolved to `Type::Error` so positions line up with the
     /// annotation list (the caller derives mangled names and conformance from these).
-    fn resolve_implements_targets(&mut self, implements: &[TypeAnnotation]) -> Vec<Type> {
+    fn resolve_implements_targets(
+        &mut self,
+        implements: &[TypeAnnotation],
+    ) -> Result<Vec<Type>, CompilerFailure> {
         let mut out = Vec::new();
         for annot in implements {
-            let ty = self.resolve_type(annot);
+            let ty = self.resolve_type(annot)?;
             match ty.peel() {
                 Type::InterfaceRef { .. } | Type::Error => out.push(ty),
                 other => {
@@ -818,24 +830,32 @@ impl<'a> Inferer<'a> {
                 }
             }
         }
-        out
+        Ok(out)
     }
 
     /// Reject `extends` cycles and signature-incompatible overrides. Runs after
     /// every class signature is bound so parent chains are fully resolvable.
-    pub(super) fn check_class_inheritance(&mut self, top_level: &[crate::StmtId]) {
+    pub(super) fn check_class_inheritance(
+        &mut self,
+        top_level: &[crate::StmtId],
+    ) -> Result<(), CompilerFailure> {
         // (class name, `extends` annotation span) for every class with a parent.
         let extending: Vec<(String, Span)> = top_level
             .iter()
-            .filter_map(|id| match &self.ast.stmt(*id).kind {
-                StmtKind::ClassDecl {
-                    name,
-                    extends: Some(ext),
-                    ..
-                } => Some((name.name.clone(), ext.span)),
-                _ => None,
+            .map(|id| {
+                Ok::<_, CompilerFailure>(
+                    match &self.ast.try_stmt(*id).map_err(super::arena_failure)?.kind {
+                        StmtKind::ClassDecl {
+                            name,
+                            extends: Some(ext),
+                            ..
+                        } => Some((name.name.clone(), ext.span)),
+                        _ => None,
+                    },
+                )
             })
-            .collect();
+            .filter_map(Result::transpose)
+            .collect::<Result<_, _>>()?;
 
         for (class_name, ext_span) in &extending {
             let Some(start) = self.class_mangled(class_name) else {
@@ -866,15 +886,20 @@ impl<'a> Inferer<'a> {
             }
         }
 
-        self.resolve_implicit_constructors(top_level);
-        self.check_member_redeclarations(top_level);
+        self.resolve_implicit_constructors(top_level)?;
+        self.check_member_redeclarations(top_level)?;
+
+        Ok(())
     }
 
     /// A subclass with no `constructor` member inherits the nearest ancestor's
     /// constructor signature, so `new Sub(...)` and `super(...)` check against it
     /// (codegen forwards the same params to the parent init). Runs after every
     /// class signature is bound, so the parent chain is fully resolvable.
-    fn resolve_implicit_constructors(&mut self, top_level: &[crate::StmtId]) {
+    fn resolve_implicit_constructors(
+        &mut self,
+        top_level: &[crate::StmtId],
+    ) -> Result<(), CompilerFailure> {
         let has_explicit = |members: &[ClassMember]| {
             members
                 .iter()
@@ -882,27 +907,37 @@ impl<'a> Inferer<'a> {
         };
         let explicit_ctor: std::collections::BTreeSet<MangledName> = top_level
             .iter()
-            .filter_map(|id| match &self.ast.stmt(*id).kind {
-                StmtKind::ClassDecl { name, members, .. } if has_explicit(members) => {
-                    self.class_mangled(&name.name)
-                }
-                _ => None,
+            .map(|id| {
+                Ok::<_, CompilerFailure>(
+                    match &self.ast.try_stmt(*id).map_err(super::arena_failure)?.kind {
+                        StmtKind::ClassDecl { name, members, .. } if has_explicit(members) => {
+                            self.class_mangled(&name.name)
+                        }
+                        _ => None,
+                    },
+                )
             })
-            .collect();
+            .filter_map(Result::transpose)
+            .collect::<Result<_, _>>()?;
         let implicit: Vec<(String, MangledName)> = top_level
             .iter()
-            .filter_map(|id| match &self.ast.stmt(*id).kind {
-                StmtKind::ClassDecl {
-                    name,
-                    members,
-                    extends: Some(_),
-                    ..
-                } if !has_explicit(members) => self
-                    .class_mangled(&name.name)
-                    .map(|m| (name.name.clone(), m)),
-                _ => None,
+            .map(|id| {
+                Ok::<_, CompilerFailure>(
+                    match &self.ast.try_stmt(*id).map_err(super::arena_failure)?.kind {
+                        StmtKind::ClassDecl {
+                            name,
+                            members,
+                            extends: Some(_),
+                            ..
+                        } if !has_explicit(members) => self
+                            .class_mangled(&name.name)
+                            .map(|m| (name.name.clone(), m)),
+                        _ => None,
+                    },
+                )
             })
-            .collect();
+            .filter_map(Result::transpose)
+            .collect::<Result<_, _>>()?;
 
         for (child_name, child) in implicit {
             // An unresolvable parent takes its constructor signature with it:
@@ -921,6 +956,8 @@ impl<'a> Inferer<'a> {
                 *constructor = params;
             }
         }
+
+        Ok(())
     }
 
     /// Constructor signature of the nearest ancestor of `child` that declares an
@@ -958,8 +995,11 @@ impl<'a> Inferer<'a> {
         })
     }
 
-    fn check_member_redeclarations(&mut self, top_level: &[crate::StmtId]) {
-        for member in self.redeclaration_candidates(top_level) {
+    fn check_member_redeclarations(
+        &mut self,
+        top_level: &[crate::StmtId],
+    ) -> Result<(), CompilerFailure> {
+        for member in self.redeclaration_candidates(top_level)? {
             // A cross-kind redeclaration has no same-kind check to run — the
             // ancestor walk each one does looks for its own kind and would sail
             // past the declaration that actually collides.
@@ -972,6 +1012,8 @@ impl<'a> Inferer<'a> {
                 MemberKind::Accessor => self.check_accessor_redeclaration(&member),
             }
         }
+
+        Ok(())
     }
 
     /// Every instance member of every class that has a parent, in source order —
@@ -979,14 +1021,17 @@ impl<'a> Inferer<'a> {
     /// since the get/set pair is collected into one candidate after the walk.
     /// Materialized rather than checked in place because the walk borrows the
     /// AST out of `self`, while the checks need `self` mutably to report.
-    fn redeclaration_candidates(&self, top_level: &[crate::StmtId]) -> Vec<RedeclarationCandidate> {
+    fn redeclaration_candidates(
+        &self,
+        top_level: &[crate::StmtId],
+    ) -> Result<Vec<RedeclarationCandidate>, CompilerFailure> {
         let mut found: Vec<RedeclarationCandidate> = Vec::new();
         for id in top_level {
             let StmtKind::ClassDecl {
                 name: class_name,
                 members,
                 ..
-            } = &self.ast.stmt(*id).kind
+            } = &self.ast.try_stmt(*id).map_err(super::arena_failure)?.kind
             else {
                 continue;
             };
@@ -1058,7 +1103,7 @@ impl<'a> Inferer<'a> {
             }
             found.extend(accessor_candidates.into_values());
         }
-        found
+        Ok(found)
     }
 
     /// Reject a member that redeclares an inherited name at a *different* kind.
@@ -2241,14 +2286,20 @@ impl<'a> Inferer<'a> {
         &self,
         receiver: crate::ExprId,
         decl_mangled: &MangledName,
-    ) -> bool {
+    ) -> Result<bool, CompilerFailure> {
         let current_class_mangled = match &self.current_class {
             Some(Type::ClassRef { mangled, .. }) => Some(mangled.clone()),
             _ => None,
         };
-        self.in_constructor
-            && matches!(self.ast.expr(receiver).kind, crate::ExprKind::This)
-            && current_class_mangled.as_ref() == Some(decl_mangled)
+        Ok(self.in_constructor
+            && matches!(
+                self.ast
+                    .try_expr(receiver)
+                    .map_err(super::arena_failure)?
+                    .kind,
+                crate::ExprKind::This
+            )
+            && current_class_mangled.as_ref() == Some(decl_mangled))
     }
 
     /// The read and write types of class field or accessor `name`, for the
@@ -2264,7 +2315,7 @@ impl<'a> Inferer<'a> {
         receiver_ty: &Type,
         name: &Ident,
         op: super::diagnostics::RwOp,
-    ) -> Option<FieldRw> {
+    ) -> Result<Option<FieldRw>, CompilerFailure> {
         let Some((field, decl_mangled)) = self.class_field_visible(mangled, class_args, &name.name)
         else {
             if !self.try_report_method_assignment(name.span, receiver_ty, &name.name) {
@@ -2275,7 +2326,7 @@ impl<'a> Inferer<'a> {
                     help,
                 );
             }
-            return None;
+            return Ok(None);
         };
         // An accessor is readable iff it has a getter and writable iff it has a
         // setter; `(None, None)` is a data field, where the `readonly` ctor-only
@@ -2284,7 +2335,7 @@ impl<'a> Inferer<'a> {
             self.class_getter(mangled, class_args, &name.name),
             self.class_setter(mangled, class_args, &name.name),
         ) {
-            (Some(read), Some(write)) => return Some(FieldRw { read, write }),
+            (Some(read), Some(write)) => return Ok(Some(FieldRw { read, write })),
             (None, Some(_)) => {
                 self.error_with_help(
                     name.span,
@@ -2294,7 +2345,7 @@ impl<'a> Inferer<'a> {
                     ),
                     vec![format!("add a `get {}()` accessor to read it", name.name)],
                 );
-                return None;
+                return Ok(None);
             }
             (Some(_), None) => {
                 self.error_with_help(
@@ -2308,11 +2359,11 @@ impl<'a> Inferer<'a> {
                         name.name
                     )],
                 );
-                return None;
+                return Ok(None);
             }
             (None, None) => {}
         }
-        if field.readonly && !self.readonly_write_allowed(receiver, &decl_mangled) {
+        if field.readonly && !self.readonly_write_allowed(receiver, &decl_mangled)? {
             self.error_with_help(
                 name.span,
                 format!(
@@ -2327,7 +2378,11 @@ impl<'a> Inferer<'a> {
         }
         // Reported here rather than left to the operator check, which would
         // blame `+=` without naming the null.
-        let recv_span = self.ast.expr(receiver).span;
+        let recv_span = self
+            .ast
+            .try_expr(receiver)
+            .map_err(super::arena_failure)?
+            .span;
         if self.try_report_nullable_rw_target(
             recv_span,
             receiver_ty,
@@ -2336,9 +2391,9 @@ impl<'a> Inferer<'a> {
             field.optional,
             op,
         ) {
-            return None;
+            return Ok(None);
         }
-        Some(FieldRw::uniform(field.ty.clone()))
+        Ok(Some(FieldRw::uniform(field.ty.clone())))
     }
 
     /// The read (getter return) type of accessor property `prop`, searching up the
@@ -2561,7 +2616,7 @@ impl<'a> Inferer<'a> {
         &mut self,
         args: Vec<crate::ExprId>,
         span: Span,
-    ) -> (crate::TypedExprKind, Type) {
+    ) -> Result<(crate::TypedExprKind, Type), CompilerFailure> {
         if !self.in_constructor {
             self.error_with_help(
                 span,
@@ -2629,9 +2684,9 @@ impl<'a> Inferer<'a> {
                 );
             }
             for arg in &args {
-                let _ = self.infer_expr(*arg, None);
+                let _ = self.infer_expr(*arg, None)?;
             }
-            return (crate::TypedExprKind::Null, Type::Void);
+            return Ok((crate::TypedExprKind::Null, Type::Void));
         };
         let parent_ty = self.super_receiver_type(&parent);
         let typed_args = self.bind_param_call_args(
@@ -2642,14 +2697,14 @@ impl<'a> Inferer<'a> {
             },
             &args,
             span,
-        );
-        (
+        )?;
+        Ok((
             crate::TypedExprKind::SuperCtorCall {
                 parent: parent.parent,
                 args: typed_args,
             },
             Type::Void,
-        )
+        ))
     }
 
     /// Typecheck `super.method(...)`: resolve the method on the parent chain and
@@ -2660,7 +2715,7 @@ impl<'a> Inferer<'a> {
         name: crate::Ident,
         args: Vec<crate::ExprId>,
         span: Span,
-    ) -> (crate::TypedExprKind, Type) {
+    ) -> Result<(crate::TypedExprKind, Type), CompilerFailure> {
         let Some(parent) = self.current_super.clone() else {
             if !self.current_class_inherits_unresolved_parent() {
                 self.error_with_help(
@@ -2673,9 +2728,9 @@ impl<'a> Inferer<'a> {
                 );
             }
             for arg in &args {
-                let _ = self.infer_expr(*arg, None);
+                let _ = self.infer_expr(*arg, None)?;
             }
-            return (crate::TypedExprKind::Null, Type::Error);
+            return Ok((crate::TypedExprKind::Null, Type::Error));
         };
         let Some(resolved) = self.class_method_in_chain(&parent.parent, &parent.args, &name.name)
         else {
@@ -2686,9 +2741,9 @@ impl<'a> Inferer<'a> {
                 );
             }
             for arg in &args {
-                let _ = self.infer_expr(*arg, None);
+                let _ = self.infer_expr(*arg, None)?;
             }
-            return (crate::TypedExprKind::Null, Type::Error);
+            return Ok((crate::TypedExprKind::Null, Type::Error));
         };
         let ResolvedMethod {
             sig,
@@ -2729,15 +2784,15 @@ impl<'a> Inferer<'a> {
             },
             &args,
             span,
-        );
-        (
+        )?;
+        Ok((
             crate::TypedExprKind::SuperMethodCall {
                 owner,
                 name,
                 args: typed_args,
             },
             sig.ret,
-        )
+        ))
     }
 
     fn super_receiver_type(&self, parent: &crate::ClassExtends) -> Type {
@@ -2847,10 +2902,14 @@ impl<'a> Inferer<'a> {
     /// constructor body, then mirror the result into the typed AST. Runs after
     /// `infer_functions` so bodies can construct sibling classes and call
     /// top-level functions.
-    pub(super) fn infer_classes(&mut self) {
+    pub(super) fn infer_classes(&mut self) -> Result<(), CompilerFailure> {
         let top_level: Vec<_> = self.ast.top_level.clone();
         for stmt_id in top_level {
-            let stmt = self.ast.stmt(stmt_id).clone();
+            let stmt = self
+                .ast
+                .try_stmt(stmt_id)
+                .map_err(super::arena_failure)?
+                .clone();
             let StmtKind::ClassDecl {
                 name,
                 extends: _,
@@ -2888,7 +2947,7 @@ impl<'a> Inferer<'a> {
             // is set so `this`/`super` get the static-specific rejections — and
             // before the class generics enter body scope (a static can't
             // reference them).
-            self.check_static_methods(&members, &static_sigs, &mangled, &name.name);
+            self.check_static_methods(&members, &static_sigs, &mangled, &name.name)?;
 
             // Class-level generics live for the whole set of instance bodies:
             // `this` is the class instantiated at its own params
@@ -2918,11 +2977,11 @@ impl<'a> Inferer<'a> {
             let stmts_before = self.typed_ast.stmts_len();
 
             let typed_fields =
-                self.check_class_fields(&members, &mangled, &field_sigs, &class_inst);
-            let typed_ctor = self.check_constructor(&members, &ctor_params, &class_inst);
+                self.check_class_fields(&members, &mangled, &field_sigs, &class_inst)?;
+            let typed_ctor = self.check_constructor(&members, &ctor_params, &class_inst)?;
             let typed_methods =
-                self.check_class_methods(&members, &method_sigs, &method_visibility, &class_inst);
-            let accessors = self.check_class_accessors(&members, &field_sigs);
+                self.check_class_methods(&members, &method_sigs, &method_visibility, &class_inst)?;
+            let accessors = self.check_class_accessors(&members, &field_sigs)?;
 
             self.current_class = prev_class;
             self.current_super = prev_super;
@@ -2975,8 +3034,10 @@ impl<'a> Inferer<'a> {
             self.add_typed_type_decl(
                 crate::TypedTypeDecl::Class(decl),
                 sym_for_export(self, &name),
-            );
+            )?;
         }
+
+        Ok(())
     }
 
     fn check_class_fields(
@@ -2985,7 +3046,7 @@ impl<'a> Inferer<'a> {
         mangled: &MangledName,
         field_sigs: &BTreeMap<String, FieldSig>,
         class_inst: &BTreeMap<String, Type>,
-    ) -> Vec<TypedClassField> {
+    ) -> Result<Vec<TypedClassField>, CompilerFailure> {
         let mut out = Vec::new();
         for member in members {
             let ClassMember::Field {
@@ -3008,22 +3069,24 @@ impl<'a> Inferer<'a> {
             };
             // Field initializers may read `this`; `current_class` is already set.
             let body_ty = substitute_typevars(&sig.ty, class_inst);
-            let typed_init = initializer.map(|expr| {
-                let (typed, value_ty) = self.infer_expr(expr, Some(&body_ty));
-                if !super::assignable(&value_ty, &body_ty, self.resolver())
-                    && !matches!(value_ty, Type::Error)
-                {
-                    let span = self.ast.expr(expr).span;
-                    self.error(
-                        span,
-                        format!(
-                            "field `{}` initializer is `{value_ty}`, expected `{}`",
-                            name.name, sig.ty
-                        ),
-                    );
-                }
-                typed
-            });
+            let typed_init = initializer
+                .map(|expr| {
+                    let (typed, value_ty) = self.infer_expr(expr, Some(&body_ty))?;
+                    if !super::assignable(&value_ty, &body_ty, self.resolver())
+                        && !matches!(value_ty, Type::Error)
+                    {
+                        let span = self.ast.try_expr(expr).map_err(super::arena_failure)?.span;
+                        self.error(
+                            span,
+                            format!(
+                                "field `{}` initializer is `{value_ty}`, expected `{}`",
+                                name.name, sig.ty
+                            ),
+                        );
+                    }
+                    Ok::<_, CompilerFailure>(typed)
+                })
+                .transpose()?;
             out.push(TypedClassField {
                 name: name.clone(),
                 ty: sig.ty.clone(),
@@ -3063,7 +3126,7 @@ impl<'a> Inferer<'a> {
                 });
             }
         }
-        out
+        Ok(out)
     }
 
     fn check_constructor(
@@ -3071,11 +3134,13 @@ impl<'a> Inferer<'a> {
         members: &[ClassMember],
         ctor_params: &[Param],
         class_inst: &BTreeMap<String, Type>,
-    ) -> Option<TypedClassConstructor> {
-        let (params, body) = members.iter().find_map(|m| match m {
+    ) -> Result<Option<TypedClassConstructor>, CompilerFailure> {
+        let Some((params, body)) = members.iter().find_map(|m| match m {
             ClassMember::Constructor { params, body, .. } => Some((params, *body)),
             _ => None,
-        })?;
+        }) else {
+            return Ok(None);
+        };
 
         let typed_params = bind_params_for_body(self, params, ctor_params, class_inst);
         let prev_in_ctor = std::mem::replace(&mut self.in_constructor, true);
@@ -3084,7 +3149,9 @@ impl<'a> Inferer<'a> {
         // A constructor returns no value; a bare `return;` is fine.
         let prev_return = self.current_return.replace(Type::Void);
         let prev_reachable = std::mem::replace(&mut self.reachable, true);
-        let body_id = self.infer_stmt(body).expect("constructor body is a Block");
+        let body_id = self
+            .infer_stmt(body)?
+            .ok_or_else(|| super::inference_failure("constructor body is a Block"))?;
         // A subclass constructor must initialize the parent via `super(...)`.
         if self.current_super.is_some() && !self.super_seen {
             let ctor_span = members
@@ -3093,7 +3160,14 @@ impl<'a> Inferer<'a> {
                     ClassMember::Constructor { span, .. } => Some(*span),
                     _ => None,
                 })
-                .unwrap_or_else(|| self.ast.stmt(body).span);
+                .map_or_else(
+                    || {
+                        Ok::<_, CompilerFailure>(
+                            self.ast.try_stmt(body).map_err(super::arena_failure)?.span,
+                        )
+                    },
+                    Ok,
+                )?;
             self.error_with_help(
                 ctor_span,
                 "a subclass constructor must call `super(...)`".to_string(),
@@ -3109,10 +3183,10 @@ impl<'a> Inferer<'a> {
         self.this_before_super = prev_this_before;
         self.scopes.pop();
 
-        Some(TypedClassConstructor {
+        Ok(Some(TypedClassConstructor {
             params: typed_params,
             body: body_id,
-        })
+        }))
     }
 
     fn check_class_methods(
@@ -3121,7 +3195,7 @@ impl<'a> Inferer<'a> {
         method_sigs: &BTreeMap<String, MethodSig>,
         method_visibility: &BTreeMap<String, Visibility>,
         class_inst: &BTreeMap<String, Type>,
-    ) -> Vec<TypedClassMethod> {
+    ) -> Result<Vec<TypedClassMethod>, CompilerFailure> {
         let mut out = Vec::new();
         for member in members {
             let ClassMember::Method {
@@ -3176,7 +3250,9 @@ impl<'a> Inferer<'a> {
             let prev_reachable = std::mem::replace(&mut self.reachable, true);
             let exprs_before = self.typed_ast.exprs_len();
             let stmts_before = self.typed_ast.stmts_len();
-            let body_id = self.infer_stmt(*body).expect("method body is a Block");
+            let body_id = self
+                .infer_stmt(*body)?
+                .ok_or_else(|| super::inference_failure("method body is a Block"))?;
             self.current_return = prev_return;
             self.reachable = prev_reachable;
             self.scopes.pop();
@@ -3203,7 +3279,7 @@ impl<'a> Inferer<'a> {
                 doc: doc.clone(),
             });
         }
-        out
+        Ok(out)
     }
 
     /// Typecheck each static method body into an ordinary [`crate::TypedFunction`]
@@ -3216,7 +3292,7 @@ impl<'a> Inferer<'a> {
         static_sigs: &BTreeMap<String, MethodSig>,
         class_mangled: &MangledName,
         class_name: &str,
-    ) {
+    ) -> Result<(), CompilerFailure> {
         for member in members {
             let ClassMember::Method {
                 name,
@@ -3269,8 +3345,8 @@ impl<'a> Inferer<'a> {
             let exprs_before = self.typed_ast.exprs_len();
             let stmts_before = self.typed_ast.stmts_len();
             let body_id = self
-                .infer_stmt(*body)
-                .expect("static method body is a Block");
+                .infer_stmt(*body)?
+                .ok_or_else(|| super::inference_failure("static method body is a Block"))?;
             self.current_return = prev_return;
             self.reachable = prev_reachable;
             self.current_static = prev_static;
@@ -3298,8 +3374,10 @@ impl<'a> Inferer<'a> {
                 body: body_id,
                 doc: doc.clone(),
                 span: *span,
-            });
+            })?;
         }
+
+        Ok(())
     }
 
     /// Typecheck each accessor body into a [`TypedClassAccessor`] (one per
@@ -3310,7 +3388,7 @@ impl<'a> Inferer<'a> {
         &mut self,
         members: &[ClassMember],
         field_sigs: &BTreeMap<String, FieldSig>,
-    ) -> Vec<TypedClassAccessor> {
+    ) -> Result<Vec<TypedClassAccessor>, CompilerFailure> {
         let mut accessors: Vec<TypedClassAccessor> = Vec::new();
         for member in members {
             let ClassMember::Accessor {
@@ -3338,8 +3416,10 @@ impl<'a> Inferer<'a> {
                     // the signature TypeVar form codegen expects.
                     let ret_ty = return_type
                         .as_ref()
-                        .map_or(Type::Error, |t| self.re_resolve_type(t));
-                    let body_id = self.check_accessor_body(*body, &[], &ret_ty);
+                        .map(|t| self.re_resolve_type(t))
+                        .transpose()?
+                        .unwrap_or(Type::Error);
+                    let body_id = self.check_accessor_body(*body, &[], &ret_ty)?;
                     accessors.push(TypedClassAccessor::Getter {
                         name: name.clone(),
                         ret_ty: erase_generic_params(&ret_ty),
@@ -3351,7 +3431,9 @@ impl<'a> Inferer<'a> {
                     let write_ty = param
                         .as_ref()
                         .and_then(|p| p.ty.as_ref())
-                        .map_or(Type::Error, |t| self.re_resolve_type(t));
+                        .map(|t| self.re_resolve_type(t))
+                        .transpose()?
+                        .unwrap_or(Type::Error);
                     let pname = param.as_ref().map_or_else(
                         || Ident {
                             name: "value".to_string(),
@@ -3370,7 +3452,7 @@ impl<'a> Inferer<'a> {
                         *body,
                         std::slice::from_ref(&typed_param),
                         &Type::Void,
-                    );
+                    )?;
                     accessors.push(TypedClassAccessor::Setter {
                         name: name.clone(),
                         param: TypedParam {
@@ -3383,7 +3465,7 @@ impl<'a> Inferer<'a> {
                 }
             }
         }
-        accessors
+        Ok(accessors)
     }
 
     /// Typecheck an accessor body with its params in scope and the given return type.
@@ -3392,7 +3474,7 @@ impl<'a> Inferer<'a> {
         body: crate::StmtId,
         params: &[TypedParam],
         ret: &Type,
-    ) -> crate::StmtId {
+    ) -> Result<crate::StmtId, CompilerFailure> {
         self.scopes.push();
         for p in params {
             self.scopes
@@ -3400,11 +3482,13 @@ impl<'a> Inferer<'a> {
         }
         let prev_return = self.current_return.replace(ret.clone());
         let prev_reachable = std::mem::replace(&mut self.reachable, true);
-        let body_id = self.infer_stmt(body).expect("accessor body is a Block");
+        let body_id = self
+            .infer_stmt(body)?
+            .ok_or_else(|| super::inference_failure("accessor body is a Block"))?;
         self.current_return = prev_return;
         self.reachable = prev_reachable;
         self.scopes.pop();
-        body_id
+        Ok(body_id)
     }
 }
 

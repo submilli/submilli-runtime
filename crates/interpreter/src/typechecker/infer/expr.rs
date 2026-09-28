@@ -5,6 +5,8 @@
 //! `to_string_intrinsic_for` dispatcher used by both
 //! `.toString()` and `String(x)` paths.
 
+use crate::compiler_error::CompilerFailure;
+
 use std::collections::BTreeSet;
 
 use crate::{
@@ -23,6 +25,9 @@ use crate::did_you_mean;
 
 use super::type_aliases::alias_ref_body;
 use super::{Inferer, assignable, narrowing};
+
+/// Typed field initializers and whether their own diagnostics explain an error.
+pub(super) type InferredObjectFields = std::collections::BTreeMap<ExprId, (ExprId, Type, bool)>;
 
 pub(super) struct StaticCallTarget<'a> {
     package: &'a str,
@@ -374,7 +379,7 @@ impl Inferer<'_> {
         &mut self,
         expr_id: ExprId,
         expected: Option<&Type>,
-    ) -> (ExprId, Type) {
+    ) -> Result<(ExprId, Type), CompilerFailure> {
         // A hint is read structurally — an object literal takes its per-field
         // hints from the expected type's fields — and `peel` stops at a
         // recursion back-edge, which carries no body to read. Rehydrating first
@@ -387,16 +392,27 @@ impl Inferer<'_> {
             name,
             function,
             this_type,
-        } = self.ast.expr(expr_id).kind.clone()
+        } = self
+            .ast
+            .try_expr(expr_id)
+            .map_err(super::arena_failure)?
+            .kind
+            .clone()
         {
             return self.infer_function_expression(name, function, this_type, expected);
         }
-        let expr = self.ast.expr(expr_id).clone();
+        let expr = self
+            .ast
+            .try_expr(expr_id)
+            .map_err(super::arena_failure)?
+            .clone();
         let span = expr.span;
         // An arrow whose own errors explain its mismatch with `expected` isn't
         // reported again as a whole.
         let mut arrow_reported = false;
-        let (kind, ty) = match expr.kind {
+        // Propagate once after dispatch: per-arm `?` creates large temporary
+        // results that inflate every recursive frame in debug builds.
+        let (kind, ty) = (match expr.kind {
             // narrow primitive literals to their literal type
             // when the expected hint (directly or as a member of an
             // expected union) calls for it. Without the hint, widen
@@ -409,18 +425,18 @@ impl Inferer<'_> {
                 } else {
                     Type::Number
                 };
-                (TypedExprKind::Number(v), ty)
+                Ok((TypedExprKind::Number(v), ty))
             }
             // bigint literal — always widens to `Type::BigInt`
             // (no `Type::BigIntLiteral` narrowing variant in v1).
-            ExprKind::BigInt(digits) => (TypedExprKind::BigInt(digits), Type::BigInt),
+            ExprKind::BigInt(digits) => Ok((TypedExprKind::BigInt(digits), Type::BigInt)),
             ExprKind::String(s) => {
                 let ty = if expects_literal(expected, |t| matches!(t, Type::StringLiteral(_))) {
                     Type::StringLiteral(s.clone())
                 } else {
                     Type::String
                 };
-                (TypedExprKind::String(s), ty)
+                Ok((TypedExprKind::String(s), ty))
             }
             ExprKind::Boolean(b) => {
                 let ty = if expects_literal(expected, |t| matches!(t, Type::BooleanLiteral(_))) {
@@ -428,10 +444,10 @@ impl Inferer<'_> {
                 } else {
                     Type::Boolean
                 };
-                (TypedExprKind::Boolean(b), ty)
+                Ok((TypedExprKind::Boolean(b), ty))
             }
-            ExprKind::Null => (TypedExprKind::Null, Type::Null),
-            ExprKind::Identifier(ident) => self.resolve_ident(ident, span),
+            ExprKind::Null => Ok((TypedExprKind::Null, Type::Null)),
+            ExprKind::Identifier(ident) => Ok(self.resolve_ident(ident, span)),
             ExprKind::Binary { op, lhs, rhs } => self.infer_binary(op, lhs, rhs, expected, span),
             ExprKind::Unary { op, operand } => self.infer_unary(op, operand),
             ExprKind::Call {
@@ -462,22 +478,22 @@ impl Inferer<'_> {
                 body,
             } => {
                 let (kind, ty, reported) =
-                    self.infer_arrow(params, return_type, type_predicate, body, expected, span);
+                    self.infer_arrow(params, return_type, type_predicate, body, expected, span)?;
                 arrow_reported = reported;
-                (kind, ty)
+                Ok((kind, ty))
             }
             ExprKind::Delete { operand } => {
                 // An object can't record one of its fields as absent unless it
                 // was built with that field optional: other objects share one
                 // immutable names array per shape (SUB-971). The operand is still
                 // inferred, so its own errors surface.
-                self.infer_expr(operand, None);
+                self.infer_expr(operand, None)?;
                 self.error_with_help(
                     span,
                     "the `delete` operator is not supported".into(),
                     vec!["type the field `T | null` and assign `null` to clear it".into()],
                 );
-                (TypedExprKind::Null, Type::Error)
+                Ok((TypedExprKind::Null, Type::Error))
             }
             ExprKind::Typeof { operand: _ } => {
                 // Reaching `Typeof` here means it didn't get folded by
@@ -495,7 +511,7 @@ impl Inferer<'_> {
                             .into(),
                     ],
                 );
-                (TypedExprKind::Null, Type::Error)
+                Ok((TypedExprKind::Null, Type::Error))
             }
             ExprKind::New {
                 callee,
@@ -520,17 +536,17 @@ impl Inferer<'_> {
             } => self.infer_assign_expr(target, op.map(|op| (op, op_span)), value, span),
             ExprKind::As { expr: inner, ty } => self.infer_as(inner, ty, span),
             ExprKind::InstanceOf { value, ty } => self.infer_instanceof(value, ty, span),
-            ExprKind::Regex { source, flags } => self.infer_regex(source, flags, span),
+            ExprKind::Regex { source, flags } => Ok(self.infer_regex(source, flags, span)),
             ExprKind::ThisOutsideReceiver => {
                 self.error_with_help(
                     span,
                     "`this` is only valid inside a class method or constructor body".into(),
                     vec!["reference `this` from within a class method or `constructor`".into()],
                 );
-                (TypedExprKind::Null, Type::Error)
+                Ok((TypedExprKind::Null, Type::Error))
             }
             ExprKind::This => {
-                if let Some(ty) = &self.function_this {
+                Ok(if let Some(ty) = &self.function_this {
                     (TypedExprKind::This, ty.clone())
                 } else if let Some(ty) = &self.current_class {
                     // In a subclass constructor, `this` before `super(...)` reads
@@ -557,7 +573,7 @@ impl Inferer<'_> {
                             .to_string(),
                     );
                     (TypedExprKind::Null, Type::Error)
-                }
+                })
             }
             ExprKind::Super => {
                 self.error_with_help(
@@ -568,9 +584,9 @@ impl Inferer<'_> {
                             .to_string(),
                     ],
                 );
-                (TypedExprKind::Null, Type::Error)
+                Ok((TypedExprKind::Null, Type::Error))
             }
-        };
+        })?;
         // an expression's type must be free of bare recursion
         // back-edges — codegen lowers `AliasRef` to the universal
         // `$Object`, but the equivalent inline alias-to-object peels to
@@ -612,7 +628,7 @@ impl Inferer<'_> {
             ty: ty.clone(),
         });
         self.record_runtime_type_test(&ty);
-        (id, ty)
+        Ok((id, ty))
     }
 
     fn resolve_ident(&mut self, ident: Ident, span: Span) -> (TypedExprKind, Type) {
@@ -938,7 +954,7 @@ impl Inferer<'_> {
         rhs: ExprId,
         expected: Option<&Type>,
         span: Span,
-    ) -> (TypedExprKind, Type) {
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         // human-readable operator symbol for diagnostics.
         // Inline-defined so the helper stays scoped to this method.
         fn op_symbol(op: BinOp) -> &'static str {
@@ -995,8 +1011,8 @@ impl Inferer<'_> {
                 // outer hint into operands would let the boundary check fire
                 // on a mistyped operand and then the operator-level rule would
                 // fire again — duplicate diagnostic.
-                let (typed_lhs, lt) = self.infer_expr(lhs, None);
-                let (typed_rhs, rt) = self.infer_expr(rhs, None);
+                let (typed_lhs, lt) = self.infer_expr(lhs, None)?;
+                let (typed_rhs, rt) = self.infer_expr(rhs, None)?;
                 // arithmetic/concat is structural — peel
                 // aliases so `type ID = number; let x: ID = 1; x + x`
                 // typechecks against the (Number, Number) arm.
@@ -1033,14 +1049,14 @@ impl Inferer<'_> {
                         }
                     }
                 };
-                (
+                Ok((
                     TypedExprKind::Binary {
                         op,
                         lhs: typed_lhs,
                         rhs: typed_rhs,
                     },
                     result_ty,
-                )
+                ))
             }
             BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem | BinOp::Pow => {
                 // arithmetic accepts `number × number`
@@ -1053,13 +1069,13 @@ impl Inferer<'_> {
                 // Inferred without a forced hint so a literal lhs
                 // picks its own widened type and the rhs gets the
                 // lhs type as a hint.
-                let (typed_lhs, lt) = self.infer_expr(lhs, None);
+                let (typed_lhs, lt) = self.infer_expr(lhs, None)?;
                 let rhs_hint = match lt.peel() {
                     Type::Number | Type::NumberLiteral(_) => Some(Type::Number),
                     Type::BigInt => Some(Type::BigInt),
                     _ => None,
                 };
-                let (typed_rhs, rt) = self.infer_expr(rhs, rhs_hint.as_ref());
+                let (typed_rhs, rt) = self.infer_expr(rhs, rhs_hint.as_ref())?;
                 let result_ty = match (lt.peel(), rt.peel()) {
                     (Type::Error, _) | (_, Type::Error) => Type::Error,
                     (Type::Unknown, _) | (_, Type::Unknown) => {
@@ -1093,14 +1109,14 @@ impl Inferer<'_> {
                         }
                     }
                 };
-                (
+                Ok((
                     TypedExprKind::Binary {
                         op,
                         lhs: typed_lhs,
                         rhs: typed_rhs,
                     },
                     result_ty,
-                )
+                ))
             }
             BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
                 // ordering accepts `number × number`, `bigint × bigint`, or
@@ -1108,13 +1124,13 @@ impl Inferer<'_> {
                 // hint so the rhs takes the lhs type as a hint (mirroring
                 // `===` / `!==`). Strings keep `None` as the rhs hint so a
                 // mixed `string < number` doesn't also emit "expected string".
-                let (typed_lhs, lt) = self.infer_expr(lhs, None);
+                let (typed_lhs, lt) = self.infer_expr(lhs, None)?;
                 let rhs_hint = match lt.peel() {
                     Type::Number | Type::NumberLiteral(_) => Some(Type::Number),
                     Type::BigInt => Some(Type::BigInt),
                     _ => None,
                 };
-                let (typed_rhs, rt) = self.infer_expr(rhs, rhs_hint.as_ref());
+                let (typed_rhs, rt) = self.infer_expr(rhs, rhs_hint.as_ref())?;
                 if matches!(lt.peel(), Type::Unknown) || matches!(rt.peel(), Type::Unknown) {
                     // ordering comparisons on un-narrowed
                     // `unknown` are rejected. Same rationale as the
@@ -1143,39 +1159,43 @@ impl Inferer<'_> {
                         culprit,
                     );
                 }
-                (
+                Ok((
                     TypedExprKind::Binary {
                         op,
                         lhs: typed_lhs,
                         rhs: typed_rhs,
                     },
                     Type::Boolean,
-                )
+                ))
             }
             BinOp::Eq | BinOp::NotEq => {
                 // forgiveness: rewrite `typeof x === "T"` and
                 // `typeof x !== "T"` (plus the swapped sides) to
                 // `Is` / `!Is`. Falls through if no `typeof` operand.
-                if let Some(folded) = self.try_typeof_fold(op, lhs, rhs, span) {
-                    return folded;
+                if let Some(folded) = self.try_typeof_fold(op, lhs, rhs, span)? {
+                    return Ok(folded);
                 }
-                let (typed_lhs, lt) = self.infer_expr(lhs, None);
+                let (typed_lhs, lt) = self.infer_expr(lhs, None)?;
                 let lhs_void = lt.carries_void().then(|| lt.clone());
-                let either_is_null_literal =
-                    matches!(&self.ast.expr(lhs).kind, crate::ExprKind::Null)
-                        || matches!(&self.ast.expr(rhs).kind, crate::ExprKind::Null);
+                let either_is_null_literal = matches!(
+                    &self.ast.try_expr(lhs).map_err(super::arena_failure)?.kind,
+                    crate::ExprKind::Null
+                ) || matches!(
+                    &self.ast.try_expr(rhs).map_err(super::arena_failure)?.kind,
+                    crate::ExprKind::Null
+                );
                 // Contextual types help literals and callbacks, but an equality
                 // operand is not an assignment into the other operand's type.
-                let contextual_rhs = equality_operand_needs_context(self.ast, rhs);
+                let contextual_rhs = equality_operand_needs_context(self.ast, rhs)?;
                 let rhs_hint = contextual_rhs.then_some(&lt);
-                let (typed_rhs, rt) = self.infer_expr(rhs, rhs_hint);
+                let (typed_rhs, rt) = self.infer_expr(rhs, rhs_hint)?;
                 let comparison_rhs =
                     literal_comparison_type(&self.typed_ast, self.typed_ast.expr(typed_rhs));
                 if !either_is_null_literal
                     && !equality_types_overlap(&lt, &comparison_rhs, self.resolver())
                 {
                     self.error(
-                        self.ast.expr(rhs).span,
+                        self.ast.try_expr(rhs).map_err(super::arena_failure)?.span,
                         format!("expected `{lt}`, got `{comparison_rhs}`"),
                     );
                 }
@@ -1184,7 +1204,11 @@ impl Inferer<'_> {
                 let rhs_void = rt.carries_void().then(|| rt.clone());
                 for (operand, void_ty) in [(lhs, lhs_void), (rhs, rhs_void)] {
                     if let Some(void_ty) = void_ty {
-                        let operand_span = self.ast.expr(operand).span;
+                        let operand_span = self
+                            .ast
+                            .try_expr(operand)
+                            .map_err(super::arena_failure)?
+                            .span;
                         self.error_non_comparable_type(
                             operand_span,
                             &void_ty,
@@ -1192,14 +1216,14 @@ impl Inferer<'_> {
                         );
                     }
                 }
-                (
+                Ok((
                     TypedExprKind::Binary {
                         op,
                         lhs: typed_lhs,
                         rhs: typed_rhs,
                     },
                     Type::Boolean,
-                )
+                ))
             }
             BinOp::And | BinOp::Or => {
                 // JS value-returning logicals. The RHS is inferred
@@ -1210,14 +1234,14 @@ impl Inferer<'_> {
                 // type is TS-style: the branch that keeps the LHS
                 // contributes only the values that can short-circuit
                 // there (`falsy_part` for `&&`, `truthy_part` for `||`).
-                let (typed_lhs, lhs_ty) = self.infer_expr(lhs, None);
+                let (typed_lhs, lhs_ty) = self.infer_expr(lhs, None)?;
                 let mut condition_error = false;
                 if matches!(lhs_ty.peel(), Type::Unknown) {
                     // `&&`/`||` on un-narrowed `unknown`
                     // rejected with a "narrow first" hint instead of
                     // the generic "expected boolean" mismatch.
                     condition_error = true;
-                    let lhs_span = self.ast.expr(lhs).span;
+                    let lhs_span = self.ast.try_expr(lhs).map_err(super::arena_failure)?.span;
                     self.error_with_help(
                         lhs_span,
                         "cannot use `unknown` in a boolean context".to_string(),
@@ -1230,7 +1254,7 @@ impl Inferer<'_> {
                     );
                 } else if !super::narrowing::condition_compatible(&lhs_ty) {
                     condition_error = true;
-                    let lhs_span = self.ast.expr(lhs).span;
+                    let lhs_span = self.ast.try_expr(lhs).map_err(super::arena_failure)?.span;
                     self.error_non_condition_type(lhs_span, &lhs_ty);
                 }
                 let (true_env, false_env) = self.predicate_envs(typed_lhs);
@@ -1239,13 +1263,14 @@ impl Inferer<'_> {
                     BinOp::Or => false_env,
                     _ => unreachable!("matched And | Or above"),
                 };
-                let (typed_rhs, rhs_ty) = self.infer_conditional_operand(rhs, &rhs_env, expected);
+                let (typed_rhs, rhs_ty) =
+                    self.infer_conditional_operand(rhs, &rhs_env, expected)?;
                 if matches!(rhs_ty.peel(), Type::Void | Type::Never) {
                     condition_error = true;
-                    let rhs_span = self.ast.expr(rhs).span;
+                    let rhs_span = self.ast.try_expr(rhs).map_err(super::arena_failure)?.span;
                     self.error_non_condition_type(rhs_span, &rhs_ty);
                 }
-                let rhs_span = self.ast.expr(rhs).span;
+                let rhs_span = self.ast.try_expr(rhs).map_err(super::arena_failure)?.span;
                 let wrapped_rhs = self.wrap_narrow_exprs(typed_rhs, &rhs_env, rhs_span);
                 let lhs_kept = match op {
                     BinOp::And => super::narrowing::falsy_part(&lhs_ty),
@@ -1257,14 +1282,14 @@ impl Inferer<'_> {
                 } else {
                     branch_result_type(lhs_kept, rhs_ty, self.resolver())
                 };
-                (
+                Ok((
                     TypedExprKind::Binary {
                         op,
                         lhs: typed_lhs,
                         rhs: wrapped_rhs,
                     },
                     result_ty,
-                )
+                ))
             }
             BinOp::In => self.infer_in_operator(lhs, rhs, span),
             // Lifted earlier in this function — the early-return at
@@ -1279,16 +1304,21 @@ impl Inferer<'_> {
     /// Result is `boolean`. The narrowing-engine side is driven from
     /// `predicate_envs_in_operator` — this method only enforces the
     /// type-level shape.
-    fn infer_in_operator(&mut self, lhs: ExprId, rhs: ExprId, span: Span) -> (TypedExprKind, Type) {
-        let lhs_span = self.ast.expr(lhs).span;
-        let (typed_lhs, lhs_ty) = self.infer_expr(lhs, Some(&Type::String));
+    fn infer_in_operator(
+        &mut self,
+        lhs: ExprId,
+        rhs: ExprId,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let lhs_span = self.ast.try_expr(lhs).map_err(super::arena_failure)?.span;
+        let (typed_lhs, lhs_ty) = self.infer_expr(lhs, Some(&Type::String))?;
         if !assignable(&lhs_ty, &Type::String, self.resolver()) {
             self.error(
                 lhs_span,
                 "`in` operator requires a string on the left".into(),
             );
         }
-        let (typed_rhs, rhs_ty) = self.infer_expr(rhs, None);
+        let (typed_rhs, rhs_ty) = self.infer_expr(rhs, None)?;
         let receiver_ok = match rhs_ty.peel() {
             Type::Unknown | Type::Error => true,
             ty if Self::is_field_bearing(ty) => true,
@@ -1305,24 +1335,32 @@ impl Inferer<'_> {
                 help,
             );
         }
-        (
+        Ok((
             TypedExprKind::Binary {
                 op: BinOp::In,
                 lhs: typed_lhs,
                 rhs: typed_rhs,
             },
             Type::Boolean,
-        )
+        ))
     }
 
-    fn infer_unary(&mut self, op: UnOp, operand: ExprId) -> (TypedExprKind, Type) {
+    fn infer_unary(
+        &mut self,
+        op: UnOp,
+        operand: ExprId,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let (operand_id, result_ty) = match op {
             UnOp::Not => {
-                let (id, operand_ty) = self.infer_expr(operand, None);
+                let (id, operand_ty) = self.infer_expr(operand, None)?;
                 if matches!(operand_ty.peel(), Type::Unknown) {
                     // `!x` on un-narrowed `unknown` rejected
                     // with a "narrow first" hint.
-                    let operand_span = self.ast.expr(operand).span;
+                    let operand_span = self
+                        .ast
+                        .try_expr(operand)
+                        .map_err(super::arena_failure)?
+                        .span;
                     self.error_with_help(
                         operand_span,
                         "cannot use `unknown` in a boolean context".to_string(),
@@ -1334,7 +1372,11 @@ impl Inferer<'_> {
                         ],
                     );
                 } else if !super::narrowing::condition_compatible(&operand_ty) {
-                    let operand_span = self.ast.expr(operand).span;
+                    let operand_span = self
+                        .ast
+                        .try_expr(operand)
+                        .map_err(super::arena_failure)?
+                        .span;
                     self.error_non_condition_type(operand_span, &operand_ty);
                 }
                 (id, Type::Boolean)
@@ -1342,8 +1384,12 @@ impl Inferer<'_> {
             UnOp::Neg | UnOp::Pos => {
                 // No forced hint — the operand picks its own widened type and
                 // the result mirrors it.
-                let (id, operand_ty) = self.infer_expr(operand, None);
-                let operand_span = self.ast.expr(operand).span;
+                let (id, operand_ty) = self.infer_expr(operand, None)?;
+                let operand_span = self
+                    .ast
+                    .try_expr(operand)
+                    .map_err(super::arena_failure)?
+                    .span;
                 let peeled = operand_ty.peel();
                 if matches!(peeled, Type::Unknown) {
                     self.error_with_help(
@@ -1381,13 +1427,13 @@ impl Inferer<'_> {
                 }
             }
         };
-        (
+        Ok((
             TypedExprKind::Unary {
                 op,
                 operand: operand_id,
             },
             result_ty,
-        )
+        ))
     }
 
     /// Detect `typeof X === "T"` / `typeof X !== "T"` (and the
@@ -1400,23 +1446,32 @@ impl Inferer<'_> {
         lhs: ExprId,
         rhs: ExprId,
         span: Span,
-    ) -> Option<(TypedExprKind, Type)> {
+    ) -> Result<Option<(TypedExprKind, Type)>, CompilerFailure> {
         // Peek the *surface* AST — we want to detect `Typeof` before
         // it's inferred (inferring it would emit the "not a value"
         // error from the bare-typeof arm).
         let (operand_id, tag, tag_span) = if let ExprKind::Typeof { operand } =
-            &self.ast.expr(lhs).kind
-            && let ExprKind::String(s) = &self.ast.expr(rhs).kind
+            &self.ast.try_expr(lhs).map_err(super::arena_failure)?.kind
+            && let ExprKind::String(s) = &self.ast.try_expr(rhs).map_err(super::arena_failure)?.kind
         {
-            (*operand, s.clone(), self.ast.expr(rhs).span)
-        } else if let ExprKind::Typeof { operand } = &self.ast.expr(rhs).kind
-            && let ExprKind::String(s) = &self.ast.expr(lhs).kind
+            (
+                *operand,
+                s.clone(),
+                self.ast.try_expr(rhs).map_err(super::arena_failure)?.span,
+            )
+        } else if let ExprKind::Typeof { operand } =
+            &self.ast.try_expr(rhs).map_err(super::arena_failure)?.kind
+            && let ExprKind::String(s) = &self.ast.try_expr(lhs).map_err(super::arena_failure)?.kind
         {
-            (*operand, s.clone(), self.ast.expr(lhs).span)
+            (
+                *operand,
+                s.clone(),
+                self.ast.try_expr(lhs).map_err(super::arena_failure)?.span,
+            )
         } else {
-            return None;
+            return Ok(None);
         };
-        let (typed_operand, _) = self.infer_expr(operand_id, None);
+        let (typed_operand, _) = self.infer_expr(operand_id, None)?;
         // Retained refinements cannot prove the kind of a later live read.
         let tag = match tag.as_str() {
             "number" => crate::TypeofTagKind::Number,
@@ -1444,7 +1499,7 @@ impl Inferer<'_> {
             value: typed_operand,
             tag,
         };
-        match op {
+        Ok(match op {
             BinOp::Eq => Some((inner_kind, Type::Boolean)),
             BinOp::NotEq => {
                 // Wrap in `Unary { Not, … }` — push the inner first
@@ -1463,7 +1518,7 @@ impl Inferer<'_> {
                 ))
             }
             _ => unreachable!("try_typeof_fold called with non-eq op"),
-        }
+        })
     }
 
     /// Type the arguments of a call that has already been rejected, discarding
@@ -1473,10 +1528,12 @@ impl Inferer<'_> {
     /// own right: an unresolved name or a bad nested call in one is a second
     /// real problem, and skipping the walk would hide it until the first is
     /// fixed.
-    fn walk_rejected_call_args(&mut self, args: &[ExprId]) {
+    fn walk_rejected_call_args(&mut self, args: &[ExprId]) -> Result<(), CompilerFailure> {
         for arg in args {
-            let _ = self.infer_expr(*arg, None);
+            let _ = self.infer_expr(*arg, None)?;
         }
+
+        Ok(())
     }
 
     /// Reports a call of a mutating array method (`push`, `sort`, …) on a receiver
@@ -1527,8 +1584,8 @@ impl Inferer<'_> {
         args: Vec<ExprId>,
         expected: Option<&Type>,
         span: Span,
-    ) -> (TypedExprKind, Type) {
-        let callee_kind = string_key_callee_as_field(self.ast, callee);
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let callee_kind = string_key_callee_as_field(self.ast, callee)?;
 
         // Intrinsic dispatch — when the callee is a bare identifier
         // matching a reserved intrinsic name, we skip the normal
@@ -1549,7 +1606,13 @@ impl Inferer<'_> {
 
         // `super.method(...)` — direct call of the parent's method body.
         if let ExprKind::FieldAccess { receiver, name } = &callee_kind
-            && matches!(self.ast.expr(*receiver).kind, ExprKind::Super)
+            && matches!(
+                self.ast
+                    .try_expr(*receiver)
+                    .map_err(super::arena_failure)?
+                    .kind,
+                ExprKind::Super
+            )
         {
             return self.infer_super_method_call(name.clone(), args, span);
         }
@@ -1561,7 +1624,12 @@ impl Inferer<'_> {
         // the namespace dispatch so the `JSON` identifier
         // never resolves as a user-imported namespace.
         if let ExprKind::FieldAccess { receiver, name } = &callee_kind
-            && let ExprKind::Identifier(recv_ident) = &self.ast.expr(*receiver).kind.clone()
+            && let ExprKind::Identifier(recv_ident) = &self
+                .ast
+                .try_expr(*receiver)
+                .map_err(super::arena_failure)?
+                .kind
+                .clone()
             && !self.shadows_namespace(&recv_ident.name)
             && recv_ident.name == "JSON"
         {
@@ -1573,7 +1641,12 @@ impl Inferer<'_> {
         // `BigInt` is reserved by `is_reserved_call_name`, so the
         // resolve_ident path produces a focused diagnostic.
         if let ExprKind::FieldAccess { receiver, name } = &callee_kind
-            && let ExprKind::Identifier(recv_ident) = &self.ast.expr(*receiver).kind.clone()
+            && let ExprKind::Identifier(recv_ident) = &self
+                .ast
+                .try_expr(*receiver)
+                .map_err(super::arena_failure)?
+                .kind
+                .clone()
             && self.scopes.get(&recv_ident.name).is_none()
             && recv_ident.name == "BigInt"
         {
@@ -1589,7 +1662,7 @@ impl Inferer<'_> {
         // FieldAccess chain rooted at the callee; the
         // `namespace_symbols` map gates the dispatch.
         if let ExprKind::FieldAccess { .. } = &callee_kind
-            && let Some((root, segments)) = namespace_symbol::extract_chain(self.ast, callee)
+            && let Some((root, segments)) = namespace_symbol::extract_chain(self.ast, callee)?
             && !segments.is_empty()
             && !self.shadows_namespace(&root.name)
             && self.namespace_symbols.contains_key(&root.name)
@@ -1607,7 +1680,12 @@ impl Inferer<'_> {
         // identifier never reaches `resolve_ident` (which would
         // reject it as "namespace cannot be used as a value").
         if let ExprKind::FieldAccess { receiver, name } = &callee_kind
-            && let ExprKind::Identifier(recv_ident) = &self.ast.expr(*receiver).kind.clone()
+            && let ExprKind::Identifier(recv_ident) = &self
+                .ast
+                .try_expr(*receiver)
+                .map_err(super::arena_failure)?
+                .kind
+                .clone()
             && self.scopes.get(&recv_ident.name).is_none()
             && let Some(ns) = self.namespace_bindings.get(&recv_ident.name)
         {
@@ -1631,21 +1709,26 @@ impl Inferer<'_> {
                 format!("package `{package_name}` does not export `{}`", name.name),
                 exports,
             );
-            return (
+            return Ok((
                 TypedExprKind::Call {
                     mangled: crate::mangle::host(&package_name, &name.name),
                     args: Vec::new(),
                     type_predicate: None,
                 },
                 Type::Error,
-            );
+            ));
         }
 
         // static member dispatch — `ClassName.member(args)`. The receiver is
         // peeked before being typed (a bare class name is not a value); a value
         // binding of the same name shadows the class, TS-style.
         if let ExprKind::FieldAccess { receiver, name } = &callee_kind
-            && let ExprKind::Identifier(recv_ident) = &self.ast.expr(*receiver).kind.clone()
+            && let ExprKind::Identifier(recv_ident) = &self
+                .ast
+                .try_expr(*receiver)
+                .map_err(super::arena_failure)?
+                .kind
+                .clone()
             && self.scopes.get(&recv_ident.name).is_none()
             && !self.top_symbols.contains_key(&recv_ident.name)
         {
@@ -1672,8 +1755,18 @@ impl Inferer<'_> {
             && let ExprKind::FieldAccess {
                 receiver: inner_recv,
                 name: type_name,
-            } = &self.ast.expr(*receiver).kind.clone()
-            && let ExprKind::Identifier(ns_ident) = &self.ast.expr(*inner_recv).kind.clone()
+            } = &self
+                .ast
+                .try_expr(*receiver)
+                .map_err(super::arena_failure)?
+                .kind
+                .clone()
+            && let ExprKind::Identifier(ns_ident) = &self
+                .ast
+                .try_expr(*inner_recv)
+                .map_err(super::arena_failure)?
+                .kind
+                .clone()
             && self.scopes.get(&ns_ident.name).is_none()
             && let Some(ns) = self.namespace_bindings.get(&ns_ident.name)
             && matches!(
@@ -1691,8 +1784,8 @@ impl Inferer<'_> {
                     type_name.name, type_name.name, name.name,
                 )],
             );
-            self.walk_rejected_call_args(&args);
-            return (TypedExprKind::Null, Type::Error);
+            self.walk_rejected_call_args(&args)?;
+            return Ok((TypedExprKind::Null, Type::Error));
         }
 
         // method dispatch — `recv.method(args)` resolves
@@ -1704,7 +1797,7 @@ impl Inferer<'_> {
         // console.log special case).
         if let ExprKind::FieldAccess { receiver, name } = &callee_kind {
             let diags_before = self.diagnostics.len();
-            let (mut typed_receiver, mut recv_ty) = self.infer_expr(*receiver, None);
+            let (mut typed_receiver, mut recv_ty) = self.infer_expr(*receiver, None)?;
             // `r.json()` on an http `Response` has no host backing, so the
             // typechecker lowers it to `JSON.parse(r.body)`. This must run before `find_method`: the `json`
             // method is declared on `Response` only for the LLM-facing type surface and
@@ -1752,14 +1845,14 @@ impl Inferer<'_> {
                     let _ = probe.unify(&sig.ret, want, self.resolver());
                     let desired = probe.apply(&recv_ty);
                     if desired != recv_ty && !type_contains_type_var(&desired) {
-                        let reinferred = self.infer_expr(*receiver, Some(&desired));
+                        let reinferred = self.infer_expr(*receiver, Some(&desired))?;
                         typed_receiver = reinferred.0;
                         recv_ty = reinferred.1;
                     }
                 }
             }
             if self.reject_mutating_array_call(&recv_ty, name) {
-                return (TypedExprKind::Null, Type::Error);
+                return Ok((TypedExprKind::Null, Type::Error));
             }
             if let Some((sig, interface_bindings, iface_mangled, _dispatch)) =
                 self.find_method(&recv_ty, &name.name)
@@ -1769,7 +1862,7 @@ impl Inferer<'_> {
                 // and override the resolved return type before dispatch.
                 let mut sig = sig;
                 if name.name == "flat" && matches!(recv_ty.peel(), Type::Array(_)) {
-                    sig.ret = self.array_flat_return_type(&recv_ty, &args);
+                    sig.ret = self.array_flat_return_type(&recv_ty, &args)?;
                 }
                 // Anything with substitution work — interface generics
                 // (`Array<T>`), method generics (`map<U>`), or both —
@@ -1810,7 +1903,7 @@ impl Inferer<'_> {
                     format!("no method `{}` on `{}`", name.name, recv_ty),
                     help,
                 );
-                return (TypedExprKind::Null, Type::Error);
+                return Ok((TypedExprKind::Null, Type::Error));
             }
             // Special-case: `null.toString()` (or `(maybeNullable)
             // .toString()`) gets the narrow-first diagnostic
@@ -1834,7 +1927,7 @@ impl Inferer<'_> {
                 // Diagnostic placeholder — the iface isn't real here
                 // (Null has no interface). Codegen never sees this
                 // node because the diagnostic blocks compilation.
-                return (
+                return Ok((
                     TypedExprKind::MethodCall {
                         receiver: typed_receiver,
                         iface: crate::mangle::prelude("Null"),
@@ -1843,15 +1936,15 @@ impl Inferer<'_> {
                         type_predicate: None,
                     },
                     Type::String,
-                );
+                ));
             }
             // A receiver that already reported has nothing left to dispatch on,
             // and the fall-through below re-infers the whole callee — which
             // re-infers this receiver and reports the identical diagnostic a
             // second time.
             if matches!(recv_ty, Type::Error) {
-                self.walk_rejected_call_args(&args);
-                return (TypedExprKind::Null, Type::Error);
+                self.walk_rejected_call_args(&args)?;
+                return Ok((TypedExprKind::Null, Type::Error));
             }
             // Fall through: receiver type may carry a method-typed
             // field one day (function-typed object fields when those
@@ -1902,7 +1995,7 @@ impl Inferer<'_> {
             );
         }
 
-        let (typed_callee, callee_ty) = self.infer_expr(callee, None);
+        let (typed_callee, callee_ty) = self.infer_expr(callee, None)?;
         // call-signature dispatch — when the callee types
         // as an `InterfaceRef` declaring `@call`, route through the
         // same method-call pipeline as `find_method(_, "new")` for
@@ -1919,29 +2012,31 @@ impl Inferer<'_> {
                 name: "@call".to_string(),
                 span,
             };
-            return if interface_bindings.is_empty() && sig.generics.is_empty() {
-                self.infer_method_call(
-                    typed_callee,
-                    iface_mangled,
-                    call_name,
-                    sig,
-                    type_args,
-                    args,
-                    span,
-                )
-            } else {
-                self.infer_generic_method_call(
-                    typed_callee,
-                    iface_mangled,
-                    call_name,
-                    sig,
-                    interface_bindings,
-                    type_args,
-                    args,
-                    expected,
-                    span,
-                )
-            };
+            return Ok(
+                if interface_bindings.is_empty() && sig.generics.is_empty() {
+                    self.infer_method_call(
+                        typed_callee,
+                        iface_mangled,
+                        call_name,
+                        sig,
+                        type_args,
+                        args,
+                        span,
+                    )?
+                } else {
+                    self.infer_generic_method_call(
+                        typed_callee,
+                        iface_mangled,
+                        call_name,
+                        sig,
+                        interface_bindings,
+                        type_args,
+                        args,
+                        expected,
+                        span,
+                    )?
+                },
+            );
         }
         // also lift `has_rest` from the function type so a
         // call through a function-typed value (arrow stored in a
@@ -2141,7 +2236,7 @@ impl Inferer<'_> {
             } else {
                 rest_elem_ty.clone()
             };
-            let (typed_id, _) = self.infer_expr(arg_id, hint.as_ref());
+            let (typed_id, _) = self.infer_expr(arg_id, hint.as_ref())?;
             typed_args.push(typed_id);
         }
         if arity1_parse_int {
@@ -2183,29 +2278,33 @@ impl Inferer<'_> {
                 symbol: &symbol,
                 mangled,
             };
-            return self.static_call_expr(target, typed_args, type_predicate, &ret_ty, span);
+            return Ok(self.static_call_expr(target, typed_args, type_predicate, &ret_ty, span));
         } else {
             TypedExprKind::CallClosure {
                 callee: typed_callee,
                 args: typed_args,
             }
         };
-        (kind, ret_ty)
+        Ok((kind, ret_ty))
     }
 
     /// Computes `flat`'s return type by un-nesting `depth` array levels from the
     /// receiver's element type. `depth` must be a non-negative integer literal
     /// (default `1`) so the result type is statically known; anything else is a
     /// compile error and the depth falls back to `1`.
-    fn array_flat_return_type(&mut self, recv_ty: &Type, args: &[ExprId]) -> Type {
+    fn array_flat_return_type(
+        &mut self,
+        recv_ty: &Type,
+        args: &[ExprId],
+    ) -> Result<Type, CompilerFailure> {
         let elem = match recv_ty.peel() {
             Type::Array(inner) => (**inner).clone(),
-            _ => return Type::Error,
+            _ => return Ok(Type::Error),
         };
         let depth = match args.first() {
             None => 1usize,
             Some(arg) => {
-                let arg_expr = self.ast.expr(*arg);
+                let arg_expr = self.ast.try_expr(*arg).map_err(super::arena_failure)?;
                 match &arg_expr.kind {
                     ExprKind::Number(v) if v.is_finite() && *v >= 0.0 && v.fract() == 0.0 => {
                         *v as usize
@@ -2232,7 +2331,7 @@ impl Inferer<'_> {
                 _ => break,
             }
         }
-        Type::Array(Box::new(result_elem))
+        Ok(Type::Array(Box::new(result_elem)))
     }
 
     /// Typecheck a method call where neither the interface nor the
@@ -2254,7 +2353,7 @@ impl Inferer<'_> {
         type_args: Option<Vec<TypeAnnotation>>,
         args: Vec<ExprId>,
         span: Span,
-    ) -> (TypedExprKind, Type) {
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         debug_assert!(
             sig.generics.is_empty(),
             "infer_method_call requires sig with no method generics; \
@@ -2290,7 +2389,7 @@ impl Inferer<'_> {
             },
             &args,
             span,
-        );
+        )?;
         // non-generic guard methods (e.g.
         // `Array.isArray(value: unknown): value is unknown[]`)
         // land here. The sig is already concrete — no substitution
@@ -2328,7 +2427,7 @@ impl Inferer<'_> {
             } else {
                 None
             };
-            return (
+            return Ok((
                 TypedExprKind::GenericMethodCall {
                     receiver: typed_receiver,
                     iface: iface_mangled,
@@ -2338,9 +2437,9 @@ impl Inferer<'_> {
                     type_predicate,
                 },
                 sig.ret,
-            );
+            ));
         }
-        (
+        Ok((
             TypedExprKind::MethodCall {
                 receiver: typed_receiver,
                 iface: iface_mangled,
@@ -2349,7 +2448,7 @@ impl Inferer<'_> {
                 type_predicate,
             },
             sig.ret,
-        )
+        ))
     }
 
     /// build a synthesized typed expression for an omitted
@@ -2523,11 +2622,16 @@ impl Inferer<'_> {
         args: Vec<ExprId>,
         expected: Option<&Type>,
         span: Span,
-    ) -> (TypedExprKind, Type) {
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         // `new ClassName(args)` — the callee names a class type. Construct an
         // instance: check the constructor args, result is the class instance
         // type. (Codegen of `new` is SUB-483; this is typecheck-only.)
-        if let ExprKind::Identifier(ident) = &self.ast.expr(callee).kind.clone()
+        if let ExprKind::Identifier(ident) = &self
+            .ast
+            .try_expr(callee)
+            .map_err(super::arena_failure)?
+            .kind
+            .clone()
             && let Some((class_mangled, ctor_params, class_generics)) = self
                 .lookup_named_type(&ident.name)
                 .and_then(|s| match &s.kind {
@@ -2571,7 +2675,7 @@ impl Inferer<'_> {
                     expected,
                     span,
                     super::generic::GenericCallee::Constructor,
-                );
+                )?;
                 // Written type arguments are screened in `resolve_type`;
                 // inferred ones arrive here, and a `void` argument has no value
                 // representation to erase into.
@@ -2593,9 +2697,9 @@ impl Inferer<'_> {
                             ident.name
                         )],
                     );
-                    return (kind, Type::Error);
+                    return Ok((kind, Type::Error));
                 }
-                return (kind, ty);
+                return Ok((kind, ty));
             }
             let class_ty = Type::class_ref(package, ident.name.clone(), class_mangled, Vec::new());
             if type_args.is_some() {
@@ -2615,21 +2719,21 @@ impl Inferer<'_> {
                 },
                 &args,
                 span,
-            );
+            )?;
             // `new Foo(args)` lowers to a call of the synthesized constructor
             // function (codegen emits it; same-package only in SUB-483).
-            return (
+            return Ok((
                 TypedExprKind::Call {
                     mangled: ctor_mangled,
                     args: typed_args,
                     type_predicate: None,
                 },
                 class_ty,
-            );
+            ));
         }
-        let (typed_callee, callee_ty) = self.infer_expr(callee, None);
+        let (typed_callee, callee_ty) = self.infer_expr(callee, None)?;
         if matches!(callee_ty, Type::Error) {
-            return (TypedExprKind::Null, Type::Error);
+            return Ok((TypedExprKind::Null, Type::Error));
         }
         let new_name = Ident {
             name: "new".to_string(),
@@ -2671,7 +2775,7 @@ impl Inferer<'_> {
                 format!("`new` expects a constructor; `{callee_ty}` declares no `new` method",),
                 help,
             );
-            return (TypedExprKind::Null, Type::Error);
+            return Ok((TypedExprKind::Null, Type::Error));
         };
         // `new foo(args)` lowers to the same MethodCall as
         // `foo.new(args)` — the dispatch mode (Static vs Direct)
@@ -2682,29 +2786,31 @@ impl Inferer<'_> {
         // is just an instance method whose name happens to be `new`,
         // and the prefix form is a perfectly valid alias for the
         // dotted form.
-        if interface_bindings.is_empty() && sig.generics.is_empty() {
-            self.infer_method_call(
-                typed_callee,
-                iface_mangled,
-                new_name,
-                sig,
-                type_args,
-                args,
-                span,
-            )
-        } else {
-            self.infer_generic_method_call(
-                typed_callee,
-                iface_mangled,
-                new_name,
-                sig,
-                interface_bindings,
-                type_args,
-                args,
-                expected,
-                span,
-            )
-        }
+        Ok(
+            if interface_bindings.is_empty() && sig.generics.is_empty() {
+                self.infer_method_call(
+                    typed_callee,
+                    iface_mangled,
+                    new_name,
+                    sig,
+                    type_args,
+                    args,
+                    span,
+                )?
+            } else {
+                self.infer_generic_method_call(
+                    typed_callee,
+                    iface_mangled,
+                    new_name,
+                    sig,
+                    interface_bindings,
+                    type_args,
+                    args,
+                    expected,
+                    span,
+                )?
+            },
+        )
     }
 
     /// Build a statically-dispatched call node. A function from an `@mcp/<server>`
@@ -3092,7 +3198,7 @@ impl Inferer<'_> {
         args: Vec<ExprId>,
         expected: Option<&Type>,
         span: Span,
-    ) -> (TypedExprKind, Type) {
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let ValueKind::Function {
             generics,
             params,
@@ -3105,14 +3211,14 @@ impl Inferer<'_> {
                 span,
                 format!("`{}.{}` is not callable", recv_ident.name, member.name,),
             );
-            return (
+            return Ok((
                 TypedExprKind::Call {
                     mangled: sym.mangled_name.clone(),
                     args: Vec::new(),
                     type_predicate: None,
                 },
                 Type::Error,
-            );
+            ));
         };
         let display = format!("{}.{}", recv_ident.name, member.name);
         // Generic functions take the same explicit-args + bidirectional +
@@ -3152,14 +3258,14 @@ impl Inferer<'_> {
             CallLift::Function { name: &display },
             &args,
             span,
-        );
+        )?;
         let type_predicate = type_predicate.clone().map(Box::new);
         let target = StaticCallTarget {
             package: &package_name,
             symbol: &member.name,
             mangled: sym.mangled_name.clone(),
         };
-        self.static_call_expr(target, typed_args, type_predicate, ret, span)
+        Ok(self.static_call_expr(target, typed_args, type_predicate, ret, span))
     }
 
     /// `ClassName.member(args)` — dispatch a static method as a direct `Call`
@@ -3176,102 +3282,104 @@ impl Inferer<'_> {
         args: Vec<ExprId>,
         expected: Option<&Type>,
         span: Span,
-    ) -> (TypedExprKind, Type) {
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         use super::classes::StaticResolution;
         let display = format!("{class_name}.{}", member.name);
-        match self.class_static_in_chain(&class_mangled, &member.name) {
-            Some((StaticResolution::Method(sig, vis), owner)) => {
-                self.check_static_privacy(vis, &owner, &class_name, &member);
-                let mangled = crate::mangle::static_member(&owner, &member.name);
-                if !sig.generics.is_empty() {
-                    let callee_ident = Ident {
-                        name: display,
-                        span: member.span,
-                    };
-                    return self.infer_generic_call(
-                        callee_ident,
-                        sig.generics.clone(),
-                        sig.params.clone(),
-                        sig.ret.clone(),
-                        mangled,
-                        sig.predicate.clone(),
-                        type_args,
-                        args,
-                        expected,
-                        span,
-                        super::generic::GenericCallee::Function,
-                    );
-                }
-                if let Some(targs) = &type_args {
-                    self.error(
-                        span,
-                        format!(
-                            "type arguments are only valid on generic functions; got {} \
+        Ok(
+            match self.class_static_in_chain(&class_mangled, &member.name) {
+                Some((StaticResolution::Method(sig, vis), owner)) => {
+                    self.check_static_privacy(vis, &owner, &class_name, &member);
+                    let mangled = crate::mangle::static_member(&owner, &member.name);
+                    if !sig.generics.is_empty() {
+                        let callee_ident = Ident {
+                            name: display,
+                            span: member.span,
+                        };
+                        return self.infer_generic_call(
+                            callee_ident,
+                            sig.generics.clone(),
+                            sig.params.clone(),
+                            sig.ret.clone(),
+                            mangled,
+                            sig.predicate.clone(),
+                            type_args,
+                            args,
+                            expected,
+                            span,
+                            super::generic::GenericCallee::Function,
+                        );
+                    }
+                    if let Some(targs) = &type_args {
+                        self.error(
+                            span,
+                            format!(
+                                "type arguments are only valid on generic functions; got {} \
                              argument(s)",
-                            targs.len(),
-                        ),
-                    );
+                                targs.len(),
+                            ),
+                        );
+                    }
+                    let typed_args = self.bind_param_call_args(
+                        &sig.params,
+                        &sig.ret,
+                        CallLift::Function { name: &display },
+                        &args,
+                        span,
+                    )?;
+                    (
+                        TypedExprKind::Call {
+                            mangled,
+                            args: typed_args,
+                            type_predicate: sig.predicate.clone().map(Box::new),
+                        },
+                        sig.ret.clone(),
+                    )
                 }
-                let typed_args = self.bind_param_call_args(
-                    &sig.params,
-                    &sig.ret,
-                    CallLift::Function { name: &display },
-                    &args,
-                    span,
-                );
-                (
-                    TypedExprKind::Call {
-                        mangled,
-                        args: typed_args,
-                        type_predicate: sig.predicate.clone().map(Box::new),
-                    },
-                    sig.ret.clone(),
-                )
-            }
-            Some((StaticResolution::Field(field), owner)) => {
-                self.check_static_privacy(field.visibility, &owner, &class_name, &member);
-                let mangled = crate::mangle::static_member(&owner, &member.name);
-                let Type::Function {
-                    params,
-                    ret,
-                    has_rest,
-                    ..
-                } = field.ty.peel().clone()
-                else {
-                    self.error(span, format!("`{display}` is not callable"));
-                    self.walk_rejected_call_args(&args);
-                    return (TypedExprKind::Null, Type::Error);
-                };
-                let callee = self.typed_ast.push_expr(TypedExpr {
-                    kind: TypedExprKind::GlobalRef {
-                        mangled,
-                        name: member.clone(),
-                    },
-                    span: member.span,
-                    ty: field.ty.clone(),
-                });
-                let typed_args = self.bind_fn_type_call_args(
-                    &params,
-                    &ret,
-                    has_rest,
-                    CallLift::Function { name: &display },
-                    &args,
-                    span,
-                );
-                (
-                    TypedExprKind::CallClosure {
-                        callee,
-                        args: typed_args,
-                    },
-                    (*ret).clone(),
-                )
-            }
-            None => {
-                self.report_missing_static(&class_name, &class_mangled, &member);
-                self.walk_rejected_call_args(&args);
-                (TypedExprKind::Null, Type::Error)
-            }
-        }
+                Some((StaticResolution::Field(field), owner)) => {
+                    self.check_static_privacy(field.visibility, &owner, &class_name, &member);
+                    let mangled = crate::mangle::static_member(&owner, &member.name);
+                    let Type::Function {
+                        params,
+                        ret,
+                        has_rest,
+                        ..
+                    } = field.ty.peel().clone()
+                    else {
+                        self.error(span, format!("`{display}` is not callable"));
+                        self.walk_rejected_call_args(&args)?;
+                        return Ok((TypedExprKind::Null, Type::Error));
+                    };
+                    let callee = self.typed_ast.push_expr(TypedExpr {
+                        kind: TypedExprKind::GlobalRef {
+                            mangled,
+                            name: member.clone(),
+                        },
+                        span: member.span,
+                        ty: field.ty.clone(),
+                    });
+                    let typed_args = self.bind_fn_type_call_args(
+                        &params,
+                        &ret,
+                        has_rest,
+                        CallLift::Function { name: &display },
+                        &args,
+                        span,
+                    )?;
+                    (
+                        TypedExprKind::CallClosure {
+                            callee,
+                            args: typed_args,
+                        },
+                        (*ret).clone(),
+                    )
+                }
+                None => {
+                    self.report_missing_static(&class_name, &class_mangled, &member);
+                    self.walk_rejected_call_args(&args)?;
+                    (TypedExprKind::Null, Type::Error)
+                }
+            },
+        )
     }
 
     /// `ClassName.member` in non-call position: a static field reads the backing
@@ -3416,7 +3524,7 @@ impl Inferer<'_> {
         lift: CallLift<'_>,
         args: &[ExprId],
         span: Span,
-    ) -> Vec<ExprId> {
+    ) -> Result<Vec<ExprId>, CompilerFailure> {
         let has_rest = params.last().is_some_and(|p| p.rest);
         let fixed_count = params.iter().take_while(|p| !p.rest).count();
         let max_args = if has_rest { usize::MAX } else { params.len() };
@@ -3501,7 +3609,7 @@ impl Inferer<'_> {
             } else {
                 rest_elem_ty.clone()
             };
-            let (typed_id, _) = self.infer_expr(arg_id, hint.as_ref());
+            let (typed_id, _) = self.infer_expr(arg_id, hint.as_ref())?;
             typed_args.push(typed_id);
         }
 
@@ -3515,7 +3623,7 @@ impl Inferer<'_> {
         if arity_ok && let Some(elem_ty) = rest_elem_ty {
             self.pack_rest_tail(fixed_count, elem_ty, span, &mut typed_args);
         }
-        typed_args
+        Ok(typed_args)
     }
 
     /// [`Self::bind_param_call_args`] for a callee known only by its
@@ -3530,7 +3638,7 @@ impl Inferer<'_> {
         lift: CallLift<'_>,
         args: &[ExprId],
         span: Span,
-    ) -> Vec<ExprId> {
+    ) -> Result<Vec<ExprId>, CompilerFailure> {
         let mut params: Vec<crate::Param> = param_types
             .iter()
             .enumerate()
@@ -3550,8 +3658,8 @@ impl Inferer<'_> {
         name: &crate::Ident,
         args: Vec<ExprId>,
         span: Span,
-    ) -> (TypedExprKind, Type) {
-        match name.name.as_str() {
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        Ok(match name.name.as_str() {
             "fromString" => {
                 if args.len() != 1 {
                     self.error(
@@ -3564,8 +3672,10 @@ impl Inferer<'_> {
                 }
                 let typed_args: Vec<ExprId> = args
                     .iter()
-                    .map(|&id| self.infer_expr(id, Some(&Type::String)).0)
-                    .collect();
+                    .map(|&id| {
+                        Ok::<_, CompilerFailure>(self.infer_expr(id, Some(&Type::String))?.0)
+                    })
+                    .collect::<Result<_, _>>()?;
                 let arg_ty = typed_args
                     .first()
                     .map_or(Type::Error, |&id| self.typed_ast.expr(id).ty.clone());
@@ -3597,7 +3707,7 @@ impl Inferer<'_> {
                     ],
                 );
                 for &arg in &args {
-                    let _ = self.infer_expr(arg, None);
+                    let _ = self.infer_expr(arg, None)?;
                 }
                 (
                     TypedExprKind::IntrinsicCall {
@@ -3607,7 +3717,7 @@ impl Inferer<'_> {
                     Type::Error,
                 )
             }
-        }
+        })
     }
 
     /// `JSON.<member>(args)` resolution. Today: `stringify`
@@ -3623,10 +3733,10 @@ impl Inferer<'_> {
         type_args: Option<Vec<crate::TypeAnnotation>>,
         expected: Option<&Type>,
         span: Span,
-    ) -> (TypedExprKind, Type) {
-        match name.name.as_str() {
-            "stringify" => self.infer_json_stringify_call(args, type_args, span),
-            "parse" => self.infer_json_parse_call(args, type_args, expected, span),
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        Ok(match name.name.as_str() {
+            "stringify" => self.infer_json_stringify_call(args, type_args, span)?,
+            "parse" => self.infer_json_parse_call(args, type_args, expected, span)?,
             _ => {
                 self.error_with_help(
                     name.span,
@@ -3640,7 +3750,7 @@ impl Inferer<'_> {
                 // Best-effort recovery: still typecheck args so
                 // unrelated errors in them surface.
                 for &arg in &args {
-                    let _ = self.infer_expr(arg, None);
+                    let _ = self.infer_expr(arg, None)?;
                 }
                 (
                     TypedExprKind::IntrinsicCall {
@@ -3650,7 +3760,7 @@ impl Inferer<'_> {
                     Type::Error,
                 )
             }
-        }
+        })
     }
 
     /// `JSON.stringify(x, null?, space?)`. Arg can be any non-`void` type;
@@ -3662,7 +3772,7 @@ impl Inferer<'_> {
         args: Vec<ExprId>,
         type_args: Option<Vec<crate::TypeAnnotation>>,
         span: Span,
-    ) -> (TypedExprKind, Type) {
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         if let Some(targs) = &type_args {
             // Span over the whole call — we don't keep the `<...>`
             // span separately on `Call`, but anchoring on the call
@@ -3693,24 +3803,24 @@ impl Inferer<'_> {
                 vec![help],
             );
             for &arg in &args {
-                let _ = self.infer_expr(arg, None);
+                let _ = self.infer_expr(arg, None)?;
             }
-            return (
+            return Ok((
                 TypedExprKind::IntrinsicCall {
                     kind: Intrinsic::JsonStringify,
                     args: Vec::new(),
                 },
                 Type::String,
-            );
+            ));
         }
-        let (typed_arg, arg_ty) = self.infer_expr(args[0], None);
+        let (typed_arg, arg_ty) = self.infer_expr(args[0], None)?;
         let mut typed_args = vec![typed_arg];
 
         if let Some(&replacer) = args.get(1) {
-            let (typed_replacer, replacer_ty) = self.infer_expr(replacer, Some(&Type::Null));
+            let (typed_replacer, replacer_ty) = self.infer_expr(replacer, Some(&Type::Null))?;
             if !matches!(replacer_ty.peel(), Type::Null | Type::Error) {
                 self.error_with_help(
-                    self.ast.expr(replacer).span,
+                    self.ast.try_expr(replacer).map_err(super::arena_failure)?.span,
                     "`JSON.stringify` only accepts `null` as its replacer argument".to_string(),
                     vec![
                         "use `JSON.stringify(value, null, space)`; replacer functions are not supported"
@@ -3722,7 +3832,7 @@ impl Inferer<'_> {
         }
 
         if let Some(&space) = args.get(2) {
-            let (typed_space, space_ty) = self.infer_expr(space, None);
+            let (typed_space, space_ty) = self.infer_expr(space, None)?;
             if !matches!(
                 space_ty.peel(),
                 Type::Number
@@ -3733,7 +3843,7 @@ impl Inferer<'_> {
                     | Type::Error
             ) {
                 self.error_with_help(
-                    self.ast.expr(space).span,
+                    self.ast.try_expr(space).map_err(super::arena_failure)?.span,
                     "`JSON.stringify` space argument must be `number`, `string`, or `null`"
                         .to_string(),
                     vec![
@@ -3750,17 +3860,20 @@ impl Inferer<'_> {
         // `is_void`: `f() ?? 1` has no more of a value than bare `f()` does.
         if arg_ty.carries_void() {
             self.error(
-                self.ast.expr(args[0]).span,
+                self.ast
+                    .try_expr(args[0])
+                    .map_err(super::arena_failure)?
+                    .span,
                 "`JSON.stringify(x)` requires a non-`void` argument".to_string(),
             );
         }
-        (
+        Ok((
             TypedExprKind::IntrinsicCall {
                 kind: Intrinsic::JsonStringify,
                 args: typed_args,
             },
             Type::String,
-        )
+        ))
     }
 
     /// `JSON.parse(s)` parses JSON into `unknown`. Use `JSON.parse(s) as T`
@@ -3771,7 +3884,7 @@ impl Inferer<'_> {
         type_args: Option<Vec<crate::TypeAnnotation>>,
         _expected: Option<&Type>,
         span: Span,
-    ) -> (TypedExprKind, Type) {
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         // Arity first — we want the same arity diagnostic regardless of
         // whether the target resolves.
         if args.len() != 1 {
@@ -3784,27 +3897,30 @@ impl Inferer<'_> {
                 vec![help],
             );
             for &arg in &args {
-                let _ = self.infer_expr(arg, None);
+                let _ = self.infer_expr(arg, None)?;
             }
-            return (
+            return Ok((
                 TypedExprKind::IntrinsicCall {
                     kind: Intrinsic::JsonParse,
                     args: Vec::new(),
                 },
                 Type::Error,
-            );
+            ));
         }
 
         // Arg must be a `string`. Pass `Some(&Type::String)` as the
         // hint so string-literal arguments widen correctly, then
         // verify the resolved type is actually a string.
-        let (typed_arg, arg_ty) = self.infer_expr(args[0], Some(&Type::String));
+        let (typed_arg, arg_ty) = self.infer_expr(args[0], Some(&Type::String))?;
         if !matches!(
             arg_ty.peel(),
             Type::String | Type::StringLiteral(_) | Type::Error
         ) {
             self.error_with_help(
-                self.ast.expr(args[0]).span,
+                self.ast
+                    .try_expr(args[0])
+                    .map_err(super::arena_failure)?
+                    .span,
                 format!("`JSON.parse(s)` expects a `string` argument, got `{arg_ty}`",),
                 vec![
                     "wrap the value with `String(x)` if you have a non-\
@@ -3825,13 +3941,13 @@ impl Inferer<'_> {
             );
         }
 
-        (
+        Ok((
             TypedExprKind::IntrinsicCall {
                 kind: Intrinsic::JsonParse,
                 args: vec![typed_arg],
             },
             Type::Unknown,
-        )
+        ))
     }
 
     fn infer_response_json_call(
@@ -3842,7 +3958,7 @@ impl Inferer<'_> {
         args: Vec<ExprId>,
         _expected: Option<&Type>,
         span: Span,
-    ) -> (TypedExprKind, Type) {
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         // `r.json()` takes no value arguments — the body is the implicit source.
         if !args.is_empty() {
             self.error_with_help(
@@ -3855,7 +3971,7 @@ impl Inferer<'_> {
                 ],
             );
             for &arg in &args {
-                let _ = self.infer_expr(arg, None);
+                let _ = self.infer_expr(arg, None)?;
             }
         }
         if let Some(targs) = &type_args {
@@ -3871,13 +3987,13 @@ impl Inferer<'_> {
             self.find_property(recv_ty, "body")
         else {
             // `Response` always declares `body`; unreachable in practice.
-            return (
+            return Ok((
                 TypedExprKind::IntrinsicCall {
                     kind: Intrinsic::JsonParse,
                     args: Vec::new(),
                 },
                 Type::Error,
-            );
+            ));
         };
         let body = self.typed_ast.push_expr(TypedExpr {
             kind: TypedExprKind::InterfacePropertyAccess {
@@ -3892,13 +4008,13 @@ impl Inferer<'_> {
             ty: body_prop.ty,
         });
 
-        (
+        Ok((
             TypedExprKind::IntrinsicCall {
                 kind: Intrinsic::JsonParse,
                 args: vec![body],
             },
             Type::Unknown,
-        )
+        ))
     }
 
     /// Walk a `JSON.parse` target type and reject forbidden shapes.
@@ -3911,7 +4027,7 @@ impl Inferer<'_> {
         intrinsic: Intrinsic,
         args: Vec<ExprId>,
         span: Span,
-    ) -> (TypedExprKind, Type) {
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let params = intrinsic.params();
         let omitted_have_defaults =
             args.len() < params.len() && params[args.len()..].iter().all(|p| p.default.is_some());
@@ -3926,19 +4042,19 @@ impl Inferer<'_> {
         let mut typed_args = Vec::with_capacity(params.len());
         for (i, &arg_id) in args.iter().enumerate() {
             let hint = params.get(i).map(|p| &p.ty);
-            let (typed_id, _) = self.infer_expr(arg_id, hint);
+            let (typed_id, _) = self.infer_expr(arg_id, hint)?;
             typed_args.push(typed_id);
         }
         if omitted_have_defaults {
             self.fill_omitted_defaults(&params, args.len(), span, &mut typed_args);
         }
-        (
+        Ok((
             TypedExprKind::IntrinsicCall {
                 kind: intrinsic,
                 args: typed_args,
             },
             intrinsic.ret(),
-        )
+        ))
     }
 
     /// lower a `` `parts[0]${exprs[0]}parts[1]${exprs[1]}…parts[N]` ``
@@ -3958,7 +4074,7 @@ impl Inferer<'_> {
         parts: Vec<String>,
         exprs: Vec<ExprId>,
         span: Span,
-    ) -> (TypedExprKind, Type) {
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         debug_assert_eq!(parts.len(), exprs.len() + 1);
 
         // Type each interpolation and (when needed) wrap in toString.
@@ -3969,14 +4085,18 @@ impl Inferer<'_> {
         let typed_interps: Vec<ExprId> = exprs
             .into_iter()
             .map(|expr_id| {
-                let (typed_id, ty) = self.infer_expr(expr_id, None);
+                let (typed_id, ty) = self.infer_expr(expr_id, None)?;
                 if matches!(ty, Type::Error) {
                     had_error = true;
                 }
                 let interp_span = self.typed_ast.expr(typed_id).span;
-                self.wrap_interpolation_in_to_string(typed_id, &ty, interp_span)
+                Ok::<_, CompilerFailure>(self.wrap_interpolation_in_to_string(
+                    typed_id,
+                    &ty,
+                    interp_span,
+                ))
             })
-            .collect();
+            .collect::<Result<_, _>>()?;
 
         // Assemble the operand list: alternating non-empty string
         // parts and the typed interpolations. Empty parts are elided.
@@ -4003,7 +4123,7 @@ impl Inferer<'_> {
         // ty rather than synthesising an extra wrapper.
         if operands.len() == 1 {
             let single = self.typed_ast.expr(operands[0]).clone();
-            return (single.kind, single.ty);
+            return Ok((single.kind, single.ty));
         }
 
         // Defensive: the parser guarantees `exprs.len() >= 1` (the
@@ -4013,7 +4133,7 @@ impl Inferer<'_> {
         // even then the toString wrap pushes a placeholder. Treat as
         // an empty string just in case.
         if operands.is_empty() {
-            return (TypedExprKind::String(String::new()), Type::String);
+            return Ok((TypedExprKind::String(String::new()), Type::String));
         }
 
         // Left-fold the operands into a Binary(Add) chain. Push every
@@ -4033,14 +4153,14 @@ impl Inferer<'_> {
                 ty: result_ty.clone(),
             });
         }
-        (
+        Ok((
             TypedExprKind::Binary {
                 op: BinOp::Add,
                 lhs: acc,
                 rhs: operands[last_idx],
             },
             result_ty,
-        )
+        ))
     }
 
     /// Wrap an already-typed interpolation expression in a
@@ -4164,39 +4284,53 @@ impl Inferer<'_> {
         &self,
         members: &'a [Type],
         literal: &[crate::ObjectLiteralMember],
-    ) -> Option<&'a Type> {
+    ) -> Result<Option<&'a Type>, CompilerFailure> {
         let has_spread = literal
             .iter()
             .any(|m| matches!(m, crate::ObjectLiteralMember::Spread { .. }));
 
         if let Some((key, table)) = self.union_discriminant_with_nominals(members) {
-            let tag_value = literal.iter().rev().find_map(|m| match m {
-                crate::ObjectLiteralMember::Field(f) if f.name.name == key => {
-                    match &self.ast.expr(f.value).kind {
-                        crate::ExprKind::String(s) => {
-                            Some(narrowing::LiteralValue::String(s.clone()))
-                        }
-                        crate::ExprKind::Boolean(b) => Some(narrowing::LiteralValue::Boolean(*b)),
-                        crate::ExprKind::Number(n) => {
-                            // Mirror the number-literal inference's -0.0 → 0.0.
-                            let canonical = if *n == 0.0 { 0.0 } else { *n };
-                            Some(narrowing::LiteralValue::Number(crate::types::LiteralF64(
-                                canonical,
-                            )))
+            let tag_value = literal
+                .iter()
+                .rev()
+                .map(|m| {
+                    Ok::<_, CompilerFailure>(match m {
+                        crate::ObjectLiteralMember::Field(f) if f.name.name == key => {
+                            match &self
+                                .ast
+                                .try_expr(f.value)
+                                .map_err(super::arena_failure)?
+                                .kind
+                            {
+                                crate::ExprKind::String(s) => {
+                                    Some(narrowing::LiteralValue::String(s.clone()))
+                                }
+                                crate::ExprKind::Boolean(b) => {
+                                    Some(narrowing::LiteralValue::Boolean(*b))
+                                }
+                                crate::ExprKind::Number(n) => {
+                                    // Mirror the number-literal inference's -0.0 → 0.0.
+                                    let canonical = if *n == 0.0 { 0.0 } else { *n };
+                                    Some(narrowing::LiteralValue::Number(crate::types::LiteralF64(
+                                        canonical,
+                                    )))
+                                }
+                                _ => None,
+                            }
                         }
                         _ => None,
-                    }
-                }
-                _ => None,
-            });
+                    })
+                })
+                .find_map(Result::transpose)
+                .transpose()?;
             if let Some(value) = tag_value
                 && let Some(idx) = table.get(&value)
             {
-                return members.get(idx.0 as usize);
+                return Ok(members.get(idx.0 as usize));
             }
         }
         if has_spread {
-            return None;
+            return Ok(None);
         }
 
         let lit_names: std::collections::BTreeSet<&str> = literal
@@ -4224,12 +4358,12 @@ impl Inferer<'_> {
             };
             if matched {
                 if selected.is_some() {
-                    return None;
+                    return Ok(None);
                 }
                 selected = Some(member);
             }
         }
-        selected
+        Ok(selected)
     }
 
     fn infer_object_literal(
@@ -4237,7 +4371,7 @@ impl Inferer<'_> {
         members: Vec<crate::ObjectLiteralMember>,
         expected: Option<&Type>,
         span: Span,
-    ) -> (TypedExprKind, Type) {
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         if members
             .iter()
             .any(|member| matches!(member, crate::ObjectLiteralMember::Computed { .. }))
@@ -4268,7 +4402,7 @@ impl Inferer<'_> {
         // into a non-nullable interface param.
         let peeled = match peeled {
             Some(Type::Union(union_members)) => {
-                if let Some(variant) = self.select_union_variant(union_members, &members) {
+                if let Some(variant) = self.select_union_variant(union_members, &members)? {
                     Some(variant.peel())
                 } else {
                     let mut shape_match: Option<&Type> = None;
@@ -4335,7 +4469,7 @@ impl Inferer<'_> {
         }
 
         let (receiver_hint, mut inferred_fields) =
-            self.infer_object_receiver(&members, expected_fields.as_ref());
+            self.infer_object_receiver(&members, expected_fields.as_ref())?;
 
         // walk members in source order, applying last-writer-wins
         // for both literal-position fields and spread sources. `merged`
@@ -4386,7 +4520,10 @@ impl Inferer<'_> {
                     });
                     let previous_hint = self.object_this_hint.take();
                     if matches!(
-                        self.ast.expr(field.value).kind,
+                        self.ast
+                            .try_expr(field.value)
+                            .map_err(super::arena_failure)?
+                            .kind,
                         ExprKind::FunctionExpression { .. }
                     ) {
                         self.object_this_hint = Some(receiver_hint.clone());
@@ -4401,12 +4538,16 @@ impl Inferer<'_> {
                         hint.as_ref(),
                         ValuePosition::FieldValue,
                         inferred_fields.remove(&field.value),
-                    );
+                    )?;
                     self.object_this_hint = previous_hint;
                     if !has_spread {
                         object_members.push(crate::TypedObjectMember::Value(typed_value));
                     }
-                    let value_span = self.ast.expr(field.value).span;
+                    let value_span = self
+                        .ast
+                        .try_expr(field.value)
+                        .map_err(super::arena_failure)?
+                        .span;
                     if rejected_void {
                         // Record the field at `Error` rather than dropping it —
                         // a missing field cascades into every later use of the
@@ -4523,7 +4664,7 @@ impl Inferer<'_> {
                         if let Some((id, ty, _)) = inferred_fields.remove(&value) {
                             (id, ty)
                         } else {
-                            self.infer_expr(value, None)
+                            self.infer_expr(value, None)?
                         };
                     if let Some(value) = self.spread_source_index(typed_source, &source_ty) {
                         for (field, _) in merged.values_mut() {
@@ -4700,15 +4841,15 @@ impl Inferer<'_> {
         // already fired above. Codegen and the shape collector derive
         // the structural Object shape from the typed origin list.
         if let Some((iface_package, iface_name, iface_mangled, iface_args)) = interface_target {
-            return (
+            return Ok((
                 TypedExprKind::ObjectLiteral {
                     members: object_members,
                     fields: field_origins,
                 },
                 Type::interface_ref(iface_package, iface_name, iface_mangled, iface_args),
-            );
+            ));
         }
-        (
+        Ok((
             TypedExprKind::ObjectLiteral {
                 members: object_members,
                 fields: field_origins,
@@ -4725,7 +4866,7 @@ impl Inferer<'_> {
                 },
                 fields: resolved,
             },
-        )
+        ))
     }
 
     /// The fields a spread copies, and whether they must be found by name at
@@ -4819,7 +4960,7 @@ impl Inferer<'_> {
         elements: Vec<crate::ArrayLiteralElement>,
         expected: Option<&Type>,
         span: Span,
-    ) -> (TypedExprKind, Type) {
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         // a tuple-typed hint forks the literal into tuple-literal
         // inference. Tuple-ness is hint-driven — without an annotation the
         // literal still infers as `Type::Array`, matching pre-tuple behavior.
@@ -4876,13 +5017,13 @@ impl Inferer<'_> {
                 );
                 Type::Error
             };
-            return (
+            return Ok((
                 TypedExprKind::ArrayLiteral {
                     elements: Vec::new(),
                     element_ty: elem_ty.clone(),
                 },
                 Type::Array(Box::new(elem_ty)),
-            );
+            ));
         }
 
         // walk elements in source order. The first resolved
@@ -4909,14 +5050,19 @@ impl Inferer<'_> {
         for el in elements {
             match el {
                 crate::ArrayLiteralElement::Value(elem_id) => {
-                    let elem_span = self.ast.expr(elem_id).span;
+                    let elem_span = self
+                        .ast
+                        .try_expr(elem_id)
+                        .map_err(super::arena_failure)?
+                        .span;
                     let hint = element_ty.as_ref().or(expected_elem);
                     let ValueOperand {
                         typed_expr: typed_id,
                         ty: elem_ty,
                         already_errored,
                         rejected_void,
-                    } = self.infer_value_operand(elem_id, hint, ValuePosition::ArrayElement, None);
+                    } =
+                        self.infer_value_operand(elem_id, hint, ValuePosition::ArrayElement, None)?;
                     if rejected_void {
                         typed_elements.push(crate::TypedArrayElement::Value(typed_id));
                         continue;
@@ -4956,10 +5102,10 @@ impl Inferer<'_> {
                         .as_ref()
                         .map(|t| Type::Readonly(Box::new(Type::Array(Box::new(t.clone())))));
                     let errors_before = self.error_count();
-                    let (typed_source, source_ty) = self.infer_expr(value, source_hint.as_ref());
+                    let (typed_source, source_ty) = self.infer_expr(value, source_hint.as_ref())?;
                     let already_errored = self.error_count() > errors_before;
                     if let Some(hint) = &source_hint {
-                        self.drop_readonly_from_hint_mismatch(value, hint, &source_ty);
+                        self.drop_readonly_from_hint_mismatch(value, hint, &source_ty)?;
                     }
                     // The spread source must be an array — or a tuple, which is one at
                     // runtime and contributes the union of its positions. Reject other
@@ -4979,7 +5125,7 @@ impl Inferer<'_> {
                             Some(running) if !assignable(&elem_t, running, self.resolver()) => {
                                 if !hint_pins_element_ty {
                                     self.report_contextual_mismatch(
-                                        self.ast.expr(value).span,
+                                        self.ast.try_expr(value).map_err(super::arena_failure)?.span,
                                         &Type::Array(Box::new(running.clone())),
                                         &source_ty,
                                         format!(
@@ -5012,13 +5158,13 @@ impl Inferer<'_> {
             None => Type::Error,
         });
 
-        (
+        Ok((
             TypedExprKind::ArrayLiteral {
                 elements: typed_elements,
                 element_ty: element_ty.clone(),
             },
             Type::Array(Box::new(element_ty)),
-        )
+        ))
     }
 
     fn report_array_element_mismatch(
@@ -5043,14 +5189,24 @@ impl Inferer<'_> {
     /// A spread source is hinted `readonly T[]` only so a readonly source is
     /// accepted; any mismatch left is in the elements, so the diagnostic names the
     /// `T[]` the writer thinks in rather than a `readonly` they never wrote.
-    fn drop_readonly_from_hint_mismatch(&mut self, source: ExprId, hint: &Type, actual: &Type) {
-        let span = self.ast.expr(source).span;
-        if let Some(diagnostic) = self.diagnostics.last_mut()
+    fn drop_readonly_from_hint_mismatch(
+        &mut self,
+        source: ExprId,
+        hint: &Type,
+        actual: &Type,
+    ) -> Result<(), CompilerFailure> {
+        let span = self
+            .ast
+            .try_expr(source)
+            .map_err(super::arena_failure)?
+            .span;
+        let _: () = if let Some(diagnostic) = self.diagnostics.last_mut()
             && diagnostic.span == span
             && diagnostic.message == format!("expected `{hint}`, got `{actual}`")
         {
             diagnostic.message = format!("expected `{}`, got `{actual}`", hint.peel());
-        }
+        };
+        Ok(())
     }
 
     fn report_contextual_mismatch(
@@ -5079,7 +5235,7 @@ impl Inferer<'_> {
         elements: Vec<crate::ArrayLiteralElement>,
         expected: &[Type],
         span: Span,
-    ) -> (TypedExprKind, Type) {
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let mut typed = Vec::with_capacity(elements.len());
         let mut slots = Vec::new();
         let mut diagnosed = Vec::new();
@@ -5087,13 +5243,13 @@ impl Inferer<'_> {
             match element {
                 crate::ArrayLiteralElement::Value(value) => {
                     let errors_before = self.error_count();
-                    let (id, ty) = self.infer_expr(*value, expected.get(slots.len()));
+                    let (id, ty) = self.infer_expr(*value, expected.get(slots.len()))?;
                     diagnosed.push(self.error_count() > errors_before);
                     slots.push(ty);
                     typed.push(crate::TypedArrayElement::Value(id));
                 }
                 crate::ArrayLiteralElement::Spread { value, span } => {
-                    let (id, ty) = self.infer_expr(*value, None);
+                    let (id, ty) = self.infer_expr(*value, None)?;
                     match ty.peel() {
                         Type::Tuple(types) => { slots.extend(types.iter().cloned()); diagnosed.extend(std::iter::repeat_n(false, types.len())); },
                         Type::Error => {},
@@ -5126,13 +5282,13 @@ impl Inferer<'_> {
         }
         // Both literals use erased $Array storage. Preserve the positional type
         // on the expression while reusing spread evaluation and copying.
-        (
+        Ok((
             TypedExprKind::ArrayLiteral {
                 elements: typed,
                 element_ty: Type::Unknown,
             },
             Type::Tuple(slots),
-        )
+        ))
     }
 
     /// Keep the inferred slots rather than the union of contextual slots: the
@@ -5141,7 +5297,7 @@ impl Inferer<'_> {
         &mut self,
         elements: Vec<crate::ArrayLiteralElement>,
         mut candidates: Vec<Type>,
-    ) -> (TypedExprKind, Type) {
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         if !elements
             .iter()
             .any(|element| matches!(element, crate::ArrayLiteralElement::Spread { .. }))
@@ -5176,12 +5332,12 @@ impl Inferer<'_> {
                         })
                         .collect();
                     let hint = (!hints.is_empty()).then(|| Type::union(hints));
-                    let (id, ty) = self.infer_expr(value, hint.as_ref());
+                    let (id, ty) = self.infer_expr(value, hint.as_ref())?;
                     slots.push(ty);
                     typed.push(crate::TypedArrayElement::Value(id));
                 }
                 crate::ArrayLiteralElement::Spread { value, span } => {
-                    let (id, ty) = self.infer_expr(value, None);
+                    let (id, ty) = self.infer_expr(value, None)?;
                     match ty.peel() {
                         Type::Tuple(types) => slots.extend(types.iter().cloned()),
                         Type::Array(element) if allows_array => {
@@ -5217,7 +5373,7 @@ impl Inferer<'_> {
                 candidates = matching;
             }
         }
-        (
+        Ok((
             TypedExprKind::ArrayLiteral {
                 elements: typed,
                 element_ty: Type::Unknown,
@@ -5227,7 +5383,7 @@ impl Inferer<'_> {
             } else {
                 Type::Tuple(slots)
             },
-        )
+        ))
     }
 
     /// array-literal expression interpreted as a tuple. Caller
@@ -5241,7 +5397,7 @@ impl Inferer<'_> {
         elements: Vec<ExprId>,
         expected_elems: Vec<Type>,
         span: Span,
-    ) -> (TypedExprKind, Type) {
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         if elements.len() != expected_elems.len() {
             self.error(
                 span,
@@ -5259,24 +5415,28 @@ impl Inferer<'_> {
             let mut typed_elements: Vec<ExprId> = Vec::with_capacity(elements.len());
             for (i, elem_id) in elements.iter().enumerate() {
                 let hint = expected_elems.get(i);
-                let (typed_id, _ty) = self.infer_expr(*elem_id, hint);
+                let (typed_id, _ty) = self.infer_expr(*elem_id, hint)?;
                 typed_elements.push(typed_id);
             }
-            return (
+            return Ok((
                 TypedExprKind::TupleLiteral {
                     elements: typed_elements,
                     element_types: expected_elems.clone(),
                 },
                 Type::Tuple(expected_elems),
-            );
+            ));
         }
 
         let mut typed_elements: Vec<ExprId> = Vec::with_capacity(elements.len());
         let mut slot_types: Vec<Type> = Vec::with_capacity(elements.len());
         for (elem_id, expected_ty) in elements.iter().zip(expected_elems.iter()) {
-            let elem_span = self.ast.expr(*elem_id).span;
+            let elem_span = self
+                .ast
+                .try_expr(*elem_id)
+                .map_err(super::arena_failure)?
+                .span;
             let errors_before = self.error_count();
-            let (typed_id, elem_ty) = self.infer_expr(*elem_id, Some(expected_ty));
+            let (typed_id, elem_ty) = self.infer_expr(*elem_id, Some(expected_ty))?;
             // Unbound generic-param slots take the inferred element type —
             // `new Map([["a", 1]])` must report `[string, number]`, not
             // `[K, V]`, so the call site can bind K and V.
@@ -5297,13 +5457,13 @@ impl Inferer<'_> {
             typed_elements.push(typed_id);
         }
 
-        (
+        Ok((
             TypedExprKind::TupleLiteral {
                 elements: typed_elements,
                 element_types: slot_types.clone(),
             },
             Type::Tuple(slot_types),
-        )
+        ))
     }
 
     /// Whether a user binding named `name` — local or top-level — hides the prelude
@@ -5319,7 +5479,7 @@ impl Inferer<'_> {
         receiver: ExprId,
         name: Ident,
         span: Span,
-    ) -> (TypedExprKind, Type) {
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         // namespace-symbol member read in non-call
         // position. `Math.PI` returns a const; `Temporal.Now` (no
         // following member) errors as a namespace-not-a-value. Must
@@ -5328,12 +5488,12 @@ impl Inferer<'_> {
         // reconstructs the dotted path from `receiver` + `name`;
         // the chain root must be in `namespace_symbols` for the
         // dispatch to engage.
-        if let Some((root, mut segments)) = namespace_symbol::extract_chain(self.ast, receiver)
+        if let Some((root, mut segments)) = namespace_symbol::extract_chain(self.ast, receiver)?
             && !self.shadows_namespace(&root.name)
             && self.namespace_symbols.contains_key(&root.name)
         {
             segments.push(name.clone());
-            return self.infer_namespace_symbol_field_access(root, segments, span);
+            return Ok(self.infer_namespace_symbol_field_access(root, segments, span));
         }
 
         // namespace member in non-call position
@@ -5341,7 +5501,11 @@ impl Inferer<'_> {
         // intercept in `infer_call` didn't fire — i.e., the
         // namespace member is being read as a value. Reject with a
         // tailored fix.
-        if let ExprKind::Identifier(ref recv_ident) = self.ast.expr(receiver).kind
+        if let ExprKind::Identifier(ref recv_ident) = self
+            .ast
+            .try_expr(receiver)
+            .map_err(super::arena_failure)?
+            .kind
             && self.scopes.get(&recv_ident.name).is_none()
             && self.namespace_bindings.contains_key(&recv_ident.name)
         {
@@ -5357,13 +5521,13 @@ impl Inferer<'_> {
                     name.name,
                 )],
             );
-            return (
+            return Ok((
                 TypedExprKind::LocalRef {
                     ident: name,
                     boxed: false,
                 },
                 Type::Error,
-            );
+            ));
         }
 
         // Syntactic enum-namespace form: `EnumName.Variant`. We
@@ -5372,7 +5536,12 @@ impl Inferer<'_> {
         // would error in `resolve_ident`. Doing the check here
         // means `EnumName.Variant` typechecks cleanly without that
         // diagnostic firing first.
-        if let ExprKind::Identifier(ref recv_ident) = self.ast.expr(receiver).kind {
+        if let ExprKind::Identifier(ref recv_ident) = self
+            .ast
+            .try_expr(receiver)
+            .map_err(super::arena_failure)?
+            .kind
+        {
             let recv_name = recv_ident.name.clone();
             if let Some(sym) = self.lookup_named_type(&recv_name) {
                 let enum_mangled = sym.mangled_name.clone();
@@ -5381,14 +5550,14 @@ impl Inferer<'_> {
                     crate::TypeKind::NumberEnum { variants, .. } => {
                         let variants = variants.clone();
                         if let Some((_, value)) = variants.iter().find(|(v, _)| v == &name.name) {
-                            return (
+                            return Ok((
                                 TypedExprKind::NumberEnumMember {
                                     enum_mangled: enum_mangled.clone(),
                                     variant: name,
                                     value: *value,
                                 },
                                 Type::number_enum(enum_package, recv_name, enum_mangled),
-                            );
+                            ));
                         }
                         let help = enum_variant_help(&recv_name, variants.iter().map(|(v, _)| v));
                         self.error_with_help(
@@ -5396,7 +5565,7 @@ impl Inferer<'_> {
                             format!("no variant `{}` on enum `{}`", name.name, recv_name,),
                             help,
                         );
-                        return (
+                        return Ok((
                             TypedExprKind::NumberEnumMember {
                                 enum_mangled,
                                 variant: name,
@@ -5407,19 +5576,19 @@ impl Inferer<'_> {
                                 value: 0.0,
                             },
                             Type::Error,
-                        );
+                        ));
                     }
                     crate::TypeKind::StringEnum { variants, .. } => {
                         let variants = variants.clone();
                         if let Some((_, value)) = variants.iter().find(|(v, _)| v == &name.name) {
-                            return (
+                            return Ok((
                                 TypedExprKind::StringEnumMember {
                                     enum_mangled: enum_mangled.clone(),
                                     variant: name,
                                     value: value.clone(),
                                 },
                                 Type::string_enum(enum_package, recv_name, enum_mangled),
-                            );
+                            ));
                         }
                         let help = enum_variant_help(&recv_name, variants.iter().map(|(v, _)| v));
                         self.error_with_help(
@@ -5427,14 +5596,14 @@ impl Inferer<'_> {
                             format!("no variant `{}` on enum `{}`", name.name, recv_name,),
                             help,
                         );
-                        return (
+                        return Ok((
                             TypedExprKind::StringEnumMember {
                                 enum_mangled,
                                 variant: name,
                                 value: String::new(),
                             },
                             Type::Error,
-                        );
+                        ));
                     }
                     crate::TypeKind::Class { .. }
                         if self.scopes.get(&recv_name).is_none()
@@ -5443,7 +5612,12 @@ impl Inferer<'_> {
                         // `ClassName.member` read: static field → backing global,
                         // static method → function value. A value binding of the
                         // same name shadows the class (checked above).
-                        return self.infer_class_static_access(recv_name, enum_mangled, name, span);
+                        return Ok(self.infer_class_static_access(
+                            recv_name,
+                            enum_mangled,
+                            name,
+                            span,
+                        ));
                     }
                     _ => {
                         // Identifier resolves to a non-enum type —
@@ -5461,8 +5635,8 @@ impl Inferer<'_> {
         receiver: ExprId,
         name: Ident,
         span: Span,
-    ) -> (TypedExprKind, Type) {
-        let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None);
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None)?;
         // Plan 75.17: in-region rewrite for field-path
         // narrowings. If the candidate path `<receiver>.<name>` has an
         // active `NarrowedView`, return a `LocalNarrowRef` to the
@@ -5483,7 +5657,7 @@ impl Inferer<'_> {
         {
             let binding = view.binding.clone();
             let narrowed_ty = view.narrowed_ty.clone();
-            return (TypedExprKind::LocalNarrowRef { binding, path }, narrowed_ty);
+            return Ok((TypedExprKind::LocalNarrowRef { binding, path }, narrowed_ty));
         }
         // interface-property dispatch lands here BEFORE the
         // user-object field path. `lookup_interface_property` returns `None`
@@ -5508,34 +5682,34 @@ impl Inferer<'_> {
                 } else {
                     resolved_ty
                 };
-                return (
+                return Ok((
                     TypedExprKind::FieldAccess {
                         receiver: typed_receiver,
                         name,
                     },
                     read_ty,
-                );
+                ));
             }
-            return (
+            return Ok((
                 TypedExprKind::InterfacePropertyAccess {
                     receiver: typed_receiver,
                     iface: iface_mangled,
                     name,
                 },
                 resolved_ty,
-            );
+            ));
         }
         if let Type::ClassRef { mangled, args, .. } = receiver_ty.peel() {
             let mangled = mangled.clone();
             let class_args = args.clone();
             if let Some(read_ty) = self.class_field_read_ty(&mangled, &class_args, &name) {
-                return (
+                return Ok((
                     TypedExprKind::FieldAccess {
                         receiver: typed_receiver,
                         name,
                     },
                     read_ty,
-                );
+                ));
             }
             // Statics are checked only after instance members, matching
             // `lookup_chain_field` and what dispatch actually does: a class may
@@ -5551,36 +5725,36 @@ impl Inferer<'_> {
             {
                 self.report_missing_field(name.span, &receiver_ty, &name.name);
             }
-            return (
+            return Ok((
                 TypedExprKind::FieldAccess {
                     receiver: typed_receiver,
                     name,
                 },
                 Type::Error,
-            );
+            ));
         }
         if matches!(receiver_ty.peel(), Type::InterfaceRef { .. })
             && let Some(index) = self.resolver().index_signature(&receiver_ty)
         {
-            return (
+            return Ok((
                 TypedExprKind::FieldAccess {
                     receiver: typed_receiver,
                     name,
                 },
                 index.read_ty(),
-            );
+            ));
         }
         if matches!(receiver_ty.peel(), Type::InterfaceRef { .. }) {
             if !self.try_report_method_reference(name.span, &receiver_ty, &name.name) {
                 self.report_missing_field(name.span, &receiver_ty, &name.name);
             }
-            return (
+            return Ok((
                 TypedExprKind::FieldAccess {
                     receiver: typed_receiver,
                     name,
                 },
                 Type::Error,
-            );
+            ));
         }
         // field-access dispatch is structural — peel
         // through alias wrappers to find the underlying Object /
@@ -5650,13 +5824,13 @@ impl Inferer<'_> {
                 Type::Error
             }
         };
-        (
+        Ok((
             TypedExprKind::FieldAccess {
                 receiver: typed_receiver,
                 name,
             },
             field_ty,
-        )
+        ))
     }
 
     fn infer_index_access(
@@ -5665,8 +5839,8 @@ impl Inferer<'_> {
         index: ExprId,
         span: Span,
         expr_id: ExprId,
-    ) -> (TypedExprKind, Type) {
-        if let Some(field) = string_key_name(self.ast, index) {
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        if let Some(field) = string_key_name(self.ast, index)? {
             return self.infer_field_access(receiver, field, span);
         }
 
@@ -5675,17 +5849,21 @@ impl Inferer<'_> {
         // tuple-index / non-indexable errors with destructure-specific
         // messages anchored on the user's pattern bracket.
         let pattern_origin = self.ast.pattern_origins.get(&expr_id).cloned();
-        let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None);
+        let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None)?;
         if receiver_ty.is_structural_object() {
-            let (typed_index, key_ty) = self.infer_object_key(index);
-            let ty = self.object_index_read_type(&receiver_ty, &key_ty, self.ast.expr(index).span);
-            return (
+            let (typed_index, key_ty) = self.infer_object_key(index)?;
+            let ty = self.object_index_read_type(
+                &receiver_ty,
+                &key_ty,
+                self.ast.try_expr(index).map_err(super::arena_failure)?.span,
+            );
+            return Ok((
                 TypedExprKind::IndexAccess {
                     receiver: typed_receiver,
                     index: typed_index,
                 },
                 ty,
-            );
+            ));
         }
         // Peel: an array or tuple reached through an alias (`type Pair = [A, B]`)
         // is indexable on the same terms as the type it names.
@@ -5697,7 +5875,7 @@ impl Inferer<'_> {
             // index path because each tuple slot has a distinct static
             // type.
             Type::Tuple(elements) => {
-                let index_expr = self.ast.expr(index);
+                let index_expr = self.ast.try_expr(index).map_err(super::arena_failure)?;
                 let literal_idx: Option<usize> = match &index_expr.kind {
                     ExprKind::Number(n) if n.is_finite() && n.fract() == 0.0 && *n >= 0.0 => {
                         Some(*n as usize)
@@ -5757,7 +5935,7 @@ impl Inferer<'_> {
             // is out of bounds for some variants stay rejected
             // (would need a runtime length check).
             Type::Union(members) if members.iter().all(|m| matches!(m.peel(), Type::Tuple(_))) => {
-                let index_expr = self.ast.expr(index);
+                let index_expr = self.ast.try_expr(index).map_err(super::arena_failure)?;
                 let literal_idx: Option<usize> = match &index_expr.kind {
                     ExprKind::Number(n) if n.is_finite() && n.fract() == 0.0 && *n >= 0.0 => {
                         Some(*n as usize)
@@ -5856,14 +6034,14 @@ impl Inferer<'_> {
                 // the index isn't a number here, so skip the trailing
                 // `Some(&Type::Number)` inference that would add a spurious
                 // "expected number" secondary error.
-                let (typed_index, _) = self.infer_expr(index, None);
-                return (
+                let (typed_index, _) = self.infer_expr(index, None)?;
+                return Ok((
                     TypedExprKind::IndexAccess {
                         receiver: typed_receiver,
                         index: typed_index,
                     },
                     Type::Error,
-                );
+                ));
             }
             _ => {
                 if let Some(origin) = &pattern_origin {
@@ -5893,7 +6071,7 @@ impl Inferer<'_> {
                 Type::Error
             }
         };
-        let (typed_index, _) = self.infer_expr(index, Some(&Type::Number));
+        let (typed_index, _) = self.infer_expr(index, Some(&Type::Number))?;
         let kind = TypedExprKind::IndexAccess {
             receiver: typed_receiver,
             index: typed_index,
@@ -5901,15 +6079,15 @@ impl Inferer<'_> {
         if let Some(path) = self.kind_to_reference_path(&kind)
             && let Some(view) = self.lookup_narrowed_view(&path)
         {
-            return (
+            return Ok((
                 TypedExprKind::LocalNarrowRef {
                     binding: view.binding.clone(),
                     path,
                 },
                 view.narrowed_ty.clone(),
-            );
+            ));
         }
-        (kind, elem_ty)
+        Ok((kind, elem_ty))
     }
 
     /// Infer data fields before method bodies so receiver types do not depend on
@@ -5918,16 +6096,35 @@ impl Inferer<'_> {
         &mut self,
         members: &[crate::ObjectLiteralMember],
         expected: Option<&std::collections::BTreeMap<String, crate::ObjectField>>,
-    ) -> (
-        Type,
-        std::collections::BTreeMap<ExprId, (ExprId, Type, bool)>,
-    ) {
+    ) -> Result<(Type, InferredObjectFields), CompilerFailure> {
         let mut fields = expected.cloned().unwrap_or_default();
         let mut inferred = std::collections::BTreeMap::new();
         let mut method_sources = std::collections::BTreeMap::new();
-        if expected.is_some() || !members.iter().any(|member| matches!(member,
-            crate::ObjectLiteralMember::Field(field) if matches!(self.ast.expr(field.value).kind, ExprKind::FunctionExpression { .. }))) {
-            return (Type::Object { index: None, fields }, inferred);
+        let mut has_method = false;
+        if expected.is_none() {
+            for member in members {
+                if let crate::ObjectLiteralMember::Field(field) = member
+                    && matches!(
+                        self.ast
+                            .try_expr(field.value)
+                            .map_err(super::arena_failure)?
+                            .kind,
+                        ExprKind::FunctionExpression { .. }
+                    )
+                {
+                    has_method = true;
+                    break;
+                }
+            }
+        }
+        if expected.is_some() || !has_method {
+            return Ok((
+                Type::Object {
+                    index: None,
+                    fields,
+                },
+                inferred,
+            ));
         }
         for member in members {
             let (value, name) = match member {
@@ -5935,11 +6132,11 @@ impl Inferer<'_> {
                 crate::ObjectLiteralMember::Spread { value, .. }
                 | crate::ObjectLiteralMember::Computed { value, .. } => (*value, None),
             };
-            let signature = match self.ast.expr(value).kind {
+            let signature = match self.ast.try_expr(value).map_err(super::arena_failure)?.kind {
                 ExprKind::FunctionExpression { function, .. } => {
-                    Some(self.function_expression_signature(function, None))
+                    Some(self.function_expression_signature(function, None)?)
                 }
-                ExprKind::Arrow { .. } => Some(self.function_expression_signature(value, None)),
+                ExprKind::Arrow { .. } => Some(self.function_expression_signature(value, None)?),
                 _ => None,
             };
             if let Some(ty) = signature {
@@ -5951,14 +6148,16 @@ impl Inferer<'_> {
             }
             let errors_before = self.error_count();
             let hint = name.and_then(|name| override_field_signature(name));
-            let (id, ty) = self.infer_expr(value, hint.as_ref());
+            let (id, ty) = self.infer_expr(value, hint.as_ref())?;
             inferred.insert(value, (id, ty.clone(), self.error_count() > errors_before));
             if let Some(name) = name {
                 method_sources.remove(name);
                 fields.insert(name.clone(), crate::ObjectField::required(ty));
-            } else if let Some(SpreadFields { fields: spread, .. }) =
-                self.spread_source_fields(id, &ty, self.ast.expr(value).span)
-            {
+            } else if let Some(SpreadFields { fields: spread, .. }) = self.spread_source_fields(
+                id,
+                &ty,
+                self.ast.try_expr(value).map_err(super::arena_failure)?.span,
+            ) {
                 for name in spread.keys() {
                     method_sources.remove(name);
                 }
@@ -5968,14 +6167,14 @@ impl Inferer<'_> {
                 }
             }
         }
-        self.infer_receiver_methods(members, &method_sources, &mut fields, &mut inferred);
-        (
+        self.infer_receiver_methods(members, &method_sources, &mut fields, &mut inferred)?;
+        Ok((
             Type::Object {
                 index: None,
                 fields,
             },
             inferred,
-        )
+        ))
     }
 
     fn infer_receiver_methods(
@@ -5983,35 +6182,42 @@ impl Inferer<'_> {
         members: &[crate::ObjectLiteralMember],
         method_sources: &std::collections::BTreeMap<String, ExprId>,
         fields: &mut std::collections::BTreeMap<String, crate::ObjectField>,
-        inferred: &mut std::collections::BTreeMap<ExprId, (ExprId, Type, bool)>,
-    ) {
-        let mut pending = members
+        inferred: &mut InferredObjectFields,
+    ) -> Result<(), CompilerFailure> {
+        let mut pending: Vec<(String, ExprId)> = members
             .iter()
-            .filter_map(|member| {
+            .map(|member| {
                 let crate::ObjectLiteralMember::Field(field) = member else {
-                    return None;
+                    return Ok::<_, CompilerFailure>(None);
                 };
-                matches!(
-                    self.ast.expr(field.value).kind,
+                Ok(matches!(
+                    self.ast
+                        .try_expr(field.value)
+                        .map_err(super::arena_failure)?
+                        .kind,
                     ExprKind::FunctionExpression { .. } | ExprKind::Arrow { .. }
                 )
-                .then(|| (field.name.name.clone(), field.value))
+                .then(|| (field.name.name.clone(), field.value)))
             })
-            .collect::<Vec<_>>();
+            .filter_map(Result::transpose)
+            .collect::<Result<_, _>>()?;
         while !pending.is_empty() {
             let unresolved = pending.iter().filter_map(|(name, value)| {
                 if method_sources.get(name) != Some(value) { return None; }
                 matches!(fields.get(name).map(|field| field.ty.peel()), Some(Type::Function { ret, .. }) if **ret == Type::Unknown)
                     .then_some(name.as_str())
             }).collect::<std::collections::HashSet<_>>();
-            let index = pending
-                .iter()
-                .position(|(_, value)| {
-                    self.receiver_dependencies(*value)
-                        .iter()
-                        .all(|name| !unresolved.contains(name.as_str()))
-                })
-                .unwrap_or(0);
+            let mut index = 0;
+            for (candidate, (_, value)) in pending.iter().enumerate() {
+                if self
+                    .receiver_dependencies(*value)?
+                    .iter()
+                    .all(|name| !unresolved.contains(name.as_str()))
+                {
+                    index = candidate;
+                    break;
+                }
+            }
             let (name, value) = pending.remove(index);
             let previous_hint = self.object_this_hint.replace(Type::Object {
                 index: None,
@@ -6019,27 +6225,31 @@ impl Inferer<'_> {
             });
             let errors_before = self.error_count();
             let hint = override_field_signature(&name);
-            let (id, ty) = self.infer_expr(value, hint.as_ref());
+            let (id, ty) = self.infer_expr(value, hint.as_ref())?;
             self.object_this_hint = previous_hint;
             inferred.insert(value, (id, ty.clone(), self.error_count() > errors_before));
             if method_sources.get(&name) == Some(&value) {
                 fields.insert(name, crate::ObjectField::required(ty));
             }
         }
+
+        Ok(())
     }
 
     /// Only reads of this object's receiver constrain the order in which method
     /// returns are inferred. Nested ordinary functions establish another receiver.
-    fn receiver_dependencies(&self, value: ExprId) -> Vec<String> {
+    fn receiver_dependencies(&self, value: ExprId) -> Result<Vec<String>, CompilerFailure> {
         if !matches!(
-            self.ast.expr(value).kind,
+            self.ast.try_expr(value).map_err(super::arena_failure)?.kind,
             ExprKind::FunctionExpression { .. }
         ) {
-            return Vec::new();
+            return Ok(Vec::new());
         }
-        let span = self.ast.expr(value).span;
-        let nested = (0..self.ast.exprs_len())
-            .map(|i| self.ast.expr(ExprId(i as u32)))
+        let span = self.ast.try_expr(value).map_err(super::arena_failure)?.span;
+        let nested = self
+            .ast
+            .source_expressions()
+            .iter()
             .filter(|expr| {
                 expr.span.start > span.start
                     && expr.span.end <= span.end
@@ -6047,51 +6257,68 @@ impl Inferer<'_> {
             })
             .map(|expr| expr.span)
             .collect::<Vec<_>>();
-        let aliases = self.receiver_aliases(span, &nested);
-        (0..self.ast.exprs_len())
-            .filter_map(|i| {
-                let expr = self.ast.expr(ExprId(i as u32));
+        let aliases = self.receiver_aliases(span, &nested)?;
+        self.ast
+            .expr_ids()
+            .map_err(super::arena_failure)?
+            .map(|id| {
+                let expr = self.ast.try_expr(id).map_err(super::arena_failure)?;
                 if expr.span.start < span.start || expr.span.end > span.end {
-                    return None;
+                    return Ok::<_, CompilerFailure>(None);
                 }
                 let (receiver, name) = match &expr.kind {
                     ExprKind::FieldAccess { receiver, name } => (*receiver, name.name.clone()),
                     ExprKind::IndexAccess { receiver, index } => {
-                        let ExprKind::String(name) = &self.ast.expr(*index).kind else {
-                            return None;
+                        let ExprKind::String(name) = &self
+                            .ast
+                            .try_expr(*index)
+                            .map_err(super::arena_failure)?
+                            .kind
+                        else {
+                            return Ok(None);
                         };
                         (*receiver, name.clone())
                     }
                     ExprKind::OptionalChain { base, parts } => {
-                        let name = match parts.first()? {
+                        let name = match match parts.first() {
+                            Some(part) => part,
+                            None => return Ok(None),
+                        } {
                             crate::ChainPart::Field { name, .. } => name.name.clone(),
                             crate::ChainPart::Index { idx, .. } => {
-                                let ExprKind::String(name) = &self.ast.expr(*idx).kind else {
-                                    return None;
+                                let ExprKind::String(name) =
+                                    &self.ast.try_expr(*idx).map_err(super::arena_failure)?.kind
+                                else {
+                                    return Ok(None);
                                 };
                                 name.clone()
                             }
-                            _ => return None,
+                            _ => return Ok(None),
                         };
                         (*base, name)
                     }
-                    _ => return None,
+                    _ => return Ok(None),
                 };
                 let own_this = !nested
                     .iter()
                     .any(|nested| expr.span.start >= nested.start && expr.span.end <= nested.end);
-                self.is_receiver_reference(receiver, &aliases, own_this)
-                    .then_some(name)
+                Ok(self
+                    .is_receiver_reference(receiver, &aliases, own_this)?
+                    .then_some(name))
             })
-            .collect()
+            .filter_map(Result::transpose)
+            .collect::<Result<_, _>>()
     }
 
-    fn receiver_aliases(&self, span: Span, nested: &[Span]) -> std::collections::HashSet<String> {
+    fn receiver_aliases(
+        &self,
+        span: Span,
+        nested: &[Span],
+    ) -> Result<std::collections::HashSet<String>, CompilerFailure> {
         let mut aliases = std::collections::HashSet::new();
         loop {
             let before = aliases.len();
-            for i in 0..self.ast.stmts_len() {
-                let statement = self.ast.stmt(crate::StmtId(i as u32));
+            for statement in self.ast.source_statements() {
                 if statement.span.start < span.start || statement.span.end > span.end {
                     continue;
                 }
@@ -6100,7 +6327,7 @@ impl Inferer<'_> {
                 });
                 if let crate::StmtKind::Let { name, value, .. }
                 | crate::StmtKind::Const { name, value, .. } = &statement.kind
-                    && self.is_receiver_reference(*value, &aliases, own_this)
+                    && self.is_receiver_reference(*value, &aliases, own_this)?
                 {
                     aliases.insert(name.name.clone());
                 }
@@ -6109,7 +6336,7 @@ impl Inferer<'_> {
                 break;
             }
         }
-        aliases
+        Ok(aliases)
     }
 
     fn is_receiver_reference(
@@ -6117,18 +6344,18 @@ impl Inferer<'_> {
         mut value: ExprId,
         aliases: &std::collections::HashSet<String>,
         own_this: bool,
-    ) -> bool {
+    ) -> Result<bool, CompilerFailure> {
         loop {
-            match &self.ast.expr(value).kind {
-                ExprKind::This => return own_this,
-                ExprKind::Identifier(name) => return aliases.contains(&name.name),
+            match &self.ast.try_expr(value).map_err(super::arena_failure)?.kind {
+                ExprKind::This => return Ok(own_this),
+                ExprKind::Identifier(name) => return Ok(aliases.contains(&name.name)),
                 ExprKind::Paren(inner)
                 | ExprKind::As { expr: inner, .. }
                 | ExprKind::PostfixUnary {
                     op: crate::PostfixOp::NonNullAssert,
                     operand: inner,
                 } => value = *inner,
-                _ => return false,
+                _ => return Ok(false),
             }
         }
     }
@@ -6139,8 +6366,8 @@ impl Inferer<'_> {
         function: ExprId,
         this_type: Option<TypeAnnotation>,
         expected: Option<&Type>,
-    ) -> (ExprId, Type) {
-        let signature = self.function_expression_signature(function, expected);
+    ) -> Result<(ExprId, Type), CompilerFailure> {
+        let signature = self.function_expression_signature(function, expected)?;
         self.scopes.push();
         if let Some(name) = &name {
             self.scopes
@@ -6150,12 +6377,13 @@ impl Inferer<'_> {
         let receiver = this_type
             .as_ref()
             .map(|ty| self.resolve_type(ty))
+            .transpose()?
             .or_else(|| previous_hint.clone())
             .unwrap_or(Type::Unknown);
         let previous_this = self.function_this.replace(receiver.clone());
         let previous_class = self.current_class.take();
         let previous_static = self.current_static.take();
-        let (id, ty) = self.infer_expr(function, expected);
+        let (id, ty) = self.infer_expr(function, expected)?;
         self.function_this = previous_this;
         self.object_this_hint = previous_hint;
         self.current_class = previous_class;
@@ -6165,18 +6393,29 @@ impl Inferer<'_> {
         if let Some(name) = name {
             self.typed_ast.closure_names.insert(id, name);
         }
-        (id, ty)
+        Ok((id, ty))
     }
 
-    fn function_expression_signature(&mut self, function: ExprId, expected: Option<&Type>) -> Type {
+    fn function_expression_signature(
+        &mut self,
+        function: ExprId,
+        expected: Option<&Type>,
+    ) -> Result<Type, CompilerFailure> {
         let ExprKind::Arrow {
             params,
             return_type,
             type_predicate,
             ..
-        } = self.ast.expr(function).kind.clone()
+        } = self
+            .ast
+            .try_expr(function)
+            .map_err(super::arena_failure)?
+            .kind
+            .clone()
         else {
-            unreachable!("function expression wraps its function body");
+            return Err(super::inference_failure(
+                "function expression wraps its function body",
+            ));
         };
         self.declared_function_type(
             &params,
@@ -6194,7 +6433,7 @@ impl Inferer<'_> {
         return_type: Option<&TypeAnnotation>,
         type_predicate: Option<&crate::TypePredicateAnnotation>,
         expected: Option<&Type>,
-    ) -> Type {
+    ) -> Result<Type, CompilerFailure> {
         let hint = expected.and_then(|ty| match ty.peel() {
             Type::Function { params, ret, .. } => Some((params, ret)),
             _ => None,
@@ -6203,27 +6442,35 @@ impl Inferer<'_> {
             .iter()
             .enumerate()
             .map(|(index, param)| {
-                param
-                    .ty
-                    .as_ref()
-                    .map(|ty| self.resolve_type(ty))
-                    .or_else(|| hint.and_then(|(params, _)| params.get(index).cloned()))
-                    .unwrap_or(Type::Error)
+                Ok::<_, CompilerFailure>(
+                    param
+                        .ty
+                        .as_ref()
+                        .map(|ty| self.resolve_type(ty))
+                        .transpose()?
+                        .or_else(|| hint.and_then(|(params, _)| params.get(index).cloned()))
+                        .unwrap_or(Type::Error),
+                )
             })
-            .collect();
-        let predicate = type_predicate.as_ref().and_then(|predicate| {
-            let signature_params = params
-                .iter()
-                .zip(&param_types)
-                .map(|(param, ty)| crate::Param::new(param.name.name.clone(), ty.clone()))
-                .collect::<Vec<_>>();
-            self.resolve_type_predicate(predicate, &signature_params)
-        });
+            .collect::<Result<_, _>>()?;
+        let predicate = type_predicate
+            .as_ref()
+            .map(|predicate| {
+                let signature_params = params
+                    .iter()
+                    .zip(&param_types)
+                    .map(|(param, ty)| crate::Param::new(param.name.name.clone(), ty.clone()))
+                    .collect::<Vec<_>>();
+                self.resolve_type_predicate(predicate, &signature_params)
+            })
+            .transpose()?
+            .flatten();
         let ret = return_type
             .map(|ty| self.resolve_type(ty))
+            .transpose()?
             .or_else(|| hint.map(|(_, ret)| (**ret).clone()))
             .unwrap_or(Type::Unknown);
-        Type::Function {
+        Ok(Type::Function {
             params: param_types,
             ret: Box::new(if type_predicate.is_some() {
                 Type::Boolean
@@ -6232,7 +6479,7 @@ impl Inferer<'_> {
             }),
             predicate: predicate.map(Box::new),
             has_rest: params.last().is_some_and(|param| param.rest),
-        }
+        })
     }
 
     /// arrow function inference. Two-mode:
@@ -6261,7 +6508,7 @@ impl Inferer<'_> {
         body: ArrowBody,
         expected: Option<&Type>,
         span: Span,
-    ) -> (TypedExprKind, Type, bool) {
+    ) -> Result<(TypedExprKind, Type, bool), CompilerFailure> {
         let errors_before = self.error_count();
         // Arrow parameters never reach `resolve_params`, so the duplicate check
         // has to be repeated here rather than inherited.
@@ -6321,7 +6568,8 @@ impl Inferer<'_> {
         for (i, p) in params.iter().enumerate() {
             let ann_ty =
                 p.ty.as_ref()
-                    .map(|t| self.resolve_value_type(t, ValuePosition::Parameter));
+                    .map(|t| self.resolve_value_type(t, ValuePosition::Parameter))
+                    .transpose()?;
             let ty = match (&ann_ty, hint_owned.as_ref()) {
                 (Some(t), Some((hp, _))) => {
                     // Parameters are **contravariant**: the call site
@@ -6402,13 +6650,17 @@ impl Inferer<'_> {
         // must NOT replace the body's inferred return type, since
         // the generic-arg unification reads the body type to bind
         // its `U`.
-        let predicate = type_predicate.as_ref().and_then(|pred| {
-            let params = typed_params
-                .iter()
-                .map(|p| crate::Param::new(p.name.name.clone(), p.ty.clone()))
-                .collect::<Vec<_>>();
-            self.resolve_type_predicate(pred, &params)
-        });
+        let predicate = type_predicate
+            .as_ref()
+            .map(|pred| {
+                let params = typed_params
+                    .iter()
+                    .map(|p| crate::Param::new(p.name.name.clone(), p.ty.clone()))
+                    .collect::<Vec<_>>();
+                self.resolve_type_predicate(pred, &params)
+            })
+            .transpose()?
+            .flatten();
         let mut annotated_ret: Option<Type> = None;
         let ret_hint: Option<Type> = match (&return_ty_ann, hint_owned.as_ref()) {
             _ if type_predicate.is_some() => {
@@ -6416,7 +6668,7 @@ impl Inferer<'_> {
                 Some(Type::Boolean)
             }
             (Some(ann), Some((_, hr))) => {
-                let t = self.resolve_type(ann);
+                let t = self.resolve_type(ann)?;
                 // After a parameter that doesn't fit, the hint's return is
                 // moot: the whole function is already reported.
                 // Skip when the hint return contains an unresolved
@@ -6434,7 +6686,7 @@ impl Inferer<'_> {
                 Some(t)
             }
             (Some(ann), None) => {
-                let t = self.resolve_type(ann);
+                let t = self.resolve_type(ann)?;
                 annotated_ret = Some(t.clone());
                 Some(t)
             }
@@ -6491,7 +6743,7 @@ impl Inferer<'_> {
 
         let (typed_body, body_ret) = match body {
             ArrowBody::Expr(e) => {
-                let (id, t) = self.infer_expr(e, ret_hint.as_ref());
+                let (id, t) = self.infer_expr(e, ret_hint.as_ref())?;
                 self.validate_type_predicate_return(id, span);
                 // Re-emit the seeded regions inside the body, over a fresh read
                 // of the `const` — the closure then captures the ordinary
@@ -6500,9 +6752,9 @@ impl Inferer<'_> {
                 (ClosureBody::Expr(id), t)
             }
             ArrowBody::Block(b) => {
-                let id = self
-                    .infer_stmt(b)
-                    .expect("arrow block body is a Block, never a type-only decl");
+                let id = self.infer_stmt(b)?.ok_or_else(|| {
+                    super::inference_failure("arrow block body is a Block, never a type-only decl")
+                })?;
                 let id = self.wrap_narrow_regions(id, &narrow_seed, span);
                 let t = if let Some(t) = &annotated_ret {
                     t.clone()
@@ -6560,7 +6812,7 @@ impl Inferer<'_> {
             // `TypedParam` with `rest: true` at the trailing slot.
             has_rest: typed_params.last().is_some_and(|p| p.rest),
         };
-        (
+        Ok((
             TypedExprKind::Closure {
                 runtime_generics: self
                     .body_instantiations
@@ -6580,7 +6832,7 @@ impl Inferer<'_> {
             },
             arrow_ty,
             hint_owned.is_some() && self.error_count() > errors_before,
-        )
+        ))
     }
 
     /// Reduce the `(Type, Span)` entries collected during a block-body
@@ -6634,30 +6886,39 @@ impl Inferer<'_> {
         op: crate::PostfixOp,
         operand: ExprId,
         span: Span,
-    ) -> (TypedExprKind, Type) {
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let op_symbol = match op {
             crate::PostfixOp::Inc => "++",
             crate::PostfixOp::Dec => "--",
             crate::PostfixOp::NonNullAssert => return self.infer_non_null_assert(operand),
         };
-        let operand_kind = self.ast.expr(operand).kind.clone();
-        match operand_kind {
+        let operand_kind = self
+            .ast
+            .try_expr(operand)
+            .map_err(super::arena_failure)?
+            .kind
+            .clone();
+        Ok(match operand_kind {
             ExprKind::Identifier(ident) => self.infer_postfix_ident(op, op_symbol, ident, span),
             ExprKind::FieldAccess { receiver, name } => {
-                self.infer_postfix_field(op, op_symbol, receiver, name, span)
+                self.infer_postfix_field(op, op_symbol, receiver, name, span)?
             }
             ExprKind::IndexAccess { receiver, index } => {
-                self.infer_postfix_index(op, op_symbol, receiver, index, span)
+                self.infer_postfix_index(op, op_symbol, receiver, index, span)?
             }
             _ => {
-                let operand_span = self.ast.expr(operand).span;
+                let operand_span = self
+                    .ast
+                    .try_expr(operand)
+                    .map_err(super::arena_failure)?
+                    .span;
                 self.error_with_help(
                     operand_span,
                     format!("postfix `{op_symbol}` requires an assignable target"),
                     vec!["operand must be an identifier, `obj.field`, or `arr[i]`".to_string()],
                 );
                 // Still infer the operand so any nested type errors surface.
-                let (_, _) = self.infer_expr(operand, None);
+                let (_, _) = self.infer_expr(operand, None)?;
                 (
                     TypedExprKind::PostfixUnary {
                         op,
@@ -6673,14 +6934,21 @@ impl Inferer<'_> {
                     Type::Error,
                 )
             }
-        }
+        })
     }
 
-    fn infer_non_null_assert(&mut self, operand: ExprId) -> (TypedExprKind, Type) {
-        let operand_span = self.ast.expr(operand).span;
-        let (value, value_ty) = self.infer_expr(operand, None);
+    fn infer_non_null_assert(
+        &mut self,
+        operand: ExprId,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let operand_span = self
+            .ast
+            .try_expr(operand)
+            .map_err(super::arena_failure)?
+            .span;
+        let (value, value_ty) = self.infer_expr(operand, None)?;
         let result_ty = self.check_non_null_assert(&value_ty, operand_span);
-        (TypedExprKind::NonNullAssert { value }, result_ty)
+        Ok((TypedExprKind::NonNullAssert { value }, result_ty))
     }
 
     /// The type `!` yields for an operand of `value_ty`. An operand that is
@@ -6865,24 +7133,28 @@ impl Inferer<'_> {
         receiver: ExprId,
         name: Ident,
         span: Span,
-    ) -> (TypedExprKind, Type) {
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         // A bare class name is not a value, so `ClassName.field++` must resolve
         // before the receiver is typed — same intercept the assignment forms use,
         // so all three write forms share one set of diagnostics.
-        match self.resolve_static_field_write(receiver, &name) {
+        match self.resolve_static_field_write(receiver, &name)? {
             StaticWrite::NotClassName => {}
-            StaticWrite::Rejected { .. } => return (TypedExprKind::Null, Type::Error),
+            StaticWrite::Rejected { .. } => return Ok((TypedExprKind::Null, Type::Error)),
             StaticWrite::Resolved { mangled, ty } => {
-                return self.postfix_on_global(op, op_symbol, name, mangled, ty, span);
+                return Ok(self.postfix_on_global(op, op_symbol, name, mangled, ty, span));
             }
         }
-        let recv_span = self.ast.expr(receiver).span;
+        let recv_span = self
+            .ast
+            .try_expr(receiver)
+            .map_err(super::arena_failure)?
+            .span;
         let rw_op = super::diagnostics::RwOp::Postfix(op);
-        let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None);
+        let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None)?;
         let target_ty: Type = if let Type::ClassRef { mangled, args, .. } = receiver_ty.peel() {
             let mangled = mangled.clone();
             let class_args = args.clone();
-            self.class_postfix_target(&mangled, &class_args, receiver, &receiver_ty, &name, rw_op)
+            self.class_postfix_target(&mangled, &class_args, receiver, &receiver_ty, &name, rw_op)?
         } else if self.try_report_method_assignment(name.span, &receiver_ty, &name.name) {
             Type::Error
         } else if let Some((prop_sig, _, _, _)) = self.find_property(&receiver_ty, &name.name) {
@@ -6982,7 +7254,7 @@ impl Inferer<'_> {
                 .push(narrowing::PathElem::Field(name.name.clone()));
             self.invalidate_for_write(path, name.span);
         }
-        (
+        Ok((
             TypedExprKind::PostfixUnary {
                 op,
                 target: crate::PostfixTarget::Field {
@@ -6996,7 +7268,7 @@ impl Inferer<'_> {
             } else {
                 result_ty
             },
-        )
+        ))
     }
 
     /// `g++` on a module global — shared by a module `let` and by a writable
@@ -7051,7 +7323,7 @@ impl Inferer<'_> {
         receiver_ty: &Type,
         name: &Ident,
         rw_op: super::diagnostics::RwOp,
-    ) -> Type {
+    ) -> Result<Type, CompilerFailure> {
         // An accessor property has no data slot. Expression-position postfix
         // reads and writes that slot directly, with nowhere to hand its computed
         // value to a setter call; statement-position postfix desugars to an
@@ -7073,10 +7345,11 @@ impl Inferer<'_> {
                     n = name.name
                 )],
             );
-            return Type::Error;
+            return Ok(Type::Error);
         }
-        self.class_read_write_target(mangled, class_args, receiver, receiver_ty, name, rw_op)
-            .map_or(Type::Error, |rw| rw.read)
+        Ok(self
+            .class_read_write_target(mangled, class_args, receiver, receiver_ty, name, rw_op)?
+            .map_or(Type::Error, |rw| rw.read))
     }
 
     fn infer_postfix_index(
@@ -7086,22 +7359,34 @@ impl Inferer<'_> {
         receiver: ExprId,
         index: ExprId,
         span: Span,
-    ) -> (TypedExprKind, Type) {
-        let recv_span = self.ast.expr(receiver).span;
-        let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None);
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let recv_span = self
+            .ast
+            .try_expr(receiver)
+            .map_err(super::arena_failure)?
+            .span;
+        let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None)?;
         let object = receiver_ty.is_structural_object();
         let (typed_index, key_ty) = if object {
-            self.infer_object_key(index)
+            self.infer_object_key(index)?
         } else {
-            self.infer_expr(index, Some(&Type::Number))
+            self.infer_expr(index, Some(&Type::Number))?
         };
         let elem_ty = if object {
-            self.object_index_write_type(&receiver_ty, &key_ty, self.ast.expr(index).span)
+            self.object_index_write_type(
+                &receiver_ty,
+                &key_ty,
+                self.ast.try_expr(index).map_err(super::arena_failure)?.span,
+            )
         } else {
             self.indexed_write_elem_ty(&receiver_ty, recv_span, span)
         };
         let declared_read = if object {
-            self.object_index_read_type(&receiver_ty, &key_ty, self.ast.expr(index).span)
+            self.object_index_read_type(
+                &receiver_ty,
+                &key_ty,
+                self.ast.try_expr(index).map_err(super::arena_failure)?.span,
+            )
         } else {
             elem_ty.clone()
         };
@@ -7120,7 +7405,7 @@ impl Inferer<'_> {
             self.error(span, format!("expected `{elem_ty}`, got `{result_ty}`"));
         }
         self.invalidate_index_write(typed_receiver, typed_index, span);
-        (
+        Ok((
             TypedExprKind::PostfixUnary {
                 op,
                 target: crate::PostfixTarget::Index {
@@ -7134,7 +7419,7 @@ impl Inferer<'_> {
             } else {
                 result_ty
             },
-        )
+        ))
     }
 
     /// `cond ? then_: else_`. `cond` is type-checked against
@@ -7147,30 +7432,30 @@ impl Inferer<'_> {
         else_: ExprId,
         expected: Option<&Type>,
         _span: Span,
-    ) -> (TypedExprKind, Type) {
-        let (typed_cond, cond_ty) = self.infer_expr(cond, None);
-        let cond_span = self.ast.expr(cond).span;
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let (typed_cond, cond_ty) = self.infer_expr(cond, None)?;
+        let cond_span = self.ast.try_expr(cond).map_err(super::arena_failure)?.span;
         self.check_condition_ty(&cond_ty, cond_span);
 
         let (true_env, false_env) = self.predicate_envs(typed_cond);
 
-        let (typed_then, then_ty) = self.infer_conditional_operand(then_, &true_env, expected);
-        let then_span = self.ast.expr(then_).span;
+        let (typed_then, then_ty) = self.infer_conditional_operand(then_, &true_env, expected)?;
+        let then_span = self.ast.try_expr(then_).map_err(super::arena_failure)?.span;
         let wrapped_then = self.wrap_narrow_exprs(typed_then, &true_env, then_span);
 
-        let (typed_else, else_ty) = self.infer_conditional_operand(else_, &false_env, expected);
-        let else_span = self.ast.expr(else_).span;
+        let (typed_else, else_ty) = self.infer_conditional_operand(else_, &false_env, expected)?;
+        let else_span = self.ast.try_expr(else_).map_err(super::arena_failure)?.span;
         let wrapped_else = self.wrap_narrow_exprs(typed_else, &false_env, else_span);
 
         let result_ty = branch_result_type(then_ty, else_ty, self.resolver());
-        (
+        Ok((
             TypedExprKind::Ternary {
                 cond: typed_cond,
                 then_: wrapped_then,
                 else_: wrapped_else,
             },
             result_ty,
-        )
+        ))
     }
 
     /// `a ?? b`. Result type is `union(strip_null(lhs), rhs)`.
@@ -7181,10 +7466,10 @@ impl Inferer<'_> {
         lhs: ExprId,
         rhs: ExprId,
         span: Span,
-    ) -> (TypedExprKind, Type) {
-        let (typed_lhs, lhs_ty) = self.infer_expr(lhs, None);
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let (typed_lhs, lhs_ty) = self.infer_expr(lhs, None)?;
         let (typed_rhs, rhs_ty) =
-            self.infer_conditional_operand(rhs, &super::narrowing::NarrowEnv::new(), None);
+            self.infer_conditional_operand(rhs, &super::narrowing::NarrowEnv::new(), None)?;
 
         // A poisoned operand has no knowable nullability, and naming it in the
         // message would print `<error>` at the user.
@@ -7213,13 +7498,13 @@ impl Inferer<'_> {
                 self.resolver(),
             )
         };
-        (
+        Ok((
             TypedExprKind::NullishCoalesce {
                 lhs: typed_lhs,
                 rhs: typed_rhs,
             },
             result_ty,
-        )
+        ))
     }
 
     /// Infers the chain, then lifts a trailing `!` off it.
@@ -7236,7 +7521,7 @@ impl Inferer<'_> {
         mut parts: Vec<ChainPart>,
         _expected: Option<&Type>,
         span: Span,
-    ) -> (TypedExprKind, Type) {
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         // `parts[0]` is the `?.` that opened the chain, so it is never a
         // `NonNull`; the bound only keeps the remaining walk non-empty.
         let mut asserts_chain = false;
@@ -7244,9 +7529,9 @@ impl Inferer<'_> {
             parts.pop();
             asserts_chain = true;
         }
-        let (kind, ty) = self.infer_chain_steps(base, parts);
+        let (kind, ty) = self.infer_chain_steps(base, parts)?;
         if !asserts_chain {
-            return (kind, ty);
+            return Ok((kind, ty));
         }
         let value = self.typed_ast.push_expr(TypedExpr {
             kind,
@@ -7254,7 +7539,7 @@ impl Inferer<'_> {
             ty: ty.clone(),
         });
         let result_ty = self.check_non_null_assert(&ty, span);
-        (TypedExprKind::NonNullAssert { value }, result_ty)
+        Ok((TypedExprKind::NonNullAssert { value }, result_ty))
     }
 
     /// Walk the chain left-to-right: each step's receiver is the previous step's
@@ -7266,12 +7551,20 @@ impl Inferer<'_> {
     /// `Type::InterfaceRef`; `Index` on `Type::Array`; `Call` on a
     /// closure-typed receiver; `Call` directly after a `Field` resolving to an
     /// interface method (lowered to `MethodCall`); `NonNull` anywhere.
-    fn infer_chain_steps(&mut self, base: ExprId, parts: Vec<ChainPart>) -> (TypedExprKind, Type) {
-        let (typed_base, base_ty) = self.infer_expr(base, None);
+    fn infer_chain_steps(
+        &mut self,
+        base: ExprId,
+        parts: Vec<ChainPart>,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let (typed_base, base_ty) = self.infer_expr(base, None)?;
         // The namespace rejection subsumes the redundancy warning — a namespace
         // receiver is non-nullable too, and two diagnostics for one `?` is noise.
-        if !self.reported_namespace_chain_base(base, &base_ty, &parts) {
-            self.warn_redundant_leading_optional(&base_ty, self.ast.expr(base).span, &parts);
+        if !self.reported_namespace_chain_base(base, &base_ty, &parts)? {
+            self.warn_redundant_leading_optional(
+                &base_ty,
+                self.ast.try_expr(base).map_err(super::arena_failure)?.span,
+                &parts,
+            );
         }
 
         let mut receiver_ty = base_ty.clone();
@@ -7339,7 +7632,7 @@ impl Inferer<'_> {
                 part,
                 &mut typed_parts,
                 &mut pending_method,
-            );
+            )?;
             step_path = self.extend_chain_path(step_path, &typed_part);
             receiver_ty = self.narrow_step_result(
                 step_path.as_ref(),
@@ -7366,13 +7659,13 @@ impl Inferer<'_> {
         } else {
             Type::union(vec![receiver_ty, Type::Null])
         };
-        (
+        Ok((
             TypedExprKind::OptionalChain {
                 base: typed_base,
                 parts: typed_parts,
             },
             final_ty,
-        )
+        ))
     }
 
     /// A chain step that dispatches on the receiver — every kind but `!`, which
@@ -7386,8 +7679,8 @@ impl Inferer<'_> {
         part: ChainPart,
         typed_parts: &mut Vec<TypedChainPart>,
         pending_method: &mut Option<ChainMethod>,
-    ) -> (TypedChainPart, Type) {
-        match string_key_as_field(self.ast, part) {
+    ) -> Result<(TypedChainPart, Type), CompilerFailure> {
+        Ok(match string_key_as_field(self.ast, part)? {
             ChainPart::NonNull { .. } => {
                 unreachable!("`!` steps never reach the member-dispatch path")
             }
@@ -7404,7 +7697,7 @@ impl Inferer<'_> {
                         result_ty: Type::Error,
                         span,
                     };
-                    return (typed_part, Type::Error);
+                    return Ok((typed_part, Type::Error));
                 }
                 let resolved = self.lookup_chain_field(receiver_ty, receiver_path, &name, span);
                 *pending_method = resolved.method;
@@ -7433,14 +7726,14 @@ impl Inferer<'_> {
                 span,
             } => {
                 let (typed_idx, idx_ty) = if receiver_ty.is_structural_object() {
-                    self.infer_object_key(idx)
+                    self.infer_object_key(idx)?
                 } else {
-                    self.infer_expr(idx, None)
+                    self.infer_expr(idx, None)?
                 };
-                let idx_span = self.ast.expr(idx).span;
+                let idx_span = self.ast.try_expr(idx).map_err(super::arena_failure)?.span;
                 if receiver_ty.is_structural_object() {
                     let ty = self.object_index_read_type(receiver_ty, &idx_ty, idx_span);
-                    return (
+                    return Ok((
                         TypedChainPart::Index {
                             idx: typed_idx,
                             optional,
@@ -7448,7 +7741,7 @@ impl Inferer<'_> {
                             span,
                         },
                         ty,
-                    );
+                    ));
                 }
                 if !matches!(
                     idx_ty.peel(),
@@ -7462,27 +7755,31 @@ impl Inferer<'_> {
                 let elem_ty = match receiver_ty.peel() {
                     Type::Array(elem) => *elem.clone(),
                     Type::Uint8Array => Type::Number,
-                    Type::Tuple(elements) => match &self.ast.expr(idx).kind {
-                        ExprKind::Number(n) if n.is_finite() && n.fract() == 0.0 && *n >= 0.0 => {
-                            elements.get(*n as usize).cloned().unwrap_or_else(|| {
+                    Type::Tuple(elements) => {
+                        match &self.ast.try_expr(idx).map_err(super::arena_failure)?.kind {
+                            ExprKind::Number(n)
+                                if n.is_finite() && n.fract() == 0.0 && *n >= 0.0 =>
+                            {
+                                elements.get(*n as usize).cloned().unwrap_or_else(|| {
+                                    self.error(
+                                        idx_span,
+                                        format!(
+                                            "tuple index {n} out of bounds; tuple has {} elements",
+                                            elements.len()
+                                        ),
+                                    );
+                                    Type::Error
+                                })
+                            }
+                            _ => {
                                 self.error(
                                     idx_span,
-                                    format!(
-                                        "tuple index {n} out of bounds; tuple has {} elements",
-                                        elements.len()
-                                    ),
+                                    "tuple index must be a non-negative integer literal".into(),
                                 );
                                 Type::Error
-                            })
+                            }
                         }
-                        _ => {
-                            self.error(
-                                idx_span,
-                                "tuple index must be a non-negative integer literal".into(),
-                            );
-                            Type::Error
-                        }
-                    },
+                    }
                     Type::Error => Type::Error,
                     Type::Unknown => Type::Unknown,
                     other => {
@@ -7592,7 +7889,7 @@ impl Inferer<'_> {
                             },
                             &args,
                             combined_span,
-                        ),
+                        )?,
                         None => self.bind_fn_type_call_args(
                             &param_tys,
                             &ret_ty,
@@ -7600,9 +7897,9 @@ impl Inferer<'_> {
                             CallLift::Anon { ty: &fn_ty },
                             &args,
                             combined_span,
-                        ),
+                        )?,
                     };
-                    return (
+                    return Ok((
                         TypedChainPart::MethodCall {
                             iface,
                             name,
@@ -7612,7 +7909,7 @@ impl Inferer<'_> {
                             span: combined_span,
                         },
                         ret_ty,
-                    );
+                    ));
                 }
 
                 // Closure-typed receiver: ordinary `Call` part.
@@ -7632,7 +7929,7 @@ impl Inferer<'_> {
                             CallLift::Anon { ty: receiver_ty },
                             &args,
                             span,
-                        );
+                        )?;
                         (ret_ty, typed_args)
                     }
                     other => {
@@ -7647,7 +7944,10 @@ impl Inferer<'_> {
                                 Type::Error
                             }
                         };
-                        let typed_args = args.iter().map(|&a| self.infer_expr(a, None).0).collect();
+                        let typed_args = args
+                            .iter()
+                            .map(|&a| Ok::<_, CompilerFailure>(self.infer_expr(a, None)?.0))
+                            .collect::<Result<_, _>>()?;
                         (ret_ty, typed_args)
                     }
                 };
@@ -7661,7 +7961,7 @@ impl Inferer<'_> {
                     ret_ty,
                 )
             }
-        }
+        })
     }
 
     /// A static-dispatch interface is a namespace, not a value: its binding
@@ -7673,18 +7973,18 @@ impl Inferer<'_> {
         base: ExprId,
         base_ty: &Type,
         parts: &[ChainPart],
-    ) -> bool {
+    ) -> Result<bool, CompilerFailure> {
         let Some(first) = parts.first() else {
-            return false;
+            return Ok(false);
         };
         if !first.is_optional() {
-            return false;
+            return Ok(false);
         }
         let Type::InterfaceRef { mangled, name, .. } = base_ty.peel() else {
-            return false;
+            return Ok(false);
         };
         let Some(sym) = self.resolver().lookup(mangled, name) else {
-            return false;
+            return Ok(false);
         };
         if !matches!(
             &sym.kind,
@@ -7693,14 +7993,14 @@ impl Inferer<'_> {
                 ..
             }
         ) {
-            return false;
+            return Ok(false);
         }
         // The declared interface is `NumberConstructor` / `InstantConstructor`,
         // which is not a name in scope — so a fix naming it would not compile.
         // Quote the path the source wrote, and where there is none (a ternary,
         // a call result), name no replacement at all rather than a wrong one.
-        let base_expr = self.ast.expr(base);
-        let (subject, help) = match self.dotted_path(base) {
+        let base_expr = self.ast.try_expr(base).map_err(super::arena_failure)?;
+        let (subject, help) = match self.dotted_path(base)? {
             Some(written) => {
                 let help = match namespace_fix_forms(&written, first) {
                     Some((fixed, wrote)) => {
@@ -7720,23 +8020,30 @@ impl Inferer<'_> {
             format!("{subject} is a namespace, not a value — `?.` has nothing to guard"),
             vec![help],
         );
-        true
+        Ok(true)
     }
 
     /// The dotted name an expression spells (`Number`, `Temporal.Instant`), if
     /// it is one. A namespace is always reached by a path of plain identifiers,
     /// so anything else has no name to quote back at the user.
-    fn dotted_path(&self, expr: ExprId) -> Option<String> {
-        match &self.ast.expr(expr).kind {
-            ExprKind::Identifier(ident) => Some(ident.name.clone()),
-            ExprKind::FieldAccess { receiver, name } => {
-                Some(format!("{}.{}", self.dotted_path(*receiver)?, name.name))
-            }
-            // `(Number)?.x` is a shape an LLM writes; the parens are not part
-            // of the name.
-            ExprKind::Paren(inner) => self.dotted_path(*inner),
-            _ => None,
-        }
+    fn dotted_path(&self, expr: ExprId) -> Result<Option<String>, CompilerFailure> {
+        Ok(
+            match &self.ast.try_expr(expr).map_err(super::arena_failure)?.kind {
+                ExprKind::Identifier(ident) => Some(ident.name.clone()),
+                ExprKind::FieldAccess { receiver, name } => Some(format!(
+                    "{}.{}",
+                    match self.dotted_path(*receiver)? {
+                        Some(path) => path,
+                        None => return Ok(None),
+                    },
+                    name.name
+                )),
+                // `(Number)?.x` is a shape an LLM writes; the parens are not part
+                // of the name.
+                ExprKind::Paren(inner) => self.dotted_path(*inner)?,
+                _ => None,
+            },
+        )
     }
 
     /// A `?.` on a base that can never be null does nothing. Warn only for the
@@ -8159,21 +8466,26 @@ impl Inferer<'_> {
     ///
     /// `check`'s shape has all interfaces reduced to their structural data form, so codegen
     /// walks plain object/array/primitive types and never needs interface knowledge.
-    fn infer_as(&mut self, inner: ExprId, ty: TypeAnnotation, span: Span) -> (TypedExprKind, Type) {
-        let target_ty = self.resolve_type(&ty);
-        let (inner_id, inner_ty) = self.infer_expr(inner, None);
+    fn infer_as(
+        &mut self,
+        inner: ExprId,
+        ty: TypeAnnotation,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let target_ty = self.resolve_type(&ty)?;
+        let (inner_id, inner_ty) = self.infer_expr(inner, None)?;
         // Error escape — already in error state; produce a Cast so
         // downstream passes see a sensible node, but don't emit more
         // diagnostics on top.
         if matches!(target_ty.peel(), Type::Error) || matches!(inner_ty.peel(), Type::Error) {
-            return (
+            return Ok((
                 TypedExprKind::Cast {
                     value: inner_id,
                     target_ty: target_ty.clone(),
                     check: None,
                 },
                 target_ty,
-            );
+            ));
         }
         // `assignable` is nominal for `InterfaceRef`; relate (and later check) against the
         // interface's structural data shape so `unknown`/structurally-compatible sources pass.
@@ -8182,21 +8494,21 @@ impl Inferer<'_> {
         // below and reaches codegen.
         if inner_ty.carries_void() {
             self.error_with_help(
-                self.ast.expr(inner).span,
+                self.ast.try_expr(inner).map_err(super::arena_failure)?.span,
                 format!("cannot cast `{inner_ty}`: it has no value"),
                 vec![
                     "`void` carries nothing to cast. Call the expression as its own                      statement, and cast a value produced separately."
                         .to_string(),
                 ],
             );
-            return (
+            return Ok((
                 TypedExprKind::Cast {
                     value: inner_id,
                     target_ty: target_ty.clone(),
                     check: None,
                 },
                 Type::Error,
-            );
+            ));
         }
         let shape = self.reduce_interfaces_to_shapes(&target_ty, &mut Vec::new());
         let inner_to_target = assignable(&inner_ty, &shape, self.resolver());
@@ -8228,7 +8540,7 @@ impl Inferer<'_> {
                          `x.{first}!`"
                     )],
                 );
-                return (TypedExprKind::Null, Type::Error);
+                return Ok((TypedExprKind::Null, Type::Error));
             }
             self.error_with_help(
                 span,
@@ -8242,7 +8554,7 @@ impl Inferer<'_> {
                      `x as unknown as {target_ty}`"
                 )],
             );
-            return (TypedExprKind::Null, Type::Error);
+            return Ok((TypedExprKind::Null, Type::Error));
         }
         // Deep check only when the source isn't a proven subtype of the target.
         // A proven upcast emits no runtime test, so it doesn't need the target
@@ -8264,18 +8576,18 @@ impl Inferer<'_> {
                             .to_string(),
                     ],
                 );
-                return (TypedExprKind::Null, Type::Error);
+                return Ok((TypedExprKind::Null, Type::Error));
             }
             Some(Box::new(shape))
         };
-        (
+        Ok((
             TypedExprKind::Cast {
                 value: inner_id,
                 target_ty: target_ty.clone(),
                 check,
             },
             target_ty,
-        )
+        ))
     }
 
     /// `x instanceof Foo` — a runtime class test. `Foo` must name a class (interfaces aren't
@@ -8289,20 +8601,20 @@ impl Inferer<'_> {
         value: ExprId,
         ty: TypeAnnotation,
         span: Span,
-    ) -> (TypedExprKind, Type) {
-        let class_ty = self.resolve_runtime_class_test(&ty);
-        let (value_id, value_ty) = self.infer_expr(value, None);
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let class_ty = self.resolve_runtime_class_test(&ty)?;
+        let (value_id, value_ty) = self.infer_expr(value, None)?;
 
         // Already in an error state (unknown type name or bad operand) — produce a node so
         // downstream passes stay happy, but don't pile on diagnostics.
         if matches!(class_ty.peel(), Type::Error) || matches!(value_ty.peel(), Type::Error) {
-            return (
+            return Ok((
                 TypedExprKind::InstanceOf {
                     value: value_id,
                     class: class_ty,
                 },
                 Type::Boolean,
-            );
+            ));
         }
 
         // `Uint8Array` keeps its own type variant rather than becoming a class
@@ -8320,13 +8632,13 @@ impl Inferer<'_> {
                     "interfaces aren't runtime types in v1 — test against a class".to_string(),
                 ],
             );
-            return (
+            return Ok((
                 TypedExprKind::InstanceOf {
                     value: value_id,
                     class: Type::Error,
                 },
                 Type::Boolean,
-            );
+            ));
         }
 
         let class_ty = self.refine_class_test_target(&class_ty, &value_ty);
@@ -8361,22 +8673,22 @@ impl Inferer<'_> {
                      `unknown` first if a dynamic test is intended",
                 )],
             );
-            return (
+            return Ok((
                 TypedExprKind::InstanceOf {
                     value: value_id,
                     class: Type::Error,
                 },
                 Type::Boolean,
-            );
+            ));
         }
 
-        (
+        Ok((
             TypedExprKind::InstanceOf {
                 value: value_id,
                 class: class_ty,
             },
             Type::Boolean,
-        )
+        ))
     }
 
     /// Resolve an annotation used as a **runtime class test** — the RHS of
@@ -8388,24 +8700,32 @@ impl Inferer<'_> {
     /// Explicit arguments are rejected however they are spelled: directly,
     /// through a namespace, or behind an alias. Accepting them would narrow a
     /// value to an instantiation the test never checked.
-    pub(super) fn resolve_runtime_class_test(&mut self, ty: &TypeAnnotation) -> Type {
+    pub(super) fn resolve_runtime_class_test(
+        &mut self,
+        ty: &TypeAnnotation,
+    ) -> Result<Type, CompilerFailure> {
         // The bare form is resolved first because `resolve_class_reference`
         // would reject its arity before this function saw it.
         if let Some((package, name, mangled, arity)) = self.bare_generic_class_target(ty) {
-            return Type::class_ref(package, name, mangled, vec![Type::Unknown; arity]);
+            return Ok(Type::class_ref(
+                package,
+                name,
+                mangled,
+                vec![Type::Unknown; arity],
+            ));
         }
-        let resolved = self.resolve_type(ty);
+        let resolved = self.resolve_type(ty)?;
         let Type::ClassRef { args, .. } = resolved.peel() else {
-            return resolved;
+            return Ok(resolved);
         };
         if args.iter().all(|a| matches!(a, Type::Unknown)) {
-            return resolved;
+            return Ok(resolved);
         }
         // Report the spelling the source used — the class's own name may not
         // even be in scope here (`ns.Box`), and behind an alias it never
         // appears on the line at all.
         let Type::ClassRef { name, .. } = resolved.peel() else {
-            return resolved;
+            return Ok(resolved);
         };
         let class_name = name.clone();
         let spelled = self
@@ -8440,7 +8760,7 @@ impl Inferer<'_> {
             format!("`{spelled}` cannot be tested at a specific instantiation"),
             vec![help],
         );
-        Type::Error
+        Ok(Type::Error)
     }
 
     /// Bind a runtime class test's erased type arguments from the operand.
@@ -8940,45 +9260,55 @@ fn enum_variant_help<'a>(
 
 /// The member a string-literal key names: `o["content-type"]` reads field
 /// `content-type` wherever `o.name` would read `name`. `None` for any other key.
-pub(super) fn string_key_name(ast: &crate::Ast, key: ExprId) -> Option<Ident> {
-    let key = ast.expr(key);
+pub(super) fn string_key_name(
+    ast: &crate::Ast,
+    key: ExprId,
+) -> Result<Option<Ident>, CompilerFailure> {
+    let key = ast.try_expr(key).map_err(super::arena_failure)?;
     let ExprKind::String(name) = &key.kind else {
-        return None;
+        return Ok(None);
     };
-    Some(Ident {
+    Ok(Some(Ident {
         name: name.clone(),
         span: key.span,
-    })
+    }))
 }
 
 /// `o["m"](…)` calls method `m`, exactly as `o.m(…)` does: every call path in
 /// `infer_call` dispatches on a `FieldAccess` callee.
-fn string_key_callee_as_field(ast: &crate::Ast, callee: ExprId) -> ExprKind {
-    let kind = ast.expr(callee).kind.clone();
+fn string_key_callee_as_field(
+    ast: &crate::Ast,
+    callee: ExprId,
+) -> Result<ExprKind, CompilerFailure> {
+    let kind = ast
+        .try_expr(callee)
+        .map_err(super::arena_failure)?
+        .kind
+        .clone();
     if let ExprKind::IndexAccess { receiver, index } = kind
-        && let Some(name) = string_key_name(ast, index)
+        && let Some(name) = string_key_name(ast, index)?
     {
-        return ExprKind::FieldAccess { receiver, name };
+        return Ok(ExprKind::FieldAccess { receiver, name });
     }
-    kind
+    Ok(kind)
 }
 
 /// `o?.["content-type"]` reads a field, exactly as `o["content-type"]` does.
-fn string_key_as_field(ast: &crate::Ast, part: ChainPart) -> ChainPart {
+fn string_key_as_field(ast: &crate::Ast, part: ChainPart) -> Result<ChainPart, CompilerFailure> {
     if let ChainPart::Index {
         idx,
         optional,
         span,
     } = part
-        && let Some(name) = string_key_name(ast, idx)
+        && let Some(name) = string_key_name(ast, idx)?
     {
-        return ChainPart::Field {
+        return Ok(ChainPart::Field {
             name,
             optional,
             span,
-        };
+        });
     }
-    part
+    Ok(part)
 }
 
 fn branch_result_type(left: Type, right: Type, types: super::assignable::TypeResolver<'_>) -> Type {
@@ -8996,14 +9326,16 @@ fn branch_result_type(left: Type, right: Type, types: super::assignable::TypeRes
     }
 }
 
-fn equality_operand_needs_context(ast: &crate::Ast, id: ExprId) -> bool {
-    match &ast.expr(id).kind {
-        ExprKind::Paren(inner) => equality_operand_needs_context(ast, *inner),
-        ExprKind::Arrow { .. } | ExprKind::ObjectLiteral { .. } | ExprKind::ArrayLiteral { .. } => {
-            true
-        }
-        _ => false,
-    }
+fn equality_operand_needs_context(ast: &crate::Ast, id: ExprId) -> Result<bool, CompilerFailure> {
+    Ok(
+        match &ast.try_expr(id).map_err(super::arena_failure)?.kind {
+            ExprKind::Paren(inner) => equality_operand_needs_context(ast, *inner)?,
+            ExprKind::Arrow { .. }
+            | ExprKind::ObjectLiteral { .. }
+            | ExprKind::ArrayLiteral { .. } => true,
+            _ => false,
+        },
+    )
 }
 
 pub(super) fn literal_comparison_type(ast: &crate::TypedAst, expr: &TypedExpr) -> Type {

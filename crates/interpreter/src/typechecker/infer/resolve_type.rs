@@ -1,3 +1,5 @@
+use crate::compiler_error::CompilerFailure;
+
 use crate::{Package, Type, TypeAnnotation, TypeAnnotationKind, TypeKind, TypeSymbol};
 
 use super::Inferer;
@@ -32,9 +34,9 @@ impl<'a> Inferer<'a> {
         sym: TypeSymbol,
         arg_annots: &[TypeAnnotation],
         span: crate::Span,
-    ) -> Type {
+    ) -> Result<Type, CompilerFailure> {
         let TypeKind::Alias { generics, ty, .. } = sym.kind else {
-            return Type::Error;
+            return Ok(Type::Error);
         };
         if arg_annots.len() != generics.len() {
             let plural = if generics.len() == 1 {
@@ -52,10 +54,13 @@ impl<'a> Inferer<'a> {
                     arg_annots.len(),
                 ),
             );
-            return Type::Error;
+            return Ok(Type::Error);
         }
 
-        let resolved_args: Vec<Type> = arg_annots.iter().map(|a| self.resolve_type(a)).collect();
+        let resolved_args: Vec<Type> = arg_annots
+            .iter()
+            .map(|a| self.resolve_type(a))
+            .collect::<Result<_, _>>()?;
         let body = if generics.is_empty() {
             ty
         } else {
@@ -66,13 +71,13 @@ impl<'a> Inferer<'a> {
                 );
             sub.apply(&ty)
         };
-        Type::alias_ty(
+        Ok(Type::alias_ty(
             package,
             type_name.to_string(),
             sym.mangled_name,
             resolved_args,
             Box::new(body),
-        )
+        ))
     }
 
     fn resolve_imported_type_symbol(
@@ -82,21 +87,21 @@ impl<'a> Inferer<'a> {
         sym: TypeSymbol,
         args: &[TypeAnnotation],
         span: crate::Span,
-    ) -> Type {
+    ) -> Result<Type, CompilerFailure> {
         let type_name = sym.name.clone();
         let mangled = sym.mangled_name.clone();
-        match &sym.kind {
+        Ok(match &sym.kind {
             TypeKind::NumberEnum { .. } => {
                 if !args.is_empty() {
                     self.error(span, format!("enum `{display_name}` is not a generic type"));
-                    return Type::Error;
+                    return Ok(Type::Error);
                 }
                 Type::number_enum(package, type_name, mangled)
             }
             TypeKind::StringEnum { .. } => {
                 if !args.is_empty() {
                     self.error(span, format!("enum `{display_name}` is not a generic type"));
-                    return Type::Error;
+                    return Ok(Type::Error);
                 }
                 Type::string_enum(package, type_name, mangled)
             }
@@ -119,9 +124,12 @@ impl<'a> Inferer<'a> {
                         ),
                         vec![header],
                     );
-                    return Type::Error;
+                    return Ok(Type::Error);
                 }
-                let resolved_args: Vec<Type> = args.iter().map(|a| self.resolve_type(a)).collect();
+                let resolved_args: Vec<Type> = args
+                    .iter()
+                    .map(|a| self.resolve_type(a))
+                    .collect::<Result<_, _>>()?;
                 Type::interface_ref(package, type_name, mangled, resolved_args)
             }
             TypeKind::Class { generics, .. } => {
@@ -136,7 +144,7 @@ impl<'a> Inferer<'a> {
                     &generics,
                     args,
                     span,
-                )
+                )?
             }
             TypeKind::Alias { .. } => self.resolve_imported_alias_reference(
                 display_name,
@@ -145,8 +153,8 @@ impl<'a> Inferer<'a> {
                 sym,
                 args,
                 span,
-            ),
-        }
+            )?,
+        })
     }
 
     /// A class name in type position: arity-check the type arguments against the
@@ -160,7 +168,7 @@ impl<'a> Inferer<'a> {
         generics: &[String],
         args: &[TypeAnnotation],
         span: crate::Span,
-    ) -> Type {
+    ) -> Result<Type, CompilerFailure> {
         let ClassName {
             display,
             package,
@@ -174,7 +182,7 @@ impl<'a> Inferer<'a> {
                     span,
                     format!("class `{display_name}` is not a generic type"),
                 );
-                return Type::Error;
+                return Ok(Type::Error);
             }
             let header = format_definition::format_class_header(display_name, generics);
             let plural = if generics.len() == 1 {
@@ -193,9 +201,12 @@ impl<'a> Inferer<'a> {
                 ),
                 vec![header],
             );
-            return Type::Error;
+            return Ok(Type::Error);
         }
-        let resolved_args: Vec<Type> = args.iter().map(|a| self.resolve_type(a)).collect();
+        let resolved_args: Vec<Type> = args
+            .iter()
+            .map(|a| self.resolve_type(a))
+            .collect::<Result<_, _>>()?;
         for (annot, resolved) in args.iter().zip(&resolved_args) {
             // The argument itself needs a value slot, but an interface or
             // callback inside it may legitimately have void returns.
@@ -209,10 +220,10 @@ impl<'a> Inferer<'a> {
                          `{display_name}` — use a value type"
                     ),
                 );
-                return Type::Error;
+                return Ok(Type::Error);
             }
         }
-        Type::class_ref(package, name, mangled, resolved_args)
+        Ok(Type::class_ref(package, name, mangled, resolved_args))
     }
 
     /// Resolve an annotation that has already been resolved once, dropping the
@@ -226,9 +237,12 @@ impl<'a> Inferer<'a> {
     /// skips an accessor's annotation on a duplicate-member or
     /// duplicate-accessor error, and the body pass is then the *only* pass to
     /// resolve it, so discarding wholesale would lose a real diagnostic.
-    pub(super) fn re_resolve_type(&mut self, annot: &TypeAnnotation) -> Type {
+    pub(super) fn re_resolve_type(
+        &mut self,
+        annot: &TypeAnnotation,
+    ) -> Result<Type, CompilerFailure> {
         let before = self.diagnostics.len();
-        let ty = self.resolve_type(annot);
+        let ty = self.resolve_type(annot)?;
         for replayed in self.diagnostics.split_off(before) {
             let already_reported = self
                 .diagnostics
@@ -238,11 +252,11 @@ impl<'a> Inferer<'a> {
                 self.diagnostics.push(replayed);
             }
         }
-        ty
+        Ok(ty)
     }
 
-    pub(super) fn resolve_type(&mut self, annot: &TypeAnnotation) -> Type {
-        let resolved = self.resolve_type_inner(annot);
+    pub(super) fn resolve_type(&mut self, annot: &TypeAnnotation) -> Result<Type, CompilerFailure> {
+        let resolved = self.resolve_type_inner(annot)?;
         if matches!(
             resolved.peel(),
             Type::InterfaceRef { .. } | Type::AliasRef { .. }
@@ -253,7 +267,7 @@ impl<'a> Inferer<'a> {
                 annot.span,
                 format!("type argument containing `void` requires {position} — use a value type"),
             );
-            return Type::Error;
+            return Ok(Type::Error);
         }
         if let Some(index) = self.resolver().index_signature(&resolved)
             && let Type::InterfaceRef {
@@ -266,11 +280,14 @@ impl<'a> Inferer<'a> {
         {
             self.check_index_fields(&fields, Some(&index), annot.span);
         }
-        resolved
+        Ok(resolved)
     }
 
-    pub(super) fn resolve_type_inner(&mut self, annot: &TypeAnnotation) -> Type {
-        match &annot.kind {
+    pub(super) fn resolve_type_inner(
+        &mut self,
+        annot: &TypeAnnotation,
+    ) -> Result<Type, CompilerFailure> {
+        Ok(match &annot.kind {
             TypeAnnotationKind::Name { name, args } => {
                 let text = name.name.as_str();
                 // Body context checked first: `T` in a function body resolves to GenericParam, not the signature TypeVar.
@@ -280,9 +297,9 @@ impl<'a> Inferer<'a> {
                             annot.span,
                             format!("type parameter `{text}` is not generic"),
                         );
-                        return Type::Error;
+                        return Ok(Type::Error);
                     }
-                    return gp.clone();
+                    return Ok(gp.clone());
                 }
                 if self.is_generic_in_scope(text) {
                     if !args.is_empty() {
@@ -290,9 +307,9 @@ impl<'a> Inferer<'a> {
                             annot.span,
                             format!("type parameter `{text}` is not generic"),
                         );
-                        return Type::Error;
+                        return Ok(Type::Error);
                     }
-                    return Type::TypeVar(text.to_string());
+                    return Ok(Type::TypeVar(text.to_string()));
                 }
                 let primitive = match text {
                     "number" => Some(Type::Number),
@@ -314,9 +331,9 @@ impl<'a> Inferer<'a> {
                 if let Some(prim) = primitive {
                     if !args.is_empty() {
                         self.error(annot.span, format!("`{text}` is not a generic type"));
-                        return Type::Error;
+                        return Ok(Type::Error);
                     }
-                    return prim;
+                    return Ok(prim);
                 }
                 // `Array<T>` is the standard-library spelling of `T[]`; desugar to
                 // the same internal `Type::Array` so the two are fully
@@ -330,10 +347,10 @@ impl<'a> Inferer<'a> {
                             format!("`Array<T>` expects 1 type argument, got {}", args.len()),
                             vec!["write `Array<T>` or equivalently `T[]`".to_string()],
                         );
-                        return Type::Error;
+                        return Ok(Type::Error);
                     }
-                    let elem_ty = self.resolve_value_type(&args[0], ValuePosition::ArrayElement);
-                    return Type::Array(Box::new(elem_ty));
+                    let elem_ty = self.resolve_value_type(&args[0], ValuePosition::ArrayElement)?;
+                    return Ok(Type::Array(Box::new(elem_ty)));
                 }
                 // `ReadonlyArray<T>` is likewise the library spelling of `readonly T[]`.
                 if text == "ReadonlyArray" {
@@ -349,24 +366,24 @@ impl<'a> Inferer<'a> {
                                     .to_string(),
                             ],
                         );
-                        return Type::Error;
+                        return Ok(Type::Error);
                     }
-                    let elem_ty = self.resolve_value_type(&args[0], ValuePosition::ArrayElement);
-                    return readonly_of(Type::Array(Box::new(elem_ty)));
+                    let elem_ty = self.resolve_value_type(&args[0], ValuePosition::ArrayElement)?;
+                    return Ok(readonly_of(Type::Array(Box::new(elem_ty))));
                 }
                 if let Some(sym) = self.lookup_named_type(text) {
                     let package = self.type_package(text);
                     // Identity = the declaring symbol's mangled name; no change
                     // needed here, `mangled_name` carries the public/internal form.
                     let mangled = sym.mangled_name.clone();
-                    return match &sym.kind {
+                    return Ok(match &sym.kind {
                         TypeKind::NumberEnum { .. } => {
                             if !args.is_empty() {
                                 self.error(
                                     annot.span,
                                     format!("enum `{text}` is not a generic type"),
                                 );
-                                return Type::Error;
+                                return Ok(Type::Error);
                             }
                             Type::number_enum(package, text.to_string(), mangled)
                         }
@@ -376,7 +393,7 @@ impl<'a> Inferer<'a> {
                                     annot.span,
                                     format!("enum `{text}` is not a generic type"),
                                 );
-                                return Type::Error;
+                                return Ok(Type::Error);
                             }
                             Type::string_enum(package, text.to_string(), mangled)
                         }
@@ -400,10 +417,12 @@ impl<'a> Inferer<'a> {
                                     ),
                                     vec![header],
                                 );
-                                return Type::Error;
+                                return Ok(Type::Error);
                             }
-                            let resolved_args: Vec<Type> =
-                                args.iter().map(|a| self.resolve_type(a)).collect();
+                            let resolved_args: Vec<Type> = args
+                                .iter()
+                                .map(|a| self.resolve_type(a))
+                                .collect::<Result<_, _>>()?;
                             Type::interface_ref(package, text.to_string(), mangled, resolved_args)
                         }
                         TypeKind::Class { generics, .. } => {
@@ -433,7 +452,7 @@ impl<'a> Inferer<'a> {
                             let _ = sym;
                             return self.resolve_alias_reference(&name, &arg_annots, annot.span);
                         }
-                    };
+                    });
                 }
                 if text == "WeakMap" {
                     self.error_with_help(
@@ -443,7 +462,7 @@ impl<'a> Inferer<'a> {
                             "use `Map<K, V>` instead — Submilli has no weak references, so `WeakMap` would behave identically to `Map`".to_string(),
                         ],
                     );
-                    return Type::Error;
+                    return Ok(Type::Error);
                 }
                 if text == "WeakSet" {
                     self.error_with_help(
@@ -453,7 +472,7 @@ impl<'a> Inferer<'a> {
                             "use `Set<T>` instead — Submilli has no weak references, so `WeakSet` would behave identically to `Set`".to_string(),
                         ],
                     );
-                    return Type::Error;
+                    return Ok(Type::Error);
                 }
                 if text == "Date" {
                     self.error_with_help(
@@ -463,7 +482,7 @@ impl<'a> Inferer<'a> {
                             "use `Temporal.Now.instant()` for wall-clock time, or `Temporal.ZonedDateTime` / `Temporal.Instant` for time values. `Date` is intentionally out of scope — see Temporal for a correct, immutable, timezone-aware time API.".to_string(),
                         ],
                     );
-                    return Type::Error;
+                    return Ok(Type::Error);
                 }
                 if text == "Record" {
                     return self.resolve_record(args, annot.span);
@@ -484,14 +503,14 @@ impl<'a> Inferer<'a> {
                 if let Some(sym) = self.lookup_named_type(&text) {
                     let package = self.type_package(&text);
                     let mangled = sym.mangled_name.clone();
-                    return match &sym.kind {
+                    return Ok(match &sym.kind {
                         TypeKind::NumberEnum { .. } => {
                             if !args.is_empty() {
                                 self.error(
                                     annot.span,
                                     format!("enum `{text}` is not a generic type"),
                                 );
-                                return Type::Error;
+                                return Ok(Type::Error);
                             }
                             Type::number_enum(package, text, mangled)
                         }
@@ -501,7 +520,7 @@ impl<'a> Inferer<'a> {
                                     annot.span,
                                     format!("enum `{text}` is not a generic type"),
                                 );
-                                return Type::Error;
+                                return Ok(Type::Error);
                             }
                             Type::string_enum(package, text, mangled)
                         }
@@ -525,10 +544,12 @@ impl<'a> Inferer<'a> {
                                     ),
                                     vec![header],
                                 );
-                                return Type::Error;
+                                return Ok(Type::Error);
                             }
-                            let resolved_args: Vec<Type> =
-                                args.iter().map(|a| self.resolve_type(a)).collect();
+                            let resolved_args: Vec<Type> = args
+                                .iter()
+                                .map(|a| self.resolve_type(a))
+                                .collect::<Result<_, _>>()?;
                             Type::interface_ref(package, text, mangled, resolved_args)
                         }
                         TypeKind::Class { generics, .. } => {
@@ -550,10 +571,10 @@ impl<'a> Inferer<'a> {
                             let _ = sym;
                             return self.resolve_alias_reference(&text, &arg_annots, annot.span);
                         }
-                    };
+                    });
                 }
                 let Some((root_name, rest)) = path.split_first() else {
-                    return Type::Error;
+                    return Ok(Type::Error);
                 };
                 let root = root_name.name.as_str();
                 if let Some(ns) = self.namespace_bindings.get(root) {
@@ -578,23 +599,23 @@ impl<'a> Inferer<'a> {
                         format!("package `{package_name}` does not export type `{member_name}`"),
                         help,
                     );
-                    return Type::Error;
+                    return Ok(Type::Error);
                 }
                 self.error(annot.span, format!("unknown type `{text}`"));
                 Type::Error
             }
             TypeAnnotationKind::Array(elem) => {
-                let elem_ty = self.resolve_value_type(elem, ValuePosition::ArrayElement);
+                let elem_ty = self.resolve_value_type(elem, ValuePosition::ArrayElement)?;
                 Type::Array(Box::new(elem_ty))
             }
             TypeAnnotationKind::Tuple(elements) => {
                 let resolved: Vec<Type> = elements
                     .iter()
                     .map(|e| self.resolve_value_type(e, ValuePosition::TupleElement))
-                    .collect();
+                    .collect::<Result<_, _>>()?;
                 Type::Tuple(resolved)
             }
-            TypeAnnotationKind::Readonly(operand) => readonly_of(self.resolve_type(operand)),
+            TypeAnnotationKind::Readonly(operand) => readonly_of(self.resolve_type(operand)?),
             TypeAnnotationKind::Object { fields, index } => {
                 let mut resolved: std::collections::BTreeMap<String, crate::ObjectField> =
                     std::collections::BTreeMap::new();
@@ -604,9 +625,9 @@ impl<'a> Inferer<'a> {
                             field.name.span,
                             super::reserved::reserved_field_message(&field.name.name),
                         );
-                        return Type::Error;
+                        return Ok(Type::Error);
                     }
-                    let ty = self.resolve_value_type(&field.ty, ValuePosition::FieldType);
+                    let ty = self.resolve_value_type(&field.ty, ValuePosition::FieldType)?;
                     // Optional override fields rejected — would require null-check on every dispatch.
                     if let Some(expected) = override_field_signature(&field.name.name) {
                         if field.optional {
@@ -614,7 +635,7 @@ impl<'a> Inferer<'a> {
                                 field.name.span,
                                 format!("`{}` cannot be optional", field.name.name),
                             );
-                            return Type::Error;
+                            return Ok(Type::Error);
                         }
                         if !super::assignable(&ty, &expected, self.resolver()) {
                             self.error(
@@ -624,7 +645,7 @@ impl<'a> Inferer<'a> {
                                     field.name.name, expected, ty,
                                 ),
                             );
-                            return Type::Error;
+                            return Ok(Type::Error);
                         }
                     }
                     resolved
@@ -637,7 +658,8 @@ impl<'a> Inferer<'a> {
                 }
                 let index = index
                     .as_ref()
-                    .map(|annotation| self.resolve_index_signature(annotation));
+                    .map(|annotation| self.resolve_index_signature(annotation))
+                    .transpose()?;
                 self.check_index_fields(&resolved, index.as_ref(), annot.span);
                 Type::Object {
                     index,
@@ -652,9 +674,9 @@ impl<'a> Inferer<'a> {
                 let resolved_params: Vec<Type> = params
                     .iter()
                     .map(|f| self.resolve_value_type(&f.ty, ValuePosition::Parameter))
-                    .collect();
+                    .collect::<Result<_, _>>()?;
                 // The return position is the one place `void` belongs.
-                let resolved_ret = self.resolve_type(return_type);
+                let resolved_ret = self.resolve_type(return_type)?;
                 let has_rest = params.last().is_some_and(|f| f.rest);
                 Type::Function {
                     params: resolved_params,
@@ -668,15 +690,15 @@ impl<'a> Inferer<'a> {
                 let resolved: Vec<Type> = members
                     .iter()
                     .map(|m| self.resolve_value_type(m, ValuePosition::UnionMember))
-                    .collect();
+                    .collect::<Result<_, _>>()?;
                 Type::union(resolved)
             }
             TypeAnnotationKind::StringLiteral(s) => Type::StringLiteral(s.clone()),
             TypeAnnotationKind::NumberLiteral(v) => Type::NumberLiteral(*v),
             TypeAnnotationKind::BooleanLiteral(b) => Type::BooleanLiteral(*b),
-            TypeAnnotationKind::KeyOf(operand) => self.resolve_keyof(operand),
+            TypeAnnotationKind::KeyOf(operand) => self.resolve_keyof(operand)?,
             TypeAnnotationKind::TypeOf { path } => self.resolve_typeof(path),
-        }
+        })
     }
 
     /// `keyof T` as the union of `T`'s member names, resolved eagerly to string literal
@@ -756,10 +778,10 @@ impl<'a> Inferer<'a> {
         }
     }
 
-    fn resolve_keyof(&mut self, operand: &TypeAnnotation) -> Type {
-        let resolved = self.resolve_value_type(operand, ValuePosition::UnionMember);
+    fn resolve_keyof(&mut self, operand: &TypeAnnotation) -> Result<Type, CompilerFailure> {
+        let resolved = self.resolve_value_type(operand, ValuePosition::UnionMember)?;
         if self.resolver().index_signature(&resolved).is_some() {
-            return Type::String;
+            return Ok(Type::String);
         }
         let Some(names) = self.member_names_of(&resolved) else {
             if !matches!(resolved.peel(), Type::Error) {
@@ -768,9 +790,11 @@ impl<'a> Inferer<'a> {
                     format!("`keyof` needs an object type or interface, got `{resolved}`"),
                 );
             }
-            return Type::Error;
+            return Ok(Type::Error);
         };
-        Type::union(names.into_iter().map(Type::StringLiteral).collect())
+        Ok(Type::union(
+            names.into_iter().map(Type::StringLiteral).collect(),
+        ))
     }
 
     /// The member names `keyof` reports, or `None` if the type has no member list to

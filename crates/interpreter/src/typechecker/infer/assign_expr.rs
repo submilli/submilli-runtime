@@ -1,5 +1,7 @@
 //! An assignment used as a value: `b = (a = 3)`, `while ((m = next()) !== null)`.
 
+use crate::compiler_error::CompilerFailure;
+
 use crate::{
     BinOp, ExprId, ExprKind, Ident, Span, StmtId, Type, TypedExpr, TypedExprKind, TypedStmt,
     TypedStmtKind,
@@ -23,8 +25,8 @@ impl Inferer<'_> {
         op: Option<(BinOp, Span)>,
         value: ExprId,
         span: Span,
-    ) -> (TypedExprKind, Type) {
-        let mut assignment = self.infer_assignment(target, op, value, span);
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let mut assignment = self.infer_assignment(target, op, value, span)?;
         if let TypedStmtKind::AssignLocal {
             target_ty: Type::Error,
             ..
@@ -33,7 +35,7 @@ impl Inferer<'_> {
             // An unresolved target, already reported.
             let stmts = vec![self.push_typed_stmt(assignment, span)];
             let result = self.error_placeholder_expr(span);
-            return (TypedExprKind::Sequence { stmts, result }, Type::Error);
+            return Ok((TypedExprKind::Sequence { stmts, result }, Type::Error));
         }
         let mut stmts = Vec::new();
         let held_value = if let TypedStmtKind::AssignLocal { value, .. }
@@ -48,7 +50,7 @@ impl Inferer<'_> {
         };
         let result = self.reread_temp(held_value);
         let ty = self.typed_ast.expr(result).ty.clone();
-        (TypedExprKind::Sequence { stmts, result }, ty)
+        Ok((TypedExprKind::Sequence { stmts, result }, ty))
     }
 
     /// The type a condition narrows from when it tests `expr`. An assignment
@@ -100,26 +102,39 @@ impl Inferer<'_> {
         op: Option<(BinOp, Span)>,
         value: ExprId,
         span: Span,
-    ) -> TypedStmtKind {
-        match (self.ast.expr(target).kind.clone(), op) {
-            (ExprKind::Identifier(ident), None) => self.infer_assign(ident, value, span),
-            (ExprKind::Identifier(ident), Some((op, op_span))) => {
-                self.infer_compound_assign(ident, op, op_span, value, span)
-            }
-            (ExprKind::FieldAccess { receiver, name }, None) => {
-                self.infer_assign_field(receiver, name, value)
-            }
-            (ExprKind::FieldAccess { receiver, name }, Some((op, op_span))) => {
-                self.infer_compound_assign_field(receiver, name, op, op_span, value)
-            }
-            (ExprKind::IndexAccess { receiver, index }, None) => {
-                self.infer_assign_index(receiver, index, value, span)
-            }
-            (ExprKind::IndexAccess { receiver, index }, Some((op, op_span))) => {
-                self.infer_compound_assign_index(receiver, index, op, op_span, value, span)
-            }
-            _ => unreachable!("the parser only builds assignments to valid targets"),
-        }
+    ) -> Result<TypedStmtKind, CompilerFailure> {
+        Ok(
+            match (
+                self.ast
+                    .try_expr(target)
+                    .map_err(super::arena_failure)?
+                    .kind
+                    .clone(),
+                op,
+            ) {
+                (ExprKind::Identifier(ident), None) => self.infer_assign(ident, value, span)?,
+                (ExprKind::Identifier(ident), Some((op, op_span))) => {
+                    self.infer_compound_assign(ident, op, op_span, value, span)?
+                }
+                (ExprKind::FieldAccess { receiver, name }, None) => {
+                    self.infer_assign_field(receiver, name, value)?
+                }
+                (ExprKind::FieldAccess { receiver, name }, Some((op, op_span))) => {
+                    self.infer_compound_assign_field(receiver, name, op, op_span, value)?
+                }
+                (ExprKind::IndexAccess { receiver, index }, None) => {
+                    self.infer_assign_index(receiver, index, value, span)?
+                }
+                (ExprKind::IndexAccess { receiver, index }, Some((op, op_span))) => {
+                    self.infer_compound_assign_index(receiver, index, op, op_span, value, span)?
+                }
+                _ => {
+                    return Err(super::inference_failure(
+                        "the parser only builds assignments to valid targets",
+                    ));
+                }
+            },
+        )
     }
 
     /// Returns the temporary holding the assigned value.

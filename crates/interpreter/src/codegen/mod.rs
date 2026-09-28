@@ -1845,7 +1845,7 @@ pub(crate) mod tests {
             parse_diags.is_empty(),
             "unexpected parser diags: {parse_diags:?}"
         );
-        lower_patterns(&mut ast);
+        ast = lower_patterns(ast).unwrap();
         (ModulePath::from(module), file, ast)
     }
 

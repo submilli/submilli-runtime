@@ -1,5 +1,7 @@
 //! Signature pass: resolve and register top-level function and interface declarations.
 
+use crate::compiler_error::CompilerFailure;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
@@ -38,16 +40,20 @@ fn classify_default_ident(ident: &Ident, param_names: &BTreeSet<&str>) -> Defaul
 }
 
 impl<'a> Inferer<'a> {
-    pub(super) fn signatures(&mut self) -> bool {
+    pub(super) fn signatures(&mut self) -> Result<bool, CompilerFailure> {
         self.pending_index_checks = Some(Vec::new());
         // Enums first — their bodies are value initializers, never type
         // references, so they have no forward-reference concern and
         // their names must be visible before any other body resolves.
         let top_level: Vec<_> = self.ast.top_level.clone();
         for stmt_id in &top_level {
-            let stmt = self.ast.stmt(*stmt_id).clone();
+            let stmt = self
+                .ast
+                .try_stmt(*stmt_id)
+                .map_err(super::arena_failure)?
+                .clone();
             if let StmtKind::EnumDecl { name, members, doc } = stmt.kind {
-                self.bind_enum(name, members, doc);
+                self.bind_enum(name, members, doc)?;
             }
         }
         // Forward-declare every interface + alias name before resolving
@@ -56,14 +62,18 @@ impl<'a> Inferer<'a> {
         // references all resolve. Duplicate + intrinsic-name detection
         // runs in the pre-pass; the returned `skip` set names the decls
         // that hit one of those so the body binders below skip them.
-        let skip = self.pre_register_type_names(&top_level);
-        if !self.bind_interfaces_in_order(&top_level, &skip) {
-            return false;
+        let skip = self.pre_register_type_names(&top_level)?;
+        if !self.bind_interfaces_in_order(&top_level, &skip)? {
+            return Ok(false);
         }
         // Class signatures. Names are forward-declared, so `extends` /
         // field+method types may reference any class or interface.
         for stmt_id in &top_level {
-            let stmt = self.ast.stmt(*stmt_id).clone();
+            let stmt = self
+                .ast
+                .try_stmt(*stmt_id)
+                .map_err(super::arena_failure)?
+                .clone();
             if let StmtKind::ClassDecl {
                 name,
                 generics,
@@ -76,16 +86,20 @@ impl<'a> Inferer<'a> {
                 if skip.contains(&name.name) {
                     continue;
                 }
-                self.bind_class(name, generics, extends, implements, members, doc);
+                self.bind_class(name, generics, extends, implements, members, doc)?;
             }
         }
         // Reject `extends` cycles and incompatible overrides once every class
         // signature is bound (so the parent chain is fully resolvable), then
         // check `implements` conformance against those complete chains.
-        self.check_class_inheritance(&top_level);
+        self.check_class_inheritance(&top_level)?;
         self.check_pending_implements();
         for stmt_id in &top_level {
-            let stmt = self.ast.stmt(*stmt_id).clone();
+            let stmt = self
+                .ast
+                .try_stmt(*stmt_id)
+                .map_err(super::arena_failure)?
+                .clone();
             if let StmtKind::Function {
                 name,
                 generics,
@@ -109,16 +123,18 @@ impl<'a> Inferer<'a> {
                 // Push generics for name visibility only — no body instantiation.
                 let generic_names: Vec<String> = generics.iter().map(|g| g.name.clone()).collect();
                 self.push_signature_generics(generic_names.clone());
-                let resolved_params: Vec<Param> = self.resolve_params(&params);
+                let resolved_params: Vec<Param> = self.resolve_params(&params)?;
                 let (resolved_return, resolved_predicate) = match (&return_type, &type_predicate) {
-                    (Some(annot), _) => (self.resolve_type(annot), None),
+                    (Some(annot), _) => (self.resolve_type(annot)?, None),
                     (None, Some(pred)) => {
-                        let resolved = self.resolve_type_predicate(pred, &resolved_params);
+                        let resolved = self.resolve_type_predicate(pred, &resolved_params)?;
                         (Type::Boolean, resolved)
                     }
-                    (None, None) => unreachable!(
-                        "parser guarantees one of return_type / type_predicate is Some",
-                    ),
+                    (None, None) => {
+                        return Err(super::inference_failure(
+                            "function declaration has no return annotation or predicate",
+                        ));
+                    }
                 };
                 self.pop_signature_generics();
                 self.bind_top(
@@ -130,7 +146,7 @@ impl<'a> Inferer<'a> {
                         type_predicate: resolved_predicate,
                         doc,
                     },
-                );
+                )?;
             }
         }
         // Drain any aliases never referenced by an interface / function
@@ -139,11 +155,11 @@ impl<'a> Inferer<'a> {
         // resolved aliases are no-ops.
         let pending: Vec<String> = self.pending_aliases.keys().cloned().collect();
         for name in pending {
-            self.resolve_alias_body(&name);
+            self.resolve_alias_body(&name)?;
         }
-        self.validate_bound_interfaces(&top_level, &skip);
+        self.validate_bound_interfaces(&top_level, &skip)?;
         self.check_pending_indexes();
-        true
+        Ok(true)
     }
 
     /// forward-declare every interface + alias name with a
@@ -154,10 +170,17 @@ impl<'a> Inferer<'a> {
     /// names that hit a duplicate / intrinsic error, which the body
     /// binders skip. Enums are bound in full before this pass, so an
     /// enum name already present here is a genuine prior declaration.
-    fn pre_register_type_names(&mut self, top_level: &[crate::StmtId]) -> BTreeSet<String> {
+    fn pre_register_type_names(
+        &mut self,
+        top_level: &[crate::StmtId],
+    ) -> Result<BTreeSet<String>, CompilerFailure> {
         let mut skip: BTreeSet<String> = BTreeSet::new();
         for stmt_id in top_level {
-            let stmt = self.ast.stmt(*stmt_id).clone();
+            let stmt = self
+                .ast
+                .try_stmt(*stmt_id)
+                .map_err(super::arena_failure)?
+                .clone();
             match stmt.kind {
                 StmtKind::InterfaceDecl { name, generics, .. } => {
                     if self.types.contains(&name.name) {
@@ -173,7 +196,7 @@ impl<'a> Inferer<'a> {
                     }
                     let generic_names: Vec<String> =
                         generics.iter().map(|g| g.name.clone()).collect();
-                    let mangled = self.mangle_top_symbol(&name.name);
+                    let mangled = self.mangle_top_symbol(&name.name)?;
                     self.types.insert(
                         name.name.clone(),
                         self.package_name.to_string(),
@@ -206,7 +229,7 @@ impl<'a> Inferer<'a> {
                     }
                     let generic_names: Vec<String> =
                         generics.iter().map(|g| g.name.clone()).collect();
-                    let mangled = self.mangle_top_symbol(&name.name);
+                    let mangled = self.mangle_top_symbol(&name.name)?;
                     self.types.insert(
                         name.name.clone(),
                         self.package_name.to_string(),
@@ -256,7 +279,7 @@ impl<'a> Inferer<'a> {
                     }
                     let generic_names: Vec<String> =
                         generics.iter().map(|g| g.name.clone()).collect();
-                    let mangled = self.mangle_top_symbol(&name.name);
+                    let mangled = self.mangle_top_symbol(&name.name)?;
                     self.types.insert(
                         name.name.clone(),
                         self.package_name.to_string(),
@@ -286,7 +309,7 @@ impl<'a> Inferer<'a> {
                 _ => {}
             }
         }
-        skip
+        Ok(skip)
     }
 
     pub(super) fn bind_interface(
@@ -296,7 +319,7 @@ impl<'a> Inferer<'a> {
         members: Vec<InterfaceMember>,
         extends: Vec<crate::TypeAnnotation>,
         doc: Option<crate::DocComment>,
-    ) {
+    ) -> Result<(), CompilerFailure> {
         // Duplicate detection happened in `pre_register_type_names`;
         // this binder is only reached for a non-duplicate name and
         // overwrites that name's forward-declared placeholder.
@@ -307,14 +330,14 @@ impl<'a> Inferer<'a> {
         let mut typed_members: Vec<crate::TypedInterfaceMember> = Vec::new();
         let mut index = None;
         for base in extends {
-            self.inherit_interface(&base, &mut method_sigs, &mut property_sigs, &mut index);
+            self.inherit_interface(&base, &mut method_sigs, &mut property_sigs, &mut index)?;
         }
         let mut own_names = BTreeSet::new();
         let mut own_index = false;
         for member in members {
             match member {
                 InterfaceMember::IndexSignature(annotation) => {
-                    let resolved = self.resolve_index_signature(&annotation);
+                    let resolved = self.resolve_index_signature(&annotation)?;
                     if own_index {
                         self.error(annotation.span, "duplicate string index signature".into());
                     }
@@ -372,8 +395,8 @@ impl<'a> Inferer<'a> {
                     // sig so any downstream type errors surface in
                     // one pass.
                     self.push_signature_generics(m_generic_names.clone());
-                    let resolved_params: Vec<Param> = self.resolve_params(&params);
-                    let resolved_ret = self.resolve_type(&return_type);
+                    let resolved_params: Vec<Param> = self.resolve_params(&params)?;
+                    let resolved_ret = self.resolve_type(&return_type)?;
                     self.pop_signature_generics();
                     if shadow_rejected {
                         continue;
@@ -429,7 +452,7 @@ impl<'a> Inferer<'a> {
                         });
                         continue;
                     }
-                    let resolved_ty = self.resolve_value_type(&ty, ValuePosition::FieldType);
+                    let resolved_ty = self.resolve_value_type(&ty, ValuePosition::FieldType)?;
                     typed_members.push(crate::TypedInterfaceMember::Property {
                         name: p_name.clone(),
                         ty: resolved_ty.clone(),
@@ -459,7 +482,7 @@ impl<'a> Inferer<'a> {
             index: index.clone(),
             doc: doc.clone(),
         });
-        let mangled = self.mangle_top_symbol(&name.name);
+        let mangled = self.mangle_top_symbol(&name.name)?;
         let symbol = TypeSymbol {
             name: name.name.clone(),
             mangled_name: mangled,
@@ -474,9 +497,11 @@ impl<'a> Inferer<'a> {
                 doc,
             },
         };
-        self.add_typed_type_decl(typed_decl, symbol.clone());
+        self.add_typed_type_decl(typed_decl, symbol.clone())?;
         self.types
             .insert(name.name.clone(), self.package_name.to_string(), symbol);
+
+        Ok(())
     }
 
     pub(super) fn reject_intrinsic_name(&mut self, name: &Ident) -> bool {
@@ -498,13 +523,16 @@ impl<'a> Inferer<'a> {
     /// default value has to know the *sibling* parameter names: a default is
     /// evaluated in the function's own scope, so an identifier naming a
     /// parameter refers to that parameter, never to a global of the same name.
-    pub(super) fn resolve_params(&mut self, params: &[crate::ParamDecl]) -> Vec<Param> {
+    pub(super) fn resolve_params(
+        &mut self,
+        params: &[crate::ParamDecl],
+    ) -> Result<Vec<Param>, CompilerFailure> {
         self.report_duplicate_params(params.iter().map(|p| &p.name));
         let names: BTreeSet<&str> = params.iter().map(|p| p.name.name.as_str()).collect();
         params
             .iter()
             .map(|p| self.resolve_param(p, &names))
-            .collect()
+            .collect::<Result<_, _>>()
     }
 
     /// Reject a parameter name declared twice in one list, anchored at the
@@ -540,10 +568,16 @@ impl<'a> Inferer<'a> {
         }
     }
 
-    fn resolve_param(&mut self, p: &crate::ParamDecl, param_names: &BTreeSet<&str>) -> Param {
-        let ty = p.ty.as_ref().map_or(Type::Error, |t| {
-            self.resolve_value_type(t, ValuePosition::Parameter)
-        });
+    fn resolve_param(
+        &mut self,
+        p: &crate::ParamDecl,
+        param_names: &BTreeSet<&str>,
+    ) -> Result<Param, CompilerFailure> {
+        let ty =
+            p.ty.as_ref()
+                .map(|t| self.resolve_value_type(t, ValuePosition::Parameter))
+                .transpose()?
+                .unwrap_or(Type::Error);
         // Parser already rejects rest + default and non-trailing rest; here we check the
         // annotation is present and resolves to an array.
         if p.rest {
@@ -567,15 +601,17 @@ impl<'a> Inferer<'a> {
                     ),
                 );
             }
-            return Param::rest(p.name.name.clone(), ty);
+            return Ok(Param::rest(p.name.name.clone(), ty));
         }
         let default = p
             .default
-            .and_then(|expr_id| self.resolve_default(expr_id, &ty, &p.name.name, param_names));
-        match default {
+            .map(|expr_id| self.resolve_default(expr_id, &ty, &p.name.name, param_names))
+            .transpose()?
+            .flatten();
+        Ok(match default {
             Some(d) => Param::with_default(p.name.name.clone(), ty, d),
             None => Param::new(p.name.name.clone(), ty),
-        }
+        })
     }
 
     fn resolve_default(
@@ -584,9 +620,13 @@ impl<'a> Inferer<'a> {
         param_ty: &Type,
         param_name: &str,
         param_names: &BTreeSet<&str>,
-    ) -> Option<crate::DefaultValue> {
+    ) -> Result<Option<crate::DefaultValue>, CompilerFailure> {
         use crate::{DefaultValue, EnumVariantValue, ExprKind};
-        let expr = self.ast.expr(expr_id).clone();
+        let expr = self
+            .ast
+            .try_expr(expr_id)
+            .map_err(super::arena_failure)?
+            .clone();
         let span = expr.span;
         let (value, value_ty): (DefaultValue, Type) = match expr.kind {
             ExprKind::Number(n) => (DefaultValue::Number(n), Type::Number),
@@ -598,13 +638,18 @@ impl<'a> Inferer<'a> {
                 op: crate::ast::UnOp::Neg,
                 operand,
             } => {
-                let folded = match &self.ast.expr(operand).kind {
+                let folded = match &self
+                    .ast
+                    .try_expr(operand)
+                    .map_err(super::arena_failure)?
+                    .kind
+                {
                     ExprKind::Number(n) => Some(*n),
                     ExprKind::Identifier(ident) => {
                         match classify_default_ident(ident, param_names) {
                             DefaultIdent::Parameter => {
                                 let name = ident.name.clone();
-                                return self.reject_parameter_default(span, &name);
+                                return Ok(self.reject_parameter_default(span, &name));
                             }
                             DefaultIdent::Global(v) => Some(v),
                             DefaultIdent::Unresolved => None,
@@ -613,7 +658,7 @@ impl<'a> Inferer<'a> {
                     _ => None,
                 };
                 let Some(v) = folded else {
-                    return self.reject_non_literal_default(span);
+                    return Ok(self.reject_non_literal_default(span));
                 };
                 (DefaultValue::Number(-v), Type::Number)
             }
@@ -627,17 +672,22 @@ impl<'a> Inferer<'a> {
                         ),
                         Vec::new(),
                     );
-                    return None;
+                    return Ok(None);
                 }
-                return Some(DefaultValue::EmptyArray);
+                return Ok(Some(DefaultValue::EmptyArray));
             }
             ExprKind::FieldAccess { receiver, ref name } => {
-                let recv_kind = self.ast.expr(receiver).kind.clone();
+                let recv_kind = self
+                    .ast
+                    .try_expr(receiver)
+                    .map_err(super::arena_failure)?
+                    .kind
+                    .clone();
                 if let ExprKind::Identifier(recv_ident) = recv_kind {
                     // A sibling parameter of the enum's name shadows it, the same
                     // way it shadows a global constant.
                     if param_names.contains(recv_ident.name.as_str()) {
-                        return self.reject_parameter_default(span, &recv_ident.name);
+                        return Ok(self.reject_parameter_default(span, &recv_ident.name));
                     }
                     if let Some(sym) = self.lookup_named_type(&recv_ident.name) {
                         let enum_name = recv_ident.name.clone();
@@ -664,7 +714,7 @@ impl<'a> Inferer<'a> {
                                             "no variant `{variant_name}` on enum `{enum_name}`",
                                         ),
                                     );
-                                    return None;
+                                    return Ok(None);
                                 }
                             }
                             crate::TypeKind::StringEnum { variants, .. } => {
@@ -686,22 +736,22 @@ impl<'a> Inferer<'a> {
                                             "no variant `{variant_name}` on enum `{enum_name}`",
                                         ),
                                     );
-                                    return None;
+                                    return Ok(None);
                                 }
                             }
-                            _ => return self.reject_non_literal_default(span),
+                            _ => return Ok(self.reject_non_literal_default(span)),
                         }
                     } else {
-                        return self.reject_non_literal_default(span);
+                        return Ok(self.reject_non_literal_default(span));
                     }
                 } else {
-                    return self.reject_non_literal_default(span);
+                    return Ok(self.reject_non_literal_default(span));
                 }
             }
             ExprKind::Identifier(ref ident) => {
                 let folded = match classify_default_ident(ident, param_names) {
                     DefaultIdent::Parameter => {
-                        return self.reject_parameter_default(span, &ident.name);
+                        return Ok(self.reject_parameter_default(span, &ident.name));
                     }
                     DefaultIdent::Global(v) => Some(v),
                     DefaultIdent::Unresolved => None,
@@ -719,11 +769,11 @@ impl<'a> Inferer<'a> {
                                 .to_string(),
                         ],
                     );
-                    return None;
+                    return Ok(None);
                 };
                 (DefaultValue::Number(v), Type::Number)
             }
-            _ => return self.reject_non_literal_default(span),
+            _ => return Ok(self.reject_non_literal_default(span)),
         };
         // `assignable` treats a type variable as a wildcard, so the check below
         // would accept any literal a type variable could stand for and let the
@@ -743,7 +793,7 @@ impl<'a> Inferer<'a> {
                         .to_string(),
                 ],
             );
-            return None;
+            return Ok(None);
         };
         if !super::assignable::assignable(&value_ty, &concrete_ty, self.resolver()) {
             // Narrowing the type variable out of a union makes the plain
@@ -765,9 +815,9 @@ impl<'a> Inferer<'a> {
                 ),
                 help,
             );
-            return None;
+            return Ok(None);
         }
-        Some(value)
+        Ok(Some(value))
     }
 
     /// A default that names another parameter. Reported apart from the
@@ -799,7 +849,11 @@ impl<'a> Inferer<'a> {
         None
     }
 
-    pub(super) fn bind_top(&mut self, name: &Ident, kind: ValueKind) {
+    pub(super) fn bind_top(
+        &mut self,
+        name: &Ident,
+        kind: ValueKind,
+    ) -> Result<(), CompilerFailure> {
         if let Some(existing) = self.top_symbols.get(&name.name) {
             let prev_span = existing.declaration_span;
             self.diagnostics.push(Diagnostic {
@@ -809,9 +863,9 @@ impl<'a> Inferer<'a> {
                 help: vec![],
                 notes: vec![(prev_span, "previously declared here".to_string())],
             });
-            return;
+            return Ok(());
         }
-        let mangled_name = self.mangle_top_symbol(&name.name);
+        let mangled_name = self.mangle_top_symbol(&name.name)?;
         self.top_symbols.insert(
             name.name.clone(),
             ValueEntry {
@@ -822,6 +876,8 @@ impl<'a> Inferer<'a> {
                 mangled_name,
             },
         );
+
+        Ok(())
     }
 }
 

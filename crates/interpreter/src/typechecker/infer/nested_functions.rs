@@ -12,6 +12,8 @@
 //! declared: using it earlier would read a variable before its declaration,
 //! which JavaScript rejects at runtime and this rejects at compile time.
 
+use crate::compiler_error::CompilerFailure;
+
 use crate::{
     ArrowBody, ClosureBody, Ident, ParamDecl, Span, StmtId, StmtKind, Type, TypeAnnotation,
     TypedExpr, TypedExprKind, TypedParam, TypedStmt, TypedStmtKind,
@@ -53,14 +55,14 @@ impl Inferer<'_> {
         &mut self,
         block: StmtId,
         stmts: &[StmtId],
-    ) -> Vec<StmtId> {
+    ) -> Result<Vec<StmtId>, CompilerFailure> {
         let mut opening = Vec::new();
         let mut hoisted = Vec::new();
         for &stmt in stmts {
-            let Some(declaration) = self.nested_declaration(stmt) else {
+            let Some(declaration) = self.nested_declaration(stmt)? else {
                 continue;
             };
-            let Some(ty) = self.nested_function_type(&declaration) else {
+            let Some(ty) = self.nested_function_type(&declaration)? else {
                 self.scopes.insert(
                     declaration.name.name.clone(),
                     Type::Error,
@@ -95,19 +97,22 @@ impl Inferer<'_> {
             opening.push(self.placeholder_binding(&declaration, &ty));
         }
         for index in hoisted {
-            opening.push(self.define_nested_function(index));
+            opening.push(self.define_nested_function(index)?);
         }
-        opening
+        Ok(opening)
     }
 
     /// The closures to create after `stmt`: those of the nested functions of
     /// its block whose last captured local it declares.
-    pub(super) fn define_nested_functions_after(&mut self, stmt: StmtId) -> Vec<StmtId> {
-        let declared = match &self.ast.stmt(stmt).kind {
+    pub(super) fn define_nested_functions_after(
+        &mut self,
+        stmt: StmtId,
+    ) -> Result<Vec<StmtId>, CompilerFailure> {
+        let declared = match &self.ast.try_stmt(stmt).map_err(super::arena_failure)?.kind {
             StmtKind::Let { name, .. }
             | StmtKind::Const { name, .. }
             | StmtKind::ConstRest { name, .. } => name.span,
-            _ => return Vec::new(),
+            _ => return Ok(Vec::new()),
         };
         let ready: Vec<usize> = (0..self.nested_functions.len())
             .filter(|&index| {
@@ -122,7 +127,7 @@ impl Inferer<'_> {
         ready
             .into_iter()
             .map(|index| self.define_nested_function(index))
-            .collect()
+            .collect::<Result<_, _>>()
     }
 
     /// Check a use of nested function `index`. Inside a sibling's body, it is
@@ -196,7 +201,7 @@ impl Inferer<'_> {
         None
     }
 
-    fn nested_declaration(&self, stmt: StmtId) -> Option<Declaration> {
+    fn nested_declaration(&self, stmt: StmtId) -> Result<Option<Declaration>, CompilerFailure> {
         let StmtKind::Function {
             name,
             generics,
@@ -205,36 +210,39 @@ impl Inferer<'_> {
             type_predicate,
             body,
             ..
-        } = &self.ast.stmt(stmt).kind
+        } = &self.ast.try_stmt(stmt).map_err(super::arena_failure)?.kind
         else {
-            return None;
+            return Ok(None);
         };
-        Some(Declaration {
+        Ok(Some(Declaration {
             name: name.clone(),
             generics: generics.clone(),
             params: params.clone(),
             return_type: return_type.clone(),
             type_predicate: type_predicate.clone(),
             body: *body,
-        })
+        }))
     }
 
     /// The declared type, or `None` after reporting what a closure can't have.
-    fn nested_function_type(&mut self, declaration: &Declaration) -> Option<Type> {
+    fn nested_function_type(
+        &mut self,
+        declaration: &Declaration,
+    ) -> Result<Option<Type>, CompilerFailure> {
         if let Some((span, message)) = nested_function_rejection(declaration) {
             self.error_with_help(
                 span,
                 message.to_string(),
                 vec!["declare the function at the top level of the module".to_string()],
             );
-            return None;
+            return Ok(None);
         }
-        Some(self.declared_function_type(
+        Ok(Some(self.declared_function_type(
             &declaration.params,
             declaration.return_type.as_ref(),
             declaration.type_predicate.as_ref(),
             None,
-        ))
+        )?))
     }
 
     /// `let name = <placeholder closure>`: the binding each nested function is
@@ -287,12 +295,16 @@ impl Inferer<'_> {
 
     /// Infer nested function `index`'s body as a closure and assign it to its
     /// binding.
-    fn define_nested_function(&mut self, index: usize) -> StmtId {
+    fn define_nested_function(&mut self, index: usize) -> Result<StmtId, CompilerFailure> {
         let declaration = self
-            .nested_declaration(self.nested_functions[index].stmt)
+            .nested_declaration(self.nested_functions[index].stmt)?
             .expect("a registered nested function is a declaration");
         let ty = self.nested_functions[index].ty.clone();
-        let span = self.ast.stmt(declaration.body).span;
+        let span = self
+            .ast
+            .try_stmt(declaration.body)
+            .map_err(super::arena_failure)?
+            .span;
         self.nested_function_bodies.push(index);
         self.enter_function_declaration_narrow_boundary();
         let (kind, closure_ty, _reported) = self.infer_arrow(
@@ -302,7 +314,7 @@ impl Inferer<'_> {
             ArrowBody::Block(declaration.body),
             Some(&ty),
             span,
-        );
+        )?;
         self.exit_closure_narrow_boundary();
         self.nested_function_bodies.pop();
         self.nested_functions[index].defined = true;
@@ -314,7 +326,7 @@ impl Inferer<'_> {
         self.typed_ast
             .nested_function_names
             .insert(value, declaration.name.clone());
-        self.typed_ast.push_stmt(TypedStmt {
+        Ok(self.typed_ast.push_stmt(TypedStmt {
             kind: TypedStmtKind::AssignLocal {
                 ident: declaration.name,
                 target_ty: ty,
@@ -323,7 +335,7 @@ impl Inferer<'_> {
                 narrowed_shadow_ty: None,
             },
             span,
-        })
+        }))
     }
 }
 

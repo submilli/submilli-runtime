@@ -1,3 +1,5 @@
+use crate::compiler_error::CompilerFailure;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
@@ -27,10 +29,14 @@ impl Inferer<'_> {
         cases: Vec<SwitchCase>,
         default: Option<SwitchDefault>,
         switch_span: Span,
-    ) -> TypedStmtKind {
+    ) -> Result<TypedStmtKind, CompilerFailure> {
         let (entry_env, _) = self.snapshot_active_narrowings(0);
-        let disc_source_span = self.ast.expr(discriminant).span;
-        let (typed_disc, disc_ty) = self.infer_expr(discriminant, None);
+        let disc_source_span = self
+            .ast
+            .try_expr(discriminant)
+            .map_err(super::arena_failure)?
+            .span;
+        let (typed_disc, disc_ty) = self.infer_expr(discriminant, None)?;
         // A `void` discriminant has nothing to compare against, and an empty
         // switch reaches codegen with no case to report a type error first.
         if disc_ty.carries_void() {
@@ -54,8 +60,12 @@ impl Inferer<'_> {
             let case_span = case.span;
             let mut typed_values: Vec<TypedSwitchValue> = Vec::new();
             for value_expr in &case.values {
-                let value_span = self.ast.expr(*value_expr).span;
-                let (typed_val, val_ty) = self.infer_expr(*value_expr, Some(&label_hint));
+                let value_span = self
+                    .ast
+                    .try_expr(*value_expr)
+                    .map_err(super::arena_failure)?
+                    .span;
+                let (typed_val, val_ty) = self.infer_expr(*value_expr, Some(&label_hint))?;
                 let val_kind = self.typed_ast.expr(typed_val).kind.clone();
                 if !matches!(disc_ty, Type::Error)
                     && !matches!(val_ty, Type::Error)
@@ -106,13 +116,17 @@ impl Inferer<'_> {
                 }
             };
 
-            let body_span = self.ast.stmt(case.body).span;
+            let body_span = self
+                .ast
+                .try_stmt(case.body)
+                .map_err(super::arena_failure)?
+                .span;
             self.push_narrow_frame(true_env.clone());
             self.switch_depth += 1;
             self.reachable = entry_reachable;
-            let typed_body = self
-                .infer_stmt(case.body)
-                .expect("switch case body is a Block, never a type-only decl");
+            let typed_body = self.infer_stmt(case.body)?.ok_or_else(|| {
+                super::inference_failure("switch case body is a Block, never a type-only decl")
+            })?;
             let body_reachable = self.reachable;
             self.switch_depth -= 1;
             let (_n, body_assigned) = self.pop_narrow_frame_capture();
@@ -131,7 +145,11 @@ impl Inferer<'_> {
         let (residual, site) = self.compute_switch_residual(typed_disc, &disc_ty, &covered);
 
         let typed_default = if let Some(d) = default {
-            let body_span = self.ast.stmt(d.body).span;
+            let body_span = self
+                .ast
+                .try_stmt(d.body)
+                .map_err(super::arena_failure)?
+                .span;
             let default_residual =
                 if saw_null.is_some() && matches!(site, ResidualSite::Scrutinee { .. }) {
                     narrowing::strip_null(&residual)
@@ -142,9 +160,9 @@ impl Inferer<'_> {
             self.push_narrow_frame(env.clone());
             self.switch_depth += 1;
             self.reachable = entry_reachable;
-            let typed_body = self
-                .infer_stmt(d.body)
-                .expect("switch default body is a Block, never a type-only decl");
+            let typed_body = self.infer_stmt(d.body)?.ok_or_else(|| {
+                super::inference_failure("switch default body is a Block, never a type-only decl")
+            })?;
             let body_reachable = self.reachable;
             self.switch_depth -= 1;
             let (_n, body_assigned) = self.pop_narrow_frame_capture();
@@ -175,12 +193,12 @@ impl Inferer<'_> {
 
         self.reachable = any_arm_reachable_exit;
 
-        TypedStmtKind::Switch {
+        Ok(TypedStmtKind::Switch {
             discriminant: typed_disc,
             discriminant_ty: disc_ty,
             cases: typed_cases,
             default: typed_default,
-        }
+        })
     }
 
     fn push_switch_value_expr(&mut self, value: &TypedSwitchValue) -> ExprId {

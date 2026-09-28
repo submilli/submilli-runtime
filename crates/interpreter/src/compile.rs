@@ -46,14 +46,24 @@ pub struct ParsedScript {
 }
 
 impl ParsedScript {
-    pub fn external_imports(&self) -> ScriptImports {
+    pub fn external_imports(&self) -> Result<ScriptImports, CompileError> {
         let stdlib_names: BTreeSet<String> = runtime::stdlib_package_declarations()
             .into_iter()
             .map(|defs| defs.package_name)
             .collect();
         let mut imports = ScriptImports::default();
         for stmt_id in &self.ast.top_level {
-            let StmtKind::Import { module, .. } = &self.ast.stmt(*stmt_id).kind else {
+            let StmtKind::Import { module, .. } = &self
+                .ast
+                .try_stmt(*stmt_id)
+                .map_err(|error| {
+                    CompileError::from(
+                        error.into_compiler_failure(crate::compiler_error::CompilerStage::Parse),
+                    )
+                    .with_prior_diagnostics(&self.diagnostics)
+                })?
+                .kind
+            else {
                 continue;
             };
             if crate::source::is_relative_specifier(module) {
@@ -67,7 +77,7 @@ impl ParsedScript {
                 imports.registry_packages.insert(module.clone());
             }
         }
-        imports
+        Ok(imports)
     }
 
     pub fn has_errors(&self) -> bool {
@@ -117,7 +127,18 @@ pub fn parse_script(source: &str, file: FileId) -> ParsedScript {
     diagnostics.extend(parse_diags);
     // must run before type-checking; the typechecker assumes patterns are already lowered
     if failure.is_none() {
-        lower_patterns(&mut ast);
+        match lower_patterns(ast) {
+            Ok(lowered) => ast = lowered,
+            Err(fatal) => {
+                let error = CompileError {
+                    diagnostics: diagnostics.clone(),
+                    fatal: Some(fatal),
+                };
+                diagnostics = error.clone().into_diagnostics(file);
+                failure = Some(error);
+                ast = Ast::new();
+            }
+        }
     }
     timings.parse = parse_start.elapsed();
 
@@ -555,7 +576,10 @@ fn parse_package_module(
         })?;
     diagnostics.extend(parse_diags);
     if !has_errors(&diagnostics) {
-        lower_patterns(&mut ast);
+        ast = lower_patterns(ast).map_err(|fatal| CompileError {
+            diagnostics: diagnostics.clone(),
+            fatal: Some(fatal),
+        })?;
     }
     Ok((ast, diagnostics))
 }
@@ -738,7 +762,7 @@ mod parsed_script_tests {
             FileId(0),
         );
 
-        let imports = parsed.external_imports();
+        let imports = parsed.external_imports().unwrap();
 
         assert_eq!(
             imports.stdlib,
@@ -761,7 +785,7 @@ mod parsed_script_tests {
             FileId(0),
         );
 
-        assert_eq!(parsed.external_imports(), ScriptImports::default());
+        assert_eq!(parsed.external_imports().unwrap(), ScriptImports::default());
     }
 }
 
@@ -1106,5 +1130,117 @@ mod importless_library_tests {
             errs.iter().any(|m| m.contains("unknown type `Widget`")),
             "expected unknown-type error for unimported source annotation; got: {errs:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod untyped_arena_failures {
+    use super::*;
+    use crate::arena::{ArenaKind, with_node_limit};
+    use crate::compiler_error::{CompilerFailure, CompilerStage};
+
+    #[test]
+    fn parser_arena_limit_is_fatal_and_keeps_prior_diagnostics() {
+        let source = "let = 0; function main(): number { return 1; }";
+        for arena in [ArenaKind::Expressions, ArenaKind::Statements] {
+            let error = with_node_limit(arena, 0, || {
+                compile_script_checked(source, "limit.ts", FileId(0), &[], &[])
+            })
+            .unwrap_err();
+            assert!(matches!(
+                error.fatal,
+                Some(CompilerFailure::Limit {
+                    stage: CompilerStage::Parse,
+                    span: None,
+                    ..
+                })
+            ));
+            assert!(
+                !error.diagnostics.is_empty(),
+                "earlier syntax diagnostics must survive"
+            );
+        }
+        assert!(
+            !compile_script_checked(
+                "function main(): number { return 1; }",
+                "healthy.ts",
+                FileId(0),
+                &[],
+                &[]
+            )
+            .unwrap()
+            .wasm
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn lowering_arena_limit_stops_script_before_inference() {
+        let source = "function main(): number { const [x] = [1]; return x; }";
+        let mut lexer = crate::Asi::new(source, FileId(0));
+        let mut tokens = Vec::new();
+        loop {
+            let token = lexer.next_token();
+            let done = matches!(token.kind, crate::TokenKind::Eof);
+            tokens.push(token);
+            if done {
+                break;
+            }
+        }
+        let (ast, _) = crate::parser::parse_checked(source, tokens, FileId(0)).unwrap();
+        for (arena, count) in [
+            (ArenaKind::Expressions, ast.exprs_len()),
+            (ArenaKind::Statements, ast.stmts_len()),
+        ] {
+            let error = with_node_limit(arena, u32::try_from(count).unwrap(), || {
+                compile_script_checked(source, "limit.ts", FileId(0), &[], &[])
+            })
+            .unwrap_err();
+            assert!(matches!(
+                error.fatal,
+                Some(CompilerFailure::Limit {
+                    stage: CompilerStage::Infer,
+                    span: None,
+                    ..
+                })
+            ));
+        }
+        assert!(
+            !compile_script_checked(source, "healthy.ts", FileId(0), &[], &[])
+                .unwrap()
+                .wasm
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn package_arena_limit_returns_no_artifact() {
+        let modules = [PackageSourceModule {
+            path: ModulePath::from("lib"),
+            source: "export function value(): number { return 1; }",
+        }];
+        let error = with_node_limit(ArenaKind::Expressions, 0, || {
+            compile_package_checked("test", ModulePath::from("lib"), &modules, &[])
+        })
+        .unwrap_err();
+        assert!(matches!(
+            error.fatal,
+            Some(CompilerFailure::Limit {
+                stage: CompilerStage::Parse,
+                ..
+            })
+        ));
+        compile_package_checked("test", ModulePath::from("lib"), &modules, &[]).unwrap();
+    }
+
+    #[test]
+    fn corrupt_parsed_imports_return_an_internal_failure() {
+        let mut parsed = parse_script("function main(): number { return 1; }", FileId(0));
+        parsed.ast.top_level.push(crate::StmtId(u32::MAX));
+        let error = parsed.external_imports().unwrap_err();
+        assert!(matches!(
+            error.fatal,
+            Some(CompilerFailure::Internal { span: None, .. })
+        ));
     }
 }

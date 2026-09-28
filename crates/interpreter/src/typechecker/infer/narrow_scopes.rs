@@ -1,3 +1,5 @@
+use crate::compiler_error::CompilerFailure;
+
 use std::collections::BTreeMap;
 
 use crate::{
@@ -355,13 +357,17 @@ impl<'a> Inferer<'a> {
         operand: ExprId,
         env: &narrowing::NarrowEnv,
         expected: Option<&Type>,
-    ) -> (ExprId, Type) {
+    ) -> Result<(ExprId, Type), CompilerFailure> {
         self.push_narrow_frame(env.clone());
-        let inferred = self.infer_expr(operand, expected);
+        let inferred = self.infer_expr(operand, expected)?;
         let (_, assigned) = self.pop_narrow_frame_capture();
-        let span = self.ast.expr(operand).span;
+        let span = self
+            .ast
+            .try_expr(operand)
+            .map_err(super::arena_failure)?
+            .span;
         self.merge_assigned_into_outer(assigned, span);
-        inferred
+        Ok(inferred)
     }
 
     pub(super) fn pop_narrow_frame_capture(

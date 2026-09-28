@@ -5,20 +5,22 @@
 //! single-file package the public and internal names coincide, so each entry's
 //! `public_name` and `target` are the same `pkg#name`.
 
+use crate::compiler_error::CompilerFailure;
+
 use crate::{ExportEntry, ExportKind, Ident, StmtKind};
 
 use super::Inferer;
 use super::module_symbols::ModuleSymbols;
 
 impl Inferer<'_> {
-    pub(super) fn collect_exports(&mut self) {
+    pub(super) fn collect_exports(&mut self) -> Result<(), CompilerFailure> {
         // Form 1: every export-marked top-level declaration becomes a public entry.
         for ed in self.ast.exported_decls.clone() {
-            let stmt = self.ast.stmt(ed.stmt);
+            let stmt = self.ast.try_stmt(ed.stmt).map_err(super::arena_failure)?;
             let Some(name) = exported_decl_name(&stmt.kind) else {
                 continue;
             };
-            let mangled = self.mangle_top_symbol(&name.name);
+            let mangled = self.mangle_top_symbol(&name.name)?;
             if matches!(stmt.kind, StmtKind::ClassDecl { .. })
                 && let Some(sym) = self.types.lookup(&name.name)
             {
@@ -34,12 +36,12 @@ impl Inferer<'_> {
         }
 
         if self.package_inference {
-            return;
+            return Ok(());
         }
 
         // Form 2: re-exports are only meaningful across modules. Gate them.
         for stmt_id in self.ast.top_level.clone() {
-            let stmt = self.ast.stmt(stmt_id);
+            let stmt = self.ast.try_stmt(stmt_id).map_err(super::arena_failure)?;
             if matches!(stmt.kind, StmtKind::ExportFrom { .. }) {
                 let span = stmt.span;
                 self.error_with_help(
@@ -53,23 +55,27 @@ impl Inferer<'_> {
                 );
             }
         }
+
+        Ok(())
     }
 
-    pub(super) fn mark_direct_package_export(&mut self, name: &str) {
+    pub(super) fn mark_direct_package_export(&mut self, name: &str) -> Result<(), CompilerFailure> {
         if !self.package_inference {
-            return;
+            return Ok(());
         }
-        let Some(span) = self.direct_export_span(name) else {
-            return;
+        let Some(span) = self.direct_export_span(name)? else {
+            return Ok(());
         };
         let declarations = self.current_module_symbols.clone();
         let source_label = self.module.as_str().to_string();
         self.export_symbol_from(&declarations, false, name, name, span, &source_label);
+
+        Ok(())
     }
 
-    pub(super) fn resolve_package_export_statements(&mut self) {
+    pub(super) fn resolve_package_export_statements(&mut self) -> Result<(), CompilerFailure> {
         for stmt_id in self.ast.top_level.clone() {
-            let stmt = self.ast.stmt(stmt_id);
+            let stmt = self.ast.try_stmt(stmt_id).map_err(super::arena_failure)?;
             let StmtKind::ExportFrom { specs, source, .. } = &stmt.kind else {
                 continue;
             };
@@ -135,15 +141,24 @@ impl Inferer<'_> {
                 );
             }
         }
+
+        Ok(())
     }
 
-    fn direct_export_span(&self, name: &str) -> Option<crate::Span> {
-        self.ast.exported_decls.iter().find_map(|ed| {
-            let stmt = self.ast.stmt(ed.stmt);
-            exported_decl_name(&stmt.kind)
-                .is_some_and(|exported| exported.name == name)
-                .then_some(ed.export_span)
-        })
+    fn direct_export_span(&self, name: &str) -> Result<Option<crate::Span>, CompilerFailure> {
+        self.ast
+            .exported_decls
+            .iter()
+            .map(|ed| {
+                let stmt = self.ast.try_stmt(ed.stmt).map_err(super::arena_failure)?;
+                Ok::<_, CompilerFailure>(
+                    exported_decl_name(&stmt.kind)
+                        .is_some_and(|exported| exported.name == name)
+                        .then_some(ed.export_span),
+                )
+            })
+            .find_map(Result::transpose)
+            .transpose()
     }
 
     fn export_symbol_from(

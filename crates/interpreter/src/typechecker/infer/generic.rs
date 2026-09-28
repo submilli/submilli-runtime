@@ -5,6 +5,8 @@
 //! inside `scopes`/`current_return` during the body walk. Downstream passes
 //! (PackageDeclaration, codegen) see only `TypeVar`s.
 
+use crate::compiler_error::CompilerFailure;
+
 use std::collections::BTreeMap;
 
 use crate::{
@@ -411,8 +413,8 @@ impl Inferer<'_> {
         annot: &TypeAnnotation,
         subject: &str,
         allow_void: bool,
-    ) -> Type {
-        let resolved = self.resolve_type(annot);
+    ) -> Result<Type, CompilerFailure> {
+        let resolved = self.resolve_type(annot)?;
         if let Some(offender) =
             super::void_type_arguments::invalid_argument(&resolved, allow_void, self.resolver())
         {
@@ -423,9 +425,9 @@ impl Inferer<'_> {
                     "`{offender}` cannot be used as a type argument to {subject} — use a value type"
                 ),
             );
-            return Type::Error;
+            return Ok(Type::Error);
         }
-        resolved
+        Ok(resolved)
     }
 
     fn type_parameter_allows_void(&self, name: &str, params: &[crate::Param], ret: &Type) -> bool {
@@ -515,10 +517,14 @@ impl Inferer<'_> {
         }
         false
     }
-    pub(super) fn infer_functions(&mut self) {
+    pub(super) fn infer_functions(&mut self) -> Result<(), CompilerFailure> {
         let top_level: Vec<_> = self.ast.top_level.clone();
         for stmt_id in top_level {
-            let stmt = self.ast.stmt(stmt_id).clone();
+            let stmt = self
+                .ast
+                .try_stmt(stmt_id)
+                .map_err(super::arena_failure)?
+                .clone();
             let span = stmt.span;
             let StmtKind::Function {
                 name,
@@ -611,9 +617,9 @@ impl Inferer<'_> {
             // only those need GP erasure.
             let exprs_before = self.typed_ast.exprs_len();
             let stmts_before = self.typed_ast.stmts_len();
-            let body_id = self
-                .infer_stmt(body)
-                .expect("function body is a Block, never a type-only decl");
+            let body_id = self.infer_stmt(body)?.ok_or_else(|| {
+                super::inference_failure("function body is a Block, never a type-only decl")
+            })?;
             self.current_return = prev_return;
             self.current_type_predicate = prev_predicate;
             self.reachable = prev_reachable;
@@ -628,7 +634,7 @@ impl Inferer<'_> {
                 erase_generic_params_in_stmt(self.typed_ast.stmt_mut(id));
             }
             let ret_type = stored_return;
-            let mangled_name = self.mangle_top_symbol(&name.name);
+            let mangled_name = self.mangle_top_symbol(&name.name)?;
             self.add_typed_function(crate::TypedFunction {
                 name,
                 mangled_name,
@@ -639,8 +645,10 @@ impl Inferer<'_> {
                 body: body_id,
                 doc,
                 span,
-            });
+            })?;
         }
+
+        Ok(())
     }
 
     /// Generic interface-method dispatch. Pre-seeds the unification map with the
@@ -658,16 +666,20 @@ impl Inferer<'_> {
         args: Vec<ExprId>,
         expected: Option<&Type>,
         span: Span,
-    ) -> (TypedExprKind, Type) {
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         // The no-mapper form preserves the source type; the mapped form has
         // an independent result parameter, like TypeScript's two overloads.
         let mut sig = sig;
         if iface_mangled == crate::mangle::prelude("ArrayConstructor")
             && name.name == "from"
             && (args.len() == 1
-                || args
-                    .get(1)
-                    .is_some_and(|id| matches!(self.ast.expr(*id).kind, crate::ExprKind::Null)))
+                || match args.get(1) {
+                    Some(id) => matches!(
+                        self.ast.try_expr(*id).map_err(super::arena_failure)?.kind,
+                        crate::ExprKind::Null
+                    ),
+                    None => false,
+                })
         {
             sig.generics = vec!["T".into()];
             sig.ret = Type::Array(Box::new(Type::TypeVar("T".into())));
@@ -705,7 +717,7 @@ impl Inferer<'_> {
                     annot,
                     &subject,
                     self.type_parameter_allows_void(gname, &sig.params, &sig.ret),
-                );
+                )?;
                 sub.insert(gname.clone(), resolved);
             }
         }
@@ -782,7 +794,7 @@ impl Inferer<'_> {
             &rest_elem_ty,
             &mut sub,
             signature_help,
-        );
+        )?;
 
         if has_rest || typed_args.len() < sig.params.len() {
             self.typed_ast
@@ -873,7 +885,7 @@ impl Inferer<'_> {
                     asserted_type: sub.apply(&p.asserted_type),
                 })
             });
-            return (
+            return Ok((
                 TypedExprKind::GenericMethodCall {
                     receiver: typed_receiver,
                     iface: iface_mangled,
@@ -883,7 +895,7 @@ impl Inferer<'_> {
                     type_predicate,
                 },
                 result_ty,
-            );
+            ));
         }
         // sub carries interface bindings even when the method itself isn't generic.
         let type_predicate = sig.predicate.as_ref().map(|p| {
@@ -892,7 +904,7 @@ impl Inferer<'_> {
                 asserted_type: sub.apply(&p.asserted_type),
             })
         });
-        (
+        Ok((
             TypedExprKind::MethodCall {
                 receiver: typed_receiver,
                 iface: iface_mangled,
@@ -901,7 +913,7 @@ impl Inferer<'_> {
                 type_predicate,
             },
             result_ty,
-        )
+        ))
     }
 
     /// The lifted signature a generic-call diagnostic shows: a real function
@@ -972,39 +984,47 @@ impl Inferer<'_> {
         literal: ExprId,
         param_ty: &Type,
         sub: &mut TypeParamSubstitution,
-    ) {
+    ) -> Result<(), CompilerFailure> {
         let Some(Type::Function { params, .. }) = function_part(param_ty) else {
-            return;
+            return Ok(());
         };
-        let Some(declared_params) = self.function_literal_params(literal) else {
-            return;
+        let Some(declared_params) = self.function_literal_params(literal)? else {
+            return Ok(());
         };
         let diagnostics_before = self.diagnostics.len();
         for (declared, param) in declared_params.iter().zip(params) {
             if let Some(annotation) = &declared.ty {
-                let annotated = self.resolve_type(annotation);
+                let annotated = self.resolve_type(annotation)?;
                 let _ = sub.unify_argument(param, &annotated, self.resolver());
             }
         }
         self.diagnostics.truncate(diagnostics_before);
+
+        Ok(())
     }
 
-    fn function_literal_params(&self, expr: ExprId) -> Option<Vec<crate::ParamDecl>> {
-        match &self.ast.expr(expr).kind {
-            ExprKind::Paren(inner) => self.function_literal_params(*inner),
-            ExprKind::FunctionExpression { function, .. } => {
-                self.function_literal_params(*function)
-            }
-            ExprKind::Arrow { params, .. } => Some(params.clone()),
-            _ => None,
-        }
+    fn function_literal_params(
+        &self,
+        expr: ExprId,
+    ) -> Result<Option<Vec<crate::ParamDecl>>, CompilerFailure> {
+        Ok(
+            match &self.ast.try_expr(expr).map_err(super::arena_failure)?.kind {
+                ExprKind::Paren(inner) => self.function_literal_params(*inner)?,
+                ExprKind::FunctionExpression { function, .. } => {
+                    self.function_literal_params(*function)?
+                }
+                ExprKind::Arrow { params, .. } => Some(params.clone()),
+                _ => None,
+            },
+        )
     }
 
     /// A function literal with a parameter left for its context to type,
     /// which is what TypeScript infers after the other arguments.
-    fn is_context_sensitive_function(&self, expr: ExprId) -> bool {
-        self.function_literal_params(expr)
-            .is_some_and(|params| params.iter().any(|p| p.ty.is_none()))
+    fn is_context_sensitive_function(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
+        Ok(self
+            .function_literal_params(expr)?
+            .is_some_and(|params| params.iter().any(|p| p.ty.is_none())))
     }
 
     /// Infer a generic call's arguments against `params`, binding its type
@@ -1024,7 +1044,7 @@ impl Inferer<'_> {
         rest_elem_ty: &Type,
         sub: &mut TypeParamSubstitution,
         signature_help: impl Fn(&mut Self) -> String,
-    ) -> Vec<ExprId> {
+    ) -> Result<Vec<ExprId>, CompilerFailure> {
         let has_rest = params.last().is_some_and(|p| p.rest);
         let fixed_count = params.iter().take_while(|p| !p.rest).count();
         let mut typed_slots: Vec<Option<ExprId>> = vec![None; args.len()];
@@ -1041,16 +1061,16 @@ impl Inferer<'_> {
                     Type::Error
                 };
                 let deferred = function_part(&param_ty).is_some()
-                    && self.is_context_sensitive_function(arg_id);
+                    && self.is_context_sensitive_function(arg_id)?;
                 if deferred && !deferred_pass {
-                    self.bind_from_annotated_params(arg_id, &param_ty, sub);
+                    self.bind_from_annotated_params(arg_id, &param_ty, sub)?;
                 }
                 if deferred != deferred_pass {
                     continue;
                 }
                 let hint = sub.apply(&param_ty);
                 let errors_before = self.error_count();
-                let (typed_id, arg_ty) = self.infer_expr(arg_id, Some(&hint));
+                let (typed_id, arg_ty) = self.infer_expr(arg_id, Some(&hint))?;
                 typed_slots[i] = Some(typed_id);
                 let missing_slot = i >= fixed_count && !has_rest;
                 if missing_slot || matches!(arg_ty, Type::Error) {
@@ -1070,7 +1090,7 @@ impl Inferer<'_> {
                 }
             }
         }
-        typed_slots.into_iter().flatten().collect()
+        Ok(typed_slots.into_iter().flatten().collect())
     }
 
     /// Handle an argument that didn't unify with its parameter: a structural
@@ -1122,7 +1142,7 @@ impl Inferer<'_> {
         expected: Option<&Type>,
         span: Span,
         callee: GenericCallee,
-    ) -> (TypedExprKind, Type) {
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let mut sub = TypeParamSubstitution::new();
         let type_args_written = type_args.is_some();
         // `session.get<T>` is lowered as a runtime-checked cast rather than an
@@ -1157,7 +1177,7 @@ impl Inferer<'_> {
                     &subject,
                     callee == GenericCallee::Function
                         && self.type_parameter_allows_void(name, &params, &ret),
-                );
+                )?;
                 sub.insert(name.clone(), resolved);
             }
         }
@@ -1215,7 +1235,7 @@ impl Inferer<'_> {
         };
         let errors_before_args = self.error_count();
         let mut typed_args =
-            self.infer_generic_arguments(&args, &params, &rest_elem_ty, &mut sub, signature_help);
+            self.infer_generic_arguments(&args, &params, &rest_elem_ty, &mut sub, signature_help)?;
 
         if has_rest || typed_args.len() < params.len() {
             self.typed_ast
@@ -1303,14 +1323,14 @@ impl Inferer<'_> {
                      or `{name}(...)` for an untyped call"
                 )],
             );
-            return (TypedExprKind::Null, Type::Error);
+            return Ok((TypedExprKind::Null, Type::Error));
         }
 
         let mut llm_schema = None;
         if checked_llm {
             match self.llm_call_schema(&result_ty, type_args_written, span) {
                 Ok(schema) => llm_schema = schema,
-                Err(()) => return (TypedExprKind::Null, Type::Error),
+                Err(()) => return Ok((TypedExprKind::Null, Type::Error)),
             }
         }
         if let Some(schema) = &llm_schema {
@@ -1362,14 +1382,14 @@ impl Inferer<'_> {
             type_predicate,
         };
         if checked_get {
-            return self.checked_session_get(call, &result_ty, type_args_written, span);
+            return Ok(self.checked_session_get(call, &result_ty, type_args_written, span));
         }
         // An untyped `llm.call` emitted no schema and needs no check: it returns
         // the `Completion` envelope the declaration already typed.
         if checked_llm && llm_schema.is_some() {
-            return self.checked_llm_cast(call, &result_ty, span);
+            return Ok(self.checked_llm_cast(call, &result_ty, span));
         }
-        (call, result_ty)
+        Ok((call, result_ty))
     }
 }
 
