@@ -12,6 +12,7 @@ use interpreter::{
 
 const FIXTURE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/http_live_fixtures");
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
 fn http_live_fixtures() {
     let server = MockServer::start();

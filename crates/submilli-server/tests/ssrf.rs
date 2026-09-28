@@ -111,6 +111,7 @@ async fn run_against_loopback_host(policy: NetworkPolicy, host: &str) -> Value {
     body
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn deny_private_blocks_loopback() {
     let body = run_against_loopback(NetworkPolicy::deny_private()).await;
@@ -137,6 +138,7 @@ async fn deny_private_blocks_loopback() {
 /// reqwest reports that as a generic send failure; the policy's reason has to
 /// survive from the bottom of its error chain, or the guest can't tell a block
 /// from an outage.
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn deny_private_blocks_loopback_by_host_name() {
     let body = run_against_loopback_host(NetworkPolicy::deny_private(), "localhost").await;
@@ -154,6 +156,7 @@ async fn deny_private_blocks_loopback_by_host_name() {
     );
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn allow_localhost_permits_loopback() {
     let body = run_against_loopback(NetworkPolicy::deny_private().allow_localhost(true)).await;
@@ -166,6 +169,7 @@ async fn allow_localhost_permits_loopback() {
     );
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn allow_ip_cidr_permits_loopback() {
     let policy = NetworkPolicy::deny_private().allow_cidr("127.0.0.0/8".parse().unwrap());

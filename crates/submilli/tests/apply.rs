@@ -53,6 +53,7 @@ fn write(dir: &Path, name: &str, contents: &str) -> PathBuf {
     path
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn applies_and_reapplies_a_blueprint() {
     let (server, shutdown) = spawn_server().await;
@@ -79,6 +80,7 @@ async fn applies_and_reapplies_a_blueprint() {
     shutdown.notify_one();
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn applies_every_document_in_a_multi_doc_file() {
     let (server, shutdown) = spawn_server().await;
@@ -102,6 +104,7 @@ async fn applies_every_document_in_a_multi_doc_file() {
     shutdown.notify_one();
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn applies_a_directory_of_files() {
     let (server, shutdown) = spawn_server().await;
@@ -136,6 +139,7 @@ fn missing_server_env_names_the_variable() {
     );
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_rejection_names_file_and_document() {
     let (server, shutdown) = spawn_server().await;
@@ -168,6 +172,7 @@ fn unknown_kind_is_a_local_error() {
     );
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unsupported_kind_prevents_partial_apply() {
     let (server, shutdown) = spawn_server().await;

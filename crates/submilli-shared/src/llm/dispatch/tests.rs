@@ -137,6 +137,7 @@ fn ok_body(kind: &str) -> Value {
 /// server can match on. The mock asserts the method, the path, the header, and
 /// the prompt's position — so a kind whose request is built wrong never gets a
 /// 200 and the test fails on the assertion *and* on the hit count.
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
 fn each_kind_round_trips_against_its_own_endpoint_and_header() {
     let cases = [
@@ -210,6 +211,7 @@ fn each_kind_round_trips_against_its_own_endpoint_and_header() {
 ///
 /// Without this, `json_body_partial` could be silently permissive — matching
 /// everything — and the per-kind body assertions would all pass vacuously.
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
 fn a_mismatched_body_is_not_routed_which_is_what_makes_the_matchers_real() {
     let server = MockServer::start();
@@ -254,6 +256,7 @@ fn a_mismatched_body_is_not_routed_which_is_what_makes_the_matchers_real() {
 /// The attacker mock routes **only** when the secret header is present, so a
 /// non-zero hit count is proof the credential arrived rather than merely that a
 /// request did.
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
 fn a_redirect_is_refused_rather_than_carrying_the_key_to_another_host() {
     for (kind, path, header) in [
@@ -296,6 +299,7 @@ fn a_redirect_is_refused_rather_than_carrying_the_key_to_another_host() {
 
 /// The schema reaches the wire in each kind's own envelope, asserted on the
 /// bytes the server actually received rather than on the codec's return value.
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
 fn a_typed_call_puts_the_schema_on_the_wire_per_kind() {
     let schema = r#"{"type":"object","properties":{"s":{"type":"string"}}}"#;
@@ -361,6 +365,7 @@ fn a_typed_call_puts_the_schema_on_the_wire_per_kind() {
 /// The `json_object` form is asserted absent on the two kinds where it is the
 /// available mistake — as a *negative* route, so a request carrying it matches
 /// this mock and the hit count proves it was never sent.
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
 fn the_openai_kinds_never_send_the_shapeless_json_object_form() {
     for kind in ["openai", "openai-compatible"] {
@@ -390,6 +395,7 @@ fn the_openai_kinds_never_send_the_shapeless_json_object_form() {
 
 /// A structured answer's JSON comes back as [`ProviderResponse::text`] so the
 /// typed path can parse it — asserted end to end through a real socket.
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
 fn a_structured_response_returns_parseable_text() {
     let server = MockServer::start();
@@ -420,6 +426,7 @@ fn a_structured_response_returns_parseable_text() {
 /// The `supports_structured_outputs: false` opt-out drops the schema entirely
 /// rather than downgrading it to a shapeless `json_object` — an explicit
 /// downgrade, not a silent one.
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
 fn the_structured_output_opt_out_sends_no_schema_at_all() {
     let server = MockServer::start();
@@ -461,6 +468,7 @@ fn the_structured_output_opt_out_sends_no_schema_at_all() {
 
 /// A provider can resolve successfully reporting no usage at all. `None`, never
 /// `Some(0)`: a zero would tell the reconciler the call was free.
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
 fn a_success_with_no_usage_reports_none_not_zero() {
     let server = MockServer::start();
@@ -481,6 +489,7 @@ fn a_success_with_no_usage_reports_none_not_zero() {
 
 /// 429, 5xx, and a dead connection each produce the failure the ladder turns
 /// into the right guest-visible reason.
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
 fn rate_limited_provider_unavailable_and_transport_each_classify() {
     // A 429 carrying retry-after is the retryable arm.
@@ -524,6 +533,7 @@ fn rate_limited_provider_unavailable_and_transport_each_classify() {
 /// A connection that never answers is `transport`, and it carries **no status**
 /// — that absence is exactly what distinguishes it from a provider that replied
 /// with an error, and it is why the ladder cannot classify it structurally.
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
 fn a_connection_failure_is_transport_with_no_status() {
     // A port with nothing listening. Bind one to learn a free number, then drop
@@ -576,6 +586,7 @@ fn a_connection_failure_is_transport_with_no_status() {
 
 /// Context-length-exceeded is classified **from the body** — the one class with
 /// no structural signal — and the body does not survive into the error.
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
 fn context_length_is_classified_from_the_body_which_never_reaches_the_error() {
     let body = json!({
@@ -629,6 +640,7 @@ fn context_length_is_classified_from_the_body_which_never_reaches_the_error() {
 /// point the error is constructed. The assertion runs over the guest-visible
 /// outcome after the full ladder, because an assertion on the dispatch's own
 /// return value would pass while the ladder leaked.
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
 fn no_error_carries_the_key_the_prompt_the_completion_or_the_body() {
     let echo = json!({
@@ -676,6 +688,7 @@ fn no_error_carries_the_key_the_prompt_the_completion_or_the_body() {
 /// truncated one lands on the failure arm with its text — which is intended —
 /// but the failure's **message** must still be a fixed string, not the
 /// completion.
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
 fn a_truncated_completion_does_not_leak_into_the_failure_message() {
     let completion = "the-completion-text-that-must-not-leak-into-a-message";
@@ -706,6 +719,7 @@ fn a_truncated_completion_does_not_leak_into_the_failure_message() {
 /// than living on the dispatch. A dispatch built without them resolves such a
 /// key to nothing and reports a credential failure on a blueprint that is in
 /// fact correct, which is why the server threads them through.
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
 fn a_harness_bound_credential_resolves_and_reaches_the_auth_header() {
     const HARNESS_SECRET: &str = "HARNESS_LLM_KEY";
@@ -752,6 +766,7 @@ llm:
 /// An unresolvable credential is `request-rejected` and says nothing at all —
 /// not the secret's name, not the resolver's message, and certainly not a
 /// partial key.
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
 fn an_unresolvable_credential_leaks_nothing() {
     let server = MockServer::start();
@@ -822,6 +837,7 @@ llm:
 
 /// The key is never sent anywhere but the auth header — asserted on the bytes
 /// the server received, not on the codec.
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
 fn the_key_reaches_the_wire_only_as_a_header() {
     let server = MockServer::start();
@@ -859,6 +875,7 @@ fn the_key_reaches_the_wire_only_as_a_header() {
 /// Google is the kind whose own docs offer a `?key=` query form. It must use the
 /// header instead, because a URL reaches logs, spans, and errors that a header
 /// does not.
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
 fn google_sends_the_key_as_a_header_not_as_a_query_parameter() {
     let server = MockServer::start();
@@ -890,6 +907,7 @@ fn google_sends_the_key_as_a_header_not_as_a_query_parameter() {
 /// The cap is 32 MiB, which no test wants to transfer, so this exercises the
 /// same guard on the UTF-8 arm: a body the reader cannot decode is likewise a
 /// transport failure rather than a panic or a lossy string.
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
 fn an_undecodable_body_is_a_transport_failure_carrying_none_of_it() {
     let server = MockServer::start();

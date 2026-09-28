@@ -86,6 +86,7 @@ fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn add_then_list() {
     let server = spawn_server().await;
@@ -107,6 +108,7 @@ async fn add_then_list() {
     assert_eq!(stdout(&list_out), "production\n");
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn local_validation_rejects_unknown_field() {
     let server = spawn_server().await;
@@ -118,6 +120,7 @@ async fn local_validation_rejects_unknown_field() {
     assert!(stderr(&out).contains("error:"));
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_then_show_then_remove() {
     let server = spawn_server().await;
@@ -174,6 +177,7 @@ async fn apply_then_show_then_remove() {
     assert_eq!(stdout(&list_out), "");
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn show_preserves_comments_and_moves_permissions_last() {
     let server = spawn_server().await;
@@ -219,6 +223,7 @@ mcp:
     );
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn show_and_remove_unknown_fail() {
     let server = spawn_server().await;
@@ -239,6 +244,7 @@ async fn show_and_remove_unknown_fail() {
     assert!(stderr(&remove_out).contains("not registered"));
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn duplicate_name_is_error() {
     let server = spawn_server().await;

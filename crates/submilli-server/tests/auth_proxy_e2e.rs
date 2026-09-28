@@ -146,6 +146,7 @@ async fn post(router: &Router, path: &str, body: Value) -> (StatusCode, Value) {
     (status, value)
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn auth_proxy_injects_header_to_real_server() {
     // SAFETY: a unique var name keeps this isolated from other tests' env.
@@ -179,6 +180,7 @@ async fn auth_proxy_injects_header_to_real_server() {
     );
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn auth_proxy_injects_store_secret_to_real_server() {
     let (port, captured) = spawn_mock(format!("Bearer {STORE_TOKEN}"));
@@ -216,6 +218,7 @@ async fn auth_proxy_injects_store_secret_to_real_server() {
     );
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn auth_proxy_bearer_method_injects_header() {
     // SAFETY: a unique var name keeps this isolated from other tests' env.
@@ -249,6 +252,7 @@ async fn auth_proxy_bearer_method_injects_header() {
     );
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn auth_proxy_basic_method_injects_base64_header() {
     // SAFETY: a unique var name keeps this isolated from other tests' env.

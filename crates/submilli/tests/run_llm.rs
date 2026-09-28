@@ -198,6 +198,7 @@ fn a_call_to_an_undeclared_model_is_refused_naming_the_model() {
 /// **No live API is contacted.** `192.0.2.1` is RFC 5737 TEST-NET-1, reserved
 /// for documentation and not routable on the public internet.
 #[test]
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 fn a_declared_model_reaches_a_real_outbound_request() {
     let home = tempfile::tempdir().expect("home");
     let f = fixture_with("llm_reaches_wire", REPORT, UNREACHABLE_BLUEPRINT);

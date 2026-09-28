@@ -6,6 +6,11 @@ use std::{
 };
 
 fn main() -> io::Result<()> {
+    println!("cargo:rustc-check-cfg=cfg(skip_http_tests)");
+    println!("cargo:rerun-if-env-changed=SUBMILLI_SKIP_HTTP_TESTS");
+    if env::var_os("SUBMILLI_SKIP_HTTP_TESTS").is_some_and(|value| value == "1") {
+        println!("cargo:rustc-cfg=skip_http_tests");
+    }
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("set by cargo"));
     let skill_dir = manifest_dir.join("../../skills/submilli").canonicalize()?;
     // Watching the directory re-runs this script when files are added or removed.

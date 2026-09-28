@@ -133,12 +133,13 @@ When impact is uncertain, investigate those relationships and explain the decisi
 For compiler/runtime-impacting changes, run:
 
 ```sh
-SUBMILLI_FULL_TEST=1 cargo test --workspace
-cargo run -p submilli -- build test
+SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_FULL_TEST=1 cargo test --workspace
+SUBMILLI_SKIP_HTTP_TESTS=1 cargo run -p submilli -- build test
 ```
 
 For other Rust changes, run affected crates' tests with full tests explicitly
-disabled, for example `SUBMILLI_FULL_TEST=0 cargo test -p submilli-server`.
+disabled, for example
+`SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_FULL_TEST=0 cargo test -p submilli-server`.
 Include affected callers/integration tests when shared code changes. Do not use
 `SUBMILLI_FULL_TEST=1` merely because a `.rs` file changed.
 
@@ -146,7 +147,7 @@ For TypeScript package-only changes, run the affected packages' tests and
 documentation examples instead:
 
 ```sh
-cargo run -p submilli -- build test -p @submilli/<package>
+SUBMILLI_SKIP_HTTP_TESTS=1 cargo run -p submilli -- build test -p @submilli/<package>
 ```
 
 Run any additional package-specific checks documented by those packages, such as
@@ -161,6 +162,36 @@ validate their frontmatter, referenced paths, and workflow consistency.
 Use focused tests while iterating. Interpreter fixtures use assertions to verify
 runtime behavior; compile-error fixtures use `// expect-error: <substring>`.
 Keep snapshots when the rendered diagnostic or declaration is the contract under test.
+
+### Conditional HTTP tests
+
+Use `SUBMILLI_SKIP_HTTP_TESTS=1` for routine verification. Cargo marks annotated
+Rust tests that open HTTP sockets (including localhost mocks) as ignored; the
+package runner skips `network.test.ts`, `network_*.test.ts`, and their `.subm`
+equivalents before execution and reports the skipped files. Keep new socket tests
+annotated with `#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]` and
+new live package tests under that naming convention. Ordinary tests, in-process
+HTTP/MCP handler tests, and documentation examples still run. This selects tests;
+it is not a network firewall. The Rust setting is read by Cargo build scripts, so
+change it through `cargo test`, not by invoking an old test binary directly.
+
+Run the affected HTTP tests with `SUBMILLI_SKIP_HTTP_TESTS=0` when the diff changes
+HTTP transport, server routing, request/response encoding, authentication,
+proxy/SSRF policy, or a package's external API behavior. Include relevant
+dependency and configuration changes. A parser/compiler change alone does not
+require live HTTP calls. For test-selection or build-script changes, verify both
+modes with synthetic package tests and a focused localhost test; contact real
+APIs only when their integration behavior is affected.
+
+Select the affected crate/test or package rather than all network integrations,
+for example `SUBMILLI_SKIP_HTTP_TESTS=0 cargo test -p interpreter --test http_live`
+or `SUBMILLI_SKIP_HTTP_TESTS=0 cargo run -p submilli -- build test -p @submilli/jina`.
+These tests may require execution outside the sandbox, even for local listeners.
+Request network access only for selected checks that require it. Record why HTTP
+tests ran or were skipped and report skipped/ignored coverage accurately. If a
+required HTTP check cannot run, report it as blocked rather than passed.
+
+### Other checks
 
 The chart has its own suite, not covered by `cargo test`: `helm unittest
 charts/submilli`. Its `checksum/blueprints` tests assert literal digests of the

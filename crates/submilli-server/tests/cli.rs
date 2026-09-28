@@ -30,6 +30,7 @@ fn version_flag_prints_the_crate_version() {
     );
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread")]
 async fn health_check_follows_the_resolved_address() {
     let home = tempfile::tempdir().expect("temp home");
@@ -61,6 +62,7 @@ async fn health_check_follows_the_resolved_address() {
 /// through the environment and the config file alone. Both directions are
 /// asserted — a probe that succeeded regardless of where it was pointed would
 /// report every container healthy.
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread")]
 async fn health_check_resolves_from_env_and_config_without_flags() {
     let home = tempfile::tempdir().expect("temp home");

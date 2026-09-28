@@ -476,12 +476,14 @@ mod tests {
         base
     }
 
+    #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
     #[test]
     fn probe_detects_oauth() {
         let base = mock_well_known(200, r#"{"authorization_servers":["https://idp"]}"#);
         assert!(probe_requires_oauth(&format!("{base}/mcp")));
     }
 
+    #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
     #[test]
     fn probe_negative_on_404() {
         let base = mock_well_known(404, "{}");

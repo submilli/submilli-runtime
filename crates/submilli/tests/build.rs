@@ -913,6 +913,88 @@ fn build_test_runs_segments_and_reports_summary() {
 }
 
 #[test]
+fn build_test_http_skip_preserves_local_tests_and_docs() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = http_skip_project(tmp.path());
+    for name in ["network.test.ts", "nested/network_read.test.subm"] {
+        write_file(&project.join("tests").join(name), "not valid TypeScript");
+    }
+    write_file(
+        &project.join("tests/networking.test.ts"),
+        "function main(): void { assert(true); }",
+    );
+    write_file(
+        &project.join("docs/readme.md"),
+        "# Util\n```ts\nfunction main(): number { return 42; }\n```\n",
+    );
+    let out = run_http_skip_test(&project, tmp.path(), Some("1"));
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("2 passed, 0 failed across 2 files"));
+    assert!(stdout(&out).contains("2 HTTP test files skipped"));
+    assert!(stdout(&out).contains("networking.test.ts"));
+    assert!(stdout(&out).contains("docs/readme.md :: example 1 (compile)"));
+
+    write_file(
+        &project.join("docs/readme.md"),
+        "# Util\n```ts\nfunction main(): number { return missing(); }\n```\n",
+    );
+    let out = run_http_skip_test(&project, tmp.path(), Some("1"));
+    assert!(!out.status.success(), "{}", stdout(&out));
+    assert!(stdout(&out).contains("1 passed, 1 failed across 2 files"));
+}
+
+#[test]
+fn build_test_http_skip_requires_an_explicit_one() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = http_skip_project(tmp.path());
+    write_file(
+        &project.join("tests/network_probe.test.ts"),
+        "function main(): void { assert(false, \"network test ran\"); }",
+    );
+    for setting in [None, Some("0"), Some("true")] {
+        let out = run_http_skip_test(&project, tmp.path(), setting);
+        assert!(!out.status.success(), "{setting:?}: {}", stdout(&out));
+        assert!(
+            stderr(&out).contains("network test ran"),
+            "{}",
+            stderr(&out)
+        );
+        assert!(!stdout(&out).contains("HTTP test files skipped"));
+    }
+    let out = run_http_skip_test(&project, tmp.path(), Some("1"));
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("0 passed, 0 failed across 0 files"));
+    assert!(stdout(&out).contains("1 HTTP test files skipped"));
+    assert!(!stderr(&out).contains("no test files found"));
+}
+
+fn http_skip_project(home: &Path) -> PathBuf {
+    let project = home.join("project");
+    write_file(
+        &project.join("submilli.toml"),
+        "[[package]]\nname = \"@acme/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
+    );
+    write_file(
+        &project.join("src/lib.ts"),
+        "export function answer(): number { return 42; }",
+    );
+    project
+}
+
+fn run_http_skip_test(project: &Path, home: &Path, setting: Option<&str>) -> Output {
+    let mut command = Command::new(submilli_bin());
+    command
+        .args(["build", "test"])
+        .current_dir(project)
+        .env("SUBMILLI_HOME", home)
+        .env_remove("SUBMILLI_SKIP_HTTP_TESTS");
+    if let Some(setting) = setting {
+        command.env("SUBMILLI_SKIP_HTTP_TESTS", setting);
+    }
+    command.output().expect("invoke build test")
+}
+
+#[test]
 fn build_test_compiles_doc_examples() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let project = tmp.path().join("project");

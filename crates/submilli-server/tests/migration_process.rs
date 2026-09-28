@@ -18,6 +18,7 @@ use common::{free_port, signal, spawn_server, wait_for_exit, wait_ready};
 use submilli_blueprint::Blueprint;
 use submilli_server::blueprint::{BlueprintStore, FileBlueprintStore};
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
 fn a_legacy_home_is_served_from_under_server_after_boot() {
     let home = tempfile::tempdir().expect("temp home");
@@ -35,6 +36,7 @@ fn a_legacy_home_is_served_from_under_server_after_boot() {
     assert!(!home.path().join("server.migrating").exists());
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
 fn an_explicitly_configured_directory_is_not_moved() {
     let home = tempfile::tempdir().expect("temp home");

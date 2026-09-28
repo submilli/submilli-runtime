@@ -35,6 +35,7 @@ enum BuildCmd {
     /// Compile the project's packages and install them into the local store.
     PublishLocal(CompileArgs),
     /// Compile and run the project's `tests/**/*.test.{ts,subm}` files.
+    /// Set SUBMILLI_SKIP_HTTP_TESTS=1 to skip network.test.* and network_*.test.* files.
     Test(CompileArgs),
 }
 
@@ -524,6 +525,9 @@ mod test_runner {
         let mut passed = 0usize;
         let mut failed = 0usize;
         let mut files = 0usize;
+        let mut skipped = 0usize;
+        let skip_http_tests =
+            std::env::var_os("SUBMILLI_SKIP_HTTP_TESTS").is_some_and(|value| value == "1");
         for pkg in &targets {
             let Some(pkg_path) = path_by_name.get(pkg.name.as_str()) else {
                 continue;
@@ -532,6 +536,11 @@ mod test_runner {
             let test_files = discover_test_files(&tests_dir)
                 .with_context(|| format!("scanning {}", tests_dir.display()))?;
             for test_file in test_files {
+                if skip_http_tests && is_http_test_file(&test_file) {
+                    println!("skip {} (SUBMILLI_SKIP_HTTP_TESTS=1)", test_file.display());
+                    skipped += 1;
+                    continue;
+                }
                 files += 1;
                 let (p, f) = run_test_file(&ctx, pkg.name.as_str(), &test_file)?;
                 passed += p;
@@ -545,11 +554,14 @@ mod test_runner {
             failed += f;
         }
 
-        if files == 0 {
+        if files == 0 && skipped == 0 {
             eprintln!("no test files found (looked for tests/**/*.test.{{ts,subm}})");
             return Ok(ExitCode::SUCCESS);
         }
         println!("\n{passed} passed, {failed} failed across {files} files");
+        if skipped > 0 {
+            println!("{skipped} HTTP test files skipped (SUBMILLI_SKIP_HTTP_TESTS=1)");
+        }
         if failed == 0 {
             Ok(ExitCode::SUCCESS)
         } else {
@@ -850,6 +862,16 @@ mod test_runner {
 
     fn is_test_file(name: &str) -> bool {
         name.ends_with(".test.ts") || name.ends_with(".test.subm")
+    }
+
+    fn is_http_test_file(path: &Path) -> bool {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| {
+                name.strip_suffix(".test.ts")
+                    .or_else(|| name.strip_suffix(".test.subm"))
+            })
+            .is_some_and(|stem| stem == "network" || stem.starts_with("network_"))
     }
 
     fn collect_test_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> std::io::Result<()> {

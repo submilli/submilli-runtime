@@ -1647,6 +1647,7 @@ async fn builtins_docs_names_the_packages_docs_call_for_a_package_name() {
     );
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test]
 async fn builtins_docs_recognizes_only_the_mcp_servers_the_blueprint_declares() {
     let url = upstream::spawn().await;
@@ -1880,6 +1881,7 @@ mod upstream {
     }
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test]
 async fn mcp_virtual_package_discovers_typechecks_and_calls() {
     let url = upstream::spawn().await;
@@ -2000,6 +2002,7 @@ async fn mcp_virtual_package_discovers_typechecks_and_calls() {
 
 /// A server that keeps state in its session (a browser page, a cursor) only
 /// works if one program's calls reach it as one session.
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test]
 async fn a_program_calls_an_mcp_server_over_one_session() {
     let url = upstream::spawn().await;
@@ -2533,4 +2536,32 @@ permissions:
         std::fs::read_dir(dir.path().join("ada")).unwrap().count(),
         1
     );
+}
+
+#[path = "common/parser_depth.rs"]
+mod parser_depth;
+
+#[test]
+fn mcp_parser_depth_is_bounded() {
+    parser_depth::isolated_worker("mcp_parser_depth_is_bounded", async {
+        let h = Harness::new();
+        let session = h.handshake(EPH).await;
+        let (status, _, rpc) = h
+            .post(
+                EPH,
+                tools_call(1, &parser_depth::nested_source()),
+                Some(&session),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(output(&rpc)["error"]["kind"], "compile_error", "{rpc}");
+        assert!(
+            rpc.to_string().contains("parser recursion limit exceeded"),
+            "{rpc}"
+        );
+        let (status, _, rpc) = h.post(EPH, tools_call(2, SUM), Some(&session)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(output(&rpc)["error"].is_null(), "{rpc}");
+        assert_eq!(output(&rpc)["result"], "2", "{rpc}");
+    });
 }

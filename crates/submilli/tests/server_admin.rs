@@ -53,6 +53,7 @@ async fn spawn_server() -> (String, std::sync::Arc<tokio::sync::Notify>) {
     (format!("http://{addr}"), shutdown)
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn status_reports_running() {
     let (server, shutdown) = spawn_server().await;
@@ -72,6 +73,7 @@ async fn status_reports_running() {
     shutdown.notify_one();
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stop_drains_and_status_then_reports_stopped() {
     let (server, _shutdown) = spawn_server().await;
@@ -93,6 +95,7 @@ async fn stop_drains_and_status_then_reports_stopped() {
     assert!(stdout(&status_out).contains("stopped"));
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn status_against_no_server_reports_stopped() {
     // Nothing bound on this port.

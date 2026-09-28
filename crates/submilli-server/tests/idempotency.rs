@@ -186,6 +186,7 @@ async fn execute(
 
 // --- unkeyed behaviour is unchanged -----------------------------------------
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test]
 async fn without_a_key_every_request_executes() {
     let mock = spawn_mock(false);
@@ -203,6 +204,7 @@ async fn without_a_key_every_request_executes() {
 
 // --- replay -----------------------------------------------------------------
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test]
 async fn a_sequential_duplicate_runs_once_and_replays_byte_for_byte() {
     let mock = spawn_mock(false);
@@ -222,6 +224,7 @@ async fn a_sequential_duplicate_runs_once_and_replays_byte_for_byte() {
 /// R5, the wait path. The mock holds the first execution open, so the duplicate
 /// provably arrives while it is still running — firing two requests and hoping
 /// they overlap would prove R4 (replay) instead.
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_concurrent_duplicate_waits_for_the_original() {
     let mock = spawn_mock(true);
@@ -255,6 +258,7 @@ async fn a_concurrent_duplicate_waits_for_the_original() {
     assert_eq!(second_body, first_body);
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test]
 async fn a_failing_program_replays_its_error_body_without_re_running() {
     let mock = spawn_mock(false);
@@ -291,6 +295,7 @@ function main(): string {{
 
 // --- conflict ---------------------------------------------------------------
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test]
 async fn the_same_key_with_different_code_is_refused_without_executing() {
     let mock = spawn_mock(false);
@@ -314,6 +319,7 @@ async fn the_same_key_with_different_code_is_refused_without_executing() {
 
 // --- scoping ----------------------------------------------------------------
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test]
 async fn the_same_key_in_two_sessions_executes_in_each() {
     let mock = spawn_mock(false);
@@ -410,6 +416,7 @@ async fn an_unbound_harness_secret_is_reported_before_the_key_is_considered() {
 
 // --- key validation (R13) ---------------------------------------------------
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test]
 async fn an_empty_key_is_rejected_and_creates_no_entry() {
     let mock = spawn_mock(false);
@@ -424,6 +431,7 @@ async fn an_empty_key_is_rejected_and_creates_no_entry() {
     assert!(ledger.session_ids().await.is_empty());
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test]
 async fn an_over_long_key_is_rejected() {
     let mock = spawn_mock(false);
@@ -495,6 +503,7 @@ function main(): string { return thing(); }"#;
 
 // --- last-run is not rewritten by a replay ----------------------------------
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test]
 async fn a_replay_leaves_last_run_reporting_the_most_recent_execution() {
     let mock = spawn_mock(false);
@@ -533,6 +542,7 @@ async fn a_replay_leaves_last_run_reporting_the_most_recent_execution() {
 /// layer the whole design rests on would otherwise never run under the HTTP
 /// surface. This drives the real `FileIdempotencyStore` through the endpoint
 /// and reads the resulting tree back off disk.
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test]
 async fn the_file_backed_ledger_records_and_replays_through_the_endpoint() {
     let mock = spawn_mock(false);
@@ -579,6 +589,7 @@ async fn the_file_backed_ledger_records_and_replays_through_the_endpoint() {
     assert_eq!(second_body, first_body);
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test]
 async fn a_replay_carries_the_same_session_header_and_content_type() {
     let mock = spawn_mock(false);
@@ -621,6 +632,7 @@ async fn a_replay_carries_the_same_session_header_and_content_type() {
 
 // --- restart recovery (R7) --------------------------------------------------
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test]
 async fn a_reservation_that_survived_a_restart_is_refused_as_indeterminate() {
     let mock = spawn_mock(false);

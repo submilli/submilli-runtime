@@ -93,6 +93,7 @@ fn upgrade(executable: &Path, home: &Path, source: &str, args: &[&str]) -> Outpu
         .unwrap()
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
 fn check_reports_a_newer_release_without_touching_the_executable() {
     let home = tempfile::tempdir().unwrap();
@@ -109,6 +110,7 @@ fn check_reports_a_newer_release_without_touching_the_executable() {
     assert_eq!(fs::read(&executable).unwrap(), before);
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
 fn replaces_the_running_executable_with_the_verified_release() {
     let home = tempfile::tempdir().unwrap();
@@ -134,6 +136,7 @@ fn replaces_the_running_executable_with_the_verified_release() {
     assert_eq!(installed, 2, "staging files must not remain");
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
 fn a_checksum_mismatch_for_either_executable_changes_nothing() {
     let home = tempfile::tempdir().unwrap();
@@ -152,6 +155,7 @@ fn a_checksum_mismatch_for_either_executable_changes_nothing() {
     assert_eq!(installed, 1, "the verified CLI must not be installed alone");
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
 fn an_unreachable_source_fails_without_changes() {
     let home = tempfile::tempdir().unwrap();

@@ -804,3 +804,30 @@ async fn configured_execution_timeout_interrupts_loop_without_expiring_early() {
     let (_, body) = execute_on(&router, "function main(): number { return 42; }").await;
     assert_eq!(body["result"], "42", "{body}");
 }
+
+#[path = "common/parser_depth.rs"]
+mod parser_depth;
+
+#[test]
+fn http_parser_depth_is_bounded() {
+    parser_depth::isolated_worker("http_parser_depth_is_bounded", async {
+        let app = router();
+        for (excessive, code) in [
+            (true, parser_depth::nested_source()),
+            (false, "function main(): number { return 42; }".into()),
+        ] {
+            let (status, body) = execute_on(&app, &code).await;
+            assert_eq!(status, StatusCode::OK);
+            if excessive {
+                assert_eq!(body["error"]["kind"], "compile_error", "{body}");
+                assert!(
+                    body.to_string().contains("parser recursion limit exceeded"),
+                    "{body}"
+                );
+            } else {
+                assert!(body["error"].is_null(), "{body}");
+                assert_eq!(body["result"], "42", "{body}");
+            }
+        }
+    });
+}

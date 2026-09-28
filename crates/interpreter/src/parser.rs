@@ -7,6 +7,9 @@ use crate::{
 };
 
 const MAX_ERRORS: usize = 20;
+// Counts recursive grammar entries, not delimiters: expression precedence and
+// mixed statement/type nesting share this budget on a 2 MiB worker stack.
+const MAX_PARSE_DEPTH: usize = 128;
 
 /// Names a type declaration may not take, as in TypeScript.
 const BUILT_IN_TYPE_NAMES: &[&str] = &[
@@ -45,8 +48,20 @@ pub fn parse(source: &str, tokens: Vec<Token>, file: FileId) -> (Ast, Vec<Diagno
         block_depth: 0,
         class_member_body_depth: 0,
         function_expression_body_depth: 0,
+        recursion_depth: 0,
+        recursion_limit_span: None,
     };
     p.parse_program();
+    if let Some(span) = p.recursion_limit_span {
+        // Speculative generic parsing can rewind both the cursor and diagnostics.
+        // Keep a limit failure outside that rollback and discard the partial AST.
+        p.error_at_with_help(
+            span,
+            "parser recursion limit exceeded",
+            vec!["simplify nested syntax or split it into separate declarations".into()],
+        );
+        return (Ast::new(), p.diagnostics);
+    }
     (p.ast, p.diagnostics)
 }
 
@@ -62,6 +77,8 @@ pub(crate) struct Parser<'a> {
     /// Nonzero while parsing a class method or constructor body; gates `this`/`super`.
     class_member_body_depth: u32,
     function_expression_body_depth: u32,
+    recursion_depth: usize,
+    recursion_limit_span: Option<Span>,
 }
 
 impl<'a> Parser<'a> {
@@ -96,6 +113,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_statement(&mut self) -> Option<StmtId> {
+        self.with_recursion_limit(Self::parse_statement_inner)
+    }
+
+    fn parse_statement_inner(&mut self) -> Option<StmtId> {
         match self.peek().kind {
             TokenKind::Let => self.parse_let_or_const(false),
             TokenKind::Const => self.parse_let_or_const(true),
@@ -2005,6 +2026,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_if(&mut self) -> Option<StmtId> {
+        self.with_recursion_limit(Self::parse_if_inner)
+    }
+
+    fn parse_if_inner(&mut self) -> Option<StmtId> {
         let kw = self.advance();
         let condition = self.parse_paren_condition()?;
         let then_block = self.parse_branch_body("if")?;
@@ -2658,6 +2683,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_type_array(&mut self, type_pos: TypePos) -> Option<TypeAnnotation> {
+        self.with_recursion_limit(|parser| parser.parse_type_array_inner(type_pos))
+    }
+
+    fn parse_type_array_inner(&mut self, type_pos: TypePos) -> Option<TypeAnnotation> {
         // `keyof` is contextual, not reserved: TypeScript allows it as an ordinary
         // identifier, and so does Submilli. It is an operator only when another type
         // follows it, which an identifier in type position never does.
@@ -3333,6 +3362,10 @@ impl<'a> Parser<'a> {
     /// Assignment is the lowest-precedence expression and right-associative:
     /// `a = b = c` assigns `c` to both, and yields it.
     fn parse_expression(&mut self) -> Option<ExprId> {
+        self.with_recursion_limit(Self::parse_expression_inner)
+    }
+
+    fn parse_expression_inner(&mut self) -> Option<ExprId> {
         let written = self.parse_conditional()?;
         if !is_assign_lookahead(&self.peek().kind) {
             return Some(written);
@@ -3450,6 +3483,18 @@ impl<'a> Parser<'a> {
     // parser reports a misleading `expected expression` at the return type.
     // `arrow_return_type_scanner_matches_type_grammar` pins the two together.
     fn scan_past_type_annotation(&self, start: usize, type_pos: TypePos) -> Option<usize> {
+        self.scan_past_type_annotation_at_depth(start, type_pos, 0)
+    }
+
+    fn scan_past_type_annotation_at_depth(
+        &self,
+        start: usize,
+        type_pos: TypePos,
+        depth: usize,
+    ) -> Option<usize> {
+        if depth >= MAX_PARSE_DEPTH {
+            return None;
+        }
         if matches!(
             self.tokens.get(start).map(|t| &t.kind),
             Some(TokenKind::Identifier)
@@ -3458,7 +3503,7 @@ impl<'a> Parser<'a> {
             .get(start + 1)
             .is_some_and(|t| self.token_is_word(t, "is"))
         {
-            return self.scan_past_type_annotation(start + 2, type_pos);
+            return self.scan_past_type_annotation_at_depth(start + 2, type_pos, depth + 1);
         }
         // Leading `|` (prettier's multiline union format).
         let start = if matches!(
@@ -3469,18 +3514,26 @@ impl<'a> Parser<'a> {
         } else {
             start
         };
-        let mut i = self.scan_past_single_type_member(start, type_pos)?;
+        let mut i = self.scan_past_single_type_member(start, type_pos, depth + 1)?;
         while matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Pipe)) {
-            i = self.scan_past_single_type_member(i + 1, type_pos)?;
+            i = self.scan_past_single_type_member(i + 1, type_pos, depth + 1)?;
         }
         Some(i)
     }
 
-    fn scan_past_single_type_member(&self, start: usize, type_pos: TypePos) -> Option<usize> {
+    fn scan_past_single_type_member(
+        &self,
+        start: usize,
+        type_pos: TypePos,
+        depth: usize,
+    ) -> Option<usize> {
+        if depth >= MAX_PARSE_DEPTH {
+            return None;
+        }
         if self.is_contextual_type_operator(start, "keyof")
             || self.is_contextual_type_operator(start, "readonly")
         {
-            return self.scan_past_single_type_member(start + 1, type_pos);
+            return self.scan_past_single_type_member(start + 1, type_pos, depth + 1);
         }
         let mut i = start;
         match self.tokens.get(i)?.kind {
@@ -3541,7 +3594,11 @@ impl<'a> Parser<'a> {
                     if !matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Arrow)) {
                         return None;
                     }
-                    return self.scan_past_type_annotation(i + 1, TypePos::Anywhere);
+                    return self.scan_past_type_annotation_at_depth(
+                        i + 1,
+                        TypePos::Anywhere,
+                        depth + 1,
+                    );
                 }
             }
             _ => return None,
@@ -3854,6 +3911,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_binary(&mut self, min_prec: u8) -> Option<ExprId> {
+        self.with_recursion_limit(|parser| parser.parse_binary_inner(min_prec))
+    }
+
+    fn parse_binary_inner(&mut self, min_prec: u8) -> Option<ExprId> {
         let mut lhs = self.parse_cast()?;
         // Track the previous op to reject `a || b ?? c` / `a ?? b || c` mixes.
         let mut last_op: Option<BinOp> = None;
@@ -3928,6 +3989,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_unary(&mut self) -> Option<ExprId> {
+        self.with_recursion_limit(Self::parse_unary_inner)
+    }
+
+    fn parse_unary_inner(&mut self) -> Option<ExprId> {
         // `typeof` is parsed as a unary prefix so `typeof x === "T"` works without a new layer;
         // the typechecker rejects `Typeof` outside the recognized equality fold position.
         if matches!(self.peek().kind, TokenKind::Typeof) {
@@ -4672,6 +4737,19 @@ impl<'a> Parser<'a> {
         }))
     }
 
+    fn with_recursion_limit<T>(&mut self, parse: impl FnOnce(&mut Self) -> Option<T>) -> Option<T> {
+        if self.recursion_limit_span.is_some() || self.recursion_depth >= MAX_PARSE_DEPTH {
+            self.recursion_limit_span.get_or_insert(self.peek().span);
+            // Stop recovery and enclosing block loops as well as recursive calls.
+            self.pos = self.tokens.len().saturating_sub(1);
+            return None;
+        }
+        self.recursion_depth += 1;
+        let result = parse(self);
+        self.recursion_depth -= 1;
+        result
+    }
+
     fn recover(&mut self) {
         while !self.is_at_eof() {
             match self.peek().kind {
@@ -4925,7 +5003,7 @@ fn is_assign_lookahead(kind: &TokenKind) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_ERRORS, Parser, parse};
+    use super::{MAX_ERRORS, MAX_PARSE_DEPTH, Parser, parse};
     use crate::source::Sources;
     use crate::{Asi, Ast, ExprKind, FileId, ImportKind, StmtKind, Token, TokenKind, diagnostics};
 
@@ -4962,7 +5040,24 @@ mod tests {
             block_depth: 0,
             class_member_body_depth: 0,
             function_expression_body_depth: 0,
+            recursion_depth: 0,
+            recursion_limit_span: None,
         }
+    }
+
+    #[test]
+    fn recursion_budget_accepts_boundary_and_restores_depth() {
+        let source = format!("{}true", "!".repeat(MAX_PARSE_DEPTH - 1));
+        let mut parser = parser_from_source(&source);
+        assert!(parser.parse_unary().is_some());
+        assert_eq!(parser.recursion_depth, 0);
+        assert!(parser.recursion_limit_span.is_none());
+
+        let source = format!("{}true", "!".repeat(MAX_PARSE_DEPTH));
+        let mut parser = parser_from_source(&source);
+        assert!(parser.parse_unary().is_none());
+        assert_eq!(parser.recursion_depth, 0);
+        assert!(parser.recursion_limit_span.is_some());
     }
 
     #[test]

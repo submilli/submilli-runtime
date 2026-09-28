@@ -8,6 +8,7 @@
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_docs_work_locally_and_through_a_registered_blueprint() {
     use axum::{Json, Router, routing::post};

@@ -501,6 +501,7 @@ fn sync_finds_installs_without_flags_and_applies_the_bundle_offline() {
     assert!(sync(&nested, home.path(), None).contains(": current"));
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
 fn sync_installs_a_newer_release_then_answers_from_its_cache() {
     let (project, home) = project_with_install("codex");
@@ -538,6 +539,7 @@ fn sync_installs_a_newer_release_then_answers_from_its_cache() {
     );
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
 fn sync_preserves_local_edits_and_survives_an_unreachable_source() {
     let (project, home) = project_with_install("claude");
@@ -549,6 +551,7 @@ fn sync_preserves_local_edits_and_survives_an_unreachable_source() {
     assert_eq!(fs::read_to_string(skill_md).unwrap(), "custom");
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
 fn sync_rejects_a_release_that_writes_outside_the_skill() {
     let (project, home) = project_with_install("claude");

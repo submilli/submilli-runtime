@@ -45,6 +45,7 @@ impl Server {
     }
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread")]
 async fn shutdown_paths() {
     sigterm_drains().await;

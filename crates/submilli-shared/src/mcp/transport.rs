@@ -339,6 +339,7 @@ pub(crate) fn policy_http_client(policy: &Arc<NetworkPolicy>) -> reqwest::Client
 
 #[cfg(test)]
 mod tests {
+    #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
     #[tokio::test(start_paused = true)]
     async fn hung_server_call_has_a_deadline() {
         use std::time::Duration;

@@ -34,6 +34,7 @@ const GRACE_SECS: u64 = 2;
 /// process teardown on a loaded machine.
 const TEARDOWN_ALLOWANCE: Duration = Duration::from_secs(4);
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
 fn sigterm_exits_the_process_within_the_grace_budget() {
     let home = tempfile::tempdir().expect("temp home");
@@ -80,6 +81,7 @@ fn sigterm_exits_the_process_within_the_grace_budget() {
 
 /// A second signal means the operator has stopped waiting — it must not require
 /// reaching for SIGKILL.
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
 fn a_second_sigterm_skips_the_remaining_grace() {
     let home = tempfile::tempdir().expect("temp home");
@@ -114,6 +116,7 @@ fn a_second_sigterm_skips_the_remaining_grace() {
 
 /// A long grace the test never waits out: proves the process is not simply
 /// sleeping for the full budget regardless of whether work is in flight.
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[test]
 fn an_idle_server_exits_immediately_regardless_of_the_grace() {
     let home = tempfile::tempdir().expect("temp home");

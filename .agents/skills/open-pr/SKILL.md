@@ -64,6 +64,19 @@ code preparation or PR creation merely because Linear is unavailable.
    Rust build/dependency/toolchain/lint changes. Use package, chart, and docs
    checks for their respective changes; combine checks for mixed changes.
    Fix formatting before review, without modifying unrelated work.
+   For routine Submilli Cargo and package/example checks, set
+   `SUBMILLI_SKIP_HTTP_TESTS=1`, including full compiler/runtime suites. Follow
+   `CLAUDE.md`'s conditional HTTP policy: use `SUBMILLI_SKIP_HTTP_TESTS=0` for
+   affected socket/live API tests only when the changed HTTP transport, routing,
+   wire formats, authentication, proxy/SSRF policy, external API behavior, or
+   relevant dependencies require them. Parser/compiler changes alone do not.
+   Test-selection/build-script changes need both modes checked with synthetic
+   package tests and a focused localhost test; live APIs are needed only when
+   their integration behavior changes. Scope enabled runs to affected tests or
+   packages. Socket tests, including localhost mocks, may need execution outside
+   the sandbox; request that access only for selected required checks. Report
+   skipped/ignored HTTP coverage separately from passing tests and explain the
+   selection. In-process handler tests remain enabled.
 2. Read and run `.agents/skills/launch-review-agents-loop/SKILL.md` for all three
    review roles, triage, repeat rounds, and final verification. The review skill
    leaves changes uncommitted; this outer workflow resumes after it passes.
@@ -116,7 +129,9 @@ attempts if the base advances. Use the selected PR base, not a hard-coded remote
 3. Reassess the whole PR diff and verification selection after rebasing. If the
    base or content changed, run the review loop again and all selected final
    checks on the integrated result. Keep full tests conditional on compiler/runtime
-   impact, including relevant changes in the newly integrated base. A no-op rebase
+   impact, including relevant changes in the newly integrated base. Reassess the
+   HTTP-test selection too; retain the skip setting unless the integrated diff
+   requires the affected HTTP checks. A no-op rebase
    with identical base/content can reuse prior results. If fixes are necessary,
    commit them with the relevant IDs and repeat review/verification. Amend only
    this workflow's own unpublished commits, never base commits.

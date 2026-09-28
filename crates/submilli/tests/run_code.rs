@@ -66,6 +66,7 @@ fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn string_return() {
     let server = spawn_server().await;
@@ -82,6 +83,7 @@ async fn string_return() {
     assert_eq!(stdout(&out), "hello\n");
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn number_return() {
     let server = spawn_server().await;
@@ -98,6 +100,7 @@ async fn number_return() {
     assert_eq!(stdout(&out), "42\n");
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn boolean_return() {
     let server = spawn_server().await;
@@ -114,6 +117,7 @@ async fn boolean_return() {
     assert_eq!(stdout(&out), "true\n");
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn void_with_stdio() {
     let server = spawn_server().await;
@@ -133,6 +137,7 @@ async fn void_with_stdio() {
     assert_eq!(stderr(&out), "hi\nthere\n");
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn void_empty() {
     let server = spawn_server().await;
@@ -146,6 +151,7 @@ async fn void_empty() {
     assert_eq!(stderr(&out), "");
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn compile_error() {
     let server = spawn_server().await;
@@ -164,6 +170,7 @@ async fn compile_error() {
     assert!(err.contains("error:"), "stderr: {err}");
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn runtime_trap_with_console() {
     let server = spawn_server().await;
@@ -185,6 +192,7 @@ async fn runtime_trap_with_console() {
     );
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unreachable_server() {
     // Port 1 is privileged — nothing can bind to it in tests, so connection refuses immediately.
