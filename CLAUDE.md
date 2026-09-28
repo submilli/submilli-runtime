@@ -48,17 +48,66 @@ scaffolding reads this catalog.
   what already-readable code does.
 - TypeScript classes use `private` / `private readonly`, not `#private` fields.
 
+## Mandatory review before pull requests
+
+Use `/open-pr` in Claude, following
+[.claude/commands/open-pr.md](.claude/commands/open-pr.md), or `$open-pr` in Codex,
+following [.agents/skills/open-pr/SKILL.md](.agents/skills/open-pr/SKILL.md),
+to prepare, verify, and open a pull request. Both workflows enforce this gate.
+
+Before creating any pull request (including a draft), run the
+`launch-review-agents-loop` skill:
+
+- Claude: `/launch-review-agents-loop`, following
+  [.claude/skills/launch-review-agents-loop/SKILL.md](.claude/skills/launch-review-agents-loop/SKILL.md).
+- Codex: `$launch-review-agents-loop`, following
+  [.agents/skills/launch-review-agents-loop/SKILL.md](.agents/skills/launch-review-agents-loop/SKILL.md).
+
+This is mandatory for code, configuration, and documentation changes. Run the
+clean-code, correctness, and edge-case reviews, triage every finding, and repeat
+until a complete round has no new confirmed findings. Complete required checks
+on the final proposed diff; rerun the loop after subsequent changes. A blocked
+or non-converged review does not satisfy this requirement. If delegation is
+unavailable, use the skill's separate-pass fallback and disclose that limitation
+in the PR. Report review rounds, finding dispositions, checks, and outstanding
+items in the PR description. Filing an issue does not clear an unresolved defect
+within the PR's scope.
+
 ## Verification
 
-Scope verification to the files changed. Run the full workspace suite only when
-Rust code changes. For Rust changes, run from the repository root:
+Choose checks from the entire proposed PR diff, including committed changes,
+based on behavior affected rather than file extensions alone. Combine the checks
+for mixed changes. Record why full tests are required or skipped.
+
+For Rust source changes or changes to Rust build/dependency/toolchain/lint
+configuration, run from the repository root:
 
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
+```
+
+Run the full tests only when the change affects the compiler/runtime or inputs
+that can change their behavior or conformance coverage. This includes interpreter
+implementation, standard library host functions, language fixtures and snapshots,
+conformance tests/harness/data, and relevant dependency, feature, build, or
+toolchain changes. Changes in CLI/build/shared/server code require full tests
+when they alter compilation, generated artifacts, execution, or runtime integration;
+an isolated CLI message or server routing change does not by itself require them.
+Inspect dependency and build-input relationships for configuration-only changes.
+When impact is uncertain, investigate those relationships and explain the decision.
+
+For compiler/runtime-impacting changes, run:
+
+```sh
 SUBMILLI_FULL_TEST=1 cargo test --workspace
 cargo run -p submilli -- build test
 ```
+
+For other Rust changes, run affected crates' tests with full tests explicitly
+disabled, for example `SUBMILLI_FULL_TEST=0 cargo test -p submilli-server`.
+Include affected callers/integration tests when shared code changes. Do not use
+`SUBMILLI_FULL_TEST=1` merely because a `.rs` file changed.
 
 For TypeScript package-only changes, run the affected packages' tests and
 documentation examples instead:
@@ -68,9 +117,13 @@ cargo run -p submilli -- build test -p @submilli/<package>
 ```
 
 Run any additional package-specific checks documented by those packages, such as
-blueprint policy tests. Do not run Rust formatting, clippy, or the workspace test
-suite for changes confined to TypeScript packages or documentation. For public
-book changes, use the documentation-site checks below.
+blueprint policy tests. Ordinary TypeScript package or documentation edits do not
+require Rust formatting, clippy, or the workspace test suite. Embedded/build-input
+documentation (such as `llm-prompt.md` and package `docs/readme.md`) also needs its
+owning build/example checks; use the full suite only if compiler/runtime behavior
+or conformance coverage is affected. For public book changes, use the
+documentation-site checks below. For agent instructions, commands, and skills,
+validate their frontmatter, referenced paths, and workflow consistency.
 
 Use focused tests while iterating. Interpreter fixtures use assertions to verify
 runtime behavior; compile-error fixtures use `// expect-error: <substring>`.
