@@ -75,6 +75,8 @@ UPDATE_TYPESCRIPT_EXPECTED=1 cargo test -p conformance --test typescript
 ```
 
 `CONFORMANCE_FILTER=<path substring>` limits the run to matching cases.
+`TYPESCRIPT_CHECKS_OUT=<file>` writes every check the run makes, one per line, for
+`coverage.cjs`.
 
 The test also fails when a case has no `.types` file, since nothing would be compared,
 and when a baseline or `.divergences` file has no case beside it. Update mode removes
@@ -165,6 +167,7 @@ All in `typescript-baselines/`, except the last:
 | `write-baselines.cjs` | Writes the `.types` and `.errors.txt` of every case, or those matching a path substring. |
 | `port-suite.cjs` | Picks the upstream cases that belong, and runs the three above and the runner on each. |
 | `tsc-case.cjs` | What the others share: the `tsc` options a case is checked with, and its errors. |
+| `coverage.cjs` | Writes `../COVERAGE.md`: for each supported feature, whether every upstream test about it has been dealt with, and what the suites check of it. |
 | `../examples/typescript_case_errors.rs` | Prints our errors on a case for the pruner, classified by `../tests/support/case_errors.rs`, which the runner uses too. |
 
 ### Setting up
@@ -212,6 +215,9 @@ the upstream case has.
    pruning cut something from is ported again too, so what it cut comes back. Cases
    ported whole are never touched. Review the diff: a case can also leave the suite,
    when what's left no longer passes the criteria above.
+
+4. Regenerate the coverage map, `node coverage.cjs <TypeScript>` from
+   `typescript-baselines/`, and commit `COVERAGE.md` with the change.
 
 ### After changing what counts as supported
 

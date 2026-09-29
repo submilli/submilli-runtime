@@ -6,6 +6,9 @@ Two suites live here:
 - **TypeScript** ([`typescript/README.md`](typescript/README.md)): what the
   typechecker infers, against what `tsc` infers for the same program.
 
+[`COVERAGE.md`](COVERAGE.md) lists each feature Submilli supports, whether every
+upstream test about it has been dealt with, and what both suites check of it.
+
 ## test262
 
 Hand-ported, vendored subset of [tc39/test262](https://github.com/tc39/test262),

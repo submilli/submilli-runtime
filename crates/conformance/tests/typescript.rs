@@ -39,16 +39,21 @@ fn typescript_baselines() {
 
     let cases = find_cases(&root);
     let mut totals = Totals::default();
+    let mut checks = String::new();
     for case in &cases {
         match compare_case(case) {
             Ok(report) => {
                 totals.add(&report);
+                checks.push_str(&report.render_checks(&rel(case)));
                 failures.extend(check_divergences(case, &report, update));
             }
             Err(message) => failures.push(format!("--- {} ---\n{message}", rel(case))),
         }
     }
 
+    if let Ok(path) = std::env::var("TYPESCRIPT_CHECKS_OUT") {
+        fs::write(&path, checks).unwrap_or_else(|e| panic!("write {path}: {e}"));
+    }
     eprintln!(
         "typescript: {} case(s); {} of {} tsc types compared, {} differ; \
          {} tsc error line(s) none of ours agrees with, {} error line(s) of ours tsc does not share",
@@ -156,7 +161,7 @@ struct Totals {
 impl Totals {
     fn add(&mut self, report: &Report) {
         self.baseline_entries += report.baseline_entries;
-        self.compared += report.compared;
+        self.compared += report.compared.len();
         self.type_divergences += report.type_divergences.len();
         self.missed_errors += report.missed_errors.len();
         self.extra_errors += report.extra_errors.len();
@@ -166,7 +171,11 @@ impl Totals {
 /// Everything one case disagrees with `tsc` about.
 struct Report {
     baseline_entries: usize,
-    compared: usize,
+    /// The `tsc` entries compared.
+    compared: Vec<ComparedEntry>,
+    /// The lines whose errors were compared: where `tsc` reports one, or where we
+    /// report one that could agree.
+    error_lines: BTreeSet<usize>,
     type_divergences: Vec<TypeDivergence>,
     /// `tsc`'s errors that none of ours agrees with.
     missed_errors: Vec<MissedError>,
@@ -179,7 +188,7 @@ impl Report {
     fn render(&self) -> String {
         let mut out = format!(
             "types: {} of {} tsc entries compared, {} differ\n",
-            self.compared,
+            self.compared.len(),
             self.baseline_entries,
             self.type_divergences.len(),
         );
@@ -220,6 +229,28 @@ impl Report {
         }
         out
     }
+
+    /// Every check the case makes, one per line, for `TYPESCRIPT_CHECKS_OUT`:
+    /// `<case>\t<line>\ttype\t<entry text>\t<tsc type>` for a type compared, and
+    /// `<case>\t<line>\terror\t\t` for a line whose errors were compared.
+    fn render_checks(&self, case: &str) -> String {
+        let types = self
+            .compared
+            .iter()
+            .map(|e| format!("{case}\t{}\ttype\t{}\t{}\n", e.line, e.text, e.tsc));
+        let errors = self
+            .error_lines
+            .iter()
+            .map(|line| format!("{case}\t{line}\terror\t\t\n"));
+        types.chain(errors).collect()
+    }
+}
+
+/// A `tsc` entry that was compared with ours.
+struct ComparedEntry {
+    line: usize,
+    text: String,
+    tsc: String,
 }
 
 struct MissedError {
@@ -264,17 +295,29 @@ fn compare_case(case: &Path) -> Result<Report, String> {
     let our_error_lines: BTreeSet<usize> = our_errors.keys().copied().collect();
     let (compared, type_divergences) =
         compare_types(&baseline, &ours, &our_error_lines, &agreed_lines);
+    let error_lines = tsc_errors
+        .iter()
+        .map(|e| e.line)
+        .chain(
+            our_errors
+                .iter()
+                .filter(|(_, e)| e.can_agree())
+                .map(|(&line, _)| line),
+        )
+        .collect();
     let (missed_errors, extra_errors) = compare_errors(tsc_errors, &our_errors, &agreed_lines);
     Ok(Report {
         baseline_entries: baseline.values().map(Vec::len).sum(),
         compared,
+        error_lines,
         type_divergences,
         missed_errors,
         extra_errors,
     })
 }
 
-/// How many `tsc` entries were compared, and those whose type differs from ours.
+/// The `tsc` entries compared, with their lines, and those whose type differs from
+/// ours.
 ///
 /// Skips a pair where a side's type is its error recovery, which says nothing about
 /// inference: ours holding `<error>` on a line where we report an error (the error
@@ -284,13 +327,13 @@ fn compare_types(
     ours: &EntriesByLine,
     our_error_lines: &BTreeSet<usize>,
     agreed_lines: &BTreeSet<usize>,
-) -> (usize, Vec<TypeDivergence>) {
+) -> (Vec<ComparedEntry>, Vec<TypeDivergence>) {
     let error_type = Type::Error.to_string();
     let is_recovery = |line: &usize, tsc_ty: &str, our_ty: &str| {
         (our_ty.contains(&error_type) && our_error_lines.contains(line))
             || (tsc_ty == "any" && agreed_lines.contains(line))
     };
-    let mut compared = 0;
+    let mut compared = Vec::new();
     let mut divergences = Vec::new();
     for (line, entries) in baseline {
         let ours_on_line = ours.get(line).map_or(&[][..], Vec::as_slice);
@@ -313,7 +356,11 @@ fn compare_types(
                 if is_recovery(line, tsc_ty, our_ty) {
                     continue;
                 }
-                compared += 1;
+                compared.push(ComparedEntry {
+                    line: *line,
+                    text: text.to_string(),
+                    tsc: tsc_ty.to_string(),
+                });
                 if normalize_type(tsc_ty) != normalize_type(our_ty) {
                     divergences.push(TypeDivergence {
                         line: *line,
@@ -1275,7 +1322,11 @@ fn entries_prefer_retained_loop_reads_and_keep_erased_source_nodes() {
             .join("typescript")
             .join(format!("{case}.ts"));
         let report = compare_case(&path).expect("conformance case");
-        assert_eq!(report.compared, compared, "source coverage for {case}");
+        assert_eq!(
+            report.compared.len(),
+            compared,
+            "source coverage for {case}"
+        );
         assert!(report.type_divergences.is_empty(), "{}", report.render());
     }
 }
