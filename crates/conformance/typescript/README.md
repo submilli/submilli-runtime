@@ -69,7 +69,8 @@ reasons and a detail:
 | porter failure | What went wrong. A bug in the porter, to fix. |
 
 `port-suite.cjs` writes the file on every run, so it always covers every upstream
-case in `controlFlow`, `expressions`, `statements` and `types`.
+conformance case. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
+read.
 
 ## What the test checks
 
@@ -163,11 +164,22 @@ Two kinds of entry are skipped, because they are not comparable:
 line where it was:
 
 1. `var` becomes `let`, and `undefined` becomes `null`, outside strings and comments.
+   A `var` declared again where the `let` would share its scope, which upstream uses
+   to check a type (`var x: T; var x = e;`), binds `x_2` instead of redeclaring `x`;
+   later reads still name the first. A case where `tsc` checks that such repeats
+   agree (TS2403) is left out, since the rename takes that check away.
 2. A typed binding with no value, such as `let x: T;` or `declare const x: T;`, gets the
    value `null as unknown as (T)`.
 3. A `declare function` gets a body that returns such a value.
 4. A function declaration or class method with no return type gets the one `tsc`
-   infers for it.
+   infers for it, and so do a class field and a parameter with a default value that
+   have no type. Where `tsc` infers `any`, or a type that can't be written there (a
+   class expression's, or `this`), nothing is written, and a parameter with no
+   default is left alone: its type comes from its context, which is what such a
+   case tests. Submilli requires these types, so it infers none of them. The type
+   is `tsc`'s, and the initializer's own type is still compared, but a case about
+   how a field's type is inferred (`readonly c = 1` is `1`, `c = 1` is `number`)
+   checks less once ported.
 5. `// @strict: false` becomes `// @strict: true`. Submilli is always strict.
 6. `function main(): void {}` is appended.
 
@@ -230,8 +242,7 @@ Once, from the repository root:
 # TypeScript's conformance tests, at the commit the suite is ported from.
 git init <TypeScript> && cd <TypeScript>
 git remote add origin https://github.com/microsoft/TypeScript.git
-git sparse-checkout set tests/cases/conformance/{controlFlow,expressions,statements,types} \
-  tests/baselines/reference
+git sparse-checkout set tests/cases/conformance tests/baselines/reference
 git fetch --depth 1 --filter=blob:none origin 5848bc5157b22ff7f4e3369f4645a514a433b15f
 git checkout FETCH_HEAD
 cd -

@@ -1,0 +1,105 @@
+=== derivedClassWithoutExplicitConstructor.ts ===
+class Base {
+>Base : Base
+>     : ^^^^
+
+    a: number = 1;
+>a : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+    constructor(x: number) { this.a = x; }
+>x : number
+>  : ^^^^^^
+>this.a = x : number
+>           : ^^^^^^
+>this.a : number
+>       : ^^^^^^
+>this : this
+>     : ^^^^
+>a : number
+>  : ^^^^^^
+>x : number
+>  : ^^^^^^
+
+}
+
+class Derived extends Base {
+>Derived : Derived
+>        : ^^^^^^^
+>Base : Base
+>     : ^^^^
+
+    x: number = 1
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+    y: string = 'hello';
+>y : string
+>  : ^^^^^^
+>'hello' : "hello"
+>        : ^^^^^^^
+
+}
+
+let r = new Derived(); // error
+>r : Derived
+>  : ^^^^^^^
+>new Derived() : Derived
+>              : ^^^^^^^
+>Derived : typeof Derived
+>        : ^^^^^^^^^^^^^^
+
+let r2 = new Derived(1); 
+>r2 : Derived
+>   : ^^^^^^^
+>new Derived(1) : Derived
+>               : ^^^^^^^
+>Derived : typeof Derived
+>        : ^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+
+class Base2<T> {
+>Base2 : Base2<T>
+>      : ^^^^^^^^
+>T : T
+>  : ^
+
+    a: T;
+>a : T
+>  : ^
+
+    constructor(x: T) { this.a = x; }
+>x : T
+>  : ^
+>this.a = x : T
+>           : ^
+>this.a : T
+>       : ^
+>this : this
+>     : ^^^^
+>a : T
+>  : ^
+>x : T
+>  : ^
+
+}
+
+/*pruned*/;                               
+                 
+                
+ 
+
+/*pruned*/;      // error
+/*pruned*/;                 // ok
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

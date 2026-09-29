@@ -1,0 +1,28 @@
+=== for-of36.ts ===
+let tuple: [string, boolean] = ["", true];
+>tuple : [string, boolean]
+>      : ^^^^^^^^^^^^^^^^^
+>["", true] : [string, true]
+>           : ^^^^^^^^^^^^^^
+>"" : ""
+>   : ^^
+>true : true
+>     : ^^^^
+
+for (let v of tuple) {
+>v : string | boolean
+>  : ^^^^^^^^^^^^^^^^
+>tuple : [string, boolean]
+>      : ^^^^^^^^^^^^^^^^^
+
+    v;
+>v : string | boolean
+>  : ^^^^^^^^^^^^^^^^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

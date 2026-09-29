@@ -1,0 +1,253 @@
+=== genericCallWithFunctionTypedArguments.ts ===
+// Generic functions used as arguments for function typed parameters are not used to make inferences from
+// Using function arguments, no errors expected
+
+function foo<T>(x: (a: T) => T): T {
+>foo : <T>(x: (a: T) => T) => T
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : (a: T) => T
+>  : ^^^^^^^^^^^
+>a : T
+>  : ^
+
+    return x(null);
+>x(null) : T
+>        : ^
+>x : (a: T) => T
+>  : ^^^^^^^^^^^
+
+}
+
+/*pruned*/;                   // {}
+/*pruned*/;                            // string 
+let r3 = foo(x => ''); // {}
+>r3 : unknown
+>   : ^^^^^^^
+>foo(x => '') : unknown
+>             : ^^^^^^^
+>foo : <T>(x: (a: T) => T) => T
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^
+>x => '' : (x: unknown) => string
+>        : ^^^^^^^^^^^^^^^^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+>'' : ""
+>   : ^^
+
+
+function foo2<T, U>(x: T, cb: (a: T) => U): U {
+>foo2 : <T, U>(x: T, cb: (a: T) => U) => U
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>x : T
+>  : ^
+>cb : (a: T) => U
+>   : ^^^^^^^^^^^
+>a : T
+>  : ^
+
+    return cb(x);
+>cb(x) : U
+>      : ^
+>cb : (a: T) => U
+>   : ^^^^^^^^^^^
+>x : T
+>  : ^
+
+}
+
+/*pruned*/;                                         // string, contextual signature instantiation is applied to generic functions
+let r5 = foo2(1, (a) => ''); // string
+>r5 : string
+>   : ^^^^^^
+>foo2(1, (a) => '') : string
+>                   : ^^^^^^
+>foo2 : <T, U>(x: T, cb: (a: T) => U) => U
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+>(a) => '' : (a: number) => string
+>          : ^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>'' : ""
+>   : ^^
+
+/*pruned*/;                                       
+
+function foo3<T, U>(x: T, cb: (a: T) => U, y: U): U {
+>foo3 : <T, U>(x: T, cb: (a: T) => U, y: U) => U
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>x : T
+>  : ^
+>cb : (a: T) => U
+>   : ^^^^^^^^^^^
+>a : T
+>  : ^
+>y : U
+>  : ^
+
+    return cb(x);
+>cb(x) : U
+>      : ^
+>cb : (a: T) => U
+>   : ^^^^^^^^^^^
+>x : T
+>  : ^
+
+}
+
+/*pruned*/;                            // string
+
+let r8 = foo3(1, function (a) { return '' }, 1); // error
+>r8 : number
+>   : ^^^^^^
+>foo3(1, function (a) { return '' }, 1) : 1
+>                                       : ^
+>foo3 : <T, U>(x: T, cb: (a: T) => U, y: U) => U
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+>function (a) { return '' } : (a: number) => string
+>                           : ^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>'' : ""
+>   : ^^
+>1 : 1
+>  : ^
+
+let r9 = foo3<number, string>(1, (a) => '', ''); // string
+>r9 : string
+>   : ^^^^^^
+>foo3<number, string>(1, (a) => '', '') : string
+>                                       : ^^^^^^
+>foo3 : <T, U>(x: T, cb: (a: T) => U, y: U) => U
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+>(a) => '' : (a: number) => string
+>          : ^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>'' : ""
+>   : ^^
+>'' : ""
+>   : ^^
+
+
+function other<T, U>(t: T, u: U): void {
+>other : <T, U>(t: T, u: U) => void
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+    let r10 = foo2(1, (x: T) => ''); // error
+>r10 : string
+>    : ^^^^^^
+>foo2(1, (x: T) => '') : string
+>                      : ^^^^^^
+>foo2 : <T, U>(x: T, cb: (a: T) => U) => U
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+>(x: T) => '' : (x: T) => string
+>             : ^^^^^^^^^^^^^^^^
+>x : T
+>  : ^
+>'' : ""
+>   : ^^
+
+    let r10_2 = foo2(1, (x) => ''); // string
+>r10_2 : string
+>      : ^^^^^^
+>foo2(1, (x) => '') : string
+>                   : ^^^^^^
+>foo2 : <T, U>(x: T, cb: (a: T) => U) => U
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+>(x) => '' : (x: number) => string
+>          : ^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>'' : ""
+>   : ^^
+
+
+    let r11 = foo3(1, (x: T) => '', ''); // error
+>r11 : string
+>    : ^^^^^^
+>foo3(1, (x: T) => '', '') : string
+>                          : ^^^^^^
+>foo3 : <T, U>(x: T, cb: (a: T) => U, y: U) => U
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+>(x: T) => '' : (x: T) => string
+>             : ^^^^^^^^^^^^^^^^
+>x : T
+>  : ^
+>'' : ""
+>   : ^^
+>'' : ""
+>   : ^^
+
+    let r11b = foo3(1, (x: T) => '', 1); // error
+>r11b : string
+>     : ^^^^^^
+>foo3(1, (x: T) => '', 1) : string
+>                         : ^^^^^^
+>foo3 : <T, U>(x: T, cb: (a: T) => U, y: U) => U
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+>(x: T) => '' : (x: T) => string
+>             : ^^^^^^^^^^^^^^^^
+>x : T
+>  : ^
+>'' : ""
+>   : ^^
+>1 : 1
+>  : ^
+
+    let r12 = foo3(1, function (a) { return '' }, 1); // error
+>r12 : number
+>    : ^^^^^^
+>foo3(1, function (a) { return '' }, 1) : 1
+>                                       : ^
+>foo3 : <T, U>(x: T, cb: (a: T) => U, y: U) => U
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+>function (a) { return '' } : (a: number) => string
+>                           : ^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>'' : ""
+>   : ^^
+>1 : 1
+>  : ^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

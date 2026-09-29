@@ -1,0 +1,499 @@
+=== typeFromPropertyAssignment29.ts ===
+function ExpandoDecl(n: number): string {
+>ExpandoDecl : typeof ExpandoDecl
+>            : ^^^^^^^^^^^^^^^^^^
+>n : number
+>  : ^^^^^^
+
+    return n.toString();
+>n.toString() : string
+>             : ^^^^^^
+>n.toString : (radix?: number) => string
+>           : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>n : number
+>  : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+}
+ExpandoDecl.prop = 2
+>ExpandoDecl.prop = 2 : 2
+>                     : ^
+>ExpandoDecl.prop : number
+>                 : ^^^^^^
+>ExpandoDecl : typeof ExpandoDecl
+>            : ^^^^^^^^^^^^^^^^^^
+>prop : number
+>     : ^^^^^^
+>2 : 2
+>  : ^
+
+ExpandoDecl.m = function(n: number) {
+>ExpandoDecl.m = function(n: number) {     return n + 1; } : (n: number) => number
+>                                                          : ^^^^^^^^^^^^^^^^^^^^^
+>ExpandoDecl.m : (n: number) => number
+>              : ^^^^^^^^^^^^^^^^^^^^^
+>ExpandoDecl : typeof ExpandoDecl
+>            : ^^^^^^^^^^^^^^^^^^
+>m : (n: number) => number
+>  : ^^^^^^^^^^^^^^^^^^^^^
+>function(n: number) {     return n + 1; } : (n: number) => number
+>                                          : ^^^^^^^^^^^^^^^^^^^^^
+>n : number
+>  : ^^^^^^
+
+    return n + 1;
+>n + 1 : number
+>      : ^^^^^^
+>n : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+}
+let n = ExpandoDecl.prop + ExpandoDecl.m(12) + ExpandoDecl(101).length
+>n : number
+>  : ^^^^^^
+>ExpandoDecl.prop + ExpandoDecl.m(12) + ExpandoDecl(101).length : number
+>                                                               : ^^^^^^
+>ExpandoDecl.prop + ExpandoDecl.m(12) : number
+>                                     : ^^^^^^
+>ExpandoDecl.prop : number
+>                 : ^^^^^^
+>ExpandoDecl : typeof ExpandoDecl
+>            : ^^^^^^^^^^^^^^^^^^
+>prop : number
+>     : ^^^^^^
+>ExpandoDecl.m(12) : number
+>                  : ^^^^^^
+>ExpandoDecl.m : (n: number) => number
+>              : ^^^^^^^^^^^^^^^^^^^^^
+>ExpandoDecl : typeof ExpandoDecl
+>            : ^^^^^^^^^^^^^^^^^^
+>m : (n: number) => number
+>  : ^^^^^^^^^^^^^^^^^^^^^
+>12 : 12
+>   : ^^
+>ExpandoDecl(101).length : number
+>                        : ^^^^^^
+>ExpandoDecl(101) : string
+>                 : ^^^^^^
+>ExpandoDecl : typeof ExpandoDecl
+>            : ^^^^^^^^^^^^^^^^^^
+>101 : 101
+>    : ^^^
+>length : number
+>       : ^^^^^^
+
+
+const ExpandoExpr = function (n: number) {
+>ExpandoExpr : { (n: number): string; prop: { x: number; y?: undefined; } | { y: string; x?: undefined; }; m(n: number): number; }
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>function (n: number) {     return n.toString(); } : { (n: number): string; prop: { x: number; y?: undefined; } | { y: string; x?: undefined; }; m(n: number): number; }
+>                                                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>n : number
+>  : ^^^^^^
+
+    return n.toString();
+>n.toString() : string
+>             : ^^^^^^
+>n.toString : (radix?: number) => string
+>           : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>n : number
+>  : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+}
+ExpandoExpr.prop = { x: 2 }
+>ExpandoExpr.prop = { x: 2 } : { x: number; }
+>                            : ^^^^^^^^^^^^^^
+>ExpandoExpr.prop : { x: number; y?: undefined; } | { y: string; x?: undefined; }
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>ExpandoExpr : { (n: number): string; prop: { x: number; y?: undefined; } | { y: string; x?: undefined; }; m(n: number): number; }
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>prop : { x: number; y?: undefined; } | { y: string; x?: undefined; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ x: 2 } : { x: number; }
+>         : ^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>2 : 2
+>  : ^
+
+ExpandoExpr.prop = { y: "" }
+>ExpandoExpr.prop = { y: "" } : { y: string; }
+>                             : ^^^^^^^^^^^^^^
+>ExpandoExpr.prop : { x: number; y?: undefined; } | { y: string; x?: undefined; }
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>ExpandoExpr : { (n: number): string; prop: { x: number; y?: undefined; } | { y: string; x?: undefined; }; m(n: number): number; }
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>prop : { x: number; y?: undefined; } | { y: string; x?: undefined; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ y: "" } : { y: string; }
+>          : ^^^^^^^^^^^^^^
+>y : string
+>  : ^^^^^^
+>"" : ""
+>   : ^^
+
+ExpandoExpr.m = function(n: number) {
+>ExpandoExpr.m = function(n: number) {     return n + 1; } : (n: number) => number
+>                                                          : ^^^^^^^^^^^^^^^^^^^^^
+>ExpandoExpr.m : (n: number) => number
+>              : ^^^^^^^^^^^^^^^^^^^^^
+>ExpandoExpr : { (n: number): string; prop: { x: number; y?: undefined; } | { y: string; x?: undefined; }; m(n: number): number; }
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>m : (n: number) => number
+>  : ^^^^^^^^^^^^^^^^^^^^^
+>function(n: number) {     return n + 1; } : (n: number) => number
+>                                          : ^^^^^^^^^^^^^^^^^^^^^
+>n : number
+>  : ^^^^^^
+
+    return n + 1;
+>n + 1 : number
+>      : ^^^^^^
+>n : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+}
+let n_2 = (ExpandoExpr.prop.x || 0) + ExpandoExpr.m(12) + ExpandoExpr(101).length
+>n_2 : number
+>    : ^^^^^^
+>(ExpandoExpr.prop.x || 0) + ExpandoExpr.m(12) + ExpandoExpr(101).length : number
+>                                                                        : ^^^^^^
+>(ExpandoExpr.prop.x || 0) + ExpandoExpr.m(12) : number
+>                                              : ^^^^^^
+>(ExpandoExpr.prop.x || 0) : 0
+>                          : ^
+>ExpandoExpr.prop.x || 0 : 0
+>                        : ^
+>ExpandoExpr.prop.x : undefined
+>                   : ^^^^^^^^^
+>ExpandoExpr.prop : { y: string; x?: undefined; }
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>ExpandoExpr : { (n: number): string; prop: { x: number; y?: undefined; } | { y: string; x?: undefined; }; m(n: number): number; }
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>prop : { y: string; x?: undefined; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>0 : 0
+>  : ^
+>ExpandoExpr.m(12) : number
+>                  : ^^^^^^
+>ExpandoExpr.m : (n: number) => number
+>              : ^^^^^^^^^^^^^^^^^^^^^
+>ExpandoExpr : { (n: number): string; prop: { x: number; y?: undefined; } | { y: string; x?: undefined; }; m(n: number): number; }
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>m : (n: number) => number
+>  : ^^^^^^^^^^^^^^^^^^^^^
+>12 : 12
+>   : ^^
+>ExpandoExpr(101).length : number
+>                        : ^^^^^^
+>ExpandoExpr(101) : string
+>                 : ^^^^^^
+>ExpandoExpr : { (n: number): string; prop: { x: number; y?: undefined; } | { y: string; x?: undefined; }; m(n: number): number; }
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>101 : 101
+>    : ^^^
+>length : number
+>       : ^^^^^^
+
+
+const ExpandoArrow = (n: number) => n.toString();
+>ExpandoArrow : { (n: number): string; prop: number; m(n: number): number; }
+>             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(n: number) => n.toString() : { (n: number): string; prop: number; m(n: number): number; }
+>                            : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>n : number
+>  : ^^^^^^
+>n.toString() : string
+>             : ^^^^^^
+>n.toString : (radix?: number) => string
+>           : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>n : number
+>  : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+ExpandoArrow.prop = 2
+>ExpandoArrow.prop = 2 : 2
+>                      : ^
+>ExpandoArrow.prop : number
+>                  : ^^^^^^
+>ExpandoArrow : { (n: number): string; prop: number; m(n: number): number; }
+>             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>prop : number
+>     : ^^^^^^
+>2 : 2
+>  : ^
+
+ExpandoArrow.m = function(n: number) {
+>ExpandoArrow.m = function(n: number) {     return n + 1;  } : (n: number) => number
+>                                                            : ^^^^^^^^^^^^^^^^^^^^^
+>ExpandoArrow.m : (n: number) => number
+>               : ^^^^^^^^^^^^^^^^^^^^^
+>ExpandoArrow : { (n: number): string; prop: number; m(n: number): number; }
+>             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>m : (n: number) => number
+>  : ^^^^^^^^^^^^^^^^^^^^^
+>function(n: number) {     return n + 1;  } : (n: number) => number
+>                                           : ^^^^^^^^^^^^^^^^^^^^^
+>n : number
+>  : ^^^^^^
+
+    return n + 1;
+>n + 1 : number
+>      : ^^^^^^
+>n : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+
+}
+
+/*pruned*/;                                                                 
+                                         
+                     
+      
+                                 
+                  
+ 
+/*pruned*/;             
+
+function ExpandoMerge(n: number): number {
+>ExpandoMerge : typeof ExpandoMerge
+>             : ^^^^^^^^^^^^^^^^^^^
+>n : number
+>  : ^^^^^^
+
+    return n * 100;
+>n * 100 : number
+>        : ^^^^^^
+>n : number
+>  : ^^^^^^
+>100 : 100
+>    : ^^^
+
+}
+ExpandoMerge.p1 = 111
+>ExpandoMerge.p1 = 111 : 111
+>                      : ^^^
+>ExpandoMerge.p1 : number
+>                : ^^^^^^
+>ExpandoMerge : typeof ExpandoMerge
+>             : ^^^^^^^^^^^^^^^^^^^
+>p1 : number
+>   : ^^^^^^
+>111 : 111
+>    : ^^^
+
+/*pruned*/;             
+                        
+ 
+/*pruned*/;             
+                        
+ 
+/*pruned*/;                                                                     
+
+/*pruned*/;   
+                                        
+                             
+                                                      
+                                
+     
+ 
+
+// Should not work in Typescript -- must be const
+let ExpandoExpr2 = function (n: number) {
+>ExpandoExpr2 : (n: number) => string
+>             : ^^^^^^^^^^^^^^^^^^^^^
+>function (n: number) {     return n.toString(); } : (n: number) => string
+>                                                  : ^^^^^^^^^^^^^^^^^^^^^
+>n : number
+>  : ^^^^^^
+
+    return n.toString();
+>n.toString() : string
+>             : ^^^^^^
+>n.toString : (radix?: number) => string
+>           : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>n : number
+>  : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+}
+ExpandoExpr2.prop = 2
+>ExpandoExpr2.prop = 2 : 2
+>                      : ^
+>ExpandoExpr2.prop : any
+>                  : ^^^
+>ExpandoExpr2 : (n: number) => string
+>             : ^^^^^^^^^^^^^^^^^^^^^
+>prop : any
+>     : ^^^
+>2 : 2
+>  : ^
+
+ExpandoExpr2.m = function(n: number) {
+>ExpandoExpr2.m = function(n: number) {     return n + 1; } : (n: number) => number
+>                                                           : ^^^^^^^^^^^^^^^^^^^^^
+>ExpandoExpr2.m : any
+>               : ^^^
+>ExpandoExpr2 : (n: number) => string
+>             : ^^^^^^^^^^^^^^^^^^^^^
+>m : any
+>  : ^^^
+>function(n: number) {     return n + 1; } : (n: number) => number
+>                                          : ^^^^^^^^^^^^^^^^^^^^^
+>n : number
+>  : ^^^^^^
+
+    return n + 1;
+>n + 1 : number
+>      : ^^^^^^
+>n : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+}
+let n_4 = ExpandoExpr2.prop + ExpandoExpr2.m(12) + ExpandoExpr2(101).length
+>n_4 : any
+>    : ^^^
+>ExpandoExpr2.prop + ExpandoExpr2.m(12) + ExpandoExpr2(101).length : any
+>                                                                  : ^^^
+>ExpandoExpr2.prop + ExpandoExpr2.m(12) : any
+>                                       : ^^^
+>ExpandoExpr2.prop : any
+>                  : ^^^
+>ExpandoExpr2 : (n: number) => string
+>             : ^^^^^^^^^^^^^^^^^^^^^
+>prop : any
+>     : ^^^
+>ExpandoExpr2.m(12) : any
+>                   : ^^^
+>ExpandoExpr2.m : any
+>               : ^^^
+>ExpandoExpr2 : (n: number) => string
+>             : ^^^^^^^^^^^^^^^^^^^^^
+>m : any
+>  : ^^^
+>12 : 12
+>   : ^^
+>ExpandoExpr2(101).length : number
+>                         : ^^^^^^
+>ExpandoExpr2(101) : string
+>                  : ^^^^^^
+>ExpandoExpr2 : (n: number) => string
+>             : ^^^^^^^^^^^^^^^^^^^^^
+>101 : 101
+>    : ^^^
+>length : number
+>       : ^^^^^^
+
+
+// Should not work in typescript -- classes already have statics
+class ExpandoClass {
+>ExpandoClass : ExpandoClass
+>             : ^^^^^^^^^^^^
+
+    n: number = 1001;
+>n : number
+>  : ^^^^^^
+>1001 : 1001
+>     : ^^^^
+
+}
+ExpandoClass.prop = 2
+>ExpandoClass.prop = 2 : 2
+>                      : ^
+>ExpandoClass.prop : any
+>                  : ^^^
+>ExpandoClass : typeof ExpandoClass
+>             : ^^^^^^^^^^^^^^^^^^^
+>prop : any
+>     : ^^^
+>2 : 2
+>  : ^
+
+ExpandoClass.m = function(n: number) {
+>ExpandoClass.m = function(n: number) {     return n + 1; } : (n: number) => number
+>                                                           : ^^^^^^^^^^^^^^^^^^^^^
+>ExpandoClass.m : any
+>               : ^^^
+>ExpandoClass : typeof ExpandoClass
+>             : ^^^^^^^^^^^^^^^^^^^
+>m : any
+>  : ^^^
+>function(n: number) {     return n + 1; } : (n: number) => number
+>                                          : ^^^^^^^^^^^^^^^^^^^^^
+>n : number
+>  : ^^^^^^
+
+    return n + 1;
+>n + 1 : number
+>      : ^^^^^^
+>n : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+}
+let n_5 = ExpandoClass.prop + ExpandoClass.m(12) + new ExpandoClass().n
+>n_5 : any
+>    : ^^^
+>ExpandoClass.prop + ExpandoClass.m(12) + new ExpandoClass().n : any
+>                                                              : ^^^
+>ExpandoClass.prop + ExpandoClass.m(12) : any
+>                                       : ^^^
+>ExpandoClass.prop : any
+>                  : ^^^
+>ExpandoClass : typeof ExpandoClass
+>             : ^^^^^^^^^^^^^^^^^^^
+>prop : any
+>     : ^^^
+>ExpandoClass.m(12) : any
+>                   : ^^^
+>ExpandoClass.m : any
+>               : ^^^
+>ExpandoClass : typeof ExpandoClass
+>             : ^^^^^^^^^^^^^^^^^^^
+>m : any
+>  : ^^^
+>12 : 12
+>   : ^^
+>new ExpandoClass().n : number
+>                     : ^^^^^^
+>new ExpandoClass() : ExpandoClass
+>                   : ^^^^^^^^^^^^
+>ExpandoClass : typeof ExpandoClass
+>             : ^^^^^^^^^^^^^^^^^^^
+>n : number
+>  : ^^^^^^
+
+
+// Class expressions shouldn't work in typescript either
+/*pruned*/;               
+                      
+ 
+/*pruned*/;          
+/*pruned*/;                           
+                 
+ 
+/*pruned*/;                                                            
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

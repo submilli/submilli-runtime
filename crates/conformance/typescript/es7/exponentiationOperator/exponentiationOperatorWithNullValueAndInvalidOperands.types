@@ -1,0 +1,114 @@
+=== exponentiationOperatorWithNullValueAndInvalidOperands.ts ===
+// If one operand is the null or undefined value, it is treated as having the type of the
+// other operand.
+
+let a: boolean = null as unknown as (boolean);
+>a : boolean
+>  : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let b: string = null as unknown as (string);
+>b : string
+>  : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;                                 
+
+// operator **
+let r1a1 = null ** a;
+>r1a1 : number
+>     : ^^^^^^
+>null ** a : number
+>          : ^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+let r1a2 = null ** b;
+>r1a2 : number
+>     : ^^^^^^
+>null ** b : number
+>          : ^^^^^^
+>b : string
+>  : ^^^^^^
+
+/*pruned*/;          
+
+let r1b1 = a ** null;
+>r1b1 : number
+>     : ^^^^^^
+>a ** null : number
+>          : ^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+let r1b2 = b ** null;
+>r1b2 : number
+>     : ^^^^^^
+>b ** null : number
+>          : ^^^^^^
+>b : string
+>  : ^^^^^^
+
+/*pruned*/;          
+
+let r1c1 = null ** true;
+>r1c1 : number
+>     : ^^^^^^
+>null ** true : number
+>             : ^^^^^^
+>true : true
+>     : ^^^^
+
+let r1c2 = null ** '';
+>r1c2 : number
+>     : ^^^^^^
+>null ** '' : number
+>           : ^^^^^^
+>'' : ""
+>   : ^^
+
+let r1c3 = null ** {};
+>r1c3 : number
+>     : ^^^^^^
+>null ** {} : number
+>           : ^^^^^^
+>{} : {}
+>   : ^^
+
+
+let r1d1 = true ** null;
+>r1d1 : number
+>     : ^^^^^^
+>true ** null : number
+>             : ^^^^^^
+>true : true
+>     : ^^^^
+
+let r1d2 = '' ** null;
+>r1d2 : number
+>     : ^^^^^^
+>'' ** null : number
+>           : ^^^^^^
+>'' : ""
+>   : ^^
+
+let r1d3 = {} ** null;
+>r1d3 : number
+>     : ^^^^^^
+>{} ** null : number
+>           : ^^^^^^
+>{} : {}
+>   : ^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

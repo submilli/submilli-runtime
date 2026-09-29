@@ -1,0 +1,45 @@
+types: 67 of 86 tsc entries compared, 11 differ
+
+line 8: t1 ** -t2
+  tsc:  number
+  ours: string
+
+line 9: (-t1) ** t2 - t1
+  tsc:  number
+  ours: string
+
+line 11: (-t1++) ** t2 - t1
+  tsc:  number
+  ours: string
+
+line 16: t1 ** -t2
+  tsc:  number
+  ours: string
+
+line 16: t1 ** -t2
+  tsc:  number
+  ours: string
+
+line 17: (-t1) ** t2 - t1
+  tsc:  number
+  ours: string
+
+line 17: (-t1) ** t2 - t1
+  tsc:  number
+  ours: string
+
+line 19: (-t1++) ** t2 - t1
+  tsc:  number
+  ours: string
+
+line 19: t2 ** (-t1++) ** - t1
+  tsc:  number
+  ours: string
+
+line 24: (-t1) ** t2 - t1
+  tsc:  number
+  ours: string
+
+line 26: (-t1++) ** t2 - t1
+  tsc:  number
+  ours: string

@@ -1,0 +1,7 @@
+types: 0 of 10 tsc entries compared, 0 differ
+
+errors:
+line 3: tsc TS2393: Duplicate function implementation. (we accept)
+line 4: tsc TS2393: Duplicate function implementation. (we accept)
+line 9: tsc TS2393: Duplicate function implementation. (we accept)
+line 10: tsc TS2393: Duplicate function implementation. (we accept)

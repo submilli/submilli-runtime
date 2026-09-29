@@ -1,0 +1,24 @@
+// @target:es5, es2015
+
+let comp: number = null as unknown as (number);
+
+comp **= 1;
+comp **= comp ** comp;
+comp **= comp ** comp ** 2;
+comp **= comp ** comp + 2;
+comp **= comp ** comp - 2;
+comp **= comp ** comp * 2;
+comp **= comp ** comp / 2;
+comp **= comp ** comp % 2;
+comp **= (comp - 2) ** 5;
+comp **= (comp + 2) ** 5;
+comp **= (comp * 2) ** 5;
+comp **= (comp / 2) ** 5;
+comp **= (comp % 2) ** 5;
+comp **= comp ** (5 + 2);
+comp **= comp ** (5 - 2);
+comp **= comp ** (5 * 2);
+comp **= comp ** (5 / 2);
+comp **= comp ** (5 % 2);
+
+function main(): void {}

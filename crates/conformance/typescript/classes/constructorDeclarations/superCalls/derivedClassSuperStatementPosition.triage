@@ -1,0 +1,6 @@
+line 14 missed: artifact we reject `extends Object` on line 10, so the constructor isn't checked
+line 24 missed: artifact we reject `extends Object` on line 20, so the constructor isn't checked
+line 62 missed: artifact we reject `extends Object` on line 58, so the constructor isn't checked
+line 71 missed: artifact we reject `extends Object` on line 67, so the constructor isn't checked
+line 83 missed: artifact we reject `extends Object` on line 79, so the constructor isn't checked
+line 92 missed: artifact we reject `extends Object` on line 88, so the constructor isn't checked

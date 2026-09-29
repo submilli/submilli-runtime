@@ -1,0 +1,20 @@
+types: 19 of 34 tsc entries compared, 3 differ
+
+line 16: c_2
+  tsc:  (null[] | null[][])[]
+  ours: null[][][]
+
+line 16: [[[null]],[null]]
+  tsc:  (null[] | null[][])[]
+  ours: null[][][]
+
+line 16: [null]
+  tsc:  null[]
+  ours: null[][]
+
+errors:
+line 5: ours: cannot infer element type of empty array; add a `: T[]` annotation (tsc accepts)
+line 11: ours: cannot infer element type of empty array; add a `: T[]` annotation (tsc accepts)
+line 12: ours: cannot infer element type of empty array; add a `: T[]` annotation (tsc accepts)
+line 15: ours: cannot infer element type of empty array; add a `: T[]` annotation (tsc accepts)
+line 16: ours: expected `null[]`, got `null` (tsc accepts)

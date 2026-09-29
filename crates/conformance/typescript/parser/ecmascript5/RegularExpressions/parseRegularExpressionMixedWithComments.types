@@ -1,0 +1,47 @@
+=== parseRegularExpressionMixedWithComments.ts ===
+let regex1 = / asdf /;
+>regex1 : RegExp
+>       : ^^^^^^
+>/ asdf / : RegExp
+>         : ^^^^^^
+
+let regex2 = /**// asdf /;
+>regex2 : RegExp
+>       : ^^^^^^
+>/ asdf / : RegExp
+>         : ^^^^^^
+
+let regex3 = /**///**/ asdf /       // should be a comment line
+>regex3 : number
+>       : ^^^^^^
+
+1;
+>1 : 1
+>  : ^
+
+let regex4 = /**// /**/asdf /;
+>regex4 : number
+>       : ^^^^^^
+>/ /**/asdf / : number
+>             : ^^^^^^
+>/ / : RegExp
+>    : ^^^^^^
+>/asdf / : RegExp
+>        : ^^^^^^
+
+let regex5 = /**// asdf/**/ /;
+>regex5 : number
+>       : ^^^^^^
+>/ asdf/**/ / : number
+>             : ^^^^^^
+>/ asdf/ : RegExp
+>        : ^^^^^^
+>/ / : RegExp
+>    : ^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

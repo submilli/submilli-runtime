@@ -1,0 +1,69 @@
+=== ts-ignore.ts ===
+// @ts-ignore with additional commenting
+let invalidCommentedFancy: number = 'nope';
+>invalidCommentedFancy : number
+>                      : ^^^^^^
+>'nope' : "nope"
+>       : ^^^^^^
+
+
+// @ts-ignore with additional commenting
+let validCommentedFancy: string = 'nope';
+>validCommentedFancy : string
+>                    : ^^^^^^
+>'nope' : "nope"
+>       : ^^^^^^
+
+
+// @ts-ignore
+let invalidCommentedPlain: number = 'nope';
+>invalidCommentedPlain : number
+>                      : ^^^^^^
+>'nope' : "nope"
+>       : ^^^^^^
+
+
+// @ts-ignore
+let validCommentedPlain: string = 'nope';
+>validCommentedPlain : string
+>                    : ^^^^^^
+>'nope' : "nope"
+>       : ^^^^^^
+
+
+let invalidPlain: number = 'nope';
+>invalidPlain : number
+>             : ^^^^^^
+>'nope' : "nope"
+>       : ^^^^^^
+
+
+let validPlain: string = 'nope';
+>validPlain : string
+>           : ^^^^^^
+>'nope' : "nope"
+>       : ^^^^^^
+
+
+// @ts-ignore: with additional commenting
+let invalidCommentedFancy: number = 'nope';
+>invalidCommentedFancy : number
+>                      : ^^^^^^
+>'nope' : "nope"
+>       : ^^^^^^
+
+
+// @ts-ignore: with additional commenting
+let validCommentedFancy: string = 'nope';
+>validCommentedFancy : string
+>                    : ^^^^^^
+>'nope' : "nope"
+>       : ^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

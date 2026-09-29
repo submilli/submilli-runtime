@@ -1,0 +1,116 @@
+=== exponentiationOperatorWithEnum.ts ===
+// operands of an enum type are treated as having the primitive type Number.
+
+enum E {
+>E : E
+>  : ^
+
+    a,
+>a : E.a
+>  : ^^^
+
+    b
+>b : E.b
+>  : ^^^
+
+}
+
+/*pruned*/;                           
+let b: number = null as unknown as (number);
+>b : number
+>  : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;                       
+
+// operator **
+/*pruned*/;     
+/*pruned*/;     
+/*pruned*/;     
+/*pruned*/;     
+/*pruned*/;     
+/*pruned*/;       
+let r7 = E.a ** b;
+>r7 : number
+>   : ^^^^^^
+>E.a ** b : number
+>         : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>b : number
+>  : ^^^^^^
+
+let r8 = E.a ** E.b;
+>r8 : number
+>   : ^^^^^^
+>E.a ** E.b : number
+>           : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+let r9 = E.a ** 1;
+>r9 : number
+>   : ^^^^^^
+>E.a ** 1 : number
+>         : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>1 : 1
+>  : ^
+
+/*pruned*/;        
+let r11 = b ** E.b;
+>r11 : number
+>    : ^^^^^^
+>b ** E.b : number
+>         : ^^^^^^
+>b : number
+>  : ^^^^^^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+let r12 = 1 ** E.b;
+>r12 : number
+>    : ^^^^^^
+>1 ** E.b : number
+>         : ^^^^^^
+>1 : 1
+>  : ^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

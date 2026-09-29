@@ -1,0 +1,7 @@
+recursiveTypesWithTypeof.ts(3,5): error TS2502: 'c' is referenced directly or indirectly in its own type annotation.
+recursiveTypesWithTypeof.ts(5,5): error TS2502: 'd' is referenced directly or indirectly in its own type annotation.
+recursiveTypesWithTypeof.ts(7,5): error TS2502: 'e' is referenced directly or indirectly in its own type annotation.
+recursiveTypesWithTypeof.ts(11,5): error TS2502: 'f' is referenced directly or indirectly in its own type annotation.
+recursiveTypesWithTypeof.ts(13,5): error TS2502: 'f2' is referenced directly or indirectly in its own type annotation.
+recursiveTypesWithTypeof.ts(15,5): error TS2502: 'f3' is referenced directly or indirectly in its own type annotation.
+recursiveTypesWithTypeof.ts(52,5): error TS2502: 'hy3' is referenced directly or indirectly in its own type annotation.

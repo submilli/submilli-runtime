@@ -1,0 +1,9 @@
+types: 5 of 9 tsc entries compared, 2 differ
+
+line 3: b
+  tsc:  RegExpMatchArray | null
+  ours: null | RegExpMatch
+
+line 3: a.match(/\/ver=([^/]+)/)
+  tsc:  RegExpMatchArray | null
+  ours: RegExpMatch | null

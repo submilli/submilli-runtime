@@ -1,0 +1,1 @@
+destructuringArrayBindingPatternAndAssignment1ES5.ts(44,6): error TS2493: Tuple type '[]' of length '0' has no element at index '0'.

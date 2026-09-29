@@ -1,0 +1,7 @@
+classExtendingNonConstructor.ts(5,5): error TS2683: 'this' implicitly has type 'any' because it does not have a type annotation.
+classExtendingNonConstructor.ts(9,18): error TS2507: Type 'true' is not a constructor function type.
+classExtendingNonConstructor.ts(10,18): error TS2507: Type 'false' is not a constructor function type.
+classExtendingNonConstructor.ts(11,18): error TS2507: Type '42' is not a constructor function type.
+classExtendingNonConstructor.ts(12,18): error TS2507: Type '"hello"' is not a constructor function type.
+classExtendingNonConstructor.ts(13,18): error TS2507: Type '{}' is not a constructor function type.
+classExtendingNonConstructor.ts(14,18): error TS2507: Type '() => void' is not a constructor function type.

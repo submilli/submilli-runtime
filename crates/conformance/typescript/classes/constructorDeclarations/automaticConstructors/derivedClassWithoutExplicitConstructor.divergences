@@ -1,0 +1,9 @@
+types: 6 of 32 tsc entries compared, 2 differ
+
+line 4: this
+  tsc:  this
+  ours: Base
+
+line 17: this
+  tsc:  this
+  ours: Base2<T>

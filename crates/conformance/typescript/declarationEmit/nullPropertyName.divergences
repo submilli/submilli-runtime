@@ -1,0 +1,388 @@
+types: 77 of 387 tsc entries compared, 77 differ
+
+line 7: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 8: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 11: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 12: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 13: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 14: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 15: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 16: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 17: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 18: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 19: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 20: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 21: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 22: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 23: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 24: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 25: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 26: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 27: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 28: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 29: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 30: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 31: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 33: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 34: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 35: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 36: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 37: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 38: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 39: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 40: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 41: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 42: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 43: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 44: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 45: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 46: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 47: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 48: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 49: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 50: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 51: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 52: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 53: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 54: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 55: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 56: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 57: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 58: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 59: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 60: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 61: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 62: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 63: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 64: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 65: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 66: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 67: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 68: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 69: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 70: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 71: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 72: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 73: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 74: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 75: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 76: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 77: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 78: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 79: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 80: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 81: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 82: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 83: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 84: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 85: foo
+  tsc:  typeof foo
+  ours: () => void
+
+line 86: foo
+  tsc:  typeof foo
+  ours: () => void
+
+errors:
+line 7: ours: cannot assign to field of `() => void` (tsc accepts)
+line 8: ours: cannot assign to field of `() => void` (tsc accepts)
+line 11: ours: cannot assign to field of `() => void` (tsc accepts)
+line 12: ours: cannot assign to field of `() => void` (tsc accepts)
+line 13: ours: cannot assign to field of `() => void` (tsc accepts)
+line 14: ours: cannot assign to field of `() => void` (tsc accepts)
+line 15: ours: cannot assign to field of `() => void` (tsc accepts)
+line 16: ours: cannot assign to field of `() => void` (tsc accepts)
+line 17: ours: cannot assign to field of `() => void` (tsc accepts)
+line 18: ours: cannot assign to field of `() => void` (tsc accepts)
+line 19: ours: cannot assign to field of `() => void` (tsc accepts)
+line 20: ours: cannot assign to field of `() => void` (tsc accepts)
+line 21: ours: cannot assign to field of `() => void` (tsc accepts)
+line 22: ours: cannot assign to field of `() => void` (tsc accepts)
+line 23: ours: cannot assign to field of `() => void` (tsc accepts)
+line 24: ours: cannot assign to field of `() => void` (tsc accepts)
+line 25: ours: cannot assign to field of `() => void` (tsc accepts)
+line 26: ours: cannot assign to field of `() => void` (tsc accepts)
+line 27: ours: cannot assign to field of `() => void` (tsc accepts)
+line 28: ours: cannot assign to field of `() => void` (tsc accepts)
+line 29: ours: cannot assign to field of `() => void` (tsc accepts)
+line 30: ours: cannot assign to field of `() => void` (tsc accepts)
+line 31: ours: cannot assign to field of `() => void` (tsc accepts)
+line 33: ours: cannot assign to field of `() => void` (tsc accepts)
+line 34: ours: cannot assign to field of `() => void` (tsc accepts)
+line 35: ours: cannot assign to field of `() => void` (tsc accepts)
+line 36: ours: cannot assign to field of `() => void` (tsc accepts)
+line 37: ours: cannot assign to field of `() => void` (tsc accepts)
+line 38: ours: cannot assign to field of `() => void` (tsc accepts)
+line 39: ours: cannot assign to field of `() => void` (tsc accepts)
+line 40: ours: cannot assign to field of `() => void` (tsc accepts)
+line 41: ours: cannot assign to field of `() => void` (tsc accepts)
+line 42: ours: cannot assign to field of `() => void` (tsc accepts)
+line 43: ours: cannot assign to field of `() => void` (tsc accepts)
+line 44: ours: cannot assign to field of `() => void` (tsc accepts)
+line 45: ours: cannot assign to field of `() => void` (tsc accepts)
+line 46: ours: cannot assign to field of `() => void` (tsc accepts)
+line 47: ours: cannot assign to field of `() => void` (tsc accepts)
+line 48: ours: cannot assign to field of `() => void` (tsc accepts)
+line 49: ours: cannot assign to field of `() => void` (tsc accepts)
+line 50: ours: cannot assign to field of `() => void` (tsc accepts)
+line 51: ours: cannot assign to field of `() => void` (tsc accepts)
+line 52: ours: cannot assign to field of `() => void` (tsc accepts)
+line 53: ours: cannot assign to field of `() => void` (tsc accepts)
+line 54: ours: cannot assign to field of `() => void` (tsc accepts)
+line 55: ours: cannot assign to field of `() => void` (tsc accepts)
+line 56: ours: cannot assign to field of `() => void` (tsc accepts)
+line 57: ours: cannot assign to field of `() => void` (tsc accepts)
+line 58: ours: cannot assign to field of `() => void` (tsc accepts)
+line 59: ours: cannot assign to field of `() => void` (tsc accepts)
+line 60: ours: cannot assign to field of `() => void` (tsc accepts)
+line 61: ours: cannot assign to field of `() => void` (tsc accepts)
+line 62: ours: cannot assign to field of `() => void` (tsc accepts)
+line 63: ours: cannot assign to field of `() => void` (tsc accepts)
+line 64: ours: cannot assign to field of `() => void` (tsc accepts)
+line 65: ours: cannot assign to field of `() => void` (tsc accepts)
+line 66: ours: cannot assign to field of `() => void` (tsc accepts)
+line 67: ours: cannot assign to field of `() => void` (tsc accepts)
+line 68: ours: cannot assign to field of `() => void` (tsc accepts)
+line 69: ours: cannot assign to field of `() => void` (tsc accepts)
+line 70: ours: cannot assign to field of `() => void` (tsc accepts)
+line 71: ours: cannot assign to field of `() => void` (tsc accepts)
+line 72: ours: cannot assign to field of `() => void` (tsc accepts)
+line 73: ours: cannot assign to field of `() => void` (tsc accepts)
+line 74: ours: cannot assign to field of `() => void` (tsc accepts)
+line 75: ours: cannot assign to field of `() => void` (tsc accepts)
+line 76: ours: cannot assign to field of `() => void` (tsc accepts)
+line 77: ours: cannot assign to field of `() => void` (tsc accepts)
+line 78: ours: cannot assign to field of `() => void` (tsc accepts)
+line 79: ours: cannot assign to field of `() => void` (tsc accepts)
+line 80: ours: cannot assign to field of `() => void` (tsc accepts)
+line 81: ours: cannot assign to field of `() => void` (tsc accepts)
+line 82: ours: cannot assign to field of `() => void` (tsc accepts)
+line 83: ours: cannot assign to field of `() => void` (tsc accepts)
+line 84: ours: cannot assign to field of `() => void` (tsc accepts)
+line 85: ours: cannot assign to field of `() => void` (tsc accepts)
+line 86: ours: cannot assign to field of `() => void` (tsc accepts)

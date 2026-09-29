@@ -1,0 +1,15 @@
+types: 9 of 35 tsc entries compared, 2 differ
+
+line 14: err.toString()
+  tsc:  any
+  ours: string
+
+line 14: err
+  tsc:  unknown
+  ours: Error
+
+errors:
+line 14: tsc TS18046: 'err' is of type 'unknown'. (we accept)
+line 5: ours: unresolved identifier `Intl` (tsc accepts)
+line 8: ours: unresolved identifier `Intl` (tsc accepts)
+line 12: ours: unresolved identifier `Intl` (tsc accepts)

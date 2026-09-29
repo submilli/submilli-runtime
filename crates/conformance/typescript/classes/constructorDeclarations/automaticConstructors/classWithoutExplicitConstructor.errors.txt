@@ -1,0 +1,1 @@
+classWithoutExplicitConstructor.ts(8,16): error TS2554: Expected 0 arguments, but got 1.

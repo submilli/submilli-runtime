@@ -1,0 +1,7 @@
+types: 13 of 41 tsc entries compared, 0 differ
+
+errors:
+line 9: ours: unresolved identifier `arguments` (tsc accepts)
+line 15: ours: unresolved identifier `arguments` (tsc accepts)
+line 25: ours: unresolved identifier `arguments` (tsc accepts)
+line 31: ours: unresolved identifier `arguments` (tsc accepts)

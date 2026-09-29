@@ -1,0 +1,8 @@
+parserMemberFunctionDeclarationAmbiguities1.ts(3,3): error TS2393: Duplicate function implementation.
+parserMemberFunctionDeclarationAmbiguities1.ts(4,3): error TS2393: Duplicate function implementation.
+parserMemberFunctionDeclarationAmbiguities1.ts(6,10): error TS2393: Duplicate function implementation.
+parserMemberFunctionDeclarationAmbiguities1.ts(7,10): error TS2393: Duplicate function implementation.
+parserMemberFunctionDeclarationAmbiguities1.ts(9,17): error TS2393: Duplicate function implementation.
+parserMemberFunctionDeclarationAmbiguities1.ts(10,17): error TS2393: Duplicate function implementation.
+parserMemberFunctionDeclarationAmbiguities1.ts(12,10): error TS2393: Duplicate function implementation.
+parserMemberFunctionDeclarationAmbiguities1.ts(13,10): error TS2393: Duplicate function implementation.

@@ -1,0 +1,47 @@
+types: 15 of 41 tsc entries compared, 10 differ
+
+line 16: sk
+  tsc:  { p: number; }
+  ours: {}
+
+line 16: { ...k }
+  tsc:  { p: number; }
+  ours: {}
+
+line 17: ssk
+  tsc:  { p: number; }
+  ours: {}
+
+line 17: { ...k, ...k }
+  tsc:  { p: number; }
+  ours: {}
+
+line 18: sk
+  tsc:  { p: number; }
+  ours: {}
+
+line 19: sk
+  tsc:  { p: number; }
+  ours: {}
+
+line 20: sk
+  tsc:  { p: number; }
+  ours: {}
+
+line 21: ssk
+  tsc:  { p: number; }
+  ours: {}
+
+line 22: ssk
+  tsc:  { p: number; }
+  ours: {}
+
+line 23: ssk
+  tsc:  { p: number; }
+  ours: {}
+
+errors:
+line 16: ours: cannot spread `K` into an object literal (tsc accepts)
+line 17: ours: cannot spread `K` into an object literal (tsc accepts)
+line 18: ours: field `p` does not exist on `{}` (tsc accepts)
+line 21: ours: field `p` does not exist on `{}` (tsc accepts)

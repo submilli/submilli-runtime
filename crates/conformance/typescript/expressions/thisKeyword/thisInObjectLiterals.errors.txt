@@ -1,0 +1,3 @@
+thisInObjectLiterals.ts(6,5): error TS2564: Property 't' has no initializer and is not definitely assigned in the constructor.
+thisInObjectLiterals.ts(18,5): error TS7023: 'f' implicitly has return type 'any' because it does not have a return type annotation and is referenced directly or indirectly in one of its return expressions.
+thisInObjectLiterals.ts(19,21): error TS2339: Property 'spaaace' does not exist on type '{ f(): any; }'.

@@ -1,0 +1,253 @@
+=== genericCallWithTupleType.ts ===
+interface I<T, U> {
+>I : I<T, U>
+>  : ^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+
+    tuple1: [T, U];
+>tuple1 : [T, U]
+>       : ^^^^^^
+
+} 
+
+let i1: I<string, number> = null as unknown as (I<string, number>);
+>i1 : I<string, number>
+>   : ^^^^^^^^^^^^^^^^^
+>null as unknown as (I<string, number>) : I<string, number>
+>                                       : ^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let i1_2: I<string, number> = null as unknown as (I<string, number>);
+>i1_2 : I<string, number>
+>     : ^^^^^^^^^^^^^^^^^
+>null as unknown as (I<string, number>) : I<string, number>
+>                                       : ^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let i2: I<{}, {}> = null as unknown as (I<{}, {}>);
+>i2 : I<{}, {}>
+>   : ^^^^^^^^^
+>null as unknown as (I<{}, {}>) : I<{}, {}>
+>                               : ^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+// no error
+i1.tuple1 = ["foo", 5];
+>i1.tuple1 = ["foo", 5] : [string, number]
+>                       : ^^^^^^^^^^^^^^^^
+>i1.tuple1 : [string, number]
+>          : ^^^^^^^^^^^^^^^^
+>i1 : I<string, number>
+>   : ^^^^^^^^^^^^^^^^^
+>tuple1 : [string, number]
+>       : ^^^^^^^^^^^^^^^^
+>["foo", 5] : [string, number]
+>           : ^^^^^^^^^^^^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+>5 : 5
+>  : ^
+
+let e1 = i1.tuple1[0];  // string
+>e1 : string
+>   : ^^^^^^
+>i1.tuple1[0] : string
+>             : ^^^^^^
+>i1.tuple1 : [string, number]
+>          : ^^^^^^^^^^^^^^^^
+>i1 : I<string, number>
+>   : ^^^^^^^^^^^^^^^^^
+>tuple1 : [string, number]
+>       : ^^^^^^^^^^^^^^^^
+>0 : 0
+>  : ^
+
+let e2 = i1.tuple1[1];  // number
+>e2 : number
+>   : ^^^^^^
+>i1.tuple1[1] : number
+>             : ^^^^^^
+>i1.tuple1 : [string, number]
+>          : ^^^^^^^^^^^^^^^^
+>i1 : I<string, number>
+>   : ^^^^^^^^^^^^^^^^^
+>tuple1 : [string, number]
+>       : ^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+i1.tuple1 = ["foo", 5, false, true];
+>i1.tuple1 = ["foo", 5, false, true] : [string, number, boolean, boolean]
+>                                    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>i1.tuple1 : [string, number]
+>          : ^^^^^^^^^^^^^^^^
+>i1 : I<string, number>
+>   : ^^^^^^^^^^^^^^^^^
+>tuple1 : [string, number]
+>       : ^^^^^^^^^^^^^^^^
+>["foo", 5, false, true] : [string, number, boolean, boolean]
+>                        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+>5 : 5
+>  : ^
+>false : false
+>      : ^^^^^
+>true : true
+>     : ^^^^
+
+let e3 = i1.tuple1[2];  // {}
+>e3 : undefined
+>   : ^^^^^^^^^
+>i1.tuple1[2] : undefined
+>             : ^^^^^^^^^
+>i1.tuple1 : [string, number]
+>          : ^^^^^^^^^^^^^^^^
+>i1 : I<string, number>
+>   : ^^^^^^^^^^^^^^^^^
+>tuple1 : [string, number]
+>       : ^^^^^^^^^^^^^^^^
+>2 : 2
+>  : ^
+
+/*pruned*/;                    
+let e4 = i1.tuple1[3];  // {}
+>e4 : undefined
+>   : ^^^^^^^^^
+>i1.tuple1[3] : undefined
+>             : ^^^^^^^^^
+>i1.tuple1 : [string, number]
+>          : ^^^^^^^^^^^^^^^^
+>i1 : I<string, number>
+>   : ^^^^^^^^^^^^^^^^^
+>tuple1 : [string, number]
+>       : ^^^^^^^^^^^^^^^^
+>3 : 3
+>  : ^
+
+i2.tuple1 = ["foo", 5];
+>i2.tuple1 = ["foo", 5] : [string, number]
+>                       : ^^^^^^^^^^^^^^^^
+>i2.tuple1 : [{}, {}]
+>          : ^^^^^^^^
+>i2 : I<{}, {}>
+>   : ^^^^^^^^^
+>tuple1 : [{}, {}]
+>       : ^^^^^^^^
+>["foo", 5] : [string, number]
+>           : ^^^^^^^^^^^^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+>5 : 5
+>  : ^
+
+i2.tuple1 = ["foo", "bar"];
+>i2.tuple1 = ["foo", "bar"] : [string, string]
+>                           : ^^^^^^^^^^^^^^^^
+>i2.tuple1 : [{}, {}]
+>          : ^^^^^^^^
+>i2 : I<{}, {}>
+>   : ^^^^^^^^^
+>tuple1 : [{}, {}]
+>       : ^^^^^^^^
+>["foo", "bar"] : [string, string]
+>               : ^^^^^^^^^^^^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+>"bar" : "bar"
+>      : ^^^^^
+
+i2.tuple1 = [5, "bar"];
+>i2.tuple1 = [5, "bar"] : [number, string]
+>                       : ^^^^^^^^^^^^^^^^
+>i2.tuple1 : [{}, {}]
+>          : ^^^^^^^^
+>i2 : I<{}, {}>
+>   : ^^^^^^^^^
+>tuple1 : [{}, {}]
+>       : ^^^^^^^^
+>[5, "bar"] : [number, string]
+>           : ^^^^^^^^^^^^^^^^
+>5 : 5
+>  : ^
+>"bar" : "bar"
+>      : ^^^^^
+
+i2.tuple1 = [{}, {}];
+>i2.tuple1 = [{}, {}] : [{}, {}]
+>                     : ^^^^^^^^
+>i2.tuple1 : [{}, {}]
+>          : ^^^^^^^^
+>i2 : I<{}, {}>
+>   : ^^^^^^^^^
+>tuple1 : [{}, {}]
+>       : ^^^^^^^^
+>[{}, {}] : [{}, {}]
+>         : ^^^^^^^^
+>{} : {}
+>   : ^^
+>{} : {}
+>   : ^^
+
+
+// error
+i1.tuple1 = [5, "foo"];
+>i1.tuple1 = [5, "foo"] : [number, string]
+>                       : ^^^^^^^^^^^^^^^^
+>i1.tuple1 : [string, number]
+>          : ^^^^^^^^^^^^^^^^
+>i1 : I<string, number>
+>   : ^^^^^^^^^^^^^^^^^
+>tuple1 : [string, number]
+>       : ^^^^^^^^^^^^^^^^
+>[5, "foo"] : [number, string]
+>           : ^^^^^^^^^^^^^^^^
+>5 : 5
+>  : ^
+>"foo" : "foo"
+>      : ^^^^^
+
+i1.tuple1 = [{}, {}];
+>i1.tuple1 = [{}, {}] : [{}, {}]
+>                     : ^^^^^^^^
+>i1.tuple1 : [string, number]
+>          : ^^^^^^^^^^^^^^^^
+>i1 : I<string, number>
+>   : ^^^^^^^^^^^^^^^^^
+>tuple1 : [string, number]
+>       : ^^^^^^^^^^^^^^^^
+>[{}, {}] : [{}, {}]
+>         : ^^^^^^^^
+>{} : {}
+>   : ^^
+>{} : {}
+>   : ^^
+
+i2.tuple1 = [{}];
+>i2.tuple1 = [{}] : [{}]
+>                 : ^^^^
+>i2.tuple1 : [{}, {}]
+>          : ^^^^^^^^
+>i2 : I<{}, {}>
+>   : ^^^^^^^^^
+>tuple1 : [{}, {}]
+>       : ^^^^^^^^
+>[{}] : [{}]
+>     : ^^^^
+>{} : {}
+>   : ^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -1,0 +1,23 @@
+types: 19 of 69 tsc entries compared, 4 differ
+
+line 37: new BaseC(10)
+  tsc:  any
+  ours: BaseC
+
+line 38: new BaseC(11)
+  tsc:  any
+  ours: BaseC
+
+line 43: bc
+  tsc:  any
+  ours: BaseC
+
+line 43: new BaseC(1)
+  tsc:  any
+  ours: BaseC
+
+errors:
+line 34: tsc TS2675: Cannot extend a class 'BaseC'. Class constructor is marked as private. (we accept)
+line 37: tsc TS2673: Constructor of class 'BaseC' is private and only accessible within the class declaration. (we accept)
+line 38: tsc TS2673: Constructor of class 'BaseC' is private and only accessible within the class declaration. (we accept)
+line 43: tsc TS2673: Constructor of class 'BaseC' is private and only accessible within the class declaration. (we accept)

@@ -1,0 +1,5 @@
+types: 6 of 29 tsc entries compared, 1 differ
+
+line 31: this
+  tsc:  this
+  ours: DDD

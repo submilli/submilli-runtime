@@ -1,0 +1,100 @@
+=== genericCallWithArrayLiteralArgs.ts ===
+function foo<T>(t: T): T {
+>foo : <T>(t: T) => T
+>    : ^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>t : T
+>  : ^
+
+    return t;
+>t : T
+>  : ^
+
+}
+
+let r = foo([1, 2]); // number[]
+>r : number[]
+>  : ^^^^^^^^
+>foo([1, 2]) : number[]
+>            : ^^^^^^^^
+>foo : <T>(t: T) => T
+>    : ^^^^^^^^^^^^^^
+>[1, 2] : number[]
+>       : ^^^^^^^^
+>1 : 1
+>  : ^
+>2 : 2
+>  : ^
+
+let r_2 = foo<number[]>([1, 2]); // number[]
+>r_2 : number[]
+>    : ^^^^^^^^
+>foo<number[]>([1, 2]) : number[]
+>                      : ^^^^^^^^
+>foo : <T>(t: T) => T
+>    : ^^^^^^^^^^^^^^
+>[1, 2] : number[]
+>       : ^^^^^^^^
+>1 : 1
+>  : ^
+>2 : 2
+>  : ^
+
+/*pruned*/;                  // any[]
+let r2 = foo([]); // any[]
+>r2 : never[]
+>   : ^^^^^^^
+>foo([]) : never[]
+>        : ^^^^^^^
+>foo : <T>(t: T) => T
+>    : ^^^^^^^^^^^^^^
+>[] : never[]
+>   : ^^^^^^^
+
+let r3 = foo<number[]>([]); // number[]
+>r3 : number[]
+>   : ^^^^^^^^
+>foo<number[]>([]) : number[]
+>                  : ^^^^^^^^
+>foo : <T>(t: T) => T
+>    : ^^^^^^^^^^^^^^
+>[] : never[]
+>   : ^^^^^^^
+
+let r4 = foo([1, '']); // {}[]
+>r4 : (string | number)[]
+>   : ^^^^^^^^^^^^^^^^^^^
+>foo([1, '']) : (string | number)[]
+>             : ^^^^^^^^^^^^^^^^^^^
+>foo : <T>(t: T) => T
+>    : ^^^^^^^^^^^^^^
+>[1, ''] : (string | number)[]
+>        : ^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+>'' : ""
+>   : ^^
+
+/*pruned*/;                   // any[]
+let r6 = foo<Object[]>([1, '']); // Object[]
+>r6 : Object[]
+>   : ^^^^^^^^
+>foo<Object[]>([1, '']) : Object[]
+>                       : ^^^^^^^^
+>foo : <T>(t: T) => T
+>    : ^^^^^^^^^^^^^^
+>[1, ''] : (string | number)[]
+>        : ^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+>'' : ""
+>   : ^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -1,0 +1,26 @@
+types: 14 of 44 tsc entries compared, 5 differ
+
+line 18: [1,2,3, "string"]
+  tsc:  (string | number)[]
+  ours: number[]
+
+line 24: d2
+  tsc:  string
+  ours: number
+
+line 24: [1,"string"]
+  tsc:  [number, string]
+  ours: number[]
+
+line 30: d4
+  tsc:  string
+  ours: number
+
+line 30: [1, "string", ...temp1]
+  tsc:  [number, string, ...boolean[]]
+  ours: number[]
+
+errors:
+line 18: ours: expected `number` (matching first element), got `string` (tsc accepts)
+line 24: ours: expected `number` (matching first element), got `string` (tsc accepts)
+line 30: ours: expected `number` (matching first element), got `string` (tsc accepts)

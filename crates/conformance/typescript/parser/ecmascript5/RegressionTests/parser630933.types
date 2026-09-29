@@ -1,0 +1,28 @@
+=== parser630933.ts ===
+let a = "Hello";
+>a : string
+>  : ^^^^^^
+>"Hello" : "Hello"
+>        : ^^^^^^^
+
+let b = a.match(/\/ver=([^/]+)/);
+>b : RegExpMatchArray | null
+>  : ^^^^^^^^^^^^^^^^^^^^^^^
+>a.match(/\/ver=([^/]+)/) : RegExpMatchArray | null
+>                         : ^^^^^^^^^^^^^^^^^^^^^^^
+>a.match : { (regexp: string | RegExp): RegExpMatchArray | null; (matcher: { [Symbol.match](string: string): RegExpMatchArray | null; }): RegExpMatchArray | null; }
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : string
+>  : ^^^^^^
+>match : { (regexp: string | RegExp): RegExpMatchArray | null; (matcher: { [Symbol.match](string: string): RegExpMatchArray | null; }): RegExpMatchArray | null; }
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>/\/ver=([^/]+)/ : RegExp
+>                : ^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

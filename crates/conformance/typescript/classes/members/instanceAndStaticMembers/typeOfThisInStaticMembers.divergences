@@ -1,0 +1,108 @@
+types: 24 of 59 tsc entries compared, 24 differ
+
+line 12: t
+  tsc:  typeof C
+  ours: <error>
+
+line 12: C.bar()
+  tsc:  typeof C
+  ours: <error>
+
+line 14: r2
+  tsc:  number
+  ours: <error>
+
+line 14: t.foo + 1
+  tsc:  number
+  ours: <error>
+
+line 14: t.foo
+  tsc:  number
+  ours: <error>
+
+line 14: t
+  tsc:  typeof C
+  ours: <error>
+
+line 15: r3
+  tsc:  typeof C
+  ours: <error>
+
+line 15: t.bar()
+  tsc:  typeof C
+  ours: <error>
+
+line 15: t
+  tsc:  typeof C
+  ours: <error>
+
+line 16: r4
+  tsc:  C
+  ours: <error>
+
+line 16: new t(1)
+  tsc:  C
+  ours: <error>
+
+line 16: t
+  tsc:  typeof C
+  ours: <error>
+
+line 29: t2
+  tsc:  typeof C2
+  ours: <error>
+
+line 29: C2.bar()
+  tsc:  typeof C2
+  ours: <error>
+
+line 31: r5
+  tsc:  string
+  ours: <error>
+
+line 31: t2.foo + 1
+  tsc:  string
+  ours: <error>
+
+line 31: t2.foo
+  tsc:  string
+  ours: <error>
+
+line 31: t2
+  tsc:  typeof C2
+  ours: <error>
+
+line 32: r6
+  tsc:  typeof C2
+  ours: <error>
+
+line 32: t2.bar()
+  tsc:  typeof C2
+  ours: <error>
+
+line 32: t2
+  tsc:  typeof C2
+  ours: <error>
+
+line 33: r7
+  tsc:  C2<unknown>
+  ours: <error>
+
+line 33: new t2('')
+  tsc:  C2<unknown>
+  ours: <error>
+
+line 33: t2
+  tsc:  typeof C2
+  ours: <error>
+
+errors:
+line 4: ours: a static field must be initialized (tsc accepts)
+line 5: ours: unresolved identifier `C` (tsc accepts)
+line 7: ours: `this` is not available in a static member (tsc accepts)
+line 8: ours: `this` is not available in a static member (tsc accepts)
+line 19: ours: a static field must be initialized (tsc accepts)
+line 21: ours: a static field must be initialized (tsc accepts)
+line 22: ours: unresolved identifier `C2` (tsc accepts)
+line 24: ours: `this` is not available in a static member (tsc accepts)
+line 25: ours: `this` is not available in a static member (tsc accepts)

@@ -1,0 +1,1 @@
+es2016IntlAPIs.ts(14,15): error TS18046: 'err' is of type 'unknown'.

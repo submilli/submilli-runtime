@@ -1,0 +1,3 @@
+mergedInheritedClassInterface.ts(9,5): error TS2564: Property 'baseNumber' has no initializer and is not definitely assigned in the constructor.
+mergedInheritedClassInterface.ts(17,5): error TS2564: Property 'classNumber' has no initializer and is not definitely assigned in the constructor.
+mergedInheritedClassInterface.ts(25,5): error TS2564: Property 'classString' has no initializer and is not definitely assigned in the constructor.

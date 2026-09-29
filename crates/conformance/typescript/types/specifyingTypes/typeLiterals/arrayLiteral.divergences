@@ -1,0 +1,8 @@
+types: 10 of 19 tsc entries compared, 1 differ
+
+line 11: []
+  tsc:  never[]
+  ours: number[]
+
+errors:
+line 4: ours: cannot infer element type of empty array; add a `: T[]` annotation (tsc accepts)

@@ -1,0 +1,1 @@
+line 7 missed: artifact we report the circular `typeof` as unresolved on line 5; tsc reports it at both declarations

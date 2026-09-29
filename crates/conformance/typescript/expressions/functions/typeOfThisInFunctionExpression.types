@@ -1,0 +1,107 @@
+=== typeOfThisInFunctionExpression.ts ===
+// type of 'this' in FunctionExpression is Any
+
+function fn(): void {
+>fn : () => void
+>   : ^^^^^^^^^^
+
+    let p = this;
+>p : any
+>  : ^^^
+>this : any
+>     : ^^^
+
+    /*pruned*/;                             
+}
+
+let t = function () {
+>t : () => void
+>  : ^^^^^^^^^^
+>function () {     let p = this;     /*pruned*/;                              } : () => void
+>                                                                               : ^^^^^^^^^^
+
+    let p = this;
+>p : any
+>  : ^^^
+>this : any
+>     : ^^^
+
+    /*pruned*/;                             
+}
+
+let t2 = function f() {
+>t2 : () => void
+>   : ^^^^^^^^^^
+>function f() {     let x = this;     /*pruned*/;                              } : () => void
+>                                                                                : ^^^^^^^^^^
+>f : () => void
+>  : ^^^^^^^^^^
+
+    let x = this;
+>x : any
+>  : ^^^
+>this : any
+>     : ^^^
+
+    /*pruned*/;                             
+}
+
+class C {
+>C : C
+>  : ^
+
+    x: () => void = function () {
+>x : () => void
+>  : ^^^^^^^^^^
+>function () {         /*pruned*/;                                    let q_2 = this;     } : () => void
+>                                                                                           : ^^^^^^^^^^
+
+        /*pruned*/;                           
+        let q_2 = this;
+>q_2 : any
+>    : ^^^
+>this : any
+>     : ^^^
+
+    }
+    y: () => void = function ff() {
+>y : () => void
+>  : ^^^^^^^^^^
+>function ff() {         /*pruned*/;                                    let q_2 = this;     } : () => void
+>                                                                                             : ^^^^^^^^^^
+>ff : () => void
+>   : ^^^^^^^^^^
+
+        /*pruned*/;                           
+        let q_2 = this;
+>q_2 : any
+>    : ^^^
+>this : any
+>     : ^^^
+
+    }
+}
+
+/*pruned*/;  
+                         
+                     
+                                                
+     
+
+                         
+                     
+                                                
+     
+
+                           
+                     
+                                                
+     
+
+ 
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -1,0 +1,3 @@
+readonlyInConstructorParameters.ts(5,10): error TS2540: Cannot assign to 'x' because it is a read-only property.
+readonlyInConstructorParameters.ts(8,26): error TS1029: 'public' modifier must precede 'readonly' modifier.
+readonlyInConstructorParameters.ts(14,10): error TS2341: Property 'x' is private and only accessible within class 'F'.

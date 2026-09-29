@@ -1,0 +1,5 @@
+types: 4 of 23 tsc entries compared, 0 differ
+
+errors:
+line 4: ours: cannot assign to static method `C.foo` (tsc accepts)
+line 10: ours: cannot assign to static method `C.bar` (tsc accepts)

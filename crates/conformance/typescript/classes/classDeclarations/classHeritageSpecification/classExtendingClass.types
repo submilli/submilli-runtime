@@ -1,0 +1,112 @@
+=== classExtendingClass.ts ===
+class C {
+>C : C
+>  : ^
+
+    foo: string;
+>foo : string
+>    : ^^^^^^
+
+    thing(): void { }
+>thing : () => void
+>      : ^^^^^^^^^^
+
+    static other(): void { }
+>other : () => void
+>      : ^^^^^^^^^^
+
+}
+
+class D extends C {
+>D : D
+>  : ^
+>C : C
+>  : ^
+
+    bar: string;
+>bar : string
+>    : ^^^^^^
+
+}
+
+/*pruned*/;                       
+/*pruned*/;   
+/*pruned*/;    
+/*pruned*/;        
+let r4 = D.other();
+>r4 : void
+>   : ^^^^
+>D.other() : void
+>          : ^^^^
+>D.other : () => void
+>        : ^^^^^^^^^^
+>D : typeof D
+>  : ^^^^^^^^
+>other : () => void
+>      : ^^^^^^^^^^
+
+
+class C2<T> {
+>C2 : C2<T>
+>   : ^^^^^
+>T : T
+>  : ^
+
+    foo: T;
+>foo : T
+>    : ^
+
+    thing(x: T): void { }
+>thing : (x: T) => void
+>      : ^^^^^^^^^^^^^^
+>x : T
+>  : ^
+
+    static other<T>(x: T): void { }
+>other : <T>(x: T) => void
+>      : ^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+
+}
+
+class D2<T> extends C2<T> {
+>D2 : D2<T>
+>   : ^^^^^
+>T : T
+>  : ^
+>C2 : C2<T>
+>   : ^^^^^
+
+    bar: string;
+>bar : string
+>    : ^^^^^^
+
+}
+
+/*pruned*/;                                          
+/*pruned*/;     
+/*pruned*/;     
+/*pruned*/;           
+let r8 = D2.other(1);
+>r8 : void
+>   : ^^^^
+>D2.other(1) : void
+>            : ^^^^
+>D2.other : <T>(x: T) => void
+>         : ^^^^^^^^^^^^^^^^^
+>D2 : typeof D2
+>   : ^^^^^^^^^
+>other : <T>(x: T) => void
+>      : ^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

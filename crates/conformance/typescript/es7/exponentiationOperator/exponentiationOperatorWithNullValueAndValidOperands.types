@@ -1,0 +1,93 @@
+=== exponentiationOperatorWithNullValueAndValidOperands.ts ===
+// If one operand is the null or undefined value, it is treated as having the type of the
+// other operand.
+
+enum E {
+>E : E
+>  : ^
+
+    a,
+>a : E.a
+>  : ^^^
+
+    b
+>b : E.b
+>  : ^^^
+
+}
+
+/*pruned*/;                           
+let b: number = null as unknown as (number);
+>b : number
+>  : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+// operator **
+/*pruned*/;        
+let r2 = null ** b;
+>r2 : number
+>   : ^^^^^^
+>null ** b : number
+>          : ^^^^^^
+>b : number
+>  : ^^^^^^
+
+let r3 = null ** 1;
+>r3 : number
+>   : ^^^^^^
+>null ** 1 : number
+>          : ^^^^^^
+>1 : 1
+>  : ^
+
+let r4 = null ** E.a;
+>r4 : number
+>   : ^^^^^^
+>null ** E.a : number
+>            : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+
+/*pruned*/;        
+let r6 = b ** null;
+>r6 : number
+>   : ^^^^^^
+>b ** null : number
+>          : ^^^^^^
+>b : number
+>  : ^^^^^^
+
+let r7 = 0 ** null;
+>r7 : number
+>   : ^^^^^^
+>0 ** null : number
+>          : ^^^^^^
+>0 : 0
+>  : ^
+
+let r8 = E.b ** null;
+>r8 : number
+>   : ^^^^^^
+>E.b ** null : number
+>            : ^^^^^^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

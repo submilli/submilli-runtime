@@ -1,0 +1,4 @@
+parserObjectType6.ts(3,7): error TS2304: Cannot find name 'B'.
+parserObjectType6.ts(4,4): error TS1096: An index signature must have exactly one parameter.
+parserObjectType6.ts(6,7): error TS2304: Cannot find name 'B'.
+parserObjectType6.ts(7,4): error TS1096: An index signature must have exactly one parameter.

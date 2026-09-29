@@ -1,0 +1,95 @@
+=== globalThisBlockscopedProperties.ts ===
+let x = 1
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+const y = 2
+>y : 2
+>  : ^
+>2 : 2
+>  : ^
+
+let z = 3
+>z : number
+>  : ^^^^^^
+>3 : 3
+>  : ^
+
+globalThis.x // ok
+>globalThis.x : any
+>             : ^^^
+>globalThis : typeof globalThis
+>           : ^^^^^^^^^^^^^^^^^
+>x : any
+>  : ^^^
+
+globalThis.y // should error, no property 'y'
+>globalThis.y : any
+>             : ^^^
+>globalThis : typeof globalThis
+>           : ^^^^^^^^^^^^^^^^^
+>y : any
+>  : ^^^
+
+globalThis.z // should error, no property 'z'
+>globalThis.z : any
+>             : ^^^
+>globalThis : typeof globalThis
+>           : ^^^^^^^^^^^^^^^^^
+>z : any
+>  : ^^^
+
+globalThis['x'] // ok
+>globalThis['x'] : any
+>                : ^^^
+>globalThis : typeof globalThis
+>           : ^^^^^^^^^^^^^^^^^
+>'x' : "x"
+>    : ^^^
+
+globalThis['y'] // should error, no property 'y'
+>globalThis['y'] : any
+>                : ^^^
+>globalThis : typeof globalThis
+>           : ^^^^^^^^^^^^^^^^^
+>'y' : "y"
+>    : ^^^
+
+globalThis['z'] // should error, no property 'z'
+>globalThis['z'] : any
+>                : ^^^
+>globalThis : typeof globalThis
+>           : ^^^^^^^^^^^^^^^^^
+>'z' : "z"
+>    : ^^^
+
+globalThis.Float64Array // ok
+>globalThis.Float64Array : Float64ArrayConstructor
+>                        : ^^^^^^^^^^^^^^^^^^^^^^^
+>globalThis : typeof globalThis
+>           : ^^^^^^^^^^^^^^^^^
+>Float64Array : Float64ArrayConstructor
+>             : ^^^^^^^^^^^^^^^^^^^^^^^
+
+globalThis.Infinity // ok
+>globalThis.Infinity : number
+>                    : ^^^^^^
+>globalThis : typeof globalThis
+>           : ^^^^^^^^^^^^^^^^^
+>Infinity : number
+>         : ^^^^^^
+
+
+/*pruned*/;                                                                          // ok
+/*pruned*/;                                                                          // error
+/*pruned*/;                                                                          // error
+/*pruned*/;                                                                         
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

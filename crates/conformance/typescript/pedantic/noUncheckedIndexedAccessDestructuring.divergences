@@ -1,0 +1,12 @@
+types: 35 of 58 tsc entries compared, 2 differ
+
+line 11: s1
+  tsc:  string | undefined
+  ours: string
+
+line 12: s1
+  tsc:  string | undefined
+  ours: string
+
+errors:
+line 12: tsc TS18048: 's1' is possibly 'undefined'. (we accept)

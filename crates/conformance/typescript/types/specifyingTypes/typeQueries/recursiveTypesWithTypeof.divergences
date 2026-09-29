@@ -1,0 +1,85 @@
+types: 32 of 108 tsc entries compared, 19 differ
+
+line 7: e
+  tsc:  any
+  ours: <error>
+
+line 7: null as unknown as (typeof d)
+  tsc:  any
+  ours: <error>
+
+line 21: g_2
+  tsc:  { x: typeof g; }
+  ours: <error>
+
+line 21: null as unknown as (typeof g.x)
+  tsc:  { x: typeof g; }
+  ours: <error>
+
+line 23: h_2
+  tsc:  () => typeof h
+  ours: <error>
+
+line 23: h()
+  tsc:  () => typeof h
+  ours: <error>
+
+line 23: h
+  tsc:  () => typeof h
+  ours: () => <error>
+
+line 25: i_2
+  tsc:  (x: typeof i) => typeof x
+  ours: <error>
+
+line 25: i(i)
+  tsc:  (x: typeof i) => typeof x
+  ours: <error>
+
+line 25: i
+  tsc:  (x: typeof i) => typeof x
+  ours: (arg0: <error>) => <error>
+
+line 25: i
+  tsc:  (x: typeof i) => typeof x
+  ours: (arg0: <error>) => <error>
+
+line 45: hy1_2
+  tsc:  { x: typeof hy1; }[]
+  ours: <error>
+
+line 45: hy1[0].x
+  tsc:  { x: typeof hy1; }[]
+  ours: <error>
+
+line 45: hy1[0]
+  tsc:  { x: typeof hy1; }
+  ours: { x: <error> }
+
+line 45: hy1
+  tsc:  { x: typeof hy1; }[]
+  ours: { x: <error> }[]
+
+line 47: hy2_2
+  tsc:  { x: Array<typeof hy2>; }
+  ours: <error>
+
+line 47: hy2.x[0]
+  tsc:  { x: Array<typeof hy2>; }
+  ours: <error>
+
+line 47: hy2.x
+  tsc:  { x: Array<typeof hy2>; }[]
+  ours: <error>[]
+
+line 47: hy2
+  tsc:  { x: Array<typeof hy2>; }
+  ours: { x: <error>[] }
+
+errors:
+line 7: tsc TS2502: 'e' is referenced directly or indirectly in its own type annotation. (we accept)
+line 20: ours: unresolved identifier `g` (tsc accepts)
+line 22: ours: unresolved identifier `h` (tsc accepts)
+line 24: ours: unresolved identifier `i` (tsc accepts)
+line 44: ours: unresolved identifier `hy1` (tsc accepts)
+line 46: ours: unresolved identifier `hy2` (tsc accepts)

@@ -1,0 +1,14 @@
+types: 24 of 39 tsc entries compared, 2 differ
+
+line 8: f2
+  tsc:  (args_0: string, args_1: string) => void
+  ours: (...arg0: readonly [string, string]) => void
+
+line 23: f2
+  tsc:  (args_0: string, args_1: string) => void
+  ours: (...arg0: readonly [string, string]) => void
+
+errors:
+line 11: ours: rest parameter `args` type must be an array, got `readonly string[]` (tsc accepts)
+line 18: ours: rest parameter `args` type must be an array, got `readonly [string, string]` (tsc accepts)
+line 28: ours: rest parameter `args` type must be an array, got `readonly string[]` (tsc accepts)

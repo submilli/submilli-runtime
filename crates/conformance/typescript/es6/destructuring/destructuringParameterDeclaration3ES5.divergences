@@ -1,0 +1,17 @@
+types: 16 of 44 tsc entries compared, 3 differ
+
+line 24: array2
+  tsc:  (string | boolean)[]
+  ours: boolean[]
+
+line 24: [true, false, "hello"]
+  tsc:  (string | boolean)[]
+  ours: boolean[]
+
+line 33: a11
+  tsc:  ([a, b, c, ...x]: number[]) => void
+  ours: (arg0: number[]) => void
+
+errors:
+line 17: ours: rest parameter `a` type must be an array, got `stringOrNumArray` (tsc accepts)
+line 24: ours: expected `boolean` (matching first element), got `string` (tsc accepts)

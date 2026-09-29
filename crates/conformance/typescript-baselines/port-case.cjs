@@ -4,11 +4,17 @@
 // line where it was, so `tsc`'s baselines and our diagnostics stay comparable line
 // by line with the upstream test:
 //
-// - `var` becomes `let`, and `undefined` becomes `null`.
+// - `var` becomes `let`, and `undefined` becomes `null`. A `var` declared again in
+//   the same scope, which upstream uses to check a type (`var x: T; var x = e;`),
+//   would be a `let` redeclaration, so the repeat binds `x_2` instead; later reads
+//   still name the first. (`port-suite.cjs` leaves out a case whose repeats are
+//   what it checks: one where `tsc` reports that they differ.)
 // - A typed binding with no value gets `null as unknown as (T)`, and a
 //   `declare function` gets a body returning such a value.
 // - A function declaration or class method with no return type gets the one `tsc`
-//   infers for it, since Submilli requires it to be written.
+//   infers for it, and so do a class field and a parameter with a default value
+//   that have no type, since Submilli requires them to be written. Where `tsc`
+//   infers `any`, nothing is written.
 // - `// @strict: false` becomes `// @strict: true`, and `function main(): void {}`
 //   is appended.
 //
@@ -30,13 +36,47 @@ function main() {
 function port(source, fileName) {
   let text = source.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
   text = text.replace(/^(\s*\/\/\s*@strict\s*:\s*)false\b/im, "$1true");
+  text = renameRedeclarations(text, fileName);
   text = rewriteTokens(text);
   text = fillDeclarations(text, fileName);
-  // Return types are inferred from the program as rewritten so far, so they are
-  // spelled with `null` and see the values the placeholders supply.
-  text = annotateReturnTypes(text, fileName);
+  // Types are inferred from the program as rewritten so far, so they are spelled
+  // with `null` and see the values the placeholders supply.
+  text = annotateInferredTypes(text, fileName);
   if (!/^\s*function\s+main\s*\(/m.test(text)) text += "\n\nfunction main(): void {}\n";
   return text;
+}
+
+/** Renames each repeated `var` declaration in a scope `let` would share: the same
+ * block, or a function body and its parameters. */
+function renameRedeclarations(text, fileName) {
+  const sourceFile = parse(text, fileName);
+  const declared = new Map(); // scope node → name → times declared
+  const edits = [];
+  const declare = (scope, name) => {
+    if (!declared.has(scope)) declared.set(scope, new Map());
+    const names = declared.get(scope);
+    const count = (names.get(name) ?? 0) + 1;
+    names.set(name, count);
+    return count;
+  };
+  const visit = (node) => {
+    if (ts.isFunctionLike(node) && node.body && ts.isBlock(node.body)) {
+      for (const p of node.parameters) if (ts.isIdentifier(p.name)) declare(node.body, p.name.text);
+    }
+    const isVar = ts.isVariableDeclarationList(node) && !(node.flags & (ts.NodeFlags.Let | ts.NodeFlags.Const));
+    if (isVar) {
+      // A statement's declarations share its block; a loop head's, the loop.
+      const scope = ts.isVariableStatement(node.parent) ? node.parent.parent : node.parent;
+      for (const decl of node.declarations) {
+        if (!ts.isIdentifier(decl.name)) continue;
+        const count = declare(scope, decl.name.text);
+        if (count > 1) edits.push({ start: decl.name.end, end: decl.name.end, text: `_${count}` });
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return applyEdits(text, edits);
 }
 
 /**
@@ -115,13 +155,29 @@ function removeModifier(node, kind, sourceFile, edits) {
   }
 }
 
-/** Write the return type `tsc` infers on every function declaration and class method lacking one. */
-function annotateReturnTypes(text, fileName) {
+/** Write the type `tsc` infers where Submilli requires one and the case has none: the
+ * return type of a function declaration or class method, and the type of a class
+ * field or of a parameter with a default value. */
+function annotateInferredTypes(text, fileName) {
   const program = ts.createProgram([fileName], { strict: true, target: ts.ScriptTarget.ES2020 }, host(text, fileName));
   const checker = program.getTypeChecker();
   const sourceFile = program.getSourceFile(fileName);
   const edits = [];
+  const spell = (type, node) => checker.typeToString(type, node, ts.TypeFormatFlags.NoTruncation).replace(/\bundefined\b/g, "null");
+  // A type that can't be written where it goes: `any`, a class expression's, or `this`.
+  const unwritable = /\bany\b|\(Anonymous|\bthis\b/;
   const visit = (node) => {
+    const binding =
+      (ts.isPropertyDeclaration(node) && ts.isClassLike(node.parent)) || (ts.isParameter(node) && node.initializer);
+    if (binding && !node.type && ts.isIdentifier(node.name)) {
+      const type = checker.getTypeAtLocation(node);
+      // An optional binding's type includes the `undefined` its `?` already allows.
+      const members = node.questionToken && type.isUnion() ? type.types.filter((t) => !(t.flags & ts.TypeFlags.Undefined)) : [type];
+      const written = members.map((t) => spell(t, node)).join(" | ");
+      // After the name and any `?` or `!`.
+      const at = (node.questionToken ?? node.exclamationToken ?? node.name).end;
+      if (!unwritable.test(written)) edits.push({ start: at, end: at, text: `: ${written}` });
+    }
     const annotatable =
       (ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node)) &&
       node.body &&
@@ -130,12 +186,12 @@ function annotateReturnTypes(text, fileName) {
     if (annotatable) {
       const signature = checker.getSignatureFromDeclaration(node);
       const ret = signature && checker.getReturnTypeOfSignature(signature);
-      const written = ret ? checker.typeToString(ret, node, ts.TypeFormatFlags.NoTruncation) : "void";
+      const written = ret ? spell(ret, node) : "void";
       // `f() {` becomes `f(): T {`, not `f() : T {`.
       const end = node.body.getStart(sourceFile);
       let start = end;
       while (start > 0 && text[start - 1] === " ") start--;
-      edits.push({ start, end, text: `: ${written.replace(/\bundefined\b/g, "null")} ` });
+      edits.push({ start, end, text: `: ${written} ` });
     }
     ts.forEachChild(node, visit);
   };

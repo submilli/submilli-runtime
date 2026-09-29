@@ -1,0 +1,38 @@
+types: 35 of 87 tsc entries compared, 8 differ
+
+line 31: [2, 3, 4]
+  tsc:  [number, number, number]
+  ours: number[]
+
+line 47: [1, 2, 3]
+  tsc:  [number, number, number]
+  ours: number[]
+
+line 48: [1, 2, 3, 4]
+  tsc:  [number, number, number, number]
+  ours: number[]
+
+line 49: [1, 2, 3, 4]
+  tsc:  [number, number, number, number]
+  ours: number[]
+
+line 50: [1, 2, 3, 4, "hello"]
+  tsc:  [number, number, number, number, string]
+  ours: number[]
+
+line 51: [1, 2, "string"]
+  tsc:  [number, number, string]
+  ours: number[]
+
+line 52: c16
+  tsc:  string
+  ours: number
+
+line 52: [1, 2, "string"]
+  tsc:  [number, number, string]
+  ours: number[]
+
+errors:
+line 50: ours: expected `number` (matching first element), got `string` (tsc accepts)
+line 51: ours: expected `number` (matching first element), got `string` (tsc accepts)
+line 52: ours: expected `number` (matching first element), got `string` (tsc accepts)

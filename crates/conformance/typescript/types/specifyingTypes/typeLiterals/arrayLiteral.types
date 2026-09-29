@@ -1,0 +1,64 @@
+=== arrayLiteral.ts ===
+// valid uses of array literals
+
+let x = [];
+>x : any[]
+>  : ^^^^^
+>[] : never[]
+>   : ^^^^^^^
+
+/*pruned*/;            
+
+let y = [1];
+>y : number[]
+>  : ^^^^^^^^
+>[1] : number[]
+>    : ^^^^^^^^
+>1 : 1
+>  : ^
+
+let y_2 = [1, 2];
+>y_2 : number[]
+>    : ^^^^^^^^
+>[1, 2] : number[]
+>       : ^^^^^^^^
+>1 : 1
+>  : ^
+>2 : 2
+>  : ^
+
+/*pruned*/;                   
+
+let x2: number[] = [];
+>x2 : number[]
+>   : ^^^^^^^^
+>[] : never[]
+>   : ^^^^^^^
+
+/*pruned*/;                       
+
+let y2: number[] = [1];
+>y2 : number[]
+>   : ^^^^^^^^
+>[1] : number[]
+>    : ^^^^^^^^
+>1 : 1
+>  : ^
+
+let y2_2: number[] = [1, 2];
+>y2_2 : number[]
+>     : ^^^^^^^^
+>[1, 2] : number[]
+>       : ^^^^^^^^
+>1 : 1
+>  : ^
+>2 : 2
+>  : ^
+
+/*pruned*/;                              
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

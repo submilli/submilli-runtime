@@ -18,7 +18,6 @@ const { promisify } = require("util");
 
 const run = promisify(execFile);
 const casesDir = path.join(__dirname, "..", "typescript");
-const AREAS = ["controlFlow", "expressions", "statements", "types"];
 const CONCURRENCY = 8;
 
 // Why an upstream case is left out. The detail says which feature, error or case.
@@ -32,8 +31,31 @@ const REASONS = {
 };
 
 // Directories about a feature we exclude or haven't built, and the feature: what
-// pruning leaves of their cases is only scaffolding.
+// pruning leaves of their cases is only scaffolding. Each covers its subdirectories.
 const EXCLUDED_DIRECTORIES = new Map([
+  ["async", "async/await"],
+  ["asyncGenerators", "async/await and generators"],
+  ["classes/classStaticBlock", "static blocks"],
+  ["classes/indexMemberDeclarations", "index signatures"],
+  ["classes/staticIndexSignature", "index signatures"],
+  ["decorators", "decorators"],
+  ["dynamicImport", "dynamic imports"],
+  ["es6/computedProperties", "computed property names"],
+  ["es6/decorators", "decorators"],
+  ["es6/Symbols", "`Symbol`"],
+  ["es6/yieldExpressions", "generators"],
+  ["esDecorators", "decorators"],
+  ["generators", "generators"],
+  ["internalModules", "user-declared namespaces"],
+  ["parser/ecmascript2018/asyncGenerators", "async/await and generators"],
+  ["parser/ecmascript2018/forAwait", "async/await"],
+  ["parser/ecmascript5/ComputedPropertyNames", "computed property names"],
+  ["parser/ecmascript5/IndexMemberDeclarations", "index signatures"],
+  ["parser/ecmascript5/IndexSignatures", "index signatures"],
+  ["parser/ecmascript5/Symbols", "`Symbol`"],
+  ["parser/ecmascript6/ComputedPropertyNames", "computed property names"],
+  ["parser/ecmascript6/Symbols", "`Symbol`"],
+  ["Symbols", "`Symbol`"],
   ["expressions/binaryOperators/inOperator", "the `in` operator"],
   ["expressions/commaOperator", "the comma operator"],
   ["expressions/optionalChaining/delete", "`delete`"],
@@ -95,6 +117,10 @@ const CONSTRUCT_SIGNATURE_FEATURE = "construct signatures (SUB-1026: read as a m
 // every case is made strict. It isn't a check the case makes, and both sides agree
 // on it, so it doesn't make the case test the port.
 const STRICT_FIELD_ERROR = "TS2564";
+
+// "Subsequent variable declarations must have the same type": what a repeated `var`
+// checks upstream.
+const REDECLARED_TYPE_ERROR = "TS2403";
 
 // How much of a case pruning must keep, when it cut something.
 const MIN_CODE_LINES = 5;
@@ -158,9 +184,10 @@ function candidateCases(conformance, refresh) {
   const excluded = [...EXCLUDED_DIRECTORIES].map(([dir, feature]) =>
     exclusion(`${dir}/`, REASONS.unsupported, feature),
   );
-  const all = AREAS.flatMap((area) => findCases(path.join(conformance, area))).map((file) =>
-    path.relative(conformance, file),
-  );
+  // A declaration file (`.d.ts`) has no code to run, and isn't a case.
+  const all = findCases(conformance)
+    .filter((file) => !file.endsWith(".d.ts"))
+    .map((file) => path.relative(conformance, file));
   for (const rel of all) {
     const existing = path.join(casesDir, rel);
     if (fs.existsSync(existing)) {
@@ -170,12 +197,16 @@ function candidateCases(conformance, refresh) {
       else candidates.push(rel);
       continue;
     }
-    if (EXCLUDED_DIRECTORIES.has(path.dirname(rel))) continue;
+    if (excludedDirectory(rel)) continue;
     const reason = exclusionBeforePort(rel, fs.readFileSync(path.join(conformance, rel), "utf8"));
     if (reason) excluded.push(reason);
     else candidates.push(rel);
   }
   return { candidates, excluded };
+}
+
+function excludedDirectory(rel) {
+  return [...EXCLUDED_DIRECTORIES.keys()].some((dir) => rel.startsWith(`${dir}/`));
 }
 
 function exclusionBeforePort(rel, source) {
@@ -201,11 +232,19 @@ async function portCase(upstream, caseErrors, rel) {
   try {
     await run("node", [path.join(__dirname, "port-case.cjs"), path.join(upstream.conformance, rel), to]);
     if (leavesUndefined(to)) return drop(REASONS.port, "it leaves an `undefined` it can't rewrite");
-    const caused = portCausedErrors(upstream, rel, await tscErrorText(to));
+    const upstreamErrors = upstreamErrorCodes(upstream, rel);
+    // The port renames a repeated `var`, so a check that repeats agree goes.
+    if (upstreamErrors.has(`error ${REDECLARED_TYPE_ERROR}`)) {
+      return drop(REASONS.port, `it renames the repeated \`var\` declarations whose types \`tsc\` checks (${REDECLARED_TYPE_ERROR})`);
+    }
+    const caused = portCausedErrors(upstreamErrors, await tscErrorText(to));
     if (caused.length) return drop(REASONS.port, `\`tsc\` then reports ${caused.join(", ")}`);
     const { stdout } = await run("node", [path.join(__dirname, "prune-case.cjs"), caseErrors, to]);
     const summary = JSON.parse(stdout);
-    if (summary.error) return drop(REASONS.porter, summary.error);
+    if (summary.error) {
+      const ours = summary.lacking[0];
+      return drop(REASONS.porter, ours ? `${summary.error}; our first unsupported error: ${ours.message}` : summary.error);
+    }
     const { codeLinesBefore: before, codeLinesAfter: after } = summary;
     const pruned = summary.passes > 0;
     const cause = pruned ? unsupportedCause(rel, summary.lacking) : null;
@@ -233,17 +272,24 @@ function unsupportedCause(rel, lacking) {
  * the port caused it, as when `var` becoming `let` makes a repeated declaration a
  * redeclaration, `undefined` becoming `null` breaks an annotation, or strictness
  * inverts what a `@strict: false` case checks. Such a case tests the port. */
-function portCausedErrors(upstream, rel, portedErrors) {
+function portCausedErrors(upstreamCodes, portedErrors) {
+  return [...errorCodes(portedErrors)]
+    .filter((code) => code !== `error ${STRICT_FIELD_ERROR}` && !upstreamCodes.has(code))
+    .map((code) => code.replace("error ", ""));
+}
+
+/** The `error TSn` codes of the upstream baselines for a case, under any options. */
+function upstreamErrorCodes(upstream, rel) {
   const name = path.basename(rel, ".ts");
-  const upstreamErrors = upstream.errorBaselines
+  const text = upstream.errorBaselines
     .filter((f) => f === `${name}.errors.txt` || f.startsWith(`${name}(`))
     .map((f) => fs.readFileSync(path.join(upstream.baselines, f), "utf8"))
     .join("\n");
-  const codes = (text) => new Set(text.match(/error TS\d+/g) ?? []);
-  const upstreamCodes = codes(upstreamErrors);
-  return [...codes(portedErrors)]
-    .filter((code) => code !== `error ${STRICT_FIELD_ERROR}` && !upstreamCodes.has(code))
-    .map((code) => code.replace("error ", ""));
+  return errorCodes(text);
+}
+
+function errorCodes(text) {
+  return new Set(text.match(/error TS\d+/g) ?? []);
 }
 
 /** Whether the port left an `undefined` its token scan missed, as it can after a
@@ -310,10 +356,10 @@ function writeExcluded(excluded) {
   const text = [
     "# Upstream cases left out",
     "",
-    `Every upstream case in \`${AREAS.join("`, `")}\` that isn't in the suite, and why. A`,
-    "directory (ending in `/`) is left out whole, except for any case in the suite. Written",
-    "by `../typescript-baselines/port-suite.cjs`: change its lists or the porter, not this",
-    "file.",
+    "Every upstream conformance case that isn't in the suite, and why. A directory (ending",
+    "in `/`) is left out whole, with its subdirectories, except for any case in the suite.",
+    "Written by `../typescript-baselines/port-suite.cjs`: change its lists or the porter,",
+    "not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't read.",
     "",
     `${excluded.length} entries: ${counts}.`,
     "",

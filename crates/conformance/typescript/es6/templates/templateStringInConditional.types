@@ -1,0 +1,25 @@
+=== templateStringInConditional.ts ===
+let x = `abc${ " " }def` ? `abc${ " " }def` : `abc${ " " }def`;
+>x : string
+>  : ^^^^^^
+>`abc${ " " }def` ? `abc${ " " }def` : `abc${ " " }def` : "abc def"
+>                                                       : ^^^^^^^^^
+>`abc${ " " }def` : "abc def"
+>                 : ^^^^^^^^^
+>" " : " "
+>    : ^^^
+>`abc${ " " }def` : "abc def"
+>                 : ^^^^^^^^^
+>" " : " "
+>    : ^^^
+>`abc${ " " }def` : "abc def"
+>                 : ^^^^^^^^^
+>" " : " "
+>    : ^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

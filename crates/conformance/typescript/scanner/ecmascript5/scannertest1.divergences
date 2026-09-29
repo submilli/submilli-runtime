@@ -1,0 +1,4 @@
+types: 29 of 92 tsc entries compared, 0 differ
+
+errors:
+line 2: tsc TS6053: File '/Users/shmuellamm/development/sim/submilli-runtime-worktrees/nested-arrow/crates/conformance/typescript/scanner/ecmascript5/References.ts' not found. (we accept)

@@ -1,0 +1,25 @@
+types: 11 of 48 tsc entries compared, 5 differ
+
+line 6: this
+  tsc:  this
+  ours: A
+
+line 14: this
+  tsc:  this
+  ours: B
+
+line 23: this
+  tsc:  this
+  ours: C
+
+line 29: this
+  tsc:  this
+  ours: D
+
+line 37: this
+  tsc:  this
+  ours: E
+
+errors:
+line 34: tsc TS2415: Class 'E' incorrectly extends base class 'D'.   Property 'x' is private in type 'D' but not in type 'E'. (we accept)
+line 35: ours: field `x` redeclares an inherited field at a different visibility (tsc accepts)

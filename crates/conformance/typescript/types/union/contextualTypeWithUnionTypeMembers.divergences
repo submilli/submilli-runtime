@@ -1,0 +1,9 @@
+types: 10 of 67 tsc entries compared, 2 differ
+
+line 28: { // Like i1 commonPropertyType: "hello", commonMethodType: a=> a, commonMethodWithTypeParameter: a => a, methodOnlyInI1: a => a, propertyOnlyInI1: "Hello", }
+  tsc:  { commonPropertyType: string; commonMethodType: (a: string) => string; commonMethodWithTypeParameter: (a: number) => number; methodOnlyInI1: (a: string) => string; propertyOnlyInI1: string; }
+  ours: I1<number>
+
+line 36: { // Like i2 commonPropertyType: "hello", commonMethodType: a=> a, commonMethodWithTypeParameter: a => a, methodOnlyInI2: a => a, propertyOnlyInI2: "Hello", }
+  tsc:  { commonPropertyType: string; commonMethodType: (a: string) => string; commonMethodWithTypeParameter: (a: number) => number; methodOnlyInI2: (a: string) => string; propertyOnlyInI2: string; }
+  ours: I2<number>

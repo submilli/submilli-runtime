@@ -1,0 +1,1 @@
+line 34 missed: artifact tsc reports the class; we report the field that redeclares `x`, on line 35

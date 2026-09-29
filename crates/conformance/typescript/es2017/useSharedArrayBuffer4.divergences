@@ -1,0 +1,30 @@
+types: 6 of 28 tsc entries compared, 6 differ
+
+line 5: bar
+  tsc:  SharedArrayBuffer
+  ours: <error>
+
+line 5: foge.slice(1, 10)
+  tsc:  SharedArrayBuffer
+  ours: <error>
+
+line 5: foge
+  tsc:  SharedArrayBuffer
+  ours: <error>
+
+line 7: len
+  tsc:  number
+  ours: <error>
+
+line 7: foge.byteLength
+  tsc:  number
+  ours: <error>
+
+line 7: foge
+  tsc:  SharedArrayBuffer
+  ours: <error>
+
+errors:
+line 4: ours: unresolved identifier `SharedArrayBuffer` (tsc accepts)
+line 6: ours: unresolved identifier `Symbol` (tsc accepts)
+line 8: ours: unresolved identifier `SharedArrayBuffer` (tsc accepts)

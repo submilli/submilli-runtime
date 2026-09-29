@@ -1,0 +1,8 @@
+classWithBaseClassButNoConstructor.ts(7,5): error TS2564: Property 'foo' has no initializer and is not definitely assigned in the constructor.
+classWithBaseClassButNoConstructor.ts(11,9): error TS2554: Expected 1 arguments, but got 0.
+classWithBaseClassButNoConstructor.ts(19,5): error TS2564: Property 'foo' has no initializer and is not definitely assigned in the constructor.
+classWithBaseClassButNoConstructor.ts(23,9): error TS2554: Expected 1 arguments, but got 0.
+classWithBaseClassButNoConstructor.ts(28,5): error TS2564: Property 'foo' has no initializer and is not definitely assigned in the constructor.
+classWithBaseClassButNoConstructor.ts(32,10): error TS2554: Expected 1 arguments, but got 0.
+classWithBaseClassButNoConstructor.ts(36,5): error TS2564: Property 'foo' has no initializer and is not definitely assigned in the constructor.
+classWithBaseClassButNoConstructor.ts(40,10): error TS2554: Expected 1 arguments, but got 0.

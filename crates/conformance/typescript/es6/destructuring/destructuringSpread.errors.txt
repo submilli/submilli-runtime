@@ -1,0 +1,1 @@
+destructuringSpread.ts(17,21): error TS2339: Property 'g' does not exist on type '{ f: number; e: number; d: number; c: number; }'.

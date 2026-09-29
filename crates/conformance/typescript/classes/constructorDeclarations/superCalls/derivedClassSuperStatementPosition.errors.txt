@@ -1,0 +1,6 @@
+derivedClassSuperStatementPosition.ts(14,9): error TS17009: 'super' must be called before accessing 'this' in the constructor of a derived class.
+derivedClassSuperStatementPosition.ts(24,9): error TS17009: 'super' must be called before accessing 'this' in the constructor of a derived class.
+derivedClassSuperStatementPosition.ts(62,15): error TS2401: A 'super' call must be a root-level statement within a constructor of a derived class that contains initialized properties, parameter properties, or private identifiers.
+derivedClassSuperStatementPosition.ts(71,13): error TS2401: A 'super' call must be a root-level statement within a constructor of a derived class that contains initialized properties, parameter properties, or private identifiers.
+derivedClassSuperStatementPosition.ts(83,13): error TS2401: A 'super' call must be a root-level statement within a constructor of a derived class that contains initialized properties, parameter properties, or private identifiers.
+derivedClassSuperStatementPosition.ts(92,13): error TS2401: A 'super' call must be a root-level statement within a constructor of a derived class that contains initialized properties, parameter properties, or private identifiers.

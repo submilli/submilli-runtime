@@ -1,0 +1,2 @@
+emitArrowFunctionWhenUsingArguments01.ts(4,15): error TS2304: Cannot find name 'arguments'.
+emitArrowFunctionWhenUsingArguments01.ts(21,15): error TS2304: Cannot find name 'arguments'.

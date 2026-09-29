@@ -1,0 +1,3 @@
+derivedTypeAccessesHiddenBaseCallViaSuperPropertyAccess.ts(4,9): error TS2322: Type 'null' is not assignable to type '{ a: number; }'.
+derivedTypeAccessesHiddenBaseCallViaSuperPropertyAccess.ts(10,9): error TS2322: Type 'null' is not assignable to type '{ a: number; b: number; }'.
+derivedTypeAccessesHiddenBaseCallViaSuperPropertyAccess.ts(15,36): error TS2353: Object literal may only specify known properties, and 'b' does not exist in type '{ a: number; }'.

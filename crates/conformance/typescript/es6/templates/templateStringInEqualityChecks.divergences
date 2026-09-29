@@ -1,0 +1,21 @@
+types: 12 of 21 tsc entries compared, 4 differ
+
+line 2: `abc${0}abc`
+  tsc:  "abc0abc"
+  ours: string
+
+line 3: `abc${0}abc`
+  tsc:  "abc0abc"
+  ours: string
+
+line 4: `abc${0}abc`
+  tsc:  "abc0abc"
+  ours: string
+
+line 5: `abc${0}abc`
+  tsc:  "abc0abc"
+  ours: string
+
+errors:
+line 2: tsc TS2367: This comparison appears to be unintentional because the types '"abc0abc"' and '"abc"' have no overlap. (we accept)
+line 3: tsc TS2367: This comparison appears to be unintentional because the types '"abc"' and '"abc0abc"' have no overlap. (we accept)

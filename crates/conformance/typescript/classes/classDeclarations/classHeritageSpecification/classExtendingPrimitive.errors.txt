@@ -1,0 +1,8 @@
+classExtendingPrimitive.ts(8,19): error TS1109: Expression expected.
+classExtendingPrimitive.ts(4,17): error TS2863: A class cannot extend a primitive type like 'number'. Classes can only extend constructable values.
+classExtendingPrimitive.ts(5,18): error TS2863: A class cannot extend a primitive type like 'string'. Classes can only extend constructable values.
+classExtendingPrimitive.ts(6,18): error TS2863: A class cannot extend a primitive type like 'boolean'. Classes can only extend constructable values.
+classExtendingPrimitive.ts(7,18): error TS2304: Cannot find name 'Void'.
+classExtendingPrimitive.ts(9,18): error TS2304: Cannot find name 'Null'.
+classExtendingPrimitive.ts(12,18): error TS2552: Cannot find name 'Undefined'. Did you mean 'undefined'?
+classExtendingPrimitive.ts(15,18): error TS2507: Type 'typeof E' is not a constructor function type.

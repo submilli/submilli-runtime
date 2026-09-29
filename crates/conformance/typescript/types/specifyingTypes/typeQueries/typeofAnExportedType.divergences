@@ -1,0 +1,6 @@
+types: 28 of 69 tsc entries compared, 0 differ
+
+errors:
+line 13: ours: unresolved identifier `C` (tsc accepts)
+line 41: ours: unresolved identifier `E` (tsc accepts)
+line 42: ours: unresolved identifier `E` (tsc accepts)

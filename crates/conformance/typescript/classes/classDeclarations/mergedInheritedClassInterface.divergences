@@ -1,0 +1,15 @@
+types: 10 of 46 tsc entries compared, 0 differ
+
+errors:
+line 17: tsc TS2564: Property 'classNumber' has no initializer and is not definitely assigned in the constructor. (we accept)
+line 25: tsc TS2564: Property 'classString' has no initializer and is not definitely assigned in the constructor. (we accept)
+line 16: ours: duplicate declaration of class `Child` (tsc accepts)
+line 24: ours: duplicate declaration of class `ChildNoBaseClass` (tsc accepts)
+line 28: ours: a class can only `extends` another class, but `ChildNoBaseClass` is not a class (tsc accepts)
+line 33: ours: field `required` does not exist on `Child` (tsc accepts)
+line 34: ours: field `optional` does not exist on `Child` (tsc accepts)
+line 35: ours: field `additional` does not exist on `Child` (tsc accepts)
+line 36: ours: field `baseNumber` does not exist on `Child` (tsc accepts)
+line 37: ours: field `classNumber` does not exist on `Child` (tsc accepts)
+line 38: ours: no method `baseMethod` on `Child` (tsc accepts)
+line 39: ours: no method `method` on `Child` (tsc accepts)

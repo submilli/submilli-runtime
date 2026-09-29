@@ -1,0 +1,32 @@
+=== interfacesWithPredefinedTypesAsNames.ts ===
+interface any { }
+>any : any
+>    : ^^^
+
+interface number { }
+>number : number
+>       : ^^^^^^
+
+interface string { }
+>string : string
+>       : ^^^^^^
+
+interface boolean { }
+>boolean : boolean
+>        : ^^^^^^^
+
+/*pruned*/;      
+interface unknown {}
+>unknown : unknown
+>        : ^^^^^^^
+
+interface never {}
+>never : never
+>      : ^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+
