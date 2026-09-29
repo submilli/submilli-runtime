@@ -1,0 +1,128 @@
+=== genericTypeReferenceWithoutTypeArgument2.ts ===
+// it is an error to use a generic type without type arguments
+// all of these are errors 
+
+interface I<T> {
+>I : I<T>
+>  : ^^^^
+>T : T
+>  : ^
+
+    foo: T;
+>foo : T
+>    : ^
+
+}
+
+let c: I = null as unknown as (I);
+>c : any
+>  : ^^^
+>null as unknown as (I) : any
+>                       : ^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+let a: { x: I } = null as unknown as ({ x: I });
+>a : { x: I; }
+>  : ^^^^^^^^^
+>x : any
+>  : ^^^
+>null as unknown as ({ x: I }) : { x: I; }
+>                              : ^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>x : any
+>  : ^^^
+
+/*pruned*/;                                               
+/*pruned*/;                                               
+
+let e = (x: I) => { let y: I = null as unknown as (I); return y; }
+>e : (x: I) => any
+>  : ^^^^^^^^^^^^^
+>(x: I) => { let y: I = null as unknown as (I); return y; } : (x: I) => any
+>                                                           : ^^^^^^^^^^^^^
+>x : any
+>  : ^^^
+>y : any
+>  : ^^^
+>null as unknown as (I) : any
+>                       : ^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>y : any
+>  : ^^^
+
+
+function f(x: I): I { let y: I = null as unknown as (I); return y; }
+>f : (x: I) => I
+>  : ^^^^^^^^^^^
+>x : any
+>  : ^^^
+>y : any
+>  : ^^^
+>null as unknown as (I) : any
+>                       : ^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>y : any
+>  : ^^^
+
+
+let g = function f(x: I): I { let y: I = null as unknown as (I); return y; }
+>g : (x: I) => I
+>  : ^^^^^^^^^^^
+>function f(x: I): I { let y: I = null as unknown as (I); return y; } : (x: I) => I
+>                                                                     : ^^^^^^^^^^^
+>f : (x: I) => I
+>  : ^^^^^^^^^^^
+>x : any
+>  : ^^^
+>y : any
+>  : ^^^
+>null as unknown as (I) : any
+>                       : ^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>y : any
+>  : ^^^
+
+
+class D extends I {
+>D : D
+>  : ^
+>I : any
+>  : ^^^
+
+}
+
+interface U extends I {}
+>U : U
+>  : ^
+
+
+/*pruned*/;  
+                                    
+ 
+
+/*pruned*/;             
+/*pruned*/;                    
+/*pruned*/;                 
+
+/*pruned*/;                            
+/*pruned*/;                              
+
+let j = <C>null;
+>j : C
+>  : ^
+><C>null : C
+>        : ^
+
+/*pruned*/;       
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

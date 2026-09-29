@@ -1,0 +1,2 @@
+contextuallyTypeLogicalAnd03.ts(7,5): error TS2872: This kind of expression is always truthy.
+contextuallyTypeLogicalAnd03.ts(7,6): error TS7006: Parameter 'a' implicitly has an 'any' type.

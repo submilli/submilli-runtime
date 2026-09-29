@@ -1,0 +1,13 @@
+types: 7 of 29 tsc entries compared, 3 differ
+
+line 43: r
+  tsc:  { Foo?: Base; }
+  ours: { Foo: <error> } | { Foo?: Base }
+
+line 43: true ? a : b
+  tsc:  { Foo?: Base; }
+  ours: { Foo: <error> } | { Foo?: Base }
+
+line 43: b
+  tsc:  { Foo: Derived; }
+  ours: { Foo: <error> }

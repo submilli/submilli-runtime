@@ -1,0 +1,2 @@
+boolInsteadOfBoolean.ts(2,8): error TS2304: Cannot find name 'bool'.
+boolInsteadOfBoolean.ts(2,35): error TS2304: Cannot find name 'bool'.

@@ -1,0 +1,1 @@
+superCallParameterContextualTyping2.ts(11,43): error TS2349: This expression is not callable.   Type 'Number' has no call signatures.

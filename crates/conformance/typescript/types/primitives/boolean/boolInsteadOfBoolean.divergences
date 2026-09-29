@@ -1,0 +1,9 @@
+types: 5 of 9 tsc entries compared, 2 differ
+
+line 3: x
+  tsc:  bool
+  ours: <error>
+
+line 4: x
+  tsc:  bool
+  ours: <error>

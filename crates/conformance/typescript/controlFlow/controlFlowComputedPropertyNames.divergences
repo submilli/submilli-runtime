@@ -1,0 +1,97 @@
+types: 60 of 92 tsc entries compared, 22 differ
+
+line 5: obj
+  tsc:  Record<string, unknown>
+  ours: { [key: string]: unknown }
+
+line 6: obj
+  tsc:  Record<string, unknown>
+  ours: { [key: string]: unknown }
+
+line 7: obj[key]
+  tsc:  string
+  ours: unknown
+
+line 7: obj
+  tsc:  Record<string, unknown>
+  ours: { [key: string]: unknown }
+
+line 11: obj
+  tsc:  Record<string, string | null>
+  ours: { [key: string]: string | null }
+
+line 12: obj
+  tsc:  Record<string, string | null>
+  ours: { [key: string]: string | null }
+
+line 13: obj[key]
+  tsc:  string
+  ours: string | null
+
+line 13: obj
+  tsc:  Record<string, string | null>
+  ours: { [key: string]: string | null }
+
+line 16: obj
+  tsc:  Record<string, string | null>
+  ours: { [key: string]: string | null }
+
+line 17: obj[key2]
+  tsc:  string
+  ours: string | null
+
+line 17: obj
+  tsc:  Record<string, string | null>
+  ours: { [key: string]: string | null }
+
+line 20: obj
+  tsc:  Record<string, string | null>
+  ours: { [key: string]: string | null }
+
+line 21: obj[key3]
+  tsc:  string
+  ours: string | null
+
+line 21: obj
+  tsc:  Record<string, string | null>
+  ours: { [key: string]: string | null }
+
+line 27: key
+  tsc:  keyof Thing
+  ours: "a" | "b" | "c"
+
+line 28: key
+  tsc:  keyof Thing
+  ours: "a" | "b" | "c"
+
+line 29: key
+  tsc:  keyof Thing
+  ours: "a" | "b" | "c"
+
+line 30: obj[key]
+  tsc:  string
+  ours: number | string | null
+
+line 30: key
+  tsc:  keyof Thing
+  ours: "a" | "b" | "c"
+
+line 32: key
+  tsc:  keyof Thing
+  ours: "a" | "b" | "c"
+
+line 33: obj[key]
+  tsc:  number
+  ours: number | string | null
+
+line 33: key
+  tsc:  keyof Thing
+  ours: "a" | "b" | "c"
+
+errors:
+line 7: ours: cannot read field `toUpperCase` on `unknown` (tsc accepts)
+line 13: ours: cannot read field `toUpperCase` on `string | null`: the receiver can be `null` (tsc accepts)
+line 17: ours: cannot read field `toUpperCase` on `string | null`: the receiver can be `null` (tsc accepts)
+line 21: ours: cannot read field `toUpperCase` on `string | null`: the receiver can be `null` (tsc accepts)
+line 30: ours: cannot read field `toUpperCase` on non-object type `number | string | null` (tsc accepts)
+line 33: ours: cannot read field `toFixed` on non-object type `number | string | null` (tsc accepts)

@@ -22,6 +22,11 @@ Each case is four files with the same base name:
 | `<case>.types` | The type `tsc` infers at each expression and binding, line by line, in the format of TypeScript's own `.types` baselines. Generated. |
 | `<case>.errors.txt` | The errors `tsc` reports, one per line. Generated, and absent when `tsc` reports none. |
 | `<case>.divergences` | Every place we disagree with `tsc`. Written by the test, and committed. |
+| `<case>.triage` | Why each divergence is expected (see [Explaining divergences](#explaining-divergences)). Written by hand, and absent while none is explained. |
+
+Beside the cases are `unexplained.txt`, the divergences not yet explained, and
+`EXCLUDED.md`, every upstream case in the directories the suite ports from that
+isn't in it, and why.
 
 The cases come from the TypeScript repository at
 `5848bc5157b22ff7f4e3369f4645a514a433b15f`, and remain under TypeScript's Apache 2.0
@@ -34,15 +39,15 @@ suite when:
 - it is about something we support. `typescript-baselines/port-suite.cjs` lists the
   directories about a feature we exclude or haven't built, such as `types/any` or
   `types/intersection`, and the case names about one elsewhere, such as index
-  signatures;
+  signatures, each with the feature;
 - it is one TypeScript file, not several (`@filename`) or JavaScript;
 - the port leaves it checking the same thing: `tsc` reports no error on it the
   upstream baseline lacks (such as a redeclaration from `var` becoming `let`, or one
   from making a `@strict: false` case strict), other than for a class field with no
   initializer, and no `undefined` is left;
 - it isn't a copy of another case once `undefined` is `null`;
-- pruning keeps at least a third of its code lines, and at least five, not counting
-  the values the port supplies; and
+- when pruning cut something, it kept at least a third of the case's code lines, and
+  at least five, not counting the values the port supplies; and
 - it still checks at least five things: `tsc` types compared, plus lines `tsc`
   rejects other than for a class field with no initializer (an error only because
   the port makes every case strict).
@@ -50,6 +55,21 @@ suite when:
 The cases ported before pruning existed are whole. Some of them reject a line where
 Submilli differs from TypeScript by design (an array literal's element type comes
 from its first element, for instance).
+
+Every upstream case that fails one of these is in `EXCLUDED.md`, with one of these
+reasons and a detail:
+
+| Reason | Detail |
+|:-------|:-------|
+| not supported | The feature, for a listed directory or name. For a case pruning cut too much of, our first error that lacked support and the code it was on. |
+| multi-file or JavaScript | |
+| the port changes what it checks | The error `tsc` reports on the port and not upstream, or the `undefined` it left. |
+| duplicate | The case it is a copy of. |
+| checks too little | How many things it checks, when pruning cut nothing. |
+| porter failure | What went wrong. A bug in the porter, to fix. |
+
+`port-suite.cjs` writes the file on every run, so it always covers every upstream
+case in `controlFlow`, `expressions`, `statements` and `types`.
 
 ## What the test checks
 
@@ -78,9 +98,41 @@ UPDATE_TYPESCRIPT_EXPECTED=1 cargo test -p conformance --test typescript
 `TYPESCRIPT_CHECKS_OUT=<file>` writes every check the run makes, one per line, for
 `coverage.cjs`.
 
+The test also fails when a divergence isn't explained; see below.
+
 The test also fails when a case has no `.types` file, since nothing would be compared,
-and when a baseline or `.divergences` file has no case beside it. Update mode removes
-such leftovers.
+and when a baseline, `.divergences` or `.triage` file has no case beside it. Update
+mode removes such leftovers, except a `.triage`, which is written by hand.
+
+### Explaining divergences
+
+Every divergence needs a reason: a bug we have filed, a difference by design, or an
+artifact of how the case was ported. A case's `.triage` gives it, one entry per line
+of the case, for one kind of divergence on it:
+
+```text
+line 12 type: by-design spec §1.2 an array literal's element type comes from its first element
+line 14, 17 extra: bug SUB-1026 construct signatures read as a method named `new`
+line 30 missed: artifact pruning removed the assignment that narrowed `x`
+```
+
+The kinds are `type`, a type we infer differently; `missed`, an error `tsc` reports
+that none of ours agrees with; and `extra`, an error of ours that none of `tsc`'s
+agrees with. The reason starts `bug SUB-<n>`, `by-design spec §<section>`, or
+`artifact` followed by a note.
+
+The divergences not yet explained are listed in `unexplained.txt`, one
+`<case> <line> <kind>` per line. The test fails when:
+
+- a divergence is neither explained nor listed;
+- an explanation names a line and kind that no longer diverges; or
+- `unexplained.txt` lists a divergence that no longer diverges, or is now explained.
+
+So the list can only shrink. Update mode drops what it lists that no longer applies,
+and never adds to it: a compiler change that makes a new divergence needs an
+explanation. It doesn't edit `.triage` files either: a stale explanation still
+fails, and is removed by hand. The one exception is a case `port-suite.cjs` has just ported, whose
+divergences it lists, through `TYPESCRIPT_PORTED_CASES=<file of case paths>`.
 
 ### How types are compared
 
@@ -165,7 +217,7 @@ All in `typescript-baselines/`, except the last:
 | `port-case.cjs` | Ports one upstream case (see [Porting a case](#porting-a-case)). |
 | `prune-case.cjs` | Prunes one ported case (see [Pruning](#pruning)). |
 | `write-baselines.cjs` | Writes the `.types` and `.errors.txt` of every case, or those matching a path substring. |
-| `port-suite.cjs` | Picks the upstream cases that belong, and runs the three above and the runner on each. |
+| `port-suite.cjs` | Picks the upstream cases that belong, runs the three above and the runner on each, and writes `EXCLUDED.md`. |
 | `tsc-case.cjs` | What the others share: the `tsc` options a case is checked with, and its errors. |
 | `coverage.cjs` | Writes `../COVERAGE.md`: for each supported feature, whether every upstream test about it has been dealt with, and what the suites check of it. |
 | `../examples/typescript_case_errors.rs` | Prints our errors on a case for the pruner, classified by `../tests/support/case_errors.rs`, which the runner uses too. |
@@ -214,7 +266,11 @@ the upstream case has.
    Without `--refresh`, only cases not yet in the suite are ported. With it, each case
    pruning cut something from is ported again too, so what it cut comes back. Cases
    ported whole are never touched. Review the diff: a case can also leave the suite,
-   when what's left no longer passes the criteria above.
+   when what's left no longer passes the criteria above. The divergences of the cases
+   it ports are added to `unexplained.txt`, and `EXCLUDED.md` is rewritten. The suite
+   must pass first; `port-suite.cjs` checks, and stops if it doesn't. A case with a
+   `.triage` isn't ported again, since its explanations name lines of the case as it
+   is; it's listed, to port by hand after its explanations are reviewed.
 
 4. Regenerate the coverage map, `node coverage.cjs <TypeScript>` from
    `typescript-baselines/`, and commit `COVERAGE.md` with the change.
@@ -224,9 +280,9 @@ the upstream case has.
 The lists in `tests/support/case_errors.rs` decide which of our errors lack support,
 and so what the runner reports and what pruning cuts. After editing them, rebuild the
 example, update the divergences (step 2 above), and port again with `--refresh`
-(step 3). The lists of excluded directories and case names are in `port-suite.cjs`; a
-change there only affects cases not yet in the suite, so remove any case it now
-excludes by hand.
+(step 3). The lists of excluded directories and case names are in `port-suite.cjs`, each with
+the feature it is about; a change there only affects cases not yet in the suite, so
+remove any case it now excludes by hand, then run it to rewrite `EXCLUDED.md`.
 
 ### Moving to another TypeScript commit
 

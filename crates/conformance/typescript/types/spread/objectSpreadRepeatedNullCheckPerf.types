@@ -1,0 +1,878 @@
+=== objectSpreadRepeatedNullCheckPerf.ts ===
+interface Props {
+>Props : Props
+>      : ^^^^^
+
+    readonly a?: string
+>a : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+    readonly b?: string
+>b : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+    readonly c?: string
+>c : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+    readonly d?: string
+>d : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+    readonly e?: string
+>e : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+    readonly f?: string
+>f : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+    readonly g?: string
+>g : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+    readonly h?: string
+>h : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+    readonly i?: string
+>i : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+    readonly j?: string
+>j : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+    readonly k?: string
+>k : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+    readonly l?: string
+>l : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+    readonly m?: string
+>m : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+    readonly n?: string
+>n : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+    readonly o?: string
+>o : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+    readonly p?: string
+>p : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+    readonly q?: string
+>q : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+    readonly r?: string
+>r : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+    readonly s?: string
+>s : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+    readonly t?: string
+>t : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+    readonly u?: string
+>u : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+    readonly v?: string
+>v : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+    readonly w?: string
+>w : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+    readonly x?: string
+>x : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+    readonly y?: string
+>y : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+    readonly z?: string
+>z : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+}
+
+function parseWithSpread(config: Record<string, number>): Props {
+>parseWithSpread : (config: Record<string, number>) => Props
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+
+    return {
+>{         ...config.a !== null && { a: config.a.toString() },         ...config.b !== null && { b: config.b.toString() },         ...config.c !== null && { c: config.c.toString() },         ...config.d !== null && { d: config.d.toString() },         ...config.e !== null && { e: config.e.toString() },         ...config.f !== null && { f: config.f.toString() },         ...config.g !== null && { g: config.g.toString() },         ...config.h !== null && { h: config.h.toString() },         ...config.i !== null && { i: config.i.toString() },         ...config.j !== null && { j: config.j.toString() },         ...config.k !== null && { k: config.k.toString() },         ...config.l !== null && { l: config.l.toString() },         ...config.m !== null && { m: config.m.toString() },         ...config.n !== null && { n: config.n.toString() },         ...config.o !== null && { o: config.o.toString() },         ...config.p !== null && { p: config.p.toString() },         ...config.q !== null && { q: config.q.toString() },         ...config.r !== null && { r: config.r.toString() },         ...config.s !== null && { s: config.s.toString() },         ...config.t !== null && { t: config.t.toString() },         ...config.u !== null && { u: config.u.toString() },         ...config.v !== null && { v: config.v.toString() },         ...config.w !== null && { w: config.w.toString() },         ...config.x !== null && { x: config.x.toString() },         ...config.y !== null && { y: config.y.toString() },         ...config.z !== null && { z: config.z.toString() }     } : { z?: string | undefined; y?: string | undefined; x?: string | undefined; w?: string | undefined; v?: string | undefined; u?: string | undefined; t?: string | undefined; s?: string | undefined; r?: string | undefined; q?: string | undefined; p?: string | undefined; o?: string | undefined; n?: string | undefined; m?: string | undefined; l?: string | undefined; k?: string | undefined; j?: string | undefined; i?: string | undefined; h?: string | undefined; g?: string | undefined; f?: string | undefined; e?: string | undefined; d?: string | undefined; c?: string | undefined; b?: string | undefined; a?: string | undefined; }
+>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        ...config.a !== null && { a: config.a.toString() },
+>config.a !== null && { a: config.a.toString() } : false | { a: string; }
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^
+>config.a !== null : boolean
+>                  : ^^^^^^^
+>config.a : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>{ a: config.a.toString() } : { a: string; }
+>                           : ^^^^^^^^^^^^^^
+>a : string
+>  : ^^^^^^
+>config.a.toString() : string
+>                    : ^^^^^^
+>config.a.toString : (radix?: number) => string
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>config.a : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        ...config.b !== null && { b: config.b.toString() },
+>config.b !== null && { b: config.b.toString() } : false | { b: string; }
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^
+>config.b !== null : boolean
+>                  : ^^^^^^^
+>config.b : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>b : number
+>  : ^^^^^^
+>{ b: config.b.toString() } : { b: string; }
+>                           : ^^^^^^^^^^^^^^
+>b : string
+>  : ^^^^^^
+>config.b.toString() : string
+>                    : ^^^^^^
+>config.b.toString : (radix?: number) => string
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>config.b : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>b : number
+>  : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        ...config.c !== null && { c: config.c.toString() },
+>config.c !== null && { c: config.c.toString() } : false | { c: string; }
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^
+>config.c !== null : boolean
+>                  : ^^^^^^^
+>config.c : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>c : number
+>  : ^^^^^^
+>{ c: config.c.toString() } : { c: string; }
+>                           : ^^^^^^^^^^^^^^
+>c : string
+>  : ^^^^^^
+>config.c.toString() : string
+>                    : ^^^^^^
+>config.c.toString : (radix?: number) => string
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>config.c : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>c : number
+>  : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        ...config.d !== null && { d: config.d.toString() },
+>config.d !== null && { d: config.d.toString() } : false | { d: string; }
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^
+>config.d !== null : boolean
+>                  : ^^^^^^^
+>config.d : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>d : number
+>  : ^^^^^^
+>{ d: config.d.toString() } : { d: string; }
+>                           : ^^^^^^^^^^^^^^
+>d : string
+>  : ^^^^^^
+>config.d.toString() : string
+>                    : ^^^^^^
+>config.d.toString : (radix?: number) => string
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>config.d : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>d : number
+>  : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        ...config.e !== null && { e: config.e.toString() },
+>config.e !== null && { e: config.e.toString() } : false | { e: string; }
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^
+>config.e !== null : boolean
+>                  : ^^^^^^^
+>config.e : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>e : number
+>  : ^^^^^^
+>{ e: config.e.toString() } : { e: string; }
+>                           : ^^^^^^^^^^^^^^
+>e : string
+>  : ^^^^^^
+>config.e.toString() : string
+>                    : ^^^^^^
+>config.e.toString : (radix?: number) => string
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>config.e : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>e : number
+>  : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        ...config.f !== null && { f: config.f.toString() },
+>config.f !== null && { f: config.f.toString() } : false | { f: string; }
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^
+>config.f !== null : boolean
+>                  : ^^^^^^^
+>config.f : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>f : number
+>  : ^^^^^^
+>{ f: config.f.toString() } : { f: string; }
+>                           : ^^^^^^^^^^^^^^
+>f : string
+>  : ^^^^^^
+>config.f.toString() : string
+>                    : ^^^^^^
+>config.f.toString : (radix?: number) => string
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>config.f : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>f : number
+>  : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        ...config.g !== null && { g: config.g.toString() },
+>config.g !== null && { g: config.g.toString() } : false | { g: string; }
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^
+>config.g !== null : boolean
+>                  : ^^^^^^^
+>config.g : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>g : number
+>  : ^^^^^^
+>{ g: config.g.toString() } : { g: string; }
+>                           : ^^^^^^^^^^^^^^
+>g : string
+>  : ^^^^^^
+>config.g.toString() : string
+>                    : ^^^^^^
+>config.g.toString : (radix?: number) => string
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>config.g : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>g : number
+>  : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        ...config.h !== null && { h: config.h.toString() },
+>config.h !== null && { h: config.h.toString() } : false | { h: string; }
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^
+>config.h !== null : boolean
+>                  : ^^^^^^^
+>config.h : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>h : number
+>  : ^^^^^^
+>{ h: config.h.toString() } : { h: string; }
+>                           : ^^^^^^^^^^^^^^
+>h : string
+>  : ^^^^^^
+>config.h.toString() : string
+>                    : ^^^^^^
+>config.h.toString : (radix?: number) => string
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>config.h : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>h : number
+>  : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        ...config.i !== null && { i: config.i.toString() },
+>config.i !== null && { i: config.i.toString() } : false | { i: string; }
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^
+>config.i !== null : boolean
+>                  : ^^^^^^^
+>config.i : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>i : number
+>  : ^^^^^^
+>{ i: config.i.toString() } : { i: string; }
+>                           : ^^^^^^^^^^^^^^
+>i : string
+>  : ^^^^^^
+>config.i.toString() : string
+>                    : ^^^^^^
+>config.i.toString : (radix?: number) => string
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>config.i : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>i : number
+>  : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        ...config.j !== null && { j: config.j.toString() },
+>config.j !== null && { j: config.j.toString() } : false | { j: string; }
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^
+>config.j !== null : boolean
+>                  : ^^^^^^^
+>config.j : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>j : number
+>  : ^^^^^^
+>{ j: config.j.toString() } : { j: string; }
+>                           : ^^^^^^^^^^^^^^
+>j : string
+>  : ^^^^^^
+>config.j.toString() : string
+>                    : ^^^^^^
+>config.j.toString : (radix?: number) => string
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>config.j : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>j : number
+>  : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        ...config.k !== null && { k: config.k.toString() },
+>config.k !== null && { k: config.k.toString() } : false | { k: string; }
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^
+>config.k !== null : boolean
+>                  : ^^^^^^^
+>config.k : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>k : number
+>  : ^^^^^^
+>{ k: config.k.toString() } : { k: string; }
+>                           : ^^^^^^^^^^^^^^
+>k : string
+>  : ^^^^^^
+>config.k.toString() : string
+>                    : ^^^^^^
+>config.k.toString : (radix?: number) => string
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>config.k : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>k : number
+>  : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        ...config.l !== null && { l: config.l.toString() },
+>config.l !== null && { l: config.l.toString() } : false | { l: string; }
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^
+>config.l !== null : boolean
+>                  : ^^^^^^^
+>config.l : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>l : number
+>  : ^^^^^^
+>{ l: config.l.toString() } : { l: string; }
+>                           : ^^^^^^^^^^^^^^
+>l : string
+>  : ^^^^^^
+>config.l.toString() : string
+>                    : ^^^^^^
+>config.l.toString : (radix?: number) => string
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>config.l : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>l : number
+>  : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        ...config.m !== null && { m: config.m.toString() },
+>config.m !== null && { m: config.m.toString() } : false | { m: string; }
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^
+>config.m !== null : boolean
+>                  : ^^^^^^^
+>config.m : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>m : number
+>  : ^^^^^^
+>{ m: config.m.toString() } : { m: string; }
+>                           : ^^^^^^^^^^^^^^
+>m : string
+>  : ^^^^^^
+>config.m.toString() : string
+>                    : ^^^^^^
+>config.m.toString : (radix?: number) => string
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>config.m : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>m : number
+>  : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        ...config.n !== null && { n: config.n.toString() },
+>config.n !== null && { n: config.n.toString() } : false | { n: string; }
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^
+>config.n !== null : boolean
+>                  : ^^^^^^^
+>config.n : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>n : number
+>  : ^^^^^^
+>{ n: config.n.toString() } : { n: string; }
+>                           : ^^^^^^^^^^^^^^
+>n : string
+>  : ^^^^^^
+>config.n.toString() : string
+>                    : ^^^^^^
+>config.n.toString : (radix?: number) => string
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>config.n : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>n : number
+>  : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        ...config.o !== null && { o: config.o.toString() },
+>config.o !== null && { o: config.o.toString() } : false | { o: string; }
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^
+>config.o !== null : boolean
+>                  : ^^^^^^^
+>config.o : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>o : number
+>  : ^^^^^^
+>{ o: config.o.toString() } : { o: string; }
+>                           : ^^^^^^^^^^^^^^
+>o : string
+>  : ^^^^^^
+>config.o.toString() : string
+>                    : ^^^^^^
+>config.o.toString : (radix?: number) => string
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>config.o : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>o : number
+>  : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        ...config.p !== null && { p: config.p.toString() },
+>config.p !== null && { p: config.p.toString() } : false | { p: string; }
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^
+>config.p !== null : boolean
+>                  : ^^^^^^^
+>config.p : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>p : number
+>  : ^^^^^^
+>{ p: config.p.toString() } : { p: string; }
+>                           : ^^^^^^^^^^^^^^
+>p : string
+>  : ^^^^^^
+>config.p.toString() : string
+>                    : ^^^^^^
+>config.p.toString : (radix?: number) => string
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>config.p : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>p : number
+>  : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        ...config.q !== null && { q: config.q.toString() },
+>config.q !== null && { q: config.q.toString() } : false | { q: string; }
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^
+>config.q !== null : boolean
+>                  : ^^^^^^^
+>config.q : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>q : number
+>  : ^^^^^^
+>{ q: config.q.toString() } : { q: string; }
+>                           : ^^^^^^^^^^^^^^
+>q : string
+>  : ^^^^^^
+>config.q.toString() : string
+>                    : ^^^^^^
+>config.q.toString : (radix?: number) => string
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>config.q : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>q : number
+>  : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        ...config.r !== null && { r: config.r.toString() },
+>config.r !== null && { r: config.r.toString() } : false | { r: string; }
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^
+>config.r !== null : boolean
+>                  : ^^^^^^^
+>config.r : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>r : number
+>  : ^^^^^^
+>{ r: config.r.toString() } : { r: string; }
+>                           : ^^^^^^^^^^^^^^
+>r : string
+>  : ^^^^^^
+>config.r.toString() : string
+>                    : ^^^^^^
+>config.r.toString : (radix?: number) => string
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>config.r : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>r : number
+>  : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        ...config.s !== null && { s: config.s.toString() },
+>config.s !== null && { s: config.s.toString() } : false | { s: string; }
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^
+>config.s !== null : boolean
+>                  : ^^^^^^^
+>config.s : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>s : number
+>  : ^^^^^^
+>{ s: config.s.toString() } : { s: string; }
+>                           : ^^^^^^^^^^^^^^
+>s : string
+>  : ^^^^^^
+>config.s.toString() : string
+>                    : ^^^^^^
+>config.s.toString : (radix?: number) => string
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>config.s : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>s : number
+>  : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        ...config.t !== null && { t: config.t.toString() },
+>config.t !== null && { t: config.t.toString() } : false | { t: string; }
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^
+>config.t !== null : boolean
+>                  : ^^^^^^^
+>config.t : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>t : number
+>  : ^^^^^^
+>{ t: config.t.toString() } : { t: string; }
+>                           : ^^^^^^^^^^^^^^
+>t : string
+>  : ^^^^^^
+>config.t.toString() : string
+>                    : ^^^^^^
+>config.t.toString : (radix?: number) => string
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>config.t : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>t : number
+>  : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        ...config.u !== null && { u: config.u.toString() },
+>config.u !== null && { u: config.u.toString() } : false | { u: string; }
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^
+>config.u !== null : boolean
+>                  : ^^^^^^^
+>config.u : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>u : number
+>  : ^^^^^^
+>{ u: config.u.toString() } : { u: string; }
+>                           : ^^^^^^^^^^^^^^
+>u : string
+>  : ^^^^^^
+>config.u.toString() : string
+>                    : ^^^^^^
+>config.u.toString : (radix?: number) => string
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>config.u : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>u : number
+>  : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        ...config.v !== null && { v: config.v.toString() },
+>config.v !== null && { v: config.v.toString() } : false | { v: string; }
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^
+>config.v !== null : boolean
+>                  : ^^^^^^^
+>config.v : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>v : number
+>  : ^^^^^^
+>{ v: config.v.toString() } : { v: string; }
+>                           : ^^^^^^^^^^^^^^
+>v : string
+>  : ^^^^^^
+>config.v.toString() : string
+>                    : ^^^^^^
+>config.v.toString : (radix?: number) => string
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>config.v : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>v : number
+>  : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        ...config.w !== null && { w: config.w.toString() },
+>config.w !== null && { w: config.w.toString() } : false | { w: string; }
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^
+>config.w !== null : boolean
+>                  : ^^^^^^^
+>config.w : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>w : number
+>  : ^^^^^^
+>{ w: config.w.toString() } : { w: string; }
+>                           : ^^^^^^^^^^^^^^
+>w : string
+>  : ^^^^^^
+>config.w.toString() : string
+>                    : ^^^^^^
+>config.w.toString : (radix?: number) => string
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>config.w : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>w : number
+>  : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        ...config.x !== null && { x: config.x.toString() },
+>config.x !== null && { x: config.x.toString() } : false | { x: string; }
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^
+>config.x !== null : boolean
+>                  : ^^^^^^^
+>config.x : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>{ x: config.x.toString() } : { x: string; }
+>                           : ^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>config.x.toString() : string
+>                    : ^^^^^^
+>config.x.toString : (radix?: number) => string
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>config.x : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        ...config.y !== null && { y: config.y.toString() },
+>config.y !== null && { y: config.y.toString() } : false | { y: string; }
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^
+>config.y !== null : boolean
+>                  : ^^^^^^^
+>config.y : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>y : number
+>  : ^^^^^^
+>{ y: config.y.toString() } : { y: string; }
+>                           : ^^^^^^^^^^^^^^
+>y : string
+>  : ^^^^^^
+>config.y.toString() : string
+>                    : ^^^^^^
+>config.y.toString : (radix?: number) => string
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>config.y : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>y : number
+>  : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        ...config.z !== null && { z: config.z.toString() }
+>config.z !== null && { z: config.z.toString() } : false | { z: string; }
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^
+>config.z !== null : boolean
+>                  : ^^^^^^^
+>config.z : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>z : number
+>  : ^^^^^^
+>{ z: config.z.toString() } : { z: string; }
+>                           : ^^^^^^^^^^^^^^
+>z : string
+>  : ^^^^^^
+>config.z.toString() : string
+>                    : ^^^^^^
+>config.z.toString : (radix?: number) => string
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>config.z : number
+>         : ^^^^^^
+>config : Record<string, number>
+>       : ^^^^^^^^^^^^^^^^^^^^^^
+>z : number
+>  : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    }
+}
+
+parseWithSpread({ a: 1, b: 2, z: 26 })
+>parseWithSpread({ a: 1, b: 2, z: 26 }) : Props
+>                                       : ^^^^^
+>parseWithSpread : (config: Record<string, number>) => Props
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ a: 1, b: 2, z: 26 } : { a: number; b: number; z: number; }
+>                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>b : number
+>  : ^^^^^^
+>2 : 2
+>  : ^
+>z : number
+>  : ^^^^^^
+>26 : 26
+>   : ^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

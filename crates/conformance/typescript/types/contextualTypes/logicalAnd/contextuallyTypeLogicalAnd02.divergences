@@ -1,0 +1,12 @@
+types: 11 of 18 tsc entries compared, 2 differ
+
+line 7: y && (a => { const b: number = a; return b; })
+  tsc:  (a: string) => number
+  ours: boolean | ((arg0: string) => number)
+
+line 7: y
+  tsc:  true
+  ours: boolean
+
+errors:
+line 9: ours: expected `string`, got `number` (tsc accepts)

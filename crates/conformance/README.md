@@ -7,7 +7,9 @@ Two suites live here:
   typechecker infers, against what `tsc` infers for the same program.
 
 [`COVERAGE.md`](COVERAGE.md) lists each feature Submilli supports, whether every
-upstream test about it has been dealt with, and what both suites check of it.
+upstream test about it has been dealt with, and what both suites check of it. In the
+TypeScript suite, every divergence from `tsc` is explained or listed as not yet
+explained, and every upstream test left out is listed with its reason.
 
 ## test262
 

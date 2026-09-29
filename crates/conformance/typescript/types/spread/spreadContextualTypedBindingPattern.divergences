@@ -1,0 +1,8 @@
+types: 9 of 15 tsc entries compared, 1 differ
+
+line 12: {...bob, ...alice}
+  tsc:  { naam: string; age: number; }
+  ours: {}
+
+errors:
+line 12: ours: cannot spread interface `Person` into an object literal — only structural object types are accepted (tsc accepts)

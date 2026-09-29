@@ -31,16 +31,25 @@ function prune(caseErrors, file) {
   const originalTscErrors = new Set(tscErrors(file).map(errorKey));
   let text = original;
   let passes = 0;
+  // What drove the pruning: each of our errors that lacked support, with the code it
+  // was on, in the order they came up.
+  const lacking = new Map();
   const finish = (error) => ({
     file,
     passes,
     error,
     codeLinesBefore: codeLines(original),
     codeLinesAfter: codeLines(text),
+    lacking: [...lacking.values()],
   });
   for (; passes < MAX_PASSES; passes++) {
     const found = offsetsToPrune(caseErrors, file, text, originalTscErrors);
     if (found.error) return finish(found.error);
+    for (const { line, message } of found.lacking) {
+      const code = (text.split("\n")[line - 1] ?? "").trim();
+      const key = `${message}\n${code}`;
+      if (!lacking.has(key)) lacking.set(key, { message, code });
+    }
     if (!found.offsets.length) return finish(null);
     const sourceFile = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
     const units = unitsToBlank(sourceFile, found.offsets);
@@ -64,7 +73,7 @@ function offsetsToPrune(caseErrors, file, text, originalTscErrors) {
   for (const e of tsc) {
     if (!originalTscErrors.has(errorKey(e))) offsets.push(e.start);
   }
-  return { offsets };
+  return { offsets, lacking };
 }
 
 function ourErrors(caseErrors, file) {
@@ -75,8 +84,8 @@ function ourErrors(caseErrors, file) {
     .split("\n")
     .filter(Boolean)
     .map((row) => {
-      const [line, column, kind] = row.split("\t");
-      return { line: Number(line), column: Number(column), kind };
+      const [line, column, kind, message] = row.split("\t");
+      return { line: Number(line), column: Number(column), kind, message };
     });
   return { errors };
 }

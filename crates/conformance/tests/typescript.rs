@@ -13,9 +13,14 @@
 //! `<case>.divergences`. That file is committed: the test fails when the current
 //! divergences differ from it, in either direction, so a fixed divergence and a
 //! new one both show up in review. `UPDATE_TYPESCRIPT_EXPECTED=1` rewrites it.
+//!
+//! Each divergence is explained in the case's `<case>.triage`, or listed in
+//! `unexplained.txt` until it is; `support/triage.rs` has the rules.
 
 #[path = "support/case_errors.rs"]
 mod case_errors;
+#[path = "support/triage.rs"]
+mod triage;
 #[path = "support/typed_reachability.rs"]
 mod typed_reachability;
 
@@ -29,13 +34,21 @@ use interpreter::{ExprId, Span, StmtId, Type, TypedAst, TypedExprKind, TypedStmt
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
 /// The files that belong to a case, beside its `.ts`.
-const CASE_FILE_SUFFIXES: &[&str] = &[".types", ".errors.txt", ".divergences"];
+const CASE_FILE_SUFFIXES: &[&str] = &[".types", ".errors.txt", ".divergences", ".triage"];
+
+/// The divergences not yet explained, beside the cases.
+const UNEXPLAINED: &str = "unexplained.txt";
 
 #[test]
 fn typescript_baselines() {
     let root = Path::new(ROOT).join("typescript");
     let update = std::env::var("UPDATE_TYPESCRIPT_EXPECTED").is_ok_and(|v| v != "0");
     let mut failures = orphaned_case_files(&root, update);
+    let unexplained_path = root.join(UNEXPLAINED);
+    let listed = triage::Unexplained::read(&unexplained_path)
+        .unwrap_or_else(|e| panic!("{}: {e}", rel(&unexplained_path)));
+    let mut unexplained = listed.clone();
+    let ported = newly_ported_cases();
 
     let cases = find_cases(&root);
     let mut totals = Totals::default();
@@ -46,9 +59,23 @@ fn typescript_baselines() {
                 totals.add(&report);
                 checks.push_str(&report.render_checks(&rel(case)));
                 failures.extend(check_divergences(case, &report, update));
+                let name = suite_path(&root, case);
+                let allow_new = update && ported.contains(&name);
+                failures.extend(check_triage(
+                    case,
+                    &name,
+                    &report,
+                    &mut unexplained,
+                    update,
+                    allow_new,
+                ));
             }
             Err(message) => failures.push(format!("--- {} ---\n{message}", rel(case))),
         }
+    }
+    failures.extend(unexplained_without_case(&root, &mut unexplained, update));
+    if update && unexplained != listed {
+        unexplained.write(&unexplained_path);
     }
 
     if let Ok(path) = std::env::var("TYPESCRIPT_CHECKS_OUT") {
@@ -114,9 +141,94 @@ fn check_divergences(case: &Path, report: &Report, update: bool) -> Option<Strin
     ))
 }
 
-/// Baselines and `.divergences` left behind by a case that no longer exists.
-/// They would otherwise go unnoticed, since cases are found by their `.ts`.
-/// Update mode removes them.
+/// Failures for a case's divergences that are neither explained in its `.triage` nor
+/// listed in `unexplained.txt`, and for explanations and listings gone stale. In update
+/// mode, stale listings are dropped, and, when `allow_new`, every divergence the
+/// `.triage` doesn't explain is listed.
+fn check_triage(
+    case: &Path,
+    name: &str,
+    report: &Report,
+    unexplained: &mut triage::Unexplained,
+    update: bool,
+    allow_new: bool,
+) -> Vec<String> {
+    let triage_path = case.with_extension("triage");
+    let explained = match triage::read_explained(&triage_path) {
+        Ok(explained) => explained,
+        Err(e) => return vec![format!("--- {} ---\n{e}", rel(&triage_path))],
+    };
+    let divergent = report.divergent();
+    if update {
+        let not_explained: BTreeSet<_> = divergent.difference(&explained).copied().collect();
+        let listed = if allow_new {
+            not_explained
+        } else {
+            unexplained
+                .of_case(name)
+                .intersection(&not_explained)
+                .copied()
+                .collect()
+        };
+        unexplained.set_case(name, &listed);
+    }
+    triage::check_case(&divergent, &explained, &unexplained.of_case(name))
+        .into_iter()
+        .map(|failure| format!("--- {} ---\n{failure}", rel(&triage_path)))
+        .collect()
+}
+
+/// Listings in `unexplained.txt` of a case that no longer exists; update mode drops
+/// them.
+fn unexplained_without_case(
+    root: &Path,
+    unexplained: &mut triage::Unexplained,
+    update: bool,
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    for name in unexplained.cases() {
+        if root.join(&name).exists() {
+            continue;
+        }
+        if update {
+            unexplained.set_case(&name, &BTreeSet::new());
+        } else {
+            failures.push(format!(
+                "--- {UNEXPLAINED} ---\nlists `{name}`, which is not a case: \
+                 rerun with UPDATE_TYPESCRIPT_EXPECTED=1 to remove it"
+            ));
+        }
+    }
+    failures
+}
+
+/// The cases `port-suite.cjs` has just ported, whose divergences update mode may list
+/// as unexplained: `TYPESCRIPT_PORTED_CASES` names a file of their paths, one per
+/// line, relative to the suite root. Nothing else adds to the list.
+fn newly_ported_cases() -> BTreeSet<String> {
+    let Ok(path) = std::env::var("TYPESCRIPT_PORTED_CASES") else {
+        return BTreeSet::new();
+    };
+    let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// A case's path relative to the suite root, as `unexplained.txt` names it.
+fn suite_path(root: &Path, case: &Path) -> String {
+    case.strip_prefix(root)
+        .unwrap_or(case)
+        .display()
+        .to_string()
+}
+
+/// Baselines, `.divergences` and `.triage` left behind by a case that no longer
+/// exists. They would otherwise go unnoticed, since cases are found by their `.ts`.
+/// Update mode removes the generated ones; a `.triage` is written by hand, so it
+/// stays a failure until someone removes it.
 fn orphaned_case_files(root: &Path, update: bool) -> Vec<String> {
     let mut files = Vec::new();
     collect_files(root, &mut |p| case_of(p).is_some(), &mut files);
@@ -128,7 +240,8 @@ fn orphaned_case_files(root: &Path, update: bool) -> Vec<String> {
         if case.exists() {
             continue;
         }
-        if update {
+        let generated = !file.extension().is_some_and(|e| e == "triage");
+        if update && generated {
             fs::remove_file(&file).unwrap_or_else(|e| panic!("remove {}: {e}", file.display()));
         } else {
             failures.push(format!(
@@ -140,7 +253,7 @@ fn orphaned_case_files(root: &Path, update: bool) -> Vec<String> {
     failures
 }
 
-/// The `.ts` a baseline or `.divergences` file belongs to.
+/// The `.ts` a baseline, `.divergences` or `.triage` file belongs to.
 fn case_of(file: &Path) -> Option<PathBuf> {
     let name = file.file_name()?.to_str()?;
     let base = CASE_FILE_SUFFIXES
@@ -228,6 +341,23 @@ impl Report {
             ));
         }
         out
+    }
+
+    /// Each line that diverges, and how.
+    fn divergent(&self) -> BTreeSet<triage::Divergence> {
+        let types = self
+            .type_divergences
+            .iter()
+            .map(|d| (d.line, triage::Kind::Type));
+        let missed = self
+            .missed_errors
+            .iter()
+            .map(|m| (m.error.line, triage::Kind::Missed));
+        let extra = self
+            .extra_errors
+            .iter()
+            .map(|e| (e.line, triage::Kind::Extra));
+        types.chain(missed).chain(extra).collect()
     }
 
     /// Every check the case makes, one per line, for `TYPESCRIPT_CHECKS_OUT`:

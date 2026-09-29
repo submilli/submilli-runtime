@@ -258,7 +258,8 @@ function main() {
     }
   }
   const inSuite = new Set(walk(path.join(conformanceDir, "typescript")).filter((f) => f.endsWith(".ts")).map((f) => path.relative(path.join(conformanceDir, "typescript"), f)));
-  fs.writeFileSync(outputFile, render(features, test262Areas(), { upstream, inSuite }));
+  const excluded = excludedCases();
+  fs.writeFileSync(outputFile, render(features, test262Areas(), { upstream, inSuite, excluded }));
   console.log(`wrote ${path.relative(workspace, outputFile)}`);
 }
 
@@ -285,6 +286,21 @@ function upstreamCases(conformance, features) {
     visit(tree);
   }
   return count;
+}
+
+// Whether an upstream case is left out of the suite with a reason, per
+// ../typescript/EXCLUDED.md: named there, or in a directory named there.
+function excludedCases() {
+  const file = path.join(conformanceDir, "typescript", "EXCLUDED.md");
+  if (!fs.existsSync(file)) throw new Error(`${file} is missing: port-suite.cjs writes it`);
+  const entries = fs
+    .readFileSync(file, "utf8")
+    .split("\n")
+    .map((line) => /^\| `([^`]+)` \|/.exec(line)?.[1])
+    .filter(Boolean);
+  const cases = new Set(entries.filter((e) => !e.endsWith("/")));
+  const directories = entries.filter((e) => e.endsWith("/"));
+  return (rel) => cases.has(rel) || directories.some((dir) => rel.startsWith(dir));
 }
 
 // Every check the TypeScript runner makes, from a run of it.
@@ -355,7 +371,7 @@ function test262Areas() {
   return areas;
 }
 
-function render(features, test262, { upstream, inSuite }) {
+function render(features, test262, { upstream, inSuite, excluded }) {
   const lines = [
     "# Conformance coverage",
     "",
@@ -367,8 +383,9 @@ function render(features, test262, { upstream, inSuite }) {
     "test262 area it names has been ported; **open** otherwise. **None upstream** means",
     "neither suite has a test that uses it, and **n/a** that none can, with the reason.",
     "",
-    "Excluded tests aren't recorded yet (plan step 2), so every upstream test outside",
-    "the suite counts as not yet dealt with.",
+    "*Excluded* counts the tests `typescript/EXCLUDED.md` leaves out, each with its",
+    "reason. It covers the directories the suite ports from; a test elsewhere that",
+    "isn't in the suite is not yet dealt with.",
     "",
     "*Lines checked* is what the TypeScript suite exercises of a feature: lines where a",
     "`tsc` type or error is compared and the feature is involved, by its syntax on the",
@@ -384,21 +401,22 @@ function render(features, test262, { upstream, inSuite }) {
     lines.push(
       `## ${group}`,
       "",
-      "| Feature | Spec | Status | Upstream tests | In the suite | Not yet dealt with | Lines checked | test262 cases | test262 checks | Note |",
-      "|:--|:--|:--|--:|--:|--:|--:|--:|--:|:--|",
+      "| Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | test262 cases | test262 checks | Note |",
+      "|:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|:--|",
     );
     for (const f of features.filter((x) => x.group === group)) {
       const areas = (f.test262 ?? []).map((a) => [a, test262.get(a)]);
       const ported = areas.filter(([, a]) => a).map(([, a]) => a);
       const missing = areas.filter(([, a]) => !a).map(([name]) => `\`${name}\``);
       const brought = [...f.upstream].filter((rel) => inSuite.has(rel)).length;
-      const open = f.upstream.size - brought;
+      const left = [...f.upstream].filter((rel) => !inSuite.has(rel) && excluded(rel)).length;
+      const open = f.upstream.size - brought - left;
       const status = statusOf(f, open, missing.length, ported.length);
       statuses.set(status, (statuses.get(status) ?? 0) + 1);
       const ts = (v) => (f.node ? String(v) : "—");
       const t262 = (key) => (f.test262 ? String(ported.reduce((n, a) => n + a[key], 0)) : "—");
       const note = f.none ?? (missing.length ? `no test262 area for ${missing.join(", ")}` : "");
-      lines.push(`| ${f.name} | §${f.spec} | ${status} | ${ts(f.upstream.size)} | ${ts(brought)} | ${ts(open)} | ${ts(f.sites.size)} | ${t262("cases")} | ${t262("assertions")} | ${note} |`);
+      lines.push(`| ${f.name} | §${f.spec} | ${status} | ${ts(f.upstream.size)} | ${ts(brought)} | ${ts(left)} | ${ts(open)} | ${ts(f.sites.size)} | ${t262("cases")} | ${t262("assertions")} | ${note} |`);
     }
     lines.push("");
   }

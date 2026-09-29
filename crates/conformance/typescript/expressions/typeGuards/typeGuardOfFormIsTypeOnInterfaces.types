@@ -1,0 +1,101 @@
+=== typeGuardOfFormIsTypeOnInterfaces.ts ===
+
+interface C1 {
+>C1 : C1
+>   : ^^
+
+    (): C1;
+    prototype: C1;
+>prototype : C1
+>          : ^^
+
+    p1: string;
+>p1 : string
+>   : ^^^^^^
+
+}
+interface C2 {
+>C2 : C2
+>   : ^^
+
+    (): C2;
+    prototype: C2;
+>prototype : C2
+>          : ^^
+
+    p2: number;
+>p2 : number
+>   : ^^^^^^
+
+}
+interface D1 extends C1 {
+>D1 : D1
+>   : ^^
+
+    prototype: D1;
+>prototype : D1
+>          : ^^
+
+    p3: number;
+>p3 : number
+>   : ^^^^^^
+
+}
+let str: string = null as unknown as (string);
+>str : string
+>    : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let num: number = null as unknown as (number);
+>num : number
+>    : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let strOrNum: string | number = null as unknown as (string | number);
+>strOrNum : string | number
+>         : ^^^^^^^^^^^^^^^
+>null as unknown as (string | number) : string | number
+>                                     : ^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+
+/*pruned*/;                     
+                
+ 
+
+/*pruned*/;                     
+                
+ 
+
+/*pruned*/;                     
+                
+ 
+
+/*pruned*/;                          
+/*pruned*/;                          
+/*pruned*/;                          
+/*pruned*/;                                        
+/*pruned*/;                      // C1
+/*pruned*/;                      // C2
+/*pruned*/;                      // D1
+/*pruned*/;                      // D1
+
+/*pruned*/;                                        
+/*pruned*/;                      // C2
+/*pruned*/;                      // D1
+/*pruned*/;                      // D1
+/*pruned*/;                               // C2 | D1
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+
