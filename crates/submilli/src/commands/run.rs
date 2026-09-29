@@ -193,10 +193,14 @@ pub(crate) fn execute_with_dispatch(
     llm_dispatch: Option<Arc<dyn ModelDispatch>>,
 ) -> anyhow::Result<ExitCode> {
     // A host call that re-enters Wasm nests frames on the native stack, so the
-    // program runs on a thread sized for the Wasm stack it is given.
+    // program runs on a thread sized for the Wasm stack it is given. The same
+    // thread compiles it, which needs the interpreter's compiler stack.
+    let stack_size = runtime_config(&args)
+        .native_stack_size()
+        .max(interpreter::compiler_limits::COMPILER_STACK_BYTES);
     std::thread::Builder::new()
         .name("submilli-run".into())
-        .stack_size(runtime_config(&args).native_stack_size())
+        .stack_size(stack_size)
         .spawn(move || execute_on_this_thread(args, llm_dispatch))
         .context("starting the thread that runs the program")?
         .join()

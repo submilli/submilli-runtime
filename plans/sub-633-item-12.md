@@ -37,11 +37,12 @@ server-sized stack; child processes, core dumps disabled):
   embedders provide it. The server runs each request's compile, and each package
   install, on a short-lived scoped thread of that size
   (`submilli-server/src/compiler_thread.rs`): spawn failure or a panicking
-  compile is an internal failure. The CLI runs its command on one such thread;
-  unoptimized builds overflow at the limits on an 8 MiB main thread. Test
-  harnesses that compile fixtures size their workers the same way. SUB-1123
-  tracks pooling the server's compile threads. Parsing stays on the Tokio
-  worker: its recursion is bounded by the parser depth limit.
+  compile is an internal failure. The CLI runs its command on one such thread,
+  and `submilli run` sizes the thread that compiles and executes the program to
+  at least this; unoptimized builds overflow at the limits on an 8 MiB main
+  thread. Test harnesses that compile fixtures size their workers the same way.
+  SUB-1123 tracks pooling the server's compile threads. Parsing stays on the
+  Tokio worker: its recursion is bounded by the parser depth limit.
 - `tree_height::check_syntax` rejects source trees taller than 256 levels,
   counting expressions, statements and type annotations, before any recursive
   post-parse pass, including for ASTs handed directly to a phase API. A flat

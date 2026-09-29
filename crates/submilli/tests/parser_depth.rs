@@ -64,6 +64,19 @@ fn cli_compiler_structure_limits_are_bounded() {
     let output = bounded_cli("run", &source);
     assert!(output.status.success(), "{output:?}");
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "200");
+    // A template at the lowered height limit is the deepest accepted shape.
+    std::fs::write(
+        &source,
+        format!(
+            "function main(): number {{ const a = 1; const s = `{}`; return s.length; }}",
+            "${a}x".repeat(510)
+        ),
+    )
+    .unwrap();
+    for command in ["check", "run"] {
+        let output = bounded_cli(command, &source);
+        assert!(output.status.success(), "{output:?}");
+    }
 }
 
 #[test]
