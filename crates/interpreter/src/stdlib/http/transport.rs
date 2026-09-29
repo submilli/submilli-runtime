@@ -280,19 +280,21 @@ impl HttpClient for ReqwestHttpClient {
         // Content-Encoding header takes precedence; URL suffix is the fallback.
         let kind = detect_decompression(&headers, &req.url, req.decompress);
         let limit = req.max_response_size;
-        // Buffer the wire-capped body (≤ limit) then decode to the writer via the
-        // shared sync path. TODO(Stage 2): stream straight to an async VFS sink
-        // once the fs handles are `tokio::fs` (avoids buffering large downloads).
-        let mut wire: Vec<u8> = Vec::new();
+        // Each chunk goes to the file as it arrives, so host memory holds one
+        // chunk however large `maxBytes` is. The limit applies to the wire bytes
+        // and, separately, to the decoded bytes written.
+        let mut sink = DecodeSink::new(kind, LimitedWriter::new(writer, limit))?;
+        let mut wire: u64 = 0;
         let mut stream = resp.bytes_stream();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(map_reqwest_error)?;
-            if wire.len() as u64 + chunk.len() as u64 > limit {
+            wire = wire.saturating_add(chunk.len() as u64);
+            if wire > limit {
                 return Err(HttpError::TooLarge { limit });
             }
-            wire.extend_from_slice(&chunk);
+            sink.write_all(&chunk)?;
         }
-        let bytes_written = stream_to_writer(std::io::Cursor::new(wire), writer, kind, limit)?;
+        let bytes_written = sink.finish()?;
 
         Ok(DownloadMeta {
             status,
@@ -394,46 +396,130 @@ pub fn detect_decompression(
 }
 
 /// Bounded chunked copy (8 KiB stack chunk) with optional gzip/zstd decoding.
-/// Public so embedder [`HttpClient::download`] impls can reuse it.
+/// Public so embedder [`HttpClient::download`] impls can reuse it: `reader` is the
+/// response body as it arrives, decoded into `writer` exactly as the built-in client
+/// decodes a download, with the same limits on the wire and decoded bytes.
 pub fn stream_to_writer(
-    reader: impl std::io::Read + 'static,
+    mut reader: impl std::io::Read,
     writer: &mut dyn std::io::Write,
     kind: Decompression,
     limit: u64,
 ) -> Result<u64, HttpError> {
-    use std::io::Read;
-    let mut src: Box<dyn Read> = match kind {
-        Decompression::None => Box::new(reader),
-        Decompression::Gzip => Box::new(flate2::read::MultiGzDecoder::new(reader)),
-        Decompression::Zstd => Box::new(
-            zstd::stream::read::Decoder::new(reader)
-                .map_err(|e| HttpError::Network(format!("zstd: {e}")))?,
-        ),
-    };
-    let mut total: u64 = 0;
+    let mut sink = DecodeSink::new(kind, LimitedWriter::new(writer, limit))?;
+    let mut wire: u64 = 0;
     let mut chunk = [0u8; 8 * 1024];
     loop {
-        let n = match src.read(&mut chunk) {
-            Ok(0) => break,
-            Ok(n) => n,
-            Err(e) => return Err(map_body_read_error(e, limit)),
-        };
-        if total.saturating_add(n as u64) > limit {
+        let n = reader
+            .read(&mut chunk)
+            .map_err(|e| HttpError::Network(format!("io: {e}")))?;
+        if n == 0 {
+            break;
+        }
+        wire = wire.saturating_add(n as u64);
+        if wire > limit {
             return Err(HttpError::TooLarge { limit });
         }
-        writer
-            .write_all(&chunk[..n])
-            .map_err(|e| HttpError::Network(format!("io: {e}")))?;
-        total += n as u64;
+        sink.write_all(&chunk[..n])?;
     }
-    Ok(total)
+    sink.finish()
 }
 
-/// Read errors on the in-memory decode source map to `Network`; the wire-size
-/// cap is enforced before `stream_to_writer`, so a `TooLarge` here would come
-/// only from the decompressed-output guard inside `stream_to_writer` itself.
-fn map_body_read_error(e: std::io::Error, _limit: u64) -> HttpError {
-    HttpError::Network(format!("io: {e}"))
+/// A writer that refuses bytes past `limit`, remembering that it did so, so a
+/// decoder's error can be told apart from a download that is too large.
+struct LimitedWriter<W> {
+    inner: W,
+    written: u64,
+    limit: u64,
+    exceeded: bool,
+}
+
+impl<W: std::io::Write> LimitedWriter<W> {
+    fn new(inner: W, limit: u64) -> Self {
+        Self {
+            inner,
+            written: 0,
+            limit,
+            exceeded: false,
+        }
+    }
+}
+
+impl<W: std::io::Write> std::io::Write for LimitedWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.written.saturating_add(buf.len() as u64) > self.limit {
+            self.exceeded = true;
+            return Err(std::io::Error::other("download limit exceeded"));
+        }
+        let n = self.inner.write(buf)?;
+        self.written = self.written.saturating_add(n as u64);
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+/// A download's destination: the file itself, or a decoder writing into it.
+/// The decoders take the body a chunk at a time, and a truncated gzip or zstd
+/// stream fails at `finish`.
+enum DecodeSink<W: std::io::Write> {
+    Plain(LimitedWriter<W>),
+    Gzip(flate2::write::MultiGzDecoder<LimitedWriter<W>>),
+    Zstd(zstd::stream::zio::Writer<LimitedWriter<W>, zstd::stream::raw::Decoder<'static>>),
+}
+
+impl<W: std::io::Write> DecodeSink<W> {
+    fn new(kind: Decompression, out: LimitedWriter<W>) -> Result<Self, HttpError> {
+        Ok(match kind {
+            Decompression::None => Self::Plain(out),
+            Decompression::Gzip => Self::Gzip(flate2::write::MultiGzDecoder::new(out)),
+            Decompression::Zstd => {
+                let decoder = zstd::stream::raw::Decoder::new()
+                    .map_err(|e| HttpError::Network(format!("zstd: {e}")))?;
+                Self::Zstd(zstd::stream::zio::Writer::new(out, decoder))
+            }
+        })
+    }
+
+    fn write_all(&mut self, chunk: &[u8]) -> Result<(), HttpError> {
+        use std::io::Write;
+        let result = match self {
+            Self::Plain(out) => out.write_all(chunk),
+            Self::Gzip(decoder) => decoder.write_all(chunk),
+            Self::Zstd(decoder) => decoder.write_all(chunk),
+        };
+        result.map_err(|e| self.error(e))
+    }
+
+    /// Flush what the decoder still holds and return the bytes written.
+    fn finish(mut self) -> Result<u64, HttpError> {
+        use std::io::Write;
+        let result = match &mut self {
+            Self::Plain(out) => out.flush(),
+            Self::Gzip(decoder) => decoder.try_finish(),
+            Self::Zstd(decoder) => decoder.finish(),
+        };
+        result.map_err(|e| self.error(e))?;
+        Ok(self.out().written)
+    }
+
+    fn out(&self) -> &LimitedWriter<W> {
+        match self {
+            Self::Plain(out) => out,
+            Self::Gzip(decoder) => decoder.get_ref(),
+            Self::Zstd(decoder) => decoder.writer(),
+        }
+    }
+
+    fn error(&self, e: std::io::Error) -> HttpError {
+        let out = self.out();
+        if out.exceeded {
+            HttpError::TooLarge { limit: out.limit }
+        } else {
+            HttpError::Network(format!("io: {e}"))
+        }
+    }
 }
 
 /// Bounded outcome class for an [`crate::runtime::metrics::HttpMetric`]: the transport failure mode.
@@ -598,3 +684,78 @@ mod tests {
 #[cfg(test)]
 #[path = "transport_tls_tests.rs"]
 mod tls_tests;
+
+#[cfg(test)]
+mod decode_sink_tests {
+    use std::io::Write as _;
+
+    use super::{DecodeSink, Decompression, HttpError, LimitedWriter};
+
+    fn gzip(data: &[u8]) -> Vec<u8> {
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        encoder.write_all(data).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    /// Feed `wire` in small chunks, as a network stream would.
+    fn decode(kind: Decompression, wire: &[u8], limit: u64) -> (Result<u64, HttpError>, Vec<u8>) {
+        let mut out: Vec<u8> = Vec::new();
+        let result = (|| {
+            let mut sink = DecodeSink::new(kind, LimitedWriter::new(&mut out, limit))?;
+            for chunk in wire.chunks(7) {
+                sink.write_all(chunk)?;
+            }
+            sink.finish()
+        })();
+        (result, out)
+    }
+
+    #[test]
+    fn plain_bytes_stop_at_the_limit() {
+        let (ok, out) = decode(Decompression::None, b"hello", 5);
+        assert_eq!(ok.unwrap(), 5);
+        assert_eq!(out, b"hello");
+        let (over, _) = decode(Decompression::None, b"hello!", 5);
+        assert!(matches!(over, Err(HttpError::TooLarge { limit: 5 })));
+    }
+
+    #[test]
+    fn gzip_decodes_across_chunks_and_rejects_truncation() {
+        let wire = gzip(b"hello gzipped download");
+        let (ok, out) = decode(Decompression::Gzip, &wire, 1024);
+        assert_eq!(ok.unwrap(), 22);
+        assert_eq!(out, b"hello gzipped download");
+
+        let (truncated, _) = decode(Decompression::Gzip, &wire[..wire.len() - 4], 1024);
+        assert!(
+            matches!(truncated, Err(HttpError::Network(_))),
+            "{truncated:?}"
+        );
+    }
+
+    #[test]
+    fn a_small_gzip_body_that_inflates_past_the_limit_is_too_large() {
+        let wire = gzip(&vec![b'x'; 100_000]);
+        assert!(wire.len() < 1_000);
+        let (result, out) = decode(Decompression::Gzip, &wire, 1_000);
+        assert!(
+            matches!(result, Err(HttpError::TooLarge { limit: 1_000 })),
+            "{result:?}"
+        );
+        assert!(out.len() <= 1_000);
+    }
+
+    #[test]
+    fn zstd_decodes_and_rejects_an_incomplete_frame() {
+        let wire = zstd::encode_all(&b"hello zstd download"[..], 1).unwrap();
+        let (ok, out) = decode(Decompression::Zstd, &wire, 1024);
+        assert_eq!(ok.unwrap(), 19);
+        assert_eq!(out, b"hello zstd download");
+
+        let (truncated, _) = decode(Decompression::Zstd, &wire[..wire.len() - 3], 1024);
+        assert!(
+            matches!(truncated, Err(HttpError::Network(_))),
+            "{truncated:?}"
+        );
+    }
+}

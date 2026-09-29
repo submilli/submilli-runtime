@@ -535,3 +535,29 @@ fn native_work_consumes_store_fuel_and_respects_refills() {
     assert_eq!(error.downcast_ref::<Trap>(), Some(&Trap::OutOfFuel));
     assert_eq!(store.get_fuel().unwrap(), 0);
 }
+#[tokio::test]
+async fn edits_are_counted_against_the_size_limit() {
+    let source = r#"
+        import { writeText, lines } from "submilli:fs";
+        import { edit, insertAt } from "submilli:code";
+        function refused(write: () => void): boolean {
+            try { write(); return false; } catch (e) { return e instanceof RangeError; }
+        }
+        function main(): void {
+            writeText("/a.ts", "x".repeat(50000) + "\nfirst\n");
+            assert(refused(() => insertAt("/a.ts", 1, "y".repeat(50000) + "\n")), "growth past the limit");
+            assert(edit("/a.ts", "first", "second").changed, "a rewrite within the limit");
+            for (const line of lines("/a.ts")) {
+                assert(refused(() => insertAt("/a.ts", 1, "z\n")), "a held file's old copy still counts");
+                break;
+            }
+            insertAt("/a.ts", 1, "z\n");
+        }
+    "#;
+    let vfs = crate::runtime::Vfs::tempdir()
+        .unwrap()
+        .with_size_limit(100_000);
+    run(source, crate::runtime::StoreData::with_vfs(vfs))
+        .await
+        .unwrap();
+}

@@ -1,6 +1,7 @@
 //! Wasmtime engine configuration for Submilli.
 
 pub mod blocking;
+pub mod disk_quota;
 pub mod exec;
 pub mod fs;
 pub mod gc_singleton;
@@ -19,6 +20,7 @@ pub mod session_kv;
 pub mod vfs;
 pub mod watchdog;
 
+pub use disk_quota::{DiskQuota, Holder, OpenFileGuard, QuotaCharge, QuotaExceeded};
 pub use exec::{RunResult, dispatch_main_async};
 pub use host::{
     INTERNAL_MODULE_NAME, NUMBER_MODULE_NAME, host_package_declarations,
@@ -46,7 +48,7 @@ pub use session_kv::{
     InMemorySessionKv, SessionKvEntry, SessionKvError, SessionKvLimitKind, SessionKvLimits,
     SessionKvPage, SessionKvStore, SharedKvBudget,
 };
-pub use vfs::{Vfs, VfsMode};
+pub use vfs::{Vfs, VfsMode, measure_dir, measure_with_held, regular_files};
 pub use watchdog::Watchdog;
 
 pub use crate::stdlib::http::{
@@ -66,14 +68,13 @@ use wasmtime::{
 
 use crate::{PackageDeclaration, TypeInfoTable};
 
-/// Filesystem metadata surfaced to scripts via `submilli:fs.info()`. Carries
-/// the active mode and the (advisory, not-yet-enforced) limits so the script —
-/// and the LLM — can branch on the sandbox shape. Never exposes the host path.
+/// Filesystem metadata surfaced to scripts via `submilli:fs.info()`: the
+/// active mode and the byte cap the VFS enforces, so the script — and the LLM —
+/// can branch on the sandbox shape. Never exposes the host path.
 #[derive(Debug, Clone)]
 pub struct VfsInfo {
     pub mode: VfsMode,
     pub size_limit: Option<u64>,
-    pub path_limit: Option<u64>,
 }
 
 pub struct StoreData {
@@ -163,7 +164,6 @@ impl StoreData {
         let vfs_info = VfsInfo {
             mode: vfs.mode(),
             size_limit: None,
-            path_limit: None,
         };
         Self {
             console: Box::new(std::io::stderr()),
@@ -280,6 +280,11 @@ fn name_the_failing_initializer(
     }))
 }
 
+/// Native stack bytes per byte of `max_wasm_stack`; see
+/// [`RuntimeConfig::native_stack_size`].
+const NATIVE_STACK_PER_WASM_BYTE: usize = 32;
+const MIN_NATIVE_STACK: usize = 8 * 1024 * 1024;
+
 #[derive(Clone, Debug)]
 pub struct RuntimeConfig {
     pub fuel: u64,
@@ -317,6 +322,20 @@ impl Default for RuntimeConfig {
 }
 
 impl RuntimeConfig {
+    /// The native stack a thread running programs under this config needs.
+    ///
+    /// `max_wasm_stack` is an interpreter budget, but a host call that re-enters
+    /// Wasm (a callback passed to `map`, say) nests interpreter frames on the
+    /// thread's own stack. The engine charges each crossing 4 KiB of the budget
+    /// so re-entry traps before the thread overflows; a debug build spends up to
+    /// ~64 KiB of native stack per crossing, so the thread is sized well past the
+    /// budget. An overflow here would abort every session in the process.
+    pub fn native_stack_size(&self) -> usize {
+        self.max_wasm_stack
+            .saturating_mul(NATIVE_STACK_PER_WASM_BYTE)
+            .max(MIN_NATIVE_STACK)
+    }
+
     pub fn engine(&self) -> wasmtime::Result<Engine> {
         Engine::new(&self.wasmtime_config())
     }

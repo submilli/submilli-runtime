@@ -163,10 +163,11 @@ pub struct Cli {
     #[arg(long, value_name = "SECONDS")]
     shutdown_grace: Option<u64>,
 
-    /// Memory one execution may hold live, in megabytes. A program that asks
-    /// for more traps catchably instead of growing until the host or the
-    /// container's own limit stops it, so this is what makes a container's
-    /// `--memory` sizeable: budget roughly this times peak concurrency.
+    /// Memory one execution may hold live, in megabytes. An allocation that
+    /// would pass it throws an `out of memory` error the program can catch,
+    /// instead of growing until the host or the container's own limit stops
+    /// it. This is what makes a container's `--memory` sizeable: budget
+    /// roughly this times peak concurrency.
     /// Note that strings are UTF-16, so text costs two bytes per character —
     /// a 25 MB document needs ~50 MB here. [default: 50]
     /// Env: `$SUBMILLI_MAX_EXECUTION_MEMORY`, which outranks the config file.
@@ -179,6 +180,19 @@ pub struct Cli {
     /// Env: `$SUBMILLI_MAX_EXECUTION_TIME`, which outranks the config file.
     #[arg(long, value_name = "SECONDS")]
     max_execution_time: Option<u64>,
+
+    /// Fuel one execution may burn, roughly one unit per Wasm instruction; a
+    /// program that runs out ends with `fuel exhausted`. The backstop for a
+    /// runaway loop when no execution time is set. [default: 1000000000000]
+    /// Env: `$SUBMILLI_MAX_EXECUTION_FUEL`, which outranks the config file.
+    #[arg(long, value_name = "FUEL")]
+    max_execution_fuel: Option<u64>,
+
+    /// Wasm stack one execution may use, in kibibytes; deeper recursion ends
+    /// with `call stack exhausted`. [default: 512]
+    /// Env: `$SUBMILLI_MAX_EXECUTION_STACK`, which outranks the config file.
+    #[arg(long, value_name = "KIBIBYTES")]
+    max_execution_stack: Option<u64>,
 
     /// Memory every live session's `submilli:session` state may hold *in total*,
     /// in megabytes. Unlike `--max-execution-memory`, which bounds one execution,
@@ -272,9 +286,7 @@ fn main() -> Result<()> {
         );
     }
 
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
+    let runtime = submilli_server::runtime(&resolved.config)?;
     let result = runtime.block_on(serve(
         resolved.addr,
         resolved.config,

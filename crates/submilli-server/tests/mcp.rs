@@ -136,19 +136,13 @@ impl Harness {
         let blueprints = Arc::new(InMemoryBlueprintStore::seed([
             Blueprint {
                 name: EPH.into(),
-                vfs: VfsConfig::Ephemeral {
-                    size_limit: None,
-                    path_limit: None,
-                },
+                vfs: VfsConfig::Ephemeral { size_limit: None },
                 permissions: allow_fs(),
                 ..Default::default()
             },
             Blueprint {
                 name: SESS.into(),
-                vfs: VfsConfig::PerSession {
-                    size_limit: None,
-                    path_limit: None,
-                },
+                vfs: VfsConfig::PerSession { size_limit: None },
                 permissions: allow_fs(),
                 ..Default::default()
             },
@@ -786,10 +780,7 @@ async fn mcp_session_restores_after_server_restart() {
     let blueprints = || {
         vec![Blueprint {
             name: SESS.into(),
-            vfs: VfsConfig::PerSession {
-                size_limit: None,
-                path_limit: None,
-            },
+            vfs: VfsConfig::PerSession { size_limit: None },
             permissions: allow_fs(),
             ..Default::default()
         }]
@@ -2363,14 +2354,8 @@ permissions:
 #[tokio::test]
 async fn files_tools_default_deny_in_every_vfs_mode() {
     for vfs in [
-        VfsConfig::Ephemeral {
-            size_limit: None,
-            path_limit: None,
-        },
-        VfsConfig::PerSession {
-            size_limit: None,
-            path_limit: None,
-        },
+        VfsConfig::Ephemeral { size_limit: None },
+        VfsConfig::PerSession { size_limit: None },
         VfsConfig::None,
     ] {
         let h = Harness::from_blueprints(vec![Blueprint {

@@ -502,10 +502,10 @@ impl SessionManager {
         self.lock().sessions.len()
     }
 
-    /// Build the VFS + info a single execute runs against. The blueprint name
-    /// is validated against the session to stop a session being driven under a
-    /// different sandbox than it was created with.
-    pub fn vfs_for_execute(
+    /// The session's VFS + info, without its size limit: enough for reading its
+    /// files. The blueprint name is validated against the session to stop a
+    /// session being driven under a different sandbox than it was created with.
+    pub fn session_vfs(
         &self,
         session_id: &str,
         blueprint: &Blueprint,
@@ -529,6 +529,17 @@ impl SessionManager {
             &self.volumes,
         )?;
         Ok((vfs, vfs_info(blueprint)))
+    }
+
+    /// [`session_vfs`](Self::session_vfs) with the blueprint's size limit
+    /// enforced, for running a program that may write.
+    pub async fn vfs_for_execute(
+        &self,
+        session_id: &str,
+        blueprint: &Blueprint,
+    ) -> Result<(Vfs, VfsInfo), SessionError> {
+        let (vfs, info) = self.session_vfs(session_id, blueprint)?;
+        Ok((attach_size_limit(vfs, blueprint).await?, info))
     }
 
     /// Mark execute activity, keeping the session alive and resetting idle.
@@ -836,6 +847,31 @@ pub(crate) fn build_vfs(
     }
 }
 
+/// Enforce the blueprint's `size_limit` on `vfs`. Attaching it walks the whole
+/// directory, so the walk runs on the blocking pool rather than an async worker.
+pub(crate) async fn attach_size_limit(
+    vfs: Vfs,
+    blueprint: &Blueprint,
+) -> Result<Vfs, SessionError> {
+    let Some(limit) = blueprint.vfs.size_limit() else {
+        return Ok(vfs);
+    };
+    let mode = blueprint.vfs.mode_str();
+    let (vfs, unmeasurable) = tokio::task::spawn_blocking(move || {
+        let measured = vfs.measure_usage();
+        let used = measured.as_ref().ok().copied();
+        (vfs.with_measured_limit(limit, used), measured.err())
+    })
+    .await
+    .map_err(|err| SessionError::Io(format!("measuring the {mode} workspace failed: {err}")))?;
+    if let Some(err) = unmeasurable {
+        // The session still opens, treated as full; the program is told so when
+        // it tries to write.
+        tracing::warn!(mode, %err, "the workspace could not be measured against its size limit");
+    }
+    Ok(vfs)
+}
+
 /// Mount a declared volume. Both failures are reported to the client by volume
 /// name only: the host directory is the operator's business, and the mount
 /// error carries it verbatim, so it is logged rather than returned.
@@ -867,7 +903,6 @@ pub(crate) fn vfs_info(blueprint: &Blueprint) -> VfsInfo {
             VfsConfig::Persistent { .. } => RtVfsMode::Persistent,
         },
         size_limit: blueprint.vfs.size_limit(),
-        path_limit: blueprint.vfs.path_limit(),
     }
 }
 
@@ -895,10 +930,7 @@ mod tests {
 
         let blueprint = Blueprint {
             name: "bp".into(),
-            vfs: VfsConfig::PerSession {
-                size_limit: None,
-                path_limit: None,
-            },
+            vfs: VfsConfig::PerSession { size_limit: None },
             ..Default::default()
         };
         let err = build_vfs(&blueprint, Some(&root), None, &VolumeTable::new())
@@ -979,10 +1011,7 @@ mod tests {
         Blueprint {
             name: "p".into(),
             idle_timeout: idle,
-            vfs: VfsConfig::PerSession {
-                size_limit: None,
-                path_limit: None,
-            },
+            vfs: VfsConfig::PerSession { size_limit: None },
             ..Default::default()
         }
     }
@@ -1045,7 +1074,7 @@ mod tests {
             .create(&bp, Arc::new(VarBindings::new()), no_secrets())
             .await
             .unwrap();
-        let (vfs, info) = mgr.vfs_for_execute(&id, &bp).unwrap();
+        let (vfs, info) = mgr.vfs_for_execute(&id, &bp).await.unwrap();
         assert_eq!(vfs.mode(), RtVfsMode::PerSession);
         assert_eq!(vfs.root(), root.path().join(&id));
         assert_eq!(info.mode, RtVfsMode::PerSession);
@@ -1066,14 +1095,11 @@ mod tests {
         );
         let bp = Blueprint {
             name: "e".into(),
-            vfs: VfsConfig::Ephemeral {
-                size_limit: None,
-                path_limit: None,
-            },
+            vfs: VfsConfig::Ephemeral { size_limit: None },
             ..Default::default()
         };
         mgr.ensure("sid", &bp).await.unwrap();
-        let (vfs, _) = mgr.vfs_for_execute("sid", &bp).unwrap();
+        let (vfs, _) = mgr.vfs_for_execute("sid", &bp).await.unwrap();
         assert!(
             vfs.root().starts_with(eph_dir.path()),
             "ephemeral scratch should live under the configured root"
@@ -1096,7 +1122,7 @@ mod tests {
             CapabilitySettings::default(),
         );
         mgr.ensure("sid", &bp).await.unwrap();
-        let (v1, _) = mgr.vfs_for_execute("sid", &bp).unwrap();
+        let (v1, _) = mgr.vfs_for_execute("sid", &bp).await.unwrap();
         std::fs::write(v1.root().join("a.txt"), b"hi").unwrap();
 
         // Restart: a fresh manager over the same durable root, in-memory state
@@ -1111,7 +1137,7 @@ mod tests {
             CapabilitySettings::default(),
         );
         restarted.ensure("sid", &bp).await.unwrap();
-        let (v2, _) = restarted.vfs_for_execute("sid", &bp).unwrap();
+        let (v2, _) = restarted.vfs_for_execute("sid", &bp).await.unwrap();
         assert_eq!(std::fs::read(v2.root().join("a.txt")).unwrap(), b"hi");
     }
 
@@ -1147,7 +1173,7 @@ mod tests {
         restarted.boot().await;
         assert!(restarted.contains("sid"), "boot must rehydrate the session");
         // Resume works without a fresh `ensure`, and the binding is intact.
-        restarted.vfs_for_execute("sid", &bp).unwrap();
+        restarted.vfs_for_execute("sid", &bp).await.unwrap();
     }
 
     #[tokio::test]
@@ -1306,7 +1332,7 @@ mod tests {
     #[tokio::test]
     async fn vfs_for_execute_unknown_session_errs() {
         let (mgr, _root) = manager();
-        let err = mgr.vfs_for_execute("missing", &per_session(HOUR));
+        let err = mgr.vfs_for_execute("missing", &per_session(HOUR)).await;
         assert!(matches!(err, Err(SessionError::UnknownSession)));
     }
 

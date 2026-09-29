@@ -120,10 +120,7 @@ impl Harness {
 }
 
 fn per_session() -> VfsConfig {
-    VfsConfig::PerSession {
-        size_limit: None,
-        path_limit: None,
-    }
+    VfsConfig::PerSession { size_limit: None }
 }
 
 const WRITE: &str = r#"import { writeText } from "submilli:fs"; function main(): void { writeText("/a.txt", "hi"); }"#;
@@ -145,12 +142,37 @@ async fn per_session_persists_across_executes() {
     assert_eq!(r["result"], json!("hi"), "file should persist across calls");
 }
 
+/// Each execute measures what the session's directory already holds, so the
+/// limit spans the whole session rather than resetting with every program.
+#[tokio::test]
+async fn per_session_size_limit_spans_the_session() {
+    let h = Harness::with_vfs(VfsConfig::PerSession {
+        size_limit: Some(100),
+    });
+    let (_, created) = h
+        .post("/v1/sessions", json!({ "blueprint": BLUEPRINT }), None)
+        .await;
+    let session = created["session_id"].as_str().unwrap().to_string();
+    let write = |name: &str| {
+        format!(
+            r#"import {{ writeText }} from "submilli:fs"; function main(): void {{ writeText("/{name}", "x".repeat(60)); }}"#
+        )
+    };
+
+    let (_, first) = h.execute(&write("a.txt"), Some(&session)).await;
+    assert!(first["error"].is_null(), "first write failed: {first}");
+
+    let (_, second) = h.execute(&write("b.txt"), Some(&session)).await;
+    let message = second["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("RangeError") && message.contains("size limit of 100 bytes"),
+        "the second program starts from the first one's 60 bytes: {second}"
+    );
+}
+
 #[tokio::test]
 async fn ephemeral_does_not_persist_across_executes() {
-    let h = Harness::with_vfs(VfsConfig::Ephemeral {
-        size_limit: None,
-        path_limit: None,
-    });
+    let h = Harness::with_vfs(VfsConfig::Ephemeral { size_limit: None });
     let (_, created) = h
         .post("/v1/sessions", json!({ "blueprint": BLUEPRINT }), None)
         .await;

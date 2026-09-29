@@ -225,12 +225,14 @@ fn mutate(
             .metadata()
             .map_err(|e| contain_trap(op, path, &e))?
             .permissions();
+        let quota = caller.data().vfs.quota().cloned();
         atomic_write(
             &resolved,
             change.text.as_bytes(),
             Some(permissions),
             path,
             op,
+            quota,
         )?;
     }
     Ok(result)

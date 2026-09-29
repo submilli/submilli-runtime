@@ -242,7 +242,7 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
     // `idle_timeout` on its own is still collected mid-flight. The write is
     // debounced (`PERSIST_INTERVAL`), so this costs nothing per call.
     manager.touch(session_id).await;
-    let (vfs, vfs_info) = match manager.vfs_for_execute(session_id, &blueprint) {
+    let (vfs, vfs_info) = match manager.vfs_for_execute(session_id, &blueprint).await {
         Ok(pair) => pair,
         Err(err) => {
             return ExecuteOutcome::undispatched(error_response(

@@ -133,6 +133,29 @@ Mistakes to avoid:
 - Never put secret values in `values.yaml`, on command lines, or in Compose
   environment variables; use Kubernetes Secrets or files.
 
+### Resource limits
+
+Each is a config key, a `--flag`, and a `SUBMILLI_*` variable (flag beats
+variable beats file). A blueprint can't raise them.
+
+| Setting | Default | Passing it |
+| --- | --- | --- |
+| `max_execution_memory` (MB) | 50 | Catchable `Error` `GC heap out of memory`; strings cost 2 bytes/char |
+| `max_execution_time` (s) | off | Run ends `timeout exceeded`; counts from `main`, checked once a second, doesn't interrupt a pending HTTP/MCP/model/Git call |
+| `max_execution_fuel` | 10¹² | Run ends `fuel exhausted`; deterministic, a backstop |
+| `max_execution_stack` (KiB, ≤ 16384) | 512 | Run ends `call stack exhausted` |
+| `max_execution_llm_tokens` / `max_llm_tokens` | 1M / 20M | Catchable `RangeError` before the prompt is billed |
+| `max_session_state_memory` (MB) | 1024 | Catchable `RangeError` |
+
+Without `max_execution_time` a runaway loop runs until its fuel is gone, far
+longer than any caller waits: set it a few seconds under the caller's own
+timeout. Pending calls have their own timeouts (HTTP 30 s, MCP and Git 60 s,
+model 10 min), so a program can overrun by one of those. Size a container as
+`max_execution_memory` × concurrent runs + `max_session_state_memory`. Files
+are capped per blueprint with `vfs.size_limit` ([blueprints](blueprints.md)).
+`submilli run` takes `--timeout` (ms), `--fuel`, `--max-stack` (bytes), and
+has a fixed 50 MB memory limit.
+
 ## New project
 
 Establish the first agent workflow and trusted user identity source using

@@ -77,6 +77,10 @@ pub struct FileConfig {
     pub max_execution_memory: Option<u64>,
     /// Whole seconds; zero or omission disables execution timeout.
     pub max_execution_time: Option<u64>,
+    /// Fuel one execution may burn, roughly one unit per Wasm instruction.
+    pub max_execution_fuel: Option<u64>,
+    /// Kibibytes of Wasm stack one execution may use.
+    pub max_execution_stack: Option<u64>,
     /// Megabytes of `submilli:session` state every live session may hold in
     /// total. Bounds the process against session count, where
     /// `max_execution_memory` bounds a single execution.
@@ -181,6 +185,8 @@ pub(crate) struct EnvConfig {
     shutdown_grace: Option<String>,
     max_execution_memory: Option<String>,
     max_execution_time: Option<String>,
+    max_execution_fuel: Option<String>,
+    max_execution_stack: Option<String>,
     max_session_state_memory: Option<String>,
     max_llm_tokens: Option<String>,
     max_execution_llm_tokens: Option<String>,
@@ -248,6 +254,8 @@ impl EnvConfig {
             shutdown_grace: var("SUBMILLI_SHUTDOWN_GRACE"),
             max_execution_memory: var("SUBMILLI_MAX_EXECUTION_MEMORY"),
             max_execution_time: var("SUBMILLI_MAX_EXECUTION_TIME"),
+            max_execution_fuel: var("SUBMILLI_MAX_EXECUTION_FUEL"),
+            max_execution_stack: var("SUBMILLI_MAX_EXECUTION_STACK"),
             max_session_state_memory: var("SUBMILLI_MAX_SESSION_STATE_MEMORY"),
             max_llm_tokens: var("SUBMILLI_MAX_LLM_TOKENS"),
             max_execution_llm_tokens: var("SUBMILLI_MAX_EXECUTION_LLM_TOKENS"),
@@ -382,6 +390,8 @@ fn preflight(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<()> {
     resolve_network_policy(cli, file, env)?;
     max_execution_memory(cli, file, env)?;
     max_execution_time(cli, file, env)?;
+    max_execution_fuel(cli, file, env)?;
+    max_execution_stack(cli, file, env)?;
     max_session_state_memory(cli, file, env)?;
     max_llm_tokens(cli, file, env)?;
     max_execution_llm_tokens(cli, file, env)?;
@@ -636,6 +646,51 @@ fn max_execution_memory(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result
     Ok(mb.saturating_mul(1024 * 1024))
 }
 
+/// How much fuel one execution may burn before it stops with `fuel exhausted`.
+/// `0` is rejected: it would stop every program before its first instruction.
+fn max_execution_fuel(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<u64> {
+    let env_fuel = parse_env(
+        "SUBMILLI_MAX_EXECUTION_FUEL",
+        "a whole number of fuel units",
+        env.max_execution_fuel.as_ref(),
+    )?;
+    let Some(fuel) = explicit(cli.max_execution_fuel, env_fuel, file.max_execution_fuel) else {
+        return Ok(RuntimeConfig::default().fuel);
+    };
+    if fuel == 0 {
+        anyhow::bail!("max execution fuel must be at least 1, got 0");
+    }
+    Ok(fuel)
+}
+
+/// The largest `max_execution_stack`, in KiB. Every runtime thread's native
+/// stack is sized from it (`RuntimeConfig::native_stack_size`), so it is bounded
+/// to keep that reservation reasonable.
+const MAX_EXECUTION_STACK_KIB: u64 = 16 * 1024;
+
+/// How deep one execution's calls may go, as a Wasm stack budget in bytes.
+fn max_execution_stack(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<usize> {
+    let env_kib = parse_env(
+        "SUBMILLI_MAX_EXECUTION_STACK",
+        "a whole number of kibibytes",
+        env.max_execution_stack.as_ref(),
+    )?;
+    let Some(kib) = explicit(cli.max_execution_stack, env_kib, file.max_execution_stack) else {
+        return Ok(RuntimeConfig::default().max_wasm_stack);
+    };
+    if kib == 0 {
+        anyhow::bail!("max execution stack must be at least 1 KiB, got 0");
+    }
+    if kib > MAX_EXECUTION_STACK_KIB {
+        anyhow::bail!(
+            "max execution stack must be at most {MAX_EXECUTION_STACK_KIB} KiB, got {kib}"
+        );
+    }
+    kib.checked_mul(1024)
+        .and_then(|bytes| usize::try_from(bytes).ok())
+        .ok_or_else(|| anyhow::anyhow!("max execution stack of {kib} KiB is too large"))
+}
+
 /// `None` leaves [`ServerConfig::max_session_state_memory`] unset, so the
 /// manager's own default applies — the same shape every other optional path
 /// takes, rather than baking the default in twice.
@@ -751,6 +806,8 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
     let runtime = RuntimeConfig {
         max_store_bytes: max_execution_memory(&cli, &file, &env)?,
         timeout: max_execution_time(&cli, &file, &env)?,
+        fuel: max_execution_fuel(&cli, &file, &env)?,
+        max_wasm_stack: max_execution_stack(&cli, &file, &env)?,
         ..RuntimeConfig::default()
     };
     let max_session_state_memory = max_session_state_memory(&cli, &file, &env)?;
@@ -963,6 +1020,8 @@ mod tests {
             shutdown_grace: None,
             max_execution_memory: None,
             max_execution_time: None,
+            max_execution_fuel: None,
+            max_execution_stack: None,
             max_session_state_memory: None,
             max_llm_tokens: None,
             max_execution_llm_tokens: None,
@@ -2026,6 +2085,67 @@ network:
             let bytes = max_execution_memory(&cli, &file, &env).unwrap();
             assert_eq!(bytes, expected, "{tier} should have won");
         }
+    }
+
+    #[test]
+    fn max_execution_fuel_and_stack_walk_the_ladder() {
+        let defaults = RuntimeConfig::default();
+        let file = FileConfig {
+            max_execution_fuel: Some(3_000),
+            max_execution_stack: Some(300),
+            ..FileConfig::default()
+        };
+        let env = env_from(&[
+            ("SUBMILLI_MAX_EXECUTION_FUEL", "2000"),
+            ("SUBMILLI_MAX_EXECUTION_STACK", "200"),
+        ]);
+        let flag = Cli {
+            max_execution_fuel: Some(1_000),
+            max_execution_stack: Some(100),
+            ..empty_cli()
+        };
+
+        assert_eq!(max_execution_fuel(&flag, &file, &env).unwrap(), 1_000);
+        assert_eq!(max_execution_stack(&flag, &file, &env).unwrap(), 100 * 1024);
+        assert_eq!(
+            max_execution_fuel(&empty_cli(), &file, &env).unwrap(),
+            2_000
+        );
+        assert_eq!(
+            max_execution_stack(&empty_cli(), &file, &env).unwrap(),
+            200 * 1024
+        );
+        let no_env = EnvConfig::default();
+        assert_eq!(
+            max_execution_fuel(&empty_cli(), &file, &no_env).unwrap(),
+            3_000
+        );
+        assert_eq!(
+            max_execution_stack(&empty_cli(), &file, &no_env).unwrap(),
+            300 * 1024
+        );
+        let none = FileConfig::default();
+        assert_eq!(
+            max_execution_fuel(&empty_cli(), &none, &no_env).unwrap(),
+            defaults.fuel
+        );
+        assert_eq!(
+            max_execution_stack(&empty_cli(), &none, &no_env).unwrap(),
+            defaults.max_wasm_stack
+        );
+
+        let zero = FileConfig {
+            max_execution_fuel: Some(0),
+            max_execution_stack: Some(0),
+            ..FileConfig::default()
+        };
+        assert!(max_execution_fuel(&empty_cli(), &zero, &no_env).is_err());
+        assert!(max_execution_stack(&empty_cli(), &zero, &no_env).is_err());
+        let huge = FileConfig {
+            max_execution_stack: Some(MAX_EXECUTION_STACK_KIB + 1),
+            ..FileConfig::default()
+        };
+        assert!(max_execution_stack(&empty_cli(), &huge, &no_env).is_err());
     }
 
     /// The same ladder, but unset stays `None` so the session manager's own
