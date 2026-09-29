@@ -202,6 +202,29 @@ impl ContentPath {
         Ok(self.dir.metadata(&self.rel)?)
     }
 
+    /// The regular file at this path and its size, without following a final
+    /// link; `None` for anything else, including nothing at all. What a write
+    /// that replaces this entry frees.
+    pub fn regular_file(&self) -> Option<(FileIdentity, u64)> {
+        regular_file(self.dir.symlink_metadata(&self.rel).ok()?)
+    }
+
+    /// Bytes held by the regular file at this path; 0 for anything else.
+    pub fn file_len(&self) -> u64 {
+        self.regular_file().map_or(0, |(_, bytes)| bytes)
+    }
+
+    /// Whether this path still names the file `identity` was taken from, the link
+    /// itself never followed. An escape along the way is reported, not answered
+    /// `false`.
+    pub fn refers_to(&self, identity: FileIdentity) -> Result<bool, ContainError> {
+        match self.dir.symlink_metadata(&self.rel) {
+            Ok(metadata) => Ok(regular_file(metadata).is_some_and(|(file, _)| file == identity)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Existence, with an escape reported as an [`ContainError::Escape`] for the caller
     /// to translate. `Dir::exists` swallows the refusal and answers `false`, which would
     /// conflate "outside the sandbox" with "not there".
@@ -266,6 +289,66 @@ impl ContentPath {
             rel,
         }
     }
+}
+
+/// A file's device and inode, which outlive any one name: how a writer checks that
+/// a path still names the file it created, and how the size limit keys the files
+/// programs hold open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FileIdentity {
+    dev: u64,
+    ino: u64,
+}
+
+impl FileIdentity {
+    /// Windows knows a file's identity only from metadata read through an open
+    /// handle, as a `Dir` stat or `File::metadata` reads it; other metadata is refused.
+    pub fn of(metadata: &Metadata) -> io::Result<Self> {
+        #[cfg(not(windows))]
+        {
+            Ok(Self {
+                dev: cap_fs_ext::MetadataExt::dev(metadata),
+                ino: cap_fs_ext::MetadataExt::ino(metadata),
+            })
+        }
+        #[cfg(windows)]
+        {
+            use cap_primitives::fs::_WindowsByHandle;
+            match (metadata.volume_serial_number(), metadata.file_index()) {
+                (Some(dev), Some(ino)) => Ok(Self {
+                    dev: dev.into(),
+                    ino,
+                }),
+                _ => Err(io::Error::other(
+                    "a file's identity needs metadata read through an open handle",
+                )),
+            }
+        }
+    }
+}
+
+/// How many names `metadata`'s file has, when the platform tells: Windows only
+/// through metadata read from an open handle.
+pub fn link_count(metadata: &Metadata) -> Option<u64> {
+    #[cfg(not(windows))]
+    {
+        Some(cap_fs_ext::MetadataExt::nlink(metadata))
+    }
+    #[cfg(windows)]
+    {
+        use cap_primitives::fs::_WindowsByHandle;
+        metadata.number_of_links().map(u64::from)
+    }
+}
+
+/// A regular file whose identity can't be read counts as no file: a write that
+/// replaces it then frees nothing, over-counting rather than freeing bytes twice.
+fn regular_file(metadata: Metadata) -> Option<(FileIdentity, u64)> {
+    if !metadata.is_file() {
+        return None;
+    }
+    let identity = FileIdentity::of(&metadata).ok()?;
+    Some((identity, metadata.len()))
 }
 
 fn require_regular_file(metadata: &Metadata) -> Result<(), ContainError> {
@@ -422,6 +505,18 @@ impl LinkPath {
     /// [`symlink_metadata`](Self::symlink_metadata) has established it is not a link.
     pub fn open_dir(&self) -> Result<Dir, ContainError> {
         Ok(self.parent.open_dir(&self.name)?)
+    }
+
+    /// The regular file this names and its size, the link itself never followed;
+    /// `None` for anything else, including nothing at all.
+    pub fn regular_file(&self) -> Option<(FileIdentity, u64)> {
+        regular_file(self.symlink_metadata().ok()?)
+    }
+
+    /// The regular file a copy onto this path writes, a final link followed as
+    /// [`copy_to`](Self::copy_to) follows it, and its size.
+    pub fn copied_onto_file(&self) -> Option<(FileIdentity, u64)> {
+        regular_file(self.parent.metadata(&self.name).ok()?)
     }
 
     pub fn entries(&self) -> Result<ReadDir, ContainError> {
@@ -616,6 +711,9 @@ fn check_metadata_mutation(
     Ok(())
 }
 
+/// How many entries a recursive removal scans before it refuses.
+pub const MAX_REMOVE_ENTRIES: usize = 10_000;
+
 fn reject_metadata_descendants(
     dir: &Dir,
     count: &mut usize,
@@ -628,7 +726,7 @@ fn reject_metadata_descendants(
     }
     for entry in dir.entries()? {
         *count += 1;
-        if *count > 10000 {
+        if *count > MAX_REMOVE_ENTRIES {
             return Err(ContainError::Io(io::Error::other(
                 "directory scan limit exceeded",
             )));

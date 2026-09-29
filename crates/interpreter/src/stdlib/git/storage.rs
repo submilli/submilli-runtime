@@ -1,4 +1,6 @@
 //! Gix only sees a private metadata copy; VFS paths never become ambient paths.
+use crate::runtime::host::range_error;
+use crate::runtime::{DiskQuota, measure_with_held};
 use cap_std::fs::Dir;
 use gix::bstr::ByteSlice;
 use std::collections::{BTreeMap, HashSet};
@@ -78,7 +80,7 @@ impl Snapshot {
         cancelled: Arc<AtomicBool>,
         max_bytes: u64,
     ) -> Result<Self> {
-        validate_branch(branch)?;
+        validate_new_ref_name(branch)?;
         if dir.try_exists(".git")? {
             bail!("git.init: repository already exists");
         }
@@ -169,15 +171,73 @@ impl Snapshot {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn publish(&self) -> Result<()> {
+        self.publish_within(None).map(|_| ())
+    }
+
+    /// Publish, refusing first if the result would pass the VFS's size limit:
+    /// what is staged, less what publication frees (see
+    /// [`freed_bytes`](Self::freed_bytes)). The reservation is only that check;
+    /// the caller counts the measured change once publication is over. Returns
+    /// the bytes staged.
+    pub fn publish_within(&self, quota: Option<&DiskQuota>) -> Result<u64> {
         self.check_cancelled()?;
         std::fs::write(self.temp.path().join(".git/config"), &self.original_config)?;
         let scratch =
             Dir::open_ambient_dir(self.temp.path().join(".git"), cap_std::ambient_authority())?;
         let files = read_files(&scratch, false, &self.cancelled, self.max_bytes)?;
+        let worktree = self
+            .pending_worktree
+            .borrow()
+            .as_ref()
+            .map_or(0, files_bytes);
+        let staged = files_bytes(&files).saturating_add(worktree);
+        let growth = match quota {
+            Some(quota) => {
+                let growth = staged.saturating_sub(self.freed_bytes(quota)?);
+                quota
+                    .reserve(growth)
+                    .map_err(|exceeded| range_error(format!("git: {exceeded}")))?;
+                growth
+            }
+            None => 0,
+        };
+        let result = self.publish_files(&files);
+        if let Some(quota) = quota {
+            quota.release(growth);
+        }
+        result.map(|()| staged)
+    }
+
+    /// The bytes a publication frees: nothing for a new repository, the whole
+    /// repository when it replaces the worktree, `.git` alone otherwise. A file a
+    /// handle holds stays on disk once replaced, so it frees nothing.
+    fn freed_bytes(&self, quota: &DiskQuota) -> Result<u64> {
+        // A repository this operation created replaces nothing: its `.git` skeleton
+        // is new too, and uncounted until publication.
+        if self.created {
+            return Ok(0);
+        }
+        let git_dir;
+        let replaced = if self.pending_worktree.borrow().is_some() {
+            &self.dir
+        } else {
+            git_dir = self.dir.open_dir(".git")?;
+            &git_dir
+        };
+        let (total, held) =
+            measure_with_held(replaced, &quota.held_files()).map_err(measure_error)?;
+        let held_bytes = held
+            .iter()
+            .fold(0u64, |sum, (_, bytes)| sum.saturating_add(*bytes));
+        Ok(total.saturating_sub(held_bytes))
+    }
+
+    fn publish_files(&self, files: &Files) -> Result<()> {
         let stage = format!(".git-submilli-{}", uuid::Uuid::new_v4());
         self.dir.create_dir(&stage)?;
-        let result = self.publish_staged(&stage, &files);
+        let result = self.publish_staged(&stage, files);
         if result.is_ok() {
             self.published.set(true);
             self.dir.remove_dir_all(&stage)?;
@@ -291,6 +351,21 @@ impl Drop for Snapshot {
             let _ = self.dir.remove_dir_all(".git");
         }
     }
+}
+
+/// A VFS git can't measure, too large or nested too deep, can't have a change
+/// counted against its size limit: refused as a write past the limit is.
+pub(super) fn measure_error(err: std::io::Error) -> wasmtime::Error {
+    range_error(format!(
+        "git: the VFS couldn't be measured against its size limit: {err}"
+    ))
+}
+
+/// The bytes a set of files holds once written to the VFS.
+fn files_bytes(files: &Files) -> u64 {
+    files.values().fold(0u64, |total, (_, bytes)| {
+        total.saturating_add(bytes.len() as u64)
+    })
 }
 
 fn copy_metadata_to_scratch(
@@ -457,6 +532,20 @@ fn validate_config_budget(bytes: &[u8], max_bytes: u64, cancelled: &AtomicBool) 
             .ok_or_else(|| wasmtime::Error::msg("git: configuration memory limit exceeded"))?;
     }
     Ok(())
+}
+
+/// The longest branch or remote name a program can create, in bytes: a
+/// filesystem's 255-byte limit on one path component, less the `.lock` suffix git
+/// writes beside a ref while updating it. It also bounds how much a new name adds
+/// to `.git`. Names already in a repository aren't held to it.
+const MAX_REF_NAME_BYTES: usize = 250;
+
+/// [`validate_branch`] for a name about to be written into `.git`.
+pub fn validate_new_ref_name(name: &str) -> Result<()> {
+    if name.len() > MAX_REF_NAME_BYTES {
+        bail!("git: a new branch or remote name is at most {MAX_REF_NAME_BYTES} bytes");
+    }
+    validate_branch(name)
 }
 
 pub fn validate_branch(name: &str) -> Result<()> {
@@ -797,6 +886,65 @@ mod tests {
                 before
             );
         }
+    }
+
+    #[test]
+    fn publication_is_refused_past_the_vfs_size_limit() {
+        let vfs = crate::runtime::Vfs::tempdir().unwrap();
+        let snapshot =
+            Snapshot::init(vfs.dir().unwrap().clone(), "main", Default::default(), 4096).unwrap();
+        let worktree: Files = [("notes.txt".to_string(), (0o644, vec![b'x'; 1000]))]
+            .into_iter()
+            .collect();
+        *snapshot.pending_worktree.borrow_mut() = Some(worktree);
+        let used = crate::runtime::measure_dir(&snapshot.dir).unwrap();
+        let quota = crate::runtime::DiskQuota::new(used + 500, used);
+        let error = snapshot.publish_within(Some(&quota)).unwrap_err();
+        assert!(error.to_string().contains("size limit"), "{error}");
+        assert!(
+            error
+                .downcast_ref::<crate::runtime::host::RangeError>()
+                .is_some(),
+            "a refusal is a RangeError the program can catch"
+        );
+        assert_eq!(quota.used(), used, "a refused publication claims nothing");
+
+        // With room for the growth, the check passes and reserves nothing afterwards:
+        // the caller counts what publication actually changed.
+        let roomy = crate::runtime::DiskQuota::new(used + 2000, used);
+        snapshot.publish_within(Some(&roomy)).unwrap();
+        assert_eq!(roomy.used(), used);
+        assert!(crate::runtime::measure_dir(&snapshot.dir).unwrap() >= used + 1000);
+    }
+
+    #[test]
+    fn a_publication_that_replaces_more_than_it_writes_needs_no_room() {
+        let vfs = crate::runtime::Vfs::tempdir().unwrap();
+        let root = vfs.dir().unwrap().clone();
+        Snapshot::init(Arc::clone(&root), "main", Default::default(), 4096)
+            .unwrap()
+            .publish()
+            .unwrap();
+        root.write("old.txt", vec![b'o'; 5000]).unwrap();
+        let snapshot = Snapshot::open(root, Default::default(), 4096).unwrap();
+        let worktree: Files = [("new.txt".to_string(), (0o644, vec![b'n'; 1000]))]
+            .into_iter()
+            .collect();
+        *snapshot.pending_worktree.borrow_mut() = Some(worktree);
+        let used = crate::runtime::measure_dir(&snapshot.dir).unwrap();
+        // Counting everything staged would need about 1 KB more than this allows.
+        let tight = crate::runtime::DiskQuota::new(used + 10, used);
+        snapshot.publish_within(Some(&tight)).unwrap();
+    }
+
+    #[test]
+    fn a_new_repository_must_fit_the_size_limit() {
+        let vfs = crate::runtime::Vfs::tempdir().unwrap();
+        let snapshot =
+            Snapshot::init(vfs.dir().unwrap().clone(), "main", Default::default(), 4096).unwrap();
+        let full = crate::runtime::DiskQuota::new(0, 0);
+        let error = snapshot.publish_within(Some(&full)).unwrap_err();
+        assert!(error.to_string().contains("size limit"), "{error}");
     }
 
     #[test]

@@ -57,9 +57,11 @@ serde_yml = "0.0.12"
 tempfile = "3"
 # Capability-based filesystem sandboxing for the VFS (SUB-699 / SUB-775). Both are
 # first-party to the same project and version in lockstep; `cap-fs-ext` supplies the
-# portable symlink helper the recursive copy needs.
+# portable symlink helper the recursive copy needs, and `cap-primitives` the Windows
+# file-index getters that fail rather than panic.
 cap-std = "4"
 cap-fs-ext = "4"
+cap-primitives = "4"
 libc = "0.2"
 httpmock = "0.7"
 num-bigint = "0.4"

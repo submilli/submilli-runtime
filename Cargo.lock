@@ -2979,6 +2979,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "cap-fs-ext",
+ "cap-primitives",
  "cap-std",
  "flate2",
  "futures",

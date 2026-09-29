@@ -1,11 +1,12 @@
 //! Helpers shared across stdlib libraries.
 
 use std::io::Write;
+use std::sync::Arc;
 
-use crate::runtime::StoreData;
 use crate::runtime::fs::{ContainError, ContentPath, LinkPath, resolve_content, resolve_link};
-use crate::runtime::host::{permission_denied, permission_denied_invariant};
+use crate::runtime::host::{permission_denied, permission_denied_invariant, range_error};
 use crate::runtime::security::CheckOutcome;
+use crate::runtime::{DiskQuota, QuotaCharge, QuotaExceeded, StoreData};
 
 pub const DEFAULT_CWD: &str = "/";
 
@@ -137,10 +138,40 @@ pub fn write_target_trap(op: &str, guest_path: &str, err: &ContainError) -> wasm
     }
 }
 
+/// A write refused because it would pass the VFS's size limit, as a `RangeError`
+/// the program can catch.
+pub(crate) fn quota_refusal(
+    op: &str,
+    guest_path: &str,
+    exceeded: QuotaExceeded,
+) -> wasmtime::Error {
+    range_error(format!("{op} {guest_path}: {exceeded}"))
+}
+
+/// No program code runs before the rename, so the write draws on the size of the file it
+/// replaces and reserves only the growth: a rewrite that ends within the size limit
+/// succeeds even though the old file and the temporary one briefly coexist.
+pub(crate) fn atomic_write(
+    final_path: &ContentPath,
+    bytes: &[u8],
+    permissions: Option<cap_std::fs::Permissions>,
+    guest_path: &str,
+    op: &str,
+    quota: Option<Arc<DiskQuota>>,
+) -> wasmtime::Result<()> {
+    let mut disk_charge = QuotaCharge::new(quota, final_path.regular_file());
+    disk_charge
+        .reserve(bytes.len() as u64)
+        .map_err(|exceeded| quota_refusal(op, guest_path, exceeded))?;
+    write_then_rename(final_path, bytes, permissions, guest_path, op)?;
+    disk_charge.commit();
+    Ok(())
+}
+
 /// No `parent.is_dir()` pre-check: `Dir` reports a missing parent as `NotFound` the way
 /// `std` does, and the old gate turned an escape into "parent directory does not exist" —
 /// costing an LLM a turn on a `mkdir` that could never succeed.
-pub(crate) fn atomic_write(
+fn write_then_rename(
     final_path: &ContentPath,
     bytes: &[u8],
     permissions: Option<cap_std::fs::Permissions>,

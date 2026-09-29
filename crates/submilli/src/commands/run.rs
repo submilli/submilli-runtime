@@ -192,6 +192,21 @@ pub(crate) fn execute_with_dispatch(
     args: Args,
     llm_dispatch: Option<Arc<dyn ModelDispatch>>,
 ) -> anyhow::Result<ExitCode> {
+    // A host call that re-enters Wasm nests frames on the native stack, so the
+    // program runs on a thread sized for the Wasm stack it is given.
+    std::thread::Builder::new()
+        .name("submilli-run".into())
+        .stack_size(runtime_config(&args).native_stack_size())
+        .spawn(move || execute_on_this_thread(args, llm_dispatch))
+        .context("starting the thread that runs the program")?
+        .join()
+        .map_err(|_| anyhow::anyhow!("the thread running the program panicked"))?
+}
+
+fn execute_on_this_thread(
+    args: Args,
+    llm_dispatch: Option<Arc<dyn ModelDispatch>>,
+) -> anyhow::Result<ExitCode> {
     let (llm_limits, llm_concurrency) = llm_settings(&args)?;
     let source = fs::read_to_string(&args.script)
         .with_context(|| format!("reading {}", args.script.display()))?;
@@ -337,23 +352,27 @@ pub(crate) fn execute_with_dispatch(
         }
     };
 
-    let mut cfg = RuntimeConfig::default();
-    if let Some(f) = args.fuel {
-        cfg.fuel = f;
-    }
-    if let Some(s) = args.max_stack {
-        cfg.max_wasm_stack = s;
-    }
-    cfg.timeout = args.timeout.map(Duration::from_millis);
+    let cfg = runtime_config(&args);
 
     let engine = cfg.engine()?;
     let package_modules = compile_package_modules(&engine, &package_artifacts)?;
-    let vfs = match args.vfs {
+    let mut vfs = match args.vfs {
         Some(path) => Vfs::external(path).context("opening --vfs directory")?,
         None => Vfs::tempdir().context("allocating temporary VFS directory")?,
     };
+    let size_limit = blueprint.as_ref().and_then(|bp| bp.vfs.size_limit());
+    if let Some(limit) = size_limit {
+        let measured = vfs.measure_usage();
+        if let Err(err) = &measured {
+            eprintln!(
+                "warning: the VFS couldn't be measured against the blueprint's size_limit, so it is treated as full: {err}"
+            );
+        }
+        vfs = vfs.with_measured_limit(limit, measured.ok());
+    }
     // Use with_vfs_and_cap directly rather than RuntimeConfig::run to keep console output streaming, not buffered.
     let mut data = StoreData::with_vfs_and_cap(vfs, cfg.max_store_bytes);
+    data.vfs_info.size_limit = size_limit;
     data.install_type_info(compiled.type_info.clone());
     if let Some(bp) = &blueprint {
         data.git = submilli_shared::resolve_git(bp, &variables)?;
@@ -436,6 +455,19 @@ pub(crate) fn execute_with_dispatch(
 
 struct LocalPackageModule {
     module: Module,
+}
+
+/// The engine limits the flags ask for; also what the run thread's stack is sized from.
+fn runtime_config(args: &Args) -> RuntimeConfig {
+    let mut cfg = RuntimeConfig::default();
+    if let Some(fuel) = args.fuel {
+        cfg.fuel = fuel;
+    }
+    if let Some(bytes) = args.max_stack {
+        cfg.max_wasm_stack = bytes;
+    }
+    cfg.timeout = args.timeout.map(Duration::from_millis);
+    cfg
 }
 
 /// Parse `--var NAME=VALUE` pairs and resolve them against the blueprint's

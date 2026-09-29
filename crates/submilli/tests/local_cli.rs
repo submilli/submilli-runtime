@@ -1010,3 +1010,30 @@ fn blueprint_http_denial_is_enforced_by_local_run() {
         }));
     }
 }
+
+/// A callback re-enters Wasm on the native stack. With a raised `--max-stack`,
+/// the run's thread must be sized to match, or deep re-entry overflows the
+/// thread and aborts the process instead of ending the run.
+#[test]
+fn deep_reentry_under_a_raised_stack_ends_the_run_cleanly() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let script = dir.path().join("reentry.ts");
+    write_file(
+        &script,
+        "function depth(n: number): number {\n  if (n === 0) { return 0; }\n  return [n].map((x: number) => depth(x - 1))[0] + 1;\n}\nfunction main(): number { return depth(200000); }\n",
+    );
+
+    let out = run(&[
+        os("run"),
+        os("--max-stack"),
+        os("1572864"),
+        script.as_os_str(),
+    ]);
+
+    assert_eq!(out.status.code(), Some(1), "stderr: {}", stderr(&out));
+    assert!(
+        stderr(&out).contains("call stack exhausted"),
+        "stderr: {}",
+        stderr(&out)
+    );
+}

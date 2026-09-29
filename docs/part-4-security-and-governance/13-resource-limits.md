@@ -1,57 +1,249 @@
 ---
 title: "Resource limits"
+description: "Reference for the limits that bound one program's run: memory, time, fuel, stack, files, model tokens, and session state, where each is set on submilli-server, and the fixed limits inside the standard library."
 slug: resource-limits
 sidebar:
-  hidden: true
+  order: 13
 ---
 
-This chapter is being written.
+Every program runs in a fresh WebAssembly instance: its own memory, its own
+view of the filesystem, and nothing else. It reaches the outside only through
+the standard library, which checks the blueprint on every call. It also runs
+inside limits that bound how much it can use. Some of the programs an agent
+writes will be wrong, a loop that never stops or a list that never stops
+growing, and the limits make such a program fail on its own. It doesn't take
+the server down, crowd out other sessions, or run up your model provider's
+bill.
 
-## Git work
+The instances of one server share its process. There is no process or
+container boundary between programs, so the limits are what keeps one
+session's program from starving another's, and a fault in the runtime itself
+would reach every session.
 
-Git reserves three quarters of the tenant's currently available memory while
-an operation runs. Its snapshot, object-allocation, result, and total response
-limits are each one sixteenth of that reservation, capped at 50 MiB. With the
-default 50 MiB store limit, this is approximately 2.3 MiB, less when the program
-already holds data. Larger repositories require a larger host memory limit.
-Git refuses an operation when less than 2 MiB is available for its reservation.
+Most limits are the operator's, set for the whole server. The blueprint adds
+one of its own, a size limit on the program's files, and can narrow others
+call by call with filters. It can't raise an operator's limit.
 
-Repository traversals are bounded to 10,000 paths and 64 directory levels.
-Staging accepts at most 10,000 path arguments, combines overlapping selections,
-and checks cancellation while selecting files. Native index entries are checked
-before decoding; optional index caches are removed from the isolated copy.
-Configuration parsing charges 256 bytes per line in addition to source bytes.
-Ignore patterns are limited to 4,096 bytes each and 10,000 in total, with
-additional memory and matching-work budgets. Oversized inputs fail explicitly;
-they are not silently skipped.
-Remote pack object counts and protocol record counts are checked before Git
-decoding, with at most one record per 512 bytes of the snapshot budget and a
-ceiling of 10,000 records per response or objects per pack.
-The total inflated pack data, including declared delta base and result sizes,
-must also fit within the snapshot budget. Nested tree reads charge complete
-tree objects before descending into their children.
-Native packfiles undergo the same validation, and their object indexes are
-regenerated without consulting the original indexes or external delta bases.
-History and fast-forward checks share a bounded traversal that charges decoded
-commits and queued IDs and checks cancellation between commits and parents.
-Fetch preflights local history and disables incremental negotiation, so a
-fetch may download objects already present locally. This keeps server-supplied
-acknowledgements from starting unchecked local history traversals.
-History pages default to 50 commits, allow at most 1,000 commits, and accept
-a nonnegative integer offset. History traversal remains subject to memory and
-cancellation limits, including skipped commits. Exceeding these bounds fails
-the operation. The [API reference](/docs/standard-library#git-repositories)
-covers supported repository formats and result shapes.
+## At a glance
 
-Git jobs use Tokio's blocking thread pool, with at most four running per
-process. Guest operations remain sequential. HTTPS uses the host's async
-HTTP transport through an adapter. Each operation has a 60-second deadline,
-including time waiting to start. At the deadline, it requests cancellation
-and waits for the worker to stop before returning a timeout error. Publication
-already underway finishes or rolls back first, so cleanup can extend the time
-before the error returns.
+| Limit | Default | Set by | When a program passes it |
+| --- | --- | --- | --- |
+| Memory | 50 MB | `max_execution_memory`, MB | `Error`: `GC heap out of memory` |
+| Time | none | `max_execution_time`, seconds | The run ends: `timeout exceeded` |
+| Fuel | 10¹² | `max_execution_fuel` | The run ends: `fuel exhausted` |
+| Stack | 512 KB | `max_execution_stack`, KB, at most 16,384 | The run ends: `call stack exhausted` |
+| Filesystem size | none | the blueprint's `vfs.size_limit` | `RangeError` |
+| Model tokens, one run | 1,000,000 | `max_execution_llm_tokens` | `RangeError` |
+| Model tokens, all runs | 20,000,000 | `max_llm_tokens` | `RangeError` |
+| Prompts in flight | 4 | `max_llm_concurrency` | Further prompts wait |
+| Session state, all sessions | 1,024 MB | `max_session_state_memory`, MB | `RangeError` |
 
-If a server request is cancelled, its execution owner cancels the program and
-waits for its blocking workers before releasing the store and VFS. Forced
-process shutdown may interrupt this cleanup. Metadata snapshots use temporary
-disk space as well as memory, and are removed after the operation.
+"The run ends" means the program can't catch it: the caller gets the error
+in place of a result. An `Error` or `RangeError` is an ordinary error the
+program can catch with `try` and act on. Sizes in this chapter are binary, as
+the settings count them: a KB is 1,024 bytes and an MB is 1,024 KB.
+
+A server setting has the three forms every server setting has. In the
+[config file](/docs/server#configure-it) it is `max_execution_fuel`, as a flag
+`--max-execution-fuel`, and in the environment
+`SUBMILLI_MAX_EXECUTION_FUEL`. A flag beats a variable, and a variable beats
+the file.
+
+## Memory
+
+Each run is its own WebAssembly instance, and `max_execution_memory` caps the
+memory that instance can use.
+
+An allocation that would pass the limit throws an error the program can
+catch. Uncaught, it ends the run:
+
+```text
+error: Error: GC heap out of memory: no capacity for allocation of 2000048 bytes
+```
+
+Catching it rarely helps unless the program lets go of what it holds: the
+memory is still in use.
+
+Files needn't pass through memory. `http.download` writes a response
+straight to a file, `fs.writer` writes one a line at a time, and `fs.lines`
+and `fs.bytes` read one a piece at a time, so a program can handle files much
+larger than its memory limit. A whole-file read, `fs.readText` or `fs.read`,
+returns `null` for a file over 50 MB.
+
+To size a container, budget `max_execution_memory` times the number of
+programs you expect to run at once, plus `max_session_state_memory` for
+sessions' state.
+
+## Time
+
+`max_execution_time` stops a run that takes too long. It is in seconds, off by
+default, and starts counting when `main` starts. The run ends with `timeout
+exceeded` (`kind: timeout`), and the program can't catch it.
+
+A call the program is waiting on finishes first, so a run can go past the
+limit by as long as that call takes:
+
+| Call | Gives up after |
+| --- | --- |
+| An HTTP request | 30 seconds |
+| `http.download` | 60 seconds, or its `timeout` option |
+| An MCP tool call | 60 seconds |
+| A Git operation | 60 seconds |
+| A model call | 10 minutes |
+
+## Fuel and stack
+
+Fuel counts work, roughly one unit per WebAssembly instruction. A run that
+uses it all ends with `fuel exhausted` (`kind: fuel_exhausted`). The default,
+a trillion, is a backstop; set `max_execution_time` to bound how long a caller
+waits. Lower `max_execution_fuel` when you want a runaway loop stopped at the
+same point every time, however busy the server is.
+
+The stack bounds how deep calls go. The default 512 KB holds about 2,000
+levels of recursion; deeper ends the run with `call stack exhausted`. Raise
+`max_execution_stack`, up to 16 MB, for programs that recurse deeply by
+design. A larger stack also uses more of the server's memory, outside
+`max_execution_memory`.
+
+## Filesystem
+
+A blueprint with an `ephemeral` or `per_session` filesystem can cap how much
+space its files take:
+
+```yaml title="blueprint.yaml (fragment)"
+vfs:
+  mode: per_session
+  size_limit: 100MB
+```
+
+`size_limit` takes a byte count or a size such as `500KB`, `100MB`, or `1GB`.
+Under `per_session` it covers all the session's files, not each program's.
+
+A write that would pass the limit is refused with a `RangeError` the program
+can catch, and deleting files frees the space again. `fs.info().sizeLimit`
+tells the program its limit, and is `-1` when there is none. A `persistent`
+volume takes no `size_limit`: every session that names it shares one
+directory, and its size is the operator's to manage.
+
+## Model spending
+
+A program's `submilli:llm` calls spend tokens against three limits. Before a
+prompt is sent, its size and the output reserved for it are counted against
+the run's budget, `max_execution_llm_tokens`, and against the server's,
+`max_llm_tokens`. A prompt that wouldn't fit is refused before it is sent,
+with a `RangeError` naming the budget, so it is never billed. The server's
+budget is your ceiling on the provider credential across every running
+program.
+
+The reserved output is 64,000 tokens per prompt unless the blueprint's model
+sets `output_reserve`. It is also sent as the request's output cap:
+
+```yaml title="blueprint.yaml (fragment)"
+llm:
+  models:
+    claude-haiku-4-5:
+      provider: anthropic
+      output_reserve: 4000
+```
+
+`max_llm_concurrency` bounds how many of one `llm.batch`'s prompts are in
+flight at once; the rest wait their turn. A batch takes at most 128 prompts,
+and a prompt at most 256 KB.
+
+## Session state
+
+`submilli:session` keeps keys and values for the life of a session. Each
+session may hold 16 MB, in at most 1,024 keys, each value at most 1 MB and
+each key at most 256 characters. Across every open session,
+`max_session_state_memory` bounds the total, so a server with many sessions
+can't be filled by them. A `set` that would pass either is refused with a
+`RangeError`, and nothing another session holds is evicted to make room.
+
+A session nobody has used for its blueprint's `idle_timeout`, 24 hours by
+default, is closed, and its state and `per_session` files are deleted.
+
+## Inside the standard library
+
+These limits are fixed. A program that meets one gets an error it can catch:
+
+| Where | Limit | When passed |
+| --- | --- | --- |
+| HTTP response (`http.get` and the other verbs) | 50 MB | `RangeError`: the message suggests `http.download` |
+| `http.download` | 50 MB, or the program's `maxBytes` option | `RangeError` |
+| Redirects | 10 | Error |
+| `fs.read`, `fs.readText` | 50 MB (`fs.maxReadSize()`) | Returns `null` |
+| A string built by `repeat`, `padStart`, `join`, and the like | 32M characters | `RangeError` |
+| A `Uint8Array` | 1 GB | `RangeError` |
+| `JSON.parse` nesting | 128 levels | `SyntaxError` |
+| Object nesting, when compared, hashed, or stringified | 128 levels | `RangeError` |
+| A regular expression | 1 MB compiled; matching is linear, with no backreferences or lookaround | `SyntaxError` for a pattern too large |
+| MCP server discovery | 10 seconds | The server is left out, with a warning |
+
+`http.download`'s `maxBytes` has no upper bound of its own, because the body
+goes to a file and not to memory: the file size limit and the disk bound it.
+A blueprint can bound it per call with a filter:
+
+```yaml title="blueprint.yaml (fragment)"
+permissions:
+  main:
+  - capability: http.download
+    filter: host == "files.example.com" and max_bytes <= 104857600
+    action: allow
+```
+
+## Git
+
+`submilli:git` works on a private copy of the repository in memory, so its
+limits follow the run's memory:
+
+- **Memory.** Git's work counts against `max_execution_memory`. Under the
+  default 50 MB, a repository of more than about 2 MB won't fit; raise
+  `max_execution_memory` for larger ones.
+- **Size.** A worktree, or a `.git` directory, holds at most 10,000 paths and
+  64 directory levels. A new branch or remote name is at most 250 bytes. A history
+  page returns at most 1,000 commits, 50 by default.
+- **Time.** Each operation has 60 seconds, including the wait for one of the
+  four Git workers a server shares among all its programs.
+- **Fetch.** A fetch downloads the history it needs without first telling the
+  remote what is already present, so it may transfer objects the repository
+  has.
+
+An operation that passes a limit fails with an error that names it, and the
+repository is left as it was.
+
+## With a coding agent
+
+A coding agent with the [Submilli skill](/docs/skill) knows these limits and
+where each one is set. These prompts were run with Claude Code in a project
+holding a research agent's blueprint, a `per_session` filesystem with
+`@submilli/jina`, and the server's `server.yaml`.
+
+**Cap the agent's files.**
+
+```text
+Cap the files this agent keeps in its session at 100 MB.
+```
+
+The agent adds `size_limit: 100MB` to the blueprint's `vfs` block and tests
+it with `submilli run`: a program that grows a file a megabyte at a time is
+refused at the limit with a `RangeError` it can catch. It points out that
+`100MB` is 104,857,600 bytes, in case you meant the decimal figure. It also
+says what it didn't test: two programs in one session, which needs a server,
+and Jina's downloads, which would mean real calls to Jina.
+
+**Stop runaway programs.**
+
+```text
+Programs our agent writes sometimes loop forever, and our API call to the Submilli server times out after 30 seconds. What should we change? server.yaml is the server's config.
+```
+
+The agent explains that the server has no time limit by default, so a stuck
+program runs until its fuel is gone, long after your client gave up. It adds
+`max_execution_time: 25` to `server.yaml`, a few seconds under your client's
+timeout, and says the server needs a restart to apply it. It then warns about
+the limit's gap: a call already waiting isn't cut off. The blueprint reaches
+Jina, whose requests time out after 30 seconds, so a request started at
+second 24 can end a run near second 54. It suggests treating `timeout
+exceeded` and your own timeout as the same result for the agent.
+
+Next: [deploying](/docs/deploying).

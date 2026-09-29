@@ -18,7 +18,6 @@ use wasmtime::{
     Caller, FuncType, HeapType, Linker, RefType, Rooted, StructRef, StructType, Val, ValType,
 };
 
-use crate::runtime::StoreData;
 use crate::runtime::fs::{ContainError, ContentPath};
 use crate::runtime::host::{
     read_boxed_number, read_string_arg, read_uint8_array_arg, register_host_fn,
@@ -29,11 +28,12 @@ use crate::runtime::metrics::{HttpMetric, MetricsSink};
 use crate::runtime::prelude::collection::{is_a, object_field, unbox_bool};
 use crate::runtime::prelude::map;
 use crate::runtime::prelude::vtable::dispatch_vtable_slot;
+use crate::runtime::{QuotaCharge, QuotaExceeded, StoreData};
 use crate::stdlib::abi::{
     self, backing_receiver, backing_struct, f64_field, i32_field, install_field_getters,
     nullable_object_field, string_field,
 };
-use crate::stdlib::shared::{check_security, contain_trap, resolve_content_or_trap};
+use crate::stdlib::shared::{check_security, contain_trap, quota_refusal, resolve_content_or_trap};
 use transport::{DownloadMeta, http_failure_outcome};
 
 pub const MODULE_NAME: &str = "submilli:http";
@@ -583,15 +583,18 @@ async fn perform_download(
     // is also where an escaping parent is refused.
     let tmp = resolved.temp_sibling();
     let start = std::time::Instant::now();
-    let streamed = stream_to_temp(caller, &req, &tmp, &guest_path).await;
+    // No program code runs while the download streams, so an overwrite draws on the
+    // size of the file it replaces and reserves only what goes beyond it.
+    let disk_charge = QuotaCharge::new(caller.data().vfs.quota().cloned(), resolved.regular_file());
+    let streamed = stream_to_temp(caller, &req, &tmp, &guest_path, disk_charge).await;
     // A filesystem failure has no transport outcome to record.
     match &streamed {
-        Ok((meta, _)) => record_http_metric(
+        Ok(streamed) => record_http_metric(
             caller.data().metrics.as_ref(),
             "http.download".to_string(),
             host_str,
             start.elapsed().as_millis() as u64,
-            Ok((meta.status, meta.bytes_written)),
+            Ok((streamed.meta.status, streamed.meta.bytes_written)),
         ),
         Err(DownloadFailure::Transport(e, _)) => record_http_metric(
             caller.data().metrics.as_ref(),
@@ -600,10 +603,14 @@ async fn perform_download(
             start.elapsed().as_millis() as u64,
             Err(e),
         ),
-        Err(DownloadFailure::Fs(_)) => {}
+        Err(DownloadFailure::Fs(_) | DownloadFailure::Full(..)) => {}
     }
-    let (meta, file) = streamed.map_err(DownloadFailure::into_error)?;
-    commit_temp(file, &tmp, &resolved, &guest_path)?;
+    let Streamed {
+        meta,
+        file,
+        disk_charge,
+    } = streamed.map_err(DownloadFailure::into_error)?;
+    commit_temp(file, disk_charge, &tmp, &resolved, &guest_path)?;
 
     let duration_ms = start.elapsed().as_millis() as f64;
     write_download_result(caller, &meta, &guest_path, duration_ms)
@@ -615,6 +622,8 @@ async fn perform_download(
 enum DownloadFailure {
     Transport(HttpError, String),
     Fs(wasmtime::Error),
+    /// The body would have passed the VFS's size limit.
+    Full(QuotaExceeded, String),
 }
 
 impl DownloadFailure {
@@ -631,6 +640,9 @@ impl DownloadFailure {
             }
             DownloadFailure::Transport(_, msg) => wasmtime::Error::msg(msg),
             DownloadFailure::Fs(err) => err,
+            DownloadFailure::Full(exceeded, guest_path) => {
+                quota_refusal("http.download", &guest_path, exceeded)
+            }
         }
     }
 }
@@ -643,31 +655,83 @@ async fn stream_to_temp(
     req: &HttpRequest,
     tmp: &ContentPath,
     guest_path: &str,
-) -> Result<(DownloadMeta, cap_std::fs::File), DownloadFailure> {
+    disk_charge: QuotaCharge,
+) -> Result<Streamed, DownloadFailure> {
     let file = tmp
         .create()
         .map_err(|err| DownloadFailure::Fs(temp_create_error(guest_path, &err)))?;
-    let mut writer = std::io::BufWriter::new(file);
+    let mut writer = std::io::BufWriter::new(QuotaWriter {
+        file,
+        disk_charge,
+        refused: None,
+    });
     let http_client = std::sync::Arc::clone(&caller.data().http_client);
     let result = http_client.download(req, &mut writer).await;
-    // Flush explicitly; BufWriter swallows errors on drop.
+    // Flush explicitly; BufWriter swallows errors on drop. Every failure below removes
+    // the temp file, and dropping the writer's disk charge gives back what it held.
     let inner = match writer.into_inner() {
-        Ok(f) => f,
+        Ok(inner) => inner,
         Err(e) => {
+            let failure = e.error().to_string();
+            let inner = e.into_inner().into_parts().0;
             let _ = tmp.remove_file();
-            return Err(DownloadFailure::Fs(wasmtime::Error::msg(format!(
-                "http.download {guest_path}: flush tempfile: {e}",
-                e = e.error()
-            ))));
+            return Err(match inner.refused {
+                Some(exceeded) => DownloadFailure::Full(exceeded, guest_path.to_string()),
+                None => DownloadFailure::Fs(wasmtime::Error::msg(format!(
+                    "http.download {guest_path}: flush tempfile: {failure}"
+                ))),
+            });
         }
     };
     match result {
-        Ok(meta) => Ok((meta, inner)),
+        Ok(meta) => Ok(Streamed {
+            meta,
+            file: inner.file,
+            disk_charge: inner.disk_charge,
+        }),
         Err(e) => {
             let _ = tmp.remove_file();
+            if let Some(exceeded) = inner.refused {
+                return Err(DownloadFailure::Full(exceeded, guest_path.to_string()));
+            }
             let msg = format!("http.download: {e}");
             Err(DownloadFailure::Transport(e, msg))
         }
+    }
+}
+
+/// A download's body, streamed into its temp file and not yet committed.
+struct Streamed {
+    meta: DownloadMeta,
+    file: cap_std::fs::File,
+    disk_charge: QuotaCharge,
+}
+
+/// The temp file a download streams into, reserving each chunk against the VFS's
+/// size limit before writing it, so a download stops at the limit rather than
+/// after it.
+struct QuotaWriter {
+    file: cap_std::fs::File,
+    disk_charge: QuotaCharge,
+    refused: Option<QuotaExceeded>,
+}
+
+impl std::io::Write for QuotaWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let asked = buf.len() as u64;
+        if let Err(exceeded) = self.disk_charge.reserve(asked) {
+            self.refused = Some(exceeded);
+            return Err(std::io::Error::other(exceeded.to_string()));
+        }
+        let written = self.file.write(buf);
+        // A short or failed write keeps less than it reserved; settle on what landed.
+        let kept = written.as_ref().map_or(0, |n| *n as u64);
+        self.disk_charge.unreserve(asked.saturating_sub(kept));
+        written
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
     }
 }
 
@@ -684,29 +748,38 @@ fn temp_create_error(guest_path: &str, err: &ContainError) -> wasmtime::Error {
 }
 
 /// Fsync and atomically rename the streamed temp file into place; a crash
-/// leaves a `.tmp` sibling instead of a half-written final file.
+/// leaves a `.tmp` sibling instead of a half-written final file. Any failure
+/// removes the temp file, and dropping `disk_charge` with it gives back what it
+/// held; a commit frees the file it replaced.
 ///
 /// The rename goes through the handle the destination resolved against, so a link
 /// swapped over a parent component while the body streamed cannot redirect the commit.
 fn commit_temp(
     file: cap_std::fs::File,
+    mut disk_charge: QuotaCharge,
     tmp: &ContentPath,
     resolved: &ContentPath,
     guest_path: &str,
 ) -> wasmtime::Result<()> {
-    if let Err(e) = file.sync_all() {
-        let _ = tmp.remove_file();
-        wasmtime::bail!("http.download {guest_path}: fsync: {e}");
-    }
-    drop(file);
-    if let Err(err) = tmp.rename_to(resolved) {
-        let _ = tmp.remove_file();
-        return Err(match err {
+    let committed = (|| {
+        file.sync_all()
+            .map_err(|e| wasmtime::Error::msg(format!("http.download {guest_path}: fsync: {e}")))?;
+        drop(file);
+        disk_charge
+            .cover(resolved.regular_file())
+            .map_err(|exceeded| quota_refusal("http.download", guest_path, exceeded))?;
+        tmp.rename_to(resolved).map_err(|err| match err {
             ContainError::Escape => contain_trap("http.download", guest_path, &err),
             _ => wasmtime::Error::msg(format!("http.download {guest_path}: rename: {err}")),
-        });
+        })
+    })();
+    match committed {
+        Ok(()) => disk_charge.commit(),
+        Err(_) => {
+            let _ = tmp.remove_file();
+        }
     }
-    Ok(())
+    committed
 }
 
 /// Build the `$DownloadResultBacking` from the committed download's metadata.

@@ -19,9 +19,8 @@ enforces the limits that keep one runaway program from touching the others.
 Programs run concurrently inside that one process. Each run is a fresh
 WebAssembly instance with its own memory and the view of the filesystem its
 blueprint allows. An instance costs a few megabytes and no CPU while it waits
-on a request, so one server carries many sessions at once. There is no process
-or container boundary between programs: a fault in the runtime itself would
-reach every session.
+on a request, so one server carries many sessions at once, each run within the
+[resource limits](/docs/resource-limits) you set.
 
 ## Start it
 
@@ -162,6 +161,8 @@ mcp_allowed_hosts: []
 
 max_execution_memory: 50
 max_execution_time: 0
+max_execution_fuel: 1000000000000
+max_execution_stack: 512
 max_session_state_memory: 1024
 max_llm_tokens: 20000000
 max_execution_llm_tokens: 1000000
@@ -375,35 +376,15 @@ variables is set.
 
 ## Limits
 
-Some of the programs an agent writes will be wrong: a loop that never stops
-growing a list, a batch that asks a model a million questions. The limits make
-one bad program fail on its own instead of taking the server down or running
-up your model provider's bill. They are the operator's settings; a blueprint
-can't raise them.
-
-| Setting | Default | What it stops, and how |
-| --- | --- | --- |
-| `max_execution_memory` | 50 MB | One program holding too much memory; the run ends with an `out of memory` error |
-| `max_execution_time` | off | One program running too long; the run ends with `timeout exceeded` |
-| `max_execution_llm_tokens` | 1,000,000 | One program spending too many model tokens; the next model call throws a `RangeError` naming the budget |
-| `max_llm_tokens` | 20,000,000 | All running programs together, your ceiling on the provider credential; the next model call throws a `RangeError` naming the budget |
-| `max_session_state_memory` | 1024 MB | `submilli:session` state across every open session; a `set` past it throws |
-| `max_llm_concurrency` | 4 | One `llm.batch` sending too many prompts at once; the extra prompts wait their turn |
-| `idle_timeout` (blueprint) | 24 h | A session nobody has run a program in; a sweep every 30 seconds closes it and deletes its `per_session` files, across restarts too |
-
-Strings are stored as UTF-16, so text costs two bytes per character: a 25 MB
-document needs about 50 MB of the execution limit. To size a container, budget
-`max_execution_memory` times the programs running at once, plus
-`max_session_state_memory`.
-
-`max_execution_time` is whole seconds, `0` disables it, and it counts from the
-moment `main` starts, so compiling the program doesn't eat into it. The check
-runs once a second, so a program may run up to a second past the limit. A host
-call already in flight, an HTTP request for instance, is not interrupted; the
-program is stopped when it returns. Without a time limit, a runaway loop runs
-until it exhausts a fixed budget of a trillion instructions, which takes far
-longer than any caller will wait, so a deployment whose callers have their own
-timeouts should set one.
+Some of the programs an agent writes will be wrong: a loop that never stops, a
+list that never stops growing, a batch that asks a model a million questions.
+The `max_*` settings in the template make such a program fail on its own
+instead of taking the server down or running up your model provider's bill.
+They are the operator's; a blueprint can't raise them. [Resource
+limits](/docs/resource-limits) describes each one, what a program sees when it
+passes it, and how to size a container for them. Set `max_execution_time` in a
+deployment whose callers have timeouts of their own: without it, a runaway loop
+runs until its fuel is gone, which takes far longer than any caller waits.
 
 ## Health, logs, and stopping
 

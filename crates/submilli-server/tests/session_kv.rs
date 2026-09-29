@@ -344,20 +344,8 @@ async fn rest_and_mcp_reach_one_store_for_one_session() {
 async fn state_survives_every_vfs_mode() {
     for (name, vfs) in [
         ("none", VfsConfig::None),
-        (
-            "ephemeral",
-            VfsConfig::Ephemeral {
-                size_limit: None,
-                path_limit: None,
-            },
-        ),
-        (
-            "per_session",
-            VfsConfig::PerSession {
-                size_limit: None,
-                path_limit: None,
-            },
-        ),
+        ("ephemeral", VfsConfig::Ephemeral { size_limit: None }),
+        ("per_session", VfsConfig::PerSession { size_limit: None }),
     ] {
         let h = Harness::with_blueprints(vec![blueprint(name, vfs)]);
         let session = h.create_session(name).await;
@@ -441,10 +429,7 @@ async fn a_restored_session_starts_with_an_empty_store() {
         let config = ServerConfig {
             blueprints: Some(Arc::new(InMemoryBlueprintStore::seed(vec![blueprint(
                 BLUEPRINT,
-                VfsConfig::PerSession {
-                    size_limit: None,
-                    path_limit: None,
-                },
+                VfsConfig::PerSession { size_limit: None },
             )]))),
             session_storage_root: Some(vfs_root.path().to_path_buf()),
             session_store_dir: Some(store_dir.path().to_path_buf()),

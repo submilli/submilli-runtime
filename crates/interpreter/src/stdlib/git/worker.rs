@@ -1,5 +1,11 @@
 //! Repository jobs run on the blocking pool and retain their VFS through cleanup.
 use super::{Job, operations, storage, transport};
+use std::collections::HashSet;
+
+use crate::runtime::fs::FileIdentity;
+use crate::runtime::host::range_error;
+use crate::runtime::{DiskQuota, measure_dir, measure_with_held};
+use cap_std::fs::Dir;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use wasmtime::{Result, bail};
@@ -20,6 +26,15 @@ pub(super) fn run(
         .ok_or_else(|| wasmtime::Error::msg("git: VFS is disabled"))?;
     let branch = requested_branch(op, args)?;
     authorize_operation(job, op, args, branch)?;
+    // Creating a repository writes its `.git` skeleton before publication, so the
+    // measurement it is counted against has to come first. An unmeasured VFS isn't
+    // measured here: `publish_counted` refuses it.
+    let before_create = match vfs.quota() {
+        Some(quota) if !quota.is_unmeasured() && matches!(op, "init" | "clone") => {
+            Some(measure_dir(root).map_err(storage::measure_error)?)
+        }
+        _ => None,
+    };
     let mut snapshot = open_snapshot(root, job, op, branch)?;
     snapshot.remotes()?;
     let mut changed = op == "init";
@@ -99,9 +114,83 @@ pub(super) fn run(
         _ => operations::read(&snapshot, op, args)?,
     };
     if changed {
-        snapshot.publish()?;
+        publish_counted(snapshot, root, vfs.quota().map(Arc::as_ref), before_create)?;
     }
     Ok(Output::Json(result))
+}
+
+/// Publish, then count the change it made to the files under `root` against the
+/// size limit, measured from `before_create` when the operation wrote before
+/// publishing. What publication frees depends on what it replaced, so the change
+/// is measured rather than tracked; git work is rare enough to afford the walk. A
+/// VFS that couldn't be measured is refused with a `RangeError`, as every other
+/// writer refuses it.
+fn publish_counted(
+    snapshot: storage::Snapshot,
+    root: &Dir,
+    quota: Option<&DiskQuota>,
+    before_create: Option<u64>,
+) -> Result<()> {
+    let Some(quota) = quota else {
+        return snapshot.publish_within(None).map(|_| ());
+    };
+    if quota.is_unmeasured() {
+        let refused = crate::runtime::QuotaExceeded::Unmeasured {
+            limit: quota.limit(),
+        };
+        return Err(range_error(format!("git: {refused}")));
+    }
+    // A file a handle holds stays on disk when publication replaces its name, but
+    // the measurement stops seeing it; note which ones to count again.
+    let held = quota.held_files();
+    let (before, held_before) = match before_create {
+        // Measured already, and nothing held to list: no walk needed.
+        Some(before) if held.is_empty() => (before, Vec::new()),
+        Some(before) => (
+            before,
+            measure_with_held(root, &held)
+                .map_err(storage::measure_error)?
+                .1,
+        ),
+        None => measure_with_held(root, &held).map_err(storage::measure_error)?,
+    };
+    let published = snapshot.publish_within(Some(quota));
+    // A failed publication of a new repository removes it when the snapshot drops;
+    // measure after that, so the count doesn't keep what is gone.
+    drop(snapshot);
+    match measure_with_held(root, &held) {
+        Ok((total, held_after)) => {
+            if total >= before {
+                quota.record(total - before);
+            } else {
+                quota.release(before - total);
+            }
+            count_vanished_held_files(quota, held_before, &held_after);
+        }
+        Err(_) => {
+            // Unmeasurable now: count all that was staged, a bound on the growth,
+            // and keep every held file counted, since none can be shown gone.
+            if let Ok(staged) = &published {
+                quota.record(*staged);
+            }
+        }
+    }
+    published.map(|_| ())
+}
+
+/// Count again the held files that publication took out of the VFS: the
+/// measurement no longer sees them, but they stay on disk until released.
+fn count_vanished_held_files(
+    quota: &DiskQuota,
+    held_before: Vec<(FileIdentity, u64)>,
+    held_after: &[(FileIdentity, u64)],
+) {
+    let present: HashSet<FileIdentity> = held_after.iter().map(|(file, _)| *file).collect();
+    for (file, bytes) in held_before {
+        if !present.contains(&file) {
+            quota.count_while_held(file, bytes);
+        }
+    }
 }
 
 fn requested_branch<'a>(op: &str, args: &'a [Value]) -> Result<&'a str> {

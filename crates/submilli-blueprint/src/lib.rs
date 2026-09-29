@@ -199,16 +199,10 @@ pub enum VfsConfig {
     /// A fresh disk-backed scratch directory per execute, wiped at return. The
     /// default when `vfs:` is omitted — scripts get a filesystem without the
     /// operator having to opt in.
-    Ephemeral {
-        size_limit: Option<u64>,
-        path_limit: Option<u64>,
-    },
+    Ephemeral { size_limit: Option<u64> },
     /// A disk-backed directory that persists across executes within one session
     /// and is wiped when the session ends.
-    PerSession {
-        size_limit: Option<u64>,
-        path_limit: Option<u64>,
-    },
+    PerSession { size_limit: Option<u64> },
     /// A volume the operator declared in the server config; files persist across
     /// calls, sessions, and restarts. No automatic cleanup, no caps. The
     /// blueprint names the volume — only the operator knows which host directory
@@ -220,10 +214,7 @@ const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 
 impl Default for VfsConfig {
     fn default() -> Self {
-        VfsConfig::Ephemeral {
-            size_limit: None,
-            path_limit: None,
-        }
+        VfsConfig::Ephemeral { size_limit: None }
     }
 }
 
@@ -242,21 +233,12 @@ impl VfsConfig {
         }
     }
 
-    /// Byte cap, where one applies (`ephemeral` / `per_session`).
+    /// Byte cap on the files a program keeps, where one applies (`ephemeral` /
+    /// `per_session`).
     pub fn size_limit(&self) -> Option<u64> {
         match self {
-            VfsConfig::Ephemeral { size_limit, .. } | VfsConfig::PerSession { size_limit, .. } => {
+            VfsConfig::Ephemeral { size_limit } | VfsConfig::PerSession { size_limit } => {
                 *size_limit
-            }
-            _ => None,
-        }
-    }
-
-    /// File-count cap, where one applies (`ephemeral` / `per_session`).
-    pub fn path_limit(&self) -> Option<u64> {
-        match self {
-            VfsConfig::Ephemeral { path_limit, .. } | VfsConfig::PerSession { path_limit, .. } => {
-                *path_limit
             }
             _ => None,
         }
@@ -283,10 +265,11 @@ impl ModeTag {
         }
     }
 
-    /// Whether `field` belongs to this mode. `grace_period` is the one field
-    /// that is accepted without doing anything: it was a `per_session` setting
-    /// before the connection-oriented transports were dropped, so old
-    /// blueprints keep parsing rather than failing on an unknown key.
+    /// Whether `field` belongs to this mode. `grace_period` and `path_limit` are
+    /// accepted without doing anything: `grace_period` was a `per_session`
+    /// setting before the connection-oriented transports were dropped, and
+    /// `path_limit` a file-count cap that was never enforced. Stored blueprints
+    /// carry both, so they keep parsing rather than failing on an unknown key.
     fn allows(self, field: &str) -> bool {
         match field {
             "volume" => matches!(self, ModeTag::Persistent),
@@ -315,11 +298,11 @@ struct Full {
     volume: Option<String>,
     grace_period: Option<String>,
     size_limit: Option<SizeRepr>,
-    path_limit: Option<u64>,
+    has_legacy_path_limit: bool,
 }
 
-const VFS_KEYS: &str = "`mode`, `volume`, `size_limit`, `path_limit` (`grace_period` is also \
-                        accepted under `mode: per_session`, but ignored)";
+const VFS_KEYS: &str = "`mode`, `volume`, `size_limit` (`grace_period` under `mode: \
+                        per_session` and `path_limit` are also accepted, but ignored)";
 
 /// What a `volume:` written without a `mode:` beside it is told. The block
 /// defaults to `ephemeral`, so the plain mode-conflict message would name a
@@ -406,7 +389,8 @@ impl<'de> de::Visitor<'de> for VfsVisitor {
                 }
                 "path_limit" => {
                     let seed = Guarded::new("path_limit", mode, PhantomData::<u64>);
-                    full.path_limit = Some(map.next_value_seed(seed)?);
+                    map.next_value_seed(seed)?;
+                    full.has_legacy_path_limit = true;
                 }
                 "path" => map.next_value_seed(Reject::<()>::new(RETIRED_PATH))?,
                 other => map.next_value_seed(Reject::<()>::new(format!(
@@ -587,24 +571,16 @@ impl Serialize for VfsConfig {
                 map.serialize_entry("mode", "none")?;
                 map.end()
             }
-            VfsConfig::Ephemeral {
-                size_limit,
-                path_limit,
-            } => {
-                let mut map =
-                    serializer.serialize_map(Some(1 + opt(*size_limit) + opt(*path_limit)))?;
+            VfsConfig::Ephemeral { size_limit } => {
+                let mut map = serializer.serialize_map(Some(1 + opt(*size_limit)))?;
                 map.serialize_entry("mode", "ephemeral")?;
-                serialize_limits(&mut map, *size_limit, *path_limit)?;
+                serialize_size_limit(&mut map, *size_limit)?;
                 map.end()
             }
-            VfsConfig::PerSession {
-                size_limit,
-                path_limit,
-            } => {
-                let mut map =
-                    serializer.serialize_map(Some(1 + opt(*size_limit) + opt(*path_limit)))?;
+            VfsConfig::PerSession { size_limit } => {
+                let mut map = serializer.serialize_map(Some(1 + opt(*size_limit)))?;
                 map.serialize_entry("mode", "per_session")?;
-                serialize_limits(&mut map, *size_limit, *path_limit)?;
+                serialize_size_limit(&mut map, *size_limit)?;
                 map.end()
             }
             VfsConfig::Persistent { volume } => {
@@ -617,16 +593,12 @@ impl Serialize for VfsConfig {
     }
 }
 
-fn serialize_limits<M: SerializeMap>(
+fn serialize_size_limit<M: SerializeMap>(
     map: &mut M,
     size_limit: Option<u64>,
-    path_limit: Option<u64>,
 ) -> Result<(), M::Error> {
     if let Some(n) = size_limit {
         map.serialize_entry("size_limit", &n)?;
-    }
-    if let Some(n) = path_limit {
-        map.serialize_entry("path_limit", &n)?;
     }
     Ok(())
 }
@@ -659,7 +631,7 @@ fn build_vfs(full: Full) -> Result<VfsConfig, BlueprintError> {
     for (field, present) in [
         ("grace_period", grace.is_some()),
         ("size_limit", size_limit.is_some()),
-        ("path_limit", full.path_limit.is_some()),
+        ("path_limit", full.has_legacy_path_limit),
     ] {
         if present && !mode.allows(field) {
             return Err(mode_conflict(field, mode));
@@ -668,14 +640,8 @@ fn build_vfs(full: Full) -> Result<VfsConfig, BlueprintError> {
 
     match mode {
         ModeTag::None => Ok(VfsConfig::None),
-        ModeTag::Ephemeral => Ok(VfsConfig::Ephemeral {
-            size_limit,
-            path_limit: full.path_limit,
-        }),
-        ModeTag::PerSession => Ok(VfsConfig::PerSession {
-            size_limit,
-            path_limit: full.path_limit,
-        }),
+        ModeTag::Ephemeral => Ok(VfsConfig::Ephemeral { size_limit }),
+        ModeTag::PerSession => Ok(VfsConfig::PerSession { size_limit }),
         ModeTag::Persistent => {
             let volume = full.volume.ok_or_else(|| {
                 BlueprintError::InvalidVfs(
@@ -1376,11 +1342,25 @@ permissions:
 
     #[test]
     fn per_session_full_block() {
-        let b =
-            parse("name: x\nvfs:\n  mode: per_session\n  size_limit: 100MB\n  path_limit: 1000\n")
-                .unwrap();
+        let b = parse("name: x\nvfs:\n  mode: per_session\n  size_limit: 100MB\n").unwrap();
         assert_eq!(b.vfs.size_limit(), Some(100 * 1024 * 1024));
-        assert_eq!(b.vfs.path_limit(), Some(1000));
+    }
+
+    #[test]
+    fn per_session_tolerates_legacy_path_limit() {
+        // Stored blueprints carried the never-enforced `path_limit`; it must still
+        // parse (ignored), and it isn't written back.
+        let b =
+            parse("name: x\nvfs:\n  mode: per_session\n  size_limit: 1MB\n  path_limit: 1000\n")
+                .unwrap();
+        assert_eq!(b.vfs.size_limit(), Some(1024 * 1024));
+        assert!(!to_yaml(&b).contains("path_limit"));
+        let err = parse("name: x\nvfs:\n  mode: persistent\n  volume: w\n  path_limit: 10\n")
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("'path_limit' is not valid"),
+            "got {err}"
+        );
     }
 
     #[test]
@@ -1501,7 +1481,6 @@ permissions:
     fn persistent_rejects_limits() {
         for (key, line) in [
             ("size_limit", "size_limit: 1MB"),
-            ("path_limit", "path_limit: 10"),
             ("grace_period", "grace_period: 5m"),
         ] {
             let err = parse(&format!(
@@ -1556,10 +1535,8 @@ permissions:
 
     #[test]
     fn ephemeral_allows_limits() {
-        let b = parse("name: x\nvfs:\n  mode: ephemeral\n  size_limit: 10MB\n  path_limit: 50\n")
-            .unwrap();
+        let b = parse("name: x\nvfs:\n  mode: ephemeral\n  size_limit: 10MB\n").unwrap();
         assert_eq!(b.vfs.size_limit(), Some(10 * 1024 * 1024));
-        assert_eq!(b.vfs.path_limit(), Some(50));
     }
 
     #[test]
@@ -1576,10 +1553,9 @@ permissions:
 
     #[test]
     fn round_trips_through_yaml() {
-        let original = parse(
-            "name: x\nidle_timeout: 1h\nvfs:\n  mode: per_session\n  size_limit: 100MB\n  path_limit: 1000\n",
-        )
-        .unwrap();
+        let original =
+            parse("name: x\nidle_timeout: 1h\nvfs:\n  mode: per_session\n  size_limit: 100MB\n")
+                .unwrap();
         let reparsed = parse(&to_yaml(&original)).unwrap();
         assert_eq!(original, reparsed);
         assert_eq!(reparsed.idle_timeout, Duration::from_secs(3600));
@@ -1609,8 +1585,8 @@ permissions:
             "name: x\nvfs: none\n",
             "name: x\nvfs: ephemeral\n",
             "name: x\nvfs: per_session\n",
-            "name: x\nvfs:\n  mode: ephemeral\n  size_limit: 10MB\n  path_limit: 50\n",
-            "name: x\nvfs:\n  mode: per_session\n  size_limit: 10MB\n  path_limit: 50\n",
+            "name: x\nvfs:\n  mode: ephemeral\n  size_limit: 10MB\n",
+            "name: x\nvfs:\n  mode: per_session\n  size_limit: 10MB\n",
         ] {
             let original = parse(src).unwrap();
             let reparsed = parse(&to_yaml(&original)).unwrap();
@@ -1907,7 +1883,6 @@ permissions:
             ("mode", "per_session", "mode: per_session"),
             ("volume", "persistent", "volume: w"),
             ("size_limit", "per_session", "size_limit: 1MB"),
-            ("path_limit", "per_session", "path_limit: 10"),
             ("grace_period", "per_session", "grace_period: 5m"),
         ] {
             let yaml = format!("name: x\nvfs:\n  mode: {mode}\n  {line}\n  {line}\n");

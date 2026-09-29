@@ -859,7 +859,6 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                 fieldtype_ref(vtable),
                 fieldtype_ref(string),
                 host_f64,
-                host_f64,
                 host_i64,
             ],
             Some(object),

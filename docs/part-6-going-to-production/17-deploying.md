@@ -465,8 +465,8 @@ the same volume. The same command applies changes to your values file. To back u
   startup log shows `failed=0`.
 - The secret store's key, if you use one, is stored and backed up separately
   from the volume.
-- The server's limits suit your workload. [Limits](/docs/server#limits)
-  explains each one.
+- The server's limits suit your workload, with `max_execution_time` set.
+  [Resource limits](/docs/resource-limits) explains each one.
 - Outbound access to internal services is opened only as far as a package
   needs. See [Outbound network](/docs/server#outbound-network).
 

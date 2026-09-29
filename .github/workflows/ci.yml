@@ -91,3 +91,15 @@ jobs:
       # them. `files_` is every test over those two tools, escapes included.
       - name: MCP file-tool containment
         run: cargo test -p submilli-server --test mcp files_
+
+      # The size limit keys files by device and inode, which Windows reports only
+      # for metadata read through an open handle, and counts a file whose name goes
+      # while a handle holds it until the handle closes. These walk a VFS; write,
+      # copy, and remove under a limit; and replace or remove files that readers and
+      # writers hold open.
+      - name: VFS size limit
+        run: >-
+          cargo test -p interpreter --lib --
+          runtime::vfs::tests::size_limit runtime::vfs::tests::measuring runtime::vfs::tests::a_tree
+          stdlib::fs::tests::size_limit stdlib::fs::tests::a_ stdlib::fs::tests::copying_
+          stdlib::fs::tests::rewriting_ stdlib::code::tests::edits_are_counted
