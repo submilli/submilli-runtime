@@ -81,10 +81,12 @@ matches `NaN`, `+0` differs from `-0`):
 | `assert.throws(ErrType, fn, msg)` | `assertThrows((): void => { … }, msg)` |
 | `assert.compareArray(a, e, msg)` / `compareArray` | `assertCompareArray(a, e, msg)` |
 
-`assertThrows` matches the base `Error` only — there are no error
-subclasses yet, so test262's `TypeError`/`RangeError` distinctions are
-erased by the port (note it in the case when the distinction was the
-point of the test).
+`assertThrows` catches any `Error`, so it erases test262's
+`TypeError`/`RangeError` distinction. The built-in subclasses `RangeError`,
+`TypeError`, and `SyntaxError` do exist (spec.md §1.8), but a class isn't a
+value and can't be passed to the shim. When the distinction is the point of
+the test, write the `try` with a typed `catch (e: RangeError)` clause in the
+case itself. Otherwise, note in the case that the distinction was erased.
 
 Caveat: `Object.is` on objects follows the language's structural `===`,
 not JS reference identity — SameValue assertions over *object identity*
