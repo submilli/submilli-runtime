@@ -1,0 +1,1 @@
+line 66 missed: bug SUB-1152 the rejected `t = u` on line 65 gave `t` the type `U`

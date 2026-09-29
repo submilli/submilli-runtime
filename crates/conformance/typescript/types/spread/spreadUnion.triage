@@ -1,0 +1,1 @@
+line 4, 7, 10 missed: artifact tsc reports a duplicate declaration at each one; we report it at the later one, on the next line

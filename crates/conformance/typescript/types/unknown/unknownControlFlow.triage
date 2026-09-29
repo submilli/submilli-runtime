@@ -1,0 +1,1 @@
+line 294 missed: artifact we reject `keyof T` in `ff1`'s declaration (line 278), so its calls aren't checked against it
