@@ -5,6 +5,7 @@
 //! so the typechecker can rephrase index errors as destructure-specific diagnostics.
 
 use crate::compiler_error::{CompilerFailure, CompilerStage};
+use crate::tree_height;
 
 use crate::{
     ArrowBody, Ast, Binding, BindingKind, Expr, ExprId, ExprKind, Ident, ParamDecl, PatternOrigin,
@@ -12,6 +13,9 @@ use crate::{
 };
 
 pub fn lower(mut ast: Ast) -> Result<Ast, CompilerFailure> {
+    // Callers may supply an AST that did not come from `parse_checked`. Pattern
+    // lowering reports its failures in the inference stage it feeds.
+    tree_height::check_syntax(&ast).map_err(|failure| failure.with_stage(CompilerStage::Infer))?;
     let mut ctx = LowerCtx { next_tmp: 0 };
     ctx.lower_arrows(&mut ast)?;
     ctx.lower_function_params(&mut ast)?;

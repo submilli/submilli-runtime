@@ -1,9 +1,42 @@
-//! Representation limits shared by signature checking and code generation.
+//! Compiler limits, and the native stack embedders provide for compilation.
+
+/// Native stack a thread needs to run a [`crate::compile`] entry point or a
+/// public phase API on any program within the structural limits below and in
+/// [`crate::tree_height`]. The interpreter creates no threads: embedders run
+/// compilation on a thread of at least this size. Only touched pages are
+/// committed. The deepest programs at the limits measured about 63 MiB in
+/// unoptimized builds and 2 MiB in optimized ones; each size keeps at least
+/// twice that.
+pub const COMPILER_STACK_BYTES: usize = if cfg!(debug_assertions) {
+    128 * 1024 * 1024
+} else {
+    16 * 1024 * 1024
+};
 
 /// Number of declared argument slots in the closure ABI. Defaults keep their
 /// slots and a packed rest array occupies one slot. The environment/receiver
 /// and captured generic descriptors are carried separately.
 pub const MAX_CLOSURE_ARITY: usize = u8::MAX as usize;
+
+/// Nested type annotation and alias-body resolutions. Each alias reference
+/// costs a level, and so does each type constructor (object, array, tuple,
+/// union, function, generic type or `readonly`) wrapping the next reference in an alias
+/// body: over a primitive base, plain renames chain 254 aliases and
+/// `{ v: Previous }` bodies 127. Resolved alias bodies are inlined, so this also
+/// bounds the depth of alias-expanded types.
+pub const MAX_TYPE_RESOLUTION_DEPTH: u32 = 256;
+
+/// Optional spreads that may override one field of an object literal, each
+/// over the value an earlier member supplied. Each link is a
+/// boxed fallback walked recursively; kept well below the typed-tree height
+/// limit so this limit, not the generic one, names the cause.
+pub const MAX_SPREAD_FALLBACK_CHAIN: u32 = 512;
+
+/// Classes in one inheritance chain, including the class itself and library
+/// ancestors such as `Error`. Each class struct subtypes its parent's, the root
+/// class subtypes the intrinsic object struct, and WasmGC validation rejects
+/// subtype depths above 63.
+pub const MAX_CLASS_CHAIN_LEN: usize = 62;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UnsupportedClosureArity {

@@ -48,7 +48,7 @@ pub(crate) fn emit_stringify_value(emitter: &mut FunctionEmitter, ctx: &CodegenC
         Type::Null => {
             // The value is a null ref; discard it and emit the literal `null`.
             emitter.instruction(Instruction::Drop);
-            super::emit_inline_string_literal(emitter, ctx, "null");
+            ctx.latch(super::emit_inline_string_literal(emitter, ctx, "null"));
         }
         Type::Boolean | Type::BooleanLiteral(_) => emit_to_json_direct(emitter, ctx, "Boolean"),
         Type::Number | Type::NumberLiteral(_) => {
@@ -84,7 +84,7 @@ fn emit_stringify_nullable(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
         nullable: false,
         heap_type: HeapType::Concrete(intrinsics.string),
     })));
-    super::emit_inline_string_literal(emitter, ctx, "null");
+    ctx.latch(super::emit_inline_string_literal(emitter, ctx, "null"));
     emitter.emit_else();
     emitter.instruction(Instruction::LocalGet(obj_tmp));
     emitter.instruction(Instruction::RefAsNonNull);
@@ -402,7 +402,7 @@ fn emit_nullable_primitive_to_string(emitter: &mut FunctionEmitter, ctx: &Codege
         nullable: false,
         heap_type: HeapType::Concrete(intrinsics.string),
     })));
-    super::emit_inline_string_literal(emitter, ctx, "null");
+    ctx.latch(super::emit_inline_string_literal(emitter, ctx, "null"));
     emitter.emit_else();
     emitter.instruction(Instruction::LocalGet(obj_tmp));
     emitter.instruction(Instruction::RefAsNonNull);

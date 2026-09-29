@@ -28,6 +28,7 @@ mod source_validation;
 pub mod span;
 pub mod stdlib;
 pub mod token;
+pub mod tree_height;
 pub mod type_info;
 pub mod typechecker;
 pub mod typed_ast;

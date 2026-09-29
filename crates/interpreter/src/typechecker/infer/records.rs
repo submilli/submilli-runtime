@@ -92,9 +92,9 @@ impl Inferer<'_> {
         fields: &BTreeMap<String, ObjectField>,
         index: Option<&IndexSignature>,
         span: Span,
-    ) {
+    ) -> Result<(), CompilerFailure> {
         let Some(index) = index else {
-            return;
+            return Ok(());
         };
         // Signature parameters must satisfy the contract for every instantiation.
         // Bare TypeVars are inference wildcards, so compare opaque copies only.
@@ -107,10 +107,10 @@ impl Inferer<'_> {
         let bindings = names
             .into_iter()
             .map(|name| {
-                let opaque = self.fresh_generic_param(&name);
-                (name, opaque)
+                let opaque = self.fresh_generic_param(&name)?;
+                Ok((name, opaque))
             })
-            .collect();
+            .collect::<Result<BTreeMap<_, _>, CompilerFailure>>()?;
         let check = PendingIndexCheck {
             fields: fields
                 .iter()
@@ -132,6 +132,7 @@ impl Inferer<'_> {
         } else {
             self.validate_index_fields(check);
         }
+        Ok(())
     }
 
     pub(super) fn check_pending_indexes(&mut self) {
@@ -805,8 +806,8 @@ impl Inferer<'_> {
         self.push_signature_generics(generics.iter().map(|g| g.name.clone()).collect());
         let opaque = generics
             .iter()
-            .map(|g| (g.name.clone(), self.fresh_generic_param(&g.name)))
-            .collect();
+            .map(|g| Ok((g.name.clone(), self.fresh_generic_param(&g.name)?)))
+            .collect::<Result<_, CompilerFailure>>()?;
         let mut inherited = BTreeMap::new();
         for annotation in bases {
             let Some(base) = self.interface_base_contract(annotation)? else {
@@ -814,23 +815,30 @@ impl Inferer<'_> {
             };
             for (member, field) in interface_member_contracts(&base.properties, &base.methods) {
                 if declared.contains(&member) {
-                    if fields.get(&member).is_some_and(|own| {
-                        own.field.optional && !field.field.optional
-                            || !self.interface_member_assignable(own, &field, &opaque)
-                    }) {
+                    let incompatible = match fields.get(&member) {
+                        Some(own) => {
+                            own.field.optional && !field.field.optional
+                                || !self.interface_member_assignable(own, &field, &opaque)?
+                        }
+                        None => false,
+                    };
+                    if incompatible {
                         self.error(
                             name.span,
                             format!("incompatible inherited member `{member}`"),
                         );
                     }
-                } else if inherited
-                    .get(&member)
-                    .is_some_and(|previous| !self.same_interface_member(previous, &field, &opaque))
-                {
-                    self.error(
-                        annotation.span,
-                        format!("incompatible inherited member `{member}`"),
-                    );
+                } else {
+                    let conflicts = match inherited.get(&member) {
+                        Some(previous) => !self.same_interface_member(previous, &field, &opaque)?,
+                        None => false,
+                    };
+                    if conflicts {
+                        self.error(
+                            annotation.span,
+                            format!("incompatible inherited member `{member}`"),
+                        );
+                    }
                 }
                 inherited.entry(member).or_insert(field);
             }
@@ -845,14 +853,14 @@ impl Inferer<'_> {
         }
         fields.remove("@call");
         if let Some(index) = &index {
-            self.check_generic_method_indexes(&fields, index, &opaque, name.span);
+            self.check_generic_method_indexes(&fields, index, &opaque, name.span)?;
         }
         let fields = fields
             .into_iter()
             .filter(|(_, member)| member.generic_count == 0)
             .map(|(name, member)| (name, member.field))
             .collect();
-        self.check_index_fields(&fields, index.as_ref(), name.span);
+        self.check_index_fields(&fields, index.as_ref(), name.span)?;
         self.pop_signature_generics();
 
         Ok(())
@@ -864,18 +872,19 @@ impl Inferer<'_> {
         index: &IndexSignature,
         opaque: &BTreeMap<String, Type>,
         span: Span,
-    ) {
+    ) -> Result<(), CompilerFailure> {
         let target = InterfaceMemberContract {
             field: ObjectField::required((*index.value).clone()),
             generic_count: 0,
         };
         for (name, member) in members {
             if member.generic_count > 0
-                && !self.interface_member_assignable(member, &target, opaque)
+                && !self.interface_member_assignable(member, &target, opaque)?
             {
                 self.error(span, format!("property `{name}` of type `{}` does not satisfy string index value type `{}`", member.field.ty, index.value));
             }
         }
+        Ok(())
     }
 
     fn same_interface_member(
@@ -883,12 +892,12 @@ impl Inferer<'_> {
         left: &InterfaceMemberContract,
         right: &InterfaceMemberContract,
         opaque: &BTreeMap<String, Type>,
-    ) -> bool {
-        left.field.optional == right.field.optional
+    ) -> Result<bool, CompilerFailure> {
+        Ok(left.field.optional == right.field.optional
             && left.field.readonly == right.field.readonly
             && left.generic_count == right.generic_count
-            && self.interface_member_assignable(left, right, opaque)
-            && self.interface_member_assignable(right, left, opaque)
+            && self.interface_member_assignable(left, right, opaque)?
+            && self.interface_member_assignable(right, left, opaque)?)
     }
 
     fn interface_member_assignable(
@@ -896,18 +905,18 @@ impl Inferer<'_> {
         actual: &InterfaceMemberContract,
         expected: &InterfaceMemberContract,
         opaque: &BTreeMap<String, Type>,
-    ) -> bool {
+    ) -> Result<bool, CompilerFailure> {
         let actual_ty = substitute_typevars(&actual.field.ty, opaque);
         let mut target_bindings = opaque.clone();
         for i in 0..expected.generic_count {
             let name = format!("$method{i}");
-            target_bindings.insert(name.clone(), self.fresh_generic_param(&name));
+            target_bindings.insert(name.clone(), self.fresh_generic_param(&name)?);
         }
         // A target generic method promises every instantiation. A source generic
         // method may instantiate to that promise, or to a concrete target signature.
         let expected_ty = substitute_typevars(&expected.field.ty, &target_bindings);
         if actual.generic_count == 0 {
-            return assignable(&actual_ty, &expected_ty, self.resolver());
+            return Ok(assignable(&actual_ty, &expected_ty, self.resolver()));
         }
         let mut inferred =
             crate::typechecker::type_param_substitution::TypeParamSubstitution::new();
@@ -918,7 +927,11 @@ impl Inferer<'_> {
                 inferred.insert(name, Type::Unknown);
             }
         }
-        assignable(&inferred.apply(&actual_ty), &expected_ty, self.resolver())
+        Ok(assignable(
+            &inferred.apply(&actual_ty),
+            &expected_ty,
+            self.resolver(),
+        ))
     }
 
     fn interface_type_assignable(

@@ -9,7 +9,9 @@ use wasm_encoder::{
 
 use crate::codegen::intrinsics::IntrinsicTypeIndices;
 use crate::codegen::symbol_table::{SymbolTable, may_hold_null};
-use crate::{Shape, Type, TypeInfoTable};
+use crate::codegen::{GuardedBodies, internal_failure, next_index, wasm_u32};
+use crate::compiler_error::CompilerFailure;
+use crate::{ObjectField, Shape, Type, TypeInfoTable};
 
 pub fn collect_object_shapes<'a>(
     dependency_shapes: impl IntoIterator<Item = &'a Shape>,
@@ -99,24 +101,40 @@ pub struct UserSubtype {
     pub to_json_func: u32,
     pub equals_func: u32,
     pub hash_func: u32,
+    pub guarded_bodies: GuardedBodies,
     pub vtable_global_idx: u32,
 }
 
-/// Pre-allocate method indices so vtable globals can reference them via `ref.func`.
-pub fn allocate_methods(ty: &Type, next_func_idx: &mut u32) -> UserSubtype {
-    let to_string_func = take(next_func_idx);
-    let to_json_func = take(next_func_idx);
-    let equals_func = take(next_func_idx);
-    let hash_func = take(next_func_idx);
-    *next_func_idx += 3; // JSON, equals, and hash implementation bodies.
-    UserSubtype {
-        ty: ty.clone(),
-        to_string_func,
-        to_json_func,
-        equals_func,
-        hash_func,
-        vtable_global_idx: 0, // filled in by emit_vtable_globals
+impl UserSubtype {
+    fn fields(&self) -> Result<&std::collections::BTreeMap<String, ObjectField>, CompilerFailure> {
+        match &self.ty {
+            Type::Object { fields, .. } => Ok(fields),
+            _ => Err(internal_failure(
+                "a structural subtype was allocated for a non-object type",
+            )),
+        }
     }
+}
+
+/// Pre-allocate method indices so vtable globals can reference them via `ref.func`.
+pub fn allocate_methods(
+    ty: &Type,
+    next_func_idx: &mut u32,
+) -> Result<UserSubtype, CompilerFailure> {
+    Ok(UserSubtype {
+        ty: ty.clone(),
+        to_string_func: next_index(next_func_idx)?,
+        to_json_func: next_index(next_func_idx)?,
+        equals_func: next_index(next_func_idx)?,
+        hash_func: next_index(next_func_idx)?,
+        // Field order is allocation order, which the body emission follows.
+        guarded_bodies: GuardedBodies {
+            to_json: next_index(next_func_idx)?,
+            equals: next_index(next_func_idx)?,
+            hash: next_index(next_func_idx)?,
+        },
+        vtable_global_idx: 0, // filled in by emit_vtable_globals
+    })
 }
 
 pub fn needs_host_object_to_json_adapter(types: &[Type]) -> bool {
@@ -149,7 +167,7 @@ pub fn emit_vtable_globals(
     symbols: &mut SymbolTable,
     next_global_idx: &mut u32,
     intrinsics: IntrinsicTypeIndices,
-) {
+) -> Result<(), CompilerFailure> {
     for subtype in subtypes.iter_mut() {
         let init = ConstExpr::extended([
             Instruction::RefFunc(subtype.to_string_func),
@@ -166,10 +184,11 @@ pub fn emit_vtable_globals(
             },
             &init,
         );
-        let idx = take(next_global_idx);
+        let idx = next_index(next_global_idx)?;
         subtype.vtable_global_idx = idx;
         symbols.record_vtable_global(subtype.ty.clone(), idx);
     }
+    Ok(())
 }
 
 pub fn emit_method_bodies(
@@ -181,16 +200,16 @@ pub fn emit_method_bodies(
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let intrinsics = symbols
         .intrinsic_type_indices()
-        .expect("intrinsics declared by codegen entry");
+        .ok_or_else(|| internal_failure("intrinsic types are not declared"))?;
     let string_vtable_global_idx = symbols
         .prelude_global_idx("string_vtable")
-        .expect("string_vtable imported from prelude");
+        .ok_or_else(|| internal_failure("string_vtable is not imported from the prelude"))?;
     let string_concat_func_idx = symbols
         .prelude_func_idx("string_concat")
-        .expect("string_concat imported from prelude");
+        .ok_or_else(|| internal_failure("string_concat is not imported from the prelude"))?;
     let string_eq_func_idx = symbols
         .prelude_func_idx("string_eq")
-        .expect("string_eq imported from prelude");
+        .ok_or_else(|| internal_failure("string_eq is not imported from the prelude"))?;
 
     for subtype in subtypes {
         code.function(&emit_subtype_to_string_body(
@@ -200,14 +219,15 @@ pub fn emit_method_bodies(
             string_vtable_global_idx,
         )?);
 
+        let bodies = subtype.guarded_bodies;
         for (body, params, result) in [
-            (subtype.hash_func + 1, 1, ref_to(intrinsics.string)),
-            (subtype.hash_func + 2, 2, ValType::I32),
-            (subtype.hash_func + 3, 1, ValType::I32),
+            (bodies.to_json, 1, ref_to(intrinsics.string)),
+            (bodies.equals, 2, ValType::I32),
+            (bodies.hash, 1, ValType::I32),
         ] {
             code.function(&super::vtable_walk::guarded_body(
                 body, params, result, symbols,
-            ));
+            )?);
         }
         code.function(&emit_subtype_to_json_body(
             subtype,
@@ -223,9 +243,9 @@ pub fn emit_method_bodies(
             subtype,
             intrinsics,
             string_eq_func_idx,
-        ));
+        )?);
 
-        code.function(&emit_subtype_hash_body(subtype, intrinsics));
+        code.function(&emit_subtype_hash_body(subtype, intrinsics)?);
     }
     Ok(())
 }
@@ -235,13 +255,8 @@ fn emit_subtype_to_string_body(
     intrinsics: IntrinsicTypeIndices,
     symbols: &SymbolTable,
     string_vtable_global_idx: u32,
-) -> Result<Function, crate::compiler_error::CompilerFailure> {
-    let Type::Object { fields, .. } = &subtype.ty else {
-        unreachable!(
-            "emit_subtype_to_string_body called on non-Object subtype: {:?}",
-            subtype.ty,
-        );
-    };
+) -> Result<Function, CompilerFailure> {
+    let fields = subtype.fields()?;
 
     if !fields.contains_key("toString") {
         let mut f = Function::new(std::iter::empty());
@@ -250,7 +265,7 @@ fn emit_subtype_to_string_body(
             intrinsics,
             string_vtable_global_idx,
             "[object Object]",
-        );
+        )?;
         f.instruction(&Instruction::End);
         return Ok(f);
     }
@@ -294,14 +309,14 @@ fn emit_subtype_to_string_body(
     f.instruction(&Instruction::LocalSet(self_t));
 
     // The field slot is `(ref null $Object)`; ref.as_non_null before the closure cast.
-    let to_string_slot = field_index(&subtype.ty, "toString")
-        .expect("toString field slot exists when shape carries the field");
+    let to_string_slot = field_index(&subtype.ty, "toString")?
+        .ok_or_else(|| internal_failure("an object shape lost its toString field slot"))?;
     f.instruction(&Instruction::LocalGet(self_t));
     f.instruction(&Instruction::StructGet {
         struct_type_index: intrinsics.object_shape,
         field_index: 2,
     });
-    f.instruction(&Instruction::I32Const(to_string_slot as i32));
+    f.instruction(&Instruction::I32Const(to_string_slot.cast_signed()));
     f.instruction(&Instruction::ArrayGet(intrinsics.object_fields));
     f.instruction(&Instruction::RefAsNonNull);
     f.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(
@@ -338,13 +353,8 @@ fn emit_subtype_to_json_body(
     pkg_string_global_idx: Option<u32>,
     string_concat_func_idx: u32,
     string_vtable_global_idx: u32,
-) -> Result<Function, crate::compiler_error::CompilerFailure> {
-    let Type::Object { fields, .. } = &subtype.ty else {
-        unreachable!(
-            "emit_subtype_to_json_body called on non-Object subtype: {:?}",
-            subtype.ty,
-        );
-    };
+) -> Result<Function, CompilerFailure> {
+    let fields = subtype.fields()?;
 
     if fields.contains_key("toJson") {
         return emit_subtype_to_json_override_body(subtype, intrinsics, symbols);
@@ -354,22 +364,22 @@ fn emit_subtype_to_json_body(
         .object_type_id(&subtype.ty)
         .filter(|_| type_info.supports_host_json_object(&subtype.ty));
     let Some(type_id) = type_id else {
-        return Ok(emit_subtype_to_json_vtable_body(
+        return emit_subtype_to_json_vtable_body(
             subtype,
             intrinsics,
             string_concat_func_idx,
             string_vtable_global_idx,
             symbols,
-        ));
+        );
     };
-    let pkg_string_global_idx =
-        pkg_string_global_idx.expect("host object toJson requires package string global");
+    let pkg_string_global_idx = pkg_string_global_idx
+        .ok_or_else(|| internal_failure("host object serialization needs the package string"))?;
     let stringify_func_idx = symbols
         .func_idx(&crate::mangle::host(
             crate::runtime::JSON_MODULE_NAME,
             "stringifyTypedObject",
         ))
-        .expect("submilli:json.stringifyTypedObject imported during codegen");
+        .ok_or_else(|| internal_failure("submilli:json.stringifyTypedObject is not imported"))?;
 
     let mut f = Function::new(std::iter::empty());
 
@@ -381,7 +391,7 @@ fn emit_subtype_to_json_body(
         struct_type_index: intrinsics.string,
         field_index: 1,
     });
-    f.instruction(&Instruction::I32Const(type_id.as_u32() as i32));
+    f.instruction(&Instruction::I32Const(type_id.as_u32().cast_signed()));
     f.instruction(&Instruction::LocalGet(0));
     f.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(
         intrinsics.object_shape,
@@ -398,7 +408,10 @@ pub(super) fn emit_grown_object_to_json(
     intrinsics: IntrinsicTypeIndices,
     symbols: &SymbolTable,
     original_len: u32,
-) {
+) -> Result<(), CompilerFailure> {
+    let dynamic_serializer = symbols
+        .prelude_func_idx("ObjectConstructor##toJson")
+        .ok_or_else(|| internal_failure("the dynamic object serializer is not imported"))?;
     function.instruction(&Instruction::LocalGet(0));
     function.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(
         intrinsics.object_shape,
@@ -408,17 +421,14 @@ pub(super) fn emit_grown_object_to_json(
         field_index: 1,
     });
     function.instruction(&Instruction::ArrayLen);
-    function.instruction(&Instruction::I32Const(original_len as i32));
+    function.instruction(&Instruction::I32Const(original_len.cast_signed()));
     function.instruction(&Instruction::I32GtU);
     function.instruction(&Instruction::If(BlockType::Empty));
     function.instruction(&Instruction::LocalGet(0));
-    function.instruction(&Instruction::Call(
-        symbols
-            .prelude_func_idx("ObjectConstructor##toJson")
-            .expect("dynamic object serializer imported"),
-    ));
+    function.instruction(&Instruction::Call(dynamic_serializer));
     function.instruction(&Instruction::Return);
     function.instruction(&Instruction::End);
+    Ok(())
 }
 
 fn emit_subtype_to_json_vtable_body(
@@ -427,13 +437,8 @@ fn emit_subtype_to_json_vtable_body(
     string_concat_func_idx: u32,
     string_vtable_global_idx: u32,
     symbols: &SymbolTable,
-) -> Function {
-    let Type::Object { fields, .. } = &subtype.ty else {
-        unreachable!(
-            "emit_subtype_to_json_vtable_body called on non-Object subtype: {:?}",
-            subtype.ty,
-        );
-    };
+) -> Result<Function, CompilerFailure> {
+    let fields = subtype.fields()?;
 
     let object_shape_ref = ref_to(intrinsics.object_shape);
     let string_ref = ref_to(intrinsics.string);
@@ -448,7 +453,7 @@ fn emit_subtype_to_json_vtable_body(
         (1, ValType::I32), // Whether any serializable field has been emitted.
     ];
     let mut f = Function::new(locals);
-    emit_grown_object_to_json(&mut f, intrinsics, symbols, fields.len() as u32);
+    emit_grown_object_to_json(&mut f, intrinsics, symbols, wasm_u32(fields.len())?)?;
     let self_t = 1u32;
     let acc = 2u32;
     let elem = 3u32;
@@ -468,9 +473,9 @@ fn emit_subtype_to_json_vtable_body(
             intrinsics.string,
             intrinsics.raw_string,
             string_vtable_global_idx,
-        );
+        )?;
         f.instruction(&Instruction::End);
-        return f;
+        return Ok(f);
     }
 
     push_inline_string(
@@ -479,13 +484,14 @@ fn emit_subtype_to_json_vtable_body(
         intrinsics.string,
         intrinsics.raw_string,
         string_vtable_global_idx,
-    );
+    )?;
     f.instruction(&Instruction::LocalSet(acc));
 
     f.instruction(&Instruction::I32Const(1));
     f.instruction(&Instruction::LocalSet(first_local));
 
     for (idx, (field_name, field)) in fields.iter().enumerate() {
+        let idx = wasm_u32(idx)?;
         let key_no_comma = format!("\"{}\":", json_escape_key(field_name));
         let key_with_comma = format!(",\"{}\":", json_escape_key(field_name));
         // A present optional field may hold a written `null` its declared type lacks.
@@ -496,7 +502,7 @@ fn emit_subtype_to_json_vtable_body(
             struct_type_index: intrinsics.object_shape,
             field_index: 2,
         });
-        f.instruction(&Instruction::I32Const(idx as i32));
+        f.instruction(&Instruction::I32Const(idx.cast_signed()));
         f.instruction(&Instruction::ArrayGet(intrinsics.object_fields));
         f.instruction(&Instruction::LocalSet(elem));
 
@@ -511,9 +517,9 @@ fn emit_subtype_to_json_vtable_body(
             super::field_names::emit_optional_presence(
                 &mut f,
                 intrinsics,
-                symbols.optional_field_name_type(),
+                symbols.optional_field_name_type()?,
                 self_t,
-                idx as u32,
+                idx,
                 elem,
             );
             f.instruction(&Instruction::If(BlockType::Empty));
@@ -528,7 +534,7 @@ fn emit_subtype_to_json_vtable_body(
             intrinsics.string,
             intrinsics.raw_string,
             string_vtable_global_idx,
-        );
+        )?;
         f.instruction(&Instruction::Else);
         push_inline_string(
             &mut f,
@@ -536,7 +542,7 @@ fn emit_subtype_to_json_vtable_body(
             intrinsics.string,
             intrinsics.raw_string,
             string_vtable_global_idx,
-        );
+        )?;
         f.instruction(&Instruction::End);
         f.instruction(&Instruction::Call(string_concat_func_idx));
         f.instruction(&Instruction::LocalSet(acc));
@@ -552,7 +558,7 @@ fn emit_subtype_to_json_vtable_body(
                 intrinsics.string,
                 intrinsics.raw_string,
                 string_vtable_global_idx,
-            );
+            )?;
             f.instruction(&Instruction::Else);
             emit_field_value_to_json(&mut f, elem, tj_fn, intrinsics);
             f.instruction(&Instruction::End);
@@ -578,17 +584,17 @@ fn emit_subtype_to_json_vtable_body(
         intrinsics.string,
         intrinsics.raw_string,
         string_vtable_global_idx,
-    );
+    )?;
     f.instruction(&Instruction::Call(string_concat_func_idx));
     f.instruction(&Instruction::End);
-    f
+    Ok(f)
 }
 
 fn emit_subtype_to_json_override_body(
     subtype: &UserSubtype,
     intrinsics: IntrinsicTypeIndices,
     symbols: &SymbolTable,
-) -> Result<Function, crate::compiler_error::CompilerFailure> {
+) -> Result<Function, CompilerFailure> {
     let to_json_sig = crate::codegen::closures::ClosureSig {
         arity: 0,
         is_void: false,
@@ -625,14 +631,14 @@ fn emit_subtype_to_json_override_body(
     f.instruction(&Instruction::LocalSet(self_t));
 
     // The typechecker guarantees `toJson` is non-optional `() => string`.
-    let to_json_slot = field_index(&subtype.ty, "toJson")
-        .expect("toJson field slot exists when shape carries the field");
+    let to_json_slot = field_index(&subtype.ty, "toJson")?
+        .ok_or_else(|| internal_failure("an object shape lost its toJson field slot"))?;
     f.instruction(&Instruction::LocalGet(self_t));
     f.instruction(&Instruction::StructGet {
         struct_type_index: intrinsics.object_shape,
         field_index: 2,
     });
-    f.instruction(&Instruction::I32Const(to_json_slot as i32));
+    f.instruction(&Instruction::I32Const(to_json_slot.cast_signed()));
     f.instruction(&Instruction::ArrayGet(intrinsics.object_fields));
     f.instruction(&Instruction::RefAsNonNull);
     f.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(
@@ -662,13 +668,8 @@ fn emit_subtype_equals_body(
     subtype: &UserSubtype,
     intrinsics: IntrinsicTypeIndices,
     string_eq_func_idx: u32,
-) -> Function {
-    let Type::Object { fields, .. } = &subtype.ty else {
-        unreachable!(
-            "emit_subtype_equals_body called on non-Object subtype: {:?}",
-            subtype.ty
-        );
-    };
+) -> Result<Function, CompilerFailure> {
+    let fields = subtype.fields()?;
     // Peel before the Union check: an aliased union field must trigger null-aware locals,
     // because emit_field_compare also peels — mismatched locals cause Wasm validation failure.
     let any_dispatch = fields.values().any(|f| {
@@ -749,14 +750,14 @@ fn emit_subtype_equals_body(
 
     emit_shape_guard(
         &mut f,
-        fields.len() as u32,
+        wasm_u32(fields.len())?,
         intrinsics,
         string_eq_func_idx,
         (a_t, b_t),
     );
 
     for (slot, field) in fields.values().enumerate() {
-        let field_index = slot as u32;
+        let field_index = wasm_u32(slot)?;
 
         emit_field_compare(
             &mut f,
@@ -766,7 +767,7 @@ fn emit_subtype_equals_body(
             field.optional,
             intrinsics,
             (a_t, b_t, field_lhs, eq_fn, field_lhs_null, field_rhs_null),
-        );
+        )?;
 
         f.instruction(&Instruction::I32Eqz);
         f.instruction(&Instruction::If(BlockType::Empty));
@@ -777,7 +778,7 @@ fn emit_subtype_equals_body(
 
     f.instruction(&Instruction::I32Const(1));
     f.instruction(&Instruction::End);
-    f
+    Ok(f)
 }
 
 fn emit_field_compare(
@@ -788,7 +789,7 @@ fn emit_field_compare(
     field_optional: bool,
     intrinsics: IntrinsicTypeIndices,
     locals: (u32, u32, u32, u32, u32, u32),
-) {
+) -> Result<(), CompilerFailure> {
     let (a_t, b_t, field_lhs, eq_fn, field_lhs_null, field_rhs_null) = locals;
     // Peel so aliased unions (`type Maybe = T | null`) route through null-aware dispatch, not optional.
     if field_optional && !matches!(field_ty.peel(), Type::Union(_)) {
@@ -799,7 +800,7 @@ fn emit_field_compare(
             intrinsics,
             (field_lhs, eq_fn, field_lhs_null, field_rhs_null, a_t, b_t),
         );
-        return;
+        return Ok(());
     }
     // The `self` side is provably this shape (dispatched off its own vtable), so
     // its non-optional slots honor the typechecker's non-null invariant. `other`
@@ -812,7 +813,7 @@ fn emit_field_compare(
             struct_type_index: object_shape_idx,
             field_index: 2,
         });
-        f.instruction(&Instruction::I32Const(field_index as i32));
+        f.instruction(&Instruction::I32Const(field_index.cast_signed()));
         f.instruction(&Instruction::ArrayGet(intrinsics.object_fields));
     };
     let load_slot_as_object = |f: &mut Function, side: u32| {
@@ -901,9 +902,7 @@ fn emit_field_compare(
             f.instruction(&Instruction::RefIsNull);
         }
         Type::Void | Type::Error | Type::Never => {
-            unreachable!(
-                "field of type {field_ty:?} should not appear in a typechecked Object",
-            );
+            return Err(unrepresentable_field(field_ty));
         }
         Type::Union(_) => {
             // null-aware union equality: both-null → equal; one-null → unequal; both non-null → vtable.equals.
@@ -912,7 +911,7 @@ fn emit_field_compare(
                 struct_type_index: object_shape_idx,
                 field_index: 2,
             });
-            f.instruction(&Instruction::I32Const(field_index as i32));
+            f.instruction(&Instruction::I32Const(field_index.cast_signed()));
             f.instruction(&Instruction::ArrayGet(intrinsics.object_fields));
             f.instruction(&Instruction::LocalSet(field_lhs_null));
 
@@ -921,7 +920,7 @@ fn emit_field_compare(
                 struct_type_index: object_shape_idx,
                 field_index: 2,
             });
-            f.instruction(&Instruction::I32Const(field_index as i32));
+            f.instruction(&Instruction::I32Const(field_index.cast_signed()));
             f.instruction(&Instruction::ArrayGet(intrinsics.object_fields));
             f.instruction(&Instruction::LocalSet(field_rhs_null));
 
@@ -956,18 +955,19 @@ fn emit_field_compare(
             f.instruction(&Instruction::End);
             f.instruction(&Instruction::End);
         }
-        Type::Alias { .. } | Type::Refined { .. } | Type::Readonly(_) => unreachable!("peel guarantees no alias here (SUB-242)"),
+        Type::Alias { .. } | Type::Refined { .. } | Type::Readonly(_) => {
+            return Err(unrepresentable_field(field_ty));
+        }
     }
+    Ok(())
 }
 
 /// FNV-1a-32 field-by-field hash. Must use same field order and dispatch as `equals`.
-fn emit_subtype_hash_body(subtype: &UserSubtype, intrinsics: IntrinsicTypeIndices) -> Function {
-    let Type::Object { fields, .. } = &subtype.ty else {
-        unreachable!(
-            "emit_subtype_hash_body called on non-Object subtype: {:?}",
-            subtype.ty,
-        );
-    };
+fn emit_subtype_hash_body(
+    subtype: &UserSubtype,
+    intrinsics: IntrinsicTypeIndices,
+) -> Result<Function, CompilerFailure> {
+    let fields = subtype.fields()?;
 
     // Peel before Union check — aliased unions must trigger null-aware dispatch prelude.
     let any_dispatch = fields.values().any(|f| {
@@ -1027,11 +1027,11 @@ fn emit_subtype_hash_body(subtype: &UserSubtype, intrinsics: IntrinsicTypeIndice
     f.instruction(&Instruction::LocalSet(self_t));
 
     // hash = FNV-1a offset basis
-    f.instruction(&Instruction::I32Const(0x811c9dc5u32 as i32));
+    f.instruction(&Instruction::I32Const(0x811c9dc5u32.cast_signed()));
     f.instruction(&Instruction::LocalSet(hash));
 
     for (slot, field) in fields.values().enumerate() {
-        let field_index = slot as u32;
+        let field_index = wasm_u32(slot)?;
         emit_field_hash(
             &mut f,
             intrinsics.object_shape,
@@ -1040,7 +1040,7 @@ fn emit_subtype_hash_body(subtype: &UserSubtype, intrinsics: IntrinsicTypeIndice
             field.optional,
             intrinsics,
             (self_t, field_obj, hash_fn, f_null, f_bits),
-        );
+        )?;
         // hash = (hash XOR field_hash) * 0x01000193
         f.instruction(&Instruction::LocalGet(hash));
         f.instruction(&Instruction::I32Xor);
@@ -1051,7 +1051,7 @@ fn emit_subtype_hash_body(subtype: &UserSubtype, intrinsics: IntrinsicTypeIndice
 
     f.instruction(&Instruction::LocalGet(hash));
     f.instruction(&Instruction::End);
-    f
+    Ok(f)
 }
 
 fn emit_field_hash(
@@ -1062,7 +1062,7 @@ fn emit_field_hash(
     field_optional: bool,
     intrinsics: IntrinsicTypeIndices,
     locals: (u32, u32, u32, u32, u32),
-) {
+) -> Result<(), CompilerFailure> {
     let (self_t, field_obj, hash_fn, f_null, f_bits) = locals;
 
     let field_ty = field_ty.peel();
@@ -1075,7 +1075,7 @@ fn emit_field_hash(
             intrinsics,
             (self_t, field_obj, hash_fn, f_null),
         );
-        return;
+        return Ok(());
     }
 
     let load_slot_as_object = |f: &mut Function| {
@@ -1084,7 +1084,7 @@ fn emit_field_hash(
             struct_type_index: object_shape_idx,
             field_index: 2,
         });
-        f.instruction(&Instruction::I32Const(field_index as i32));
+        f.instruction(&Instruction::I32Const(field_index.cast_signed()));
         f.instruction(&Instruction::ArrayGet(intrinsics.object_fields));
         f.instruction(&Instruction::RefAsNonNull);
     };
@@ -1160,9 +1160,7 @@ fn emit_field_hash(
             f.instruction(&Instruction::I32Const(0));
         }
         Type::Void | Type::Error | Type::Never => {
-            unreachable!(
-                "field of type {field_ty:?} should not appear in a typechecked Object",
-            );
+            return Err(unrepresentable_field(field_ty));
         }
         Type::Union(_) => {
             emit_nullable_field_hash(
@@ -1173,8 +1171,19 @@ fn emit_field_hash(
                 (self_t, field_obj, hash_fn, f_null),
             );
         }
-        Type::Alias { .. } | Type::Refined { .. } | Type::Readonly(_) => unreachable!("peel guarantees no alias here (SUB-242)"),
+        Type::Alias { .. } | Type::Refined { .. } | Type::Readonly(_) => {
+            return Err(unrepresentable_field(field_ty));
+        }
     }
+    Ok(())
+}
+
+/// Peeled, typechecked object fields never have these types; one reaching
+/// codegen means an earlier phase broke that invariant.
+fn unrepresentable_field(field_ty: &Type) -> CompilerFailure {
+    internal_failure(format!(
+        "an object field of type `{field_ty}` reached structural equality or hashing"
+    ))
 }
 
 /// Null-aware vtable-hash dispatch shared by the Union arm and
@@ -1193,7 +1202,7 @@ fn emit_nullable_field_hash(
         struct_type_index: object_shape_idx,
         field_index: 2,
     });
-    f.instruction(&Instruction::I32Const(field_index as i32));
+    f.instruction(&Instruction::I32Const(field_index.cast_signed()));
     f.instruction(&Instruction::ArrayGet(intrinsics.object_fields));
     f.instruction(&Instruction::LocalSet(f_null));
 
@@ -1234,7 +1243,7 @@ fn emit_nullable_field_compare(
         struct_type_index: object_shape_idx,
         field_index: 2,
     });
-    f.instruction(&Instruction::I32Const(field_index as i32));
+    f.instruction(&Instruction::I32Const(field_index.cast_signed()));
     f.instruction(&Instruction::ArrayGet(intrinsics.object_fields));
     f.instruction(&Instruction::LocalSet(field_lhs_null));
 
@@ -1243,7 +1252,7 @@ fn emit_nullable_field_compare(
         struct_type_index: object_shape_idx,
         field_index: 2,
     });
-    f.instruction(&Instruction::I32Const(field_index as i32));
+    f.instruction(&Instruction::I32Const(field_index.cast_signed()));
     f.instruction(&Instruction::ArrayGet(intrinsics.object_fields));
     f.instruction(&Instruction::LocalSet(field_rhs_null));
 
@@ -1308,23 +1317,22 @@ fn is_ref_dispatch_field(ty: &Type) -> bool {
 
 /// Returns all method function indices; must be declared in the element section for `ref.func` to be valid.
 pub fn declared_method_funcs(subtypes: &[UserSubtype]) -> Vec<u32> {
-    let mut out = Vec::with_capacity(subtypes.len() * 4);
-    for s in subtypes {
-        out.push(s.to_string_func);
-        out.push(s.to_json_func);
-        out.push(s.equals_func);
-        out.push(s.hash_func);
-    }
-    out
+    subtypes
+        .iter()
+        .flat_map(|s| [s.to_string_func, s.to_json_func, s.equals_func, s.hash_func])
+        .collect()
 }
 
 /// Payload-array index for a named field.
-pub fn field_index(ty: &Type, field_name: &str) -> Option<u32> {
+pub fn field_index(ty: &Type, field_name: &str) -> Result<Option<u32>, CompilerFailure> {
     let Type::Object { fields, .. } = ty else {
-        return None;
+        return Ok(None);
     };
-    let pos = fields.keys().position(|k| k == field_name)?;
-    Some(pos as u32)
+    fields
+        .keys()
+        .position(|k| k == field_name)
+        .map(wasm_u32)
+        .transpose()
 }
 
 fn emit_field_value_to_json(
@@ -1357,16 +1365,17 @@ fn push_inline_string(
     string_idx: u32,
     raw_string_idx: u32,
     string_vtable_global_idx: u32,
-) {
+) -> Result<(), CompilerFailure> {
     f.instruction(&Instruction::GlobalGet(string_vtable_global_idx));
     for b in s.bytes() {
         f.instruction(&Instruction::I32Const(i32::from(b)));
     }
     f.instruction(&Instruction::ArrayNewFixed {
         array_type_index: raw_string_idx,
-        array_size: s.len() as u32,
+        array_size: wasm_u32(s.len())?,
     });
     f.instruction(&Instruction::StructNew(string_idx));
+    Ok(())
 }
 
 pub(crate) fn json_escape_key(s: &str) -> String {
@@ -1378,10 +1387,7 @@ pub(crate) fn json_escape_key(s: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if c.is_control() => {
-                use std::fmt::Write;
-                let _ = write!(out, "\\u{:04x}", c as u32);
-            }
+            c if c.is_control() => out.push_str(&format!("\\u{:04x}", u32::from(c))),
             c => out.push(c),
         }
     }
@@ -1400,12 +1406,6 @@ fn ref_null(idx: u32) -> ValType {
         nullable: true,
         heap_type: HeapType::Concrete(idx),
     })
-}
-
-fn take(counter: &mut u32) -> u32 {
-    let v = *counter;
-    *counter += 1;
-    v
 }
 
 /// Prepend `if (other is not `type_idx`) return 0` to a vtable `equals` body.
@@ -1447,7 +1447,7 @@ fn emit_shape_guard(
     };
     let load_name_at = |f: &mut Function, side: u32, i: u32| {
         load_names(f, side);
-        f.instruction(&Instruction::I32Const(i as i32));
+        f.instruction(&Instruction::I32Const(i.cast_signed()));
         f.instruction(&Instruction::ArrayGet(intrinsics.field_names));
     };
 
@@ -1459,7 +1459,7 @@ fn emit_shape_guard(
 
     load_names(f, b_t);
     f.instruction(&Instruction::ArrayLen);
-    f.instruction(&Instruction::I32Const(n_fields as i32));
+    f.instruction(&Instruction::I32Const(n_fields.cast_signed()));
     f.instruction(&Instruction::I32Ne);
     f.instruction(&Instruction::If(BlockType::Empty));
     f.instruction(&Instruction::I32Const(0));

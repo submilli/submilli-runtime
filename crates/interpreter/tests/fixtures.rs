@@ -208,19 +208,24 @@ fn run_fixtures_parallel(paths: Vec<PathBuf>, runtime: Arc<PreparedRuntime>) -> 
     let mut handles = Vec::new();
     for chunk in chunks {
         let runtime = Arc::clone(&runtime);
-        handles.push(std::thread::spawn(move || {
-            let tokio = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("tokio runtime");
-            chunk
-                .into_iter()
-                .map(|path| {
-                    let result = run_one(&path, &runtime, &tokio);
-                    FixtureResult { path, result }
+        handles.push(
+            std::thread::Builder::new()
+                .stack_size(interpreter::compiler_limits::COMPILER_STACK_BYTES)
+                .spawn(move || {
+                    let tokio = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .expect("tokio runtime");
+                    chunk
+                        .into_iter()
+                        .map(|path| {
+                            let result = run_one(&path, &runtime, &tokio);
+                            FixtureResult { path, result }
+                        })
+                        .collect::<Vec<_>>()
                 })
-                .collect::<Vec<_>>()
-        }));
+                .expect("spawn fixture worker"),
+        );
     }
 
     handles

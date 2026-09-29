@@ -153,19 +153,24 @@ fn run_cases_parallel(
     for chunk in chunks {
         let shim = Arc::clone(&shim);
         let runtime = Arc::clone(&runtime);
-        handles.push(std::thread::spawn(move || {
-            let tokio = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("tokio runtime");
-            chunk
-                .into_iter()
-                .map(|path| {
-                    let result = run_case(&path, &shim, &runtime, &tokio);
-                    CaseResult { path, result }
+        handles.push(
+            std::thread::Builder::new()
+                .stack_size(interpreter::compiler_limits::COMPILER_STACK_BYTES)
+                .spawn(move || {
+                    let tokio = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .expect("tokio runtime");
+                    chunk
+                        .into_iter()
+                        .map(|path| {
+                            let result = run_case(&path, &shim, &runtime, &tokio);
+                            CaseResult { path, result }
+                        })
+                        .collect::<Vec<_>>()
                 })
-                .collect::<Vec<_>>()
-        }));
+                .expect("spawn fixture worker"),
+        );
     }
 
     handles

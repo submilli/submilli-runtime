@@ -127,7 +127,12 @@ fn check_in_parallel(paths: Vec<PathBuf>) -> Report {
 
     let handles: Vec<_> = chunks
         .into_iter()
-        .map(|chunk| std::thread::spawn(move || find_unstable(&chunk)))
+        .map(|chunk| {
+            std::thread::Builder::new()
+                .stack_size(interpreter::compiler_limits::COMPILER_STACK_BYTES)
+                .spawn(move || find_unstable(&chunk))
+                .expect("spawn compile worker")
+        })
         .collect();
 
     let mut report = Report {

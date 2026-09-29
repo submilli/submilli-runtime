@@ -14,11 +14,13 @@ mod missing_return;
 mod return_outside_function;
 mod unreachable;
 
-use crate::{Diagnostic, ExportEntry, PackageDeclaration, TypedAst};
+use crate::compiler_error::{CompileError, CompilerStage};
+use crate::{Diagnostic, ExportEntry, PackageDeclaration, TypedAst, tree_height};
 
 use super::infer::module_symbols::ModuleSymbols;
 
-pub fn check(ta: &TypedAst) -> Result<Vec<Diagnostic>, crate::compiler_error::CompileError> {
+pub fn check(ta: &TypedAst) -> Result<Vec<Diagnostic>, CompileError> {
+    tree_height::check_typed(ta, CompilerStage::Infer)?;
     let mut diags = Vec::new();
     missing_return::run(ta, &mut diags).map_err(|fatal| crate::compiler_error::CompileError {
         diagnostics: diags.clone(),

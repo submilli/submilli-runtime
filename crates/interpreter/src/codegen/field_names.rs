@@ -9,6 +9,8 @@ use wasm_encoder::{
 use crate::Type;
 use crate::codegen::intrinsics::IntrinsicTypeIndices;
 use crate::codegen::symbol_table::SymbolTable;
+use crate::codegen::{internal_failure, next_index, wasm_u32};
+use crate::compiler_error::CompilerFailure;
 
 /// Optional field names use a nominal string subtype. The name's text stays
 /// unchanged, while `in` can recover optionality after receiver-type erasure.
@@ -25,7 +27,8 @@ pub fn declare_optional_name_type(
     symbols: &mut SymbolTable,
     next_type_idx: &mut u32,
     intrinsics: IntrinsicTypeIndices,
-) {
+) -> Result<(), CompilerFailure> {
+    let type_idx = next_index(next_type_idx)?;
     let mut fields = [intrinsics.vtable, intrinsics.raw_string]
         .map(|index| wasm_encoder::FieldType {
             element_type: StorageType::Val(ValType::Ref(RefType {
@@ -55,8 +58,8 @@ pub fn declare_optional_name_type(
             describes: None,
         },
     });
-    symbols.record_optional_field_name_type(*next_type_idx);
-    *next_type_idx += 1;
+    symbols.record_optional_field_name_type(type_idx);
+    Ok(())
 }
 
 pub fn collect(shapes: &[Type]) -> Vec<Vec<FieldName>> {
@@ -86,18 +89,20 @@ pub fn emit(
     next_global_idx: &mut u32,
     intrinsics: IntrinsicTypeIndices,
     string_vtable_global_idx: u32,
-) {
+) -> Result<(), CompilerFailure> {
     let field_names_val_type = ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(intrinsics.field_names),
     });
+    let optional_name_type = symbols.optional_field_name_type()?;
     for shape in shapes {
         let init = build_init_expr(
             shape,
             intrinsics,
             string_vtable_global_idx,
-            symbols.optional_field_name_type(),
-        );
+            optional_name_type,
+        )?;
+        let global_idx = next_index(next_global_idx)?;
         globals.global(
             GlobalType {
                 val_type: field_names_val_type,
@@ -106,9 +111,9 @@ pub fn emit(
             },
             &init,
         );
-        symbols.record_field_names_global(shape.clone(), *next_global_idx);
-        *next_global_idx += 1;
+        symbols.record_field_names_global(shape.clone(), global_idx);
     }
+    Ok(())
 }
 
 fn build_init_expr(
@@ -116,17 +121,17 @@ fn build_init_expr(
     intrinsics: IntrinsicTypeIndices,
     string_vtable_global_idx: u32,
     optional_name_type: u32,
-) -> ConstExpr {
+) -> Result<ConstExpr, CompilerFailure> {
     let mut instrs: Vec<Instruction<'_>> = Vec::new();
     for name in shape {
         let code_units: Vec<u16> = name.name.encode_utf16().collect();
         instrs.push(Instruction::GlobalGet(string_vtable_global_idx));
         for unit in &code_units {
-            instrs.push(Instruction::I32Const(*unit as i32));
+            instrs.push(Instruction::I32Const(i32::from(*unit)));
         }
         instrs.push(Instruction::ArrayNewFixed {
             array_type_index: intrinsics.raw_string,
-            array_size: code_units.len() as u32,
+            array_size: wasm_u32(code_units.len())?,
         });
         if name.optional || name.is_accessor || name.is_private {
             instrs.push(Instruction::I32Const(if name.is_accessor {
@@ -148,13 +153,9 @@ fn build_init_expr(
     }
     instrs.push(Instruction::ArrayNewFixed {
         array_type_index: intrinsics.field_names,
-        array_size: shape.len() as u32,
+        array_size: wasm_u32(shape.len())?,
     });
-    let _ = StorageType::Val(ValType::Ref(RefType {
-        nullable: false,
-        heap_type: HeapType::Concrete(intrinsics.field_names),
-    }));
-    ConstExpr::extended(instrs)
+    Ok(ConstExpr::extended(instrs))
 }
 
 /// Optional names carry per-instance presence separately from the value slot.
@@ -164,24 +165,23 @@ pub(crate) fn emit_instance_names(
     ctx: &super::CodegenCtx,
     names: &[FieldName],
     present: impl Fn(&str) -> bool,
-) {
+) -> Result<(), CompilerFailure> {
     let global = ctx
         .symbols
         .field_names_global_idx(names)
-        .expect("field names collected");
+        .ok_or_else(|| internal_failure("object field names were not collected"))?;
     if !names.iter().any(|name| name.optional) {
         emitter.instruction(Instruction::GlobalGet(global));
-        return;
+        return Ok(());
     }
-    let intrinsics = ctx
-        .symbols
-        .intrinsic_type_indices()
-        .expect("intrinsics declared");
+    let intrinsics = intrinsics(ctx)?;
+    let optional_name_type = ctx.symbols.optional_field_name_type()?;
     for (index, name) in names.iter().enumerate() {
+        let index = wasm_u32(index)?.cast_signed();
         if name.optional {
             for field_index in [0, 1] {
                 emitter.instruction(Instruction::GlobalGet(global));
-                emitter.instruction(Instruction::I32Const(index as i32));
+                emitter.instruction(Instruction::I32Const(index));
                 emitter.instruction(Instruction::ArrayGet(intrinsics.field_names));
                 emitter.instruction(Instruction::StructGet {
                     struct_type_index: intrinsics.string,
@@ -190,19 +190,18 @@ pub(crate) fn emit_instance_names(
             }
             emitter.instruction(Instruction::I32Const(i32::from(present(&name.name))));
             emitter.instruction(Instruction::I32Const(i32::from(name.is_private)));
-            emitter.instruction(Instruction::StructNew(
-                ctx.symbols.optional_field_name_type(),
-            ));
+            emitter.instruction(Instruction::StructNew(optional_name_type));
         } else {
             emitter.instruction(Instruction::GlobalGet(global));
-            emitter.instruction(Instruction::I32Const(index as i32));
+            emitter.instruction(Instruction::I32Const(index));
             emitter.instruction(Instruction::ArrayGet(intrinsics.field_names));
         }
     }
     emitter.instruction(Instruction::ArrayNewFixed {
         array_type_index: intrinsics.field_names,
-        array_size: names.len() as u32,
+        array_size: wasm_u32(names.len())?,
     });
+    Ok(())
 }
 
 /// Push whether the name on the stack marks an internal accessor payload slot.
@@ -211,7 +210,7 @@ pub(crate) fn emit_name_is_accessor(
     ctx: &super::CodegenCtx,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let name = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::String)?);
-    let marked = ctx.symbols.optional_field_name_type();
+    let marked = ctx.symbols.optional_field_name_type()?;
     emitter.instruction(Instruction::LocalTee(name));
     emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(marked)));
     emitter.emit_if(wasm_encoder::BlockType::Result(ValType::I32));
@@ -234,17 +233,14 @@ pub(crate) fn emit_name_is_accessor(
 pub(crate) fn emit_name_presence(
     emitter: &mut super::function_emitter::FunctionEmitter,
     ctx: &super::CodegenCtx,
-) {
-    let intrinsics = ctx
-        .symbols
-        .intrinsic_type_indices()
-        .expect("intrinsics declared");
+) -> Result<(), CompilerFailure> {
+    let intrinsics = intrinsics(ctx)?;
+    let optional = ctx.symbols.optional_field_name_type()?;
     let name = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(intrinsics.string),
     }));
     emitter.instruction(Instruction::LocalTee(name));
-    let optional = ctx.symbols.optional_field_name_type();
     emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(optional)));
     emitter.emit_if(wasm_encoder::BlockType::Result(ValType::I32));
     emitter.instruction(Instruction::LocalGet(name));
@@ -258,6 +254,7 @@ pub(crate) fn emit_name_presence(
     emitter.emit_else();
     emitter.instruction(Instruction::I32Const(1));
     emitter.emit_end();
+    Ok(())
 }
 
 /// The object and index are locals; callers mark a successful store as present.
@@ -266,11 +263,9 @@ pub(crate) fn emit_mark_present(
     ctx: &super::CodegenCtx,
     object: u32,
     index: u32,
-) {
-    let intrinsics = ctx
-        .symbols
-        .intrinsic_type_indices()
-        .expect("intrinsics declared");
+) -> Result<(), CompilerFailure> {
+    let intrinsics = intrinsics(ctx)?;
+    let optional = ctx.symbols.optional_field_name_type()?;
     let name = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(intrinsics.string),
@@ -283,7 +278,6 @@ pub(crate) fn emit_mark_present(
     emitter.instruction(Instruction::LocalGet(index));
     emitter.instruction(Instruction::ArrayGet(intrinsics.field_names));
     emitter.instruction(Instruction::LocalTee(name));
-    let optional = ctx.symbols.optional_field_name_type();
     emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(optional)));
     emitter.emit_if(wasm_encoder::BlockType::Empty);
     emitter.instruction(Instruction::LocalGet(name));
@@ -303,6 +297,13 @@ pub(crate) fn emit_mark_present(
     });
     emitter.emit_end();
     emitter.emit_end();
+    Ok(())
+}
+
+fn intrinsics(ctx: &super::CodegenCtx) -> Result<IntrinsicTypeIndices, CompilerFailure> {
+    ctx.symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| internal_failure("intrinsic types are not declared"))
 }
 
 /// Serializer fast path for an optional slot in its own declared layout.
@@ -321,7 +322,7 @@ pub(crate) fn emit_optional_presence(
             struct_type_index: intrinsics.object_shape,
             field_index: 1,
         },
-        Instruction::I32Const(index as i32),
+        Instruction::I32Const(index.cast_signed()),
         Instruction::ArrayGet(intrinsics.field_names),
         Instruction::RefCastNonNull(HeapType::Concrete(optional_name_type)),
         Instruction::StructGet {

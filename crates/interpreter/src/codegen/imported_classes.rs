@@ -22,10 +22,12 @@ use wasm_encoder::{
     SubType, TypeSection, ValType,
 };
 
-use crate::codegen::classes::shadows_inherited_field;
+use crate::codegen::classes::{method_vtable_slot, shadows_inherited_field};
 use crate::codegen::dependency_usage::DependencyUsage;
 use crate::codegen::intrinsics::IntrinsicTypeIndices;
 use crate::codegen::symbol_table::{MethodSlotAbi, SymbolTable};
+use crate::codegen::{internal_failure, next_index, wasm_u32};
+use crate::compiler_error::CompilerFailure;
 use crate::{MangledName, Param, TypeKind, TypedAst, TypedTypeDecl};
 
 /// The resolved full layout of an imported class, handed to [`super::classes`]
@@ -159,11 +161,11 @@ pub fn reconstruct(
     symbols: &mut SymbolTable,
 ) -> Result<BTreeMap<MangledName, ImportedClassLayout>, crate::compiler_error::CompilerFailure> {
     let info = collect_class_info(dependencies);
-    let order = needed_in_topo_order(&info, ta, usage);
+    let order = needed_in_topo_order(&info, ta, usage)?;
 
     let mut layouts: BTreeMap<MangledName, ImportedClassLayout> = BTreeMap::new();
     for mangled in &order {
-        let class = &info[mangled];
+        let class = class_info(&info, mangled)?;
         let layout = reconstruct_one(
             mangled,
             class,
@@ -184,7 +186,7 @@ pub fn reconstruct(
     for mangled in &order {
         import_statics(
             mangled,
-            &info[mangled],
+            class_info(&info, mangled)?,
             usage,
             types,
             next_type_idx,
@@ -246,14 +248,14 @@ fn import_statics(
             param_types.push(super::runtime_descriptors::environment_type(symbols)?);
         }
         let results = symbols.wasm_result(&sig.ret)?;
+        let sig_idx = next_index(next_type_idx)?;
         types.ty().function(param_types, results);
-        let sig_idx = take(next_type_idx);
         imports.import(
             host_module_for(class),
             key.as_str(),
             EntityType::Function(sig_idx),
         );
-        let idx = take(next_func_idx);
+        let idx = next_index(next_func_idx)?;
         symbols.record_imported_fn(
             key,
             idx,
@@ -278,7 +280,7 @@ fn import_statics(
                 shared: false,
             }),
         );
-        symbols.record_typed_global(key, take(next_global_idx), field.ty.clone());
+        symbols.record_typed_global(key, next_index(next_global_idx)?, field.ty.clone());
     }
     Ok(())
 }
@@ -339,7 +341,7 @@ fn needed_in_topo_order(
     info: &BTreeMap<MangledName, ClassInfo<'_>>,
     ta: &TypedAst,
     usage: &DependencyUsage,
-) -> Vec<MangledName> {
+) -> Result<Vec<MangledName>, CompilerFailure> {
     let mut roots: BTreeSet<MangledName> = BTreeSet::new();
     for mangled in info.keys() {
         // `is_type_reachable_by_name` also catches classes used only through
@@ -359,34 +361,59 @@ fn needed_in_topo_order(
     }
 
     let mut order: Vec<MangledName> = Vec::new();
-    let mut seen: BTreeSet<MangledName> = BTreeSet::new();
+    let mut seen: BTreeSet<&MangledName> = BTreeSet::new();
     for root in &roots {
-        visit(root, info, &mut seen, &mut order);
+        push_ancestors_first(info, root, &mut seen, &mut order)?;
     }
-    order
+    Ok(order)
 }
 
-fn visit(
-    mangled: &MangledName,
-    info: &BTreeMap<MangledName, ClassInfo<'_>>,
-    seen: &mut BTreeSet<MangledName>,
+/// Appends `root` and its not-yet-ordered ancestors, parents first. Unlike a
+/// local class, an imported class's ancestors must all be declared: without
+/// one, the subclass would be reconstructed without its field and slot prefix
+/// and fail to link as `imported global type mismatch`, naming nothing.
+fn push_ancestors_first<'a>(
+    info: &'a BTreeMap<MangledName, ClassInfo<'_>>,
+    root: &'a MangledName,
+    seen: &mut BTreeSet<&'a MangledName>,
     order: &mut Vec<MangledName>,
-) {
-    if seen.contains(mangled) || !info.contains_key(mangled) {
-        return;
+) -> Result<(), CompilerFailure> {
+    let mut chain: Vec<&MangledName> = Vec::new();
+    let mut next = Some(root);
+    while let Some(mangled) = next {
+        if seen.contains(mangled) {
+            break;
+        }
+        let class = info.get(mangled).ok_or_else(|| {
+            internal_failure(format!(
+                "the dependency closure passed to codegen has no declaration for \
+                 `{mangled}`, an ancestor of imported class `{root}`"
+            ))
+        })?;
+        if chain.contains(&mangled) {
+            return Err(internal_failure(format!(
+                "imported class `{mangled}` inherits from itself"
+            )));
+        }
+        chain.push(mangled);
+        next = class.extends.as_ref();
     }
-    seen.insert(mangled.clone());
-    if let Some(parent) = &info[mangled].extends {
-        debug_assert!(
-            info.contains_key(parent),
-            "no declaration for `{parent}`, the parent of imported class `{mangled}`: the \
-             dependency closure passed to codegen is incomplete. Reconstructing `{mangled}` \
-             without its ancestor's field and slot prefix links as `imported global type \
-             mismatch`, with nothing naming the missing package.",
-        );
-        visit(parent, info, seen, order);
+    for mangled in chain.into_iter().rev() {
+        seen.insert(mangled);
+        order.push(mangled.clone());
     }
-    order.push(mangled.clone());
+    Ok(())
+}
+
+fn class_info<'i, 'a>(
+    info: &'i BTreeMap<MangledName, ClassInfo<'a>>,
+    mangled: &MangledName,
+) -> Result<&'i ClassInfo<'a>, CompilerFailure> {
+    info.get(mangled).ok_or_else(|| {
+        internal_failure(format!(
+            "imported class `{mangled}` has no reconstructed declaration"
+        ))
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -404,15 +431,19 @@ fn reconstruct_one(
     next_global_idx: &mut u32,
     symbols: &mut SymbolTable,
 ) -> Result<ImportedClassLayout, crate::compiler_error::CompilerFailure> {
+    // Parents are reconstructed first (`needed_in_topo_order`).
+    let parent_layout = match &class.extends {
+        Some(parent) => Some(layouts.get(parent).ok_or_else(|| {
+            internal_failure(format!(
+                "imported class `{mangled}` was reconstructed before its parent `{parent}`"
+            ))
+        })?),
+        None => None,
+    };
     // Full field list = inherited prefix (already reconstructed) + own *data*
     // fields. Accessor properties are in `fields` for typing/docs but back no data
     // slot, so they're excluded — matching the producer's payload layout.
-    let mut fields: Vec<String> = class
-        .extends
-        .as_ref()
-        .and_then(|p| layouts.get(p))
-        .map(|l| l.fields.clone())
-        .unwrap_or_default();
+    let mut fields: Vec<String> = parent_layout.map(|l| l.fields.clone()).unwrap_or_default();
     for name in class
         .fields
         .keys()
@@ -423,10 +454,7 @@ fn reconstruct_one(
         }
         fields.push(name.clone());
     }
-    let mut optional_fields = class
-        .extends
-        .as_ref()
-        .and_then(|parent| layouts.get(parent))
+    let mut optional_fields = parent_layout
         .map(|layout| layout.optional_fields.clone())
         .unwrap_or_default();
     for (name, field) in class.fields {
@@ -436,10 +464,7 @@ fn reconstruct_one(
             optional_fields.remove(name);
         }
     }
-    let mut narrowing_checks = class
-        .extends
-        .as_ref()
-        .and_then(|parent| layouts.get(parent))
+    let mut narrowing_checks = parent_layout
         .map(|layout| layout.narrowing_checks.clone())
         .unwrap_or_default();
     narrowing_checks.extend(class.narrowing_checks.clone());
@@ -450,10 +475,7 @@ fn reconstruct_one(
 
     // Full vtable slots = parent's slots, then fold in own methods (override →
     // same slot/owner-of-body, new → appended owned by this class).
-    let mut slots: Vec<ImportedSlot> = class
-        .extends
-        .as_ref()
-        .and_then(|p| layouts.get(p))
+    let mut slots: Vec<ImportedSlot> = parent_layout
         .map(|l| {
             l.methods
                 .iter()
@@ -469,13 +491,14 @@ fn reconstruct_one(
         })
         .unwrap_or_default();
     for (name, (param_tys, ret_ty)) in &methods {
-        let argument_metadata = class.methods.get(name).and_then(|sig| {
-            super::call_arguments::metadata(
+        let argument_metadata = match class.methods.get(name) {
+            Some(sig) => super::call_arguments::metadata(
                 sig.params
                     .iter()
                     .map(|param| (param.default.as_ref(), param.rest)),
-            )
-        });
+            )?,
+            None => None,
+        };
         let generic = class
             .methods
             .get(name)
@@ -521,11 +544,11 @@ fn reconstruct_one(
         );
         let results = symbols.slot_wasm_result(ret)?;
         let abi = MethodSlotAbi {
-            params: params[1..].to_vec(),
+            params: params.iter().skip(1).copied().collect(),
             ret: results.first().copied(),
         };
+        let sig_idx = next_index(next_type_idx)?;
         types.ty().function(params, results);
-        let sig_idx = take(next_type_idx);
         symbols.record_class_method_sig(mangled.clone(), name.clone(), sig_idx);
         symbols.record_class_method_abi(mangled.clone(), name.clone(), abi);
     }
@@ -533,10 +556,12 @@ fn reconstruct_one(
     // shape) under this class's key.
     for slot in &slots {
         if symbols.class_method_sig(mangled, &slot.name).is_none() {
-            let sig = symbols
-                .class_method_sig(&slot.owner, &slot.name)
-                .or_else(|| ancestor_sig(info, symbols, class, &slot.name))
-                .expect("inherited slot's originating sig reconstructed earlier");
+            let sig = match symbols.class_method_sig(&slot.owner, &slot.name) {
+                Some(sig) => sig,
+                None => ancestor_sig(info, symbols, class, &slot.name)?.ok_or_else(|| {
+                    internal_failure("an inherited method slot's signature was not reconstructed")
+                })?,
+            };
             symbols.record_class_method_sig(mangled.clone(), slot.name.clone(), sig);
         }
         if symbols.class_method_abi(mangled, &slot.name).is_none()
@@ -555,21 +580,25 @@ fn reconstruct_one(
     }
 
     // 2. Reserve the (vtable, struct) pair and 3. emit the rec group.
-    let vtable_idx = take(next_type_idx);
-    let struct_idx = take(next_type_idx);
+    let vtable_idx = next_index(next_type_idx)?;
+    let struct_idx = next_index(next_type_idx)?;
     symbols.record_class_vtable_type(mangled.clone(), vtable_idx);
     symbols.record_class_struct_type(mangled.clone(), struct_idx);
 
-    let vtable_super = class
-        .extends
-        .as_ref()
-        .and_then(|p| symbols.class_vtable_type_idx(p))
-        .unwrap_or(intrinsics.class_vtable);
-    let struct_super = class
-        .extends
-        .as_ref()
-        .and_then(|p| symbols.class_struct_type_idx(p))
-        .unwrap_or(intrinsics.object_shape);
+    // Parents are reconstructed first, so a missing parent type is a broken
+    // order, not a root class.
+    let (vtable_super, struct_super) = match &class.extends {
+        Some(parent) => (
+            symbols.class_vtable_type_idx(parent),
+            symbols.class_struct_type_idx(parent),
+        ),
+        None => (Some(intrinsics.class_vtable), Some(intrinsics.object_shape)),
+    };
+    let (Some(vtable_super), Some(struct_super)) = (vtable_super, struct_super) else {
+        return Err(internal_failure(
+            "an imported class's parent types were not reconstructed first",
+        ));
+    };
     symbols.record_struct_supertype(vtable_idx, vtable_super);
     symbols.record_struct_supertype(struct_idx, struct_super);
 
@@ -583,7 +612,7 @@ fn reconstruct_one(
     for slot in &slots {
         let sig = symbols
             .class_method_sig(mangled, &slot.name)
-            .expect("slot sig recorded above");
+            .ok_or_else(|| internal_failure("an imported class method slot has no signature"))?;
         vtable_fields.push(fieldtype_ref(sig));
     }
     let vtable = substruct(vtable_fields, Some(vtable_super));
@@ -617,12 +646,12 @@ fn reconstruct_one(
             shared: false,
         }),
     );
-    symbols.record_class_vtable_global(mangled.clone(), take(next_global_idx));
+    symbols.record_class_vtable_global(mangled.clone(), next_index(next_global_idx)?);
 
     // Record field payload slots and method vtable slots (universal slots +
     // parent link precede).
     for (i, name) in fields.iter().enumerate() {
-        symbols.record_class_field_slot(mangled.clone(), name.clone(), i as u32);
+        symbols.record_class_field_slot(mangled.clone(), name.clone(), wasm_u32(i)?);
     }
     for (name, check) in &narrowing_checks {
         symbols.record_class_field_narrowing_check(mangled.clone(), name.clone(), check.clone());
@@ -631,25 +660,32 @@ fn reconstruct_one(
         symbols.record_class_method_slot(
             mangled.clone(),
             slot.name.clone(),
-            crate::codegen::classes::VTABLE_METHOD_SLOT_BASE + i as u32,
+            method_vtable_slot(i)?,
         );
     }
 
     symbols
         .class_type_parameters
         .insert(mangled.clone(), class.generics.to_vec());
+    let parent_guarded = match &class.extends {
+        Some(parent) => {
+            symbols
+                .recorded_class_guard_layout(parent)?
+                .has_instance_guards
+        }
+        None => false,
+    };
+    let named_payload_len = fields
+        .len()
+        .checked_add(slots.iter().filter(|slot| !slot.generic).count())
+        .ok_or_else(|| internal_failure("an imported class payload is too large"))?;
     symbols.record_class_guard_layout(
         mangled.clone(),
         class.extends.as_ref(),
-        (fields.len() + slots.iter().filter(|slot| !slot.generic).count()) as u32,
-        (!class.generics.is_empty()
-            || !narrowing_checks.is_empty()
-            || class
-                .extends
-                .as_ref()
-                .is_some_and(|parent| symbols.class_guard_layout(parent).has_instance_guards))
+        wasm_u32(named_payload_len)?,
+        (!class.generics.is_empty() || !narrowing_checks.is_empty() || parent_guarded)
             && class.supports_instance_guards,
-    );
+    )?;
 
     // 4. Import the constructor, ctor-init, and own method bodies.
     let ctor_params: Vec<ValType> = class
@@ -668,32 +704,35 @@ fn reconstruct_one(
 
     // Entry constructor: `(params) -> (ref $C)`.
     let mut entry_params = ctor_params.clone();
-    if symbols.class_guard_layout(mangled).has_instance_guards {
+    if symbols
+        .recorded_class_guard_layout(mangled)?
+        .has_instance_guards
+    {
         entry_params.push(ref_to(intrinsics.object_fields));
     }
+    let ctor_sig = next_index(next_type_idx)?;
     types.ty().function(entry_params, [ref_to(struct_idx)]);
-    let ctor_sig = take(next_type_idx);
     let ctor_mangled = crate::mangle::extend(mangled, "constructor");
     imports.import(
         host_module_for(class),
         ctor_mangled.as_str(),
         EntityType::Function(ctor_sig),
     );
-    let ctor_idx = take(next_func_idx);
+    let ctor_idx = next_index(next_func_idx)?;
     symbols.record_imported_fn(ctor_mangled, ctor_idx, ctor_param_tys, class_ref, false);
 
     // Self-first ctor-init: `((ref $Object), params...) -> ()`.
     let mut init_params = vec![ref_to(intrinsics.object)];
     init_params.extend(ctor_params);
+    let init_sig = next_index(next_type_idx)?;
     types.ty().function(init_params, Vec::<ValType>::new());
-    let init_sig = take(next_type_idx);
     let init_mangled = crate::mangle::extend(mangled, "constructor_init");
     imports.import(
         host_module_for(class),
         init_mangled.as_str(),
         EntityType::Function(init_sig),
     );
-    let init_idx = take(next_func_idx);
+    let init_idx = next_index(next_func_idx)?;
     symbols.record_class_ctor_init_func(mangled.clone(), init_idx);
 
     // Own method bodies — reuse the slot's `((ref $Object), params...) -> ret`
@@ -701,14 +740,14 @@ fn reconstruct_one(
     for name in methods.keys() {
         let sig = symbols
             .class_method_sig(mangled, name)
-            .expect("own method sig recorded");
+            .ok_or_else(|| internal_failure("an imported class's own method has no signature"))?;
         let method_mangled = crate::mangle::extend(mangled, name);
         imports.import(
             host_module_for(class),
             method_mangled.as_str(),
             EntityType::Function(sig),
         );
-        let idx = take(next_func_idx);
+        let idx = next_index(next_func_idx)?;
         symbols.record_class_method_func(mangled.clone(), name.clone(), idx);
     }
 
@@ -727,10 +766,7 @@ fn reconstruct_one(
         })
         .collect();
 
-    let mut private_members = class
-        .extends
-        .as_ref()
-        .and_then(|parent| layouts.get(parent))
+    let mut private_members = parent_layout
         .map(|layout| layout.private_members.clone())
         .unwrap_or_default();
     for (name, field) in class.fields {
@@ -765,15 +801,21 @@ fn ancestor_sig(
     symbols: &SymbolTable,
     class: &ClassInfo<'_>,
     method: &str,
-) -> Option<u32> {
-    let mut cur = class.extends.clone();
+) -> Result<Option<u32>, CompilerFailure> {
+    let mut visited: BTreeSet<&MangledName> = BTreeSet::new();
+    let mut cur = class.extends.as_ref();
     while let Some(m) = cur {
-        if let Some(sig) = symbols.class_method_sig(&m, method) {
-            return Some(sig);
+        if !visited.insert(m) {
+            return Err(internal_failure(format!(
+                "imported class `{m}` inherits from itself"
+            )));
         }
-        cur = info.get(&m).and_then(|c| c.extends.clone());
+        if let Some(sig) = symbols.class_method_sig(m, method) {
+            return Ok(Some(sig));
+        }
+        cur = info.get(m).and_then(|c| c.extends.as_ref());
     }
-    None
+    Ok(None)
 }
 
 fn ref_to(idx: u32) -> ValType {
@@ -815,8 +857,99 @@ fn substruct(fields: Vec<FieldType>, supertype: Option<u32>) -> SubType {
     }
 }
 
-fn take(counter: &mut u32) -> u32 {
-    let v = *counter;
-    *counter += 1;
-    v
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::compile::{PackageSourceModule, compile_package_checked};
+    use crate::compiler_error::CompilerFailure;
+
+    fn declaration() -> crate::PackageDeclaration {
+        let modules = [PackageSourceModule {
+            path: crate::ModulePath::from("lib"),
+            source: "export class A { x: number = 1 } export class B extends A {}",
+        }];
+        compile_package_checked("dep", crate::ModulePath::from("lib"), &modules, &[])
+            .unwrap()
+            .declaration
+    }
+
+    /// A local class extending the imported `B`, so B and its ancestors are needed.
+    fn subclass_of(parent: &MangledName) -> TypedAst {
+        let (mut ta, diagnostics) = crate::compile::typecheck_to_typed_ast(
+            "class C {} function main(): void {}",
+            crate::FileId(0),
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        for decl in &mut ta.types {
+            if let TypedTypeDecl::Class(class) = decl {
+                class.extends = Some(parent.clone());
+            }
+        }
+        ta
+    }
+
+    fn mangled(declaration: &crate::PackageDeclaration, name: &str) -> MangledName {
+        declaration
+            .runtime_types
+            .values()
+            .chain(declaration.types.values())
+            .find(|symbol| symbol.name == name)
+            .unwrap()
+            .mangled_name
+            .clone()
+    }
+
+    #[test]
+    fn incomplete_or_cyclic_dependency_closures_are_internal_failures() {
+        let declaration = declaration();
+        let a = mangled(&declaration, "A");
+        let b = mangled(&declaration, "B");
+        let ta = subclass_of(&b);
+        let usage = DependencyUsage::empty();
+
+        let dependencies = [&declaration];
+        let info = collect_class_info(&dependencies);
+        assert_eq!(
+            needed_in_topo_order(&info, &ta, &usage).unwrap(),
+            [a.clone(), b.clone()]
+        );
+
+        // A missing ancestor fails rather than reconstructing a subclass
+        // without its prefix, which would link as a type mismatch.
+        let mut incomplete = declaration.clone();
+        incomplete
+            .runtime_types
+            .retain(|_, symbol| symbol.mangled_name != a);
+        incomplete
+            .types
+            .retain(|_, symbol| symbol.mangled_name != a);
+        let dependencies = [&incomplete];
+        let info = collect_class_info(&dependencies);
+        assert!(matches!(
+            needed_in_topo_order(&info, &ta, &usage),
+            Err(CompilerFailure::Internal { .. })
+        ));
+
+        let mut cyclic = declaration;
+        for symbol in cyclic
+            .runtime_types
+            .values_mut()
+            .chain(cyclic.types.values_mut())
+        {
+            if symbol.mangled_name == a
+                && let TypeKind::Class { extends, .. } = &mut symbol.kind
+            {
+                *extends = Some(crate::ClassExtends {
+                    parent: b.clone(),
+                    args: Vec::new(),
+                });
+            }
+        }
+        let dependencies = [&cyclic];
+        let info = collect_class_info(&dependencies);
+        assert!(matches!(
+            needed_in_topo_order(&info, &ta, &usage),
+            Err(CompilerFailure::Internal { .. })
+        ));
+    }
 }

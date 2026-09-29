@@ -766,7 +766,7 @@ pub fn emit_method_bodies(
         intrinsics,
         string_vtable_global_idx,
         "[object Function]",
-    );
+    )?;
     to_string.instruction(&wasm_encoder::Instruction::End);
     code.function(&to_string);
 
@@ -776,7 +776,7 @@ pub fn emit_method_bodies(
         intrinsics,
         string_vtable_global_idx,
         "null",
-    );
+    )?;
     to_json.instruction(&wasm_encoder::Instruction::End);
     code.function(&to_json);
 

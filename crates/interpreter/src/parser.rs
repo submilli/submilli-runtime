@@ -98,6 +98,10 @@ pub fn parse_checked(
             diagnostics: p.diagnostics.clone(),
             fatal: Some(error.into_compiler_failure(CompilerStage::Parse)),
         })?;
+    crate::tree_height::check_syntax(&p.ast).map_err(|fatal| CompileError {
+        diagnostics: p.diagnostics.clone(),
+        fatal: Some(fatal),
+    })?;
     Ok((p.ast, p.diagnostics))
 }
 
@@ -3067,7 +3071,15 @@ impl<'a> Parser<'a> {
                 return None;
             }
         };
+        // Array suffixes nest boxed annotations without recursing, so each one
+        // spends the recursive grammar budget to keep the chain's drop bounded.
+        let mut array_suffixes = 0usize;
         while matches!(self.peek().kind, TokenKind::LeftBracket) {
+            array_suffixes += 1;
+            if self.recursion_depth.saturating_add(array_suffixes) >= MAX_PARSE_DEPTH {
+                self.stop_at_recursion_limit();
+                return None;
+            }
             let open = self.advance();
             if !matches!(self.peek().kind, TokenKind::RightBracket) {
                 self.error_at(open.span, "expected `]` to close array type");
@@ -5147,15 +5159,19 @@ impl<'a> Parser<'a> {
             return None;
         }
         if self.recursion_limit_span.is_some() || self.recursion_depth >= MAX_PARSE_DEPTH {
-            self.recursion_limit_span.get_or_insert(self.peek().span);
-            // Stop recovery and enclosing block loops as well as recursive calls.
-            self.pos = self.tokens.len().saturating_sub(1);
+            self.stop_at_recursion_limit();
             return None;
         }
         self.recursion_depth += 1;
         let result = parse(self);
         self.recursion_depth -= 1;
         result
+    }
+
+    fn stop_at_recursion_limit(&mut self) {
+        self.recursion_limit_span.get_or_insert(self.peek().span);
+        // Stop recovery and enclosing block loops as well as recursive calls.
+        self.pos = self.tokens.len().saturating_sub(1);
     }
 
     fn recover(&mut self) {

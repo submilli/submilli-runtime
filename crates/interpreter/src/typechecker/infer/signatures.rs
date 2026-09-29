@@ -94,7 +94,7 @@ impl<'a> Inferer<'a> {
         // signature is bound (so the parent chain is fully resolvable), then
         // check `implements` conformance against those complete chains.
         self.check_class_inheritance(&top_level)?;
-        self.check_pending_implements();
+        self.check_pending_implements()?;
         for stmt_id in &top_level {
             let stmt = self
                 .ast

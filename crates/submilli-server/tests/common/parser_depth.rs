@@ -43,6 +43,24 @@ pub fn nested_source() -> String {
     )
 }
 
+/// Parsed iteratively, but every later compiler walk recurses over its height.
+pub fn flat_chain_source() -> String {
+    format!(
+        "function main(): number {{ return {}; }}",
+        vec!["1"; 10_000].join(" + ")
+    )
+}
+
+/// Needs more than a 2 MiB worker stack to compile in unoptimized builds.
+pub fn near_limit_chain_source() -> String {
+    format!(
+        "function main(): number {{ return {}; }}",
+        vec!["1"; 200].join(" + ")
+    )
+}
+
+pub const SYNTAX_LIMIT_MESSAGE: &str = "syntax nesting exceeds the compiler limit";
+
 pub fn oversized_closure_source() -> String {
     let params = (0..256)
         .map(|i| format!("a{i}: number"))

@@ -575,7 +575,7 @@ impl Inferer<'_> {
                 },
                 None => None,
             };
-            let body_instantiation = self.push_body_generics(generic_names.clone());
+            let body_instantiation = self.push_body_generics(generic_names.clone())?;
             let body_param_types: Vec<Type> = sig_param_types
                 .iter()
                 .map(|t| substitute_typevars(t, &body_instantiation))

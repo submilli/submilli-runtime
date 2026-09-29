@@ -4817,7 +4817,9 @@ impl Inferer<'_> {
                             fallback: None,
                         };
                         let earlier = merged.remove(&name);
-                        merged.insert(name, merge_spread_field(earlier, field, origin));
+                        let merged_field = merge_spread_field(earlier, field, origin)
+                            .map_err(|failure| failure.with_span(spread_span))?;
+                        merged.insert(name, merged_field);
                     }
                 }
             }
@@ -9699,20 +9701,50 @@ pub(super) struct SpreadFields {
 /// An optional field may be absent, and then the earlier value stays: `{ a: 1,
 /// ...{} }` keeps `a: 1`. So the field holds either value, and is optional only
 /// if the earlier one was. Omitted optional slots count as absent, matching `in`.
+///
+/// The earlier values form a boxed chain, one fallback link per optional spread
+/// that overrides an earlier value, which later phases walk recursively.
 fn merge_spread_field(
     earlier: Option<(crate::ObjectField, crate::TypedObjectFieldSource)>,
     field: crate::ObjectField,
     origin: crate::TypedObjectFieldSource,
-) -> (crate::ObjectField, crate::TypedObjectFieldSource) {
+) -> Result<(crate::ObjectField, crate::TypedObjectFieldSource), CompilerFailure> {
     let keeps_earlier = field.optional;
     let Some((earlier_field, earlier_origin)) = earlier.filter(|_| keeps_earlier) else {
-        return (field, origin);
+        return Ok((field, origin));
     };
+    if overriding_spreads(&earlier_origin) >= crate::compiler_limits::MAX_SPREAD_FALLBACK_CHAIN {
+        return Err(CompilerFailure::Limit {
+            stage: crate::compiler_error::CompilerStage::Infer,
+            span: None,
+            message: format!(
+                "an object literal overrides one field with more than {} optional spreads",
+                crate::compiler_limits::MAX_SPREAD_FALLBACK_CHAIN
+            ),
+            help: vec!["merge the spread sources into intermediate objects".into()],
+        });
+    }
     let mut origin = origin;
     if let crate::TypedObjectFieldSource::Spread { fallback, .. } = &mut origin {
         *fallback = Some(Box::new(earlier_origin));
     }
-    (merge_spread_field_type(Some(earlier_field), field), origin)
+    Ok((merge_spread_field_type(Some(earlier_field), field), origin))
+}
+
+/// Optional spreads in `origin`'s chain that override an earlier value: its
+/// fallback links, whatever supplied the first value.
+fn overriding_spreads(origin: &crate::TypedObjectFieldSource) -> u32 {
+    let mut overrides = 0u32;
+    let mut next = origin;
+    while let crate::TypedObjectFieldSource::Spread {
+        fallback: Some(fallback),
+        ..
+    } = next
+    {
+        overrides = overrides.saturating_add(1);
+        next = fallback;
+    }
+    overrides
 }
 
 fn merge_spread_field_type(

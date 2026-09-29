@@ -1,4 +1,7 @@
 //! End-to-end source-to-Wasm pipeline.
+//!
+//! Callers run these entry points on a thread with at least
+//! [`crate::compiler_limits::COMPILER_STACK_BYTES`] of stack.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
@@ -242,10 +245,18 @@ pub struct CompiledScript {
 pub fn typecheck_checked(source: &str, file: FileId) -> Result<Vec<Diagnostic>, CompileError> {
     let parsed = parse_script(source, file);
     let stdlib_defs = runtime::stdlib_package_declarations();
-    let (_ta, diags, _timings) = front_end(source, &parsed, &stdlib_defs, &[])?;
+    let (ta, diags, _timings) = front_end(source, &parsed, &stdlib_defs, &[])?;
     if has_errors(&diags) {
         return Err(diags.into());
     }
+    // Lowering deepens the typed tree, so check enforces compilation's limit on
+    // the lowered tree too.
+    let with_front_end_diagnostics = |failure| CompileError {
+        diagnostics: diags.clone(),
+        fatal: Some(failure),
+    };
+    let ta = capture(ta).map_err(with_front_end_diagnostics)?;
+    desugar(ta, file).map_err(with_front_end_diagnostics)?;
     Ok(warnings_only(diags))
 }
 

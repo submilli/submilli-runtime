@@ -110,8 +110,8 @@ pub fn build_dwarf(
             line_program.row().file = *files
                 .get(path)
                 .ok_or_else(|| dwarf_failure("source file was not registered"))?;
-            line_program.row().line = line as u64;
-            line_program.row().column = col as u64;
+            line_program.row().line = u64::from(line);
+            line_program.row().column = u64::from(col);
             line_program.row().is_statement = true;
             line_program.generate_row();
         }

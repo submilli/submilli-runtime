@@ -6,7 +6,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use wasm_encoder::{HeapType, RefType, ValType};
 
 use crate::codegen::closures::ClosureSig;
+use crate::codegen::internal_failure;
 use crate::codegen::intrinsics::{IntrinsicTypeIndices, intrinsic_supertypes};
+use crate::compiler_error::CompilerFailure;
 use crate::{Dispatch, ExprId, MangledName, Type};
 
 /// One step of a constructor's field-setup sequence, run after `super(...)`
@@ -396,9 +398,9 @@ impl SymbolTable {
         self.optional_field_name_type = Some(index);
     }
 
-    pub fn optional_field_name_type(&self) -> u32 {
+    pub fn optional_field_name_type(&self) -> Result<u32, CompilerFailure> {
         self.optional_field_name_type
-            .expect("optional field-name type declared")
+            .ok_or_else(|| internal_failure("optional field-name type was not declared"))
     }
 
     pub fn field_names_global_idx(
@@ -667,10 +669,15 @@ impl SymbolTable {
         parent: Option<&MangledName>,
         named_len: u32,
         guarded: bool,
-    ) {
-        let depth = parent.map_or(0, |parent| {
-            self.class_guard_layout(parent).inheritance_depth + 1
-        });
+    ) -> Result<(), CompilerFailure> {
+        let depth = match parent {
+            Some(parent) => self
+                .recorded_class_guard_layout(parent)?
+                .inheritance_depth
+                .checked_add(1)
+                .ok_or_else(|| internal_failure("class inheritance depth overflowed"))?,
+            None => 0,
+        };
         self.class_guard_layout.insert(
             class,
             ClassGuardLayout {
@@ -679,13 +686,31 @@ impl SymbolTable {
                 has_instance_guards: guarded,
             },
         );
+        Ok(())
     }
 
+    /// Defaults an unrecorded class to no guards. Only the field-guard emitters
+    /// still rely on this until SUB-633 item 17; everything else uses
+    /// [`Self::recorded_class_guard_layout`].
     pub fn class_guard_layout(&self, class: &MangledName) -> ClassGuardLayout {
         self.class_guard_layout
             .get(class)
             .copied()
             .unwrap_or_default()
+    }
+
+    /// Guard layout of a class this module lays out or reconstructs, which is
+    /// recorded before any use.
+    pub fn recorded_class_guard_layout(
+        &self,
+        class: &MangledName,
+    ) -> Result<ClassGuardLayout, CompilerFailure> {
+        self.class_guard_layout.get(class).copied().ok_or_else(|| {
+            internal_failure(format!(
+                "class `{}` has no recorded guard layout",
+                class.as_str()
+            ))
+        })
     }
 
     pub fn record_instance_field_guard(
@@ -710,21 +735,12 @@ impl SymbolTable {
     }
 
     pub fn record_runtime_validator(&mut self, key: Type, idx: u32) {
-        match &key {
-            Type::AliasRef { mangled, args, .. } | Type::InterfaceRef { mangled, args, .. }
-                if !args.is_empty() && args.iter().all(|arg| matches!(arg, Type::TypeVar(_))) =>
-            {
-                let names = args
-                    .iter()
-                    .map(|arg| match arg {
-                        Type::TypeVar(name) => name.clone(),
-                        _ => unreachable!(),
-                    })
-                    .collect();
-                self.generic_runtime_validators
-                    .insert(mangled.clone(), (names, idx));
-            }
-            _ => {}
+        if let Type::AliasRef { mangled, args, .. } | Type::InterfaceRef { mangled, args, .. } =
+            &key
+            && let Some(names) = generic_parameter_names(args)
+        {
+            self.generic_runtime_validators
+                .insert(mangled.clone(), (names, idx));
         }
         self.runtime_validator_idx.insert(key, idx);
     }
@@ -802,13 +818,14 @@ impl SymbolTable {
         idx: u32,
         params: Vec<Type>,
         ret: Type,
-    ) {
+    ) -> Result<(), CompilerFailure> {
         // Guard against an accidental mangle/source-name swap.
-        debug_assert!(
-            mangled.as_str().contains(crate::mangle::SEP),
-            "local fn mangled name must contain the separator: {}",
-            mangled.as_str(),
-        );
+        if !mangled.as_str().contains(crate::mangle::SEP) {
+            return Err(internal_failure(format!(
+                "local function `{}` has no mangled package prefix",
+                mangled.as_str()
+            )));
+        }
         self.funcs.insert(mangled.clone(), idx);
         self.top_level_fns.insert(
             mangled,
@@ -819,6 +836,7 @@ impl SymbolTable {
                 is_host: false,
             },
         );
+        Ok(())
     }
 
     pub fn top_level_fn(&self, mangled: &MangledName) -> Option<&TopLevelFn> {
@@ -1166,6 +1184,20 @@ impl SymbolTable {
     }
 }
 
+/// Names of a validator key's type arguments when every one is a generic
+/// parameter, so one validator serves each instantiation.
+fn generic_parameter_names(args: &[Type]) -> Option<Vec<String>> {
+    if args.is_empty() {
+        return None;
+    }
+    args.iter()
+        .map(|arg| match arg {
+            Type::TypeVar(name) => Some(name.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1178,7 +1210,14 @@ mod tests {
             10,
             Vec::new(),
             Type::Void,
+        )
+        .unwrap();
+        let unmangled: MangledName = serde_json::from_str("\"main\"").unwrap();
+        assert!(
+            map.record_local_fn(unmangled.clone(), 13, Vec::new(), Type::Void)
+                .is_err()
         );
+        assert_eq!(map.func_idx(&unmangled), None);
         map.record_imported_fn(
             crate::mangle::prelude("string_concat"),
             11,

@@ -279,7 +279,7 @@ impl<'a> Inferer<'a> {
             } = resolved.peel()
             && let Some(fields) = self.resolver().interface_full_form(mangled, name, args)
         {
-            self.check_index_fields(&fields, Some(&index), annot.span);
+            self.check_index_fields(&fields, Some(&index), annot.span)?;
         }
         Ok(resolved)
     }
@@ -288,6 +288,35 @@ impl<'a> Inferer<'a> {
         &mut self,
         annot: &TypeAnnotation,
     ) -> Result<Type, CompilerFailure> {
+        if self.type_resolution_depth >= crate::compiler_limits::MAX_TYPE_RESOLUTION_DEPTH {
+            // The outermost resolution attaches its annotation's span: the
+            // innermost one is often an unrelated alias at the end of a chain.
+            return Err(CompilerFailure::Limit {
+                stage: crate::compiler_error::CompilerStage::Infer,
+                span: None,
+                message: format!(
+                    "type resolution nests deeper than the compiler limit of {} levels",
+                    crate::compiler_limits::MAX_TYPE_RESOLUTION_DEPTH
+                ),
+                help: vec![
+                    "each alias reference adds a level, and so does each type constructor that \
+                     wraps it in an alias body (object, array, tuple, union, function, generic \
+                     type or `readonly`); shorten the alias chain or split nested annotations"
+                        .into(),
+                ],
+            });
+        }
+        let outermost = self.type_resolution_depth == 0;
+        self.type_resolution_depth += 1;
+        let resolved = self.resolve_annotation(annot);
+        self.type_resolution_depth -= 1;
+        if outermost {
+            return resolved.map_err(|failure| failure.with_span(annot.span));
+        }
+        resolved
+    }
+
+    fn resolve_annotation(&mut self, annot: &TypeAnnotation) -> Result<Type, CompilerFailure> {
         Ok(match &annot.kind {
             TypeAnnotationKind::Name { name, args } => {
                 let text = name.name.as_str();
@@ -663,7 +692,7 @@ impl<'a> Inferer<'a> {
                     .as_ref()
                     .map(|annotation| self.resolve_index_signature(annotation))
                     .transpose()?;
-                self.check_index_fields(&resolved, index.as_ref(), annot.span);
+                self.check_index_fields(&resolved, index.as_ref(), annot.span)?;
                 Type::Object {
                     index,
                     fields: resolved,

@@ -73,7 +73,7 @@ pub fn emit_bodies(
             ));
         }
         for (i, p_ty) in target.params.iter().enumerate() {
-            emitter.instruction(Instruction::LocalGet((i + 1) as u32));
+            emitter.instruction(Instruction::LocalGet(super::parameter_local(i)?));
             crate::codegen::cast_check::emit_checked_parameter_cast_on_stack(
                 &mut emitter,
                 ctx,

@@ -5,13 +5,13 @@
 
 use std::collections::BTreeSet;
 
-use wasm_encoder::{
-    ConstExpr, GlobalSection, GlobalType, HeapType, Instruction, RefType, StorageType, ValType,
-};
+use wasm_encoder::{ConstExpr, GlobalSection, GlobalType, HeapType, Instruction, RefType, ValType};
 
 use crate::Type;
 use crate::codegen::intrinsics::IntrinsicTypeIndices;
 use crate::codegen::symbol_table::SymbolTable;
+use crate::codegen::{next_index, wasm_u32};
+use crate::compiler_error::CompilerFailure;
 
 /// `extra_names` injects VTable interface method names (Iterator, Iterable, …)
 /// that don't appear in any object literal — without them dispatch chains can't
@@ -38,13 +38,14 @@ pub fn emit(
     next_global_idx: &mut u32,
     intrinsics: IntrinsicTypeIndices,
     string_vtable_global_idx: u32,
-) {
+) -> Result<(), CompilerFailure> {
     let string_val_type = ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(intrinsics.string),
     });
     for name in names {
-        let init = build_init_expr(name, intrinsics, string_vtable_global_idx);
+        let init = build_init_expr(name, intrinsics, string_vtable_global_idx)?;
+        let global_idx = next_index(next_global_idx)?;
         globals.global(
             GlobalType {
                 val_type: string_val_type,
@@ -53,32 +54,28 @@ pub fn emit(
             },
             &init,
         );
-        symbols.record_field_name_string_global(name.clone(), *next_global_idx);
-        *next_global_idx += 1;
+        symbols.record_field_name_string_global(name.clone(), global_idx);
     }
+    Ok(())
 }
 
 fn build_init_expr(
     name: &str,
     intrinsics: IntrinsicTypeIndices,
     string_vtable_global_idx: u32,
-) -> ConstExpr {
+) -> Result<ConstExpr, CompilerFailure> {
     let mut instrs: Vec<Instruction<'_>> = Vec::new();
     let code_units: Vec<u16> = name.encode_utf16().collect();
     instrs.push(Instruction::GlobalGet(string_vtable_global_idx));
     for unit in &code_units {
-        instrs.push(Instruction::I32Const(*unit as i32));
+        instrs.push(Instruction::I32Const(i32::from(*unit)));
     }
     instrs.push(Instruction::ArrayNewFixed {
         array_type_index: intrinsics.raw_string,
-        array_size: code_units.len() as u32,
+        array_size: wasm_u32(code_units.len())?,
     });
     instrs.push(Instruction::StructNew(intrinsics.string));
-    let _ = StorageType::Val(ValType::Ref(RefType {
-        nullable: false,
-        heap_type: HeapType::Concrete(intrinsics.string),
-    }));
-    ConstExpr::extended(instrs)
+    Ok(ConstExpr::extended(instrs))
 }
 
 #[cfg(test)]
