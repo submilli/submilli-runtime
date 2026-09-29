@@ -7,16 +7,16 @@
 //! `packages.*` / `builtins.docs` tools, the server's REST surface, and the
 //! `submilli docs` / `search` / `builtins` CLI commands.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt::Write;
 
 use crate::runtime::prelude::declaration::prelude_package_declaration;
 use crate::stdlib::stdlib_package_declarations;
 use crate::types::escape_string_literal;
 use crate::{
-    DocCapabilityBindingKind, DocCapabilityLiteral, DocComment, FileId, NamespaceSymbol,
-    PackageDeclaration, Param, Span, Type, TypeKind, TypePredicate, TypeSymbol, ValueKind,
-    ValueSymbol,
+    ClassExtends, DocCapabilityBindingKind, DocCapabilityLiteral, DocComment, FileId,
+    NamespaceSymbol, PackageDeclaration, Param, Span, Type, TypeKind, TypePredicate, TypeSymbol,
+    ValueKind, ValueSymbol,
 };
 
 /// Internal plumbing imported by the fs/http shims; never user-facing.
@@ -872,41 +872,71 @@ pub fn render_stdlib_d_ts() -> String {
     out.trim_end().to_string()
 }
 
-/// Render editor-facing TypeScript declarations for packages, one
-/// `declare module` block each, in the order given. A declaration names the
-/// types it borrows from another module without saying where they are from,
-/// so each block imports the ones it mentions.
-pub fn render_packages_d_ts(packages: &[&PackageDeclaration]) -> String {
+/// Render editor-facing TypeScript declarations for `packages`, one
+/// `declare module` block each, in the order given.
+///
+/// A declaration names the types it borrows from another module without
+/// saying where they come from, so each block imports them. A borrowed type is
+/// matched to its module by the reference's mangled name, not by its text:
+/// many modules export a `Page` or an `Item`. `context` holds further modules
+/// those types may come from that get no block here, such as the project's
+/// own packages.
+pub fn render_packages_d_ts(
+    packages: &[&PackageDeclaration],
+    context: &[&PackageDeclaration],
+) -> String {
     let stdlib = editor_stdlib_modules();
-    let mut modules_by_type: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
-    for defs in stdlib.iter().chain(packages.iter().copied()) {
-        for name in defs.types.keys() {
-            modules_by_type
-                .entry(name.as_str())
-                .or_default()
-                .insert(defs.package_name.as_str());
-        }
-    }
-
+    let exporters = TypeExporters::new(
+        stdlib
+            .iter()
+            .chain(packages.iter().copied())
+            .chain(context.iter().copied()),
+    );
+    let globals = global_classes();
     let mut out = String::new();
     for defs in packages {
-        let mut body = String::new();
-        render_ts_declarations(&mut body, defs, "  ", "export ");
         let _ = writeln!(out, "declare module \"{}\" {{", defs.package_name);
-        for (name, modules) in &modules_by_type {
-            if defs.types.contains_key(*name) || !mentions_type(&body, name) {
-                continue;
-            }
-            // A name two modules export can't be attributed from the text.
-            let mut modules = modules.iter();
-            if let (Some(module), None) = (modules.next(), modules.next()) {
-                let _ = writeln!(out, "  import type {{ {name} }} from \"{module}\";");
+        let imports = block_imports(defs, &exporters);
+        for (local, (public, module)) in &imports.types {
+            if local == public {
+                let _ = writeln!(out, "  import type {{ {local} }} from \"{module}\";");
+            } else {
+                let _ = writeln!(
+                    out,
+                    "  import type {{ {public} as {local} }} from \"{module}\";"
+                );
             }
         }
-        out.push_str(&body);
+        let parent = |extends: &ClassExtends| {
+            if let Some(local) = imports.parents.get(extends.parent.as_str()) {
+                return Some(ts_named_type(local, &extends.args));
+            }
+            // A package value of the global's name would hide it; the class
+            // then renders without its parent rather than extend the value.
+            let global = globals.get(extends.parent.as_str())?;
+            if declares(defs, global, true) {
+                return None;
+            }
+            Some(ts_named_type(global, &extends.args))
+        };
+        render_ts_declarations(&mut out, defs, "  ", "export ", &parent);
         let _ = writeln!(out, "}}\n");
     }
     out.trim_end().to_string()
+}
+
+/// The built-in classes a package's class may extend, such as `Error`, by
+/// mangled name. They're globals, so a parent among them needs no import.
+fn global_classes() -> BTreeMap<String, String> {
+    let defs = builtin_package_declaration();
+    defs.types
+        .into_iter()
+        .filter(|(name, symbol)| {
+            matches!(symbol.kind, TypeKind::Class { .. })
+                && !is_hidden_prelude_type(&defs.package_name, name)
+        })
+        .map(|(name, symbol)| (symbol.mangled_name.as_str().to_string(), name))
+        .collect()
 }
 
 fn editor_stdlib_modules() -> Vec<PackageDeclaration> {
@@ -917,33 +947,280 @@ fn editor_stdlib_modules() -> Vec<PackageDeclaration> {
     modules
 }
 
-/// Whether rendered declarations use `name` as a type, outside doc comments.
-fn mentions_type(declarations: &str, name: &str) -> bool {
-    let is_identifier = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
-    declarations
-        .lines()
-        .filter(|line| {
-            let line = line.trim_start();
-            !line.starts_with('*') && !line.starts_with("/**")
+/// Where each exported type can be imported from.
+struct TypeExporters<'a> {
+    /// A type symbol's mangled name, mapped to the type and its module.
+    by_mangled: BTreeMap<&'a str, (ExportedType<'a>, &'a str)>,
+    /// Each module's exported types by name, for a reference whose mangled
+    /// name is the internal-module form of a type the package root re-exports.
+    by_module: BTreeMap<&'a str, BTreeMap<&'a str, ExportedType<'a>>>,
+}
+
+#[derive(Clone, Copy)]
+struct ExportedType<'a> {
+    name: &'a str,
+    /// A class or enum is a value too, and an import of one conflicts with a
+    /// local value of the same name. An interface or alias doesn't.
+    is_value: bool,
+}
+
+impl<'a> TypeExporters<'a> {
+    fn new(modules: impl Iterator<Item = &'a PackageDeclaration>) -> Self {
+        let mut by_mangled = BTreeMap::new();
+        let mut by_module: BTreeMap<&str, BTreeMap<&str, ExportedType>> = BTreeMap::new();
+        for defs in modules {
+            let module = defs.package_name.as_str();
+            for (name, symbol) in &defs.types {
+                let exported = ExportedType {
+                    name: name.as_str(),
+                    is_value: matches!(
+                        symbol.kind,
+                        TypeKind::Class { .. }
+                            | TypeKind::NumberEnum { .. }
+                            | TypeKind::StringEnum { .. }
+                    ),
+                };
+                by_mangled.insert(symbol.mangled_name.as_str(), (exported, module));
+                by_module
+                    .entry(module)
+                    .or_default()
+                    .insert(name.as_str(), exported);
+            }
+        }
+        Self {
+            by_mangled,
+            by_module,
+        }
+    }
+
+    /// The type a reference points at and its module, if a known module
+    /// exports it.
+    fn resolve(&self, reference: &TypeReference) -> Option<(ExportedType<'a>, &'a str)> {
+        if let Some(&exported) = self.by_mangled.get(reference.mangled.as_str()) {
+            return Some(exported);
+        }
+        let (module, types) = self.by_module.get_key_value(reference.package.as_str())?;
+        Some((*types.get(reference.name.as_str())?, module))
+    }
+}
+
+/// A by-name type as a declaration refers to it: the declaring symbol's
+/// mangled name and package, and the name the rendered text uses for it,
+/// which is the local name an aliased import gave it.
+struct TypeReference {
+    mangled: String,
+    package: String,
+    name: String,
+}
+
+/// The imports one `declare module` block needs.
+struct BlockImports<'a> {
+    /// Keyed by the name the block's text uses, valued by the public name and
+    /// module to import it from.
+    types: BTreeMap<String, (&'a str, &'a str)>,
+    /// Each class parent's mangled name, mapped to the name the block imports
+    /// it under.
+    parents: BTreeMap<&'a str, String>,
+}
+
+/// The imports `defs`'s block needs.
+///
+/// A type reference is imported under the name the text already uses for it.
+/// That name is the package's own if it declares a type of that name, or a
+/// value when the borrowed type is a value too (a class or enum); TypeScript
+/// keeps a type and a value of one name apart otherwise. Two references that
+/// use one local name for different types, which only separate source files
+/// can produce, get the first one's import.
+///
+/// A class's parent records no local name, so the block picks one: the name
+/// an import of the same type already has, else its public name, else that
+/// name with a numeric suffix that nothing in the block uses.
+fn block_imports<'a>(
+    defs: &'a PackageDeclaration,
+    exporters: &TypeExporters<'a>,
+) -> BlockImports<'a> {
+    let mut types = BTreeMap::new();
+    for reference in rendered_type_references(defs) {
+        let Some((exported, module)) = exporters.resolve(&reference) else {
+            continue;
+        };
+        if module != defs.package_name && !declares(defs, &reference.name, exported.is_value) {
+            types
+                .entry(reference.name)
+                .or_insert((exported.name, module));
+        }
+    }
+    let mut parents = BTreeMap::new();
+    for (mangled, exported, module) in class_parents(defs, exporters) {
+        if module == defs.package_name {
+            parents.insert(mangled, exported.name.to_string());
+            continue;
+        }
+        let already_imported = types
+            .iter()
+            .find(|(_, target)| **target == (exported.name, module))
+            .map(|(local, _)| local.clone());
+        let local = if let Some(local) = already_imported {
+            local
+        } else {
+            let local = free_local_name(defs, &types, exported.name);
+            types.insert(local.clone(), (exported.name, module));
+            local
+        };
+        parents.insert(mangled, local);
+    }
+    BlockImports { types, parents }
+}
+
+/// `public` if the block can import a class under it, else `public` with the
+/// first numeric suffix nothing in the block uses. Each name the block holds
+/// rules out at most one suffix, so one past their count is always free.
+fn free_local_name(
+    defs: &PackageDeclaration,
+    imports: &BTreeMap<String, (&str, &str)>,
+    public: &str,
+) -> String {
+    let is_free = |name: &str| !imports.contains_key(name) && !declares(defs, name, true);
+    if is_free(public) {
+        return public.to_string();
+    }
+    let taken = imports
+        .len()
+        .saturating_add(defs.types.len())
+        .saturating_add(defs.values.len())
+        .saturating_add(defs.namespaces.len());
+    (1..=taken.saturating_add(1))
+        .map(|suffix| format!("{public}{suffix}"))
+        .find(|name| is_free(name))
+        .unwrap_or_else(|| format!("{public}{}", taken.saturating_add(1)))
+}
+
+/// Whether `defs` declares `name` itself in a way that would clash with
+/// importing a type under it.
+fn declares(defs: &PackageDeclaration, name: &str, borrowed_is_value: bool) -> bool {
+    defs.types.contains_key(name)
+        || (borrowed_is_value
+            && (defs.values.contains_key(name) || defs.namespaces.contains_key(name)))
+}
+
+/// The parent of each class `defs` exports that extends a known module's
+/// class, by mangled name, with that class and its module.
+fn class_parents<'a>(
+    defs: &'a PackageDeclaration,
+    exporters: &TypeExporters<'a>,
+) -> Vec<(&'a str, ExportedType<'a>, &'a str)> {
+    defs.types
+        .values()
+        .filter_map(|symbol| match &symbol.kind {
+            TypeKind::Class {
+                extends: Some(extends),
+                ..
+            } => {
+                let parent = extends.parent.as_str();
+                let &(exported, module) = exporters.by_mangled.get(parent)?;
+                Some((parent, exported, module))
+            }
+            _ => None,
         })
-        .any(|line| {
-            line.match_indices(name).any(|(start, matched)| {
-                let before = line[..start].chars().next_back();
-                let after = line[start + matched.len()..].chars().next();
-                !before.is_some_and(is_identifier) && !after.is_some_and(is_identifier)
-            })
-        })
+        .collect()
+}
+
+/// The by-name types the rendered declarations of `defs` mention: in its
+/// values, namespaces, and the public surface of its types, which is what
+/// `render_ts_declarations` prints. A private function or member doesn't
+/// appear in the text, so its types don't count.
+///
+/// Every by-name `Type` serializes with its declaring symbol's `mangled` name,
+/// so walking the serialized form finds them in every signature and member
+/// without a visitor over each declaration shape. A reference renders as its
+/// name and type arguments only, so the walk goes into `args` and not into an
+/// alias's body. A class's parent isn't a `Type`; `class_parents` finds
+/// those.
+fn rendered_type_references(defs: &PackageDeclaration) -> Vec<TypeReference> {
+    let types: BTreeMap<&String, TypeSymbol> = defs
+        .types
+        .iter()
+        .map(|(name, symbol)| (name, public_surface(symbol)))
+        .collect();
+    let rendered = [
+        serde_json::to_value(&defs.values),
+        serde_json::to_value(&types),
+        serde_json::to_value(&defs.namespaces),
+    ];
+    // A part that won't serialize still renders; it just imports nothing.
+    let mut pending: Vec<&serde_json::Value> = rendered.iter().flatten().collect();
+    let mut references = Vec::new();
+    while let Some(value) = pending.pop() {
+        match value {
+            serde_json::Value::Object(fields) => {
+                let Some(serde_json::Value::String(mangled)) = fields.get("mangled") else {
+                    pending.extend(fields.values());
+                    continue;
+                };
+                let text = |key: &str| {
+                    fields
+                        .get(key)
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string()
+                };
+                references.push(TypeReference {
+                    mangled: mangled.clone(),
+                    package: text("package"),
+                    name: text("name"),
+                });
+                pending.extend(fields.get("args"));
+            }
+            serde_json::Value::Array(items) => pending.extend(items),
+            _ => {}
+        }
+    }
+    references
+}
+
+/// `symbol` as `render_ts_type` prints it: a class keeps only its public
+/// members.
+fn public_surface(symbol: &TypeSymbol) -> TypeSymbol {
+    let mut symbol = symbol.clone();
+    if let TypeKind::Class {
+        fields,
+        narrowing_checks,
+        methods,
+        method_visibility,
+        accessors,
+        statics,
+        static_visibility,
+        static_fields,
+        ..
+    } = &mut symbol.kind
+    {
+        let is_public = |visibility: Option<&crate::Visibility>| {
+            visibility != Some(&crate::Visibility::Private)
+        };
+        accessors.retain(|accessor| is_public(fields.get(accessor.name()).map(|f| &f.visibility)));
+        fields.retain(|_, field| is_public(Some(&field.visibility)));
+        static_fields.retain(|_, field| is_public(Some(&field.visibility)));
+        methods.retain(|name, _| is_public(method_visibility.get(name)));
+        statics.retain(|name, _| is_public(static_visibility.get(name)));
+        narrowing_checks.clear();
+    }
+    symbol
 }
 
 /// Render editor-facing TypeScript ambient declarations for always-in-scope
 /// built-ins.
 pub fn render_lib_submilli_d_ts() -> String {
     let defs = builtin_package_declaration();
+    let globals = global_classes();
+    let parent = |extends: &ClassExtends| {
+        let global = globals.get(extends.parent.as_str())?;
+        Some(ts_named_type(global, &extends.args))
+    };
     let mut out = String::new();
-    render_ts_declarations(&mut out, &defs, "", "declare ");
+    render_ts_declarations(&mut out, &defs, "", "declare ", &parent);
     render_ts_compiler_globals(&mut out, &defs);
     let json = json_package_declaration();
-    render_ts_declarations(&mut out, &json, "", "declare ");
+    render_ts_declarations(&mut out, &json, "", "declare ", &|_| None);
     out.trim_end().to_string()
 }
 
@@ -991,15 +1268,18 @@ fn render_ts_checker_plumbing(out: &mut String, defs: &PackageDeclaration) {
 
 fn render_declare_module(out: &mut String, defs: &PackageDeclaration) {
     let _ = writeln!(out, "declare module \"{}\" {{", defs.package_name);
-    render_ts_declarations(out, defs, "  ", "export ");
+    render_ts_declarations(out, defs, "  ", "export ", &|_| None);
     let _ = writeln!(out, "}}\n");
 }
 
+/// `class_parent` renders a class's `extends` target, or declines, in which
+/// case the class renders without one.
 fn render_ts_declarations(
     out: &mut String,
     defs: &PackageDeclaration,
     indent: &str,
     export_prefix: &str,
+    class_parent: &dyn Fn(&ClassExtends) -> Option<String>,
 ) {
     for (name, sym) in &defs.values {
         if is_hidden_prelude_value(&defs.package_name, name) {
@@ -1008,14 +1288,17 @@ fn render_ts_declarations(
         push_doc(out, value_doc(&sym.kind), indent);
         render_ts_value(out, name, &sym.kind, indent, export_prefix);
     }
+    // Only the runtime's own modules pair a type with an `XConstructor`
+    // interface for its static side; in a package they're two ordinary types.
+    let pairs_constructors = defs.package_name.starts_with("submilli:");
     for (name, sym) in &defs.types {
         if is_hidden_prelude_type(&defs.package_name, name) {
             continue;
         }
-        if name.ends_with("Constructor") {
+        if pairs_constructors && name.ends_with("Constructor") {
             continue;
         }
-        if defs.types.contains_key(&format!("{name}Constructor")) {
+        if pairs_constructors && defs.types.contains_key(&format!("{name}Constructor")) {
             render_ts_type_with_ctor(
                 out,
                 &defs.types,
@@ -1026,7 +1309,21 @@ fn render_ts_declarations(
             );
         } else {
             push_doc(out, type_doc(&sym.kind), indent);
-            render_ts_type(out, name, &sym.kind, indent, export_prefix);
+            let parent = match &sym.kind {
+                TypeKind::Class {
+                    extends: Some(extends),
+                    ..
+                } => class_parent(extends),
+                _ => None,
+            };
+            render_ts_type(
+                out,
+                name,
+                &sym.kind,
+                indent,
+                export_prefix,
+                parent.as_deref(),
+            );
         }
     }
     for (name, ns) in &defs.namespaces {
@@ -1098,12 +1395,14 @@ fn render_ts_value(
     out.push('\n');
 }
 
+/// `parent` is the rendered `extends` target of a class, if it has one.
 fn render_ts_type(
     out: &mut String,
     name: &str,
     kind: &TypeKind,
     indent: &str,
     export_prefix: &str,
+    parent: Option<&str>,
 ) {
     let inner = format!("{indent}  ");
     match kind {
@@ -1199,10 +1498,12 @@ fn render_ts_type(
             // API an agent can call, so they're omitted from the rendered surface
             // (`packages.docs` and the generated `.d.ts`). Privacy itself is enforced
             // by the typechecker; this only keeps private names/types out of the docs.
+            let extends = parent.map(|parent| format!(" extends {parent}"));
             let _ = writeln!(
                 out,
-                "{indent}{export_prefix}class {name}{} {{",
-                generics_str(generics)
+                "{indent}{export_prefix}class {name}{}{} {{",
+                generics_str(generics),
+                extends.unwrap_or_default()
             );
             for (fname, field) in static_fields {
                 if field.visibility == crate::Visibility::Private {
@@ -1310,12 +1611,12 @@ fn render_ts_type_with_ctor(
 ) {
     if let Some(sym) = types.get(name) {
         push_doc(out, type_doc(&sym.kind), indent);
-        render_ts_type(out, name, &sym.kind, indent, export_prefix);
+        render_ts_type(out, name, &sym.kind, indent, export_prefix, None);
     }
     let ctor = format!("{name}Constructor");
     if let Some(sym) = types.get(&ctor) {
         push_doc(out, type_doc(&sym.kind), indent);
-        render_ts_type(out, &ctor, &sym.kind, indent, export_prefix);
+        render_ts_type(out, &ctor, &sym.kind, indent, export_prefix, None);
         if synthesize_binding {
             let _ = writeln!(out, "{indent}{export_prefix}const {name}: {ctor};\n");
         }
@@ -1338,7 +1639,7 @@ fn render_ts_namespace(
     }
     for (tname, sym) in &ns.types {
         push_doc(out, type_doc(&sym.kind), &inner);
-        render_ts_type(out, tname, &sym.kind, &inner, "");
+        render_ts_type(out, tname, &sym.kind, &inner, "", None);
     }
     for (nname, sub) in &ns.namespaces {
         render_ts_namespace(out, nname, sub, &inner, "");
@@ -2375,7 +2676,7 @@ mod tests {
             .clone();
         package.values.insert("fetch".to_string(), download);
 
-        let docs = render_packages_d_ts(&[&package]);
+        let docs = render_packages_d_ts(&[&package], &[]);
 
         assert!(docs.starts_with("declare module \"@acme/files\" {\n"));
         assert!(docs.contains("  import type { DownloadResult } from \"submilli:http\";\n"));
@@ -2384,13 +2685,484 @@ mod tests {
     }
 
     #[test]
-    fn a_type_named_only_in_a_doc_comment_is_not_mentioned() {
-        assert!(mentions_type("  export function f(): Result;", "Result"));
-        assert!(!mentions_type("   * Returns a Result.", "Result"));
-        assert!(!mentions_type(
-            "  export function f(): DownloadResult;",
-            "Result"
-        ));
+    fn a_borrowed_type_is_imported_from_its_own_module_when_others_share_its_name() {
+        // `submilli:session` and `@acme/other` export a `Page` too; the
+        // reference's mangled name picks the leaf's.
+        let mut leaf = PackageDeclaration::with_package("@acme/leaf");
+        leaf.types
+            .insert("Page".to_string(), alias_symbol("@acme/leaf", "Page"));
+        let mut other = PackageDeclaration::with_package("@acme/other");
+        other
+            .types
+            .insert("Page".to_string(), alias_symbol("@acme/other", "Page"));
+        let mut mid = PackageDeclaration::with_package("@acme/mid");
+        let page = reference(
+            "@acme/leaf",
+            crate::mangle::package_symbol("@acme/leaf", "Page"),
+            "Page",
+        );
+        mid.values
+            .insert("page".to_string(), const_symbol("@acme/mid", "page", page));
+
+        let docs = render_packages_d_ts(&[&leaf, &other, &mid], &[]);
+
+        assert!(docs.contains("  import type { Page } from \"@acme/leaf\";\n"));
+        assert!(!docs.contains("from \"submilli:session\""));
+        assert!(!docs.contains("from \"@acme/other\""));
+    }
+
+    fn alias_symbol(package: &str, name: &str) -> crate::TypeSymbol {
+        crate::TypeSymbol {
+            name: name.to_string(),
+            mangled_name: crate::mangle::package_symbol(package, name),
+            declaration_span: crate::Span::at(crate::FileId(0)),
+            kind: crate::TypeKind::Alias {
+                generics: Vec::new(),
+                ty: Type::Number,
+                doc: None,
+            },
+        }
+    }
+
+    fn const_symbol(package: &str, name: &str, ty: Type) -> ValueSymbol {
+        ValueSymbol {
+            name: name.to_string(),
+            mangled_name: crate::mangle::package_symbol(package, name),
+            declaration_span: crate::Span::at(crate::FileId(0)),
+            kind: ValueKind::Const { ty, doc: None },
+        }
+    }
+
+    fn reference(package: &str, mangled: crate::MangledName, local_name: &str) -> Type {
+        Type::alias_ref(
+            crate::types::Package(package.to_string()),
+            local_name,
+            mangled,
+            Vec::new(),
+        )
+    }
+
+    #[test]
+    fn an_aliased_type_is_imported_under_the_name_the_text_uses() {
+        let mut leaf = PackageDeclaration::with_package("@acme/leaf");
+        leaf.types
+            .insert("Page".to_string(), alias_symbol("@acme/leaf", "Page"));
+        let mut mid = PackageDeclaration::with_package("@acme/mid");
+        let page = reference(
+            "@acme/leaf",
+            crate::mangle::package_symbol("@acme/leaf", "Page"),
+            "LeafPage",
+        );
+        mid.values
+            .insert("page".to_string(), const_symbol("@acme/mid", "page", page));
+
+        let docs = render_packages_d_ts(&[&mid], &[&leaf]);
+
+        assert!(docs.contains("  import type { Page as LeafPage } from \"@acme/leaf\";\n"));
+        assert!(!docs.contains("declare module \"@acme/leaf\""));
+    }
+
+    #[test]
+    fn a_type_reexported_from_an_internal_module_is_imported_from_the_package() {
+        let mut leaf = PackageDeclaration::with_package("@acme/leaf");
+        leaf.types
+            .insert("Status".to_string(), alias_symbol("@acme/leaf", "Status"));
+        let mut mid = PackageDeclaration::with_package("@acme/mid");
+        let status = reference(
+            "@acme/leaf",
+            crate::mangle::package_module_symbol("@acme/leaf", "model", "Status"),
+            "Status",
+        );
+        mid.values.insert(
+            "status".to_string(),
+            const_symbol("@acme/mid", "status", status),
+        );
+
+        let docs = render_packages_d_ts(&[&leaf, &mid], &[]);
+
+        assert!(docs.contains("  import type { Status } from \"@acme/leaf\";\n"));
+    }
+
+    #[test]
+    fn only_the_rendered_declarations_bring_imports() {
+        let mut mid = PackageDeclaration::with_package("@acme/mid");
+        let response = reference(
+            "submilli:http",
+            crate::mangle::package_symbol("submilli:http", "Response"),
+            "Response",
+        );
+        mid.runtime_globals.insert(
+            crate::mangle::package_symbol("@acme/mid", "hidden"),
+            response.clone(),
+        );
+
+        let docs = render_packages_d_ts(&[&mid], &[]);
+
+        assert!(!docs.contains("import type"), "{docs}");
+    }
+
+    #[test]
+    fn a_value_named_like_a_borrowed_interface_leaves_its_import() {
+        // TypeScript keeps a type and a value of one name apart, so the
+        // interface still needs its import next to the package's own value.
+        let download = reference(
+            "submilli:http",
+            crate::mangle::package_symbol("submilli:http", "DownloadResult"),
+            "DownloadResult",
+        );
+        let mut mid = PackageDeclaration::with_package("@acme/mid");
+        mid.values.insert(
+            "DownloadResult".to_string(),
+            const_symbol("@acme/mid", "DownloadResult", download),
+        );
+
+        let docs = render_packages_d_ts(&[&mid], &[]);
+
+        assert!(
+            docs.contains("  import type { DownloadResult } from \"submilli:http\";\n"),
+            "{docs}"
+        );
+    }
+
+    #[test]
+    fn type_arguments_bring_imports_and_alias_bodies_do_not() {
+        let mut leaf = PackageDeclaration::with_package("@acme/leaf");
+        leaf.types
+            .insert("Page".to_string(), alias_symbol("@acme/leaf", "Page"));
+        leaf.types
+            .insert("Item".to_string(), alias_symbol("@acme/leaf", "Item"));
+        let mut mid = PackageDeclaration::with_package("@acme/mid");
+        let item = reference(
+            "@acme/leaf",
+            crate::mangle::package_symbol("@acme/leaf", "Item"),
+            "Item",
+        );
+        let page_of_items = Type::alias_ref(
+            crate::types::Package("@acme/leaf".to_string()),
+            "Page",
+            crate::mangle::package_symbol("@acme/leaf", "Page"),
+            vec![Type::Array(Box::new(item))],
+        );
+        mid.values.insert(
+            "page".to_string(),
+            const_symbol("@acme/mid", "page", page_of_items),
+        );
+        // A resolved alias renders as its name; what it stands for doesn't
+        // appear in the text.
+        let response = reference(
+            "submilli:http",
+            crate::mangle::package_symbol("submilli:http", "Response"),
+            "Response",
+        );
+        let wrapped = Type::Alias {
+            mangled: crate::mangle::package_symbol("@acme/leaf", "Item"),
+            package: crate::types::Package("@acme/leaf".to_string()),
+            name: "Item".to_string(),
+            args: Vec::new(),
+            ty: Box::new(response),
+        };
+        mid.values.insert(
+            "item".to_string(),
+            const_symbol("@acme/mid", "item", wrapped),
+        );
+
+        let docs = render_packages_d_ts(&[&mid], &[&leaf]);
+
+        assert!(docs.contains("  import type { Page } from \"@acme/leaf\";\n"));
+        assert!(docs.contains("  import type { Item } from \"@acme/leaf\";\n"));
+        assert!(!docs.contains("Response"), "{docs}");
+    }
+
+    fn class_symbol(
+        package: &str,
+        name: &str,
+        extends: Option<crate::ClassExtends>,
+    ) -> crate::TypeSymbol {
+        crate::TypeSymbol {
+            name: name.to_string(),
+            mangled_name: crate::mangle::package_symbol(package, name),
+            declaration_span: crate::Span::at(crate::FileId(0)),
+            kind: TypeKind::Class {
+                generics: Vec::new(),
+                fields: BTreeMap::new(),
+                narrowing_checks: BTreeMap::new(),
+                methods: BTreeMap::new(),
+                method_visibility: BTreeMap::new(),
+                accessors: Vec::new(),
+                constructor: Vec::new(),
+                statics: BTreeMap::new(),
+                static_visibility: BTreeMap::new(),
+                static_fields: BTreeMap::new(),
+                extends,
+                implements: Vec::new(),
+                doc: None,
+            },
+        }
+    }
+
+    #[test]
+    fn a_class_renders_and_imports_its_parent() {
+        let mut leaf = PackageDeclaration::with_package("@acme/leaf");
+        leaf.types
+            .insert("Base".to_string(), class_symbol("@acme/leaf", "Base", None));
+        leaf.types
+            .insert("Item".to_string(), alias_symbol("@acme/leaf", "Item"));
+        let item = reference(
+            "@acme/leaf",
+            crate::mangle::package_symbol("@acme/leaf", "Item"),
+            "Item",
+        );
+        let extends = crate::ClassExtends {
+            parent: crate::mangle::package_symbol("@acme/leaf", "Base"),
+            args: vec![item],
+        };
+        let mut sub = class_symbol("@acme/mid", "Sub", Some(extends));
+        if let TypeKind::Class { fields, .. } = &mut sub.kind {
+            // A private member isn't rendered, so its type isn't imported.
+            let response = reference(
+                "submilli:http",
+                crate::mangle::package_symbol("submilli:http", "Response"),
+                "Response",
+            );
+            fields.insert(
+                "hidden".to_string(),
+                crate::FieldSig {
+                    ty: response,
+                    visibility: crate::Visibility::Private,
+                    readonly: false,
+                    optional: false,
+                    doc: None,
+                },
+            );
+        }
+        let mut mid = PackageDeclaration::with_package("@acme/mid");
+        mid.types.insert("Sub".to_string(), sub);
+
+        let docs = render_packages_d_ts(&[&mid], &[&leaf]);
+
+        assert!(
+            docs.contains("  import type { Base } from \"@acme/leaf\";\n"),
+            "{docs}"
+        );
+        assert!(
+            docs.contains("  import type { Item } from \"@acme/leaf\";\n"),
+            "{docs}"
+        );
+        assert!(
+            docs.contains("  export class Sub extends Base<Item> {"),
+            "{docs}"
+        );
+        assert!(!docs.contains("Response"), "{docs}");
+    }
+
+    fn subclass_of(package: &str, name: &str, parent: crate::MangledName) -> crate::TypeSymbol {
+        class_symbol(package, name, Some(crate::ClassExtends::plain(parent)))
+    }
+
+    /// `@acme/leaf` and `@acme/other`, which each export a class `Base`.
+    fn two_bases() -> (PackageDeclaration, PackageDeclaration) {
+        let mut leaf = PackageDeclaration::with_package("@acme/leaf");
+        leaf.types
+            .insert("Base".to_string(), class_symbol("@acme/leaf", "Base", None));
+        let mut other = PackageDeclaration::with_package("@acme/other");
+        other.types.insert(
+            "Base".to_string(),
+            class_symbol("@acme/other", "Base", None),
+        );
+        (leaf, other)
+    }
+
+    #[test]
+    fn a_parent_named_like_a_local_value_is_imported_under_another_name() {
+        let (leaf, _) = two_bases();
+        let mut package = PackageDeclaration::with_package("@acme/shadowed");
+        package.values.insert(
+            "Base".to_string(),
+            const_symbol("@acme/shadowed", "Base", Type::Number),
+        );
+        let base = crate::mangle::package_symbol("@acme/leaf", "Base");
+        package.types.insert(
+            "Sub".to_string(),
+            subclass_of("@acme/shadowed", "Sub", base),
+        );
+
+        let docs = render_packages_d_ts(&[&package], &[&leaf]);
+
+        assert!(
+            docs.contains("  import type { Base as Base1 } from \"@acme/leaf\";\n"),
+            "{docs}"
+        );
+        assert!(
+            docs.contains("  export class Sub extends Base1 {"),
+            "{docs}"
+        );
+    }
+
+    #[test]
+    fn parents_that_share_a_public_name_get_different_local_names() {
+        let (leaf, other) = two_bases();
+        let mut package = PackageDeclaration::with_package("@acme/both");
+        package.types.insert(
+            "A".to_string(),
+            subclass_of(
+                "@acme/both",
+                "A",
+                crate::mangle::package_symbol("@acme/leaf", "Base"),
+            ),
+        );
+        package.types.insert(
+            "B".to_string(),
+            subclass_of(
+                "@acme/both",
+                "B",
+                crate::mangle::package_symbol("@acme/other", "Base"),
+            ),
+        );
+
+        let docs = render_packages_d_ts(&[&package], &[&leaf, &other]);
+
+        assert!(
+            docs.contains("  import type { Base } from \"@acme/leaf\";\n"),
+            "{docs}"
+        );
+        assert!(
+            docs.contains("  import type { Base as Base1 } from \"@acme/other\";\n"),
+            "{docs}"
+        );
+        assert!(docs.contains("  export class A extends Base {"), "{docs}");
+        assert!(docs.contains("  export class B extends Base1 {"), "{docs}");
+    }
+
+    #[test]
+    fn a_parent_already_imported_under_an_alias_keeps_it() {
+        let (leaf, _) = two_bases();
+        let base = crate::mangle::package_symbol("@acme/leaf", "Base");
+        let mut package = PackageDeclaration::with_package("@acme/aliased");
+        package.values.insert(
+            "base".to_string(),
+            const_symbol(
+                "@acme/aliased",
+                "base",
+                reference("@acme/leaf", base.clone(), "LB"),
+            ),
+        );
+        package
+            .types
+            .insert("Sub".to_string(), subclass_of("@acme/aliased", "Sub", base));
+
+        let docs = render_packages_d_ts(&[&package], &[&leaf]);
+
+        assert!(
+            docs.contains("  import type { Base as LB } from \"@acme/leaf\";\n"),
+            "{docs}"
+        );
+        assert!(docs.contains("  export class Sub extends LB {"), "{docs}");
+        assert!(!docs.contains("import type { Base }"), "{docs}");
+    }
+
+    #[test]
+    fn a_class_extending_a_builtin_error_renders_its_parent_as_the_global() {
+        let error = builtin_package_declaration()
+            .types
+            .get("Error")
+            .expect("the prelude declares Error")
+            .mangled_name
+            .clone();
+        let mut package = PackageDeclaration::with_package("@acme/errors");
+        package.types.insert(
+            "BillingError".to_string(),
+            subclass_of("@acme/errors", "BillingError", error),
+        );
+
+        let docs = render_packages_d_ts(&[&package], &[]);
+
+        assert!(
+            docs.contains("  export class BillingError extends Error {"),
+            "{docs}"
+        );
+        assert!(!docs.contains("import type"), "{docs}");
+    }
+
+    #[test]
+    fn a_package_value_named_like_the_global_parent_leaves_the_class_without_it() {
+        let error = builtin_package_declaration()
+            .types
+            .get("Error")
+            .expect("the prelude declares Error")
+            .mangled_name
+            .clone();
+        let mut package = PackageDeclaration::with_package("@acme/errors");
+        package.values.insert(
+            "Error".to_string(),
+            const_symbol("@acme/errors", "Error", Type::Number),
+        );
+        package.types.insert(
+            "BillingError".to_string(),
+            subclass_of("@acme/errors", "BillingError", error),
+        );
+
+        let docs = render_packages_d_ts(&[&package], &[]);
+
+        assert!(docs.contains("  export class BillingError {"), "{docs}");
+    }
+
+    #[test]
+    fn builtin_errors_extend_error_in_the_editor_declarations() {
+        let lib = render_lib_submilli_d_ts();
+        for class in [
+            "RangeError",
+            "TypeError",
+            "SyntaxError",
+            "PermissionDeniedError",
+        ] {
+            assert!(
+                lib.contains(&format!("declare class {class} extends Error {{")),
+                "{class}"
+            );
+        }
+        assert!(lib.contains("declare class Error {"));
+    }
+
+    #[test]
+    fn a_value_named_like_a_borrowed_class_keeps_the_class_out() {
+        // A class is a value too, so importing it would clash with the const.
+        let mut leaf = PackageDeclaration::with_package("@acme/leaf");
+        leaf.types
+            .insert("Base".to_string(), class_symbol("@acme/leaf", "Base", None));
+        let base = Type::class_ref(
+            crate::types::Package("@acme/leaf".to_string()),
+            "Base",
+            crate::mangle::package_symbol("@acme/leaf", "Base"),
+            Vec::new(),
+        );
+        let mut mid = PackageDeclaration::with_package("@acme/mid");
+        mid.values
+            .insert("Base".to_string(), const_symbol("@acme/mid", "Base", base));
+
+        let docs = render_packages_d_ts(&[&mid], &[&leaf]);
+
+        assert!(!docs.contains("import type"), "{docs}");
+    }
+
+    #[test]
+    fn a_package_type_named_like_a_constructor_is_an_ordinary_type() {
+        let mut package = PackageDeclaration::with_package("@acme/leaf");
+        package
+            .types
+            .insert("Client".to_string(), alias_symbol("@acme/leaf", "Client"));
+        package.types.insert(
+            "ClientConstructor".to_string(),
+            alias_symbol("@acme/leaf", "ClientConstructor"),
+        );
+
+        let docs = render_packages_d_ts(&[&package], &[]);
+
+        assert!(docs.contains("  export type Client = number;"), "{docs}");
+        assert!(
+            docs.contains("  export type ClientConstructor = number;"),
+            "{docs}"
+        );
+        assert!(!docs.contains("const Client"), "{docs}");
     }
 
     #[test]
@@ -2583,7 +3355,7 @@ mod tests {
         let docs = render_declarations(&defs);
         let shape = &defs.types.get("Shape").unwrap().kind;
         let mut dts = String::new();
-        render_ts_type(&mut dts, "Shape", shape, "", "export ");
+        render_ts_type(&mut dts, "Shape", shape, "", "export ", None);
         for rendered in [&docs, &dts] {
             assert!(rendered.contains("readonly area: number;"), "{rendered}"); // get-only
             assert!(rendered.contains("size: number;"), "{rendered}"); // get+set same type
@@ -2683,7 +3455,7 @@ mod tests {
         let docs = render_declarations(&defs);
         let calc = &defs.types.get("Calc").unwrap().kind;
         let mut dts = String::new();
-        render_ts_type(&mut dts, "Calc", calc, "", "export ");
+        render_ts_type(&mut dts, "Calc", calc, "", "export ", None);
         for rendered in [&docs, &dts] {
             assert!(
                 rendered.contains("static make(x: number): number;"),

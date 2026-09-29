@@ -210,8 +210,7 @@ checked @acme/billing v0.1.0
 ```
 
 `build check` compiles every package in the project, in dependency order,
-and installs nothing. `-p @acme/billing` compiles one package and the
-siblings it depends on. A compile error stops the build and exits 1:
+and installs nothing. A compile error stops the build and exits 1:
 
 ```text
 error: expected `number`, got `string`
@@ -259,6 +258,9 @@ blueprint](/docs/blueprints) showed.
 `latestInvoice` is where `requires` came from:
 
 ```typescript title="packages/billing/src/lib.ts (fragment)"
+import { get } from "submilli:http";
+import secrets from "submilli:secrets";
+
 const BASE = "https://billing.acme.com/v1";
 
 /**
@@ -284,7 +286,7 @@ export function latestInvoice(customerId: string): Invoice | null {
 }
 ```
 
-Three habits keep the derived grants narrow:
+Three habits keep the grants narrow and the credential inside the package:
 
 - **Keep the host in a constant.** The build reads the host out of `BASE`
   and writes `host == "billing.acme.com"` into `requires`. A host that
@@ -483,13 +485,12 @@ permissions:
     action: allow
 ```
 
-Two details came from the service, not from the prompt. Attio's notes and
-tasks endpoints return every record in the workspace when their company
-filter is missing, so `normalizeRecordId` refuses anything but a record id,
-and each result's owner is checked before it is returned, as `listNotes`
-does above. The
-agent also narrowed the package's own grant from all of `api.attio.com` to
-the paths it calls.
+Two details weren't in the prompt. The first came from the service:
+Attio's notes and tasks endpoints return every record in the workspace when
+their company filter is missing, so `normalizeRecordId` refuses anything but
+a record id, and each result's owner is checked before it is returned, as
+`listNotes` does above. The second was the agent's own choice: it narrowed
+the package's grant from all of `api.attio.com` to the paths it calls.
 
 It tested against the live workspace. `submilli build test` passed, live
 reads included. Under the blueprint, a session bound to one company read
@@ -499,17 +500,17 @@ session with no company were refused too. Two controls showed the rule was
 the reason: bound to the other company, the results reversed, and with the
 filter removed, the other company's data came through.
 
-A second agent then reviewed the package the way an attacker would, with ids
-in other forms, look-alike characters, and a program that catches a denial
-and carries on. It found no way to another company's records, and its
-findings led to four fixes, among them a task linked to two companies, which
-is now left out.
+The skill has a second agent review the work, and in this run it did so the
+way an attacker would: with ids in other forms, look-alike characters, and a
+program that catches a denial and carries on. It found no way to another
+company's records, and its findings led to four fixes, among them leaving
+out a task linked to two companies.
 
-The report ends with decisions for you: whether tasks shared with another
-company should show, that notes on the company's people aren't included,
-and that the application must bind `companyId` as the company's record id.
-The workspace had no notes or tasks yet, so it says that filtering them was
-tested only on sample data. The run took about twelve minutes.
+The agent's final report ended with decisions for you: whether tasks shared
+with another company should show, that notes on the company's people aren't
+included, and that the application must bind `companyId` as the company's
+record id. The workspace had no notes or tasks yet, so it said that
+filtering them was tested only on sample data. The run took about twelve minutes.
 
 ### Packages that write
 

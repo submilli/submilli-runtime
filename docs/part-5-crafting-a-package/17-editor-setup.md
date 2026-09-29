@@ -20,7 +20,7 @@ compiler's begins.
 | `.vscode/tasks.json` | A build task that runs `submilli build check` | Yes |
 | `.gitignore` | An entry for `.submilli/` | Yes |
 | `.submilli/tsconfig.submilli.json` | The generated configuration: where each package lives, and the types below | No |
-| `.submilli/types/` | Type declarations for the language's built-ins, the standard library, and the packages you depend on | No |
+| `.submilli/types/` | Type declarations for the language's built-ins and the standard library; the first `submilli build check` adds the packages you depend on | No |
 
 The first three are written once and then left alone. Everything under
 `.submilli/` is written again by every `submilli build check` and `publish-local`,
@@ -40,8 +40,8 @@ with TypeScript support. There is no extension to install.
 - **Your dependencies.** A package from the local store or from GitHub
   completes from the declarations it was built with.
 - **The language's built-ins.** The types are Submilli's, not the browser's
-  or Node's. `fetch`, `process`, and `Date` aren't there because programs
-  don't have them, and `Temporal` is.
+  or Node's. `fetch`, `process`, and `Date` aren't there, because programs
+  don't have them; `Temporal` is.
 
 ## The compiler is the checker
 

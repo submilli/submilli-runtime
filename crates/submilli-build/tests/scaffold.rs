@@ -325,7 +325,7 @@ fn refresh_dependency_types_declares_each_dependency() {
     let tmp = TempDir::new().expect("tempdir");
     let dependency = interpreter::PackageDeclaration::with_package("@acme/leaf");
 
-    refresh_dependency_types(tmp.path(), &[&dependency]).expect("refresh");
+    refresh_dependency_types(tmp.path(), &[&dependency], &[]).expect("refresh");
 
     let packages = fs::read_to_string(tmp.path().join(".submilli/types/packages.d.ts"))
         .expect("read packages.d.ts");

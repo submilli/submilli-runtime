@@ -3,7 +3,7 @@
 //! the packages in dependency order, and `publish-local` compiles and installs
 //! the artifacts into the local package store.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
@@ -329,13 +329,22 @@ fn resolve_github_dependencies(
 }
 
 /// Give the editor declarations for the dependencies that come from the store.
-/// A dependency the store can't load is left for the build to report: it
-/// knows which packages are being built and names the one that needs it.
+///
+/// Each dependency's closure loads on its own, so one the store can't load
+/// costs only its own declarations; the build reports it, naming the package
+/// that needs it. A store package named like a package of this project gets no
+/// declarations, since the project's own source is what the editor should
+/// open, but the dependencies may still borrow its types.
 fn refresh_dependency_editor_types(
     manifest: &ProjectManifest,
     manifest_dir: &Path,
     store: &PackageStore,
 ) -> Result<(), ExitCode> {
+    let project_names: BTreeSet<&str> = manifest
+        .packages
+        .iter()
+        .map(|package| package.name.as_str())
+        .collect();
     let external_names: BTreeSet<&str> = manifest
         .packages
         .iter()
@@ -343,14 +352,22 @@ fn refresh_dependency_editor_types(
         .filter(|dependency| dependency.kind != DependencyKind::Sibling)
         .map(|dependency| dependency.name.as_str())
         .collect();
-    let Ok(artifacts) = store.load_closure(external_names) else {
-        return Ok(());
-    };
-    let declarations: Vec<_> = artifacts
-        .iter()
+    let mut artifacts = BTreeMap::new();
+    for name in external_names {
+        let Ok(closure) = store.load_closure([name]) else {
+            continue;
+        };
+        for artifact in closure {
+            artifacts
+                .entry(artifact.metadata.package_name.clone())
+                .or_insert(artifact);
+        }
+    }
+    let (project_packages, dependencies): (Vec<_>, Vec<_>) = artifacts
+        .values()
         .map(|artifact| &artifact.package_declaration)
-        .collect();
-    if let Err(err) = refresh_dependency_types(manifest_dir, &declarations) {
+        .partition(|declaration| project_names.contains(declaration.package_name.as_str()));
+    if let Err(err) = refresh_dependency_types(manifest_dir, &dependencies, &project_packages) {
         eprintln!("error: {err}");
         return Err(ExitCode::from(1));
     }

@@ -69,6 +69,7 @@ The first failure ends the file. The tests before it passed, the one it
 happened in failed, and the ones after it didn't run and aren't counted:
 
 ```text
+…
 ok   packages/support/tests/lib.test.ts :: apologizes with a credit
 FAIL packages/support/tests/lib.test.ts :: reports the amount in dollars
 
@@ -171,22 +172,22 @@ above, with the skill installed and one test in `@acme/billing`.
 Add tests for @acme/billing. I don't have the billing API key on this machine.
 ```
 
-The agent reads the package and runs the test that is there before it writes
-any. That test was failing: it expected a customer id with an underscore to
-appear unchanged in a path, and the package escapes it. The agent ran a
-small test to see what the function returns, decided the package was right
-and the expectation wrong, and says so in its report.
+The agent read the package and ran the existing test before writing any.
+Then it wrote tests that need no key: the invoice path for a hostile id,
+`cus/../admin?x=1`, which must stay inside the customer's segment of the
+path; credits for a premium and a standard customer; a zero and a negative
+amount, refused before the permission check; and `latestInvoice` with no
+key, which must fail naming `BILLING_API_KEY`. At the end of the same file
+it added a live read that runs only when the key is set. It didn't put that
+read in a `network.test.ts`, so `SUBMILLI_SKIP_HTTP_TESTS=1` doesn't skip it.
 
-It then writes tests that need no key: the invoice path with a space, a
-slash, and an id such as `../admin`; credits for a premium and a standard
-customer; a zero and a negative amount; and `latestInvoice` with no key,
-which must fail naming `BILLING_API_KEY`. It adds a live test in
-`network.test.ts` that reads one invoice and returns at once when the key is
-unset. All ten tests pass.
+Its first expectation for the hostile path was wrong: it hadn't expected
+`encodeComponent` to escape dots as well as slashes. It ran the function to
+see what it returns, decided the package was right and its test wrong, fixed
+the test, and said so in its report. All the tests passed, about a minute
+after the prompt.
 
-The report separates what ran from what didn't. The live test reported `ok`
-without calling the service. A missing invoice, a failed request, and reading
-a response aren't covered, because tests have no way to stand in for the
-service. The customer in the live test comes from the examples, so replace
-it with one that exists. And it repeats the limit in the section above: the
-tests show the operations work, not that a program is refused.
+The report separated what ran from what didn't. The live read hadn't run,
+so the report called it unverified until someone runs it with the key.
+It also repeated the limit in the section above: the tests show the package
+works, not that a blueprint refuses what it should.
