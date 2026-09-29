@@ -29,6 +29,8 @@ use crate::codegen::function_emitter::FunctionEmitter;
 use crate::codegen::imported_classes::ImportedClassLayout;
 use crate::codegen::intrinsics::IntrinsicTypeIndices;
 use crate::codegen::symbol_table::{FieldSetup, MethodSlotAbi, SymbolTable};
+use crate::codegen::{GuardedBodies, internal_failure, next_index, parameter_local, wasm_u32};
+use crate::compiler_error::CompilerFailure;
 use crate::{MangledName, TypedAst, TypedClassDecl, TypedTypeDecl};
 
 /// The four universal vtable slots (toString/toJson/equals/hash) every vtable
@@ -110,6 +112,7 @@ struct ClassLayout {
     /// Per-class universal slot 3 body: FNV-1a over the data-field payload
     /// slots, consistent with the `equals` contract.
     hash_func_idx: u32,
+    guarded_bodies: GuardedBodies,
 }
 
 impl ClassLayout {
@@ -199,7 +202,7 @@ impl ClassPlan {
             })
             .collect();
 
-        let order = topo_order(&by_mangled);
+        let order = topo_order(&by_mangled)?;
         let mut private_members: BTreeMap<MangledName, BTreeSet<String>> = imported
             .iter()
             .map(|(name, layout)| (name.clone(), layout.private_members.clone()))
@@ -215,13 +218,14 @@ impl ClassPlan {
         let mut inherited_fields: BTreeMap<MangledName, BTreeSet<String>> = BTreeMap::new();
 
         for mangled in &order {
-            let decl = by_mangled[mangled];
-            let mut private = decl
-                .extends
-                .as_ref()
-                .and_then(|parent| private_members.get(parent))
-                .cloned()
-                .unwrap_or_default();
+            let decl = class_decl(&by_mangled, mangled)?;
+            let mut private = match &decl.extends {
+                Some(parent) => private_members
+                    .get(parent)
+                    .cloned()
+                    .ok_or_else(|| unavailable_parent(parent))?,
+                None => BTreeSet::new(),
+            };
             for field in &decl.fields {
                 if field.visibility == crate::Visibility::Private {
                     private.insert(field.name.name.clone());
@@ -236,45 +240,10 @@ impl ClassPlan {
             private_members.insert(mangled.clone(), private);
             // Parent prefix: a local parent (resolved earlier this pass) or an
             // imported parent (its full layout reconstructed in `imported_classes`).
-            let (parent_fields, parent_methods) = decl
-                .extends
-                .as_ref()
-                .and_then(|p| {
-                    layouts
-                        .get(p)
-                        .map(|(f, m, _)| (f.clone(), m.clone()))
-                        .or_else(|| {
-                            imported.get(p).map(|l| {
-                                let fields = l
-                                    .fields
-                                    .iter()
-                                    .map(|name| FieldLayout {
-                                        name: name.clone(),
-                                        optional: l.optional_fields.contains(name),
-                                        narrowing_check: l
-                                            .narrowing_checks
-                                            .get(name)
-                                            .cloned()
-                                            .map(Box::new),
-                                    })
-                                    .collect();
-                                let methods = l
-                                    .methods
-                                    .iter()
-                                    .map(|s| SlotDraft {
-                                        name: s.name.clone(),
-                                        owner: s.owner.clone(),
-                                        param_tys: s.param_tys.clone(),
-                                        argument_metadata: s.argument_metadata.clone(),
-                                        ret_ty: s.ret_ty.clone(),
-                                        generic: s.generic,
-                                    })
-                                    .collect();
-                                (fields, methods)
-                            })
-                        })
-                })
-                .unwrap_or_default();
+            let (parent_fields, parent_methods) = match &decl.extends {
+                Some(parent) => parent_prefix(parent, &layouts, imported)?,
+                None => (Vec::new(), Vec::new()),
+            };
 
             // Slot order is an internal ABI, not source order: own members sort
             // by name and append after the inherited prefix. A cross-package
@@ -318,7 +287,7 @@ impl ClassPlan {
             let mut methods: Vec<SlotDraft> = parent_methods;
             for m in &sorted_methods {
                 let param_tys: Vec<crate::Type> = m.params.iter().map(|p| p.ty.clone()).collect();
-                let argument_metadata = super::call_arguments::typed_metadata(&m.params);
+                let argument_metadata = super::call_arguments::typed_metadata(&m.params)?;
                 if let Some(slot) = methods.iter_mut().find(|s| s.name == m.name.name) {
                     // Override: same slot, body now supplied by this class — so
                     // the slot must describe *this* body, not the ancestor's.
@@ -363,8 +332,10 @@ impl ClassPlan {
             .collect();
         let mut classes: Vec<ClassLayout> = Vec::with_capacity(ordered.len());
         for mangled in ordered {
-            let decl = by_mangled[&mangled];
-            let (fields, method_drafts, own_methods) = layouts.remove(&mangled).unwrap();
+            let decl = class_decl(&by_mangled, &mangled)?;
+            let (fields, method_drafts, own_methods) = layouts
+                .remove(&mangled)
+                .ok_or_else(|| internal_failure("a class layout was resolved out of order"))?;
             // An inherited signature comes from the typed AST with the
             // `extends` clause's type arguments substituted, matching what the
             // declaration exports and a consumer imports; re-deriving the
@@ -373,10 +344,10 @@ impl ClassPlan {
             let ctor_params = decl.effective_ctor_params().to_vec();
             let ctor_body = decl.constructor.as_ref().map(|c| c.body);
             ctor_params_by_mangled.insert(mangled.clone(), ctor_params.clone());
-            let inherited = inherited_fields
-                .remove(&mangled)
-                .expect("inherited field names recorded for every class in topo order");
-            let field_setup = field_setup_steps(decl, &inherited);
+            let inherited = inherited_fields.remove(&mangled).ok_or_else(|| {
+                internal_failure("a class's inherited field names were not recorded")
+            })?;
+            let field_setup = field_setup_steps(decl, &inherited)?;
             // get + set share a property name; dedup for the per-name string globals.
             let accessor_names: Vec<String> = decl
                 .accessors
@@ -385,8 +356,11 @@ impl ClassPlan {
                 .collect::<std::collections::BTreeSet<_>>()
                 .into_iter()
                 .collect();
+            let private_members = private_members
+                .remove(&mangled)
+                .ok_or_else(|| internal_failure("a class's private members were not recorded"))?;
             classes.push(ClassLayout {
-                private_members: private_members.remove(&mangled).unwrap_or_default(),
+                private_members,
                 generics: ta
                     .runtime_class_parameters
                     .get(&mangled)
@@ -426,6 +400,7 @@ impl ClassPlan {
                 to_string_func_idx: 0,
                 to_json_func_idx: 0,
                 hash_func_idx: 0,
+                guarded_bodies: GuardedBodies::default(),
             });
         }
 
@@ -492,24 +467,10 @@ impl ClassPlan {
             for slot in &class.methods {
                 // Only allocate when this class is where the slot's sig originates:
                 // i.e. the method is declared here AND the parent has no such slot.
-                let parent_has = class.parent.as_ref().and_then(|p| {
-                    sig_by_name
-                        .get(&(p.clone(), slot.name.clone()))
-                        .cloned()
-                        // An imported parent's slot sigs live in the symbol table
-                        // (recorded by `imported_classes`), not `sig_by_name`.
-                        .or_else(|| {
-                            symbols.class_method_sig(p, &slot.name).map(|sig| {
-                                (
-                                    sig,
-                                    symbols
-                                        .class_method_abi(p, &slot.name)
-                                        .cloned()
-                                        .unwrap_or_default(),
-                                )
-                            })
-                        })
-                });
+                let parent_has = match &class.parent {
+                    Some(p) => inherited_slot_sig(&sig_by_name, symbols, p, &slot.name)?,
+                    None => None,
+                };
                 if let Some(parent_entry) = parent_has {
                     sig_by_name.insert((class.mangled.clone(), slot.name.clone()), parent_entry);
                     continue;
@@ -520,7 +481,9 @@ impl ClassPlan {
                     .own_methods
                     .iter()
                     .find(|m| m.name == slot.name)
-                    .expect("originating slot is declared on this class");
+                    .ok_or_else(|| {
+                        internal_failure("a class method slot originates in a class without it")
+                    })?;
                 let mut params: Vec<ValType> = vec![ref_to(intrinsics.object)];
                 // Overrides may widen parameters beyond the ancestor's representation.
                 // Every method argument therefore crosses a nullable boxed slot.
@@ -536,8 +499,8 @@ impl ClassPlan {
                     params: params.iter().skip(1).copied().collect(),
                     ret: results.first().copied(),
                 };
+                let sig_idx = next_index(next_type_idx)?;
                 types.ty().function(params, results);
-                let sig_idx = take(next_type_idx);
                 sig_by_name.insert((class.mangled.clone(), slot.name.clone()), (sig_idx, abi));
             }
         }
@@ -546,7 +509,7 @@ impl ClassPlan {
             for slot in &mut class.methods {
                 slot.sig_idx = sig_by_name
                     .get(&(class.mangled.clone(), slot.name.clone()))
-                    .expect("every slot has a sig")
+                    .ok_or_else(|| internal_failure("a class method slot has no signature"))?
                     .0;
             }
         }
@@ -554,12 +517,12 @@ impl ClassPlan {
         // 2. Reserve struct + vtable type indices: one (vtable, struct) pair per
         //    class, interleaved, in topo order (parents precede children).
         for class in &mut self.classes {
-            class.vtable_type_idx = take(next_type_idx);
-            class.struct_type_idx = take(next_type_idx);
+            class.vtable_type_idx = next_index(next_type_idx)?;
+            class.struct_type_idx = next_index(next_type_idx)?;
             symbols.record_class_vtable_type(class.mangled.clone(), class.vtable_type_idx);
             symbols.record_class_struct_type(class.mangled.clone(), class.struct_type_idx);
-            let vtable_super = vtable_supertype_idx(class, intrinsics, symbols);
-            let struct_super = struct_supertype_idx(class, intrinsics, symbols);
+            let vtable_super = vtable_supertype_idx(class, intrinsics, symbols)?;
+            let struct_super = struct_supertype_idx(class, intrinsics, symbols)?;
             symbols.record_struct_supertype(class.vtable_type_idx, vtable_super);
             symbols.record_struct_supertype(class.struct_type_idx, struct_super);
         }
@@ -572,8 +535,8 @@ impl ClassPlan {
         //    Per-class groups let a cross-package consumer reconstruct just the
         //    classes it uses, byte-identically.
         for class in &self.classes {
-            let vtable = self.vtable_subtype(class, intrinsics, symbols);
-            let strukt = self.struct_subtype(class, intrinsics, symbols);
+            let vtable = self.vtable_subtype(class, intrinsics, symbols)?;
+            let strukt = self.struct_subtype(class, intrinsics, symbols)?;
             types.ty().rec([vtable, strukt]);
         }
 
@@ -582,21 +545,31 @@ impl ClassPlan {
             symbols
                 .class_type_parameters
                 .insert(class.mangled.clone(), class.generics.clone());
+            let parent_guarded = match &class.parent {
+                Some(parent) => {
+                    symbols
+                        .recorded_class_guard_layout(parent)?
+                        .has_instance_guards
+                }
+                None => false,
+            };
             symbols.record_class_guard_layout(
                 class.mangled.clone(),
                 class.parent.as_ref(),
-                class.payload_field_names().len() as u32,
+                wasm_u32(class.payload_field_names().len())?,
                 !class.generics.is_empty()
-                    || class.parent.as_ref().is_some_and(|parent| {
-                        symbols.class_guard_layout(parent).has_instance_guards
-                    })
+                    || parent_guarded
                     || class
                         .fields
                         .iter()
                         .any(|field| field.narrowing_check.is_some()),
-            );
+            )?;
             for (i, f) in class.fields.iter().enumerate() {
-                symbols.record_class_field_slot(class.mangled.clone(), f.name.clone(), i as u32);
+                symbols.record_class_field_slot(
+                    class.mangled.clone(),
+                    f.name.clone(),
+                    wasm_u32(i)?,
+                );
                 if let Some(check) = &f.narrowing_check {
                     symbols.record_class_field_narrowing_check(
                         class.mangled.clone(),
@@ -612,7 +585,7 @@ impl ClassPlan {
                 symbols.record_class_method_slot(
                     class.mangled.clone(),
                     slot.name.clone(),
-                    VTABLE_METHOD_SLOT_BASE + i as u32,
+                    method_vtable_slot(i)?,
                 );
                 symbols.record_class_method_sig(
                     class.mangled.clone(),
@@ -647,18 +620,18 @@ impl ClassPlan {
             let ret = ref_to(class.struct_type_idx);
             let mut entry_params = params.clone();
             if symbols
-                .class_guard_layout(&class.mangled)
+                .recorded_class_guard_layout(&class.mangled)?
                 .has_instance_guards
             {
                 entry_params.push(ref_to(intrinsics.object_fields));
             }
+            class.ctor_sig_idx = next_index(next_type_idx)?;
             types.ty().function(entry_params, vec![ret]);
-            class.ctor_sig_idx = take(next_type_idx);
 
             let mut init_params = vec![ref_to(object_idx)];
             init_params.extend(params);
+            class.ctor_init_sig_idx = next_index(next_type_idx)?;
             types.ty().function(init_params, Vec::new());
-            class.ctor_init_sig_idx = take(next_type_idx);
         }
         Ok(())
     }
@@ -668,8 +641,8 @@ impl ClassPlan {
         class: &ClassLayout,
         intrinsics: IntrinsicTypeIndices,
         symbols: &SymbolTable,
-    ) -> SubType {
-        let supertype = vtable_supertype_idx(class, intrinsics, symbols);
+    ) -> Result<SubType, CompilerFailure> {
+        let supertype = vtable_supertype_idx(class, intrinsics, symbols)?;
         let mut fields: Vec<FieldType> = vec![
             fieldtype_ref(intrinsics.to_string_fn),
             fieldtype_ref(intrinsics.to_json_fn),
@@ -680,7 +653,7 @@ impl ClassPlan {
         for slot in &class.methods {
             fields.push(fieldtype_ref(slot.sig_idx));
         }
-        substruct(fields, Some(supertype))
+        Ok(substruct(fields, Some(supertype)))
     }
 
     fn struct_subtype(
@@ -688,8 +661,8 @@ impl ClassPlan {
         class: &ClassLayout,
         intrinsics: IntrinsicTypeIndices,
         symbols: &SymbolTable,
-    ) -> SubType {
-        let supertype = struct_supertype_idx(class, intrinsics, symbols);
+    ) -> Result<SubType, CompilerFailure> {
+        let supertype = struct_supertype_idx(class, intrinsics, symbols)?;
         // Header slots 0-2: vtable (refined to this class's vtable),
         // field-names, object-fields. Wasm requires the full supertype prefix
         // to be re-listed.
@@ -704,20 +677,24 @@ impl ClassPlan {
                 ..fieldtype_ref(intrinsics.object_fields)
             },
         ];
-        substruct(fields, Some(supertype))
+        Ok(substruct(fields, Some(supertype)))
     }
 
     /// Phase: reserve function indices — 4 shared universal stubs, then per-class
     /// method stubs (one per own method) + getter + setter.
-    pub fn allocate_funcs(&mut self, next_func_idx: &mut u32, symbols: &mut SymbolTable) {
+    pub fn allocate_funcs(
+        &mut self,
+        next_func_idx: &mut u32,
+        symbols: &mut SymbolTable,
+    ) -> Result<(), CompilerFailure> {
         if self.classes.is_empty() {
-            return;
+            return Ok(());
         }
         self.universal_stubs = [
-            take(next_func_idx),
-            take(next_func_idx),
-            take(next_func_idx),
-            take(next_func_idx),
+            next_index(next_func_idx)?,
+            next_index(next_func_idx)?,
+            next_index(next_func_idx)?,
+            next_index(next_func_idx)?,
         ];
         // Borrow-checker: build the (mangled, ctor params, ret) tuples first so we
         // can call the `&self` helper `class_ref_ty` before the `&mut` loop.
@@ -736,13 +713,13 @@ impl ClassPlan {
         {
             // Constructor first (its index backs the `new Foo(...)` direct call),
             // then its init body (backs `super(...)` and the entry's delegation).
-            class.ctor_func_idx = take(next_func_idx);
-            symbols.record_local_fn(ctor_mangled, class.ctor_func_idx, ctor_param_tys, ret);
-            class.ctor_init_func_idx = take(next_func_idx);
+            class.ctor_func_idx = next_index(next_func_idx)?;
+            symbols.record_local_fn(ctor_mangled, class.ctor_func_idx, ctor_param_tys, ret)?;
+            class.ctor_init_func_idx = next_index(next_func_idx)?;
             symbols.record_class_ctor_init_func(class.mangled.clone(), class.ctor_init_func_idx);
             symbols.record_class_field_setup(class.mangled.clone(), class.field_setup.clone());
             for method in &class.own_methods {
-                let idx = take(next_func_idx);
+                let idx = next_index(next_func_idx)?;
                 symbols.record_class_method_func(class.mangled.clone(), method.name.clone(), idx);
             }
             // One closure-ABI adapter per non-generic *slot* — inherited ones
@@ -760,7 +737,10 @@ impl ClassPlan {
                 let reused = (slot.owner != class.mangled)
                     .then(|| symbols.class_method_adapter_func_idx(&slot.owner, &slot.name))
                     .flatten();
-                let idx = reused.unwrap_or_else(|| take(next_func_idx));
+                let idx = match reused {
+                    Some(idx) => idx,
+                    None => next_index(next_func_idx)?,
+                };
                 if reused.is_none() {
                     adapter_slots.push(i);
                     // Also key it by the owner, so descendants of this class
@@ -783,14 +763,20 @@ impl ClassPlan {
             class.adapter_slots = adapter_slots;
             // Retained temporarily for stable function/global numbering while
             // class field dispatch migrates to the object-fields payload.
-            class.getter_func_idx = take(next_func_idx);
-            class.setter_func_idx = take(next_func_idx);
-            class.equals_func_idx = take(next_func_idx);
-            class.to_string_func_idx = take(next_func_idx);
-            class.to_json_func_idx = take(next_func_idx);
-            class.hash_func_idx = take(next_func_idx);
-            *next_func_idx += 3; // Guarded equals, JSON, and hash implementation bodies.
+            class.getter_func_idx = next_index(next_func_idx)?;
+            class.setter_func_idx = next_index(next_func_idx)?;
+            class.equals_func_idx = next_index(next_func_idx)?;
+            class.to_string_func_idx = next_index(next_func_idx)?;
+            class.to_json_func_idx = next_index(next_func_idx)?;
+            class.hash_func_idx = next_index(next_func_idx)?;
+            // Field order is allocation order, which the body emission follows.
+            class.guarded_bodies = GuardedBodies {
+                equals: next_index(next_func_idx)?,
+                to_json: next_index(next_func_idx)?,
+                hash: next_index(next_func_idx)?,
+            };
         }
+        Ok(())
     }
 
     /// Phase: function-section entries for every emitted function, in the same
@@ -816,7 +802,7 @@ impl ClassPlan {
                     .methods
                     .iter()
                     .find(|s| s.name == method.name)
-                    .expect("own method has a slot")
+                    .ok_or_else(|| internal_failure("a class's own method has no vtable slot"))?
                     .sig_idx;
                 functions.function(sig_idx);
             }
@@ -857,7 +843,7 @@ impl ClassPlan {
         symbols: &mut SymbolTable,
         next_global_idx: &mut u32,
         intrinsics: IntrinsicTypeIndices,
-    ) {
+    ) -> Result<(), CompilerFailure> {
         for class in &self.classes {
             // Vtable instance: the four per-class universal bodies + the
             // parent-vtable link + a ref.func per method slot (resolved to the
@@ -866,11 +852,11 @@ impl ClassPlan {
             // defined global (topo order, parents first) or an imported one
             // (cross-package / `Error`); both are valid in a const expr.
             let parent_link = match &class.parent {
-                Some(p) => Instruction::GlobalGet(
-                    symbols
-                        .class_vtable_global_idx(p)
-                        .expect("parent vtable global recorded before child"),
-                ),
+                Some(p) => {
+                    Instruction::GlobalGet(symbols.class_vtable_global_idx(p).ok_or_else(|| {
+                        internal_failure("a parent vtable global was not recorded before its child")
+                    })?)
+                }
                 None => Instruction::RefNull(HeapType::Concrete(intrinsics.class_vtable)),
             };
             let mut instrs: Vec<Instruction<'_>> = vec![
@@ -883,7 +869,7 @@ impl ClassPlan {
             for slot in &class.methods {
                 let func = symbols
                     .class_method_func_idx(&slot.owner, &slot.name)
-                    .expect("method stub allocated");
+                    .ok_or_else(|| internal_failure("a class method body was not allocated"))?;
                 instrs.push(Instruction::RefFunc(func));
             }
             instrs.push(Instruction::StructNew(class.vtable_type_idx));
@@ -895,7 +881,7 @@ impl ClassPlan {
                 },
                 &ConstExpr::extended(instrs),
             );
-            symbols.record_class_vtable_global(class.mangled.clone(), take(next_global_idx));
+            symbols.record_class_vtable_global(class.mangled.clone(), next_index(next_global_idx)?);
 
             // Getter + setter globals are no longer part of ObjectShape, but keep
             // emitting them for now so existing numbering remains stable.
@@ -907,7 +893,7 @@ impl ClassPlan {
                 },
                 &ConstExpr::extended([Instruction::RefFunc(class.getter_func_idx)]),
             );
-            symbols.record_class_getter_global(class.mangled.clone(), take(next_global_idx));
+            symbols.record_class_getter_global(class.mangled.clone(), next_index(next_global_idx)?);
 
             globals.global(
                 GlobalType {
@@ -917,8 +903,9 @@ impl ClassPlan {
                 },
                 &ConstExpr::extended([Instruction::RefFunc(class.setter_func_idx)]),
             );
-            symbols.record_class_setter_global(class.mangled.clone(), take(next_global_idx));
+            symbols.record_class_setter_global(class.mangled.clone(), next_index(next_global_idx)?);
         }
+        Ok(())
     }
 
     /// Phase: function bodies — constructor + init, method bodies and their
@@ -962,17 +949,20 @@ impl ClassPlan {
             let intrinsics = ctx
                 .symbols
                 .intrinsic_type_indices()
-                .expect("intrinsics declared by codegen entry");
+                .ok_or_else(|| internal_failure("intrinsic types are not declared"))?;
+            let bodies = class.guarded_bodies;
             code.function(&super::vtable_walk::guarded_body(
-                class.hash_func_idx + 1,
+                bodies.equals,
                 2,
                 ValType::I32,
                 ctx.symbols,
-            ));
+            )?);
             let string_vtable_global_idx = ctx
                 .symbols
                 .prelude_global_idx("string_vtable")
-                .expect("string_vtable imported from prelude");
+                .ok_or_else(|| {
+                    internal_failure("string_vtable is not imported from the prelude")
+                })?;
             // A user `toString`/`toJson` method fills the universal slot (the
             // universal slots require strings even when the authored method's
             // physical return has widened to preserve live values).
@@ -986,35 +976,38 @@ impl ClassPlan {
                             let idx = ctx
                                 .symbols
                                 .class_method_func_idx(&slot.owner, &slot.name)
-                                .expect("slot owner's method func allocated");
+                                .ok_or_else(|| {
+                                    internal_failure("a class method body was not allocated")
+                                })?;
                             emit_universal_slot_thunk(ctx, idx)
                         })
                         .transpose()
                 };
-            code.function(&user_method_thunk("toString")?.unwrap_or_else(|| {
-                emit_class_to_string_body(intrinsics, string_vtable_global_idx)
-            }));
+            let to_string = match user_method_thunk("toString")? {
+                Some(thunk) => thunk,
+                None => emit_class_to_string_body(intrinsics, string_vtable_global_idx)?,
+            };
+            code.function(&to_string);
             code.function(&super::vtable_walk::guarded_body(
-                class.hash_func_idx + 2,
+                bodies.to_json,
                 1,
                 ref_to(intrinsics.string),
                 ctx.symbols,
-            ));
+            )?);
             code.function(&super::vtable_walk::guarded_body(
-                class.hash_func_idx + 3,
+                bodies.hash,
                 1,
                 ValType::I32,
                 ctx.symbols,
-            ));
-            code.function(&emit_class_equals_body(
-                class.fields.len() as u32,
-                intrinsics,
-            ));
-            code.function(
-                &user_method_thunk("toJson")?
-                    .unwrap_or_else(|| emit_class_to_json_body(ctx.symbols)),
-            );
-            code.function(&emit_class_hash_body(class.fields.len() as u32, intrinsics));
+            )?);
+            let field_count = wasm_u32(class.fields.len())?;
+            code.function(&emit_class_equals_body(field_count, intrinsics));
+            let to_json = match user_method_thunk("toJson")? {
+                Some(thunk) => thunk,
+                None => emit_class_to_json_body(ctx.symbols)?,
+            };
+            code.function(&to_json);
+            code.function(&emit_class_hash_body(field_count, intrinsics));
         }
         Ok(())
     }
@@ -1095,13 +1088,13 @@ impl ClassPlan {
         }
         emitter.instruction(Instruction::LocalGet(0));
         if slot.argument_metadata.is_some() {
-            super::call_arguments::unwrap(&mut emitter, ctx);
+            super::call_arguments::unwrap(&mut emitter, ctx)?;
         }
         emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
             intrinsics.object,
         )));
         for (i, ty) in slot.param_tys.iter().enumerate() {
-            emitter.instruction(Instruction::LocalGet((i + 1) as u32));
+            emitter.instruction(Instruction::LocalGet(parameter_local(i)?));
             if abi.params.get(i) != Some(&object_ref_null) {
                 crate::codegen::cast_check::emit_checked_parameter_cast_on_stack(
                     &mut emitter,
@@ -1151,13 +1144,13 @@ impl ClassPlan {
         let object_idx = ctx
             .symbols
             .intrinsic_type_indices()
-            .expect("intrinsics declared by codegen entry")
+            .ok_or_else(|| internal_failure("intrinsic types are not declared"))?
             .object;
         let abi = ctx
             .symbols
             .class_method_abi(&class.mangled, &method.name)
             .cloned()
-            .unwrap_or_default();
+            .ok_or_else(|| internal_failure("class method slot ABI is not registered"))?;
         let mut wasm_params: Vec<(crate::Ident, ValType)> = vec![(
             crate::Ident {
                 name: "this".to_string(),
@@ -1209,11 +1202,11 @@ impl ClassPlan {
 
         // Parameters stay at their (possibly erased) slot types: this body only
         // forwards them to the init fn, which takes the same slots.
-        let ctor_slots = ctor_slot_types(ctx, &class.mangled);
+        let ctor_slots = ctor_slot_types(ctx, &class.mangled)?;
         let mut wasm_params = slot_params(ctx, &class.ctor_params, &ctor_slots)?;
         let guarded = ctx
             .symbols
-            .class_guard_layout(&class.mangled)
+            .recorded_class_guard_layout(&class.mangled)?
             .has_instance_guards;
         if guarded {
             let intr = ctx
@@ -1239,7 +1232,7 @@ impl ClassPlan {
         // populated by the prologue below). The field-names list must match
         // `class_field_names` so the dynamic field-name scan resolves both.
         let dynamic_methods: Vec<&MethodSlot> = class.payload_slots().collect();
-        let n_fields = class.fields.len();
+        let n_fields = wasm_u32(class.fields.len())?;
         let field_names = class.payload_field_names();
         let push_global =
             |em: &mut FunctionEmitter, idx: u32| em.instruction(Instruction::GlobalGet(idx));
@@ -1249,42 +1242,43 @@ impl ClassPlan {
                 .class_vtable_global_idx(&class.mangled)
                 .ok_or_else(|| crate::codegen::internal_failure("vtable global"))?,
         );
-        super::field_names::emit_instance_names(&mut emitter, ctx, &field_names, |_| false);
+        super::field_names::emit_instance_names(&mut emitter, ctx, &field_names, |_| false)?;
         let intrinsics = ctx.symbols.intrinsic_type_indices().ok_or_else(|| {
             crate::codegen::internal_failure("intrinsics declared by codegen entry")
         })?;
         // Instance validators live after the named payload, indexed by data
         // slot. Keeping them out of field_names preserves object enumeration.
-        let layout = ctx.symbols.class_guard_layout(&class.mangled);
-        let depth = layout.inheritance_depth;
-        let guarded = layout.has_instance_guards;
-        let guard_slots = if guarded {
-            (depth as usize + 1) * (field_names.len() + 1)
+        let layout = ctx.symbols.recorded_class_guard_layout(&class.mangled)?;
+        let named_len = wasm_u32(field_names.len())?;
+        let guard_slots = if layout.has_instance_guards {
+            guard_slot_count(layout.inheritance_depth, named_len)?
         } else {
             0
         };
-        let payload_len = field_names.len() + guard_slots;
+        let payload_len = named_len
+            .checked_add(guard_slots)
+            .ok_or_else(|| internal_failure("a class instance payload is too large"))?;
         for _ in 0..payload_len {
             let default = default_object_value_instr(intrinsics.object);
             emitter.instruction(default);
         }
         emitter.instruction(Instruction::ArrayNewFixed {
             array_type_index: intrinsics.object_fields,
-            array_size: payload_len as u32,
+            array_size: payload_len,
         });
         emitter.instruction(Instruction::StructNew(class.struct_type_idx));
         emitter.instruction(Instruction::LocalSet(this_slot));
 
-        if guarded {
+        if layout.has_instance_guards {
             emitter.instruction(Instruction::LocalGet(this_slot));
             emitter.instruction(Instruction::StructGet {
                 struct_type_index: class.struct_type_idx,
                 field_index: 2,
             });
-            emitter.instruction(Instruction::I32Const(field_names.len() as i32));
-            emitter.instruction(Instruction::LocalGet(class.ctor_params.len() as u32));
+            emitter.instruction(Instruction::I32Const(named_len.cast_signed()));
+            emitter.instruction(Instruction::LocalGet(wasm_u32(class.ctor_params.len())?));
             emitter.instruction(Instruction::I32Const(0));
-            emitter.instruction(Instruction::I32Const(guard_slots as i32));
+            emitter.instruction(Instruction::I32Const(guard_slots.cast_signed()));
             emitter.instruction(Instruction::ArrayCopy {
                 array_type_index_dst: intrinsics.object_fields,
                 array_type_index_src: intrinsics.object_fields,
@@ -1301,6 +1295,9 @@ impl ClassPlan {
                 )
             })?;
             for (j, method) in dynamic_methods.iter().enumerate() {
+                let method_slot = n_fields
+                    .checked_add(wasm_u32(j)?)
+                    .ok_or_else(|| internal_failure("a class instance payload is too large"))?;
                 let closure_struct = ctx
                     .symbols
                     .closure_struct_type_idx(slot_closure_sig(method)?)
@@ -1320,12 +1317,12 @@ impl ClassPlan {
                     struct_type_index: class.struct_type_idx,
                     field_index: 2,
                 });
-                emitter.instruction(Instruction::I32Const((n_fields + j) as i32));
+                emitter.instruction(Instruction::I32Const(method_slot.cast_signed()));
                 emitter.instruction(Instruction::GlobalGet(closure_vtable));
                 emitter.instruction(Instruction::RefFunc(adapter));
                 emitter.instruction(Instruction::LocalGet(this_slot));
                 if let Some(metadata) = &method.argument_metadata {
-                    super::call_arguments::wrap(&mut emitter, ctx, metadata);
+                    super::call_arguments::wrap(&mut emitter, ctx, metadata)?;
                 }
                 emitter.instruction(Instruction::StructNew(closure_struct));
                 emitter.instruction(Instruction::ArraySet(intrinsics.object_fields));
@@ -1336,7 +1333,7 @@ impl ClassPlan {
         // It runs the constructor body (or forwards to the parent for an implicit
         // constructor), where `super(...)` chains up to the parent init.
         emitter.instruction(Instruction::LocalGet(this_slot));
-        for i in 0..class.ctor_params.len() as u32 {
+        for i in 0..wasm_u32(class.ctor_params.len())? {
             emitter.instruction(Instruction::LocalGet(i));
         }
         emitter.instruction(Instruction::Call(class.ctor_init_func_idx));
@@ -1362,7 +1359,7 @@ impl ClassPlan {
         let object_idx = ctx
             .symbols
             .intrinsic_type_indices()
-            .expect("intrinsics declared by codegen entry")
+            .ok_or_else(|| internal_failure("intrinsic types are not declared"))?
             .object;
         let mut wasm_params: Vec<(crate::Ident, ValType)> = vec![(
             crate::Ident {
@@ -1371,7 +1368,7 @@ impl ClassPlan {
             },
             ref_to(object_idx),
         )];
-        let ctor_slots = ctor_slot_types(ctx, &class.mangled);
+        let ctor_slots = ctor_slot_types(ctx, &class.mangled)?;
         wasm_params.extend(slot_params(ctx, &class.ctor_params, &ctor_slots)?);
         let mut emitter = FunctionEmitter::new(ctx, &wasm_params);
         let param_slots = rebind_erased_params(&mut emitter, ctx, &class.ctor_params, &ctor_slots)?;
@@ -1404,19 +1401,26 @@ impl ClassPlan {
             // Implicit constructor: forward all params to the parent init (if
             // any), then run this class's field setup.
             if let Some(parent) = &class.parent {
-                let parent_init = ctx
-                    .symbols
-                    .class_ctor_init_func_idx(parent)
-                    .expect("parent ctor init allocated");
+                let parent_init =
+                    ctx.symbols
+                        .class_ctor_init_func_idx(parent)
+                        .ok_or_else(|| {
+                            internal_failure("a parent constructor init was not allocated")
+                        })?;
                 // This class's parameters carry the `extends` clause's
                 // substituted types, while the parent's own signature may
                 // still erase them, so each one is coerced on the way through.
                 // Forward from the rebound local, whose Wasm type is `p.ty`'s —
                 // what the coercion takes as its source.
-                let parent_slots = ctor_slot_types(ctx, parent);
+                let parent_slots = ctor_slot_types(ctx, parent)?;
                 emitter.instruction(Instruction::LocalGet(this_slot));
-                for (i, p) in class.ctor_params.iter().enumerate() {
-                    emitter.instruction(Instruction::LocalGet(param_slots[i]));
+                if param_slots.len() != class.ctor_params.len() {
+                    return Err(internal_failure(
+                        "constructor parameters and their locals differ in number",
+                    ));
+                }
+                for (i, (p, local)) in class.ctor_params.iter().zip(&param_slots).enumerate() {
+                    emitter.instruction(Instruction::LocalGet(*local));
                     if let Some(slot) = parent_slots.get(i).copied() {
                         cast::emit_coerce_to_wasm_slot(&mut emitter, ctx, &p.ty, slot)?;
                     }
@@ -1443,7 +1447,7 @@ impl ClassPlan {
         &self,
         symbols: &SymbolTable,
         is_exported: impl Fn(&MangledName) -> bool,
-    ) -> Vec<(MangledName, u32)> {
+    ) -> Result<Vec<(MangledName, u32)>, CompilerFailure> {
         let mut out: Vec<(MangledName, u32)> = Vec::new();
         for class in &self.classes {
             if !is_exported(&class.mangled) {
@@ -1463,11 +1467,11 @@ impl ClassPlan {
                 }
                 let idx = symbols
                     .class_method_func_idx(&class.mangled, &method.name)
-                    .expect("method body func allocated");
+                    .ok_or_else(|| internal_failure("a class method body was not allocated"))?;
                 out.push((crate::mangle::extend(&class.mangled, &method.name), idx));
             }
         }
-        out
+        Ok(out)
     }
 
     /// Each exported class's vtable-singleton global, for the export section —
@@ -1477,15 +1481,15 @@ impl ClassPlan {
         &self,
         symbols: &SymbolTable,
         is_exported: impl Fn(&MangledName) -> bool,
-    ) -> Vec<(MangledName, u32)> {
+    ) -> Result<Vec<(MangledName, u32)>, CompilerFailure> {
         self.classes
             .iter()
             .filter(|class| is_exported(&class.mangled))
             .map(|class| {
                 let global_idx = symbols
                     .class_vtable_global_idx(&class.mangled)
-                    .expect("vtable global emitted before exports");
-                (vtable_global_export_name(&class.mangled), global_idx)
+                    .ok_or_else(|| internal_failure("a class vtable global was not emitted"))?;
+                Ok((vtable_global_export_name(&class.mangled), global_idx))
             })
             .collect()
     }
@@ -1536,19 +1540,23 @@ impl ClassPlan {
 /// A field that only redeclares an inherited one contributes a
 /// [`FieldSetup::Reset`] instead — see [`redeclares_uninitialized_slot`].
 /// `inherited` names the slots the parent prefix already owns.
-fn field_setup_steps(decl: &TypedClassDecl, inherited: &BTreeSet<String>) -> Vec<FieldSetup> {
+fn field_setup_steps(
+    decl: &TypedClassDecl,
+    inherited: &BTreeSet<String>,
+) -> Result<Vec<FieldSetup>, CompilerFailure> {
     let mut steps = Vec::new();
     if let Some(ctor) = &decl.constructor {
         for field in decl.fields.iter().filter(|f| f.auto_assigned) {
-            if let Some(pos) = ctor
+            if let Some((pos, param)) = ctor
                 .params
                 .iter()
-                .position(|p| p.name.name == field.name.name)
+                .enumerate()
+                .find(|(_, p)| p.name.name == field.name.name)
             {
                 steps.push(FieldSetup::ParamCopy {
                     field: field.name.name.clone(),
-                    param_local: pos as u32 + 1,
-                    ty: ctor.params[pos].ty.clone(),
+                    param_local: parameter_local(pos)?,
+                    ty: param.ty.clone(),
                 });
             }
         }
@@ -1565,7 +1573,35 @@ fn field_setup_steps(decl: &TypedClassDecl, inherited: &BTreeSet<String>) -> Vec
             });
         }
     }
-    steps
+    Ok(steps)
+}
+
+/// Vtable field of the method in class slot `slot`, after the universal slots
+/// and parent link.
+pub(crate) fn method_vtable_slot(slot: usize) -> Result<u32, CompilerFailure> {
+    VTABLE_METHOD_SLOT_BASE
+        .checked_add(wasm_u32(slot)?)
+        .ok_or_else(|| internal_failure("a class has too many vtable slots"))
+}
+
+/// Guard payload slots: one guard per named slot plus its receiver marker, for
+/// each class level from this one to the root.
+fn guard_slot_count(inheritance_depth: u32, named_len: u32) -> Result<u32, CompilerFailure> {
+    inheritance_depth
+        .checked_add(1)
+        .zip(named_len.checked_add(1))
+        .and_then(|(levels, per_level)| levels.checked_mul(per_level))
+        .ok_or_else(|| internal_failure("a class guard payload is too large"))
+}
+
+fn class_decl<'a>(
+    by_mangled: &BTreeMap<&MangledName, &'a TypedClassDecl>,
+    mangled: &MangledName,
+) -> Result<&'a TypedClassDecl, CompilerFailure> {
+    by_mangled
+        .get(mangled)
+        .copied()
+        .ok_or_else(|| internal_failure("class order names an undeclared class"))
 }
 
 /// Whether this own field shares an inherited slot without writing it. Such a
@@ -1698,36 +1734,103 @@ struct SlotDraft {
 /// inheritance-folding pass in [`ClassPlan::collect`].
 type ResolvedLayout = (Vec<FieldLayout>, Vec<SlotDraft>, Vec<OwnMethod>);
 
-/// Topological order of classes by `extends` (parents before children). Classes
-/// whose parent is not in this module (cross-package) are treated as roots.
-fn topo_order(by_mangled: &BTreeMap<&MangledName, &TypedClassDecl>) -> Vec<MangledName> {
-    let mut visited: std::collections::BTreeSet<MangledName> = std::collections::BTreeSet::new();
-    let mut out: Vec<MangledName> = Vec::new();
-    let mut keys: Vec<&MangledName> = by_mangled.keys().copied().collect();
-    keys.sort();
-    for k in keys {
-        visit(k, by_mangled, &mut visited, &mut out);
+/// The inherited field and method-slot prefix of a class whose parent is
+/// `parent`: a local class laid out earlier in topological order, or an
+/// imported one reconstructed before local classes.
+fn parent_prefix(
+    parent: &MangledName,
+    layouts: &BTreeMap<MangledName, ResolvedLayout>,
+    imported: &BTreeMap<MangledName, ImportedClassLayout>,
+) -> Result<(Vec<FieldLayout>, Vec<SlotDraft>), CompilerFailure> {
+    if let Some((fields, methods, _)) = layouts.get(parent) {
+        return Ok((fields.clone(), methods.clone()));
     }
-    out
+    let layout = imported
+        .get(parent)
+        .ok_or_else(|| unavailable_parent(parent))?;
+    let fields = layout
+        .fields
+        .iter()
+        .map(|name| FieldLayout {
+            name: name.clone(),
+            optional: layout.optional_fields.contains(name),
+            narrowing_check: layout.narrowing_checks.get(name).cloned().map(Box::new),
+        })
+        .collect();
+    let methods = layout
+        .methods
+        .iter()
+        .map(|s| SlotDraft {
+            name: s.name.clone(),
+            owner: s.owner.clone(),
+            param_tys: s.param_tys.clone(),
+            argument_metadata: s.argument_metadata.clone(),
+            ret_ty: s.ret_ty.clone(),
+            generic: s.generic,
+        })
+        .collect();
+    Ok((fields, methods))
 }
 
-fn visit(
-    mangled: &MangledName,
-    by_mangled: &BTreeMap<&MangledName, &TypedClassDecl>,
-    visited: &mut std::collections::BTreeSet<MangledName>,
-    out: &mut Vec<MangledName>,
-) {
-    if visited.contains(mangled) {
-        return;
+fn unavailable_parent(parent: &MangledName) -> CompilerFailure {
+    internal_failure(format!(
+        "parent class `{parent}` was not laid out before its subclass"
+    ))
+}
+
+/// The signature and ABI a slot inherits from `parent`, if the parent has the
+/// slot. An imported parent's slots live in the symbol table (recorded by
+/// `imported_classes`), not in `sig_by_name`.
+fn inherited_slot_sig(
+    sig_by_name: &BTreeMap<(MangledName, String), (u32, MethodSlotAbi)>,
+    symbols: &SymbolTable,
+    parent: &MangledName,
+    slot: &str,
+) -> Result<Option<(u32, MethodSlotAbi)>, CompilerFailure> {
+    if let Some(entry) = sig_by_name.get(&(parent.clone(), slot.to_owned())) {
+        return Ok(Some(entry.clone()));
     }
-    let Some(decl) = by_mangled.get(mangled) else {
-        return;
+    let Some(sig) = symbols.class_method_sig(parent, slot) else {
+        return Ok(None);
     };
-    visited.insert(mangled.clone());
-    if let Some(parent) = &decl.extends {
-        visit(parent, by_mangled, visited, out);
+    let abi = symbols
+        .class_method_abi(parent, slot)
+        .cloned()
+        .ok_or_else(|| internal_failure("an inherited method slot has no recorded ABI"))?;
+    Ok(Some((sig, abi)))
+}
+
+/// Topological order of classes by `extends` (parents before children). Classes
+/// whose parent is not in this module (cross-package) are treated as roots.
+/// Chains are walked iteratively; a cycle is an internal failure because
+/// inference rejects cyclic hierarchies.
+fn topo_order(
+    by_mangled: &BTreeMap<&MangledName, &TypedClassDecl>,
+) -> Result<Vec<MangledName>, CompilerFailure> {
+    let mut visited: BTreeSet<&MangledName> = BTreeSet::new();
+    let mut out: Vec<MangledName> = Vec::new();
+    for &start in by_mangled.keys() {
+        let mut chain: Vec<&MangledName> = Vec::new();
+        let mut next = Some(start);
+        while let Some(mangled) = next {
+            if visited.contains(mangled) {
+                break;
+            }
+            let Some(decl) = by_mangled.get(mangled) else {
+                break;
+            };
+            if chain.contains(&mangled) {
+                return Err(internal_failure("class inheritance is cyclic"));
+            }
+            chain.push(mangled);
+            next = decl.extends.as_ref();
+        }
+        for mangled in chain.into_iter().rev() {
+            visited.insert(mangled);
+            out.push(mangled.clone());
+        }
     }
-    out.push(mangled.clone());
+    Ok(out)
 }
 
 /// The Wasm type of a body's parameter `i` — the recorded slot's, not the
@@ -1748,13 +1851,20 @@ fn slot_param_type(
 
 /// The constructor parameter slots recorded when the class's ctor fn-types were
 /// emitted — the same signature the entry ctor, the init fn, and every call site
-/// must agree on. An unrecorded class falls back to per-param `slot_value_type`
-/// in [`slot_param_type`], which is what recording ran in the first place.
-fn ctor_slot_types(ctx: &CodegenCtx<'_>, class: &MangledName) -> Vec<ValType> {
+/// must agree on. Local and imported classes both record it before any body is
+/// emitted.
+fn ctor_slot_types(
+    ctx: &CodegenCtx<'_>,
+    class: &MangledName,
+) -> Result<Vec<ValType>, CompilerFailure> {
     ctx.symbols
         .class_ctor_abi(class)
         .map(<[ValType]>::to_vec)
-        .unwrap_or_default()
+        .ok_or_else(|| {
+            internal_failure(format!(
+                "class `{class}` has no recorded constructor signature"
+            ))
+        })
 }
 
 /// Named Wasm parameters for a method or constructor body, at their slot types.
@@ -1782,14 +1892,16 @@ fn rebind_erased_params(
     params: &[crate::TypedParam],
     slot_types: &[ValType],
 ) -> Result<Vec<u32>, crate::compiler_error::CompilerFailure> {
-    let mut param_slots: Vec<u32> = (1..=params.len() as u32).collect();
+    let mut param_slots = Vec::with_capacity(params.len());
     for (i, p) in params.iter().enumerate() {
+        let param_local = parameter_local(i)?;
         let own_vt = ctx.symbols.value_type(&p.ty)?;
         if slot_param_type(ctx, slot_types, i, p)? == own_vt {
+            param_slots.push(param_local);
             continue;
         }
         let shadow = emitter.add_anonymous_local(own_vt);
-        emitter.instruction(Instruction::LocalGet((i + 1) as u32));
+        emitter.instruction(Instruction::LocalGet(param_local));
         crate::codegen::cast_check::emit_checked_parameter_cast_on_stack(
             emitter,
             ctx,
@@ -1798,7 +1910,7 @@ fn rebind_erased_params(
         )?;
         emitter.instruction(Instruction::LocalSet(shadow));
         emitter.rebind_in_innermost_scope(&p.name.name, shadow, own_vt);
-        param_slots[i] = shadow;
+        param_slots.push(shadow);
     }
     Ok(param_slots)
 }
@@ -1904,7 +2016,7 @@ fn emit_payload_slot_equals(f: &mut Function, slot: u32, intrinsics: IntrinsicTy
 
     for (fields, dest) in [(a_fields, elem_a), (b_fields, elem_b)] {
         f.instruction(&Instruction::LocalGet(fields));
-        f.instruction(&Instruction::I32Const(slot as i32));
+        f.instruction(&Instruction::I32Const(slot.cast_signed()));
         f.instruction(&Instruction::ArrayGet(intrinsics.object_fields));
         f.instruction(&Instruction::LocalSet(dest));
     }
@@ -1983,30 +2095,29 @@ fn emit_universal_slot_thunk(
 fn emit_class_to_string_body(
     intrinsics: IntrinsicTypeIndices,
     string_vtable_global_idx: u32,
-) -> Function {
+) -> Result<Function, CompilerFailure> {
     let mut f = Function::new([]);
     crate::codegen::intrinsics::push_string_literal(
         &mut f,
         intrinsics,
         string_vtable_global_idx,
         "[object Object]",
-    );
+    )?;
     f.instruction(&Instruction::End);
-    f
+    Ok(f)
 }
 
 /// Class serialization reads the runtime property metadata, including visibility
 /// and getters, so structural views and dynamically added fields use the same rules.
-fn emit_class_to_json_body(symbols: &SymbolTable) -> Function {
+fn emit_class_to_json_body(symbols: &SymbolTable) -> Result<Function, CompilerFailure> {
+    let serializer = symbols
+        .prelude_func_idx("ObjectConstructor##toJson")
+        .ok_or_else(|| internal_failure("the object serializer is not imported"))?;
     let mut f = Function::new([]);
     f.instruction(&Instruction::LocalGet(0));
-    f.instruction(&Instruction::Call(
-        symbols
-            .prelude_func_idx("ObjectConstructor##toJson")
-            .expect("object serializer imported"),
-    ));
+    f.instruction(&Instruction::Call(serializer));
     f.instruction(&Instruction::End);
-    f
+    Ok(f)
 }
 
 /// Default class `hash`: FNV-1a over the data-field payload slots, each value
@@ -2014,7 +2125,7 @@ fn emit_class_to_json_body(symbols: &SymbolTable) -> Function {
 /// the structural `emit_subtype_hash_body`, so the `equals`-implies-equal-hash
 /// contract holds: `equals` compares exactly these slots by vtable dispatch.
 fn emit_class_hash_body(n_fields: u32, intrinsics: IntrinsicTypeIndices) -> Function {
-    const FNV_BASIS: i32 = 0x811c9dc5_u32 as i32;
+    const FNV_BASIS: i32 = 0x811c9dc5_u32.cast_signed();
     const FNV_PRIME: i32 = 0x01000193;
 
     if n_fields == 0 {
@@ -2061,7 +2172,7 @@ fn emit_class_hash_body(n_fields: u32, intrinsics: IntrinsicTypeIndices) -> Func
 
     for slot in 0..n_fields {
         f.instruction(&Instruction::LocalGet(fields_arr));
-        f.instruction(&Instruction::I32Const(slot as i32));
+        f.instruction(&Instruction::I32Const(slot.cast_signed()));
         f.instruction(&Instruction::ArrayGet(intrinsics.object_fields));
         f.instruction(&Instruction::LocalSet(elem));
 
@@ -2134,12 +2245,12 @@ fn vtable_supertype_idx(
     class: &ClassLayout,
     intrinsics: IntrinsicTypeIndices,
     symbols: &SymbolTable,
-) -> u32 {
+) -> Result<u32, CompilerFailure> {
     match &class.parent {
-        Some(p) => symbols
-            .class_vtable_type_idx(p)
-            .expect("parent vtable type reserved before child"),
-        None => intrinsics.class_vtable,
+        Some(p) => symbols.class_vtable_type_idx(p).ok_or_else(|| {
+            internal_failure("a parent vtable type was not reserved before its child")
+        }),
+        None => Ok(intrinsics.class_vtable),
     }
 }
 
@@ -2149,12 +2260,12 @@ fn struct_supertype_idx(
     class: &ClassLayout,
     intrinsics: IntrinsicTypeIndices,
     symbols: &SymbolTable,
-) -> u32 {
+) -> Result<u32, CompilerFailure> {
     match &class.parent {
-        Some(p) => symbols
-            .class_struct_type_idx(p)
-            .expect("parent struct type reserved before child"),
-        None => intrinsics.object_shape,
+        Some(p) => symbols.class_struct_type_idx(p).ok_or_else(|| {
+            internal_failure("a parent struct type was not reserved before its child")
+        }),
+        None => Ok(intrinsics.object_shape),
     }
 }
 
@@ -2171,12 +2282,6 @@ fn substruct(fields: Vec<FieldType>, supertype: Option<u32>) -> SubType {
             describes: None,
         },
     }
-}
-
-fn take(counter: &mut u32) -> u32 {
-    let v = *counter;
-    *counter += 1;
-    v
 }
 
 #[cfg(test)]
@@ -2238,6 +2343,7 @@ mod tests {
             to_string_func_idx: 0,
             to_json_func_idx: 0,
             hash_func_idx: 0,
+            guarded_bodies: GuardedBodies::default(),
         };
         let plan = ClassPlan {
             package_name: "witness".to_string(),
@@ -2245,8 +2351,8 @@ mod tests {
             universal_stubs: [0; UNIVERSAL_STUB_COUNT],
         };
         let symbols = SymbolTable::default();
-        let vtable = plan.vtable_subtype(&layout, intrinsics, &symbols);
-        let strukt = plan.struct_subtype(&layout, intrinsics, &symbols);
+        let vtable = plan.vtable_subtype(&layout, intrinsics, &symbols).unwrap();
+        let strukt = plan.struct_subtype(&layout, intrinsics, &symbols).unwrap();
         types.ty().rec([vtable, strukt]);
 
         let mut module = Module::new();
@@ -2332,5 +2438,65 @@ mod closure_adapter_invariant_tests {
         with_context(&ta, &symbols, |ctx| {
             assert_internal(plan.emit_method_adapter_body(class, slot, ctx).unwrap_err());
         });
+    }
+}
+
+#[cfg(test)]
+mod layout_invariant_tests {
+    use super::*;
+    use crate::compiler_error::CompilerFailure;
+
+    fn typed(source: &str) -> TypedAst {
+        let (ta, diagnostics) = crate::compile::typecheck_to_typed_ast(source, crate::FileId(0));
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        ta
+    }
+
+    fn class_mut<'a>(ta: &'a mut TypedAst, name: &str) -> &'a mut TypedClassDecl {
+        ta.types
+            .iter_mut()
+            .find_map(|decl| match decl {
+                TypedTypeDecl::Class(class) if class.name.name == name => Some(class),
+                _ => None,
+            })
+            .unwrap()
+    }
+
+    fn assert_internal(result: Result<ClassPlan, CompilerFailure>) {
+        assert!(
+            matches!(result, Err(CompilerFailure::Internal { .. })),
+            "expected an internal failure"
+        );
+    }
+
+    #[test]
+    fn missing_or_cyclic_parents_stop_layout_instead_of_dropping_the_prefix() {
+        let source = "class A { x: number = 1 } class B extends A { y: number = 2 } \
+                      function main(): number { return new B().x; }";
+        let intact = typed(source);
+        let plan = ClassPlan::collect(&intact, &BTreeMap::new()).unwrap();
+        let b = plan.classes.iter().find(|class| class.name == "B").unwrap();
+        assert_eq!(b.fields.len(), 2, "B inherits A's field prefix");
+
+        // An orphaned subclass must fail rather than lose its parent's prefix.
+        let mut orphan = intact.clone();
+        orphan
+            .types
+            .retain(|decl| !matches!(decl, TypedTypeDecl::Class(class) if class.name.name == "A"));
+        assert_internal(ClassPlan::collect(&orphan, &BTreeMap::new()));
+
+        let mut cyclic = intact;
+        let b_name = class_mut(&mut cyclic, "B").mangled_name.clone();
+        class_mut(&mut cyclic, "A").extends = Some(b_name);
+        assert_internal(ClassPlan::collect(&cyclic, &BTreeMap::new()));
+    }
+
+    #[test]
+    fn guard_payload_arithmetic_is_checked() {
+        assert_eq!(guard_slot_count(0, 0).unwrap(), 1);
+        assert_eq!(guard_slot_count(2, 3).unwrap(), 12);
+        assert!(guard_slot_count(u32::MAX, 0).is_err());
+        assert!(guard_slot_count(1, u32::MAX).is_err());
+        assert!(guard_slot_count(u32::MAX / 2, 3).is_err());
     }
 }

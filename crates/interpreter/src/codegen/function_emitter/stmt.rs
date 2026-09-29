@@ -490,7 +490,7 @@ fn emit_class_field_store(
     let index = emitter.add_anonymous_local(ValType::I32);
     emitter.instruction(Instruction::I32Const(slot as i32));
     emitter.instruction(Instruction::LocalSet(index));
-    crate::codegen::field_names::emit_mark_present(emitter, ctx, recv, index);
+    crate::codegen::field_names::emit_mark_present(emitter, ctx, recv, index)?;
     Ok(())
 }
 
@@ -1006,7 +1006,7 @@ fn emit_case_comparison(
             emitter.instruction(Instruction::I32Eq);
         }
         TypedSwitchValue::String { value, .. } => {
-            emit_string_compare(emitter, ctx, disc_local, disc_val, value);
+            emit_string_compare(emitter, ctx, disc_local, disc_val, value)?;
         }
         TypedSwitchValue::Enum { value: payload, .. } => match payload {
             EnumVariantPayload::Number(n) => {
@@ -1015,7 +1015,7 @@ fn emit_case_comparison(
                 emitter.instruction(Instruction::F64Eq);
             }
             EnumVariantPayload::String(s) => {
-                emit_string_compare(emitter, ctx, disc_local, disc_val, s);
+                emit_string_compare(emitter, ctx, disc_local, disc_val, s)?;
             }
         },
     };
@@ -1079,28 +1079,10 @@ fn emit_string_compare(
     disc_local: u32,
     disc_val: ValType,
     literal: &str,
-) {
-    let pool_idx = ctx
-        .strings
-        .lookup_text(literal)
-        .expect("switch string case interned by CodegenAnalysis");
-    let code_units = ctx.strings.code_units(pool_idx);
-    let string_type_idx = ctx
-        .symbols
-        .string_type_idx()
-        .expect("string intrinsic type declared");
-    let raw_string_type_idx = ctx
-        .symbols
-        .raw_string_type_idx()
-        .expect("string intrinsic type declared");
-    let vtable_global_idx = ctx
-        .symbols
-        .prelude_global_idx("string_vtable")
-        .expect("submilli:prelude.string_vtable imported");
-    let string_eq_idx = ctx
-        .symbols
-        .prelude_func_idx("string_eq")
-        .expect("submilli:prelude.string_eq imported");
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let string_eq_idx = ctx.symbols.prelude_func_idx("string_eq").ok_or_else(|| {
+        crate::codegen::internal_failure("string_eq is not imported from the prelude")
+    })?;
 
     let disc_is_nullable = matches!(
         disc_val,
@@ -1117,24 +1099,13 @@ fn emit_string_compare(
         emitter.emit_else();
         emitter.instruction(Instruction::LocalGet(disc_local));
         emitter.instruction(Instruction::RefAsNonNull);
-        emitter.emit_const_string(
-            string_type_idx,
-            raw_string_type_idx,
-            vtable_global_idx,
-            pool_idx as u32,
-            code_units,
-        );
+        super::emit_const_string_by_text(emitter, ctx, literal)?;
         emitter.instruction(Instruction::Call(string_eq_idx));
         emitter.emit_end();
     } else {
         emitter.instruction(Instruction::LocalGet(disc_local));
-        emitter.emit_const_string(
-            string_type_idx,
-            raw_string_type_idx,
-            vtable_global_idx,
-            pool_idx as u32,
-            code_units,
-        );
+        super::emit_const_string_by_text(emitter, ctx, literal)?;
         emitter.instruction(Instruction::Call(string_eq_idx));
     }
+    Ok(())
 }

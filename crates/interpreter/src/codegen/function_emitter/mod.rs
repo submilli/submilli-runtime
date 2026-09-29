@@ -566,31 +566,41 @@ pub(crate) fn emit_const_string_by_text(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     text: &str,
-) {
-    let pool_idx = ctx
-        .strings
-        .lookup_text(text)
-        .unwrap_or_else(|| panic!("`{text}` was not interned by the StringPool"));
-    let code_units = ctx.strings.code_units(pool_idx);
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let pool_idx = ctx.strings.lookup_text(text).ok_or_else(|| {
+        crate::codegen::internal_failure(format!("`{text}` was not interned by the string pool"))
+    })?;
+    emit_pooled_string(emitter, ctx, pool_idx)
+}
+
+/// Push the constant `(ref $string)` backed by string-pool entry `pool_idx`.
+pub(crate) fn emit_pooled_string(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    pool_idx: usize,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    use crate::codegen::internal_failure;
+    let code_units = ctx.strings.code_units(pool_idx)?;
     let string_type_idx = ctx
         .symbols
         .string_type_idx()
-        .expect("$string intrinsic registered");
+        .ok_or_else(|| internal_failure("the $string intrinsic is not registered"))?;
     let raw_string_type_idx = ctx
         .symbols
         .raw_string_type_idx()
-        .expect("$rawString intrinsic registered");
+        .ok_or_else(|| internal_failure("the $rawString intrinsic is not registered"))?;
     let vtable_global_idx = ctx
         .symbols
         .prelude_global_idx("string_vtable")
-        .expect("string_vtable global imported from prelude");
+        .ok_or_else(|| internal_failure("string_vtable is not imported from the prelude"))?;
     emitter.emit_const_string(
         string_type_idx,
         raw_string_type_idx,
         vtable_global_idx,
-        pool_idx as u32,
+        crate::codegen::wasm_u32(pool_idx)?,
         code_units,
     );
+    Ok(())
 }
 
 /// Push a fresh `(ref $string)` for a short codegen-owned literal (`"null"`,
@@ -599,30 +609,32 @@ pub(crate) fn emit_inline_string_literal(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     text: &str,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    use crate::codegen::internal_failure;
     let string_type_idx = ctx
         .symbols
         .string_type_idx()
-        .expect("$string intrinsic registered");
+        .ok_or_else(|| internal_failure("the $string intrinsic is not registered"))?;
     let raw_string_type_idx = ctx
         .symbols
         .raw_string_type_idx()
-        .expect("$rawString intrinsic registered");
+        .ok_or_else(|| internal_failure("the $rawString intrinsic is not registered"))?;
     let vtable_global_idx = ctx
         .symbols
         .prelude_global_idx("string_vtable")
-        .expect("string_vtable global imported from prelude");
+        .ok_or_else(|| internal_failure("string_vtable is not imported from the prelude"))?;
     emitter.instruction(Instruction::GlobalGet(vtable_global_idx));
-    let mut len = 0u32;
+    let mut len = 0usize;
     for unit in text.encode_utf16() {
         emitter.instruction(Instruction::I32Const(i32::from(unit)));
-        len += 1;
+        len = len.saturating_add(1);
     }
     emitter.instruction(Instruction::ArrayNewFixed {
         array_type_index: raw_string_type_idx,
-        array_size: len,
+        array_size: crate::codegen::wasm_u32(len)?,
     });
     emitter.instruction(Instruction::StructNew(string_type_idx));
+    Ok(())
 }
 
 pub fn emit_function(
@@ -726,8 +738,8 @@ pub fn emit_closure_function(
             field_index: 0,
         });
     }
-    if crate::codegen::call_arguments::typed_metadata(&meta.params).is_some() {
-        crate::codegen::call_arguments::unwrap(&mut emitter, ctx);
+    if crate::codegen::call_arguments::typed_metadata(&meta.params)?.is_some() {
+        crate::codegen::call_arguments::unwrap(&mut emitter, ctx)?;
     }
     emitter.instructions.push(Instruction::RefCastNonNull(
         wasm_encoder::HeapType::Concrete(env_type_idx),

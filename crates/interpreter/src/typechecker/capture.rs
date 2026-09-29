@@ -4,9 +4,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::compiler_error::{CompilerFailure, CompilerStage};
 use crate::{
     CapturedVar, ClosureBody, ExprId, Ident, StmtId, Type, TypedAst, TypedChainPart, TypedExprKind,
-    TypedStmtKind,
+    TypedStmtKind, tree_height,
 };
 
 /// Capture-pass name for `this`. `this` is a keyword, so it can never collide
@@ -14,7 +15,8 @@ use crate::{
 /// receiver inside a closure body.
 pub(crate) const THIS_BINDING: &str = "this";
 
-pub fn capture(mut ta: TypedAst) -> Result<TypedAst, crate::compiler_error::CompilerFailure> {
+pub fn capture(mut ta: TypedAst) -> Result<TypedAst, CompilerFailure> {
+    tree_height::check_typed(&ta, CompilerStage::Infer)?;
     resolve_locals(&mut ta)?;
     Ok(ta)
 }

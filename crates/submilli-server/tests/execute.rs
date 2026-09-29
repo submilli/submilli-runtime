@@ -833,6 +833,25 @@ fn http_parser_depth_is_bounded() {
 }
 
 #[test]
+fn http_compiler_structure_limits_are_bounded() {
+    parser_depth::isolated_worker("http_compiler_structure_limits_are_bounded", async {
+        let app = router();
+        let (status, body) = execute_on(&app, &parser_depth::flat_chain_source()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["error"]["kind"], "compile_error", "{body}");
+        assert!(
+            body.to_string()
+                .contains(parser_depth::SYNTAX_LIMIT_MESSAGE),
+            "{body}"
+        );
+        let (status, body) = execute_on(&app, &parser_depth::near_limit_chain_source()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["error"].is_null(), "{body}");
+        assert_eq!(body["result"], "200", "{body}");
+    });
+}
+
+#[test]
 fn http_closure_arity_returns_diagnostics() {
     parser_depth::isolated_worker("http_closure_arity_returns_diagnostics", async {
         let app = router();

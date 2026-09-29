@@ -747,7 +747,7 @@ impl CodegenAnalysis {
                 self.dependency_usage.note_type(enum_mangled.clone());
             }
             TypedExprKind::BigInt(digits) => {
-                self.bigint_pool.intern_digits(digits);
+                self.bigint_pool.intern_digits(digits)?;
                 self.dependency_usage
                     .collect_bigint_host_value("fromNumber");
             }

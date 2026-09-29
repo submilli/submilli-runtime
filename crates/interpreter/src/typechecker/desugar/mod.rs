@@ -1,8 +1,10 @@
 //! Desugar pass — transforms surface-level Typed AST forms into a smaller
 //! canonical shape that codegen has to handle.
 
+use crate::compiler_error::{CompilerFailure, CompilerStage};
 use crate::{
     ExprId, FileId, Ident, Span, StmtId, Type, TypedAst, TypedExpr, TypedExprKind, TypedStmt,
+    tree_height,
 };
 
 mod do_while;
@@ -206,7 +208,15 @@ impl DesugarCtx<'_> {
     }
 }
 
-pub fn desugar(
+/// Lowering loops adds nesting, so the output is measured as well as the input.
+pub fn desugar(ta: TypedAst, file: FileId) -> Result<TypedAst, CompilerFailure> {
+    tree_height::check_typed(&ta, CompilerStage::Infer)?;
+    let desugared = desugar_tree(ta, file)?;
+    tree_height::check_typed(&desugared, CompilerStage::Infer)?;
+    Ok(desugared)
+}
+
+fn desugar_tree(
     mut ta: TypedAst,
     file: FileId,
 ) -> Result<TypedAst, crate::compiler_error::CompilerFailure> {

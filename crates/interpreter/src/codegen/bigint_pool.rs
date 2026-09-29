@@ -4,6 +4,9 @@
 
 use std::collections::BTreeMap;
 
+use crate::codegen::{internal_failure, wasm_u32};
+use crate::compiler_error::CompilerFailure;
+
 #[derive(Clone, Debug)]
 pub struct BigIntLiteral {
     /// Dedup key; no `n` suffix or leading sign.
@@ -30,17 +33,19 @@ pub struct BigIntPool {
 }
 
 impl BigIntPool {
-    pub(crate) fn intern_digits(&mut self, digits: &str) -> Option<usize> {
-        const SAFE_INTEGER_MAX: i64 = (1i64 << 53) - 1;
-        if let Ok(v) = digits.parse::<i64>()
-            && v.abs() <= SAFE_INTEGER_MAX
+    pub(crate) fn intern_digits(&mut self, digits: &str) -> Result<Option<usize>, CompilerFailure> {
+        const SAFE_INTEGER_MAX: u64 = (1u64 << 53) - 1;
+        check_decimal_digits(digits)?;
+        if digits
+            .parse::<u64>()
+            .is_ok_and(|value| value <= SAFE_INTEGER_MAX)
         {
-            return None;
+            return Ok(None);
         }
         if let Some(&existing) = self.text_to_idx.get(digits) {
-            return Some(existing);
+            return Ok(Some(existing));
         }
-        let limbs_le = decimal_to_limbs(digits);
+        let limbs_le = decimal_to_limbs(digits)?;
         let idx = self.literals.len();
         self.literals.push(BigIntLiteral {
             digits: digits.to_string(),
@@ -48,18 +53,26 @@ impl BigIntPool {
             limbs_le,
         });
         self.text_to_idx.insert(digits.to_string(), idx);
-        Some(idx)
+        Ok(Some(idx))
     }
 
     /// Returns `None` if the value is within the safe-integer range (wasn't pooled).
-    pub fn lookup(&self, digits: &str) -> Option<BigIntEntry> {
-        let idx = *self.text_to_idx.get(digits)?;
-        let lit = &self.literals[idx];
-        Some(BigIntEntry {
-            data_idx: idx as u32,
-            limb_count: lit.limbs_le.len() as u32,
+    pub fn lookup(&self, digits: &str) -> Result<Option<BigIntEntry>, CompilerFailure> {
+        let Some(&idx) = self.text_to_idx.get(digits) else {
+            return Ok(None);
+        };
+        let lit = self.literal(idx)?;
+        Ok(Some(BigIntEntry {
+            data_idx: wasm_u32(idx)?,
+            limb_count: wasm_u32(lit.limbs_le.len())?,
             sign: lit.sign,
-        })
+        }))
+    }
+
+    fn literal(&self, idx: usize) -> Result<&BigIntLiteral, CompilerFailure> {
+        self.literals
+            .get(idx)
+            .ok_or_else(|| internal_failure("a bigint literal pool index is out of range"))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -67,45 +80,82 @@ impl BigIntPool {
     }
 
     /// Little-endian byte payload for the literal at `idx` — body of its passive data segment.
-    pub fn le_bytes(&self, idx: usize) -> Vec<u8> {
-        self.literals[idx]
+    pub fn le_bytes(&self, idx: usize) -> Result<Vec<u8>, CompilerFailure> {
+        Ok(self
+            .literal(idx)?
             .limbs_le
             .iter()
             .flat_map(|w| w.to_le_bytes())
-            .collect()
+            .collect())
     }
 }
 
-fn decimal_to_limbs(digits: &str) -> Vec<u64> {
+/// The lexer emits sign-free decimal digits; anything else is corrupt typed input.
+fn check_decimal_digits(digits: &str) -> Result<(), CompilerFailure> {
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(internal_failure(
+            "a bigint literal is not a sign-free decimal digit string",
+        ));
+    }
+    Ok(())
+}
+
+fn decimal_to_limbs(digits: &str) -> Result<Vec<u64>, CompilerFailure> {
     use num_bigint::BigUint;
     use num_traits::Zero;
-    let value: BigUint = digits.parse().expect("lexer guarantees a decimal string");
+    check_decimal_digits(digits)?;
+    let value: BigUint = digits
+        .parse()
+        .map_err(|_| internal_failure("a bigint literal could not be parsed"))?;
     if value.is_zero() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    value.to_u64_digits()
+    Ok(value.to_u64_digits())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::decimal_to_limbs;
+    use super::{BigIntPool, decimal_to_limbs};
+    use crate::compiler_error::CompilerFailure;
 
     #[test]
     fn small_round_trip() {
-        let limbs = decimal_to_limbs("18446744073709551616");
+        let limbs = decimal_to_limbs("18446744073709551616").unwrap();
         assert_eq!(limbs, vec![0, 1]);
     }
 
     #[test]
     fn one_bit_under_two_limbs() {
-        let limbs = decimal_to_limbs("18446744073709551615");
+        let limbs = decimal_to_limbs("18446744073709551615").unwrap();
         assert_eq!(limbs, vec![u64::MAX]);
     }
 
     #[test]
     fn very_large() {
-        let limbs = decimal_to_limbs("1267650600228229401496703205376");
+        let limbs = decimal_to_limbs("1267650600228229401496703205376").unwrap();
         // 2^100 = 2^64 * 2^36 = limb[1] = 2^36, limb[0] = 0.
         assert_eq!(limbs, vec![0, 1u64 << 36]);
+    }
+
+    #[test]
+    fn corrupt_literals_and_indices_are_internal_failures() {
+        let mut pool = BigIntPool::default();
+        // Signs are never part of the lexer's digits, including `i64::MIN`'s.
+        for digits in ["-9223372036854775808", "", "12a", "+5"] {
+            assert!(
+                matches!(
+                    pool.intern_digits(digits),
+                    Err(CompilerFailure::Internal { .. })
+                ),
+                "{digits:?}"
+            );
+        }
+        assert_eq!(pool.intern_digits("9007199254740991").unwrap(), None);
+        assert_eq!(pool.intern_digits("9007199254740992").unwrap(), Some(0));
+        assert!(pool.lookup("9007199254740992").unwrap().is_some());
+        assert!(pool.lookup("1").unwrap().is_none());
+        assert!(pool.le_bytes(1).is_err());
+        pool.literals.clear();
+        assert!(pool.lookup("9007199254740992").is_err());
     }
 }

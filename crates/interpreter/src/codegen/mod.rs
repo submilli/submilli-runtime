@@ -34,6 +34,7 @@ pub mod user_subtypes;
 mod vtable_walk;
 
 use crate::compiler_error::{CompilerFailure, CompilerStage};
+use crate::tree_height;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -59,6 +60,45 @@ pub(crate) fn internal_failure(message: impl Into<String>) -> CompilerFailure {
         stage: CompilerStage::Codegen,
         span: None,
         message: message.into(),
+    }
+}
+
+/// Allocates the next index in a WebAssembly index space. Like arena IDs,
+/// `u32::MAX` itself is never allocated.
+pub(crate) fn next_index(counter: &mut u32) -> Result<u32, CompilerFailure> {
+    let index = *counter;
+    *counter = index.checked_add(1).ok_or_else(index_space_exhausted)?;
+    Ok(index)
+}
+
+/// Encodes a count or position that WebAssembly represents as `u32`.
+pub(crate) fn wasm_u32(value: usize) -> Result<u32, CompilerFailure> {
+    u32::try_from(value).map_err(|_| index_space_exhausted())
+}
+
+/// Local index of parameter `position` in a body whose local 0 holds the
+/// receiver or closure environment.
+pub(crate) fn parameter_local(position: usize) -> Result<u32, CompilerFailure> {
+    wasm_u32(position)?
+        .checked_add(1)
+        .ok_or_else(index_space_exhausted)
+}
+
+/// Function indices of the depth-guarded bodies behind a vtable's universal
+/// `equals`, `toJson` and `hash` slots.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct GuardedBodies {
+    pub equals: u32,
+    pub to_json: u32,
+    pub hash: u32,
+}
+
+fn index_space_exhausted() -> CompilerFailure {
+    CompilerFailure::Limit {
+        stage: CompilerStage::Codegen,
+        span: None,
+        message: "the module exceeds a WebAssembly index or size limit".into(),
+        help: vec!["split the program into smaller modules".into()],
     }
 }
 
@@ -148,7 +188,7 @@ fn import_value_symbol(
                 params
                     .iter()
                     .map(|param| (param.default.as_ref(), param.rest)),
-            ) {
+            )? {
                 symbols
                     .function_argument_metadata
                     .insert(value.mangled_name.clone(), metadata);
@@ -323,7 +363,7 @@ pub struct CodegenCtx<'a> {
     pub validator_bodies: &'a recursive_validators::ValidatorBodies,
     pub type_info: &'a crate::TypeInfoTable,
     pub package_string_global_idx: Option<u32>,
-    failure: std::cell::Cell<Option<CodegenError>>,
+    failure: std::cell::Cell<Option<CompilerFailure>>,
 }
 
 impl CodegenCtx<'_> {
@@ -336,7 +376,20 @@ impl CodegenCtx<'_> {
         value
     }
 
-    fn check_failure(&self) -> Result<(), CodegenError> {
+    /// Latches a typed failure for an emitter that cannot yet return one; the
+    /// codegen boundary discards the module just as for [`Self::require`], so a
+    /// caller may return early or keep emitting after a failure.
+    fn latch<T>(&self, result: Result<T, CompilerFailure>) -> Option<T> {
+        match result {
+            Ok(value) => Some(value),
+            Err(failure) => {
+                self.record_failure(failure);
+                None
+            }
+        }
+    }
+
+    fn check_failure(&self) -> Result<(), CompilerFailure> {
         match self.failure.take() {
             Some(error) => Err(error),
             None => Ok(()),
@@ -344,10 +397,18 @@ impl CodegenCtx<'_> {
     }
 
     fn fail(&self, message: &'static str) {
-        let first = self.failure.take().unwrap_or(CodegenError {
-            message,
-            span: crate::Span::at(self.file),
-        });
+        self.record_failure(
+            CodegenError {
+                message,
+                span: crate::Span::at(self.file),
+            }
+            .into(),
+        );
+    }
+
+    /// Keeps the first failure; later ones are consequences of it.
+    fn record_failure(&self, failure: CompilerFailure) {
+        let first = self.failure.take().unwrap_or(failure);
         self.failure.set(Some(first));
     }
 }
@@ -444,6 +505,7 @@ fn codegen_inner(
     owning_package: &str,
     sources: Option<&crate::Sources>,
 ) -> Result<GeneratedModule, CompilerFailure> {
+    tree_height::check_typed(ta, CompilerStage::Codegen)?;
     u32::try_from(source.len()).map_err(|_| CompilerFailure::Limit {
         stage: CompilerStage::Codegen,
         span: None,
@@ -512,7 +574,7 @@ fn codegen_inner(
         &mut symbols,
         &mut next_type_idx,
         intrinsics,
-    );
+    )?;
 
     // The exception tag — host-owned (created per store, linker-defined under
     // `submilli:prelude`) and imported unconditionally: every module can
@@ -1033,7 +1095,7 @@ fn codegen_inner(
         let func_idx = next_func_idx;
         next_func_idx += 1;
         let param_types: Vec<Type> = f.params.iter().map(|p| p.ty.clone()).collect();
-        if let Some(metadata) = call_arguments::typed_metadata(&f.params) {
+        if let Some(metadata) = call_arguments::typed_metadata(&f.params)? {
             symbols
                 .function_argument_metadata
                 .insert(f.mangled_name.clone(), metadata);
@@ -1043,7 +1105,7 @@ fn codegen_inner(
             func_idx,
             param_types,
             f.return_type.clone(),
-        );
+        )?;
         user_func_type_idx.insert(f.mangled_name.clone(), sig_idx);
         user_funcs.push(UserFunc {
             name: f.name.name.clone(),
@@ -1091,12 +1153,12 @@ fn codegen_inner(
     let mut user_subtypes_alloc: Vec<user_subtypes::UserSubtype> = Vec::new();
     for ty in &user_emitted_types {
         if let Type::Object { .. } = ty {
-            user_subtypes_alloc.push(user_subtypes::allocate_methods(ty, &mut next_func_idx));
+            user_subtypes_alloc.push(user_subtypes::allocate_methods(ty, &mut next_func_idx)?);
         }
     }
 
     // Class method stubs + per-class getter/setter (vtable/header globals ref.func these).
-    class_plan.allocate_funcs(&mut next_func_idx, &mut symbols);
+    class_plan.allocate_funcs(&mut next_func_idx, &mut symbols)?;
     let instance_field_guards = field_guards::allocate(ta, &mut symbols, &mut next_func_idx);
     let type_descriptors = runtime_descriptors::allocate(
         ta,
@@ -1268,14 +1330,14 @@ fn codegen_inner(
         next_global_idx += 1;
         globals_count += 1;
     }
-    let vtable_globals_count = user_subtypes_alloc.len() as u32;
+    let vtable_globals_count = wasm_u32(user_subtypes_alloc.len())?;
     user_subtypes::emit_vtable_globals(
         &mut globals,
         &mut user_subtypes_alloc,
         &mut symbols,
         &mut next_global_idx,
         intrinsics,
-    );
+    )?;
     let mut field_names_shapes = field_names::collect(&user_emitted_types);
     // Classes carry a field-names array global too (header slot 1); add each
     // class's declaration-order field-name list, deduping against object shapes.
@@ -1295,7 +1357,7 @@ fn codegen_inner(
         &mut next_global_idx,
         intrinsics,
         string_vtable_global_idx,
-    );
+    )?;
     // Names that need a per-name `$string` global even when no object literal
     // of that shape appears in this module — field access and name-based
     // dispatch read the global by name. Object-literal field names come from
@@ -1354,9 +1416,9 @@ fn codegen_inner(
         &mut next_global_idx,
         intrinsics,
         string_vtable_global_idx,
-    );
+    )?;
     // Per-class header singletons.
-    class_plan.emit_globals(&mut globals, &mut symbols, &mut next_global_idx, intrinsics);
+    class_plan.emit_globals(&mut globals, &mut symbols, &mut next_global_idx, intrinsics)?;
     let mut closure_methods_for_emit = closure_methods;
     let closure_vtable_count = if let Some(methods) = closure_methods_for_emit.as_mut() {
         closures::emit_vtable_global(
@@ -1427,12 +1489,12 @@ fn codegen_inner(
         })
         .collect();
     for (name, func_idx) in
-        class_plan.exported_funcs(&symbols, |m| exported_class_mangles.contains(m))
+        class_plan.exported_funcs(&symbols, |m| exported_class_mangles.contains(m))?
     {
         exports.export(name.as_str(), WasmExportKind::Func, func_idx);
     }
     for (name, global_idx) in
-        class_plan.exported_vtable_globals(&symbols, |m| exported_class_mangles.contains(m))
+        class_plan.exported_vtable_globals(&symbols, |m| exported_class_mangles.contains(m))?
     {
         exports.export(name.as_str(), WasmExportKind::Global, global_idx);
     }
@@ -1630,11 +1692,11 @@ fn codegen_inner(
     if total_data_segments > 0 {
         let mut data = DataSection::new();
         for i in 0..pool.strings.len() {
-            data.passive(pool.utf16_le_bytes(i));
+            data.passive(pool.utf16_le_bytes(i)?);
         }
         // Bigint segments indexed from pool.strings.len() at each array.new_data site.
         for i in 0..bigint_pool.literals.len() {
-            data.passive(bigint_pool.le_bytes(i));
+            data.passive(bigint_pool.le_bytes(i)?);
         }
         module.section(&data);
     }

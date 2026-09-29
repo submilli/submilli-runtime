@@ -89,6 +89,9 @@ pub fn infer_with_transitive_checked<'a>(
         .unwrap_or(crate::FileId(0));
     ast.validate_source(source, file)
         .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?;
+    // Callers may supply an AST that did not come from `parse_checked`.
+    crate::tree_height::check_syntax(ast)
+        .map_err(|failure| failure.with_stage(CompilerStage::Infer))?;
     validate_lowered_patterns(ast)?;
     let packages_by_name: BTreeMap<&'a str, &'a PackageDeclaration> = packages
         .iter()
@@ -166,6 +169,7 @@ pub fn infer_with_transitive_checked<'a>(
         pending_index_checks: None,
         field_narrowing_checks: BTreeMap::new(),
         alias_resolution_stack: Vec::new(),
+        type_resolution_depth: 0,
     };
     tc.populate_prelude().map_err(|fatal| CompileError {
         diagnostics: tc.diagnostics.clone(),
@@ -180,6 +184,12 @@ pub fn infer_with_transitive_checked<'a>(
         diagnostics: tc.diagnostics.clone(),
         fatal: Some(fatal),
     })? {
+        crate::tree_height::check_typed(&tc.typed_ast, CompilerStage::Infer).map_err(|fatal| {
+            CompileError {
+                diagnostics: tc.diagnostics.clone(),
+                fatal: Some(fatal),
+            }
+        })?;
         return Ok((tc.typed_ast, tc.diagnostics));
     }
     tc.infer_global_variables().map_err(|fatal| CompileError {
@@ -197,6 +207,12 @@ pub fn infer_with_transitive_checked<'a>(
     tc.collect_exports().map_err(|fatal| CompileError {
         diagnostics: tc.diagnostics.clone(),
         fatal: Some(fatal),
+    })?;
+    crate::tree_height::check_typed(&tc.typed_ast, CompilerStage::Infer).map_err(|fatal| {
+        CompileError {
+            diagnostics: tc.diagnostics.clone(),
+            fatal: Some(fatal),
+        }
     })?;
     // The `&tc` borrow has to end before the `&mut tc.typed_ast` assignment.
     let shapes = shapes::collect(&tc.typed_ast, tc.resolver()).map_err(|fatal| CompileError {
@@ -385,6 +401,7 @@ pub fn infer_package_checked<'a>(
         pending_index_checks: None,
         field_narrowing_checks: BTreeMap::new(),
         alias_resolution_stack: Vec::new(),
+        type_resolution_depth: 0,
     };
 
     for module in order {
@@ -500,6 +517,13 @@ pub fn infer_package_checked<'a>(
         inferred_modules.insert(module, module_symbols);
     }
 
+    crate::tree_height::check_typed(&tc.typed_ast, CompilerStage::Infer).map_err(|fatal| {
+        CompileError {
+            diagnostics: tc.diagnostics.clone(),
+            fatal: Some(fatal),
+        }
+        .with_prior_diagnostics(&diagnostics)
+    })?;
     // The `&tc` borrow has to end before the `&mut tc.typed_ast` assignment.
     let shapes = shapes::collect(&tc.typed_ast, tc.resolver()).map_err(|fatal| {
         CompileError {
@@ -728,6 +752,9 @@ pub(super) struct Inferer<'a> {
     /// to a lazy [`Type::AliasRef`] instead of inlining the (not-yet-
     /// finished, and for a true cycle infinite) body.
     pub(super) alias_resolution_stack: Vec<String>,
+    /// Nested annotation and alias-body resolutions in progress. Alias chains
+    /// resolve recursively, so their length is bounded before the stack is.
+    pub(super) type_resolution_depth: u32,
 }
 
 impl<'a> Inferer<'a> {
@@ -738,6 +765,9 @@ impl<'a> Inferer<'a> {
         module: ModulePath,
         inferred_modules: &BTreeMap<ModulePath, ModuleSymbols>,
     ) -> Result<(), CompileError> {
+        // Callers may supply ASTs that did not come from `parse_checked`.
+        crate::tree_height::check_syntax(ast)
+            .map_err(|failure| failure.with_stage(CompilerStage::Infer))?;
         validate_lowered_patterns(ast)?;
         self.source = source;
         self.ast = ast;

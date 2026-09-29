@@ -3,6 +3,7 @@
 pub mod app;
 pub mod blueprint;
 pub mod blueprint_seed;
+mod compiler_thread;
 pub mod config;
 pub mod error;
 mod execution_timeout;

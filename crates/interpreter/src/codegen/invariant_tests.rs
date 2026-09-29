@@ -91,3 +91,141 @@ fn receiver_binding_requires_an_environment_registration() {
         },
     );
 }
+
+fn assert_limit(error: CompilerFailure) {
+    assert!(matches!(error, CompilerFailure::Limit { .. }), "{error}");
+}
+
+#[test]
+fn index_spaces_and_wasm_sizes_are_checked() {
+    let mut counter = u32::MAX - 1;
+    assert_eq!(super::next_index(&mut counter).unwrap(), u32::MAX - 1);
+    assert_limit(super::next_index(&mut counter).unwrap_err());
+    assert_eq!(counter, u32::MAX);
+    assert_eq!(super::wasm_u32(u32::MAX as usize).unwrap(), u32::MAX);
+    if let Some(too_large) = (u32::MAX as usize).checked_add(1) {
+        assert_limit(super::wasm_u32(too_large).unwrap_err());
+    }
+
+    let mut counter = u32::MAX - 5;
+    assert_limit(super::user_subtypes::allocate_methods(&Type::Number, &mut counter).unwrap_err());
+    assert!(super::parameter_local(usize::MAX).is_err());
+    assert!(super::classes::method_vtable_slot(usize::MAX).is_err());
+}
+
+#[test]
+fn symbol_lowering_requires_its_registrations() {
+    let symbols = SymbolTable::default();
+    assert_internal(symbols.optional_field_name_type().unwrap_err());
+
+    let mut symbols = SymbolTable::default();
+    let parent = crate::mangle::package_symbol("main", "Parent");
+    let child = crate::mangle::package_symbol("main", "Child");
+    assert_internal(
+        symbols
+            .record_class_guard_layout(child.clone(), Some(&parent), 0, false)
+            .unwrap_err(),
+    );
+    assert_internal(symbols.recorded_class_guard_layout(&child).unwrap_err());
+    symbols
+        .record_class_guard_layout(parent.clone(), None, 0, true)
+        .unwrap();
+    symbols
+        .record_class_guard_layout(child.clone(), Some(&parent), 2, false)
+        .unwrap();
+    let layout = symbols.recorded_class_guard_layout(&child).unwrap();
+    assert_eq!(layout.inheritance_depth, 1);
+    assert_eq!(layout.named_payload_len, 2);
+
+    let generic_key = |args| Type::AliasRef {
+        mangled: crate::mangle::package_symbol("main", "Box"),
+        package: crate::Package("main".into()),
+        name: "Box".into(),
+        args,
+    };
+    let mut symbols = SymbolTable::default();
+    symbols.record_runtime_validator(generic_key(vec![Type::TypeVar("T".into())]), 7);
+    let concrete = generic_key(vec![Type::Number]);
+    assert_eq!(
+        symbols.generic_runtime_validator(&concrete),
+        Some((&["T".to_string()][..], 7))
+    );
+    let mut symbols = SymbolTable::default();
+    symbols.record_runtime_validator(
+        generic_key(vec![Type::TypeVar("T".into()), Type::Number]),
+        8,
+    );
+    assert_eq!(symbols.generic_runtime_validator(&concrete), None);
+}
+
+fn structural_symbols(with_walk_guard: bool) -> SymbolTable {
+    let mut symbols = super::tests::mock_symbols_with_intrinsics();
+    if with_walk_guard {
+        symbols.record_func(crate::mangle::prelude("vtable_walk_enter"), 3);
+        symbols.record_func(crate::mangle::prelude("vtable_walk_leave"), 4);
+    }
+    symbols.record_global(crate::mangle::prelude("string_vtable"), 0);
+    symbols.record_func(crate::mangle::prelude("string_concat"), 0);
+    symbols.record_func(crate::mangle::prelude("string_eq"), 1);
+    symbols.record_func(crate::mangle::prelude("ObjectConstructor##toJson"), 2);
+    symbols.record_optional_field_name_type(99);
+    symbols
+}
+
+fn subtype(ty: Type) -> super::user_subtypes::UserSubtype {
+    let mut next = 0;
+    super::user_subtypes::allocate_methods(&ty, &mut next).unwrap()
+}
+
+#[test]
+fn structural_subtypes_reject_unrepresentable_layouts() {
+    let emit = |symbols: &SymbolTable, subtype| {
+        super::user_subtypes::emit_method_bodies(
+            &mut wasm_encoder::CodeSection::new(),
+            &[subtype],
+            symbols,
+            &crate::TypeInfoTable::default(),
+            None,
+        )
+    };
+    let object = |ty| Type::Object {
+        fields: [("a".to_string(), crate::ObjectField::required(ty))].into(),
+        index: None,
+    };
+    assert_internal(emit(&SymbolTable::default(), subtype(object(Type::Number))).unwrap_err());
+    // A missing depth guard import fails instead of emitting an unguarded body.
+    assert_internal(emit(&structural_symbols(false), subtype(object(Type::Number))).unwrap_err());
+    let symbols = structural_symbols(true);
+    emit(&symbols, subtype(object(Type::Number))).unwrap();
+    assert_internal(emit(&symbols, subtype(Type::Number)).unwrap_err());
+    for field in [Type::Void, Type::Never, Type::Error] {
+        assert_internal(emit(&symbols, subtype(object(field))).unwrap_err());
+    }
+}
+
+#[test]
+fn literal_pools_and_call_metadata_require_their_registrations() {
+    let ta = TypedAst::new();
+    with_context(&ta, &super::tests::mock_symbols_with_intrinsics(), |ctx| {
+        let mut emitter = FunctionEmitter::new(ctx, &[]);
+        assert_internal(super::call_arguments::wrap(&mut emitter, ctx, "[]").unwrap_err());
+        assert_internal(super::call_arguments::unwrap(&mut emitter, ctx).unwrap_err());
+        // Text the analysis pass never interned has no pool entry to reference.
+        assert_internal(
+            super::function_emitter::emit_const_string_by_text(&mut emitter, ctx, "absent")
+                .unwrap_err(),
+        );
+        assert_internal(
+            super::field_names::emit_instance_names(&mut emitter, ctx, &[], |_| false).unwrap_err(),
+        );
+        assert_internal(super::field_names::emit_name_presence(&mut emitter, ctx).unwrap_err());
+    });
+    // Emitters that cannot return errors yet latch the failure, so the module
+    // is discarded at the codegen boundary instead of carrying partial code.
+    with_context(&ta, &super::tests::mock_symbols_with_intrinsics(), |ctx| {
+        let mut emitter = FunctionEmitter::new(ctx, &[]);
+        super::throw::emit_type_error_throw(&mut emitter, ctx, "absent");
+        assert_internal(ctx.check_failure().unwrap_err());
+        ctx.check_failure().unwrap();
+    });
+}

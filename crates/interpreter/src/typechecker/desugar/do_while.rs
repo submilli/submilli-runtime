@@ -43,10 +43,13 @@ fn lower(ctx: &mut DesugarCtx, id: StmtId) -> Result<(), crate::compiler_error::
     ctx.ta
         .try_stmt(body)
         .map_err(crate::typechecker::arena_failure)?;
-    ctx.ta
+    let condition_span = ctx
+        .ta
         .try_expr(condition)
-        .map_err(crate::typechecker::arena_failure)?;
+        .map_err(crate::typechecker::arena_failure)?
+        .span;
 
+    // The test is the condition's own code, so it keeps the condition's span.
     let not_cond = ctx
         .ta
         .try_push_expr(TypedExpr {
@@ -54,7 +57,7 @@ fn lower(ctx: &mut DesugarCtx, id: StmtId) -> Result<(), crate::compiler_error::
                 op: UnOp::Not,
                 operand: condition,
             },
-            span,
+            span: condition_span,
             ty: Type::Boolean,
         })
         .map_err(crate::typechecker::arena_failure)?;

@@ -519,17 +519,21 @@ impl<'a> Inferer<'a> {
     /// Check that every class satisfies each interface it declares. Runs once
     /// all class signatures are bound, so a member inherited from a
     /// later-declared parent counts.
-    pub(super) fn check_pending_implements(&mut self) {
+    pub(super) fn check_pending_implements(&mut self) -> Result<(), CompilerFailure> {
         for pending in std::mem::take(&mut self.pending_implements) {
             // An unresolvable parent could have supplied any of the interface's
             // members, so conformance is unknowable rather than broken.
             if !self.inherits_unresolved_parent(&pending.mangled) {
-                self.check_class_implements(&pending);
+                self.check_class_implements(&pending)?;
             }
         }
+        Ok(())
     }
 
-    fn check_class_implements(&mut self, pending: &PendingImplements) {
+    fn check_class_implements(
+        &mut self,
+        pending: &PendingImplements,
+    ) -> Result<(), CompilerFailure> {
         // A generic class is checked at fresh opaque parameters, applied to
         // both sides, so `Box<T> implements Container<T>` still matches member
         // for member while `Box<T> implements Container<string>` is caught —
@@ -538,7 +542,7 @@ impl<'a> Inferer<'a> {
             .generic_names
             .iter()
             .map(|name| self.fresh_generic_param(name))
-            .collect();
+            .collect::<Result<_, _>>()?;
         let opaque: BTreeMap<String, Type> = pending
             .generic_names
             .iter()
@@ -573,6 +577,7 @@ impl<'a> Inferer<'a> {
                 self.report_implements_failures(*span, &pending.class_name, iface_ty, &failures);
             }
         }
+        Ok(())
     }
 
     /// Render a class→interface conformance failure as an LLM-native diagnostic:
@@ -870,6 +875,21 @@ impl<'a> Inferer<'a> {
                     cyclic = true;
                     break;
                 }
+                if chain.len() >= crate::compiler_limits::MAX_CLASS_CHAIN_LEN {
+                    return Err(CompilerFailure::Limit {
+                        stage: crate::compiler_error::CompilerStage::Infer,
+                        span: Some(*ext_span),
+                        message: format!(
+                            "class `{class_name}` has more than {} classes in its inheritance \
+                             chain, counting itself and every ancestor",
+                            crate::compiler_limits::MAX_CLASS_CHAIN_LEN
+                        ),
+                        help: vec![
+                            "flatten the hierarchy, or compose behavior instead of extending"
+                                .into(),
+                        ],
+                    });
+                }
                 chain.push(p.clone());
                 parent = self.class_parent(&p);
             }
@@ -1005,13 +1025,13 @@ impl<'a> Inferer<'a> {
             // A cross-kind redeclaration has no same-kind check to run — the
             // ancestor walk each one does looks for its own kind and would sail
             // past the declaration that actually collides.
-            if self.reported_cross_kind_redeclaration(&member) {
+            if self.reported_cross_kind_redeclaration(&member)? {
                 continue;
             }
             match member.kind {
-                MemberKind::Method => self.check_method_override(&member),
+                MemberKind::Method => self.check_method_override(&member)?,
                 MemberKind::Field => self.check_field_redeclaration(&member)?,
-                MemberKind::Accessor => self.check_accessor_redeclaration(&member),
+                MemberKind::Accessor => self.check_accessor_redeclaration(&member)?,
             }
         }
 
@@ -1114,15 +1134,18 @@ impl<'a> Inferer<'a> {
     /// inherited accessor appends a second, independent property under one name,
     /// and a field over an inherited method leaves `c.v` and `p.v()` naming
     /// different members.
-    fn reported_cross_kind_redeclaration(&mut self, member: &RedeclarationCandidate) -> bool {
-        let opaque = self.opaque_own_generics(&member.child_class);
+    fn reported_cross_kind_redeclaration(
+        &mut self,
+        member: &RedeclarationCandidate,
+    ) -> Result<bool, CompilerFailure> {
+        let opaque = self.opaque_own_generics(&member.child_class)?;
         let Some((inherited_kind, owner)) =
             self.ancestor_member_kind(&member.child_class, &member.name, &opaque)
         else {
-            return false;
+            return Ok(false);
         };
         if inherited_kind == member.kind {
-            return false;
+            return Ok(false);
         }
         let owner_name = self.class_name_of(&owner);
         let (child, parent) = (member.kind.noun(), inherited_kind.noun());
@@ -1143,15 +1166,18 @@ impl<'a> Inferer<'a> {
                 ),
             ],
         );
-        true
+        Ok(true)
     }
 
     /// An accessor redeclaring an inherited accessor shares its vtable slot, so
     /// the slot's recorded signature is the *base* declarer's: a getter whose
     /// return doesn't fit it (or a setter that won't accept what the inherited
     /// one does) miscompiles rather than dispatching.
-    fn check_accessor_redeclaration(&mut self, member: &RedeclarationCandidate) {
-        let opaque = self.opaque_own_generics(&member.child_class);
+    fn check_accessor_redeclaration(
+        &mut self,
+        member: &RedeclarationCandidate,
+    ) -> Result<(), CompilerFailure> {
+        let opaque = self.opaque_own_generics(&member.child_class)?;
         for own in self.class_own_accessors(&member.child_class, &member.name) {
             let Some(inherited) = self.ancestor_accessor(&member.child_class, &own, &opaque) else {
                 continue;
@@ -1184,6 +1210,7 @@ impl<'a> Inferer<'a> {
                 ],
             );
         }
+        Ok(())
     }
 
     /// The class's own getter and setter for `name` (either may be absent).
@@ -1244,16 +1271,19 @@ impl<'a> Inferer<'a> {
         })
     }
 
-    fn check_method_override(&mut self, member: &RedeclarationCandidate) {
+    fn check_method_override(
+        &mut self,
+        member: &RedeclarationCandidate,
+    ) -> Result<(), CompilerFailure> {
         let Some(child_sig) = self.class_method_sig(&member.child_class, &member.name) else {
-            return;
+            return Ok(());
         };
         // A generic declared on the method itself is not in this map and keeps
         // its existing (lenient) treatment.
-        let opaque = self.opaque_own_generics(&member.child_class);
+        let opaque = self.opaque_own_generics(&member.child_class)?;
         let Some(parent_sig) = self.ancestor_method_sig(&member.child_class, &member.name, &opaque)
         else {
-            return;
+            return Ok(());
         };
         let child_fn = substitute_typevars(&method_fn_type(&child_sig), &opaque);
         let parent_fn = method_fn_type(&parent_sig);
@@ -1274,7 +1304,7 @@ impl<'a> Inferer<'a> {
                     "declare the parameters it ignores too".to_string(),
                 ],
             );
-            return;
+            return Ok(());
         }
         if !super::assignable(&child_fn, &parent_fn, self.resolver()) {
             self.error_with_help(
@@ -1289,6 +1319,7 @@ impl<'a> Inferer<'a> {
                 ],
             );
         }
+        Ok(())
     }
 
     /// A redeclared field shadows the inherited one into a single property
@@ -1304,7 +1335,7 @@ impl<'a> Inferer<'a> {
         let Some(child_field) = self.class_own_field_sig(&member.child_class, &member.name) else {
             return Ok(());
         };
-        let opaque = self.opaque_own_generics(&member.child_class);
+        let opaque = self.opaque_own_generics(&member.child_class)?;
         let Some((parent_field, parent_class)) =
             self.ancestor_field_decl(&member.child_class, &member.name, &opaque)
         else {
@@ -2089,19 +2120,22 @@ impl<'a> Inferer<'a> {
     /// keyed by name for [`substitute_typevars`]. Same guard
     /// `check_class_implements` uses: comparing at bare `TypeVar`s would make
     /// every parameterized member match everything.
-    fn opaque_own_generics(&mut self, mangled: &MangledName) -> BTreeMap<String, Type> {
+    fn opaque_own_generics(
+        &mut self,
+        mangled: &MangledName,
+    ) -> Result<BTreeMap<String, Type>, CompilerFailure> {
         let Some(sym) = self.class_by_mangled(mangled) else {
-            return BTreeMap::new();
+            return Ok(BTreeMap::new());
         };
         let TypeKind::Class { generics, .. } = &sym.kind else {
-            return BTreeMap::new();
+            return Ok(BTreeMap::new());
         };
         generics
             .clone()
             .into_iter()
             .map(|g| {
-                let opaque = self.fresh_generic_param(&g);
-                (g, opaque)
+                let opaque = self.fresh_generic_param(&g)?;
+                Ok((g, opaque))
             })
             .collect()
     }
@@ -3014,7 +3048,7 @@ impl<'a> Inferer<'a> {
             let class_inst = if class_generics.is_empty() {
                 BTreeMap::new()
             } else {
-                self.push_body_generics(class_generics.clone())
+                self.push_body_generics(class_generics.clone())?
             };
             let class_ty = Type::class_ref(
                 crate::Package(self.package_name.to_string()),
@@ -3315,7 +3349,7 @@ impl<'a> Inferer<'a> {
                         .with_span(name.span),
                 );
             }
-            let body_instantiation = self.push_body_generics(sig.generics.clone());
+            let body_instantiation = self.push_body_generics(sig.generics.clone())?;
             // Method-level generics shadow class-level ones of the same name.
             let mut merged = class_inst.clone();
             merged.extend(body_instantiation);
@@ -3437,7 +3471,7 @@ impl<'a> Inferer<'a> {
                         .with_span(name.span),
                 );
             }
-            let body_instantiation = self.push_body_generics(sig.generics.clone());
+            let body_instantiation = self.push_body_generics(sig.generics.clone())?;
             let body_param_types: Vec<Type> = sig
                 .params
                 .iter()

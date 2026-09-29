@@ -91,7 +91,7 @@ fn emit_expr_value(
         TypedExprKind::Number(v) => {
             emitter.instruction(Instruction::F64Const(Ieee64::from(*v)));
         }
-        TypedExprKind::BigInt(digits) => emit_bigint_literal(emitter, ctx, digits),
+        TypedExprKind::BigInt(digits) => emit_bigint_literal(emitter, ctx, digits)?,
         TypedExprKind::Boolean(b) => {
             emitter.instruction(Instruction::I32Const(if *b { 1 } else { 0 }));
         }
@@ -99,35 +99,13 @@ fn emit_expr_value(
         // `array.new_data` + `struct.new $string`, reading from the
         // per-literal passive data segment that StringPool assigned.
         TypedExprKind::String(_) => {
-            let pool_idx = ctx
-                .strings
-                .locations
-                .get(&id)
-                .copied()
-                .expect("CodegenAnalysis recorded string literals");
-            let code_units = ctx.strings.code_units(pool_idx);
-            let string_type_idx = ctx
-                .symbols
-                .string_type_idx()
-                .expect("Type::String requires the intrinsic types to be declared");
-            let raw_string_type_idx = ctx
-                .symbols
-                .raw_string_type_idx()
-                .expect("Type::String requires the intrinsic types to be declared");
-            let vtable_global_idx = ctx
-                .symbols
-                .prelude_global_idx("string_vtable")
-                .expect("string_vtable global imported from prelude");
-            emitter.emit_const_string(
-                string_type_idx,
-                raw_string_type_idx,
-                vtable_global_idx,
-                pool_idx as u32,
-                code_units,
-            );
+            let pool_idx = ctx.strings.locations.get(&id).copied().ok_or_else(|| {
+                crate::codegen::internal_failure("a string literal was not interned")
+            })?;
+            super::emit_pooled_string(emitter, ctx, pool_idx)?;
         }
         TypedExprKind::Regex { source, flags } => {
-            emit_regex_literal(emitter, ctx, source, flags);
+            emit_regex_literal(emitter, ctx, source, flags)?;
         }
         TypedExprKind::Sequence { stmts, result } => {
             for &stmt in stmts {
@@ -243,7 +221,7 @@ fn emit_expr_value(
             emitter.instruction(Instruction::RefFunc(adapter_idx));
             emitter.instruction(Instruction::GlobalGet(vtable_idx));
             if let Some(metadata) = ctx.symbols.function_argument_metadata.get(mangled) {
-                crate::codegen::call_arguments::wrap(emitter, ctx, metadata);
+                crate::codegen::call_arguments::wrap(emitter, ctx, metadata)?;
             }
             emitter.instruction(Instruction::StructNew(closure_struct_idx));
         }
@@ -678,32 +656,10 @@ fn emit_expr_value(
             // The StringPool collector records each `StringEnumMember`
             // by `ExprId` (see string_pool.rs), so the materialisation
             // path is identical to a regular string literal.
-            let pool_idx = ctx
-                .strings
-                .locations
-                .get(&id)
-                .copied()
-                .expect("CodegenAnalysis recorded the variant value");
-            let code_units = ctx.strings.code_units(pool_idx);
-            let string_type_idx = ctx
-                .symbols
-                .string_type_idx()
-                .expect("Type::String requires the intrinsic types to be declared");
-            let raw_string_type_idx = ctx
-                .symbols
-                .raw_string_type_idx()
-                .expect("Type::String requires the intrinsic types to be declared");
-            let vtable_global_idx = ctx
-                .symbols
-                .prelude_global_idx("string_vtable")
-                .expect("string_vtable global imported from prelude");
-            emitter.emit_const_string(
-                string_type_idx,
-                raw_string_type_idx,
-                vtable_global_idx,
-                pool_idx as u32,
-                code_units,
-            );
+            let pool_idx = ctx.strings.locations.get(&id).copied().ok_or_else(|| {
+                crate::codegen::internal_failure("a string enum value was not interned")
+            })?;
+            super::emit_pooled_string(emitter, ctx, pool_idx)?;
         }
         TypedExprKind::TypeofTag { value, tag } => {
             emit_typeof_tag(emitter, ctx, *value, *tag)?;
@@ -1125,7 +1081,7 @@ fn emit_object_literal(
         fields.iter().any(|field| {
             field.name.name == name && !matches!(field.source, TypedObjectFieldSource::Absent(_))
         })
-    });
+    })?;
 
     // Walk the declared shape's field set in BTreeMap order
     // and emit one value per slot. The typed-AST `fields`
@@ -1389,8 +1345,8 @@ fn emit_closure_value(
     if let Some(local) = self_environment {
         emitter.instruction(Instruction::LocalTee(local));
     }
-    if let Some(metadata) = crate::codegen::call_arguments::typed_metadata(params) {
-        crate::codegen::call_arguments::wrap(emitter, ctx, &metadata);
+    if let Some(metadata) = crate::codegen::call_arguments::typed_metadata(params)? {
+        crate::codegen::call_arguments::wrap(emitter, ctx, &metadata)?;
     }
 
     if ctx.ta.closure_this.contains_key(&id) {
@@ -2240,8 +2196,8 @@ fn emit_live_member_on_stack(
     name: &str,
     args: Option<&[ExprId]>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    super::emit_const_string_by_text(emitter, ctx, name);
-    super::emit_const_string_by_text(emitter, ctx, iface.as_str());
+    super::emit_const_string_by_text(emitter, ctx, name)?;
+    super::emit_const_string_by_text(emitter, ctx, iface.as_str())?;
     let helper = if args.is_some() {
         "__value_member"
     } else {
@@ -3359,7 +3315,7 @@ pub(crate) fn emit_class_field_setup(
         let index = emitter.add_anonymous_local(ValType::I32);
         emitter.instruction(Instruction::I32Const(slot as i32));
         emitter.instruction(Instruction::LocalSet(index));
-        crate::codegen::field_names::emit_mark_present(emitter, ctx, this, index);
+        crate::codegen::field_names::emit_mark_present(emitter, ctx, this, index)?;
     }
     Ok(())
 }
@@ -3421,11 +3377,11 @@ pub(crate) fn emit_object_field_write_by_name(
     ctx: &CodegenCtx,
     object_local: u32,
     name_global: u32,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
-        .expect("intrinsics declared by codegen entry");
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared by codegen entry"))?;
     let value_local = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: true,
         heap_type: HeapType::Concrete(intrinsics.object),
@@ -3445,7 +3401,7 @@ pub(crate) fn emit_object_field_write_by_name(
     emitter.instruction(Instruction::LocalGet(index_local));
     emitter.instruction(Instruction::LocalGet(value_local));
     emitter.instruction(Instruction::ArraySet(intrinsics.object_fields));
-    crate::codegen::field_names::emit_mark_present(emitter, ctx, object_local, index_local);
+    crate::codegen::field_names::emit_mark_present(emitter, ctx, object_local, index_local)?;
     emitter.emit_else();
     emitter.instruction(Instruction::LocalGet(object_local));
     emitter.instruction(Instruction::GlobalGet(name_global));
@@ -3453,9 +3409,12 @@ pub(crate) fn emit_object_field_write_by_name(
     let insert = ctx
         .symbols
         .prelude_func_idx("ObjectConstructor##insertField")
-        .expect("field insertion helper imported");
+        .ok_or_else(|| {
+            crate::codegen::internal_failure("field insertion helper is not imported")
+        })?;
     emitter.instruction(Instruction::Call(insert));
     emitter.emit_end();
+    Ok(())
 }
 
 /// Whether a shaped property read may emit its accessor branch, which scans for
@@ -3762,7 +3721,7 @@ fn emit_object_property_write_value(
         let value_ty = value.ty(ctx)?;
         value.emit(emitter, ctx)?;
         cast::emit_box(emitter, ctx, &value_ty)?;
-        emit_object_field_write_by_name(emitter, ctx, object_local, name_global);
+        emit_object_field_write_by_name(emitter, ctx, object_local, name_global)?;
         return Ok(());
     }
     let index_local = emitter.add_anonymous_local(ValType::I32);
@@ -3777,7 +3736,7 @@ fn emit_object_property_write_value(
     let value_ty = value.ty(ctx)?;
     value.emit(emitter, ctx)?;
     cast::emit_box(emitter, ctx, &value_ty)?;
-    emit_object_field_write_by_name(emitter, ctx, object_local, name_global);
+    emit_object_field_write_by_name(emitter, ctx, object_local, name_global)?;
     emitter.emit_else();
     // One nested `if` per accessor the program declares, innermost `else` being
     // the absent case — so the arm list *is* the nesting depth. An accessor the
@@ -3826,7 +3785,7 @@ fn emit_object_property_write_value(
     let value_ty = value.ty(ctx)?;
     value.emit(emitter, ctx)?;
     cast::emit_box(emitter, ctx, &value_ty)?;
-    emit_object_field_write_by_name(emitter, ctx, object_local, name_global);
+    emit_object_field_write_by_name(emitter, ctx, object_local, name_global)?;
     for _ in &arms {
         emitter.emit_end();
     }
@@ -5440,8 +5399,13 @@ fn emit_nullable_eq(
 /// are looked up in the bigint constants pool and materialized via
 /// `array.new_data` over a per-program data segment, then wrapped
 /// directly into `$bigint` with the prelude's vtable.
-fn emit_bigint_literal(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, digits: &str) {
-    if let Some(entry) = ctx.bigints.lookup(digits) {
+fn emit_bigint_literal(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    digits: &str,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    use crate::codegen::internal_failure;
+    if let Some(entry) = ctx.bigints.lookup(digits)? {
         // Large literal — pack limbs from data segment, wrap with
         // bigint vtable directly (no host fn involved). Data-segment
         // index is offset by the string-pool count because string
@@ -5449,38 +5413,45 @@ fn emit_bigint_literal(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, digits: 
         let raw_bigint_idx = ctx
             .symbols
             .raw_bigint_type_idx()
-            .expect("$rawBigInt registered");
-        let bigint_idx = ctx.symbols.bigint_type_idx().expect("$bigint registered");
+            .ok_or_else(|| internal_failure("the $rawBigInt intrinsic is not registered"))?;
+        let bigint_idx = ctx
+            .symbols
+            .bigint_type_idx()
+            .ok_or_else(|| internal_failure("the $bigint intrinsic is not registered"))?;
         let vtable_global = ctx
             .symbols
             .prelude_global_idx("bigint_vtable")
-            .expect("bigint_vtable imported from prelude bootstrap");
-        let data_idx = ctx.strings.strings.len() as u32 + entry.data_idx;
+            .ok_or_else(|| internal_failure("bigint_vtable is not imported from the prelude"))?;
+        let data_idx = crate::codegen::wasm_u32(ctx.strings.strings.len())?
+            .checked_add(entry.data_idx)
+            .ok_or_else(|| internal_failure("the module has too many data segments"))?;
         emitter.instruction(Instruction::GlobalGet(vtable_global));
-        emitter.instruction(Instruction::I32Const(entry.sign as i32));
+        emitter.instruction(Instruction::I32Const(i32::from(entry.sign)));
         emitter.instruction(Instruction::I32Const(0));
-        emitter.instruction(Instruction::I32Const(entry.limb_count as i32));
+        emitter.instruction(Instruction::I32Const(entry.limb_count.cast_signed()));
         emitter.instruction(Instruction::ArrayNewData {
             array_type_index: raw_bigint_idx,
             array_data_index: data_idx,
         });
         emitter.instruction(Instruction::StructNew(bigint_idx));
-        return;
+        return Ok(());
     }
-    // Fits in f64's safe-integer range (pool guarantees it).
+    // The pool leaves only literals within f64's safe-integer range, so this
+    // conversion is exact.
     // Construct via `submilli:bigint.fromNumber` + standard wrap.
     let v: i64 = digits
         .parse()
-        .expect("small-bigint literals parse as i64 by construction of the pool");
+        .map_err(|_| internal_failure("an unpooled bigint literal is not a safe integer"))?;
     let host_idx = ctx
         .symbols
         .func_idx(&crate::mangle::host(
             crate::runtime::BIGINT_MODULE_NAME,
             "fromNumber",
         ))
-        .expect("submilli:bigint.fromNumber import recorded by codegen bootstrap");
+        .ok_or_else(|| internal_failure("submilli:bigint.fromNumber is not imported"))?;
     emitter.instruction(Instruction::F64Const(Ieee64::from(v as f64)));
     emit_bigint_wrap_host_result(emitter, ctx, host_idx);
+    Ok(())
 }
 
 /// regex-literal lowering. Each literal site allocates a
@@ -5494,49 +5465,20 @@ fn emit_bigint_literal(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, digits: 
 /// (`typechecker::infer::expr::infer_regex` calls
 /// `runtime::prelude::regex::engine::build_regex`), so the wrapper's compile call
 /// here only fails on memory-cap exhaustion, which traps cleanly.
-fn emit_regex_literal(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, source: &str, flags: &str) {
-    let string_type_idx = ctx
-        .symbols
-        .string_type_idx()
-        .expect("Type::String requires the intrinsic types to be declared");
-    let raw_string_type_idx = ctx
-        .symbols
-        .raw_string_type_idx()
-        .expect("Type::String requires the intrinsic types to be declared");
-    let string_vtable_global_idx = ctx
-        .symbols
-        .prelude_global_idx("string_vtable")
-        .expect("string_vtable global imported from prelude");
-
-    let source_idx = ctx
-        .strings
-        .lookup_text(source)
-        .expect("regex source string interned by CodegenAnalysis");
-    let flags_idx = ctx
-        .strings
-        .lookup_text(flags)
-        .expect("regex flags string interned by CodegenAnalysis");
-
-    emitter.emit_const_string(
-        string_type_idx,
-        raw_string_type_idx,
-        string_vtable_global_idx,
-        source_idx as u32,
-        ctx.strings.code_units(source_idx),
-    );
-    emitter.emit_const_string(
-        string_type_idx,
-        raw_string_type_idx,
-        string_vtable_global_idx,
-        flags_idx as u32,
-        ctx.strings.code_units(flags_idx),
-    );
-
+fn emit_regex_literal(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    source: &str,
+    flags: &str,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    super::emit_const_string_by_text(emitter, ctx, source)?;
+    super::emit_const_string_by_text(emitter, ctx, flags)?;
     let ctor_idx = ctx
         .symbols
         .func_idx(&crate::mangle::prelude("RegExpConstructor#new"))
-        .expect("RegExpConstructor#new exported from prelude");
+        .ok_or_else(|| crate::codegen::internal_failure("RegExpConstructor#new is not imported"))?;
     emitter.instruction(Instruction::Call(ctor_idx));
+    Ok(())
 }
 
 /// helper — given a `(ref $bigint)` on top of the stack,
@@ -5663,7 +5605,9 @@ fn emit_bigint_pm_one(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, op: crate
     emitter.instruction(Instruction::LocalSet(lhs_sign));
     emitter.instruction(Instruction::LocalGet(lhs_sign));
     emitter.instruction(Instruction::LocalGet(lhs_limbs));
-    emit_bigint_literal(emitter, ctx, "1");
+    if ctx.latch(emit_bigint_literal(emitter, ctx, "1")).is_none() {
+        return;
+    }
     emit_bigint_extract_to_stack(emitter, ctx);
     let op_name = match op {
         crate::PostfixOp::Inc => "add",
@@ -5809,7 +5753,7 @@ fn emit_field_holds_value_of(
     });
     emitter.instruction(Instruction::LocalGet(index));
     emitter.instruction(Instruction::ArrayGet(intrinsics.field_names));
-    crate::codegen::field_names::emit_name_presence(emitter, ctx);
+    crate::codegen::field_names::emit_name_presence(emitter, ctx)?;
     emitter.instruction(Instruction::LocalGet(value));
     emitter.instruction(Instruction::RefIsNull);
     emitter.instruction(Instruction::I32Eqz);

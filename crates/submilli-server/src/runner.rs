@@ -24,6 +24,7 @@ use tracing::debug;
 use wasmtime::{Engine, Linker, Module, Trap};
 
 use crate::app::PreparedBlueprintPackages;
+use crate::compiler_thread;
 use crate::error::{DiagnosticNote, DiagnosticPayload, ErrorKind, ExecuteError};
 use crate::mcp::McpCatalog;
 
@@ -193,18 +194,22 @@ async fn run_inner(
     if let Err(error) = register_package_sources(&mut parsed.sources, imports.packages) {
         return internal_failure(&error.to_string());
     }
-    let compiled = match compile_parsed_script_timed(
-        code,
-        FILENAME,
-        &parsed.parsed,
-        &imports.packages.stdlib_declarations,
-        &package_refs,
-        &mcp_refs,
-    ) {
-        Ok(out) => out,
-        Err(diags) => {
+    let compiled = compiler_thread::run(|| {
+        compile_parsed_script_timed(
+            code,
+            FILENAME,
+            &parsed.parsed,
+            &imports.packages.stdlib_declarations,
+            &package_refs,
+            &mcp_refs,
+        )
+    });
+    let compiled = match compiled {
+        Ok(Ok(out)) => out,
+        Ok(Err(diags)) => {
             return compile_failure(&parsed.sources, parsed.file, &diags, discovery_warnings);
         }
+        Err(error) => return internal_failure(&error.to_string()),
     };
     crate::metrics::compile_phases(&compiled.timings);
 

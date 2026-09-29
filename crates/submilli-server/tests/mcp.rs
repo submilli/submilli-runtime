@@ -2552,6 +2552,37 @@ fn mcp_parser_depth_is_bounded() {
 }
 
 #[test]
+fn mcp_compiler_structure_limits_are_bounded() {
+    parser_depth::isolated_worker("mcp_compiler_structure_limits_are_bounded", async {
+        let h = Harness::new();
+        let session = h.handshake(EPH).await;
+        let (status, _, rpc) = h
+            .post(
+                EPH,
+                tools_call(1, &parser_depth::flat_chain_source()),
+                Some(&session),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(output(&rpc)["error"]["kind"], "compile_error", "{rpc}");
+        assert!(
+            rpc.to_string().contains(parser_depth::SYNTAX_LIMIT_MESSAGE),
+            "{rpc}"
+        );
+        let (status, _, rpc) = h
+            .post(
+                EPH,
+                tools_call(2, &parser_depth::near_limit_chain_source()),
+                Some(&session),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(output(&rpc)["error"].is_null(), "{rpc}");
+        assert_eq!(output(&rpc)["result"], "200", "{rpc}");
+    });
+}
+
+#[test]
 fn mcp_closure_arity_returns_diagnostics() {
     parser_depth::isolated_worker("mcp_closure_arity_returns_diagnostics", async {
         let h = Harness::new();

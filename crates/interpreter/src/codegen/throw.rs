@@ -34,7 +34,12 @@ pub(crate) fn emit_type_error_throw(
     ctx: &CodegenCtx,
     message: &str,
 ) {
-    emit_const_string_by_text(emitter, ctx, message);
+    if ctx
+        .latch(emit_const_string_by_text(emitter, ctx, message))
+        .is_none()
+    {
+        return;
+    }
     let new_idx = ctx
         .symbols
         .prelude_func_idx("TypeError#constructor")
