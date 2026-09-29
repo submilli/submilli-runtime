@@ -536,9 +536,7 @@ impl<'a> Inferer<'a> {
         if let Some(natural) = natural_exit_env {
             exits.push(natural);
         }
-        let Some(post_env) = exits.into_iter().reduce(|a_env, b_env| {
-            narrowing::union_envs(a_env, Default::default(), b_env, Default::default()).0
-        }) else {
+        let Some(post_env) = join_exit_envs(exits) else {
             return Ok(false);
         };
         if !post_env.is_empty() {
@@ -1680,6 +1678,29 @@ fn is_class_seen_as_class(part: &Type, member: &Type) -> bool {
         (part.peel(), member.peel()),
         (Type::ClassRef { .. }, Type::ClassRef { .. })
     )
+}
+
+/// Joins exit environments pairwise in a balanced tree rather than left to
+/// right: a switch with thousands of exits would otherwise rebuild a growing
+/// union at every step. Joined narrowed types are unions, so they do not depend
+/// on the grouping, and each join keeps the leftmost environment's bindings.
+/// Only `dropped` entries, which feed a help hint, compare narrowed types for
+/// equality and can differ for an authored union such as `"a" | string`.
+fn join_exit_envs(mut level: Vec<narrowing::NarrowEnv>) -> Option<narrowing::NarrowEnv> {
+    while level.len() > 1 {
+        let mut next = Vec::with_capacity(level.len().div_ceil(2));
+        let mut envs = level.into_iter();
+        while let Some(left) = envs.next() {
+            next.push(match envs.next() {
+                Some(right) => {
+                    narrowing::union_envs(left, Default::default(), right, Default::default()).0
+                }
+                None => left,
+            });
+        }
+        level = next;
+    }
+    level.pop()
 }
 
 #[cfg(test)]

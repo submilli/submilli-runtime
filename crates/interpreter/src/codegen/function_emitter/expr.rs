@@ -895,6 +895,7 @@ fn emit_expr_value(
                 *value,
                 target_ty,
                 check.as_deref(),
+                expr.span,
             )?;
         }
     };
@@ -5759,7 +5760,7 @@ fn emit_field_holds_value_of(
     emitter.instruction(Instruction::I32Eqz);
     emitter.instruction(Instruction::I32Or);
     let _: () = if field_runtime_type_is_testable(field_ty) {
-        emit_structural_test(emitter, ctx, value, field_ty)?;
+        emit_structural_test(emitter, ctx, value, field_ty, field_ty)?;
         emitter.instruction(Instruction::I32And);
     };
     Ok(())

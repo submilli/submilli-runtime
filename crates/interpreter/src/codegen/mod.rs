@@ -364,6 +364,14 @@ pub struct CodegenCtx<'a> {
     pub type_info: &'a crate::TypeInfoTable,
     pub package_string_global_idx: Option<u32>,
     failure: std::cell::Cell<Option<CompilerFailure>>,
+    /// Inline structural-test steps the current runtime check may still
+    /// emit; see [`crate::compiler_limits::MAX_INLINE_VALIDATOR_STEPS`].
+    validator_steps_left: std::cell::Cell<u64>,
+    /// The type whose runtime check is being emitted, named when the check
+    /// exhausts `validator_steps_left`.
+    validator_root: std::cell::Cell<Option<Type>>,
+    /// Whether the check being emitted is a function of its own.
+    check_is_standalone: std::cell::Cell<bool>,
 }
 
 impl CodegenCtx<'_> {
@@ -406,11 +414,227 @@ impl CodegenCtx<'_> {
         );
     }
 
+    /// Charges one step of structural-test emission to the current check, and
+    /// stops before the function it is emitted into exceeds the Wasm engine's
+    /// limits on locals and body size (see [`Self::check_function_limits`]).
+    /// The check's own failures are reported at the last source-locating span
+    /// the emitter mapped, which the test is emitted for.
+    fn charge_validator_step(&self, emitter: &mut FunctionEmitter) -> Result<(), CompilerFailure> {
+        self.charge_validator_steps(emitter, 1)
+    }
+
+    /// [`charge_validator_step`](Self::charge_validator_step) for `steps` at
+    /// once, for emission whose size varies, such as a path naming long fields.
+    fn charge_validator_steps(
+        &self,
+        emitter: &mut FunctionEmitter,
+        steps: u64,
+    ) -> Result<(), CompilerFailure> {
+        use crate::compiler_limits::MAX_INLINE_VALIDATOR_STEPS;
+        self.check_function_limits(emitter)?;
+        let Some(left) = self.validator_steps_left.get().checked_sub(steps) else {
+            return Err(self.validator_limit(
+                emitter.last_source_span(),
+                format!("exceeds the compiler limit of {MAX_INLINE_VALIDATOR_STEPS} steps"),
+                "check against a smaller type, or restructure the interfaces so members do not repeat the same nested interface",
+            ));
+        };
+        self.validator_steps_left.set(left);
+        Ok(())
+    }
+
+    /// Stops a runtime check once the function it is emitted into has more
+    /// locals, or a larger body, than the Wasm engine accepts, so runaway
+    /// checks stop early; [`Self::check_finished_function`] measures every
+    /// function once it is built.
+    ///
+    /// A limit crossed before the check emitted anything is the preceding
+    /// code's: it is reported as the function's failure at the source that
+    /// crossed it. Otherwise the check is named, at the last source-locating
+    /// span.
+    fn check_function_limits(&self, emitter: &mut FunctionEmitter) -> Result<(), CompilerFailure> {
+        let Some(limit) = FunctionLimit::exceeded(emitter.body_size(), emitter.local_count())
+        else {
+            return Ok(());
+        };
+        // A check charges a step before emitting anything, so before its
+        // first step its allowance is untouched.
+        let check_has_emitted_code =
+            self.validator_steps_left.get() < crate::compiler_limits::MAX_INLINE_VALIDATOR_STEPS;
+        if !check_has_emitted_code {
+            let span = match limit {
+                FunctionLimit::BodyBytes => emitter.body_limit_span(),
+                FunctionLimit::Locals => emitter.locals_limit_span(),
+            };
+            return Err(limit.failure(span));
+        }
+        let fix = if self.check_is_standalone.get() {
+            "check against a smaller type"
+        } else {
+            "check against a smaller type, or move some of the function's checks into another function"
+        };
+        Err(self.validator_limit(emitter.last_source_span(), limit.check_exceeds(), fix))
+    }
+
+    /// Records a limit failure for a built function the Wasm engine would
+    /// reject (see [`FunctionLimit`]), reported at the source that crossed the
+    /// limit.
+    fn check_finished_function(&self, function: FinishedFunction) {
+        let Some(limit) = FunctionLimit::exceeded(function.body_bytes, function.locals) else {
+            return;
+        };
+        let span = match limit {
+            FunctionLimit::BodyBytes => function.body_limit_span,
+            FunctionLimit::Locals => function.locals_limit_span,
+        };
+        self.record_failure(limit.failure(span));
+    }
+
+    /// A runtime-check limit, naming the check being emitted.
+    fn validator_limit(
+        &self,
+        span: Option<crate::Span>,
+        exceeded: String,
+        fix: &str,
+    ) -> CompilerFailure {
+        let root = self.validator_root.take();
+        let subject = match &root {
+            Some(ty) => format!("the runtime check of `{}`", abbreviated(ty)),
+            None => "a runtime type check".to_string(),
+        };
+        self.validator_root.set(root);
+        CompilerFailure::Limit {
+            stage: crate::compiler_error::CompilerStage::Codegen,
+            span,
+            message: format!("{subject} {exceeded}"),
+            help: vec![
+                "a runtime check of a value against an interface includes the checks of every member, so interfaces whose members reference other interfaces several times multiply its size".into(),
+                fix.into(),
+            ],
+        }
+    }
+
+    /// Runs `emit` as the runtime check of `ty` with a fresh step allowance,
+    /// unless it is part of an enclosing check, whose name and allowance it
+    /// shares.
+    fn checking<T>(&self, ty: &Type, emit: impl FnOnce() -> T) -> T {
+        if let Some(outer) = self.validator_root.take() {
+            self.validator_root.set(Some(outer));
+            return emit();
+        }
+        self.validator_steps_left
+            .set(crate::compiler_limits::MAX_INLINE_VALIDATOR_STEPS);
+        self.validator_root.set(Some(ty.clone()));
+        let result = emit();
+        self.validator_root.set(None);
+        result
+    }
+
+    /// [`Self::checking`] for a check emitted as a function of its own, which
+    /// shares that function with no other code.
+    fn checking_standalone<T>(&self, ty: &Type, emit: impl FnOnce() -> T) -> T {
+        self.check_is_standalone.set(true);
+        let result = self.checking(ty, emit);
+        self.check_is_standalone.set(false);
+        result
+    }
+
     /// Keeps the first failure; later ones are consequences of it.
     fn record_failure(&self, failure: CompilerFailure) {
         let first = self.failure.take().unwrap_or(failure);
         self.failure.set(Some(first));
     }
+}
+
+/// A per-function limit of the Wasm engine.
+#[derive(Clone, Copy)]
+enum FunctionLimit {
+    /// A body of more than [`crate::compiler_limits::MAX_FUNCTION_BODY_BYTES`] bytes.
+    BodyBytes,
+    /// More than [`crate::compiler_limits::MAX_FUNCTION_LOCALS`] locals,
+    /// parameters included.
+    Locals,
+}
+
+impl FunctionLimit {
+    /// The limit a function of `body_bytes` and `locals` exceeds. Locals come
+    /// first: their declarations are part of the body, so enough of them take
+    /// it over the byte limit before any code does.
+    fn exceeded(body_bytes: usize, locals: u32) -> Option<Self> {
+        if locals > crate::compiler_limits::MAX_FUNCTION_LOCALS {
+            Some(Self::Locals)
+        } else if !Self::body_fits(body_bytes) {
+            Some(Self::BodyBytes)
+        } else {
+            None
+        }
+    }
+
+    /// Whether a function body of `bytes` is within the engine's limit.
+    fn body_fits(bytes: usize) -> bool {
+        bytes <= crate::compiler_limits::MAX_FUNCTION_BODY_BYTES
+    }
+
+    /// A function over this limit, reported at `span`, the source that
+    /// crossed it.
+    fn failure(self, span: Option<crate::Span>) -> CompilerFailure {
+        CompilerFailure::Limit {
+            stage: crate::compiler_error::CompilerStage::Codegen,
+            span,
+            message: format!("the function this code compiles into {}", self.function_exceeds()),
+            help: vec![
+                "split the code into smaller functions; top-level statements compile into one function, and runtime type checks of large types are emitted inline in the function that contains them".into(),
+            ],
+        }
+    }
+
+    /// What a function over this limit does, following "the function …".
+    fn function_exceeds(self) -> String {
+        use crate::compiler_limits::{MAX_FUNCTION_BODY_BYTES, MAX_FUNCTION_LOCALS};
+        match self {
+            Self::BodyBytes => {
+                format!("is larger than the {MAX_FUNCTION_BODY_BYTES} bytes a function may have")
+            }
+            Self::Locals => {
+                format!("needs more than the {MAX_FUNCTION_LOCALS} locals a function may have")
+            }
+        }
+    }
+
+    /// What a runtime check taking its function over this limit does,
+    /// following "the runtime check of …".
+    fn check_exceeds(self) -> String {
+        use crate::compiler_limits::{MAX_FUNCTION_BODY_BYTES, MAX_FUNCTION_LOCALS};
+        match self {
+            Self::BodyBytes => format!(
+                "makes its function larger than the {MAX_FUNCTION_BODY_BYTES} bytes a function may have"
+            ),
+            Self::Locals => {
+                format!("needs more than the {MAX_FUNCTION_LOCALS} locals a function may have")
+            }
+        }
+    }
+}
+
+/// A built function's size, and the sources that took it past each limit.
+struct FinishedFunction {
+    body_bytes: usize,
+    body_limit_span: Option<crate::Span>,
+    locals: u32,
+    locals_limit_span: Option<crate::Span>,
+}
+
+/// `ty` as a diagnostic names it, cut short: a type near the size limit
+/// renders as hundreds of kilobytes.
+fn abbreviated(ty: &Type) -> String {
+    const MAX_CHARS: usize = 120;
+    let text = ty.to_string();
+    if text.chars().count() <= MAX_CHARS {
+        return text;
+    }
+    let mut short: String = text.chars().take(MAX_CHARS).collect();
+    short.push('…');
+    short
 }
 
 pub fn codegen(
@@ -617,7 +841,7 @@ fn codegen_inner(
     let dependency_shapes = dependency_usage.dependency_shapes(dependencies);
     let user_emitted_types: Vec<Type> =
         user_subtypes::collect_object_shapes(dependency_shapes.iter().copied(), &all_shapes);
-    let type_info = crate::TypeInfoTable::collect_from_shapes_and_types(
+    let (type_info, type_info_index) = crate::TypeInfoTable::collect_indexed(
         ta.package_name.clone(),
         &all_shapes,
         &user_emitted_types,
@@ -1555,6 +1779,11 @@ fn codegen_inner(
         type_info: &type_info,
         package_string_global_idx: pkg_string_global_idx,
         failure: std::cell::Cell::new(None),
+        validator_steps_left: std::cell::Cell::new(
+            crate::compiler_limits::MAX_INLINE_VALIDATOR_STEPS,
+        ),
+        validator_root: std::cell::Cell::new(None),
+        check_is_standalone: std::cell::Cell::new(false),
     };
 
     let mut code = CodeSection::new();
@@ -1613,10 +1842,14 @@ fn codegen_inner(
         &user_subtypes_alloc,
         &symbols,
         &type_info,
+        &type_info_index,
         pkg_string_global_idx,
     )?;
 
     class_plan.emit_bodies(&mut code, &ctx)?;
+    // A failure recorded by the bodies above comes before those of the checks
+    // emitted as functions of their own below.
+    ctx.check_failure()?;
     for guard in &instance_field_guards {
         code.function(&field_guards::body(&ctx, guard)?);
     }
@@ -1626,13 +1859,16 @@ fn codegen_inner(
 
     code.function(&field_lookup::body(&ctx)?);
     for (validator_id, plan) in recursive_validators.plans.iter().enumerate() {
-        code.function(&cast_check::emit_runtime_validator_body(
-            &ctx,
-            &plan.key,
-            &plan.body,
-            plan.rejects_polymorphic_edge,
-            validator_id as i32,
-        )?);
+        let validator = ctx.checking_standalone(&plan.key, || {
+            cast_check::emit_runtime_validator_body(
+                &ctx,
+                &plan.key,
+                &plan.body,
+                plan.rejects_polymorphic_edge,
+                validator_id as i32,
+            )
+        })?;
+        code.function(&validator);
     }
 
     if let (Some(_), Some(main_func_idx), Some(main_return_ty)) =
@@ -1721,7 +1957,9 @@ struct UserFunc {
     generics: Vec<String>,
 }
 
-/// Converts `CodeSection::byte_len` (excludes leading vec-count) into Code-section-content offsets for DWARF.
+/// The encoded size of `v` as unsigned LEB128: a function body's local count,
+/// or the Code section's function count, which `CodeSection::byte_len`
+/// excludes and DWARF offsets add back.
 fn leb128_u32_size(mut v: u32) -> usize {
     let mut size = 0;
     loop {
@@ -4871,6 +5109,33 @@ function main(): void { inner(); }
 function deepest(): void { assert(false, \"x\"); }
 function middle(): void { deepest(); }
 function main(): void { middle(); }
+";
+        let dump = run_main_expecting_error(src);
+        insta::assert_snapshot!(dump);
+    }
+
+    #[test]
+    fn failed_cast_backtrace_points_at_the_cast() {
+        let src = "\
+interface P { a: number }
+function g(n: number, p: P): number { return n; }
+function main(): void {
+  const r = g(1,
+    JSON.parse(\"{}\") as P);
+}
+";
+        let dump = run_main_expecting_error(src);
+        insta::assert_snapshot!(dump);
+    }
+
+    #[test]
+    fn code_after_a_cast_keeps_its_backtrace_location() {
+        let src = "\
+interface P { a: number }
+function g(n: number, p: P): number { assert(false, \"x\"); return n; }
+function main(): void {
+  const r = g(1, JSON.parse(\"{\\\"a\\\": 1}\") as P);
+}
 ";
         let dump = run_main_expecting_error(src);
         insta::assert_snapshot!(dump);

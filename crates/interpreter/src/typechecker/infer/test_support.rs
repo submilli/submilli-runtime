@@ -173,6 +173,7 @@ pub(super) fn with_source_inferer(source: &str, test: impl FnOnce(&mut super::In
         field_narrowing_checks: BTreeMap::new(),
         alias_resolution_stack: Vec::new(),
         type_resolution_depth: 0,
+        type_limits: Default::default(),
     };
     tc.populate_prelude().unwrap();
     test(&mut tc);

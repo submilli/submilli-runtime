@@ -118,6 +118,25 @@ impl Span {
         }
     }
 
+    /// This span cut to its first line of `text`, its file's source; unchanged
+    /// when it is not a range of `text`. A line ends at `\n` or `\r`, as in
+    /// [`LineIndex`].
+    pub fn first_line_of(self, text: &str) -> Self {
+        let first_line_len = text
+            .get(self.start as usize..self.end as usize)
+            .and_then(|range| range.find(['\n', '\r']))
+            .and_then(|len| u32::try_from(len).ok());
+        match first_line_len.and_then(|len| self.start.checked_add(len)) {
+            Some(end) => Self { end, ..self },
+            None => self,
+        }
+    }
+
+    /// Whether this is a [`Self::at`] placeholder, which locates nothing.
+    pub const fn is_placeholder(self) -> bool {
+        self.start == 0 && self.end == 0
+    }
+
     pub fn merge(self, other: Self) -> Result<Self, SourceError> {
         Self::new(self.file, self.start, self.end)?;
         Self::new(other.file, other.start, other.end)?;
@@ -253,6 +272,19 @@ impl LineIndex {
 #[cfg(test)]
 mod tests {
     use super::{FileId, LineIndex, Span};
+
+    #[test]
+    fn first_line_of_ends_at_either_line_break() {
+        let text = "héllo\r\nworld\rmore\nend";
+        let span = |start, end| Span::new(FileId(0), start, end).unwrap();
+        assert_eq!(span(0, 20).first_line_of(text), span(0, 6));
+        assert_eq!(span(8, 20).first_line_of(text), span(8, 13));
+        assert_eq!(span(14, 20).first_line_of(text), span(14, 18));
+        assert_eq!(span(19, 22).first_line_of(text), span(19, 22));
+        // Not a range of `text`: left as is.
+        assert_eq!(span(2, 20).first_line_of(text), span(2, 20));
+        assert_eq!(span(0, 99).first_line_of(text), span(0, 99));
+    }
 
     const F: FileId = FileId(0);
 

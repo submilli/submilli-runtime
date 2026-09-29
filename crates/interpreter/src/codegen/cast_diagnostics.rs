@@ -2,11 +2,15 @@
 //! No value is re-read to explain a failure, and diagnostics never copy payloads.
 
 use super::{CodegenCtx, function_emitter::FunctionEmitter};
+use crate::compiler_error::CompilerFailure;
 use wasm_encoder::{BlockType, HeapType, Instruction, RefType, ValType};
 
 // The recursive validator's visited array holds two cells per active frame.
 pub(super) const PATH_SLOT: i32 = super::cast_check::RECURSIVE_VALIDATOR_CAPACITY * 2;
 pub(super) const FAILURE_SLOT: i32 = PATH_SLOT + 1;
+
+/// UTF-16 units of a field name in an emitted path charged as one more step.
+const PATH_UNITS_PER_STEP: usize = 64;
 
 #[derive(Clone)]
 pub(super) struct Locals {
@@ -80,9 +84,13 @@ pub(super) fn checkpoint(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) -> Opt
 
 /// Consume and reproduce a conformance bit. Successful alternatives discard
 /// their speculative failures; a failing parent preserves its child's location.
-pub(super) fn finish(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, saved: Option<u32>) {
+pub(super) fn finish(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    saved: Option<u32>,
+) -> Result<(), CompilerFailure> {
     let (Some(state), Some(saved)) = (emitter.cast_diagnostic.clone(), saved) else {
-        return;
+        return Ok(());
     };
     let result = emitter.add_anonymous_local(ValType::I32);
     emitter.instruction(Instruction::LocalTee(result));
@@ -93,11 +101,12 @@ pub(super) fn finish(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, saved: Opt
     emitter.instruction(Instruction::LocalGet(state.failure));
     emitter.instruction(Instruction::RefIsNull);
     emitter.emit_if(BlockType::Empty);
-    emit_path(emitter, ctx, &state);
+    emit_path(emitter, ctx, &state)?;
     emitter.instruction(Instruction::LocalSet(state.failure));
     emitter.emit_end();
     emitter.emit_end();
     emitter.instruction(Instruction::LocalGet(result));
+    Ok(())
 }
 
 /// Each union alternative starts with an independent failure. Prefer a longer
@@ -187,32 +196,52 @@ pub(super) fn pop(emitter: &mut FunctionEmitter, mark: Option<usize>) {
 
 /// Inline paths are assembled only when a check fails. Index locals still
 /// contain the failing iteration's index when this code runs.
-fn emit_path(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, state: &Locals) {
+///
+/// Every test emits the path to the value it tests, so a check emits its
+/// nesting depth in segments per test. Each segment is charged to the check as
+/// a step, and a field name as one more per [`PATH_UNITS_PER_STEP`] UTF-16
+/// units, since each unit is an instruction.
+fn emit_path(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    state: &Locals,
+) -> Result<(), CompilerFailure> {
     emitter.instruction(Instruction::LocalGet(state.current));
     for segment in &state.path {
         match segment {
             Segment::Field(name) => {
-                let quoted = serde_json::to_string(name).expect("field name");
+                let units = name.encode_utf16().count() / PATH_UNITS_PER_STEP;
+                let name_steps = u64::try_from(units).unwrap_or(u64::MAX);
+                ctx.charge_validator_steps(emitter, name_steps.saturating_add(1))?;
+                let quoted = serde_json::to_string(name).map_err(|error| {
+                    super::internal_failure(format!("cannot quote a field name: {error}"))
+                })?;
                 super::cast_check::emit_inline_string(emitter, ctx, &format!("[{quoted}]"));
                 concat(emitter, ctx);
             }
             Segment::Index(index) => {
+                ctx.charge_validator_step(emitter)?;
                 super::cast_check::emit_inline_string(emitter, ctx, "[");
                 concat(emitter, ctx);
                 emitter.instruction(Instruction::LocalGet(*index));
                 emitter.instruction(Instruction::F64ConvertI32U);
                 emitter.instruction(Instruction::F64Const(10.0_f64.into()));
-                emitter.instruction(Instruction::Call(
+                let number_to_string =
                     ctx.symbols
                         .prelude_func_idx("Number#toString")
-                        .expect("number formatter"),
-                ));
+                        .ok_or_else(|| {
+                            super::internal_failure(
+                                "Number#toString is not imported from the prelude",
+                            )
+                        })?;
+                emitter.instruction(Instruction::Call(number_to_string));
                 concat(emitter, ctx);
                 super::cast_check::emit_inline_string(emitter, ctx, "]");
                 concat(emitter, ctx);
             }
         }
     }
+    Ok(())
 }
 
 pub(super) fn append_failure(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
@@ -243,25 +272,30 @@ pub(super) fn append_failure(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
     }
 }
 
-pub(super) fn save_recursive(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, visited: u32) {
+pub(super) fn save_recursive(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    visited: u32,
+) -> Result<(), CompilerFailure> {
     let Some(state) = emitter.cast_diagnostic.clone() else {
-        return;
+        return Ok(());
     };
     let array = ctx
         .symbols
         .intrinsic_type_indices()
-        .expect("intrinsics")
+        .ok_or_else(|| super::internal_failure("intrinsic types are not declared"))?
         .raw_array;
     for (index, local) in [(PATH_SLOT, state.current), (FAILURE_SLOT, state.failure)] {
         emitter.instruction(Instruction::LocalGet(visited));
         emitter.instruction(Instruction::I32Const(index));
         if index == PATH_SLOT {
-            emit_path(emitter, ctx, &state);
+            emit_path(emitter, ctx, &state)?;
         } else {
             emitter.instruction(Instruction::LocalGet(local));
         }
         emitter.instruction(Instruction::ArraySet(array));
     }
+    Ok(())
 }
 
 pub(super) fn load_recursive(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, visited: u32) {

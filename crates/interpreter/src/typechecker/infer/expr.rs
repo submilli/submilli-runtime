@@ -22,6 +22,7 @@ use super::reserved::{is_reserved_object_field, override_field_signature, reserv
 use super::stmt::StaticWrite;
 use super::void_value::{ValueOperand, ValuePosition};
 use crate::did_you_mean;
+use crate::type_size::{TypeBudget, TypeTooLarge, map_children};
 
 use super::type_aliases::alias_ref_body;
 use super::{Inferer, assignable, narrowing};
@@ -389,12 +390,18 @@ impl Inferer<'_> {
         expr_id: ExprId,
         expected: Option<&Type>,
     ) -> Result<(ExprId, Type), CompilerFailure> {
+        // A limit recorded before this expression belongs to an enclosing
+        // check, whose own checkpoint reports it.
+        let limit_was_pending = self.type_limits.limit_reached();
         // A hint is read structurally — an object literal takes its per-field
         // hints from the expected type's fields — and `peel` stops at a
         // recursion back-edge, which carries no body to read. Rehydrating first
         // is what lets the hint reach the second level of a recursive shape.
         let rehydrated_hint = expected.and_then(|want| {
-            super::type_aliases::type_has_alias_ref(want).then(|| self.rehydrate_alias_refs(want))
+            super::type_aliases::type_has_alias_ref(want).then(|| {
+                self.type_limits
+                    .type_or_error(self.rehydrate_alias_refs(want))
+            })
         });
         let expected = rehydrated_hint.as_ref().or(expected);
         if let ExprKind::FunctionExpression {
@@ -613,7 +620,12 @@ impl Inferer<'_> {
         // the narrower `$ObjectShape`, and the two can't share a slot.
         // Rehydrate any `AliasRef` (read out of a recursive alias's body
         // via field / index / call) back to the inline `Alias` form.
-        let ty = self.rehydrate_alias_refs(&ty);
+        let ty = self
+            .rehydrate_alias_refs(&ty)
+            .map_err(super::type_limit_at(span))?;
+        // The expression's own type may compose several values of the
+        // largest size.
+        crate::type_size::check(&ty).map_err(super::type_limit_at(span))?;
         // `assignable` treats `TypeVar` (signature form) as a
         // wildcard, so hints flowing through generic call sites
         // (`(T) => U` shaped) don't fire false errors here. Real
@@ -651,7 +663,13 @@ impl Inferer<'_> {
                 ty: ty.clone(),
             })
             .map_err(crate::typechecker::arena_failure)?;
-        self.record_runtime_type_test(&ty)?;
+        self.record_runtime_type_test(&ty)
+            .map_err(|failure| failure.with_span(span))?;
+        // Report an oversized type met while inferring or checking this
+        // expression at the innermost expression that met it.
+        if !limit_was_pending {
+            self.type_size_checkpoint(Some(span))?;
+        }
         Ok((id, ty))
     }
 
@@ -1873,7 +1891,9 @@ impl Inferer<'_> {
                         probe.insert(k.clone(), v.clone());
                     }
                     let _ = probe.unify(&sig.ret, want, self.resolver());
-                    let desired = probe.apply(&recv_ty);
+                    let desired = probe
+                        .apply(&recv_ty, &self.type_limits)
+                        .map_err(super::type_limit_at(span))?;
                     if desired != recv_ty && !type_contains_type_var(&desired) {
                         let reinferred = self.infer_expr(*receiver, Some(&desired))?;
                         typed_receiver = reinferred.0;
@@ -3059,7 +3079,7 @@ impl Inferer<'_> {
         // (`unsupported_cast_target_reason`'s `TypeVar | GenericParam` arm), so
         // a program hitting it under `llm.call` reads the same advice it would
         // hit under `as`.
-        let shape = self.reduce_interfaces_to_shapes(result_ty, &mut Vec::new());
+        let shape = self.reduce_interfaces_to_shapes(result_ty);
         if matches!(shape.peel(), Type::TypeVar(_) | Type::GenericParam { .. })
             && let Some(reason) =
                 unsupported_cast_target_reason(&shape, self.resolver(), &mut Vec::new())
@@ -3201,7 +3221,7 @@ impl Inferer<'_> {
         &mut self,
         target_ty: &Type,
     ) -> Result<String, crate::typechecker::json_schema::SchemaReject> {
-        let shape = self.reduce_interfaces_to_shapes(target_ty, &mut Vec::new());
+        let shape = self.reduce_interfaces_to_shapes(target_ty);
         let types = self.resolver();
         let expand = |ty: &Type| assignable::expand_alias_ref(ty, types);
         let value = crate::typechecker::json_schema::json_schema_with(&shape, &expand)?;
@@ -3225,7 +3245,7 @@ impl Inferer<'_> {
         target_ty: &Type,
         span: Span,
     ) -> Result<Result<(TypedExprKind, Type), &'static str>, CompilerFailure> {
-        let shape = self.reduce_interfaces_to_shapes(target_ty, &mut Vec::new());
+        let shape = self.reduce_interfaces_to_shapes(target_ty);
         if let Some(reason) =
             unsupported_cast_target_reason(&shape, self.resolver(), &mut Vec::new())
         {
@@ -5825,7 +5845,8 @@ impl Inferer<'_> {
             let resolved_ty = if bindings.is_empty() {
                 prop_sig.ty.clone()
             } else {
-                super::generic::substitute_typevars(&prop_sig.ty, &bindings)
+                super::generic::substitute_typevars(&prop_sig.ty, &bindings, &self.type_limits)
+                    .map_err(super::type_limit_at(span))?
             };
             // VTable interfaces (every user-declared interface) have no
             // getter import — read through shape-based field dispatch, the
@@ -8466,7 +8487,11 @@ impl Inferer<'_> {
                     let resolved_ty = if bindings.is_empty() {
                         prop_sig.ty
                     } else {
-                        super::generic::substitute_typevars(&prop_sig.ty, &bindings)
+                        super::generic::substitute_or_record(
+                            &prop_sig.ty,
+                            &bindings,
+                            &self.type_limits,
+                        )
                     };
                     if dispatch == crate::Dispatch::VTable {
                         let read_ty = if prop_sig.optional {
@@ -8611,7 +8636,7 @@ impl Inferer<'_> {
             .params
             .iter()
             .map(|p| crate::Param {
-                ty: super::generic::substitute_typevars(&p.ty, bindings),
+                ty: super::generic::substitute_or_record(&p.ty, bindings, &self.type_limits),
                 ..p.clone()
             })
             .collect();
@@ -8619,7 +8644,8 @@ impl Inferer<'_> {
         // also keeps the `Call` branch off the `InterfaceProperty` lift, which
         // cannot represent an un-bound method-level generic.
         let (ty, iface) = if method_sig.generics.is_empty() {
-            let ret = super::generic::substitute_typevars(&method_sig.ret, bindings);
+            let ret =
+                super::generic::substitute_or_record(&method_sig.ret, bindings, &self.type_limits);
             let has_rest = params.last().is_some_and(|p| p.rest);
             let fn_ty = Type::Function {
                 params: params.iter().map(|p| p.ty.clone()).collect(),
@@ -8654,7 +8680,7 @@ impl Inferer<'_> {
     /// assignable to it. Otherwise the target is reduced to its structural shape
     /// and put to the same predicate `infer_as` uses.
     pub(super) fn is_legal_cast_target(&self, source: &Type, target: &Type) -> bool {
-        let shape = self.reduce_interfaces_to_shapes(target, &mut Vec::new());
+        let shape = self.reduce_interfaces_to_shapes(target);
         if super::assignable::assignable(source, &shape, self.resolver()) {
             return true;
         }
@@ -8717,7 +8743,7 @@ impl Inferer<'_> {
                 Type::Error,
             ));
         }
-        let shape = self.reduce_interfaces_to_shapes(&target_ty, &mut Vec::new());
+        let shape = self.reduce_interfaces_to_shapes(&target_ty);
         let inner_to_target = assignable(&inner_ty, &shape, self.resolver());
         let target_to_inner = assignable(&shape, &inner_ty, self.resolver());
         let target_to_widened =
@@ -9044,7 +9070,7 @@ impl Inferer<'_> {
         let solved: Vec<Type> = identity
             .iter()
             .map(|t| {
-                let applied = sub.apply(t);
+                let applied = sub.apply_or_record(t, &self.type_limits);
                 // A parameter the operand doesn't constrain stays erased.
                 if type_contains_type_var(&applied) {
                     Type::Unknown
@@ -9133,80 +9159,88 @@ impl Inferer<'_> {
     /// interfaces: a re-encountered interface is left as `InterfaceRef`. Leftover
     /// `InterfaceRef`s are rejected by `unsupported_cast_target_reason` when a runtime
     /// check is actually needed.
-    fn reduce_interfaces_to_shapes(&self, ty: &Type, seen: &mut Vec<String>) -> Type {
+    fn reduce_interfaces_to_shapes(&self, ty: &Type) -> Type {
+        let mut budget = self.type_limits.budget();
+        self.type_limits.type_or_error(self.reduce_interfaces_rec(
+            ty,
+            &mut Vec::new(),
+            1,
+            &mut budget,
+        ))
+    }
+
+    /// [`reduce_interfaces_to_shapes`](Self::reduce_interfaces_to_shapes) for
+    /// the node at `depth` of the result. Expanding a reference inlines the
+    /// interface, so a chain of interfaces becomes a type as deep as the chain;
+    /// it builds under `budget` like any substitution.
+    fn reduce_interfaces_rec(
+        &self,
+        ty: &Type,
+        seen: &mut Vec<String>,
+        depth: u32,
+        budget: &mut TypeBudget<'_>,
+    ) -> Result<Type, TypeTooLarge> {
+        let child = depth.saturating_add(1);
         match ty.peel_preserving_readonly() {
-            Type::Readonly(inner) => {
-                Type::Readonly(Box::new(self.reduce_interfaces_to_shapes(inner, seen)))
-            }
             Type::InterfaceRef {
                 mangled,
                 name,
                 args,
                 ..
             } => {
-                if seen.iter().any(|n| n == name) {
-                    return ty.peel().clone();
-                }
-                let Some(fields) = self.interface_data_shape(mangled, name, args) else {
-                    return ty.peel().clone();
+                let data_shape = if seen.iter().any(|n| n == name) {
+                    None
+                } else {
+                    self.interface_data_shape(mangled, name, args)
                 };
+                let Some(fields) = data_shape else {
+                    budget.charge_copy(ty.peel(), depth)?;
+                    return Ok(ty.peel().clone());
+                };
+                budget.charge(depth)?;
                 seen.push(name.clone());
-                let reduced: std::collections::BTreeMap<String, crate::ObjectField> = fields
+                let reduced = fields
                     .into_iter()
                     .map(|(k, f)| {
-                        (
+                        Ok((
                             k,
                             crate::ObjectField {
-                                ty: self.reduce_interfaces_to_shapes(&f.ty, seen),
+                                ty: self.reduce_interfaces_rec(&f.ty, seen, child, budget)?,
                                 optional: f.optional,
                                 readonly: f.readonly,
                             },
-                        )
+                        ))
                     })
-                    .collect();
+                    .collect::<Result<_, TypeTooLarge>>()?;
                 let index = self
                     .resolver()
                     .index_signature(ty)
-                    .map(|i| i.map_value(|v| self.reduce_interfaces_to_shapes(v, seen)));
+                    .map(|i| {
+                        i.try_map_value(|value| {
+                            self.reduce_interfaces_rec(value, seen, child, budget)
+                        })
+                    })
+                    .transpose()?;
                 seen.pop();
-                Type::Object {
+                Ok(Type::Object {
                     index,
                     fields: reduced,
-                }
+                })
             }
-            Type::Object { fields, index } => Type::Object {
-                index: index
-                    .as_ref()
-                    .map(|i| i.map_value(|v| self.reduce_interfaces_to_shapes(v, seen))),
-                fields: fields
-                    .iter()
-                    .map(|(k, f)| {
-                        (
-                            k.clone(),
-                            crate::ObjectField {
-                                ty: self.reduce_interfaces_to_shapes(&f.ty, seen),
-                                optional: f.optional,
-                                readonly: f.readonly,
-                            },
-                        )
-                    })
-                    .collect(),
-            },
-            Type::Array(elem) => {
-                Type::Array(Box::new(self.reduce_interfaces_to_shapes(elem, seen)))
+            peeled @ (Type::Object { .. }
+            | Type::Array(_)
+            | Type::Readonly(_)
+            | Type::Tuple(_)
+            | Type::Union(_)) => {
+                budget.charge(depth)?;
+                map_children(peeled, |inner| {
+                    self.reduce_interfaces_rec(inner, seen, child, budget)
+                })
             }
-            Type::Tuple(elems) => Type::Tuple(
-                elems
-                    .iter()
-                    .map(|e| self.reduce_interfaces_to_shapes(e, seen))
-                    .collect(),
-            ),
-            Type::Union(ms) => Type::union(
-                ms.iter()
-                    .map(|m| self.reduce_interfaces_to_shapes(m, seen))
-                    .collect(),
-            ),
-            other => other.clone(),
+            other => {
+                budget.charge_copy(other, depth)?;
+                Ok(other.clone())
+            }
         }
     }
 

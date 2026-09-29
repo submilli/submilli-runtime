@@ -6,7 +6,7 @@ use std::ops::ControlFlow;
 
 use crate::{MangledName, ObjectField, Type, TypeKind};
 
-use super::generic::substitute_typevars;
+use super::generic::substitute_or_record;
 use super::narrowing;
 use super::type_namespace::TypeNamespace;
 use super::type_registry::TypeRegistry;
@@ -19,6 +19,9 @@ use super::type_registry::TypeRegistry;
 pub(crate) struct TypeResolver<'a> {
     pub(super) types: &'a TypeNamespace<'a>,
     pub(super) registry: &'a TypeRegistry<'a>,
+    /// Records an oversized type met while resolving, for the inferer's next
+    /// checkpoint; the resolver itself answers as if the type were `Error`.
+    pub(crate) limits: &'a crate::type_size::TypeLimits,
 }
 
 /// A single way a class fails to satisfy an interface it declares it `implements`.
@@ -97,9 +100,9 @@ impl<'a> TypeResolver<'a> {
                         params: sig
                             .params
                             .iter()
-                            .map(|p| substitute_typevars(&p.ty, &bindings))
+                            .map(|p| substitute_or_record(&p.ty, &bindings, self.limits))
                             .collect(),
-                        ret: Box::new(substitute_typevars(&sig.ret, &bindings)),
+                        ret: Box::new(substitute_or_record(&sig.ret, &bindings, self.limits)),
                         predicate: None,
                         has_rest: sig.params.last().is_some_and(|p| p.rest),
                     },
@@ -112,7 +115,7 @@ impl<'a> TypeResolver<'a> {
             out.insert(
                 member.clone(),
                 ObjectField {
-                    ty: substitute_typevars(&sig.ty, &bindings),
+                    ty: substitute_or_record(&sig.ty, &bindings, self.limits),
                     optional: sig.optional,
                     readonly: sig.readonly,
                 },
@@ -162,6 +165,7 @@ impl<'a> TypeResolver<'a> {
     ) -> Option<Vec<Type>> {
         super::classes::walk_class_chain_with(
             |m| self.sym_by_mangled(m).cloned(),
+            self.limits,
             actual,
             actual_args,
             |sym, bindings| {
@@ -197,6 +201,7 @@ impl<'a> TypeResolver<'a> {
         let mut out: BTreeMap<String, ObjectField> = BTreeMap::new();
         super::classes::for_each_class_in_chain(
             |m| self.sym_by_mangled(m).cloned(),
+            self.limits,
             mangled,
             args,
             |sym, bindings| {
@@ -220,9 +225,9 @@ impl<'a> TypeResolver<'a> {
                             params: sig
                                 .params
                                 .iter()
-                                .map(|p| substitute_typevars(&p.ty, bindings))
+                                .map(|p| substitute_or_record(&p.ty, bindings, self.limits))
                                 .collect(),
-                            ret: Box::new(substitute_typevars(&sig.ret, bindings)),
+                            ret: Box::new(substitute_or_record(&sig.ret, bindings, self.limits)),
                             predicate: None,
                             has_rest: sig.params.last().is_some_and(|p| p.rest),
                         },
@@ -235,7 +240,7 @@ impl<'a> TypeResolver<'a> {
                         continue;
                     }
                     out.entry(name.clone()).or_insert(ObjectField {
-                        ty: substitute_typevars(&f.ty, bindings),
+                        ty: substitute_or_record(&f.ty, bindings, self.limits),
                         optional: f.optional,
                         readonly: f.readonly,
                     });
@@ -358,6 +363,7 @@ impl<'a> TypeResolver<'a> {
         }
         let omittable = super::classes::walk_class_chain_with(
             |m| self.sym_by_mangled(m).cloned(),
+            self.limits,
             class,
             args,
             |sym, _| {
@@ -407,6 +413,7 @@ impl<'a> TypeResolver<'a> {
         let mut has_getter = false;
         super::classes::for_each_class_in_chain(
             |m| self.sym_by_mangled(m).cloned(),
+            self.limits,
             mangled,
             args,
             |sym, _| {
@@ -460,7 +467,7 @@ impl<'a> TypeResolver<'a> {
                     (
                         field.clone(),
                         ObjectField {
-                            ty: substitute_typevars(&sig.ty, &bindings),
+                            ty: substitute_or_record(&sig.ty, &bindings, self.limits),
                             optional: sig.optional,
                             readonly: sig.readonly,
                         },
@@ -483,6 +490,7 @@ impl<'a> TypeResolver<'a> {
         let mut names = Vec::new();
         super::classes::for_each_class_in_chain(
             |m| self.sym_by_mangled(m).cloned(),
+            self.limits,
             mangled,
             args,
             |sym, _| {
@@ -518,6 +526,12 @@ fn assignable_rec(
     types: TypeResolver,
     seen: &mut Vec<(Type, Type)>,
 ) -> bool {
+    // Structures that each fit the type limits can still take exponentially
+    // many comparisons, so each one draws on the phase's work allowance. Once a
+    // limit is recorded the answer no longer matters: compilation fails.
+    if !types.limits.spend_work(1) {
+        return false;
+    }
     if let Type::Refined { original, ty } = expected.without_aliases() {
         return assignable_rec(actual, original, types, seen)
             && assignable_rec(actual, ty, types, seen);
@@ -952,7 +966,7 @@ pub(crate) fn expand_alias_ref(ty: &Type, types: TypeResolver) -> Type {
         let sub = crate::typechecker::type_param_substitution::TypeParamSubstitution::from_pairs(
             generics, args,
         );
-        sub.apply(body)
+        sub.apply_or_record(body, types.limits)
     }
 }
 
@@ -1172,12 +1186,14 @@ mod tests {
     fn assignable(actual: &Type, expected: &Type) -> bool {
         let types = TypeNamespace::new();
         let registry = TypeRegistry::new();
+        let limits = crate::type_size::TypeLimits::default();
         super::assignable(
             actual,
             expected,
             TypeResolver {
                 types: &types,
                 registry: &registry,
+                limits: &limits,
             },
         )
     }
@@ -1509,12 +1525,14 @@ mod tests {
 
     fn assignable_with(actual: &Type, expected: &Type, ns: &TypeNamespace) -> bool {
         let registry = TypeRegistry::new();
+        let limits = crate::type_size::TypeLimits::default();
         super::assignable(
             actual,
             expected,
             TypeResolver {
                 types: ns,
                 registry: &registry,
+                limits: &limits,
             },
         )
     }

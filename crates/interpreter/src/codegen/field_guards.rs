@@ -92,7 +92,9 @@ pub(super) fn body(
     if !emitter.runtime_type_params.is_empty() {
         check.test = crate::FieldNarrowingTest::Shape(guard.target.clone());
     }
-    super::cast_check::emit_narrowed_field_read(&mut emitter, ctx, &check, &guard.target)?;
+    ctx.checking_standalone(&guard.target, || {
+        super::cast_check::emit_narrowed_field_read(&mut emitter, ctx, &check, &guard.target)
+    })?;
     cast::emit_box(&mut emitter, ctx, &guard.target)?;
     Ok(emitter.build())
 }

@@ -93,6 +93,7 @@ pub fn infer_with_transitive_checked<'a>(
     crate::tree_height::check_syntax(ast)
         .map_err(|failure| failure.with_stage(CompilerStage::Infer))?;
     validate_lowered_patterns(ast)?;
+    check_declaration_types(packages.iter().chain(transitive).copied())?;
     let packages_by_name: BTreeMap<&'a str, &'a PackageDeclaration> = packages
         .iter()
         .map(|d| (d.package_name.as_str(), *d))
@@ -170,6 +171,7 @@ pub fn infer_with_transitive_checked<'a>(
         field_narrowing_checks: BTreeMap::new(),
         alias_resolution_stack: Vec::new(),
         type_resolution_depth: 0,
+        type_limits: Default::default(),
     };
     tc.populate_prelude().map_err(|fatal| CompileError {
         diagnostics: tc.diagnostics.clone(),
@@ -184,12 +186,12 @@ pub fn infer_with_transitive_checked<'a>(
         diagnostics: tc.diagnostics.clone(),
         fatal: Some(fatal),
     })? {
-        crate::tree_height::check_typed(&tc.typed_ast, CompilerStage::Infer).map_err(|fatal| {
-            CompileError {
+        crate::tree_height::check_typed(&tc.typed_ast, CompilerStage::Infer)
+            .and_then(|()| tc.type_size_checkpoint(None))
+            .map_err(|fatal| CompileError {
                 diagnostics: tc.diagnostics.clone(),
                 fatal: Some(fatal),
-            }
-        })?;
+            })?;
         return Ok((tc.typed_ast, tc.diagnostics));
     }
     tc.infer_global_variables().map_err(|fatal| CompileError {
@@ -215,10 +217,15 @@ pub fn infer_with_transitive_checked<'a>(
         }
     })?;
     // The `&tc` borrow has to end before the `&mut tc.typed_ast` assignment.
-    let shapes = shapes::collect(&tc.typed_ast, tc.resolver()).map_err(|fatal| CompileError {
-        diagnostics: tc.diagnostics.clone(),
-        fatal: Some(fatal),
-    })?;
+    // Shape collection resolves types under the limits too, so the last checkpoint
+    // follows it.
+    let shapes = shapes::collect(&tc.typed_ast, tc.resolver())
+        .map_err(|failure| tc.pending_limit_or(failure))
+        .and_then(|shapes| tc.type_size_checkpoint(None).map(|()| shapes))
+        .map_err(|fatal| CompileError {
+            diagnostics: tc.diagnostics.clone(),
+            fatal: Some(fatal),
+        })?;
     tc.typed_ast.shapes = shapes;
     Ok((tc.typed_ast, tc.diagnostics))
 }
@@ -256,6 +263,11 @@ pub fn infer_package_checked<'a>(
     external_packages: BTreeMap<String, PackageDeclaration>,
     transitive_packages: BTreeMap<String, PackageDeclaration>,
 ) -> Result<(TypedAst, PackageDeclaration, Vec<Diagnostic>), CompileError> {
+    check_declaration_types(
+        external_packages
+            .values()
+            .chain(transitive_packages.values()),
+    )?;
     let mut diagnostics = Vec::new();
     let module_map: BTreeMap<ModulePath, (crate::FileId, &'a Ast)> = modules
         .into_iter()
@@ -402,6 +414,7 @@ pub fn infer_package_checked<'a>(
         field_narrowing_checks: BTreeMap::new(),
         alias_resolution_stack: Vec::new(),
         type_resolution_depth: 0,
+        type_limits: Default::default(),
     };
 
     for module in order {
@@ -451,6 +464,13 @@ pub fn infer_package_checked<'a>(
             }
             .with_prior_diagnostics(&diagnostics)
         })? {
+            tc.type_size_checkpoint(None).map_err(|fatal| {
+                CompileError {
+                    diagnostics: tc.diagnostics.clone(),
+                    fatal: Some(fatal),
+                }
+                .with_prior_diagnostics(&diagnostics)
+            })?;
             diagnostics.extend(tc.diagnostics);
             return Ok((tc.typed_ast, package_declaration, diagnostics));
         }
@@ -483,13 +503,16 @@ pub fn infer_package_checked<'a>(
             }
         }
         diagnose_package_main_since(&tc.typed_ast, starts.functions, &mut tc.diagnostics);
-        tc.resolve_package_export_statements().map_err(|fatal| {
-            CompileError {
-                diagnostics: tc.diagnostics.clone(),
-                fatal: Some(fatal),
-            }
-            .with_prior_diagnostics(&diagnostics)
-        })?;
+        // A limit recorded in this module must not be reported against the next.
+        tc.resolve_package_export_statements()
+            .and_then(|()| tc.type_size_checkpoint(None))
+            .map_err(|fatal| {
+                CompileError {
+                    diagnostics: tc.diagnostics.clone(),
+                    fatal: Some(fatal),
+                }
+                .with_prior_diagnostics(&diagnostics)
+            })?;
         let module_symbols = std::mem::take(&mut tc.current_module_symbols);
         for symbol in module_symbols.all_types() {
             let mut symbol = symbol.clone();
@@ -525,13 +548,18 @@ pub fn infer_package_checked<'a>(
         .with_prior_diagnostics(&diagnostics)
     })?;
     // The `&tc` borrow has to end before the `&mut tc.typed_ast` assignment.
-    let shapes = shapes::collect(&tc.typed_ast, tc.resolver()).map_err(|fatal| {
-        CompileError {
-            diagnostics: tc.diagnostics.clone(),
-            fatal: Some(fatal),
-        }
-        .with_prior_diagnostics(&diagnostics)
-    })?;
+    // Shape collection resolves types under the limits too, so the last checkpoint
+    // follows it.
+    let shapes = shapes::collect(&tc.typed_ast, tc.resolver())
+        .map_err(|failure| tc.pending_limit_or(failure))
+        .and_then(|shapes| tc.type_size_checkpoint(None).map(|()| shapes))
+        .map_err(|fatal| {
+            CompileError {
+                diagnostics: tc.diagnostics.clone(),
+                fatal: Some(fatal),
+            }
+            .with_prior_diagnostics(&diagnostics)
+        })?;
     tc.typed_ast.shapes = shapes;
     for entry in &root_public_exports {
         if package_declaration.runtime_generics.contains(&entry.target)
@@ -755,9 +783,31 @@ pub(super) struct Inferer<'a> {
     /// Nested annotation and alias-body resolutions in progress. Alias chains
     /// resolve recursively, so their length is bounded before the stack is.
     pub(super) type_resolution_depth: u32,
+    /// Oversized types met where the code could not return an error; see
+    /// [`Inferer::type_size_checkpoint`].
+    pub(super) type_limits: crate::type_size::TypeLimits,
 }
 
 impl<'a> Inferer<'a> {
+    /// Fails with a type limit recorded since the last checkpoint, reported at
+    /// `span`: the source being inferred when an oversized type was met where
+    /// no error could be returned.
+    pub(super) fn type_size_checkpoint(&self, span: Option<Span>) -> Result<(), CompilerFailure> {
+        self.type_limits
+            .take()
+            .map_err(|exceeded| exceeded.into_failure(CompilerStage::Infer, span))
+    }
+
+    /// A recorded type limit in place of `internal`: once a limit is recorded,
+    /// a walk that stopped early or a phase that failed may have met the
+    /// `Type::Error` stand-in rather than a real inconsistency.
+    pub(super) fn pending_limit_or(&self, internal: CompilerFailure) -> CompilerFailure {
+        match self.type_size_checkpoint(None) {
+            Err(limit) => limit,
+            Ok(()) => internal,
+        }
+    }
+
     pub(super) fn reset_for_package_module(
         &mut self,
         source: &'a str,
@@ -1266,4 +1316,41 @@ mod test_support;
 
 fn arena_failure(error: crate::arena::ArenaError) -> CompilerFailure {
     error.into_compiler_failure(CompilerStage::Infer)
+}
+
+/// Rejects a dependency declaration holding a type beyond the type limits
+/// before any recursive pass reads it.
+fn check_declaration_types<'d>(
+    declarations: impl IntoIterator<Item = &'d PackageDeclaration>,
+) -> Result<(), CompilerFailure> {
+    for declaration in declarations {
+        declaration
+            .check_type_limits()
+            .map_err(|exceeded| CompilerFailure::Limit {
+                stage: CompilerStage::Infer,
+                span: None,
+                message: format!(
+                    "package `{}` declares a type beyond a compiler limit: {exceeded}",
+                    declaration.package_name
+                ),
+                help: vec![
+                    "rebuild the package with a compiler that enforces the same limits".into(),
+                ],
+            })?;
+    }
+    Ok(())
+}
+
+/// Converts a type limit met where no source position is at hand; an enclosing
+/// caller adds one with `with_span`, such as `infer_expr` or the interface
+/// validation around member comparisons.
+pub(super) fn type_limit_unlocated(exceeded: crate::type_size::TypeTooLarge) -> CompilerFailure {
+    exceeded.into_failure(CompilerStage::Infer, None)
+}
+
+/// Converts a type limit met while inferring the source at `span`.
+pub(super) fn type_limit_at(
+    span: Span,
+) -> impl FnOnce(crate::type_size::TypeTooLarge) -> CompilerFailure {
+    move |exceeded| exceeded.into_failure(CompilerStage::Infer, Some(span))
 }

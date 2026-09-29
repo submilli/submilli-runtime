@@ -9,7 +9,7 @@ pub mod stmt;
 
 use std::collections::BTreeMap;
 
-use wasm_encoder::{BlockType, Function, Instruction, ValType};
+use wasm_encoder::{BlockType, Encode, Function, Instruction, ValType};
 
 use crate::codegen::CodegenCtx;
 use crate::{ExprId, Ident, Span, Type};
@@ -41,12 +41,16 @@ pub enum ReturnTarget {
 pub struct FunctionEmitter<'a> {
     pub(super) cast_diagnostic: Option<super::cast_diagnostics::Locals>,
     pub runtime_type_params: BTreeMap<String, (u32, u32)>,
-    #[allow(dead_code)]
     ctx: &'a CodegenCtx<'a>,
 
     next_local_index: u32,
     locals: Vec<(u32, ValType)>,
     instructions: Vec<Instruction<'static>>,
+    /// How many leading `instructions` [`Self::body_size`] has
+    /// encoded so far.
+    sized_instructions: usize,
+    /// The encoded size of those instructions.
+    instruction_bytes: usize,
     scopes: Vec<Scope>,
 
     wasm_block_depth: u32,
@@ -71,6 +75,14 @@ pub struct FunctionEmitter<'a> {
     ctor_class: Option<crate::MangledName>,
 
     source_mappings: Vec<(usize, Span)>,
+    /// The source being emitted when the function first needed more locals
+    /// than the Wasm engine accepts.
+    locals_limit_span: Option<Span>,
+    /// The encoded size of `locals`' entries.
+    local_entry_bytes: usize,
+    /// The first instruction [`Self::body_size`] found past the Wasm
+    /// engine's body-size limit.
+    body_limit_instruction: Option<usize>,
 
     /// Expression nodes already evaluated into a local, so re-emitting one
     /// reads the local instead of running it again. A compound assignment is
@@ -157,6 +169,8 @@ impl<'a> FunctionEmitter<'a> {
             next_local_index: 0,
             locals: Vec::new(),
             instructions: Vec::new(),
+            sized_instructions: 0,
+            instruction_bytes: 0,
             scopes: vec![Scope::new()],
             wasm_block_depth: 0,
             loop_contexts: Vec::new(),
@@ -168,6 +182,9 @@ impl<'a> FunctionEmitter<'a> {
             call_receiver: None,
             ctor_class: None,
             source_mappings: Vec::new(),
+            locals_limit_span: None,
+            body_limit_instruction: None,
+            local_entry_bytes: 0,
             single_evaluations: Vec::new(),
             cast_diagnostic: None,
         };
@@ -223,6 +240,13 @@ impl<'a> FunctionEmitter<'a> {
     pub fn add_anonymous_local(&mut self, ty: ValType) -> u32 {
         let index = self.next_local_index;
         self.next_local_index += 1;
+        if index == crate::compiler_limits::MAX_FUNCTION_LOCALS {
+            self.locals_limit_span = self.last_source_span();
+        }
+        // Each local is its own entry: a count of one (one byte) and its type.
+        let mut entry = vec![1u8];
+        ty.encode(&mut entry);
+        self.local_entry_bytes = self.local_entry_bytes.saturating_add(entry.len());
         self.locals.push((1, ty));
         index
     }
@@ -384,6 +408,81 @@ impl<'a> FunctionEmitter<'a> {
         self.instructions.push(inst);
     }
 
+    /// The encoded size the function body would have if it ended here: its
+    /// local declarations, its instructions and the closing `end`, as
+    /// [`Self::build`] encodes them. Instructions are only ever appended, so
+    /// each is encoded once, the first time it is measured.
+    pub fn body_size(&mut self) -> usize {
+        let locals_count = u32::try_from(self.locals.len()).unwrap_or(u32::MAX);
+        // The declarations and the one-byte `end`, around the instructions.
+        let declarations_and_end_bytes = super::leb128_u32_size(locals_count)
+            .saturating_add(self.local_entry_bytes)
+            .saturating_add(1);
+        let mut encoded = Vec::new();
+        for (index, instruction) in self
+            .instructions
+            .iter()
+            .enumerate()
+            .skip(self.sized_instructions)
+        {
+            instruction.encode(&mut encoded);
+            let body_bytes = self
+                .instruction_bytes
+                .saturating_add(encoded.len())
+                .saturating_add(declarations_and_end_bytes);
+            if self.body_limit_instruction.is_none() && !super::FunctionLimit::body_fits(body_bytes)
+            {
+                self.body_limit_instruction = Some(index);
+            }
+        }
+        self.sized_instructions = self.instructions.len();
+        self.instruction_bytes = self.instruction_bytes.saturating_add(encoded.len());
+        self.instruction_bytes
+            .saturating_add(declarations_and_end_bytes)
+    }
+
+    /// The source whose code took [`Self::body_size`] past the Wasm
+    /// engine's body-size limit.
+    pub fn body_limit_span(&self) -> Option<Span> {
+        self.body_limit_instruction
+            .and_then(|instruction| self.source_span_before(instruction))
+    }
+
+    /// The source being emitted when the function first needed more locals
+    /// than the Wasm engine accepts.
+    pub fn locals_limit_span(&self) -> Option<Span> {
+        self.locals_limit_span
+    }
+
+    /// Locals the function has so far, parameters included.
+    pub fn local_count(&self) -> u32 {
+        self.next_local_index
+    }
+
+    /// The source span most recently mapped to emitted code.
+    pub fn last_mapped_span(&self) -> Option<Span> {
+        self.source_mappings.last().map(|(_, span)| *span)
+    }
+
+    /// The most recently mapped span that locates source, skipping the
+    /// placeholders of desugared code.
+    pub fn last_source_span(&self) -> Option<Span> {
+        self.source_span_before(self.instructions.len())
+    }
+
+    /// The last span mapped at or before `instruction` that locates source.
+    fn source_span_before(&self, instruction: usize) -> Option<Span> {
+        let mapped = self
+            .source_mappings
+            .partition_point(|(index, _)| *index <= instruction);
+        self.source_mappings
+            .iter()
+            .take(mapped)
+            .rev()
+            .map(|(_, span)| *span)
+            .find(|span| !span.is_placeholder())
+    }
+
     pub fn record_span(&mut self, span: Span) {
         self.source_mappings.push((self.instructions.len(), span));
     }
@@ -522,30 +621,36 @@ impl<'a> FunctionEmitter<'a> {
         self.instruction(Instruction::StructNew(string_type_idx));
     }
 
+    /// Encodes the function. When the body or its locals exceed what the Wasm
+    /// engine accepts, records a limit failure on the ctx (see
+    /// `CodegenCtx::check_finished_function`), which the codegen boundary reports.
     pub fn build(self) -> Function {
         self.build_with_lines().0
     }
 
-    /// Like `build`, but also returns DWARF byte offsets. Offsets are measured before each instruction is pushed.
+    /// Like `build`, but also returns DWARF byte offsets. Offsets are measured
+    /// before each instruction is pushed, so they never decrease.
     pub fn build_with_lines(self) -> (Function, Vec<(u64, Span)>) {
-        let mut func = Function::new(self.locals);
+        let mut func = Function::new(self.locals.iter().copied());
         let mut byte_offsets: Vec<(u64, Span)> = Vec::with_capacity(self.source_mappings.len());
         let mut next_mapping = 0usize;
+        let mut body_limit_instruction = None;
 
         for (i, inst) in self.instructions.iter().enumerate() {
             while next_mapping < self.source_mappings.len()
                 && self.source_mappings[next_mapping].0 == i
             {
                 let offset = func.byte_len() as u64;
-                debug_assert!(
-                    byte_offsets.last().is_none_or(|(prev, _)| *prev <= offset),
-                    "line-program offsets must be monotonic; got {offset} after {:?}",
-                    byte_offsets.last(),
-                );
                 byte_offsets.push((offset, self.source_mappings[next_mapping].1));
                 next_mapping += 1;
             }
             func.instruction(inst);
+            // The closing `end` is one byte.
+            if body_limit_instruction.is_none()
+                && !super::FunctionLimit::body_fits(func.byte_len().saturating_add(1))
+            {
+                body_limit_instruction = Some(i);
+            }
         }
         // Drain spans recorded past the last instruction; their offset is the function's end byte.
         let end_offset = func.byte_len() as u64;
@@ -554,6 +659,13 @@ impl<'a> FunctionEmitter<'a> {
             next_mapping += 1;
         }
         func.instruction(&Instruction::End);
+        self.ctx.check_finished_function(super::FinishedFunction {
+            body_bytes: func.byte_len(),
+            body_limit_span: body_limit_instruction
+                .and_then(|instruction| self.source_span_before(instruction)),
+            locals: self.next_local_index,
+            locals_limit_span: self.locals_limit_span,
+        });
         (func, byte_offsets)
     }
 }
@@ -934,6 +1046,11 @@ mod tests {
             type_info: &f.type_info,
             package_string_global_idx: None,
             failure: std::cell::Cell::new(None),
+            validator_steps_left: std::cell::Cell::new(
+                crate::compiler_limits::MAX_INLINE_VALIDATOR_STEPS,
+            ),
+            validator_root: std::cell::Cell::new(None),
+            check_is_standalone: std::cell::Cell::new(false),
         }
     }
 
@@ -965,6 +1082,32 @@ mod tests {
         wasmparser::Validator::new()
             .validate_all(&module.finish())
             .expect("module validates");
+    }
+
+    #[test]
+    fn body_size_is_the_encoded_body_size() {
+        let f = fixture();
+        let cx = cx_of(&f);
+        let mut emitter = FunctionEmitter::new(&cx, &[ident_param("p", ValType::I32)]);
+        assert_eq!(emitter.body_size(), 2, "no locals, then `end`");
+        let any = ValType::Ref(wasm_encoder::RefType {
+            nullable: true,
+            heap_type: wasm_encoder::HeapType::ANY,
+        });
+        let concrete = ValType::Ref(wasm_encoder::RefType {
+            nullable: false,
+            heap_type: wasm_encoder::HeapType::Concrete(300),
+        });
+        for i in 0..200 {
+            emitter.add_anonymous_local([ValType::F64, any, concrete][i % 3]);
+            emitter.instruction(Instruction::I32Const(i as i32 * 1_000));
+            emitter.instruction(Instruction::Drop);
+            if i % 50 == 0 {
+                let _ = emitter.body_size();
+            }
+        }
+        let size = emitter.body_size();
+        assert_eq!(size, emitter.build().byte_len());
     }
 
     #[test]

@@ -348,7 +348,9 @@ pub fn body(
     ];
     let mut emitter = FunctionEmitter::new(ctx, &params);
     bind(&mut emitter, &parameters(ty), 0);
-    super::cast_check::emit_structural_test(&mut emitter, ctx, 1, ty)?;
+    ctx.checking_standalone(ty, || {
+        super::cast_check::emit_structural_test(&mut emitter, ctx, 1, ty, ty)
+    })?;
     cast::emit_box(&mut emitter, ctx, &Type::Boolean)?;
     Ok(emitter.build())
 }

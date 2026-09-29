@@ -56,6 +56,9 @@ impl Inferer<'_> {
             .map_err(super::arena_failure)?
             .clone();
         let span = stmt.span;
+        // As in `infer_expr`: a limit pending before this statement belongs to
+        // whatever enclosing check met it.
+        let limit_was_pending = self.type_limits.limit_reached();
         // Propagate once after dispatch: per-arm `?` creates large temporary
         // results that inflate every recursive frame in debug builds.
         let typed_kind = (match stmt.kind {
@@ -331,6 +334,11 @@ impl Inferer<'_> {
                 })
             }
         })?;
+        // Checks a statement makes itself, such as a `return` value against
+        // the declared result, meet limits outside any expression.
+        if !limit_was_pending {
+            self.type_size_checkpoint(Some(span))?;
+        }
         Ok(Some(
             self.typed_ast
                 .try_push_stmt(TypedStmt {

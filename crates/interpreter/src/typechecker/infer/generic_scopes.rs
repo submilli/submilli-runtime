@@ -70,15 +70,18 @@ impl<'a> Inferer<'a> {
     /// types brought into a body (a generic parent's ctor params, a `super`
     /// method sig) go through this so they compare against the body's live
     /// forms.
-    pub(super) fn apply_body_instantiations(&self, ty: &Type) -> Type {
+    pub(super) fn apply_body_instantiations(
+        &self,
+        ty: &Type,
+    ) -> Result<Type, crate::type_size::TypeTooLarge> {
         if self.body_instantiations.is_empty() {
-            return ty.clone();
+            return Ok(ty.clone());
         }
         let mut merged = BTreeMap::new();
         for frame in &self.body_instantiations {
             merged.extend(frame.clone());
         }
-        super::generic::substitute_typevars(ty, &merged)
+        super::generic::substitute_typevars(ty, &merged, &self.type_limits)
     }
 }
 

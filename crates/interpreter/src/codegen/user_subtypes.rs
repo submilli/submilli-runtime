@@ -11,7 +11,7 @@ use crate::codegen::intrinsics::IntrinsicTypeIndices;
 use crate::codegen::symbol_table::{SymbolTable, may_hold_null};
 use crate::codegen::{GuardedBodies, internal_failure, next_index, wasm_u32};
 use crate::compiler_error::CompilerFailure;
-use crate::{ObjectField, Shape, Type, TypeInfoTable};
+use crate::{ObjectField, Shape, Type, TypeInfoIndex, TypeInfoTable};
 
 pub fn collect_object_shapes<'a>(
     dependency_shapes: impl IntoIterator<Item = &'a Shape>,
@@ -196,6 +196,7 @@ pub fn emit_method_bodies(
     subtypes: &[UserSubtype],
     symbols: &SymbolTable,
     type_info: &TypeInfoTable,
+    type_info_index: &TypeInfoIndex,
     pkg_string_global_idx: Option<u32>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let intrinsics = symbols
@@ -229,11 +230,16 @@ pub fn emit_method_bodies(
                 body, params, result, symbols,
             )?);
         }
+        // The host serializes an object whose shape has type info; others walk
+        // their vtable.
+        let host_json_type = type_info_index
+            .object_type_id(type_info, &subtype.ty)
+            .filter(|_| type_info.supports_host_json_object(&subtype.ty));
         code.function(&emit_subtype_to_json_body(
             subtype,
             intrinsics,
             symbols,
-            type_info,
+            host_json_type,
             pkg_string_global_idx,
             string_concat_func_idx,
             string_vtable_global_idx,
@@ -349,7 +355,7 @@ fn emit_subtype_to_json_body(
     subtype: &UserSubtype,
     intrinsics: IntrinsicTypeIndices,
     symbols: &SymbolTable,
-    type_info: &TypeInfoTable,
+    host_json_type: Option<crate::TypeInfoId>,
     pkg_string_global_idx: Option<u32>,
     string_concat_func_idx: u32,
     string_vtable_global_idx: u32,
@@ -360,10 +366,7 @@ fn emit_subtype_to_json_body(
         return emit_subtype_to_json_override_body(subtype, intrinsics, symbols);
     }
 
-    let type_id = type_info
-        .object_type_id(&subtype.ty)
-        .filter(|_| type_info.supports_host_json_object(&subtype.ty));
-    let Some(type_id) = type_id else {
+    let Some(type_id) = host_json_type else {
         return emit_subtype_to_json_vtable_body(
             subtype,
             intrinsics,

@@ -276,9 +276,12 @@ impl Inferer<'_> {
         // Substitute TypeVars → body GenericParams; without this, assignable treats TypeVar as a wildcard
         // and generic guards like `f<T>(x: T | null): x is T` slip through validation.
         let asserted_body = match self.body_instantiations.last() {
-            Some(frame) if !frame.is_empty() => {
-                super::generic::substitute_typevars(&predicate.asserted_type, frame)
-            }
+            Some(frame) if !frame.is_empty() => super::generic::substitute_typevars(
+                &predicate.asserted_type,
+                frame,
+                &self.type_limits,
+            )
+            .map_err(super::type_limit_at(span))?,
             _ => predicate.asserted_type.clone(),
         };
         let _: () = if !assignable(&narrowed_ty, &asserted_body, self.resolver()) {

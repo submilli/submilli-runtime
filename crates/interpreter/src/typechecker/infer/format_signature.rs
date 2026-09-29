@@ -1,8 +1,10 @@
 use std::fmt::Write;
 
+use crate::type_size::TypeLimits;
 use crate::typechecker::type_param_substitution::TypeParamSubstitution;
 use crate::{DefaultValue, EnumVariantValue, Intrinsic, MethodSig, Param, Type};
 
+#[derive(Clone, Copy)]
 pub(super) enum SignatureKind<'a> {
     Constructor {
         name: &'a str,
@@ -34,10 +36,12 @@ pub(super) enum SignatureKind<'a> {
 
 /// `substitution` is the method lift's type-parameter table, empty for every
 /// other kind. It arrives from the caller because only member resolution knows
-/// which declaration a signature is written in.
+/// which declaration a signature is written in. A substitution that passes a
+/// type limit renders as `Type::Error` and is recorded in `limits`.
 pub(super) fn format_signature(
     kind: SignatureKind<'_>,
     substitution: &TypeParamSubstitution,
+    limits: &TypeLimits,
 ) -> String {
     match kind {
         SignatureKind::Constructor { name, params } => {
@@ -58,12 +62,12 @@ pub(super) fn format_signature(
             ret,
             doc,
             predicate,
-        } => format_function(name, generics, params, ret, doc, predicate),
+        } => format_function(name, generics, params, ret, doc, predicate, limits),
         SignatureKind::Method {
             receiver_ty,
             name,
             sig,
-        } => format_method(receiver_ty, name, sig, substitution),
+        } => format_method(receiver_ty, name, sig, substitution, limits),
         SignatureKind::Anon {
             params,
             ret,
@@ -80,6 +84,7 @@ fn format_function(
     ret: &Type,
     doc: Option<&crate::DocComment>,
     predicate: Option<&crate::TypePredicate>,
+    limits: &TypeLimits,
 ) -> String {
     let mut out = String::new();
     if let Some(d) = doc {
@@ -102,6 +107,7 @@ fn format_function(
         ret,
         predicate,
         &TypeParamSubstitution::new(),
+        limits,
     );
     out
 }
@@ -156,6 +162,7 @@ fn format_method(
     name: &str,
     sig: &MethodSig,
     substitution: &TypeParamSubstitution,
+    limits: &TypeLimits,
 ) -> String {
     let mut out = String::new();
     if let Some(d) = &sig.doc {
@@ -171,7 +178,7 @@ fn format_method(
         write_named_param(
             &mut out,
             &p.name,
-            &substitution.apply(&p.ty),
+            &substitution.apply_or_record(&p.ty, limits),
             p.default.as_ref(),
             p.rest,
         );
@@ -183,6 +190,7 @@ fn format_method(
         &sig.ret,
         sig.predicate.as_ref(),
         substitution,
+        limits,
     );
     out
 }
@@ -193,20 +201,17 @@ fn write_return(
     ret: &Type,
     predicate: Option<&crate::TypePredicate>,
     substitution: &TypeParamSubstitution,
+    limits: &TypeLimits,
 ) {
     if let Some(predicate) = predicate
         && let Some(param) = params.get(predicate.parameter_index as usize)
     {
-        write!(
-            out,
-            "{} is {}",
-            param.name,
-            substitution.apply(&predicate.asserted_type)
-        )
-        .unwrap();
+        let asserted = substitution.apply_or_record(&predicate.asserted_type, limits);
+        out.push_str(&format!("{} is {asserted}", param.name));
         return;
     }
-    write!(out, "{}", substitution.apply(ret)).unwrap();
+    let ret = substitution.apply_or_record(ret, limits);
+    out.push_str(&ret.to_string());
 }
 
 /// An anonymous callee has only parameter *types* to lift, so it renders through
@@ -259,6 +264,14 @@ fn write_generic_list(out: &mut String, generics: &[String]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Renders without a type limit being reached; shadows the 3-argument form.
+    fn format_signature(kind: SignatureKind<'_>, substitution: &TypeParamSubstitution) -> String {
+        let limits = TypeLimits::default();
+        let out = super::format_signature(kind, substitution, &limits);
+        assert_eq!(limits.take(), Ok(()));
+        out
+    }
 
     #[test]
     fn function_no_generics_no_params() {

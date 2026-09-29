@@ -243,6 +243,12 @@ pub struct CompiledScript {
 /// `Ok(warnings)` when the program is error-free (warnings are non-fatal),
 /// `Err(diagnostics)` if any phase errors. Backs `submilli check`.
 pub fn typecheck_checked(source: &str, file: FileId) -> Result<Vec<Diagnostic>, CompileError> {
+    typecheck_script(source, file).map_err(|error| {
+        error.with_limit_span_cut(|span_file| (span_file == file).then_some(source))
+    })
+}
+
+fn typecheck_script(source: &str, file: FileId) -> Result<Vec<Diagnostic>, CompileError> {
     let parsed = parse_script(source, file);
     let stdlib_defs = runtime::stdlib_package_declarations();
     let (ta, diags, _timings) = front_end(source, &parsed, &stdlib_defs, &[])?;
@@ -269,7 +275,12 @@ pub fn typecheck_to_typed_ast(source: &str, file: FileId) -> (TypedAst, Vec<Diag
     let stdlib_defs = runtime::stdlib_package_declarations();
     match front_end(source, &parsed, &stdlib_defs, &[]) {
         Ok((ta, diags, _)) => (ta, diags),
-        Err(error) => (TypedAst::new(), error.into_diagnostics(file)),
+        Err(error) => (
+            TypedAst::new(),
+            error
+                .with_limit_span_cut(|span_file| (span_file == file).then_some(source))
+                .into_diagnostics(file),
+        ),
     }
 }
 
@@ -371,6 +382,27 @@ fn compile_parsed_script_owned_by(
     external_declarations: &[&PackageDeclaration],
     transitive: &[&PackageDeclaration],
 ) -> Result<CompiledScript, CompileError> {
+    compile_parsed_script(
+        owning_package,
+        source,
+        filename,
+        parsed,
+        stdlib_defs,
+        external_declarations,
+        transitive,
+    )
+    .map_err(|error| error.with_limit_span_cut(|file| (file == parsed.file).then_some(source)))
+}
+
+fn compile_parsed_script(
+    owning_package: Option<&str>,
+    source: &str,
+    filename: &str,
+    parsed: &ParsedScript,
+    stdlib_defs: &[PackageDeclaration],
+    external_declarations: &[&PackageDeclaration],
+    transitive: &[&PackageDeclaration],
+) -> Result<CompiledScript, CompileError> {
     let (mut ta, diags, mut timings) = front_end_with_transitive(
         source,
         parsed,
@@ -464,6 +496,27 @@ pub fn compile_package_with_transitive_checked(
     transitive: &[&PackageDeclaration],
 ) -> Result<CompiledPackage, CompileError> {
     let mut sources = Sources::new();
+    compile_package_sources(
+        &mut sources,
+        package_name,
+        root_module,
+        modules,
+        dependencies,
+        transitive,
+    )
+    .map_err(|error| {
+        error.with_limit_span_cut(|file| sources.get(file).map(crate::SourceFile::text))
+    })
+}
+
+fn compile_package_sources(
+    sources: &mut Sources,
+    package_name: &str,
+    root_module: ModulePath,
+    modules: &[PackageSourceModule<'_>],
+    dependencies: &[&PackageDeclaration],
+    transitive: &[&PackageDeclaration],
+) -> Result<CompiledPackage, CompileError> {
     let mut parsed_modules = Vec::with_capacity(modules.len());
     let mut diagnostics = Vec::new();
     for module in modules {
@@ -514,7 +567,7 @@ pub fn compile_package_with_transitive_checked(
             package_name,
             root_module.clone(),
             module_refs,
-            &sources,
+            sources,
             external_packages,
             transitive_packages,
         )
@@ -562,7 +615,7 @@ pub fn compile_package_with_transitive_checked(
     codegen_deps.extend_from_slice(dependencies);
     codegen_deps.extend_from_slice(transitive);
     let generated =
-        crate::codegen::codegen_package_with_type_info(&sources, root_file, &ta, &codegen_deps)
+        crate::codegen::codegen_package_with_type_info(sources, root_file, &ta, &codegen_deps)
             .map_err(|fatal| CompileError {
                 diagnostics: diagnostics.clone(),
                 fatal: Some(fatal),

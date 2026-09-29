@@ -6,8 +6,10 @@ use std::collections::BTreeMap;
 use crate::{IndexSignature, ObjectField, Span, Type, TypeAnnotation};
 
 use super::assignable::TypeResolver;
+use super::generic::{substitute_or_record, substitute_typevars};
 use super::void_value::ValuePosition;
-use super::{Inferer, assignable, generic::substitute_typevars};
+use super::{Inferer, assignable, type_limit_at, type_limit_unlocated};
+use crate::type_size::{TypeLimits, TypeTooLarge};
 
 impl TypeResolver<'_> {
     pub(crate) fn index_signature(&self, ty: &Type) -> Option<IndexSignature> {
@@ -28,7 +30,7 @@ impl TypeResolver<'_> {
                 let bindings = generics.iter().cloned().zip(args.iter().cloned()).collect();
                 index
                     .as_ref()
-                    .map(|i| i.map_value(|v| substitute_typevars(v, &bindings)))
+                    .map(|i| i.map_value(|v| substitute_or_record(v, &bindings, self.limits)))
             }
             _ => None,
         }
@@ -111,20 +113,23 @@ impl Inferer<'_> {
                 Ok((name, opaque))
             })
             .collect::<Result<BTreeMap<_, _>, CompilerFailure>>()?;
+        let substitute = |ty: &Type| {
+            substitute_typevars(ty, &bindings, &self.type_limits).map_err(type_limit_at(span))
+        };
         let check = PendingIndexCheck {
             fields: fields
                 .iter()
                 .map(|(name, field)| {
-                    (
+                    Ok((
                         name.clone(),
                         ObjectField {
-                            ty: substitute_typevars(&field.ty, &bindings),
+                            ty: substitute(&field.ty)?,
                             ..field.clone()
                         },
-                    )
+                    ))
                 })
-                .collect(),
-            index: index.map_value(|ty| substitute_typevars(ty, &bindings)),
+                .collect::<Result<_, CompilerFailure>>()?,
+            index: index.try_map_value(substitute)?,
             span,
         };
         if let Some(pending) = &mut self.pending_index_checks {
@@ -663,7 +668,11 @@ impl Inferer<'_> {
                 .clone()
                 && !skip.contains(&name.name)
             {
-                self.validate_bound_interface(&name, &generics, &members, &extends)?;
+                // A type limit met while comparing members is reported at the
+                // interface; the comparisons carry no member span.
+                self.validate_bound_interface(&name, &generics, &members, &extends)
+                    .and_then(|()| self.type_size_checkpoint(Some(name.span)))
+                    .map_err(|failure| failure.with_span(name.span))?;
             }
         }
 
@@ -703,6 +712,9 @@ impl Inferer<'_> {
     ) -> Result<bool, (crate::Span, &'static str)> {
         let mut base = base.clone();
         let mut seen = std::collections::BTreeSet::new();
+        // An alias that passes its parameter twice doubles the annotation at
+        // each step, so the steps share one bound on the nodes they build.
+        let mut nodes_left = crate::compiler_limits::MAX_TYPE_NODES;
         // Bound alias expansion separately from parser nesting: each alias can
         // be a shallow declaration while the chain consumes compiler resources.
         for _ in 0..64 {
@@ -720,7 +732,7 @@ impl Inferer<'_> {
                 return Ok(false);
             }
             let bindings = generics.iter().cloned().zip(args.iter().cloned()).collect();
-            base = self.substitute_base_names(body, &bindings, 0)?;
+            base = self.substitute_base_names(body, &bindings, 0, &mut nodes_left)?;
         }
         Err((base.span, "interface inheritance alias limit exceeded"))
     }
@@ -730,6 +742,7 @@ impl Inferer<'_> {
         annotation: &TypeAnnotation,
         bindings: &BTreeMap<String, TypeAnnotation>,
         depth: usize,
+        nodes_left: &mut u64,
     ) -> Result<TypeAnnotation, (crate::Span, &'static str)> {
         if depth >= 64 {
             return Err((
@@ -737,15 +750,31 @@ impl Inferer<'_> {
                 "interface inheritance type nesting limit exceeded",
             ));
         }
+        let replacement = match &annotation.kind {
+            crate::TypeAnnotationKind::Name { name, .. } => bindings.get(name.name.as_str()),
+            _ => None,
+        };
+        // Each copy is charged in full, including arguments the recursion
+        // below then substitutes: the depth guard keeps that overcount small.
+        let mut charge = |copied: &TypeAnnotation| {
+            let nodes = crate::tree_height::annotation_nodes(copied, *nodes_left);
+            let left = nodes_left.checked_sub(nodes).ok_or((
+                annotation.span,
+                "interface inheritance type size limit exceeded",
+            ))?;
+            *nodes_left = left;
+            Ok(())
+        };
+        if let Some(replacement) = replacement {
+            charge(replacement)?;
+            return Ok(replacement.clone());
+        }
+        charge(annotation)?;
         let mut result = annotation.clone();
-        if let crate::TypeAnnotationKind::Name { name, args } = &mut result.kind {
-            let name = name.name.as_str();
-            if let Some(replacement) = bindings.get(name) {
-                return Ok(replacement.clone());
-            }
+        if let crate::TypeAnnotationKind::Name { args, .. } = &mut result.kind {
             *args = args
                 .iter()
-                .map(|arg| self.substitute_base_names(arg, bindings, depth + 1))
+                .map(|arg| self.substitute_base_names(arg, bindings, depth + 1, nodes_left))
                 .collect::<Result<_, _>>()?;
         }
         Ok(result)
@@ -794,7 +823,8 @@ impl Inferer<'_> {
         else {
             return Ok(());
         };
-        let mut fields = interface_member_contracts(&properties, &methods);
+        let mut fields = interface_member_contracts(&properties, &methods, &self.type_limits)
+            .map_err(type_limit_at(name.span))?;
         let declared: std::collections::BTreeSet<_> = members
             .iter()
             .filter_map(|member| match member {
@@ -813,7 +843,10 @@ impl Inferer<'_> {
             let Some(base) = self.interface_base_contract(annotation)? else {
                 continue;
             };
-            for (member, field) in interface_member_contracts(&base.properties, &base.methods) {
+            let contracts =
+                interface_member_contracts(&base.properties, &base.methods, &self.type_limits)
+                    .map_err(type_limit_at(annotation.span))?;
+            for (member, field) in contracts {
                 if declared.contains(&member) {
                     let incompatible = match fields.get(&member) {
                         Some(own) => {
@@ -906,7 +939,8 @@ impl Inferer<'_> {
         expected: &InterfaceMemberContract,
         opaque: &BTreeMap<String, Type>,
     ) -> Result<bool, CompilerFailure> {
-        let actual_ty = substitute_typevars(&actual.field.ty, opaque);
+        let actual_ty = substitute_typevars(&actual.field.ty, opaque, &self.type_limits)
+            .map_err(type_limit_unlocated)?;
         let mut target_bindings = opaque.clone();
         for i in 0..expected.generic_count {
             let name = format!("$method{i}");
@@ -914,7 +948,9 @@ impl Inferer<'_> {
         }
         // A target generic method promises every instantiation. A source generic
         // method may instantiate to that promise, or to a concrete target signature.
-        let expected_ty = substitute_typevars(&expected.field.ty, &target_bindings);
+        let expected_ty =
+            substitute_typevars(&expected.field.ty, &target_bindings, &self.type_limits)
+                .map_err(type_limit_unlocated)?;
         if actual.generic_count == 0 {
             return Ok(assignable(&actual_ty, &expected_ty, self.resolver()));
         }
@@ -927,11 +963,10 @@ impl Inferer<'_> {
                 inferred.insert(name, Type::Unknown);
             }
         }
-        Ok(assignable(
-            &inferred.apply(&actual_ty),
-            &expected_ty,
-            self.resolver(),
-        ))
+        let instantiated = inferred
+            .apply(&actual_ty, &self.type_limits)
+            .map_err(type_limit_unlocated)?;
+        Ok(assignable(&instantiated, &expected_ty, self.resolver()))
     }
 
     fn interface_type_assignable(
@@ -941,8 +976,8 @@ impl Inferer<'_> {
         opaque: &BTreeMap<String, Type>,
     ) -> bool {
         assignable(
-            &substitute_typevars(actual, opaque),
-            &substitute_typevars(expected, opaque),
+            &substitute_or_record(actual, opaque, &self.type_limits),
+            &substitute_or_record(expected, opaque, &self.type_limits),
             self.resolver(),
         )
     }
@@ -975,28 +1010,31 @@ impl Inferer<'_> {
                     return Ok(None);
                 };
                 let bindings = generics.into_iter().zip(args.iter().cloned()).collect();
+                let substitute = |ty: &Type| {
+                    substitute_typevars(ty, &bindings, &self.type_limits)
+                        .map_err(type_limit_at(base.span))
+                };
                 let methods = methods
                     .into_iter()
                     .map(|(name, mut method)| {
                         for param in &mut method.params {
-                            param.ty = substitute_typevars(&param.ty, &bindings);
+                            param.ty = substitute(&param.ty)?;
                         }
-                        method.ret = substitute_typevars(&method.ret, &bindings);
-                        (name, method)
+                        method.ret = substitute(&method.ret)?;
+                        Ok((name, method))
                     })
-                    .collect();
+                    .collect::<Result<_, CompilerFailure>>()?;
                 let properties = properties
                     .into_iter()
                     .map(|(name, mut property)| {
-                        property.ty = substitute_typevars(&property.ty, &bindings);
-                        (name, property)
+                        property.ty = substitute(&property.ty)?;
+                        Ok((name, property))
                     })
-                    .collect();
-                (
-                    methods,
-                    properties,
-                    index.map(|i| i.map_value(|v| substitute_typevars(v, &bindings))),
-                )
+                    .collect::<Result<_, CompilerFailure>>()?;
+                let index = index
+                    .map(|index| index.try_map_value(substitute))
+                    .transpose()?;
+                (methods, properties, index)
             }
             Type::Object { fields, index } => {
                 let properties = fields
@@ -1037,7 +1075,8 @@ impl Inferer<'_> {
 fn interface_member_contracts(
     properties: &BTreeMap<String, crate::PropertySig>,
     methods: &BTreeMap<String, crate::MethodSig>,
-) -> BTreeMap<String, InterfaceMemberContract> {
+    limits: &TypeLimits,
+) -> Result<BTreeMap<String, InterfaceMemberContract>, TypeTooLarge> {
     let mut fields: BTreeMap<String, InterfaceMemberContract> = properties
         .iter()
         .map(|(name, property)| {
@@ -1065,9 +1104,9 @@ fn interface_member_contracts(
             params: method
                 .params
                 .iter()
-                .map(|p| substitute_typevars(&p.ty, &bindings))
-                .collect(),
-            ret: Box::new(substitute_typevars(&method.ret, &bindings)),
+                .map(|p| substitute_typevars(&p.ty, &bindings, limits))
+                .collect::<Result<_, _>>()?,
+            ret: Box::new(substitute_typevars(&method.ret, &bindings, limits)?),
             predicate: None,
             has_rest: method.params.last().is_some_and(|p| p.rest),
         };
@@ -1079,7 +1118,7 @@ fn interface_member_contracts(
             },
         );
     }
-    fields
+    Ok(fields)
 }
 
 struct InterfaceContract {

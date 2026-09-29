@@ -30,6 +30,7 @@ pub mod stdlib;
 pub mod token;
 pub mod tree_height;
 pub mod type_info;
+pub mod type_size;
 pub mod typechecker;
 pub mod typed_ast;
 pub mod types;
@@ -71,7 +72,7 @@ pub use shape::Shape;
 pub use source::{ModulePath, SourceFile, Sources};
 pub use span::{FileId, LineIndex, Span};
 pub use token::{Token, TokenKind};
-pub use type_info::{FieldInfo, TypeInfo, TypeInfoId, TypeInfoKind, TypeInfoTable};
+pub use type_info::{FieldInfo, TypeInfo, TypeInfoId, TypeInfoIndex, TypeInfoKind, TypeInfoTable};
 pub use typechecker::{capture, check, desugar, infer, infer_package};
 pub use typed_ast::{
     CapturedVar, ClosureBody, EnumVariantPayload, ExportEntry, ExportKind, FieldNarrowingCheck,

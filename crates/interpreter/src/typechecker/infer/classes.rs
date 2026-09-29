@@ -16,8 +16,9 @@ use crate::{
     Visibility,
 };
 
-use super::Inferer;
 use super::void_value::ValuePosition;
+use super::{Inferer, type_limit_at, type_limit_unlocated};
+use crate::type_size::{TypeLimits, TypeTooLarge};
 
 use super::assignable::ImplementsFailure;
 use super::generic::{
@@ -526,6 +527,8 @@ impl<'a> Inferer<'a> {
             if !self.inherits_unresolved_parent(&pending.mangled) {
                 self.check_class_implements(&pending)?;
             }
+            let first_target = pending.targets.first().map(|(span, _)| *span);
+            self.type_size_checkpoint(first_target)?;
         }
         Ok(())
     }
@@ -564,8 +567,9 @@ impl<'a> Inferer<'a> {
             };
             let iface_args: Vec<Type> = iface_args
                 .iter()
-                .map(|a| substitute_typevars(a, &opaque))
-                .collect();
+                .map(|a| substitute_typevars(a, &opaque, &self.type_limits))
+                .collect::<Result<_, _>>()
+                .map_err(type_limit_at(*span))?;
             let failures = self.resolver().implements_failures(
                 &pending.mangled,
                 &class_args,
@@ -893,6 +897,7 @@ impl<'a> Inferer<'a> {
                 chain.push(p.clone());
                 parent = self.class_parent(&p);
             }
+            self.type_size_checkpoint(Some(*ext_span))?;
             if cyclic {
                 self.invalid_class_hierarchies.insert(start);
                 self.error_with_help(
@@ -1005,15 +1010,16 @@ impl<'a> Inferer<'a> {
             let TypeKind::Class { constructor, .. } = &sym.kind else {
                 return ControlFlow::Break(None);
             };
-            ControlFlow::Break(Some(
-                constructor
-                    .iter()
-                    .map(|param| Param {
-                        ty: substitute_typevars(&param.ty, bindings),
+            let params = constructor
+                .iter()
+                .map(|param| {
+                    Ok(Param {
+                        ty: substitute_typevars(&param.ty, bindings, &self.type_limits)?,
                         ..param.clone()
                     })
-                    .collect(),
-            ))
+                })
+                .collect();
+            ControlFlow::Break(self.type_limits.ok_or_record(params))
         })
     }
 
@@ -1033,6 +1039,7 @@ impl<'a> Inferer<'a> {
                 MemberKind::Field => self.check_field_redeclaration(&member)?,
                 MemberKind::Accessor => self.check_accessor_redeclaration(&member)?,
             }
+            self.type_size_checkpoint(Some(member.span))?;
         }
 
         Ok(())
@@ -1182,7 +1189,10 @@ impl<'a> Inferer<'a> {
             let Some(inherited) = self.ancestor_accessor(&member.child_class, &own, &opaque) else {
                 continue;
             };
-            let Some(cmp) = accessor_comparison(&member.name, &own, &inherited, &opaque) else {
+            let Some(cmp) =
+                accessor_comparison(&member.name, &own, &inherited, &opaque, &self.type_limits)
+                    .map_err(type_limit_at(member.span))?
+            else {
                 continue;
             };
             if super::assignable(&cmp.subtype, &cmp.supertype, self.resolver()) {
@@ -1247,7 +1257,13 @@ impl<'a> Inferer<'a> {
                 a.name() == name && matches!(a, AccessorSig::Getter { .. }) == want_getter
             });
             match found {
-                Some(sig) => ControlFlow::Break(Some(substitute_accessor_sig(sig, bindings))),
+                Some(sig) => {
+                    ControlFlow::Break(self.type_limits.ok_or_record(substitute_accessor_sig(
+                        sig,
+                        bindings,
+                        &self.type_limits,
+                    )))
+                }
                 // A class that redeclares the property's other half but not this
                 // one still leaves this half inherited from further up.
                 None => ControlFlow::Continue(()),
@@ -1285,7 +1301,8 @@ impl<'a> Inferer<'a> {
         else {
             return Ok(());
         };
-        let child_fn = substitute_typevars(&method_fn_type(&child_sig), &opaque);
+        let child_fn = substitute_typevars(&method_fn_type(&child_sig), &opaque, &self.type_limits)
+            .map_err(type_limit_at(member.span))?;
         let parent_fn = method_fn_type(&parent_sig);
         // TypeScript lets an override declare fewer parameters, as any function
         // may. Here the override fills the inherited method's vtable slot, whose
@@ -1342,7 +1359,9 @@ impl<'a> Inferer<'a> {
             return Ok(());
         };
 
-        let child_ty = substitute_typevars(&field_read_ty(&child_field), &opaque);
+        let child_ty =
+            substitute_typevars(&field_read_ty(&child_field), &opaque, &self.type_limits)
+                .map_err(type_limit_at(member.span))?;
         let parent_ty = field_read_ty(&parent_field);
         if !super::assignable(&child_ty, &parent_ty, self.resolver()) {
             self.error_with_help(
@@ -1631,9 +1650,102 @@ impl<'a> Inferer<'a> {
         };
         let candidates = runtime_carrier_candidates(members);
         let mut carriers =
-            self.array_and_set_interface_carriers(target, name, target_args, &candidates);
-        carriers.extend(self.map_interface_carriers(target, name, target_args, &candidates));
+            self.array_and_set_interface_carriers(target, name, target_args, &candidates, members);
+        carriers.extend(self.map_interface_carriers(
+            target,
+            name,
+            target_args,
+            &candidates,
+            members,
+        ));
         carriers
+    }
+
+    /// How the instantiations of a collection carrier relate to `target`, where
+    /// that can be decided without trying each one. A field typed as a union of
+    /// hundreds of literals makes hundreds of candidate arguments, and `Map`
+    /// tries every pair of them.
+    ///
+    /// Member names do not depend on type arguments, so a missing required
+    /// member, or a weak target sharing no member with the carrier, rules out
+    /// every instantiation. When none of the carrier members the target names
+    /// mentions the carrier's type parameters, and the target has no index
+    /// signature constraining member types, every instantiation compares the
+    /// same members, so one answers for all.
+    fn carrier_fit(
+        &self,
+        template: &Type,
+        target: &Type,
+        target_members: &std::collections::BTreeMap<String, crate::ObjectField>,
+    ) -> CarrierFit {
+        let Some((mangled, _, name, args)) = template.interface_routing() else {
+            return CarrierFit::TryEach;
+        };
+        let Some(form) = self.resolver().interface_full_form(&mangled, name, &args) else {
+            return CarrierFit::TryEach;
+        };
+        if target_members
+            .iter()
+            .any(|(member, field)| !field.optional && !form.contains_key(member))
+        {
+            return CarrierFit::None;
+        }
+        let weak = !target_members.is_empty() && target_members.values().all(|f| f.optional);
+        if weak && !form.is_empty() && !target_members.keys().any(|k| form.contains_key(k)) {
+            return CarrierFit::None;
+        }
+        // An index signature of `unknown` admits every member of every
+        // instantiation: only `void` is not assignable to `unknown`, and no
+        // candidate is `void`.
+        let index_constrains_members = self
+            .resolver()
+            .index_signature(target)
+            .is_some_and(|index| !matches!(index.value.peel(), Type::Unknown));
+        if index_constrains_members
+            || self.carrier_members_mention_parameters(&mangled, name, target_members)
+        {
+            return CarrierFit::TryEach;
+        }
+        if super::assignable(template, target, self.resolver()) {
+            CarrierFit::Every
+        } else {
+            CarrierFit::None
+        }
+    }
+
+    /// Whether any member of the carrier interface `name` that `target_members`
+    /// also names mentions one of the carrier's type parameters. True when the
+    /// declaration cannot be read, which keeps the per-instantiation search.
+    fn carrier_members_mention_parameters(
+        &self,
+        mangled: &MangledName,
+        name: &str,
+        target_members: &std::collections::BTreeMap<String, crate::ObjectField>,
+    ) -> bool {
+        let Some(symbol) = self.resolver().lookup(mangled, name) else {
+            return true;
+        };
+        let TypeKind::Interface {
+            generics,
+            methods,
+            properties,
+            ..
+        } = &symbol.kind
+        else {
+            return true;
+        };
+        let mentions = |ty: &Type| {
+            generics
+                .iter()
+                .any(|generic| signature_mentions_typevar(ty, generic))
+        };
+        target_members.keys().any(|member| {
+            methods.get(member).is_some_and(|sig| {
+                sig.params.iter().any(|param| mentions(&param.ty)) || mentions(&sig.ret)
+            }) || properties
+                .get(member)
+                .is_some_and(|property| mentions(&property.ty))
+        })
     }
 
     fn array_and_set_interface_carriers(
@@ -1642,6 +1754,7 @@ impl<'a> Inferer<'a> {
         name: &str,
         target_args: &[Type],
         candidates: &[Type],
+        members: &std::collections::BTreeMap<String, crate::ObjectField>,
     ) -> std::collections::BTreeSet<crate::InterfaceCarrier> {
         let mut carriers = std::collections::BTreeSet::new();
         let exact_element = matches!(name, "Iterable" | "Set")
@@ -1662,16 +1775,14 @@ impl<'a> Inferer<'a> {
             // When every instantiation matches, the target leaves contents
             // unconstrained and an `Any` carrier is sound. Otherwise retain
             // only the matching instantiations and validate their contents.
-            let array_matches: Vec<Type> = candidates
-                .iter()
-                .filter(|element| {
-                    let array = Type::Array(Box::new((*element).clone()));
-                    let tuple = Type::Tuple(vec![(*element).clone()]);
-                    super::assignable(&array, target, self.resolver())
-                        || super::assignable(&tuple, target, self.resolver())
-                })
-                .cloned()
-                .collect();
+            let array_fit =
+                self.carrier_fit(&Type::Array(Box::new(Type::Unknown)), target, members);
+            let array_matches = array_fit.matching(candidates, |element| {
+                let array = Type::Array(Box::new(element.clone()));
+                let tuple = Type::Tuple(vec![element.clone()]);
+                super::assignable(&array, target, self.resolver())
+                    || super::assignable(&tuple, target, self.resolver())
+            });
             if array_matches.len() == candidates.len() {
                 carriers.insert(crate::InterfaceCarrier::ArrayAny);
             } else {
@@ -1681,14 +1792,15 @@ impl<'a> Inferer<'a> {
                     }),
                 );
             }
-            let set_matches: Vec<Type> = candidates
-                .iter()
-                .filter(|element| {
-                    let set = Type::prelude_interface("Set".to_string(), vec![(*element).clone()]);
-                    super::assignable(&set, target, self.resolver())
-                })
-                .cloned()
-                .collect();
+            let set_fit = self.carrier_fit(
+                &Type::prelude_interface("Set".to_string(), vec![Type::Unknown]),
+                target,
+                members,
+            );
+            let set_matches = set_fit.matching(candidates, |element| {
+                let set = Type::prelude_interface("Set".to_string(), vec![element.clone()]);
+                super::assignable(&set, target, self.resolver())
+            });
             if set_matches.len() == candidates.len() {
                 carriers.insert(crate::InterfaceCarrier::SetAny);
             } else {
@@ -1704,6 +1816,7 @@ impl<'a> Inferer<'a> {
         name: &str,
         target_args: &[Type],
         candidates: &[Type],
+        members: &std::collections::BTreeMap<String, crate::ObjectField>,
     ) -> std::collections::BTreeSet<crate::InterfaceCarrier> {
         let mut carriers = std::collections::BTreeSet::new();
         let exact_map_pair = if name == "Map" {
@@ -1725,27 +1838,40 @@ impl<'a> Inferer<'a> {
                 carriers.insert(crate::InterfaceCarrier::Map(key.clone(), value.clone()));
             }
         } else {
-            let map_matches: Vec<(Type, Type)> = candidates
-                .iter()
-                .flat_map(|key| {
-                    candidates.iter().filter_map(|value| {
-                        let map = Type::prelude_interface(
-                            "Map".to_string(),
-                            vec![key.clone(), value.clone()],
+            let fit = self.carrier_fit(
+                &Type::prelude_interface("Map".to_string(), vec![Type::Unknown, Type::Unknown]),
+                target,
+                members,
+            );
+            match fit {
+                CarrierFit::None => {}
+                CarrierFit::Every => {
+                    carriers.insert(crate::InterfaceCarrier::MapAny);
+                }
+                CarrierFit::TryEach => {
+                    let map_matches: Vec<(Type, Type)> = candidates
+                        .iter()
+                        .flat_map(|key| {
+                            candidates.iter().filter_map(|value| {
+                                let map = Type::prelude_interface(
+                                    "Map".to_string(),
+                                    vec![key.clone(), value.clone()],
+                                );
+                                super::assignable(&map, target, self.resolver())
+                                    .then(|| (key.clone(), value.clone()))
+                            })
+                        })
+                        .collect();
+                    if map_matches.len() == candidates.len() * candidates.len() {
+                        carriers.insert(crate::InterfaceCarrier::MapAny);
+                    } else {
+                        carriers.extend(
+                            map_matches
+                                .into_iter()
+                                .map(|(key, value)| crate::InterfaceCarrier::Map(key, value)),
                         );
-                        super::assignable(&map, target, self.resolver())
-                            .then(|| (key.clone(), value.clone()))
-                    })
-                })
-                .collect();
-            if map_matches.len() == candidates.len() * candidates.len() {
-                carriers.insert(crate::InterfaceCarrier::MapAny);
-            } else {
-                carriers.extend(
-                    map_matches
-                        .into_iter()
-                        .map(|(key, value)| crate::InterfaceCarrier::Map(key, value)),
-                );
+                    }
+                }
             }
         }
         carriers
@@ -1942,11 +2068,16 @@ impl<'a> Inferer<'a> {
         let mut chain = Vec::new();
         for_each_class_in_chain(
             |name| self.class_by_mangled(name),
+            &self.type_limits,
             mangled,
             args,
             |symbol, bindings| chain.push((symbol.clone(), bindings.clone())),
         )
-        .ok_or_else(|| super::inference_failure("incomplete runtime class metadata"))?;
+        .ok_or_else(|| {
+            self.pending_limit_or(super::inference_failure(
+                "incomplete runtime class metadata",
+            ))
+        })?;
         for (symbol, bindings) in &chain {
             let TypeKind::Class {
                 generics,
@@ -1979,7 +2110,8 @@ impl<'a> Inferer<'a> {
                     .ok_or_else(|| super::inference_failure("missing guarded-field signature"))?;
                 guards.push(crate::typed_ast::InstantiatedFieldGuard {
                     field: name.clone(),
-                    target: substitute_typevars(&field_read_ty(field), bindings),
+                    target: substitute_typevars(&field_read_ty(field), bindings, &self.type_limits)
+                        .map_err(type_limit_unlocated)?,
                     check: check.clone(),
                 });
             }
@@ -1987,11 +2119,16 @@ impl<'a> Inferer<'a> {
                 if accessors.iter().any(|accessor| accessor.name() == name) {
                     continue;
                 }
-                fields.entry(name.clone()).or_insert(crate::ObjectField {
-                    ty: substitute_typevars(&field.ty, bindings),
-                    optional: field.optional,
-                    readonly: field.readonly,
-                });
+                if let std::collections::btree_map::Entry::Vacant(entry) =
+                    fields.entry(name.clone())
+                {
+                    entry.insert(crate::ObjectField {
+                        ty: substitute_typevars(&field.ty, bindings, &self.type_limits)
+                            .map_err(type_limit_unlocated)?,
+                        optional: field.optional,
+                        readonly: field.readonly,
+                    });
+                }
             }
         }
         self.typed_ast
@@ -2175,7 +2312,13 @@ impl<'a> Inferer<'a> {
         start_args: &[Type],
         visit: impl FnMut(&TypeSymbol, &BTreeMap<String, Type>) -> ControlFlow<Option<T>>,
     ) -> Option<T> {
-        walk_class_chain_with(|m| self.class_by_mangled(m), start, start_args, visit)
+        walk_class_chain_with(
+            |m| self.class_by_mangled(m),
+            &self.type_limits,
+            start,
+            start_args,
+            visit,
+        )
     }
 
     /// [`walk_class_chain`](Self::walk_class_chain) starting at `child`'s
@@ -2205,7 +2348,10 @@ impl<'a> Inferer<'a> {
         let sym = self.class_by_mangled(child)?;
         // The child stands at its own parameters, so its extends-args resolve
         // through them before the walk proper begins.
-        let (parent, parent_args) = parent_hop(&sym, own_bindings)?;
+        let (parent, parent_args) = self
+            .type_limits
+            .ok_or_record(parent_hop(&sym, own_bindings, &self.type_limits))
+            .flatten()?;
         self.walk_class_chain(&parent, &parent_args, visit)
     }
 
@@ -2271,9 +2417,17 @@ impl<'a> Inferer<'a> {
             if f.visibility != Visibility::Public && !self.local_class_mangles.contains(m) {
                 return ControlFlow::Break(None);
             }
-            let mut f = f.clone();
-            f.ty = super::generic::substitute_typevars(&f.ty, bindings);
-            ControlFlow::Break(Some((f, m.clone())))
+            let Some(ty) = self
+                .type_limits
+                .ok_or_record(super::generic::substitute_typevars(
+                    &f.ty,
+                    bindings,
+                    &self.type_limits,
+                ))
+            else {
+                return ControlFlow::Break(None);
+            };
+            ControlFlow::Break(Some((FieldSig { ty, ..f.clone() }, m.clone())))
         })
     }
 
@@ -2518,9 +2672,9 @@ impl<'a> Inferer<'a> {
                 .filter(|a| a.name() == prop)
                 .find_map(&extract)
             {
-                return ControlFlow::Break(Some(super::generic::substitute_typevars(
-                    &ty, bindings,
-                )));
+                return ControlFlow::Break(self.type_limits.ok_or_record(
+                    super::generic::substitute_typevars(&ty, bindings, &self.type_limits),
+                ));
             }
             // An accessor synthesizes a `fields` entry for typing, so the data-field
             // shadow only applies where this level declares neither half.
@@ -2729,15 +2883,19 @@ impl<'a> Inferer<'a> {
                     Some(
                         constructor
                             .iter()
-                            .map(|p| Param {
+                            .map(|p| {
                                 // Extends args may name the child's own type
                                 // params — map those to the body's live GPs.
-                                ty: self.apply_body_instantiations(
-                                    &super::generic::substitute_typevars(&p.ty, &bindings),
-                                ),
-                                ..p.clone()
+                                let ty = super::generic::substitute_typevars(
+                                    &p.ty,
+                                    &bindings,
+                                    &self.type_limits,
+                                )
+                                .and_then(|ty| self.apply_body_instantiations(&ty))
+                                .map_err(type_limit_at(span))?;
+                                Ok(Param { ty, ..p.clone() })
                             })
-                            .collect::<Vec<_>>(),
+                            .collect::<Result<Vec<_>, CompilerFailure>>()?,
                     )
                 }
                 _ => None,
@@ -2829,17 +2987,23 @@ impl<'a> Inferer<'a> {
                 ),
             );
         }
-        let sig = substitute_method_sig(&sig, &bindings);
+        let sig = substitute_method_sig(&sig, &bindings, &self.type_limits)
+            .map_err(type_limit_at(span))?;
         let sig = MethodSig {
             params: sig
                 .params
                 .iter()
-                .map(|p| Param {
-                    ty: self.apply_body_instantiations(&p.ty),
-                    ..p.clone()
+                .map(|p| {
+                    Ok(Param {
+                        ty: self.apply_body_instantiations(&p.ty)?,
+                        ..p.clone()
+                    })
                 })
-                .collect(),
-            ret: self.apply_body_instantiations(&sig.ret),
+                .collect::<Result<_, TypeTooLarge>>()
+                .map_err(type_limit_at(span))?,
+            ret: self
+                .apply_body_instantiations(&sig.ret)
+                .map_err(type_limit_at(span))?,
             ..sig
         };
         let parent_ty = self.super_receiver_type(&parent)?;
@@ -2876,7 +3040,8 @@ impl<'a> Inferer<'a> {
                 .args
                 .iter()
                 .map(|ty| self.apply_body_instantiations(ty))
-                .collect(),
+                .collect::<Result<_, _>>()
+                .map_err(type_limit_unlocated)?,
         ))
     }
 
@@ -2909,7 +3074,13 @@ impl<'a> Inferer<'a> {
                 return ControlFlow::Continue(());
             };
             match methods.get(method) {
-                Some(sig) => ControlFlow::Break(Some(substitute_method_sig(sig, bindings))),
+                Some(sig) => {
+                    ControlFlow::Break(self.type_limits.ok_or_record(substitute_method_sig(
+                        sig,
+                        bindings,
+                        &self.type_limits,
+                    )))
+                }
                 None => ControlFlow::Continue(()),
             }
         })
@@ -2936,9 +3107,15 @@ impl<'a> Inferer<'a> {
         let mut widest = None;
         self.walk_ancestors_at::<()>(child, own_bindings, |sym, bindings| {
             if let Some(sig) = data_field(sym, field) {
-                let mut sig = sig.clone();
-                sig.ty = substitute_typevars(&sig.ty, bindings);
-                widest = Some((sig, sym.mangled_name.clone()));
+                let Some(ty) = self.type_limits.ok_or_record(substitute_typevars(
+                    &sig.ty,
+                    bindings,
+                    &self.type_limits,
+                )) else {
+                    widest = None;
+                    return ControlFlow::Break(None);
+                };
+                widest = Some((FieldSig { ty, ..sig.clone() }, sym.mangled_name.clone()));
             }
             ControlFlow::Continue(())
         });
@@ -2958,9 +3135,14 @@ impl<'a> Inferer<'a> {
         self.walk_ancestors_at(child, own_bindings, |sym, bindings| {
             match data_field(sym, field) {
                 Some(sig) => {
-                    let mut sig = sig.clone();
-                    sig.ty = substitute_typevars(&sig.ty, bindings);
-                    ControlFlow::Break(Some((sig, sym.mangled_name.clone())))
+                    let ty = self.type_limits.ok_or_record(substitute_typevars(
+                        &sig.ty,
+                        bindings,
+                        &self.type_limits,
+                    ));
+                    ControlFlow::Break(
+                        ty.map(|ty| (FieldSig { ty, ..sig.clone() }, sym.mangled_name.clone())),
+                    )
                 }
                 None => ControlFlow::Continue(()),
             }
@@ -3144,6 +3326,7 @@ impl<'a> Inferer<'a> {
                 crate::TypedTypeDecl::Class(decl),
                 sym_for_export(self, &name)?,
             )?;
+            self.type_size_checkpoint(Some(name.span))?;
         }
 
         Ok(())
@@ -3182,7 +3365,8 @@ impl<'a> Inferer<'a> {
                 );
             };
             // Field initializers may read `this`; `current_class` is already set.
-            let body_ty = substitute_typevars(&sig.ty, class_inst);
+            let body_ty = substitute_typevars(&sig.ty, class_inst, &self.type_limits)
+                .map_err(type_limit_at(name.span))?;
             let typed_init = initializer
                 .map(|expr| {
                     let (typed, value_ty) = self.infer_expr(expr, Some(&body_ty))?;
@@ -3356,9 +3540,11 @@ impl<'a> Inferer<'a> {
             let body_param_types: Vec<Type> = sig
                 .params
                 .iter()
-                .map(|p| substitute_typevars(&p.ty, &merged))
-                .collect();
-            let body_ret = substitute_typevars(&sig.ret, &merged);
+                .map(|p| substitute_typevars(&p.ty, &merged, &self.type_limits))
+                .collect::<Result<_, _>>()
+                .map_err(type_limit_at(name.span))?;
+            let body_ret = substitute_typevars(&sig.ret, &merged, &self.type_limits)
+                .map_err(type_limit_at(name.span))?;
 
             let typed_params: Vec<TypedParam> = params
                 .iter()
@@ -3475,9 +3661,11 @@ impl<'a> Inferer<'a> {
             let body_param_types: Vec<Type> = sig
                 .params
                 .iter()
-                .map(|p| substitute_typevars(&p.ty, &body_instantiation))
-                .collect();
-            let body_ret = substitute_typevars(&sig.ret, &body_instantiation);
+                .map(|p| substitute_typevars(&p.ty, &body_instantiation, &self.type_limits))
+                .collect::<Result<_, _>>()
+                .map_err(type_limit_at(name.span))?;
+            let body_ret = substitute_typevars(&sig.ret, &body_instantiation, &self.type_limits)
+                .map_err(type_limit_at(name.span))?;
             let typed_params: Vec<TypedParam> = params
                 .iter()
                 .zip(sig.params.iter())
@@ -3666,6 +3854,33 @@ impl<'a> Inferer<'a> {
     }
 }
 
+/// What [`Inferer::carrier_fit`] decided about a collection carrier's
+/// instantiations.
+enum CarrierFit {
+    /// No instantiation satisfies the target.
+    None,
+    /// Every instantiation does.
+    Every,
+    /// It depends on the arguments, so each candidate is tried.
+    TryEach,
+}
+
+impl CarrierFit {
+    /// The candidates whose instantiation satisfies the target, trying each
+    /// with `satisfies` only when the fit is not already decided.
+    fn matching(self, candidates: &[Type], mut satisfies: impl FnMut(&Type) -> bool) -> Vec<Type> {
+        match self {
+            Self::None => Vec::new(),
+            Self::Every => candidates.to_vec(),
+            Self::TryEach => candidates
+                .iter()
+                .filter(|candidate| satisfies(candidate))
+                .cloned()
+                .collect(),
+        }
+    }
+}
+
 fn runtime_carrier_candidates(
     members: &std::collections::BTreeMap<String, crate::ObjectField>,
 ) -> Vec<Type> {
@@ -3772,18 +3987,21 @@ pub(super) struct ResolvedMethod {
 /// climbs chains by the same rules rather than by a second hand-rolled loop.
 pub(super) fn walk_class_chain_with<T>(
     lookup: impl Fn(&MangledName) -> Option<TypeSymbol>,
+    limits: &TypeLimits,
     start: &MangledName,
     start_args: &[Type],
     visit: impl FnMut(&TypeSymbol, &BTreeMap<String, Type>) -> ControlFlow<Option<T>>,
 ) -> Option<T> {
-    walk_chain(lookup, start, start_args, visit).0
+    walk_chain(lookup, limits, start, start_args, visit).0
 }
 
 /// The walk, plus whether the whole chain was seen. A chain is *not* whole when
-/// a link fails to resolve or turns out not to be a class; callers that
+/// a link fails to resolve or turns out not to be a class, or when a parent's
+/// type arguments pass a type limit (recorded in `limits`); callers that
 /// accumulate need that distinction, callers that search do not.
 fn walk_chain<T>(
     lookup: impl Fn(&MangledName) -> Option<TypeSymbol>,
+    limits: &TypeLimits,
     start: &MangledName,
     start_args: &[Type],
     mut visit: impl FnMut(&TypeSymbol, &BTreeMap<String, Type>) -> ControlFlow<Option<T>>,
@@ -3812,7 +4030,13 @@ fn walk_chain<T>(
         if let ControlFlow::Break(answer) = visit(&sym, &bindings) {
             return (answer, true);
         }
-        cur = parent_hop(&sym, &bindings);
+        cur = match parent_hop(&sym, &bindings, limits) {
+            Ok(hop) => hop,
+            Err(exceeded) => {
+                limits.record(exceeded);
+                return (None, false);
+            }
+        };
     }
     (None, true)
 }
@@ -3847,11 +4071,12 @@ fn erased_ctor_rest_param() -> Param {
 /// a complete walk.
 pub(super) fn for_each_class_in_chain(
     lookup: impl Fn(&MangledName) -> Option<TypeSymbol>,
+    limits: &TypeLimits,
     start: &MangledName,
     start_args: &[Type],
     mut visit: impl FnMut(&TypeSymbol, &BTreeMap<String, Type>),
 ) -> Option<()> {
-    let (_, whole) = walk_chain(lookup, start, start_args, |sym, bindings| {
+    let (_, whole) = walk_chain(lookup, limits, start, start_args, |sym, bindings| {
         visit(sym, bindings);
         ControlFlow::<Option<()>>::Continue(())
     });
@@ -3864,43 +4089,54 @@ pub(super) fn for_each_class_in_chain(
 pub(super) fn parent_hop(
     sym: &TypeSymbol,
     bindings: &BTreeMap<String, Type>,
-) -> Option<(MangledName, Vec<Type>)> {
-    let TypeKind::Class { extends, .. } = &sym.kind else {
-        return None;
+    limits: &TypeLimits,
+) -> Result<Option<(MangledName, Vec<Type>)>, TypeTooLarge> {
+    let TypeKind::Class {
+        extends: Some(extends),
+        ..
+    } = &sym.kind
+    else {
+        return Ok(None);
     };
-    extends.as_ref().map(|e| {
-        (
-            e.parent.clone(),
-            e.args
-                .iter()
-                .map(|a| substitute_typevars(a, bindings))
-                .collect(),
-        )
-    })
+    let args = extends
+        .args
+        .iter()
+        .map(|a| substitute_typevars(a, bindings, limits))
+        .collect::<Result<_, _>>()?;
+    Ok(Some((extends.parent.clone(), args)))
 }
 
 /// A method signature with the declaring class's type parameters substituted
 /// from `bindings` — param types, return, and the guard predicate's asserted
 /// type. Method-level generics and doc pass through unchanged.
-fn substitute_method_sig(sig: &MethodSig, bindings: &BTreeMap<String, Type>) -> MethodSig {
+fn substitute_method_sig(
+    sig: &MethodSig,
+    bindings: &BTreeMap<String, Type>,
+    limits: &TypeLimits,
+) -> Result<MethodSig, TypeTooLarge> {
     use super::generic::substitute_typevars;
-    MethodSig {
+    Ok(MethodSig {
         generics: sig.generics.clone(),
         params: sig
             .params
             .iter()
-            .map(|p| Param {
-                ty: substitute_typevars(&p.ty, bindings),
-                ..p.clone()
+            .map(|p| {
+                Ok(Param {
+                    ty: substitute_typevars(&p.ty, bindings, limits)?,
+                    ..p.clone()
+                })
             })
-            .collect(),
-        ret: substitute_typevars(&sig.ret, bindings),
-        predicate: sig.predicate.as_ref().map(|p| crate::TypePredicate {
-            parameter_index: p.parameter_index,
-            asserted_type: substitute_typevars(&p.asserted_type, bindings),
-        }),
+            .collect::<Result<_, TypeTooLarge>>()?,
+        ret: substitute_typevars(&sig.ret, bindings, limits)?,
+        predicate: match &sig.predicate {
+            Some(p) => Some(crate::TypePredicate {
+                parameter_index: p.parameter_index,
+                asserted_type: substitute_typevars(&p.asserted_type, bindings, limits)?,
+            }),
+            None => None,
+        },
         doc: sig.doc.clone(),
-    }
+    })
 }
 
 /// A class's own instance field `name`, if it is backed by a payload slot.
@@ -3948,15 +4184,16 @@ fn accessor_comparison(
     own: &AccessorSig,
     inherited: &AccessorSig,
     opaque: &BTreeMap<String, Type>,
-) -> Option<AccessorComparison> {
-    match (own, inherited) {
+    limits: &TypeLimits,
+) -> Result<Option<AccessorComparison>, TypeTooLarge> {
+    Ok(match (own, inherited) {
         (
             AccessorSig::Getter { ret_ty: own, .. },
             AccessorSig::Getter {
                 ret_ty: inherited, ..
             },
         ) => {
-            let own = substitute_typevars(own, opaque);
+            let own = substitute_typevars(own, opaque, limits)?;
             Some(AccessorComparison {
                 half: AccessorKind::Get,
                 accessor: format!("get {name}"),
@@ -3972,7 +4209,7 @@ fn accessor_comparison(
                 param: inherited, ..
             },
         ) => {
-            let own = substitute_typevars(&own.ty, opaque);
+            let own = substitute_typevars(&own.ty, opaque, limits)?;
             Some(AccessorComparison {
                 half: AccessorKind::Set,
                 accessor: format!("set {name}"),
@@ -3983,7 +4220,7 @@ fn accessor_comparison(
             })
         }
         _ => None,
-    }
+    })
 }
 
 /// Which kind of member `sym` declares `name` as, if any. Accessors are tested
@@ -4012,20 +4249,24 @@ fn declared_member_kind(sym: &TypeSymbol, name: &str) -> Option<MemberKind> {
 /// [`substitute_typevars`] applied through an accessor signature, so an
 /// inherited accessor is compared at the type arguments the child's `extends`
 /// clause instantiates.
-fn substitute_accessor_sig(sig: &AccessorSig, bindings: &BTreeMap<String, Type>) -> AccessorSig {
-    match sig {
+fn substitute_accessor_sig(
+    sig: &AccessorSig,
+    bindings: &BTreeMap<String, Type>,
+    limits: &TypeLimits,
+) -> Result<AccessorSig, TypeTooLarge> {
+    Ok(match sig {
         AccessorSig::Getter { name, ret_ty } => AccessorSig::Getter {
             name: name.clone(),
-            ret_ty: substitute_typevars(ret_ty, bindings),
+            ret_ty: substitute_typevars(ret_ty, bindings, limits)?,
         },
         AccessorSig::Setter { name, param } => AccessorSig::Setter {
             name: name.clone(),
             param: Param {
-                ty: substitute_typevars(&param.ty, bindings),
+                ty: substitute_typevars(&param.ty, bindings, limits)?,
                 ..param.clone()
             },
         },
-    }
+    })
 }
 
 /// How a visibility renders as the source keyword that produces it. `public` is
@@ -4079,12 +4320,10 @@ fn bind_params_for_body(
     // Scope types go through the body instantiation (TypeVar → GenericParam);
     // the returned TypedParams keep the raw signature forms codegen expects.
     for (p, sp) in params.iter().zip(sig_params.iter()) {
-        tc.scopes.insert(
-            p.name.name.clone(),
-            substitute_typevars(&sp.ty, bindings),
-            false,
-            p.name.span,
-        );
+        let ty = substitute_typevars(&sp.ty, bindings, &tc.type_limits)
+            .map_err(type_limit_at(p.name.span))?;
+        tc.scopes
+            .insert(p.name.name.clone(), ty, false, p.name.span);
     }
     Ok(params
         .iter()
@@ -4099,12 +4338,17 @@ fn bind_params_for_body(
         .collect())
 }
 
-/// Signature-space scan for a `TypeVar` mention: substitute a sentinel for `name`
-/// and compare — reusing the one traversal that already covers every `Type`
-/// variant, so this can't drift from the enum.
+/// Signature-space scan for a `TypeVar` mention, over the one child traversal
+/// that covers every `Type` variant, so this can't drift from the enum.
 fn signature_mentions_typevar(ty: &Type, name: &str) -> bool {
-    let sentinel = BTreeMap::from([(name.to_string(), Type::Error)]);
-    substitute_typevars(ty, &sentinel) != *ty
+    let mut pending = vec![ty];
+    while let Some(ty) = pending.pop() {
+        if matches!(ty, Type::TypeVar(var) if var == name) {
+            return true;
+        }
+        crate::type_size::for_each_child(ty, |child| pending.push(child));
+    }
+    false
 }
 
 /// Re-fetch the class's bound symbol for the export surface (it was registered

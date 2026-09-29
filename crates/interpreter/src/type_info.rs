@@ -67,6 +67,16 @@ impl TypeInfoTable {
         shapes: &[Shape],
         types: &[Type],
     ) -> Self {
+        Self::collect_indexed(package_name, shapes, types).0
+    }
+
+    /// [`collect_from_shapes_and_types`](Self::collect_from_shapes_and_types),
+    /// plus the id each collected type was interned under.
+    pub fn collect_indexed(
+        package_name: impl Into<String>,
+        shapes: &[Shape],
+        types: &[Type],
+    ) -> (Self, TypeInfoIndex) {
         let mut builder = TypeInfoBuilder::new(package_name.into());
         for shape in shapes {
             builder.intern_type(&canonical_type(shape));
@@ -202,6 +212,29 @@ impl TypeInfoTable {
     }
 }
 
+/// The id each type was interned under when a [`TypeInfoTable`] was collected.
+/// [`TypeInfoTable::type_id`] finds a type by comparing it with every entry in
+/// turn, which is quadratic over a program's types; a collected type is found
+/// here directly.
+#[derive(Debug, Default)]
+pub struct TypeInfoIndex {
+    by_type: BTreeMap<Type, TypeInfoId>,
+}
+
+impl TypeInfoIndex {
+    /// [`TypeInfoTable::object_type_id`], looking a collected type up directly.
+    pub fn object_type_id(&self, table: &TypeInfoTable, ty: &Type) -> Option<TypeInfoId> {
+        let Some(id) = self.by_type.get(ty) else {
+            return table.object_type_id(ty);
+        };
+        matches!(
+            table.get(*id).map(|info| &info.kind),
+            Some(TypeInfoKind::Object { .. })
+        )
+        .then_some(*id)
+    }
+}
+
 struct TypeInfoBuilder {
     table: TypeInfoTable,
     by_type: BTreeMap<Type, TypeInfoId>,
@@ -218,8 +251,13 @@ impl TypeInfoBuilder {
         }
     }
 
-    fn finish(self) -> TypeInfoTable {
-        self.table
+    fn finish(self) -> (TypeInfoTable, TypeInfoIndex) {
+        (
+            self.table,
+            TypeInfoIndex {
+                by_type: self.by_type,
+            },
+        )
     }
 
     fn intern_type(&mut self, ty: &Type) -> TypeInfoId {
@@ -299,6 +337,45 @@ mod tests {
     use std::collections::BTreeMap;
 
     use crate::{ObjectField, Shape, Type, TypeInfoKind, TypeInfoTable};
+
+    #[test]
+    fn index_finds_the_same_object_type_id_as_the_scan() {
+        let inner = BTreeMap::from([("v".to_string(), ObjectField::required(Type::Number))]);
+        let inner_ty = Type::Object {
+            index: None,
+            fields: inner.clone(),
+        };
+        let outer =
+            BTreeMap::from([("inner".to_string(), ObjectField::required(inner_ty.clone()))]);
+        let outer_ty = Type::Object {
+            index: None,
+            fields: outer.clone(),
+        };
+        let (table, index) = TypeInfoTable::collect_indexed(
+            "main",
+            &[
+                Shape::Object {
+                    index: None,
+                    fields: outer,
+                },
+                Shape::Array(Box::new(Type::String)),
+            ],
+            std::slice::from_ref(&inner_ty),
+        );
+        for ty in [&outer_ty, &inner_ty] {
+            let id = index.object_type_id(&table, ty);
+            assert!(id.is_some(), "{ty} has type info");
+            assert_eq!(id, table.object_type_id(ty));
+        }
+        let array = Type::Array(Box::new(Type::String));
+        assert_eq!(index.object_type_id(&table, &array), None);
+        // A type the table never collected falls back to the structural scan.
+        let uncollected = Type::Object {
+            index: None,
+            fields: BTreeMap::from([("w".to_string(), ObjectField::required(Type::Number))]),
+        };
+        assert_eq!(index.object_type_id(&table, &uncollected), None);
+    }
 
     #[test]
     fn object_type_id_finds_collected_object_shape() {

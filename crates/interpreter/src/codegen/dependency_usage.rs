@@ -26,6 +26,9 @@ pub struct DependencyUsage {
     types: BTreeSet<MangledName>,
     member_types: BTreeSet<MangledName>,
     shapes: BTreeSet<Shape>,
+    /// Shapes whose whole subtree `collect_type` has walked, unlike `shapes`,
+    /// which `note_shape` also fills.
+    collected_shapes: BTreeSet<Shape>,
     uses_bigint: bool,
 }
 
@@ -37,6 +40,7 @@ impl DependencyUsage {
             types: BTreeSet::new(),
             member_types: BTreeSet::new(),
             shapes: BTreeSet::new(),
+            collected_shapes: BTreeSet::new(),
             uses_bigint: false,
         }
     }
@@ -388,6 +392,12 @@ impl DependencyUsage {
     /// `visit_type` funnel, which also collects the type's closure shapes.
     pub(crate) fn collect_type(&mut self, ty: &Type) {
         if let Some(shape) = Shape::from_type(ty) {
+            // A shape carries its member types, so its subtree was collected
+            // with it. Walking it again for every expression that has the type
+            // is quadratic in the type's depth.
+            if !self.collected_shapes.insert(shape.clone()) {
+                return;
+            }
             if matches!(shape, Shape::Object { .. }) {
                 self.collect_typed_object_stringify_host_value();
             }

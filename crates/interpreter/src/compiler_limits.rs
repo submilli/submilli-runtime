@@ -2,11 +2,11 @@
 
 /// Native stack a thread needs to run a [`crate::compile`] entry point or a
 /// public phase API on any program within the structural limits below and in
-/// [`crate::tree_height`]. The interpreter creates no threads: embedders run
-/// compilation on a thread of at least this size. Only touched pages are
-/// committed. The deepest programs at the limits measured about 63 MiB in
-/// unoptimized builds and 2 MiB in optimized ones; each size keeps at least
-/// twice that.
+/// [`crate::tree_height`], including types at [`MAX_TYPE_DEPTH`]. The
+/// interpreter creates no threads: embedders run compilation on a thread of at
+/// least this size. Only touched pages are committed. The deepest programs at
+/// the limits measured about 63 MiB in unoptimized builds and 2 MiB in
+/// optimized ones; each size keeps at least twice that.
 pub const COMPILER_STACK_BYTES: usize = if cfg!(debug_assertions) {
     128 * 1024 * 1024
 } else {
@@ -25,6 +25,51 @@ pub const MAX_CLOSURE_ARITY: usize = u8::MAX as usize;
 /// `{ v: Previous }` bodies 127. Resolved alias bodies are inlined, so this also
 /// bounds the depth of alias-expanded types.
 pub const MAX_TYPE_RESOLUTION_DEPTH: u32 = 256;
+
+/// Nodes in one type. Instantiating an alias or generic that mentions its
+/// parameter more than once copies the argument, so nesting such instantiations
+/// doubles a type's size per level; substitution stops at this bound. An alias
+/// instance also keeps its arguments beside its substituted body, so each layer
+/// of generic alias around a type doubles it too. The largest type in the
+/// fixture and package suites has under 100 nodes. Each stored copy of a type
+/// costs memory in proportion, up to about 1 KiB per node for small objects.
+pub const MAX_TYPE_NODES: u64 = 1 << 16;
+
+/// Nesting depth of one type, counting every type constructor and alias. Every
+/// recursive walk over a type is bounded by it. Annotation resolution nests at
+/// most [`MAX_TYPE_RESOLUTION_DEPTH`] levels, but a `[]` suffix is not one of
+/// them, so a chain `type Ai = A(i-1)[]` adds two levels per alias and is cut
+/// here at 254 aliases.
+pub const MAX_TYPE_DEPTH: u32 = 512;
+
+/// Steps of type work one compiler phase may spend: each type node built by
+/// substitution (instantiating aliases, generic calls and members, and
+/// expanding interfaces) and each step comparing types. A phase can rebuild or
+/// compare types near [`MAX_TYPE_NODES`] many times over; this bounds the
+/// total. The largest inference in the fixture and package suites spends under
+/// 2 million.
+pub const MAX_TYPE_WORK: u64 = 1 << 24;
+
+/// Steps of inline code one runtime type check may emit: one per structural
+/// test of a type, union member, field or element, and one per segment of the
+/// failure path each test records. Interface checks are inlined with their
+/// members' checks, so interfaces that reference others several times multiply
+/// a check's code; this bounds the work of emitting one before the function's
+/// locals would. The largest module in the fixture and package suites emits
+/// under 4,000 tests across all its checks.
+pub const MAX_INLINE_VALIDATOR_STEPS: u64 = 1 << 15;
+
+/// Locals the Wasm engine accepts in one function (wasmparser's
+/// `MAX_WASM_FUNCTION_LOCALS`). Runtime checks add locals as they are emitted,
+/// so emitting stops with a located error before a function the engine would
+/// reject.
+pub const MAX_FUNCTION_LOCALS: u32 = 50_000;
+
+/// Bytes the Wasm engine accepts in one function body (wasmparser's
+/// `MAX_WASM_FUNCTION_SIZE`). Runtime checks stop emitting before a function
+/// reaches it, which also keeps a body far below the 4 GiB the Wasm encoder can
+/// represent.
+pub const MAX_FUNCTION_BODY_BYTES: usize = 7_654_321;
 
 /// Optional spreads that may override one field of an object literal, each
 /// over the value an earlier member supplied. Each link is a

@@ -87,7 +87,9 @@ impl<'a> Inferer<'a> {
                 if skip.contains(&name.name) {
                     continue;
                 }
+                let span = name.span;
                 self.bind_class(name, generics, extends, implements, members, doc)?;
+                self.type_size_checkpoint(Some(span))?;
             }
         }
         // Reject `extends` cycles and incompatible overrides once every class
@@ -138,6 +140,7 @@ impl<'a> Inferer<'a> {
                     }
                 };
                 self.pop_signature_generics();
+                self.type_size_checkpoint(Some(name.span))?;
                 self.bind_top(
                     &name,
                     ValueKind::Function {

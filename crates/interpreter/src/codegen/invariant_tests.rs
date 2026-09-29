@@ -28,6 +28,11 @@ pub(super) fn with_context<T>(
         type_info: &type_info,
         package_string_global_idx: None,
         failure: std::cell::Cell::new(None),
+        validator_steps_left: std::cell::Cell::new(
+            crate::compiler_limits::MAX_INLINE_VALIDATOR_STEPS,
+        ),
+        validator_root: std::cell::Cell::new(None),
+        check_is_standalone: std::cell::Cell::new(false),
     })
 }
 
@@ -185,6 +190,7 @@ fn structural_subtypes_reject_unrepresentable_layouts() {
             &[subtype],
             symbols,
             &crate::TypeInfoTable::default(),
+            &crate::TypeInfoIndex::default(),
             None,
         )
     };

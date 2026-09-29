@@ -54,7 +54,14 @@ impl<'a> ShapeCollector<'a> {
             .into_iter()
             .filter(|mangled| !self.open_aliases.contains(mangled))
             .collect();
-        let ty = &rehydrate_alias_refs_skipping(ty, self.types, &self.open_aliases);
+        let ty = &self
+            .types
+            .limits
+            .type_or_error(rehydrate_alias_refs_skipping(
+                ty,
+                self.types,
+                &self.open_aliases,
+            ));
         if self.walked_types.insert(ty.clone()) {
             self.open_aliases.extend(newly_opened.iter().cloned());
             self.walk(ty);
