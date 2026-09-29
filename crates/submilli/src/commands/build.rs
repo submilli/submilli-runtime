@@ -3,6 +3,7 @@
 //! the packages in dependency order, and `publish-local` compiles and installs
 //! the artifacts into the local package store.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
@@ -11,10 +12,11 @@ use std::process::ExitCode;
 use anyhow::Context;
 use interpreter::{Severity, Sources, Span, diagnostics};
 use submilli_build::{
-    BuildDiagnostic, BuildSeverity, BuiltPackage, DriverError, Lockfile, PackageName, PackageStore,
-    ProjectManifest, ResolveError, ScaffoldError, add_package, build_packages,
-    find_manifest_upwards, init_project, install_packages, install_plan, is_valid_package_name,
-    parse_manifest, refresh_editor_files, resolve_github_closure, write_capabilities_file,
+    BuildDiagnostic, BuildSeverity, BuiltPackage, DependencyKind, DriverError, Lockfile,
+    PackageName, PackageStore, ProjectManifest, ResolveError, ScaffoldError, add_package,
+    build_packages, find_manifest_upwards, init_project, install_packages, install_plan,
+    is_valid_package_name, parse_manifest, refresh_dependency_types, refresh_editor_files,
+    resolve_github_closure, write_capabilities_file,
 };
 use submilli_shared::github::GithubRepoFetcher;
 
@@ -264,6 +266,9 @@ fn compile_project(args: CompileArgs) -> anyhow::Result<Result<CompiledProject, 
     if let Err(code) = resolve_github_dependencies(&manifest, &manifest_dir, &store) {
         return Ok(Err(code));
     }
+    if let Err(code) = refresh_dependency_editor_types(&manifest, &manifest_dir, &store) {
+        return Ok(Err(code));
+    }
     let only = args.package.map(PackageName::new);
     match build_packages(&manifest, &manifest_dir, &store, only.as_ref()) {
         Ok(built) => {
@@ -317,6 +322,35 @@ fn resolve_github_dependencies(
         Lockfile::new(closure.locked).write(manifest_dir)
     };
     if let Err(err) = write_result {
+        eprintln!("error: {err}");
+        return Err(ExitCode::from(1));
+    }
+    Ok(())
+}
+
+/// Give the editor declarations for the dependencies that come from the store.
+/// A dependency the store can't load is left for the build to report: it
+/// knows which packages are being built and names the one that needs it.
+fn refresh_dependency_editor_types(
+    manifest: &ProjectManifest,
+    manifest_dir: &Path,
+    store: &PackageStore,
+) -> Result<(), ExitCode> {
+    let external_names: BTreeSet<&str> = manifest
+        .packages
+        .iter()
+        .flat_map(|package| &package.dependencies)
+        .filter(|dependency| dependency.kind != DependencyKind::Sibling)
+        .map(|dependency| dependency.name.as_str())
+        .collect();
+    let Ok(artifacts) = store.load_closure(external_names) else {
+        return Ok(());
+    };
+    let declarations: Vec<_> = artifacts
+        .iter()
+        .map(|artifact| &artifact.package_declaration)
+        .collect();
+    if let Err(err) = refresh_dependency_types(manifest_dir, &declarations) {
         eprintln!("error: {err}");
         return Err(ExitCode::from(1));
     }

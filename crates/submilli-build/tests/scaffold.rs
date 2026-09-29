@@ -5,7 +5,7 @@ use std::path::Path;
 
 use submilli_build::{
     PackageStore, ScaffoldError, add_package, build_packages, init_project, parse_manifest,
-    refresh_editor_files,
+    refresh_dependency_types, refresh_editor_files,
 };
 use tempfile::TempDir;
 
@@ -299,7 +299,7 @@ fn generated_editor_declarations_cover_prelude_and_stdlib() {
     assert!(lib.contains("namespace JSON {"), "got: {lib}");
     assert!(stdlib.contains("declare module \"submilli:uuid\" {"));
     assert!(stdlib.contains("declare module \"submilli:http\" {"));
-    assert!(!stdlib.contains("declare module \"submilli:security\""));
+    assert!(stdlib.contains("declare module \"submilli:security\""));
 }
 
 #[test]
@@ -318,4 +318,16 @@ fn refresh_editor_files_rewrites_generated_files() {
     let lib = fs::read_to_string(types_dir.join("lib.submilli.d.ts")).expect("read lib");
     assert!(stdlib.contains("declare module \"submilli:uuid\" {"));
     assert!(lib.contains("namespace JSON {"));
+}
+
+#[test]
+fn refresh_dependency_types_declares_each_dependency() {
+    let tmp = TempDir::new().expect("tempdir");
+    let dependency = interpreter::PackageDeclaration::with_package("@acme/leaf");
+
+    refresh_dependency_types(tmp.path(), &[&dependency]).expect("refresh");
+
+    let packages = fs::read_to_string(tmp.path().join(".submilli/types/packages.d.ts"))
+        .expect("read packages.d.ts");
+    assert!(packages.contains("declare module \"@acme/leaf\" {"));
 }

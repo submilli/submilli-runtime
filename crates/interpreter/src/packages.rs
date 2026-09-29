@@ -7,7 +7,7 @@
 //! `packages.*` / `builtins.docs` tools, the server's REST surface, and the
 //! `submilli docs` / `search` / `builtins` CLI commands.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
 use crate::runtime::prelude::declaration::prelude_package_declaration;
@@ -858,20 +858,81 @@ pub fn render_declarations(defs: &PackageDeclaration) -> String {
     out.trim_end().to_string()
 }
 
-/// Render editor-facing TypeScript declarations for every user-importable
-/// stdlib module. Each package gets a separate `declare module` block.
-/// `submilli:test` is included even though only `build test` makes it
-/// importable — the editor should complete it in test files; `build check`
-/// remains the gate against importing it elsewhere.
+/// Render editor-facing TypeScript declarations for every stdlib module a
+/// package project can import. Each package gets a separate `declare module`
+/// block. `submilli:test` is included even though only `build test` makes it
+/// importable, and `submilli:security` even though only packages may import
+/// it — the editor should complete both; `build check` remains the gate
+/// against importing them elsewhere.
 pub fn render_stdlib_d_ts() -> String {
-    let mut modules = user_modules();
-    modules.push(crate::stdlib::test::package_declaration());
-    modules.sort_by(|a, b| a.package_name.cmp(&b.package_name));
     let mut out = String::new();
-    for defs in &modules {
+    for defs in &editor_stdlib_modules() {
         render_declare_module(&mut out, defs);
     }
     out.trim_end().to_string()
+}
+
+/// Render editor-facing TypeScript declarations for packages, one
+/// `declare module` block each, in the order given. A declaration names the
+/// types it borrows from another module without saying where they are from,
+/// so each block imports the ones it mentions.
+pub fn render_packages_d_ts(packages: &[&PackageDeclaration]) -> String {
+    let stdlib = editor_stdlib_modules();
+    let mut modules_by_type: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    for defs in stdlib.iter().chain(packages.iter().copied()) {
+        for name in defs.types.keys() {
+            modules_by_type
+                .entry(name.as_str())
+                .or_default()
+                .insert(defs.package_name.as_str());
+        }
+    }
+
+    let mut out = String::new();
+    for defs in packages {
+        let mut body = String::new();
+        render_ts_declarations(&mut body, defs, "  ", "export ");
+        let _ = writeln!(out, "declare module \"{}\" {{", defs.package_name);
+        for (name, modules) in &modules_by_type {
+            if defs.types.contains_key(*name) || !mentions_type(&body, name) {
+                continue;
+            }
+            // A name two modules export can't be attributed from the text.
+            let mut modules = modules.iter();
+            if let (Some(module), None) = (modules.next(), modules.next()) {
+                let _ = writeln!(out, "  import type {{ {name} }} from \"{module}\";");
+            }
+        }
+        out.push_str(&body);
+        let _ = writeln!(out, "}}\n");
+    }
+    out.trim_end().to_string()
+}
+
+fn editor_stdlib_modules() -> Vec<PackageDeclaration> {
+    let mut modules = user_modules();
+    modules.push(crate::stdlib::test::package_declaration());
+    modules.push(crate::stdlib::security::package_declaration());
+    modules.sort_by(|a, b| a.package_name.cmp(&b.package_name));
+    modules
+}
+
+/// Whether rendered declarations use `name` as a type, outside doc comments.
+fn mentions_type(declarations: &str, name: &str) -> bool {
+    let is_identifier = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
+    declarations
+        .lines()
+        .filter(|line| {
+            let line = line.trim_start();
+            !line.starts_with('*') && !line.starts_with("/**")
+        })
+        .any(|line| {
+            line.match_indices(name).any(|(start, matched)| {
+                let before = line[..start].chars().next_back();
+                let after = line[start + matched.len()..].chars().next();
+                !before.is_some_and(is_identifier) && !after.is_some_and(is_identifier)
+            })
+        })
 }
 
 /// Render editor-facing TypeScript ambient declarations for always-in-scope
@@ -2305,6 +2366,34 @@ mod tests {
     }
 
     #[test]
+    fn packages_d_ts_imports_the_types_a_package_borrows() {
+        let mut package = PackageDeclaration::with_package("@acme/files");
+        let download = crate::stdlib::http::package_declaration()
+            .values
+            .get("download")
+            .expect("submilli:http declares download")
+            .clone();
+        package.values.insert("fetch".to_string(), download);
+
+        let docs = render_packages_d_ts(&[&package]);
+
+        assert!(docs.starts_with("declare module \"@acme/files\" {\n"));
+        assert!(docs.contains("  import type { DownloadResult } from \"submilli:http\";\n"));
+        assert!(docs.contains("  import type { DownloadOptions } from \"submilli:http\";\n"));
+        assert!(!docs.contains("import type { Response }"));
+    }
+
+    #[test]
+    fn a_type_named_only_in_a_doc_comment_is_not_mentioned() {
+        assert!(mentions_type("  export function f(): Result;", "Result"));
+        assert!(!mentions_type("   * Returns a Result.", "Result"));
+        assert!(!mentions_type(
+            "  export function f(): DownloadResult;",
+            "Result"
+        ));
+    }
+
+    #[test]
     fn stdlib_d_ts_declares_each_user_module() {
         let docs = render_stdlib_d_ts();
         for module in user_modules() {
@@ -2314,7 +2403,8 @@ mod tests {
                 module.package_name
             );
         }
-        assert!(!docs.contains("declare module \"submilli:security\""));
+        assert!(docs.contains("declare module \"submilli:security\" {\n"));
+        assert!(docs.contains("  export function check<T>("));
         assert!(docs.contains("declare module \"submilli:uuid\" {\n"));
         assert!(docs.contains("  export function v4("));
         assert!(docs.contains("  function delete_("));

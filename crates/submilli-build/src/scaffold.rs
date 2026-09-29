@@ -6,7 +6,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use interpreter::packages::{render_lib_submilli_d_ts, render_stdlib_d_ts};
+use interpreter::PackageDeclaration;
+use interpreter::packages::{render_lib_submilli_d_ts, render_packages_d_ts, render_stdlib_d_ts};
 
 use crate::package_store::split_scoped_name;
 use crate::{
@@ -347,6 +348,24 @@ pub fn refresh_editor_files(
     )?;
 
     Ok(())
+}
+
+/// Write the editor's declarations for the project's dependencies from the
+/// package store. Sibling packages need none: the generated tsconfig maps
+/// them to their sources.
+pub fn refresh_dependency_types(
+    manifest_dir: &Path,
+    dependencies: &[&PackageDeclaration],
+) -> Result<(), ScaffoldError> {
+    let types_dir = manifest_dir.join(".submilli").join("types");
+    fs::create_dir_all(&types_dir).map_err(|source| ScaffoldError::Io {
+        path: types_dir.clone(),
+        source,
+    })?;
+    write_text(
+        &types_dir.join("packages.d.ts"),
+        &format!("{}\n", render_packages_d_ts(dependencies)),
+    )
 }
 
 fn generated_tsconfig_text(manifest: &ProjectManifest) -> String {
