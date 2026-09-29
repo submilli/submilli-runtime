@@ -1,9 +1,9 @@
 ---
 title: "Using MCP servers"
-description: "Reference for the blueprint's mcp block: declaring an MCP server, allowing its tools, how tools become typed functions, output schemas, credentials and OAuth, from the local CLI and on submilli-server."
+description: "Reference for the blueprint's mcp block: declaring an MCP server, allowing its tools, how tools become typed functions, output schemas, credentials, and OAuth."
 slug: mcp-servers
 sidebar:
-  order: 9
+  order: 8
 ---
 
 An MCP server is a program that offers tools to an agent over MCP, the
@@ -14,8 +14,11 @@ package that programs import, with each tool a function the blueprint can
 allow or deny.
 
 MCP appears in Submilli in two directions. This chapter is about the servers
-Submilli calls. The [next chapter](/docs/harness) is about the other
+Submilli calls. [Connecting to your harness](/docs/harness) is about the other
 direction, where `submilli-server` is itself an MCP server for your agent.
+Everything here runs on your machine with a blueprint file;
+[MCP servers on the server](/docs/server-mcp) covers the same blueprint
+registered on a server.
 
 The examples use two servers. Playwright's drives a browser and needs no
 account; Linear's needs a login. Start Playwright's on your machine with:
@@ -170,12 +173,6 @@ function browser_click(args: { button?: "left" | "right" | "middle"; doubleClick
 …
 ```
 
-For a blueprint registered on a server, ask the server:
-
-```sh
-submilli server docs @mcp/playwright --blueprint browse
-```
-
 This is also what the model reads, through the package docs tool, before it
 writes a program. The listing shows every tool the MCP server has, whether or
 not the blueprint allows it.
@@ -184,8 +181,7 @@ not the blueprint allows it.
 
 Submilli reads the server's tool list and builds the package from it. This is
 **discovery**. It happens the first time a program or a search needs the
-server, and the result is kept until the blueprint is applied again, a login
-changes, or the server restarts.
+server.
 
 | In the tool | In the package |
 | --- | --- |
@@ -330,11 +326,10 @@ mcp:
 
 ### Log in
 
-Register the blueprint, then log in once:
+Log in once:
 
 ```sh
-submilli server blueprint apply blueprint.yaml
-submilli server mcp authenticate tracker linear
+submilli mcp authenticate linear --blueprint blueprint.yaml
 ```
 
 ```text
@@ -346,14 +341,12 @@ Waiting for the redirect on http://127.0.0.1:8765/callback …
 ✓ authenticated 'linear' on blueprint 'tracker' — blueprint 'tracker' is ACTIVE
 ```
 
-The command runs on your machine. It prints the address to open, waits for
-the browser to come back to port 8765, and hands the result to the server,
-which stores the credential in its secret store. The server therefore needs
-a [secret store](/docs/server#secrets). `SUBMILLI_OAUTH_REDIRECT_PORT`
-changes the port.
+The command prints the address to open, waits for the browser to come back
+to port 8765, and stores the credential in the local secret store.
+`SUBMILLI_OAUTH_REDIRECT_PORT` changes the port.
 
 ```sh
-submilli server mcp auth-status tracker
+submilli mcp auth-status --blueprint blueprint.yaml
 ```
 
 ```text
@@ -367,8 +360,10 @@ without a credential are left out of it.
 
 ### One login, shared
 
-The credential is stored per blueprint and server. Every session of the
-blueprint, for every user, calls the MCP server as the person who logged in.
+The credential is stored per blueprint and MCP server, so every program run
+under the blueprint calls the MCP server as the person who logged in. On
+[a server](/docs/server-mcp#log-in-to-an-oauth-server) that means every
+session of the blueprint, for every user.
 Log in as an account that may do what you are willing to let any user's
 agent do, and narrow it further with the `tool` filter. When users must act
 as themselves, use a per-user token in a header, as the table above shows.
@@ -404,16 +399,7 @@ providers:
   - repo
 ```
 
-That command and file serve the local CLI. A server takes the same entries
-under `mcp_oauth` in its [config file](/docs/server#configure-it):
-
-```yaml title="server.yaml (fragment)"
-mcp_oauth:
-  providers:
-  - match: github.com
-    client_id: Iv1.example
-    client_secret: ${secrets.GITHUB_CLIENT_SECRET}
-```
+`submilli mcp provider list` and `remove` manage the entries.
 
 The scopes requested are the blueprint's `scopes` if it has any, then the
 provider's, then the ones the server advertises.
@@ -433,42 +419,12 @@ can succeed without a new login. When the refusal lasts, log in again.
 `deauthenticate` removes a credential; until then the blueprint stays
 `ACTIVE`.
 
-## Local CLI and server
+## When a server can't be used
 
-| Task | Local, with a blueprint file | On a server, with a registered blueprint |
-| --- | --- | --- |
-| Run a program | `submilli run --blueprint blueprint.yaml link.ts` | `submilli server run-code link.ts --blueprint browse` |
-| List a server's tools | `submilli docs @mcp/<server> --blueprint blueprint.yaml` | `submilli server docs @mcp/<server> --blueprint <blueprint>` |
-| Log in | `submilli mcp authenticate --blueprint blueprint.yaml <server>` | `submilli server mcp authenticate <blueprint> <server>` |
-| Check logins | `submilli mcp auth-status --blueprint blueprint.yaml` | `submilli server mcp auth-status <blueprint>` |
-| Log out | `submilli mcp deauthenticate --blueprint blueprint.yaml <server>` | `submilli server mcp deauthenticate <blueprint> <server>` |
-| Providers | `submilli mcp provider add\|list\|remove` | `mcp_oauth` in the config file |
-| Credentials kept in | The local secret store, in plain files | The server's secret store, encrypted |
-| Private addresses | Allowed | Refused unless the server allows them |
-
-The two keep separate credentials. A login made locally isn't known to a
-server, and the reverse.
-
-## On a server
-
-**The network rules apply.** An MCP server is an outbound destination like
-any other, for discovery, for calls, and for the OAuth exchange. The
-Playwright example runs on `localhost`, which a server refuses by default:
-
-```text
-blocked by network policy: localhost resolves only to private/loopback IP space; allow-list it on the server with --allow-ip / --allow-localhost / --allow-private
-```
-
-Start the server with `--allow-localhost` to run it, and see
-[outbound network](/docs/server#outbound-network) for the choices in
-production.
-
-**A server that can't be used is left out.** When discovery can't reach an
-MCP server, or the server has no login yet, the blueprint still works, minus
-that package. A run reports it with a warning that begins
-`warning: @mcp/playwright: server unavailable:` and gives the reason. Over
-HTTP the same text arrives in the `discovery_warnings` field of the response.
-A program that imports the missing package doesn't compile:
+When discovery can't reach an MCP server, or the server has no login yet, the
+blueprint still works, minus that package. A run reports it with a warning
+that begins `warning: @mcp/playwright: server unavailable:` and gives the
+reason. A program that imports the missing package doesn't compile:
 
 ```text
 error: MCP server `playwright` is unavailable — `@mcp/playwright` is absent from the discovered catalog; check the blueprint's `mcp:` block and discovery warnings
@@ -527,5 +483,5 @@ Playwright's server, or putting a package in front of it that accepts only
 `http` and `https` addresses. It asks whether "can't run JavaScript"
 includes the pages' own scripts, since that decides which fix fits.
 
-Next: [connecting to your harness](/docs/harness), where an agent uses
-all of this.
+Next: [permissions](/docs/permissions), the reference for the rules a
+blueprint grants and denies calls with.

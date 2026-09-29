@@ -3,7 +3,7 @@ title: "Deploying"
 description: "Running submilli-server next to your application in production: on one machine, with Docker Compose, or on Kubernetes with the Helm chart."
 slug: deploying
 sidebar:
-  order: 17
+  order: 15
 ---
 
 On your laptop, `submilli-server` runs in a terminal and keeps its state in

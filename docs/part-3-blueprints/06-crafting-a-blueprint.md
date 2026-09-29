@@ -7,7 +7,7 @@ sidebar:
 ---
 
 A blueprint is one YAML file that describes everything one agent's programs
-may do. The server keeps it under a name; your application or harness names it
+may do. [The server](/docs/server) keeps it under a name; your application or harness names it
 when it opens a session, and from then on every gated call the program makes is
 answered from that file. What the file doesn't grant, the program can't do.
 That is the whole idea: the environment an agent's code runs in is written
@@ -285,7 +285,7 @@ idle_timeout: 1h
 | `none` | Nothing; every `submilli:fs` call fails |
 | `ephemeral` (the default) | A scratch directory created for the run and deleted after it |
 | `per_session` | A directory that lasts as long as the session |
-| `persistent` | A volume the server operator declared, kept across sessions and restarts |
+| `persistent` | A [volume](/docs/server#volumes) the server's operator declared, kept across sessions and restarts |
 
 A **session** is what the application or harness opens for one conversation
 with the agent, and then runs each program inside. Everything under

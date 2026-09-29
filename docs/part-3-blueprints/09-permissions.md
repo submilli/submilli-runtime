@@ -3,7 +3,7 @@ title: "Permissions"
 description: "Reference for blueprint permissions: how a call is decided, callers, actions, the standard library's capabilities and their fields, the filter language, and the errors a rule produces."
 slug: permissions
 sidebar:
-  order: 11
+  order: 9
 ---
 
 This chapter is the reference for the `permissions` block of a blueprint:
@@ -315,8 +315,8 @@ checked before any of its data arrives.
 `.` and `..` segments, the host's case, and a default port are normalized,
 so `https://GitHub.com:443/acme/./project.git` is checked as the same URL.
 URLs with credentials or a query string are refused, and so are redirects.
-A named remote is checked by its current URL on every fetch, and connections
-follow the server's [outbound network rules](/docs/server#outbound-network).
+A named remote is checked by its current URL on every fetch. On a server,
+connections also follow its [outbound network rules](/docs/server#outbound-network).
 
 If the remote asks for credentials, Submilli sends the `GIT_TOKEN` secret
 with the configured username. The program never sees the token, and nothing
@@ -376,3 +376,6 @@ what you still need to do, such as storing the key on the server.
 
 Expect the second request to take several minutes. Testing the rule and
 reviewing it is most of the work.
+
+Next: [Submilli server](/docs/server), where the blueprint and packages you
+have locally are registered with a running server.

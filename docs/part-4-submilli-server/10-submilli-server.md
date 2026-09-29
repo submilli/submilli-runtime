@@ -3,11 +3,11 @@ title: "Submilli server"
 description: "Operating submilli-server: starting it, who can reach it, where it keeps state, how it is configured, and how blueprints, packages, and secrets get onto it."
 slug: server
 sidebar:
-  order: 8
+  order: 10
 ---
 
-The quickstart started `submilli-server` and left it running; the last two
-chapters worked without it. `submilli-server` is the service your harness or
+The quickstart started `submilli-server` and left it running; the chapters
+since worked without it. `submilli-server` is the service your harness or
 application uses to run the agent's programs. It is how Submilli runs in
 production: one long-lived process that holds your blueprints, packages, and
 secrets, runs each session's programs in isolation, and answers every gated
@@ -374,6 +374,13 @@ another's, so a stray `SUBMILLI_ALLOW_PRIVATE=1` overrides a file that says
 `allow_private: false`; the server warns at startup whenever one of those
 variables is set.
 
+## MCP servers
+
+The MCP servers a blueprint declares are reached from the server once the
+blueprint is registered, under the server's network rules and with logins
+kept in its secret store. [MCP servers on the server](/docs/server-mcp) shows
+how to operate them.
+
 ## Limits
 
 Some of the programs an agent writes will be wrong: a loop that never stops, a
@@ -450,7 +457,7 @@ opening every private range, and warns that `localhost` means the server's
 own machine or container, so a server in a container needs the service's
 real address instead.
 
-Next: [using MCP servers](/docs/mcp-servers), which turns tool servers you
-already have into packages; then
-[connecting to your harness](/docs/harness), where an application or an agent
-framework opens sessions against a registered blueprint.
+Next: [MCP servers on the server](/docs/server-mcp), for blueprints that
+declare them; then [connecting to your harness](/docs/harness), where an
+application or an agent framework opens sessions against a registered
+blueprint.

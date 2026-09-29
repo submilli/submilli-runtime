@@ -10,7 +10,7 @@ The `submilli` command is the local half of Submilli: everything in this
 chapter runs on your machine, with no server. It compiles and runs programs,
 looks things up, edits blueprints, and keeps a local store of packages and
 secrets. The other half, `submilli server` and the `submilli-server` binary,
-is the [next chapter](/docs/server).
+is in [Submilli server](/docs/server).
 
 This chapter is a reference, grouped by task. Every command prints its own
 help with `--help`; the text here says what each one is for and what to expect
@@ -59,7 +59,7 @@ error: PermissionDeniedError: permission denied: caller=main capability=acme.com
 ```
 
 One thing a local run doesn't have is session state: `submilli:session` needs
-a session store, which only a server provides, so `session.set` throws a
+a session store, which only [a server](/docs/server) provides, so `session.set` throws a
 `TypeError` saying so.
 
 | Flag | Effect |
@@ -110,7 +110,6 @@ what they print is what the model sees.
 | `submilli search [query]` | Standard-library modules and installed packages whose name, description, or exported symbol contains the query; all of them with no query |
 | `submilli docs <name>` | One module's or package's description and declarations: `submilli:fs`, `@acme/billing`; a built-in such as `Temporal.Instant` resolves here too |
 | `submilli docs @mcp/<server> --blueprint <file>` | Discover one MCP server using local credentials and print its tool signatures; the file defaults to `blueprint.yaml` |
-| `submilli server docs @mcp/<server> --blueprint <name>` | Read the registered blueprint's discovered MCP tool signatures; `--server <url>` selects the runtime server |
 | `submilli builtins [names…]` | The built-in catalog with no argument; one or more built-ins' declarations with names, down to a member such as `Temporal.Instant` |
 
 ```sh
@@ -223,14 +222,14 @@ Everything above lives under one directory, `~/.submilli` by default, or
 | `mcp_oauth.yaml` | OAuth provider registrations |
 | `server/` | A local `submilli-server`'s own state; the CLI never touches it |
 
-A server reads the packages in `packages/` too, so a package you publish
-locally is available to it without a second install. Its secrets are separate:
+A server on the same machine reads the packages in `packages/` too, so a
+package you publish locally is available to it without a second install
+([where it keeps state](/docs/server#where-it-keeps-state)). Its secrets are separate:
 `submilli secret put` fills the local store that `run --blueprint` reads, and
 `submilli server secret put` fills the server's.
 
 Pointing `SUBMILLI_HOME` at an empty directory gives you a clean slate for
 trying something out.
 
-Next: [Submilli server](/docs/server), where the blueprint and packages you
-have locally are registered with a running server, and `submilli server …`
-drives it from the terminal.
+Next: [using MCP servers](/docs/mcp-servers), which turns tool servers you
+already have into packages.

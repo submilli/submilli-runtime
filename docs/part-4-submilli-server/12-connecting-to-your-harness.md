@@ -3,7 +3,7 @@ title: "Connecting to your harness"
 description: "Connecting an agent framework to submilli-server over MCP, with examples for Mastra, LangChain deepagents, the OpenAI Agents SDK, and the Claude Agent SDK, and building the same tools on the HTTP API."
 slug: harness
 sidebar:
-  order: 10
+  order: 12
 ---
 
 A server is running and a blueprint is registered on it. What remains is the
@@ -974,4 +974,5 @@ Its fix is the one in the [deepagents](#langchain-deepagents) section: one
 session, held open for the whole run. It adds that files still won't survive
 between separate runs of the script, which takes a `persistent` volume.
 
-Next: [deploying](/docs/deploying), which puts the server in a container.
+Next: [resource limits](/docs/resource-limits), which bound what one
+program's run can use.
