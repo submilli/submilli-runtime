@@ -1,0 +1,5 @@
+types: 5 of 26 tsc entries compared, 1 differ
+
+line 21: this
+  tsc:  this
+  ours: Test

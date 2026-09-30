@@ -1,0 +1,18 @@
+genericTypeReferenceWithoutTypeArgument2.ts(9,8): error TS2314: Generic type 'I<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument2.ts(9,32): error TS2314: Generic type 'I<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument2.ts(11,13): error TS2314: Generic type 'I<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument2.ts(11,44): error TS2314: Generic type 'I<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument2.ts(15,13): error TS2314: Generic type 'I<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument2.ts(15,28): error TS2314: Generic type 'I<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument2.ts(15,52): error TS2314: Generic type 'I<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument2.ts(17,15): error TS2314: Generic type 'I<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument2.ts(17,19): error TS2314: Generic type 'I<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument2.ts(17,30): error TS2314: Generic type 'I<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument2.ts(17,54): error TS2314: Generic type 'I<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument2.ts(19,23): error TS2314: Generic type 'I<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument2.ts(19,27): error TS2314: Generic type 'I<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument2.ts(19,38): error TS2314: Generic type 'I<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument2.ts(19,62): error TS2314: Generic type 'I<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument2.ts(21,17): error TS2689: Cannot extend an interface 'I'. Did you mean 'implements'?
+genericTypeReferenceWithoutTypeArgument2.ts(24,21): error TS2314: Generic type 'I<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument2.ts(37,10): error TS2304: Cannot find name 'C'.

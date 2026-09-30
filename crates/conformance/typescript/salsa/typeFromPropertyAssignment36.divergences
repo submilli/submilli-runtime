@@ -1,0 +1,124 @@
+types: 27 of 82 tsc entries compared, 27 differ
+
+line 38: d
+  tsc:  typeof d
+  ours: () => void
+
+line 39: d
+  tsc:  typeof d
+  ours: () => void
+
+line 41: !!false
+  tsc:  false
+  ours: boolean
+
+line 41: !false
+  tsc:  true
+  ours: boolean
+
+line 42: d
+  tsc:  typeof d
+  ours: () => void
+
+line 44: d
+  tsc:  typeof d
+  ours: () => void
+
+line 45: !!false
+  tsc:  false
+  ours: boolean
+
+line 45: !false
+  tsc:  true
+  ours: boolean
+
+line 46: d
+  tsc:  typeof d
+  ours: () => void
+
+line 49: d
+  tsc:  typeof d
+  ours: () => void
+
+line 51: d
+  tsc:  typeof d
+  ours: () => void
+
+line 52: !!false
+  tsc:  false
+  ours: boolean
+
+line 52: !false
+  tsc:  true
+  ours: boolean
+
+line 53: d
+  tsc:  typeof d
+  ours: () => void
+
+line 56: d
+  tsc:  typeof d
+  ours: () => void
+
+line 58: d
+  tsc:  typeof d
+  ours: () => void
+
+line 61: g
+  tsc:  { (): void; expando: number; both: string | number; }
+  ours: () => void
+
+line 61: function() { }
+  tsc:  { (): void; expando: number; both: string | number; }
+  ours: () => void
+
+line 63: !!false
+  tsc:  false
+  ours: boolean
+
+line 63: !false
+  tsc:  true
+  ours: boolean
+
+line 64: g
+  tsc:  { (): void; expando: number; both: string | number; }
+  ours: () => void
+
+line 66: g
+  tsc:  { (): void; expando: number; both: string | number; }
+  ours: () => void
+
+line 68: !!false
+  tsc:  false
+  ours: boolean
+
+line 68: !false
+  tsc:  true
+  ours: boolean
+
+line 69: g
+  tsc:  { (): void; expando: number; both: string | number; }
+  ours: () => void
+
+line 72: g
+  tsc:  { (): void; expando: number; both: string | number; }
+  ours: () => void
+
+line 74: g
+  tsc:  { (): void; expando: number; both: string | number; }
+  ours: () => void
+
+errors:
+line 38: ours: cannot assign to field of `() => void` (tsc accepts)
+line 39: ours: cannot read field `e` on non-object type `() => void` (tsc accepts)
+line 42: ours: cannot assign to field of `() => void` (tsc accepts)
+line 46: ours: cannot assign to field of `() => void` (tsc accepts)
+line 49: ours: cannot assign to field of `() => void` (tsc accepts)
+line 51: ours: cannot read field `q` on non-object type `() => void` (tsc accepts)
+line 53: ours: cannot assign to field of `() => void` (tsc accepts)
+line 56: ours: cannot assign to field of `() => void` (tsc accepts)
+line 58: ours: cannot read field `r` on non-object type `() => void` (tsc accepts)
+line 64: ours: cannot assign to field of `() => void` (tsc accepts)
+line 69: ours: cannot assign to field of `() => void` (tsc accepts)
+line 72: ours: cannot assign to field of `() => void` (tsc accepts)
+line 74: ours: cannot read field `both` on non-object type `() => void` (tsc accepts)

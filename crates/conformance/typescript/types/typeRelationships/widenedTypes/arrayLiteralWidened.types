@@ -1,0 +1,107 @@
+=== arrayLiteralWidened.ts ===
+// array literals are widened upon assignment according to their element type
+
+let a = []; // any[]
+>a : any[]
+>  : ^^^^^
+>[] : never[]
+>   : ^^^^^^^
+
+/*pruned*/;    
+
+let a_3 = [null, null];
+>a_3 : null[]
+>    : ^^^^^^
+>[null, null] : null[]
+>             : ^^^^^^
+
+let a_4 = [null, null];
+>a_4 : null[]
+>    : ^^^^^^
+>[null, null] : null[]
+>             : ^^^^^^
+
+
+let b = [[], [null, null]]; // any[][]
+>b : null[][]
+>  : ^^^^^^^^
+>[[], [null, null]] : null[][]
+>                   : ^^^^^^^^
+>[] : never[]
+>   : ^^^^^^^
+>[null, null] : null[]
+>             : ^^^^^^
+
+let b_2 = [[], []];
+>b_2 : never[][]
+>    : ^^^^^^^^^
+>[[], []] : never[][]
+>         : ^^^^^^^^^
+>[] : never[]
+>   : ^^^^^^^
+>[] : never[]
+>   : ^^^^^^^
+
+let b_3 = [[null, null]];
+>b_3 : null[][]
+>    : ^^^^^^^^
+>[[null, null]] : null[][]
+>               : ^^^^^^^^
+>[null, null] : null[]
+>             : ^^^^^^
+
+
+let c = [[[]]]; // any[][][]
+>c : never[][][]
+>  : ^^^^^^^^^^^
+>[[[]]] : never[][][]
+>       : ^^^^^^^^^^^
+>[[]] : never[][]
+>     : ^^^^^^^^^
+>[] : never[]
+>   : ^^^^^^^
+
+let c_2 = [[[null]],[null]]
+>c_2 : (null[] | null[][])[]
+>    : ^^^^^^^^^^^^^^^^^^^^^
+>[[[null]],[null]] : (null[] | null[][])[]
+>                  : ^^^^^^^^^^^^^^^^^^^^^
+>[[null]] : null[][]
+>         : ^^^^^^^^
+>[null] : null[]
+>       : ^^^^^^
+>[null] : null[]
+>       : ^^^^^^
+
+
+// no widening when one or more elements are non-widening
+
+let x: null = null;
+>x : null
+>  : ^^^^
+
+
+let d = [x];
+>d : null[]
+>  : ^^^^^^
+>[x] : null[]
+>    : ^^^^^^
+>x : null
+>  : ^^^^
+
+/*pruned*/;     
+let d_3 = [null, x];
+>d_3 : null[]
+>    : ^^^^^^
+>[null, x] : null[]
+>          : ^^^^^^
+>x : null
+>  : ^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

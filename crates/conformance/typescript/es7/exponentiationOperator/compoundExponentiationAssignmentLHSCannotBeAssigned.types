@@ -1,0 +1,270 @@
+=== compoundExponentiationAssignmentLHSCannotBeAssigned.ts ===
+enum E { a, b }
+>E : E
+>  : ^
+>a : E.a
+>  : ^^^
+>b : E.b
+>  : ^^^
+
+
+/*pruned*/;                           
+/*pruned*/;                             
+
+let x1: boolean = null as unknown as (boolean);
+>x1 : boolean
+>   : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/**/;    
+/**/;    
+x1 **= true;
+>x1 **= true : number
+>            : ^^^^^^
+>x1 : boolean
+>   : ^^^^^^^
+>true : true
+>     : ^^^^
+
+x1 **= 0;
+>x1 **= 0 : number
+>         : ^^^^^^
+>x1 : boolean
+>   : ^^^^^^^
+>0 : 0
+>  : ^
+
+x1 **= ''
+>x1 **= '' : number
+>          : ^^^^^^
+>x1 : boolean
+>   : ^^^^^^^
+>'' : ""
+>   : ^^
+
+x1 **= E.a;
+>x1 **= E.a : number
+>           : ^^^^^^
+>x1 : boolean
+>   : ^^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+
+x1 **= {};
+>x1 **= {} : number
+>          : ^^^^^^
+>x1 : boolean
+>   : ^^^^^^^
+>{} : {}
+>   : ^^
+
+x1 **= null;
+>x1 **= null : number
+>            : ^^^^^^
+>x1 : boolean
+>   : ^^^^^^^
+
+x1 **= null;
+>x1 **= null : number
+>            : ^^^^^^
+>x1 : boolean
+>   : ^^^^^^^
+
+
+let x2: string = null as unknown as (string);
+>x2 : string
+>   : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/**/;    
+/**/;    
+x2 **= true;
+>x2 **= true : number
+>            : ^^^^^^
+>x2 : string
+>   : ^^^^^^
+>true : true
+>     : ^^^^
+
+x2 **= 0;
+>x2 **= 0 : number
+>         : ^^^^^^
+>x2 : string
+>   : ^^^^^^
+>0 : 0
+>  : ^
+
+x2 **= ''
+>x2 **= '' : number
+>          : ^^^^^^
+>x2 : string
+>   : ^^^^^^
+>'' : ""
+>   : ^^
+
+x2 **= E.a;
+>x2 **= E.a : number
+>           : ^^^^^^
+>x2 : string
+>   : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+
+x2 **= {};
+>x2 **= {} : number
+>          : ^^^^^^
+>x2 : string
+>   : ^^^^^^
+>{} : {}
+>   : ^^
+
+x2 **= null;
+>x2 **= null : number
+>            : ^^^^^^
+>x2 : string
+>   : ^^^^^^
+
+x2 **= null;
+>x2 **= null : number
+>            : ^^^^^^
+>x2 : string
+>   : ^^^^^^
+
+
+let x3: {} = null as unknown as ({});
+>x3 : {}
+>   : ^^
+>null as unknown as ({}) : {}
+>                        : ^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/**/;    
+/**/;    
+x3 **= true;
+>x3 **= true : number
+>            : ^^^^^^
+>x3 : {}
+>   : ^^
+>true : true
+>     : ^^^^
+
+x3 **= 0;
+>x3 **= 0 : number
+>         : ^^^^^^
+>x3 : {}
+>   : ^^
+>0 : 0
+>  : ^
+
+x3 **= ''
+>x3 **= '' : number
+>          : ^^^^^^
+>x3 : {}
+>   : ^^
+>'' : ""
+>   : ^^
+
+x3 **= E.a;
+>x3 **= E.a : number
+>           : ^^^^^^
+>x3 : {}
+>   : ^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+
+x3 **= {};
+>x3 **= {} : number
+>          : ^^^^^^
+>x3 : {}
+>   : ^^
+>{} : {}
+>   : ^^
+
+x3 **= null;
+>x3 **= null : number
+>            : ^^^^^^
+>x3 : {}
+>   : ^^
+
+x3 **= null;
+>x3 **= null : number
+>            : ^^^^^^
+>x3 : {}
+>   : ^^
+
+
+/*pruned*/;                              
+/**/;    
+/**/;    
+/*pruned*/; 
+/**/;    
+/**/;    
+/*pruned*/;
+/**/;     
+/*pruned*/; 
+/*pruned*/; 
+
+let x5: number = null as unknown as (number);
+>x5 : number
+>   : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/**/;    
+x5 **= true;
+>x5 **= true : number
+>            : ^^^^^^
+>x5 : number
+>   : ^^^^^^
+>true : true
+>     : ^^^^
+
+x5 **= ''
+>x5 **= '' : number
+>          : ^^^^^^
+>x5 : number
+>   : ^^^^^^
+>'' : ""
+>   : ^^
+
+x5 **= {};
+>x5 **= {} : number
+>          : ^^^^^^
+>x5 : number
+>   : ^^^^^^
+>{} : {}
+>   : ^^
+
+
+/*pruned*/;                        
+/**/;    
+/*pruned*/; 
+/**/;    
+/**/;     
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

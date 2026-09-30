@@ -1,0 +1,28 @@
+=== parserObjectType6.ts ===
+let v: {
+>v : { a: B; }
+>  : ^^^^^^^^^
+
+   a: B
+>a : B
+>  : ^
+
+   [];
+} = null as unknown as ({
+>null as unknown as ({    a: B    []; }) : { a: B; }
+>                                        : ^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+   a: B
+>a : B
+>  : ^
+
+   [];
+});
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

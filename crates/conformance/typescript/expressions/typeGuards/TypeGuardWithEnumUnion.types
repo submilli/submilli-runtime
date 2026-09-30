@@ -1,0 +1,161 @@
+=== TypeGuardWithEnumUnion.ts ===
+enum Color { R, G, B }
+>Color : Color
+>      : ^^^^^
+>R : Color.R
+>  : ^^^^^^^
+>G : Color.G
+>  : ^^^^^^^
+>B : Color.B
+>  : ^^^^^^^
+
+
+function f1(x: Color | string): void {
+>f1 : (x: Color | string) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | Color
+>  : ^^^^^^^^^^^^^^
+
+    if (typeof x === "number") {
+>typeof x === "number" : boolean
+>                      : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | Color
+>  : ^^^^^^^^^^^^^^
+>"number" : "number"
+>         : ^^^^^^^^
+
+        let y = x;
+>y : Color
+>  : ^^^^^
+>x : Color
+>  : ^^^^^
+
+        /*pruned*/;                                 
+    }
+    else {
+        let z = x;
+>z : string
+>  : ^^^^^^
+>x : string
+>  : ^^^^^^
+
+        let z_2: string = null as unknown as (string);
+>z_2 : string
+>    : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    }
+}
+
+function f2(x: Color | string | string[]): void {
+>f2 : (x: Color | string | string[]) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | Color | string[]
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    if (typeof x === "object") {
+>typeof x === "object" : boolean
+>                      : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | Color | string[]
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>"object" : "object"
+>         : ^^^^^^^^
+
+        let y = x;
+>y : string[]
+>  : ^^^^^^^^
+>x : string[]
+>  : ^^^^^^^^
+
+        let y_2: string[] = null as unknown as (string[]);
+>y_2 : string[]
+>    : ^^^^^^^^
+>null as unknown as (string[]) : string[]
+>                              : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    }
+    if (typeof x === "number") {
+>typeof x === "number" : boolean
+>                      : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | Color | string[]
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>"number" : "number"
+>         : ^^^^^^^^
+
+        let z = x;
+>z : Color
+>  : ^^^^^
+>x : Color
+>  : ^^^^^
+
+        /*pruned*/;                                 
+    }
+    else {
+        let w = x;
+>w : string | string[]
+>  : ^^^^^^^^^^^^^^^^^
+>x : string | string[]
+>  : ^^^^^^^^^^^^^^^^^
+
+        let w_2: string | string[] = null as unknown as (string | string[]);
+>w_2 : string | string[]
+>    : ^^^^^^^^^^^^^^^^^
+>null as unknown as (string | string[]) : string | string[]
+>                                       : ^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    }
+    if (typeof x === "string") {
+>typeof x === "string" : boolean
+>                      : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | Color | string[]
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>"string" : "string"
+>         : ^^^^^^^^
+
+        let a = x;
+>a : string
+>  : ^^^^^^
+>x : string
+>  : ^^^^^^
+
+        let a_2: string = null as unknown as (string);
+>a_2 : string
+>    : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    }
+    else {
+        let b = x;
+>b : Color | string[]
+>  : ^^^^^^^^^^^^^^^^
+>x : Color | string[]
+>  : ^^^^^^^^^^^^^^^^
+
+        /*pruned*/;                                                       
+    }
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

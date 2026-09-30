@@ -1,0 +1,33 @@
+types: 34 of 43 tsc entries compared, 8 differ
+
+line 14: y
+  tsc:  I2
+  ours: number | I2
+
+line 14: y
+  tsc:  I2
+  ours: number | I2
+
+line 16: y
+  tsc:  I2
+  ours: number | I2
+
+line 16: y
+  tsc:  I2
+  ours: number | I2
+
+line 18: y
+  tsc:  I2
+  ours: number | I2
+
+line 18: y
+  tsc:  I2
+  ours: number | I2
+
+line 20: y
+  tsc:  I2
+  ours: number | I2
+
+line 20: y
+  tsc:  I2
+  ours: number | I2

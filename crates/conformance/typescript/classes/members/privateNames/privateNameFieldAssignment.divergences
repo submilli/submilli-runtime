@@ -1,0 +1,29 @@
+types: 39 of 98 tsc entries compared, 7 differ
+
+line 11: this
+  tsc:  this
+  ours: A
+
+line 12: this
+  tsc:  this
+  ours: A
+
+line 13: this
+  tsc:  this
+  ours: A
+
+line 14: this
+  tsc:  this
+  ours: A
+
+line 15: this
+  tsc:  this
+  ours: A
+
+line 16: this
+  tsc:  this
+  ours: A
+
+line 17: this
+  tsc:  this
+  ours: A

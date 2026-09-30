@@ -1,0 +1,47 @@
+=== parserMemberFunctionDeclarationAmbiguities1.ts ===
+class C {
+>C : C
+>  : ^
+
+  public(): void {}
+>public : { (): void; (): void; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^
+
+  static(): void {}
+>static : { (): void; (): void; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^
+
+
+  public public(): void {}
+>public : { (): void; (): void; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^
+
+  public static(): void {}
+>static : { (): void; (): void; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^
+
+
+  public static public(): void {}
+>public : { (): void; (): void; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^
+
+  public static static(): void {}
+>static : { (): void; (): void; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^
+
+  
+  static public(): void {}
+>public : { (): void; (): void; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^
+
+  static static(): void {}
+>static : { (): void; (): void; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

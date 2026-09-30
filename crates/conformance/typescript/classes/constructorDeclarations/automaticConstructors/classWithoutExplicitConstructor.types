@@ -1,0 +1,49 @@
+=== classWithoutExplicitConstructor.ts ===
+class C {
+>C : C
+>  : ^
+
+    x: number = 1
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+    y: string = 'hello';
+>y : string
+>  : ^^^^^^
+>'hello' : "hello"
+>        : ^^^^^^^
+
+}
+
+let c = new C();
+>c : C
+>  : ^
+>new C() : C
+>        : ^
+>C : typeof C
+>  : ^^^^^^^^
+
+let c2 = new C(null); // error
+>c2 : C
+>   : ^
+>new C(null) : C
+>            : ^
+>C : typeof C
+>  : ^^^^^^^^
+
+
+/*pruned*/;              
+                 
+                
+ 
+
+/*pruned*/;     
+/*pruned*/;           // error
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

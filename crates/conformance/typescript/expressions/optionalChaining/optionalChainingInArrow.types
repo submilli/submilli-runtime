@@ -1,0 +1,34 @@
+=== optionalChainingInArrow.ts ===
+// https://github.com/microsoft/TypeScript/issues/41814
+const test = (names: string[]) =>
+>test : (names: string[]) => string[]
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(names: string[]) =>     // single-line comment     names?.filter(x => x) : (names: string[]) => string[]
+>                                                                          : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>names : string[]
+>      : ^^^^^^^^
+
+    // single-line comment
+    names?.filter(x => x);
+>names?.filter(x => x) : string[]
+>                      : ^^^^^^^^
+>names?.filter : { <S extends string>(predicate: (value: string, index: number, array: string[]) => value is S, thisArg?: any): S[]; (predicate: (value: string, index: number, array: string[]) => unknown, thisArg?: any): string[]; }
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>names : string[]
+>      : ^^^^^^^^
+>filter : { <S extends string>(predicate: (value: string, index: number, array: string[]) => value is S, thisArg?: any): S[]; (predicate: (value: string, index: number, array: string[]) => unknown, thisArg?: any): string[]; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x => x : (x: string) => string
+>       : ^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>x : string
+>  : ^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

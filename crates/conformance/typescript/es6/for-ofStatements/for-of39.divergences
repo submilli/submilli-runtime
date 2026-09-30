@@ -1,0 +1,13 @@
+types: 11 of 16 tsc entries compared, 3 differ
+
+line 3: [["", true], ["", 0]]
+  tsc:  ([string, number] | [string, true])[]
+  ours: [string, boolean][]
+
+line 3: ["", true]
+  tsc:  [string, true]
+  ours: [string, boolean]
+
+line 3: ["", 0]
+  tsc:  [string, number]
+  ours: [string, boolean]

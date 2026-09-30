@@ -1,0 +1,29 @@
+=== boolInsteadOfBoolean.ts ===
+let x: bool = null as unknown as (bool);
+>x : bool
+>  : ^^^^
+>null as unknown as (bool) : bool
+>                          : ^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let a: boolean = x;
+>a : boolean
+>  : ^^^^^^^
+>x : bool
+>  : ^^^^
+
+x = a;
+>x = a : boolean
+>      : ^^^^^^^
+>x : bool
+>  : ^^^^
+>a : boolean
+>  : ^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

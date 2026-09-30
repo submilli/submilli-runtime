@@ -1,0 +1,1 @@
+line 34, 37, 38, 43 missed: bug SUB-1160 a `private` constructor isn't enforced

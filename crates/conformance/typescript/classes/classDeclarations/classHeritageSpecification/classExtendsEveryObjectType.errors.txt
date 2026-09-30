@@ -1,0 +1,6 @@
+classExtendsEveryObjectType.ts(7,31): error TS1005: ',' expected.
+classExtendsEveryObjectType.ts(5,17): error TS2689: Cannot extend an interface 'I'. Did you mean 'implements'?
+classExtendsEveryObjectType.ts(7,18): error TS2507: Type '{ foo: any; }' is not a constructor function type.
+classExtendsEveryObjectType.ts(7,25): error TS2693: 'string' only refers to a type, but is being used as a value here.
+classExtendsEveryObjectType.ts(9,18): error TS2507: Type '{ foo: string; }' is not a constructor function type.
+classExtendsEveryObjectType.ts(15,18): error TS2507: Type '() => void' is not a constructor function type.

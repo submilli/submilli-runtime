@@ -1,0 +1,21 @@
+types: 11 of 21 tsc entries compared, 5 differ
+
+line 6: x
+  tsc:  number
+  ours: unknown
+
+line 6: Object.values(o)
+  tsc:  number[]
+  ours: unknown[]
+
+line 7: y
+  tsc:  number
+  ours: unknown
+
+line 7: x
+  tsc:  number
+  ours: unknown
+
+line 10: Object.entries(o)
+  tsc:  [string, number][]
+  ours: [string, unknown][]

@@ -1,0 +1,266 @@
+=== validMultipleVariableDeclarations.ts ===
+// all expected to be valid
+
+let x: number = null as unknown as (number);
+>x : number
+>  : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let x_2 = 2;
+>x_2 : number
+>    : ^^^^^^
+>2 : 2
+>  : ^
+
+if (true) {
+>true : true
+>     : ^^^^
+
+    let x = 3;
+>x : number
+>  : ^^^^^^
+>3 : 3
+>  : ^
+
+    for (let x = 0; ;) { }
+>x : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+
+}
+let x_3 = <number>null;
+>x_3 : number
+>    : ^^^^^^
+><number>null : number
+>             : ^^^^^^
+
+
+// new declaration space, making redeclaring x as a string valid
+function declSpace(): void {
+>declSpace : () => void
+>          : ^^^^^^^^^^
+
+    let x = 'this is a string';
+>x : string
+>  : ^^^^^^
+>'this is a string' : "this is a string"
+>                   : ^^^^^^^^^^^^^^^^^^
+
+}
+
+interface Point { x: number; y: number; }
+>Point : Point
+>      : ^^^^^
+>x : number
+>  : ^^^^^^
+>y : number
+>  : ^^^^^^
+
+
+let p: Point = null as unknown as (Point);
+>p : Point
+>  : ^^^^^
+>null as unknown as (Point) : Point
+>                           : ^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let p_2 = { x: 1, y: 2 };
+>p_2 : { x: number; y: number; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ x: 1, y: 2 } : { x: number; y: number; }
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>y : number
+>  : ^^^^^^
+>2 : 2
+>  : ^
+
+let p_3: Point = { x: 0, y: null };
+>p_3 : Point
+>    : ^^^^^
+>{ x: 0, y: null } : { x: number; y: null; }
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+>y : null
+>  : ^^^^
+
+let p_4 = { x: 1, y: <number>null };
+>p_4 : { x: number; y: number; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ x: 1, y: <number>null } : { x: number; y: number; }
+>                          : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>y : number
+>  : ^^^^^^
+><number>null : number
+>             : ^^^^^^
+
+let p_5: { x: number; y: number; } = { x: 1, y: 2 };
+>p_5 : { x: number; y: number; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>y : number
+>  : ^^^^^^
+>{ x: 1, y: 2 } : { x: number; y: number; }
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>y : number
+>  : ^^^^^^
+>2 : 2
+>  : ^
+
+let p_6 = <{ x: number; y: number; }>{ x: 0, y: null };
+>p_6 : { x: number; y: number; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^
+><{ x: number; y: number; }>{ x: 0, y: null } : { x: number; y: number; }
+>                                             : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>y : number
+>  : ^^^^^^
+>{ x: 0, y: null } : { x: number; y: null; }
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+>y : null
+>  : ^^^^
+
+let p_7: typeof p = null as unknown as (typeof p);
+>p_7 : Point
+>    : ^^^^^
+>p : Point
+>  : ^^^^^
+>null as unknown as (typeof p) : Point
+>                              : ^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>p : Point
+>  : ^^^^^
+
+
+let fn = function (s: string) { return 42; }
+>fn : (s: string) => number
+>   : ^^^^^^^^^^^^^^^^^^^^^
+>function (s: string) { return 42; } : (s: string) => number
+>                                    : ^^^^^^^^^^^^^^^^^^^^^
+>s : string
+>  : ^^^^^^
+>42 : 42
+>   : ^^
+
+let fn_2 = (s: string) => 3;
+>fn_2 : (s: string) => number
+>     : ^^^^^^^^^^^^^^^^^^^^^
+>(s: string) => 3 : (s: string) => number
+>                 : ^^^^^^^^^^^^^^^^^^^^^
+>s : string
+>  : ^^^^^^
+>3 : 3
+>  : ^
+
+let fn_3: (s: string) => number = null as unknown as ((s: string) => number);
+>fn_3 : (s: string) => number
+>     : ^^^^^^^^^^^^^^^^^^^^^
+>s : string
+>  : ^^^^^^
+>null as unknown as ((s: string) => number) : (s: string) => number
+>                                           : ^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>s : string
+>  : ^^^^^^
+
+/*pruned*/;                                                                      
+let fn_5 = <(s: string) => number> null;
+>fn_5 : (s: string) => number
+>     : ^^^^^^^^^^^^^^^^^^^^^
+><(s: string) => number> null : (s: string) => number
+>                             : ^^^^^^^^^^^^^^^^^^^^^
+>s : string
+>  : ^^^^^^
+
+let fn_6: typeof fn = null as unknown as (typeof fn);
+>fn_6 : (s: string) => number
+>     : ^^^^^^^^^^^^^^^^^^^^^
+>fn : (s: string) => number
+>   : ^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (typeof fn) : (s: string) => number
+>                               : ^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>fn : (s: string) => number
+>   : ^^^^^^^^^^^^^^^^^^^^^
+
+
+let a: string[] = null as unknown as (string[]); 
+>a : string[]
+>  : ^^^^^^^^
+>null as unknown as (string[]) : string[]
+>                              : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let a_2 = ['a', 'b']
+>a_2 : string[]
+>    : ^^^^^^^^
+>['a', 'b'] : string[]
+>           : ^^^^^^^^
+>'a' : "a"
+>    : ^^^
+>'b' : "b"
+>    : ^^^
+
+let a_3 = <string[]>[];
+>a_3 : string[]
+>    : ^^^^^^^^
+><string[]>[] : string[]
+>             : ^^^^^^^^
+>[] : never[]
+>   : ^^^^^^^
+
+let a_4: string[] = [];
+>a_4 : string[]
+>    : ^^^^^^^^
+>[] : never[]
+>   : ^^^^^^^
+
+/*pruned*/;                   
+let a_6: typeof a = null as unknown as (typeof a);
+>a_6 : string[]
+>    : ^^^^^^^^
+>a : string[]
+>  : ^^^^^^^^
+>null as unknown as (typeof a) : string[]
+>                              : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>a : string[]
+>  : ^^^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

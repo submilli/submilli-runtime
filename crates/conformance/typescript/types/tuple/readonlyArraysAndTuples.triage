@@ -1,0 +1,1 @@
+line 28 missed: bug SUB-1152 the rejected `ma = rt` on line 21 gave `ma` the type of `rt`

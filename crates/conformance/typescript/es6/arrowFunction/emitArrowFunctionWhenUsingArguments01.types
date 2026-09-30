@@ -1,0 +1,134 @@
+=== emitArrowFunctionWhenUsingArguments01.ts ===
+let a = () => {
+>a : () => void
+>  : ^^^^^^^^^^
+>() => {     let arg = arguments[0];  // error } : () => void
+>                                                : ^^^^^^^^^^
+
+    let arg = arguments[0];  // error
+>arg : any
+>    : ^^^
+>arguments[0] : any
+>             : ^^^
+>arguments : any
+>          : ^^^
+>0 : 0
+>  : ^
+
+}
+
+let b = function () {
+>b : () => void
+>  : ^^^^^^^^^^
+>function () {     let a = () => {         let arg = arguments[0];  // error     } } : () => void
+>                                                                                    : ^^^^^^^^^^
+
+    let a = () => {
+>a : () => void
+>  : ^^^^^^^^^^
+>() => {         let arg = arguments[0];  // error     } : () => void
+>                                                        : ^^^^^^^^^^
+
+        let arg = arguments[0];  // error
+>arg : any
+>    : ^^^
+>arguments[0] : any
+>             : ^^^
+>arguments : IArguments
+>          : ^^^^^^^^^^
+>0 : 0
+>  : ^
+
+    }
+}
+
+function baz(): void {
+>baz : () => void
+>    : ^^^^^^^^^^
+
+	() => {
+>() => { 		let arg = arguments[0]; 	} : () => void
+>                                     : ^^^^^^^^^^
+
+		let arg = arguments[0];
+>arg : any
+>    : ^^^
+>arguments[0] : any
+>             : ^^^
+>arguments : IArguments
+>          : ^^^^^^^^^^
+>0 : 0
+>  : ^
+
+	}
+}
+
+function foo(inputFunc: () => void): void { }
+>foo : (inputFunc: () => void) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>inputFunc : () => void
+>          : ^^^^^^^^^^
+
+foo(() => {
+>foo(() => {     let arg = arguments[0];  // error }) : void
+>                                                     : ^^^^
+>foo : (inputFunc: () => void) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>() => {     let arg = arguments[0];  // error } : () => void
+>                                                : ^^^^^^^^^^
+
+    let arg = arguments[0];  // error
+>arg : any
+>    : ^^^
+>arguments[0] : any
+>             : ^^^
+>arguments : any
+>          : ^^^
+>0 : 0
+>  : ^
+
+});
+
+function bar(): void {
+>bar : () => void
+>    : ^^^^^^^^^^
+
+    let arg = arguments[0];  // no error
+>arg : any
+>    : ^^^
+>arguments[0] : any
+>             : ^^^
+>arguments : IArguments
+>          : ^^^^^^^^^^
+>0 : 0
+>  : ^
+
+}
+
+
+() => {
+>() => { 	function foo(): void { 		let arg = arguments[0];  // no error 	} } : () => void
+>                                                                            : ^^^^^^^^^^
+
+	function foo(): void {
+>foo : () => void
+>    : ^^^^^^^^^^
+
+		let arg = arguments[0];  // no error
+>arg : any
+>    : ^^^
+>arguments[0] : any
+>             : ^^^
+>arguments : IArguments
+>          : ^^^^^^^^^^
+>0 : 0
+>  : ^
+
+	}
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

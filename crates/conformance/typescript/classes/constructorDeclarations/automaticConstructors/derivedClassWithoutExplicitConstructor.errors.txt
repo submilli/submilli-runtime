@@ -1,0 +1,1 @@
+derivedClassWithoutExplicitConstructor.ts(12,9): error TS2554: Expected 1 arguments, but got 0.

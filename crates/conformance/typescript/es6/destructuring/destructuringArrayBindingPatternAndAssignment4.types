@@ -1,0 +1,25 @@
+=== destructuringArrayBindingPatternAndAssignment4.ts ===
+// #35497
+
+
+const data: number[] | null = null as unknown as (number[] | null);
+>data : number[] | null
+>     : ^^^^^^^^^^^^^^^
+>null as unknown as (number[] | null) : number[] | null
+>                                     : ^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+const [value] = data; // Error
+>value : any
+>      : ^^^
+>data : number[] | null
+>     : ^^^^^^^^^^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

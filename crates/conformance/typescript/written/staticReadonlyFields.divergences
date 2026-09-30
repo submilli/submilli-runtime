@@ -1,0 +1,5 @@
+types: 12 of 35 tsc entries compared, 1 differ
+
+line 6: Limits.max
+  tsc:  number
+  ours: string

@@ -1,0 +1,340 @@
+=== emitExponentiationOperatorInTemplateString3.ts ===
+
+let t1 = 10;
+>t1 : number
+>   : ^^^^^^
+>10 : 10
+>   : ^^
+
+let t2 = 10;
+>t2 : number
+>   : ^^^^^^
+>10 : 10
+>   : ^^
+
+/**/; 
+
+// With TemplateTail
+`${t1 ** t2} world`;
+>`${t1 ** t2} world` : string
+>                    : ^^^^^^
+>t1 ** t2 : number
+>         : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+
+`${t1 ** t2 ** t1} world`;
+>`${t1 ** t2 ** t1} world` : string
+>                          : ^^^^^^
+>t1 ** t2 ** t1 : number
+>               : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 ** t1 : number
+>         : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+
+`${t1 + t2 ** t1} world`;
+>`${t1 + t2 ** t1} world` : string
+>                         : ^^^^^^
+>t1 + t2 ** t1 : number
+>              : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 ** t1 : number
+>         : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+
+`${t1 ** t2 + t1} world`;
+>`${t1 ** t2 + t1} world` : string
+>                         : ^^^^^^
+>t1 ** t2 + t1 : number
+>              : ^^^^^^
+>t1 ** t2 : number
+>         : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+
+`${t1 + t2 ** t2 + t1 } world`;
+>`${t1 + t2 ** t2 + t1 } world` : string
+>                               : ^^^^^^
+>t1 + t2 ** t2 + t1 : number
+>                   : ^^^^^^
+>t1 + t2 ** t2 : number
+>              : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 ** t2 : number
+>         : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+
+/*pruned*/;                         
+/*pruned*/;                             
+
+`${t1 ** t2}${t1 ** t2} world`;
+>`${t1 ** t2}${t1 ** t2} world` : string
+>                               : ^^^^^^
+>t1 ** t2 : number
+>         : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t1 ** t2 : number
+>         : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+
+`${t1 ** t2 ** t1}${t1 ** t2 ** t1} world`;
+>`${t1 ** t2 ** t1}${t1 ** t2 ** t1} world` : string
+>                                           : ^^^^^^
+>t1 ** t2 ** t1 : number
+>               : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 ** t1 : number
+>         : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t1 ** t2 ** t1 : number
+>               : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 ** t1 : number
+>         : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+
+`${t1 + t2 ** t1}${t1 + t2 ** t1} world`;
+>`${t1 + t2 ** t1}${t1 + t2 ** t1} world` : string
+>                                         : ^^^^^^
+>t1 + t2 ** t1 : number
+>              : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 ** t1 : number
+>         : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t1 + t2 ** t1 : number
+>              : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 ** t1 : number
+>         : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+
+`${t1 ** t2 + t1}${t1 ** t2 + t1} world`;
+>`${t1 ** t2 + t1}${t1 ** t2 + t1} world` : string
+>                                         : ^^^^^^
+>t1 ** t2 + t1 : number
+>              : ^^^^^^
+>t1 ** t2 : number
+>         : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t1 ** t2 + t1 : number
+>              : ^^^^^^
+>t1 ** t2 : number
+>         : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+
+`${t1 + t2 ** t2 + t1}${t1 + t2 ** t2 + t1} world`;
+>`${t1 + t2 ** t2 + t1}${t1 + t2 ** t2 + t1} world` : string
+>                                                   : ^^^^^^
+>t1 + t2 ** t2 + t1 : number
+>                   : ^^^^^^
+>t1 + t2 ** t2 : number
+>              : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 ** t2 : number
+>         : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t1 + t2 ** t2 + t1 : number
+>                   : ^^^^^^
+>t1 + t2 ** t2 : number
+>              : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 ** t2 : number
+>         : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+
+/*pruned*/;                                                    
+
+`${t1 ** t2} hello world ${t1 ** t2} !!`;
+>`${t1 ** t2} hello world ${t1 ** t2} !!` : string
+>                                         : ^^^^^^
+>t1 ** t2 : number
+>         : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t1 ** t2 : number
+>         : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+
+`${t1 ** t2 ** t1} hello world ${t1 ** t2 ** t1} !!`;
+>`${t1 ** t2 ** t1} hello world ${t1 ** t2 ** t1} !!` : string
+>                                                     : ^^^^^^
+>t1 ** t2 ** t1 : number
+>               : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 ** t1 : number
+>         : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t1 ** t2 ** t1 : number
+>               : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 ** t1 : number
+>         : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+
+`${t1 + t2 ** t1} hello world ${t1 + t2 ** t1} !!`;
+>`${t1 + t2 ** t1} hello world ${t1 + t2 ** t1} !!` : string
+>                                                   : ^^^^^^
+>t1 + t2 ** t1 : number
+>              : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 ** t1 : number
+>         : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t1 + t2 ** t1 : number
+>              : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 ** t1 : number
+>         : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+
+`${t1 ** t2 + t1} hello world ${t1 ** t2 + t1} !!`;
+>`${t1 ** t2 + t1} hello world ${t1 ** t2 + t1} !!` : string
+>                                                   : ^^^^^^
+>t1 ** t2 + t1 : number
+>              : ^^^^^^
+>t1 ** t2 : number
+>         : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t1 ** t2 + t1 : number
+>              : ^^^^^^
+>t1 ** t2 : number
+>         : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+
+`${t1 + t2 ** t2 + t1} hello world ${t1 + t2 ** t2 + t1} !!`;
+>`${t1 + t2 ** t2 + t1} hello world ${t1 + t2 ** t2 + t1} !!` : string
+>                                                             : ^^^^^^
+>t1 + t2 ** t2 + t1 : number
+>                   : ^^^^^^
+>t1 + t2 ** t2 : number
+>              : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 ** t2 : number
+>         : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t1 + t2 ** t2 + t1 : number
+>                   : ^^^^^^
+>t1 + t2 ** t2 : number
+>              : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 ** t2 : number
+>         : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+
+/*pruned*/;                                                             
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

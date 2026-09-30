@@ -1,0 +1,162 @@
+=== destructuringSameNames.ts ===
+// Valid cases
+
+let { foo, foo: bar } = { foo: 1 };
+>foo : number
+>    : ^^^^^^
+>foo : any
+>    : ^^^
+>bar : number
+>    : ^^^^^^
+>{ foo: 1 } : { foo: number; }
+>           : ^^^^^^^^^^^^^^^^
+>foo : number
+>    : ^^^^^^
+>1 : 1
+>  : ^
+
+/*pruned*/;                 
+/*pruned*/;                      
+/*pruned*/;                      
+/*pruned*/;                               
+/*pruned*/;                               
+/*pruned*/;                           
+/*pruned*/;                                    
+/*pruned*/;                           
+
+/*pruned*/;              
+/*pruned*/;              
+/*pruned*/;                          
+/*pruned*/;                          
+/*pruned*/;                          
+
+// Error cases
+
+let { foo1, foo1 } = { foo1: 10 };
+>foo1 : number
+>     : ^^^^^^
+>foo1 : number
+>     : ^^^^^^
+>{ foo1: 10 } : { foo1: number; }
+>             : ^^^^^^^^^^^^^^^^^
+>foo1 : number
+>     : ^^^^^^
+>10 : 10
+>   : ^^
+
+let { foo2, bar2: foo2 } = { foo2: 20, bar2: 220 };
+>foo2 : number
+>     : ^^^^^^
+>bar2 : any
+>     : ^^^
+>foo2 : number
+>     : ^^^^^^
+>{ foo2: 20, bar2: 220 } : { foo2: number; bar2: number; }
+>                        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>foo2 : number
+>     : ^^^^^^
+>20 : 20
+>   : ^^
+>bar2 : number
+>     : ^^^^^^
+>220 : 220
+>    : ^^^
+
+let { bar3: foo3, foo3 } = { foo3: 30, bar3: 330 };
+>bar3 : any
+>     : ^^^
+>foo3 : number
+>     : ^^^^^^
+>foo3 : number
+>     : ^^^^^^
+>{ foo3: 30, bar3: 330 } : { foo3: number; bar3: number; }
+>                        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>foo3 : number
+>     : ^^^^^^
+>30 : 30
+>   : ^^
+>bar3 : number
+>     : ^^^^^^
+>330 : 330
+>    : ^^^
+
+const { foo4, foo4 } = { foo4: 40 };
+>foo4 : number
+>     : ^^^^^^
+>foo4 : number
+>     : ^^^^^^
+>{ foo4: 40 } : { foo4: number; }
+>             : ^^^^^^^^^^^^^^^^^
+>foo4 : number
+>     : ^^^^^^
+>40 : 40
+>   : ^^
+
+const { foo5, bar5: foo5 } = { foo5: 50, bar5: 550 };
+>foo5 : number
+>     : ^^^^^^
+>bar5 : any
+>     : ^^^
+>foo5 : number
+>     : ^^^^^^
+>{ foo5: 50, bar5: 550 } : { foo5: number; bar5: number; }
+>                        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>foo5 : number
+>     : ^^^^^^
+>50 : 50
+>   : ^^
+>bar5 : number
+>     : ^^^^^^
+>550 : 550
+>    : ^^^
+
+const { bar6: foo6, foo6 } = { foo6: 60, bar6: 660 };
+>bar6 : any
+>     : ^^^
+>foo6 : number
+>     : ^^^^^^
+>foo6 : number
+>     : ^^^^^^
+>{ foo6: 60, bar6: 660 } : { foo6: number; bar6: number; }
+>                        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>foo6 : number
+>     : ^^^^^^
+>60 : 60
+>   : ^^
+>bar6 : number
+>     : ^^^^^^
+>660 : 660
+>    : ^^^
+
+
+let [blah1, blah1] = [111, 222];
+>blah1 : number
+>      : ^^^^^^
+>blah1 : number
+>      : ^^^^^^
+>[111, 222] : [number, number]
+>           : ^^^^^^^^^^^^^^^^
+>111 : 111
+>    : ^^^
+>222 : 222
+>    : ^^^
+
+const [blah2, blah2] = [333, 444];
+>blah2 : number
+>      : ^^^^^^
+>blah2 : number
+>      : ^^^^^^
+>[333, 444] : [number, number]
+>           : ^^^^^^^^^^^^^^^^
+>333 : 333
+>    : ^^^
+>444 : 444
+>    : ^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

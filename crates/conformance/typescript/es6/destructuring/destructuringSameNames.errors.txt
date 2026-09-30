@@ -1,0 +1,16 @@
+destructuringSameNames.ts(22,7): error TS2451: Cannot redeclare block-scoped variable 'foo1'.
+destructuringSameNames.ts(22,13): error TS2451: Cannot redeclare block-scoped variable 'foo1'.
+destructuringSameNames.ts(23,7): error TS2451: Cannot redeclare block-scoped variable 'foo2'.
+destructuringSameNames.ts(23,19): error TS2451: Cannot redeclare block-scoped variable 'foo2'.
+destructuringSameNames.ts(24,13): error TS2451: Cannot redeclare block-scoped variable 'foo3'.
+destructuringSameNames.ts(24,19): error TS2451: Cannot redeclare block-scoped variable 'foo3'.
+destructuringSameNames.ts(25,9): error TS2451: Cannot redeclare block-scoped variable 'foo4'.
+destructuringSameNames.ts(25,15): error TS2451: Cannot redeclare block-scoped variable 'foo4'.
+destructuringSameNames.ts(26,9): error TS2451: Cannot redeclare block-scoped variable 'foo5'.
+destructuringSameNames.ts(26,21): error TS2451: Cannot redeclare block-scoped variable 'foo5'.
+destructuringSameNames.ts(27,15): error TS2451: Cannot redeclare block-scoped variable 'foo6'.
+destructuringSameNames.ts(27,21): error TS2451: Cannot redeclare block-scoped variable 'foo6'.
+destructuringSameNames.ts(29,6): error TS2451: Cannot redeclare block-scoped variable 'blah1'.
+destructuringSameNames.ts(29,13): error TS2451: Cannot redeclare block-scoped variable 'blah1'.
+destructuringSameNames.ts(30,8): error TS2451: Cannot redeclare block-scoped variable 'blah2'.
+destructuringSameNames.ts(30,15): error TS2451: Cannot redeclare block-scoped variable 'blah2'.

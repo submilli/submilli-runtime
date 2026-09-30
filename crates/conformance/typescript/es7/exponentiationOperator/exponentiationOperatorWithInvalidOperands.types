@@ -1,0 +1,364 @@
+=== exponentiationOperatorWithInvalidOperands.ts ===
+// these operators require their operands to be of type Any, the Number primitive type, or
+// an enum type
+enum E { a, b, c }
+>E : E
+>  : ^
+>a : E.a
+>  : ^^^
+>b : E.b
+>  : ^^^
+>c : E.c
+>  : ^^^
+
+
+/*pruned*/;                           
+let b: boolean = null as unknown as (boolean);
+>b : boolean
+>  : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let c: number = null as unknown as (number);
+>c : number
+>  : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let d: string = null as unknown as (string);
+>d : string
+>  : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let e: { a: number } = null as unknown as ({ a: number });
+>e : { a: number; }
+>  : ^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>null as unknown as ({ a: number }) : { a: number; }
+>                                   : ^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>a : number
+>  : ^^^^^^
+
+/*pruned*/;                                 
+
+// All of the below should be an error unless otherwise noted
+// operator **
+/*pruned*/;        //ok
+/*pruned*/;       
+/*pruned*/;        //ok
+/*pruned*/;       
+/*pruned*/;       
+/*pruned*/;       
+
+/*pruned*/;       
+let r1b2 = b ** b;
+>r1b2 : number
+>     : ^^^^^^
+>b ** b : number
+>       : ^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+
+let r1b3 = b ** c;
+>r1b3 : number
+>     : ^^^^^^
+>b ** c : number
+>       : ^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>c : number
+>  : ^^^^^^
+
+let r1b4 = b ** d;
+>r1b4 : number
+>     : ^^^^^^
+>b ** d : number
+>       : ^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>d : string
+>  : ^^^^^^
+
+let r1b5 = b ** e;
+>r1b5 : number
+>     : ^^^^^^
+>b ** e : number
+>       : ^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>e : { a: number; }
+>  : ^^^^^^^^^^^^^^
+
+/*pruned*/;       
+
+/*pruned*/;        //ok
+let r1c2 = c ** b;
+>r1c2 : number
+>     : ^^^^^^
+>c ** b : number
+>       : ^^^^^^
+>c : number
+>  : ^^^^^^
+>b : boolean
+>  : ^^^^^^^
+
+let r1c3 = c ** c; //ok
+>r1c3 : number
+>     : ^^^^^^
+>c ** c : number
+>       : ^^^^^^
+>c : number
+>  : ^^^^^^
+>c : number
+>  : ^^^^^^
+
+let r1c4 = c ** d;
+>r1c4 : number
+>     : ^^^^^^
+>c ** d : number
+>       : ^^^^^^
+>c : number
+>  : ^^^^^^
+>d : string
+>  : ^^^^^^
+
+let r1c5 = c ** e;
+>r1c5 : number
+>     : ^^^^^^
+>c ** e : number
+>       : ^^^^^^
+>c : number
+>  : ^^^^^^
+>e : { a: number; }
+>  : ^^^^^^^^^^^^^^
+
+/*pruned*/;       
+
+/*pruned*/;       
+let r1d2 = d ** b;
+>r1d2 : number
+>     : ^^^^^^
+>d ** b : number
+>       : ^^^^^^
+>d : string
+>  : ^^^^^^
+>b : boolean
+>  : ^^^^^^^
+
+let r1d3 = d ** c;
+>r1d3 : number
+>     : ^^^^^^
+>d ** c : number
+>       : ^^^^^^
+>d : string
+>  : ^^^^^^
+>c : number
+>  : ^^^^^^
+
+let r1d4 = d ** d;
+>r1d4 : number
+>     : ^^^^^^
+>d ** d : number
+>       : ^^^^^^
+>d : string
+>  : ^^^^^^
+>d : string
+>  : ^^^^^^
+
+let r1d5 = d ** e;
+>r1d5 : number
+>     : ^^^^^^
+>d ** e : number
+>       : ^^^^^^
+>d : string
+>  : ^^^^^^
+>e : { a: number; }
+>  : ^^^^^^^^^^^^^^
+
+/*pruned*/;       
+
+/*pruned*/;       
+let r1e2 = e ** b;
+>r1e2 : number
+>     : ^^^^^^
+>e ** b : number
+>       : ^^^^^^
+>e : { a: number; }
+>  : ^^^^^^^^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+
+let r1e3 = e ** c;
+>r1e3 : number
+>     : ^^^^^^
+>e ** c : number
+>       : ^^^^^^
+>e : { a: number; }
+>  : ^^^^^^^^^^^^^^
+>c : number
+>  : ^^^^^^
+
+let r1e4 = e ** d;
+>r1e4 : number
+>     : ^^^^^^
+>e ** d : number
+>       : ^^^^^^
+>e : { a: number; }
+>  : ^^^^^^^^^^^^^^
+>d : string
+>  : ^^^^^^
+
+let r1e5 = e ** e;
+>r1e5 : number
+>     : ^^^^^^
+>e ** e : number
+>       : ^^^^^^
+>e : { a: number; }
+>  : ^^^^^^^^^^^^^^
+>e : { a: number; }
+>  : ^^^^^^^^^^^^^^
+
+/*pruned*/;       
+
+/*pruned*/;       
+/*pruned*/;       
+/*pruned*/;       
+/*pruned*/;       
+/*pruned*/;       
+/*pruned*/;       
+
+/*pruned*/;          //ok
+let r1g2 = E.a ** b;
+>r1g2 : number
+>     : ^^^^^^
+>E.a ** b : number
+>         : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>b : boolean
+>  : ^^^^^^^
+
+let r1g3 = E.a ** c; //ok
+>r1g3 : number
+>     : ^^^^^^
+>E.a ** c : number
+>         : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>c : number
+>  : ^^^^^^
+
+let r1g4 = E.a ** d;
+>r1g4 : number
+>     : ^^^^^^
+>E.a ** d : number
+>         : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>d : string
+>  : ^^^^^^
+
+let r1g5 = E.a ** e;
+>r1g5 : number
+>     : ^^^^^^
+>E.a ** e : number
+>         : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>e : { a: number; }
+>  : ^^^^^^^^^^^^^^
+
+/*pruned*/;         
+
+/*pruned*/;          //ok
+let r1h2 = b ** E.b;
+>r1h2 : number
+>     : ^^^^^^
+>b ** E.b : number
+>         : ^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+let r1h3 = c ** E.b; //ok
+>r1h3 : number
+>     : ^^^^^^
+>c ** E.b : number
+>         : ^^^^^^
+>c : number
+>  : ^^^^^^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+let r1h4 = d ** E.b;
+>r1h4 : number
+>     : ^^^^^^
+>d ** E.b : number
+>         : ^^^^^^
+>d : string
+>  : ^^^^^^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+let r1h5 = e ** E.b;
+>r1h5 : number
+>     : ^^^^^^
+>e ** E.b : number
+>         : ^^^^^^
+>e : { a: number; }
+>  : ^^^^^^^^^^^^^^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+/*pruned*/;        
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

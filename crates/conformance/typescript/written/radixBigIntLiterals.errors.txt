@@ -1,0 +1,1 @@
+radixBigIntLiterals.ts(8,5): error TS2322: Type 'bigint' is not assignable to type 'number'.

@@ -1,0 +1,107 @@
+=== subtypingWithObjectMembersOptionality2.ts ===
+// Derived member is optional but base member is not, should be an error
+
+interface Base { foo: string; }
+>Base : Base
+>     : ^^^^
+>foo : string
+>    : ^^^^^^
+
+interface Derived extends Base { bar: string; }
+>Derived : Derived
+>        : ^^^^^^^
+>bar : string
+>    : ^^^^^^
+
+
+interface T {
+>T : T
+>  : ^
+
+    Foo: Base;
+>Foo : Base
+>    : ^^^^
+
+}
+
+interface S extends T {
+>S : S
+>  : ^
+
+    Foo?: Derived // error
+>Foo : Derived | undefined
+>    : ^^^^^^^^^^^^^^^^^^^
+
+}
+
+/*pruned*/;   
+            
+ 
+
+/*pruned*/;              
+                         
+ 
+
+interface T3 {
+>T3 : T3
+>   : ^^
+
+    '1': Base;
+>'1' : Base
+>    : ^^^^
+
+}
+
+interface S3 extends T3 {
+>S3 : S3
+>   : ^^
+
+    '1'?: Derived; // error
+>'1' : Derived | undefined
+>    : ^^^^^^^^^^^^^^^^^^^
+
+}
+
+// object literal case
+let a: { Foo: Base; } = null as unknown as ({ Foo: Base; });
+>a : { Foo: Base; }
+>  : ^^^^^^^^^^^^^^
+>Foo : Base
+>    : ^^^^
+>null as unknown as ({ Foo: Base; }) : { Foo: Base; }
+>                                    : ^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>Foo : Base
+>    : ^^^^
+
+let b: { Foo?: Derived; } = null as unknown as ({ Foo?: Derived; });
+>b : { Foo?: Derived; }
+>  : ^^^^^^^^^^^^^^^^^^
+>Foo : Derived | undefined
+>    : ^^^^^^^^^^^^^^^^^^^
+>null as unknown as ({ Foo?: Derived; }) : { Foo?: Derived; }
+>                                        : ^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>Foo : Derived | undefined
+>    : ^^^^^^^^^^^^^^^^^^^
+
+let r = true ? a : b; // ok
+>r : { Foo: Base; } | { Foo?: Derived; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>true ? a : b : { Foo: Base; } | { Foo?: Derived; }
+>             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+>a : { Foo: Base; }
+>  : ^^^^^^^^^^^^^^
+>b : { Foo?: Derived; }
+>  : ^^^^^^^^^^^^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

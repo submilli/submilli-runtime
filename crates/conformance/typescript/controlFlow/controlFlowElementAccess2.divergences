@@ -1,0 +1,31 @@
+types: 17 of 48 tsc entries compared, 6 differ
+
+line 9: config['works']
+  tsc:  boolean | { prop: string; }
+  ours: boolean | null | { prop: string }
+
+line 10: config.works
+  tsc:  { prop: string; }
+  ours: null | { prop: string }
+
+line 11: config['works']
+  tsc:  { prop: string; }
+  ours: null | { prop: string }
+
+line 13: config.works
+  tsc:  boolean | { prop: string; }
+  ours: boolean | null | { prop: string }
+
+line 14: config['works']
+  tsc:  { prop: string; }
+  ours: null | { prop: string }
+
+line 15: config.works
+  tsc:  { prop: string; }
+  ours: null | { prop: string }
+
+errors:
+line 10: ours: cannot assign to field `prop` of `null | { prop: string }`: the receiver can be `null` (tsc accepts)
+line 11: ours: cannot assign to field `prop` of `null | { prop: string }`: the receiver can be `null` (tsc accepts)
+line 14: ours: cannot assign to field `prop` of `null | { prop: string }`: the receiver can be `null` (tsc accepts)
+line 15: ours: cannot assign to field `prop` of `null | { prop: string }`: the receiver can be `null` (tsc accepts)

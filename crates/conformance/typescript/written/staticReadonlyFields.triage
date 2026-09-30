@@ -1,0 +1,1 @@
+line 6 type: bug SUB-1180 a property read inside `${}` beside other text is recorded as `string`

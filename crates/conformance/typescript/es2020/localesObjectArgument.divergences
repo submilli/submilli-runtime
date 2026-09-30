@@ -1,0 +1,47 @@
+types: 17 of 218 tsc entries compared, 3 differ
+
+line 9: bigint
+  tsc:  123456789123456789n
+  ours: bigint
+
+line 24: bigint
+  tsc:  123456789123456789n
+  ours: bigint
+
+line 25: bigint
+  tsc:  123456789123456789n
+  ours: bigint
+
+errors:
+line 3: ours: unresolved identifier `Intl` (tsc accepts)
+line 4: ours: unresolved identifier `Intl` (tsc accepts)
+line 5: ours: unresolved identifier `Intl` (tsc accepts)
+line 21: ours: field `toLocaleString` does not exist on `1000` (tsc accepts)
+line 22: ours: field `toLocaleString` does not exist on `1000` (tsc accepts)
+line 24: ours: field `toLocaleString` does not exist on `bigint` (tsc accepts)
+line 25: ours: field `toLocaleString` does not exist on `bigint` (tsc accepts)
+line 27: ours: field `toLocaleLowerCase` does not exist on `""` (tsc accepts)
+line 28: ours: field `toLocaleLowerCase` does not exist on `""` (tsc accepts)
+line 29: ours: field `toLocaleUpperCase` does not exist on `""` (tsc accepts)
+line 30: ours: field `toLocaleUpperCase` does not exist on `""` (tsc accepts)
+line 31: ours: method `localeCompare` expects 1 argument(s), got 2 (tsc accepts)
+line 32: ours: method `localeCompare` expects 1 argument(s), got 2 (tsc accepts)
+line 34: ours: unresolved identifier `Intl` (tsc accepts)
+line 35: ours: unresolved identifier `Intl` (tsc accepts)
+line 37: ours: unresolved identifier `Intl` (tsc accepts)
+line 38: ours: unresolved identifier `Intl` (tsc accepts)
+line 41: ours: unresolved identifier `Intl` (tsc accepts)
+line 42: ours: unresolved identifier `Intl` (tsc accepts)
+line 44: ours: unresolved identifier `Intl` (tsc accepts)
+line 45: ours: unresolved identifier `Intl` (tsc accepts)
+line 48: ours: unresolved identifier `Intl` (tsc accepts)
+line 49: ours: unresolved identifier `Intl` (tsc accepts)
+line 51: ours: unresolved identifier `Intl` (tsc accepts)
+line 52: ours: unresolved identifier `Intl` (tsc accepts)
+line 54: ours: unresolved identifier `Intl` (tsc accepts)
+line 55: ours: unresolved identifier `Intl` (tsc accepts)
+line 57: ours: unresolved identifier `Intl` (tsc accepts)
+line 58: ours: unresolved identifier `Intl` (tsc accepts)
+line 61: ours: unresolved identifier `Intl` (tsc accepts)
+line 62: ours: unresolved identifier `Intl` (tsc accepts)
+line 64: ours: unresolved identifier `Intl` (tsc accepts)

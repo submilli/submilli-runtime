@@ -1,0 +1,12 @@
+types: 8 of 16 tsc entries compared, 2 differ
+
+line 7: y && (a => a)
+  tsc:  (a: string) => string
+  ours: boolean | ((arg0: string) => string)
+
+line 7: y
+  tsc:  true
+  ours: boolean
+
+errors:
+line 7: ours: expected `(arg0: string) => string`, got `boolean | ((arg0: string) => string)` (tsc accepts)

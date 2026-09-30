@@ -1,0 +1,51 @@
+=== contextuallyTypeLogicalAnd03.ts ===
+
+let x: (a: string) => string = null as unknown as ((a: string) => string);
+>x : (a: string) => string
+>  : ^^^^^^^^^^^^^^^^^^^^^
+>a : string
+>  : ^^^^^^
+>null as unknown as ((a: string) => string) : (a: string) => string
+>                                           : ^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>a : string
+>  : ^^^^^^
+
+let y = true;
+>y : boolean
+>  : ^^^^^^^
+>true : true
+>     : ^^^^
+
+
+x = (a => a) && (b => b);
+>x = (a => a) && (b => b) : (b: string) => string
+>                         : ^^^^^^^^^^^^^^^^^^^^^
+>x : (a: string) => string
+>  : ^^^^^^^^^^^^^^^^^^^^^
+>(a => a) && (b => b) : (b: string) => string
+>                     : ^^^^^^^^^^^^^^^^^^^^^
+>(a => a) : (a: any) => any
+>         : ^^^^^^^^^^^^^^^
+>a => a : (a: any) => any
+>       : ^^^^^^^^^^^^^^^
+>a : any
+>  : ^^^
+>a : any
+>  : ^^^
+>(b => b) : (b: string) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^
+>b => b : (b: string) => string
+>       : ^^^^^^^^^^^^^^^^^^^^^
+>b : string
+>  : ^^^^^^
+>b : string
+>  : ^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

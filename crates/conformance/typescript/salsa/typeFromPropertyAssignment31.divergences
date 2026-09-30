@@ -1,0 +1,43 @@
+types: 13 of 48 tsc entries compared, 8 differ
+
+line 6: ExpandoMerge
+  tsc:  typeof ExpandoMerge
+  ours: (arg0: number) => number
+
+line 7: ExpandoMerge
+  tsc:  typeof ExpandoMerge
+  ours: (arg0: number) => number
+
+line 13: ExpandoMerge
+  tsc:  typeof ExpandoMerge
+  ours: (arg0: number) => number
+
+line 14: ExpandoMerge
+  tsc:  typeof ExpandoMerge
+  ours: (arg0: number) => number
+
+line 15: ExpandoMerge
+  tsc:  typeof ExpandoMerge
+  ours: (arg0: number) => number
+
+line 25: ExpandoMerge
+  tsc:  typeof ExpandoMerge
+  ours: (arg0: number) => number
+
+line 26: ExpandoMerge
+  tsc:  typeof ExpandoMerge
+  ours: (arg0: number) => number
+
+line 27: ExpandoMerge
+  tsc:  typeof ExpandoMerge
+  ours: (arg0: number) => number
+
+errors:
+line 6: ours: cannot assign to field of `(arg0: number) => number` (tsc accepts)
+line 7: ours: cannot assign to field of `(arg0: number) => number` (tsc accepts)
+line 13: ours: cannot assign to field of `(arg0: number) => number` (tsc accepts)
+line 14: ours: cannot assign to field of `(arg0: number) => number` (tsc accepts)
+line 15: ours: cannot assign to field of `(arg0: number) => number` (tsc accepts)
+line 25: ours: cannot assign to field of `(arg0: number) => number` (tsc accepts)
+line 26: ours: cannot assign to field of `(arg0: number) => number` (tsc accepts)
+line 27: ours: cannot assign to field of `(arg0: number) => number` (tsc accepts)

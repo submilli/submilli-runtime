@@ -1,0 +1,5 @@
+line 4 missed: artifact tsc reports the circular reference at the declaration; we report it at the type alias, on line 3
+line 6 missed: artifact tsc reports the circular reference at the declaration; we report it at the type alias, on line 7
+line 9, 10 missed: artifact tsc reports the circular reference at the declaration; we report it at the type alias, on line 11
+line 20, 21 missed: artifact the circular reference runs through `ReturnType`, which we reject as unsupported on line 20
+line 27, 28 missed: artifact the circular reference runs through `ReturnType`, which we reject as unsupported on line 27

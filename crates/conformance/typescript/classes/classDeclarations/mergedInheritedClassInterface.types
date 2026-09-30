@@ -1,0 +1,168 @@
+=== mergedInheritedClassInterface.ts ===
+interface BaseInterface {
+>BaseInterface : BaseInterface
+>              : ^^^^^^^^^^^^^
+
+    required: number;
+>required : number
+>         : ^^^^^^
+
+    optional?: number;
+>optional : number | undefined
+>         : ^^^^^^^^^^^^^^^^^^
+
+}
+
+class BaseClass {
+>BaseClass : BaseClass
+>          : ^^^^^^^^^
+
+    baseMethod(): void { }
+>baseMethod : () => void
+>           : ^^^^^^^^^^
+
+    baseNumber: number;
+>baseNumber : number
+>           : ^^^^^^
+
+}
+
+interface Child extends BaseInterface {
+>Child : Child
+>      : ^^^^^
+
+    additional: number;
+>additional : number
+>           : ^^^^^^
+
+}
+
+class Child extends BaseClass {
+>Child : Child
+>      : ^^^^^
+>BaseClass : BaseClass
+>          : ^^^^^^^^^
+
+    classNumber: number;
+>classNumber : number
+>            : ^^^^^^
+
+    method(): void { }
+>method : () => void
+>       : ^^^^^^^^^^
+
+}
+
+interface ChildNoBaseClass extends BaseInterface {
+>ChildNoBaseClass : ChildNoBaseClass
+>                 : ^^^^^^^^^^^^^^^^
+
+    additional2: string;
+>additional2 : string
+>            : ^^^^^^
+
+}
+class ChildNoBaseClass {
+>ChildNoBaseClass : ChildNoBaseClass
+>                 : ^^^^^^^^^^^^^^^^
+
+    classString: string;
+>classString : string
+>            : ^^^^^^
+
+    method2(): void { }
+>method2 : () => void
+>        : ^^^^^^^^^^
+
+}
+class Grandchild extends ChildNoBaseClass {
+>Grandchild : Grandchild
+>           : ^^^^^^^^^^
+>ChildNoBaseClass : ChildNoBaseClass
+>                 : ^^^^^^^^^^^^^^^^
+
+}
+
+// checks if properties actually were merged
+let child : Child = null as unknown as (Child);
+>child : Child
+>      : ^^^^^
+>null as unknown as (Child) : Child
+>                           : ^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+child.required;
+>child.required : number
+>               : ^^^^^^
+>child : Child
+>      : ^^^^^
+>required : number
+>         : ^^^^^^
+
+child.optional;
+>child.optional : number | undefined
+>               : ^^^^^^^^^^^^^^^^^^
+>child : Child
+>      : ^^^^^
+>optional : number | undefined
+>         : ^^^^^^^^^^^^^^^^^^
+
+child.additional;
+>child.additional : number
+>                 : ^^^^^^
+>child : Child
+>      : ^^^^^
+>additional : number
+>           : ^^^^^^
+
+child.baseNumber;
+>child.baseNumber : number
+>                 : ^^^^^^
+>child : Child
+>      : ^^^^^
+>baseNumber : number
+>           : ^^^^^^
+
+child.classNumber;
+>child.classNumber : number
+>                  : ^^^^^^
+>child : Child
+>      : ^^^^^
+>classNumber : number
+>            : ^^^^^^
+
+child.baseMethod();
+>child.baseMethod() : void
+>                   : ^^^^
+>child.baseMethod : () => void
+>                 : ^^^^^^^^^^
+>child : Child
+>      : ^^^^^
+>baseMethod : () => void
+>           : ^^^^^^^^^^
+
+child.method();
+>child.method() : void
+>               : ^^^^
+>child.method : () => void
+>             : ^^^^^^^^^^
+>child : Child
+>      : ^^^^^
+>method : () => void
+>       : ^^^^^^^^^^
+
+
+/*pruned*/;                                                  
+/*pruned*/;         
+/*pruned*/;         
+/*pruned*/;            
+/*pruned*/;            
+/*pruned*/;          
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

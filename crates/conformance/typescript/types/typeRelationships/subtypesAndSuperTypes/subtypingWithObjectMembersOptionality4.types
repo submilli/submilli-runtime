@@ -1,0 +1,107 @@
+=== subtypingWithObjectMembersOptionality4.ts ===
+// Base has required property, derived adds an optional property, no errors
+
+interface Base { foo: string; }
+>Base : Base
+>     : ^^^^
+>foo : string
+>    : ^^^^^^
+
+interface Derived extends Base { bar: string; }
+>Derived : Derived
+>        : ^^^^^^^
+>bar : string
+>    : ^^^^^^
+
+
+interface T {
+>T : T
+>  : ^
+
+    Foo: Base;
+>Foo : Base
+>    : ^^^^
+
+}
+
+interface S extends T {
+>S : S
+>  : ^
+
+    Foo2?: Derived // ok
+>Foo2 : Derived | undefined
+>     : ^^^^^^^^^^^^^^^^^^^
+
+}
+
+/*pruned*/;   
+             
+ 
+
+/*pruned*/;              
+                      
+ 
+
+interface T3 {
+>T3 : T3
+>   : ^^
+
+    '1': Base;
+>'1' : Base
+>    : ^^^^
+
+}
+
+interface S3 extends T3 {
+>S3 : S3
+>   : ^^
+
+    '1.0'?: Derived; // ok
+>'1.0' : Derived | undefined
+>      : ^^^^^^^^^^^^^^^^^^^
+
+}
+
+// object literal case
+let a: { Foo: Base; } = null as unknown as ({ Foo: Base; });
+>a : { Foo: Base; }
+>  : ^^^^^^^^^^^^^^
+>Foo : Base
+>    : ^^^^
+>null as unknown as ({ Foo: Base; }) : { Foo: Base; }
+>                                    : ^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>Foo : Base
+>    : ^^^^
+
+let b: { Foo2?: Derived; } = null as unknown as ({ Foo2?: Derived; });
+>b : { Foo2?: Derived; }
+>  : ^^^^^^^^^^^^^^^^^^^
+>Foo2 : Derived | undefined
+>     : ^^^^^^^^^^^^^^^^^^^
+>null as unknown as ({ Foo2?: Derived; }) : { Foo2?: Derived; }
+>                                         : ^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>Foo2 : Derived | undefined
+>     : ^^^^^^^^^^^^^^^^^^^
+
+let r = true ? a : b; // ok
+>r : { Foo: Base; } | { Foo2?: Derived; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>true ? a : b : { Foo: Base; } | { Foo2?: Derived; }
+>             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+>a : { Foo: Base; }
+>  : ^^^^^^^^^^^^^^
+>b : { Foo2?: Derived; }
+>  : ^^^^^^^^^^^^^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

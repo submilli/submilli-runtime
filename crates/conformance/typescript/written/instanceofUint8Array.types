@@ -1,0 +1,93 @@
+=== instanceofUint8Array.ts ===
+// Written for Submilli: `instanceof Uint8Array` is the one `instanceof` the spec
+// allows on something other than a class, and no upstream case uses it.
+
+function size(value: Uint8Array | string): number {
+>size : (value: Uint8Array | string) => number
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>value : string | Uint8Array<ArrayBufferLike>
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    if (value instanceof Uint8Array) {
+>value instanceof Uint8Array : boolean
+>                            : ^^^^^^^
+>value : string | Uint8Array<ArrayBufferLike>
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>Uint8Array : Uint8ArrayConstructor
+>           : ^^^^^^^^^^^^^^^^^^^^^
+
+        let bytes = value;
+>bytes : Uint8Array<ArrayBufferLike>
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>value : Uint8Array<ArrayBufferLike>
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        return bytes.length;
+>bytes.length : number
+>             : ^^^^^^
+>bytes : Uint8Array<ArrayBufferLike>
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>length : number
+>       : ^^^^^^
+
+    }
+    let text = value;
+>text : string
+>     : ^^^^^^
+>value : string
+>      : ^^^^^^
+
+    return text.length;
+>text.length : number
+>            : ^^^^^^
+>text : string
+>     : ^^^^^^
+>length : number
+>       : ^^^^^^
+
+}
+
+let buffer = new Uint8Array(4);
+>buffer : Uint8Array<ArrayBuffer>
+>       : ^^^^^^^^^^^^^^^^^^^^^^^
+>new Uint8Array(4) : Uint8Array<ArrayBuffer>
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^
+>Uint8Array : Uint8ArrayConstructor
+>           : ^^^^^^^^^^^^^^^^^^^^^
+>4 : 4
+>  : ^
+
+let isBytes = buffer instanceof Uint8Array;
+>isBytes : boolean
+>        : ^^^^^^^
+>buffer instanceof Uint8Array : boolean
+>                             : ^^^^^^^
+>buffer : Uint8Array<ArrayBuffer>
+>       : ^^^^^^^^^^^^^^^^^^^^^^^
+>Uint8Array : Uint8ArrayConstructor
+>           : ^^^^^^^^^^^^^^^^^^^^^
+
+let measured = size(buffer) + size("four");
+>measured : number
+>         : ^^^^^^
+>size(buffer) + size("four") : number
+>                            : ^^^^^^
+>size(buffer) : number
+>             : ^^^^^^
+>size : (value: Uint8Array | string) => number
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>buffer : Uint8Array<ArrayBuffer>
+>       : ^^^^^^^^^^^^^^^^^^^^^^^
+>size("four") : number
+>             : ^^^^^^
+>size : (value: Uint8Array | string) => number
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>"four" : "four"
+>       : ^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

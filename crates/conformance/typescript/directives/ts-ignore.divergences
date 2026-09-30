@@ -1,0 +1,7 @@
+types: 8 of 17 tsc entries compared, 0 differ
+
+errors:
+line 3: ours: expected `number`, got `string` (tsc accepts)
+line 9: ours: expected `number`, got `string` (tsc accepts)
+line 19: ours: expected `number`, got `string` (tsc accepts)
+line 22: ours: duplicate declaration of `validCommentedFancy` (tsc accepts)

@@ -1,0 +1,5 @@
+types: 27 of 51 tsc entries compared, 0 differ
+
+errors:
+line 21: tsc TS1121: Octal literals are not allowed. Use the syntax '0o1'. (we accept)
+line 26: tsc TS1121: Octal literals are not allowed. Use the syntax '-0o3'. (we accept)

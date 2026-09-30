@@ -1,0 +1,292 @@
+=== recursiveTypesWithTypeof.ts ===
+// The following are errors because of circular references
+let c: typeof c = null as unknown as (typeof c);
+>c : any
+>  : ^^^
+>c : any
+>  : ^^^
+>null as unknown as (typeof c) : any
+>                              : ^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>c : any
+>  : ^^^
+
+/*pruned*/;                             
+let d: typeof e = null as unknown as (typeof e);
+>d : any
+>  : ^^^
+>e : any
+>  : ^^^
+>null as unknown as (typeof e) : any
+>                              : ^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>e : any
+>  : ^^^
+
+/*pruned*/;                             
+let e: typeof d = null as unknown as (typeof d);
+>e : any
+>  : ^^^
+>d : any
+>  : ^^^
+>null as unknown as (typeof d) : any
+>                              : ^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>d : any
+>  : ^^^
+
+/*pruned*/;                             
+
+interface Foo<T> { }
+>Foo : Foo<T>
+>    : ^^^^^^
+>T : T
+>  : ^
+
+let f: Array<typeof f> = null as unknown as (Array<typeof f>);
+>f : any
+>  : ^^^
+>f : any
+>  : ^^^
+>null as unknown as (Array<typeof f>) : any[]
+>                                     : ^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>f : any
+>  : ^^^
+
+/*pruned*/;                             
+let f2: Foo<typeof f2> = null as unknown as (Foo<typeof f2>);
+>f2 : any
+>   : ^^^
+>f2 : any
+>   : ^^^
+>null as unknown as (Foo<typeof f2>) : Foo<any>
+>                                    : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>f2 : any
+>   : ^^^
+
+/*pruned*/;                              
+let f3: Foo<typeof f3>[] = null as unknown as (Foo<typeof f3>[]);
+>f3 : any
+>   : ^^^
+>f3 : any
+>   : ^^^
+>null as unknown as (Foo<typeof f3>[]) : Foo<any>[]
+>                                      : ^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>f3 : any
+>   : ^^^
+
+/*pruned*/;                              
+
+// None of these declarations should have any errors!
+// Truly recursive types
+let g: { x: typeof g; } = null as unknown as ({ x: typeof g; });
+>g : { x: typeof g; }
+>  : ^^^^^^^^^^^^^^^^
+>x : { x: typeof g; }
+>  : ^^^^^^^^^^^^^^^^
+>g : { x: typeof g; }
+>  : ^^^^^^^^^^^^^^^^
+>null as unknown as ({ x: typeof g; }) : { x: typeof g; }
+>                                      : ^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>x : { x: typeof g; }
+>  : ^^^^^^^^^^^^^^^^
+>g : { x: typeof g; }
+>  : ^^^^^^^^^^^^^^^^
+
+let g_2: typeof g.x = null as unknown as (typeof g.x);
+>g_2 : { x: typeof g; }
+>    : ^^^^^^^^^^^^^^^^
+>g.x : { x: typeof g; }
+>    : ^^^^^^^^^^^^^^^^
+>g : { x: typeof g; }
+>  : ^^^^^^^^^^^^^^^^
+>x : { x: typeof g; }
+>  : ^^^^^^^^^^^^^^^^
+>null as unknown as (typeof g.x) : { x: typeof g; }
+>                                : ^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>g.x : { x: typeof g; }
+>    : ^^^^^^^^^^^^^^^^
+>g : { x: typeof g; }
+>  : ^^^^^^^^^^^^^^^^
+>x : { x: typeof g; }
+>  : ^^^^^^^^^^^^^^^^
+
+let h: () => typeof h = null as unknown as (() => typeof h);
+>h : () => typeof h
+>  : ^^^^^^^^^^^^^^
+>h : () => typeof h
+>  : ^^^^^^^^^^^^^^
+>null as unknown as (() => typeof h) : () => typeof h
+>                                    : ^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>h : () => typeof h
+>  : ^^^^^^^^^^^^^^
+
+let h_2 = h();
+>h_2 : () => typeof h
+>    : ^^^^^^^^^^^^^^
+>h() : () => typeof h
+>    : ^^^^^^^^^^^^^^
+>h : () => typeof h
+>  : ^^^^^^^^^^^^^^
+
+let i: (x: typeof i) => typeof x = null as unknown as ((x: typeof i) => typeof x);
+>i : (x: typeof i) => typeof x
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : (x: typeof i) => typeof x
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>i : (x: typeof i) => typeof x
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : (x: typeof i) => typeof x
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as ((x: typeof i) => typeof x) : (x: typeof i) => typeof x
+>                                               : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>x : (x: typeof i) => typeof x
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>i : (x: typeof i) => typeof x
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : (x: typeof i) => typeof x
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+let i_2 = i(i);
+>i_2 : (x: typeof i) => typeof x
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>i(i) : (x: typeof i) => typeof x
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>i : (x: typeof i) => typeof x
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>i : (x: typeof i) => typeof x
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+/*pruned*/;                                                                                   
+/*pruned*/;    
+
+// Same as h, i, j with construct signatures
+/*pruned*/;                                                            
+/*pruned*/;         
+/*pruned*/;                                                                                  
+/*pruned*/;           
+/*pruned*/;                                                                                              
+/*pruned*/;           
+
+// Indexers
+/*pruned*/;                                                                                                                   
+/*pruned*/;    
+/*pruned*/;     
+
+// Hybrid - contains type literals as well as type arguments
+// These two are recursive
+let hy1: { x: typeof hy1 }[] = null as unknown as ({ x: typeof hy1 }[]);
+>hy1 : { x: typeof hy1; }[]
+>    : ^^^^^^^^^^^^^^^^^^^^
+>x : { x: typeof hy1; }[]
+>  : ^^^^^^^^^^^^^^^^^^^^
+>hy1 : { x: typeof hy1; }[]
+>    : ^^^^^^^^^^^^^^^^^^^^
+>null as unknown as ({ x: typeof hy1 }[]) : { x: typeof hy1; }[]
+>                                         : ^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>x : { x: typeof hy1; }[]
+>  : ^^^^^^^^^^^^^^^^^^^^
+>hy1 : { x: typeof hy1; }[]
+>    : ^^^^^^^^^^^^^^^^^^^^
+
+let hy1_2 = hy1[0].x;
+>hy1_2 : { x: typeof hy1; }[]
+>      : ^^^^^^^^^^^^^^^^^^^^
+>hy1[0].x : { x: typeof hy1; }[]
+>         : ^^^^^^^^^^^^^^^^^^^^
+>hy1[0] : { x: typeof hy1; }
+>       : ^^^^^^^^^^^^^^^^^^
+>hy1 : { x: typeof hy1; }[]
+>    : ^^^^^^^^^^^^^^^^^^^^
+>0 : 0
+>  : ^
+>x : { x: typeof hy1; }[]
+>  : ^^^^^^^^^^^^^^^^^^^^
+
+let hy2: { x: Array<typeof hy2> } = null as unknown as ({ x: Array<typeof hy2> });
+>hy2 : { x: Array<typeof hy2>; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : { x: Array<typeof hy2>; }[]
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>hy2 : { x: Array<typeof hy2>; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as ({ x: Array<typeof hy2> }) : { x: Array<typeof hy2>; }
+>                                              : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>x : { x: Array<typeof hy2>; }[]
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>hy2 : { x: Array<typeof hy2>; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+let hy2_2 = hy2.x[0];
+>hy2_2 : { x: Array<typeof hy2>; }
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>hy2.x[0] : { x: Array<typeof hy2>; }
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>hy2.x : { x: Array<typeof hy2>; }[]
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>hy2 : { x: Array<typeof hy2>; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : { x: Array<typeof hy2>; }[]
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>0 : 0
+>  : ^
+
+
+interface Foo2<T, U> { }
+>Foo2 : Foo2<T, U>
+>     : ^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+
+
+// This one should be an error because the first type argument is not contained inside a type literal
+let hy3: Foo2<typeof hy3, { x: typeof hy3 }> = null as unknown as (Foo2<typeof hy3, { x: typeof hy3 }>);
+>hy3 : any
+>    : ^^^
+>hy3 : any
+>    : ^^^
+>x : any
+>  : ^^^
+>hy3 : any
+>    : ^^^
+>null as unknown as (Foo2<typeof hy3, { x: typeof hy3 }>) : Foo2<any, { x: typeof hy3; }>
+>                                                         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>hy3 : any
+>    : ^^^
+>x : any
+>  : ^^^
+>hy3 : any
+>    : ^^^
+
+/*pruned*/;                               
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

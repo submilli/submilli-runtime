@@ -1,0 +1,5 @@
+types: 17 of 28 tsc entries compared, 0 differ
+
+errors:
+line 5: ours: expected `string | number`, got `bigint` (tsc accepts)
+line 7: ours: expected `string | number`, got `boolean` (tsc accepts)

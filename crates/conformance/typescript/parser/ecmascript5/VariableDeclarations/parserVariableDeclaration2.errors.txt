@@ -1,0 +1,2 @@
+parserVariableDeclaration2.ts(9,9): error TS2304: Cannot find name 'MUnit'.
+parserVariableDeclaration2.ts(9,20): error TS2304: Cannot find name 'a'.

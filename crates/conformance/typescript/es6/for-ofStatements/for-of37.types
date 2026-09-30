@@ -1,0 +1,34 @@
+=== for-of37.ts ===
+let map = new Map([["", true]]);
+>map : Map<string, boolean>
+>    : ^^^^^^^^^^^^^^^^^^^^
+>new Map([["", true]]) : Map<string, boolean>
+>                      : ^^^^^^^^^^^^^^^^^^^^
+>Map : MapConstructor
+>    : ^^^^^^^^^^^^^^
+>[["", true]] : [string, true][]
+>             : ^^^^^^^^^^^^^^^^
+>["", true] : [string, true]
+>           : ^^^^^^^^^^^^^^
+>"" : ""
+>   : ^^
+>true : true
+>     : ^^^^
+
+for (let v of map) {
+>v : [string, boolean]
+>  : ^^^^^^^^^^^^^^^^^
+>map : Map<string, boolean>
+>    : ^^^^^^^^^^^^^^^^^^^^
+
+    v;
+>v : [string, boolean]
+>  : ^^^^^^^^^^^^^^^^^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

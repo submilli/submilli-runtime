@@ -1,0 +1,16 @@
+scannertest1.ts(2,21): error TS6053: File '/Users/shmuellamm/development/sim/submilli-runtime-worktrees/nested-arrow/crates/conformance/typescript/scanner/ecmascript5/References.ts' not found.
+scannertest1.ts(6,21): error TS2304: Cannot find name 'CharacterCodes'.
+scannertest1.ts(6,47): error TS2304: Cannot find name 'CharacterCodes'.
+scannertest1.ts(10,16): error TS2662: Cannot find name 'isDecimalDigit'. Did you mean the static member 'CharacterInfo.isDecimalDigit'?
+scannertest1.ts(11,22): error TS2304: Cannot find name 'CharacterCodes'.
+scannertest1.ts(11,47): error TS2304: Cannot find name 'CharacterCodes'.
+scannertest1.ts(12,22): error TS2304: Cannot find name 'CharacterCodes'.
+scannertest1.ts(12,47): error TS2304: Cannot find name 'CharacterCodes'.
+scannertest1.ts(16,9): error TS2304: Cannot find name 'Debug'.
+scannertest1.ts(16,22): error TS2662: Cannot find name 'isHexDigit'. Did you mean the static member 'CharacterInfo.isHexDigit'?
+scannertest1.ts(17,16): error TS2662: Cannot find name 'isDecimalDigit'. Did you mean the static member 'CharacterInfo.isDecimalDigit'?
+scannertest1.ts(18,20): error TS2304: Cannot find name 'CharacterCodes'.
+scannertest1.ts(19,21): error TS2304: Cannot find name 'CharacterCodes'.
+scannertest1.ts(19,46): error TS2304: Cannot find name 'CharacterCodes'.
+scannertest1.ts(20,23): error TS2304: Cannot find name 'CharacterCodes'.
+scannertest1.ts(21,23): error TS2304: Cannot find name 'CharacterCodes'.

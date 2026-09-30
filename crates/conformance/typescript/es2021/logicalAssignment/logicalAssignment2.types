@@ -1,0 +1,81 @@
+=== logicalAssignment2.ts ===
+interface A {
+>A : A
+>  : ^
+
+    foo: {
+>foo : { bar(): { baz: 0 | 1 | 42 | null | ""; }; baz: 0 | 1 | 42 | null | ""; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        bar(): {
+>bar : () => { baz: 0 | 1 | 42 | null | ""; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+            baz: 0 | 1 | 42 | null | ''
+>baz : "" | 0 | 1 | 42 | null
+>    : ^^^^^^^^^^^^^^^^^^^^^^
+
+        }
+        baz: 0 | 1 | 42 | null | ''
+>baz : "" | 0 | 1 | 42 | null
+>    : ^^^^^^^^^^^^^^^^^^^^^^
+
+    }
+    baz: 0 | 1 | 42 | null | ''
+>baz : "" | 0 | 1 | 42 | null
+>    : ^^^^^^^^^^^^^^^^^^^^^^
+
+}
+
+const result: A = null as unknown as (A);
+>result : A
+>       : ^
+>null as unknown as (A) : A
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+const a: A = null as unknown as (A);
+>a : A
+>  : ^
+>null as unknown as (A) : A
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+const b: A = null as unknown as (A);
+>b : A
+>  : ^
+>null as unknown as (A) : A
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+const c: A = null as unknown as (A);
+>c : A
+>  : ^
+>null as unknown as (A) : A
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+/*pruned*/;         
+/*pruned*/;         
+/*pruned*/;         
+
+/*pruned*/;                    
+/*pruned*/;                    
+/*pruned*/;                    
+
+/*pruned*/;                             
+/*pruned*/;                             
+/*pruned*/;                             
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

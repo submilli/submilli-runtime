@@ -1,0 +1,146 @@
+=== spreadMethods.ts ===
+
+class K {
+>K : K
+>  : ^
+
+    p: number = 12;
+>p : number
+>  : ^^^^^^
+>12 : 12
+>   : ^^
+
+    m(): void { }
+>m : () => void
+>  : ^^^^^^^^^^
+
+    get g() { return 0; }
+>g : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+
+}
+interface I {
+>I : I
+>  : ^
+
+    p: number;
+>p : number
+>  : ^^^^^^
+
+    m(): void;
+>m : () => void
+>  : ^^^^^^^^^^
+
+    readonly g: number;
+>g : number
+>  : ^^^^^^
+
+}
+
+let k = new K()
+>k : K
+>  : ^
+>new K() : K
+>        : ^
+>K : typeof K
+>  : ^^^^^^^^
+
+let sk = { ...k };
+>sk : { p: number; }
+>   : ^^^^^^^^^^^^^^
+>{ ...k } : { p: number; }
+>         : ^^^^^^^^^^^^^^
+>k : K
+>  : ^
+
+let ssk = { ...k, ...k };
+>ssk : { p: number; }
+>    : ^^^^^^^^^^^^^^
+>{ ...k, ...k } : { p: number; }
+>               : ^^^^^^^^^^^^^^
+>k : K
+>  : ^
+>k : K
+>  : ^
+
+sk.p;
+>sk.p : number
+>     : ^^^^^^
+>sk : { p: number; }
+>   : ^^^^^^^^^^^^^^
+>p : number
+>  : ^^^^^^
+
+sk.m(); // error
+>sk.m() : any
+>       : ^^^
+>sk.m : any
+>     : ^^^
+>sk : { p: number; }
+>   : ^^^^^^^^^^^^^^
+>m : any
+>  : ^^^
+
+sk.g; // error
+>sk.g : any
+>     : ^^^
+>sk : { p: number; }
+>   : ^^^^^^^^^^^^^^
+>g : any
+>  : ^^^
+
+ssk.p;
+>ssk.p : number
+>      : ^^^^^^
+>ssk : { p: number; }
+>    : ^^^^^^^^^^^^^^
+>p : number
+>  : ^^^^^^
+
+ssk.m(); // error
+>ssk.m() : any
+>        : ^^^
+>ssk.m : any
+>      : ^^^
+>ssk : { p: number; }
+>    : ^^^^^^^^^^^^^^
+>m : any
+>  : ^^^
+
+ssk.g; // error
+>ssk.g : any
+>      : ^^^
+>ssk : { p: number; }
+>    : ^^^^^^^^^^^^^^
+>g : any
+>  : ^^^
+
+
+/*pruned*/;                                          
+/*pruned*/;       
+/*pruned*/;              
+/**/;
+/**/;   // ok
+/**/; // ok
+/**/; 
+/**/;    // ok
+/**/;  // ok
+
+/*pruned*/;                                       
+/*pruned*/;       
+/*pruned*/;              
+/**/;
+/**/;   // ok
+/**/; // ok
+/**/; 
+/**/;    // ok
+/**/;  // ok
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

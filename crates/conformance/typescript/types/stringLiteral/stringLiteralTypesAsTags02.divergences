@@ -1,0 +1,32 @@
+types: 22 of 41 tsc entries compared, 7 differ
+
+line 27: { kind: "A", a: 100, }
+  tsc:  { kind: "A"; a: number; }
+  ours: A
+
+line 32: hasKind
+  tsc:  (entity: Entity, kind: Kind) => entity is (A | B)
+  ours: (arg0: Entity, arg1: Kind) => boolean
+
+line 36: b
+  tsc:  never
+  ours: A
+
+line 36: x
+  tsc:  never
+  ours: A
+
+line 39: hasKind
+  tsc:  (entity: Entity, kind: Kind) => entity is (A | B)
+  ours: (arg0: Entity, arg1: Kind) => boolean
+
+line 40: c
+  tsc:  never
+  ours: A
+
+line 40: x
+  tsc:  never
+  ours: A
+
+errors:
+line 24: ours: type-guard return value does not narrow parameter `entity` to `A | B` (tsc accepts)

@@ -1,0 +1,9 @@
+types: 7 of 29 tsc entries compared, 2 differ
+
+line 17: E.a
+  tsc:  E.a
+  ours: E
+
+line 21: E.b
+  tsc:  E.b
+  ours: E

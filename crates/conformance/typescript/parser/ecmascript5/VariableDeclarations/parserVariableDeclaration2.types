@@ -1,0 +1,44 @@
+=== parserVariableDeclaration2.ts ===
+(function() {
+>(function() {         let check = function () {         }          let checkNot = function () {         }          MUnit.test(a); })() : void
+>                                                                                                                                       : ^^^^
+>(function() {         let check = function () {         }          let checkNot = function () {         }          MUnit.test(a); }) : () => void
+>                                                                                                                                     : ^^^^^^^^^^
+>function() {         let check = function () {         }          let checkNot = function () {         }          MUnit.test(a); } : () => void
+>                                                                                                                                   : ^^^^^^^^^^
+
+        let check = function () {
+>check : () => void
+>      : ^^^^^^^^^^
+>function () {         } : () => void
+>                        : ^^^^^^^^^^
+
+        }
+
+        let checkNot = function () {
+>checkNot : () => void
+>         : ^^^^^^^^^^
+>function () {         } : () => void
+>                        : ^^^^^^^^^^
+
+        }
+
+        MUnit.test(a);
+>MUnit.test(a) : any
+>              : ^^^
+>MUnit.test : any
+>           : ^^^
+>MUnit : any
+>      : ^^^
+>test : any
+>     : ^^^
+>a : any
+>  : ^^^
+
+})();
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

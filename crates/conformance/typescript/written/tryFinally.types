@@ -1,0 +1,168 @@
+=== tryFinally.ts ===
+// Written for Submilli: the upstream cases with `finally` that Submilli can run
+// leave its blocks empty, so nothing in them is checked.
+
+function total(values: number[]): number {
+>total : (values: number[]) => number
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>values : number[]
+>       : ^^^^^^^^
+
+    let sum = 0;
+>sum : number
+>    : ^^^^^^
+>0 : 0
+>  : ^
+
+    let attempts = 0;
+>attempts : number
+>         : ^^^^^^
+>0 : 0
+>  : ^
+
+    try {
+        for (const value of values) sum += value;
+>value : number
+>      : ^^^^^^
+>values : number[]
+>       : ^^^^^^^^
+>sum += value : number
+>             : ^^^^^^
+>sum : number
+>    : ^^^^^^
+>value : number
+>      : ^^^^^^
+
+    } finally {
+        attempts = attempts + 1;
+>attempts = attempts + 1 : number
+>                        : ^^^^^^
+>attempts : number
+>         : ^^^^^^
+>attempts + 1 : number
+>             : ^^^^^^
+>attempts : number
+>         : ^^^^^^
+>1 : 1
+>  : ^
+
+    }
+    return attempts > 0 ? sum : -1;
+>attempts > 0 ? sum : -1 : number
+>                        : ^^^^^^
+>attempts > 0 : boolean
+>             : ^^^^^^^
+>attempts : number
+>         : ^^^^^^
+>0 : 0
+>  : ^
+>sum : number
+>    : ^^^^^^
+>-1 : -1
+>   : ^^
+>1 : 1
+>  : ^
+
+}
+
+function divide(a: number, b: number): number | null {
+>divide : (a: number, b: number) => number | null
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+
+    let result: number | null = null;
+>result : number | null
+>       : ^^^^^^^^^^^^^
+
+    try {
+        if (b === 0) throw new RangeError("division by zero");
+>b === 0 : boolean
+>        : ^^^^^^^
+>b : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+>new RangeError("division by zero") : RangeError
+>                                   : ^^^^^^^^^^
+>RangeError : RangeErrorConstructor
+>           : ^^^^^^^^^^^^^^^^^^^^^
+>"division by zero" : "division by zero"
+>                   : ^^^^^^^^^^^^^^^^^^
+
+        result = a / b;
+>result = a / b : number
+>               : ^^^^^^
+>result : number | null
+>       : ^^^^^^^^^^^^^
+>a / b : number
+>      : ^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+
+    } catch (e) {
+>e : unknown
+>  : ^^^^^^^
+
+        result = null;
+>result = null : null
+>              : ^^^^
+>result : number | null
+>       : ^^^^^^^^^^^^^
+
+    } finally {
+        let attempted: string = `${a} / ${b}`;
+>attempted : string
+>          : ^^^^^^
+>`${a} / ${b}` : string
+>              : ^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+
+    }
+    return result;
+>result : number | null
+>       : ^^^^^^^^^^^^^
+
+}
+
+function first(values: string[]): string {
+>first : (values: string[]) => string
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>values : string[]
+>       : ^^^^^^^^
+
+    try {
+        return values[0];
+>values[0] : string
+>          : ^^^^^^
+>values : string[]
+>       : ^^^^^^^^
+>0 : 0
+>  : ^
+
+    } finally {
+        let count = values.length;
+>count : number
+>      : ^^^^^^
+>values.length : number
+>              : ^^^^^^
+>values : string[]
+>       : ^^^^^^^^
+>length : number
+>       : ^^^^^^
+
+    }
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

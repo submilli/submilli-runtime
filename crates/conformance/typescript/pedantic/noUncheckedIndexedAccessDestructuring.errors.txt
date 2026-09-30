@@ -1,0 +1,5 @@
+noUncheckedIndexedAccessDestructuring.ts(12,1): error TS18048: 's1' is possibly 'undefined'.
+noUncheckedIndexedAccessDestructuring.ts(16,9): error TS2345: Argument of type 'null' is not assignable to parameter of type 'string'.
+noUncheckedIndexedAccessDestructuring.ts(20,9): error TS2345: Argument of type 'null' is not assignable to parameter of type 'string'.
+noUncheckedIndexedAccessDestructuring.ts(27,1): error TS18048: 't1' is possibly 'undefined'.
+noUncheckedIndexedAccessDestructuring.ts(30,1): error TS18048: 't2.z' is possibly 'undefined'.

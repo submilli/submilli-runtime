@@ -1,0 +1,167 @@
+=== literals.ts ===
+
+//typeof null is Null
+//typeof true is Boolean
+//typeof false is Boolean
+//typeof numeric literal is Number
+//typeof string literal is String
+//typeof regex literal is Regex
+
+let nu = null / null;
+>nu : number
+>   : ^^^^^^
+>null / null : number
+>            : ^^^^^^
+
+let u = null / null;
+>u : number
+>  : ^^^^^^
+>null / null : number
+>            : ^^^^^^
+
+
+let b: boolean = null as unknown as (boolean);
+>b : boolean
+>  : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let b_2 = true;
+>b_2 : boolean
+>    : ^^^^^^^
+>true : true
+>     : ^^^^
+
+let b_3 = false;
+>b_3 : boolean
+>    : ^^^^^^^
+>false : false
+>      : ^^^^^
+
+
+let n: number = null as unknown as (number);
+>n : number
+>  : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let n_2 = 1;
+>n_2 : number
+>    : ^^^^^^
+>1 : 1
+>  : ^
+
+let n_3 = 1.0;
+>n_3 : number
+>    : ^^^^^^
+>1.0 : 1
+>    : ^
+
+let n_4 = 1e4;
+>n_4 : number
+>    : ^^^^^^
+>1e4 : 10000
+>    : ^^^^^
+
+let n_5 = 001; // Error in ES5
+>n_5 : number
+>    : ^^^^^^
+>001 : 1
+>    : ^
+
+let n_6 = 0x1;
+>n_6 : number
+>    : ^^^^^^
+>0x1 : 1
+>    : ^
+
+let n_7 = -1;
+>n_7 : number
+>    : ^^^^^^
+>-1 : -1
+>   : ^^
+>1 : 1
+>  : ^
+
+let n_8 = -1.0;
+>n_8 : number
+>    : ^^^^^^
+>-1.0 : -1
+>     : ^^
+>1.0 : 1
+>    : ^
+
+let n_9 = -1e-4;
+>n_9 : number
+>    : ^^^^^^
+>-1e-4 : -0.0001
+>      : ^^^^^^^
+>1e-4 : 0.0001
+>     : ^^^^^^
+
+let n_10 = -003; // Error in ES5
+>n_10 : number
+>     : ^^^^^^
+>-003 : -3
+>     : ^^
+>003 : 3
+>    : ^
+
+let n_11 = -0x1;
+>n_11 : number
+>     : ^^^^^^
+>-0x1 : -1
+>     : ^^
+>0x1 : 1
+>    : ^
+
+
+let s: string = null as unknown as (string);
+>s : string
+>  : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let s_2 = '';
+>s_2 : string
+>    : ^^^^^^
+>'' : ""
+>   : ^^
+
+let s_3 = "";
+>s_3 : string
+>    : ^^^^^^
+>"" : ""
+>   : ^^
+
+/*pruned*/;    
+         
+/*pruned*/;    
+         
+
+/*pruned*/;                                 
+let r_2 = /what/;
+>r_2 : RegExp
+>    : ^^^^^^
+>/what/ : RegExp
+>       : ^^^^^^
+
+let r_3 = /\\\\/;
+>r_3 : RegExp
+>    : ^^^^^^
+>/\\\\/ : RegExp
+>       : ^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

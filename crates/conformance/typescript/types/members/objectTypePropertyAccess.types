@@ -1,0 +1,145 @@
+=== objectTypePropertyAccess.ts ===
+// Index notation should resolve to the type of a declared property with that same name
+class C {
+>C : C
+>  : ^
+
+    foo: string;
+>foo : string
+>    : ^^^^^^
+
+}
+
+/*pruned*/;                       
+/*pruned*/;           
+/*pruned*/;              
+/*pruned*/;    
+/*pruned*/;       
+
+interface I {
+>I : I
+>  : ^
+
+    bar: string;
+>bar : string
+>    : ^^^^^^
+
+}
+let i: I = null as unknown as (I);
+>i : I
+>  : ^
+>null as unknown as (I) : I
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let r4_2 = i.toString();
+>r4_2 : string
+>     : ^^^^^^
+>i.toString() : string
+>             : ^^^^^^
+>i.toString : () => string
+>           : ^^^^^^^^^^^^
+>i : I
+>  : ^
+>toString : () => string
+>         : ^^^^^^^^^^^^
+
+let r5 = i['toString']();
+>r5 : string
+>   : ^^^^^^
+>i['toString']() : string
+>                : ^^^^^^
+>i['toString'] : () => string
+>              : ^^^^^^^^^^^^
+>i : I
+>  : ^
+>'toString' : "toString"
+>           : ^^^^^^^^^^
+
+let r6 = i.bar;
+>r6 : string
+>   : ^^^^^^
+>i.bar : string
+>      : ^^^^^^
+>i : I
+>  : ^
+>bar : string
+>    : ^^^^^^
+
+let r7 = i['bar'];
+>r7 : string
+>   : ^^^^^^
+>i['bar'] : string
+>         : ^^^^^^
+>i : I
+>  : ^
+>'bar' : "bar"
+>      : ^^^^^
+
+
+let a = {
+>a : { foo: string; }
+>  : ^^^^^^^^^^^^^^^^
+>{     foo: '' } : { foo: string; }
+>                : ^^^^^^^^^^^^^^^^
+
+    foo: ''
+>foo : string
+>    : ^^^^^^
+>'' : ""
+>   : ^^
+
+}
+
+let r8 = a.toString();
+>r8 : string
+>   : ^^^^^^
+>a.toString() : string
+>             : ^^^^^^
+>a.toString : () => string
+>           : ^^^^^^^^^^^^
+>a : { foo: string; }
+>  : ^^^^^^^^^^^^^^^^
+>toString : () => string
+>         : ^^^^^^^^^^^^
+
+let r9 = a['toString']();
+>r9 : string
+>   : ^^^^^^
+>a['toString']() : string
+>                : ^^^^^^
+>a['toString'] : () => string
+>              : ^^^^^^^^^^^^
+>a : { foo: string; }
+>  : ^^^^^^^^^^^^^^^^
+>'toString' : "toString"
+>           : ^^^^^^^^^^
+
+let r10 = a.foo;
+>r10 : string
+>    : ^^^^^^
+>a.foo : string
+>      : ^^^^^^
+>a : { foo: string; }
+>  : ^^^^^^^^^^^^^^^^
+>foo : string
+>    : ^^^^^^
+
+let r11 = a['foo'];
+>r11 : string
+>    : ^^^^^^
+>a['foo'] : string
+>         : ^^^^^^
+>a : { foo: string; }
+>  : ^^^^^^^^^^^^^^^^
+>'foo' : "foo"
+>      : ^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

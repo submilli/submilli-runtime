@@ -1,0 +1,21 @@
+types: 6 of 19 tsc entries compared, 4 differ
+
+line 7: () => true
+  tsc:  { (): true; num: 123; }
+  ours: () => boolean
+
+line 13: ignoreJsdoc
+  tsc:  { (): boolean; extra: number; }
+  ours: () => boolean
+
+line 13: () => true
+  tsc:  { (): boolean; extra: number; }
+  ours: () => boolean
+
+line 15: ignoreJsdoc
+  tsc:  { (): boolean; extra: number; }
+  ours: () => boolean
+
+errors:
+line 7: ours: expected `N`, got `() => boolean` (tsc accepts)
+line 15: ours: cannot assign to field of `() => boolean` (tsc accepts)

@@ -1,0 +1,10 @@
+types: 1 of 159 tsc entries compared, 0 differ
+
+errors:
+line 32: tsc TS17006: An unary expression with the '-' operator is not allowed in the left-hand side of an exponentiation expression. Consider enclosing the expression in parentheses. (we accept)
+line 33: tsc TS17006: An unary expression with the '-' operator is not allowed in the left-hand side of an exponentiation expression. Consider enclosing the expression in parentheses. (we accept)
+line 34: tsc TS17006: An unary expression with the '+' operator is not allowed in the left-hand side of an exponentiation expression. Consider enclosing the expression in parentheses. (we accept)
+line 35: tsc TS17006: An unary expression with the '+' operator is not allowed in the left-hand side of an exponentiation expression. Consider enclosing the expression in parentheses. (we accept)
+line 36: tsc TS17006: An unary expression with the '+' operator is not allowed in the left-hand side of an exponentiation expression. Consider enclosing the expression in parentheses. (we accept)
+line 37: tsc TS17006: An unary expression with the '+' operator is not allowed in the left-hand side of an exponentiation expression. Consider enclosing the expression in parentheses. (we accept)
+line 1: ours: missing `main` function (tsc accepts)

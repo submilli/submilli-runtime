@@ -1,0 +1,1 @@
+objectTypePropertyAccess.ts(4,5): error TS2564: Property 'foo' has no initializer and is not definitely assigned in the constructor.

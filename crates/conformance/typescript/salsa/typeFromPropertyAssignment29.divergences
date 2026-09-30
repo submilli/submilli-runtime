@@ -1,0 +1,89 @@
+types: 62 of 188 tsc entries compared, 19 differ
+
+line 7: ExpandoDecl
+  tsc:  typeof ExpandoDecl
+  ours: (arg0: number) => string
+
+line 8: ExpandoDecl
+  tsc:  typeof ExpandoDecl
+  ours: (arg0: number) => string
+
+line 11: ExpandoDecl
+  tsc:  typeof ExpandoDecl
+  ours: (arg0: number) => string
+
+line 11: ExpandoDecl
+  tsc:  typeof ExpandoDecl
+  ours: (arg0: number) => string
+
+line 11: ExpandoDecl
+  tsc:  typeof ExpandoDecl
+  ours: (arg0: number) => string
+
+line 13: ExpandoExpr
+  tsc:  { (n: number): string; prop: { x: number; y?: undefined; } | { y: string; x?: undefined; }; m(n: number): number; }
+  ours: (arg0: number) => string
+
+line 13: function (n: number) { return n.toString(); }
+  tsc:  { (n: number): string; prop: { x: number; y?: undefined; } | { y: string; x?: undefined; }; m(n: number): number; }
+  ours: (arg0: number) => string
+
+line 16: ExpandoExpr
+  tsc:  { (n: number): string; prop: { x: number; y?: undefined; } | { y: string; x?: undefined; }; m(n: number): number; }
+  ours: (arg0: number) => string
+
+line 17: ExpandoExpr
+  tsc:  { (n: number): string; prop: { x: number; y?: undefined; } | { y: string; x?: undefined; }; m(n: number): number; }
+  ours: (arg0: number) => string
+
+line 18: ExpandoExpr
+  tsc:  { (n: number): string; prop: { x: number; y?: undefined; } | { y: string; x?: undefined; }; m(n: number): number; }
+  ours: (arg0: number) => string
+
+line 21: ExpandoExpr.prop.x || 0
+  tsc:  0
+  ours: number
+
+line 21: ExpandoExpr
+  tsc:  { (n: number): string; prop: { x: number; y?: undefined; } | { y: string; x?: undefined; }; m(n: number): number; }
+  ours: (arg0: number) => string
+
+line 21: ExpandoExpr
+  tsc:  { (n: number): string; prop: { x: number; y?: undefined; } | { y: string; x?: undefined; }; m(n: number): number; }
+  ours: (arg0: number) => string
+
+line 21: ExpandoExpr
+  tsc:  { (n: number): string; prop: { x: number; y?: undefined; } | { y: string; x?: undefined; }; m(n: number): number; }
+  ours: (arg0: number) => string
+
+line 23: ExpandoArrow
+  tsc:  { (n: number): string; prop: number; m(n: number): number; }
+  ours: (arg0: number) => string
+
+line 23: (n: number) => n.toString()
+  tsc:  { (n: number): string; prop: number; m(n: number): number; }
+  ours: (arg0: number) => string
+
+line 24: ExpandoArrow
+  tsc:  { (n: number): string; prop: number; m(n: number): number; }
+  ours: (arg0: number) => string
+
+line 25: ExpandoArrow
+  tsc:  { (n: number): string; prop: number; m(n: number): number; }
+  ours: (arg0: number) => string
+
+line 42: ExpandoMerge
+  tsc:  typeof ExpandoMerge
+  ours: (arg0: number) => number
+
+errors:
+line 7: ours: cannot assign to field of `(arg0: number) => string` (tsc accepts)
+line 8: ours: cannot assign to field of `(arg0: number) => string` (tsc accepts)
+line 11: ours: cannot read field `prop` on non-object type `(arg0: number) => string` (tsc accepts)
+line 16: ours: cannot assign to field of `(arg0: number) => string` (tsc accepts)
+line 17: ours: cannot assign to field of `(arg0: number) => string` (tsc accepts)
+line 18: ours: cannot assign to field of `(arg0: number) => string` (tsc accepts)
+line 21: ours: cannot read field `prop` on non-object type `(arg0: number) => string` (tsc accepts)
+line 24: ours: cannot assign to field of `(arg0: number) => string` (tsc accepts)
+line 25: ours: cannot assign to field of `(arg0: number) => string` (tsc accepts)
+line 42: ours: cannot assign to field of `(arg0: number) => number` (tsc accepts)

@@ -1,0 +1,38 @@
+=== asiPreventsParsingAsAmbientExternalModule01.ts ===
+
+let declare: number = null as unknown as (number);
+>declare : number
+>        : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let module: string = null as unknown as (string);
+>module : string
+>       : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+declare                // this is the identifier 'declare'
+>declare : number
+>        : ^^^^^^
+
+module                 // this is the identifier 'module'
+>module : string
+>       : ^^^^^^
+
+"my external module"   // this is just a string
+>"my external module" : "my external module"
+>                     : ^^^^^^^^^^^^^^^^^^^^
+
+{ }                    // this is a block body
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

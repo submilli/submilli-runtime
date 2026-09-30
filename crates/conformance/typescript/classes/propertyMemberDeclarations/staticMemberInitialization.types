@@ -1,0 +1,37 @@
+=== staticMemberInitialization.ts ===
+class C {
+>C : C
+>  : ^
+
+    static x: number = 1;
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+}
+
+let c = new C();
+>c : C
+>  : ^
+>new C() : C
+>        : ^
+>C : typeof C
+>  : ^^^^^^^^
+
+let r = C.x;
+>r : number
+>  : ^^^^^^
+>C.x : number
+>    : ^^^^^^
+>C : typeof C
+>  : ^^^^^^^^
+>x : number
+>  : ^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

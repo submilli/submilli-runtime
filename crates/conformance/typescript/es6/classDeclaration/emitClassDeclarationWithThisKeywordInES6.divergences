@@ -1,0 +1,17 @@
+types: 9 of 30 tsc entries compared, 4 differ
+
+line 5: this
+  tsc:  this
+  ours: B
+
+line 9: this
+  tsc:  this
+  ours: B
+
+line 13: this
+  tsc:  this
+  ours: B
+
+line 17: this
+  tsc:  this
+  ours: B

@@ -1,0 +1,152 @@
+=== destructuringParameterDeclaration3ES5.ts ===
+
+// If the parameter is a rest parameter, the parameter type is any[]
+// A type annotation for a rest parameter must denote an array type.
+
+// RestParameter:
+//     ...   Identifier   TypeAnnotation(opt)
+
+type arrayString = Array<String>
+>arrayString : arrayString
+>            : ^^^^^^^^^^^
+
+/*pruned*/;                               
+type stringOrNumArray = Array<String|Number>;
+>stringOrNumArray : stringOrNumArray
+>                 : ^^^^^^^^^^^^^^^^
+
+
+function a1(...x: (number|string)[]): void { }
+>a1 : (...x: (number | string)[]) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : (string | number)[]
+>  : ^^^^^^^^^^^^^^^^^^^
+
+/*pruned*/;                
+function a3(...a: Array<String>): void { }
+>a3 : (...a: Array<String>) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : String[]
+>  : ^^^^^^^^
+
+/*pruned*/;                             
+function a5(...a: stringOrNumArray): void { }
+>a5 : (...a: stringOrNumArray) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : stringOrNumArray
+>  : ^^^^^^^^^^^^^^^^
+
+/*pruned*/;                         
+/*pruned*/;                                
+function a11([a, b, c, ...x]: number[]): void { }
+>a11 : ([a, b, c, ...x]: number[]) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+>c : number
+>  : ^^^^^^
+>x : number[]
+>  : ^^^^^^^^
+
+
+
+let array = [1, 2, 3];
+>array : number[]
+>      : ^^^^^^^^
+>[1, 2, 3] : number[]
+>          : ^^^^^^^^
+>1 : 1
+>  : ^
+>2 : 2
+>  : ^
+>3 : 3
+>  : ^
+
+let array2 = [true, false, "hello"];
+>array2 : (string | boolean)[]
+>       : ^^^^^^^^^^^^^^^^^^^^
+>[true, false, "hello"] : (string | boolean)[]
+>                       : ^^^^^^^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+>false : false
+>      : ^^^^^
+>"hello" : "hello"
+>        : ^^^^^^^
+
+/*pruned*/;    
+/*pruned*/;  
+
+/*pruned*/;                              // Parameter type is [any, any, [[any]]]
+
+/*pruned*/;                               // Parameter type is any[]
+/*pruned*/;                               // Parameter type is any[]
+/*pruned*/;                               // Parameter type is any[]
+a11([1, 2]);                              // Parameter type is number[]
+>a11([1, 2]) : void
+>            : ^^^^
+>a11 : ([a, b, c, ...x]: number[]) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>[1, 2] : number[]
+>       : ^^^^^^^^
+>1 : 1
+>  : ^
+>2 : 2
+>  : ^
+
+
+// Rest parameter with generic
+function foo<T>(...a: T[]): void { }
+>foo : <T>(...a: T[]) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>a : T[]
+>  : ^^^
+
+foo<number|string>("hello", 1, 2);
+>foo<number|string>("hello", 1, 2) : void
+>                                  : ^^^^
+>foo : <T>(...a: T[]) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^
+>"hello" : "hello"
+>        : ^^^^^^^
+>1 : 1
+>  : ^
+>2 : 2
+>  : ^
+
+foo("hello", "world");
+>foo("hello", "world") : void
+>                      : ^^^^
+>foo : <T>(...a: T[]) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^
+>"hello" : "hello"
+>        : ^^^^^^^
+>"world" : "world"
+>        : ^^^^^^^
+
+
+enum E { a, b }
+>E : E
+>  : ^
+>a : E.a
+>  : ^^^
+>b : E.b
+>  : ^^^
+
+/*pruned*/;           
+/*pruned*/;                                         
+/*pruned*/;        
+/*pruned*/;              
+
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

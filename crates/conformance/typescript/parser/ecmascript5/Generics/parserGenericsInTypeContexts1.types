@@ -1,0 +1,80 @@
+=== parserGenericsInTypeContexts1.ts ===
+class C extends A<T> implements B<T> {
+>C : C
+>  : ^
+>A : any
+>  : ^^^
+
+}
+
+let v1: C<T> = null as unknown as (C<T>);
+>v1 : any
+>   : ^^^
+>null as unknown as (C<T>) : any
+>                          : ^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let v2: D<T> = null;
+>v2 : D<T>
+>   : ^^^^
+
+let v3: E.F<T> = null as unknown as (E.F<T>);
+>v3 : E.F<T>
+>   : ^^^^^^
+>E : any
+>  : ^^^
+>null as unknown as (E.F<T>) : E.F<T>
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>E : any
+>  : ^^^
+
+let v3_2: G.H.I<T> = null as unknown as (G.H.I<T>);
+>v3_2 : G.H.I<T>
+>     : ^^^^^^^^
+>G : any
+>  : ^^^
+>H : any
+>  : ^^^
+>null as unknown as (G.H.I<T>) : G.H.I<T>
+>                              : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>G : any
+>  : ^^^
+>H : any
+>  : ^^^
+
+let v6: K<T>[] = null as unknown as (K<T>[]);
+>v6 : K<T>[]
+>   : ^^^^^^
+>null as unknown as (K<T>[]) : K<T>[]
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+
+function f1(a: E<T>): void {
+>f1 : (a: E<T>) => void
+>   : ^^^^^^^^^^^^^^^^^
+>a : E<T>
+>  : ^^^^
+
+}
+
+function f2(): F<T> {
+>f2 : () => F<T>
+>   : ^^^^^^^^^^
+
+}
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

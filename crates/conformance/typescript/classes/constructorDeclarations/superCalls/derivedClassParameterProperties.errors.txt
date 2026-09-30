@@ -1,0 +1,9 @@
+derivedClassParameterProperties.ts(5,5): error TS2564: Property 'x' has no initializer and is not definitely assigned in the constructor.
+derivedClassParameterProperties.ts(48,9): error TS17009: 'super' must be called before accessing 'this' in the constructor of a derived class.
+derivedClassParameterProperties.ts(57,5): error TS2376: A 'super' call must be the first statement in the constructor to refer to 'super' or 'this' when a derived class contains initialized properties, parameter properties, or private identifiers.
+derivedClassParameterProperties.ts(58,9): error TS17009: 'super' must be called before accessing 'this' in the constructor of a derived class.
+derivedClassParameterProperties.ts(59,9): error TS17009: 'super' must be called before accessing 'this' in the constructor of a derived class.
+derivedClassParameterProperties.ts(75,18): error TS2564: Property 'x' has no initializer and is not definitely assigned in the constructor.
+derivedClassParameterProperties.ts(80,5): error TS2376: A 'super' call must be the first statement in the constructor to refer to 'super' or 'this' when a derived class contains initialized properties, parameter properties, or private identifiers.
+derivedClassParameterProperties.ts(81,9): error TS17009: 'super' must be called before accessing 'this' in the constructor of a derived class.
+derivedClassParameterProperties.ts(82,9): error TS17009: 'super' must be called before accessing 'this' in the constructor of a derived class.

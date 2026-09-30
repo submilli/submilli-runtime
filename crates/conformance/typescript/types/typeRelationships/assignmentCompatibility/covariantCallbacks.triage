@@ -1,0 +1,1 @@
+line 46 missed: by-design spec §1.6 assignment narrowing: after `a = b` on line 45, `a` has `b`'s type, where tsc keeps `AList2`

@@ -1,0 +1,1 @@
+line 3, 4, 9, 10 missed: artifact tsc reports a duplicate member at each declaration; we report it at the later one, three lines down

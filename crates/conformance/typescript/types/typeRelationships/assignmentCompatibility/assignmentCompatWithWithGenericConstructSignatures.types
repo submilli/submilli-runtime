@@ -1,8 +1,0 @@
-=== assignmentCompatWithWithGenericConstructSignatures.ts ===
-
-
-function main(): void {}
->main : () => void
->     : ^^^^^^^^^^
-
-

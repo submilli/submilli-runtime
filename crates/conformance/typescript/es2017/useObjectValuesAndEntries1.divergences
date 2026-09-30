@@ -1,0 +1,101 @@
+types: 56 of 106 tsc entries compared, 25 differ
+
+line 6: x
+  tsc:  number
+  ours: unknown
+
+line 6: Object.values(o)
+  tsc:  number[]
+  ours: unknown[]
+
+line 7: y
+  tsc:  number
+  ours: unknown
+
+line 7: x
+  tsc:  number
+  ours: unknown
+
+line 10: Object.entries(o)
+  tsc:  [string, number][]
+  ours: [string, unknown][]
+
+line 11: Object.values(o)
+  tsc:  number[]
+  ours: unknown[]
+
+line 13: entries1
+  tsc:  [string, any][]
+  ours: [string, unknown][]
+
+line 13: Object.entries(1)
+  tsc:  [string, any][]
+  ours: [string, unknown][]
+
+line 14: values1
+  tsc:  any[]
+  ours: unknown[]
+
+line 14: Object.values(1)
+  tsc:  any[]
+  ours: unknown[]
+
+line 16: entries2
+  tsc:  [string, number | boolean][]
+  ours: [string, unknown][]
+
+line 16: Object.entries({ a: true, b: 2 })
+  tsc:  [string, number | boolean][]
+  ours: [string, unknown][]
+
+line 16: { a: true, b: 2 }
+  tsc:  { a: true; b: number; }
+  ours: { a: boolean; b: number }
+
+line 17: values2
+  tsc:  (number | boolean)[]
+  ours: unknown[]
+
+line 17: Object.values({ a: true, b: 2 })
+  tsc:  (number | boolean)[]
+  ours: unknown[]
+
+line 17: { a: true, b: 2 }
+  tsc:  { a: true; b: number; }
+  ours: { a: boolean; b: number }
+
+line 23: entries4
+  tsc:  [string, string][]
+  ours: [string, unknown][]
+
+line 23: Object.entries(a)
+  tsc:  [string, string][]
+  ours: [string, unknown][]
+
+line 24: values4
+  tsc:  string[]
+  ours: unknown[]
+
+line 24: Object.values(a)
+  tsc:  string[]
+  ours: unknown[]
+
+line 31: {}
+  tsc:  {}
+  ours: I
+
+line 32: entries6
+  tsc:  [string, any][]
+  ours: [string, unknown][]
+
+line 32: Object.entries(i)
+  tsc:  [string, any][]
+  ours: [string, unknown][]
+
+line 33: values6
+  tsc:  any[]
+  ours: unknown[]
+
+line 33: Object.values(i)
+  tsc:  any[]
+  ours: unknown[]

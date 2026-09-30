@@ -1,0 +1,2 @@
+line 8 missed: bug SUB-1162 `readonly public` is accepted in either order
+line 14 missed: bug SUB-1160 a `private` parameter property is readable outside its class

@@ -1,0 +1,81 @@
+types: 142 of 145 tsc entries compared, 20 differ
+
+line 16: t1 ** t2
+  tsc:  number
+  ours: string
+
+line 16: t1 ** t2
+  tsc:  number
+  ours: string
+
+line 17: t1 ** t2 ** t1
+  tsc:  number
+  ours: string
+
+line 17: t1 ** t2 ** t1
+  tsc:  number
+  ours: string
+
+line 18: t1 + t2 ** t1
+  tsc:  number
+  ours: string
+
+line 18: t1 + t2 ** t1
+  tsc:  number
+  ours: string
+
+line 19: t1 ** t2 + t1
+  tsc:  number
+  ours: string
+
+line 19: t1 ** t2 + t1
+  tsc:  number
+  ours: string
+
+line 20: t1 + t2 ** t2 + t1
+  tsc:  number
+  ours: string
+
+line 20: t1 + t2 ** t2 + t1
+  tsc:  number
+  ours: string
+
+line 23: t1 ** t2
+  tsc:  number
+  ours: string
+
+line 23: t1 ** t2
+  tsc:  number
+  ours: string
+
+line 24: t1 ** t2 ** t1
+  tsc:  number
+  ours: string
+
+line 24: t1 ** t2 ** t1
+  tsc:  number
+  ours: string
+
+line 25: t1 + t2 ** t1
+  tsc:  number
+  ours: string
+
+line 25: t1 + t2 ** t1
+  tsc:  number
+  ours: string
+
+line 26: t1 ** t2 + t1
+  tsc:  number
+  ours: string
+
+line 26: t1 ** t2 + t1
+  tsc:  number
+  ours: string
+
+line 27: t1 + t2 ** t2 + t1
+  tsc:  number
+  ours: string
+
+line 27: t1 + t2 ** t2 + t1
+  tsc:  number
+  ours: string

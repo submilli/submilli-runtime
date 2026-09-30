@@ -1,0 +1,6 @@
+types: 5 of 36 tsc entries compared, 0 differ
+
+errors:
+line 5: ours: `this` is not available in a static member (tsc accepts)
+line 10: ours: `this` is not available in a static member (tsc accepts)
+line 11: ours: `super` is only valid as `super(...)` or `super.method(...)` (tsc accepts)

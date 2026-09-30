@@ -1,0 +1,12 @@
+types: 5 of 12 tsc entries compared, 2 differ
+
+line 7: () => 1
+  tsc:  { (): number; p: {}; }
+  ours: () => number
+
+line 9: p
+  tsc:  { [s: string]: number; } | undefined
+  ours: Combo
+
+errors:
+line 7: ours: expected `Combo`, got `() => number` (tsc accepts)

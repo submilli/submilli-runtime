@@ -1,0 +1,61 @@
+=== allowUnescapedParagraphAndLineSeparatorsInStringLiteral.ts ===
+// Strings containing unescaped line / paragraph separators
+// Using both single quotes, double quotes and template literals
+
+let stringContainingUnescapedLineSeparator1 = " STRING_CONTENT ";
+>stringContainingUnescapedLineSeparator1 : string
+>                                        : ^^^^^^
+>" STRING_CONTENT " : "\u2028STRING_CONTENT\u2028"
+>                   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+let stringContainingUnescapedParagraphSeparator1 = " STRING_CONTENT ";
+>stringContainingUnescapedParagraphSeparator1 : string
+>                                             : ^^^^^^
+>" STRING_CONTENT " : "\u2029STRING_CONTENT\u2029"
+>                   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+
+let stringContainingUnescapedLineSeparator2 = ' STRING_CONTENT ';
+>stringContainingUnescapedLineSeparator2 : string
+>                                        : ^^^^^^
+>' STRING_CONTENT ' : "\u2028STRING_CONTENT\u2028"
+>                   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+let stringContainingUnescapedParagraphSeparator2 = ' STRING_CONTENT ';
+>stringContainingUnescapedParagraphSeparator2 : string
+>                                             : ^^^^^^
+>' STRING_CONTENT ' : "\u2029STRING_CONTENT\u2029"
+>                   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+
+let stringContainingUnescapedLineSeparator3 = ` STRING_CONTENT `;
+>stringContainingUnescapedLineSeparator3 : string
+>                                        : ^^^^^^
+>` STRING_CONTENT ` : "\u2028STRING_CONTENT\u2028"
+>                   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+let stringContainingUnescapedParagraphSeparator3 = ` STRING_CONTENT `;
+>stringContainingUnescapedParagraphSeparator3 : string
+>                                             : ^^^^^^
+>` STRING_CONTENT ` : "\u2029STRING_CONTENT\u2029"
+>                   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+// Array of unescaped line / paragraph separators
+
+/*pruned*/;
+                         
+                           
+                      
+                      
+         
+       
+  
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

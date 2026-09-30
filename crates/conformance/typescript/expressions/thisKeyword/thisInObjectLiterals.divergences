@@ -1,0 +1,24 @@
+types: 6 of 18 tsc entries compared, 5 differ
+
+line 11: { x: this, y: this.t }
+  tsc:  { x: this; y: number; }
+  ours: { x: MyClass; y: number }
+
+line 11: this
+  tsc:  this
+  ours: MyClass
+
+line 11: this
+  tsc:  this
+  ours: MyClass
+
+line 17: obj
+  tsc:  { f(): any; }
+  ours: { f: () => <error> }
+
+line 17: { f() { return this.spaaace; } }
+  tsc:  { f(): any; }
+  ours: { f: () => <error> }
+
+errors:
+line 18: tsc TS7023: 'f' implicitly has return type 'any' because it does not have a return type annotation and is referenced directly or indirectly in one of its return expressions. (we accept)

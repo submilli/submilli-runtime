@@ -1,0 +1,3 @@
+line 48 missed: artifact we report the use of `this` before `super()` once, at the `super()` call on line 50
+line 57, 58, 59 missed: artifact we report the use of `this` before `super()` once, at the `super()` call on line 60
+line 80, 81, 82 missed: artifact we report the use of `this` before `super()` once, at the `super()` call on line 83

@@ -1,0 +1,6 @@
+types: 7 of 21 tsc entries compared, 0 differ
+
+errors:
+line 4: ours: no method `push` on `StringTreeArray` (tsc accepts)
+line 5: ours: no method `push` on `StringTreeArray` (tsc accepts)
+line 9: ours: interface base must be an interface or structural object type (tsc accepts)

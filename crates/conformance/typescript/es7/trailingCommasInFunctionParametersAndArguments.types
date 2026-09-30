@@ -1,0 +1,78 @@
+=== trailingCommasInFunctionParametersAndArguments.ts ===
+// Adapted by hand from the upstream case. Parameters and functions are typed,
+// since Submilli requires it. Removed, since Submilli supports none of them:
+// `declare function` (an ambient one and the overloads), the spread of an empty
+// array into a call, a `<T>` cast of an overloaded call, and the interface of
+// call and construct signatures. The trailing comma after a rest parameter
+// stays: both reject it. Added: `made`, to construct `X` and write through its
+// setter. `@strict: false` is gone, since Submilli is always strict.
+
+function f1(x: number,): void {}
+>f1 : (x: number) => void
+>   : ^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+
+
+f1(1,);
+>f1(1,) : void
+>       : ^^^^
+>f1 : (x: number) => void
+>   : ^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+
+function f2(...args: number[],): void {}
+>f2 : (...args: number[]) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>args : number[]
+>     : ^^^^^^^^
+
+
+
+// Works for constructors too
+class X {
+>X : X
+>  : ^
+
+    constructor(a: number,) { }
+>a : number
+>  : ^^^^^^
+
+    set x(value: number,) { }
+>x : number
+>  : ^^^^^^
+>value : number
+>      : ^^^^^^
+
+}
+
+let made: X = new X(1,);
+>made : X
+>     : ^
+>new X(1,) : X
+>          : ^
+>X : typeof X
+>  : ^^^^^^^^
+>1 : 1
+>  : ^
+
+made.x = 2;
+>made.x = 2 : 2
+>           : ^
+>made.x : number
+>       : ^^^^^^
+>made : X
+>     : ^
+>x : number
+>  : ^^^^^^
+>2 : 2
+>  : ^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

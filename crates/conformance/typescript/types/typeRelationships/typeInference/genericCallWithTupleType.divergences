@@ -1,0 +1,34 @@
+types: 44 of 102 tsc entries compared, 7 differ
+
+line 14: ["foo", 5, false, true]
+  tsc:  [string, number, boolean, boolean]
+  ours: [string, number]
+
+line 18: ["foo", 5]
+  tsc:  [string, number]
+  ours: [{}, {}]
+
+line 19: ["foo", "bar"]
+  tsc:  [string, string]
+  ours: [{}, {}]
+
+line 20: [5, "bar"]
+  tsc:  [number, string]
+  ours: [{}, {}]
+
+line 24: [5, "foo"]
+  tsc:  [number, string]
+  ours: [string, number]
+
+line 25: [{}, {}]
+  tsc:  [{}, {}]
+  ours: [string, number]
+
+line 26: [{}]
+  tsc:  [{}]
+  ours: [{}, {}]
+
+errors:
+line 18: ours: expected `{}`, got `string` (tsc accepts)
+line 19: ours: expected `{}`, got `string` (tsc accepts)
+line 20: ours: expected `{}`, got `number` (tsc accepts)

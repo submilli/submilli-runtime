@@ -1,0 +1,19 @@
+genericTypeReferenceWithoutTypeArgument.ts(6,5): error TS2564: Property 'foo' has no initializer and is not definitely assigned in the constructor.
+genericTypeReferenceWithoutTypeArgument.ts(9,8): error TS2314: Generic type 'C<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument.ts(9,32): error TS2314: Generic type 'C<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument.ts(11,13): error TS2314: Generic type 'C<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument.ts(11,44): error TS2314: Generic type 'C<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument.ts(15,13): error TS2314: Generic type 'C<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument.ts(15,28): error TS2314: Generic type 'C<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument.ts(15,52): error TS2314: Generic type 'C<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument.ts(17,15): error TS2314: Generic type 'C<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument.ts(17,19): error TS2314: Generic type 'C<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument.ts(17,30): error TS2314: Generic type 'C<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument.ts(17,54): error TS2314: Generic type 'C<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument.ts(19,23): error TS2314: Generic type 'C<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument.ts(19,27): error TS2314: Generic type 'C<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument.ts(19,38): error TS2314: Generic type 'C<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument.ts(19,62): error TS2314: Generic type 'C<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument.ts(21,17): error TS2314: Generic type 'C<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument.ts(24,21): error TS2314: Generic type 'C<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument.ts(37,10): error TS2314: Generic type 'C<T>' requires 1 type argument(s).

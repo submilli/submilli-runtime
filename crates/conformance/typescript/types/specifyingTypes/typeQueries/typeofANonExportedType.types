@@ -1,0 +1,214 @@
+=== typeofANonExportedType.ts ===
+let x = 1;
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+let r1: typeof x = null as unknown as (typeof x);
+>r1 : number
+>   : ^^^^^^
+>x : number
+>  : ^^^^^^
+>null as unknown as (typeof x) : number
+>                              : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>x : number
+>  : ^^^^^^
+
+let y = { foo: '' };
+>y : { foo: string; }
+>  : ^^^^^^^^^^^^^^^^
+>{ foo: '' } : { foo: string; }
+>            : ^^^^^^^^^^^^^^^^
+>foo : string
+>    : ^^^^^^
+>'' : ""
+>   : ^^
+
+let r2: typeof y = null as unknown as (typeof y);
+>r2 : { foo: string; }
+>   : ^^^^^^^^^^^^^^^^
+>y : { foo: string; }
+>  : ^^^^^^^^^^^^^^^^
+>null as unknown as (typeof y) : { foo: string; }
+>                              : ^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>y : { foo: string; }
+>  : ^^^^^^^^^^^^^^^^
+
+class C {
+>C : C
+>  : ^
+
+    foo: string;
+>foo : string
+>    : ^^^^^^
+
+}
+/*pruned*/;                       
+/*pruned*/;                        
+
+let r3: typeof C = null as unknown as (typeof C);
+>r3 : typeof C
+>   : ^^^^^^^^
+>C : typeof C
+>  : ^^^^^^^^
+>null as unknown as (typeof C) : typeof C
+>                              : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>C : typeof C
+>  : ^^^^^^^^
+
+/*pruned*/;                                      
+/*pruned*/;                                         
+
+interface I {
+>I : I
+>  : ^
+
+    foo: string;
+>foo : string
+>    : ^^^^^^
+
+}
+let i: I = null as unknown as (I);
+>i : I
+>  : ^
+>null as unknown as (I) : I
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let i2: I = null as unknown as (I);
+>i2 : I
+>   : ^
+>null as unknown as (I) : I
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let r5: typeof i = null as unknown as (typeof i);
+>r5 : I
+>   : ^
+>i : I
+>  : ^
+>null as unknown as (typeof i) : I
+>                              : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+>i : I
+>  : ^
+
+let r5_2: typeof i2 = null as unknown as (typeof i2);
+>r5_2 : I
+>     : ^
+>i2 : I
+>   : ^
+>null as unknown as (typeof i2) : I
+>                               : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+>i2 : I
+>   : ^
+
+
+/*pruned*/;  
+                        
+                    
+                    
+     
+ 
+/*pruned*/;                                      
+/*pruned*/;                                              
+
+/*pruned*/;  
+/*pruned*/;                                      
+/*pruned*/;                                              
+
+enum E {
+>E : E
+>  : ^
+
+    A
+>A : E.A
+>  : ^^^
+
+}
+let r10: typeof E = null as unknown as (typeof E);
+>r10 : typeof E
+>    : ^^^^^^^^
+>E : typeof E
+>  : ^^^^^^^^
+>null as unknown as (typeof E) : typeof E
+>                              : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>E : typeof E
+>  : ^^^^^^^^
+
+let r11: typeof E.A = null as unknown as (typeof E.A);
+>r11 : E
+>    : ^
+>E.A : E
+>    : ^
+>E : typeof E
+>  : ^^^^^^^^
+>A : E
+>  : ^
+>null as unknown as (typeof E.A) : E
+>                                : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+>E.A : E
+>    : ^
+>E : typeof E
+>  : ^^^^^^^^
+>A : E
+>  : ^
+
+
+let r12: typeof r12 = null as unknown as (typeof r12);
+>r12 : any
+>    : ^^^
+>r12 : any
+>    : ^^^
+>null as unknown as (typeof r12) : any
+>                                : ^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>r12 : any
+>    : ^^^
+
+
+function foo(): void { }
+>foo : () => void
+>    : ^^^^^^^^^^
+
+/*pruned*/;    
+                     
+                    
+                    
+     
+ 
+let r13: typeof foo = null as unknown as (typeof foo);
+>r13 : () => void
+>    : ^^^^^^^^^^
+>foo : () => void
+>    : ^^^^^^^^^^
+>null as unknown as (typeof foo) : () => void
+>                                : ^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>foo : () => void
+>    : ^^^^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

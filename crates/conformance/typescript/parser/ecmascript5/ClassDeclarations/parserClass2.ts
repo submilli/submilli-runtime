@@ -1,0 +1,10 @@
+// @target: es2015
+
+
+    export class LoggerAdapter implements ILogger {
+        constructor (public logger: ILogger) { 
+            this._information = this.logger.information();
+        }
+    }
+
+function main(): void {}

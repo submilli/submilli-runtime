@@ -13,9 +13,14 @@
 //! `<case>.divergences`. That file is committed: the test fails when the current
 //! divergences differ from it, in either direction, so a fixed divergence and a
 //! new one both show up in review. `UPDATE_TYPESCRIPT_EXPECTED=1` rewrites it.
+//!
+//! Each divergence is explained in the case's `<case>.triage`, or listed in
+//! `unexplained.txt` until it is; `support/triage.rs` has the rules.
 
 #[path = "support/case_errors.rs"]
 mod case_errors;
+#[path = "support/triage.rs"]
+mod triage;
 #[path = "support/typed_reachability.rs"]
 mod typed_reachability;
 
@@ -29,26 +34,53 @@ use interpreter::{ExprId, Span, StmtId, Type, TypedAst, TypedExprKind, TypedStmt
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
 /// The files that belong to a case, beside its `.ts`.
-const CASE_FILE_SUFFIXES: &[&str] = &[".types", ".errors.txt", ".divergences"];
+const CASE_FILE_SUFFIXES: &[&str] = &[".types", ".errors.txt", ".divergences", ".triage"];
+
+/// The divergences not yet explained, beside the cases.
+const UNEXPLAINED: &str = "unexplained.txt";
 
 #[test]
 fn typescript_baselines() {
     let root = Path::new(ROOT).join("typescript");
     let update = std::env::var("UPDATE_TYPESCRIPT_EXPECTED").is_ok_and(|v| v != "0");
     let mut failures = orphaned_case_files(&root, update);
+    let unexplained_path = root.join(UNEXPLAINED);
+    let listed = triage::Unexplained::read(&unexplained_path)
+        .unwrap_or_else(|e| panic!("{}: {e}", rel(&unexplained_path)));
+    let mut unexplained = listed.clone();
+    let ported = newly_ported_cases();
 
     let cases = find_cases(&root);
     let mut totals = Totals::default();
+    let mut checks = String::new();
     for case in &cases {
         match compare_case(case) {
             Ok(report) => {
                 totals.add(&report);
+                checks.push_str(&report.render_checks(&rel(case)));
                 failures.extend(check_divergences(case, &report, update));
+                let name = suite_path(&root, case);
+                let allow_new = update && ported.contains(&name);
+                failures.extend(check_triage(
+                    case,
+                    &name,
+                    &report,
+                    &mut unexplained,
+                    update,
+                    allow_new,
+                ));
             }
             Err(message) => failures.push(format!("--- {} ---\n{message}", rel(case))),
         }
     }
+    failures.extend(unexplained_without_case(&root, &mut unexplained, update));
+    if update && unexplained != listed {
+        unexplained.write(&unexplained_path);
+    }
 
+    if let Ok(path) = std::env::var("TYPESCRIPT_CHECKS_OUT") {
+        fs::write(&path, checks).unwrap_or_else(|e| panic!("write {path}: {e}"));
+    }
     eprintln!(
         "typescript: {} case(s); {} of {} tsc types compared, {} differ; \
          {} tsc error line(s) none of ours agrees with, {} error line(s) of ours tsc does not share",
@@ -109,9 +141,94 @@ fn check_divergences(case: &Path, report: &Report, update: bool) -> Option<Strin
     ))
 }
 
-/// Baselines and `.divergences` left behind by a case that no longer exists.
-/// They would otherwise go unnoticed, since cases are found by their `.ts`.
-/// Update mode removes them.
+/// Failures for a case's divergences that are neither explained in its `.triage` nor
+/// listed in `unexplained.txt`, and for explanations and listings gone stale. In update
+/// mode, stale listings are dropped, and, when `allow_new`, every divergence the
+/// `.triage` doesn't explain is listed.
+fn check_triage(
+    case: &Path,
+    name: &str,
+    report: &Report,
+    unexplained: &mut triage::Unexplained,
+    update: bool,
+    allow_new: bool,
+) -> Vec<String> {
+    let triage_path = case.with_extension("triage");
+    let explained = match triage::read_explained(&triage_path) {
+        Ok(explained) => explained,
+        Err(e) => return vec![format!("--- {} ---\n{e}", rel(&triage_path))],
+    };
+    let divergent = report.divergent();
+    if update {
+        let not_explained: BTreeSet<_> = divergent.difference(&explained).copied().collect();
+        let listed = if allow_new {
+            not_explained
+        } else {
+            unexplained
+                .of_case(name)
+                .intersection(&not_explained)
+                .copied()
+                .collect()
+        };
+        unexplained.set_case(name, &listed);
+    }
+    triage::check_case(&divergent, &explained, &unexplained.of_case(name))
+        .into_iter()
+        .map(|failure| format!("--- {} ---\n{failure}", rel(&triage_path)))
+        .collect()
+}
+
+/// Listings in `unexplained.txt` of a case that no longer exists; update mode drops
+/// them.
+fn unexplained_without_case(
+    root: &Path,
+    unexplained: &mut triage::Unexplained,
+    update: bool,
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    for name in unexplained.cases() {
+        if root.join(&name).exists() {
+            continue;
+        }
+        if update {
+            unexplained.set_case(&name, &BTreeSet::new());
+        } else {
+            failures.push(format!(
+                "--- {UNEXPLAINED} ---\nlists `{name}`, which is not a case: \
+                 rerun with UPDATE_TYPESCRIPT_EXPECTED=1 to remove it"
+            ));
+        }
+    }
+    failures
+}
+
+/// The cases `port-suite.cjs` has just ported, whose divergences update mode may list
+/// as unexplained: `TYPESCRIPT_PORTED_CASES` names a file of their paths, one per
+/// line, relative to the suite root. Nothing else adds to the list.
+fn newly_ported_cases() -> BTreeSet<String> {
+    let Ok(path) = std::env::var("TYPESCRIPT_PORTED_CASES") else {
+        return BTreeSet::new();
+    };
+    let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// A case's path relative to the suite root, as `unexplained.txt` names it.
+fn suite_path(root: &Path, case: &Path) -> String {
+    case.strip_prefix(root)
+        .unwrap_or(case)
+        .display()
+        .to_string()
+}
+
+/// Baselines, `.divergences` and `.triage` left behind by a case that no longer
+/// exists. They would otherwise go unnoticed, since cases are found by their `.ts`.
+/// Update mode removes the generated ones; a `.triage` is written by hand, so it
+/// stays a failure until someone removes it.
 fn orphaned_case_files(root: &Path, update: bool) -> Vec<String> {
     let mut files = Vec::new();
     collect_files(root, &mut |p| case_of(p).is_some(), &mut files);
@@ -123,7 +240,8 @@ fn orphaned_case_files(root: &Path, update: bool) -> Vec<String> {
         if case.exists() {
             continue;
         }
-        if update {
+        let generated = !file.extension().is_some_and(|e| e == "triage");
+        if update && generated {
             fs::remove_file(&file).unwrap_or_else(|e| panic!("remove {}: {e}", file.display()));
         } else {
             failures.push(format!(
@@ -135,7 +253,7 @@ fn orphaned_case_files(root: &Path, update: bool) -> Vec<String> {
     failures
 }
 
-/// The `.ts` a baseline or `.divergences` file belongs to.
+/// The `.ts` a baseline, `.divergences` or `.triage` file belongs to.
 fn case_of(file: &Path) -> Option<PathBuf> {
     let name = file.file_name()?.to_str()?;
     let base = CASE_FILE_SUFFIXES
@@ -156,7 +274,7 @@ struct Totals {
 impl Totals {
     fn add(&mut self, report: &Report) {
         self.baseline_entries += report.baseline_entries;
-        self.compared += report.compared;
+        self.compared += report.compared.len();
         self.type_divergences += report.type_divergences.len();
         self.missed_errors += report.missed_errors.len();
         self.extra_errors += report.extra_errors.len();
@@ -166,7 +284,11 @@ impl Totals {
 /// Everything one case disagrees with `tsc` about.
 struct Report {
     baseline_entries: usize,
-    compared: usize,
+    /// The `tsc` entries compared.
+    compared: Vec<ComparedEntry>,
+    /// The lines whose errors were compared: where `tsc` reports one, or where we
+    /// report one that could agree.
+    error_lines: BTreeSet<usize>,
     type_divergences: Vec<TypeDivergence>,
     /// `tsc`'s errors that none of ours agrees with.
     missed_errors: Vec<MissedError>,
@@ -179,7 +301,7 @@ impl Report {
     fn render(&self) -> String {
         let mut out = format!(
             "types: {} of {} tsc entries compared, {} differ\n",
-            self.compared,
+            self.compared.len(),
             self.baseline_entries,
             self.type_divergences.len(),
         );
@@ -220,6 +342,45 @@ impl Report {
         }
         out
     }
+
+    /// Each line that diverges, and how.
+    fn divergent(&self) -> BTreeSet<triage::Divergence> {
+        let types = self
+            .type_divergences
+            .iter()
+            .map(|d| (d.line, triage::Kind::Type));
+        let missed = self
+            .missed_errors
+            .iter()
+            .map(|m| (m.error.line, triage::Kind::Missed));
+        let extra = self
+            .extra_errors
+            .iter()
+            .map(|e| (e.line, triage::Kind::Extra));
+        types.chain(missed).chain(extra).collect()
+    }
+
+    /// Every check the case makes, one per line, for `TYPESCRIPT_CHECKS_OUT`:
+    /// `<case>\t<line>\ttype\t<entry text>\t<tsc type>` for a type compared, and
+    /// `<case>\t<line>\terror\t\t` for a line whose errors were compared.
+    fn render_checks(&self, case: &str) -> String {
+        let types = self
+            .compared
+            .iter()
+            .map(|e| format!("{case}\t{}\ttype\t{}\t{}\n", e.line, e.text, e.tsc));
+        let errors = self
+            .error_lines
+            .iter()
+            .map(|line| format!("{case}\t{line}\terror\t\t\n"));
+        types.chain(errors).collect()
+    }
+}
+
+/// A `tsc` entry that was compared with ours.
+struct ComparedEntry {
+    line: usize,
+    text: String,
+    tsc: String,
 }
 
 struct MissedError {
@@ -264,17 +425,29 @@ fn compare_case(case: &Path) -> Result<Report, String> {
     let our_error_lines: BTreeSet<usize> = our_errors.keys().copied().collect();
     let (compared, type_divergences) =
         compare_types(&baseline, &ours, &our_error_lines, &agreed_lines);
+    let error_lines = tsc_errors
+        .iter()
+        .map(|e| e.line)
+        .chain(
+            our_errors
+                .iter()
+                .filter(|(_, e)| e.can_agree())
+                .map(|(&line, _)| line),
+        )
+        .collect();
     let (missed_errors, extra_errors) = compare_errors(tsc_errors, &our_errors, &agreed_lines);
     Ok(Report {
         baseline_entries: baseline.values().map(Vec::len).sum(),
         compared,
+        error_lines,
         type_divergences,
         missed_errors,
         extra_errors,
     })
 }
 
-/// How many `tsc` entries were compared, and those whose type differs from ours.
+/// The `tsc` entries compared, with their lines, and those whose type differs from
+/// ours.
 ///
 /// Skips a pair where a side's type is its error recovery, which says nothing about
 /// inference: ours holding `<error>` on a line where we report an error (the error
@@ -284,13 +457,13 @@ fn compare_types(
     ours: &EntriesByLine,
     our_error_lines: &BTreeSet<usize>,
     agreed_lines: &BTreeSet<usize>,
-) -> (usize, Vec<TypeDivergence>) {
+) -> (Vec<ComparedEntry>, Vec<TypeDivergence>) {
     let error_type = Type::Error.to_string();
     let is_recovery = |line: &usize, tsc_ty: &str, our_ty: &str| {
         (our_ty.contains(&error_type) && our_error_lines.contains(line))
             || (tsc_ty == "any" && agreed_lines.contains(line))
     };
-    let mut compared = 0;
+    let mut compared = Vec::new();
     let mut divergences = Vec::new();
     for (line, entries) in baseline {
         let ours_on_line = ours.get(line).map_or(&[][..], Vec::as_slice);
@@ -313,7 +486,11 @@ fn compare_types(
                 if is_recovery(line, tsc_ty, our_ty) {
                     continue;
                 }
-                compared += 1;
+                compared.push(ComparedEntry {
+                    line: *line,
+                    text: text.to_string(),
+                    tsc: tsc_ty.to_string(),
+                });
                 if normalize_type(tsc_ty) != normalize_type(our_ty) {
                     divergences.push(TypeDivergence {
                         line: *line,
@@ -874,6 +1051,13 @@ impl TypeText<'_> {
         }
         if self.eat("<") {
             let args = self.list(">", Self::union_text)?;
+            // `tsc`'s `Uint8Array` names the buffer behind it, which ours has no
+            // choice of.
+            if name == "Uint8Array"
+                && matches!(args.as_slice(), [b] if b == "ArrayBuffer" || b == "ArrayBufferLike")
+            {
+                return Some(CanonicalType::plain(name));
+            }
             return Some(CanonicalType::plain(format!("{name}<{}>", args.join(", "))));
         }
         Some(CanonicalType::plain(name))
@@ -1134,6 +1318,20 @@ fn normalizing_keeps_readonly_distinct() {
 }
 
 #[test]
+fn normalizing_drops_only_the_buffer_of_a_uint8array() {
+    for buffer in ["ArrayBuffer", "ArrayBufferLike"] {
+        assert_eq!(
+            normalize_type(&format!("string | Uint8Array<{buffer}>")),
+            normalize_type("Uint8Array | string")
+        );
+    }
+    assert_ne!(
+        normalize_type("Map<string, ArrayBuffer>"),
+        normalize_type("Map")
+    );
+}
+
+#[test]
 fn only_a_single_literal_is_skipped() {
     for literal in [
         "+1",
@@ -1275,7 +1473,11 @@ fn entries_prefer_retained_loop_reads_and_keep_erased_source_nodes() {
             .join("typescript")
             .join(format!("{case}.ts"));
         let report = compare_case(&path).expect("conformance case");
-        assert_eq!(report.compared, compared, "source coverage for {case}");
+        assert_eq!(
+            report.compared.len(),
+            compared,
+            "source coverage for {case}"
+        );
         assert!(report.type_divergences.is_empty(), "{}", report.render());
     }
 }

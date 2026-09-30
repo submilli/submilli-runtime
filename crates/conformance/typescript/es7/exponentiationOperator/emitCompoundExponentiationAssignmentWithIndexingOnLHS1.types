@@ -1,0 +1,82 @@
+=== emitCompoundExponentiationAssignmentWithIndexingOnLHS1.ts ===
+
+let array0 = [1, 2, 3]
+>array0 : number[]
+>       : ^^^^^^^^
+>[1, 2, 3] : number[]
+>          : ^^^^^^^^
+>1 : 1
+>  : ^
+>2 : 2
+>  : ^
+>3 : 3
+>  : ^
+
+let i0 = 0;
+>i0 : number
+>   : ^^^^^^
+>0 : 0
+>  : ^
+
+/*pruned*/;        
+
+let array1 = [1, 2, 3]
+>array1 : number[]
+>       : ^^^^^^^^
+>[1, 2, 3] : number[]
+>          : ^^^^^^^^
+>1 : 1
+>  : ^
+>2 : 2
+>  : ^
+>3 : 3
+>  : ^
+
+let i1 = 0;
+>i1 : number
+>   : ^^^^^^
+>0 : 0
+>  : ^
+
+/*pruned*/;                         
+
+let array2 = [1, 2, 3]
+>array2 : number[]
+>       : ^^^^^^^^
+>[1, 2, 3] : number[]
+>          : ^^^^^^^^
+>1 : 1
+>  : ^
+>2 : 2
+>  : ^
+>3 : 3
+>  : ^
+
+let i2 = 0;
+>i2 : number
+>   : ^^^^^^
+>0 : 0
+>  : ^
+
+/*pruned*/;                        
+
+let array3 = [2, 2, 3];
+>array3 : number[]
+>       : ^^^^^^^^
+>[2, 2, 3] : number[]
+>          : ^^^^^^^^
+>2 : 2
+>  : ^
+>2 : 2
+>  : ^
+>3 : 3
+>  : ^
+
+/*pruned*/;        
+/*pruned*/;                                          
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+
