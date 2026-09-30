@@ -1,2 +1,2 @@
-line 4, 5 extra: bug SUB-1206 an interface can't extend `Array<T>` (on line 9, so it has no `push`)
+line 4, 5 extra: bug SUB-1206 an interface can't extend `Array<T>` (`StringTreeArray` on line 9, so it has no `push`)
 line 9 extra: bug SUB-1206 an interface can't extend `Array<T>`
