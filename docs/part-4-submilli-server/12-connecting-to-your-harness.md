@@ -99,13 +99,25 @@ through the package, where the rules above don't reach. The file gives the
 package's `fs.write` and `http.download` rules the same user directory, and
 `lint` notes that they are narrower than the package declared.
 
-The server needs the volume, a secret store for Jina's API key, and the
-package. From `examples/harnesses/`:
+The server needs the volume, two API tokens, a secret store for Jina's API
+key, and the package. From `examples/harnesses/`:
 
 ```sh
 mkdir -p "$HOME/submilli-notes"
-printf 'volumes:\n  notes: %s\n' "$HOME/submilli-notes" > server.yaml
+cat > server.yaml <<EOF
+volumes:
+  notes: $HOME/submilli-notes
+api_tokens:
+- name: ops
+  role: admin
+  token_env: SUBMILLI_ADMIN_TOKEN
+- name: app
+  role: user
+  token_env: SUBMILLI_USER_TOKEN
+EOF
 head -c 32 /dev/urandom | base64 > store.key
+export SUBMILLI_ADMIN_TOKEN=$(openssl rand -hex 32)
+export SUBMILLI_USER_TOKEN=$(openssl rand -hex 32)
 
 submilli-server --config server.yaml --secret-store-key-file store.key &
 
@@ -118,22 +130,43 @@ submilli server blueprint apply blueprint.yaml
 [jina.ai](https://jina.ai). [Submilli server](/docs/server) explains each of
 these commands.
 
+The two tokens separate two jobs. The `submilli server` commands manage the
+server and send `SUBMILLI_ADMIN_TOKEN`. Every example in this chapter reads
+`SUBMILLI_USER_TOKEN`, which can run programs under a registered blueprint and
+cannot change one. Give a harness only that token: a credential held by the
+process an agent runs in must not be able to rewrite the blueprint that
+constrains the agent.
+
 ## What an MCP connection fixes: blueprint, variables, session
 
-Whatever the harness, connecting over MCP comes down to three decisions your
-application makes and the model has no part in.
+Whatever the harness, connecting over MCP comes down to four things your
+application supplies and the model has no part in: the token that admits it,
+and the three in the heading.
 
 **The address names the blueprint.** The MCP endpoint is
 `http://127.0.0.1:8128/mcp/<blueprint>`. A harness connected to
 `/mcp/research` runs every program under that blueprint. The model can't
 choose another, because the blueprint isn't an argument of any tool.
 
+**A token admits the application.** The server accepts a connection only
+with one of its API tokens, sent as `Authorization: Bearer <token>`. The
+harness sends the `user` token. A connection with no token, or with one the
+server doesn't know, is refused with HTTP 401 before the server reads anything
+else. The refusal asks for a bearer token and names no authorization server,
+so an MCP client reports it as a failed connection and doesn't start an OAuth
+sign-in.
+
 **A header binds the variables.** The `research` blueprint requires a
-variable, `userId`. The harness sends it when it connects:
+variable, `userId`. The harness sends it when it connects, beside the token:
 
 ```text
+Authorization: Bearer <user token>
 submilli-variables: userId=u_ada
 ```
+
+The two headers do different jobs. The token says which application is
+connecting and is the same for every user. The variables say which of your
+users this connection is for.
 
 Several variables are separated by `;`, so a value can't contain one. The
 server checks them against the blueprint before it accepts the connection. It
@@ -349,7 +382,12 @@ export async function answer(
     servers: {
       submilli: {
         url: new URL(`${SUBMILLI_SERVER}/mcp/${BLUEPRINT}`),
-        requestInit: { headers: { "submilli-variables": `userId=${userId}` } },
+        requestInit: {
+          headers: {
+            Authorization: `Bearer ${userToken()}`,
+            "submilli-variables": `userId=${userId}`,
+          },
+        },
       },
     },
   });
@@ -364,6 +402,13 @@ export async function answer(
   } finally {
     await submilli.disconnect();
   }
+}
+
+/** The application's token for the server: the `user` role, never the admin one. */
+function userToken(): string {
+  const token = process.env.SUBMILLI_USER_TOKEN;
+  if (!token) throw new Error("SUBMILLI_USER_TOKEN is not set: export the server's user token");
+  return token;
 }
 
 if (import.meta.filename === process.argv[1]) {
@@ -405,6 +450,8 @@ from langchain_mcp_adapters.sessions import create_session
 from langchain_mcp_adapters.tools import load_mcp_tools
 
 SUBMILLI_SERVER = os.environ.get("SUBMILLI_SERVER", "http://127.0.0.1:8128")
+# The application's token for the server: the `user` role, never the admin one.
+SUBMILLI_USER_TOKEN = os.environ["SUBMILLI_USER_TOKEN"]
 BLUEPRINT = "research"
 
 
@@ -421,7 +468,10 @@ async def answer(question: str, user_id: str, model="google_genai:gemini-3.8-fla
     submilli = {
         "transport": "streamable_http",
         "url": f"{SUBMILLI_SERVER}/mcp/{BLUEPRINT}",
-        "headers": {"submilli-variables": f"userId={user_id}"},
+        "headers": {
+            "Authorization": f"Bearer {SUBMILLI_USER_TOKEN}",
+            "submilli-variables": f"userId={user_id}",
+        },
     }
 
     # One session per user: the binding is fixed when the session opens.
@@ -479,6 +529,8 @@ from agents import Agent, Runner
 from agents.mcp import MCPServerStreamableHttp
 
 SUBMILLI_SERVER = os.environ.get("SUBMILLI_SERVER", "http://127.0.0.1:8128")
+# The application's token for the server: the `user` role, never the admin one.
+SUBMILLI_USER_TOKEN = os.environ["SUBMILLI_USER_TOKEN"]
 BLUEPRINT = "research"
 
 
@@ -497,7 +549,10 @@ async def answer(question: str, user_id: str, model=None) -> str:
         name="submilli",
         params={
             "url": f"{SUBMILLI_SERVER}/mcp/{BLUEPRINT}",
-            "headers": {"submilli-variables": f"userId={user_id}"},
+            "headers": {
+                "Authorization": f"Bearer {SUBMILLI_USER_TOKEN}",
+                "submilli-variables": f"userId={user_id}",
+            },
         },
     ) as submilli:
         agent = Agent(
@@ -556,7 +611,10 @@ export function options(userId: string): Options {
       submilli: {
         type: "http",
         url: `${SUBMILLI_SERVER}/mcp/${BLUEPRINT}`,
-        headers: { "submilli-variables": `userId=${userId}` },
+        headers: {
+          Authorization: `Bearer ${userToken()}`,
+          "submilli-variables": `userId=${userId}`,
+        },
       },
     },
     // Only the server above, whatever else the account or machine has configured.
@@ -576,6 +634,13 @@ export async function answer(question: string, userId: string): Promise<string> 
     }
   }
   throw new Error("the agent ended without a result");
+}
+
+/** The application's token for the server: the `user` role, never the admin one. */
+function userToken(): string {
+  const token = process.env.SUBMILLI_USER_TOKEN;
+  if (!token) throw new Error("SUBMILLI_USER_TOKEN is not set: export the server's user token");
+  return token;
 }
 
 if (import.meta.filename === process.argv[1]) {
@@ -646,6 +711,7 @@ export async function answer(
 ): Promise<string> {
   const submilli = await openSession({
     server: SUBMILLI_SERVER,
+    token: userToken(),
     blueprint: "research",
     variables: { userId },
   });
@@ -664,6 +730,13 @@ export async function answer(
   }
 }
 
+/** The application's token for the server: the `user` role, never the admin one. */
+function userToken(): string {
+  const token = process.env.SUBMILLI_USER_TOKEN;
+  if (!token) throw new Error("SUBMILLI_USER_TOKEN is not set: export the server's user token");
+  return token;
+}
+
 if (import.meta.filename === process.argv[1]) {
   // In a real application the user comes from the signed-in session.
   console.log(await answer("What is new in the latest stable release of Rust? Save a note with your sources.", "u_ada"));
@@ -679,7 +752,8 @@ the run on the tool call, before the model has seen the result. The example
 is written for version 7 of the SDK.
 
 `openSession` is the part you write. It makes two requests, then builds six
-tools, one for each of the MCP tools the HTTP API can serve:
+tools, one for each of the MCP tools the HTTP API can serve. Every request
+goes through `call`, which adds the token:
 
 ```typescript title="submilli.ts"
 // The tools a model needs to write and run programs on submilli-server, built
@@ -691,6 +765,8 @@ import { z } from "zod";
 export interface SessionOptions {
   /** Base URL of submilli-server. */
   server: string;
+  /** A token the server accepts in the `user` role. It stays in your application. */
+  token: string;
   /** The registered blueprint every program in this session runs under. */
   blueprint: string;
   /** Values for the blueprint's variables, from your application's own state. */
@@ -717,14 +793,24 @@ interface Prompt {
 }
 
 export async function openSession(options: SessionOptions): Promise<Session> {
+  // Every request carries the token, and a request with a body sends it as JSON.
+  const call = (url: string, method = "GET", body?: unknown): Promise<Response> =>
+    fetch(url, {
+      method,
+      headers: {
+        Authorization: `Bearer ${options.token}`,
+        ...(body === undefined ? {} : { "content-type": "application/json" }),
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+
   const blueprint = `${options.server}/v1/blueprints/${encodeURIComponent(options.blueprint)}`;
-  const describe: Prompt = await json(await fetch(`${blueprint}/prompt`));
+  const describe: Prompt = await json(await call(`${blueprint}/prompt`));
 
   const { session_id } = await json(
-    await fetch(`${options.server}/v1/sessions`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ blueprint: options.blueprint, variables: options.variables ?? {} }),
+    await call(`${options.server}/v1/sessions`, "POST", {
+      blueprint: options.blueprint,
+      variables: options.variables ?? {},
     }),
   );
   const session = `${options.server}/v1/sessions/${session_id}`;
@@ -737,13 +823,7 @@ export async function openSession(options: SessionOptions): Promise<Session> {
         description: describe.prompt,
         inputSchema: z.object({ code: z.string() }),
         execute: async ({ code }) => {
-          const run = await json(
-            await fetch(`${session}/execute`, {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ code }),
-            }),
-          );
+          const run = await json(await call(`${session}/execute`, "POST", { code }));
           // A denial or a compile error arrives here as `error`, for the model to read.
           return { result: run.result, console: run.console, error: run.error };
         },
@@ -751,38 +831,38 @@ export async function openSession(options: SessionOptions): Promise<Session> {
       submilli__typescript__last_run: tool({
         description: describe.tools.last_run,
         inputSchema: z.object({}),
-        execute: async () => json(await fetch(`${session}/last-run`)),
+        execute: async () => json(await call(`${session}/last-run`)),
       }),
       submilli__typescript__packages__search: tool({
         description: describe.tools.search,
         inputSchema: z.object({ query: z.string().default("") }),
         execute: async ({ query }) =>
-          json(await fetch(`${blueprint}/packages/search?${new URLSearchParams({ q: query })}`)),
+          json(await call(`${blueprint}/packages/search?${new URLSearchParams({ q: query })}`)),
       }),
       submilli__typescript__packages__docs: tool({
         description: describe.tools.docs,
         inputSchema: z.object({ name: z.string() }),
         execute: async ({ name }) => {
-          const docs = await fetch(`${blueprint}/packages/docs?${new URLSearchParams({ name })}`);
+          const docs = await call(`${blueprint}/packages/docs?${new URLSearchParams({ name })}`);
           return docs.text();
         },
       }),
       submilli__typescript__builtins__list: tool({
         description: describe.tools.builtins_list,
         inputSchema: z.object({}),
-        execute: async () => json(await fetch(`${blueprint}/builtins`)),
+        execute: async () => json(await call(`${blueprint}/builtins`)),
       }),
       submilli__typescript__builtins__docs: tool({
         description: describe.tools.builtins_docs,
         inputSchema: z.object({ names: z.array(z.string()) }),
         execute: async ({ names }) => {
           const query = new URLSearchParams(names.map((name) => ["name", name]));
-          return json(await fetch(`${blueprint}/builtins/docs?${query}`));
+          return json(await call(`${blueprint}/builtins/docs?${query}`));
         },
       }),
     },
     close: async () => {
-      await fetch(session, { method: "DELETE" });
+      await call(session, "DELETE");
     },
   };
 }
@@ -801,7 +881,8 @@ The first request fetches the text the MCP tools would have carried:
 the others. The second opens the session. That is where the blueprint and
 the variables are fixed, the step the address and the header performed over
 MCP. A missing variable is refused there with HTTP 400, and an unknown
-blueprint with 404.
+blueprint with 404. A missing or unknown token is refused with 401 on the
+first request.
 
 The execute tool's schema decides what the model can choose. The model fills
 in the arguments of a tool, so an argument named `blueprint` or `userId`
@@ -810,6 +891,9 @@ would hand the model that choice. Keep both in your own code, as here.
 A failed program still answers HTTP 200, with `error` set as it is over MCP
 and the session's id beside it. Only a request the server can't act on, such
 as an unknown session, gets an error status.
+
+Every request in this table needs a token in `Authorization: Bearer`. The
+`user` token is enough for all of them, and the `admin` token is accepted too.
 
 | Request | Serves |
 | --- | --- |
@@ -828,6 +912,10 @@ which the quickstart used, takes the blueprint and variables with the code and
 runs the program in a session that ends when the program returns. It suits a
 single run. An agent needs the session endpoints, so that one program can
 build on the state of the last.
+
+`POST /v1/execute` takes the `user` token as well. The endpoints that register
+blueprints, store secrets, and install packages need the `admin` token, and
+answer a `user` token with HTTP 403.
 
 Project: [`examples/harnesses/vercel-ai-sdk-http/`](https://github.com/submilli/submilli-runtime/tree/main/examples/harnesses/vercel-ai-sdk-http).
 
@@ -848,14 +936,16 @@ Over HTTP the value goes in the request that opens the session:
 { "blueprint": "research", "variables": { "userId": "u_ada" }, "secrets": { "USER_TOKEN": "tok_…" } }
 ```
 
-Over MCP it goes in a second header, `submilli-secrets`, holding the same JSON
+Over MCP it goes in one more header, `submilli-secrets`, holding the same JSON
 object encoded as base64url. A session opened without a required secret is
 refused with HTTP 400. The server keeps these values in memory for the life of
 the session and never writes them to disk. A session therefore outlives a
 server restart but its secrets don't, and running a program in it answers
 HTTP 409 with `session_requires_secrets` until the harness supplies them
 again. `POST /v1/sessions/{id}/rebind` does that, and replaces a token that
-has expired; over MCP, open a new connection.
+has expired; over MCP, open a new connection. Like the other session
+endpoints, `rebind` is called with the server's `user` token, which is
+separate from the secrets it carries.
 
 ## Giving the agent an MCP server
 

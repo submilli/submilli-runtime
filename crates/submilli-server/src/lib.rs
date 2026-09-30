@@ -1,6 +1,7 @@
 //! Submilli HTTP execution server.
 
 pub mod app;
+pub mod auth;
 pub mod blueprint;
 pub mod blueprint_seed;
 mod compiler_thread;
@@ -19,8 +20,9 @@ pub mod session;
 pub mod session_manager;
 pub mod session_store;
 
-pub use app::{AppState, app};
-pub use config::{ServerConfig, warn_if_external_bind};
+pub use app::{AppState, app, route_table};
+pub use auth::{Access, ApiToken, AuthConfig, Role};
+pub use config::ServerConfig;
 pub use interpreter::runtime::{
     DEFAULT_MAX_EXECUTION_TOKENS, DEFAULT_MAX_STORE_BYTES, LlmLimits, NetworkPolicy, RuntimeConfig,
 };

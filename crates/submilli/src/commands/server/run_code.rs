@@ -10,6 +10,8 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::commands::http::{ServerTarget, ok_or_report};
+
 #[derive(clap::Args)]
 pub struct Args {
     script: PathBuf,
@@ -17,8 +19,8 @@ pub struct Args {
     #[arg(long)]
     blueprint: String,
 
-    #[arg(long, default_value = "http://127.0.0.1:8128")]
-    server: String,
+    #[command(flatten)]
+    target: ServerTarget,
 
     /// Bind a blueprint variable for this run, `NAME=VALUE` (repeatable), the
     /// way an application binds it when it opens a session.
@@ -61,14 +63,12 @@ pub fn execute(args: Args) -> Result<ExitCode> {
         .with_context(|| format!("reading {}", args.script.display()))?;
     let variables = parse_variables(&args.vars)?;
 
-    let base = args.server.trim_end_matches('/');
+    let base = args.target.base();
     let execute_url = format!("{base}/v1/execute");
 
-    let mut config = ureq::Agent::config_builder();
-    if let Some(secs) = args.timeout {
-        config = config.timeout_global(Some(Duration::from_secs(secs)));
-    }
-    let agent: ureq::Agent = config.build().into();
+    let agent = args
+        .target
+        .agent_with_timeout(args.timeout.map(Duration::from_secs))?;
 
     let mut request = serde_json::json!({
         "code": source,
@@ -83,6 +83,10 @@ pub fn execute(args: Args) -> Result<ExitCode> {
             eprintln!("error: {err}");
             return Ok(ExitCode::from(1));
         }
+    };
+
+    let Some(resp) = ok_or_report(resp) else {
+        return Ok(ExitCode::from(1));
     };
 
     let response: ExecuteResponse = resp

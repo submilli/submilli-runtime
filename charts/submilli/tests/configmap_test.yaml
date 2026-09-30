@@ -1,6 +1,7 @@
 suite: blueprint seeding
 templates:
   - configmap-blueprints.yaml
+  - configmap-config.yaml
   - statefulset.yaml
 tests:
   - it: renders no ConfigMap when no blueprints are configured
@@ -75,7 +76,6 @@ tests:
             readOnly: true
 
   - it: keeps the read-only seed and the writable store apart
-    template: statefulset.yaml
     set:
       blueprints:
         demo: |
@@ -85,16 +85,16 @@ tests:
       # Two different directories. Pointing both at one path would make the
       # store read-only forever — the defect this separation exists to
       # avoid.
-      - contains:
-          path: spec.template.spec.containers[0].env
-          content:
-            name: SUBMILLI_BLUEPRINT_SEED_DIR
-            value: /etc/submilli/blueprints
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: '(?m)^blueprint_seed_dir: /etc/submilli/blueprints$'
+        template: configmap-config.yaml
       - contains:
           path: spec.template.spec.containers[0].volumeMounts
           content:
             name: state
             mountPath: /var/lib/submilli
+        template: statefulset.yaml
 
   - it: rolls the pod when a blueprint changes
     template: statefulset.yaml

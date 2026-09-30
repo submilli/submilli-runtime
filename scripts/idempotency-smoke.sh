@@ -148,7 +148,30 @@ mock_reset() { curl -sf "http://127.0.0.1:${MOCK_PORT}/reset" >/dev/null; }
 
 # ---------------------------------------------------------------- the server
 
+# The server refuses to start without API tokens. The config only names the
+# variables; the tokens themselves go to the server through its environment.
+gen_token() { python3 -c 'import secrets; print(secrets.token_hex(32))'; }
+ADMIN_TOKEN=$(gen_token)
+USER_TOKEN=$(gen_token)
+cat >"${STATE_DIR}/server.yaml" <<'YAML'
+api_tokens:
+  - name: smoke-admin
+    role: admin
+    token_env: SUBMILLI_ADMIN_TOKEN
+  - name: smoke-user
+    role: user
+    token_env: SUBMILLI_USER_TOKEN
+YAML
+
+# Registering blueprints is the only admin call here; everything else is what
+# an application does, so it goes out with the user token.
+admin_curl() { curl -H "Authorization: Bearer ${ADMIN_TOKEN}" "$@"; }
+user_curl() { curl -H "Authorization: Bearer ${USER_TOKEN}" "$@"; }
+
 start_server() {
+    SUBMILLI_CONFIG="${STATE_DIR}/server.yaml" \
+    SUBMILLI_ADMIN_TOKEN="$ADMIN_TOKEN" \
+    SUBMILLI_USER_TOKEN="$USER_TOKEN" \
     SUBMILLI_BIND=127.0.0.1 \
     SUBMILLI_PORT="$SERVER_PORT" \
     SUBMILLI_SESSION_STORE_DIR="${STATE_DIR}/sessions" \
@@ -161,10 +184,10 @@ start_server() {
     SERVER_PID=$!
     local deadline=$((SECONDS + 60))
     while ((SECONDS < deadline)); do
-        curl -sf "http://127.0.0.1:${SERVER_PORT}/v1/status" >/dev/null 2>&1 && return 0
+        curl -sf "http://127.0.0.1:${SERVER_PORT}/healthz" >/dev/null 2>&1 && return 0
         sleep 0.3
     done
-    printf 'server never answered /v1/status; see %s/server.log\n' "$STATE_DIR" >&2
+    printf 'server never answered /healthz; see %s/server.log\n' "$STATE_DIR" >&2
     exit 1
 }
 
@@ -186,12 +209,12 @@ BASE=""
 
 put_blueprint() {  # name yaml
     python3 -c 'import json,sys; print(json.dumps({"yaml": sys.argv[1]}))' "$2" \
-        | curl -sf -X PUT "${BASE}/v1/blueprints/$1" \
+        | admin_curl -sf -X PUT "${BASE}/v1/blueprints/$1" \
             -H 'content-type: application/json' -d @- >/dev/null
 }
 
 open_session() {  # blueprint -> session id
-    curl -sf -X POST "${BASE}/v1/sessions" -H 'content-type: application/json' \
+    user_curl -sf -X POST "${BASE}/v1/sessions" -H 'content-type: application/json' \
         -d "{\"blueprint\":\"$1\"}" | json_field session_id
 }
 
@@ -201,7 +224,7 @@ execute() {  # session key code   (empty key = unkeyed)
     local sid=$1 key=$2 code=$3 body args=()
     body=$(python3 -c 'import json,sys; print(json.dumps({"code": sys.argv[1]}))' "$code")
     [[ -n "$key" ]] && args=(-H "Idempotency-Key: ${key}")
-    curl -s -w $'\n%{http_code}' -X POST "${BASE}/v1/sessions/${sid}/execute" \
+    user_curl -s -w $'\n%{http_code}' -X POST "${BASE}/v1/sessions/${sid}/execute" \
         -H 'content-type: application/json' "${args[@]}" -d "$body" \
         | python3 -c 'import sys
 raw = sys.stdin.read()
@@ -253,12 +276,14 @@ SERVER_PORT=$(free_port)
 BASE="http://127.0.0.1:${SERVER_PORT}"
 start_mock
 start_server
-put_blueprint smoke $'name: smoke\nvfs: per_session\ndefault: allow\n'
-put_blueprint brief $'name: brief\nvfs: per_session\ndefault: allow\nidle_timeout: 5s\n'
+# The mock speaks plain HTTP on loopback, which a blueprint refuses unless it
+# says otherwise.
+put_blueprint smoke $'name: smoke\nvfs: per_session\ndefault: allow\nallow_insecure_http: true\n'
+put_blueprint brief $'name: brief\nvfs: per_session\ndefault: allow\nallow_insecure_http: true\nidle_timeout: 5s\n'
 # Declares a package that is not installed, so importing it fails at resolution
 # — before the runner — which is the only externally reachable pre-dispatch
 # failure. Code that does not import it runs normally under this blueprint.
-put_blueprint unresolvable $'name: unresolvable\nvfs: per_session\ndefault: allow\npackages:\n  - "@nonexistent-org/nonexistent-pkg"\n'
+put_blueprint unresolvable $'name: unresolvable\nvfs: per_session\ndefault: allow\nallow_insecure_http: true\npackages:\n  - "@nonexistent-org/nonexistent-pkg"\n'
 printf 'server %s | mock %s | state %s\n' "$SERVER_PORT" "$MOCK_PORT" "$STATE_DIR"
 
 # ================================================================ tier 1
@@ -308,7 +333,7 @@ step "3. A client that hangs up mid-execution"
 mock_reset
 sid=$(open_session smoke)
 body=$(python3 -c 'import json,sys; print(json.dumps({"code": sys.argv[1]}))' "$(holder 8)")
-curl -s --max-time 2 -X POST "${BASE}/v1/sessions/${sid}/execute" \
+user_curl -s --max-time 2 -X POST "${BASE}/v1/sessions/${sid}/execute" \
     -H 'content-type: application/json' -H 'Idempotency-Key: disconnect:1' \
     -d "$body" >/dev/null 2>&1 || true
 sleep 1
@@ -454,7 +479,7 @@ step "11. Deleting a session purges its ledger"
 sid=$(open_session smoke)
 execute "$sid" "purge:1" "$(hitter)" >/dev/null
 [[ -d "$(ledger_dir "$sid")" ]] || fail "no ledger directory to purge"
-curl -sf -X DELETE "${BASE}/v1/sessions/${sid}" >/dev/null
+user_curl -sf -X DELETE "${BASE}/v1/sessions/${sid}" >/dev/null
 if [[ ! -d "$(ledger_dir "$sid")" ]]; then
     ok "ledger directory removed with the session"
 else

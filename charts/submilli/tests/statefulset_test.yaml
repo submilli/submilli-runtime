@@ -70,7 +70,9 @@ tests:
       # reads SUBMILLI_PORT as an explicit config tier and fails boot when it is
       # set but unparseable, so the pod exits at startup with a confusing parse
       # error. Both guards are asserted because they fail in different
-      # directions if one is later removed.
+      # directions if one is later removed. It is also why the port is the one
+      # setting that stays in the environment rather than the config file: an
+      # injected variable outranks the file.
       - equal:
           path: spec.template.spec.enableServiceLinks
           value: false
@@ -79,24 +81,16 @@ tests:
           content:
             name: SUBMILLI_PORT
             value: "8128"
-      - contains:
-          path: spec.template.spec.containers[0].env
-          content:
-            name: SUBMILLI_BIND
-            value: 0.0.0.0
 
   - it: gives the ephemeral VFS somewhere writable to live
     asserts:
       # SUBMILLI_HOME relocates five of the server's six state directories (under
       # its server/ subdirectory); the ephemeral VFS root is the sixth and still
       # defaults to the OS temp dir.
-      # Under readOnlyRootFilesystem, omitting this breaks /v1/execute — the
-      # product — while /v1/status stays green.
-      - contains:
-          path: spec.template.spec.containers[0].env
-          content:
-            name: SUBMILLI_VFS_EPHEMERAL_DIR
-            value: /tmp
+      # Under readOnlyRootFilesystem, a missing mount breaks /v1/execute — the
+      # product — while /healthz stays green. The config side of this, the
+      # `vfs_ephemeral_dir` that points the server here, is asserted in
+      # auth_config_test.yaml.
       - contains:
           path: spec.template.spec.containers[0].volumeMounts
           content:
@@ -119,14 +113,10 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].resources.requests.memory
           value: 928Mi
-      # A bare integer: the server rejects "50Mi" for this setting.
-      - contains:
-          path: spec.template.spec.containers[0].env
-          content:
-            name: SUBMILLI_MAX_EXECUTION_MEMORY
-            value: "50"
+      # The other half — the cap the server itself is given — is asserted
+      # against the config file in auth_config_test.yaml.
 
-  - it: keeps the memory limit and the execution cap in step when either moves
+  - it: derives the memory limit from the execution cap and the baseline
     set:
       execution.maxMemoryMB: 100
       resources.baselineMi: 256
@@ -137,11 +127,6 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].resources.limits.memory
           value: 1856Mi
-      - contains:
-          path: spec.template.spec.containers[0].env
-          content:
-            name: SUBMILLI_MAX_EXECUTION_MEMORY
-            value: "100"
 
   - it: sets no CPU limit by default
     asserts:
@@ -206,12 +191,14 @@ tests:
 
   - it: probes over HTTP with a tolerant timeout
     asserts:
+      # The one route that needs no token. A probe on /v1/status would get 401
+      # forever and the pod would never become ready.
       - equal:
           path: spec.template.spec.containers[0].readinessProbe.httpGet.path
-          value: /v1/status
+          value: /healthz
       - equal:
           path: spec.template.spec.containers[0].startupProbe.httpGet.path
-          value: /v1/status
+          value: /healthz
       # The default is 1s, which a loaded server can exceed while perfectly
       # healthy — and a readiness flap pulls the pod out of the Service.
       - equal:
@@ -224,10 +211,10 @@ tests:
   - it: does not mount a seed directory when no blueprints are configured
     asserts:
       - notContains:
-          path: spec.template.spec.containers[0].env
+          path: spec.template.spec.containers[0].volumeMounts
           content:
-            name: SUBMILLI_BLUEPRINT_SEED_DIR
-            value: /etc/submilli/blueprints
+            name: blueprints
+          any: true
       - notExists:
           path: spec.template.metadata.annotations["checksum/blueprints"]
 
@@ -267,12 +254,28 @@ tests:
         key: store-key
     asserts:
       # Environment is readable through /proc/self/environ, so the key itself
-      # must never be an env var — only the path to it.
+      # must never be an env var. The config file names this path as
+      # `secret_store.key_file`; that half is asserted in auth_config_test.yaml.
       - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: secret-store-key
+            mountPath: /etc/submilli/secret-store
+            readOnly: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: secret-store-key
+            secret:
+              secretName: submilli-store-key
+              items:
+                - key: store-key
+                  path: store-key
+      - notContains:
           path: spec.template.spec.containers[0].env
           content:
             name: SUBMILLI_SECRET_STORE_KEY_FILE
-            value: /etc/submilli/secret-store/store-key
+          any: true
 
   - it: defaults to a single server
     asserts:

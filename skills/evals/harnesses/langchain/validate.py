@@ -12,6 +12,8 @@ from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode
 
 URL = os.environ.get("SUBMILLI_SERVER_URL", "http://127.0.0.1:18128").rstrip("/")
+# The fixture's user token; serve_fixture.py prints it.
+TOKEN = os.environ["SUBMILLI_USER_TOKEN"]
 CODE = 'import { readBalance } from "@acme/billing"; function main(): number { return readBalance("cus_northwind"); }'
 
 
@@ -29,8 +31,11 @@ def flatten(error: BaseException) -> list[str]:
     return [text for child in nested for text in flatten(child)]
 
 
-async def load(customer: str | None) -> tuple[MultiServerMCPClient, Any, list[Any]]:
-    headers = {} if customer is None else {"submilli-variables": f"customerId={customer}"}
+async def load(customer: str | None, token: str | None = TOKEN) -> tuple[MultiServerMCPClient, Any, list[Any]]:
+    # The token admits the application; the binding says which customer.
+    headers = {} if token is None else {"Authorization": f"Bearer {token}"}
+    if customer is not None:
+        headers["submilli-variables"] = f"customerId={customer}"
     client = MultiServerMCPClient({"submilli": {
         "transport": "streamable_http", "url": f"{URL}/mcp/support-read", "headers": headers,
     }})
@@ -44,8 +49,8 @@ async def load(customer: str | None) -> tuple[MultiServerMCPClient, Any, list[An
     return client, session, tools
 
 
-async def call(customer: str | None, code: str) -> str:
-    client, session, tools = await load(customer)
+async def call(customer: str | None, code: str, token: str | None = TOKEN) -> str:
+    client, session, tools = await load(customer, token)
     try:
         result = await execution_tool(tools).ainvoke({"code": code})
         if isinstance(result, ToolMessage):
@@ -111,16 +116,26 @@ async def main() -> None:
     assert "permission denied" in denied.lower() and "balance.read" in denied, denied
     # The server rejects a session without the required binding at initialize,
     # so the failure surfaces from the transport before any tool is listed.
+    # The token is still sent: this must be the 400, not an authentication error.
     try:
         await call(None, CODE)
     except BaseException as error:
         assert "400" in "".join(flatten(error)), error
     else:
         raise AssertionError("session without customerId was accepted")
+    # Without a token the server answers 401 before it reads the binding. The
+    # adapter has no OAuth provider configured, so it raises instead of
+    # starting a sign-in.
+    try:
+        await call("cus_northwind", CODE, token=None)
+    except BaseException as error:
+        assert "401" in "".join(flatten(error)), error
+    else:
+        raise AssertionError("session without a token was accepted")
     invalid = await call("cus_northwind", "bad program")
     assert "6150" not in invalid and "error" in invalid.lower(), invalid
     await resume_test()
-    print("PASS: discovery, allowed=6150, denied, missing binding, error cleanup, checkpoint resume")
+    print("PASS: discovery, allowed=6150, denied, missing binding, missing token, error cleanup, checkpoint resume")
 
 
 if __name__ == "__main__":

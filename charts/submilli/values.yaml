@@ -180,11 +180,70 @@ secretStore:
   existingSecret: ""
   key: "key"
 
+auth:
+  # -- Require a bearer token on the API. **On by default**; the server refuses
+  # to start without tokens unless told to serve unauthenticated, and `false`
+  # is what tells it. With `false`, anything that can reach the port can execute
+  # code, rewrite blueprints, and stop the process, and network reachability is
+  # the only access control left.
+  #
+  # Two tokens are configured. `admin` may call everything. `user` may run code
+  # and use sessions, MCP, and the read-only blueprint prompt and package
+  # documentation routes, and gets 403 on the rest — blueprints, secrets,
+  # packages, status, shutdown. Hand agents the `user` token.
+  #
+  # `/healthz` needs no token; it is what the pod's probes call.
+  enabled: true
+  # -- Existing Secret holding the two tokens, instead of the one the chart
+  # generates. Each token must be at least 32 characters of letters, digits, and
+  # `-._~+/`, and the two must differ; the server refuses to start otherwise.
+  #
+  # Required when the chart is rendered without cluster access — Argo CD, or
+  # any `helm template | kubectl apply` flow. The generated Secret keeps its
+  # values across upgrades by reading the live one back, and there is no live
+  # one to read there, so both tokens would change on every render.
+  #
+  # Tokens are read at boot. After changing the Secret, restart the pod:
+  # `kubectl rollout restart statefulset/<name>`.
+  existingSecret: ""
+  # -- Key in the Secret holding the `admin` token. Also its file name under
+  # /etc/submilli/auth.
+  adminTokenKey: admin-token
+  # -- Key in the Secret holding the `user` token.
+  userTokenKey: user-token
+
+# -- Extra keys merged into the server's config file (server.yaml), for settings
+# the chart has no dedicated value for. Keys are the server's own, in its units;
+# it rejects a key it does not know and refuses to boot, so a typo here surfaces
+# as a crash-looping pod rather than a setting that silently does nothing.
+#
+# Example:
+#   config:
+#     max_execution_time: 30        # seconds
+#     max_execution_fuel: 10000000000
+#     network:
+#       allow_private: true
+#
+# Keys the chart sets itself are refused here, with an error naming the value to
+# use instead: `bind`, `port`, `vfs_ephemeral_dir`, `max_execution_memory`,
+# `shutdown_grace`, `blueprint_seed_dir`, `allow_unauthenticated`, and
+# `secret_store.key_file`. Most of them also size something in the pod spec, and
+# two sources for one number is how those drift apart.
+#
+# `api_tokens` entries are added after the chart's `admin` and `user`, whose
+# names are reserved. An extra token has to come from the environment
+# (`token_env`, with the variable supplied through `extraEnv` and a
+# `secretKeyRef`) — never put a token value here: values are stored in plaintext
+# in the Helm release object.
+config: {}
+
 networkPolicy:
   # -- Restrict which pods may reach the server. **On by default**, which is
-  # unusual for a chart — the server's HTTP API is entirely unauthenticated, so
-  # in a cluster without this every pod in every namespace can execute code on
-  # it. See the README's security section before turning it off.
+  # unusual for a chart. The API requires a token, and this is the second layer
+  # behind it: a leaked or over-shared token is then only usable from the
+  # workloads allowlisted here, instead of from every pod in every namespace.
+  # With `auth.enabled: false` it is the only layer. See the README's security
+  # section before turning it off.
   #
   # Only enforced if your CNI implements NetworkPolicy. Where it does not, the
   # policy is accepted by the API server and does nothing, with no warning.
@@ -211,8 +270,10 @@ networkPolicy:
 
 ingress:
   # -- Expose the server outside the cluster. **Off by default, and think hard
-  # before enabling.** The API is unauthenticated: an Ingress publishes arbitrary
-  # code execution to whatever can reach it.
+  # before enabling.** An Ingress publishes a code-execution API whose only
+  # protection is a bearer token, and a bearer token sent over plain HTTP is
+  # readable by everything on the path — so configure `tls`. Never combine it
+  # with `auth.enabled: false`.
   enabled: false
   className: ""
   annotations: {}
@@ -238,6 +299,12 @@ tests:
 
 # -- Extra environment variables for the server container, as a list of
 # `name`/`value` (or `valueFrom`) entries.
+#
+# An override, not a default: the server ranks an explicit `SUBMILLI_*` variable
+# above its config file, so one set here beats both the chart's own settings and
+# `config:` — including the ones `config:` refuses. Prefer `config:` for
+# settings; use this for what only the environment can carry, such as a provider
+# credential or the variable a `token_env` names.
 extraEnv: []
 
 podAnnotations: {}

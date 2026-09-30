@@ -60,7 +60,10 @@ spec:
 
           BASE="{{ $base }}"
 
-          echo "==> expecting to be BLOCKED from $BASE/v1/status"
+          # /healthz because it answers 200 to anyone. A token-protected route
+          # would answer 401 to this pod, and the branch below that reports an
+          # unenforced policy would then be describing an auth refusal.
+          echo "==> expecting to be BLOCKED from $BASE/healthz"
 
           # Short timeouts on purpose: a policy drop manifests as a hang, not a
           # refusal, so the timeout *is* the pass signal and there is no reason
@@ -72,7 +75,7 @@ spec:
           # nothing about the policy. Those are the failure modes a typo in this
           # URL, or a pod that is simply not up, actually produce.
           code=$(curl -sS -o /dev/null -w '%{http_code}' \
-                   --connect-timeout 5 --max-time 10 "$BASE/v1/status") || rc=$?
+                   --connect-timeout 5 --max-time 10 "$BASE/healthz") || rc=$?
           rc=${rc:-0}
 
           case "$rc" in
@@ -100,8 +103,13 @@ spec:
                 echo "The NetworkPolicy is not being enforced. Most likely this cluster's" >&2
                 echo "CNI does not implement NetworkPolicy, in which case the object was" >&2
                 echo "accepted and silently does nothing — every pod in every namespace" >&2
-                echo "can execute code on this server. The API has no authentication of" >&2
-                echo "its own, so nothing else is stopping them." >&2
+                {{- if .Values.auth.enabled }}
+                echo "can reach this server, and its API tokens are the only thing between" >&2
+                echo "them and code execution." >&2
+                {{- else }}
+                echo "can execute code on this server. auth.enabled is false, so nothing" >&2
+                echo "else is stopping them." >&2
+                {{- end }}
                 exit 1
               fi
               echo "FAIL: reached the server and got HTTP $code. The connection was not" >&2

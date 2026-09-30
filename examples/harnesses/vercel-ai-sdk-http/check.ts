@@ -8,6 +8,7 @@ import { answer } from "./agent.ts";
 import { openSession } from "./submilli.ts";
 
 const server = process.env.SUBMILLI_SERVER ?? "http://127.0.0.1:8128";
+const token = process.env.SUBMILLI_USER_TOKEN ?? "";
 const program = readFileSync(new URL("../note.ts", import.meta.url), "utf8");
 const usage = {
   inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
@@ -44,12 +45,22 @@ assert.match(
   /permission denied/,
 );
 await assert.rejects(
-  openSession({ server, blueprint: "research" }),
+  openSession({ server, token, blueprint: "research" }),
   /required variable 'userId'/,
+);
+await assert.rejects(
+  openSession({
+    server,
+    token: "a-token-the-server-does-not-know",
+    blueprint: "research",
+    variables: { userId: "u_ada" },
+  }),
+  /answered 401/,
 );
 
 const session = await openSession({
   server,
+  token,
   blueprint: "research",
   variables: { userId: "u_ada" },
 });

@@ -8,9 +8,9 @@ tests:
   - it: is on by default
     template: networkpolicy.yaml
     asserts:
-      # Unusual for a chart, and deliberate: the server's HTTP API is entirely
-      # unauthenticated, so without this every pod in every namespace can
-      # execute code on it.
+      # Unusual for a chart, and deliberate: it is the second layer behind the
+      # API tokens. Without it a leaked token works from every pod in every
+      # namespace, and with `auth.enabled: false` so does no token at all.
       - hasDocuments:
           count: 1
 
@@ -138,7 +138,8 @@ tests:
   - it: publishes nothing to the internet by default
     template: ingress.yaml
     asserts:
-      # An Ingress publishes arbitrary code execution to whatever can reach it.
+      # An Ingress publishes a code-execution API, behind nothing but a bearer
+      # token, to whatever can reach it.
       - hasDocuments:
           count: 0
 

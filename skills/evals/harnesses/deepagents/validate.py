@@ -16,6 +16,8 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.tools import load_mcp_tools
 
 URL = os.environ.get("SUBMILLI_SERVER_URL", "http://127.0.0.1:18128").rstrip("/")
+# The fixture's user token; serve_fixture.py prints it.
+TOKEN = os.environ["SUBMILLI_USER_TOKEN"]
 EXECUTE = "submilli__typescript__execute"
 
 
@@ -52,8 +54,12 @@ class ScriptedModel(BaseChatModel):
         return ChatResult(generations=[ChatGeneration(message=reply)])
 
 
-async def run_agent(customer: str | None, requested: str) -> tuple[str, list[str]]:
-    headers = {} if customer is None else {"submilli-variables": f"customerId={customer}"}
+async def run_agent(customer: str | None, requested: str,
+                    token: str | None = TOKEN) -> tuple[str, list[str]]:
+    # The token admits the application; the binding says which customer.
+    headers = {} if token is None else {"Authorization": f"Bearer {token}"}
+    if customer is not None:
+        headers["submilli-variables"] = f"customerId={customer}"
     client = MultiServerMCPClient({"submilli": {
         "transport": "streamable_http", "url": f"{URL}/mcp/support-read", "headers": headers,
     }})
@@ -88,13 +94,24 @@ async def main() -> None:
     denied, _ = await run_agent("cus_northwind", "cus_initech")
     assert "permission denied" in denied.lower() and "balance.read" in denied, denied
 
+    # The token is still sent here: this must be the 400 for the missing
+    # binding, not an authentication error.
     try:
         await run_agent(None, "cus_northwind")
     except BaseException as error:
         assert "400" in "".join(flatten(error)), error
     else:
         raise AssertionError("session without customerId was accepted")
-    print("PASS: deep agent allowed=6150, cross-customer denied, missing binding rejected")
+    # Without a token the server answers 401 before it reads the binding. The
+    # adapter has no OAuth provider configured, so it raises instead of
+    # starting a sign-in.
+    try:
+        await run_agent("cus_northwind", "cus_northwind", token=None)
+    except BaseException as error:
+        assert "401" in "".join(flatten(error)), error
+    else:
+        raise AssertionError("session without a token was accepted")
+    print("PASS: deep agent allowed=6150, cross-customer denied, missing binding rejected, missing token rejected")
 
 
 if __name__ == "__main__":

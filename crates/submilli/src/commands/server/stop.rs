@@ -4,10 +4,12 @@
 use std::process::ExitCode;
 use std::time::Duration;
 
+use crate::commands::http::{ServerTarget, ok_or_report};
+
 #[derive(clap::Args)]
 pub struct Args {
-    #[arg(long, default_value = "http://127.0.0.1:8128")]
-    server: String,
+    #[command(flatten)]
+    target: ServerTarget,
 }
 
 /// How long to wait for the server to finish draining before giving up.
@@ -15,21 +17,22 @@ const POLL_ATTEMPTS: u32 = 50;
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
-    let base = args.server.trim_end_matches('/');
-    let agent: ureq::Agent = ureq::Agent::config_builder().build().into();
+    let base = args.target.base();
+    let agent = args.target.agent()?;
 
-    if agent
-        .post(&format!("{base}/v1/shutdown"))
-        .send_empty()
-        .is_err()
-    {
+    let Ok(resp) = agent.post(&format!("{base}/v1/shutdown")).send_empty() else {
         println!("already stopped (no server at {base})");
         return Ok(ExitCode::SUCCESS);
+    };
+    if ok_or_report(resp).is_none() {
+        return Ok(ExitCode::from(1));
     }
 
-    // Poll /v1/status until the listener stops accepting — then it's down.
+    // Poll until the listener stops accepting — then it's down. `/healthz`
+    // rather than `/v1/status`: any answer at all means "still up", and this
+    // one needs no token.
     for _ in 0..POLL_ATTEMPTS {
-        if agent.get(&format!("{base}/v1/status")).call().is_err() {
+        if agent.get(&format!("{base}/healthz")).call().is_err() {
             println!("stopped");
             return Ok(ExitCode::SUCCESS);
         }

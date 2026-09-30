@@ -7,6 +7,8 @@ from agents import Agent, Runner
 from agents.mcp import MCPServerStreamableHttp
 
 SUBMILLI_SERVER = os.environ.get("SUBMILLI_SERVER", "http://127.0.0.1:8128")
+# The application's token for the server: the `user` role, never the admin one.
+SUBMILLI_USER_TOKEN = os.environ["SUBMILLI_USER_TOKEN"]
 BLUEPRINT = "research"
 
 
@@ -25,7 +27,10 @@ async def answer(question: str, user_id: str, model=None) -> str:
         name="submilli",
         params={
             "url": f"{SUBMILLI_SERVER}/mcp/{BLUEPRINT}",
-            "headers": {"submilli-variables": f"userId={user_id}"},
+            "headers": {
+                "Authorization": f"Bearer {SUBMILLI_USER_TOKEN}",
+                "submilli-variables": f"userId={user_id}",
+            },
         },
     ) as submilli:
         agent = Agent(

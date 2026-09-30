@@ -1,32 +1,93 @@
 # Partner-facing example for running `submilli-server` in a container, and the
 # fixture the release workflow's smoke test drives.
 #
+# The server refuses to start without API tokens, so generate two first. Compose
+# reads `.env` from this directory on its own:
+#
+#   printf 'SUBMILLI_ADMIN_TOKEN=%s\nSUBMILLI_USER_TOKEN=%s\n' \
+#     "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" > .env
+#   chmod 600 .env
 #   docker compose up -d
+#
+#   set -a; . ./.env; set +a
 #   curl -X PUT http://127.0.0.1:8128/v1/blueprints/demo \
+#     -H "Authorization: Bearer $SUBMILLI_ADMIN_TOKEN" \
 #     -H 'content-type: application/json' \
 #     -d "$(python3 -c 'import json,sys; print(json.dumps({"yaml": sys.stdin.read()}))' \
 #         < examples/docker/blueprints/demo.yaml)"
+#
+# The admin token manages the server (blueprints, secrets, packages, status,
+# shutdown) and is what the `submilli server` CLI reads from
+# $SUBMILLI_ADMIN_TOKEN. The user token only runs programs against registered
+# blueprints; it is the one to hand to your application container, as
+# SUBMILLI_USER_TOKEN. Never give an agent process the admin token: it could
+# rewrite the blueprint that constrains it.
 #
 # SUBMILLI_IMAGE lets the smoke test point this at a locally-built image; the
 # default is the published tag a partner would pull.
 
 services:
+  # Writes the server's config file into a volume, then exits. `api_tokens` has
+  # no flag or environment form, so the server needs a file, and this keeps
+  # compose.yaml a single download. Compose's inline `configs: content:` would be
+  # the obvious way to ship one, but Compose refuses it for a `read_only`
+  # service (it has to copy the file into the container's filesystem), and the
+  # read-only root below is not worth trading away. The distroless server image
+  # has no shell to write the file itself, hence a separate one-shot container.
+  #
+  # The file holds no secret: each entry names the environment variable its token
+  # comes from. Add other server settings to it here (see
+  # https://submilli.ai/docs/server/#configure-it); after an edit,
+  # `docker compose up -d --force-recreate` rewrites the file and restarts the
+  # server, which reads it only at boot.
+  submilli-config:
+    image: busybox:1.38-musl
+    network_mode: none
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    read_only: true
+    volumes:
+      - submilli-config:/config
+    command:
+      - sh
+      - -c
+      - |
+        cat > /config/server.yaml <<'YAML'
+        api_tokens:
+          - name: ops
+            role: admin
+            token_env: SUBMILLI_ADMIN_TOKEN
+          - name: app
+            role: user
+            token_env: SUBMILLI_USER_TOKEN
+        YAML
+
   submilli:
     image: ${SUBMILLI_IMAGE:-ghcr.io/submilli/submilli-runtime:latest}
+    depends_on:
+      submilli-config:
+        condition: service_completed_successfully
 
-    # The HTTP API has no inbound authentication yet (SUB-950), so the
-    # published port is scoped to the loopback interface. This is substantive,
-    # not stylistic: Docker DNATs published ports in nat/PREROUTING and they then
-    # traverse FORWARD via DOCKER-USER/DOCKER, so the INPUT rules ufw writes are
-    # never consulted — a plain `8128:8128` would expose an unauthenticated
-    # code-execution endpoint to the LAN on a host the operator believes is
-    # firewalled.
+    # Every request needs a token, and the published port is still scoped to the
+    # loopback interface. Both, because the server speaks plain HTTP: a bearer
+    # token sent across a LAN is readable by anything on the path, and a token
+    # is one leak away from being the only thing between the network and a
+    # code-execution endpoint. The loopback scope is substantive, not stylistic:
+    # Docker DNATs published ports in nat/PREROUTING and they then traverse
+    # FORWARD via DOCKER-USER/DOCKER, so the INPUT rules ufw writes are never
+    # consulted — a plain `8128:8128` is reachable from the LAN on a host the
+    # operator believes is firewalled. To serve other machines, put a
+    # TLS-terminating reverse proxy in front rather than widening this.
     #
     # Loopback publishing scopes the *host* interface only. It does not isolate
     # the server from other containers, which is why `submilli-net` below is a
     # dedicated network rather than the default bridge: on the default bridge any
     # co-resident container reaches the server directly on its container IP,
-    # where the published-port restriction does not apply.
+    # where the published-port restriction does not apply. Put only your
+    # application on this network; a container there still needs a token, but
+    # it is one step closer than it has to be.
     ports:
       - "127.0.0.1:8128:8128"
     networks:
@@ -42,6 +103,7 @@ services:
     # hand-written files, so it is registered over the API and persists here.
     volumes:
       - submilli-state:/var/lib/submilli
+      - submilli-config:/etc/submilli/config:ro
 
     # The sixth state directory. The ephemeral VFS root is a separate setting
     # that defaults to the system temp dir, so it is not moved by SUBMILLI_HOME;
@@ -77,14 +139,34 @@ services:
     # SUBMILLI_BIND/SUBMILLI_PORT are what the healthcheck reads: it runs as its
     # own process and cannot inherit the server's flags. The image already sets
     # HOST=0.0.0.0, but that is the *ambient* tier — naming them explicitly is
-    # what makes an operator's port override apply to the probe as well.
+    # what makes an operator's port override apply to the probe as well. The
+    # probe inherits SUBMILLI_CONFIG too, and needs no token: it calls /healthz,
+    # the one endpoint that answers without one.
+    #
+    # The tokens arrive as environment variables (`token_env` in the config
+    # above) rather than as files. A file is the better home for a credential in
+    # general — an env var is readable via `docker inspect` and printed by
+    # `docker compose config` — but a Compose-mounted file keeps its host owner
+    # and mode, so a conventionally-permissioned 0600 token file is unreadable
+    # by uid 65532 and the server fails boot (the same trap as the store key
+    # below). Env vars work on every host with no chmod step. To use files
+    # instead, mount each token as a Compose secret with mode 0444 and replace
+    # `token_env: …` with `token_file: /run/secrets/<name>` in the config.
+    #
+    # `:?` makes a missing token a Compose error rather than a server that
+    # refuses to boot with the reason buried in its log.
     environment:
       SUBMILLI_BIND: 0.0.0.0
       SUBMILLI_PORT: 8128
+      SUBMILLI_CONFIG: /etc/submilli/config/server.yaml
+      SUBMILLI_ADMIN_TOKEN: ${SUBMILLI_ADMIN_TOKEN:?set SUBMILLI_ADMIN_TOKEN, for example in .env - generate one with `openssl rand -hex 32`}
+      SUBMILLI_USER_TOKEN: ${SUBMILLI_USER_TOKEN:?set SUBMILLI_USER_TOKEN, for example in .env - generate one with `openssl rand -hex 32` (not the admin token)}
 
     # Supply the secret-store key as a file, not as an environment variable: an
     # env var is readable via `docker inspect`, appears in `docker compose
-    # config` output, and is inherited by the process environment.
+    # config` output, and is inherited by the process environment. Unlike an API
+    # token, this key cannot be rotated by editing a config entry — it decrypts
+    # everything already in the store — so it earns the extra step.
     #
     # Uncomment both blocks after creating the key. Compose's uid/gid/mode secret
     # attributes are ignored outside swarm and Docker does not chown bind mounts,
@@ -95,7 +177,7 @@ services:
     #   head -c32 /dev/urandom | base64 > submilli-store-key
     #   chmod 0444 submilli-store-key
     #
-    #   environment:
+    #   environment:          # add to the block above
     #     SUBMILLI_SECRET_STORE_KEY_FILE: /run/secrets/submilli-store-key
     #   secrets:
     #     - submilli-store-key
@@ -104,6 +186,7 @@ services:
 
 volumes:
   submilli-state:
+  submilli-config:
 
 networks:
   submilli-net:

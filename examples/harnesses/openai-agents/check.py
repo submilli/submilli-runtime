@@ -9,6 +9,7 @@ from agents import ModelResponse, Usage, set_tracing_disabled
 from agents.models.interface import Model
 from openai.types.responses import ResponseFunctionToolCall, ResponseOutputMessage, ResponseOutputText
 
+import agent
 from agent import answer
 
 PROGRAM = (pathlib.Path(__file__).parent.parent / "note.ts").read_text()
@@ -51,6 +52,13 @@ async def main() -> None:
         pass  # The server refuses the connection: the blueprint requires a user.
     else:
         raise AssertionError("a session without the user binding was accepted")
+    agent.SUBMILLI_USER_TOKEN = "a-token-the-server-does-not-know"
+    try:
+        await answer("total", "u_ada", Scripted(PROGRAM))
+    except Exception:
+        pass  # The server answers 401 before it looks at anything else.
+    else:
+        raise AssertionError("a token the server does not know was accepted")
     print("openai-agents: ok")
 
 

@@ -48,11 +48,15 @@ async def main() -> None:
     customer_id = trusted_customer_id()
     base_url = os.environ.get("SUBMILLI_SERVER_URL", "http://127.0.0.1:8128").rstrip("/")
     blueprint = os.environ.get("SUBMILLI_BLUEPRINT", "support-read")
+    token = os.environ["SUBMILLI_USER_TOKEN"]  # user role; never the admin token
     client = MultiServerMCPClient({
         "submilli": {
             "transport": "streamable_http",
             "url": f"{base_url}/mcp/{blueprint}",
-            "headers": {"submilli-variables": f"customerId={customer_id}"},
+            "headers": {
+                "Authorization": f"Bearer {token}",
+                "submilli-variables": f"customerId={customer_id}",
+            },
         }
     })
     try:
@@ -88,7 +92,7 @@ The JavaScript adapter has the same identity rule. Its current API uses
 `new MultiServerMCPClient({ mcpServers: ... })`, `await client.getTools(...)`,
 and `await client.close()`; see the [official TypeScript MCP integration](https://docs.langchain.com/oss/javascript/langchain/mcp)
 for the version-specific example. Keep the trusted header in the server-side
-constructor and close the client in `finally`.
+constructor, beside `Authorization`, and close the client in `finally`.
 
 ## LangGraph checkpoint and resume
 
@@ -104,6 +108,7 @@ same server-side identity:
 
 ```python
 import asyncio
+import os
 from typing import Any
 
 from langchain_core.messages import AIMessage
@@ -149,12 +154,15 @@ async def run_with_resume(customer_id: str) -> dict[str, Any]:
     if customer_id != "cus_northwind":
         raise ValueError("demo only: customer must be authorized by the host")
     endpoint = "http://127.0.0.1:8128/mcp/support-read"
+    headers = {
+        "Authorization": f"Bearer {os.environ['SUBMILLI_USER_TOKEN']}",
+        "submilli-variables": f"customerId={customer_id}",
+    }
     checkpointer = InMemorySaver()
     config = {"configurable": {"thread_id": "trusted-resume-demo"}}
 
     first_client = MultiServerMCPClient({"submilli": {
-        "transport": "streamable_http", "url": endpoint,
-        "headers": {"submilli-variables": f"customerId={customer_id}"},
+        "transport": "streamable_http", "url": endpoint, "headers": headers,
     }})
     async with first_client.session("submilli") as first_session:
         first_tools = await load_mcp_tools(first_session)
@@ -164,8 +172,7 @@ async def run_with_resume(customer_id: str) -> dict[str, Any]:
                      config, interrupt_before=["tools"])
 
     second_client = MultiServerMCPClient({"submilli": {
-        "transport": "streamable_http", "url": endpoint,
-        "headers": {"submilli-variables": f"customerId={customer_id}"},
+        "transport": "streamable_http", "url": endpoint, "headers": headers,
     }})
     try:
         async with second_client.session("submilli") as second_session:
@@ -203,9 +210,10 @@ node that returns an `AIMessage` with one `tool_calls` entry for
    `handle_tool_errors=True` this is returned content, not an exception.
    `handle_tool_errors` is an argument of `MultiServerMCPClient(...)` and
    `load_mcp_tools(...)`, not a key of the connection dict.
-3. A session without `submilli-variables` fails at `initialize`: entering
-   `client.session(...)` raises an exception group wrapping an HTTP `400`, so
-   no tools are listed. Test for the raised error, not a tool result.
+3. A session without `submilli-variables` (token still sent) fails at
+   `initialize`: entering `client.session(...)` raises an exception group
+   wrapping an HTTP `400`, so no tools are listed. Without `Authorization` it
+   wraps a `401` instead. Test for the raised error, not a tool result.
 4. An interrupted thread (`interrupt_before=["tools"]`) resumes with
    `ainvoke(None, config)` on a graph rebuilt from a new session for the same
    trusted identity, after the first session has closed.

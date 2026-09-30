@@ -22,7 +22,10 @@ export function options(userId: string): Options {
       submilli: {
         type: "http",
         url: `${SUBMILLI_SERVER}/mcp/${BLUEPRINT}`,
-        headers: { "submilli-variables": `userId=${userId}` },
+        headers: {
+          Authorization: `Bearer ${userToken()}`,
+          "submilli-variables": `userId=${userId}`,
+        },
       },
     },
     // Only the server above, whatever else the account or machine has configured.
@@ -42,6 +45,13 @@ export async function answer(question: string, userId: string): Promise<string> 
     }
   }
   throw new Error("the agent ended without a result");
+}
+
+/** The application's token for the server: the `user` role, never the admin one. */
+function userToken(): string {
+  const token = process.env.SUBMILLI_USER_TOKEN;
+  if (!token) throw new Error("SUBMILLI_USER_TOKEN is not set: export the server's user token");
+  return token;
 }
 
 if (import.meta.filename === process.argv[1]) {

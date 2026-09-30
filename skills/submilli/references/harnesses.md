@@ -33,23 +33,42 @@ service. Install the CLI/server using [setup](setup.md), then:
    permits only the bound customer's balance.
 4. Run `submilli build check`, `submilli build test`,
    `submilli build publish-local`, and `submilli blueprint lint blueprint.yaml`.
-5. Start `submilli-server --bind 127.0.0.1 --port 8128` in another terminal.
+5. The server refuses to start without API tokens ([setup](setup.md)). Save
+   `server.yaml`:
+
+   ```yaml
+   api_tokens:
+     - { name: ops, role: admin, token_env: SUBMILLI_ADMIN_TOKEN }
+     - { name: app, role: user, token_env: SUBMILLI_USER_TOKEN }
+   ```
+
+   Export both tokens, then start the server in the background:
+
+   ```sh
+   export SUBMILLI_ADMIN_TOKEN=$(openssl rand -hex 32)
+   export SUBMILLI_USER_TOKEN=$(openssl rand -hex 32)
+   submilli-server --config server.yaml --bind 127.0.0.1 --port 8128 &
+   ```
+
+   Any other shell that runs the CLI or the harness needs the same values.
    Use the same `SUBMILLI_HOME` for the CLI and server if overriding the default:
    the server must see the package store where you published the fixture.
-6. Run `submilli server blueprint apply blueprint.yaml --server http://127.0.0.1:8128`.
+6. Run `submilli server blueprint apply blueprint.yaml --server http://127.0.0.1:8128`;
+   the CLI sends `SUBMILLI_ADMIN_TOKEN`.
    The MCP URL is now `http://127.0.0.1:8128/mcp/support-read`.
 
 Before involving a model, verify the endpoint:
 
 ```sh
 curl --fail-with-body http://127.0.0.1:8128/v1/execute \
+  -H "Authorization: Bearer $SUBMILLI_USER_TOKEN" \
   -H 'content-type: application/json' \
   -d '{"blueprint":"support-read","variables":{"customerId":"cus_northwind"},"code":"import { readBalance } from \"@acme/billing\"; function main(): number { return readBalance(\"cus_northwind\"); }"}'
 ```
 
 Expect `result: "6150"`. Change only the program's argument to `cus_initech`:
 expect a capability denial. Remove `variables`: expect `invalid_request` for
-the missing binding. The fixture returns a constant; these checks prove the
+the missing binding. Drop the `Authorization` header: expect `401`. The fixture returns a constant; these checks prove the
 policy path, not connectivity to a billing service. Replace it with reviewed
 service operations only after this slice works. Each harness guide below
 uses this fixture and labels its hard-coded demo identity explicitly.
@@ -68,6 +87,12 @@ HTTP. Load tools from that endpoint; preserve their names, schemas, and full
 descriptions. The execution tool's description teaches the TypeScript subset;
 discovery tools supply package and built-in declarations. Do not replace this
 with a generic “execute JavaScript” schema or assume there is only one tool.
+
+Send `Authorization: Bearer <token>` on every MCP and REST request, with the
+`user` token read from `SUBMILLI_USER_TOKEN` in the host process. The harness
+and agent never get the admin token (it could rewrite the blueprint), and no
+token goes into a prompt, tool schema, or generated code. A missing or unknown
+token is `401` before the binding is read; it is not an OAuth challenge.
 
 Bind session variables before MCP initialization, from authenticated and
 authorized application state. Header format:
@@ -90,7 +115,9 @@ explain the actual boundary. Keep model credentials in the host application
 and service credentials in the intended runtime/package credential path.
 
 First test initialization, tool discovery, an allowed call, a cross-identity
-denial, and missing-variable rejection deterministically. Then run one live
+denial, missing-variable rejection (token still sent), and missing-token
+rejection deterministically. Then run one live
 model task if access is available. Inspect transcript and results; never claim
-a live model test passed when only a mocked adapter ran. Network-accessible
-production servers need trusted ingress; variable binding alone is not auth.
+a live model test passed when only a mocked adapter ran. The token
+authenticates the application, not its end user, and variable binding is not
+auth; a network-reachable server also needs TLS and restricted ingress.

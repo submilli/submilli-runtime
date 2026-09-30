@@ -86,16 +86,40 @@ installs do not automatically propagate to remote/cloud machines.
 
 ## Deploying the server
 
-The server does not authenticate callers, so every deployment has one rule:
-run one server per application and make sure only that application can
-reach it. Read https://submilli.ai/docs/deploying/ before advising on
-production; the mechanics that matter most:
+The server requires a bearer token on every request except `GET /healthz`,
+and refuses to start with none configured. Tokens are declared in the config
+file only, each with a role and a source (`token_env` or `token_file`, never
+the value):
 
-| The application runs | Server setup | How only the application reaches it |
-| --- | --- | --- |
-| As a process on a machine | `submilli-server --config server.yaml` with `SUBMILLI_HOME` on durable disk | `bind: 127.0.0.1` (the default); the app calls `http://127.0.0.1:8128` |
-| In containers on one host | The published `compose.yaml` (`curl -fsSLO https://raw.githubusercontent.com/submilli/submilli-runtime/main/compose.yaml`) | Port published as `127.0.0.1:8128:8128`, never `8128:8128` (Docker bypasses host firewalls such as ufw); the app joins the `submilli-net` network and calls `http://submilli:8128` |
-| On Kubernetes | `helm install submilli oci://ghcr.io/submilli/charts/submilli -f values.yaml` | Default-deny NetworkPolicy; list the app's pods in `networkPolicy.allowFrom`, and the app calls `http://submilli.<namespace>.svc:8128` |
+```yaml
+api_tokens:
+  - { name: ops, role: admin, token_env: SUBMILLI_ADMIN_TOKEN }
+  - { name: app, role: user, token_env: SUBMILLI_USER_TOKEN }
+```
+
+Generate each with `openssl rand -hex 32` (32+ characters required). `user`
+covers `/v1/execute`, `/v1/sessions/*`, `/mcp/{blueprint}`, and the
+per-blueprint prompt, package, and builtin reads; `admin` adds blueprints,
+secrets, packages, status, and shutdown. The application and agents get
+`SUBMILLI_USER_TOKEN`; only the operator and `submilli server` commands (which
+read `SUBMILLI_ADMIN_TOKEN`, or `--token-file`) hold the admin token. Never
+give an agent the admin token: it could rewrite its own blueprint. No token is
+`401`; a `user` token on an admin route is `403`. Tokens are read at boot;
+rotate by adding a second entry, moving callers, then removing the old one.
+`allow_unauthenticated: true` (`--allow-unauthenticated`,
+`SUBMILLI_ALLOW_UNAUTHENTICATED=1`) is the explicit opt-out, for local
+experiments only; it cannot be combined with `api_tokens`.
+
+Tokens travel over plain HTTP, so also run one server per application and
+make sure only that application can reach it. Read
+https://submilli.ai/docs/deploying/ before advising on production; the
+mechanics that matter most:
+
+| The application runs | Server setup | Tokens | How only the application reaches it |
+| --- | --- | --- | --- |
+| As a process on a machine | `submilli-server --config server.yaml` with `SUBMILLI_HOME` on durable disk | `token_file` paths or `token_env` in `server.yaml` | `bind: 127.0.0.1` (the default); the app calls `http://127.0.0.1:8128` |
+| In containers on one host | The published `compose.yaml` (`curl -fsSLO https://raw.githubusercontent.com/submilli/submilli-runtime/main/compose.yaml`) | `SUBMILLI_ADMIN_TOKEN` and `SUBMILLI_USER_TOKEN` in `.env` (Compose refuses to start without them); pass only the user token to the app container | Port published as `127.0.0.1:8128:8128`, never `8128:8128` (Docker bypasses host firewalls such as ufw); the app joins the `submilli-net` network and calls `http://submilli:8128` |
+| On Kubernetes | `helm install submilli oci://ghcr.io/submilli/charts/submilli -f values.yaml` | Generated into Secret `<release>-auth`, keys `admin-token` and `user-token`; the app takes `user-token` through a `secretKeyRef` (same namespace only). Argo CD and `helm template` flows must set `auth.existingSecret` | Default-deny NetworkPolicy; list the app's pods in `networkPolicy.allowFrom`, and the app calls `http://submilli.<namespace>.svc:8128` |
 
 In every setup, blueprints come from source control through the seed
 directory (`blueprint_seed_dir`; in the chart, the `blueprints:` values map),
@@ -105,10 +129,15 @@ which the server reconciles on every start. Only seeded blueprints may use
 
 Mistakes to avoid:
 
-- In a container or pod, the startup warning "bound outside loopback" is
-  expected: the server must listen on all addresses inside it, and the port
-  publish, network, or NetworkPolicy is the boundary. On a plain machine the
-  same warning means the bind is wrong.
+- A healthy start logs `inbound authentication enabled tokens="…"`. A WARN
+  beginning `inbound authentication is disabled` means the opt-out is set;
+  don't leave it on in a deployment. In a container or pod the server listens
+  on all addresses by design, and the port publish, network, or NetworkPolicy
+  is the second boundary behind the token.
+- A public address needs the token and TLS in front (reverse proxy or
+  ingress). The token alone does not make plain HTTP safe.
+- Probes use `GET /healthz` or `submilli-server --health-check`; neither
+  needs a token. `/v1/status` needs the admin token.
 - In `allowFrom`, a `namespaceSelector` and `podSelector` in the same list
   item mean both must match; as separate items either one admits, which is
   far wider. Run `helm test submilli` after every install and upgrade: it
@@ -130,8 +159,10 @@ Mistakes to avoid:
   a client must stay on one pod through the headless Service
   (`submilli-0.submilli-headless.<namespace>.svc:8128`). Don't suggest it for
   scale unless the application does that.
-- Never put secret values in `values.yaml`, on command lines, or in Compose
-  environment variables; use Kubernetes Secrets or files.
+- Never put secret values in `values.yaml` or on command lines; use
+  Kubernetes Secrets or files. The shipped `compose.yaml` takes the two API
+  tokens from `.env` (keep it out of source control); the secret-store key
+  stays a file.
 
 ### Resource limits
 

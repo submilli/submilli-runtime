@@ -21,16 +21,26 @@ run:
 
 Pick the section that matches. The server itself is the same program in all
 three, configured the way [Submilli server](/docs/server) describes; what
-changes is how each setup handles the same three jobs.
+changes is how each setup handles the same four jobs.
 
 ## What every deployment has to get right
 
-**Only your application can reach the server.** Your application is the
-server's one client, and the server doesn't check credentials of its own yet,
-so where it sits on the network decides who can use it. Each setup below
-places it where your application can reach it and nothing else can: loopback
-on a single machine, a private network in Compose, a network policy in
-Kubernetes. Each section shows how, and how to confirm it's working.
+**Every caller holds the right token.** The server checks a bearer token on
+every request and won't start without one configured. There are two roles.
+The `user` token runs programs against registered blueprints; it goes to your
+application, and to any agent that connects over MCP. The `admin` token also
+manages blueprints, secrets, and packages; it stays with whoever deploys.
+[Who can reach it](/docs/server#who-can-reach-it) has the full split. Each
+setup below shows where the two tokens come from and how each side gets its
+own.
+
+**Only your application can reach the server.** The token is one layer; where
+the server sits on the network is the other. The server speaks plain HTTP, so
+a token that crosses a network unencrypted can be read on the way, and a
+leaked token is only useful to someone who can reach the port. Each setup
+below places the server where your application can reach it and nothing else
+can: loopback on a single machine, a private network in Compose, a network
+policy in Kubernetes. Each section shows how, and how to confirm it's working.
 
 **State lives on storage that outlasts the process.** Registered blueprints,
 open sessions, installed packages, and secrets all live under
@@ -40,7 +50,7 @@ container it has to be a volume, or it's gone at the next deploy.
 
 **Blueprints and secrets arrive without manual steps.** Keep blueprints in
 source control and let the server load them at startup from a [seed
-directory](/docs/server#blueprints-from-a-directory). Keep secret values out
+directory](/docs/server#register-blueprints). Keep secret values out
 of source control and out of anywhere they'd be printed, such as command
 lines and environment dumps.
 
@@ -62,19 +72,51 @@ bind: 127.0.0.1
 blueprint_seed_dir: /etc/submilli/blueprints
 secret_store:
   key_file: /etc/submilli/store.key
+api_tokens:
+  - name: ops
+    role: admin
+    token_file: /etc/submilli/admin.token
+  - name: app
+    role: user
+    token_file: /etc/submilli/user.token
+```
+
+Generate the two tokens as files that only the server's user and the right
+caller can read: the admin token for you, the user token for your
+application.
+
+```sh
+openssl rand -hex 32 > /etc/submilli/admin.token
+openssl rand -hex 32 > /etc/submilli/user.token
+chmod 600 /etc/submilli/*.token
 ```
 
 ```sh
 SUBMILLI_HOME=/var/lib/submilli submilli-server --config /etc/submilli/server.yaml
 ```
 
-Leave `bind` at `127.0.0.1`. Your application connects to
-`http://127.0.0.1:8128`, and nothing on the network can. If you ever see this
-at startup, the server is listening on a public address:
-
 ```text
-WARN submilli_server::config: bound outside loopback: this server has no inbound authentication, so anything that can reach this port can run code, manage blueprints, and stop the server; make sure only your application can reach it (https://submilli.ai/docs/deploying/)
+INFO submilli_server::auth: inbound authentication enabled tokens="ops (admin), app (user)"
+INFO submilli_server::serve: submilli-server listening addr=127.0.0.1:8128
 ```
+
+The first line names the tokens the server loaded and their roles, never the
+tokens themselves. If it is missing and the server exited instead, the error
+names the entry it couldn't load. Your application reads
+`/etc/submilli/user.token` and sends it as `Authorization: Bearer <token>`.
+For your own commands, point the CLI at the admin token:
+
+```sh
+export SUBMILLI_SERVER_TOKEN_FILE=/etc/submilli/admin.token
+submilli server status
+```
+
+Leave `bind` at `127.0.0.1`. Your application connects to
+`http://127.0.0.1:8128`, and nothing on the network can. The token is what
+separates your application from every other process on the machine; the
+loopback bind is what keeps the token off the network. If other machines have
+to reach the server, put a reverse proxy that terminates TLS in front of it
+rather than changing `bind`.
 
 If a package needs to call a service on your private network, allow just
 that address in the same file (`network: { allow_ip: ["10.0.12.7"] }`);
@@ -90,10 +132,14 @@ both binaries with the latest release; restart the server afterwards.
 
 If your application runs in containers on one host, run the server as one
 more container. Submilli publishes a `compose.yaml` that does the hard parts.
-Download it next to your own and start it:
+Download it next to your own, generate the two tokens it requires into `.env`,
+and start it:
 
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/submilli/submilli-runtime/main/compose.yaml
+printf 'SUBMILLI_ADMIN_TOKEN=%s\nSUBMILLI_USER_TOKEN=%s\n' \
+  "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" > .env
+chmod 600 .env
 docker compose up -d
 docker compose ps
 ```
@@ -103,13 +149,34 @@ NAME                   IMAGE                                      COMMAND       
 myproject-submilli-1   ghcr.io/submilli/submilli-runtime:latest   "/usr/local/bin/subm…"   submilli   12 seconds ago   Up 12 seconds (healthy)   127.0.0.1:8128->8128/tcp
 ```
 
-The log opens with the warning about binding outside loopback. In a
-container that's expected: the server has to listen on every address inside
-the container, or nothing outside the container could reach it at all. What
-decides who can actually reach it is how the port is published and which
-network it's on, which is the next part.
+Compose reads `.env` from the directory it runs in. Keep that file out of
+source control. Without the two variables Compose stops before starting
+anything:
+
+```text
+error while interpolating services.submilli.environment.SUBMILLI_ADMIN_TOKEN: required variable SUBMILLI_ADMIN_TOKEN is missing a value: set SUBMILLI_ADMIN_TOKEN, for example in .env - generate one with `openssl rand -hex 32`
+```
+
+The server's log opens by naming the tokens it loaded:
+
+```text
+submilli-1  | … INFO submilli_server::auth: inbound authentication enabled tokens="ops (admin), app (user)"
+```
 
 ### How it keeps other callers out
+
+Every request needs one of the two tokens. The file's `submilli-config`
+service writes the server's config into a volume before the server starts;
+that config declares an `admin` token read from `SUBMILLI_ADMIN_TOKEN` and a
+`user` token read from `SUBMILLI_USER_TOKEN`, and the server container gets
+both variables from `.env`. The config holds no token, only the variable
+names.
+
+On top of that, the server is kept off the network, because it speaks plain
+HTTP and a token sent in the clear is only as private as the network it
+crosses. The server listens on every address inside its container, as it has
+to, or nothing outside the container could reach it. Who can actually reach
+it is decided by how the port is published and which network it's on.
 
 The file publishes the server's port as `127.0.0.1:8128`, not `8128`. That
 difference matters more with Docker than it looks: Docker routes published
@@ -119,8 +186,8 @@ your whole network even on a host where `ufw` says the port is closed.
 Loopback publishing only covers the host, though. Other containers reach the
 server over Docker's networks, not the published port. So the server sits on
 its own network, `submilli-net`, and only containers you put on that network
-can reach it. Add your application to it and call the server by its service
-name:
+can reach it. Add your application to it, give it the user token, and call
+the server by its service name:
 
 ```yaml title="compose.yaml (your service)"
 services:
@@ -128,13 +195,24 @@ services:
     image: your-application
     environment:
       SUBMILLI_URL: http://submilli:8128
+      SUBMILLI_USER_TOKEN: ${SUBMILLI_USER_TOKEN:?}
     networks:
       - submilli-net
 ```
 
-Any container on `submilli-net` gets the full API, so don't put anything else
-there. A container on Docker's default network can't connect at all; its
-requests time out.
+Your application sends that value as `Authorization: Bearer <token>`. Pass it
+the user token only: the application is what talks to the agent, and a user
+token can't change the blueprints that limit what the agent's programs do.
+Don't put anything else on `submilli-net`. A container on Docker's default
+network can't connect at all; its requests time out.
+
+The admin token stays on the host. The `submilli server` commands read it from
+your shell, over the loopback port:
+
+```sh
+set -a; . ./.env; set +a
+submilli server status
+```
 
 ### What else the file sets up
 
@@ -147,7 +225,8 @@ requests time out.
   read-only filesystem with every Linux capability dropped. The image has no
   shell. These are extra layers beneath the sandbox itself.
 - **A health check** using `submilli-server --health-check`, which is why
-  `docker compose ps` can say `healthy`.
+  `docker compose ps` can say `healthy`. It calls `/healthz`, which needs no
+  token.
 - **Ten seconds to stop.** Docker waits that long before forcing the
   container to stop, which covers the server's own five-second drain. If you raise
   `--shutdown-grace`, raise `stop_grace_period` with it.
@@ -179,7 +258,8 @@ Compose reads `compose.override.yaml` automatically, so the shipped file
 stays untouched.
 
 Packages install over the published port, from the host, with the same
-command as on a laptop. The server fetches and builds them itself:
+command as on a laptop and the admin token in your shell. The server fetches
+and builds them itself:
 
 ```sh
 submilli server packages install acme/billing-package
@@ -189,7 +269,12 @@ submilli server packages install acme/billing-package
 
 The secret store stays off until the server has a key. Give it one as a file,
 not an environment variable: environment variables show up in
-`docker inspect` and `docker compose config`.
+`docker inspect` and `docker compose config`. The API tokens above are
+environment variables all the same, because a token is easy to replace and the
+file permissions described below are easy to get wrong; the store key
+decrypts everything already in the store, so it gets the extra care. To keep
+the tokens in files as well, mount each as a Compose secret the same way and
+use `token_file` in place of `token_env` in the config.
 
 ```sh
 head -c 32 /dev/urandom | base64 > submilli-store-key
@@ -251,11 +336,13 @@ WARN submilli_server: the outbound egress guard was widened by environment varia
 To upgrade, point the image at a new tag and recreate the container:
 
 ```sh
-SUBMILLI_IMAGE=ghcr.io/submilli/submilli-runtime:0.1.6 docker compose up -d
+SUBMILLI_IMAGE=ghcr.io/submilli/submilli-runtime:<version> docker compose up -d
 ```
 
 Pin a version tag rather than following `latest`, so an upgrade happens
-when you choose it. The volume carries the state across.
+when you choose it. The `compose.yaml` you downloaded configures API tokens,
+so it needs a server release that has them; a release from before tokens
+rejects the `api_tokens` key and won't start. The volume carries the state across.
 
 To back up, copy the volume while the server is stopped. Compose prefixes
 the volume name with the project name, usually the directory name;
@@ -282,15 +369,72 @@ empty file is a valid start. Add `--version` to pin a chart version, so
 upgrades happen when you choose them.
 
 This gives you one server pod, a Service called `submilli`, a persistent
-volume for its state, and a network policy that lets nothing reach it yet.
+volume for its state, a Secret holding two generated API tokens, and a
+network policy that lets nothing reach it yet.
 The chart's [README](https://github.com/submilli/submilli-runtime/tree/main/charts/submilli)
 is the reference for every value; this section covers the decisions you'll
 actually make.
 
+### Tokens
+
+The chart generates an admin token and a user token into a Secret named
+`submilli-auth` (the release name, then `-auth`), mounts them into the server
+pod as files, and points the server's config at them with `token_file`. Read
+one out when you need it:
+
+```sh
+kubectl get secret submilli-auth -o jsonpath='{.data.admin-token}' | base64 -d
+```
+
+Your application gets the user token from the same Secret, as an environment
+variable:
+
+```yaml title="your application's Deployment (fragment)"
+env:
+  - name: SUBMILLI_URL
+    value: http://submilli.submilli.svc:8128
+  - name: SUBMILLI_USER_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: submilli-auth
+        key: user-token
+```
+
+A pod can only reference a Secret in its own namespace. If your application
+runs in a different namespace from the server, create the tokens yourself,
+put the user token in a Secret in the application's namespace, and give the
+server both through `auth.existingSecret`:
+
+```sh
+kubectl -n submilli create secret generic submilli-tokens \
+  --from-literal=admin-token="$(openssl rand -hex 32)" \
+  --from-literal=user-token="$(openssl rand -hex 32)"
+```
+
+```yaml title="values.yaml"
+auth:
+  existingSecret: submilli-tokens
+```
+
+Use `auth.existingSecret` with Argo CD, too, and with any pipeline that runs
+`helm template` and applies the output. The chart keeps its generated tokens
+stable across upgrades by reading the live Secret back; rendered without
+access to the cluster, it has nothing to read and would produce new tokens on
+every sync, locking out every caller.
+
+The server reads tokens when it starts. To rotate one, change the Secret,
+then restart the pod and the application that uses it:
+
+```sh
+kubectl rollout restart statefulset/submilli
+```
+
 ### Letting your application in
 
-In a cluster, any pod in any namespace can reach any Service unless
-something says otherwise. So the chart installs a default-deny
+A token says what a caller may do; it doesn't limit who can try. In a
+cluster, any pod in any namespace can reach any Service unless something says
+otherwise, so a user token that leaks into a log or another team's manifest
+would work from anywhere. So the chart also installs a default-deny
 NetworkPolicy, and you list the pods that may call the server:
 
 ```yaml title="values.yaml"
@@ -315,11 +459,14 @@ The policy has three limits worth knowing:
   cluster's network plugin enforces it, and some don't. Where it isn't
   enforced, nothing warns you. `helm test submilli` checks this directly: it
   starts a pod that shouldn't get through and fails if it does.
-- **It admits pods, not requests.** Every pod you allow gets the whole API,
-  including replacing blueprints.
-- **`kubectl port-forward` is a separate way in.** It's handy for
-  debugging, and it's worth deciding who on your team should have that
-  permission.
+- **It admits pods, not requests.** What an admitted pod may call is decided
+  by the token it holds, which is why your application gets the user token
+  and not the admin one.
+- **`kubectl port-forward` is a separate way in.** It goes around the policy,
+  and it is how you run `submilli server` commands against the cluster: forward
+  the port, put the admin token in `SUBMILLI_ADMIN_TOKEN`, and the commands
+  work as they do locally. Anyone who can read the Secret can do the same, so
+  it's worth deciding who on your team has that permission.
 
 ### Blueprints and secrets
 
@@ -361,6 +508,19 @@ the secret fails. `helm test` catches it before that:
 ```text
 FAIL: a blueprint declares a secret at /etc/submilli/secrets/stripe/apikey, but the chart does not mount anything there. Paths the chart mounts: /etc/submilli/secrets/stripe/api-key
 ```
+
+The chart writes the server's config file for you, from its own values. For
+a server setting the chart has no value for, add it under `config:` with the
+same key the [config file](/docs/server#configure-it) uses:
+
+```yaml title="values.yaml"
+config:
+  max_execution_time: 30
+```
+
+The chart refuses keys it sets itself, such as `bind` and `port`, and names
+the value to use instead. Environment variables passed through `extraEnv`
+still override the file.
 
 Run `helm test submilli` after every install and upgrade. It registers a
 small blueprint of its own, `submilli-helmtest-exec`, to run a program
@@ -431,9 +591,11 @@ Choose the storage settings before installing. Access mode, storage class,
 and size are fixed when the claim is created, and `helm upgrade` can't change
 them.
 
-The pod's log also opens with the warning about binding outside loopback,
-for the same reason as in Compose: a Service can only reach a pod that
-listens on every address. The NetworkPolicy is what keeps it private.
+The pod's log opens with `inbound authentication enabled tokens="admin
+(admin), user (user)"`, as in the other setups. The server listens on every
+address in the pod, since a Service can only reach a pod that does; the tokens
+and the NetworkPolicy are what keep it private. The pod's probes call
+`/healthz`, which needs no token.
 
 `replicaCount` above 1 gives you several independent servers, not one
 bigger server. Blueprints from the values file reach all of them, but
@@ -455,10 +617,18 @@ the same volume. The same command applies changes to your values file. To back u
 
 ## Before you go live
 
-- Only your application can reach the server. On one machine, the log has no
-  warning about binding outside loopback. With Compose, the port is published
-  on `127.0.0.1` and only your application shares `submilli-net`. On
-  Kubernetes, `helm test` passes.
+- The startup log says `inbound authentication enabled` and lists the tokens
+  you expect. A request with no token gets `401`.
+- Your application, and any agent that connects to the server, holds the user
+  token. The admin token is only where blueprints are deployed from. Never
+  give an agent the admin token.
+- Only your application can reach the server. On one machine, `bind` is
+  `127.0.0.1`. With Compose, the port is published on `127.0.0.1` and only
+  your application shares `submilli-net`. On Kubernetes, `helm test` passes.
+- If the server has to be reachable at a public address, it has the tokens
+  and TLS in front of it, from a reverse proxy or an ingress. The token alone
+  does not make a plain-HTTP endpoint safe: sent unencrypted, it can be read
+  in transit and reused.
 - `$SUBMILLI_HOME` is on storage that survives a redeploy, and it's backed
   up.
 - Blueprints come from source control through the seed directory, and the
@@ -469,7 +639,3 @@ the same volume. The same command applies changes to your values file. To back u
   [Resource limits](/docs/resource-limits) explains each one.
 - Outbound access to internal services is opened only as far as a package
   needs. See [Outbound network](/docs/server#outbound-network).
-
-Inbound authentication is planned. When it ships, this chapter will show how
-to supply the credential in each setup, and the network rules above become a
-second layer rather than the only one.

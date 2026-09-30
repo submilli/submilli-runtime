@@ -15,7 +15,11 @@ the authorized blueprint and variables:
 async function runSubmilli(code, trustedCustomerId) {
   const response = await fetch("http://127.0.0.1:8128/v1/execute", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      // The `user` token; never the admin token.
+      Authorization: `Bearer ${process.env.SUBMILLI_USER_TOKEN}`,
+      "content-type": "application/json",
+    },
     body: JSON.stringify({
       blueprint: "support-read",
       code,
@@ -30,8 +34,8 @@ async function runSubmilli(code, trustedCustomerId) {
 ```
 
 `trustedCustomerId` comes from the authenticated handler and must not appear
-in the model's tool schema. Keep the server URL and blueprint selection
-application-owned too. Use a timeout and finite model-loop budget. An HTTP
+in the model's tool schema. Keep the server URL, token and blueprint selection
+application-owned too; a `401` means the token is missing or unknown. Use a timeout and finite model-loop budget. An HTTP
 success can still contain a runtime error; surface it. Avoid logging secret
 headers or unnecessary customer data in errors/transcripts.
 

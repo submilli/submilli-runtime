@@ -6,7 +6,7 @@ use std::process::ExitCode;
 use anyhow::Result;
 
 use super::AuthStateBody;
-use crate::commands::http::{client, read_or_error};
+use crate::commands::http::{ServerTarget, read_or_error};
 
 #[derive(clap::Args)]
 pub struct Args {
@@ -14,9 +14,8 @@ pub struct Args {
     blueprint: String,
     /// The MCP server's local name (its key in the `mcp:` block).
     server: String,
-    /// Base URL of the running submilli-server.
-    #[arg(long = "server", default_value = "http://127.0.0.1:8128")]
-    server_url: String,
+    #[command(flatten)]
+    target: ServerTarget,
 }
 
 pub fn execute(args: Args) -> Result<ExitCode> {
@@ -33,8 +32,8 @@ pub fn execute(args: Args) -> Result<ExitCode> {
 }
 
 fn run(args: &Args) -> Result<String> {
-    let agent = client();
-    let base = args.server_url.trim_end_matches('/');
+    let agent = args.target.agent()?;
+    let base = args.target.base();
     let state: AuthStateBody = read_or_error(
         agent
             .delete(&format!(

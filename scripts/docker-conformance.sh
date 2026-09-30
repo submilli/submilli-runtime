@@ -64,10 +64,16 @@ free_port() {
 s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
 }
 
-wait_for_status() {
+# Each call carries the least-privileged token that works for it: admin for
+# blueprints, secrets and status, user for executions, sessions and MCP.
+admin_curl() { curl -H "Authorization: Bearer ${SUBMILLI_ADMIN_TOKEN}" "$@"; }
+user_curl() { curl -H "Authorization: Bearer ${SUBMILLI_USER_TOKEN}" "$@"; }
+
+# /healthz is the one endpoint that answers without a token.
+wait_for_health() {
     local port=$1 deadline=$((SECONDS + 90))
     while ((SECONDS < deadline)); do
-        if curl -sf "http://127.0.0.1:${port}/v1/status" >/dev/null 2>&1; then
+        if curl -sf "http://127.0.0.1:${port}/healthz" >/dev/null 2>&1; then
             return 0
         fi
         sleep 0.5
@@ -82,7 +88,7 @@ json_field() {
 put_blueprint() {
     python3 -c 'import json,sys; print(json.dumps({"yaml": sys.stdin.read()}))' \
         <"${REPO_ROOT}/examples/docker/blueprints/${1}.yaml" \
-        | curl -sf -X PUT "http://127.0.0.1:${2}/v1/blueprints/${1}" \
+        | admin_curl -sf -X PUT "http://127.0.0.1:${2}/v1/blueprints/${1}" \
             -H 'content-type: application/json' -d @- >/dev/null
 }
 
@@ -90,15 +96,16 @@ execute() {
     local port=$1 blueprint=$2 file=$3
     python3 -c 'import json,sys; print(json.dumps({"blueprint": sys.argv[1], "code": sys.stdin.read()}))' \
         "$blueprint" <"$file" \
-        | curl -sf -X POST "http://127.0.0.1:${port}/v1/execute" \
+        | user_curl -sf -X POST "http://127.0.0.1:${port}/v1/execute" \
             -H 'content-type: application/json' -d @-
 }
 
 # An MCP `initialize`, which is all that is needed to learn whether the request
-# got past rmcp's DNS-rebinding guard.
+# got past rmcp's DNS-rebinding guard. It carries a valid token so that the
+# status it reports is the guard's verdict and not the token check's.
 mcp_initialize_status() {
     local port=$1 host=$2
-    curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:${port}/mcp/conformance" \
+    user_curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:${port}/mcp/conformance" \
         -H "Host: ${host}" \
         -H 'content-type: application/json' \
         -H 'accept: application/json, text/event-stream' \
@@ -113,6 +120,29 @@ printf '%s' "$(head -c 32 /dev/urandom | base64)" >"${WORKDIR}/store-key"
 chmod 0444 "${WORKDIR}/store-key"
 docker volume create "$VOLUME" >/dev/null
 
+# The server refuses to start without API tokens. The config names the
+# environment variables they arrive in; it is 0444 for the same reason as the
+# store key above.
+gen_token() { python3 -c 'import secrets; print(secrets.token_hex(32))'; }
+SUBMILLI_ADMIN_TOKEN=$(gen_token)
+SUBMILLI_USER_TOKEN=$(gen_token)
+export SUBMILLI_ADMIN_TOKEN SUBMILLI_USER_TOKEN
+cat >"${WORKDIR}/server.yaml" <<'YAML'
+api_tokens:
+  - name: conformance-admin
+    role: admin
+    token_env: SUBMILLI_ADMIN_TOKEN
+  - name: conformance-user
+    role: user
+    token_env: SUBMILLI_USER_TOKEN
+YAML
+chmod 0444 "${WORKDIR}/server.yaml"
+AUTH_ARGS=(
+    -v "${WORKDIR}/server.yaml:/etc/submilli/server.yaml:ro"
+    -e SUBMILLI_CONFIG=/etc/submilli/server.yaml
+    -e SUBMILLI_ADMIN_TOKEN -e SUBMILLI_USER_TOKEN
+)
+
 PORT=$(free_port)
 MAIN=$(docker run -d --read-only \
     -p "127.0.0.1:${PORT}:8128" \
@@ -123,15 +153,16 @@ MAIN=$(docker run -d --read-only \
     -e SUBMILLI_BIND=0.0.0.0 -e SUBMILLI_PORT=8128 \
     -e SUBMILLI_MCP_ALLOWED_HOSTS=submilli.internal \
     -e SUBMILLI_SHUTDOWN_GRACE=3 \
+    "${AUTH_ARGS[@]}" \
     "$IMAGE")
 CONTAINERS+=("$MAIN")
-wait_for_status "$PORT" || die "the conformance container never answered /v1/status"
+wait_for_health "$PORT" || die "the conformance container never answered /healthz"
 
 step "1. The encrypted secret store round-trips against a mounted key file"
 # Storing proves uid 65532 read a 0444 root-owned file and the cipher was built
 # from it — but it only ever *encrypts*, so on its own it cannot tell a correct
 # key from any other 32 bytes.
-curl -sf -X POST "http://127.0.0.1:${PORT}/v1/secrets" -H 'content-type: application/json' \
+admin_curl -sf -X POST "http://127.0.0.1:${PORT}/v1/secrets" -H 'content-type: application/json' \
     -d '{"key":"conformance_key","value":"conformance-value"}' >/dev/null \
     || die "storing a secret failed; the mounted key file was not usable"
 ok "secret stored through a file-mounted key"
@@ -159,7 +190,7 @@ step "3. The ephemeral VFS root is the tmpfs, not the volume"
 # Under a read-only root filesystem a write that landed anywhere but the tmpfs
 # would fail outright, so success plus absence from the volume pins it down.
 # shellcheck disable=SC2016  # `${...}` here is a TypeScript template literal
-scratch=$(curl -sf -X POST "http://127.0.0.1:${PORT}/v1/execute" -H 'content-type: application/json' \
+scratch=$(user_curl -sf -X POST "http://127.0.0.1:${PORT}/v1/execute" -H 'content-type: application/json' \
     -d '{"blueprint":"conformance-ephemeral","code":"import fs from \"submilli:fs\";\nexport function main(): string {\n  assert(fs.info().mode === \"ephemeral\", `mode ${fs.info().mode}`);\n  fs.writeText(\"/scratch-marker.txt\", \"ephemeral-ok\");\n  return fs.readText(\"/scratch-marker.txt\")!;\n}\n"}' \
     | json_field result)
 [[ "$scratch" == "ephemeral-ok" ]] || die "ephemeral write returned '${scratch}'"
@@ -171,6 +202,8 @@ step "4. The inbound MCP host guard admits the configured host and no other"
 # The likeliest failure in the whole image, and the one nobody expects: rmcp's
 # DNS-rebinding guard accepts only loopback by default, so an agent reaching the
 # container by service name, published port, or proxy is rejected out of the box.
+# The guard is separate from the token check and runs after it, so both requests
+# carry a valid token and differ only in `Host`.
 allowed=$(mcp_initialize_status "$PORT" submilli.internal)
 [[ "$allowed" == "200" ]] || die "the configured MCP host got HTTP ${allowed}"
 refused=$(mcp_initialize_status "$PORT" evil.example.com)
@@ -178,21 +211,21 @@ refused=$(mcp_initialize_status "$PORT" evil.example.com)
 ok "configured host 200, unlisted host 403"
 
 step "5. Blueprints and session files survive a restart"
-session=$(curl -sf -X POST "http://127.0.0.1:${PORT}/v1/sessions" -H 'content-type: application/json' \
+session=$(user_curl -sf -X POST "http://127.0.0.1:${PORT}/v1/sessions" -H 'content-type: application/json' \
     -d '{"blueprint":"conformance"}' | json_field session_id)
 [[ -n "$session" ]] || die "could not open a session"
-curl -sf -X POST "http://127.0.0.1:${PORT}/v1/sessions/${session}/execute" \
+user_curl -sf -X POST "http://127.0.0.1:${PORT}/v1/sessions/${session}/execute" \
     -H 'content-type: application/json' \
     -d '{"code":"import fs from \"submilli:fs\";\nexport function main(): string {\n  fs.writeText(\"/survivor.txt\", \"before restart\");\n  return \"written\";\n}\n"}' >/dev/null \
     || die "could not write into the session VFS"
 
 docker restart "$MAIN" >/dev/null
-wait_for_status "$PORT" || die "the container did not come back after a restart"
+wait_for_health "$PORT" || die "the container did not come back after a restart"
 
-listed=$(curl -sf "http://127.0.0.1:${PORT}/v1/status" \
+listed=$(admin_curl -sf "http://127.0.0.1:${PORT}/v1/status" \
     | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["blueprints"]))')
 [[ "$listed" == *conformance* ]] || die "blueprints did not survive the restart: ${listed}"
-survivor=$(curl -sf -X POST "http://127.0.0.1:${PORT}/v1/sessions/${session}/execute" \
+survivor=$(user_curl -sf -X POST "http://127.0.0.1:${PORT}/v1/sessions/${session}/execute" \
     -H 'content-type: application/json' \
     -d '{"code":"import fs from \"submilli:fs\";\nexport function main(): string {\n  return fs.readText(\"/survivor.txt\")!;\n}\n"}' \
     | json_field result)
@@ -203,11 +236,11 @@ step "6. Shutdown returns while an execution is still running"
 # The scenario an idle-container test would falsely certify. `serve()` cannot
 # cancel an interpreter loop that never yields, so this is the only check that
 # exercises the stages after the drain rather than the drain alone.
-curl -s -m 300 -X POST "http://127.0.0.1:${PORT}/v1/execute" -H 'content-type: application/json' \
+user_curl -s -m 300 -X POST "http://127.0.0.1:${PORT}/v1/execute" -H 'content-type: application/json' \
     -d '{"blueprint":"conformance","code":"export function main(): number {\n  let acc = 0;\n  for (let i = 0; i < 200000000; i++) {\n    acc = acc + i;\n  }\n  return acc;\n}\n"}' \
     >/dev/null 2>&1 &
 sleep 3
-curl -sf "http://127.0.0.1:${PORT}/v1/status" >/dev/null || die "the server died before the stop test began"
+curl -sf "http://127.0.0.1:${PORT}/healthz" >/dev/null || die "the server died before the stop test began"
 
 start=$(python3 -c 'import time; print(time.time())')
 # `-t 10` pins Docker's own SIGKILL fallback rather than inheriting the daemon's
@@ -234,9 +267,10 @@ guarded=$(docker run -d --read-only \
     -v "${VOLUME}:/var/lib/submilli" \
     --tmpfs /tmp:mode=1777 \
     -e SUBMILLI_BIND=0.0.0.0 -e SUBMILLI_PORT=8128 \
+    "${AUTH_ARGS[@]}" \
     "$IMAGE")
 CONTAINERS+=("$guarded")
-wait_for_status "$guard_port" || die "the allowlist-free container never answered"
+wait_for_health "$guard_port" || die "the allowlist-free container never answered"
 without=$(mcp_initialize_status "$guard_port" submilli.internal)
 [[ "$without" == "403" ]] || die "an unconfigured host got HTTP ${without}, expected 403"
 loopback=$(mcp_initialize_status "$guard_port" 127.0.0.1)

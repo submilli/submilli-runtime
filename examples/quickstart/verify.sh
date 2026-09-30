@@ -37,6 +37,9 @@ REPO_ROOT="$(cd "$SRC/../.." && pwd)"
 # ~/.submilli/packages — CI's package tests depend on it.
 SUBMILLI_HOME="$(mktemp -d)"
 export SUBMILLI_HOME
+# The journey names its own server, config, and tokens. Settings inherited from
+# the developer's shell would point the CLI at another server or another token.
+unset SUBMILLI_SERVER_URL SUBMILLI_SERVER_TOKEN_FILE SUBMILLI_CONFIG
 WORK="$(mktemp -d)"
 SERVER_PID=""
 
@@ -65,19 +68,19 @@ check_chapter_blocks() {
 import pathlib, re, sys
 chapter, src = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
 blocks = [b for _, b in re.findall(r"```(\w*)\n(.*?)```", chapter.read_text(), re.S)]
-missing = [p for p in ("blueprint.yaml", "total.ts", "total-injected.ts",
-                       "app.mjs", "package/src/lib.ts",
+missing = [p for p in ("blueprint.yaml", "server.yaml", "total.ts",
+                       "total-injected.ts", "app.mjs", "package/src/lib.ts",
                        "package/capabilities.yaml")
            if (src / p).read_text() not in blocks]
 for p in missing:
     print(f"  not printed verbatim in the chapter: {p}", file=sys.stderr)
 
-# agent.py is excerpted rather than printed whole, so check the two lines a
-# reader copies: the MCP endpoint and the session-variable header.
+# agent.py is excerpted rather than printed whole, so check the lines a reader
+# copies: the MCP endpoint, the token header, and the session-variable header.
 text = chapter.read_text()
 agent = (src / "agent.py").read_text()
 for needle in [l.strip() for l in agent.splitlines()
-               if '"url"' in l or "submilli-variables" in l]:
+               if '"url"' in l or '"Authorization"' in l or "submilli-variables" in l]:
     if needle not in text:
         missing.append("agent.py")
         print(f"  agent.py line missing from the chapter: {needle}", file=sys.stderr)
@@ -101,18 +104,26 @@ expect_missing() {
   [[ "$haystack" != *"$needle"* ]] || fail "$what: expected NOT to contain '$needle', got: $haystack"
 }
 
+# `/healthz` answers without a token, so readiness does not depend on the
+# tokens being right. `server status` does, and proves the admin token works.
 wait_for_server() {
   for _ in $(seq 1 120); do
-    if $SUBMILLI server status >/dev/null 2>&1; then return 0; fi
+    if curl -fsS -o /dev/null http://127.0.0.1:8128/healthz 2>/dev/null; then
+      $SUBMILLI server status >/dev/null || fail "the server is up but refused the admin token"
+      return 0
+    fi
+    kill -0 "$SERVER_PID" 2>/dev/null || fail "the server exited before it became ready"
     sleep 0.5
   done
   fail "server did not become ready"
 }
 
 # A server already on the port would answer every request from the developer's
-# real package store, and the run would pass for the wrong reason.
+# real package store, and the run would pass for the wrong reason. Any HTTP
+# answer counts, which is why curl runs without -f: another listener's 404
+# means the port is taken just as much as a submilli-server's 200.
 require_port_free() {
-  if $SUBMILLI server status >/dev/null 2>&1; then
+  if curl -sS -o /dev/null http://127.0.0.1:8128/healthz 2>/dev/null; then
     fail "something is already listening on 127.0.0.1:8128 — stop it first (submilli server stop)"
   fi
 }
@@ -169,7 +180,10 @@ require_port_free
 save total.ts
 save total-injected.ts
 save app.mjs
-$SUBMILLI_SERVER &
+save server.yaml
+export SUBMILLI_ADMIN_TOKEN=$(openssl rand -hex 32)
+export SUBMILLI_USER_TOKEN=$(openssl rand -hex 32)
+$SUBMILLI_SERVER --config server.yaml &
 # --- end reader journey ---
 SERVER_PID=$!
 wait_for_server
@@ -226,6 +240,29 @@ missing="$(sed 's/"quickstart"/"no-such-blueprint"/' app.mjs > app-missing.mjs &
 expect_contains "$missing" "no-such-blueprint" "an unregistered blueprint names itself in the error"
 expect_missing "$missing" "[result]" "an unregistered blueprint does not run the program"
 
+# The token is what lets the application in at all. Without one it stops before
+# it calls; with a wrong one, or with no header, the server refuses and nothing
+# runs.
+if notoken="$(env -u SUBMILLI_USER_TOKEN node app.mjs total.ts 2>&1)"; then
+  fail "without SUBMILLI_USER_TOKEN the application should exit non-zero, got: $notoken"
+fi
+expect_contains "$notoken" "SUBMILLI_USER_TOKEN is not set" "a missing token is named"
+if wrongtoken="$(SUBMILLI_USER_TOKEN="$(openssl rand -hex 32)" node app.mjs total.ts 2>&1)"; then
+  fail "a token the server does not know should be refused, got: $wrongtoken"
+fi
+expect_contains "$wrongtoken" "[refused]" "an unknown token is refused"
+expect_missing "$wrongtoken" "[result]" "an unknown token does not run the program"
+unauthenticated="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+  -H 'content-type: application/json' -d '{}' http://127.0.0.1:8128/v1/execute)"
+[[ "$unauthenticated" == "401" ]] || fail "a request with no token: expected 401, got $unauthenticated"
+
+# The application's token runs code and cannot manage the server: a blueprint
+# the agent's own credential could rewrite would constrain nothing.
+if as_user="$(SUBMILLI_ADMIN_TOKEN="$SUBMILLI_USER_TOKEN" $SUBMILLI server blueprint apply blueprint.yaml 2>&1)"; then
+  fail "the user token should not be able to apply a blueprint, got: $as_user"
+fi
+expect_contains "$as_user" "admin" "the refusal names the role the endpoint needs"
+
 # The variable is required, not defaulted.
 novar="$(sed 's/variables: { customerId }/variables: {}/' app.mjs > app-novar.mjs && node app-novar.mjs total.ts 2>&1)"
 expect_contains "$novar" "customerId" "omitting the variable is rejected by name"
@@ -237,7 +274,9 @@ if [[ -n "${SUBMILLI_QUICKSTART_CHAPTER:-}" ]]; then
 fi
 
 step "teardown"
+# --- reader journey, continued ---
 $SUBMILLI server stop
+# --- end reader journey ---
 wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 

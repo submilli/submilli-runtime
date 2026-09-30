@@ -33,10 +33,11 @@ server pod never becomes ready, so `helm test` never runs and the assertion
 could not fire.
 
 Nor is it a probe blueprint registered over the API: the server refuses
-`env:`/`file:` sources on anything registered over the wire, since with no
-inbound auth those sources would let a caller read the server's own files,
-including the secret-store key. `file:` remains valid for blueprints an operator
-supplies locally, which is what `blueprints:` does.
+`env:`/`file:` sources on anything registered over the wire, even from an admin
+token, since those sources would let a caller make the server read its own
+environment and files — including the secret-store key and the API tokens.
+`file:` remains valid for blueprints an operator supplies locally, which is what
+`blueprints:` does.
 */}}
 {{- $mountRoot := include "submilli.secretMountPath" . -}}
 {{- $declaredPaths := list -}}
@@ -79,8 +80,9 @@ metadata:
     helm.sh/hook-weight: "1"
     # Deleted on success, and on the next run if it failed — so a failed pod
     # stays around for `kubectl logs` while a successful one does not linger.
-    # That matters here beyond tidiness: this pod mounts every Secret named in
-    # `secrets:` and, unlike the distroless server, has a shell. Retaining it
+    # That matters here beyond tidiness: this pod mounts the admin token and
+    # every Secret named in `secrets:` and, unlike the distroless server, has a
+    # shell. Retaining it
     # after a green run would leave operator secret material sitting in a pod
     # anyone with `pods/exec` could read, indefinitely.
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
@@ -113,6 +115,11 @@ spec:
           mountPath: {{ include "submilli.secretMountPath" $ }}/{{ $name }}
           readOnly: true
         {{- end }}
+        {{- if .Values.auth.enabled }}
+        - name: auth
+          mountPath: {{ include "submilli.authMountPath" . }}
+          readOnly: true
+        {{- end }}
       command: ["/bin/sh", "-c"]
       args:
         - |
@@ -120,6 +127,22 @@ spec:
 
           BASE="{{ $base }}"
           CURL="curl -sS --connect-timeout 5 --max-time 30"
+
+          # The admin token, because registering and deleting the probe
+          # blueprint are admin routes. It reaches curl through a config file
+          # rather than `-H`: a header on the command line is in argv, which
+          # anything that can list processes on the node can read. `printf` is
+          # a shell builtin, so writing the file does not put it there either.
+          # Whitespace is stripped because the server trims it on read, and an
+          # operator's own Secret may well end in a newline.
+          AUTH=""
+          {{- if .Values.auth.enabled }}
+          umask 077
+          TOKEN=$(tr -d '[:space:]' <{{ include "submilli.authMountPath" . }}/{{ .Values.auth.adminTokenKey }})
+          [ -n "$TOKEN" ] || { echo "FAIL: the admin token in Secret {{ include "submilli.authSecretName" . }} is empty" >&2; exit 1; }
+          printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" >/tmp/auth.curlrc
+          AUTH="-K /tmp/auth.curlrc"
+          {{- end }}
 
           fail() {
             echo "FAIL: $*" >&2
@@ -131,14 +154,22 @@ spec:
 
           # $1 method, $2 path, $3 optional JSON body file. Echoes the HTTP
           # status (000 if the connection never completed); body lands in
-          # /tmp/body.
+          # /tmp/body. Sends the admin token when auth is on.
           call() {
             if [ -n "${3:-}" ]; then
-              code=$($CURL -o /tmp/body -w '%{http_code}' -X "$1" \
+              code=$($CURL $AUTH -o /tmp/body -w '%{http_code}' -X "$1" \
                 -H 'Content-Type: application/json' --data-binary "@$3" "$BASE$2") || true
             else
-              code=$($CURL -o /tmp/body -w '%{http_code}' -X "$1" "$BASE$2") || true
+              code=$($CURL $AUTH -o /tmp/body -w '%{http_code}' -X "$1" "$BASE$2") || true
             fi
+            [ -n "${code:-}" ] || code=000
+            echo "$code"
+          }
+
+          # $1 path. A GET with no token, whatever the auth setting: what the
+          # kubelet's probe and an uninvited caller both look like.
+          anonymous() {
+            code=$($CURL -o /tmp/body -w '%{http_code}' "$BASE$1") || true
             [ -n "${code:-}" ] || code=000
             echo "$code"
           }
@@ -146,7 +177,7 @@ spec:
           CREATED_EXEC=0
           cleanup() {
             if [ "$CREATED_EXEC" = 1 ]; then
-              $CURL -o /dev/null -X DELETE "$BASE/v1/blueprints/{{ $execProbe }}" || true
+              $CURL $AUTH -o /dev/null -X DELETE "$BASE/v1/blueprints/{{ $execProbe }}" || true
             fi
             return 0
           }
@@ -154,14 +185,32 @@ spec:
 
           # `helm test` does not imply the pod is ready, so poll rather than
           # assume. 60 x 2s comfortably outlasts the startupProbe's budget.
-          echo "==> waiting for $BASE/v1/status"
+          #
+          # /healthz without a token, which is exactly the request the pod's
+          # own probes make — so this also proves the probe route is public.
+          echo "==> waiting for $BASE/healthz"
           i=0
-          while [ "$(call GET /v1/status)" != "200" ]; do
+          while [ "$(anonymous /healthz)" != "200" ]; do
             i=$((i + 1))
-            [ "$i" -lt 60 ] || fail "/v1/status never returned 200 after 120s"
+            [ "$i" -lt 60 ] || fail "/healthz never returned 200 after 120s"
             sleep 2
           done
-          echo "ok: GET /v1/status"
+          echo "ok: GET /healthz needs no token"
+
+          {{- if .Values.auth.enabled }}
+
+          # Both directions. A server that answers everyone and a server that
+          # rejects the chart's own token each leave one of these green, and
+          # each is a broken deployment: the first is open, the second is
+          # unusable by the callers this token was handed to.
+          code=$(anonymous /v1/status)
+          [ "$code" = "401" ] || fail "GET /v1/status without a token returned $code, expected 401 — the server is not enforcing authentication"
+          echo "ok: GET /v1/status is refused without a token"
+
+          code=$(call GET /v1/status)
+          [ "$code" = "200" ] || fail "GET /v1/status with the admin token returned $code — the token in Secret {{ include "submilli.authSecretName" . }} is not one the server accepts. Tokens are read at boot: if the Secret changed since, restart the pod"
+          echo "ok: GET /v1/status accepts the admin token"
+          {{- end }}
 
           cat >/tmp/exec-bp.json <<'JSON'
           {{ dict "yaml" $execYaml | toJson }}
@@ -172,7 +221,7 @@ spec:
           echo "ok: registered probe blueprint {{ $execProbe }}"
 
           # The point of this test. A server whose ephemeral VFS root is not
-          # writable answers /v1/status perfectly happily and fails every
+          # writable answers /healthz perfectly happily and fails every
           # execute, so health alone would call that deployment green. The
           # program writes and reads a file to exercise the VFS rather than
           # merely reaching the interpreter.
@@ -218,4 +267,13 @@ spec:
         items:
           - key: {{ $ref.key }}
             path: {{ $ref.key }}
+    {{- end }}
+    {{- if .Values.auth.enabled }}
+    # The admin token alone; the test never acts as a `user`.
+    - name: auth
+      secret:
+        secretName: {{ include "submilli.authSecretName" . }}
+        items:
+          - key: {{ .Values.auth.adminTokenKey }}
+            path: {{ .Values.auth.adminTokenKey }}
     {{- end }}

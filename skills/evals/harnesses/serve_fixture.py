@@ -2,12 +2,15 @@
 """Serve the documented billing fixture in disposable storage for SDK checks.
 
 No model or business-service credentials are needed. Build the local CLI and
-server first. Stop with Ctrl-C; the child server and temporary store are removed.
+server first. The server requires API tokens, so the fixture generates an admin
+token for its own setup and a user token, which it prints for the adapter
+checks. Stop with Ctrl-C; the child server and temporary store are removed.
 """
 import argparse
 import json
 import os
 from pathlib import Path
+import secrets
 import subprocess
 import tempfile
 import time
@@ -16,13 +19,50 @@ from urllib.request import Request, urlopen
 
 
 REPO = Path(__file__).resolve().parents[3]
+CONFIG = """\
+api_tokens:
+- name: ops
+  role: admin
+  token_env: SUBMILLI_ADMIN_TOKEN
+- name: app
+  role: user
+  token_env: SUBMILLI_USER_TOKEN
+"""
 
 
 def first_block(path, language):
     return path.read_text().split(f"```{language}\n", 1)[1].split("\n```", 1)[0]
 
 
-def verify_policy(url):
+def call(url, token=None, payload=None):
+    """Return (status, JSON body or None); an HTTP error status is an answer."""
+    headers = {} if token is None else {"Authorization": f"Bearer {token}"}
+    data = None
+    if payload is not None:
+        headers["content-type"] = "application/json"
+        data = json.dumps(payload).encode()
+    try:
+        response = urlopen(Request(url, data=data, headers=headers), timeout=10)
+    except HTTPError as error:
+        response = error
+    with response:
+        body = response.read()
+    return response.status, json.loads(body) if body else None
+
+
+def verify_auth(url, user_token):
+    payload = {"blueprint": "support-read", "variables": {"customerId": "cus_northwind"},
+               "code": "function main(): number { return 1; }"}
+    status, body = call(url + "/v1/execute", None, payload)
+    assert status == 401 and body.get("error") == "unauthorized", (status, body)
+    status, body = call(url + "/v1/execute", secrets.token_hex(32), payload)
+    assert status == 401 and body.get("error") == "unauthorized", (status, body)
+    # The user token runs code and cannot manage the server.
+    status, body = call(url + "/v1/status", user_token)
+    assert status == 403 and body.get("error") == "forbidden", (status, body)
+
+
+def verify_policy(url, user_token):
     code = ('import { readBalance } from "@acme/billing"; '
             'function main(): number { return readBalance("cus_northwind"); }')
     for label, program, variables in [
@@ -31,14 +71,7 @@ def verify_policy(url):
         ("missing", code, {}),
     ]:
         payload = {"blueprint": "support-read", "variables": variables, "code": program}
-        request = Request(url + "/v1/execute", data=json.dumps(payload).encode(),
-                          headers={"content-type": "application/json"})
-        try:
-            response = urlopen(request, timeout=10)
-        except HTTPError as error:
-            response = error
-        with response:
-            body = json.load(response)
+        _, body = call(url + "/v1/execute", user_token, payload)
         if label == "allowed":
             assert body.get("result") == "6150", body
         elif label == "denied":
@@ -61,7 +94,10 @@ def main():
         # Isolate every Submilli location, including inherited server overrides.
         env = {k: v for k, v in os.environ.items()
                if not k.startswith("SUBMILLI_") and k not in {"HOST", "PORT"}}
-        env.update(SUBMILLI_HOME=str(root / "store"), SUBMILLI_TELEMETRY="0")
+        admin_token, user_token = secrets.token_hex(32), secrets.token_hex(32)
+        # The server reads both tokens from these; the CLI sends the admin one.
+        env.update(SUBMILLI_HOME=str(root / "store"), SUBMILLI_TELEMETRY="0",
+                   SUBMILLI_ADMIN_TOKEN=admin_token, SUBMILLI_USER_TOKEN=user_token)
 
         def run(*arguments):
             subprocess.run([str(cli), *arguments], cwd=root, env=env,
@@ -78,10 +114,12 @@ def main():
         blueprint = root / "blueprint.yaml"
         blueprint.write_text(first_block(references / "blueprints.md", "yaml"))
         run("blueprint", "lint", str(blueprint))
+        config = root / "server.yaml"
+        config.write_text(CONFIG)
         url = f"http://127.0.0.1:{args.port}"
         with (root / "server.log").open("w+") as log:
             process = subprocess.Popen(
-                [str(server), "--bind", "127.0.0.1", "--port", str(args.port)],
+                [str(server), "--config", str(config), "--bind", "127.0.0.1", "--port", str(args.port)],
                 cwd=root, env=env, stdout=log, stderr=log)
             try:
                 deadline = time.monotonic() + 20
@@ -90,20 +128,26 @@ def main():
                         log.seek(0)
                         raise RuntimeError(log.read())
                     try:
-                        with urlopen(url + "/v1/status", timeout=1) as response:
-                            status = json.load(response)
-                        # Do not register a test blueprint on a pre-existing server.
-                        if status.get("pid") != process.pid:
-                            raise RuntimeError("Port is owned by another server; choose --port")
-                        break
+                        # The health probe needs no token.
+                        if call(url + "/healthz")[0] == 200:
+                            break
                     except URLError:
-                        if time.monotonic() >= deadline:
-                            raise TimeoutError("Fixture server did not become ready")
-                        time.sleep(0.1)
+                        pass
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("Fixture server did not become ready")
+                    time.sleep(0.1)
+                # Do not register a test blueprint on a pre-existing server: one
+                # that refuses this run's admin token, or reports another pid.
+                code, status = call(url + "/v1/status", admin_token)
+                if code != 200 or status.get("pid") != process.pid:
+                    raise RuntimeError("Port is owned by another server; choose --port")
                 run("server", "blueprint", "apply", str(blueprint), "--server", url)
-                verify_policy(url)
-                print(f"Fixture ready: SUBMILLI_SERVER_URL={url}; blueprint=support-read", flush=True)
-                print("readBalance(bound customer) = 6150; other customer denied. Ctrl-C to stop.", flush=True)
+                verify_auth(url, user_token)
+                verify_policy(url, user_token)
+                print("Fixture ready: blueprint=support-read. For the adapter checks:", flush=True)
+                print(f"export SUBMILLI_SERVER_URL={url} SUBMILLI_USER_TOKEN={user_token}", flush=True)
+                print("readBalance(bound customer) = 6150; other customer denied; "
+                      "no token, or an unknown one, refused. Ctrl-C to stop.", flush=True)
                 process.wait()
             except KeyboardInterrupt:
                 pass

@@ -318,10 +318,9 @@ pub struct InstallResponse {
 }
 
 /// `POST /v1/packages/install` — fetch a GitHub repo, compile it, and install
-/// into the server's package store. Admin surface (same unauthenticated posture
-/// as `/v1/secrets`; gating lands with SUB-950). The fetch + compile blocks, so
-/// it runs off the async workers, on a compiler-sized thread because it
-/// compiles package sources.
+/// into the server's package store. The fetch + compile blocks, so it runs
+/// off the async workers, on a compiler-sized thread because it compiles
+/// package sources.
 pub async fn install(
     State(state): State<AppState>,
     Json(req): Json<InstallRequest>,

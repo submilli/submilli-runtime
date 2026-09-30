@@ -29,10 +29,21 @@ bad()  { fail=$((fail+1)); printf '  \033[31mFAIL\033[0m  %s\n         got: %s\n
 expect_in() { case "$2" in *"$1"*) ok "$3";; *) bad "$3" "$2";; esac; }
 expect_not() { case "$2" in *"$1"*) bad "$3" "$2";; *) ok "$3";; esac; }
 
+# The server refuses to start without API tokens. Every config below declares
+# two and reads them from these variables, so the boot refusals further down are
+# about the volume map and not about a missing token. Registration and
+# /v1/volumes are admin calls; running code and MCP use the user token.
+SUBMILLI_ADMIN_TOKEN=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
+SUBMILLI_USER_TOKEN=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
+export SUBMILLI_ADMIN_TOKEN SUBMILLI_USER_TOKEN
+
 # ---------------------------------------------------------------- helpers
 config() { # config <volumes-block-file> <blueprint_dir>
   cat <<EOF
 port: $PORT
+api_tokens:
+  - { name: smoke-admin, role: admin, token_env: SUBMILLI_ADMIN_TOKEN }
+  - { name: smoke-user, role: user, token_env: SUBMILLI_USER_TOKEN }
 blueprint_dir: ${2:-$V/home/blueprints}
 session_store_dir: $V/home/sessions
 vfs_session_dir: $V/home/vfs/sessions
@@ -51,10 +62,11 @@ boot() {
 }
 put() { # put <port> <name> <yaml>  -> "<code> <message-or-body>"
   python3 - "$1" "$2" "$3" <<'PY'
-import json, sys, urllib.request, urllib.error
+import json, os, sys, urllib.request, urllib.error
 port, name, yaml = sys.argv[1], sys.argv[2], sys.argv[3]
 req = urllib.request.Request(f"http://localhost:{port}/v1/blueprints/{name}", method="PUT",
-    data=json.dumps({"yaml": yaml}).encode(), headers={"content-type": "application/json"})
+    data=json.dumps({"yaml": yaml}).encode(), headers={"content-type": "application/json",
+    "authorization": "Bearer " + os.environ["SUBMILLI_ADMIN_TOKEN"]})
 try:
     with urllib.request.urlopen(req) as r: print(r.status, r.read().decode())
 except urllib.error.HTTPError as e: print(e.code, json.loads(e.read()).get("message", ""))
@@ -62,10 +74,11 @@ PY
 }
 run() { # run <port> <blueprint> <code> -> the result, or "ERROR: <message>"
   python3 - "$1" "$2" "$3" <<'PY'
-import json, sys, urllib.request
+import json, os, sys, urllib.request
 port, bp, code = sys.argv[1], sys.argv[2], sys.argv[3]
 req = urllib.request.Request(f"http://localhost:{port}/v1/execute", method="POST",
-    data=json.dumps({"blueprint": bp, "code": code}).encode(), headers={"content-type": "application/json"})
+    data=json.dumps({"blueprint": bp, "code": code}).encode(), headers={"content-type": "application/json",
+    "authorization": "Bearer " + os.environ["SUBMILLI_USER_TOKEN"]})
 body = json.load(urllib.request.urlopen(req))
 err = body.get("error")
 print(("ERROR: " + str(err.get("message"))) if err else (body.get("result") or ""))
@@ -77,10 +90,12 @@ mcp() { # mcp <port> <blueprint> <tool> <args-json>
   # empty keepalive — hence `grep '^data: {'`.
   local port=$1 bp=$2 sid
   sid=$(curl -s -D "$V/h.txt" -o /dev/null -X POST "localhost:$port/mcp/$bp" \
+    -H "authorization: Bearer $SUBMILLI_USER_TOKEN" \
     -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' \
     -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"verify","version":"0"}}}'
     grep -i '^mcp-session-id:' "$V/h.txt" | tr -d '\r' | awk '{print $2}')
   curl -s -X POST "localhost:$port/mcp/$bp" -H 'content-type: application/json' \
+    -H "authorization: Bearer $SUBMILLI_USER_TOKEN" \
     -H 'accept: application/json, text/event-stream' -H "mcp-session-id: $sid" \
     -d "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\",\"params\":{\"name\":\"$3\",\"arguments\":$4}}" \
   | grep '^data: {' | head -1 | sed 's/^data: //' \
@@ -163,7 +178,9 @@ $ALLOW")" "a declared volume is accepted"
 expect_in "200" "$(put $PORT none "name: none
 vfs: none
 $ALLOW")" "a \`vfs: none\` blueprint is accepted"
-expect_in '{"volumes":["work"]}' "$(curl -s localhost:$PORT/v1/volumes)" "GET /v1/volumes returns names only"
+expect_in '{"volumes":["work"]}' "$(curl -s -H "authorization: Bearer $SUBMILLI_ADMIN_TOKEN" localhost:$PORT/v1/volumes)" "GET /v1/volumes returns names only"
+expect_in '"error":"unauthorized"' "$(curl -s localhost:$PORT/v1/volumes)" "GET /v1/volumes without a token is refused"
+expect_in '"error":"forbidden"' "$(curl -s -H "authorization: Bearer $SUBMILLI_USER_TOKEN" localhost:$PORT/v1/volumes)" "GET /v1/volumes with the user token is refused"
 
 echo; echo "=== Containment at runtime ==="
 rd() { run $PORT good "import { readText } from \"submilli:fs\";

@@ -20,13 +20,25 @@ that give the user named by the `userId` variable one directory of it.
 
 ## Before you run one
 
-The server needs the volume, a secret store for the Jina API key, and the
-package. From this directory:
+The server needs the volume, two API tokens, a secret store for the Jina API
+key, and the package. From this directory:
 
 ```sh
 mkdir -p "$HOME/submilli-notes"
-printf 'volumes:\n  notes: %s\n' "$HOME/submilli-notes" > server.yaml
+cat > server.yaml <<EOF
+volumes:
+  notes: $HOME/submilli-notes
+api_tokens:
+- name: ops
+  role: admin
+  token_env: SUBMILLI_ADMIN_TOKEN
+- name: app
+  role: user
+  token_env: SUBMILLI_USER_TOKEN
+EOF
 head -c 32 /dev/urandom | base64 > store.key
+export SUBMILLI_ADMIN_TOKEN=$(openssl rand -hex 32)
+export SUBMILLI_USER_TOKEN=$(openssl rand -hex 32)
 
 submilli-server --config server.yaml --secret-store-key-file store.key &
 
@@ -34,6 +46,12 @@ submilli server packages install submilli/submilli-runtime @submilli/jina
 submilli server secret put jina_api_key
 submilli server blueprint apply blueprint.yaml
 ```
+
+The `submilli server` commands send `SUBMILLI_ADMIN_TOKEN`, which manages the
+server. The agents and the checks read `SUBMILLI_USER_TOKEN`, which can run
+programs and cannot change the blueprint, and send it as
+`Authorization: Bearer …`. Run them from a shell that has it exported, and
+never give an agent the admin token.
 
 From a checkout of this repository, `submilli build publish-local -p
 @submilli/jina`, run at its root before the server starts, installs the
@@ -75,9 +93,10 @@ GOOGLE_GENERATIVE_AI_API_KEY=... npm run agent
 
 Every directory has a check that needs no model API key. It runs the agent
 against the local server with a scripted model that calls the execute tool
-with `note.ts`, and asserts three things: the note is written to the user's
-directory, the same program aimed at another user's directory is denied, and
-a connection that names no user is refused.
+with `note.ts`, and asserts four things: the note is written to the user's
+directory, the same program aimed at another user's directory is denied, a
+connection that names no user is refused, and so is one whose token the
+server does not know.
 
 ```sh
 npm run check       # the TypeScript examples
@@ -86,4 +105,4 @@ python check.py     # the Python examples
 
 The Claude Agent SDK has no scripted model, so its check stops short of the
 model: it asserts that the agent connects and is offered the execute tool, and
-that a connection without a user fails.
+that a connection without a user, or with an unknown token, fails.
