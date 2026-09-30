@@ -1,3 +1,5 @@
 line 4, 19, 21 extra: by-design spec §2.2 a static field requires an initializer
 line 5, 22 extra: bug SUB-1205 `typeof` of a class or enum name is unresolved
 line 7, 8, 24, 25 extra: by-design spec §2.2 there is no `this` in a static member
+line 12, 15, 29, 32 type: bug SUB-1205 `typeof` of a class or enum name is unresolved
+line 14, 16, 31, 33 type: bug SUB-1205 `typeof` of a class name or of a variable in its own annotation is unresolved; also bug SUB-1205 `typeof` of a class or enum name is unresolved

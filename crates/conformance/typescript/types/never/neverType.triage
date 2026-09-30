@@ -1,2 +1,3 @@
 line 22, 57, 63, 93 extra: bug SUB-1208 `new Error()` without a message is rejected
 line 30, 76 extra: bug SUB-1188 a `while (true)` loop without `break` counts as falling through
+line 93 type: bug SUB-1213 an arrow whose body only throws is typed `() => void`, not `() => never`

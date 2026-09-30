@@ -1,0 +1,1 @@
+line 12, 13, 14, 15, 21, 22, 23, 24 type: bug SUB-1196 (literal under an expected type) a literal checked against an expected type takes that type, where tsc keeps its own

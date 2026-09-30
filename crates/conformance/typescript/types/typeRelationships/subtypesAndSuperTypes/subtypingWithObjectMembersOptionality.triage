@@ -1,0 +1,1 @@
+line 43 type: artifact both reject the cast on the line before; tsc keeps its type, we type the field `<error>`

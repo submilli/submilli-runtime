@@ -1,0 +1,2 @@
+line 12, 18 type: artifact tsc also rejects this line; after the error the literal is recorded with the type it was checked against
+line 34 type: artifact after the error both report, we type the rejected spread literal as `[]`

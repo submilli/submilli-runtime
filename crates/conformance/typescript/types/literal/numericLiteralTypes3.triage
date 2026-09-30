@@ -1,2 +1,4 @@
 line 16 extra: bug SUB-1152 the rejected `b = a` on line 15 gave `b` the type `A`
 line 32 extra: bug SUB-1152 the rejected `d = c` on line 31 gave `d` the type `C`
+line 7, 8, 9, 10, 11, 14, 15, 21, 22, 24, 28, 29, 35, 36, 37, 38, 39, 54, 55, 56, 57, 58, 73, 74, 75, 76, 77, 78, 82, 86 type: artifact one side prints a type alias (or `keyof`) by name and the other expands it
+line 16, 32 type: bug SUB-1152 a rejected assignment or `++`/`--` narrows its target to the assigned type

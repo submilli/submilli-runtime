@@ -1,3 +1,4 @@
 line 3 extra: by-design spec §2.2 a required field must be initialized or assigned in the constructor
 line 4 extra: by-design spec §2.2 a static field requires an initializer
 line 8 extra: artifact we reject the uninitialized static field on line 4, so `C['c d']` is unresolved
+line 16, 18, 21, 23, 26 type: bug SUB-1211 our type display drops a field's `readonly` and doesn't quote a non-identifier field name

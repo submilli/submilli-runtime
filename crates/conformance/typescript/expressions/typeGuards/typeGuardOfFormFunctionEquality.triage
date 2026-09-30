@@ -1,1 +1,2 @@
 line 2, 4 extra: artifact the port gave the declared type guard a placeholder body, which can't establish its predicate
+line 11, 14 type: by-design spec §2.11 a type predicate is not part of a function's type

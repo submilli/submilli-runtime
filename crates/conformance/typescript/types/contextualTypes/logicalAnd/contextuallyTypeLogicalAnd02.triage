@@ -1,1 +1,2 @@
 line 9 extra: artifact we report the mismatch again on this line; tsc reports it on lines 7 and 8
+line 7 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type

@@ -1,1 +1,2 @@
 line 24, 33, 41 extra: bug SUB-1202 a type parameter with nothing to infer from is an error, where tsc infers `unknown`
+line 23, 24, 32, 33, 40, 41 type: bug SUB-1202 a type parameter with nothing to infer from stays uninstantiated, where tsc infers `unknown`

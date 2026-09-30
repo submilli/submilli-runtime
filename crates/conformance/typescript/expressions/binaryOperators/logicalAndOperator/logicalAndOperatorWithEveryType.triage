@@ -1,1 +1,4 @@
 line 36, 37, 47, 48, 58, 59, 91, 92, 102, 103, 113, 114, 124, 125 missed: bug SUB-1154 tsc rejects a condition that is always truthy or always falsy
+line 30, 40, 51, 52, 84, 85, 95, 96, 106, 107, 117, 118 type: by-design spec §1.6 `&&` keeps `number` and `boolean` whole in its falsy part, where tsc narrows to `0` or `false`
+line 31, 42, 86, 97, 108, 119 type: bug SUB-1204 a `let` or object property widens a literal type that isn't fresh, where tsc keeps it
+line 36, 37, 47, 48, 58, 59, 91, 92, 102, 103 type: by-design spec §1.6 `a && b` is `falsy_part(a) | b` and `a || b` is `truthy_part(a) | b`, even when `a`'s truthiness is known

@@ -1,0 +1,1 @@
+line 3 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type; also by-design spec §1.2 an array literal's element type comes from its first element; also artifact tsc also rejects this line; after the error the literal is recorded with the type it was checked against

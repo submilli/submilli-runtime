@@ -1,1 +1,4 @@
 line 8, 45 extra: by-design spec §1.6 an `unknown` must be narrowed before it is used as a condition
+line 11 type: by-design spec §1.6 an `unknown` must be narrowed before it is used as a condition
+line 20, 29, 38, 54, 64, 65 type: bug SUB-1196 (primitive to `{}`) removing `null` from `unknown` leaves `unknown`, where tsc gives `{}`
+line 44 type: bug SUB-1196 (literals from constant expressions) `!` on an operand of known truthiness isn't a literal type

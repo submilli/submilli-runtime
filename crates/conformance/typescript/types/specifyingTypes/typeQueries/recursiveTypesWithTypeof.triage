@@ -1,2 +1,5 @@
 line 7 missed: artifact we report the circular `typeof` as unresolved on line 5; tsc reports it at both declarations
 line 20, 22, 24, 44, 46 extra: bug SUB-1205 a variable used with `typeof` inside its own annotation is unresolved
+line 7 type: artifact tsc types the circular declaration as `any` and reports it there; we report the cycle at the type alias
+line 21, 23, 25, 45 type: bug SUB-1205 a variable used with `typeof` inside its own annotation is unresolved
+line 47 type: bug SUB-1205 `typeof` of a class name or of a variable in its own annotation is unresolved; also bug SUB-1205 a variable used with `typeof` inside its own annotation is unresolved

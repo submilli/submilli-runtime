@@ -1,0 +1,1 @@
+line 4 type: bug SUB-1196 (spreading a falsy or nullable value) `...(c && {…})` or a nullable source is rejected

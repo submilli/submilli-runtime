@@ -1,1 +1,2 @@
 line 7, 10, 13, 17, 20 missed: artifact tsc reports a duplicate declaration at each one; we report it at the later one, on the next line
+line 8, 11, 14, 15, 18, 21 type: bug SUB-1196 (spreading a falsy or nullable value) the rejected spread types as `{}`

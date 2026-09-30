@@ -1,3 +1,4 @@
 line 24 extra: artifact we report the mismatch again at the property; tsc reports only the declaration, on line 23
 line 28 extra: artifact we report the mismatch again at the property; tsc reports only the declaration, on line 27
 line 59 extra: artifact we report the mismatch again at the property; tsc reports only the declaration, on line 60
+line 8, 9 type: by-design spec §1.6 `a || b` is `truthy_part(a) | b` even when `a` is never falsy

@@ -1,0 +1,1 @@
+line 5, 7, 9, 10, 12, 13, 15, 16, 18 type: bug SUB-1196 (RegExp result shape) `exec`/`match` return a `RegExpMatch` record, not tsc's match array

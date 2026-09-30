@@ -1,0 +1,1 @@
+line 14 type: bug SUB-1152 a rejected assignment or `++`/`--` narrows its target to the assigned type

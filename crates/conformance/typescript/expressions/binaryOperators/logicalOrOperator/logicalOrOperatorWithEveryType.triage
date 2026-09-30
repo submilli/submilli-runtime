@@ -1,1 +1,5 @@
 line 38, 39, 49, 50, 60, 61, 93, 94, 104, 105, 115, 116, 126, 127 missed: bug SUB-1154 tsc rejects a condition that is always truthy or always falsy
+line 36, 37, 47, 48, 58, 59, 92, 102 type: by-design spec §1.6 `a && b` is `falsy_part(a) | b` and `a || b` is `truthy_part(a) | b`, even when `a`'s truthiness is known
+line 42, 53, 86, 97, 108, 119 type: bug SUB-1212 `||` keeps `boolean` whole in its left operand's truthy part instead of `true`
+line 91, 103 type: bug SUB-1210 a narrowing that rules out every member keeps a type instead of `never`
+line 113, 114, 124, 125 type: by-design spec §1.6 `a || b` is `truthy_part(a) | b`, so `|| null` keeps `null`

@@ -1,1 +1,2 @@
 line 12 extra: by-design spec §2.5 only structural object types can be spread
+line 12 type: by-design spec §2.5 only structural object types can be spread

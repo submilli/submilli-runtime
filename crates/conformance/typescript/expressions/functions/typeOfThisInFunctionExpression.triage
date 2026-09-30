@@ -1,1 +1,2 @@
 line 10, 15, 22, 26 missed: bug SUB-1161 `this` in a function expression compiles
+line 10, 15, 22, 26 type: bug SUB-1161 `this` in a function expression compiles

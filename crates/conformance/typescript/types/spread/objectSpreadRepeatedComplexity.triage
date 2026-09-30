@@ -1,1 +1,2 @@
 line 3 extra: by-design spec §Excluded-Features a number-keyed `Record` is an index signature; use `Map`
+line 7, 8, 13, 17, 21, 25, 29, 33, 37, 41, 45, 49, 53, 57, 61, 65, 69, 73, 77, 81 type: by-design spec §Excluded-Features a number-keyed `Record` is an index signature; use `Map`

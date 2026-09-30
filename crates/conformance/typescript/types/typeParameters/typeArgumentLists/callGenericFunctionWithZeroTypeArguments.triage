@@ -1,0 +1,2 @@
+line 5 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type
+line 31 type: bug SUB-1202 a type parameter with nothing to infer from is an error, where tsc infers `unknown`; also bug SUB-1202 a type parameter with nothing to infer from stays unbound, where tsc infers `unknown`

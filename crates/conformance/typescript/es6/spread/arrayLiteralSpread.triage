@@ -1,2 +1,3 @@
 line 17 extra: by-design spec §1.2 an array literal's element type comes from its first element
 line 22 extra: bug SUB-1196 (empty array literal) an empty array literal with no expected type is rejected
+line 17 type: by-design spec §1.2 an array literal's element type comes from its first element

@@ -1,1 +1,5 @@
 line 9, 13, 23, 24, 38, 39, 40, 42, 44 extra: by-design spec §1.6 `&&` keeps `number` and `boolean` whole in its falsy part, where tsc narrows to `0` or `false`
+line 9, 13, 42 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type; also by-design spec §1.6 `&&` keeps `number` and `boolean` whole in its falsy part, where tsc narrows to `0` or `false`
+line 23, 38, 39 type: by-design spec §1.6 `&&` keeps `number` and `boolean` whole in its falsy part, where tsc narrows to `0` or `false`
+line 24, 40, 44 type: bug SUB-1156 we don't narrow `x` through the truthiness of an assignment; also by-design spec §1.6 `&&` keeps `number` and `boolean` whole in its falsy part, where tsc narrows to `0` or `false`
+line 25 type: bug SUB-1156 we don't narrow `x` through the truthiness of an assignment

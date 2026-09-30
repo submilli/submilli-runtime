@@ -1,0 +1,2 @@
+line 11 type: by-design spec §2.11 a type predicate is not part of a function's type
+line 12 type: artifact one side prints a type alias (or `keyof`) by name and the other expands it

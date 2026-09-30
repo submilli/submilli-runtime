@@ -1,1 +1,3 @@
 line 28, 46 extra: bug SUB-1203 `===` requires one operand to be assignable to the other, where tsc accepts overlapping types
+line 29, 47 type: bug SUB-1203 `===` requires one operand to be assignable to the other, where tsc accepts overlapping types
+line 38 type: bug SUB-1212 `===` against a union-typed operand doesn't narrow

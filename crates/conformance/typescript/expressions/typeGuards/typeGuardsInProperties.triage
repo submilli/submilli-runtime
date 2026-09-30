@@ -1,1 +1,3 @@
 line 18 missed: bug SUB-1155 the getter `pp3` has no return type, so `this.pp3` is an unreported error type
+line 16, 17, 29 type: by-design spec §1.6 `&&` keeps `number` and `boolean` whole in its falsy part, where tsc narrows to `0` or `false`
+line 18 type: bug SUB-1155 the getter has no return type, so the read is an unreported error type

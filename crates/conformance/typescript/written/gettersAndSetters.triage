@@ -1,1 +1,2 @@
 line 22 type: bug SUB-1180 `reading.fahrenheit` inside `${}` beside other text is recorded as `string`
+line 13, 18 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type

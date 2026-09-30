@@ -1,0 +1,3 @@
+line 11 type: bug SUB-1196 (context-sensitive inference) `T` is inferred from a callback's return, where tsc fixes it to `unknown` first; also bug SUB-1202 a type parameter with nothing to infer from stays unbound, where tsc infers `unknown`
+line 27, 36 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type
+line 35 type: artifact both reject the call; after the error tsc takes `U` from the callback and we take it from the last argument
