@@ -9,7 +9,7 @@ class C1 {
     private pp1: string | number;
     pp2: string | number;
     // Inside public accessor getter
-    get pp3() {
+    get pp3(): string | number {
         return strOrNum;
     }
     method(): void {

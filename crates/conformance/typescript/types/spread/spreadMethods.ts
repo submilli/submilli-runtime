@@ -4,7 +4,7 @@
 class K {
     p: number = 12;
     m(): void { }
-    get g() { return 0; }
+    get g(): number { return 0; }
 }
 interface I {
     p: number;

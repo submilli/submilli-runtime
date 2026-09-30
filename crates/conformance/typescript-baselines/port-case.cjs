@@ -11,8 +11,8 @@
 //   what it checks: one where `tsc` reports that they differ.)
 // - A typed binding with no value gets `null as unknown as (T)`, and a
 //   `declare function` gets a body returning such a value.
-// - A function declaration or class method with no return type gets the one `tsc`
-//   infers for it, and so do a class field and a parameter with a default value
+// - A function declaration, class method or getter with no return type gets the one
+//   `tsc` infers for it, and so do a class field and a parameter with a default value
 //   that have no type, since Submilli requires them to be written. Where `tsc`
 //   infers `any`, nothing is written.
 // - `// @strict: false` becomes `// @strict: true`, and `function main(): void {}`
@@ -156,7 +156,7 @@ function removeModifier(node, kind, sourceFile, edits) {
 }
 
 /** Write the type `tsc` infers where Submilli requires one and the case has none: the
- * return type of a function declaration or class method, and the type of a class
+ * return type of a function declaration, class method or getter, and the type of a class
  * field or of a parameter with a default value. */
 function annotateInferredTypes(text, fileName) {
   const program = ts.createProgram([fileName], { strict: true, target: ts.ScriptTarget.ES2020 }, host(text, fileName));
@@ -179,10 +179,10 @@ function annotateInferredTypes(text, fileName) {
       if (!unwritable.test(written)) edits.push({ start: at, end: at, text: `: ${written}` });
     }
     const annotatable =
-      (ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node)) &&
+      (ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node) || ts.isGetAccessorDeclaration(node)) &&
       node.body &&
       !node.type &&
-      !(ts.isMethodDeclaration(node) && ts.isObjectLiteralExpression(node.parent));
+      !(!ts.isFunctionDeclaration(node) && ts.isObjectLiteralExpression(node.parent));
     if (annotatable) {
       const signature = checker.getSignatureFromDeclaration(node);
       const ret = signature && checker.getReturnTypeOfSignature(signature);

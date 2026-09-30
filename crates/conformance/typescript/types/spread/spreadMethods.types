@@ -14,7 +14,7 @@ class K {
 >m : () => void
 >  : ^^^^^^^^^^
 
-    get g() { return 0; }
+    get g(): number { return 0; }
 >g : number
 >  : ^^^^^^
 >0 : 0
