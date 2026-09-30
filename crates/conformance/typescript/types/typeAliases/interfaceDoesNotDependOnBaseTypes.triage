@@ -1,2 +1,2 @@
 line 4, 5 extra: artifact we reject the interface extending `Array` on line 9, so it has no `push`
-line 9 extra: by-design spec §2.3 interface `extends` is deferred, so an interface can't extend `Array`
+line 9 extra: bug SUB-1206 an interface can't extend `Array<T>`

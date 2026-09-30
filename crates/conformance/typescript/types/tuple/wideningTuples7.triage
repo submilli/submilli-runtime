@@ -1,2 +1,2 @@
-line 4 type: artifact the type comes from code tsc rejects, and each side's recovery type differs (on line 6, ours records the literal with the type it was checked against)
-line 6 type: artifact the type comes from code tsc rejects, and each side's recovery type differs (ours records the literal with the type it was checked against)
+line 4 type: bug SUB-1196 (literal under an expected type) a literal checked against an expected type takes that type, where tsc keeps its own (the literal on line 6)
+line 6 type: bug SUB-1196 (literal under an expected type) a literal checked against an expected type takes that type, where tsc keeps its own

@@ -1,1 +1,1 @@
-line 43 type: artifact the type comes from code tsc rejects, and each side's recovery type differs (the cast on line 42: tsc keeps its type, ours types the field `<error>`)
+line 43 type: artifact the type comes from code tsc rejects, and each side's recovery type differs (on line 42, tsc keeps the cast's type, ours types the field `<error>`)
