@@ -954,15 +954,46 @@ fn same_type(text: &str, tsc_ty: &str, our_ty: &str) -> bool {
 }
 
 /// Whether `ty` is a single named type, `Name` or `Name<…>`, that isn't a
-/// built-in one: what we print for a class.
+/// built-in one: what we print for a class. `A<B> | C<D>` is two types.
 fn names_a_class(ty: &str) -> bool {
-    let name = ty.split_once('<').map_or(ty, |(name, _)| name);
-    let arguments_closed = !ty.contains('<') || ty.ends_with('>');
+    let (name, arguments) = ty.split_once('<').unwrap_or((ty, ""));
     let is_builtin = matches!(
         name,
-        "unknown" | "never" | "null" | "void" | "number" | "string" | "boolean" | "bigint"
+        "unknown"
+            | "never"
+            | "null"
+            | "undefined"
+            | "void"
+            | "any"
+            | "object"
+            | "symbol"
+            | "this"
+            | "number"
+            | "string"
+            | "boolean"
+            | "bigint"
     );
-    is_identifier(name) && arguments_closed && !is_builtin
+    let is_generic = ty.contains('<');
+    is_identifier(name) && !is_builtin && (!is_generic || closes_at_end(arguments))
+}
+
+/// Whether the type arguments after a generic's `<` close exactly at the end of
+/// the text, so nothing (`| C<D>`, `[]`) follows them.
+fn closes_at_end(arguments: &str) -> bool {
+    let mut depth = 1usize;
+    for (i, c) in arguments.char_indices() {
+        match c {
+            '<' => depth += 1,
+            '>' => {
+                depth -= 1;
+                if depth == 0 {
+                    return i + 1 == arguments.len();
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 /// A type's text in a canonical form, so that two spellings of the same type
@@ -1007,50 +1038,6 @@ impl CanonicalType {
             is_function: false,
         }
     }
-}
-
-/// What an object member's type reads as.
-enum FieldType {
-    Typed(String),
-    /// An optional field typed only `undefined`: `tsc`'s `b?: undefined`, for a
-    /// field only some members of a normalized union have. It adds nothing to
-    /// the object, so it is dropped.
-    Absent,
-}
-
-/// A generic type's canonical text. Three spellings only `tsc` uses read as ours:
-/// - `Uint8Array<ArrayBuffer>`: `tsc` names the buffer behind it, which ours has
-///   no choice of;
-/// - `Record<string, V>`: defined as the index signature we print;
-/// - `ArrayIterator<T>`: `tsc`'s name for an array's iterator, which is our
-///   `Iterator<T>`.
-fn canonical_generic(name: &str, args: &[String]) -> String {
-    match (name, args) {
-        ("Uint8Array", [buffer]) if buffer == "ArrayBuffer" || buffer == "ArrayBufferLike" => {
-            name.to_string()
-        }
-        ("Record", [key, value]) if key == "string" => format!("{{ [key: string]: {value} }}"),
-        ("ArrayIterator", _) => format!("Iterator<{}>", args.join(", ")),
-        _ => format!("{name}<{}>", args.join(", ")),
-    }
-}
-
-/// Drops each union member that is a literal of a base type the union also has:
-/// `string | "a"` is `string`. `tsc` prints the reduced union; ours may not
-/// reduce it. A bigint literal (`1n`) is not a `number`.
-fn drop_literals_beside_their_base(members: &mut Vec<String>) {
-    let has = |base: &str| members.iter().any(|m| m == base);
-    let (has_string, has_number, has_bigint, has_boolean) =
-        (has("string"), has("number"), has("bigint"), has("boolean"));
-    members.retain(|m| {
-        let is_numeric = is_signed_number_literal(m);
-        let is_bigint = is_numeric && m.ends_with('n');
-        let absorbed = has_string && m.starts_with('"')
-            || has_number && is_numeric && !is_bigint
-            || has_bigint && is_bigint
-            || has_boolean && matches!(m.as_str(), "true" | "false");
-        !absorbed
-    });
 }
 
 impl TypeText<'_> {
@@ -1287,9 +1274,7 @@ impl TypeText<'_> {
     /// A name, keyword, or number: everything up to the next delimiter.
     fn word(&mut self) -> Option<String> {
         let rest = self.rest();
-        let len = rest
-            .find(|c: char| !(c.is_alphanumeric() || matches!(c, '_' | '$' | '.' | '-')))
-            .unwrap_or(rest.len());
+        let len = rest.find(|c| !is_word_char(c)).unwrap_or(rest.len());
         if len == 0 {
             return None;
         }
@@ -1321,14 +1306,12 @@ impl TypeText<'_> {
         false
     }
 
-    /// `word` as a whole type: not the start of a longer name (the characters
-    /// `word()` reads), an array (`[]`) or a generic (`<`).
+    /// `word` as a whole type: not the start of a longer name, an array (`[]`)
+    /// or a generic (`<`).
     fn eat_word(&mut self, word: &str) -> bool {
         let rest = self.rest();
         let whole = rest.strip_prefix(word).is_some_and(|after| {
-            !after.starts_with(|c: char| {
-                c.is_alphanumeric() || matches!(c, '_' | '$' | '.' | '-' | '[' | '<')
-            })
+            !after.starts_with(|c: char| is_word_char(c) || matches!(c, '[' | '<'))
         });
         if whole {
             self.pos += word.len();
@@ -1347,6 +1330,55 @@ impl TypeText<'_> {
     fn rest(&self) -> &str {
         &self.text[self.pos..]
     }
+}
+
+/// What an object member's type reads as.
+enum FieldType {
+    Typed(String),
+    /// An optional field typed only `undefined`: `tsc`'s `b?: undefined`, for a
+    /// field only some members of a normalized union have. It adds nothing to
+    /// the object, so it is dropped.
+    Absent,
+}
+
+/// A generic type's canonical text. Three spellings only `tsc` uses read as ours:
+/// - `Uint8Array<ArrayBuffer>`: `tsc` names the buffer behind it, which ours has
+///   no choice of;
+/// - `Record<string, V>`: defined as the index signature we print;
+/// - `ArrayIterator<T>`: `tsc`'s name for an array's iterator, which is our
+///   `Iterator<T>`.
+fn canonical_generic(name: &str, args: &[String]) -> String {
+    match (name, args) {
+        ("Uint8Array", [buffer]) if buffer == "ArrayBuffer" || buffer == "ArrayBufferLike" => {
+            name.to_string()
+        }
+        ("Record", [key, value]) if key == "string" => format!("{{ [key: string]: {value} }}"),
+        ("ArrayIterator", _) => format!("Iterator<{}>", args.join(", ")),
+        _ => format!("{name}<{}>", args.join(", ")),
+    }
+}
+
+/// Drops each union member that is a literal of a base type the union also has:
+/// `string | "a"` is `string`. `tsc` prints the reduced union; ours may not
+/// reduce it. A bigint literal (`1n`) is not a `number`.
+fn drop_literals_beside_their_base(members: &mut Vec<String>) {
+    let has = |base: &str| members.iter().any(|m| m == base);
+    let (has_string, has_number, has_bigint, has_boolean) =
+        (has("string"), has("number"), has("bigint"), has("boolean"));
+    members.retain(|m| {
+        let is_numeric = is_signed_number_literal(m);
+        let is_bigint = is_numeric && m.ends_with('n');
+        let absorbed = has_string && m.starts_with('"') && is_string_literal(m)
+            || has_number && is_numeric && !is_bigint
+            || has_bigint && is_bigint
+            || has_boolean && matches!(m.as_str(), "true" | "false");
+        !absorbed
+    });
+}
+
+/// A character of a name, keyword or number as the type reader reads one.
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '_' | '$' | '.' | '-')
 }
 
 fn span_text(source: &str, span: Span) -> Option<&str> {
@@ -1479,8 +1511,13 @@ const TSC_ONLY_SPELLINGS: &[(&str, &str, &str)] = &[
     ),
     (
         "literal beside its base",
-        r#"string | "bar" | number | 1 | -2 | boolean | true | bigint | 1n"#,
+        r#"string | "bar" | number | 1 | -2 | 1_000 | .5 | boolean | true | bigint | -1n"#,
         "bigint | boolean | number | string",
+    ),
+    (
+        "readonly b?: undefined",
+        "{ readonly b?: undefined; a: number }",
+        "{ a: number }",
     ),
 ];
 
@@ -1524,6 +1561,22 @@ const DISTINCT_SPELLINGS: &[(&str, &str, &str)] = &[
         "boolean",
     ),
     ("a literal without its base", r#""bar" | number"#, "number"),
+    (
+        "a negative bigint literal isn't a number",
+        "number | -1n",
+        "number",
+    ),
+    (
+        "a hex bigint literal isn't a number",
+        "number | 0x1n",
+        "number",
+    ),
+    (
+        "a grouped union isn't a literal",
+        r#"string | ("a" | number)"#,
+        "string",
+    ),
+    ("a longer name isn't undefined", "{ a?: undefinedX }", "{}"),
 ];
 
 #[test]
@@ -1544,12 +1597,17 @@ fn normalizing_keeps_distinct_types_distinct() {
 fn only_this_as_this_counts_as_its_class() {
     assert!(same_type("this", "this", "Base2<T>"));
     assert!(same_type("this", "this", "Derived"));
+    assert!(same_type("this", "this", "Box<Map<K, V>>"));
     assert!(!same_type("x", "this", "Base2<T>"));
     for not_a_class in [
         "<error>",
         "unknown",
+        "any",
         "number",
         "A | B",
+        "A<B> | C<D>",
+        "A<B> & C<D>",
+        "A<B>[]",
         "{ x: number }",
         "() => void",
     ] {

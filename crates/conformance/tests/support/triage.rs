@@ -16,7 +16,7 @@
 //!
 //! A line that diverges for more than one reason names each, joined by `; also `.
 //! Each starts with its own category, though only the first is checked, and a
-//! reason never contains `; `.
+//! reason never contains `; also ` itself.
 use std::collections::BTreeSet;
 use std::fmt;
 use std::fs;

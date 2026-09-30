@@ -1,2 +1,2 @@
 line 2 missed: by-design spec §Appendix `for...in` is never supported; we reject the line for that
-line 2 extra: by-design spec §Appendix `for...in` is never supported, we reject the line for that
+line 2 extra: by-design spec §Appendix `for...in` is never supported; we reject the line for that

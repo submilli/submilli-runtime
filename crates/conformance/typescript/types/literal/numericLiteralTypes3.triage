@@ -1,4 +1,4 @@
-line 16 extra: bug SUB-1152 a rejected assignment still narrows its target to the assigned type (`b = a` on line 15)
-line 32 extra: bug SUB-1152 a rejected assignment still narrows its target to the assigned type (`d = c` on line 31)
+line 16 extra: bug SUB-1152 a rejected assignment, `++` or `--` still narrows its target (`b = a` on line 15)
+line 32 extra: bug SUB-1152 a rejected assignment, `++` or `--` still narrows its target (`d = c` on line 31)
 line 7, 8, 9, 10, 11, 14, 15, 21, 22, 24, 28, 29, 35, 36, 37, 38, 39, 54, 55, 56, 57, 58, 73, 74, 75, 76, 77, 78, 82, 86 type: artifact one side prints a type alias (or `keyof`) by name and the other expands it
-line 16, 32 type: bug SUB-1152 a rejected assignment still narrows its target to the assigned type
+line 16, 32 type: bug SUB-1152 a rejected assignment, `++` or `--` still narrows its target

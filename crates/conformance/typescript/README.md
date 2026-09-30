@@ -131,8 +131,9 @@ When a line diverges for more than one reason, the entry names each, joined by
 line 47 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type; also by-design spec §1.6 …
 ```
 
-So a reason itself never contains `; `. Use one wording per issue or spec rule, so
-that searching for it finds every line. A `bug SUB-1196 (<item>)` reason names the
+So a reason itself never contains `; also `. Reuse the wording other entries give
+the same issue or spec rule, with anything particular to the line in parentheses
+after it, so that searching for it finds every line. A `bug SUB-1196 (<item>)` reason names the
 item of that checklist issue it waits on.
 
 The divergences not yet explained are listed in `unexplained.txt`, one
