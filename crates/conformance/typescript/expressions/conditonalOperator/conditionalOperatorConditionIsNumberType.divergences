@@ -1,12 +1,4 @@
-types: 132 of 155 tsc entries compared, 2 differ
-
-line 29: - 10000000000000
-  tsc:  -10000000000000
-  ours: number
-
-line 55: - 10000000000000
-  tsc:  -10000000000000
-  ours: number
+types: 130 of 155 tsc entries compared, 0 differ
 
 errors:
 line 28: tsc TS2872: This kind of expression is always truthy. (we accept)

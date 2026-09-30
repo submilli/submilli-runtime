@@ -848,7 +848,7 @@ fn group_by_text(entries: &[Entry]) -> Vec<(&str, Vec<&str>)> {
 /// binding, so the literal's own entry is skipped.
 fn is_literal(text: &str) -> bool {
     matches!(text, "true" | "false" | "null")
-        || is_number_literal(text.strip_prefix(['-', '+']).unwrap_or(text))
+        || is_number_literal(text.strip_prefix(['-', '+']).map_or(text, str::trim_start))
         || is_string_literal(text)
 }
 
@@ -1035,6 +1035,15 @@ impl TypeText<'_> {
             .collect();
         texts.sort();
         texts.dedup();
+        // A literal beside its own base type adds nothing: `string | "a"` is
+        // `string`. `tsc` prints the reduced union; ours may not reduce it.
+        let has = |base: &str| texts.iter().any(|t| t == base);
+        let (strings, numbers, booleans) = (has("string"), has("number"), has("boolean"));
+        texts.retain(|t| {
+            !(strings && t.starts_with('"')
+                || numbers && is_number_literal(t.strip_prefix('-').unwrap_or(t))
+                || booleans && matches!(t.as_str(), "true" | "false"))
+        });
         Some(CanonicalType::plain(texts.join(" | ")))
     }
 
@@ -1102,11 +1111,16 @@ impl TypeText<'_> {
             if let ("Record", [key, value]) = (name.as_str(), args.as_slice())
                 && key == "string"
             {
-                return Some(CanonicalType::plain(format!("{{ [key: string]: {value} }}")));
+                return Some(CanonicalType::plain(format!(
+                    "{{ [key: string]: {value} }}"
+                )));
             }
             // `tsc` names an array's iterator `ArrayIterator`; ours is `Iterator`.
             if name == "ArrayIterator" {
-                return Some(CanonicalType::plain(format!("Iterator<{}>", args.join(", "))));
+                return Some(CanonicalType::plain(format!(
+                    "Iterator<{}>",
+                    args.join(", ")
+                )));
             }
             return Some(CanonicalType::plain(format!("{name}<{}>", args.join(", "))));
         }
@@ -1420,6 +1434,14 @@ fn normalizing_reads_tsc_only_spellings_as_ours() {
         normalize_type("([a, { b }, ...c]: number[]) => void"),
         normalize_type("(arg0: number[]) => void")
     );
+    assert_eq!(
+        normalize_type(r#"string | "bar" | number | 1 | -2 | boolean | true"#),
+        normalize_type("boolean | number | string")
+    );
+    assert_ne!(
+        normalize_type(r#""bar" | number"#),
+        normalize_type("number")
+    );
     for distinct in [
         "Record<number, string>",
         "{ sn: number | string }",
@@ -1471,6 +1493,7 @@ fn only_a_single_literal_is_skipped() {
         "+1",
         "1e-5",
         "-1E+5",
+        "- 10000000000000",
         "1",
         "-1",
         "1.5",

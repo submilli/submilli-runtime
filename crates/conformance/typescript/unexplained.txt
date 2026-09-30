@@ -532,8 +532,6 @@ expressions/binaryOperators/logicalOrOperator/logicalOrOperatorWithTypeParameter
 expressions/binaryOperators/logicalOrOperator/logicalOrOperatorWithTypeParameters.ts 10 type
 expressions/binaryOperators/logicalOrOperator/logicalOrOperatorWithTypeParameters.ts 14 type
 expressions/binaryOperators/logicalOrOperator/logicalOrOperatorWithTypeParameters.ts 15 type
-expressions/conditonalOperator/conditionalOperatorConditionIsNumberType.ts 29 type
-expressions/conditonalOperator/conditionalOperatorConditionIsNumberType.ts 55 type
 expressions/conditonalOperator/conditionalOperatorWithIdenticalBCT.ts 17 type
 expressions/conditonalOperator/conditionalOperatorWithIdenticalBCT.ts 19 type
 expressions/conditonalOperator/conditionalOperatorWithIdenticalBCT.ts 32 type
@@ -1076,10 +1074,7 @@ types/stringLiteral/stringLiteralTypesAsTags03.ts 36 type
 types/stringLiteral/stringLiteralTypesAsTags03.ts 40 type
 types/stringLiteral/stringLiteralTypesAsTags03.ts 43 type
 types/stringLiteral/stringLiteralTypesAsTags03.ts 44 type
-types/stringLiteral/stringLiteralTypesInUnionTypes02.ts 7 type
 types/stringLiteral/stringLiteralTypesInUnionTypes02.ts 8 type
-types/stringLiteral/stringLiteralTypesInUnionTypes02.ts 10 type
-types/stringLiteral/stringLiteralTypesInUnionTypes02.ts 13 type
 types/stringLiteral/stringLiteralTypesInUnionTypes02.ts 14 type
 types/stringLiteral/stringLiteralTypesInUnionTypes02.ts 18 type
 types/stringLiteral/stringLiteralTypesInUnionTypes02.ts 19 type
