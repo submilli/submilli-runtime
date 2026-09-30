@@ -282,6 +282,10 @@ fn generated_tsconfig_maps_package_names_to_source_entrypoints() {
         generated.contains("\"strictNullChecks\": false"),
         "got: {generated}"
     );
+    assert!(
+        generated.contains("\"useUnknownInCatchVariables\": false"),
+        "got: {generated}"
+    );
     assert!(generated.contains("./types/**/*.d.ts"), "got: {generated}");
 }
 
