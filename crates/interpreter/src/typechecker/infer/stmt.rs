@@ -695,6 +695,8 @@ impl Inferer<'_> {
         }
 
         let mut post = join_reachable_envs(None, exits);
+        // A `super(...)` in a `catch` can throw too, so the `finally` after it
+        // counts as before the call as well.
         self.in_super_handler |= !super_seen_before && self.super_seen;
         let typed_finally = finally
             .map(|f| {
