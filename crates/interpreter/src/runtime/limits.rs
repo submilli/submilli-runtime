@@ -33,6 +33,35 @@ impl std::fmt::Display for MemoryCapExceeded {
 
 impl std::error::Error for MemoryCapExceeded {}
 
+/// The run reached its memory cap. Like spent fuel or an expired deadline this
+/// ends the run; a program cannot catch it. The refusal that raised it is the
+/// error's source.
+#[derive(Debug, Clone, Copy)]
+pub struct MemoryExhausted;
+
+impl std::fmt::Display for MemoryExhausted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("memory exhausted")
+    }
+}
+
+/// Whether `err` is the tenant's cap refusing memory: the engine growing the
+/// GC heap, or the host charging bytes it holds for the program.
+pub fn is_memory_exhausted(err: &wasmtime::Error) -> bool {
+    err.is::<MemoryExhausted>()
+        || err.is::<wasmtime::GcHeapOutOfMemory<()>>()
+        || err.is::<MemoryCapExceeded>()
+}
+
+/// Names `err` as [`MemoryExhausted`] when the cap refused memory, keeping the
+/// refusal as its source; any other error is returned unchanged.
+pub(crate) fn name_memory_exhaustion(err: wasmtime::Error) -> wasmtime::Error {
+    if !is_memory_exhausted(&err) || err.is::<MemoryExhausted>() {
+        return err;
+    }
+    err.context(MemoryExhausted)
+}
+
 pub struct TenantLimits {
     pub max_total_bytes: u64,
     observed_bytes: u64,

@@ -28,6 +28,7 @@ use crate::runtime::host::{
 };
 use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
 use crate::runtime::number::format_number_js;
+use crate::runtime::prelude::keep::{KeptValue, keep_all};
 
 const FNV_OFFSET: u32 = 0x811c_9dc5;
 const FNV_PRIME: u32 = 0x0100_0193;
@@ -372,6 +373,9 @@ async fn array_to_string(
     string_ty: &StructType,
 ) -> wasmtime::Result<Val> {
     let elements = read_array_backing(caller, recv, "Array#toString")?;
+    // An element's `toString` may be the program's, which can drop the rest
+    // from the array.
+    keep_all(caller, &elements)?;
     let mut out: Vec<u16> = Vec::new();
     for (i, elem) in elements.iter().enumerate() {
         if i > 0 {
@@ -398,6 +402,9 @@ async fn array_to_json(
     string_ty: &StructType,
 ) -> wasmtime::Result<Val> {
     let elements = read_array_backing(caller, recv, "Array#toJson")?;
+    // An element's `toJson` may be the program's, which can drop the rest
+    // from the array.
+    keep_all(caller, &elements)?;
     let mut out: Vec<u16> = vec![u16::from(b'[')];
     for (i, elem) in elements.iter().enumerate() {
         if i > 0 {
@@ -586,6 +593,9 @@ pub(crate) async fn object_to_json(
     }
     let entries = json_property_slots(caller, recv)?;
 
+    // A value's own `toJson` may be a host body, whose receiver the engine
+    // does not keep; a getter's result is held by nothing else.
+    let kept_value = KeptValue::new(caller)?;
     let mut out: Vec<u16> = vec![u16::from(b'{')];
     for (name_units, slot, getter) in &entries {
         let object = as_struct(caller, recv, "Object#toJson")?;
@@ -596,6 +606,7 @@ pub(crate) async fn object_to_json(
                 .call_with_receiver(caller, *recv, &[])
                 .await?;
         }
+        kept_value.set(caller, value)?;
         let value = &value;
         if is_function(caller, value)? {
             continue;

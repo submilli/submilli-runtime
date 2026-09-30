@@ -164,10 +164,10 @@ pub struct Cli {
     shutdown_grace: Option<u64>,
 
     /// Memory one execution may hold live, in megabytes. An allocation that
-    /// would pass it throws an `out of memory` error the program can catch,
-    /// instead of growing until the host or the container's own limit stops
-    /// it. This is what makes a container's `--memory` sizeable: budget
-    /// roughly this times peak concurrency.
+    /// would pass it ends the run with `memory exhausted`, instead of growing
+    /// until the host or the container's own limit stops it. This is what
+    /// makes a container's `--memory` sizeable: budget roughly this times peak
+    /// concurrency.
     /// Note that strings are UTF-16, so text costs two bytes per character —
     /// a 25 MB document needs ~50 MB here. [default: 50]
     /// Env: `$SUBMILLI_MAX_EXECUTION_MEMORY`, which outranks the config file.

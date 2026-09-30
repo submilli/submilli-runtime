@@ -146,7 +146,7 @@ variable beats file). A blueprint can't raise them.
 
 | Setting | Default | Passing it |
 | --- | --- | --- |
-| `max_execution_memory` (MB) | 50 | Catchable `Error` `GC heap out of memory`; strings cost 2 bytes/char |
+| `max_execution_memory` (MB) | 50 | Run ends `memory exhausted`; strings cost 2 bytes/char |
 | `max_execution_time` (s) | off | Run ends `timeout exceeded`; counts from `main`, checked once a second, doesn't interrupt a pending HTTP/MCP/model/Git call |
 | `max_execution_fuel` | 10¹² | Run ends `fuel exhausted`; deterministic, a backstop |
 | `max_execution_stack` (KiB, ≤ 16384) | 512 | Run ends `call stack exhausted` |

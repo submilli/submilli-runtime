@@ -584,7 +584,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 &caller.data().tenant_limits,
                 held,
             )
-            .map_err(|e| wasmtime::Error::msg(format!("fs.lines {path}: {e}")))?;
+            .map_err(|e| wasmtime::Error::new(e).context(format!("fs.lines {path}")))?;
             results[0] = make_handle_iterator(
                 caller,
                 reader,
@@ -629,7 +629,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 &caller.data().tenant_limits,
                 held,
             )
-            .map_err(|e| wasmtime::Error::msg(format!("fs.bytes {path}: {e}")))?;
+            .map_err(|e| wasmtime::Error::new(e).context(format!("fs.bytes {path}")))?;
             results[0] = make_handle_iterator(
                 caller,
                 reader,
@@ -673,7 +673,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             let walk = ContainedWalk::new(base, list_prefix(&path)?, recursive)
                 .map_err(|e| contain_trap("fs.list", &path, &ContainError::from(e)))?;
             let dir = ChargedDirIter::new(walk, &caller.data().tenant_limits)
-                .map_err(|e| wasmtime::Error::msg(format!("fs.list {path}: {e}")))?;
+                .map_err(|e| wasmtime::Error::new(e).context(format!("fs.list {path}")))?;
             results[0] =
                 make_handle_iterator(caller, dir, list_next, close_handle_of::<ChargedDirIter>)?;
             Ok(())
@@ -901,7 +901,7 @@ fn open_writer(caller: &mut Caller<'_, StoreData>, path: &str) -> wasmtime::Resu
         &caller.data().tenant_limits,
         quota,
     )
-    .map_err(|e| wasmtime::Error::msg(format!("fs.writer {path}: {e}")))?;
+    .map_err(|e| wasmtime::Error::new(e).context(format!("fs.writer {path}")))?;
     let handle = ExternRef::new(&mut *caller, writer)?;
     let ty = file_writer_backing_struct(caller.engine())?;
     abi::new_backing(caller, ty, &[Val::ExternRef(Some(handle))])

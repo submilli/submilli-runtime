@@ -480,14 +480,14 @@ impl Type {
     }
 
     /// Whether a value of this type would need a `void` slot at runtime:
-    /// `void` itself, or a union that lists it (`f() ?? 1` and
-    /// `cond ? f() : 1` both build one).
+    /// `void` itself, or a union that lists it.
     ///
     /// Deliberately one level deep — it does **not** descend into a function's
     /// return type, where `void` is legitimate (`() => void`). Every gate that
     /// refuses `void` in a value or comparison position wants this, not the
-    /// bare [`is_void`](Self::is_void): a top-level-only check leaves the union
-    /// form to reach codegen and panic.
+    /// bare [`is_void`](Self::is_void). `cond ? f() : 1` and `a ?? f()` are
+    /// plain `void`, so no expression builds the union form; a gate that asks
+    /// this still refuses one that did, rather than letting it reach codegen.
     pub fn carries_void(&self) -> bool {
         match self.peel() {
             Type::Void => true,

@@ -40,6 +40,7 @@ use crate::runtime::prelude::collection::{is_a, object_field, read_array_vals, u
 use crate::runtime::prelude::iterator::{
     IterKind, as_struct, build_iterator, iter_done, iter_yield, next_closure_type,
 };
+use crate::runtime::prelude::keep::{KeptValue, keep_all};
 use crate::runtime::prelude::vtable::dispatch_vtable_slot;
 
 /// The map's initial bucket capacity (must stay a power of two for the
@@ -480,6 +481,11 @@ pub(super) async fn for_each(
     let values = field_array(caller, &b, F_VALUES)?;
     let order = field_array(caller, &b, F_ORDER)?;
     let order_len = field_i32(caller, &b, F_ORDER_LEN)?;
+    // A callback that clears or grows the map swaps these arrays out of it.
+    keep_all(
+        caller,
+        &[keys, values, order].map(|array| Val::AnyRef(Some(array.to_anyref()))),
+    )?;
     for o in 0..order_len {
         let Val::I32(idx) = order.get(&mut *caller, o as u32)? else {
             continue;
@@ -706,6 +712,10 @@ pub(super) async fn construct(
         return Ok(coll);
     }
 
+    // The iterator and each object its `next()` returns come from guest calls.
+    let kept_iterator = KeptValue::new(caller)?;
+    let kept_result = KeptValue::new(caller)?;
+
     let it = if is_a(caller, init, &map_backing_struct(caller.engine(), &intr)?)? {
         entries(caller, init)?
     } else if let Some(iter_method) = object_field(caller, init, "iterator")? {
@@ -714,12 +724,14 @@ pub(super) async fn construct(
     } else {
         *init
     };
+    kept_iterator.set(caller, it)?;
 
     let next = object_field(caller, &it, "next")?
         .ok_or_else(|| wasmtime::Error::msg("Map ctor: initializer is not iterable"))?;
     let next_closure = closure::read(caller, &next, "Map ctor iterator")?;
     loop {
         let result = next_closure.call(caller, &[]).await?;
+        kept_result.set(caller, result)?;
         let done = object_field(caller, &result, "done")?
             .ok_or_else(|| wasmtime::Error::msg("Map ctor: iterator result missing `done`"))?;
         if unbox_bool(caller, &done)? {

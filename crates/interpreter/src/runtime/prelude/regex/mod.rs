@@ -158,14 +158,13 @@ pub(super) fn construct(
     let flags_str = read_string_arg(&mut *caller, flags, "new RegExp(flags)")?;
     let charged = {
         let limits = &caller.data().tenant_limits;
-        compile_charged(limits, &source_str, &flags_str).map_err(|e| {
-            let msg = format!("RegExp: {e}");
-            // An invalid pattern or flag is a spec `SyntaxError`; a tenant
-            // memory-cap breach is a resource failure and stays a base `Error`.
-            match e {
-                engine::RegexCompileError::Syntax(_) => crate::runtime::host::syntax_error(msg),
-                engine::RegexCompileError::Memory(_) => wasmtime::Error::msg(msg),
+        // An invalid pattern or flag is a spec `SyntaxError`; a tenant
+        // memory-cap breach keeps its type, which ends the run.
+        compile_charged(limits, &source_str, &flags_str).map_err(|e| match e {
+            engine::RegexCompileError::Syntax(syntax) => {
+                crate::runtime::host::syntax_error(format!("RegExp: {syntax}"))
             }
+            engine::RegexCompileError::Memory(cap) => wasmtime::Error::new(cap).context("RegExp"),
         })?
     };
     let bits = i32::from(charged.flag_bits());

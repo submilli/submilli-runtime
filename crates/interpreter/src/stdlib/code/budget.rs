@@ -20,10 +20,14 @@ impl Budget {
         }
     }
     pub fn charge(&mut self, caller: &mut Caller<'_, StoreData>, bytes: usize) -> Result<()> {
+        // An estimate of working space taken before the work starts, so a
+        // refusal is an error the program can catch and act on (a smaller
+        // file), not the run reaching its memory cap.
         caller
             .data()
             .tenant_limits
-            .charge_host_bytes(bytes as u64)?;
+            .charge_host_bytes(bytes as u64)
+            .map_err(|refused| wasmtime::Error::msg(format!("code: {refused}")))?;
         self.charged += bytes as u64;
         Ok(())
     }

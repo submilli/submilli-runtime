@@ -27,6 +27,7 @@ use crate::runtime::host::{host_boxed_number_vtable, write_submilli_array_struct
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::prelude::closure::Closure;
 use crate::runtime::prelude::iterator::{IterKind, as_struct, make_index_iterator};
+use crate::runtime::prelude::keep::{KeptValue, KeptValues, keep_all};
 use crate::runtime::prelude::vtable::dispatch_vtable_slot;
 
 // ---------------------------------------------------------------------------
@@ -61,6 +62,21 @@ pub(super) fn read_array(
     for i in 0..len {
         elements.push(backing.get(&mut *caller, i)?);
     }
+    Ok(elements)
+}
+
+/// [`read_array`] for a method that runs the program's code while it holds
+/// the elements: a callback, or an element's own `toString`. That code can
+/// drop them from the source array, leaving the snapshot the only thing that
+/// refers to them, so it is kept reachable. Element `equals` and `hash` are
+/// never the program's, so the searching methods read without keeping.
+pub(super) fn read_kept_array(
+    caller: &mut Caller<'_, StoreData>,
+    val: &Val,
+    name: &str,
+) -> wasmtime::Result<Vec<Val>> {
+    let elements = read_array(caller, val, name)?;
+    keep_all(caller, &elements)?;
     Ok(elements)
 }
 
@@ -497,8 +513,11 @@ fn splice(
     items: Vec<Val>,
 ) -> wasmtime::Result<Val> {
     let (removed, result) = splice_parts(&elements, start, delete_count, items);
+    // Built while the receiver still holds the removed elements: once they are
+    // swapped out nothing else does, and an allocation may collect.
+    let removed = build_array(caller, &removed)?;
     set_backing(caller, receiver, &result)?;
-    build_array(caller, &removed)
+    Ok(removed)
 }
 
 /// Insertion sort that re-enters the guest comparator (or compares element
@@ -648,11 +667,12 @@ async fn map(
     f: &Closure,
 ) -> wasmtime::Result<Vec<Val>> {
     let f = ElementCallback::new(caller, f, Some(array))?;
-    let mut out = Vec::with_capacity(elements.len());
+    let mut out = KeptValues::with_capacity(caller, elements.len())?;
     for (index, elem) in elements.into_iter().enumerate() {
-        out.push(f.call(caller, None, elem, index).await?);
+        let mapped = f.call(caller, None, elem, index).await?;
+        out.push(caller, mapped)?;
     }
-    Ok(out)
+    Ok(out.values().to_vec())
 }
 
 async fn filter(
@@ -686,8 +706,11 @@ async fn reduce(
     if reverse {
         indexed.reverse();
     }
+    // The next call boxes its index before it passes the accumulator on.
+    let kept_acc = KeptValue::new(caller)?;
     for (index, elem) in indexed {
         acc = f.call(caller, Some(acc), elem, index).await?;
+        kept_acc.set(caller, acc)?;
     }
     Ok(acc)
 }
@@ -770,16 +793,17 @@ async fn flat_map(
     f: &Closure,
 ) -> wasmtime::Result<Vec<Val>> {
     let f = ElementCallback::new(caller, f, Some(array))?;
-    let mut out = Vec::new();
+    let kept_mapped = KeptValue::new(caller)?;
+    let mut out = KeptValues::with_capacity(caller, elements.len())?;
     for (index, elem) in elements.into_iter().enumerate() {
         let mapped = f.call(caller, None, elem, index).await?;
-        out.extend(read_array(
-            caller,
-            &mapped,
-            "Array#flatMap callback result",
-        )?);
+        // The callback may reuse the array it returns, so its elements are
+        // kept themselves; the array holds them while room is made.
+        kept_mapped.set(caller, mapped)?;
+        let flattened = read_array(caller, &mapped, "Array#flatMap callback result")?;
+        out.extend(caller, &flattened)?;
     }
-    Ok(out)
+    Ok(out.values().to_vec())
 }
 
 // ---------------------------------------------------------------------------
@@ -859,7 +883,7 @@ pub(super) async fn from(
         None => None,
     };
     let intr = build_intrinsic_types(caller.engine())?;
-    let mut out = Vec::new();
+    let mut out = KeptValues::with_capacity(caller, 0)?;
 
     if is_a(caller, src, &intr.array)? {
         // Drive the live backing like the `values` cursor (`array_step`): re-read
@@ -871,23 +895,27 @@ pub(super) async fn from(
             if pos >= backing.len(&mut *caller)? {
                 break;
             }
+            out.reserve(caller, 1)?;
             let elem = backing.get(&mut *caller, pos)?;
-            let mapped = apply_map(caller, &map_fn, elem, out.len()).await?;
-            out.push(mapped);
+            let mapped = apply_map(caller, &map_fn, elem, out.values().len()).await?;
+            out.push(caller, mapped)?;
             pos += 1;
         }
-        return build_array(caller, &out);
+        return build_array(caller, out.values());
     }
     if is_a(caller, src, &intr.string)? {
         let cps = string_code_points(caller, src)?;
-        out.reserve(cps.len());
+        out.reserve(caller, cps.len())?;
         for cp in cps {
-            let mapped = apply_map(caller, &map_fn, cp, out.len()).await?;
-            out.push(mapped);
+            let mapped = apply_map(caller, &map_fn, cp, out.values().len()).await?;
+            out.push(caller, mapped)?;
         }
-        return build_array(caller, &out);
+        return build_array(caller, out.values());
     }
 
+    // The iterator and each object its `next()` returns come from guest calls.
+    let kept_iterator = KeptValue::new(caller)?;
+    let kept_result = KeptValue::new(caller)?;
     let it = if is_a(
         caller,
         src,
@@ -906,12 +934,15 @@ pub(super) async fn from(
     } else {
         *src
     };
+    kept_iterator.set(caller, it)?;
 
     let next = object_field(caller, &it, "next")?
         .ok_or_else(|| wasmtime::Error::msg("Array.from: source is not iterable"))?;
     let next_closure = closure::read(caller, &next, "Array.from iterator")?;
     loop {
+        out.reserve(caller, 1)?;
         let result = next_closure.call_with_receiver(caller, it, &[]).await?;
+        kept_result.set(caller, result)?;
         let done = object_field(caller, &result, "done")?
             .ok_or_else(|| wasmtime::Error::msg("Array.from: iterator result missing `done`"))?;
         if unbox_bool(caller, &done)? {
@@ -919,10 +950,10 @@ pub(super) async fn from(
         }
         let value = object_field(caller, &result, "value")?
             .ok_or_else(|| wasmtime::Error::msg("Array.from: iterator result missing `value`"))?;
-        let mapped = apply_map(caller, &map_fn, value, out.len()).await?;
-        out.push(mapped);
+        let mapped = apply_map(caller, &map_fn, value, out.values().len()).await?;
+        out.push(caller, mapped)?;
     }
-    build_array(caller, &out)
+    build_array(caller, out.values())
 }
 
 async fn apply_map(

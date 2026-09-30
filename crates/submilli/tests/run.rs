@@ -434,6 +434,30 @@ fn timeout_interrupts_infinite_loop() {
 }
 
 #[test]
+fn reaching_the_memory_limit_ends_the_run_past_a_catch() {
+    // 2^26 code units = 128 MB, against the CLI's fixed 50 MB.
+    let out = run_script(
+        "memory_exhausted",
+        r#"function main(): string {
+            let s = "x";
+            try {
+                for (let i = 0; i < 26; i++) { s = s + s; }
+            } catch (e) {
+                return "caught";
+            }
+            return "done";
+        }"#,
+        &[],
+    );
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(
+        err.contains("error: memory exhausted"),
+        "expected memory exhaustion in stderr, got: {err}"
+    );
+}
+
+#[test]
 fn boolean_to_string_method_call() {
     let out = run_script(
         "sub71_bool_to_string",

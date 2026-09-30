@@ -15,6 +15,7 @@ use interpreter::runtime::{
     AuthProxy, ExecutionTokenBudget, HttpClient, LinkedPackageModule, LlmProvider, McpTransport,
     RuntimeConfig, SecretProvider, SecurityCheck, SessionKvStore, StoreData, Vfs, VfsInfo,
     install_package_modules_async, install_runtime_store_bound, install_tenant_limits,
+    is_memory_exhausted,
 };
 use interpreter::{
     BacktraceMode, Diagnostic, FileId, ParsedScript, ScriptImports, Sources,
@@ -396,6 +397,7 @@ fn classify_runtime_error(err: &wasmtime::Error, sources: &Sources, file: FileId
     let kind = match err.downcast_ref::<Trap>() {
         Some(Trap::Interrupt) => ErrorKind::Timeout,
         Some(Trap::OutOfFuel) => ErrorKind::FuelExhausted,
+        _ if is_memory_exhausted(err) => ErrorKind::MemoryExhausted,
         _ => ErrorKind::RuntimeError,
     };
     // drops middle host frames; full trace available from the CLI
@@ -485,6 +487,7 @@ fn error_kind_tag(kind: ErrorKind) -> &'static str {
         ErrorKind::CompileError => "compile_error",
         ErrorKind::Timeout => "timeout",
         ErrorKind::FuelExhausted => "fuel_exhausted",
+        ErrorKind::MemoryExhausted => "memory_exhausted",
         ErrorKind::RuntimeError => "runtime_error",
         ErrorKind::BlueprintNotFound => "blueprint_not_found",
         ErrorKind::PackageResolution => "package_resolution",

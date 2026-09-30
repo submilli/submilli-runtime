@@ -80,11 +80,37 @@ async fn a_guest_over_the_cap_traps_instead_of_growing() {
             response["result"]
         )
     });
+    assert_eq!(error["kind"], "memory_exhausted", "{response}");
     let message = error["message"].as_str().unwrap_or_default();
     assert!(
-        message.contains("out of memory"),
-        "expected an out-of-memory trap, got: {message}"
+        message.starts_with("memory exhausted") && message.contains("out of memory"),
+        "expected `memory exhausted` naming the out-of-memory cause, got: {message}"
     );
+}
+
+/// Reaching the cap ends the run like spent fuel does: a program that wraps its
+/// work in `try`/`catch` must not carry on with partial data, and the caller
+/// must be able to tell the limit from a bug in the program.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_guest_cannot_catch_reaching_the_cap() {
+    let program = r#"export function main(): string {
+             let s = "x";
+             try {
+               for (let i = 0; i < 25; i++) { s = s + s; }
+             } catch (e) {
+               return "caught";
+             }
+             return `len ${s.length}`;
+           }"#;
+    let router = router_with_cap(50 * 1024 * 1024);
+
+    let response = execute(&router, program).await;
+    assert_eq!(response["result"], Value::Null, "{response}");
+    assert_eq!(response["error"]["kind"], "memory_exhausted", "{response}");
+
+    let healthy = execute(&router, &doubling_program(4)).await;
+    assert_eq!(healthy["error"], Value::Null, "{healthy}");
+    assert_eq!(healthy["result"], "len 16");
 }
 
 /// The cap has to leave the ordinary case alone, or the test above would pass

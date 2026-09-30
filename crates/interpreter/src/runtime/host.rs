@@ -1112,6 +1112,8 @@ pub fn throw_error(caller: &mut Caller<'_, StoreData>, message: &str) -> wasmtim
 
 /// A broken host invariant or exhausted host allocation must terminate the run,
 /// rather than becoming an exception that guest code can catch and ignore.
+/// Reaching the memory cap terminates it too, under its own name: see
+/// [`is_memory_exhausted`](super::limits::is_memory_exhausted).
 #[derive(Debug)]
 pub struct FatalHostError(String);
 
@@ -1137,7 +1139,10 @@ pub(crate) fn throw_host_error(
     caller: &mut Caller<'_, StoreData>,
     err: wasmtime::Error,
 ) -> wasmtime::Error {
-    if err.is::<FatalHostError>() || err.is::<wasmtime::ThrownException>() {
+    if err.is::<FatalHostError>()
+        || err.is::<wasmtime::ThrownException>()
+        || super::limits::is_memory_exhausted(&err)
+    {
         return err;
     }
     let class = builtin_class_of(&err);
@@ -1153,6 +1158,9 @@ fn throw_error_as(
 ) -> wasmtime::Error {
     match throw_error_inner(caller, class, message, own_fields) {
         Ok(err) => err,
+        // The error could not be built because the run is out of memory, which
+        // ends the run as such rather than as a host failure.
+        Err(cause) if super::limits::is_memory_exhausted(&cause) => cause,
         Err(cause) => fatal_host_error(format!("{message}; error construction failed: {cause:#}")),
     }
 }
@@ -1194,11 +1202,11 @@ pub(crate) fn string_array_type(engine: &Engine) -> ArrayType {
 /// `_deterministic` is reserved for Phase-2 durable-log wrapping; unused today.
 ///
 /// Ordinary host errors become catchable guest errors via [`throw_error`].
-/// [`FatalHostError`] bypasses conversion and terminates execution. A body
-/// that already raised a throw (its `Err` is a `ThrownException`) is passed
-/// through untouched, so the pending exception isn't clobbered. Bodies receive
-/// `&mut Caller` (not an owned `Caller`) so the wrapper can still use the caller
-/// to raise the throw after the body returns.
+/// [`FatalHostError`] and a reached memory cap bypass conversion and terminate
+/// execution. A body that already raised a throw (its `Err` is a
+/// `ThrownException`) is passed through untouched, so the pending exception
+/// isn't clobbered. Bodies receive `&mut Caller` (not an owned `Caller`) so the
+/// wrapper can still use the caller to raise the throw after the body returns.
 ///
 /// The import is synchronous: the engine services it inline in its dispatch loop
 /// rather than suspending the interpreter and resuming through the async driver.

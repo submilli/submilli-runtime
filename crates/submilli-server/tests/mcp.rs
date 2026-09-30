@@ -411,6 +411,39 @@ async fn execute_returns_result() {
     assert!(out["error"].is_null());
 }
 
+/// Reaching the memory cap is reported under its own kind, which the program's
+/// `catch` cannot turn into an ordinary result, and leaves the session usable.
+#[tokio::test]
+async fn execute_reports_memory_exhaustion_as_its_own_kind() {
+    const OVER_THE_CAP: &str = r#"export function main(): string {
+        let s = "x";
+        try {
+            for (let i = 0; i < 25; i++) { s = s + s; }
+        } catch (e) {
+            return "caught";
+        }
+        return `len ${s.length}`;
+    }"#;
+    let h = Harness::new();
+    let session = h.handshake(EPH).await;
+
+    let (status, _, rpc) = h
+        .post(EPH, tools_call(1, OVER_THE_CAP), Some(&session))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let out = output(&rpc);
+    assert!(out["result"].is_null(), "got: {rpc}");
+    assert_eq!(
+        out["error"]["kind"],
+        json!("memory_exhausted"),
+        "got: {rpc}"
+    );
+
+    let (_, _, rpc) = h.post(EPH, tools_call(2, SUM), Some(&session)).await;
+    assert!(output(&rpc)["error"].is_null(), "got: {rpc}");
+    assert_eq!(output(&rpc)["result"], json!("2"), "got: {rpc}");
+}
+
 // ---- Session variables (`${vars.NAME}` bound at initialize) --------------
 
 const VARBP: &str = "varbp";

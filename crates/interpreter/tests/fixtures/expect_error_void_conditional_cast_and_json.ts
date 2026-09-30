@@ -1,12 +1,15 @@
 // The two value positions with their own hand-written `void` screen: both must
-// use the union-aware predicate, or `f() ?? 1` walks past a gate that refuses
-// bare `f()`.
-// expect-error: cannot cast `number | void`: it has no value
+// refuse a conditional that is `void` on one path as they refuse bare `f()`.
+// expect-error: cannot cast `void`: it has no value
 // expect-error: `JSON.stringify(x)` requires a non-`void` argument
 function f(): void {}
+
+function maybe(): number | null {
+  return null;
+}
 
 function main(): void {
   const c = true;
   const cast = (c ? f() : 1) as number;
-  const json = JSON.stringify(f() ?? 1);
+  const json = JSON.stringify(maybe() ?? f());
 }
