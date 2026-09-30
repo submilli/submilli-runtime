@@ -1,1 +1,1 @@
-line 34, 37, 38, 43 missed: bug SUB-1160 a `private` constructor isn't enforced
+line 34, 37, 38, 43 missed: by-design spec §2.2 privacy is module-scoped, and these uses of the `private` constructor are in its module
