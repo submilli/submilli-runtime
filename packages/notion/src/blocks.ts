@@ -1,10 +1,9 @@
-import { check } from "submilli:security";
 import {
     NotionBlock,
-    PageOptions,
     PageResult,
 } from "./types";
 import {
+    PageContext,
     blockFrom,
     fieldJson,
     listFrom,
@@ -24,31 +23,21 @@ export {
     PageOptions,
     PageResult,
 } from "./types";
+export { PageContext } from "./transport";
 
-/**
- * Retrieve one block.
- * @capability submilli/notion.getBlock { pageId: string }
- */
-export function getBlock(ref: string): NotionBlock {
-    const context = resolvePageContext(ref);
-    check("submilli/notion.getBlock", { pageId: context.pageId });
+/** Return the block a page context was resolved from; the context retains its response. */
+export function getBlock(context: PageContext): NotionBlock {
     return blockFrom(context.raw);
 }
 
-/**
- * List direct children of a block or page.
- * @capability submilli/notion.listBlockChildren { pageId: string }
- */
-export function listBlockChildren(ref: string, options: PageOptions | null = null): PageResult<NotionBlock> {
-    const context = resolvePageContext(ref);
-    check("submilli/notion.listBlockChildren", { pageId: context.pageId });
+/** List direct children of the block or page a context was resolved from. */
+export function listBlockChildren(
+    context: PageContext,
+    requestedSize: number | null,
+    startCursor: string | null,
+): PageResult<NotionBlock> {
     const query = new Map<string, string>();
-    let requestedSize: number | null = null;
-    if (options !== null) {
-        const actual = options as PageOptions;
-        requestedSize = actual.pageSize;
-        putQuery(query, "start_cursor", actual.startCursor);
-    }
+    putQuery(query, "start_cursor", startCursor);
     query.set("page_size", pageSize(requestedSize).toString());
     const page = listFrom(notionGet("/blocks/" + pathId(context.blockId) + "/children", query));
     const results: NotionBlock[] = [];
@@ -62,21 +51,28 @@ export function listBlockChildren(ref: string, options: PageOptions | null = nul
 }
 
 /**
- * Append block children, optionally at an explicit Notion position.
- * @capability submilli/notion.appendBlockChildren { pageId: string }
+ * Validate the children and position of an append, then resolve the page context of its target.
+ * An empty positionJson appends at the end.
  */
-export function appendBlockChildrenJson(
+export function prepareAppendBlockChildren(
     ref: string,
     childrenJson: string[],
     positionJson: string,
-): PageResult<NotionBlock> {
+): PageContext {
     if (childrenJson.length === 0 || childrenJson.length > 100) {
         throw validationError("invalid_children", "appendBlockChildren requires between 1 and 100 children");
     }
     for (const childJson of childrenJson) JSON.parse(childJson);
     if (positionJson.length > 0) JSON.parse(positionJson);
-    const context = resolvePageContext(ref);
-    check("submilli/notion.appendBlockChildren", { pageId: context.pageId });
+    return resolvePageContext(ref);
+}
+
+/** Append validated block children, optionally at an explicit Notion position. */
+export function appendBlockChildrenJson(
+    context: PageContext,
+    childrenJson: string[],
+    positionJson: string,
+): PageResult<NotionBlock> {
     const fields: string[] = ["\"children\":[" + childrenJson.join(",") + "]"];
     if (positionJson.length > 0) fields.push("\"position\":" + positionJson);
     const page = listFrom(notionPatch("/blocks/" + pathId(context.blockId) + "/children", objectJson(fields)));
@@ -90,33 +86,22 @@ export function appendBlockChildrenJson(
     };
 }
 
-/**
- * Update a block using fields from its Notion block type.
- * @capability submilli/notion.updateBlock { pageId: string }
- */
-export function updateBlock(ref: string, fields: Map<string, unknown>): NotionBlock {
+/** Reject an empty block update before any request is sent. */
+export function validateUpdateBlock(fields: Map<string, unknown>): void {
     if (fields.size === 0) throw validationError("empty_update", "updateBlock requires at least one changed field");
-    const context = resolvePageContext(ref);
-    check("submilli/notion.updateBlock", { pageId: context.pageId });
+}
+
+/** Update a block using fields from its Notion block type. */
+export function updateBlock(context: PageContext, fields: Map<string, unknown>): NotionBlock {
     return blockFrom(notionPatch("/blocks/" + pathId(context.blockId), mapJson(fields)).json());
 }
 
-/**
- * Move a block to trash.
- * @capability submilli/notion.trashBlock { pageId: string }
- */
-export function trashBlock(ref: string): NotionBlock {
-    const context = resolvePageContext(ref);
-    check("submilli/notion.trashBlock", { pageId: context.pageId });
+/** Move a block to trash. */
+export function trashBlock(context: PageContext): NotionBlock {
     return blockFrom(notionPatch("/blocks/" + pathId(context.blockId), { in_trash: true }).json());
 }
 
-/**
- * Restore a block from trash.
- * @capability submilli/notion.restoreBlock { pageId: string }
- */
-export function restoreBlock(ref: string): NotionBlock {
-    const context = resolvePageContext(ref);
-    check("submilli/notion.restoreBlock", { pageId: context.pageId });
+/** Restore a block from trash. */
+export function restoreBlock(context: PageContext): NotionBlock {
     return blockFrom(notionPatch("/blocks/" + pathId(context.blockId), { in_trash: false }).json());
 }

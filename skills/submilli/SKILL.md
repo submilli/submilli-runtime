@@ -30,7 +30,8 @@ that general knowledge gets wrong; what goes wrong without it is named.
   [capability design](references/capability-design.md); without it checks
   guard fields the model can choose.
 - Package implementation: [packages](references/packages.md); without it the
-  package is written as Node.js and fails `build`.
+  package is written as Node.js and fails `build`, or checks one value and
+  sends another.
 - Policy design and verification, including MCP servers and direct HTTP:
   [blueprints](references/blueprints.md); without it the blueprint lints but
   the server rejects it, or an MCP server is allowed whole.

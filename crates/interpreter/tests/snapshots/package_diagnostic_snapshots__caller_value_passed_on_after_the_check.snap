@@ -1,0 +1,30 @@
+---
+source: crates/interpreter/tests/package_diagnostic_snapshots.rs
+expression: "render_package(\"\nfunction deliver(input: Input): void {}\n\n/**\n * Sends the message.\n * @capability test.com/send { channelId: string }\n */\nexport function send(input: Input): void {\n  const channelId = input.channelId;\n  check(\\\"test.com/send\\\", { channelId: channelId });\n  deliver(input);\n  deliver(input);\n}\n\")"
+---
+warning: caller-supplied `input` is passed to `deliver` in `send`, which calls `check()` (and 1 more)
+  --> lib.ts:22:11
+   |
+21 |   check("test.com/send", { channelId: channelId });
+22 |   deliver(input);
+   |           ^^^^^
+23 |   deliver(input);
+   |
+help: Read what the callee needs into `const`s and pass those; a value the caller supplies can change after `check()` approves it
+   |
+note: `input` is a parameter of `send`
+  --> lib.ts:19:22
+   |
+18 |  */
+19 | export function send(input: Input): void {
+   |                      ^^^^^
+20 |   const channelId = input.channelId;
+   |
+note: `input.channelId` reaches `check()` here
+  --> lib.ts:21:26
+   |
+20 |   const channelId = input.channelId;
+21 |   check("test.com/send", { channelId: channelId });
+   |                          ^^^^^^^^^^^^^^^^^^^^^^^^
+22 |   deliver(input);
+---

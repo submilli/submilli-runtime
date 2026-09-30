@@ -580,14 +580,26 @@ pub fn infer_package_checked<'a>(
             .get(module)
             .map(|symbols| crate::typechecker::rules::PackageModuleSurface { symbols, exports })
     });
-    tc.diagnostics
-        .extend(crate::typechecker::rules::check_package(
-            package_name,
-            &tc.typed_ast,
-            &package_declaration,
-            &tc.typed_ast.exports,
-            module_surfaces,
-        ));
+    let dependencies: Vec<&PackageDeclaration> = tc
+        .packages_by_name
+        .values()
+        .chain(tc.type_only_packages.values())
+        .copied()
+        .collect();
+    let rule_diagnostics = crate::typechecker::rules::check_package(
+        package_name,
+        &tc.typed_ast,
+        &package_declaration,
+        &tc.typed_ast.exports,
+        module_surfaces,
+        &dependencies,
+    )
+    .map_err(|error| {
+        error
+            .with_prior_diagnostics(&tc.diagnostics)
+            .with_prior_diagnostics(&diagnostics)
+    })?;
+    tc.diagnostics.extend(rule_diagnostics);
     diagnostics.extend(tc.diagnostics);
     Ok((tc.typed_ast, package_declaration, diagnostics))
 }
@@ -610,7 +622,7 @@ fn diagnose_package_main_since(
     functions_start: usize,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    for function in &ast.functions[functions_start..] {
+    for function in ast.functions.iter().skip(functions_start) {
         if function.name.name == "main" {
             diagnostics.push(Diagnostic {
                 severity: crate::Severity::Error,

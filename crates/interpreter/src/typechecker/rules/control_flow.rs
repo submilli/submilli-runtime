@@ -1,8 +1,9 @@
 //! Completion analysis shared by return, reachability, and switch-fallthrough rules.
 
+use super::declarations::TypeDeclarations;
 use crate::{
-    EnumVariantPayload, StmtId, Type, TypedAst, TypedExprKind, TypedStmtKind, TypedSwitchCase,
-    TypedSwitchValue, typechecker::infer::narrowing,
+    EnumVariantPayload, MangledName, StmtId, Type, TypedAst, TypedExprKind, TypedStmtKind,
+    TypedSwitchCase, TypedSwitchValue, typechecker::infer::narrowing,
 };
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -13,9 +14,10 @@ pub(super) enum ControlFlow {
 
 pub(super) fn control_flow(
     ta: &TypedAst,
+    declarations: &TypeDeclarations<'_>,
     id: StmtId,
 ) -> Result<ControlFlow, crate::compiler_error::CompilerFailure> {
-    let flow = completion(ta, id)?;
+    let flow = completion(ta, declarations, id)?;
     Ok(if flow.falls || flow.breaks || flow.continues {
         ControlFlow::Falls
     } else {
@@ -25,9 +27,10 @@ pub(super) fn control_flow(
 
 pub(super) fn case_terminates(
     ta: &TypedAst,
+    declarations: &TypeDeclarations<'_>,
     id: StmtId,
 ) -> Result<bool, crate::compiler_error::CompilerFailure> {
-    Ok(!completion(ta, id)?.falls)
+    Ok(!completion(ta, declarations, id)?.falls)
 }
 
 #[derive(Clone, Copy, Default)]
@@ -57,6 +60,7 @@ impl Completion {
 
 fn completion(
     ta: &TypedAst,
+    declarations: &TypeDeclarations<'_>,
     id: StmtId,
 ) -> Result<Completion, crate::compiler_error::CompilerFailure> {
     let falls = Completion {
@@ -79,15 +83,19 @@ fn completion(
                 ..Default::default()
             },
             TypedStmtKind::Block(stmts) => stmts.iter().try_fold(falls, |flow, &stmt| {
-                Ok::<_, crate::compiler_error::CompilerFailure>(flow.then(completion(ta, stmt)?))
+                Ok::<_, crate::compiler_error::CompilerFailure>(flow.then(completion(
+                    ta,
+                    declarations,
+                    stmt,
+                )?))
             })?,
             TypedStmtKind::If {
                 then_block,
                 else_block,
                 ..
-            } => completion(ta, *then_block)?.union(
+            } => completion(ta, declarations, *then_block)?.union(
                 else_block
-                    .map(|body| completion(ta, body))
+                    .map(|body| completion(ta, declarations, body))
                     .transpose()?
                     .unwrap_or(falls),
             ),
@@ -95,14 +103,14 @@ fn completion(
                 body,
                 catches,
                 finally,
-            } => try_completion(ta, *body, catches, *finally)?,
+            } => try_completion(ta, declarations, *body, catches, *finally)?,
             TypedStmtKind::Switch {
                 discriminant,
                 cases,
                 default,
                 ..
-            } => switch_completion(ta, *discriminant, cases, *default)?,
-            TypedStmtKind::NarrowRegion { body, .. } => completion(ta, *body)?,
+            } => switch_completion(ta, declarations, *discriminant, cases, *default)?,
+            TypedStmtKind::NarrowRegion { body, .. } => completion(ta, declarations, *body)?,
             TypedStmtKind::While { .. }
             | TypedStmtKind::For { .. }
             | TypedStmtKind::ForOf { .. }
@@ -121,19 +129,24 @@ fn completion(
 
 fn try_completion(
     ta: &TypedAst,
+    declarations: &TypeDeclarations<'_>,
     body: StmtId,
     catches: &[crate::TypedCatchClause],
     finally: Option<StmtId>,
 ) -> Result<Completion, crate::compiler_error::CompilerFailure> {
     let flow = catches
         .iter()
-        .try_fold(completion(ta, body)?, |flow, catch| {
-            Ok::<_, crate::compiler_error::CompilerFailure>(flow.union(completion(ta, catch.body)?))
+        .try_fold(completion(ta, declarations, body)?, |flow, catch| {
+            Ok::<_, crate::compiler_error::CompilerFailure>(flow.union(completion(
+                ta,
+                declarations,
+                catch.body,
+            )?))
         })?;
     let Some(finally) = finally else {
         return Ok(flow);
     };
-    let cleanup = completion(ta, finally)?;
+    let cleanup = completion(ta, declarations, finally)?;
     // A control transfer from finally replaces the pending completion.
     let preserved = if cleanup.falls {
         flow
@@ -148,16 +161,21 @@ fn try_completion(
 
 fn switch_completion(
     ta: &TypedAst,
+    declarations: &TypeDeclarations<'_>,
     discriminant: crate::ExprId,
     cases: &[crate::TypedSwitchCase],
     default: Option<StmtId>,
 ) -> Result<Completion, crate::compiler_error::CompilerFailure> {
     let mut flow = cases.iter().try_fold(Completion::default(), |flow, case| {
-        Ok::<_, crate::compiler_error::CompilerFailure>(flow.union(completion(ta, case.body)?))
+        Ok::<_, crate::compiler_error::CompilerFailure>(flow.union(completion(
+            ta,
+            declarations,
+            case.body,
+        )?))
     })?;
     if let Some(default) = default {
-        flow = flow.union(completion(ta, default)?);
-    } else if !switch_is_exhaustive(ta, discriminant, cases)? {
+        flow = flow.union(completion(ta, declarations, default)?);
+    } else if !switch_is_exhaustive(ta, declarations, discriminant, cases)? {
         flow.falls = true;
     }
     // A break exits this nested switch, not the containing case.
@@ -170,6 +188,7 @@ fn switch_completion(
 
 fn switch_is_exhaustive(
     ta: &TypedAst,
+    declarations: &TypeDeclarations<'_>,
     discriminant: crate::ExprId,
     cases: &[TypedSwitchCase],
 ) -> Result<bool, crate::compiler_error::CompilerFailure> {
@@ -187,8 +206,10 @@ fn switch_is_exhaustive(
         .map_err(crate::typechecker::arena_failure)?;
     // A `switch` on an enum value is exhaustive when every declared variant is
     // covered, even without a `default:` — the canonical enum-dispatch pattern.
-    if let Type::NumberEnum { name, .. } | Type::StringEnum { name, .. } = disc_expr.ty.peel() {
-        return Ok(enum_is_covered(ta, name, &seen));
+    if let Type::NumberEnum { mangled, name, .. } | Type::StringEnum { mangled, name, .. } =
+        disc_expr.ty.peel()
+    {
+        return Ok(enum_is_covered(declarations, mangled, name, &seen));
     }
     if let TypedExprKind::FieldAccess { receiver, name } = &disc_expr.kind
         && let Type::Union(members) = ta
@@ -207,34 +228,18 @@ fn switch_is_exhaustive(
     ))
 }
 
-/// True when `seen` covers every variant of the enum named `name`. An enum with
-/// no declared members is never exhaustively covered (it has no values, but a
-/// missing declaration shouldn't silently prove the switch returns).
+/// True when `seen` covers every variant of the enum. An enum with no declared
+/// members is never exhaustively covered (it has no values, but a missing
+/// declaration shouldn't silently prove the switch returns).
 fn enum_is_covered(
-    ta: &TypedAst,
+    declarations: &TypeDeclarations<'_>,
+    mangled: &MangledName,
     name: &str,
     seen: &std::collections::BTreeSet<narrowing::LiteralValue>,
 ) -> bool {
-    for decl in &ta.types {
-        match decl {
-            crate::TypedTypeDecl::NumberEnum(d) if d.name.name == name => {
-                return !d.members.is_empty()
-                    && d.members.iter().all(|m| {
-                        seen.contains(&narrowing::LiteralValue::Number(crate::types::LiteralF64(
-                            m.value,
-                        )))
-                    });
-            }
-            crate::TypedTypeDecl::StringEnum(d) if d.name.name == name => {
-                return !d.members.is_empty()
-                    && d.members
-                        .iter()
-                        .all(|m| seen.contains(&narrowing::LiteralValue::String(m.value.clone())));
-            }
-            _ => {}
-        }
-    }
-    false
+    declarations
+        .enum_values(mangled, name)
+        .is_some_and(|values| !values.is_empty() && values.iter().all(|v| seen.contains(v)))
 }
 
 fn literal_value_of(value: &TypedSwitchValue) -> Option<narrowing::LiteralValue> {

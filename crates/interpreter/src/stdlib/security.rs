@@ -14,9 +14,17 @@ use crate::runtime::host::{
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::prelude::vtable::dispatch_vtable_slot;
 use crate::runtime::security::CheckOutcome;
-use crate::{PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
+use crate::{MangledName, PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
 
 pub const MODULE_NAME: &str = "submilli:security";
+
+/// Whether `mangled` is this package's `check`. Matching the package-export
+/// mangled name is what makes the answer independent of how the symbol was
+/// imported: a named, an aliased and a namespace import all carry it, while a
+/// user's own `check` never can.
+pub fn is_check(mangled: &MangledName) -> bool {
+    *mangled == crate::mangle::package_symbol(MODULE_NAME, "check")
+}
 
 /// `toJson` is slot 1 of the four-slot `$VTable`.
 const TO_JSON_SLOT: usize = 1;

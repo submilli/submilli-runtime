@@ -107,8 +107,41 @@ export class ExaError extends Error {
  * @capability exa.ai/search {}
  */
 export function search(query: string, options: SearchOptions | null = null): SearchResponse {
+    const numResults = options === null ? null : options.numResults;
+    const requestedIncludeDomains = options === null ? null : options.includeDomains;
+    const requestedExcludeDomains = options === null ? null : options.excludeDomains;
+    const startPublishedDate = options === null ? null : options.startPublishedDate;
+    const endPublishedDate = options === null ? null : options.endPublishedDate;
+    const requestedContents = options === null ? null : options.contents;
+    const mode = requestedContents === null ? null : requestedContents.mode;
+    const maxCharacters = requestedContents === null ? null : requestedContents.maxCharacters;
+    const maxAgeHours = requestedContents === null ? null : requestedContents.maxAgeHours;
+    const livecrawlTimeout = requestedContents === null ? null : requestedContents.livecrawlTimeout;
+    let includeDomains: string[] | null = null;
+    if (requestedIncludeDomains !== null) {
+        const copied: string[] = [];
+        for (const domain of requestedIncludeDomains) copied.push(domain);
+        includeDomains = copied;
+    }
+    let excludeDomains: string[] | null = null;
+    if (requestedExcludeDomains !== null) {
+        const copied: string[] = [];
+        for (const domain of requestedExcludeDomains) copied.push(domain);
+        excludeDomains = copied;
+    }
+    const contents: ContentOptions = {};
+    if (mode !== null) contents.mode = mode;
+    if (maxCharacters !== null) contents.maxCharacters = maxCharacters;
+    if (maxAgeHours !== null) contents.maxAgeHours = maxAgeHours;
+    if (livecrawlTimeout !== null) contents.livecrawlTimeout = livecrawlTimeout;
+    const searchOptions: SearchOptions = { contents: contents };
+    if (numResults !== null) searchOptions.numResults = numResults;
+    if (startPublishedDate !== null) searchOptions.startPublishedDate = startPublishedDate;
+    if (endPublishedDate !== null) searchOptions.endPublishedDate = endPublishedDate;
+    if (includeDomains !== null) searchOptions.includeDomains = includeDomains;
+    if (excludeDomains !== null) searchOptions.excludeDomains = excludeDomains;
     check("exa.ai/search", {});
-    const body = buildSearchBody(query, options);
+    const body = buildSearchBody(query, searchOptions);
     const response = post("https://api.exa.ai/search", body, authHeaders());
     return normalizeSearchJson(requireOk(response));
 }
@@ -117,9 +150,20 @@ export function search(query: string, options: SearchOptions | null = null): Sea
  * @capability exa.ai/contents { host: string }
  */
 export function getContents(urls: string[], options: ContentOptions | null = null): ContentsResponse {
-    const hosts = contentsHosts(urls);
+    const ownedUrls: string[] = [];
+    for (const url of urls) ownedUrls.push(url);
+    const mode = options === null ? null : options.mode;
+    const maxCharacters = options === null ? null : options.maxCharacters;
+    const maxAgeHours = options === null ? null : options.maxAgeHours;
+    const livecrawlTimeout = options === null ? null : options.livecrawlTimeout;
+    const contentOptions: ContentOptions = {};
+    if (mode !== null) contentOptions.mode = mode;
+    if (maxCharacters !== null) contentOptions.maxCharacters = maxCharacters;
+    if (maxAgeHours !== null) contentOptions.maxAgeHours = maxAgeHours;
+    if (livecrawlTimeout !== null) contentOptions.livecrawlTimeout = livecrawlTimeout;
+    const hosts = contentsHosts(ownedUrls);
     for (const host of hosts) check("exa.ai/contents", { host: host });
-    const body = buildContentsBody(urls, options);
+    const body = buildContentsBody(ownedUrls, contentOptions);
     const response = post("https://api.exa.ai/contents", body, authHeaders());
     return normalizeContentsJson(requireOk(response));
 }

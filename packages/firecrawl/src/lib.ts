@@ -277,10 +277,22 @@ export class FirecrawlError extends Error {
  * @capability firecrawl.dev/delegatedFetch {}
  */
 export function search(query: string, options: SearchOptions | null = null): SearchResponse {
-    const opts: SearchOptions = options === null ? {} : options;
+    const requested: SearchOptions = options === null ? {} : options;
+    const { limit, includeDomains, excludeDomains, tbs, location, country, safe, timeout, scrapeOptions } = requested;
+    // The body builder reads its options again, so it gets these reads, not the caller's object.
+    const opts: SearchOptions = {};
+    if (limit !== null) opts.limit = limit;
+    if (includeDomains !== null) opts.includeDomains = includeDomains;
+    if (excludeDomains !== null) opts.excludeDomains = excludeDomains;
+    if (tbs !== null) opts.tbs = tbs;
+    if (location !== null) opts.location = location;
+    if (country !== null) opts.country = country;
+    if (safe !== null) opts.safe = safe;
+    if (timeout !== null) opts.timeout = timeout;
+    if (scrapeOptions !== null) opts.scrapeOptions = scrapeOptions;
     const body = buildSearchBody(query, opts);
-    check("firecrawl.dev/search", { limit: opts.limit ?? 10 });
-    if (opts.scrapeOptions !== null) {
+    check("firecrawl.dev/search", { limit: limit ?? 10 });
+    if (scrapeOptions !== null) {
         // Search results are unknown before submission. This grant deliberately
         // authorizes native extraction across result hosts; it is not a host-scoped scrape grant.
         check("firecrawl.dev/search.scrape", {});
@@ -332,10 +344,22 @@ export function scrape(url: string, options: ScrapeOptions | null = null): Page 
  * @capability firecrawl.dev/delegatedFetch {}
  */
 export function map(url: string, options: MapOptions | null = null): MapResponse {
-    const opts: MapOptions = options === null ? {} : options;
+    const requestedLimit = options === null ? null : options.limit;
+    const search = options === null ? null : options.search;
+    const sitemap = options === null ? null : options.sitemap;
+    const includeSubdomains = options === null ? null : options.includeSubdomains;
+    const ignoreQueryParameters = options === null ? null : options.ignoreQueryParameters;
+    const ignoreCache = options === null ? null : options.ignoreCache;
+    const opts: MapOptions = {};
+    if (requestedLimit !== null) opts.limit = requestedLimit;
+    if (search !== null) opts.search = search;
+    if (sitemap !== null) opts.sitemap = sitemap;
+    if (includeSubdomains !== null) opts.includeSubdomains = includeSubdomains;
+    if (ignoreQueryParameters !== null) opts.ignoreQueryParameters = ignoreQueryParameters;
+    if (ignoreCache !== null) opts.ignoreCache = ignoreCache;
     const body = buildMapBody(url, opts);
-    const limit = opts.limit ?? 100;
-    check("firecrawl.dev/map", { host: urlHost(url), limit: limit, includeSubdomains: opts.includeSubdomains ?? false });
+    const limit = requestedLimit ?? 100;
+    check("firecrawl.dev/map", { host: urlHost(url), limit: limit, includeSubdomains: includeSubdomains ?? false });
     check("firecrawl.dev/delegatedFetch", {});
     return normalizeMapJson(requireOk(post(BASE + "/map", body, authHeaders())), limit);
 }
@@ -345,9 +369,14 @@ export function map(url: string, options: MapOptions | null = null): MapResponse
  * @capability firecrawl.dev/delegatedFetch {}
  */
 export function startBatch(urls: string[], options: ScrapeOptions | null = null): Job {
-    const body = buildBatchBody(urls, options);
-    for (const url of urls) check("firecrawl.dev/batch.start", { host: urlHost(url), count: urls.length });
+    const ownedUrls: string[] = [];
+    for (const url of urls) ownedUrls.push(url);
+    // Validated before the checks, as `buildBatchBody` does; the body is built after them.
+    validateBatchUrls(ownedUrls);
+    const fields = scrapeFields(options);
+    for (const url of ownedUrls) check("firecrawl.dev/batch.start", { host: urlHost(url), count: ownedUrls.length });
     check("firecrawl.dev/delegatedFetch", {});
+    const body = batchBody(ownedUrls, fields);
     return normalizeJobJson(requireOk(post(BASE + "/batch/scrape", body, authHeaders())));
 }
 
@@ -356,10 +385,23 @@ export function startBatch(urls: string[], options: ScrapeOptions | null = null)
  * @capability firecrawl.dev/delegatedFetch {}
  */
 export function startCrawl(url: string, options: CrawlOptions): Job {
-    const body = buildCrawlBody(url, options);
-    check("firecrawl.dev/crawl.start", { host: urlHost(url), limit: options.limit,
-        allowSubdomains: options.allowSubdomains ?? false, allowExternalLinks: options.allowExternalLinks ?? false,
-        crawlEntireDomain: options.crawlEntireDomain ?? false });
+    const { limit, maxDiscoveryDepth, includePaths, excludePaths, sitemap, ignoreQueryParameters,
+        crawlEntireDomain, allowSubdomains, allowExternalLinks, scrapeOptions } = options;
+    // The body builder reads its options again, so it gets these reads, not the caller's object.
+    const opts: CrawlOptions = { limit: limit };
+    if (maxDiscoveryDepth !== null) opts.maxDiscoveryDepth = maxDiscoveryDepth;
+    if (includePaths !== null) opts.includePaths = includePaths;
+    if (excludePaths !== null) opts.excludePaths = excludePaths;
+    if (sitemap !== null) opts.sitemap = sitemap;
+    if (ignoreQueryParameters !== null) opts.ignoreQueryParameters = ignoreQueryParameters;
+    if (crawlEntireDomain !== null) opts.crawlEntireDomain = crawlEntireDomain;
+    if (allowSubdomains !== null) opts.allowSubdomains = allowSubdomains;
+    if (allowExternalLinks !== null) opts.allowExternalLinks = allowExternalLinks;
+    if (scrapeOptions !== null) opts.scrapeOptions = scrapeOptions;
+    const body = buildCrawlBody(url, opts);
+    check("firecrawl.dev/crawl.start", { host: urlHost(url), limit: limit,
+        allowSubdomains: allowSubdomains ?? false, allowExternalLinks: allowExternalLinks ?? false,
+        crawlEntireDomain: crawlEntireDomain ?? false });
     check("firecrawl.dev/delegatedFetch", {});
     return normalizeJobJson(requireOk(post(BASE + "/crawl", body, authHeaders())));
 }
@@ -416,9 +458,16 @@ export function buildScrapeBody(url: string, options: ScrapeOptions | null = nul
 
 /** Build a strict batch request without network access. */
 export function buildBatchBody(urls: string[], options: ScrapeOptions | null = null): string {
+    validateBatchUrls(urls);
+    return batchBody(urls, scrapeFields(options));
+}
+
+function validateBatchUrls(urls: string[]): void {
     integerRange(urls.length, 1, 1000, "URL count");
     for (const url of urls) urlHost(url);
-    const fields = scrapeFields(options);
+}
+
+function batchBody(urls: string[], fields: string[]): string {
     fields.push(field("urls", JSON.stringify(urls)));
     fields.push('"ignoreInvalidURLs":false');
     return objectJson(fields);

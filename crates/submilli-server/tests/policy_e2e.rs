@@ -352,6 +352,7 @@ function main(): string {
 /// and the package-provided capability belongs to the package caller.
 const SDK_SOURCE: &str = r#"
 import { check } from "submilli:security";
+/** @capability test.com/op { amount: number } */
 export function op(): number { check("test.com/op", { amount: 100 }); return 1; }
 "#;
 

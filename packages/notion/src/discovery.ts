@@ -1,4 +1,3 @@
-import { check } from "submilli:security";
 import {
     FetchedResource,
     NotionBlock,
@@ -7,10 +6,8 @@ import {
     NotionPage,
     NotionUser,
     NotionView,
-    PageOptions,
     PageResult,
-    ResourceRef,
-    SearchOptions,
+    ResourceKind,
     SearchResult,
 } from "./types";
 import {
@@ -43,7 +40,6 @@ export {
     NotionView,
     PageOptions,
     PageResult,
-    ResourceRef,
     ResourceKind,
     SearchOptions,
     SearchResult,
@@ -63,37 +59,45 @@ export function notionId(ref: string): string {
     return idFromRef(ref);
 }
 
-/**
- * Retrieve the integration bot user.
- * @capability submilli/notion.getSelf {}
- */
+/** Retrieve the integration bot user. */
 export function getSelf(): NotionUser {
-    check("submilli/notion.getSelf", {});
     return userFrom(notionGet("/users/me").json());
 }
 
-/**
- * Search titles visible to the connection.
- * @capability submilli/notion.search {}
- */
-export function search(options: SearchOptions | null = null): PageResult<SearchResult> {
-    check("submilli/notion.search", {});
+/** Search fields the root module read from the caller's options; null where the caller gave none. */
+export interface SearchRequest {
+    /** Text to match against titles. */
+    query: string | null;
+    /** Restrict results to one object kind. */
+    kind: "page" | "data_source" | null;
+    /** Sort direction; results are unsorted when null. */
+    direction: "ascending" | "descending" | null;
+    /** Timestamp the sort applies to. */
+    timestamp: "last_edited_time" | null;
+    /** Requested page size. */
+    pageSize: number | null;
+    /** Cursor of the page to continue from. */
+    startCursor: string | null;
+}
+
+/** Search titles visible to the connection. */
+export function search(request: SearchRequest): PageResult<SearchResult> {
+    const query = request.query;
+    const kind = request.kind;
+    const direction = request.direction;
+    const timestamp = request.timestamp;
+    const startCursor = request.startCursor;
     const fields: string[] = [];
-    if (options !== null) {
-        const actual = options as SearchOptions;
-        if (actual.query !== null && actual.query.length > 0) fields.push(fieldJson("query", actual.query));
-        if (actual.kind !== null) {
-            fields.push("\"filter\":{\"property\":\"object\",\"value\":" + JSON.stringify(actual.kind) + "}");
-        }
-        if (actual.direction !== null) {
-            const timestamp = actual.timestamp === null ? "last_edited_time" : actual.timestamp;
-            fields.push("\"sort\":{\"direction\":" + JSON.stringify(actual.direction) + ",\"timestamp\":" + JSON.stringify(timestamp) + "}");
-        }
-        fields.push(fieldJson("page_size", pageSize(actual.pageSize)));
-        if (actual.startCursor !== null) fields.push(fieldJson("start_cursor", actual.startCursor));
-    } else {
-        fields.push(fieldJson("page_size", 100));
+    if (query !== null && query.length > 0) fields.push(fieldJson("query", query));
+    if (kind !== null) {
+        fields.push("\"filter\":{\"property\":\"object\",\"value\":" + JSON.stringify(kind) + "}");
     }
+    if (direction !== null) {
+        const sortTimestamp = timestamp === null ? "last_edited_time" : timestamp;
+        fields.push("\"sort\":{\"direction\":" + JSON.stringify(direction) + ",\"timestamp\":" + JSON.stringify(sortTimestamp) + "}");
+    }
+    fields.push(fieldJson("page_size", pageSize(request.pageSize)));
+    if (startCursor !== null) fields.push(fieldJson("start_cursor", startCursor));
     const page = listFrom(notionPost("/search", objectJson(fields)));
     const results: SearchResult[] = [];
     for (const raw of page.results) results.push(searchResultFrom(raw));
@@ -105,74 +109,40 @@ export function search(options: SearchOptions | null = null): PageResult<SearchR
     };
 }
 
-/**
- * Fetch one resource using its explicit kind.
- * @capability submilli/notion.fetch { kind: string, id: string }
- */
-export function fetch(resource: ResourceRef): FetchedResource {
-    const id = idFromRef(resource.ref, resource.kind);
-    check("submilli/notion.fetch", { kind: resource.kind as string, id: id });
-    if (resource.kind === "page") return pageFrom(notionGet("/pages/" + pathId(id)).json());
-    if (resource.kind === "database") return databaseFrom(notionGet("/databases/" + pathId(id)).json());
-    if (resource.kind === "data_source") return dataSourceFrom(notionGet("/data_sources/" + pathId(id)).json());
-    if (resource.kind === "block") return blockFrom(notionGet("/blocks/" + pathId(id)).json());
-    if (resource.kind === "view") return viewFrom(notionGet("/views/" + pathId(id)).json());
+/** Fetch one resource of an explicit kind by its resolved ID. */
+export function fetch(kind: ResourceKind, id: string): FetchedResource {
+    if (kind === "page") return pageFrom(notionGet("/pages/" + pathId(id)).json());
+    if (kind === "database") return databaseFrom(notionGet("/databases/" + pathId(id)).json());
+    if (kind === "data_source") return dataSourceFrom(notionGet("/data_sources/" + pathId(id)).json());
+    if (kind === "block") return blockFrom(notionGet("/blocks/" + pathId(id)).json());
+    if (kind === "view") return viewFrom(notionGet("/views/" + pathId(id)).json());
     return userFrom(notionGet("/users/" + pathId(id)).json());
 }
 
-/**
- * Retrieve a page by ID or Notion URL.
- * @capability submilli/notion.fetchPage { pageId: string }
- */
-export function fetchPage(ref: string): NotionPage {
-    const id = idFromRef(ref, "page");
-    check("submilli/notion.fetchPage", { pageId: id });
+/** Retrieve a page by its resolved ID. */
+export function fetchPage(id: string): NotionPage {
     return pageFrom(notionGet("/pages/" + pathId(id)).json());
 }
 
-/**
- * Retrieve a database container by ID or Notion URL.
- * @capability submilli/notion.fetchDatabase { databaseId: string }
- */
-export function fetchDatabase(ref: string): NotionDatabase {
-    const id = idFromRef(ref, "database");
-    check("submilli/notion.fetchDatabase", { databaseId: id });
+/** Retrieve a database container by its resolved ID. */
+export function fetchDatabase(id: string): NotionDatabase {
     return databaseFrom(notionGet("/databases/" + pathId(id)).json());
 }
 
-/**
- * Retrieve a data source by ID, Notion URL, or collection:// reference.
- * @capability submilli/notion.fetchDataSource { dataSourceId: string }
- */
-export function fetchDataSource(ref: string): NotionDataSource {
-    const id = idFromRef(ref, "data_source");
-    check("submilli/notion.fetchDataSource", { dataSourceId: id });
+/** Retrieve a data source by its resolved ID. */
+export function fetchDataSource(id: string): NotionDataSource {
     return dataSourceFrom(notionGet("/data_sources/" + pathId(id)).json());
 }
 
-/**
- * Retrieve a workspace user.
- * @capability submilli/notion.getUser { userId: string }
- */
-export function getUser(ref: string): NotionUser {
-    const id = idFromRef(ref, "user");
-    check("submilli/notion.getUser", { userId: id });
+/** Retrieve a workspace user by its resolved ID. */
+export function getUser(id: string): NotionUser {
     return userFrom(notionGet("/users/" + pathId(id)).json());
 }
 
-/**
- * List users visible to the connection.
- * @capability submilli/notion.listUsers {}
- */
-export function listUsers(options: PageOptions | null = null): PageResult<NotionUser> {
-    check("submilli/notion.listUsers", {});
+/** List users visible to the connection. */
+export function listUsers(requestedSize: number | null, startCursor: string | null): PageResult<NotionUser> {
     const query = new Map<string, string>();
-    let requestedSize: number | null = null;
-    if (options !== null) {
-        const actual = options as PageOptions;
-        requestedSize = actual.pageSize;
-        putQuery(query, "start_cursor", actual.startCursor);
-    }
+    putQuery(query, "start_cursor", startCursor);
     query.set("page_size", pageSize(requestedSize).toString());
     const page = listFrom(notionGet("/users", query));
     const results: NotionUser[] = [];

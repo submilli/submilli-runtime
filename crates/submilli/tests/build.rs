@@ -294,6 +294,7 @@ path = "util"
         r#"
             import { forty } from "@z/util";
             import { check } from "submilli:security";
+            /** @capability test.com/op { amount: number } */
             export function fortyTwo(): number {
                 check("test.com/op", { amount: 100 });
                 return forty() + 2;

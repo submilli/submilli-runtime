@@ -26,6 +26,36 @@ Credentials are supplied internally. Never request, accept, or pass an access
 token in package calls. Failures throw `GmailError`; do not blindly retry sends
 when the outcome is uncertain.
 
+## Recipients
+
+Pass one bare address per entry in `to`, `cc`, and `bcc`: `"dana@example.com"`,
+never `"Dana <dana@example.com>"` and never several addresses in one string.
+Spaces and tabs around an entry are removed, and no other whitespace. An
+address holds printable ASCII characters only, so an internationalized address,
+in a message or draft header as well, is refused with `invalid_recipient`. Any
+other entry throws `GmailError` with code `invalid_recipient` before anything
+is checked or sent, and the message names the field.
+
+Policy sees every address a message goes to as one `recipients` list, in the
+order To, Cc, Bcc, with each address once:
+
+| Operation | `recipients` |
+| --- | --- |
+| `sendEmail`, `createDraft` | `to`, `cc`, and `bcc` |
+| `reply`, `createReplyDraft` | The resolved To and Cc |
+| `sendDraft` | The To, Cc, and Bcc headers of the stored draft |
+
+A reply's To is the original Reply-To, or From when there is none. Reply-all
+adds the original To, and its Cc holds the original Cc addresses that are not
+already in To. Replies are addressed to bare addresses, without display names.
+
+`reply`, `createReplyDraft`, and `sendDraft` read the source message or draft
+from Gmail before the check. They throw `invalid_recipient` when one of its
+address headers is not a plain list of `address` or `Name <address>`, and
+`not_found` when it does not exist. Because that read comes first, a program
+the policy denies can still tell whether the message or draft exists, and a
+draft edited between the read and the send goes out as edited.
+
 ## Example
 
 Summarize unread threads: search returns lightweight refs; fetch the full
