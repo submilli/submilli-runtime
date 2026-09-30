@@ -1,4 +1,6 @@
 line 7 missed: artifact we report the circular `typeof` as unresolved on line 5; tsc reports it at both declarations
-line 20, 22, 24, 44, 46 extra: bug SUB-1205 a variable used with `typeof` inside its own annotation is unresolved
+line 20, 22, 44, 46 extra: bug SUB-1205 a variable used with `typeof` inside its own annotation is unresolved
+line 24 extra: bug SUB-1205 `typeof` of a function type's parameter in its return type is unresolved; also bug SUB-1205 a variable used with `typeof` inside its own annotation is unresolved
 line 7 type: artifact tsc types the circular declaration as `any` and reports it there, we report the `typeof` as unresolved
-line 21, 23, 25, 45, 47 type: bug SUB-1205 a variable used with `typeof` inside its own annotation is unresolved
+line 21, 23, 45, 47 type: bug SUB-1205 a variable used with `typeof` inside its own annotation is unresolved
+line 25 type: bug SUB-1205 `typeof` of a function type's parameter in its return type is unresolved; also bug SUB-1205 a variable used with `typeof` inside its own annotation is unresolved
