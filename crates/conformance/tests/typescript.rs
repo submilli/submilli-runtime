@@ -491,7 +491,7 @@ fn compare_types(
                     text: text.to_string(),
                     tsc: tsc_ty.to_string(),
                 });
-                if normalize_type(tsc_ty) != normalize_type(our_ty) {
+                if !same_type(text, tsc_ty, our_ty) {
                     divergences.push(TypeDivergence {
                         line: *line,
                         text: text.to_string(),
@@ -933,10 +933,27 @@ fn is_identifier(text: &str) -> bool {
             .all(|c| c.is_alphanumeric() || matches!(c, '_' | '$'))
 }
 
+/// Whether `tsc`'s and our types for the expression `text` are the same type.
+///
+/// `tsc` types `this` in an instance member as the polymorphic `this` type, where
+/// we give it the enclosing class. Submilli can't write `: this`, so nothing can
+/// tell the two apart; the type text alone doesn't name the class, hence a rule
+/// on the expression.
+fn same_type(text: &str, tsc_ty: &str, our_ty: &str) -> bool {
+    if text == "this" && tsc_ty == "this" && !our_ty.contains(&Type::Error.to_string()) {
+        return true;
+    }
+    normalize_type(tsc_ty) == normalize_type(our_ty)
+}
+
 /// A type's text in a canonical form, so that two spellings of the same type
 /// compare equal: union members and object fields sorted, parameter names
 /// dropped (`tsc` prints the declared name, we print `arg0`), method signatures
 /// read as function-typed fields, and no `;` before an object's `}`.
+/// `Record<string, V>` reads as the index signature it stands for, `tsc`'s
+/// `ArrayIterator<T>` as our `Iterator<T>`, and an optional field's `undefined`
+/// is dropped, since `a?: T | undefined` is `a?: T` without
+/// `exactOptionalPropertyTypes`.
 /// Text the reader does not understand is compared as written.
 fn normalize_type(ty: &str) -> String {
     let text = collapse_whitespace(ty);
@@ -980,6 +997,29 @@ impl TypeText<'_> {
         while self.eat(" | ") {
             members.push(self.postfix()?);
         }
+        Self::join_members(members)
+    }
+
+    /// An optional field's type, without the `undefined` its `?` already implies.
+    /// `None` inside when nothing else is left, as in `tsc`'s `b?: undefined`
+    /// for a field only some members of a normalized union have.
+    fn optional_field_type(&mut self) -> Option<Option<String>> {
+        let mut members = Vec::new();
+        loop {
+            if !self.eat_word("undefined") {
+                members.push(self.postfix()?);
+            }
+            if !self.eat(" | ") {
+                break;
+            }
+        }
+        if members.is_empty() {
+            return Some(None);
+        }
+        Some(Some(Self::join_members(members)?.text))
+    }
+
+    fn join_members(mut members: Vec<CanonicalType>) -> Option<CanonicalType> {
         if members.len() == 1 {
             return members.pop();
         }
@@ -1058,6 +1098,16 @@ impl TypeText<'_> {
             {
                 return Some(CanonicalType::plain(name));
             }
+            // `Record<string, V>` is defined as the index signature we print.
+            if let ("Record", [key, value]) = (name.as_str(), args.as_slice())
+                && key == "string"
+            {
+                return Some(CanonicalType::plain(format!("{{ [key: string]: {value} }}")));
+            }
+            // `tsc` names an array's iterator `ArrayIterator`; ours is `Iterator`.
+            if name == "ArrayIterator" {
+                return Some(CanonicalType::plain(format!("Iterator<{}>", args.join(", "))));
+            }
             return Some(CanonicalType::plain(format!("{name}<{}>", args.join(", "))));
         }
         Some(CanonicalType::plain(name))
@@ -1084,7 +1134,11 @@ impl TypeText<'_> {
 
     fn parameter(&mut self) -> Option<String> {
         let rest = if self.eat("...") { "..." } else { "" };
-        self.word()?;
+        // `tsc` prints a destructured parameter by its pattern, `([a, b]: T) => R`;
+        // like a name, the pattern doesn't change the parameter's type.
+        if !self.skip_binding_pattern() {
+            self.word()?;
+        }
         let optional = if self.eat("?") { "?" } else { "" };
         if !self.eat(": ") {
             return None;
@@ -1111,12 +1165,16 @@ impl TypeText<'_> {
                     return None;
                 }
                 format!("({}) => {}", params.join(", "), self.union_text()?)
-            } else if self.eat(": ") {
+            } else if !self.eat(": ") {
+                return None;
+            } else if optional.is_empty() {
                 self.union_text()?
             } else {
-                return None;
+                self.optional_field_type()?.unwrap_or_default()
             };
-            fields.push(format!("{readonly}{name}{optional}: {ty}"));
+            if !ty.is_empty() {
+                fields.push(format!("{readonly}{name}{optional}: {ty}"));
+            }
             let separated = self.eat(";") || self.eat(",");
             self.eat(" ");
             if !separated && !self.rest().starts_with('}') {
@@ -1185,6 +1243,41 @@ impl TypeText<'_> {
         let word = rest[..len].to_string();
         self.pos += len;
         Some(word)
+    }
+
+    /// A balanced `[…]` or `{…}` binding pattern, skipped whole.
+    fn skip_binding_pattern(&mut self) -> bool {
+        let rest = self.rest();
+        if !rest.starts_with(['[', '{']) {
+            return false;
+        }
+        let mut depth = 0usize;
+        for (i, c) in rest.char_indices() {
+            match c {
+                '[' | '{' => depth += 1,
+                ']' | '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        self.pos += i + 1;
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// `word` as a whole word, not the start of a longer name.
+    fn eat_word(&mut self, word: &str) -> bool {
+        let rest = self.rest();
+        let whole = rest.strip_prefix(word).is_some_and(|after| {
+            !after.starts_with(|c: char| c.is_alphanumeric() || matches!(c, '_' | '$' | '.'))
+        });
+        if whole {
+            self.pos += word.len();
+        }
+        whole
     }
 
     fn eat(&mut self, token: &str) -> bool {
@@ -1303,6 +1396,47 @@ fn normalizing_index_signatures_ignores_only_parameter_names() {
             normalize_type(distinct)
         );
     }
+}
+
+#[test]
+fn normalizing_reads_tsc_only_spellings_as_ours() {
+    assert_eq!(
+        normalize_type("Record<string, number | null>"),
+        normalize_type("{ [key: string]: null | number }")
+    );
+    assert_eq!(
+        normalize_type("ArrayIterator<number>"),
+        normalize_type("Iterator<number>")
+    );
+    assert_eq!(
+        normalize_type("{ sn?: string | number | undefined; }"),
+        normalize_type("{ sn?: number | string }")
+    );
+    assert_eq!(
+        normalize_type("{ a: number; b?: undefined; } | { a: number; b: string; }"),
+        normalize_type("{ a: number } | { a: number; b: string }")
+    );
+    assert_eq!(
+        normalize_type("([a, { b }, ...c]: number[]) => void"),
+        normalize_type("(arg0: number[]) => void")
+    );
+    for distinct in [
+        "Record<number, string>",
+        "{ sn: number | string }",
+        "{ sn?: null | number | string }",
+    ] {
+        assert_ne!(
+            normalize_type(distinct),
+            normalize_type("{ sn?: number | string }")
+        );
+    }
+}
+
+#[test]
+fn only_this_as_this_counts_as_its_class() {
+    assert!(same_type("this", "this", "Base2<T>"));
+    assert!(!same_type("x", "this", "Base2<T>"));
+    assert!(!same_type("this", "this", "<error>"));
 }
 
 #[test]

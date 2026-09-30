@@ -1,28 +1,12 @@
-types: 38 of 66 tsc entries compared, 12 differ
+types: 38 of 66 tsc entries compared, 6 differ
 
 line 16: typeof this.pp1 === "string" && this.pp1
   tsc:  string | false
   ours: string | boolean
 
-line 16: this
-  tsc:  this
-  ours: C1
-
-line 16: this
-  tsc:  this
-  ours: C1
-
 line 17: typeof this.pp2 === "string" && this.pp2
   tsc:  string | false
   ours: string | boolean
-
-line 17: this
-  tsc:  this
-  ours: C1
-
-line 17: this
-  tsc:  this
-  ours: C1
 
 line 18: typeof this.pp3 === "string" && this.pp3
   tsc:  string | false
@@ -35,14 +19,6 @@ line 18: this.pp3
 line 18: this.pp3
   tsc:  string
   ours: <error>
-
-line 18: this
-  tsc:  this
-  ours: C1
-
-line 18: this
-  tsc:  this
-  ours: C1
 
 line 29: typeof obj1.x === "string" && obj1.x
   tsc:  string | false

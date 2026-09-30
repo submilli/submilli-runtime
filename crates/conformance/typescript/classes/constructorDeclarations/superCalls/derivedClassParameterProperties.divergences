@@ -1,40 +1,4 @@
-types: 25 of 132 tsc entries compared, 9 differ
-
-line 48: this
-  tsc:  this
-  ours: Derived6
-
-line 58: this
-  tsc:  this
-  ours: Derived7
-
-line 59: this
-  tsc:  this
-  ours: Derived7
-
-line 69: this
-  tsc:  this
-  ours: Derived8
-
-line 70: this
-  tsc:  this
-  ours: Derived8
-
-line 81: this
-  tsc:  this
-  ours: Derived9<T>
-
-line 82: this
-  tsc:  this
-  ours: Derived9<T>
-
-line 92: this
-  tsc:  this
-  ours: Derived10<T>
-
-line 93: this
-  tsc:  this
-  ours: Derived10<T>
+types: 25 of 132 tsc entries compared, 0 differ
 
 errors:
 line 48: tsc TS17009: 'super' must be called before accessing 'this' in the constructor of a derived class. (we accept)

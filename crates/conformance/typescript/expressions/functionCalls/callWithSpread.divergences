@@ -1,8 +1,4 @@
-types: 17 of 48 tsc entries compared, 1 differ
-
-line 42: this
-  tsc:  this
-  ours: C
+types: 17 of 48 tsc entries compared, 0 differ
 
 errors:
 line 54: ours: override of method `foo` must declare the inherited method's 3 parameter(s) (tsc accepts)

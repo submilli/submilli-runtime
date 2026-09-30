@@ -1,16 +1,8 @@
-types: 6 of 18 tsc entries compared, 5 differ
+types: 6 of 18 tsc entries compared, 3 differ
 
 line 11: { x: this, y: this.t }
   tsc:  { x: this; y: number; }
   ours: { x: MyClass; y: number }
-
-line 11: this
-  tsc:  this
-  ours: MyClass
-
-line 11: this
-  tsc:  this
-  ours: MyClass
 
 line 17: obj
   tsc:  { f(): any; }

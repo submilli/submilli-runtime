@@ -1,8 +1,4 @@
-types: 12 of 35 tsc entries compared, 2 differ
-
-line 25: a6
-  tsc:  ([a, b, c, ...x]: number[]) => void
-  ours: (arg0: number[]) => void
+types: 12 of 35 tsc entries compared, 1 differ
 
 line 25: [1, 2, "string"]
   tsc:  (string | number)[]

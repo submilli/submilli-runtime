@@ -1,12 +1,8 @@
-types: 45 of 106 tsc entries compared, 4 differ
+types: 45 of 106 tsc entries compared, 3 differ
 
 line 17: { x: 1, ...obj }
   tsc:  { x: number; } | { x: string; }
   ours: { x: number | string }
-
-line 20: { command: "hi", ...(b ? t : {}) }
-  tsc:  { command: string; ok?: string | undefined; }
-  ours: { command: string; ok?: string }
 
 line 26: { command: "hi", ...{ spoiler: true }, spoiler2: true, ...t }
   tsc:  { command: string; ok: string; spoiler2: true; spoiler: true; }

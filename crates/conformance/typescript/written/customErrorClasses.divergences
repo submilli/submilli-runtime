@@ -1,8 +1,4 @@
-types: 41 of 83 tsc entries compared, 3 differ
-
-line 9: this
-  tsc:  this
-  ours: ValidationError
+types: 41 of 83 tsc entries compared, 2 differ
 
 line 28: e
   tsc:  unknown

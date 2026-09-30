@@ -1,20 +1,4 @@
-types: 24 of 97 tsc entries compared, 4 differ
-
-line 14: this
-  tsc:  this
-  ours: DerivedAfterParameterDefault
-
-line 16: this
-  tsc:  this
-  ours: DerivedAfterParameterDefault
-
-line 24: this
-  tsc:  this
-  ours: DerivedAfterRestParameter
-
-line 26: this
-  tsc:  this
-  ours: DerivedAfterRestParameter
+types: 24 of 97 tsc entries compared, 0 differ
 
 errors:
 line 14: tsc TS17009: 'super' must be called before accessing 'this' in the constructor of a derived class. (we accept)

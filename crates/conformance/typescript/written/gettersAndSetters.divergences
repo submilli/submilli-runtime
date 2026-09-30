@@ -1,20 +1,8 @@
-types: 36 of 78 tsc entries compared, 6 differ
-
-line 7: this
-  tsc:  this
-  ours: Temperature
-
-line 10: this
-  tsc:  this
-  ours: Temperature
+types: 36 of 78 tsc entries compared, 3 differ
 
 line 13: this.celsius > 25 ? "warm" : "cool"
   tsc:  "warm" | "cool"
   ours: string
-
-line 13: this
-  tsc:  this
-  ours: Temperature
 
 line 18: reading.fahrenheit = 212
   tsc:  212
