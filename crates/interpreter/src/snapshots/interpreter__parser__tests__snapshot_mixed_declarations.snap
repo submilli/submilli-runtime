@@ -1,5 +1,6 @@
 ---
 source: crates/interpreter/src/parser.rs
+assertion_line: 6993
 expression: ast
 ---
 Ast {
@@ -113,12 +114,15 @@ Ast {
                 ty: Some(
                     TypeAnnotation {
                         kind: Name {
-                            name_span: Span {
-                                file: FileId(
-                                    0,
-                                ),
-                                start: 20,
-                                end: 26,
+                            name: Ident {
+                                name: "string",
+                                span: Span {
+                                    file: FileId(
+                                        0,
+                                    ),
+                                    start: 20,
+                                    end: 26,
+                                },
                             },
                             args: [],
                         },
@@ -159,12 +163,15 @@ Ast {
                 ty: Some(
                     TypeAnnotation {
                         kind: Name {
-                            name_span: Span {
-                                file: FileId(
-                                    0,
-                                ),
-                                start: 42,
-                                end: 48,
+                            name: Ident {
+                                name: "number",
+                                span: Span {
+                                    file: FileId(
+                                        0,
+                                    ),
+                                    start: 42,
+                                    end: 48,
+                                },
                             },
                             args: [],
                         },

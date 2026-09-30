@@ -680,6 +680,115 @@ fn check_refreshes_generated_editor_declarations() {
     assert!(lib.contains("interface Array<"));
 }
 
+/// Publish `@acme/leaf`, which exports `Page`, and `@acme/mid`, which returns
+/// leaf's `Page`, into `home`'s store.
+fn publish_leaf_and_mid(root: &Path, home: &Path) {
+    let leaf = root.join("store-leaf");
+    write_file(&leaf.join("submilli.toml"), LEAF_MANIFEST);
+    write_file(&leaf.join("leaf/src/lib.ts"), LEAF_SOURCE);
+    let published = build(&leaf, home, &[]);
+    assert!(published.status.success(), "stderr: {}", stderr(&published));
+
+    let mid = root.join("store-mid");
+    write_file(
+        &mid.join("submilli.toml"),
+        "[dependencies]\n\"@acme/leaf\" = \"0.1.0\"\n\n\
+         [[package]]\nname = \"@acme/mid\"\nversion = \"0.1.0\"\ndescription = \"Mid.\"\n\
+         dependencies = [\"@acme/leaf\"]\n",
+    );
+    write_file(
+        &mid.join("src/lib.ts"),
+        "import { first, Page } from \"@acme/leaf\";\n\
+         /** The first page, from the leaf. */\nexport function page(): Page { return first(); }\n",
+    );
+    let published = build(&mid, home, &[]);
+    assert!(published.status.success(), "stderr: {}", stderr(&published));
+}
+
+const LEAF_MANIFEST: &str = "[[package]]\nname = \"@acme/leaf\"\nversion = \"0.1.0\"\n\
+    description = \"Leaf.\"\npath = \"leaf\"\n";
+
+const LEAF_SOURCE: &str = "/** A page of items. */\nexport interface Page {\n    /** Items. */\n    \
+    items: number[];\n}\n/** The first page. */\nexport function first(): Page { return { items: [] }; }\n";
+
+#[test]
+fn check_declares_store_dependencies_for_the_editor() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let home = tmp.path().join("home");
+    publish_leaf_and_mid(tmp.path(), &home);
+    let project = tmp.path().join("project");
+    write_file(
+        &project.join("submilli.toml"),
+        "[dependencies]\n\"@acme/mid\" = \"0.1.0\"\n\"@acme/missing\" = \"0.1.0\"\n\n\
+         [[package]]\nname = \"@acme/app\"\nversion = \"0.1.0\"\ndescription = \"App.\"\n\
+         dependencies = [\"@acme/mid\", \"@acme/missing\"]\n",
+    );
+    write_file(
+        &project.join("src/lib.ts"),
+        "/** Nothing. */\nexport function nothing(): number { return 0; }\n",
+    );
+
+    // `@acme/missing` fails the build, but not the other dependencies' types.
+    let out = build_subcommand("check", &project, &home, &[]);
+
+    assert!(!out.status.success());
+    let packages =
+        fs::read_to_string(project.join(".submilli/types/packages.d.ts")).expect("read packages");
+    assert!(
+        packages.contains("declare module \"@acme/mid\" {"),
+        "{packages}"
+    );
+    assert!(
+        packages.contains("declare module \"@acme/leaf\" {"),
+        "{packages}"
+    );
+    assert!(
+        packages.contains("  import type { Page } from \"@acme/leaf\";"),
+        "{packages}"
+    );
+    assert!(!packages.contains("@acme/missing"), "{packages}");
+}
+
+#[test]
+fn a_project_package_in_a_dependencys_closure_is_left_to_its_source() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let home = tmp.path().join("home");
+    publish_leaf_and_mid(tmp.path(), &home);
+    // The project has its own `@acme/leaf`, which `@acme/mid` also depends on.
+    let project = tmp.path().join("project");
+    write_file(
+        &project.join("submilli.toml"),
+        &format!(
+            "[dependencies]\n\"@acme/mid\" = \"0.1.0\"\n\n{LEAF_MANIFEST}\n\
+             [[package]]\nname = \"@acme/app\"\nversion = \"0.1.0\"\ndescription = \"App.\"\n\
+             path = \"app\"\ndependencies = [\"@acme/leaf\", \"@acme/mid\"]\n"
+        ),
+    );
+    write_file(&project.join("leaf/src/lib.ts"), LEAF_SOURCE);
+    write_file(
+        &project.join("app/src/lib.ts"),
+        "/** Nothing. */\nexport function nothing(): number { return 0; }\n",
+    );
+
+    let out = build_subcommand("check", &project, &home, &[]);
+
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let packages =
+        fs::read_to_string(project.join(".submilli/types/packages.d.ts")).expect("read packages");
+    assert!(
+        packages.contains("declare module \"@acme/mid\" {"),
+        "{packages}"
+    );
+    assert!(
+        !packages.contains("declare module \"@acme/leaf\""),
+        "{packages}"
+    );
+    assert!(
+        packages.contains("  import type { Page } from \"@acme/leaf\";"),
+        "{packages}"
+    );
+}
+
 #[test]
 fn check_reports_compile_errors_with_caret() {
     let tmp = tempfile::tempdir().expect("tempdir");

@@ -22,26 +22,30 @@ use wasmtime::{
     Rooted, StorageType, StructRef, StructRefPre, StructType, Val, ValType,
 };
 
-use crate::runtime::StoreData;
-use crate::runtime::fs::{ContainError, ContentPath, LinkPath, guest_normalize, resolve_link};
+use crate::runtime::fs::{
+    ContainError, ContentPath, FileIdentity, LinkPath, MAX_REMOVE_ENTRIES, guest_normalize,
+    resolve_link,
+};
 use crate::runtime::gc_singleton::singleton_struct;
 use crate::runtime::host::{
-    read_string_arg, read_uint8_array_arg, register_host_fn, write_submilli_string_struct,
-    write_submilli_uint8array_struct,
+    range_error, read_string_arg, read_uint8_array_arg, register_host_fn,
+    write_submilli_string_struct, write_submilli_uint8array_struct,
 };
 use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
 use crate::runtime::prelude::iterator::{
     as_struct, build_closable_iterator, iter_done, iter_yield, next_closure_type, void_closure_type,
 };
+use crate::runtime::{DiskQuota, Holder, OpenFileGuard, QuotaCharge, StoreData, regular_files};
 use crate::stdlib::abi::{
     self, backing_struct, externref_field, f64_field, install_field_getters, string_field,
 };
 use crate::stdlib::shared::{
-    DEFAULT_CWD, atomic_write, check_security, contain_trap, resolve_content_or_trap,
-    resolve_link_or_trap, write_target_trap,
+    DEFAULT_CWD, atomic_write, check_security, contain_trap, quota_refusal,
+    resolve_content_or_trap, resolve_link_or_trap, write_target_trap,
 };
 use handles::{
-    ChargedByteReader, ChargedDirIter, ChargedFileWriter, ChargedLineReader, ContainedWalk, kind_of,
+    ChargedByteReader, ChargedDirIter, ChargedFileWriter, ChargedLineReader, ContainedWalk,
+    TempFile, WriteError, kind_of,
 };
 
 pub const MODULE_NAME: &str = "submilli:fs";
@@ -68,7 +72,6 @@ const ENTRY_SIZE: usize = 4;
 // `$InfoBacking` field indices.
 const INFO_MODE: usize = 1;
 const INFO_SIZE_LIMIT: usize = 2;
-const INFO_PATH_LIMIT: usize = 3;
 
 // `$FileWriterBacking`: vtable + the externref handle.
 const WRITER_HANDLE: usize = 1;
@@ -123,7 +126,6 @@ fn info_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructType
         vec![
             string_field(&intr), // mode
             f64_field(),         // sizeLimit
-            f64_field(),         // pathLimit
             wasmtime::FieldType::new(Mutability::Const, StorageType::ValType(ValType::I64)), // nominal marker
         ],
     )
@@ -384,10 +386,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 if resolved.is_root() {
                     wasmtime::bail!("{ctx} {}: the VFS root is a directory, not a file", path);
                 }
+                let quota = caller.data().vfs.quota().cloned();
                 if atomic {
-                    atomic_write(&resolved, &bytes, None, &path, &ctx)
+                    atomic_write(&resolved, &bytes, None, &path, &ctx, quota)
                 } else {
-                    append_bytes(&resolved, &bytes, &path, &ctx)
+                    append_bytes(&resolved, &bytes, &path, &ctx, quota)
                 }
             },
         )?;
@@ -445,6 +448,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             let meta = resolved
                 .symlink_metadata()
                 .map_err(|e| contain_trap("fs.remove", &path, &e))?;
+            let quota = caller.data().vfs.quota().cloned();
+            let freed = match quota {
+                Some(_) => files_freed_by_remove(&resolved, meta.is_dir(), recursive),
+                None => Vec::new(),
+            };
             // `is_dir` on link metadata is false for a symlink to a directory, so an
             // escaping link is unlinked rather than followed and recursively deleted.
             let res = if meta.is_dir() {
@@ -457,6 +465,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 resolved.remove_file()
             };
             res.map_err(|e| contain_trap("fs.remove", &path, &e))?;
+            if let Some(quota) = quota {
+                for (file, bytes) in freed {
+                    quota.release_file(file, bytes);
+                }
+            }
             Ok(())
         },
     )?;
@@ -477,9 +490,18 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             )?;
             let from_resolved = resolve_link_or_trap(caller.data(), &from, "fs.move")?;
             let to_resolved = resolve_link_or_trap(caller.data(), &to, "fs.move")?;
+            // A file moved over another frees the one it replaced; a move onto the same
+            // file, under any spelling, frees nothing.
+            let moved = from_resolved.regular_file().map(|(file, _)| file);
+            let replaced = to_resolved
+                .regular_file()
+                .filter(|(file, _)| Some(*file) != moved);
             from_resolved
                 .rename_to(&to_resolved)
                 .map_err(|e| contain_trap("fs.move", &format!("{from} -> {to}"), &e))?;
+            if let (Some(quota), Some((file, bytes))) = (caller.data().vfs.quota(), replaced) {
+                quota.release_file(file, bytes);
+            }
             Ok(())
         },
     )?;
@@ -517,7 +539,15 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     .map_err(|e| write_target_trap("fs.copy", &to, &e))?;
             }
             let to_resolved = resolve_link_or_trap(caller.data(), &to, "fs.copy")?;
-            copy_recursive(&from_resolved, &to_resolved, recursive, &from, &to)
+            let quota = caller.data().vfs.quota().cloned();
+            copy_recursive(
+                &from_resolved,
+                &to_resolved,
+                recursive,
+                &from,
+                &to,
+                quota.as_ref(),
+            )
         },
     )?;
 
@@ -547,10 +577,14 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             let resolved = resolve_content_or_trap(caller.data(), &path, "fs.lines")?;
             let file = resolved
                 .open()
-                .map_err(|e| contain_trap("fs.lines", &path, &e))?
-                .into_std();
-            let reader = ChargedLineReader::new(BufReader::new(file), &caller.data().tenant_limits)
-                .map_err(|e| wasmtime::Error::msg(format!("fs.lines {path}: {e}")))?;
+                .map_err(|e| contain_trap("fs.lines", &path, &e))?;
+            let held = hold_for_reading(caller.data(), &file);
+            let reader = ChargedLineReader::new(
+                BufReader::new(file.into_std()),
+                &caller.data().tenant_limits,
+                held,
+            )
+            .map_err(|e| wasmtime::Error::msg(format!("fs.lines {path}: {e}")))?;
             results[0] = make_handle_iterator(
                 caller,
                 reader,
@@ -587,11 +621,15 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             let resolved = resolve_content_or_trap(caller.data(), &path, "fs.bytes")?;
             let file = resolved
                 .open()
-                .map_err(|e| contain_trap("fs.bytes", &path, &e))?
-                .into_std();
-            let reader =
-                ChargedByteReader::new(file, chunk_size as usize, &caller.data().tenant_limits)
-                    .map_err(|e| wasmtime::Error::msg(format!("fs.bytes {path}: {e}")))?;
+                .map_err(|e| contain_trap("fs.bytes", &path, &e))?;
+            let held = hold_for_reading(caller.data(), &file);
+            let reader = ChargedByteReader::new(
+                file.into_std(),
+                chunk_size as usize,
+                &caller.data().tenant_limits,
+                held,
+            )
+            .map_err(|e| wasmtime::Error::msg(format!("fs.bytes {path}: {e}")))?;
             results[0] = make_handle_iterator(
                 caller,
                 reader,
@@ -663,7 +701,6 @@ fn build_info(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Val> {
     // -1 sentinel = "no limit / not applicable" (none + persistent modes);
     // the language has no `undefined`, so the field is always present.
     let size_limit = info.size_limit.map_or(-1.0, |v| v as f64);
-    let path_limit = info.path_limit.map_or(-1.0, |v| v as f64);
     let mode = write_submilli_string_struct(caller, mode)?.to_anyref();
     let ty = info_backing_struct(caller.engine())?;
     abi::new_backing(
@@ -672,7 +709,6 @@ fn build_info(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Val> {
         &[
             Val::AnyRef(Some(mode)),
             Val::F64(size_limit.to_bits()),
-            Val::F64(path_limit.to_bits()),
             Val::I64(0),
         ],
     )
@@ -854,10 +890,18 @@ fn open_writer(caller: &mut Caller<'_, StoreData>, path: &str) -> wasmtime::Resu
     let tmp = resolved.temp_sibling();
     let file = tmp
         .create_new()
-        .map_err(|e| write_target_trap("fs.writer", path, &e))?
-        .into_std();
-    let writer = ChargedFileWriter::new(file, tmp, resolved, &caller.data().tenant_limits)
+        .map_err(|e| write_target_trap("fs.writer", path, &e))?;
+    let temp = TempFile::created(tmp, &file)
         .map_err(|e| wasmtime::Error::msg(format!("fs.writer {path}: {e}")))?;
+    let quota = caller.data().vfs.quota().cloned();
+    let writer = ChargedFileWriter::new(
+        file.into_std(),
+        temp,
+        resolved,
+        &caller.data().tenant_limits,
+        quota,
+    )
+    .map_err(|e| wasmtime::Error::msg(format!("fs.writer {path}: {e}")))?;
     let handle = ExternRef::new(&mut *caller, writer)?;
     let ty = file_writer_backing_struct(caller.engine())?;
     abi::new_backing(caller, ty, &[Val::ExternRef(Some(handle))])
@@ -1087,7 +1131,6 @@ fn install_getters(
         &[
             ("mode", INFO_MODE, string()),
             ("sizeLimit", INFO_SIZE_LIMIT, ValType::F64),
-            ("pathLimit", INFO_PATH_LIMIT, ValType::F64),
         ],
     )?;
     Ok(())
@@ -1118,7 +1161,7 @@ fn install_file_writer_methods(
         |caller, params, _results| {
             writer_payload(caller, &params[0], "fs.writer.close")?
                 .close()
-                .map_err(|e| wasmtime::Error::msg(format!("fs.writer.close: {e}")))
+                .map_err(|e| write_error("fs.writer.close", e))
         },
     )?;
 
@@ -1132,7 +1175,7 @@ fn install_file_writer_methods(
             let line = read_string_arg(&mut *caller, &params[1], "fs.writer.writeLine")?;
             writer_payload(caller, &params[0], "fs.writer.writeLine")?
                 .write_line(&line)
-                .map_err(|e| wasmtime::Error::msg(format!("fs.writer.writeLine: {e}")))
+                .map_err(|e| write_error("fs.writer.writeLine", e))
         },
     )?;
 
@@ -1146,11 +1189,21 @@ fn install_file_writer_methods(
             let bytes = read_uint8_array_arg(&mut *caller, &params[1], "fs.writer.writeBytes")?;
             writer_payload(caller, &params[0], "fs.writer.writeBytes")?
                 .write_bytes(&bytes)
-                .map_err(|e| wasmtime::Error::msg(format!("fs.writer.writeBytes: {e}")))
+                .map_err(|e| write_error("fs.writer.writeBytes", e))
         },
     )?;
 
     Ok(())
+}
+
+/// A size-limit refusal is a `RangeError` the program can catch, like every other
+/// write that would pass it.
+fn write_error(op: &str, err: WriteError) -> wasmtime::Error {
+    match err {
+        WriteError::Full(exceeded) => range_error(format!("{op}: {exceeded}")),
+        WriteError::Io(e) => wasmtime::Error::msg(format!("{op}: {e}")),
+        WriteError::Contain(e) => wasmtime::Error::msg(format!("{op}: {e}")),
+    }
 }
 
 /// Borrow the [`ChargedFileWriter`] out of a `$FileWriterBacking` receiver.
@@ -1232,13 +1285,61 @@ fn append_bytes(
     bytes: &[u8],
     guest_path: &str,
     op: &str,
+    quota: Option<Arc<DiskQuota>>,
 ) -> wasmtime::Result<()> {
-    let mut f = final_path
+    let appended = bytes.len() as u64;
+    let before = final_path.file_len();
+    let mut disk_charge = QuotaCharge::new(quota, None);
+    disk_charge
+        .reserve(appended)
+        .map_err(|exceeded| quota_refusal(op, guest_path, exceeded))?;
+    let result = final_path
         .append()
-        .map_err(|e| write_target_trap(op, guest_path, &e))?;
-    f.write_all(bytes)
-        .map_err(|e| wasmtime::Error::msg(format!("{op} {guest_path}: {e}")))?;
-    Ok(())
+        .map_err(|e| write_target_trap(op, guest_path, &e))
+        .and_then(|mut f| {
+            f.write_all(bytes)
+                .map_err(|e| wasmtime::Error::msg(format!("{op} {guest_path}: {e}")))
+        });
+    if result.is_err() {
+        // A failed append may still have landed part of its bytes; keep those counted.
+        let landed = final_path.file_len().saturating_sub(before).min(appended);
+        disk_charge.unreserve(appended.saturating_sub(landed));
+        disk_charge.keep();
+        return result;
+    }
+    disk_charge.commit();
+    result
+}
+
+/// The regular files a removal frees: the file itself, or every file under a
+/// directory removed recursively. A tree that can't be walked frees nothing on the
+/// count, which errs toward refusing a later write rather than allowing one past
+/// the limit. The walk stops where the removal's own scan would refuse, so a tree
+/// too large to remove isn't walked in full first.
+fn files_freed_by_remove(
+    target: &LinkPath,
+    is_dir: bool,
+    recursive: bool,
+) -> Vec<(FileIdentity, u64)> {
+    if !is_dir {
+        return target.regular_file().into_iter().collect();
+    }
+    if !recursive {
+        return Vec::new();
+    }
+    target
+        .open_dir()
+        .ok()
+        .and_then(|dir| regular_files(&dir, MAX_REMOVE_ENTRIES).ok())
+        .unwrap_or_default()
+}
+
+/// Register a file a reader opens, so a removal of its name keeps its bytes
+/// counted until the reader closes.
+fn hold_for_reading(data: &StoreData, file: &cap_std::fs::File) -> Option<OpenFileGuard> {
+    let quota = data.vfs.quota()?;
+    let metadata = file.metadata().ok()?;
+    Some(quota.hold(FileIdentity::of(&metadata).ok()?, Holder::Reader))
 }
 
 /// Preserves symlinks as links rather than dereferencing — prevents exfiltrating targets
@@ -1250,6 +1351,7 @@ fn copy_recursive(
     recursive: bool,
     guest_from: &str,
     guest_to: &str,
+    quota: Option<&Arc<DiskQuota>>,
 ) -> wasmtime::Result<()> {
     let pair = format!("{guest_from} -> {guest_to}");
     let meta = from
@@ -1294,11 +1396,23 @@ fn copy_recursive(
                 let _ = copy_link(&child_from, &child_to);
                 continue;
             }
-            copy_recursive(&child_from, &child_to, true, guest_from, guest_to)?;
+            copy_recursive(&child_from, &child_to, true, guest_from, guest_to, quota)?;
         }
     } else {
-        from.copy_to(to)
-            .map_err(|e| contain_trap("fs.copy", &pair, &e))?;
+        // Each file is reserved as the walk reaches it, so a copy that would pass the
+        // size limit stops at the file that would, with what came before in place.
+        // No program code runs during the copy, and it truncates and rewrites the
+        // destination itself, so it draws on the destination's old contents.
+        let mut disk_charge = QuotaCharge::in_place(quota.cloned(), to.copied_onto_file());
+        disk_charge
+            .reserve(meta.len())
+            .map_err(|exceeded| quota_refusal("fs.copy", &pair, exceeded))?;
+        if let Err(e) = from.copy_to(to) {
+            // The copy may have truncated the destination and landed part of it.
+            disk_charge.settle_at(to.copied_onto_file().map_or(0, |(_, bytes)| bytes));
+            return Err(contain_trap("fs.copy", &pair, &e));
+        }
+        disk_charge.commit();
     }
     Ok(())
 }
@@ -1733,15 +1847,401 @@ function main(): void {
                 const fs = info();
                 assert(fs.mode === "per_session", "mode surfaced");
                 assert(fs.sizeLimit === 1048576, "size limit surfaced");
-                assert(fs.pathLimit === 42, "path limit surfaced");
             }
         "#;
         let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
         data.vfs_info = VfsInfo {
             mode: VfsMode::PerSession,
             size_limit: Some(1024 * 1024),
-            path_limit: Some(42),
         };
         run_with(source, data).await.expect("info asserts hold");
+    }
+
+    fn limited(limit: u64) -> StoreData {
+        let vfs = Vfs::tempdir().expect("tempdir").with_size_limit(limit);
+        let mut data = StoreData::with_vfs(vfs);
+        data.vfs_info.size_limit = Some(limit);
+        data
+    }
+
+    #[tokio::test]
+    async fn size_limit_refuses_growth_but_allows_rewrites_within_it() {
+        let source = r#"
+            import { writeText, readText, append, info } from "submilli:fs";
+            function refused(write: () => void): boolean {
+                try { write(); return false; } catch (e) { return e instanceof RangeError; }
+            }
+            function main(): void {
+                assert(info().sizeLimit === 100, "limit surfaced");
+                writeText("/a.txt", "x".repeat(60));
+                assert(refused(() => writeText("/b.txt", "y".repeat(60))), "a second file past the limit");
+                writeText("/a.txt", "z".repeat(90));
+                assert(readText("/a.txt") === "z".repeat(90), "a rewrite that ends within the limit");
+                assert(refused(() => append("/a.txt", new Uint8Array(20))), "an append past the limit");
+                writeText("/a.txt", "");
+                writeText("/b.txt", "y".repeat(100));
+            }
+        "#;
+        run_with(source, limited(100))
+            .await
+            .expect("limit asserts hold");
+    }
+
+    #[tokio::test]
+    async fn size_limit_stops_a_writer_and_frees_its_temp_file() {
+        let source = r#"
+            import { writer, writeText, exists } from "submilli:fs";
+            function main(): void {
+                const w = writer("/log.txt");
+                w.writeLine("x".repeat(40));
+                let refused = false;
+                try { w.writeLine("y".repeat(80)); } catch (e) { refused = e instanceof RangeError; }
+                assert(refused, "the writer stops at the limit");
+                w.close();
+                assert(exists("/log.txt"), "what was written before the limit is kept");
+                writeText("/other.txt", "z".repeat(59));
+            }
+        "#;
+        run_with(source, limited(100))
+            .await
+            .expect("writer asserts hold");
+    }
+
+    #[tokio::test]
+    async fn size_limit_stops_a_copy_at_the_file_that_would_pass_it() {
+        let source = r#"
+            import { writeText, copy, exists } from "submilli:fs";
+            function main(): void {
+                writeText("/a.txt", "x".repeat(40));
+                copy("/a.txt", "/b.txt", false);
+                let refused = false;
+                try { copy("/a.txt", "/c.txt", false); } catch (e) { refused = e instanceof RangeError; }
+                assert(refused, "a third copy passes the limit");
+                assert(!exists("/c.txt"), "the refused copy leaves nothing");
+                copy("/b.txt", "/a.txt", false);
+            }
+        "#;
+        run_with(source, limited(100))
+            .await
+            .expect("copy asserts hold");
+    }
+
+    #[tokio::test]
+    async fn size_limit_counts_what_remove_and_move_free() {
+        let source = r#"
+            import { writeText, remove, move } from "submilli:fs";
+            function refused(write: () => void): boolean {
+                try { write(); return false; } catch (e) { return e instanceof RangeError; }
+            }
+            function main(): void {
+                writeText("/a.txt", "x".repeat(60));
+                remove("/a.txt", false);
+                writeText("/b.txt", "y".repeat(60));
+                writeText("/c.txt", "z".repeat(30));
+                move("/c.txt", "/b.txt");
+                writeText("/d.txt", "w".repeat(70));
+                move("/d.txt", "/d.txt");
+                assert(refused(() => writeText("/e.txt", "v".repeat(1))), "a move onto itself frees nothing");
+            }
+        "#;
+        run_with(source, limited(100))
+            .await
+            .expect("remove and move free space");
+    }
+
+    #[tokio::test]
+    async fn size_limit_counts_a_writer_whose_target_shrinks_mid_write() {
+        let source = r#"
+            import { writer, writeText } from "submilli:fs";
+            function refused(write: () => void): boolean {
+                try { write(); return false; } catch (e) { return e instanceof RangeError; }
+            }
+            function main(): void {
+                writeText("/a.txt", "x".repeat(90));
+                const w = writer("/a.txt");
+                writeText("/a.txt", "");
+                w.writeBytes(new Uint8Array(90));
+                w.close();
+                assert(refused(() => writeText("/b.txt", "y".repeat(90))), "the writer's 90 bytes still count");
+            }
+        "#;
+        run_with(source, limited(100))
+            .await
+            .expect("stale allowance is not honoured");
+    }
+
+    #[tokio::test]
+    async fn size_limit_counts_every_writer_on_one_path() {
+        let source = r#"
+            import { writer, writeText } from "submilli:fs";
+            function main(): void {
+                writeText("/a.txt", "x".repeat(60));
+                const first = writer("/a.txt");
+                first.writeBytes(new Uint8Array(30));
+                const second = writer("/a.txt");
+                let refused = false;
+                try { second.writeBytes(new Uint8Array(30)); } catch (e) { refused = e instanceof RangeError; }
+                assert(refused, "two open writers' bytes both count");
+                first.close();
+                second.close();
+            }
+        "#;
+        run_with(source, limited(100))
+            .await
+            .expect("each writer is counted");
+    }
+
+    #[tokio::test]
+    async fn a_directory_over_its_limit_can_be_cleaned_up() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("big.txt"), vec![b'x'; 200]).expect("seed");
+        let vfs = Vfs::external_with_mode(dir.path().to_path_buf(), VfsMode::PerSession)
+            .expect("external")
+            .with_size_limit(100);
+        let source = r#"
+            import { writeText, remove } from "submilli:fs";
+            function main(): void {
+                writeText("/big.txt", "");
+                writeText("/big.txt", "x".repeat(10));
+                remove("/big.txt", false);
+                writeText("/after.txt", "y".repeat(100));
+            }
+        "#;
+        run_with(source, StoreData::with_vfs(vfs))
+            .await
+            .expect("truncating and removing recover the limit");
+    }
+
+    #[tokio::test]
+    async fn a_writer_temp_file_moved_away_stays_counted() {
+        let source = r#"
+            import { writer, list, move, writeText } from "submilli:fs";
+            function main(): void {
+                const w = writer("/w.bin");
+                w.writeBytes(new Uint8Array(60));
+                let temp = "";
+                for (const e of list("/", false)) { if (e.name.startsWith("w.bin.")) { temp = e.path; } }
+                move(temp, "/kept.bin");
+                let failed = false;
+                try { w.close(); } catch (e) { failed = true; }
+                assert(failed, "close notices its temp file was moved");
+                let refused = false;
+                try { writeText("/x.txt", "y".repeat(50)); } catch (e) { refused = e instanceof RangeError; }
+                assert(refused, "the moved bytes still count");
+            }
+        "#;
+        run_with(source, limited(100))
+            .await
+            .expect("moved temp stays counted");
+    }
+
+    // Relies on a removed file's link count reaching 0 while the writer holds it,
+    // which Windows may report differently; there the count only over-counts.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_writer_leaves_a_file_the_program_put_at_its_temp_name() {
+        let source = r#"
+            import { writer, list, remove, writeText, exists } from "submilli:fs";
+            function main(): void {
+                const w = writer("/w.bin");
+                w.writeBytes(new Uint8Array(40000));
+                let temp = "";
+                for (const e of list("/", false)) { if (e.name.startsWith("w.bin.")) { temp = e.path; } }
+                remove(temp, false);
+                writeText(temp, "");
+                let failed = false;
+                try { w.close(); } catch (e) { failed = true; }
+                assert(failed, "close notices its temp file was replaced");
+                assert(exists(temp), "the program's own file is left alone");
+                writeText("/x.bin", "y".repeat(100000));
+            }
+        "#;
+        run_with(source, limited(100000))
+            .await
+            .expect("a replaced temp file is neither committed nor double-freed");
+    }
+
+    #[tokio::test]
+    async fn an_unmeasured_directory_opens_as_full() {
+        let vfs = Vfs::tempdir()
+            .expect("tempdir")
+            .with_measured_limit(100, None);
+        let source = r#"
+            import { writeText, remove } from "submilli:fs";
+            function main(): string {
+                writeText("/empty.txt", "");
+                remove("/empty.txt", false);
+                try { writeText("/a.txt", "x"); return "allowed"; }
+                catch (e) { return (e instanceof RangeError ? "true " : "false ") + (e as Error).message; }
+            }
+        "#;
+        let result = run_with(source, StoreData::with_vfs(vfs))
+            .await
+            .expect("runs")
+            .expect("a result");
+        assert!(result.starts_with("true "), "{result}");
+        assert!(result.contains("couldn't be measured"), "{result}");
+    }
+
+    #[tokio::test]
+    async fn size_limit_counts_what_a_recursive_remove_frees() {
+        let source = r#"
+            import { mkdir, writeText, remove } from "submilli:fs";
+            function main(): void {
+                mkdir("/d/e", true);
+                writeText("/d/e/a.txt", "x".repeat(60));
+                writeText("/d/b.txt", "y".repeat(30));
+                remove("/d", true);
+                writeText("/c.txt", "z".repeat(100));
+            }
+        "#;
+        run_with(source, limited(100))
+            .await
+            .expect("a recursive remove frees its whole tree");
+    }
+
+    #[tokio::test]
+    async fn a_removed_file_a_reader_holds_counts_until_the_reader_closes() {
+        let source = r#"
+            import { writeText, bytes, remove } from "submilli:fs";
+            function refused(write: () => void): boolean {
+                try { write(); return false; } catch (e) { return e instanceof RangeError; }
+            }
+            function main(): void {
+                writeText("/f.bin", "x".repeat(90));
+                for (const chunk of bytes("/f.bin", 1)) {
+                    remove("/f.bin", false);
+                    assert(refused(() => writeText("/g.txt", "y".repeat(20))), "the open file's bytes still count");
+                    break;
+                }
+                writeText("/g.txt", "y".repeat(100));
+            }
+        "#;
+        run_with(source, limited(100))
+            .await
+            .expect("a closed reader frees what its removed file held");
+    }
+
+    #[tokio::test]
+    async fn a_write_over_a_writers_temp_file_is_counted_in_full() {
+        let source = r#"
+            import { writer, list, writeText } from "submilli:fs";
+            function refused(write: () => void): boolean {
+                try { write(); return false; } catch (e) { return e instanceof RangeError; }
+            }
+            function main(): void {
+                const w = writer("/a.bin");
+                w.writeBytes(new Uint8Array(40000));
+                let temp = "";
+                for (const e of list("/", false)) { if (e.name.startsWith("a.bin.")) { temp = e.path; } }
+                writeText(temp, "x".repeat(40000));
+                let failed = false;
+                try { w.close(); } catch (e) { failed = true; }
+                assert(failed, "close notices its temp file was replaced");
+                assert(refused(() => writeText("/b.txt", "y".repeat(60001))), "the 40000 at the temp name count");
+                writeText("/b.txt", "y".repeat(60000));
+            }
+        "#;
+        run_with(source, limited(100000))
+            .await
+            .expect("the replaced temp file's bytes are counted exactly once");
+    }
+
+    #[tokio::test]
+    async fn rewriting_a_file_a_reader_holds_counts_both_copies() {
+        let source = r#"
+            import { writeText, bytes } from "submilli:fs";
+            function refused(write: () => void): boolean {
+                try { write(); return false; } catch (e) { return e instanceof RangeError; }
+            }
+            function main(): void {
+                writeText("/f.bin", "x".repeat(40000));
+                for (const chunk of bytes("/f.bin", 1)) {
+                    writeText("/f.bin", "z".repeat(40000));
+                    assert(refused(() => writeText("/g.txt", "y".repeat(20001))), "the old copy is still on disk");
+                    break;
+                }
+                writeText("/g.txt", "y".repeat(60000));
+            }
+        "#;
+        run_with(source, limited(100000))
+            .await
+            .expect("the old copy is freed when the reader closes");
+    }
+
+    #[tokio::test]
+    async fn copying_over_a_file_a_reader_holds_counts_only_the_growth() {
+        let source = r#"
+            import { writeText, copy, bytes } from "submilli:fs";
+            function refused(write: () => void): boolean {
+                try { write(); return false; } catch (e) { return e instanceof RangeError; }
+            }
+            function main(): void {
+                writeText("/f.bin", "x".repeat(40000));
+                writeText("/src.bin", "z".repeat(40000));
+                for (const chunk of bytes("/f.bin", 1)) {
+                    copy("/src.bin", "/f.bin", false);
+                    writeText("/g.txt", "y".repeat(20000));
+                    assert(refused(() => writeText("/h.txt", "w")), "the limit is reached");
+                    break;
+                }
+            }
+        "#;
+        run_with(source, limited(100000))
+            .await
+            .expect("a copy rewrites the held file in place");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn copying_onto_a_link_frees_the_file_it_rewrites() {
+        let vfs = Vfs::tempdir().expect("tempdir");
+        std::fs::write(vfs.root().join("t.bin"), vec![b't'; 50000]).expect("write");
+        std::os::unix::fs::symlink("t.bin", vfs.root().join("l")).expect("symlink");
+        let vfs = vfs.with_size_limit(100000);
+        let mut data = StoreData::with_vfs(vfs);
+        data.vfs_info.size_limit = Some(100000);
+        let source = r#"
+            import { writeText, copy } from "submilli:fs";
+            function main(): void {
+                writeText("/s.bin", "0123456789");
+                copy("/s.bin", "/l", false);
+                writeText("/g.txt", "y".repeat(99980));
+            }
+        "#;
+        run_with(source, data)
+            .await
+            .expect("the link's target shrank to the copied 10 bytes");
+    }
+
+    #[tokio::test]
+    async fn copying_over_a_writers_temp_file_leaves_it_for_the_writer_to_settle() {
+        let source = r#"
+            import { writeText, writer, list, copy, mkdir } from "submilli:fs";
+            function refused(write: () => void): boolean {
+                try { write(); return false; } catch (e) { return e instanceof RangeError; }
+            }
+            function main(): void {
+                writeText("/empty", "");
+                writeText("/keep.bin", "k".repeat(20000));
+                const w = writer("/a.bin");
+                w.writeBytes(new Uint8Array(40000));
+                let temp = "";
+                for (const e of list("/", false)) {
+                    if (e.name.startsWith("a.bin.")) { temp = e.path; }
+                }
+                copy("/empty", temp, false);
+                mkdir("/a.bin", false);
+                writeText("/a.bin/x", "1");
+                let closed = true;
+                try { w.close(); } catch (e) { closed = false; }
+                assert(!closed, "close fails on the directory");
+                assert(refused(() => writeText("/big.bin", "y".repeat(80000))), "20001 bytes remain on disk");
+                writeText("/big.bin", "y".repeat(79999));
+            }
+        "#;
+        run_with(source, limited(100000))
+            .await
+            .expect("the writer's temp file is freed once, when the writer discards it");
     }
 }

@@ -152,6 +152,17 @@ impl IndexSignature {
         }
     }
 
+    /// [`map_value`](Self::map_value) with a transform that can fail.
+    pub fn try_map_value<E>(
+        &self,
+        transform: impl FnOnce(&Type) -> Result<Type, E>,
+    ) -> Result<Self, E> {
+        Ok(Self {
+            value: Box::new(transform(&self.value)?),
+            readonly: self.readonly,
+        })
+    }
+
     pub fn read_ty(&self) -> Type {
         Type::union(vec![(*self.value).clone(), Type::Null])
     }
@@ -610,11 +621,12 @@ impl Type {
         });
         flat.dedup_by(|a, b| a.without_aliases() == b.without_aliases());
         fold_boolean_literals(&mut flat);
-        match flat.len() {
-            // All members were Never → return Never (the bottom type), not Error.
-            0 => Type::Never,
-            1 => flat.pop().expect("len == 1"),
-            _ => Type::Union(flat),
+        if flat.len() > 1 {
+            return Type::Union(flat);
+        }
+        match flat.into_iter().next() {
+            Some(member) => member,
+            None => Type::Never,
         }
     }
 

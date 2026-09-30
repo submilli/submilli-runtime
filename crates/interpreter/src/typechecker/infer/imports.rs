@@ -1,6 +1,8 @@
 //! Prelude population and explicit-import resolution.
 //! Runs before signature inference so imported type names are in scope for function signatures.
 
+use crate::compiler_error::CompilerFailure;
+
 use crate::{
     Diagnostic, Ident, NamespaceSymbol, PackageDeclaration, Severity, StmtKind, Type, TypeKind,
     ValueKind,
@@ -82,9 +84,7 @@ fn load_namespaces<'a>(
 }
 
 impl<'a> Inferer<'a> {
-    pub(super) fn populate_prelude(
-        &mut self,
-    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+    pub(super) fn populate_prelude(&mut self) -> Result<(), CompilerFailure> {
         // Constructor bindings (`Const { ty: InterfaceRef }`) are public by
         // shape; everything else in `prelude.values` is an internal helper
         // (string_concat, …) except the bare globals named here.
@@ -208,10 +208,14 @@ impl<'a> Inferer<'a> {
         }
     }
 
-    pub(super) fn populate_imports(&mut self) {
+    pub(super) fn populate_imports(&mut self) -> Result<(), CompilerFailure> {
         let top_level: Vec<crate::StmtId> = self.ast.top_level.clone();
         for stmt_id in top_level {
-            let stmt = self.ast.stmt(stmt_id).clone();
+            let stmt = self
+                .ast
+                .try_stmt(stmt_id)
+                .map_err(super::arena_failure)?
+                .clone();
             let StmtKind::Import {
                 module,
                 module_span,
@@ -305,6 +309,8 @@ impl<'a> Inferer<'a> {
                 }
             }
         }
+
+        Ok(())
     }
 
     fn populate_relative_import(

@@ -28,7 +28,8 @@ use crate::CapabilitySchema;
 // conflate absent fields with explicit null and cannot share the new markers.
 // v8: replaceable object-shape arrays and explicitly marked accessor payload names.
 // v9: structural objects and interface declarations carry string index signatures.
-pub const ARTIFACT_SCHEMA_VERSION: u32 = 9;
+// v10: `submilli:fs` `Info` drops `pathLimit`, so its intrinsic layout loses a field.
+pub const ARTIFACT_SCHEMA_VERSION: u32 = 10;
 
 const WASM_FILE: &str = "pkg.wasm";
 const CAPABILITIES_FILE: &str = "capabilities.yaml";
@@ -440,7 +441,7 @@ mod tests {
             ValueSymbol {
                 name: "greet".to_string(),
                 mangled_name: mangle::package_symbol("@acme/util", "greet"),
-                declaration_span: Span::new(file, 0, 12),
+                declaration_span: Span::new(file, 0, 12).unwrap(),
                 kind: ValueKind::Function {
                     generics: vec!["T".to_string()],
                     params: vec![
@@ -488,7 +489,7 @@ mod tests {
             TypeSymbol {
                 name: "Thing".to_string(),
                 mangled_name: mangle::package_symbol("@acme/util", "Thing"),
-                declaration_span: Span::new(file, 20, 40),
+                declaration_span: Span::new(file, 20, 40).unwrap(),
                 kind: TypeKind::Interface {
                     index: None,
                     generics: Vec::new(),
@@ -506,7 +507,7 @@ mod tests {
             ValueSymbol {
                 name: "version".to_string(),
                 mangled_name: mangle::package_symbol("@acme/util", "Meta#version"),
-                declaration_span: Span::new(file, 45, 60),
+                declaration_span: Span::new(file, 45, 60).unwrap(),
                 kind: ValueKind::Const {
                     ty: Type::StringLiteral("1.0.0".to_string()),
                     doc: doc(file, "/** Current version. */"),
@@ -518,7 +519,7 @@ mod tests {
             NamespaceSymbol {
                 name: "Meta".to_string(),
                 mangled_prefix: mangle::package_symbol("@acme/util", "Meta"),
-                declaration_span: Span::new(file, 40, 44),
+                declaration_span: Span::new(file, 40, 44).unwrap(),
                 values: ns_values,
                 types: BTreeMap::new(),
                 namespaces: BTreeMap::new(),

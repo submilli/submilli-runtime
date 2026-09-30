@@ -7,19 +7,31 @@ use crate::typechecker::infer::narrowing::{BindingId, CastInfo, CastKind, Refere
 
 use super::DesugarCtx;
 
-pub(super) fn run(ctx: &mut DesugarCtx) {
-    let mut i = 0;
-    while i < ctx.ta.stmts_len() {
-        let id = StmtId(i as u32);
-        if matches!(ctx.ta.stmt(id).kind, TypedStmtKind::ForOf { .. }) {
-            lower(ctx, id);
+pub(super) fn run(ctx: &mut DesugarCtx) -> Result<(), crate::compiler_error::CompilerFailure> {
+    for id in ctx
+        .ta
+        .stmt_ids()
+        .map_err(crate::typechecker::arena_failure)?
+    {
+        if matches!(
+            ctx.ta
+                .try_stmt(id)
+                .map_err(crate::typechecker::arena_failure)?
+                .kind,
+            TypedStmtKind::ForOf { .. }
+        ) {
+            lower(ctx, id)?;
         }
-        i += 1;
     }
+    Ok(())
 }
 
-fn lower(ctx: &mut DesugarCtx, id: StmtId) {
-    let span = ctx.ta.stmt(id).span;
+fn lower(ctx: &mut DesugarCtx, id: StmtId) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let span = ctx
+        .ta
+        .try_stmt(id)
+        .map_err(crate::typechecker::arena_failure)?
+        .span;
     let TypedStmtKind::ForOf {
         binding_kind,
         name,
@@ -27,10 +39,25 @@ fn lower(ctx: &mut DesugarCtx, id: StmtId) {
         iter,
         body,
         kind,
-    } = ctx.ta.stmt(id).kind.clone()
+    } = ctx
+        .ta
+        .try_stmt(id)
+        .map_err(crate::typechecker::arena_failure)?
+        .kind
+        .clone()
     else {
-        return;
+        return Err(crate::typechecker::invariant_failure(
+            "for-of lowering target is not a for-of statement",
+        )
+        .with_span(span));
     };
+
+    ctx.ta
+        .try_expr(iter)
+        .map_err(crate::typechecker::arena_failure)?;
+    ctx.ta
+        .try_stmt(body)
+        .map_err(crate::typechecker::arena_failure)?;
 
     match kind {
         ForOfKind::Iterator | ForOfKind::Iterable => {
@@ -44,14 +71,14 @@ fn lower(ctx: &mut DesugarCtx, id: StmtId) {
                 body,
                 kind,
                 span,
-            );
-            return;
+            )?;
+            return Ok(());
         }
         ForOfKind::Array => {}
     }
 
-    let arr_ident = ctx.fresh_name("arr");
-    let idx_ident = ctx.fresh_name("i");
+    let arr_ident = ctx.fresh_name("arr")?;
+    let idx_ident = ctx.fresh_name("i")?;
 
     let arr_ty = Type::Array(Box::new(element_ty.clone()));
 
@@ -63,12 +90,12 @@ fn lower(ctx: &mut DesugarCtx, id: StmtId) {
             doc: None,
         },
         span,
-    );
+    )?;
 
     // Start at -1 and increment at the top of each iteration so a bare `continue` —
     // including one that unwinds a `try`/`finally` — advances the index and the loop
     // terminates, with the finally running before the advance.
-    let neg_one = ctx.number_lit(-1.0);
+    let neg_one = ctx.number_lit(-1.0)?;
     let let_idx = ctx.push_stmt(
         TypedStmtKind::Let {
             name: idx_ident.clone(),
@@ -78,32 +105,38 @@ fn lower(ctx: &mut DesugarCtx, id: StmtId) {
             doc: None,
         },
         span,
-    );
+    )?;
 
-    let inc_stmt = build_increment(ctx, &idx_ident, span);
+    let inc_stmt = build_increment(ctx, &idx_ident, span)?;
 
-    let length_expr = build_array_length(ctx, &arr_ident, arr_ty.clone());
-    let idx_ref_for_cond = ctx.local_ref(idx_ident.clone(), Type::Number);
-    let cond = ctx.ta.push_expr(TypedExpr {
-        kind: TypedExprKind::Binary {
-            op: BinOp::Lt,
-            lhs: idx_ref_for_cond,
-            rhs: length_expr,
-        },
-        span,
-        ty: Type::Boolean,
-    });
+    let length_expr = build_array_length(ctx, &arr_ident, arr_ty.clone())?;
+    let idx_ref_for_cond = ctx.local_ref(idx_ident.clone(), Type::Number)?;
+    let cond = ctx
+        .ta
+        .try_push_expr(TypedExpr {
+            kind: TypedExprKind::Binary {
+                op: BinOp::Lt,
+                lhs: idx_ref_for_cond,
+                rhs: length_expr,
+            },
+            span,
+            ty: Type::Boolean,
+        })
+        .map_err(crate::typechecker::arena_failure)?;
 
-    let arr_ref_for_index = ctx.local_ref(arr_ident.clone(), arr_ty.clone());
-    let idx_ref_for_index = ctx.local_ref(idx_ident.clone(), Type::Number);
-    let element_expr = ctx.ta.push_expr(TypedExpr {
-        kind: TypedExprKind::IndexAccess {
-            receiver: arr_ref_for_index,
-            index: idx_ref_for_index,
-        },
-        span,
-        ty: element_ty.clone(),
-    });
+    let arr_ref_for_index = ctx.local_ref(arr_ident.clone(), arr_ty.clone())?;
+    let idx_ref_for_index = ctx.local_ref(idx_ident.clone(), Type::Number)?;
+    let element_expr = ctx
+        .ta
+        .try_push_expr(TypedExpr {
+            kind: TypedExprKind::IndexAccess {
+                receiver: arr_ref_for_index,
+                index: idx_ref_for_index,
+            },
+            span,
+            ty: element_ty.clone(),
+        })
+        .map_err(crate::typechecker::arena_failure)?;
     let loop_var_bind = match binding_kind {
         BindingKind::Const => ctx.push_stmt(
             TypedStmtKind::Const {
@@ -113,7 +146,7 @@ fn lower(ctx: &mut DesugarCtx, id: StmtId) {
                 doc: None,
             },
             span,
-        ),
+        )?,
         BindingKind::Let => ctx.push_stmt(
             TypedStmtKind::Let {
                 name: name.clone(),
@@ -123,14 +156,14 @@ fn lower(ctx: &mut DesugarCtx, id: StmtId) {
                 doc: None,
             },
             span,
-        ),
+        )?,
     };
 
-    let then_stmts = bind_then_body(ctx, loop_var_bind, body);
-    let then_block = ctx.push_stmt(TypedStmtKind::Block(then_stmts), span);
+    let then_stmts = bind_then_body(ctx, loop_var_bind, body)?;
+    let then_block = ctx.push_stmt(TypedStmtKind::Block(then_stmts), span)?;
 
-    let break_stmt = ctx.push_stmt(TypedStmtKind::Break, span);
-    let else_block = ctx.push_stmt(TypedStmtKind::Block(vec![break_stmt]), span);
+    let break_stmt = ctx.push_stmt(TypedStmtKind::Break, span)?;
+    let else_block = ctx.push_stmt(TypedStmtKind::Block(vec![break_stmt]), span)?;
     let guard = ctx.push_stmt(
         TypedStmtKind::If {
             condition: cond,
@@ -138,58 +171,79 @@ fn lower(ctx: &mut DesugarCtx, id: StmtId) {
             else_block: Some(else_block),
         },
         span,
-    );
-    let new_body = ctx.push_stmt(TypedStmtKind::Block(vec![inc_stmt, guard]), span);
+    )?;
+    let new_body = ctx.push_stmt(TypedStmtKind::Block(vec![inc_stmt, guard]), span)?;
 
-    let cond_true = ctx.bool_true();
+    let cond_true = ctx.bool_true()?;
     let while_stmt = ctx.push_stmt(
         TypedStmtKind::While {
             condition: cond_true,
             body: new_body,
         },
         span,
-    );
+    )?;
 
-    ctx.ta.stmt_mut(id).kind = TypedStmtKind::Block(vec![const_arr, let_idx, while_stmt]);
+    ctx.ta
+        .try_stmt_mut(id)
+        .map_err(crate::typechecker::arena_failure)?
+        .kind = TypedStmtKind::Block(vec![const_arr, let_idx, while_stmt]);
+    Ok(())
 }
 
-fn bind_then_body(ctx: &DesugarCtx, loop_var_bind: StmtId, body: StmtId) -> Vec<StmtId> {
-    let stmts = ctx.body_as_stmts(body);
+fn bind_then_body(
+    ctx: &DesugarCtx,
+    loop_var_bind: StmtId,
+    body: StmtId,
+) -> Result<Vec<StmtId>, crate::compiler_error::CompilerFailure> {
+    let stmts = ctx.body_as_stmts(body)?;
     let mut out = Vec::with_capacity(stmts.len() + 1);
     out.push(loop_var_bind);
     out.extend(stmts);
-    out
+    Ok(out)
 }
 
-fn build_array_length(ctx: &mut DesugarCtx, arr_ident: &Ident, arr_ty: Type) -> crate::ExprId {
-    let receiver = ctx.local_ref(arr_ident.clone(), arr_ty);
+fn build_array_length(
+    ctx: &mut DesugarCtx,
+    arr_ident: &Ident,
+    arr_ty: Type,
+) -> Result<crate::ExprId, crate::compiler_error::CompilerFailure> {
+    let receiver = ctx.local_ref(arr_ident.clone(), arr_ty)?;
     let gspan = ctx.gen_span();
-    ctx.ta.push_expr(TypedExpr {
-        kind: TypedExprKind::InterfacePropertyAccess {
-            receiver,
-            iface: crate::mangle::prelude("Array"),
-            name: Ident {
-                name: "length".to_string(),
-                span: gspan,
+    ctx.ta
+        .try_push_expr(TypedExpr {
+            kind: TypedExprKind::InterfacePropertyAccess {
+                receiver,
+                iface: crate::mangle::prelude("Array"),
+                name: Ident {
+                    name: "length".to_string(),
+                    span: gspan,
+                },
             },
-        },
-        span: gspan,
-        ty: Type::Number,
-    })
+            span: gspan,
+            ty: Type::Number,
+        })
+        .map_err(crate::typechecker::arena_failure)
 }
 
-fn build_increment(ctx: &mut DesugarCtx, idx_ident: &Ident, span: Span) -> StmtId {
-    let idx_ref = ctx.local_ref(idx_ident.clone(), Type::Number);
-    let one = ctx.number_lit(1.0);
-    let plus = ctx.ta.push_expr(TypedExpr {
-        kind: TypedExprKind::Binary {
-            op: BinOp::Add,
-            lhs: idx_ref,
-            rhs: one,
-        },
-        span,
-        ty: Type::Number,
-    });
+fn build_increment(
+    ctx: &mut DesugarCtx,
+    idx_ident: &Ident,
+    span: Span,
+) -> Result<StmtId, crate::compiler_error::CompilerFailure> {
+    let idx_ref = ctx.local_ref(idx_ident.clone(), Type::Number)?;
+    let one = ctx.number_lit(1.0)?;
+    let plus = ctx
+        .ta
+        .try_push_expr(TypedExpr {
+            kind: TypedExprKind::Binary {
+                op: BinOp::Add,
+                lhs: idx_ref,
+                rhs: one,
+            },
+            span,
+            ty: Type::Number,
+        })
+        .map_err(crate::typechecker::arena_failure)?;
     ctx.push_stmt(
         TypedStmtKind::AssignLocal {
             ident: idx_ident.clone(),
@@ -214,12 +268,12 @@ fn lower_iterator_like(
     body: StmtId,
     kind: ForOfKind,
     span: Span,
-) {
-    let it_ident = ctx.fresh_name("it");
-    let r_ident = ctx.fresh_name("r");
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let it_ident = ctx.fresh_name("it")?;
+    let r_ident = ctx.fresh_name("r")?;
     // Distinct from __r: the shadow's define_local runs before source is emitted,
     // so a shared name would make source resolve to the uninitialized shadow.
-    let r_narrow_ident = ctx.fresh_name("r_narrow");
+    let r_narrow_ident = ctx.fresh_name("r_narrow")?;
 
     let iter_ty = Type::prelude_interface("Iterator", vec![element_ty.clone()]);
 
@@ -277,29 +331,41 @@ fn lower_iterator_like(
     let it_init = match kind {
         ForOfKind::Iterator => iter,
         ForOfKind::Iterable => {
-            let receiver_iface = match ctx.ta.expr(iter).ty.peel() {
+            let receiver_iface = match ctx
+                .ta
+                .try_expr(iter)
+                .map_err(crate::typechecker::arena_failure)?
+                .ty
+                .peel()
+            {
                 Type::InterfaceRef { mangled, .. } | Type::ClassRef { mangled, .. } => {
                     mangled.clone()
                 }
                 Type::String => crate::mangle::prelude("String"),
                 _ => crate::mangle::prelude("Iterable"),
             };
-            ctx.ta.push_expr(TypedExpr {
-                kind: TypedExprKind::MethodCall {
-                    receiver: iter,
-                    iface: receiver_iface,
-                    name: Ident {
-                        name: "iterator".to_string(),
-                        span,
+            ctx.ta
+                .try_push_expr(TypedExpr {
+                    kind: TypedExprKind::MethodCall {
+                        receiver: iter,
+                        iface: receiver_iface,
+                        name: Ident {
+                            name: "iterator".to_string(),
+                            span,
+                        },
+                        args: Vec::new(),
+                        type_predicate: None,
                     },
-                    args: Vec::new(),
-                    type_predicate: None,
-                },
-                span,
-                ty: iter_ty.clone(),
-            })
+                    span,
+                    ty: iter_ty.clone(),
+                })
+                .map_err(crate::typechecker::arena_failure)?
         }
-        _ => unreachable!("lower_iterator_like only handles Iterator / Iterable"),
+        _ => {
+            return Err(crate::typechecker::invariant_failure(
+                "expected Iterator or Iterable lowering kind",
+            ));
+        }
     };
     let const_it = ctx.push_stmt(
         TypedStmtKind::Const {
@@ -309,23 +375,26 @@ fn lower_iterator_like(
             doc: None,
         },
         span,
-    );
+    )?;
 
-    let it_ref = ctx.local_ref(it_ident.clone(), iter_ty.clone());
-    let next_call = ctx.ta.push_expr(TypedExpr {
-        kind: TypedExprKind::MethodCall {
-            receiver: it_ref,
-            iface: crate::mangle::prelude("Iterator"),
-            name: Ident {
-                name: "next".to_string(),
-                span,
+    let it_ref = ctx.local_ref(it_ident.clone(), iter_ty.clone())?;
+    let next_call = ctx
+        .ta
+        .try_push_expr(TypedExpr {
+            kind: TypedExprKind::MethodCall {
+                receiver: it_ref,
+                iface: crate::mangle::prelude("Iterator"),
+                name: Ident {
+                    name: "next".to_string(),
+                    span,
+                },
+                args: Vec::new(),
+                type_predicate: None,
             },
-            args: Vec::new(),
-            type_predicate: None,
-        },
-        span,
-        ty: result_ty.clone(),
-    });
+            span,
+            ty: result_ty.clone(),
+        })
+        .map_err(crate::typechecker::arena_failure)?;
     let const_r = ctx.push_stmt(
         TypedStmtKind::Const {
             name: r_ident.clone(),
@@ -334,22 +403,25 @@ fn lower_iterator_like(
             doc: None,
         },
         span,
-    );
+    )?;
 
-    let r_ref_for_done = ctx.local_ref(r_ident.clone(), result_ty.clone());
-    let done_access = ctx.ta.push_expr(TypedExpr {
-        kind: TypedExprKind::FieldAccess {
-            receiver: r_ref_for_done,
-            name: Ident {
-                name: "done".to_string(),
-                span,
+    let r_ref_for_done = ctx.local_ref(r_ident.clone(), result_ty.clone())?;
+    let done_access = ctx
+        .ta
+        .try_push_expr(TypedExpr {
+            kind: TypedExprKind::FieldAccess {
+                receiver: r_ref_for_done,
+                name: Ident {
+                    name: "done".to_string(),
+                    span,
+                },
             },
-        },
-        span,
-        ty: Type::Boolean,
-    });
-    let break_stmt = ctx.push_stmt(TypedStmtKind::Break, span);
-    let then_block = ctx.push_stmt(TypedStmtKind::Block(vec![break_stmt]), span);
+            span,
+            ty: Type::Boolean,
+        })
+        .map_err(crate::typechecker::arena_failure)?;
+    let break_stmt = ctx.push_stmt(TypedStmtKind::Break, span)?;
+    let then_block = ctx.push_stmt(TypedStmtKind::Block(vec![break_stmt]), span)?;
     let if_break = ctx.push_stmt(
         TypedStmtKind::If {
             condition: done_access,
@@ -357,7 +429,7 @@ fn lower_iterator_like(
             else_block: None,
         },
         span,
-    );
+    )?;
 
     let narrow_path = ReferencePath::root(BindingId::Local {
         name: r_ident.name.clone(),
@@ -368,27 +440,33 @@ fn lower_iterator_like(
         to_ty: yield_alias_ty.clone(),
         cast_kind: CastKind::RefSubtype,
     };
-    let narrow_source = ctx.local_ref(r_ident.clone(), result_ty.clone());
+    let narrow_source = ctx.local_ref(r_ident.clone(), result_ty.clone())?;
 
-    let r_narrow_ref = ctx.ta.push_expr(TypedExpr {
-        kind: TypedExprKind::LocalNarrowRef {
-            binding: r_narrow_ident.clone(),
-            path: narrow_path.clone(),
-        },
-        span,
-        ty: yield_alias_ty.clone(),
-    });
-    let value_access = ctx.ta.push_expr(TypedExpr {
-        kind: TypedExprKind::FieldAccess {
-            receiver: r_narrow_ref,
-            name: Ident {
-                name: "value".to_string(),
-                span,
+    let r_narrow_ref = ctx
+        .ta
+        .try_push_expr(TypedExpr {
+            kind: TypedExprKind::LocalNarrowRef {
+                binding: r_narrow_ident.clone(),
+                path: narrow_path.clone(),
             },
-        },
-        span,
-        ty: element_ty.clone(),
-    });
+            span,
+            ty: yield_alias_ty.clone(),
+        })
+        .map_err(crate::typechecker::arena_failure)?;
+    let value_access = ctx
+        .ta
+        .try_push_expr(TypedExpr {
+            kind: TypedExprKind::FieldAccess {
+                receiver: r_narrow_ref,
+                name: Ident {
+                    name: "value".to_string(),
+                    span,
+                },
+            },
+            span,
+            ty: element_ty.clone(),
+        })
+        .map_err(crate::typechecker::arena_failure)?;
     let loop_var_bind = match binding_kind {
         BindingKind::Const => ctx.push_stmt(
             TypedStmtKind::Const {
@@ -398,7 +476,7 @@ fn lower_iterator_like(
                 doc: None,
             },
             span,
-        ),
+        )?,
         BindingKind::Let => ctx.push_stmt(
             TypedStmtKind::Let {
                 name: name.clone(),
@@ -408,10 +486,10 @@ fn lower_iterator_like(
                 doc: None,
             },
             span,
-        ),
+        )?,
     };
-    let narrow_body_stmts = bind_then_body(ctx, loop_var_bind, body);
-    let narrow_body = ctx.push_stmt(TypedStmtKind::Block(narrow_body_stmts), span);
+    let narrow_body_stmts = bind_then_body(ctx, loop_var_bind, body)?;
+    let narrow_body = ctx.push_stmt(TypedStmtKind::Block(narrow_body_stmts), span)?;
 
     let narrow_region = ctx.push_stmt(
         TypedStmtKind::NarrowRegion {
@@ -422,26 +500,29 @@ fn lower_iterator_like(
             body: narrow_body,
         },
         span,
-    );
+    )?;
 
-    let true_lit = ctx.ta.push_expr(TypedExpr {
-        kind: TypedExprKind::Boolean(true),
-        span,
-        ty: Type::Boolean,
-    });
+    let true_lit = ctx
+        .ta
+        .try_push_expr(TypedExpr {
+            kind: TypedExprKind::Boolean(true),
+            span,
+            ty: Type::Boolean,
+        })
+        .map_err(crate::typechecker::arena_failure)?;
     let loop_body = ctx.push_stmt(
         TypedStmtKind::Block(vec![const_r, if_break, narrow_region]),
         span,
-    );
+    )?;
     let while_stmt = ctx.push_stmt(
         TypedStmtKind::While {
             condition: true_lit,
             body: loop_body,
         },
         span,
-    );
+    )?;
 
-    let finally_block = synthesize_close_finally(ctx, &it_ident, &iter_ty, span);
+    let finally_block = synthesize_close_finally(ctx, &it_ident, &iter_ty, span)?;
 
     let try_stmt = ctx.push_stmt(
         TypedStmtKind::Try {
@@ -450,8 +531,12 @@ fn lower_iterator_like(
             finally: Some(finally_block),
         },
         span,
-    );
-    ctx.ta.stmt_mut(id).kind = TypedStmtKind::Block(vec![const_it, try_stmt]);
+    )?;
+    ctx.ta
+        .try_stmt_mut(id)
+        .map_err(crate::typechecker::arena_failure)?
+        .kind = TypedStmtKind::Block(vec![const_it, try_stmt]);
+    Ok(())
 }
 
 fn synthesize_close_finally(
@@ -459,9 +544,9 @@ fn synthesize_close_finally(
     it_ident: &Ident,
     iter_ty: &Type,
     span: Span,
-) -> StmtId {
-    let close_ident = ctx.fresh_name("close");
-    let close_narrow_ident = ctx.fresh_name("close_narrow");
+) -> Result<StmtId, crate::compiler_error::CompilerFailure> {
+    let close_ident = ctx.fresh_name("close")?;
+    let close_narrow_ident = ctx.fresh_name("close_narrow")?;
 
     let close_fn_ty = Type::Function {
         params: Vec::new(),
@@ -472,18 +557,21 @@ fn synthesize_close_finally(
     let close_opt_ty = Type::union(vec![close_fn_ty.clone(), Type::Null]);
 
     // Iterator uses VTable dispatch: emit as FieldAccess, not MethodCall.
-    let it_ref_for_close = ctx.local_ref(it_ident.clone(), iter_ty.clone());
-    let close_access = ctx.ta.push_expr(TypedExpr {
-        kind: TypedExprKind::FieldAccess {
-            receiver: it_ref_for_close,
-            name: Ident {
-                name: "close".to_string(),
-                span,
+    let it_ref_for_close = ctx.local_ref(it_ident.clone(), iter_ty.clone())?;
+    let close_access = ctx
+        .ta
+        .try_push_expr(TypedExpr {
+            kind: TypedExprKind::FieldAccess {
+                receiver: it_ref_for_close,
+                name: Ident {
+                    name: "close".to_string(),
+                    span,
+                },
             },
-        },
-        span,
-        ty: close_opt_ty.clone(),
-    });
+            span,
+            ty: close_opt_ty.clone(),
+        })
+        .map_err(crate::typechecker::arena_failure)?;
     let const_close = ctx.push_stmt(
         TypedStmtKind::Const {
             name: close_ident.clone(),
@@ -492,47 +580,59 @@ fn synthesize_close_finally(
             doc: None,
         },
         span,
-    );
+    )?;
 
-    let close_ref_for_check = ctx.local_ref(close_ident.clone(), close_opt_ty.clone());
-    let null_lit = ctx.ta.push_expr(TypedExpr {
-        kind: TypedExprKind::Null,
-        span,
-        ty: Type::Null,
-    });
-    let null_check = ctx.ta.push_expr(TypedExpr {
-        kind: TypedExprKind::Binary {
-            op: BinOp::NotEq,
-            lhs: close_ref_for_check,
-            rhs: null_lit,
-        },
-        span,
-        ty: Type::Boolean,
-    });
+    let close_ref_for_check = ctx.local_ref(close_ident.clone(), close_opt_ty.clone())?;
+    let null_lit = ctx
+        .ta
+        .try_push_expr(TypedExpr {
+            kind: TypedExprKind::Null,
+            span,
+            ty: Type::Null,
+        })
+        .map_err(crate::typechecker::arena_failure)?;
+    let null_check = ctx
+        .ta
+        .try_push_expr(TypedExpr {
+            kind: TypedExprKind::Binary {
+                op: BinOp::NotEq,
+                lhs: close_ref_for_check,
+                rhs: null_lit,
+            },
+            span,
+            ty: Type::Boolean,
+        })
+        .map_err(crate::typechecker::arena_failure)?;
 
-    let narrow_source = ctx.local_ref(close_ident.clone(), close_opt_ty.clone());
+    let narrow_source = ctx.local_ref(close_ident.clone(), close_opt_ty.clone())?;
     let narrow_path = ReferencePath::root(BindingId::Local {
         name: close_ident.name.clone(),
         decl_scope: ScopeId(0),
     });
-    let close_narrow_ref = ctx.ta.push_expr(TypedExpr {
-        kind: TypedExprKind::LocalNarrowRef {
-            binding: close_narrow_ident.clone(),
-            path: narrow_path.clone(),
-        },
-        span,
-        ty: close_fn_ty.clone(),
-    });
-    let call_expr = ctx.ta.push_expr(TypedExpr {
-        kind: TypedExprKind::CallClosure {
-            callee: close_narrow_ref,
-            args: Vec::new(),
-        },
-        span,
-        ty: Type::Void,
-    });
-    let call_stmt = ctx.push_stmt(TypedStmtKind::Expr(call_expr), span);
-    let narrow_body = ctx.push_stmt(TypedStmtKind::Block(vec![call_stmt]), span);
+    let close_narrow_ref = ctx
+        .ta
+        .try_push_expr(TypedExpr {
+            kind: TypedExprKind::LocalNarrowRef {
+                binding: close_narrow_ident.clone(),
+                path: narrow_path.clone(),
+            },
+            span,
+            ty: close_fn_ty.clone(),
+        })
+        .map_err(crate::typechecker::arena_failure)?;
+    let call_expr = ctx
+        .ta
+        .try_push_expr(TypedExpr {
+            kind: TypedExprKind::CallClosure {
+                callee: close_narrow_ref,
+                args: Vec::new(),
+            },
+            span,
+            ty: Type::Void,
+        })
+        .map_err(crate::typechecker::arena_failure)?;
+    let call_stmt = ctx.push_stmt(TypedStmtKind::Expr(call_expr), span)?;
+    let narrow_body = ctx.push_stmt(TypedStmtKind::Block(vec![call_stmt]), span)?;
     let cast_info = CastInfo {
         from_ty: close_opt_ty.clone(),
         to_ty: close_fn_ty,
@@ -547,9 +647,9 @@ fn synthesize_close_finally(
             body: narrow_body,
         },
         span,
-    );
+    )?;
 
-    let then_block = ctx.push_stmt(TypedStmtKind::Block(vec![narrow_region]), span);
+    let then_block = ctx.push_stmt(TypedStmtKind::Block(vec![narrow_region]), span)?;
     let if_stmt = ctx.push_stmt(
         TypedStmtKind::If {
             condition: null_check,
@@ -557,7 +657,32 @@ fn synthesize_close_finally(
             else_block: None,
         },
         span,
-    );
+    )?;
 
     ctx.push_stmt(TypedStmtKind::Block(vec![const_close, if_stmt]), span)
+}
+
+#[cfg(test)]
+mod invariant_tests {
+    use super::*;
+    #[test]
+    fn wrong_for_of_target_is_a_fatal_failure() {
+        let mut ta = crate::TypedAst::with_package("test");
+        let file = crate::FileId(0);
+        let id = ta
+            .try_push_stmt(crate::TypedStmt {
+                kind: TypedStmtKind::Block(Vec::new()),
+                span: Span::at(file),
+            })
+            .unwrap();
+        let mut ctx = DesugarCtx {
+            ta: &mut ta,
+            file,
+            next_temp: 0,
+        };
+        assert!(matches!(
+            lower(&mut ctx, id),
+            Err(crate::compiler_error::CompilerFailure::Internal { .. })
+        ));
+    }
 }

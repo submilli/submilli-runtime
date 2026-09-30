@@ -20,7 +20,7 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
     let source = fs::read_to_string(&args.script)
         .with_context(|| format!("reading {}", args.script.display()))?;
     let filename = args.script.to_string_lossy().into_owned();
-    let (sources, file) = Sources::single(filename, source.clone());
+    let (sources, file) = Sources::single(filename, source.clone())?;
 
     match typecheck(&source, file) {
         Ok(warnings) => {

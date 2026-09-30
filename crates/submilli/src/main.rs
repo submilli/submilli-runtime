@@ -61,7 +61,19 @@ fn main() -> anyhow::Result<ExitCode> {
         commands::skill::warn_if_outdated();
     }
     record_invocation(&cli.cmd);
-    match cli.cmd {
+    // Compilation recurses with program nesting and needs the interpreter's
+    // documented stack; the main thread's size is platform-dependent.
+    std::thread::Builder::new()
+        .name("submilli-command".into())
+        .stack_size(interpreter::compiler_limits::COMPILER_STACK_BYTES)
+        .spawn(move || execute(cli.cmd))
+        .map_err(|error| anyhow::anyhow!("cannot start the command thread: {error}"))?
+        .join()
+        .map_err(|_| anyhow::anyhow!("the command thread panicked"))?
+}
+
+fn execute(cmd: Cmd) -> anyhow::Result<ExitCode> {
+    match cmd {
         Cmd::Run(args) => commands::run::execute(args),
         Cmd::Check(args) => commands::check::execute(args),
         Cmd::Build(args) => commands::build::execute(args),

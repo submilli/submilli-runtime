@@ -192,7 +192,7 @@ async fn auth_proxy_injects_store_secret_to_real_server() {
     };
     let router = app(AppState::new(config).expect("AppState"));
 
-    let blueprint = "name: auth-store-demo\nsecrets:\n  TOK:\n    store: api/token\nauth_proxy:\n  - host: 127.0.0.1\n    headers:\n      Authorization: \"Bearer ${secrets.TOK}\"\npermissions:\n  main:\n    - capability: http.get\n      action: allow\n";
+    let blueprint = "name: auth-store-demo\nallow_insecure_http: true\nsecrets:\n  TOK:\n    store: api/token\nauth_proxy:\n  - host: 127.0.0.1\n    allow_insecure_http: true\n    headers:\n      Authorization: \"Bearer ${secrets.TOK}\"\npermissions:\n  main:\n    - capability: http.get\n      action: allow\n";
     let (status, body) = post(&router, "/v1/blueprints", json!({ "yaml": blueprint })).await;
     assert_eq!(status, StatusCode::OK, "blueprint add failed: {body}");
 
@@ -226,7 +226,7 @@ async fn auth_proxy_bearer_method_injects_header() {
     let (port, captured) = spawn_mock(format!("Bearer {BEARER_TOKEN}"));
 
     let blueprint = format!(
-        "name: auth-bearer-demo\nsecrets:\n  TOK:\n    env: {BEARER_ENV}\nauth_proxy:\n  - host: 127.0.0.1\n    auth:\n      bearer: TOK\npermissions:\n  main:\n    - capability: http.get\n      action: allow\n"
+        "name: auth-bearer-demo\nallow_insecure_http: true\nsecrets:\n  TOK:\n    env: {BEARER_ENV}\nauth_proxy:\n  - host: 127.0.0.1\n    allow_insecure_http: true\n    auth:\n      bearer: TOK\npermissions:\n  main:\n    - capability: http.get\n      action: allow\n"
     );
     let router = router_seeded(ServerConfig::default(), &blueprint);
 
@@ -264,7 +264,7 @@ async fn auth_proxy_basic_method_injects_base64_header() {
     let (port, captured) = spawn_mock(expected.clone());
 
     let blueprint = format!(
-        "name: auth-basic-demo\nsecrets:\n  PW:\n    env: {BASIC_ENV}\nauth_proxy:\n  - host: 127.0.0.1\n    auth:\n      basic:\n        username: alice\n        password: PW\npermissions:\n  main:\n    - capability: http.get\n      action: allow\n"
+        "name: auth-basic-demo\nallow_insecure_http: true\nsecrets:\n  PW:\n    env: {BASIC_ENV}\nauth_proxy:\n  - host: 127.0.0.1\n    allow_insecure_http: true\n    auth:\n      basic:\n        username: alice\n        password: PW\npermissions:\n  main:\n    - capability: http.get\n      action: allow\n"
     );
     let router = router_seeded(ServerConfig::default(), &blueprint);
 
@@ -288,4 +288,46 @@ async fn auth_proxy_basic_method_injects_base64_header() {
         Some(expected.as_str()),
         "mock did not see the base64-encoded `auth: basic` header"
     );
+}
+
+#[tokio::test]
+async fn plain_http_denials_reach_execute_without_touching_the_network() {
+    for (blueprint, rule) in [(false, false), (false, true), (true, false)] {
+        let yaml = format!(
+            "name: gates\ndefault: allow\nallow_insecure_http: {blueprint}\nsecrets:\n  K: {{ file: /nonexistent/sub1105-secret }}\nauth_proxy:\n- host: 127.0.0.1\n  allow_insecure_http: {rule}\n  auth: {{ bearer: K }}\n"
+        );
+        let router = router_seeded(ServerConfig::default(), &yaml);
+        for operation in [
+            "get(\"http://127.0.0.1:1/?token=never-print-this\");",
+            "download(\"http://127.0.0.1:1/?token=never-print-this\", \"/payload\");",
+        ] {
+            let code = format!(
+                r#"import {{ get, download }} from "submilli:http";
+                function main(): string {{
+                    try {{ {operation} return "allowed"; }}
+                    catch (error) {{ return (error as Error).message; }}
+                }}"#
+            );
+            let (_, body) = post(
+                &router,
+                "/v1/execute",
+                json!({
+                    "blueprint": "gates", "code": code,
+                }),
+            )
+            .await;
+            assert!(body["error"].is_null(), "{body}");
+            let error = body["result"].as_str().unwrap();
+            assert!(error.contains("HTTPS required"), "{body}");
+            assert!(!error.contains("never-print-this"), "{body}");
+            assert!(
+                error.contains(if blueprint {
+                    "auth_proxy rule"
+                } else {
+                    "blueprint"
+                }),
+                "{body}"
+            );
+        }
+    }
 }

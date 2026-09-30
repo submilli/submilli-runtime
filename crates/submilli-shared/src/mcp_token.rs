@@ -319,6 +319,8 @@ impl OAuthTokenManager {
             timeout_ms: EXCHANGE_TIMEOUT_MS,
             max_response_size: MAX_RESPONSE_SIZE,
             decompress: false,
+            transport_policy: None,
+            redirect_guard: None,
         };
 
         let resp = self

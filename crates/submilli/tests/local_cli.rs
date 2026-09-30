@@ -364,6 +364,28 @@ fn lint_errors_for_missing_requires_rule() {
 }
 
 #[test]
+fn lint_keeps_a_narrowed_requires_rule() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_capability_packages(home.path());
+    let file = home.path().join("blueprint.yaml");
+    let blueprint = "name: x\npackages:\n  - \"@acme/app\"\npermissions:\n  \"@acme/app\":\n    - capability: acme.com/charge\n      filter: customer == \"cus_123\" and amount < 500\n      action: allow\n";
+    write_file(&file, blueprint);
+
+    let out = run_with_home(
+        &[os("blueprint"), os("lint"), os("--fix"), file.as_os_str()],
+        home.path(),
+    );
+
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("warning:"), "missing warning in {err}");
+    assert!(err.contains("grants it differently"), "got: {err}");
+    let updated = fs::read_to_string(&file).expect("read blueprint");
+    let parsed = submilli_blueprint::parse(&updated).expect("blueprint parses");
+    assert_eq!(parsed.permissions["@acme/app"].len(), 1, "{updated}");
+}
+
+#[test]
 fn lint_fix_adds_missing_capability_rules() {
     let home = tempfile::tempdir().expect("home tempdir");
     let _project = publish_capability_packages(home.path());
@@ -947,5 +969,71 @@ fn lint_does_not_warn_on_the_same_rule_under_a_package() {
     assert!(
         !err.contains("has no effect"),
         "a package may hold this rule; got: {err}"
+    );
+}
+
+#[test]
+fn blueprint_http_denial_is_enforced_by_local_run() {
+    let temp = tempfile::tempdir().unwrap();
+    let script = temp.path().join("probe.ts");
+    let blueprint = temp.path().join("blueprint.yaml");
+    fs::write(
+        &script,
+        r#"
+        import { get } from "submilli:http";
+        function main(): string {
+            try { get("http://127.0.0.1:1/?token=never-print-this"); return "allowed"; }
+            catch (error) { return (error as Error).message; }
+        }
+    "#,
+    )
+    .unwrap();
+    for (allow, rule) in [(false, false), (false, true), (true, false)] {
+        fs::write(&blueprint, format!("name: gates\ndefault: allow\nallow_insecure_http: {allow}\nauth_proxy:\n- host: 127.0.0.1\n  allow_insecure_http: {rule}\n  headers: {{ X-Test: dummy }}\n")).unwrap();
+        let result = run_with_home(
+            &[
+                os("run"),
+                script.as_os_str(),
+                os("--blueprint"),
+                blueprint.as_os_str(),
+            ],
+            temp.path(),
+        );
+        assert!(result.status.success(), "{}", stderr(&result));
+        let message = stdout(&result);
+        assert!(message.contains("HTTPS required"), "{message}");
+        assert!(!message.contains("never-print-this"), "{message}");
+        assert!(message.contains(if allow {
+            "auth_proxy rule"
+        } else {
+            "blueprint"
+        }));
+    }
+}
+
+/// A callback re-enters Wasm on the native stack. With a raised `--max-stack`,
+/// the run's thread must be sized to match, or deep re-entry overflows the
+/// thread and aborts the process instead of ending the run.
+#[test]
+fn deep_reentry_under_a_raised_stack_ends_the_run_cleanly() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let script = dir.path().join("reentry.ts");
+    write_file(
+        &script,
+        "function depth(n: number): number {\n  if (n === 0) { return 0; }\n  return [n].map((x: number) => depth(x - 1))[0] + 1;\n}\nfunction main(): number { return depth(200000); }\n",
+    );
+
+    let out = run(&[
+        os("run"),
+        os("--max-stack"),
+        os("1572864"),
+        script.as_os_str(),
+    ]);
+
+    assert_eq!(out.status.code(), Some(1), "stderr: {}", stderr(&out));
+    assert!(
+        stderr(&out).contains("call stack exhausted"),
+        "stderr: {}",
+        stderr(&out)
     );
 }

@@ -31,6 +31,7 @@ const BLUEPRINT: &str = "idempotency";
 
 const POLICY: &str = "\
 name: idempotency
+allow_insecure_http: true
 default: deny
 vfs: none
 permissions:

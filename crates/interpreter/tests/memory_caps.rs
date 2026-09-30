@@ -334,3 +334,91 @@ function main(): void {
         "expected memory/cap language in trap, got: {msg}"
     );
 }
+
+/// A download stops at the VFS's `size_limit`: the program can catch the refusal,
+/// the partial file is gone, and the space it held is free again.
+#[test]
+fn download_stops_at_the_vfs_size_limit() {
+    const LIMIT: u64 = 1024 * 1024;
+    let src = r#"
+import { download } from "submilli:http";
+import { exists, writeText } from "submilli:fs";
+function main(): void {
+  let refused = false;
+  try {
+    download("https://example.test/big.bin", "/big.bin", { maxBytes: 8388608 });
+  } catch (e) {
+    refused = e instanceof RangeError;
+  }
+  assert(refused, "a 4 MB download under a 1 MB limit is refused");
+  assert(!exists("/big.bin"), "nothing is left behind");
+  writeText("/after.txt", "x".repeat(1000000));
+}
+"#;
+
+    let compiled = compile_script(src, "size_limit.subm", interpreter::FileId(0), &[], &[])
+        .expect("compile clean");
+    let cfg = RuntimeConfig::default();
+    let engine = cfg.engine().expect("engine");
+    let vfs = Vfs::tempdir().expect("tempdir").with_size_limit(LIMIT);
+    let mut data = StoreData::with_vfs(vfs);
+    data.http_client = Arc::new(StreamingByteClient {
+        body_size: 4 * 1024 * 1024,
+    });
+    let mut store = cfg.store(&engine, data).expect("store");
+    let module = Module::new(&engine, &compiled.wasm).expect("module");
+    let mut linker = Linker::<StoreData>::new(&engine);
+    let instance = pollster::block_on(async {
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .expect("install runtime");
+        linker
+            .instantiate_async(&mut store, &module)
+            .await
+            .expect("instantiate")
+    });
+    pollster::block_on(dispatch_main_async(&mut store, &instance)).expect("main asserts hold");
+}
+
+/// A download that overwrites a larger file is counted by its growth over it, and
+/// frees the difference, so the space is there for the next write.
+#[test]
+fn a_download_overwrite_is_counted_by_its_growth() {
+    const LIMIT: u64 = 1024 * 1024;
+    let src = r#"
+import { download } from "submilli:http";
+import { writeText } from "submilli:fs";
+function main(): void {
+  download("https://example.test/big.bin", "/big.bin", { maxBytes: 8388608, overwrite: true });
+  writeText("/after.txt", "x".repeat(500000));
+}
+"#;
+
+    let compiled = compile_script(src, "overwrite.subm", interpreter::FileId(0), &[], &[])
+        .expect("compile clean");
+    let cfg = RuntimeConfig::default();
+    let engine = cfg.engine().expect("engine");
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("big.bin"), vec![b'o'; 900 * 1024]).expect("seed");
+    let vfs = Vfs::external(dir.path().to_path_buf())
+        .expect("external")
+        .with_size_limit(LIMIT);
+    let mut data = StoreData::with_vfs(vfs);
+    data.http_client = Arc::new(StreamingByteClient {
+        body_size: 400 * 1024,
+    });
+    let mut store = cfg.store(&engine, data).expect("store");
+    let module = Module::new(&engine, &compiled.wasm).expect("module");
+    let mut linker = Linker::<StoreData>::new(&engine);
+    let instance = pollster::block_on(async {
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .expect("install runtime");
+        linker
+            .instantiate_async(&mut store, &module)
+            .await
+            .expect("instantiate")
+    });
+    pollster::block_on(dispatch_main_async(&mut store, &instance))
+        .expect("the overwrite freed 500 KB for the next write");
+}

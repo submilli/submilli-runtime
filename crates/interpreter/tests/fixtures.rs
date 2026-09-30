@@ -208,19 +208,24 @@ fn run_fixtures_parallel(paths: Vec<PathBuf>, runtime: Arc<PreparedRuntime>) -> 
     let mut handles = Vec::new();
     for chunk in chunks {
         let runtime = Arc::clone(&runtime);
-        handles.push(std::thread::spawn(move || {
-            let tokio = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("tokio runtime");
-            chunk
-                .into_iter()
-                .map(|path| {
-                    let result = run_one(&path, &runtime, &tokio);
-                    FixtureResult { path, result }
+        handles.push(
+            std::thread::Builder::new()
+                .stack_size(interpreter::compiler_limits::COMPILER_STACK_BYTES)
+                .spawn(move || {
+                    let tokio = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .expect("tokio runtime");
+                    chunk
+                        .into_iter()
+                        .map(|path| {
+                            let result = run_one(&path, &runtime, &tokio);
+                            FixtureResult { path, result }
+                        })
+                        .collect::<Vec<_>>()
                 })
-                .collect::<Vec<_>>()
-        }));
+                .expect("spawn fixture worker"),
+        );
     }
 
     handles
@@ -395,7 +400,7 @@ fn run_one(
             match outcome {
                 Ok(_) => Ok(()),
                 Err(err) => {
-                    let (sources, file) = Sources::single(filename.as_str(), src);
+                    let (sources, file) = Sources::single(filename.as_str(), src).unwrap();
                     // The rendered backtrace already carries the `error: …` header.
                     Err(
                         match render_backtrace(&err, &sources, file, BacktraceMode::Full) {
@@ -441,9 +446,9 @@ fn run_multi(path: &Path) -> Result<(), String> {
             }
             return Err(message);
         }
-        let file_id = sources.add(module.clone(), src.clone());
+        let file_id = sources.add(module.clone(), src.clone()).unwrap();
         let (mut ast, mut diags) = parse_source(&src, file_id);
-        lower_patterns(&mut ast);
+        ast = lower_patterns(ast).unwrap();
         all_diags.append(&mut diags);
         owned_asts.push((module, file_id, ast));
     }
@@ -1201,7 +1206,7 @@ fn assert_multi_diagnostics(
 }
 
 fn render_diags(diags: &[Diagnostic], filename: &str, src: &str) -> String {
-    let (sources, _) = Sources::single(filename, src);
+    let (sources, _) = Sources::single(filename, src).unwrap();
     diags
         .iter()
         .map(|d| diagnostics::render(d, &sources))

@@ -204,8 +204,26 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
         harness_secrets,
     } = inputs;
 
-    let parsed = runner::parse(code);
-    let script_imports = parsed.imports();
+    let parsed = match runner::parse(code) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return ExecuteOutcome::undispatched(error_response(
+                session_id,
+                ErrorKind::RuntimeError,
+                error.to_string(),
+            ));
+        }
+    };
+    let script_imports = match parsed.imports() {
+        Ok(imports) => imports,
+        Err(message) => {
+            return ExecuteOutcome::undispatched(error_response(
+                session_id,
+                ErrorKind::RuntimeError,
+                message,
+            ));
+        }
+    };
 
     let manager = state.session_manager();
     if let Err(err) = manager.ensure(session_id, &blueprint).await {
@@ -224,7 +242,7 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
     // `idle_timeout` on its own is still collected mid-flight. The write is
     // debounced (`PERSIST_INTERVAL`), so this costs nothing per call.
     manager.touch(session_id).await;
-    let (vfs, vfs_info) = match manager.vfs_for_execute(session_id, &blueprint) {
+    let (vfs, vfs_info) = match manager.vfs_for_execute(session_id, &blueprint).await {
         Ok(pair) => pair,
         Err(err) => {
             return ExecuteOutcome::undispatched(error_response(

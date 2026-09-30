@@ -1,4 +1,6 @@
-use super::storage::{Files, MAX_PATHS, Snapshot, validate_branch, validate_path};
+use super::storage::{
+    Files, MAX_PATHS, Snapshot, validate_branch, validate_new_ref_name, validate_path,
+};
 use gix::bstr::ByteSlice;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -530,7 +532,7 @@ pub fn commit(snapshot: &Snapshot, message: &str, identity: &super::GitConfig) -
 }
 
 pub fn create_branch(snapshot: &Snapshot, name: &str, start: &str) -> Result<()> {
-    validate_branch(name)?;
+    validate_new_ref_name(name)?;
     snapshot.validate_reference_spelling(&format!("refs/heads/{name}"))?;
     let id = super::history::resolve_commit(snapshot, start)?.id;
     snapshot.repo.reference(
@@ -577,7 +579,11 @@ pub fn replace_worktree(snapshot: &Snapshot, next: &Files) -> Result<()> {
 }
 
 pub fn set_remote(snapshot: &mut Snapshot, name: &str, url: &str, add: bool) -> Result<()> {
-    validate_branch(name)?;
+    if add {
+        validate_new_ref_name(name)?;
+    } else {
+        validate_branch(name)?;
+    }
     let url = super::transport::canonical_url(url)?;
     let remotes = snapshot.remotes()?;
     if add == remotes.contains_key(name) {

@@ -1,3 +1,4 @@
+use crate::arena::{self, ArenaError, ArenaKind};
 use crate::typechecker::infer::narrowing::{CastInfo, ReferencePath};
 use crate::{BinOp, BindingKind, ExprId, Ident, MangledName, Span, StmtId, Type, UnOp};
 
@@ -1298,18 +1299,40 @@ impl TypedAst {
             .get(&(span.file.0, span.start, span.end))
     }
 
-    pub fn push_expr(&mut self, expr: TypedExpr) -> ExprId {
-        let id = self.exprs.len();
-        debug_assert!(id < u32::MAX as usize, "TypedAst expr index overflow");
-        self.exprs.push(expr);
-        ExprId(id as u32)
+    /// Checked allocation; failure leaves the arena unchanged.
+    pub fn try_push_expr(&mut self, expr: TypedExpr) -> Result<ExprId, ArenaError> {
+        arena::push(&mut self.exprs, expr, ArenaKind::TypedExpressions).map(ExprId)
     }
 
-    pub fn push_stmt(&mut self, stmt: TypedStmt) -> StmtId {
-        let id = self.stmts.len();
-        debug_assert!(id < u32::MAX as usize, "TypedAst stmt index overflow");
-        self.stmts.push(stmt);
-        StmtId(id as u32)
+    /// Checked allocation; failure leaves the arena unchanged.
+    pub fn try_push_stmt(&mut self, stmt: TypedStmt) -> Result<StmtId, ArenaError> {
+        arena::push(&mut self.stmts, stmt, ArenaKind::TypedStatements).map(StmtId)
+    }
+
+    pub fn try_expr(&self, id: ExprId) -> Result<&TypedExpr, ArenaError> {
+        arena::get(&self.exprs, id.0, ArenaKind::TypedExpressions)
+    }
+
+    pub fn try_stmt(&self, id: StmtId) -> Result<&TypedStmt, ArenaError> {
+        arena::get(&self.stmts, id.0, ArenaKind::TypedStatements)
+    }
+
+    pub fn try_expr_mut(&mut self, id: ExprId) -> Result<&mut TypedExpr, ArenaError> {
+        arena::get_mut(&mut self.exprs, id.0, ArenaKind::TypedExpressions)
+    }
+
+    pub fn try_stmt_mut(&mut self, id: StmtId) -> Result<&mut TypedStmt, ArenaError> {
+        arena::get_mut(&mut self.stmts, id.0, ArenaKind::TypedStatements)
+    }
+
+    /// Snapshot of allocated expression IDs, usable while appending new nodes.
+    pub fn expr_ids(&self) -> Result<impl DoubleEndedIterator<Item = ExprId> + use<>, ArenaError> {
+        Ok(arena::ids(self.exprs.len(), ArenaKind::TypedExpressions)?.map(ExprId))
+    }
+
+    /// Snapshot of allocated statement IDs, usable while appending new nodes.
+    pub fn stmt_ids(&self) -> Result<impl DoubleEndedIterator<Item = StmtId> + use<>, ArenaError> {
+        Ok(arena::ids(self.stmts.len(), ArenaKind::TypedStatements)?.map(StmtId))
     }
 
     /// Body `StmtId`s of every class constructor + method — additional codegen
@@ -1341,18 +1364,9 @@ impl TypedAst {
         inits
     }
 
-    pub fn expr(&self, id: ExprId) -> &TypedExpr {
-        &self.exprs[id.0 as usize]
-    }
-
-    pub fn source_type(&self, id: ExprId) -> &Type {
-        self.runtime_source_types
-            .get(&id)
-            .unwrap_or(&self.expr(id).ty)
-    }
-
-    pub fn stmt(&self, id: StmtId) -> &TypedStmt {
-        &self.stmts[id.0 as usize]
+    pub fn source_type(&self, id: ExprId) -> Result<&Type, ArenaError> {
+        let expr = self.try_expr(id)?;
+        Ok(self.runtime_source_types.get(&id).unwrap_or(&expr.ty))
     }
 
     /// Used by post-inference passes to iterate just-pushed IDs (e.g. GenericParam erasure).
@@ -1369,9 +1383,9 @@ impl TypedAst {
     /// a field read that may hit an accessor, an operator that may throw — says
     /// `false`, so a caller that folds an expression's value away and relies on
     /// this to decide whether to keep the computation errs toward keeping it.
-    pub fn is_effect_free(&self, id: ExprId) -> bool {
-        matches!(
-            self.expr(id).kind,
+    pub fn is_effect_free(&self, id: ExprId) -> Result<bool, ArenaError> {
+        Ok(matches!(
+            self.try_expr(id)?.kind,
             TypedExprKind::Number(_)
                 | TypedExprKind::BigInt(_)
                 | TypedExprKind::String(_)
@@ -1385,17 +1399,7 @@ impl TypedAst {
                 | TypedExprKind::FunctionRef { .. }
                 | TypedExprKind::NumberEnumMember { .. }
                 | TypedExprKind::StringEnumMember { .. }
-        )
-    }
-
-    /// Mutable accessor for post-inference rewrites (capture pass flips `boxed` flags).
-    pub fn stmt_mut(&mut self, id: StmtId) -> &mut TypedStmt {
-        &mut self.stmts[id.0 as usize]
-    }
-
-    /// Mutable accessor for post-inference rewrites (sets `LocalRef.boxed`, fills `Closure.captured`).
-    pub fn expr_mut(&mut self, id: ExprId) -> &mut TypedExpr {
-        &mut self.exprs[id.0 as usize]
+        ))
     }
 }
 
@@ -1407,89 +1411,107 @@ mod tests {
     #[test]
     fn arena_round_trip_for_typed_exprs() {
         let mut ast = TypedAst::new();
-        let id = ast.push_expr(TypedExpr {
-            kind: TypedExprKind::Number(42.0),
-            span: Span::new(crate::FileId(0), 0, 2),
-            ty: Type::Number,
-        });
+        let id = ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::Number(42.0),
+                span: Span::new(crate::FileId(0), 0, 2).unwrap(),
+                ty: Type::Number,
+            })
+            .unwrap();
         assert_eq!(id.0, 0);
-        let e = ast.expr(id);
+        let e = ast.try_expr(id).unwrap();
         assert_eq!(e.kind, TypedExprKind::Number(42.0));
-        assert_eq!(e.span, Span::new(crate::FileId(0), 0, 2));
+        assert_eq!(e.span, Span::new(crate::FileId(0), 0, 2).unwrap());
         assert_eq!(e.ty, Type::Number);
     }
 
     #[test]
     fn arena_round_trip_for_typed_stmts() {
         let mut ast = TypedAst::new();
-        let expr_id = ast.push_expr(TypedExpr {
-            kind: TypedExprKind::Boolean(true),
-            span: Span::new(crate::FileId(0), 0, 4),
-            ty: Type::Boolean,
-        });
-        let stmt_id = ast.push_stmt(TypedStmt {
-            kind: TypedStmtKind::Expr(expr_id),
-            span: Span::new(crate::FileId(0), 0, 5),
-        });
+        let expr_id = ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::Boolean(true),
+                span: Span::new(crate::FileId(0), 0, 4).unwrap(),
+                ty: Type::Boolean,
+            })
+            .unwrap();
+        let stmt_id = ast
+            .try_push_stmt(TypedStmt {
+                kind: TypedStmtKind::Expr(expr_id),
+                span: Span::new(crate::FileId(0), 0, 5).unwrap(),
+            })
+            .unwrap();
         assert_eq!(stmt_id.0, 0);
-        let s = ast.stmt(stmt_id);
-        assert_eq!(s.span, Span::new(crate::FileId(0), 0, 5));
+        let s = ast.try_stmt(stmt_id).unwrap();
+        assert_eq!(s.span, Span::new(crate::FileId(0), 0, 5).unwrap());
         assert!(matches!(s.kind, TypedStmtKind::Expr(_)));
     }
 
     #[test]
     fn build_typed_binary_tree() {
         let mut ast = TypedAst::new();
-        let lhs = ast.push_expr(TypedExpr {
-            kind: TypedExprKind::Number(1.0),
-            span: Span::new(crate::FileId(0), 0, 1),
-            ty: Type::Number,
-        });
-        let rhs = ast.push_expr(TypedExpr {
-            kind: TypedExprKind::Number(2.0),
-            span: Span::new(crate::FileId(0), 4, 5),
-            ty: Type::Number,
-        });
-        let sum = ast.push_expr(TypedExpr {
-            kind: TypedExprKind::Binary {
-                op: BinOp::Add,
-                lhs,
-                rhs,
-            },
-            span: Span::new(crate::FileId(0), 0, 5),
-            ty: Type::Number,
-        });
+        let lhs = ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::Number(1.0),
+                span: Span::new(crate::FileId(0), 0, 1).unwrap(),
+                ty: Type::Number,
+            })
+            .unwrap();
+        let rhs = ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::Number(2.0),
+                span: Span::new(crate::FileId(0), 4, 5).unwrap(),
+                ty: Type::Number,
+            })
+            .unwrap();
+        let sum = ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::Binary {
+                    op: BinOp::Add,
+                    lhs,
+                    rhs,
+                },
+                span: Span::new(crate::FileId(0), 0, 5).unwrap(),
+                ty: Type::Number,
+            })
+            .unwrap();
 
-        let outer = ast.expr(sum);
+        let outer = ast.try_expr(sum).unwrap();
         assert_eq!(outer.ty, Type::Number);
         let TypedExprKind::Binary { op, lhs, rhs } = outer.kind else {
             panic!("expected Binary");
         };
         assert_eq!(op, BinOp::Add);
-        assert_eq!(ast.expr(lhs).ty, Type::Number);
-        assert_eq!(ast.expr(rhs).ty, Type::Number);
+        assert_eq!(ast.try_expr(lhs).unwrap().ty, Type::Number);
+        assert_eq!(ast.try_expr(rhs).unwrap().ty, Type::Number);
     }
 
     #[test]
     fn build_typed_function_with_return() {
         let mut ast = TypedAst::new();
-        let one = ast.push_expr(TypedExpr {
-            kind: TypedExprKind::Number(1.0),
-            span: Span::new(crate::FileId(0), 31, 32),
-            ty: Type::Number,
-        });
-        let ret = ast.push_stmt(TypedStmt {
-            kind: TypedStmtKind::Return(Some(one)),
-            span: Span::new(crate::FileId(0), 24, 33),
-        });
-        let body = ast.push_stmt(TypedStmt {
-            kind: TypedStmtKind::Block(vec![ret]),
-            span: Span::new(crate::FileId(0), 22, 35),
-        });
+        let one = ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::Number(1.0),
+                span: Span::new(crate::FileId(0), 31, 32).unwrap(),
+                ty: Type::Number,
+            })
+            .unwrap();
+        let ret = ast
+            .try_push_stmt(TypedStmt {
+                kind: TypedStmtKind::Return(Some(one)),
+                span: Span::new(crate::FileId(0), 24, 33).unwrap(),
+            })
+            .unwrap();
+        let body = ast
+            .try_push_stmt(TypedStmt {
+                kind: TypedStmtKind::Block(vec![ret]),
+                span: Span::new(crate::FileId(0), 22, 35).unwrap(),
+            })
+            .unwrap();
         ast.functions.push(crate::TypedFunction {
             name: Ident {
                 name: "f".to_string(),
-                span: Span::new(crate::FileId(0), 9, 10),
+                span: Span::new(crate::FileId(0), 9, 10).unwrap(),
             },
             mangled_name: crate::mangle::package_symbol("main", "f"),
             generics: vec![],
@@ -1498,12 +1520,15 @@ mod tests {
             type_predicate: None,
             body,
             doc: None,
-            span: Span::new(crate::FileId(0), 0, 35),
+            span: Span::new(crate::FileId(0), 0, 35).unwrap(),
         });
 
         let f = &ast.functions[0];
         assert_eq!(f.return_type, Type::Number);
-        assert!(matches!(ast.stmt(f.body).kind, TypedStmtKind::Block(_)));
+        assert!(matches!(
+            ast.try_stmt(f.body).unwrap().kind,
+            TypedStmtKind::Block(_)
+        ));
     }
 
     #[test]
@@ -1520,7 +1545,7 @@ mod tests {
         let p = TypedParam {
             name: Ident {
                 name: "param".to_string(),
-                span: Span::new(crate::FileId(0), 10, 15),
+                span: Span::new(crate::FileId(0), 10, 15).unwrap(),
             },
             ty: Type::String,
             boxed: false,
@@ -1528,7 +1553,7 @@ mod tests {
             default: None,
         };
         assert_eq!(p.name.name, "param");
-        assert_eq!(p.name.span, Span::new(crate::FileId(0), 10, 15));
+        assert_eq!(p.name.span, Span::new(crate::FileId(0), 10, 15).unwrap());
         assert_eq!(p.ty, Type::String);
         assert!(!p.boxed);
     }
@@ -1536,21 +1561,23 @@ mod tests {
     #[test]
     fn local_ref_carries_name_and_boxed_flag() {
         let mut ast = TypedAst::new();
-        let id = ast.push_expr(TypedExpr {
-            kind: TypedExprKind::LocalRef {
-                ident: Ident {
-                    name: "x".to_string(),
-                    span: Span::new(crate::FileId(0), 0, 1),
+        let id = ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::LocalRef {
+                    ident: Ident {
+                        name: "x".to_string(),
+                        span: Span::new(crate::FileId(0), 0, 1).unwrap(),
+                    },
+                    boxed: false,
                 },
-                boxed: false,
-            },
-            span: Span::new(crate::FileId(0), 0, 1),
-            ty: Type::Number,
-        });
-        match ast.expr(id).kind {
+                span: Span::new(crate::FileId(0), 0, 1).unwrap(),
+                ty: Type::Number,
+            })
+            .unwrap();
+        match ast.try_expr(id).unwrap().kind {
             TypedExprKind::LocalRef { ref ident, boxed } => {
                 assert_eq!(ident.name, "x");
-                assert_eq!(ident.span, Span::new(crate::FileId(0), 0, 1));
+                assert_eq!(ident.span, Span::new(crate::FileId(0), 0, 1).unwrap());
                 assert!(!boxed);
             }
             _ => panic!("expected LocalRef"),
@@ -1561,24 +1588,26 @@ mod tests {
     fn global_ref_carries_name_and_mangled() {
         let mut ast = TypedAst::new();
         let mangled = crate::mangle::package_symbol("main", "y");
-        let id = ast.push_expr(TypedExpr {
-            kind: TypedExprKind::GlobalRef {
-                mangled: mangled.clone(),
-                name: Ident {
-                    name: "y".to_string(),
-                    span: Span::new(crate::FileId(0), 2, 3),
+        let id = ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::GlobalRef {
+                    mangled: mangled.clone(),
+                    name: Ident {
+                        name: "y".to_string(),
+                        span: Span::new(crate::FileId(0), 2, 3).unwrap(),
+                    },
                 },
-            },
-            span: Span::new(crate::FileId(0), 2, 3),
-            ty: Type::Number,
-        });
-        match ast.expr(id).kind {
+                span: Span::new(crate::FileId(0), 2, 3).unwrap(),
+                ty: Type::Number,
+            })
+            .unwrap();
+        match ast.try_expr(id).unwrap().kind {
             TypedExprKind::GlobalRef {
                 ref name,
                 ref mangled,
             } => {
                 assert_eq!(name.name, "y");
-                assert_eq!(name.span, Span::new(crate::FileId(0), 2, 3));
+                assert_eq!(name.span, Span::new(crate::FileId(0), 2, 3).unwrap());
                 assert_eq!(mangled.as_str(), "main#y");
             }
             _ => panic!("expected GlobalRef"),

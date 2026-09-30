@@ -10,8 +10,12 @@ use super::closures::ClosureSig;
 use super::function_emitter::FunctionEmitter;
 use super::symbol_table::SymbolTable;
 
-pub fn allocate(symbols: &mut SymbolTable, next_func: &mut u32) -> Vec<ClosureSig> {
+pub fn allocate(
+    symbols: &mut SymbolTable,
+    next_func: &mut u32,
+) -> Result<Vec<ClosureSig>, crate::compiler_error::CompilerFailure> {
     let signatures: Vec<_> = symbols.closure_signatures().collect();
+    super::closures::ensure_index_capacity(*next_func, Some(signatures.len()), 0)?;
     let mut targets = Vec::new();
     for target in signatures {
         if symbols.closure_struct_type_idx(opposite(target)).is_none() {
@@ -21,7 +25,7 @@ pub fn allocate(symbols: &mut SymbolTable, next_func: &mut u32) -> Vec<ClosureSi
         *next_func += 1;
         targets.push(target);
     }
-    targets
+    Ok(targets)
 }
 
 fn opposite(sig: ClosureSig) -> ClosureSig {
@@ -35,28 +39,40 @@ pub fn emit_entries(
     targets: &[ClosureSig],
     functions: &mut FunctionSection,
     symbols: &SymbolTable,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     for &target in targets {
         functions.function(
             symbols
                 .closure_func_type_idx(target)
-                .expect("target closure type"),
+                .ok_or_else(|| crate::codegen::internal_failure("target closure type"))?,
         );
     }
+    Ok(())
 }
 
-pub fn emit_bodies(targets: &[ClosureSig], code: &mut CodeSection, ctx: &CodegenCtx<'_>) {
+pub fn emit_bodies(
+    targets: &[ClosureSig],
+    code: &mut CodeSection,
+    ctx: &CodegenCtx<'_>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     for &target in targets {
-        code.function(&emit_body(target, ctx));
+        code.function(&emit_body(target, ctx)?);
     }
+    Ok(())
 }
 
-fn emit_body(target: ClosureSig, ctx: &CodegenCtx<'_>) -> Function {
-    let wrapper = ctx.symbols.this_environment_type.expect("this environment");
+fn emit_body(
+    target: ClosureSig,
+    ctx: &CodegenCtx<'_>,
+) -> Result<Function, crate::compiler_error::CompilerFailure> {
+    let wrapper = ctx
+        .symbols
+        .this_environment_type
+        .ok_or_else(|| crate::codegen::internal_failure("this environment"))?;
     let object = ctx
         .symbols
         .intrinsic_type_indices()
-        .expect("intrinsics")
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics"))?
         .object;
     let original = u32::from(target.arity) + 1;
     let receiver = original + 1;
@@ -102,30 +118,30 @@ fn emit_body(target: ClosureSig, ctx: &CodegenCtx<'_>) -> Function {
     // Call what an adapter of an adapter ultimately wraps, which takes every
     // argument JavaScript would pass it: an inner adapter would drop those
     // past its own arity. An adapter binds no receiver of its own.
-    emit_original_identity(&mut body, ctx.symbols, original);
+    emit_original_identity(&mut body, ctx.symbols, original)?;
     let result = if target.is_void {
         wasm_encoder::BlockType::Empty
     } else {
-        wasm_encoder::BlockType::Result(ctx.symbols.value_type(&crate::Type::Unknown))
+        wasm_encoder::BlockType::Result(ctx.symbols.value_type(&crate::Type::Unknown)?)
     };
     let sources = direct_sources(target, ctx.symbols);
     for &source in &sources {
         let structure = ctx
             .symbols
             .closure_struct_type_idx(source)
-            .expect("source closure type");
+            .ok_or_else(|| crate::codegen::internal_failure("source closure type"))?;
         body.instruction(&Instruction::LocalGet(original));
         body.instruction(&Instruction::RefTestNonNull(HeapType::Concrete(structure)));
         body.instruction(&Instruction::If(result));
-        emit_direct_call(&mut body, ctx, source, target, original, receiver, env);
+        emit_direct_call(&mut body, ctx, source, target, original, receiver, env)?;
         body.instruction(&Instruction::Else);
     }
-    emit_default_adapter_call(&mut body, ctx, target, original, receiver);
+    emit_default_adapter_call(&mut body, ctx, target, original, receiver)?;
     for _ in &sources {
         body.instruction(&Instruction::End);
     }
     body.instruction(&Instruction::End);
-    body
+    Ok(body)
 }
 
 /// The closures an adapter to `target` calls without re-entering the host: the
@@ -155,16 +171,19 @@ fn emit_direct_call(
     original: u32,
     receiver: u32,
     env: u32,
-) {
-    let wrapper = ctx.symbols.this_environment_type.expect("this environment");
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let wrapper = ctx
+        .symbols
+        .this_environment_type
+        .ok_or_else(|| crate::codegen::internal_failure("this environment"))?;
     let structure = ctx
         .symbols
         .closure_struct_type_idx(source)
-        .expect("source closure type");
+        .ok_or_else(|| crate::codegen::internal_failure("source closure type"))?;
     let signature = ctx
         .symbols
         .closure_func_type_idx(source)
-        .expect("source function type");
+        .ok_or_else(|| crate::codegen::internal_failure("source function type"))?;
     body.instruction(&Instruction::LocalGet(original));
     body.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(structure)));
     body.instruction(&Instruction::StructGet {
@@ -191,10 +210,11 @@ fn emit_direct_call(
         let object = ctx
             .symbols
             .intrinsic_type_indices()
-            .expect("intrinsics")
+            .ok_or_else(|| crate::codegen::internal_failure("intrinsics"))?
             .object;
         body.instruction(&Instruction::RefNull(HeapType::Concrete(object)));
-    }
+    };
+    Ok(())
 }
 
 fn emit_default_adapter_call(
@@ -203,14 +223,17 @@ fn emit_default_adapter_call(
     target: ClosureSig,
     original: u32,
     receiver: u32,
-) {
-    let intr = ctx.symbols.intrinsic_type_indices().expect("intrinsics");
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let intr = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics"))?;
     body.instruction(&Instruction::LocalGet(original));
     body.instruction(&Instruction::LocalGet(receiver));
     body.instruction(&Instruction::GlobalGet(
         ctx.symbols
             .prelude_global_idx("array_vtable")
-            .expect("array vtable"),
+            .ok_or_else(|| crate::codegen::internal_failure("array vtable"))?,
     ));
     for i in 1..=u32::from(target.arity) {
         body.instruction(&Instruction::LocalGet(i));
@@ -223,11 +246,12 @@ fn emit_default_adapter_call(
     body.instruction(&Instruction::Call(
         ctx.symbols
             .prelude_func_idx("__value_invoke_defaults")
-            .expect("default invocation collected"),
+            .ok_or_else(|| crate::codegen::internal_failure("default invocation collected"))?,
     ));
     if target.is_void {
         body.instruction(&Instruction::Drop);
-    }
+    };
+    Ok(())
 }
 
 /// Normalize reference values to a concrete closure slot, preserving the
@@ -237,9 +261,9 @@ pub fn emit_coercion(
     ctx: &CodegenCtx<'_>,
     source: &crate::Type,
     target_slot: ValType,
-) -> bool {
-    if !matches!(ctx.symbols.value_type(source), ValType::Ref(_)) {
-        return false;
+) -> Result<bool, crate::compiler_error::CompilerFailure> {
+    if !matches!(ctx.symbols.value_type(source)?, ValType::Ref(_)) {
+        return Ok(false);
     }
     let target = ctx.symbols.closure_signatures().find(|signature| {
         ctx.symbols
@@ -253,16 +277,16 @@ pub fn emit_coercion(
             })
     });
     let Some(target) = target else {
-        return false;
+        return Ok(false);
     };
     if takes_fewer_arguments(source, target) {
-        let original = emitter.add_anonymous_local(ctx.symbols.value_type(&crate::Type::Unknown));
+        let original = emitter.add_anonymous_local(ctx.symbols.value_type(&crate::Type::Unknown)?);
         emitter.instruction(Instruction::LocalSet(original));
-        emit_wrap(emitter, ctx, target, original);
+        emit_wrap(emitter, ctx, target, original)?;
     } else {
-        emit_erased_cast(emitter, ctx, target);
+        emit_erased_cast(emitter, ctx, target)?;
     }
-    true
+    Ok(true)
 }
 
 /// A function statically known to declare fewer parameters than `target`
@@ -281,11 +305,11 @@ pub fn emit_erased_cast(
     emitter: &mut FunctionEmitter<'_>,
     ctx: &CodegenCtx<'_>,
     target: ClosureSig,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let target_struct = ctx
         .symbols
         .closure_struct_type_idx(target)
-        .expect("target closure");
+        .ok_or_else(|| crate::codegen::internal_failure("target closure"))?;
     let target_slot = ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(target_struct),
@@ -294,8 +318,8 @@ pub fn emit_erased_cast(
     let source_struct = ctx
         .symbols
         .closure_struct_type_idx(source)
-        .expect("source closure");
-    let original = emitter.add_anonymous_local(ctx.symbols.value_type(&crate::Type::Unknown));
+        .ok_or_else(|| crate::codegen::internal_failure("source closure"))?;
+    let original = emitter.add_anonymous_local(ctx.symbols.value_type(&crate::Type::Unknown)?);
     emitter.instruction(Instruction::LocalTee(original));
     emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
         source_struct,
@@ -312,16 +336,18 @@ pub fn emit_erased_cast(
         source_struct,
     )));
     emitter.emit_else();
-    emit_defaults_fit(emitter, ctx, original, target.arity, None);
+    emit_defaults_fit(emitter, ctx, original, target.arity, None)?;
     emitter.emit_end();
     emitter.emit_if(wasm_encoder::BlockType::Result(target_slot));
-    emit_wrap(emitter, ctx, target, original);
+    emit_wrap(emitter, ctx, target, original)?;
     emitter.emit_else();
     emitter.instruction(Instruction::LocalGet(original));
     emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
         target_struct,
     )));
     emitter.emit_end();
+
+    Ok(())
 }
 
 /// Wrap the function in `original` in `target`'s adapter, keeping its identity.
@@ -330,21 +356,23 @@ fn emit_wrap(
     ctx: &CodegenCtx<'_>,
     target: ClosureSig,
     original: u32,
-) {
-    emit_identity_vtable(emitter, ctx, original);
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    emit_identity_vtable(emitter, ctx, original)?;
     emitter.instruction(Instruction::RefFunc(
         ctx.symbols
             .closure_coercion(target)
-            .expect("coercion allocated"),
+            .ok_or_else(|| crate::codegen::internal_failure("coercion allocated"))?,
     ));
     emitter.instruction(Instruction::LocalGet(original));
     emitter.instruction(Instruction::RefAsNonNull);
-    super::this_binding::wrap(emitter, ctx);
+    super::this_binding::wrap(emitter, ctx)?;
     emitter.instruction(Instruction::StructNew(
         ctx.symbols
             .closure_struct_type_idx(target)
-            .expect("target closure"),
+            .ok_or_else(|| crate::codegen::internal_failure("target closure"))?,
     ));
+
+    Ok(())
 }
 
 pub(super) fn emit_defaults_fit(
@@ -353,19 +381,21 @@ pub(super) fn emit_defaults_fit(
     function: u32,
     arity: u8,
     is_void: Option<bool>,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     emitter.instruction(Instruction::LocalGet(function));
     emitter.instruction(Instruction::F64Const(f64::from(arity).into()));
-    super::function_emitter::cast::emit_box(emitter, ctx, &crate::Type::Number);
+    super::function_emitter::cast::emit_box(emitter, ctx, &crate::Type::Number)?;
     let results = is_void.map_or(-1.0, |is_void| if is_void { 0.0 } else { 1.0 });
     emitter.instruction(Instruction::F64Const(results.into()));
-    super::function_emitter::cast::emit_box(emitter, ctx, &crate::Type::Number);
+    super::function_emitter::cast::emit_box(emitter, ctx, &crate::Type::Number)?;
     emitter.instruction(Instruction::Call(
         ctx.symbols
             .prelude_func_idx("__value_defaults_fit")
-            .expect("default compatibility collected"),
+            .ok_or_else(|| crate::codegen::internal_failure("default compatibility collected"))?,
     ));
-    super::function_emitter::cast::emit_cast_to(emitter, ctx, &crate::Type::Boolean);
+    super::function_emitter::cast::emit_cast_to(emitter, ctx, &crate::Type::Boolean)?;
+
+    Ok(())
 }
 
 /// The adapter vtable's field holding the function the adapter wraps. The
@@ -380,11 +410,16 @@ pub fn emit_vtable_type(
     types: &mut wasm_encoder::TypeSection,
     symbols: &mut SymbolTable,
     next_type: &mut u32,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     use wasm_encoder::{
         CompositeInnerType, CompositeType, FieldType, StorageType, StructType, SubType,
     };
-    let intrinsics = symbols.intrinsic_type_indices().expect("intrinsics");
+    let following_type_idx = next_type.checked_add(1).ok_or_else(|| {
+        crate::codegen::internal_failure("closure coercion vtable exhausts the Wasm index space")
+    })?;
+    let intrinsics = symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics"))?;
     let fields = [
         intrinsics.to_string_fn,
         intrinsics.to_json_fn,
@@ -415,15 +450,24 @@ pub fn emit_vtable_type(
     });
     symbols.record_closure_coercion_vtable_type(*next_type);
     symbols.record_struct_supertype(*next_type, intrinsics.vtable);
-    *next_type += 1;
+    *next_type = following_type_idx;
+
+    Ok(())
 }
 
-fn emit_identity_vtable(emitter: &mut FunctionEmitter<'_>, ctx: &CodegenCtx<'_>, original: u32) {
-    let intrinsics = ctx.symbols.intrinsic_type_indices().expect("intrinsics");
+fn emit_identity_vtable(
+    emitter: &mut FunctionEmitter<'_>,
+    ctx: &CodegenCtx<'_>,
+    original: u32,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let intrinsics = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics"))?;
     let vtable = ctx
         .symbols
         .closure_vtable_global_idx()
-        .expect("closure vtable");
+        .ok_or_else(|| crate::codegen::internal_failure("closure vtable"))?;
     for field in 0..4 {
         emitter.instruction(Instruction::GlobalGet(vtable));
         emitter.instruction(Instruction::StructGet {
@@ -434,24 +478,35 @@ fn emit_identity_vtable(emitter: &mut FunctionEmitter<'_>, ctx: &CodegenCtx<'_>,
     emitter.instruction(Instruction::LocalGet(original));
     emitter.instruction(Instruction::RefAsNonNull);
     emitter.instruction(Instruction::StructNew(
-        ctx.symbols.closure_coercion_vtable_type(),
+        ctx.symbols.closure_coercion_vtable_type()?,
     ));
+
+    Ok(())
 }
 
-pub fn emit_equals(symbols: &SymbolTable) -> Function {
+pub fn emit_equals(
+    symbols: &SymbolTable,
+) -> Result<Function, crate::compiler_error::CompilerFailure> {
     let mut body = Function::new([]);
-    emit_original_identity(&mut body, symbols, 0);
-    emit_original_identity(&mut body, symbols, 1);
+    emit_original_identity(&mut body, symbols, 0)?;
+    emit_original_identity(&mut body, symbols, 1)?;
     body.instruction(&Instruction::LocalGet(0));
     body.instruction(&Instruction::LocalGet(1));
     body.instruction(&Instruction::RefEq);
     body.instruction(&Instruction::End);
-    body
+    Ok(body)
 }
 
-fn emit_original_identity(body: &mut Function, symbols: &SymbolTable, local: u32) {
-    let object = symbols.intrinsic_type_indices().expect("intrinsics").object;
-    let wrapper = symbols.closure_coercion_vtable_type();
+fn emit_original_identity(
+    body: &mut Function,
+    symbols: &SymbolTable,
+    local: u32,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let object = symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics"))?
+        .object;
+    let wrapper = symbols.closure_coercion_vtable_type()?;
     body.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
     body.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
     body.instruction(&Instruction::LocalGet(local));
@@ -479,4 +534,6 @@ fn emit_original_identity(body: &mut Function, symbols: &SymbolTable, local: u32
     body.instruction(&Instruction::Br(0));
     body.instruction(&Instruction::End);
     body.instruction(&Instruction::End);
+
+    Ok(())
 }

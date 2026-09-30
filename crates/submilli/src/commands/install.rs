@@ -185,13 +185,33 @@ fn render_manifest_diagnostics(
     manifest_text: &str,
     diags: &[BuildDiagnostic],
 ) {
-    let (sources, file) = Sources::single(
-        manifest_path.display().to_string(),
-        manifest_text.to_string(),
-    );
+    let (sources, file) = match Sources::single(manifest_path.display().to_string(), manifest_text)
+    {
+        Ok(source) => source,
+        Err(error) => {
+            for diagnostic in diags {
+                eprintln!("error: {}", diagnostic.message);
+            }
+            eprintln!("source context unavailable: {error}");
+            return;
+        }
+    };
     for diag in diags {
         let span = match diag.span {
-            Some(span) => Span::new(file, span.start as u32, span.end as u32),
+            Some(span) => {
+                let Some(span) = u32::try_from(span.start)
+                    .ok()
+                    .zip(u32::try_from(span.end).ok())
+                    .and_then(|(start, end)| Span::new(file, start, end).ok())
+                else {
+                    eprintln!(
+                        "error: {}\nsource context unavailable: invalid manifest span",
+                        diag.message
+                    );
+                    continue;
+                };
+                span
+            }
             None => Span::at(file),
         };
         let rendered = diagnostics::render(

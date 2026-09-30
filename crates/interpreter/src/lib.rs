@@ -1,6 +1,7 @@
 //! Submilli interpreter library.
 //!
 
+pub mod arena;
 pub(crate) mod artifact_f64;
 pub mod asi;
 pub mod ast;
@@ -10,6 +11,7 @@ pub mod codegen;
 pub mod compile;
 mod compile_capabilities;
 pub mod compiler_error;
+pub mod compiler_limits;
 pub mod diagnostics;
 pub mod did_you_mean;
 pub mod doc_comment;
@@ -22,10 +24,13 @@ pub mod parser;
 pub mod runtime;
 pub mod shape;
 pub mod source;
+mod source_validation;
 pub mod span;
 pub mod stdlib;
 pub mod token;
+pub mod tree_height;
 pub mod type_info;
+pub mod type_size;
 pub mod typechecker;
 pub mod typed_ast;
 pub mod types;
@@ -67,7 +72,7 @@ pub use shape::Shape;
 pub use source::{ModulePath, SourceFile, Sources};
 pub use span::{FileId, LineIndex, Span};
 pub use token::{Token, TokenKind};
-pub use type_info::{FieldInfo, TypeInfo, TypeInfoId, TypeInfoKind, TypeInfoTable};
+pub use type_info::{FieldInfo, TypeInfo, TypeInfoId, TypeInfoIndex, TypeInfoKind, TypeInfoTable};
 pub use typechecker::{capture, check, desugar, infer, infer_package};
 pub use typed_ast::{
     CapturedVar, ClosureBody, EnumVariantPayload, ExportEntry, ExportKind, FieldNarrowingCheck,

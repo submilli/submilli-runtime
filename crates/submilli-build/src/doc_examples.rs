@@ -52,7 +52,8 @@ pub fn compile_check_doc_example(
     declarations: &[&PackageDeclaration],
 ) -> Result<(), String> {
     let padded = format!("{}{}", "\n".repeat(example.fence_line), example.source);
-    let (sources, file) = Sources::single(display_path.to_string(), padded.clone());
+    let (sources, file) = Sources::single(display_path.to_string(), padded.clone())
+        .map_err(|error| error.to_string())?;
     match compile_script(&padded, display_path, file, declarations, &[]) {
         Ok(_) => Ok(()),
         Err(diags) => {

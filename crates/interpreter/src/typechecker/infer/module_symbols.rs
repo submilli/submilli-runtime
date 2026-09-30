@@ -190,49 +190,52 @@ impl<'a> NamespaceMembers<'a> {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub(in crate::typechecker) struct NamespaceSymbolSet<'a> {
-    entries: Vec<&'a NamespaceSymbol>,
+    first: &'a NamespaceSymbol,
+    rest: Vec<&'a NamespaceSymbol>,
 }
 
 impl<'a> NamespaceSymbolSet<'a> {
     pub(in crate::typechecker) fn new(ns: &'a NamespaceSymbol) -> Self {
-        Self { entries: vec![ns] }
+        Self {
+            first: ns,
+            rest: Vec::new(),
+        }
     }
 
     pub(in crate::typechecker) fn push(&mut self, ns: &'a NamespaceSymbol) {
-        self.entries.push(ns);
+        self.rest.push(ns);
     }
 
     pub(in crate::typechecker) fn child(&self, name: &str) -> Option<Self> {
-        let entries: Vec<&'a NamespaceSymbol> = self
-            .entries
-            .iter()
-            .filter_map(|ns| ns.namespaces.get(name))
-            .collect();
-        (!entries.is_empty()).then_some(Self { entries })
+        let mut entries = self.entries().filter_map(|ns| ns.namespaces.get(name));
+        let first = entries.next()?;
+        Some(Self {
+            first,
+            rest: entries.collect(),
+        })
+    }
+
+    fn entries(&self) -> impl Iterator<Item = &'a NamespaceSymbol> + '_ {
+        std::iter::once(self.first).chain(self.rest.iter().copied())
     }
 
     pub(in crate::typechecker) fn value(&self, name: &str) -> Option<&ValueSymbol> {
-        self.entries.iter().find_map(|ns| ns.values.get(name))
+        self.entries().find_map(|ns| ns.values.get(name))
     }
 
     pub(in crate::typechecker) fn type_symbol(&self, name: &str) -> Option<&TypeSymbol> {
-        self.entries.iter().find_map(|ns| ns.types.get(name))
+        self.entries().find_map(|ns| ns.types.get(name))
     }
 
     pub(in crate::typechecker) fn mangled_prefix(&self) -> MangledName {
-        self.entries
-            .first()
-            .expect("namespace symbol set must not be empty")
-            .mangled_prefix
-            .clone()
+        self.first.mangled_prefix.clone()
     }
 
     pub(in crate::typechecker) fn exports(&self) -> Vec<String> {
         let mut names: Vec<String> = self
-            .entries
-            .iter()
+            .entries()
             .flat_map(|ns| {
                 ns.values
                     .keys()

@@ -14,21 +14,47 @@ mod missing_return;
 mod return_outside_function;
 mod unreachable;
 
-use crate::{Diagnostic, ExportEntry, PackageDeclaration, TypedAst};
+use crate::compiler_error::{CompileError, CompilerStage};
+use crate::{Diagnostic, ExportEntry, PackageDeclaration, TypedAst, tree_height};
 
 use super::infer::module_symbols::ModuleSymbols;
 
-pub fn check(ta: &TypedAst) -> Vec<Diagnostic> {
+pub fn check(ta: &TypedAst) -> Result<Vec<Diagnostic>, CompileError> {
+    tree_height::check_typed(ta, CompilerStage::Infer)?;
     let mut diags = Vec::new();
-    missing_return::run(ta, &mut diags);
-    unreachable::run(ta, &mut diags);
-    return_outside_function::run(ta, &mut diags);
-    fallthrough::run(ta, &mut diags);
-    definite_assignment::run(ta, &mut diags);
+    missing_return::run(ta, &mut diags).map_err(|fatal| crate::compiler_error::CompileError {
+        diagnostics: diags.clone(),
+        fatal: Some(fatal),
+    })?;
+    unreachable::run(ta, &mut diags).map_err(|fatal| crate::compiler_error::CompileError {
+        diagnostics: diags.clone(),
+        fatal: Some(fatal),
+    })?;
+    return_outside_function::run(ta, &mut diags).map_err(|fatal| {
+        crate::compiler_error::CompileError {
+            diagnostics: diags.clone(),
+            fatal: Some(fatal),
+        }
+    })?;
+    fallthrough::run(ta, &mut diags).map_err(|fatal| crate::compiler_error::CompileError {
+        diagnostics: diags.clone(),
+        fatal: Some(fatal),
+    })?;
+    definite_assignment::run(ta, &mut diags).map_err(|fatal| {
+        crate::compiler_error::CompileError {
+            diagnostics: diags.clone(),
+            fatal: Some(fatal),
+        }
+    })?;
     main_required::run(ta, &mut diags);
     doc_consistency::run(ta, &mut diags);
-    capability_consistency::run(ta, &mut diags);
-    diags
+    capability_consistency::run(ta, &mut diags).map_err(|fatal| {
+        crate::compiler_error::CompileError {
+            diagnostics: diags.clone(),
+            fatal: Some(fatal),
+        }
+    })?;
+    Ok(diags)
 }
 
 pub(in crate::typechecker) struct PackageModuleSurface<'a> {
@@ -90,7 +116,7 @@ mod test_util {
         packages.extend(prelude_defs.iter());
         packages.extend(host_defs.iter());
         let (ta, mut diags) = infer(source, "main", &ast, &packages);
-        diags.extend(check(&ta));
+        diags.extend(check(&ta).unwrap());
         diags
     }
 

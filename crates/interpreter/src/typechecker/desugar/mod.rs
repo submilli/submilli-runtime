@@ -1,8 +1,10 @@
 //! Desugar pass — transforms surface-level Typed AST forms into a smaller
 //! canonical shape that codegen has to handle.
 
+use crate::compiler_error::{CompilerFailure, CompilerStage};
 use crate::{
     ExprId, FileId, Ident, Span, StmtId, Type, TypedAst, TypedExpr, TypedExprKind, TypedStmt,
+    tree_height,
 };
 
 mod do_while;
@@ -24,74 +26,114 @@ impl DesugarCtx<'_> {
         Span::at(self.file)
     }
 
-    pub(crate) fn fresh_name(&mut self, prefix: &str) -> Ident {
+    pub(crate) fn fresh_name(
+        &mut self,
+        prefix: &str,
+    ) -> Result<Ident, crate::compiler_error::CompilerFailure> {
         let n = self.next_temp;
-        self.next_temp += 1;
-        Ident {
+        self.next_temp =
+            n.checked_add(1)
+                .ok_or_else(|| crate::compiler_error::CompilerFailure::Limit {
+                    stage: crate::compiler_error::CompilerStage::Infer,
+                    span: None,
+                    message: "desugaring temporary ID capacity exceeded".into(),
+                    help: Vec::new(),
+                })?;
+        Ok(Ident {
             // `#` cannot occur in a source identifier.
             name: format!("#desugar_{prefix}_{n}"),
             span: self.gen_span(),
-        }
-    }
-
-    pub(crate) fn bool_true(&mut self) -> ExprId {
-        let span = self.gen_span();
-        self.ta.push_expr(TypedExpr {
-            kind: TypedExprKind::Boolean(true),
-            span,
-            ty: Type::Boolean,
         })
     }
 
-    pub(crate) fn bool_false(&mut self) -> ExprId {
+    pub(crate) fn bool_true(&mut self) -> Result<ExprId, crate::compiler_error::CompilerFailure> {
         let span = self.gen_span();
-        self.ta.push_expr(TypedExpr {
-            kind: TypedExprKind::Boolean(false),
-            span,
-            ty: Type::Boolean,
-        })
+        self.ta
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::Boolean(true),
+                span,
+                ty: Type::Boolean,
+            })
+            .map_err(crate::typechecker::arena_failure)
     }
 
-    pub(crate) fn number_lit(&mut self, value: f64) -> ExprId {
+    pub(crate) fn bool_false(&mut self) -> Result<ExprId, crate::compiler_error::CompilerFailure> {
         let span = self.gen_span();
-        self.ta.push_expr(TypedExpr {
-            kind: TypedExprKind::Number(value),
-            span,
-            ty: Type::Number,
-        })
+        self.ta
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::Boolean(false),
+                span,
+                ty: Type::Boolean,
+            })
+            .map_err(crate::typechecker::arena_failure)
     }
 
-    pub(crate) fn bigint_lit(&mut self, digits: &str) -> ExprId {
+    pub(crate) fn number_lit(
+        &mut self,
+        value: f64,
+    ) -> Result<ExprId, crate::compiler_error::CompilerFailure> {
         let span = self.gen_span();
-        self.ta.push_expr(TypedExpr {
-            kind: TypedExprKind::BigInt(digits.to_string()),
-            span,
-            ty: Type::BigInt,
-        })
+        self.ta
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::Number(value),
+                span,
+                ty: Type::Number,
+            })
+            .map_err(crate::typechecker::arena_failure)
+    }
+
+    pub(crate) fn bigint_lit(
+        &mut self,
+        digits: &str,
+    ) -> Result<ExprId, crate::compiler_error::CompilerFailure> {
+        let span = self.gen_span();
+        self.ta
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::BigInt(digits.to_string()),
+                span,
+                ty: Type::BigInt,
+            })
+            .map_err(crate::typechecker::arena_failure)
     }
 
     /// `boxed` is always false — capture pass already ran before desugar.
-    pub(crate) fn local_ref(&mut self, ident: Ident, ty: Type) -> ExprId {
+    pub(crate) fn local_ref(
+        &mut self,
+        ident: Ident,
+        ty: Type,
+    ) -> Result<ExprId, crate::compiler_error::CompilerFailure> {
         let span = self.gen_span();
-        self.ta.push_expr(TypedExpr {
-            kind: TypedExprKind::LocalRef {
-                ident,
-                boxed: false,
-            },
-            span,
-            ty,
-        })
+        self.ta
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::LocalRef {
+                    ident,
+                    boxed: false,
+                },
+                span,
+                ty,
+            })
+            .map_err(crate::typechecker::arena_failure)
     }
 
-    pub(crate) fn push_stmt(&mut self, kind: crate::TypedStmtKind, span: Span) -> StmtId {
-        self.ta.push_stmt(TypedStmt { kind, span })
+    pub(crate) fn push_stmt(
+        &mut self,
+        kind: crate::TypedStmtKind,
+        span: Span,
+    ) -> Result<StmtId, crate::compiler_error::CompilerFailure> {
+        self.ta
+            .try_push_stmt(TypedStmt { kind, span })
+            .map_err(crate::typechecker::arena_failure)
     }
 
     /// `let #desugar_<prefix>_N = true;` — the flag that tells a `while`-true's head
     /// which pass it is on. Returns the flag's name and its declaration.
-    pub(crate) fn first_pass_flag(&mut self, prefix: &str, span: Span) -> (Ident, StmtId) {
-        let flag = self.fresh_name(prefix);
-        let true_lit = self.bool_true();
+    pub(crate) fn first_pass_flag(
+        &mut self,
+        prefix: &str,
+        span: Span,
+    ) -> Result<(Ident, StmtId), crate::compiler_error::CompilerFailure> {
+        let flag = self.fresh_name(prefix)?;
+        let true_lit = self.bool_true()?;
         let decl = self.push_stmt(
             crate::TypedStmtKind::Let {
                 name: flag.clone(),
@@ -101,8 +143,8 @@ impl DesugarCtx<'_> {
                 doc: None,
             },
             span,
-        );
-        (flag, decl)
+        )?;
+        Ok((flag, decl))
     }
 
     /// `if (__first) { __first = false; } else { steps… }` — runs `steps` at the
@@ -118,8 +160,8 @@ impl DesugarCtx<'_> {
         flag: &Ident,
         steps: Vec<StmtId>,
         span: Span,
-    ) -> StmtId {
-        let false_lit = self.bool_false();
+    ) -> Result<StmtId, crate::compiler_error::CompilerFailure> {
+        let false_lit = self.bool_false()?;
         let clear = self.push_stmt(
             crate::TypedStmtKind::AssignLocal {
                 ident: flag.clone(),
@@ -129,10 +171,10 @@ impl DesugarCtx<'_> {
                 narrowed_shadow_ty: None,
             },
             span,
-        );
-        let then_block = self.push_stmt(crate::TypedStmtKind::Block(vec![clear]), span);
-        let else_block = self.push_stmt(crate::TypedStmtKind::Block(steps), span);
-        let flag_ref = self.local_ref(flag.clone(), Type::Boolean);
+        )?;
+        let then_block = self.push_stmt(crate::TypedStmtKind::Block(vec![clear]), span)?;
+        let else_block = self.push_stmt(crate::TypedStmtKind::Block(steps), span)?;
+        let flag_ref = self.local_ref(flag.clone(), Type::Boolean)?;
         self.push_stmt(
             crate::TypedStmtKind::If {
                 condition: flag_ref,
@@ -148,26 +190,48 @@ impl DesugarCtx<'_> {
     /// AST, where the narrowing fixed point may have wrapped it in `NarrowRegion`s
     /// (`wrap_narrow_regions`). A wrapper nests whole: its shadow binding scopes
     /// over the statements inside it, so splicing those out would orphan them.
-    pub(crate) fn body_as_stmts(&self, body: StmtId) -> Vec<StmtId> {
-        match &self.ta.stmt(body).kind {
-            crate::TypedStmtKind::Block(stmts) => stmts.clone(),
-            _ => vec![body],
-        }
+    pub(crate) fn body_as_stmts(
+        &self,
+        body: StmtId,
+    ) -> Result<Vec<StmtId>, crate::compiler_error::CompilerFailure> {
+        Ok(
+            match &self
+                .ta
+                .try_stmt(body)
+                .map_err(crate::typechecker::arena_failure)?
+                .kind
+            {
+                crate::TypedStmtKind::Block(stmts) => stmts.clone(),
+                _ => vec![body],
+            },
+        )
     }
 }
 
-pub fn desugar(ta: &mut TypedAst, file: FileId) {
+/// Lowering loops adds nesting, so the output is measured as well as the input.
+pub fn desugar(ta: TypedAst, file: FileId) -> Result<TypedAst, CompilerFailure> {
+    tree_height::check_typed(&ta, CompilerStage::Infer)?;
+    let desugared = desugar_tree(ta, file)?;
+    tree_height::check_typed(&desugared, CompilerStage::Infer)?;
+    Ok(desugared)
+}
+
+fn desugar_tree(
+    mut ta: TypedAst,
+    file: FileId,
+) -> Result<TypedAst, crate::compiler_error::CompilerFailure> {
     let mut ctx = DesugarCtx {
-        ta,
+        ta: &mut ta,
         file,
         next_temp: 0,
     };
     // for_of must run first — its expansion produces a While that the other passes must not rewrite.
-    for_of::run(&mut ctx);
-    for_loop::run(&mut ctx);
-    do_while::run(&mut ctx);
+    for_of::run(&mut ctx)?;
+    for_loop::run(&mut ctx)?;
+    do_while::run(&mut ctx)?;
     // Runs after loop desugarers so i++ in for-loop update slots reaches this as Stmt::Expr(PostfixUnary).
-    postfix_incdec::run(&mut ctx);
+    postfix_incdec::run(&mut ctx)?;
+    Ok(ta)
 }
 
 #[cfg(test)]
@@ -206,8 +270,8 @@ mod tests {
             infer_diags.is_empty(),
             "unexpected infer diags: {infer_diags:?}"
         );
-        capture(&mut ta);
-        desugar(&mut ta, crate::FileId(0));
+        ta = capture(ta).unwrap();
+        ta = desugar(ta, crate::FileId(0)).unwrap();
         ta
     }
 
@@ -241,11 +305,11 @@ mod tests {
             packages.extend(prelude_defs.iter());
             packages.extend(host_defs.iter());
             let (mut ta, _) = infer(src, "main", &ast, &packages);
-            capture(&mut ta);
+            ta = capture(ta).unwrap();
             ta
         };
         let mut after = before.clone();
-        desugar(&mut after, crate::FileId(0));
+        after = desugar(after, crate::FileId(0)).unwrap();
         assert_eq!(format!("{before:?}"), format!("{after:?}"));
     }
 
@@ -253,8 +317,8 @@ mod tests {
     fn desugar_is_idempotent() {
         let mut ta = pipeline("function main(): number { return 1; }");
         let snapshot = ta.clone();
-        desugar(&mut ta, crate::FileId(0));
-        desugar(&mut ta, crate::FileId(0));
+        ta = desugar(ta, crate::FileId(0)).unwrap();
+        ta = desugar(ta, crate::FileId(0)).unwrap();
         assert_eq!(format!("{ta:?}"), format!("{snapshot:?}"));
     }
 

@@ -13,6 +13,7 @@ use async_trait::async_trait;
 use interpreter::runtime::{
     AuthProxy, AuthProxyError, CheckOutcome, HttpRequest, SecretProvider, SecurityCheck,
 };
+use interpreter::stdlib::http::HttpTransportPolicy;
 use url::Url;
 
 use std::collections::BTreeMap;
@@ -255,6 +256,8 @@ impl SecretProvider for BlueprintSecretProvider {
 /// Injects the matching rule's headers / query params (with `${secrets.X}`
 /// resolved) into outbound `submilli:http` calls made by `main`.
 pub struct BlueprintAuthProxy {
+    transport_policy: Arc<HttpTransportPolicy>,
+    authenticated_policy: Arc<HttpTransportPolicy>,
     blueprint: Arc<Blueprint>,
     resolver: EnvFileSecretResolver,
 }
@@ -269,7 +272,22 @@ impl BlueprintAuthProxy {
         store: Option<Arc<dyn SecretStore>>,
         harness: Arc<HarnessSecretBindings>,
     ) -> Self {
+        let transport_policy = HttpTransportPolicy {
+            allow_insecure_http: blueprint.allow_insecure_http,
+            auth_proxy_hosts: blueprint
+                .auth_proxy
+                .iter()
+                .map(|rule| (rule.host.clone(), rule.allow_insecure_http))
+                .collect(),
+            same_origin_redirects: false,
+        };
+        let authenticated_policy = Arc::new(HttpTransportPolicy {
+            same_origin_redirects: true,
+            ..transport_policy.clone()
+        });
         Self {
+            transport_policy: Arc::new(transport_policy),
+            authenticated_policy,
             blueprint,
             resolver: EnvFileSecretResolver::with_harness(store, harness),
         }
@@ -283,23 +301,26 @@ impl AuthProxy for BlueprintAuthProxy {
         mut req: HttpRequest,
         caller: &str,
     ) -> Result<HttpRequest, AuthProxyError> {
-        // main-only: library code never gets the operator's auth injected.
+        req.transport_policy = Some(Arc::clone(&self.transport_policy));
+        // Check every caller before resolving credentials, including package calls.
+        let url =
+            Url::parse(&req.url).map_err(|_| AuthProxyError::Other("invalid HTTP URL".into()))?;
+        self.transport_policy
+            .check_destination(&url)
+            .map_err(|error| AuthProxyError::Other(error.to_string()))?;
         if caller != MAIN_PACKAGE {
             return Ok(req);
         }
-        // An unparseable URL has nothing to match; let the http layer report it.
-        let Some(host) = Url::parse(&req.url)
-            .ok()
-            .and_then(|u| u.host_str().map(str::to_string))
-        else {
+        let Some(host) = url.host_str() else {
             return Ok(req);
         };
-        let Some(injections) = resolve_injections(&self.blueprint, &host, &self.resolver)
+        let Some(injections) = resolve_injections(&self.blueprint, host, &self.resolver)
             .await
             .map_err(to_proxy_error)?
         else {
             return Ok(req);
         };
+        req.transport_policy = Some(Arc::clone(&self.authenticated_policy));
         apply(&mut req, injections);
         Ok(req)
     }
@@ -540,6 +561,8 @@ permissions:
             timeout_ms: 1000,
             max_response_size: 1024,
             decompress: false,
+            transport_policy: None,
+            redirect_guard: None,
         }
     }
 
@@ -555,6 +578,85 @@ permissions:
             .iter()
             .find(|(k, _)| k == name)
             .map(|(_, v)| v.as_str())
+    }
+
+    #[tokio::test]
+    async fn insecure_http_requires_both_flags_before_resolving_secrets() {
+        // An unreadable file proves denial occurs before secret resolution.
+        for blueprint in [false, true] {
+            for rule in [false, true] {
+                let yaml = format!(
+                    "name: gates\nallow_insecure_http: {blueprint}\nsecrets:\n  K: {{ file: /nonexistent/sub1105-secret }}\nauth_proxy:\n- host: example.com\n  allow_insecure_http: {rule}\n  auth: {{ bearer: K }}\n"
+                );
+                let proxy = BlueprintAuthProxy::new(Arc::new(parse(&yaml).unwrap()), None);
+                for caller in ["main", "@test/package"] {
+                    let result = proxy
+                        .transform(req("http://example.com/", vec![]), caller)
+                        .await;
+                    if blueprint && rule {
+                        if caller == "main" {
+                            assert!(matches!(result, Err(AuthProxyError::MissingSecret(_))));
+                        } else {
+                            let request = result.unwrap();
+                            assert!(request.headers.is_empty());
+                            assert!(!request.transport_policy.unwrap().same_origin_redirects);
+                        }
+                    } else {
+                        let error = result.unwrap_err().to_string();
+                        assert!(error.contains("HTTPS required"), "{error}");
+                        assert!(error.contains(if blueprint {
+                            "auth_proxy rule"
+                        } else {
+                            "blueprint"
+                        }));
+                    }
+                }
+                let unmatched = proxy
+                    .transform(req("http://other.com/", vec![]), "main")
+                    .await;
+                assert_eq!(unmatched.is_ok(), blueprint);
+                assert!(
+                    proxy
+                        .transform(req("https://other.com/", vec![]), "main")
+                        .await
+                        .is_ok()
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn allowed_injections_lock_redirects_and_preserve_first_rule() {
+        for injection in [
+            "auth: { bearer: K }",
+            "auth: { basic: { username: alice, password: K } }",
+            "headers: { X-Key: '${secrets.K}' }",
+            "query: { key: '${secrets.K}' }",
+        ] {
+            let yaml = format!(
+                "name: gates\nallow_insecure_http: true\nsecrets:\n  K: {{ harness: {{ required: true }} }}\nauth_proxy:\n- host: example.com\n  allow_insecure_http: true\n  {injection}\n- host: example.com\n  headers: {{ X-Second: ignored }}\n"
+            );
+            let proxy = BlueprintAuthProxy::with_harness(
+                Arc::new(parse(&yaml).unwrap()),
+                None,
+                Arc::new(BTreeMap::from([("K".into(), "test-token".into())])),
+            );
+            for scheme in ["http", "https"] {
+                let result = proxy
+                    .transform(req(&format!("{scheme}://example.com/"), vec![]), "main")
+                    .await
+                    .unwrap();
+                assert!(
+                    result
+                        .transport_policy
+                        .as_ref()
+                        .unwrap()
+                        .same_origin_redirects
+                );
+                assert!(!result.headers.is_empty() || result.url.contains("test-token"));
+                assert!(header_value(&result, "x-second").is_none());
+            }
+        }
     }
 
     #[tokio::test]

@@ -22,7 +22,7 @@
 //! goes through, and the funnel takes that from the call site — where the
 //! generics are already substituted, which the declaration's spelling isn't.
 //!
-//! Missing a sig is a codegen panic, not a diagnostic, so these over-collect
+//! Missing a sig is an internal compiler failure, so these over-collect
 //! freely: `emit_arity_closures` dedups, and an unused shape costs one func
 //! type plus one struct type.
 
@@ -50,18 +50,27 @@ pub struct ClosureSig {
 impl ClosureSig {
     /// The closure ABI reduces a signature to these two facts, so callers that
     /// know an arity and a return type need not build a `Type::Function`.
-    pub fn of(arity: usize, ret: &Type) -> Self {
-        Self {
-            arity: u8::try_from(arity)
-                .expect("closure arity fits in u8 (Phase 1 caps at single-digit params)"),
+    pub fn of(arity: usize, ret: &Type) -> Result<Self, crate::compiler_error::CompilerFailure> {
+        let arity = crate::compiler_limits::checked_closure_arity(arity).map_err(|error| {
+            crate::compiler_error::CompilerFailure::Limit {
+                stage: crate::compiler_error::CompilerStage::Codegen,
+                span: None,
+                message: error.to_string(),
+                help: vec!["group arguments into an object or a rest parameter".into()],
+            }
+        })?;
+        Ok(Self {
+            arity,
             is_void: ret.is_void(),
-        }
+        })
     }
 }
 
-pub fn classify(sig: &Type) -> ClosureSig {
+pub fn classify(sig: &Type) -> Result<ClosureSig, crate::compiler_error::CompilerFailure> {
     let Type::Function { params, ret, .. } = sig.peel() else {
-        panic!("classify called with non-Function: {sig:?}");
+        return Err(super::internal_failure(
+            "closure classification requires a function type",
+        ));
     };
     ClosureSig::of(params.len(), ret)
 }
@@ -87,36 +96,36 @@ pub fn collect_from_dependencies<'a>(
     shapes: impl IntoIterator<Item = &'a Shape>,
     types: impl IntoIterator<Item = &'a DependencyType<'a>>,
     usage: &DependencyUsage,
-) -> Vec<ClosureSig> {
+) -> Result<Vec<ClosureSig>, crate::compiler_error::CompilerFailure> {
     let mut out: Vec<ClosureSig> = Vec::new();
     for value_sym in values {
         let ValueKind::Function { params, ret, .. } = &value_sym.kind else {
             continue;
         };
         for p in params {
-            walk_type(&p.ty, &mut out);
+            walk_type(&p.ty, &mut out)?;
         }
-        walk_type(ret, &mut out);
+        walk_type(ret, &mut out)?;
     }
     for shape in shapes {
         match shape {
             crate::Shape::Object { fields, index } => {
                 if let Some(index) = index {
-                    walk_type(&index.value, &mut out);
+                    walk_type(&index.value, &mut out)?;
                 }
                 for f in fields.values() {
-                    walk_type(&f.ty, &mut out);
+                    walk_type(&f.ty, &mut out)?;
                 }
             }
-            crate::Shape::Array(elem) => walk_type(elem, &mut out),
+            crate::Shape::Array(elem) => walk_type(elem, &mut out)?,
             crate::Shape::Tuple(elements) => {
                 for e in elements {
-                    walk_type(e, &mut out);
+                    walk_type(e, &mut out)?;
                 }
             }
             crate::Shape::Union(members) => {
                 for m in members {
-                    walk_type(m, &mut out);
+                    walk_type(m, &mut out)?;
                 }
             }
         }
@@ -137,23 +146,23 @@ pub fn collect_from_dependencies<'a>(
                             sig.params.iter().map(|p| &p.ty),
                             &sig.ret,
                             &mut out,
-                        );
+                        )?;
                     }
                 }
                 for (name, prop) in properties {
                     if usage.is_interface_member_used(ty_sym, name) {
-                        walk_type(&prop.ty, &mut out);
+                        walk_type(&prop.ty, &mut out)?;
                     }
                 }
             } else {
                 for (name, sig) in methods {
                     if usage.is_interface_member_used(ty_sym, name) {
-                        walk_signature_types(sig.params.iter().map(|p| &p.ty), &sig.ret, &mut out);
+                        walk_signature_types(sig.params.iter().map(|p| &p.ty), &sig.ret, &mut out)?;
                     }
                 }
                 for (name, prop) in properties {
                     if usage.is_interface_member_used(ty_sym, name) {
-                        walk_type(&prop.ty, &mut out);
+                        walk_type(&prop.ty, &mut out)?;
                     }
                 }
             }
@@ -174,25 +183,25 @@ pub fn collect_from_dependencies<'a>(
             // the producing package.
             for sig in methods.values() {
                 if sig.generics.is_empty() {
-                    dispatched_member_sigs(sig.params.iter().map(|p| &p.ty), &sig.ret, &mut out);
+                    dispatched_member_sigs(sig.params.iter().map(|p| &p.ty), &sig.ret, &mut out)?;
                 }
             }
             for p in constructor {
-                walk_type(&p.ty, &mut out);
+                walk_type(&p.ty, &mut out)?;
             }
             for f in fields.values() {
-                walk_type(&f.ty, &mut out);
+                walk_type(&f.ty, &mut out)?;
             }
             for sig in statics.values() {
-                walk_signature_types(sig.params.iter().map(|p| &p.ty), &sig.ret, &mut out);
+                walk_signature_types(sig.params.iter().map(|p| &p.ty), &sig.ret, &mut out)?;
             }
             for f in static_fields.values() {
-                walk_type(&f.ty, &mut out);
+                walk_type(&f.ty, &mut out)?;
             }
-            accessor_sigs(accessors, &mut out);
+            accessor_sigs(accessors, &mut out)?;
         }
     }
-    out
+    Ok(out)
 }
 
 /// Closure signatures for each local class's members — its own, and the ones it
@@ -202,17 +211,17 @@ pub fn collect_from_dependencies<'a>(
 pub fn class_member_sigs(
     ta: &TypedAst,
     dependencies: &[&crate::PackageDeclaration],
-) -> Vec<ClosureSig> {
+) -> Result<Vec<ClosureSig>, crate::compiler_error::CompilerFailure> {
     let mut out: Vec<ClosureSig> = Vec::new();
     for decl in &ta.types {
         let crate::TypedTypeDecl::Class(class) = decl else {
             continue;
         };
         for f in &class.fields {
-            walk_type(&f.ty, &mut out);
+            walk_type(&f.ty, &mut out)?;
         }
         for p in class.effective_ctor_params() {
-            walk_type(&p.ty, &mut out);
+            walk_type(&p.ty, &mut out)?;
         }
         for method in &class.methods {
             if method.generics.is_empty() {
@@ -220,13 +229,14 @@ pub fn class_member_sigs(
                     method.params.iter().map(|p| &p.ty),
                     &method.return_type,
                     &mut out,
-                );
+                )
+                .map_err(|error| error.with_span(method.name.span))?;
             }
         }
-        class_accessor_sigs(&class.accessors, &mut out);
-        inherited_dependency_sigs(class.extends.clone(), dependencies, &mut out);
+        class_accessor_sigs(&class.accessors, &mut out)?;
+        inherited_dependency_sigs(class.extends.clone(), dependencies, &mut out)?;
     }
-    out
+    Ok(out)
 }
 
 /// Every function-typed position nested inside a member's own signature.
@@ -234,11 +244,13 @@ fn walk_signature_types<'a>(
     params: impl IntoIterator<Item = &'a Type>,
     ret: &Type,
     out: &mut Vec<ClosureSig>,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     for ty in params {
-        walk_type(ty, out);
+        walk_type(ty, out)?;
     }
-    walk_type(ret, out);
+    walk_type(ret, out)?;
+
+    Ok(())
 }
 
 /// The sig the member itself dispatches through, plus everything
@@ -248,38 +260,48 @@ fn dispatched_member_sigs<'a>(
     params: impl ExactSizeIterator<Item = &'a Type>,
     ret: &Type,
     out: &mut Vec<ClosureSig>,
-) {
-    out.push(ClosureSig::of(params.len(), ret));
-    walk_signature_types(params, ret, out);
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    out.push(ClosureSig::of(params.len(), ret)?);
+    walk_signature_types(params, ret, out)?;
+
+    Ok(())
 }
 
 /// An accessor lowers to a getter `() -> R` or setter `(W) -> void` method,
 /// which dispatches like any other member.
-fn accessor_sigs(accessors: &[crate::AccessorSig], out: &mut Vec<ClosureSig>) {
+fn accessor_sigs(
+    accessors: &[crate::AccessorSig],
+    out: &mut Vec<ClosureSig>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     for acc in accessors {
         match acc {
             crate::AccessorSig::Getter { ret_ty, .. } => {
-                dispatched_member_sigs(std::iter::empty(), ret_ty, out);
+                dispatched_member_sigs(std::iter::empty(), ret_ty, out)?;
             }
             crate::AccessorSig::Setter { param, .. } => {
-                dispatched_member_sigs(std::iter::once(&param.ty), &Type::Void, out);
+                dispatched_member_sigs(std::iter::once(&param.ty), &Type::Void, out)?;
             }
         }
     }
+    Ok(())
 }
 
 /// The local-class mirror of [`accessor_sigs`] — same lowering, different enum.
-fn class_accessor_sigs(accessors: &[crate::TypedClassAccessor], out: &mut Vec<ClosureSig>) {
+fn class_accessor_sigs(
+    accessors: &[crate::TypedClassAccessor],
+    out: &mut Vec<ClosureSig>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     for acc in accessors {
         match acc {
             crate::TypedClassAccessor::Getter { ret_ty, .. } => {
-                dispatched_member_sigs(std::iter::empty(), ret_ty, out);
+                dispatched_member_sigs(std::iter::empty(), ret_ty, out)?;
             }
             crate::TypedClassAccessor::Setter { param, .. } => {
-                dispatched_member_sigs(std::iter::once(&param.ty), &Type::Void, out);
+                dispatched_member_sigs(std::iter::once(&param.ty), &Type::Void, out)?;
             }
         }
     }
+    Ok(())
 }
 
 /// Closure sigs for the methods a local class inherits from *dependency*
@@ -290,19 +312,19 @@ fn inherited_dependency_sigs(
     mut parent: Option<crate::MangledName>,
     dependencies: &[&crate::PackageDeclaration],
     out: &mut Vec<ClosureSig>,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let mut seen: std::collections::BTreeSet<crate::MangledName> =
         std::collections::BTreeSet::new();
     while let Some(mangled) = parent {
         if !seen.insert(mangled.clone()) {
-            return; // malformed cyclic chain; the typechecker reports it
+            return Ok(()); // malformed cyclic chain; the typechecker reports it
         }
         let Some(sym) = dependencies
             .iter()
             .flat_map(|d| d.types.values())
             .find(|t| t.mangled_name == mangled)
         else {
-            return;
+            return Ok(());
         };
         let crate::TypeKind::Class {
             methods,
@@ -311,46 +333,50 @@ fn inherited_dependency_sigs(
             ..
         } = &sym.kind
         else {
-            return;
+            return Ok(());
         };
         for sig in methods.values() {
             if sig.generics.is_empty() {
-                dispatched_member_sigs(sig.params.iter().map(|p| &p.ty), &sig.ret, out);
+                dispatched_member_sigs(sig.params.iter().map(|p| &p.ty), &sig.ret, out)?;
             }
         }
-        accessor_sigs(accessors, out);
+        accessor_sigs(accessors, out)?;
         parent = extends.as_ref().map(|e| e.parent.clone());
     }
+    Ok(())
 }
 
 /// Every function-typed position reachable from `ty`.
-pub(crate) fn walk_type(ty: &Type, out: &mut Vec<ClosureSig>) {
+pub(crate) fn walk_type(
+    ty: &Type,
+    out: &mut Vec<ClosureSig>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     match ty {
-        Type::Refined { ty, .. } | Type::Readonly(ty) => walk_type(ty, out),
+        Type::Refined { ty, .. } | Type::Readonly(ty) => walk_type(ty, out)?,
         Type::Function { params, ret, .. } => {
-            out.push(classify(ty));
+            out.push(classify(ty)?);
             for p in params {
-                walk_type(p, out);
+                walk_type(p, out)?;
             }
-            walk_type(ret, out);
+            walk_type(ret, out)?;
         }
-        Type::Array(elem) => walk_type(elem, out),
+        Type::Array(elem) => walk_type(elem, out)?,
         Type::Tuple(elements) => {
             for e in elements {
-                walk_type(e, out);
+                walk_type(e, out)?;
             }
         }
         Type::Object { fields, index } => {
             if let Some(index) = index {
-                walk_type(&index.value, out);
+                walk_type(&index.value, out)?;
             }
             for f in fields.values() {
-                walk_type(&f.ty, out);
+                walk_type(&f.ty, out)?;
             }
         }
         Type::InterfaceRef { args, .. } | Type::ClassRef { args, .. } => {
             for a in args {
-                walk_type(a, out);
+                walk_type(a, out)?;
             }
         }
         // A recursion back-edge has no inline body to walk — its
@@ -359,15 +385,15 @@ pub(crate) fn walk_type(ty: &Type, out: &mut Vec<ClosureSig>) {
         // stops the otherwise-infinite recursion.
         Type::AliasRef { args, .. } => {
             for a in args {
-                walk_type(a, out);
+                walk_type(a, out)?;
             }
         }
         Type::Union(members) => {
             for m in members {
-                walk_type(m, out);
+                walk_type(m, out)?;
             }
         }
-        Type::Alias { ty: inner, .. } => walk_type(inner, out),
+        Type::Alias { ty: inner, .. } => walk_type(inner, out)?,
         Type::Number
         | Type::NumberLiteral(_)
         | Type::BigInt
@@ -385,7 +411,8 @@ pub(crate) fn walk_type(ty: &Type, out: &mut Vec<ClosureSig>) {
         | Type::Unknown
         | Type::NumberEnum { .. }
         | Type::StringEnum { .. } => {}
-    }
+    };
+    Ok(())
 }
 
 pub fn emit_func_and_struct_types<I>(
@@ -393,12 +420,13 @@ pub fn emit_func_and_struct_types<I>(
     types: &mut TypeSection,
     symbols: &mut SymbolTable,
     next_type_idx: &mut u32,
-) where
+) -> Result<(), crate::compiler_error::CompilerFailure>
+where
     I: IntoIterator<Item = ClosureSig>,
 {
     let intrinsics = symbols
         .intrinsic_type_indices()
-        .expect("intrinsics declared by codegen entry");
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared by codegen entry"))?;
     let signatures = signatures.into_iter().flat_map(|sig| {
         [
             sig,
@@ -408,13 +436,14 @@ pub fn emit_func_and_struct_types<I>(
             },
         ]
     });
-    let assigned = emit_arity_closures(signatures, types, intrinsics, next_type_idx);
-    super::closure_coercions::emit_vtable_type(types, symbols, next_type_idx);
+    let assigned = emit_arity_closures(signatures, types, intrinsics, next_type_idx)?;
+    super::closure_coercions::emit_vtable_type(types, symbols, next_type_idx)?;
     for (sig, (fn_idx, struct_idx)) in assigned {
         symbols.record_closure_func_type(sig, fn_idx);
         symbols.record_closure_struct_type(sig, struct_idx);
         symbols.record_struct_supertype(struct_idx, closure_struct_supertype(intrinsics));
     }
+    Ok(())
 }
 
 /// Structural canonicalization unifies prelude and consumer copies at instantiation time.
@@ -423,7 +452,7 @@ pub fn emit_arity_closures<I>(
     types: &mut TypeSection,
     intrinsics: IntrinsicTypeIndices,
     next_type_idx: &mut u32,
-) -> BTreeMap<ClosureSig, (u32, u32)>
+) -> Result<BTreeMap<ClosureSig, (u32, u32)>, crate::compiler_error::CompilerFailure>
 where
     I: IntoIterator<Item = ClosureSig>,
 {
@@ -433,6 +462,7 @@ where
         .filter(|sig| seen.insert(*sig))
         .collect();
 
+    ensure_index_capacity(*next_type_idx, unique.len().checked_mul(2), 0)?;
     let mut assigned: BTreeMap<ClosureSig, (u32, u32)> = BTreeMap::new();
 
     let mut fn_indices: Vec<u32> = Vec::with_capacity(unique.len());
@@ -493,7 +523,7 @@ where
         assigned.insert(*sig, (fn_idx, struct_idx));
     }
 
-    assigned
+    Ok(assigned)
 }
 
 /// Must run after `box_types::emit` so env-field lookups for boxed captures resolve.
@@ -502,8 +532,11 @@ pub fn emit_env_types(
     types: &mut TypeSection,
     symbols: &mut SymbolTable,
     next_type_idx: &mut u32,
-) {
-    let string = symbols.string_type_idx().expect("string intrinsic");
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    ensure_index_capacity(*next_type_idx, Some(metas.len()), 2)?;
+    let string = symbols
+        .string_type_idx()
+        .ok_or_else(|| crate::codegen::internal_failure("string intrinsic"))?;
     types.ty().struct_([
         FieldType {
             element_type: StorageType::Val(ValType::Ref(RefType {
@@ -522,7 +555,10 @@ pub fn emit_env_types(
     ]);
     symbols.call_metadata_type = Some(*next_type_idx);
     *next_type_idx += 1;
-    let object = symbols.intrinsic_type_indices().expect("intrinsics").object;
+    let object = symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics"))?
+        .object;
     types.ty().struct_([
         FieldType {
             element_type: StorageType::Val(ValType::Ref(RefType {
@@ -545,16 +581,18 @@ pub fn emit_env_types(
         let mut fields: Vec<FieldType> = meta
             .captured
             .iter()
-            .map(|c| FieldType {
-                element_type: StorageType::Val(env_field_type(c, symbols)),
-                mutable: false,
+            .map(|c| {
+                Ok(FieldType {
+                    element_type: StorageType::Val(env_field_type(c, symbols)?),
+                    mutable: false,
+                })
             })
-            .collect();
+            .collect::<Result<_, crate::compiler_error::CompilerFailure>>()?;
         if !meta.runtime_generics.is_empty() {
             fields.push(FieldType {
                 element_type: StorageType::Val(super::runtime_descriptors::environment_type(
                     symbols,
-                )),
+                )?),
                 mutable: false,
             });
         }
@@ -565,7 +603,7 @@ pub fn emit_env_types(
                     heap_type: HeapType::Concrete(
                         symbols
                             .intrinsic_type_indices()
-                            .expect("intrinsics declared")
+                            .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?
                             .object,
                     ),
                 })),
@@ -587,6 +625,7 @@ pub fn emit_env_types(
         symbols.record_env_type(meta.expr_id, *next_type_idx);
         *next_type_idx += 1;
     }
+    Ok(())
 }
 
 /// Read by both the declaration and the recorded coercion edge, so the two
@@ -615,18 +654,21 @@ fn closure_func_type(sig: ClosureSig, intrinsics: IntrinsicTypeIndices) -> FuncT
     FuncType::new(wasm_params, results)
 }
 
-fn env_field_type(c: &CapturedVar, symbols: &SymbolTable) -> ValType {
-    if c.boxed {
-        let box_idx = symbols
-            .box_type_idx(&c.ty)
-            .expect("box type registered for every boxed capture");
+fn env_field_type(
+    c: &CapturedVar,
+    symbols: &SymbolTable,
+) -> Result<ValType, crate::compiler_error::CompilerFailure> {
+    Ok(if c.boxed {
+        let box_idx = symbols.box_type_idx(&c.ty)?.ok_or_else(|| {
+            crate::codegen::internal_failure("box type registered for every boxed capture")
+        })?;
         ValType::Ref(RefType {
             nullable: false,
             heap_type: HeapType::Concrete(box_idx),
         })
     } else {
-        symbols.value_type(&c.ty)
-    }
+        symbols.value_type(&c.ty)?
+    })
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -639,18 +681,21 @@ pub struct ClosureMethods {
     pub vtable_global_idx: u32,
 }
 
-pub fn allocate_methods(next_func_idx: &mut u32) -> ClosureMethods {
+pub fn allocate_methods(
+    next_func_idx: &mut u32,
+) -> Result<ClosureMethods, crate::compiler_error::CompilerFailure> {
+    ensure_index_capacity(*next_func_idx, Some(4), 0)?;
     let to_string_func = take(next_func_idx);
     let to_json_func = take(next_func_idx);
     let equals_func = take(next_func_idx);
     let hash_func = take(next_func_idx);
-    ClosureMethods {
+    Ok(ClosureMethods {
         to_string_func,
         to_json_func,
         equals_func,
         hash_func,
         vtable_global_idx: 0,
-    }
+    })
 }
 
 fn take(counter: &mut u32) -> u32 {
@@ -676,7 +721,8 @@ pub fn emit_vtable_global(
     symbols: &mut SymbolTable,
     next_global_idx: &mut u32,
     intrinsics: crate::codegen::intrinsics::IntrinsicTypeIndices,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    ensure_index_capacity(*next_global_idx, Some(1), 0)?;
     let init = wasm_encoder::ConstExpr::extended([
         wasm_encoder::Instruction::RefFunc(methods.to_string_func),
         wasm_encoder::Instruction::RefFunc(methods.to_json_func),
@@ -698,19 +744,21 @@ pub fn emit_vtable_global(
     let idx = take(next_global_idx);
     methods.vtable_global_idx = idx;
     symbols.set_closure_vtable_global(idx);
+
+    Ok(())
 }
 
 pub fn emit_method_bodies(
     code: &mut wasm_encoder::CodeSection,
     _methods: ClosureMethods,
     symbols: &SymbolTable,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let intrinsics = symbols
         .intrinsic_type_indices()
-        .expect("intrinsics declared by codegen entry");
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared by codegen entry"))?;
     let string_vtable_global_idx = symbols
         .prelude_global_idx("string_vtable")
-        .expect("string_vtable imported from prelude");
+        .ok_or_else(|| crate::codegen::internal_failure("string_vtable imported from prelude"))?;
 
     let mut to_string = wasm_encoder::Function::new(std::iter::empty());
     crate::codegen::intrinsics::push_string_literal(
@@ -718,7 +766,7 @@ pub fn emit_method_bodies(
         intrinsics,
         string_vtable_global_idx,
         "[object Function]",
-    );
+    )?;
     to_string.instruction(&wasm_encoder::Instruction::End);
     code.function(&to_string);
 
@@ -728,16 +776,18 @@ pub fn emit_method_bodies(
         intrinsics,
         string_vtable_global_idx,
         "null",
-    );
+    )?;
     to_json.instruction(&wasm_encoder::Instruction::End);
     code.function(&to_json);
 
-    code.function(&super::closure_coercions::emit_equals(symbols));
+    code.function(&super::closure_coercions::emit_equals(symbols)?);
 
     let mut hash = wasm_encoder::Function::new(std::iter::empty());
     hash.instruction(&wasm_encoder::Instruction::I32Const(0));
     hash.instruction(&wasm_encoder::Instruction::End);
     code.function(&hash);
+
+    Ok(())
 }
 
 /// `ref.func` in a const-expr requires declarative element coverage; these are the target indices.
@@ -748,4 +798,52 @@ pub fn declared_funcs(methods: ClosureMethods) -> Vec<u32> {
         methods.equals_func,
         methods.hash_func,
     ]
+}
+
+/// Validate the whole index range before emitting any of its declarations.
+pub(super) fn ensure_index_capacity(
+    next: u32,
+    count: Option<usize>,
+    fixed: u32,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let end = count
+        .and_then(|count| u32::try_from(count).ok())
+        .and_then(|count| count.checked_add(fixed))
+        .and_then(|count| next.checked_add(count));
+    if end.is_none() {
+        return Err(crate::compiler_error::CompilerFailure::Limit {
+            stage: crate::compiler_error::CompilerStage::Codegen,
+            span: None,
+            message: "closure declarations exceed the Wasm index space".into(),
+            help: vec!["reduce the number of declarations".into()],
+        });
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dependency_collection_checks_nested_callable_types() {
+        let signature = Type::Function {
+            params: vec![Type::Number; 256],
+            ret: Box::new(Type::Void),
+            predicate: None,
+            has_rest: false,
+        };
+        let shapes = [Shape::Array(Box::new(Type::Array(Box::new(signature))))];
+        let error = collect_from_dependencies([], shapes.iter(), [], &DependencyUsage::empty())
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            crate::compiler_error::CompilerFailure::Limit {
+                stage: crate::compiler_error::CompilerStage::Codegen,
+                span: None,
+                ..
+            }
+        ));
+        assert!(error.to_string().contains("256"));
+    }
 }

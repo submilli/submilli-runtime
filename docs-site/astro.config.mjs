@@ -120,10 +120,9 @@ export default defineConfig({
       sidebar: [
         { label: "Getting started", items: [{ autogenerate: { directory: "../docs/part-1-getting-started" } }] },
         { label: "Writing code", items: [{ autogenerate: { directory: "../docs/part-2-writing-code" } }] },
-        { label: "Running", items: [{ autogenerate: { directory: "../docs/part-3-running" } }] },
-        { label: "Security and governance", items: [{ autogenerate: { directory: "../docs/part-4-security-and-governance" } }] },
+        { label: "Blueprints", items: [{ autogenerate: { directory: "../docs/part-3-blueprints" } }] },
+        { label: "Submilli server", items: [{ autogenerate: { directory: "../docs/part-4-submilli-server" } }] },
         { label: "Crafting a package", items: [{ autogenerate: { directory: "../docs/part-5-crafting-a-package" } }] },
-        { label: "Going to production", items: [{ autogenerate: { directory: "../docs/part-6-going-to-production" } }] },
       ],
     }),
   ],

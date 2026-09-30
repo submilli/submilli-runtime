@@ -63,10 +63,25 @@ impl<'a> Lexer<'a> {
     }
 
     fn span(&self, start: u32, end: u32) -> Span {
-        Span::new(self.file, start, end)
+        Span {
+            file: self.file,
+            start,
+            end,
+        }
     }
 
     pub fn next_token(&mut self) -> Token {
+        let token = self.next_token_inner();
+        if self.fatal.is_none()
+            && let Err(error) = token.span.text(self.source, self.file)
+        {
+            self.fatal = Some(error.into_compiler_failure(CompilerStage::Parse));
+            return self.eof_token();
+        }
+        token
+    }
+
+    fn next_token_inner(&mut self) -> Token {
         if self.fatal.is_some() {
             return self.eof_token();
         }
@@ -1253,7 +1268,7 @@ mod tests {
     }
 
     fn sources(text: &str) -> Sources {
-        let (sources, _) = Sources::single("script.subm", text);
+        let (sources, _) = Sources::single("script.subm", text).unwrap();
         sources
     }
 
@@ -1343,50 +1358,50 @@ mod tests {
 
     #[test]
     fn lex_integer() {
-        expect_number("42", 42.0, Span::new(F, 0, 2));
+        expect_number("42", 42.0, Span::new(F, 0, 2).unwrap());
     }
 
     #[test]
     fn lex_zero() {
-        expect_number("0", 0.0, Span::new(F, 0, 1));
+        expect_number("0", 0.0, Span::new(F, 0, 1).unwrap());
     }
 
     #[test]
     #[allow(clippy::approx_constant)]
     fn lex_decimal() {
-        expect_number("3.14", 3.14, Span::new(F, 0, 4));
+        expect_number("3.14", 3.14, Span::new(F, 0, 4).unwrap());
     }
 
     #[test]
     fn lex_leading_zero_decimal() {
-        expect_number("0.5", 0.5, Span::new(F, 0, 3));
+        expect_number("0.5", 0.5, Span::new(F, 0, 3).unwrap());
     }
 
     #[test]
     fn lex_exponent() {
-        expect_number("1e10", 1e10, Span::new(F, 0, 4));
+        expect_number("1e10", 1e10, Span::new(F, 0, 4).unwrap());
     }
 
     #[test]
     fn lex_decimal_with_exponent() {
-        expect_number("1.5e10", 1.5e10, Span::new(F, 0, 6));
+        expect_number("1.5e10", 1.5e10, Span::new(F, 0, 6).unwrap());
     }
 
     #[test]
     fn lex_uppercase_exponent_with_negative_sign() {
-        expect_number("2E-3", 2e-3, Span::new(F, 0, 4));
+        expect_number("2E-3", 2e-3, Span::new(F, 0, 4).unwrap());
     }
 
     #[test]
     fn lex_positive_exponent() {
-        expect_number("1e+2", 1e2, Span::new(F, 0, 4));
+        expect_number("1e+2", 1e2, Span::new(F, 0, 4).unwrap());
     }
 
     #[test]
     fn lex_number_with_trailing_whitespace() {
         let mut lx = Lexer::new("42 ", crate::FileId(0));
         let tok = lx.next_token();
-        assert_eq!(tok.span, Span::new(F, 0, 2));
+        assert_eq!(tok.span, Span::new(F, 0, 2).unwrap());
         assert_eq!(tok.kind, TokenKind::NumberLiteral(42.0));
         assert_eq!(lx.next_token().kind, TokenKind::Eof);
         assert!(lx.into_diagnostics().is_empty());
@@ -1418,7 +1433,7 @@ mod tests {
         let mut lx = Lexer::new("", crate::FileId(0));
         let tok = lx.next_token();
         assert_eq!(tok.kind, TokenKind::Eof);
-        assert_eq!(tok.span, Span::new(F, 0, 0));
+        assert_eq!(tok.span, Span::new(F, 0, 0).unwrap());
         assert!(lx.into_diagnostics().is_empty());
     }
 
@@ -1428,9 +1443,9 @@ mod tests {
         assert!(diags.is_empty());
         let kinds: Vec<_> = tokens.iter().map(|t| &t.kind).collect();
         assert!(matches!(kinds[0], TokenKind::NumberLiteral(v) if *v == 1.0));
-        assert_eq!(tokens[0].span, Span::new(F, 0, 1));
+        assert_eq!(tokens[0].span, Span::new(F, 0, 1).unwrap());
         assert_eq!(tokens[1].kind, TokenKind::Dot);
-        assert_eq!(tokens[1].span, Span::new(F, 1, 2));
+        assert_eq!(tokens[1].span, Span::new(F, 1, 2).unwrap());
         assert_eq!(tokens[2].kind, TokenKind::Eof);
     }
 
@@ -1438,14 +1453,14 @@ mod tests {
     fn bare_exponent_is_nan_with_diagnostic() {
         let mut lx = Lexer::new("1e", crate::FileId(0));
         let tok = lx.next_token();
-        assert_eq!(tok.span, Span::new(F, 0, 2));
+        assert_eq!(tok.span, Span::new(F, 0, 2).unwrap());
         match tok.kind {
             TokenKind::NumberLiteral(v) => assert!(v.is_nan()),
             other => panic!("expected NumberLiteral(NaN), got {other:?}"),
         }
         let diags = lx.into_diagnostics();
         assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].span, Span::new(F, 1, 2));
+        assert_eq!(diags[0].span, Span::new(F, 1, 2).unwrap());
         assert_eq!(diags[0].message, "missing digits in exponent");
     }
 
@@ -1453,14 +1468,14 @@ mod tests {
     fn signed_exponent_with_no_digits_is_nan_with_diagnostic() {
         let mut lx = Lexer::new("3.14e+", crate::FileId(0));
         let tok = lx.next_token();
-        assert_eq!(tok.span, Span::new(F, 0, 6));
+        assert_eq!(tok.span, Span::new(F, 0, 6).unwrap());
         match tok.kind {
             TokenKind::NumberLiteral(v) => assert!(v.is_nan()),
             other => panic!("expected NumberLiteral(NaN), got {other:?}"),
         }
         let diags = lx.into_diagnostics();
         assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].span, Span::new(F, 4, 6));
+        assert_eq!(diags[0].span, Span::new(F, 4, 6).unwrap());
     }
 
     #[test]
@@ -1491,12 +1506,12 @@ mod tests {
 
     #[test]
     fn lex_bigint_simple() {
-        expect_bigint("42n", "42", Span::new(F, 0, 3));
+        expect_bigint("42n", "42", Span::new(F, 0, 3).unwrap());
     }
 
     #[test]
     fn lex_bigint_zero() {
-        expect_bigint("0n", "0", Span::new(F, 0, 2));
+        expect_bigint("0n", "0", Span::new(F, 0, 2).unwrap());
     }
 
     #[test]
@@ -1505,7 +1520,7 @@ mod tests {
         expect_bigint(
             "1267650600228229401496703205376n",
             "1267650600228229401496703205376",
-            Span::new(F, 0, 32),
+            Span::new(F, 0, 32).unwrap(),
         );
     }
 
@@ -1513,14 +1528,14 @@ mod tests {
     fn lex_bigint_fraction_rejected() {
         let mut lx = Lexer::new("3.14n", crate::FileId(0));
         let tok = lx.next_token();
-        assert_eq!(tok.span, Span::new(F, 0, 5));
+        assert_eq!(tok.span, Span::new(F, 0, 5).unwrap());
         match tok.kind {
             TokenKind::BigIntLiteral(ref s) => assert_eq!(s, "3"),
             other => panic!("expected BigIntLiteral (recovery), got {other:?}"),
         }
         let diags = lx.into_diagnostics();
         assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].span, Span::new(F, 0, 5));
+        assert_eq!(diags[0].span, Span::new(F, 0, 5).unwrap());
         assert!(
             diags[0]
                 .message
@@ -1534,7 +1549,7 @@ mod tests {
     fn lex_bigint_exponent_rejected() {
         let mut lx = Lexer::new("1e10n", crate::FileId(0));
         let tok = lx.next_token();
-        assert_eq!(tok.span, Span::new(F, 0, 5));
+        assert_eq!(tok.span, Span::new(F, 0, 5).unwrap());
         match tok.kind {
             TokenKind::BigIntLiteral(ref s) => assert_eq!(s, "1"),
             other => panic!("expected BigIntLiteral (recovery), got {other:?}"),
@@ -1552,31 +1567,31 @@ mod tests {
 
     #[test]
     fn lex_hex_literal() {
-        expect_number("0xff", 255.0, Span::new(F, 0, 4));
-        expect_number("0XFF", 255.0, Span::new(F, 0, 4));
-        expect_number("0x0", 0.0, Span::new(F, 0, 3));
-        expect_number("0x10", 16.0, Span::new(F, 0, 4));
+        expect_number("0xff", 255.0, Span::new(F, 0, 4).unwrap());
+        expect_number("0XFF", 255.0, Span::new(F, 0, 4).unwrap());
+        expect_number("0x0", 0.0, Span::new(F, 0, 3).unwrap());
+        expect_number("0x10", 16.0, Span::new(F, 0, 4).unwrap());
     }
 
     #[test]
     fn lex_binary_literal() {
-        expect_number("0b1010", 10.0, Span::new(F, 0, 6));
-        expect_number("0B1", 1.0, Span::new(F, 0, 3));
-        expect_number("0b0", 0.0, Span::new(F, 0, 3));
+        expect_number("0b1010", 10.0, Span::new(F, 0, 6).unwrap());
+        expect_number("0B1", 1.0, Span::new(F, 0, 3).unwrap());
+        expect_number("0b0", 0.0, Span::new(F, 0, 3).unwrap());
     }
 
     #[test]
     fn lex_octal_literal() {
-        expect_number("0o17", 15.0, Span::new(F, 0, 4));
-        expect_number("0O7", 7.0, Span::new(F, 0, 3));
-        expect_number("0o0", 0.0, Span::new(F, 0, 3));
+        expect_number("0o17", 15.0, Span::new(F, 0, 4).unwrap());
+        expect_number("0O7", 7.0, Span::new(F, 0, 3).unwrap());
+        expect_number("0o0", 0.0, Span::new(F, 0, 3).unwrap());
     }
 
     #[test]
     fn lex_radix_bigint() {
-        expect_bigint("0xffn", "255", Span::new(F, 0, 5));
-        expect_bigint("0b101n", "5", Span::new(F, 0, 6));
-        expect_bigint("0o17n", "15", Span::new(F, 0, 5));
+        expect_bigint("0xffn", "255", Span::new(F, 0, 5).unwrap());
+        expect_bigint("0b101n", "5", Span::new(F, 0, 6).unwrap());
+        expect_bigint("0o17n", "15", Span::new(F, 0, 5).unwrap());
     }
 
     #[test]
@@ -1584,7 +1599,7 @@ mod tests {
         expect_bigint(
             "0xffffffffffffffffn",
             "18446744073709551615",
-            Span::new(F, 0, 19),
+            Span::new(F, 0, 19).unwrap(),
         );
     }
 
@@ -1593,7 +1608,7 @@ mod tests {
         for src in ["0x", "0b", "0o"] {
             let mut lx = Lexer::new(src, crate::FileId(0));
             let tok = lx.next_token();
-            assert_eq!(tok.span, Span::new(F, 0, 2), "span for {src:?}");
+            assert_eq!(tok.span, Span::new(F, 0, 2).unwrap(), "span for {src:?}");
             assert!(
                 matches!(tok.kind, TokenKind::NumberLiteral(v) if v.is_nan()),
                 "expected NaN recovery for {src:?}, got {:?}",
@@ -1615,9 +1630,9 @@ mod tests {
         let (tokens, diags) = tokenize_all("0xfg");
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
         assert!(matches!(tokens[0].kind, TokenKind::NumberLiteral(v) if v == 15.0));
-        assert_eq!(tokens[0].span, Span::new(F, 0, 3));
+        assert_eq!(tokens[0].span, Span::new(F, 0, 3).unwrap());
         assert_eq!(tokens[1].kind, TokenKind::Identifier);
-        assert_eq!(tokens[1].span, Span::new(F, 3, 4));
+        assert_eq!(tokens[1].span, Span::new(F, 3, 4).unwrap());
     }
 
     #[test]
@@ -1626,7 +1641,7 @@ mod tests {
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
         let kinds: Vec<_> = tokens.iter().map(|t| &t.kind).collect();
         assert!(matches!(kinds[0], TokenKind::BigIntLiteral(s) if s == "42"));
-        assert_eq!(tokens[0].span, Span::new(F, 0, 3));
+        assert_eq!(tokens[0].span, Span::new(F, 0, 3).unwrap());
         assert_eq!(tokens[1].kind, TokenKind::Dot);
     }
 
@@ -2003,7 +2018,7 @@ mod tests {
             let (tok, _eof, diags) = tokenize_one(src);
             assert!(diags.is_empty(), "diagnostics for {src:?}");
             assert_eq!(tok.kind, expected, "kind mismatch for {src:?}");
-            assert_eq!(tok.span, Span::new(F, 0, src.len() as u32));
+            assert_eq!(tok.span, Span::new(F, 0, src.len() as u32).unwrap());
         }
     }
 
@@ -2022,7 +2037,7 @@ mod tests {
             let (tok, _eof, diags) = tokenize_one(src);
             assert!(diags.is_empty(), "diagnostics for {src:?}");
             assert_eq!(tok.kind, TokenKind::Identifier, "kind mismatch for {src:?}");
-            assert_eq!(tok.span, Span::new(F, 0, src.len() as u32));
+            assert_eq!(tok.span, Span::new(F, 0, src.len() as u32).unwrap());
         }
     }
 
@@ -2031,7 +2046,7 @@ mod tests {
         let (tok, _eof, diags) = tokenize_one("café");
         assert!(diags.is_empty());
         assert_eq!(tok.kind, TokenKind::Identifier);
-        assert_eq!(tok.span, Span::new(F, 0, "café".len() as u32));
+        assert_eq!(tok.span, Span::new(F, 0, "café".len() as u32).unwrap());
     }
 
     #[test]
@@ -2043,28 +2058,32 @@ mod tests {
 
     #[test]
     fn lex_arithmetic_operators() {
-        expect_single_token("+", TokenKind::Plus, Span::new(F, 0, 1));
-        expect_single_token("-", TokenKind::Minus, Span::new(F, 0, 1));
-        expect_single_token("*", TokenKind::Star, Span::new(F, 0, 1));
+        expect_single_token("+", TokenKind::Plus, Span::new(F, 0, 1).unwrap());
+        expect_single_token("-", TokenKind::Minus, Span::new(F, 0, 1).unwrap());
+        expect_single_token("*", TokenKind::Star, Span::new(F, 0, 1).unwrap());
         // `/` after an identifier is division; standalone it would start a regex literal.
         let (toks, diags) = tokenize_all("a / b");
         assert!(diags.is_empty(), "diags: {diags:?}");
         assert_eq!(toks[1].kind, TokenKind::Slash);
-        expect_single_token("%", TokenKind::Percent, Span::new(F, 0, 1));
+        expect_single_token("%", TokenKind::Percent, Span::new(F, 0, 1).unwrap());
     }
 
     #[test]
     fn lex_compound_assignment_operators() {
-        expect_single_token("+=", TokenKind::PlusEquals, Span::new(F, 0, 2));
-        expect_single_token("-=", TokenKind::MinusEquals, Span::new(F, 0, 2));
-        expect_single_token("*=", TokenKind::StarEquals, Span::new(F, 0, 2));
+        expect_single_token("+=", TokenKind::PlusEquals, Span::new(F, 0, 2).unwrap());
+        expect_single_token("-=", TokenKind::MinusEquals, Span::new(F, 0, 2).unwrap());
+        expect_single_token("*=", TokenKind::StarEquals, Span::new(F, 0, 2).unwrap());
         // `/=` after an identifier is compound-assign; standalone it would start a regex literal.
         let (toks, diags) = tokenize_all("a /= 2");
         assert!(diags.is_empty(), "diags: {diags:?}");
         assert_eq!(toks[1].kind, TokenKind::SlashEquals);
-        expect_single_token("%=", TokenKind::PercentEquals, Span::new(F, 0, 2));
-        expect_single_token("**", TokenKind::StarStar, Span::new(F, 0, 2));
-        expect_single_token("**=", TokenKind::StarStarEquals, Span::new(F, 0, 3));
+        expect_single_token("%=", TokenKind::PercentEquals, Span::new(F, 0, 2).unwrap());
+        expect_single_token("**", TokenKind::StarStar, Span::new(F, 0, 2).unwrap());
+        expect_single_token(
+            "**=",
+            TokenKind::StarStarEquals,
+            Span::new(F, 0, 3).unwrap(),
+        );
         // `**=` must beat `**` + `=` in greedy dispatch.
         let (toks, diags) = tokenize_all("a **= 2");
         assert!(diags.is_empty(), "diags: {diags:?}");
@@ -2083,7 +2102,7 @@ mod tests {
                 source: "abc".to_string(),
                 flags: String::new(),
             },
-            Span::new(F, 0, 5),
+            Span::new(F, 0, 5).unwrap(),
         );
     }
 
@@ -2261,8 +2280,8 @@ mod tests {
     #[test]
     fn lex_postfix_increment_decrement() {
         // `++` must beat `+=` in greedy dispatch; `--` must beat `-=`.
-        expect_single_token("++", TokenKind::PlusPlus, Span::new(F, 0, 2));
-        expect_single_token("--", TokenKind::MinusMinus, Span::new(F, 0, 2));
+        expect_single_token("++", TokenKind::PlusPlus, Span::new(F, 0, 2).unwrap());
+        expect_single_token("--", TokenKind::MinusMinus, Span::new(F, 0, 2).unwrap());
         let (toks, diags) = tokenize_all("+=");
         assert!(diags.is_empty());
         assert_eq!(toks[0].kind, TokenKind::PlusEquals);
@@ -2278,42 +2297,42 @@ mod tests {
 
     #[test]
     fn lex_equality_operators_longest_match() {
-        expect_single_token("=", TokenKind::Equals, Span::new(F, 0, 1));
-        expect_single_token("==", TokenKind::EqEq, Span::new(F, 0, 2));
-        expect_single_token("===", TokenKind::EqEqEq, Span::new(F, 0, 3));
-        expect_single_token("!", TokenKind::Bang, Span::new(F, 0, 1));
-        expect_single_token("!=", TokenKind::BangEq, Span::new(F, 0, 2));
-        expect_single_token("!==", TokenKind::BangEqEq, Span::new(F, 0, 3));
+        expect_single_token("=", TokenKind::Equals, Span::new(F, 0, 1).unwrap());
+        expect_single_token("==", TokenKind::EqEq, Span::new(F, 0, 2).unwrap());
+        expect_single_token("===", TokenKind::EqEqEq, Span::new(F, 0, 3).unwrap());
+        expect_single_token("!", TokenKind::Bang, Span::new(F, 0, 1).unwrap());
+        expect_single_token("!=", TokenKind::BangEq, Span::new(F, 0, 2).unwrap());
+        expect_single_token("!==", TokenKind::BangEqEq, Span::new(F, 0, 3).unwrap());
     }
 
     #[test]
     fn lex_arrow_token() {
-        expect_single_token("=>", TokenKind::Arrow, Span::new(F, 0, 2));
+        expect_single_token("=>", TokenKind::Arrow, Span::new(F, 0, 2).unwrap());
     }
 
     #[test]
     fn lex_comparison_operators() {
-        expect_single_token("<", TokenKind::LessThan, Span::new(F, 0, 1));
-        expect_single_token(">", TokenKind::GreaterThan, Span::new(F, 0, 1));
-        expect_single_token("<=", TokenKind::LessEquals, Span::new(F, 0, 2));
-        expect_single_token(">=", TokenKind::GreaterEquals, Span::new(F, 0, 2));
+        expect_single_token("<", TokenKind::LessThan, Span::new(F, 0, 1).unwrap());
+        expect_single_token(">", TokenKind::GreaterThan, Span::new(F, 0, 1).unwrap());
+        expect_single_token("<=", TokenKind::LessEquals, Span::new(F, 0, 2).unwrap());
+        expect_single_token(">=", TokenKind::GreaterEquals, Span::new(F, 0, 2).unwrap());
     }
 
     #[test]
     fn lex_logical_operators() {
-        expect_single_token("&&", TokenKind::AmpAmp, Span::new(F, 0, 2));
-        expect_single_token("||", TokenKind::PipePipe, Span::new(F, 0, 2));
+        expect_single_token("&&", TokenKind::AmpAmp, Span::new(F, 0, 2).unwrap());
+        expect_single_token("||", TokenKind::PipePipe, Span::new(F, 0, 2).unwrap());
     }
 
     #[test]
     fn lex_pipe_longest_match() {
-        expect_single_token("|", TokenKind::Pipe, Span::new(F, 0, 1));
-        expect_single_token("||", TokenKind::PipePipe, Span::new(F, 0, 2));
+        expect_single_token("|", TokenKind::Pipe, Span::new(F, 0, 1).unwrap());
+        expect_single_token("||", TokenKind::PipePipe, Span::new(F, 0, 2).unwrap());
     }
 
     #[test]
     fn lex_dot_standalone_and_after_identifier() {
-        expect_single_token(".", TokenKind::Dot, Span::new(F, 0, 1));
+        expect_single_token(".", TokenKind::Dot, Span::new(F, 0, 1).unwrap());
         let (tokens, diags) = tokenize_all("foo.bar");
         assert!(diags.is_empty());
         assert_eq!(tokens[0].kind, TokenKind::Identifier);
@@ -2330,16 +2349,16 @@ mod tests {
 
     #[test]
     fn lex_all_delimiters() {
-        expect_single_token("(", TokenKind::LeftParen, Span::new(F, 0, 1));
-        expect_single_token(")", TokenKind::RightParen, Span::new(F, 0, 1));
-        expect_single_token("{", TokenKind::LeftBrace, Span::new(F, 0, 1));
-        expect_single_token("}", TokenKind::RightBrace, Span::new(F, 0, 1));
-        expect_single_token("[", TokenKind::LeftBracket, Span::new(F, 0, 1));
-        expect_single_token("]", TokenKind::RightBracket, Span::new(F, 0, 1));
-        expect_single_token(",", TokenKind::Comma, Span::new(F, 0, 1));
-        expect_single_token(":", TokenKind::Colon, Span::new(F, 0, 1));
-        expect_single_token(";", TokenKind::Semicolon, Span::new(F, 0, 1));
-        expect_single_token("?", TokenKind::Question, Span::new(F, 0, 1));
+        expect_single_token("(", TokenKind::LeftParen, Span::new(F, 0, 1).unwrap());
+        expect_single_token(")", TokenKind::RightParen, Span::new(F, 0, 1).unwrap());
+        expect_single_token("{", TokenKind::LeftBrace, Span::new(F, 0, 1).unwrap());
+        expect_single_token("}", TokenKind::RightBrace, Span::new(F, 0, 1).unwrap());
+        expect_single_token("[", TokenKind::LeftBracket, Span::new(F, 0, 1).unwrap());
+        expect_single_token("]", TokenKind::RightBracket, Span::new(F, 0, 1).unwrap());
+        expect_single_token(",", TokenKind::Comma, Span::new(F, 0, 1).unwrap());
+        expect_single_token(":", TokenKind::Colon, Span::new(F, 0, 1).unwrap());
+        expect_single_token(";", TokenKind::Semicolon, Span::new(F, 0, 1).unwrap());
+        expect_single_token("?", TokenKind::Question, Span::new(F, 0, 1).unwrap());
     }
 
     #[test]
@@ -2363,17 +2382,17 @@ mod tests {
 
     #[test]
     fn lex_newline_lf() {
-        expect_single_token("\n", TokenKind::Newline, Span::new(F, 0, 1));
+        expect_single_token("\n", TokenKind::Newline, Span::new(F, 0, 1).unwrap());
     }
 
     #[test]
     fn lex_newline_crlf_is_one_token() {
-        expect_single_token("\r\n", TokenKind::Newline, Span::new(F, 0, 2));
+        expect_single_token("\r\n", TokenKind::Newline, Span::new(F, 0, 2).unwrap());
     }
 
     #[test]
     fn lex_newline_cr() {
-        expect_single_token("\r", TokenKind::Newline, Span::new(F, 0, 1));
+        expect_single_token("\r", TokenKind::Newline, Span::new(F, 0, 1).unwrap());
     }
 
     #[test]
@@ -2436,7 +2455,7 @@ mod tests {
         let (_, diags) = tokenize_all("/* unterminated");
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].message, "unterminated block comment");
-        assert_eq!(diags[0].span, Span::new(F, 0, 2));
+        assert_eq!(diags[0].span, Span::new(F, 0, 2).unwrap());
     }
 
     #[test]
@@ -2452,7 +2471,7 @@ mod tests {
         let (tok, eof, diags) = tokenize_one("/** Summary. */ foo");
         let doc = tok.leading_doc.as_ref().expect("doc attached");
         assert_eq!(doc.text, "/** Summary. */");
-        assert_eq!(doc.span, Span::new(F, 0, 15));
+        assert_eq!(doc.span, Span::new(F, 0, 15).unwrap());
         assert_eq!(tok.kind, TokenKind::Identifier);
         assert!(eof.leading_doc.is_none());
         assert!(diags.is_empty());

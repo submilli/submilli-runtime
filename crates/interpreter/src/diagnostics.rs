@@ -1,6 +1,4 @@
-use std::fmt::Write;
-
-use crate::source::Sources;
+use crate::source::{SourceError, Sources};
 use crate::{LineIndex, Span};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -27,13 +25,11 @@ pub fn render(diagnostic: &Diagnostic, sources: &Sources) -> String {
     let gutter_blank = " ".repeat(gutter_width);
 
     let mut out = String::new();
-    writeln!(
-        out,
-        "{}: {}",
+    out.push_str(&format!(
+        "{}: {}\n",
         severity_str(diagnostic.severity),
         diagnostic.message
-    )
-    .unwrap();
+    ));
     render_anchored_block(
         &mut out,
         sources,
@@ -43,13 +39,13 @@ pub fn render(diagnostic: &Diagnostic, sources: &Sources) -> String {
     );
 
     for help in &diagnostic.help {
-        writeln!(out, "{gutter_blank} |").unwrap();
-        writeln!(out, "help: {help}").unwrap();
+        out.push_str(&format!("{gutter_blank} |\n"));
+        out.push_str(&format!("help: {help}\n"));
     }
 
     for (note_span, note_msg) in &diagnostic.notes {
-        writeln!(out, "{gutter_blank} |").unwrap();
-        writeln!(out, "note: {note_msg}").unwrap();
+        out.push_str(&format!("{gutter_blank} |\n"));
+        out.push_str(&format!("note: {note_msg}\n"));
         render_anchored_block(&mut out, sources, *note_span, &gutter_blank, gutter_width);
     }
 
@@ -71,7 +67,9 @@ fn gutter_width_for_spans(sources: &Sources, spans: impl IntoIterator<Item = Spa
         };
         let line_index = file.line_index();
         let line_count = line_index.line_count().max(1);
-        let (end_line, _) = line_index.line_col(span.end);
+        let Ok((end_line, _)) = line_index.line_col(span.end) else {
+            continue;
+        };
         // +1 for the context line below, clamped to file bounds.
         max_line = max_line.max(end_line.saturating_add(1).min(line_count));
     }
@@ -85,30 +83,36 @@ fn render_anchored_block(
     gutter_blank: &str,
     gutter_width: usize,
 ) {
-    let Some(file) = sources.get(span.file) else {
-        // Reserved (prelude/stdlib) ids aren't in the registry; show their
-        // virtual path. Anything else is a bug — fall back rather than panic.
-        let path = span.file.reserved_path().unwrap_or("<unknown>");
-        writeln!(out, "{gutter_blank}--> {path}").unwrap();
-        return;
-    };
+    match source_context(sources, span, gutter_blank, gutter_width) {
+        Ok(context) => out.push_str(&context),
+        Err(error) => out.push_str(&format!(
+            "{gutter_blank} | source context unavailable: {error}\n"
+        )),
+    }
+}
+
+fn source_context(
+    sources: &Sources,
+    span: Span,
+    gutter_blank: &str,
+    gutter_width: usize,
+) -> Result<String, SourceError> {
+    Span::new(span.file, span.start, span.end)?;
+    if let Some(path) = span.file.reserved_path() {
+        return Ok(format!("{gutter_blank}--> {path}\n"));
+    }
+    let file = sources
+        .get(span.file)
+        .ok_or(SourceError::UnknownFile { file: span.file })?;
+    file.span_text(span)?;
     let line_index = file.line_index();
-    let (start_line, start_col) = line_index.line_col(span.start);
-    writeln!(
-        out,
-        "{gutter_blank}--> {}:{start_line}:{start_col}",
+    let (start_line, start_col) = line_index.line_col(span.start)?;
+    let mut out = format!(
+        "{gutter_blank}--> {}:{start_line}:{start_col}\n{gutter_blank} |\n",
         file.path
-    )
-    .unwrap();
-    writeln!(out, "{gutter_blank} |").unwrap();
-    render_source_block(
-        out,
-        &file.text,
-        line_index,
-        span,
-        gutter_blank,
-        gutter_width,
     );
+    render_source_block(&mut out, line_index, span, gutter_blank, gutter_width)?;
+    Ok(out)
 }
 
 /// Source-context block for `span`. Shared with `backtrace` so compile and
@@ -116,35 +120,31 @@ fn render_anchored_block(
 /// the `--> file:line:col` header.
 pub(crate) fn render_source_block(
     out: &mut String,
-    source: &str,
     line_index: &LineIndex,
     span: Span,
     gutter_blank: &str,
     gutter_width: usize,
-) {
-    let (start_line, start_col) = line_index.line_col(span.start);
-    let (end_line, end_col) = line_index.line_col(span.end);
+) -> Result<(), SourceError> {
+    span.text(line_index.source(), span.file)?;
+    let (start_line, start_col) = line_index.line_col(span.start)?;
+    let (end_line, end_col) = line_index.line_col(span.end)?;
     let line_count = line_index.line_count();
 
     if start_line > 1 {
-        let prev = line_index.line_text(source, start_line - 1);
-        writeln!(
-            out,
-            "{:>width$} | {}",
+        let prev = line_index.line_text(start_line - 1)?;
+        out.push_str(&format!(
+            "{:>width$} | {}\n",
             start_line - 1,
             expand_tabs(prev),
             width = gutter_width
-        )
-        .unwrap();
+        ));
     }
 
-    let start_text = line_index.line_text(source, start_line);
-    writeln!(
-        out,
-        "{start_line:>gutter_width$} | {}",
+    let start_text = line_index.line_text(start_line)?;
+    out.push_str(&format!(
+        "{start_line:>gutter_width$} | {}\n",
         expand_tabs(start_text)
-    )
-    .unwrap();
+    ));
     let caret_indent = display_column(start_text, start_col - 1);
     let caret_len = if start_line == end_line {
         display_column(start_text, end_col - 1)
@@ -156,40 +156,43 @@ pub(crate) fn render_source_block(
             .saturating_sub(caret_indent)
             .max(1)
     };
-    writeln!(
-        out,
-        "{} | {}{}",
+    out.push_str(&format!(
+        "{} | {}{}\n",
         gutter_blank,
         " ".repeat(caret_indent),
         "^".repeat(caret_len)
-    )
-    .unwrap();
+    ));
 
     if end_line > start_line {
         for mid_line in (start_line + 1)..end_line {
-            let mid_text = line_index.line_text(source, mid_line);
-            writeln!(out, "{mid_line:>gutter_width$} | {}", expand_tabs(mid_text)).unwrap();
+            let mid_text = line_index.line_text(mid_line)?;
+            out.push_str(&format!(
+                "{mid_line:>gutter_width$} | {}\n",
+                expand_tabs(mid_text)
+            ));
             let mid_carets = display_column(mid_text, u32::MAX).max(1);
-            writeln!(out, "{} | {}", gutter_blank, "^".repeat(mid_carets)).unwrap();
+            out.push_str(&format!("{} | {}\n", gutter_blank, "^".repeat(mid_carets)));
         }
-        let end_text = line_index.line_text(source, end_line);
-        writeln!(out, "{end_line:>gutter_width$} | {}", expand_tabs(end_text)).unwrap();
+        let end_text = line_index.line_text(end_line)?;
+        out.push_str(&format!(
+            "{end_line:>gutter_width$} | {}\n",
+            expand_tabs(end_text)
+        ));
         let end_carets = display_column(end_text, end_col.saturating_sub(1)).max(1);
-        writeln!(out, "{} | {}", gutter_blank, "^".repeat(end_carets)).unwrap();
+        out.push_str(&format!("{} | {}\n", gutter_blank, "^".repeat(end_carets)));
     }
 
     // Skip at EOF; line_count is the last addressable line.
     if end_line < line_count {
-        let next = line_index.line_text(source, end_line + 1);
-        writeln!(
-            out,
-            "{:>width$} | {}",
+        let next = line_index.line_text(end_line + 1)?;
+        out.push_str(&format!(
+            "{:>width$} | {}\n",
             end_line + 1,
             expand_tabs(next),
             width = gutter_width
-        )
-        .unwrap();
+        ));
     }
+    Ok(())
 }
 
 /// Terminal column at a byte offset. Source columns remain byte-based for LSP
@@ -239,7 +242,7 @@ mod tests {
     const F: FileId = FileId(0);
 
     fn sources(text: &str) -> Sources {
-        let (sources, _) = Sources::single("script.subm", text);
+        let (sources, _) = Sources::single("script.subm", text).unwrap();
         sources
     }
 
@@ -247,16 +250,16 @@ mod tests {
     fn construct_and_read_fields() {
         let d = Diagnostic {
             severity: Severity::Error,
-            span: Span::new(F, 10, 20),
+            span: Span::new(F, 10, 20).unwrap(),
             message: "type mismatch".to_string(),
             help: vec![],
-            notes: vec![(Span::new(F, 5, 8), "defined here".to_string())],
+            notes: vec![(Span::new(F, 5, 8).unwrap(), "defined here".to_string())],
         };
         assert_eq!(d.severity, Severity::Error);
-        assert_eq!(d.span, Span::new(F, 10, 20));
+        assert_eq!(d.span, Span::new(F, 10, 20).unwrap());
         assert_eq!(d.message, "type mismatch");
         assert_eq!(d.notes.len(), 1);
-        assert_eq!(d.notes[0].0, Span::new(F, 5, 8));
+        assert_eq!(d.notes[0].0, Span::new(F, 5, 8).unwrap());
         assert_eq!(d.notes[0].1, "defined here");
     }
 
@@ -264,7 +267,7 @@ mod tests {
     fn clone_is_equal() {
         let d = Diagnostic {
             severity: Severity::Warning,
-            span: Span::new(F, 0, 3),
+            span: Span::new(F, 0, 3).unwrap(),
             message: "unused variable".to_string(),
             help: vec![],
             notes: vec![],
@@ -277,7 +280,7 @@ mod tests {
         let source = "let x = 1;\nlet y: number = \"hello\";\nlet z = 2;\n";
         let diag = Diagnostic {
             severity: Severity::Error,
-            span: Span::new(F, 27, 34),
+            span: Span::new(F, 27, 34).unwrap(),
             message: "type mismatch: expected `number`, found `string`".to_string(),
             help: vec![],
             notes: vec![],
@@ -292,7 +295,7 @@ mod tests {
         let start = source.find("bad").unwrap() as u32;
         let diag = Diagnostic {
             severity: Severity::Error,
-            span: Span::new(F, start, start + 3),
+            span: Span::new(F, start, start + 3).unwrap(),
             message: "unresolved identifier `bad`".to_string(),
             help: vec![],
             notes: vec![],
@@ -320,7 +323,7 @@ mod tests {
             let start = source.find(target).unwrap();
             let diag = Diagnostic {
                 severity: Severity::Error,
-                span: Span::new(F, start as u32, (start + target.len()) as u32),
+                span: Span::new(F, start as u32, (start + target.len()) as u32).unwrap(),
                 message: "bad value".into(),
                 help: vec![],
                 notes: vec![],
@@ -342,7 +345,7 @@ mod tests {
         let end = source.find('終').unwrap() + '終'.len_utf8();
         let diag = Diagnostic {
             severity: Severity::Error,
-            span: Span::new(F, 1, end as u32),
+            span: Span::new(F, 1, end as u32).unwrap(),
             message: "multiline".into(),
             help: vec![],
             notes: vec![],
@@ -363,13 +366,16 @@ mod tests {
         let source = "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\n";
         let diag = Diagnostic {
             severity: Severity::Error,
-            span: Span::new(F, 2, 3), // "b" on line 2
+            span: Span::new(F, 2, 3).unwrap(), // "b" on line 2
             message: "missing return in all code paths".to_string(),
             help: vec![],
             notes: vec![
-                (Span::new(F, 0, 1), "function declared here".to_string()),
                 (
-                    Span::new(F, 20, 21),
+                    Span::new(F, 0, 1).unwrap(),
+                    "function declared here".to_string(),
+                ),
+                (
+                    Span::new(F, 20, 21).unwrap(),
                     "this branch returns, but else does not".to_string(),
                 ),
             ],
@@ -382,7 +388,7 @@ mod tests {
         let source = "hello";
         let diag = Diagnostic {
             severity: Severity::Error,
-            span: Span::new(F, 5, 5),
+            span: Span::new(F, 5, 5).unwrap(),
             message: "expected `;`".to_string(),
             help: vec![],
             notes: vec![],
@@ -395,7 +401,7 @@ mod tests {
         let source = "let unused = 42;\n";
         let diag = Diagnostic {
             severity: Severity::Warning,
-            span: Span::new(F, 4, 10),
+            span: Span::new(F, 4, 10).unwrap(),
             message: "unused variable `unused`".to_string(),
             help: vec![],
             notes: vec![],
@@ -409,7 +415,7 @@ mod tests {
         let source = "first\nsecond\nthird\n";
         let diag = Diagnostic {
             severity: Severity::Error,
-            span: Span::new(F, 0, 5),
+            span: Span::new(F, 0, 5).unwrap(),
             message: "boom".to_string(),
             help: vec![],
             notes: vec![],
@@ -424,7 +430,7 @@ mod tests {
         let source = "first\nsecond\nthird";
         let diag = Diagnostic {
             severity: Severity::Error,
-            span: Span::new(F, 13, 18),
+            span: Span::new(F, 13, 18).unwrap(),
             message: "boom".to_string(),
             help: vec![],
             notes: vec![],
@@ -442,7 +448,7 @@ mod tests {
         let end = source.find("end").unwrap() as u32 + 3;
         let diag = Diagnostic {
             severity: Severity::Error,
-            span: Span::new(F, start, end),
+            span: Span::new(F, start, end).unwrap(),
             message: "multi-line span".to_string(),
             help: vec![],
             notes: vec![],
@@ -455,7 +461,7 @@ mod tests {
         let source = "let x = foo.bar;\n";
         let diag = Diagnostic {
             severity: Severity::Error,
-            span: Span::new(F, 12, 15),
+            span: Span::new(F, 12, 15).unwrap(),
             message: "field `bar` does not exist on `Foo`".to_string(),
             help: vec!["interface Foo {\n  baz: number;\n}".to_string()],
             notes: vec![],
@@ -468,10 +474,10 @@ mod tests {
         let source = "a\nb\nc\n";
         let diag = Diagnostic {
             severity: Severity::Error,
-            span: Span::new(F, 2, 3),
+            span: Span::new(F, 2, 3).unwrap(),
             message: "bad".to_string(),
             help: vec!["try this instead".to_string()],
-            notes: vec![(Span::new(F, 0, 1), "declared here".to_string())],
+            notes: vec![(Span::new(F, 0, 1).unwrap(), "declared here".to_string())],
         };
         insta::assert_snapshot!(render(&diag, &sources(source)));
     }
@@ -481,7 +487,7 @@ mod tests {
         let source = "x\n";
         let diag = Diagnostic {
             severity: Severity::Error,
-            span: Span::new(F, 0, 1),
+            span: Span::new(F, 0, 1).unwrap(),
             message: "bad".to_string(),
             help: vec!["first hint".to_string(), "second hint".to_string()],
             notes: vec![],

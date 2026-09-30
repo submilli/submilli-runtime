@@ -59,10 +59,10 @@ pub(super) fn emit_try_finally(
     body: StmtId,
     catches: &[TypedCatchClause],
     finally: StmtId,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let action = emitter.add_anonymous_local(ValType::I32);
     let exception = emitter.add_anonymous_local(ValType::EXNREF);
-    let result = emitter.wasm_result_type(ctx).map(|ty| {
+    let result = emitter.wasm_result_type(ctx)?.map(|ty| {
         let (storage, non_null) = match ty {
             ValType::Ref(mut reference) => {
                 let non_null = !reference.nullable;
@@ -89,7 +89,7 @@ pub(super) fn emit_try_finally(
         std::borrow::Cow::Owned(vec![Catch::AllRef { label: 0 }]),
     ));
     emitter.bump_block_depth();
-    stmt::emit_try(emitter, ctx, body, catches, None);
+    stmt::emit_try(emitter, ctx, body, catches, None)?;
     emitter.emit_end();
     emitter.instruction(Instruction::Br(1));
     emitter.emit_end();
@@ -101,9 +101,10 @@ pub(super) fn emit_try_finally(
     // Transfers or throws from cleanup supersede the pending completion and
     // can reach enclosing handlers, but never this try's own catch or finally.
     emitter.push_scope();
-    stmt::emit_statement(emitter, ctx, finally);
+    stmt::emit_statement(emitter, ctx, finally)?;
     emitter.pop_scope();
     emit_completion_dispatch(emitter, frame, exception);
+    Ok(())
 }
 
 fn emit_completion_dispatch(emitter: &mut FunctionEmitter, frame: FinallyFrame, exception: u32) {

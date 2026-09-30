@@ -9,16 +9,18 @@ use wasm_encoder::{
     ValType,
 };
 
-pub fn environment_type(symbols: &SymbolTable) -> ValType {
-    ValType::Ref(RefType {
+pub fn environment_type(
+    symbols: &SymbolTable,
+) -> Result<ValType, crate::compiler_error::CompilerFailure> {
+    Ok(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(
             symbols
                 .intrinsic_type_indices()
-                .expect("intrinsics")
+                .ok_or_else(|| crate::codegen::internal_failure("intrinsics"))?
                 .object_fields,
         ),
-    })
+    }))
 }
 
 pub fn parameters(ty: &Type) -> Vec<String> {
@@ -76,13 +78,15 @@ pub fn allocate(
     extra: &BTreeSet<Type>,
     symbols: &mut SymbolTable,
     next: &mut u32,
-) -> Vec<(Type, u32)> {
+) -> Result<Vec<(Type, u32)>, crate::compiler_error::CompilerFailure> {
     let mut targets = BTreeSet::from([Type::Unknown]);
     targets.extend(extra.iter().cloned());
     let mut has_generic_calls = false;
-    for index in 0..ta.exprs_len() {
-        if let TypedExprKind::GenericCall { type_args, .. } =
-            &ta.expr(crate::ExprId(index as u32)).kind
+    for index in ta.expr_ids().map_err(crate::codegen::arena_failure)? {
+        if let TypedExprKind::GenericCall { type_args, .. } = &ta
+            .try_expr(index)
+            .map_err(crate::codegen::arena_failure)?
+            .kind
         {
             has_generic_calls = true;
             targets.extend(type_args.iter().cloned());
@@ -102,7 +106,7 @@ pub fn allocate(
             .flatten()
             .any(|guard| !parameters(&guard.target).is_empty())
     {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let mut descriptors = Vec::new();
     for ty in targets {
@@ -113,7 +117,7 @@ pub fn allocate(
         descriptors.push((ty, *next));
         *next += 1;
     }
-    descriptors
+    Ok(descriptors)
 }
 
 /// Closed predicates are singletons so recursive calls retain effective type identity.
@@ -121,7 +125,7 @@ pub fn allocate_globals(
     globals: &mut GlobalSection,
     symbols: &mut SymbolTable,
     next: &mut u32,
-) -> u32 {
+) -> Result<u32, crate::compiler_error::CompilerFailure> {
     let closed: Vec<_> = symbols
         .type_descriptor_functions
         .keys()
@@ -129,11 +133,11 @@ pub fn allocate_globals(
         .cloned()
         .collect();
     if closed.is_empty() {
-        return 0;
+        return Ok(0);
     }
     let closure = symbols
         .closure_struct_type_idx(field_guards::signature())
-        .expect("descriptor closure");
+        .ok_or_else(|| crate::codegen::internal_failure("descriptor closure"))?;
     for ty in &closed {
         symbols.type_descriptor_globals.insert(ty.clone(), *next);
         *next += 1;
@@ -149,32 +153,48 @@ pub fn allocate_globals(
             &ConstExpr::ref_null(HeapType::Concrete(closure)),
         );
     }
-    closed.len() as u32
+    Ok(closed.len() as u32)
 }
 
-pub fn environment(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, types: &[Type]) {
+pub fn environment(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    types: &[Type],
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     for ty in types {
-        emit(emitter, ctx, ty);
+        emit(emitter, ctx, ty)?;
     }
     emitter.instruction(Instruction::ArrayNewFixed {
         array_type_index: ctx
             .symbols
             .intrinsic_type_indices()
-            .expect("intrinsics")
+            .ok_or_else(|| crate::codegen::internal_failure("intrinsics"))?
             .object_fields,
         array_size: types.len() as u32,
     });
+
+    Ok(())
 }
 
-pub fn capture(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, ty: &Type) {
+pub fn capture(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let types: Vec<_> = parameters(ty).into_iter().map(Type::TypeVar).collect();
-    environment(emitter, ctx, &types);
+    environment(emitter, ctx, &types)?;
+
+    Ok(())
 }
 
 /// A generic helper binds declaration parameters, rather than free variables in
 /// this particular instantiation. Pair arguments in declaration order, then sort
 /// by parameter name to match `parameters()` and the helper's binding slots.
-pub fn validator_environment(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, key: &Type) {
+pub fn validator_environment(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    key: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     if let Some((names, _)) = ctx.symbols.generic_runtime_validator(key)
         && let Type::AliasRef { args, .. } | Type::InterfaceRef { args, .. } = key.peel()
     {
@@ -187,83 +207,102 @@ pub fn validator_environment(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, ke
                 .into_iter()
                 .map(|(_, arg)| arg.clone())
                 .collect::<Vec<_>>(),
-        );
-        return;
+        )?;
+        return Ok(());
     }
-    capture(emitter, ctx, key);
+    capture(emitter, ctx, key)?;
+
+    Ok(())
 }
 
-fn emit(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, ty: &Type) {
+fn emit(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     if let Type::TypeVar(name) | Type::GenericParam { name, .. } = ty.peel() {
         if let Some(&(local, slot)) = emitter.runtime_type_params.get(name) {
             emitter.instruction(Instruction::LocalGet(local));
             emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
                 ctx.symbols
                     .intrinsic_type_indices()
-                    .expect("intrinsics")
+                    .ok_or_else(|| crate::codegen::internal_failure("intrinsics"))?
                     .object_fields,
             )));
             emitter.instruction(Instruction::I32Const(slot as i32));
             emitter.instruction(Instruction::ArrayGet(
                 ctx.symbols
                     .intrinsic_type_indices()
-                    .expect("intrinsics")
+                    .ok_or_else(|| crate::codegen::internal_failure("intrinsics"))?
                     .object_fields,
             ));
-            return;
+            return Ok(());
         }
         // Legacy erased entry points have no descriptor to forward.
-        emit(emitter, ctx, &Type::Unknown);
-        return;
+        emit(emitter, ctx, &Type::Unknown)?;
+        return Ok(());
     }
     if let Some(&global) = ctx.symbols.type_descriptor_globals.get(ty) {
         emitter.instruction(Instruction::GlobalGet(global));
         emitter.instruction(Instruction::RefIsNull);
         emitter.emit_if(BlockType::Empty);
-        emit_new_descriptor(emitter, ctx, ty);
+        emit_new_descriptor(emitter, ctx, ty)?;
         emitter.instruction(Instruction::GlobalSet(global));
         emitter.emit_end();
         emitter.instruction(Instruction::GlobalGet(global));
         emitter.instruction(Instruction::RefAsNonNull);
-        return;
+        return Ok(());
     }
-    emit_new_descriptor(emitter, ctx, ty);
+    emit_new_descriptor(emitter, ctx, ty)?;
+
+    Ok(())
 }
 
-fn emit_new_descriptor(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, ty: &Type) {
+fn emit_new_descriptor(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let function = ctx
         .symbols
         .type_descriptor_functions
         .get(ty)
-        .expect("type descriptor allocated");
+        .ok_or_else(|| crate::codegen::internal_failure("type descriptor allocated"))?;
     emitter.instruction(Instruction::GlobalGet(
         ctx.symbols
             .closure_vtable_global_idx()
-            .expect("closure vtable"),
+            .ok_or_else(|| crate::codegen::internal_failure("closure vtable"))?,
     ));
     emitter.instruction(Instruction::RefFunc(*function));
-    capture(emitter, ctx, ty);
+    capture(emitter, ctx, ty)?;
     emitter.instruction(Instruction::StructNew(
         ctx.symbols
             .closure_struct_type_idx(field_guards::signature())
-            .expect("descriptor closure"),
+            .ok_or_else(|| crate::codegen::internal_failure("descriptor closure"))?,
     ));
+
+    Ok(())
 }
 
-pub fn test_parameter(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, name: &str, value: u32) {
+pub fn test_parameter(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    name: &str,
+    value: u32,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     if !emitter.runtime_type_params.contains_key(name) {
         emitter.instruction(Instruction::I32Const(1));
-        return;
+        return Ok(());
     }
     let closure_type = ctx
         .symbols
         .closure_struct_type_idx(field_guards::signature())
-        .expect("descriptor closure");
+        .ok_or_else(|| crate::codegen::internal_failure("descriptor closure"))?;
     let local = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(closure_type),
     }));
-    emit(emitter, ctx, &Type::TypeVar(name.into()));
+    emit(emitter, ctx, &Type::TypeVar(name.into()))?;
     emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
         closure_type,
     )));
@@ -282,12 +321,17 @@ pub fn test_parameter(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, name: &st
     emitter.instruction(Instruction::CallRef(
         ctx.symbols
             .closure_func_type_idx(field_guards::signature())
-            .expect("descriptor signature"),
+            .ok_or_else(|| crate::codegen::internal_failure("descriptor signature"))?,
     ));
-    cast::emit_cast_to(emitter, ctx, &Type::Boolean);
+    cast::emit_cast_to(emitter, ctx, &Type::Boolean)?;
+
+    Ok(())
 }
 
-pub fn body(ctx: &CodegenCtx, ty: &Type) -> Function {
+pub fn body(
+    ctx: &CodegenCtx,
+    ty: &Type,
+) -> Result<Function, crate::compiler_error::CompilerFailure> {
     let ident = |name: &str| Ident {
         name: name.into(),
         span: Span::at(ctx.file),
@@ -300,11 +344,13 @@ pub fn body(ctx: &CodegenCtx, ty: &Type) -> Function {
                 heap_type: HeapType::ANY,
             }),
         ),
-        (ident("value"), ctx.symbols.value_type(&Type::Unknown)),
+        (ident("value"), ctx.symbols.value_type(&Type::Unknown)?),
     ];
     let mut emitter = FunctionEmitter::new(ctx, &params);
     bind(&mut emitter, &parameters(ty), 0);
-    super::cast_check::emit_structural_test(&mut emitter, ctx, 1, ty);
-    cast::emit_box(&mut emitter, ctx, &Type::Boolean);
-    emitter.build()
+    ctx.checking_standalone(ty, || {
+        super::cast_check::emit_structural_test(&mut emitter, ctx, 1, ty, ty)
+    })?;
+    cast::emit_box(&mut emitter, ctx, &Type::Boolean)?;
+    Ok(emitter.build())
 }

@@ -240,31 +240,21 @@ fn builtins_phrase() -> String {
 /// Describe the bound blueprint's VFS configuration for the sandbox section.
 fn vfs_mode_phrase(vfs: &submilli_blueprint::VfsConfig) -> String {
     use submilli_blueprint::VfsConfig;
-    let limits = || -> String {
-        let mut parts = Vec::new();
-        if let Some(bytes) = vfs.size_limit() {
-            parts.push(format!("{bytes} bytes"));
-        }
-        if let Some(n) = vfs.path_limit() {
-            parts.push(format!("{n} files"));
-        }
-        if parts.is_empty() {
-            String::new()
-        } else {
-            format!(" (limit: {})", parts.join(", "))
-        }
+    let size_limit_phrase = || -> String {
+        vfs.size_limit()
+            .map_or(String::new(), |bytes| format!(" (limit: {bytes} bytes)"))
     };
     match vfs {
         VfsConfig::None => "none — `submilli:fs` is disabled".into(),
         VfsConfig::Ephemeral { .. } => {
             format!(
                 "ephemeral — a fresh sandbox, wiped after each call{}",
-                limits()
+                size_limit_phrase()
             )
         }
         VfsConfig::PerSession { .. } => format!(
             "per_session — a sandbox that persists across calls in this session{}",
-            limits()
+            size_limit_phrase()
         ),
         VfsConfig::Persistent { .. } => {
             "persistent — a fixed sandbox directory shared across sessions".into()
@@ -580,7 +570,6 @@ mod tests {
         let sess = Blueprint {
             vfs: VfsConfig::PerSession {
                 size_limit: Some(1024),
-                path_limit: None,
             },
             ..Blueprint::default()
         };

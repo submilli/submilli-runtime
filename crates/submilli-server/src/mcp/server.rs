@@ -29,7 +29,7 @@ use crate::handlers::execute::{blueprint_miss_message, outcome_to_parts, split_c
 use crate::packages;
 use crate::runner;
 use crate::session::LastRun;
-use crate::session_manager::{build_vfs, vfs_info};
+use crate::session_manager::{attach_size_limit, build_vfs, vfs_info};
 
 const TOOL_NAME: &str = "submilli__typescript__execute";
 
@@ -209,11 +209,13 @@ impl SubmilliMcp {
     /// `files.read` — therefore needs a mode whose *directory* is the same one
     /// each time: `per_session`, or `persistent`, which remounts the same declared
     /// volume. Only `ephemeral` hands out a fresh temp directory per call. Shared
-    /// by `execute` and `files.read`.
+    /// by `execute`, `files.read` and `files.list`; only a program run enforces
+    /// the size limit, which costs a walk of the whole directory.
     async fn acquire_vfs(
         &self,
         blueprint: &Blueprint,
         session_id: Option<&str>,
+        purpose: VfsUse,
     ) -> Result<(Vfs, VfsInfo), ErrorData> {
         let manager = self.state.session_manager();
         if matches!(blueprint.vfs, VfsConfig::PerSession { .. }) {
@@ -223,17 +225,36 @@ impl SubmilliMcp {
                 .ensure(sid, blueprint)
                 .await
                 .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
-            let pair = manager
-                .vfs_for_execute(sid, blueprint)
-                .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+            let pair = if purpose == VfsUse::RunProgram {
+                manager.vfs_for_execute(sid, blueprint).await
+            } else {
+                manager.session_vfs(sid, blueprint)
+            }
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
             manager.touch(sid).await;
             Ok(pair)
         } else {
             let vfs = build_vfs(blueprint, None, manager.ephemeral_root(), manager.volumes())
                 .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+            let vfs = if purpose == VfsUse::RunProgram {
+                attach_size_limit(vfs, blueprint)
+                    .await
+                    .map_err(|e| ErrorData::internal_error(e.to_string(), None))?
+            } else {
+                vfs
+            };
             Ok((vfs, vfs_info(blueprint)))
         }
     }
+}
+
+/// What a tool needs its VFS for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum VfsUse {
+    /// Run a program, which may write: the size limit is enforced.
+    RunProgram,
+    /// Read or list files: no limit to enforce.
+    ReadFiles,
 }
 
 #[tool_router]
@@ -280,9 +301,14 @@ impl SubmilliMcp {
             .session_manager()
             .variables(session_id.as_deref().unwrap_or(""));
 
-        let (vfs, vfs_info) = self.acquire_vfs(&blueprint, session_id.as_deref()).await?;
-        let parsed = runner::parse(&args.code);
-        let script_imports = parsed.imports();
+        let parsed = runner::parse(&args.code)
+            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+        let script_imports = parsed
+            .imports()
+            .map_err(|message| ErrorData::internal_error(message, None))?;
+        let (vfs, vfs_info) = self
+            .acquire_vfs(&blueprint, session_id.as_deref(), VfsUse::RunProgram)
+            .await?;
 
         let manager = self.state.session_manager();
         let http_client = manager.http_client(session_id.as_deref().unwrap_or(""));
@@ -523,7 +549,9 @@ impl SubmilliMcp {
             "fs.read",
             serde_json::json!({ "path": &args.path }),
         )?;
-        let (vfs, _info) = self.acquire_vfs(&blueprint, session_id.as_deref()).await?;
+        let (vfs, _info) = self
+            .acquire_vfs(&blueprint, session_id.as_deref(), VfsUse::ReadFiles)
+            .await?;
 
         let resolved = resolve_content(&vfs, "/", &args.path)
             .map_err(|e| ErrorData::invalid_request(format!("{}: {e}", args.path), None))?;
@@ -568,7 +596,9 @@ impl SubmilliMcp {
             "fs.list",
             serde_json::json!({ "path": dir, "recursive": recursive }),
         )?;
-        let (vfs, _info) = self.acquire_vfs(&blueprint, session_id.as_deref()).await?;
+        let (vfs, _info) = self
+            .acquire_vfs(&blueprint, session_id.as_deref(), VfsUse::ReadFiles)
+            .await?;
 
         let resolved = resolve_content(&vfs, "/", dir)
             .map_err(|e| ErrorData::invalid_request(format!("{dir}: {e}"), None))?;

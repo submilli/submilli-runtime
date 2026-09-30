@@ -1,3 +1,5 @@
+use crate::compiler_error::CompilerFailure;
+
 use std::collections::BTreeMap;
 
 use crate::{Ast, Diagnostic, ModulePath, Span};
@@ -5,11 +7,11 @@ use crate::{Ast, Diagnostic, ModulePath, Span};
 pub(super) fn topo_order(
     modules: &BTreeMap<ModulePath, (crate::FileId, &Ast)>,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Option<Vec<ModulePath>> {
+) -> Result<Option<Vec<ModulePath>>, CompilerFailure> {
     let mut edges: BTreeMap<ModulePath, Vec<(ModulePath, Span)>> = BTreeMap::new();
     for (module, (_file, ast)) in modules {
         for stmt_id in &ast.top_level {
-            let stmt = ast.stmt(*stmt_id);
+            let stmt = ast.try_stmt(*stmt_id).map_err(super::arena_failure)?;
             match &stmt.kind {
                 crate::StmtKind::Import {
                     module: specifier,
@@ -39,7 +41,7 @@ pub(super) fn topo_order(
         .iter()
         .any(|d| d.severity == crate::Severity::Error)
     {
-        return None;
+        return Ok(None);
     }
 
     let mut order = Vec::new();
@@ -54,10 +56,10 @@ pub(super) fn topo_order(
             &mut order,
             diagnostics,
         ) {
-            return None;
+            return Ok(None);
         }
     }
-    Some(order)
+    Ok(Some(order))
 }
 
 pub(super) fn available_modules_help_from_paths<'a>(

@@ -28,6 +28,14 @@ use crate::{
 
 pub const MODULE_NAME: &str = "submilli:url";
 
+/// What `encodeComponent` and `encodeQuery` escape: everything but ASCII alphanumerics and
+/// `-`, `_`, `~`. RFC 3986 also leaves `.` alone; it is escaped here so that a
+/// component of `..` can't become a dot segment of the path it is put in.
+const COMPONENT: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'_')
+    .remove(b'~');
+
 pub fn package_declaration() -> PackageDeclaration {
     let mut defs = PackageDeclaration::with_package(MODULE_NAME);
 
@@ -55,7 +63,7 @@ pub fn package_declaration() -> PackageDeclaration {
     insert_string_to_string_fn(
         &mut defs,
         "encodeComponent",
-        "/**\n * Percent-encode `s` per RFC 3986 (UTF-8 then `%HH` for every byte that isn't an ASCII alphanumeric).\n * @param s The component to encode.\n */",
+        "/**\n * Percent-encode `s` per RFC 3986 (UTF-8 then `%HH` for every byte that isn't an ASCII alphanumeric or one of `-`, `_`, `~`). `.` is encoded too, so `..` can't act as a path segment.\n * @param s The component to encode.\n */",
     );
     insert_string_to_string_fn(
         &mut defs,
@@ -357,9 +365,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ true,
         |caller, params, results| {
             let s = read_string_arg(&mut *caller, &params[0], "url.encodeComponent")?;
-            let encoded =
-                percent_encoding::utf8_percent_encode(&s, percent_encoding::NON_ALPHANUMERIC)
-                    .to_string();
+            let encoded = percent_encoding::utf8_percent_encode(&s, COMPONENT).to_string();
             let st = write_submilli_string_struct(caller, &encoded)?;
             results[0] = Val::AnyRef(Some(st.to_anyref()));
             Ok(())
@@ -596,15 +602,9 @@ fn encode_query(pairs: &[(String, String)]) -> String {
         if i > 0 {
             out.push('&');
         }
-        out.push_str(
-            &percent_encoding::utf8_percent_encode(k, percent_encoding::NON_ALPHANUMERIC)
-                .to_string(),
-        );
+        out.push_str(&percent_encoding::utf8_percent_encode(k, COMPONENT).to_string());
         out.push('=');
-        out.push_str(
-            &percent_encoding::utf8_percent_encode(v, percent_encoding::NON_ALPHANUMERIC)
-                .to_string(),
-        );
+        out.push_str(&percent_encoding::utf8_percent_encode(v, COMPONENT).to_string());
     }
     out
 }

@@ -5,7 +5,7 @@ import { gfm } from 'micromark-extension-gfm';
 import { decodeString } from 'micromark-util-decode-string';
 
 export const DOCS_ORIGIN = 'https://submilli.ai';
-export const DOCS_INDEX = '/llms.txt';
+export const DOCS_INDEX = '/docs/llms.txt';
 const docsDirectory = new URL('../../../docs/', import.meta.url);
 
 export interface Chapter {
@@ -65,10 +65,10 @@ export function createAgentDocs(chapters: Chapter[]): Map<string, string> {
 		'# Submilli documentation', '',
 		'> Submilli runs the programs your agent writes, under rules you set.', '',
 		'Fetch the relevant Markdown chapters below. For the entire book in one fetch, use',
-		`[the complete documentation](${DOCS_ORIGIN}/llms-full.txt).`, '',
+		`[the complete documentation](${DOCS_ORIGIN}/docs/llms-full.txt).`, '',
 		'## Chapters', '', ...links, '',
 	].join('\n'));
-	outputs.set('/llms-full.txt', sections.join('\n---\n\n'));
+	outputs.set('/docs/llms-full.txt', sections.join('\n---\n\n'));
 	return outputs;
 }
 

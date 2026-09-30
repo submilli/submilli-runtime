@@ -53,7 +53,11 @@ sha2 = "0.10"
 hmac = "0.12"
 gix = { version = "0.87.1", default-features = false, features = ["sha1", "basic", "revision", "index", "blocking-network-client", "blocking-http-transport-reqwest-rust-tls"] }
 
+[target.'cfg(windows)'.dependencies]
+cap-primitives = { workspace = true }
+
 [dev-dependencies]
+tokio-rustls = "0.26"
 insta = { workspace = true }
 httpmock = { workspace = true }
 flate2 = { workspace = true }

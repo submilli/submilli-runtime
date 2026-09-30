@@ -144,6 +144,16 @@ fn collect_capability_findings(
             .filter
             .as_deref()
             .map_or(String::new(), |filter| format!(" with filter `{filter}`"));
+        // A different rule for the same capability is the operator narrowing or
+        // denying the package on purpose; `--fix` must not append the broad rule
+        // behind it, which would match whatever the narrowed rule leaves out.
+        if has_capability_rule(blueprint, package, &required.capability) {
+            warnings.push(format!(
+                "package `{package}` requires `{}`{filter}; `permissions.{package}` grants it differently, so the package's calls outside those rules are denied",
+                required.capability
+            ));
+            continue;
+        }
         errors.push(format!(
             "package `{package}` requires `{}`{filter}, but `permissions.{package}` has no matching rule",
             required.capability

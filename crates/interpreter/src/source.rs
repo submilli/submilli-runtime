@@ -5,7 +5,73 @@
 //! one per module. Diagnostics resolve a span back to `(path, text, line index)`
 //! through this registry so they can render `--> util.subm:5:12` for the right file.
 
-use crate::span::{FileId, LineIndex};
+use crate::compiler_error::{CompilerFailure, CompilerStage};
+use crate::span::{FileId, LineIndex, Span};
+
+#[derive(Debug)]
+pub enum SourceError {
+    InvalidSpan { span: Span, reason: &'static str },
+    InvalidOffset { offset: u32 },
+    InvalidPosition { line: u32, col: u32 },
+    UnknownFile { file: FileId },
+    SourceLimit { len: usize },
+    FileLimit { len: usize },
+    Allocation(std::collections::TryReserveError),
+}
+
+impl SourceError {
+    pub const MAX_SOURCE_BYTES: usize = (u32::MAX - 4) as usize;
+
+    pub fn check_source_len(len: usize) -> Result<(), Self> {
+        if len > Self::MAX_SOURCE_BYTES {
+            return Err(Self::SourceLimit { len });
+        }
+        Ok(())
+    }
+
+    pub fn into_compiler_failure(self, stage: CompilerStage) -> CompilerFailure {
+        let message = self.to_string();
+        match self {
+            Self::SourceLimit { .. } | Self::FileLimit { .. } | Self::Allocation(_) => {
+                CompilerFailure::Limit {
+                    stage,
+                    span: None,
+                    message,
+                    help: vec!["split the source into smaller modules".into()],
+                }
+            }
+            _ => CompilerFailure::Internal {
+                stage,
+                span: None,
+                message,
+            },
+        }
+    }
+}
+
+impl std::fmt::Display for SourceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidSpan { span, reason } => {
+                write!(f, "invalid source span {span:?}: {reason}")
+            }
+            Self::InvalidOffset { offset } => write!(f, "invalid source byte offset {offset}"),
+            Self::InvalidPosition { line, col } => {
+                write!(f, "invalid source position {line}:{col}")
+            }
+            Self::UnknownFile { file } => write!(f, "unknown source file {}", file.0),
+            Self::SourceLimit { len } => {
+                write!(f, "source length {len} exceeds the supported byte limit")
+            }
+            Self::FileLimit { len } => {
+                write!(f, "source file count {len} reaches the reserved file IDs")
+            }
+            Self::Allocation(error) => write!(f, "cannot reserve source storage: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for SourceError {}
 
 /// A module's package-relative display path (e.g. `util`, `internal/math`). For
 /// single-file scripts this is just the script filename. A thin newtype today;
@@ -95,11 +161,19 @@ impl std::fmt::Display for ModulePath {
 /// span → line/col resolution.
 pub struct SourceFile {
     pub path: ModulePath,
-    pub text: String,
+    id: FileId,
     line_index: LineIndex,
 }
 
 impl SourceFile {
+    pub fn text(&self) -> &str {
+        self.line_index.source()
+    }
+
+    pub fn span_text(&self, span: Span) -> Result<&str, SourceError> {
+        span.text(self.text(), self.id)
+    }
+
     pub fn line_index(&self) -> &LineIndex {
         &self.line_index
     }
@@ -117,16 +191,20 @@ impl Sources {
     }
 
     /// Register a file and return its `FileId`.
-    pub fn add(&mut self, path: impl Into<ModulePath>, text: impl Into<String>) -> FileId {
-        let text = text.into();
-        let line_index = LineIndex::new(&text);
-        let id = FileId(self.files.len() as u32);
+    pub fn add(
+        &mut self,
+        path: impl Into<ModulePath>,
+        text: impl AsRef<str>,
+    ) -> Result<FileId, SourceError> {
+        let id = next_file_id(self.files.len())?;
+        let line_index = LineIndex::new(text.as_ref())?;
+        self.files.try_reserve(1).map_err(SourceError::Allocation)?;
         self.files.push(SourceFile {
             path: path.into(),
-            text,
+            id,
             line_index,
         });
-        id
+        Ok(id)
     }
 
     pub fn get(&self, id: FileId) -> Option<&SourceFile> {
@@ -136,17 +214,27 @@ impl Sources {
     pub fn find_path(&self, path: &str) -> Option<(FileId, &SourceFile)> {
         self.files
             .iter()
-            .enumerate()
-            .find(|(_, file)| file.path.as_str() == path)
-            .map(|(index, file)| (FileId(index as u32), file))
+            .find(|file| file.path.as_str() == path)
+            .map(|file| (file.id, file))
     }
 
     /// Convenience for the single-file path: a registry with one entry plus its `FileId`.
-    pub fn single(path: impl Into<ModulePath>, text: impl Into<String>) -> (Self, FileId) {
+    pub fn single(
+        path: impl Into<ModulePath>,
+        text: impl AsRef<str>,
+    ) -> Result<(Self, FileId), SourceError> {
         let mut sources = Self::new();
-        let id = sources.add(path, text);
-        (sources, id)
+        let id = sources.add(path, text)?;
+        Ok((sources, id))
     }
+}
+
+fn next_file_id(len: usize) -> Result<FileId, SourceError> {
+    u32::try_from(len)
+        .ok()
+        .filter(|id| *id < FileId::FIRST_RESERVED)
+        .map(FileId)
+        .ok_or(SourceError::FileLimit { len })
 }
 
 #[cfg(test)]
@@ -154,20 +242,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn checked_source_ids_stop_before_reserved_range() {
+        let limit = FileId::FIRST_RESERVED as usize;
+        assert_eq!(
+            next_file_id(limit - 1).unwrap().0,
+            FileId::FIRST_RESERVED - 1
+        );
+        assert!(matches!(
+            next_file_id(limit),
+            Err(SourceError::FileLimit { .. })
+        ));
+        assert!(next_file_id(usize::MAX).is_err());
+    }
+
+    #[test]
     fn add_assigns_sequential_ids() {
         let mut sources = Sources::new();
-        let a = sources.add("a.subm", "let x = 1;");
-        let b = sources.add("b.subm", "let y = 2;");
+        let a = sources.add("a.subm", "let x = 1;").unwrap();
+        let b = sources.add("b.subm", "let y = 2;").unwrap();
         assert_eq!(a, FileId(0));
         assert_eq!(b, FileId(1));
     }
 
     #[test]
     fn get_resolves_path_and_text() {
-        let (sources, id) = Sources::single("script.subm", "let x = 1;");
+        let (sources, id) = Sources::single("script.subm", "let x = 1;").unwrap();
         let file = sources.get(id).unwrap();
         assert_eq!(file.path.as_str(), "script.subm");
-        assert_eq!(file.text, "let x = 1;");
+        assert_eq!(file.text(), "let x = 1;");
     }
 
     #[test]
@@ -181,13 +283,13 @@ mod tests {
     #[test]
     fn find_path_returns_file_id_and_source() {
         let mut sources = Sources::new();
-        sources.add("lib", "export const a = 1;");
-        let util = sources.add("util", "export const b = 2;");
+        sources.add("lib", "export const a = 1;").unwrap();
+        let util = sources.add("util", "export const b = 2;").unwrap();
 
         let (id, file) = sources.find_path("util").expect("find util");
 
         assert_eq!(id, util);
-        assert_eq!(file.text, "export const b = 2;");
+        assert_eq!(file.text(), "export const b = 2;");
         assert!(sources.find_path("missing").is_none());
     }
 

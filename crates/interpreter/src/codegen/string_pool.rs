@@ -4,6 +4,8 @@
 use std::collections::BTreeMap;
 
 use crate::ExprId;
+use crate::codegen::{internal_failure, wasm_u32};
+use crate::compiler_error::CompilerFailure;
 
 #[derive(Default, Clone, Debug)]
 pub struct StringPool {
@@ -39,15 +41,23 @@ impl StringPool {
     }
 
     /// UTF-16 code unit count for the literal at `idx` (= JS `.length`).
-    pub fn code_units(&self, idx: usize) -> u32 {
-        self.strings[idx].encode_utf16().count() as u32
+    pub fn code_units(&self, idx: usize) -> Result<u32, CompilerFailure> {
+        wasm_u32(self.string(idx)?.encode_utf16().count())
     }
 
-    pub fn utf16_le_bytes(&self, idx: usize) -> Vec<u8> {
-        self.strings[idx]
+    pub fn utf16_le_bytes(&self, idx: usize) -> Result<Vec<u8>, CompilerFailure> {
+        Ok(self
+            .string(idx)?
             .encode_utf16()
             .flat_map(u16::to_le_bytes)
-            .collect()
+            .collect())
+    }
+
+    fn string(&self, idx: usize) -> Result<&str, CompilerFailure> {
+        self.strings
+            .get(idx)
+            .map(String::as_str)
+            .ok_or_else(|| internal_failure("a string literal pool index is out of range"))
     }
 }
 
@@ -76,11 +86,11 @@ mod tests {
         packages.extend(prelude_defs.iter());
         packages.extend(host_defs.iter());
         let (mut ta, mut diags) = infer(source, "main", &ast, &packages);
-        diags.extend(check(&ta));
-        capture(&mut ta);
-        desugar(&mut ta, crate::FileId(0));
+        diags.extend(check(&ta).unwrap());
+        ta = capture(ta).unwrap();
+        ta = desugar(ta, crate::FileId(0)).unwrap();
         assert!(diags.is_empty(), "unexpected typecheck diags: {diags:?}");
-        CodegenAnalysis::collect(&ta, &[]).string_pool
+        CodegenAnalysis::collect(&ta, &[]).unwrap().string_pool
     }
 
     #[test]
@@ -96,8 +106,10 @@ mod tests {
         let p = pool(r#"let x: string = "hello"; function main(): void { }"#);
         assert_eq!(p.strings, vec!["hello".to_string()]);
         assert_eq!(p.locations.len(), 1);
-        assert_eq!(p.code_units(0), 5);
-        assert_eq!(p.utf16_le_bytes(0), b"h\0e\0l\0l\0o\0".to_vec());
+        assert_eq!(p.code_units(0).unwrap(), 5);
+        assert_eq!(p.utf16_le_bytes(0).unwrap(), b"h\0e\0l\0l\0o\0".to_vec());
+        assert!(p.code_units(1).is_err());
+        assert!(p.utf16_le_bytes(1).is_err());
     }
 
     #[test]

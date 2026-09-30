@@ -1,3 +1,4 @@
+allow_insecure_http: true
 name: ssrf-test
 
 # The server is deny-by-default; the script's http.get must be granted so the

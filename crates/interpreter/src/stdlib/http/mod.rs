@@ -9,13 +9,16 @@
 
 mod declaration;
 pub mod policy;
+mod redirect_guard;
 pub mod transport;
+mod transport_policy;
+#[cfg(test)]
+mod transport_policy_tests;
 
 use wasmtime::{
     Caller, FuncType, HeapType, Linker, RefType, Rooted, StructRef, StructType, Val, ValType,
 };
 
-use crate::runtime::StoreData;
 use crate::runtime::fs::{ContainError, ContentPath};
 use crate::runtime::host::{
     read_boxed_number, read_string_arg, read_uint8_array_arg, register_host_fn,
@@ -26,11 +29,15 @@ use crate::runtime::metrics::{HttpMetric, MetricsSink};
 use crate::runtime::prelude::collection::{is_a, object_field, unbox_bool};
 use crate::runtime::prelude::map;
 use crate::runtime::prelude::vtable::dispatch_vtable_slot;
+use crate::runtime::{QuotaCharge, QuotaExceeded, StoreData};
 use crate::stdlib::abi::{
     self, backing_receiver, backing_struct, f64_field, i32_field, install_field_getters,
     nullable_object_field, string_field,
 };
-use crate::stdlib::shared::{check_security, contain_trap, resolve_content_or_trap};
+use crate::stdlib::shared::{check_security, contain_trap, quota_refusal, resolve_content_or_trap};
+use redirect_guard::{
+    CapabilityGuard, DownloadTarget, GuardedRequest, host_and_path, verb_context,
+};
 use transport::{DownloadMeta, http_failure_outcome};
 
 pub const MODULE_NAME: &str = "submilli:http";
@@ -39,8 +46,10 @@ pub use declaration::package_declaration;
 pub use policy::NetworkPolicy;
 pub use transport::{
     AuthProxy, AuthProxyError, HttpClient, HttpError, HttpRequest, HttpResponse, NoopAuthProxy,
-    ReqwestHttpClient, default_auth_proxy, default_http_client, describe_error_chain,
+    RedirectDenied, RedirectGuard, RedirectHop, ReqwestHttpClient, default_auth_proxy,
+    default_http_client, describe_error_chain,
 };
+pub use transport_policy::{HttpTransportPolicy, TransportPolicyError};
 
 /// Verb-form helpers' per-request timeout; `download` defaults to
 /// [`DOWNLOAD_TIMEOUT_MS`] instead (downloads are usually larger).
@@ -293,16 +302,10 @@ fn read_headers(
     map::string_entries(caller, val)
 }
 
-/// The shared verb/`request` path: discriminate the body, default the
-/// Content-Type, gate the capability, run the transport, and build the
-/// `$ResponseBacking` the guest sees.
-/// Host and path of `url` for capability context / metrics; empty strings when
-/// the URL doesn't parse (the transport reports the real failure).
+/// [`host_and_path`] of an unparsed URL; empty strings when it doesn't parse
+/// (the transport reports the real failure).
 fn url_host_and_path(url: &str) -> (String, String) {
-    url::Url::parse(url).map_or_else(
-        |_| (String::new(), String::new()),
-        |u| (u.host_str().unwrap_or("").to_string(), u.path().to_string()),
-    )
+    url::Url::parse(url).map_or_else(|_| (String::new(), String::new()), |u| host_and_path(&u))
 }
 
 /// Record one transport operation, mapping a failure to its bounded outcome class.
@@ -327,6 +330,9 @@ fn record_http_metric(
     });
 }
 
+/// The shared verb/`request` path: discriminate the body, default the
+/// Content-Type, gate the capability, run the transport, and build the
+/// `$ResponseBacking` the guest sees.
 async fn perform_request(
     caller: &mut Caller<'_, StoreData>,
     method: &str,
@@ -353,14 +359,15 @@ async fn perform_request(
     check_security(
         &*caller,
         &capability,
-        serde_json::json!({
-            "host": host_str.clone(),
-            "path": path_str,
-            "body_size": body.len(),
-            "timeout_ms": DEFAULT_TIMEOUT_MS,
-        }),
+        verb_context(&host_str, &path_str, body.len() as u64, DEFAULT_TIMEOUT_MS),
     )?;
 
+    let (who, guard) = request_principal(
+        caller,
+        GuardedRequest::Verb {
+            timeout_ms: DEFAULT_TIMEOUT_MS,
+        },
+    );
     let req = HttpRequest {
         method: method.to_ascii_uppercase(),
         url: url.to_string(),
@@ -369,18 +376,17 @@ async fn perform_request(
         timeout_ms: DEFAULT_TIMEOUT_MS,
         max_response_size: caller.data().http_max_response_size,
         decompress: false,
+        transport_policy: None,
+        redirect_guard: None,
     };
-    // The running code, not the last export entered: injection is main-only, so a package
-    // misattributed to `main` would be handed the operator's credentials. An unresolvable
-    // principal keeps its bracketed label, which can never equal `main`.
-    let who = crate::stdlib::shared::running_package(&*caller)
-        .unwrap_or_else(|unknown| unknown.label.to_string());
     let auth_proxy = std::sync::Arc::clone(&caller.data().auth_proxy);
     let http_client = std::sync::Arc::clone(&caller.data().http_client);
-    let req = auth_proxy
+    let mut req = auth_proxy
         .transform(req, &who)
         .await
-        .map_err(|e| wasmtime::Error::msg(format!("http {method} {url}: auth proxy: {e}")))?;
+        .map_err(|e| wasmtime::Error::msg(format!("http {method}: auth proxy: {e}")))?;
+    // Attached after the proxy, so no proxy can drop it and leave hops unchecked.
+    req.redirect_guard = Some(guard);
 
     let metrics = std::sync::Arc::clone(&caller.data().metrics);
     let start = std::time::Instant::now();
@@ -396,18 +402,40 @@ async fn perform_request(
             .map(|resp| (resp.status, resp.body.len() as u64)),
     );
     let resp = send_result.map_err(|e| {
-        let msg = format!("http {method} {url}: {e}");
+        let msg = format!("http {method}: {e}");
         // An over-limit response body is a spec `RangeError` (out-of-range
         // size) and a bad verb a `TypeError`; other transport failures stay
         // base `Error`s.
         match e {
             HttpError::TooLarge { .. } => crate::runtime::host::range_error(msg),
             HttpError::UnsupportedMethod(_) => crate::runtime::host::type_error(msg),
+            HttpError::Internal(_) => crate::runtime::host::fatal_host_error(msg),
+            HttpError::PermissionDenied(denied) => denied.into_error(),
             _ => wasmtime::Error::msg(msg),
         }
     })?;
 
     write_response(caller, resp).await
+}
+
+/// The principal a request is attributed to, and the guard that checks its
+/// redirect hops for that same principal.
+///
+/// The running code, not the last export entered: injection is main-only, so a package
+/// misattributed to `main` would be handed the operator's credentials. An unresolvable
+/// principal keeps its bracketed label, which can never equal `main`.
+fn request_principal(
+    caller: &Caller<'_, StoreData>,
+    request: GuardedRequest,
+) -> (String, std::sync::Arc<CapabilityGuard>) {
+    let who = crate::stdlib::shared::running_package(caller)
+        .unwrap_or_else(|unknown| unknown.label.to_string());
+    let guard = CapabilityGuard::new(
+        who.clone(),
+        std::sync::Arc::clone(&caller.data().security_check),
+        request,
+    );
+    (who, std::sync::Arc::new(guard))
 }
 
 /// Build the `$ResponseBacking` from a transport [`HttpResponse`].
@@ -516,18 +544,17 @@ async fn perform_download(
 
     let (host_str, url_path_str) = url_host_and_path(&url);
 
+    let target = DownloadTarget {
+        vfs_path: guest_path.clone(),
+        max_bytes: options.max_bytes,
+        overwrite: options.overwrite,
+        decompress: options.decompress,
+    };
     // http-side check first; remote-only policies can deny without path-context cost.
     check_security(
         &*caller,
         "http.download",
-        serde_json::json!({
-            "host": host_str.clone(),
-            "url_path": url_path_str,
-            "vfs_path": guest_path,
-            "max_bytes": options.max_bytes,
-            "overwrite": options.overwrite,
-            "decompress": options.decompress,
-        }),
+        target.context(&host_str, &url_path_str),
     )?;
     check_security(
         &*caller,
@@ -552,6 +579,7 @@ async fn perform_download(
         );
     }
 
+    let (who, guard) = request_principal(caller, GuardedRequest::Download(target));
     let req = HttpRequest {
         method: "GET".to_string(),
         url: url.clone(),
@@ -560,31 +588,33 @@ async fn perform_download(
         timeout_ms: options.timeout_ms,
         max_response_size: options.max_bytes,
         decompress: options.decompress,
+        transport_policy: None,
+        redirect_guard: None,
     };
-    // The running code, not the last export entered: injection is main-only, so a package
-    // misattributed to `main` would be handed the operator's credentials. An unresolvable
-    // principal keeps its bracketed label, which can never equal `main`.
-    let who = crate::stdlib::shared::running_package(&*caller)
-        .unwrap_or_else(|unknown| unknown.label.to_string());
     let auth_proxy = std::sync::Arc::clone(&caller.data().auth_proxy);
-    let req = auth_proxy
+    let mut req = auth_proxy
         .transform(req, &who)
         .await
-        .map_err(|e| wasmtime::Error::msg(format!("http.download {url}: auth proxy: {e}")))?;
+        .map_err(|e| wasmtime::Error::msg(format!("http.download: auth proxy: {e}")))?;
+    // Attached after the proxy, so no proxy can drop it and leave hops unchecked.
+    req.redirect_guard = Some(guard);
 
     // No auto-mkdir; a missing parent surfaces when the temp sibling is created, which
     // is also where an escaping parent is refused.
     let tmp = resolved.temp_sibling();
     let start = std::time::Instant::now();
-    let streamed = stream_to_temp(caller, &req, &tmp, &guest_path).await;
+    // No program code runs while the download streams, so an overwrite draws on the
+    // size of the file it replaces and reserves only what goes beyond it.
+    let disk_charge = QuotaCharge::new(caller.data().vfs.quota().cloned(), resolved.regular_file());
+    let streamed = stream_to_temp(caller, &req, &tmp, &guest_path, disk_charge).await;
     // A filesystem failure has no transport outcome to record.
     match &streamed {
-        Ok((meta, _)) => record_http_metric(
+        Ok(streamed) => record_http_metric(
             caller.data().metrics.as_ref(),
             "http.download".to_string(),
             host_str,
             start.elapsed().as_millis() as u64,
-            Ok((meta.status, meta.bytes_written)),
+            Ok((streamed.meta.status, streamed.meta.bytes_written)),
         ),
         Err(DownloadFailure::Transport(e, _)) => record_http_metric(
             caller.data().metrics.as_ref(),
@@ -593,10 +623,14 @@ async fn perform_download(
             start.elapsed().as_millis() as u64,
             Err(e),
         ),
-        Err(DownloadFailure::Fs(_)) => {}
+        Err(DownloadFailure::Fs(_) | DownloadFailure::Full(..)) => {}
     }
-    let (meta, file) = streamed.map_err(DownloadFailure::into_error)?;
-    commit_temp(file, &tmp, &resolved, &guest_path)?;
+    let Streamed {
+        meta,
+        file,
+        disk_charge,
+    } = streamed.map_err(DownloadFailure::into_error)?;
+    commit_temp(file, disk_charge, &tmp, &resolved, &guest_path)?;
 
     let duration_ms = start.elapsed().as_millis() as f64;
     write_download_result(caller, &meta, &guest_path, duration_ms)
@@ -608,6 +642,8 @@ async fn perform_download(
 enum DownloadFailure {
     Transport(HttpError, String),
     Fs(wasmtime::Error),
+    /// The body would have passed the VFS's size limit.
+    Full(QuotaExceeded, String),
 }
 
 impl DownloadFailure {
@@ -619,8 +655,17 @@ impl DownloadFailure {
             DownloadFailure::Transport(HttpError::UnsupportedMethod(_), msg) => {
                 crate::runtime::host::type_error(msg)
             }
+            DownloadFailure::Transport(HttpError::PermissionDenied(denied), _) => {
+                denied.into_error()
+            }
+            DownloadFailure::Transport(HttpError::Internal(_), msg) => {
+                crate::runtime::host::fatal_host_error(msg)
+            }
             DownloadFailure::Transport(_, msg) => wasmtime::Error::msg(msg),
             DownloadFailure::Fs(err) => err,
+            DownloadFailure::Full(exceeded, guest_path) => {
+                quota_refusal("http.download", &guest_path, exceeded)
+            }
         }
     }
 }
@@ -633,31 +678,83 @@ async fn stream_to_temp(
     req: &HttpRequest,
     tmp: &ContentPath,
     guest_path: &str,
-) -> Result<(DownloadMeta, cap_std::fs::File), DownloadFailure> {
+    disk_charge: QuotaCharge,
+) -> Result<Streamed, DownloadFailure> {
     let file = tmp
         .create()
         .map_err(|err| DownloadFailure::Fs(temp_create_error(guest_path, &err)))?;
-    let mut writer = std::io::BufWriter::new(file);
+    let mut writer = std::io::BufWriter::new(QuotaWriter {
+        file,
+        disk_charge,
+        refused: None,
+    });
     let http_client = std::sync::Arc::clone(&caller.data().http_client);
     let result = http_client.download(req, &mut writer).await;
-    // Flush explicitly; BufWriter swallows errors on drop.
+    // Flush explicitly; BufWriter swallows errors on drop. Every failure below removes
+    // the temp file, and dropping the writer's disk charge gives back what it held.
     let inner = match writer.into_inner() {
-        Ok(f) => f,
+        Ok(inner) => inner,
         Err(e) => {
+            let failure = e.error().to_string();
+            let inner = e.into_inner().into_parts().0;
             let _ = tmp.remove_file();
-            return Err(DownloadFailure::Fs(wasmtime::Error::msg(format!(
-                "http.download {guest_path}: flush tempfile: {e}",
-                e = e.error()
-            ))));
+            return Err(match inner.refused {
+                Some(exceeded) => DownloadFailure::Full(exceeded, guest_path.to_string()),
+                None => DownloadFailure::Fs(wasmtime::Error::msg(format!(
+                    "http.download {guest_path}: flush tempfile: {failure}"
+                ))),
+            });
         }
     };
     match result {
-        Ok(meta) => Ok((meta, inner)),
+        Ok(meta) => Ok(Streamed {
+            meta,
+            file: inner.file,
+            disk_charge: inner.disk_charge,
+        }),
         Err(e) => {
             let _ = tmp.remove_file();
-            let msg = format!("http.download {url}: {e}", url = req.url);
+            if let Some(exceeded) = inner.refused {
+                return Err(DownloadFailure::Full(exceeded, guest_path.to_string()));
+            }
+            let msg = format!("http.download: {e}");
             Err(DownloadFailure::Transport(e, msg))
         }
+    }
+}
+
+/// A download's body, streamed into its temp file and not yet committed.
+struct Streamed {
+    meta: DownloadMeta,
+    file: cap_std::fs::File,
+    disk_charge: QuotaCharge,
+}
+
+/// The temp file a download streams into, reserving each chunk against the VFS's
+/// size limit before writing it, so a download stops at the limit rather than
+/// after it.
+struct QuotaWriter {
+    file: cap_std::fs::File,
+    disk_charge: QuotaCharge,
+    refused: Option<QuotaExceeded>,
+}
+
+impl std::io::Write for QuotaWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let asked = buf.len() as u64;
+        if let Err(exceeded) = self.disk_charge.reserve(asked) {
+            self.refused = Some(exceeded);
+            return Err(std::io::Error::other(exceeded.to_string()));
+        }
+        let written = self.file.write(buf);
+        // A short or failed write keeps less than it reserved; settle on what landed.
+        let kept = written.as_ref().map_or(0, |n| *n as u64);
+        self.disk_charge.unreserve(asked.saturating_sub(kept));
+        written
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
     }
 }
 
@@ -674,29 +771,38 @@ fn temp_create_error(guest_path: &str, err: &ContainError) -> wasmtime::Error {
 }
 
 /// Fsync and atomically rename the streamed temp file into place; a crash
-/// leaves a `.tmp` sibling instead of a half-written final file.
+/// leaves a `.tmp` sibling instead of a half-written final file. Any failure
+/// removes the temp file, and dropping `disk_charge` with it gives back what it
+/// held; a commit frees the file it replaced.
 ///
 /// The rename goes through the handle the destination resolved against, so a link
 /// swapped over a parent component while the body streamed cannot redirect the commit.
 fn commit_temp(
     file: cap_std::fs::File,
+    mut disk_charge: QuotaCharge,
     tmp: &ContentPath,
     resolved: &ContentPath,
     guest_path: &str,
 ) -> wasmtime::Result<()> {
-    if let Err(e) = file.sync_all() {
-        let _ = tmp.remove_file();
-        wasmtime::bail!("http.download {guest_path}: fsync: {e}");
-    }
-    drop(file);
-    if let Err(err) = tmp.rename_to(resolved) {
-        let _ = tmp.remove_file();
-        return Err(match err {
+    let committed = (|| {
+        file.sync_all()
+            .map_err(|e| wasmtime::Error::msg(format!("http.download {guest_path}: fsync: {e}")))?;
+        drop(file);
+        disk_charge
+            .cover(resolved.regular_file())
+            .map_err(|exceeded| quota_refusal("http.download", guest_path, exceeded))?;
+        tmp.rename_to(resolved).map_err(|err| match err {
             ContainError::Escape => contain_trap("http.download", guest_path, &err),
             _ => wasmtime::Error::msg(format!("http.download {guest_path}: rename: {err}")),
-        });
+        })
+    })();
+    match committed {
+        Ok(()) => disk_charge.commit(),
+        Err(_) => {
+            let _ = tmp.remove_file();
+        }
     }
-    Ok(())
+    committed
 }
 
 /// Build the `$DownloadResultBacking` from the committed download's metadata.
@@ -1712,6 +1818,60 @@ function main(): void {
         // Host fn upper-cases the method before storing it on the
         // `HttpRequest`.
         assert_eq!(seen[0].method, "POST");
+    }
+
+    #[tokio::test]
+    async fn internal_http_setup_failure_bypasses_catch_and_cleans_download() {
+        struct BrokenSetup;
+        #[async_trait::async_trait]
+        impl HttpClient for BrokenSetup {
+            async fn send(&self, _: &HttpRequest) -> Result<HttpResponse, HttpError> {
+                Err(HttpError::Internal("injected setup failure".into()))
+            }
+            async fn download(
+                &self,
+                _: &HttpRequest,
+                _: &mut (dyn std::io::Write + Send),
+            ) -> Result<DownloadMeta, HttpError> {
+                Err(HttpError::Internal("injected setup failure".into()))
+            }
+        }
+        for operation in [
+            "get(\"https://example.com/\");",
+            "download(\"https://example.com/\", \"/payload\");",
+        ] {
+            let source = format!(
+                r#"
+                import {{ get, download }} from "submilli:http";
+                function main(): void {{
+                    try {{ {operation} }} catch (error) {{ return; }}
+                }}
+            "#
+            );
+            let compiled = compile_script(&source, "test.ts", crate::FileId(0), &[], &[]).unwrap();
+            let cfg = RuntimeConfig::default();
+            let engine = cfg.engine().unwrap();
+            let mut data = StoreData::with_vfs(Vfs::tempdir().unwrap());
+            data.http_client = Arc::new(BrokenSetup);
+            let mut store = cfg.store(&engine, data).unwrap();
+            let module = wasmtime::Module::new(&engine, &compiled.wasm).unwrap();
+            let mut linker = wasmtime::Linker::<StoreData>::new(&engine);
+            install_runtime_async(&mut linker, &mut store)
+                .await
+                .unwrap();
+            let instance = linker.instantiate_async(&mut store, &module).await.unwrap();
+            let error = dispatch_main_async(&mut store, &instance)
+                .await
+                .unwrap_err();
+            assert!(
+                format!("{error:?}").contains("injected setup failure"),
+                "{error:?}"
+            );
+            assert_eq!(
+                store.data().vfs.dir().unwrap().entries().unwrap().count(),
+                0
+            );
+        }
     }
 
     #[tokio::test]
@@ -2834,5 +2994,298 @@ function main(): void {
             }
         "#;
         run_with_mock(source, vec![ok_response(200, "hi")]).await;
+    }
+
+    /// Follows one scripted redirect through the request's guard, as a compliant
+    /// custom transport must, and records whether the hop was allowed.
+    struct RedirectingClient {
+        hop_method: &'static str,
+        hop_url: &'static str,
+        method_rewritten: bool,
+        sent_hop: Mutex<bool>,
+    }
+
+    impl RedirectingClient {
+        fn follow(&self, req: &HttpRequest) -> Result<(), HttpError> {
+            let guard = req
+                .redirect_guard
+                .as_ref()
+                .ok_or_else(|| HttpError::Other("request has no redirect guard".into()))?;
+            let url = url::Url::parse(self.hop_url).unwrap();
+            let body_len = if self.method_rewritten {
+                0
+            } else {
+                req.body.len() as u64
+            };
+            guard
+                .authorize(&super::RedirectHop {
+                    method: self.hop_method,
+                    url: &url,
+                    method_rewritten: self.method_rewritten,
+                    body_len,
+                })
+                .map_err(HttpError::PermissionDenied)?;
+            *self.sent_hop.lock().unwrap() = true;
+            Ok(())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl HttpClient for RedirectingClient {
+        async fn send(&self, req: &HttpRequest) -> Result<HttpResponse, HttpError> {
+            self.follow(req)?;
+            Ok(ok_response(200, "redirected"))
+        }
+
+        async fn download(
+            &self,
+            req: &HttpRequest,
+            writer: &mut (dyn std::io::Write + Send),
+        ) -> Result<DownloadMeta, HttpError> {
+            self.follow(req)?;
+            writer.write_all(b"redirected").unwrap();
+            Ok(DownloadMeta {
+                status: 200,
+                status_text: "OK".into(),
+                headers: vec![],
+                final_url: self.hop_url.into(),
+                bytes_written: 10,
+            })
+        }
+    }
+
+    /// Records every check and denies anything aimed at `evil.test`.
+    #[derive(Default)]
+    struct DenyEvilHost {
+        seen: Mutex<Vec<(String, String, serde_json::Value)>>,
+    }
+
+    impl SecurityCheck for DenyEvilHost {
+        fn check(
+            &self,
+            caller: &str,
+            capability: &str,
+            context: &serde_json::Value,
+        ) -> CheckOutcome {
+            self.seen.lock().unwrap().push((
+                caller.to_string(),
+                capability.to_string(),
+                context.clone(),
+            ));
+            if context["host"] == "evil.test" {
+                CheckOutcome::Deny {
+                    reason: "evil.test is not allowed".into(),
+                }
+            } else {
+                CheckOutcome::Allow
+            }
+        }
+    }
+
+    async fn run_redirect(
+        source: &str,
+        hop_method: &'static str,
+        hop_url: &'static str,
+        method_rewritten: bool,
+    ) -> (
+        Result<(), String>,
+        bool,
+        Vec<(String, String, serde_json::Value)>,
+    ) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let client = Arc::new(RedirectingClient {
+            hop_method,
+            hop_url,
+            method_rewritten,
+            sent_hop: Mutex::new(false),
+        });
+        let policy = Arc::new(DenyEvilHost::default());
+        let result =
+            run_download_with_client(source, client.clone(), Some(policy.clone()), tmp.path())
+                .await;
+        let sent = *client.sent_hop.lock().unwrap();
+        let seen = policy.seen.lock().unwrap().clone();
+        (result, sent, seen)
+    }
+
+    #[tokio::test]
+    async fn redirect_hops_are_checked_for_the_original_caller() {
+        let source = r#"
+            import { post } from "submilli:http";
+            function main(): void {
+                let caught = "";
+                try {
+                    post("https://example.test/start", "hello");
+                } catch (e: PermissionDeniedError) {
+                    caught = e.caller + " " + e.capability + ": " + e.reason;
+                }
+                assert(caught === "main http.post: evil.test is not allowed", caught);
+            }
+        "#;
+        let (result, sent, seen) =
+            run_redirect(source, "POST", "https://evil.test/collect", false).await;
+        result.expect("denial is catchable");
+        assert!(!sent, "a denied hop must not be sent");
+        assert_eq!(seen.len(), 2);
+        assert_eq!(
+            seen[1],
+            (
+                "main".to_string(),
+                "http.post".to_string(),
+                serde_json::json!({
+                    "host": "evil.test",
+                    "path": "/collect",
+                    "body_size": 5,
+                    "timeout_ms": super::DEFAULT_TIMEOUT_MS,
+                })
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn rewritten_redirect_hops_are_checked_as_get_on_host_and_path() {
+        let source = r#"
+            import { post } from "submilli:http";
+            function main(): void {
+                post("https://example.test/start", "hello");
+            }
+        "#;
+        let (result, sent, seen) =
+            run_redirect(source, "GET", "https://example.test/result", true).await;
+        result.expect("allowed hop");
+        assert!(sent);
+        assert_eq!(
+            seen[1],
+            (
+                "main".to_string(),
+                "http.get".to_string(),
+                serde_json::json!({ "host": "example.test", "path": "/result" })
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn download_redirect_hops_are_checked_before_anything_is_written() {
+        let source = r#"
+            import { download } from "submilli:http";
+            function main(): void {
+                download("https://example.test/f", "/out.bin");
+            }
+        "#;
+        let (result, sent, seen) = run_redirect(source, "GET", "https://evil.test/f", false).await;
+        let error = result.expect_err("denied hop");
+        assert!(error.contains("permission denied"), "{error}");
+        assert!(!sent);
+        let capabilities: Vec<&str> = seen.iter().map(|(_, cap, _)| cap.as_str()).collect();
+        assert_eq!(capabilities, ["http.download", "fs.write", "http.download"]);
+        assert_eq!(
+            seen[2].2,
+            serde_json::json!({
+                "host": "evil.test",
+                "url_path": "/f",
+                "vfs_path": "/out.bin",
+                "max_bytes": 50 * 1024 * 1024,
+                "overwrite": false,
+                "decompress": false,
+            })
+        );
+    }
+
+    /// Rebuilds the request the way a custom proxy might, dropping fields it
+    /// does not know about.
+    struct RebuildingAuthProxy;
+
+    #[async_trait::async_trait]
+    impl crate::stdlib::http::AuthProxy for RebuildingAuthProxy {
+        async fn transform(
+            &self,
+            req: HttpRequest,
+            _caller: &str,
+        ) -> Result<HttpRequest, crate::stdlib::http::AuthProxyError> {
+            Ok(HttpRequest {
+                redirect_guard: None,
+                ..req
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn an_auth_proxy_cannot_drop_the_redirect_guard() {
+        let source = r#"
+            import { get } from "submilli:http";
+            function main(): void {
+                get("https://example.test/start");
+            }
+        "#;
+        let compiled = crate::compile_script(source, "test.subm", crate::FileId(0), &[], &[])
+            .expect("compile clean");
+        let cfg = RuntimeConfig::default();
+        let engine = cfg.engine().expect("engine");
+        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let client = Arc::new(RedirectingClient {
+            hop_method: "GET",
+            hop_url: "https://evil.test/collect",
+            method_rewritten: false,
+            sent_hop: Mutex::new(false),
+        });
+        data.http_client = client.clone();
+        data.auth_proxy = Arc::new(RebuildingAuthProxy);
+        data.security_check = Arc::new(DenyEvilHost::default());
+        let mut store = cfg.store(&engine, data).expect("store");
+        let module = wasmtime::Module::new(&engine, &compiled.wasm).expect("module");
+        let mut linker = wasmtime::Linker::<StoreData>::new(&engine);
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .expect("install");
+        let inst = linker
+            .instantiate_async(&mut store, &module)
+            .await
+            .expect("instantiate");
+        let error = dispatch_main_async(&mut store, &inst)
+            .await
+            .expect_err("the hop is denied");
+        assert!(
+            format!("{error:?}").contains("permission denied"),
+            "{error:?}"
+        );
+        assert!(!*client.sent_hop.lock().unwrap());
+    }
+
+    #[tokio::test]
+    async fn fully_qualified_hosts_are_checked_without_their_trailing_dot() {
+        let initial = r#"
+            import { get } from "submilli:http";
+            function main(): void {
+                let caught = "";
+                try {
+                    get("https://evil.test./x");
+                } catch (e: PermissionDeniedError) {
+                    caught = e.reason;
+                }
+                assert(caught === "evil.test is not allowed", caught);
+            }
+        "#;
+        let (result, sent, seen) =
+            run_redirect(initial, "GET", "https://example.test/unused", false).await;
+        result.expect("initial request denied");
+        assert!(!sent);
+        assert_eq!(seen[0].2["host"], "evil.test");
+
+        let hop = r#"
+            import { get } from "submilli:http";
+            function main(): void {
+                get("https://example.test/start");
+            }
+        "#;
+        // Two dots: every trailing dot is dropped, not just one.
+        let (result, sent, seen) =
+            run_redirect(hop, "GET", "https://evil.test../collect", false).await;
+        assert!(
+            result
+                .expect_err("hop denied")
+                .contains("permission denied")
+        );
+        assert!(!sent);
+        assert_eq!(seen[1].2["host"], "evil.test");
     }
 }

@@ -1,5 +1,6 @@
 ---
 source: crates/interpreter/src/parser.rs
+assertion_line: 9637
 expression: ast
 ---
 Ast {
@@ -210,12 +211,15 @@ Ast {
                         ty: Some(
                             TypeAnnotation {
                                 kind: Name {
-                                    name_span: Span {
-                                        file: FileId(
-                                            0,
-                                        ),
-                                        start: 17,
-                                        end: 23,
+                                    name: Ident {
+                                        name: "number",
+                                        span: Span {
+                                            file: FileId(
+                                                0,
+                                            ),
+                                            start: 17,
+                                            end: 23,
+                                        },
                                     },
                                     args: [],
                                 },
@@ -237,12 +241,15 @@ Ast {
                 return_type: Some(
                     TypeAnnotation {
                         kind: Name {
-                            name_span: Span {
-                                file: FileId(
-                                    0,
-                                ),
-                                start: 26,
-                                end: 30,
+                            name: Ident {
+                                name: "void",
+                                span: Span {
+                                    file: FileId(
+                                        0,
+                                    ),
+                                    start: 26,
+                                    end: 30,
+                                },
                             },
                             args: [],
                         },

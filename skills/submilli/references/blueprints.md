@@ -53,11 +53,12 @@ Every top-level key, all optional except `name`:
 | `variables` | Session variables. Each has `required: true` or `default: "value"`, never both. Referenced as `${vars.NAME}` in filters |
 | `packages` | Packages the program may import. Unlisted packages do not exist for it |
 | `secrets` | Declared secret names and sources: `{ env: VAR }`, `{ file: /path }`, `{ store: key }`, or `{ harness: { required: true } }` for a value the trusted application binds per session. A server accepts only `store` and `harness` sources in a blueprint registered over its API (see Workflow) |
-| `auth_proxy` | Host-keyed credential injection for direct HTTP: `host`, then `auth: { bearer: "${secrets.X}" }`, `auth: { basic: { username, password } }`, `headers`, or `query` |
+| `allow_insecure_http` | Defaults to `false`: script HTTP (including packages/downloads) requires HTTPS. Does not govern MCP/LLM connections or inbound server HTTP |
+| `auth_proxy` | Host-keyed credential injection for direct HTTP: `host`, optional `allow_insecure_http: true` (also requires the blueprint flag), then `auth: { bearer: X }`, `auth: { basic: { username, password } }`, `headers`, or `query` |
 | `default` | Fall-through action: `deny` (the default and the norm), `allow`, or `ask-human` |
 | `permissions` | Per-caller rule lists; see below |
-| `mcp` | Outbound MCP servers keyed by local name: `url`, optional `transport` (`streamable_http`), `headers` with `${secrets.X}`, or `auth: { type: oauth2, ... }`. Imported as `@mcp/<name>`; gated by the `mcp.<name>` capability with a `tool` field |
-| `vfs` | The program's `/`: `none` (every `submilli:fs` call fails), `ephemeral` (default; a scratch directory deleted after the run), `per_session` (lasts as long as the session, like `submilli:session` state), or `persistent: { volume }` (an operator-declared volume kept across sessions and restarts). A program run outside a session gets one that closes when it returns |
+| `mcp` | Outbound MCP servers keyed by local name: `url`, optional `transport` (`streamable_http`), `headers` with `${secrets.X}`, or `auth: { type: oauth2, ... }`. Imported as `@mcp/<name>`; gated by the `mcp.<name>` capability with a `tool` field; see MCP servers below |
+| `vfs` | The program's `/`: `none` (every `submilli:fs` call fails), `ephemeral` (default; a scratch directory deleted after the run), `per_session` (lasts as long as the session, like `submilli:session` state), or `persistent: { volume }` (an operator-declared volume kept across sessions and restarts). A program run outside a session gets one that closes when it returns. `ephemeral` and `per_session` take `size_limit` (`100MB`, binary units: 104,857,600 bytes). Every write counts, packages' included: `fs` writes, appends, writers, copies, `http.download`, and Git; `fs.remove` and `fs.move` free space. One past it throws a catchable `RangeError`; under `per_session` the limit spans the session. It counts bytes, not entries |
 | `idle_timeout` | Session reaping window, e.g. `3600s`; default one day |
 | `llm` | Models a program may call through `submilli:llm`: `providers` (name → `type`, `api_key: ${secrets.X}`) and `models` (name → `provider`, optional `description`). A model not listed cannot be called; descriptions reach the model writing the program, so they say which model is for what |
 
@@ -81,6 +82,14 @@ Two kinds of capability, two homes:
   `secrets.get`) go under the package's own caller. Derive them from the
   package's `capabilities.yaml` with `submilli blueprint add-package` or
   `submilli blueprint lint --fix`; do not hand-write hosts and secret names.
+  Then look for derived rules that leave a caller-chosen value open: `fs.*`
+  with no `path` filter, `http.download` with no `vfs_path`. The package
+  passes that value through from the program, so the program can steer the
+  package there. When `main`'s rules confine that resource (a user's
+  directory), give the package's rule the same filter, such as `fs.write`
+  with `path glob "/${vars.userId}/*"`, or the program routes around
+  `main`'s rules through the package. Lint then warns that the
+  rule differs from what the package declared, and `--fix` leaves it alone.
 
 `secrets.get` can never be granted to `main`. Do not give `main` raw `http.*`
 access to a host a package already wraps: that reopens every argument the
@@ -206,6 +215,22 @@ an `auth_proxy` entry, the runtime adds the header. The token never enters the
 program. A model call works the same way: the provider key stays in
 `secrets`, the program names a model, and the response comes back.
 
+Use HTTPS URLs. Do not enable `allow_insecure_http` merely to make a failing
+request work: establish that the user intends cleartext traffic for this
+blueprint and, separately, for each affected auth-proxy credential. The
+blueprint flag alone permits no HTTP to a matching auth-proxy host; that
+rule must also set `allow_insecure_http: true`. Both flags default to false,
+including for localhost, and denial occurs before secret resolution.
+`blueprint auth-proxy add --allow-insecure-http` sets only the rule flag;
+edit the top-level flag in YAML. Existing HTTP blueprints need explicit
+opt-ins or HTTPS URLs when upgrading.
+
+Redirect destinations obey the same gates. Injected headers and query values
+restrict redirects to the same scheme, host, and effective port; redirects
+do not inject new credentials. Capability and network restrictions still
+apply. Runs without a blueprint, MCP/LLM connections, and inbound server HTTP
+retain their existing behavior; Git remains HTTPS-only.
+
 ```yaml
 kind: blueprint
 name: support-status
@@ -242,6 +267,58 @@ permissions:
 auth-proxy cases; `--header NAME=VALUE` and `--query KEY=VALUE` with
 `${secrets.X}` values cover the rest.
 
+## MCP servers
+
+When a service has an MCP server and no package, declare the server and it
+becomes the package `@mcp/<name>`, one function per tool:
+
+```sh
+submilli blueprint add-mcp playwright http://localhost:8931/mcp
+submilli docs @mcp/playwright            # connects; prints every tool's signature
+submilli blueprint capability add mcp.playwright \
+  --filter 'tool == "browser_navigate" or tool == "browser_snapshot"'
+```
+
+`add-mcp` writes the `mcp` block and a `deny` rule for `mcp.<name>` under
+`main`; `capability add` puts the allow ahead of it. One capability covers the
+whole server, and `tool` (with `==` or `glob`) picks tools within it. Choose
+tools from the `docs` listing, not from the task description: servers ship
+tools that run arbitrary code or write (Playwright's `browser_evaluate`), and
+a model given the server will reach for them. `mcp.<name>/<tool>` as a
+capability name is refused. Only Streamable HTTP servers work; a stdio server
+must be put behind an HTTP endpoint first.
+
+A tool takes one object of arguments, is called synchronously, and returns
+`unknown` unless the server publishes an output schema (or it is GitHub's
+hosted server, whose schemas Submilli carries). Cast the result to an
+interface declaring only the fields the program reads: the cast is checked,
+and a declared field the server doesn't send fails it. A program's calls to
+one server share one MCP session, closed when the program ends, so a stateful
+sequence (navigate, then snapshot) belongs in one program.
+
+Credentials, by what the server wants:
+
+| Server wants | Declare with |
+| --- | --- |
+| An API key | `secret add KEY --store key`, then `add-mcp <name> <url> --authorization-bearer KEY` |
+| Each user's own token | A `harness` secret, and `--header 'Authorization: Bearer ${secrets.KEY}'` |
+| An OAuth login | `add-mcp` probes and writes `auth: type: oauth2` (or pass `--oauth`) |
+
+An OAuth login is interactive: the developer opens a URL in a browser. Hand
+them the command instead of running it: `submilli mcp authenticate <name>
+--blueprint blueprint.yaml` locally, or `submilli server mcp authenticate
+<blueprint> <name>` after the blueprint is applied. Local and server
+credentials are separate. One login serves every session of the blueprint,
+so every user acts as whoever logged in; use a per-user header when users
+must act as themselves.
+
+Verify with `submilli run --blueprint blueprint.yaml` locally: an allowed
+tool returns, a tool outside the filter fails with `PermissionDeniedError ...
+capability=mcp.<name>` before any request reaches the server. On a server,
+private addresses are blocked, so a `localhost` MCP server needs
+`submilli-server --allow-localhost`; an unreachable server is left out of the
+blueprint with a `server unavailable` warning, and imports of it don't compile.
+
 ## Workflow
 
 ```sh
@@ -274,9 +351,18 @@ Register and run:
 
 ```sh
 submilli-server                                  # separate terminal
+submilli server packages install submilli/submilli-runtime @submilli/jina
 submilli server blueprint apply blueprint.yaml   # or: submilli apply -f dir/
 submilli server run-code --blueprint support-orders program.ts
 ```
+
+The server builds each package in `packages:` from its GitHub repository,
+pinned to a commit. The curated `@submilli/*` packages live in
+`submilli/submilli-runtime`; `submilli server packages list` shows what is
+installed. A server on the same machine also sees packages in the CLI's local
+store (`submilli build publish-local`, `submilli install`), so a package may
+work locally without being in `packages list`. `apply` doesn't check that
+packages are installed; the first program that imports a missing one fails.
 
 `apply` rejects a blueprint whose secrets use `env:` or `file:` with "not
 allowed for a blueprint registered over the API": the server has no inbound
@@ -295,8 +381,10 @@ the response carries `result`, `console`, and on failure `error.kind` and
 `error.message`. A missing required variable is rejected as `invalid_request`
 before compilation. MCP clients bind variables in the `submilli-variables`
 header or `initialize` `_meta.variables`; see [harnesses](harnesses.md).
-`submilli run --blueprint file.yaml program.ts` applies policy locally but has
-no variable binding, so a `${vars.*}` filter never matches there.
+Locally, `submilli run --blueprint file.yaml --var customerId=cus_northwind
+program.ts` applies the policy with that binding, the way an application binds
+it; `--var` repeats, and a required variable left out is refused. No server is
+needed, so run the verification matrix below this way first.
 
 ## Verification matrix
 

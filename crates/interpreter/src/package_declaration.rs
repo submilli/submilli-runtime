@@ -144,6 +144,249 @@ impl PackageDeclaration {
         }
         collector.shapes
     }
+
+    /// Rejects a declaration holding a type beyond the type limits in
+    /// [`crate::type_size`]. Declarations read from artifact JSON are bounded
+    /// by the parser's nesting limit, but an embedder can build one directly,
+    /// and every recursive walk over its types trusts those limits.
+    pub fn check_type_limits(&self) -> Result<(), crate::type_size::TypeTooLarge> {
+        let mut result = Ok(());
+        self.for_each_type(&mut |ty| {
+            if result.is_ok() {
+                result = crate::type_size::check(ty);
+            }
+        });
+        result
+    }
+
+    /// Calls `visit` on every type the declaration holds. Structures are
+    /// destructured exhaustively so a new type-bearing field has to be added
+    /// here, and nested namespaces are walked without recursion.
+    fn for_each_type(&self, visit: &mut dyn FnMut(&Type)) {
+        let Self {
+            runtime_functions,
+            runtime_globals,
+            package_name: _,
+            mcp_server: _,
+            values,
+            types,
+            runtime_types,
+            runtime_generics: _,
+            shapes,
+            namespaces,
+        } = self;
+        for RuntimeFunction { params, ret } in runtime_functions.values() {
+            params.iter().for_each(&mut *visit);
+            visit(ret);
+        }
+        runtime_globals.values().for_each(&mut *visit);
+        values.values().for_each(|value| value_types(value, visit));
+        types
+            .values()
+            .chain(runtime_types.values())
+            .for_each(|symbol| type_symbol_types(symbol, visit));
+        for shape in shapes {
+            match shape {
+                Shape::Object { fields, index } => {
+                    fields.values().for_each(|field| visit(&field.ty));
+                    if let Some(index) = index {
+                        visit(&index.value);
+                    }
+                }
+                Shape::Array(element) => visit(element),
+                Shape::Tuple(members) | Shape::Union(members) => {
+                    members.iter().for_each(&mut *visit);
+                }
+            }
+        }
+        let mut pending: Vec<&NamespaceSymbol> = namespaces.values().collect();
+        while let Some(namespace) = pending.pop() {
+            let NamespaceSymbol {
+                name: _,
+                mangled_prefix: _,
+                declaration_span: _,
+                values,
+                types,
+                namespaces,
+                doc: _,
+            } = namespace;
+            values.values().for_each(|value| value_types(value, visit));
+            types
+                .values()
+                .for_each(|symbol| type_symbol_types(symbol, visit));
+            pending.extend(namespaces.values());
+        }
+    }
+}
+
+fn value_types(value: &ValueSymbol, visit: &mut dyn FnMut(&Type)) {
+    match &value.kind {
+        ValueKind::Function {
+            generics: _,
+            params,
+            ret,
+            type_predicate,
+            doc: _,
+        } => {
+            params.iter().for_each(|param| visit(&param.ty));
+            visit(ret);
+            if let Some(predicate) = type_predicate {
+                visit(&predicate.asserted_type);
+            }
+        }
+        ValueKind::Let { ty, doc: _ } | ValueKind::Const { ty, doc: _ } => visit(ty),
+    }
+}
+
+fn type_symbol_types(symbol: &TypeSymbol, visit: &mut dyn FnMut(&Type)) {
+    match &symbol.kind {
+        TypeKind::Interface {
+            generics: _,
+            methods,
+            properties,
+            index,
+            dispatch: _,
+            doc: _,
+        } => {
+            methods
+                .values()
+                .for_each(|method| method_types(method, visit));
+            properties.values().for_each(|property| visit(&property.ty));
+            if let Some(index) = index {
+                visit(&index.value);
+            }
+        }
+        TypeKind::NumberEnum { .. } | TypeKind::StringEnum { .. } => {}
+        TypeKind::Alias {
+            generics: _,
+            ty,
+            doc: _,
+        } => visit(ty),
+        TypeKind::Class {
+            generics: _,
+            fields,
+            narrowing_checks,
+            methods,
+            method_visibility: _,
+            accessors,
+            constructor,
+            statics,
+            static_visibility: _,
+            static_fields,
+            extends,
+            implements: _,
+            doc: _,
+        } => {
+            fields
+                .values()
+                .chain(static_fields.values())
+                .for_each(|field| visit(&field.ty));
+            for check in narrowing_checks.values() {
+                narrowing_check_types(check, visit);
+            }
+            methods
+                .values()
+                .chain(statics.values())
+                .for_each(|method| method_types(method, visit));
+            for accessor in accessors {
+                match accessor {
+                    AccessorSig::Getter { name: _, ret_ty } => visit(ret_ty),
+                    AccessorSig::Setter { name: _, param } => visit(&param.ty),
+                }
+            }
+            constructor.iter().for_each(|param| visit(&param.ty));
+            if let Some(extends) = extends {
+                extends.args.iter().for_each(&mut *visit);
+            }
+        }
+    }
+}
+
+fn narrowing_check_types(check: &crate::FieldNarrowingCheck, visit: &mut dyn FnMut(&Type)) {
+    let crate::FieldNarrowingCheck {
+        declaration: _,
+        test,
+        minimal_test_target,
+        message: _,
+    } = check;
+    if let Some(target) = minimal_test_target {
+        visit(target);
+    }
+    match test {
+        crate::FieldNarrowingTest::Shape(ty) => visit(ty),
+        crate::FieldNarrowingTest::Interface(interface) => {
+            let crate::InterfaceNarrowingTest {
+                index,
+                members,
+                methods: _,
+                non_shape_carriers,
+                shape_allowed: _,
+                nullable: _,
+            } = interface;
+            if let Some(index) = index {
+                visit(&index.value);
+            }
+            members.values().for_each(|member| visit(&member.ty));
+            for carrier in non_shape_carriers {
+                match carrier {
+                    crate::InterfaceCarrier::Array(element)
+                    | crate::InterfaceCarrier::Set(element) => visit(element),
+                    crate::InterfaceCarrier::Map(key, value) => {
+                        visit(key);
+                        visit(value);
+                    }
+
+                    crate::InterfaceCarrier::Number
+                    | crate::InterfaceCarrier::Boolean
+                    | crate::InterfaceCarrier::String
+                    | crate::InterfaceCarrier::BigInt
+                    | crate::InterfaceCarrier::Uint8Array
+                    | crate::InterfaceCarrier::ArrayAny
+                    | crate::InterfaceCarrier::MapAny
+                    | crate::InterfaceCarrier::SetAny
+                    | crate::InterfaceCarrier::RegExp
+                    | crate::InterfaceCarrier::RegExpMatch
+                    | crate::InterfaceCarrier::TemporalInstant
+                    | crate::InterfaceCarrier::TemporalDuration
+                    | crate::InterfaceCarrier::TemporalZonedDateTime
+                    | crate::InterfaceCarrier::TemporalPlainDate
+                    | crate::InterfaceCarrier::TemporalPlainTime
+                    | crate::InterfaceCarrier::TemporalPlainDateTime
+                    | crate::InterfaceCarrier::TemporalPlainYearMonth
+                    | crate::InterfaceCarrier::TemporalPlainMonthDay
+                    | crate::InterfaceCarrier::ObjectShape
+                    | crate::InterfaceCarrier::Url
+                    | crate::InterfaceCarrier::FsStat
+                    | crate::InterfaceCarrier::FsPeek
+                    | crate::InterfaceCarrier::FsDirEntry
+                    | crate::InterfaceCarrier::FsInfo
+                    | crate::InterfaceCarrier::FsFileWriter
+                    | crate::InterfaceCarrier::HttpResponse
+                    | crate::InterfaceCarrier::HttpDownloadResult
+                    | crate::InterfaceCarrier::SessionEntry
+                    | crate::InterfaceCarrier::SessionPage => {}
+                }
+            }
+        }
+        crate::FieldNarrowingTest::NonNull
+        | crate::FieldNarrowingTest::Substituted
+        | crate::FieldNarrowingTest::Representation => {}
+    }
+}
+
+fn method_types(method: &MethodSig, visit: &mut dyn FnMut(&Type)) {
+    let MethodSig {
+        generics: _,
+        params,
+        ret,
+        predicate,
+        doc: _,
+    } = method;
+    params.iter().for_each(|param| visit(&param.ty));
+    visit(ret);
+    if let Some(predicate) = predicate {
+        visit(&predicate.asserted_type);
+    }
 }
 
 #[derive(Default)]
@@ -659,8 +902,8 @@ mod tests {
         packages.extend(host_defs.iter());
         let (mut ta, _) = infer(source, "main", &ast, &packages);
         let _ = check(&ta);
-        capture(&mut ta);
-        desugar(&mut ta, crate::FileId(0));
+        ta = capture(ta).unwrap();
+        ta = desugar(ta, crate::FileId(0)).unwrap();
         ta
     }
 
@@ -786,6 +1029,82 @@ mod tests {
             .any(|s| matches!(s, crate::Shape::Object { .. }));
         assert!(has_array, "expected Array shape");
         assert!(has_object, "expected Object shape");
+    }
+}
+
+#[cfg(test)]
+mod type_limit_checks {
+    use std::collections::BTreeMap;
+
+    use super::*;
+    use crate::compiler_limits::MAX_TYPE_DEPTH;
+    use crate::type_size::TypeTooLarge;
+
+    fn nested(depth: u32) -> Type {
+        (1..depth).fold(Type::Number, |inner, _| Type::Array(Box::new(inner)))
+    }
+
+    fn namespace(name: &str) -> NamespaceSymbol {
+        NamespaceSymbol {
+            name: name.into(),
+            mangled_prefix: crate::mangle::prelude(name),
+            declaration_span: Span::at(crate::FileId(0)),
+            values: BTreeMap::new(),
+            types: BTreeMap::new(),
+            namespaces: BTreeMap::new(),
+            doc: None,
+        }
+    }
+
+    fn alias(ty: Type) -> TypeSymbol {
+        TypeSymbol {
+            name: "Deep".into(),
+            mangled_name: crate::mangle::prelude("Deep"),
+            declaration_span: Span::at(crate::FileId(0)),
+            kind: TypeKind::Alias {
+                generics: Vec::new(),
+                ty,
+                doc: None,
+            },
+        }
+    }
+
+    #[test]
+    fn a_type_in_a_nested_namespace_is_checked() {
+        crate::type_size::tests::on_compiler_stack(|| {
+            let mut inner = namespace("Inner");
+            inner
+                .types
+                .insert("Deep".into(), alias(nested(MAX_TYPE_DEPTH + 1)));
+            let mut outer = namespace("Outer");
+            outer.namespaces.insert("Inner".into(), inner);
+            let mut declaration = PackageDeclaration::with_package("dep");
+            assert_eq!(declaration.check_type_limits(), Ok(()));
+            declaration.namespaces.insert("Outer".into(), outer);
+            assert_eq!(declaration.check_type_limits(), Err(TypeTooLarge::Depth));
+        });
+    }
+
+    #[test]
+    fn runtime_declarations_are_checked() {
+        crate::type_size::tests::on_compiler_stack(|| {
+            let mut declaration = PackageDeclaration::with_package("dep");
+            declaration.runtime_functions.insert(
+                crate::mangle::prelude("f"),
+                RuntimeFunction {
+                    params: vec![nested(MAX_TYPE_DEPTH)],
+                    ret: Type::Void,
+                },
+            );
+            declaration
+                .runtime_types
+                .insert("Deep".into(), alias(nested(MAX_TYPE_DEPTH)));
+            assert_eq!(declaration.check_type_limits(), Ok(()));
+            declaration
+                .runtime_globals
+                .insert(crate::mangle::prelude("g"), nested(MAX_TYPE_DEPTH + 1));
+            assert_eq!(declaration.check_type_limits(), Err(TypeTooLarge::Depth));
+        });
     }
 }
 

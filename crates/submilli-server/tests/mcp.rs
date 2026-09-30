@@ -136,19 +136,13 @@ impl Harness {
         let blueprints = Arc::new(InMemoryBlueprintStore::seed([
             Blueprint {
                 name: EPH.into(),
-                vfs: VfsConfig::Ephemeral {
-                    size_limit: None,
-                    path_limit: None,
-                },
+                vfs: VfsConfig::Ephemeral { size_limit: None },
                 permissions: allow_fs(),
                 ..Default::default()
             },
             Blueprint {
                 name: SESS.into(),
-                vfs: VfsConfig::PerSession {
-                    size_limit: None,
-                    path_limit: None,
-                },
+                vfs: VfsConfig::PerSession { size_limit: None },
                 permissions: allow_fs(),
                 ..Default::default()
             },
@@ -786,10 +780,7 @@ async fn mcp_session_restores_after_server_restart() {
     let blueprints = || {
         vec![Blueprint {
             name: SESS.into(),
-            vfs: VfsConfig::PerSession {
-                size_limit: None,
-                path_limit: None,
-            },
+            vfs: VfsConfig::PerSession { size_limit: None },
             permissions: allow_fs(),
             ..Default::default()
         }]
@@ -2363,14 +2354,8 @@ permissions:
 #[tokio::test]
 async fn files_tools_default_deny_in_every_vfs_mode() {
     for vfs in [
-        VfsConfig::Ephemeral {
-            size_limit: None,
-            path_limit: None,
-        },
-        VfsConfig::PerSession {
-            size_limit: None,
-            path_limit: None,
-        },
+        VfsConfig::Ephemeral { size_limit: None },
+        VfsConfig::PerSession { size_limit: None },
         VfsConfig::None,
     ] {
         let h = Harness::from_blueprints(vec![Blueprint {
@@ -2559,6 +2544,58 @@ fn mcp_parser_depth_is_bounded() {
             rpc.to_string().contains("parser recursion limit exceeded"),
             "{rpc}"
         );
+        let (status, _, rpc) = h.post(EPH, tools_call(2, SUM), Some(&session)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(output(&rpc)["error"].is_null(), "{rpc}");
+        assert_eq!(output(&rpc)["result"], "2", "{rpc}");
+    });
+}
+
+#[test]
+fn mcp_compiler_structure_limits_are_bounded() {
+    parser_depth::isolated_worker("mcp_compiler_structure_limits_are_bounded", async {
+        let h = Harness::new();
+        let session = h.handshake(EPH).await;
+        let (status, _, rpc) = h
+            .post(
+                EPH,
+                tools_call(1, &parser_depth::flat_chain_source()),
+                Some(&session),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(output(&rpc)["error"]["kind"], "compile_error", "{rpc}");
+        assert!(
+            rpc.to_string().contains(parser_depth::SYNTAX_LIMIT_MESSAGE),
+            "{rpc}"
+        );
+        let (status, _, rpc) = h
+            .post(
+                EPH,
+                tools_call(2, &parser_depth::near_limit_chain_source()),
+                Some(&session),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(output(&rpc)["error"].is_null(), "{rpc}");
+        assert_eq!(output(&rpc)["result"], "200", "{rpc}");
+    });
+}
+
+#[test]
+fn mcp_closure_arity_returns_diagnostics() {
+    parser_depth::isolated_worker("mcp_closure_arity_returns_diagnostics", async {
+        let h = Harness::new();
+        let session = h.handshake(EPH).await;
+        let (status, _, rpc) = h
+            .post(
+                EPH,
+                tools_call(1, &parser_depth::oversized_closure_source()),
+                Some(&session),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        parser_depth::assert_closure_diagnostic(output(&rpc));
         let (status, _, rpc) = h.post(EPH, tools_call(2, SUM), Some(&session)).await;
         assert_eq!(status, StatusCode::OK);
         assert!(output(&rpc)["error"].is_null(), "{rpc}");

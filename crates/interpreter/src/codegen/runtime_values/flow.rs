@@ -13,15 +13,16 @@ pub(super) fn connect(
     dependencies: &[&crate::PackageDeclaration],
     locals: &ResolvedLocals,
     flow: &mut Flow,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let mut sources = HashMap::new();
     seed_dependencies(dependencies, flow);
-    let escaping = escaping_functions(ast);
-    connect_functions(ast, &escaping, flow);
-    connect_classes(ast, flow);
-    connect_statements(ast, locals, &mut sources, flow);
-    connect_closures(ast, &mut sources, flow);
-    connect_reads(ast, lowered, dependencies, locals, &sources, flow);
+    let escaping = escaping_functions(ast)?;
+    connect_functions(ast, &escaping, flow)?;
+    connect_classes(ast, flow)?;
+    connect_statements(ast, locals, &mut sources, flow)?;
+    connect_closures(ast, &mut sources, flow)?;
+    connect_reads(ast, lowered, dependencies, locals, &sources, flow)?;
+    Ok(())
 }
 
 fn seed_dependencies(dependencies: &[&crate::PackageDeclaration], flow: &mut Flow) {
@@ -57,21 +58,31 @@ fn seed_dependencies(dependencies: &[&crate::PackageDeclaration], flow: &mut Flo
     }
 }
 
-fn escaping_functions(ast: &TypedAst) -> HashSet<MangledName> {
+fn escaping_functions(
+    ast: &TypedAst,
+) -> Result<HashSet<MangledName>, crate::compiler_error::CompilerFailure> {
     let mut escaping_functions: HashSet<_> = ast
         .exports
         .iter()
         .map(|export| export.target.clone())
         .collect();
-    for index in 0..ast.exprs_len() {
-        if let TypedExprKind::FunctionRef { mangled, .. } = &ast.expr(ExprId(index as u32)).kind {
+    for index in ast.expr_ids().map_err(crate::codegen::arena_failure)? {
+        if let TypedExprKind::FunctionRef { mangled, .. } = &ast
+            .try_expr(index)
+            .map_err(crate::codegen::arena_failure)?
+            .kind
+        {
             escaping_functions.insert(mangled.clone());
         }
     }
-    escaping_functions
+    Ok(escaping_functions)
 }
 
-fn connect_functions(ast: &TypedAst, escaping_functions: &HashSet<MangledName>, flow: &mut Flow) {
+fn connect_functions(
+    ast: &TypedAst,
+    escaping_functions: &HashSet<MangledName>,
+    flow: &mut Flow,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     for function in &ast.functions {
         for param in &function.params {
             flow.binding_types
@@ -80,15 +91,19 @@ fn connect_functions(ast: &TypedAst, escaping_functions: &HashSet<MangledName>, 
                 flow.widened.insert(Place::Local(param.name.clone()));
             }
         }
-        connect_returns(ast, function.body, Place::Return(function.body), flow);
+        connect_returns(ast, function.body, Place::Return(function.body), flow)?;
         if escaping_functions.contains(&function.mangled_name) {
             flow.edge(Place::Return(function.body), Place::Element);
             flow.edge(Place::Return(function.body), Place::CallbackReturn);
         }
     }
+    Ok(())
 }
 
-fn connect_classes(ast: &TypedAst, flow: &mut Flow) {
+fn connect_classes(
+    ast: &TypedAst,
+    flow: &mut Flow,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     for declaration in &ast.types {
         let crate::TypedTypeDecl::Class(class) = declaration else {
             continue;
@@ -99,7 +114,7 @@ fn connect_classes(ast: &TypedAst, flow: &mut Flow) {
                     .insert(param.name.clone(), (param.ty.clone(), param.boxed));
                 flow.widened.insert(Place::Local(param.name.clone()));
             }
-            connect_returns(ast, method.body, Place::Return(method.body), flow);
+            connect_returns(ast, method.body, Place::Return(method.body), flow)?;
             flow.edge(
                 Place::Return(method.body),
                 Place::Method(method.name.name.clone()),
@@ -111,7 +126,7 @@ fn connect_classes(ast: &TypedAst, flow: &mut Flow) {
         }
         for accessor in &class.accessors {
             if let crate::TypedClassAccessor::Getter { body, name, .. } = accessor {
-                connect_returns(ast, *body, Place::Return(*body), flow);
+                connect_returns(ast, *body, Place::Return(*body), flow)?;
                 flow.edge(Place::Return(*body), Place::Field(name.name.clone()));
                 flow.edge(Place::Field(name.name.clone()), Place::Return(*body));
             }
@@ -146,6 +161,7 @@ fn connect_classes(ast: &TypedAst, flow: &mut Flow) {
             }
         }
     }
+    Ok(())
 }
 
 fn connect_statements(
@@ -153,10 +169,13 @@ fn connect_statements(
     locals: &ResolvedLocals,
     sources: &mut HashMap<Ident, ExprId>,
     flow: &mut Flow,
-) {
-    for i in 0..ast.stmts_len() {
-        let id = StmtId(i as u32);
-        match &ast.stmt(id).kind {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    for id in ast.stmt_ids().map_err(crate::codegen::arena_failure)? {
+        match &ast
+            .try_stmt(id)
+            .map_err(crate::codegen::arena_failure)?
+            .kind
+        {
             TypedStmtKind::Let {
                 name,
                 ty,
@@ -194,12 +213,20 @@ fn connect_statements(
             _ => {}
         }
     }
+    Ok(())
 }
 
-fn connect_closures(ast: &TypedAst, sources: &mut HashMap<Ident, ExprId>, flow: &mut Flow) {
-    for i in 0..ast.exprs_len() {
-        let id = ExprId(i as u32);
-        match &ast.expr(id).kind {
+fn connect_closures(
+    ast: &TypedAst,
+    sources: &mut HashMap<Ident, ExprId>,
+    flow: &mut Flow,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    for id in ast.expr_ids().map_err(crate::codegen::arena_failure)? {
+        match &ast
+            .try_expr(id)
+            .map_err(crate::codegen::arena_failure)?
+            .kind
+        {
             TypedExprKind::Narrowed {
                 binding, source, ..
             } => {
@@ -216,13 +243,14 @@ fn connect_closures(ast: &TypedAst, sources: &mut HashMap<Ident, ExprId>, flow: 
                 match body {
                     ClosureBody::Expr(value) => flow.value(*value, Place::ClosureReturn(id)),
                     ClosureBody::Block(body) => {
-                        connect_returns(ast, *body, Place::ClosureReturn(id), flow);
+                        connect_returns(ast, *body, Place::ClosureReturn(id), flow)?;
                     }
                 }
             }
             _ => {}
         }
     }
+    Ok(())
 }
 
 fn connect_reads(
@@ -232,41 +260,51 @@ fn connect_reads(
     locals: &ResolvedLocals,
     sources: &HashMap<Ident, ExprId>,
     flow: &mut Flow,
-) {
-    seed_imported_callbacks(ast, dependencies, flow);
-    for i in 0..ast.exprs_len() {
-        let id = ExprId(i as u32);
-        connect_expression(ast, id, flow);
-        seed_imported_read(ast, dependencies, id, flow);
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    seed_imported_callbacks(ast, dependencies, flow)?;
+    for id in ast.expr_ids().map_err(crate::codegen::arena_failure)? {
+        connect_expression(ast, id, flow)?;
+        seed_imported_read(ast, dependencies, id, flow)?;
         if let Some(name) = locals.reads.get(&id) {
             flow.edge(Place::Local(name.clone()), Place::Expr(id));
-            if matches!(ast.expr(id).kind, TypedExprKind::PostfixUnary { .. }) {
+            if matches!(
+                ast.try_expr(id)
+                    .map_err(crate::codegen::arena_failure)?
+                    .kind,
+                TypedExprKind::PostfixUnary { .. }
+            ) {
                 flow.value(id, Place::Local(name.clone()));
             }
         }
-        connect_live_narrow_read(ast, lowered, locals, sources, id, flow);
+        connect_live_narrow_read(ast, lowered, locals, sources, id, flow)?;
     }
+    Ok(())
 }
 
 fn seed_imported_callbacks(
     ast: &TypedAst,
     dependencies: &[&crate::PackageDeclaration],
     flow: &mut Flow,
-) {
-    let imported_callback_returns = (0..ast.exprs_len()).any(|index| {
-        let TypedExprKind::FunctionRef { mangled, .. } = &ast.expr(ExprId(index as u32)).kind
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    for id in ast.expr_ids().map_err(crate::codegen::arena_failure)? {
+        let TypedExprKind::FunctionRef { mangled, .. } = &ast
+            .try_expr(id)
+            .map_err(crate::codegen::arena_failure)?
+            .kind
         else {
-            return false;
+            continue;
         };
-        dependencies
+        if dependencies
             .iter()
             .filter_map(|dependency| dependency.runtime_functions.get(mangled))
             .any(|signature| signature.ret == Type::Unknown)
-    });
-    if imported_callback_returns {
-        flow.widened.insert(Place::Element);
-        flow.widened.insert(Place::CallbackReturn);
+        {
+            flow.widened.insert(Place::Element);
+            flow.widened.insert(Place::CallbackReturn);
+            break;
+        }
     }
+    Ok(())
 }
 
 fn seed_imported_read(
@@ -274,8 +312,12 @@ fn seed_imported_read(
     dependencies: &[&crate::PackageDeclaration],
     id: ExprId,
     flow: &mut Flow,
-) {
-    match &ast.expr(id).kind {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let _: () = match &ast
+        .try_expr(id)
+        .map_err(crate::codegen::arena_failure)?
+        .kind
+    {
         TypedExprKind::Call { mangled, .. } | TypedExprKind::GenericCall { mangled, .. } => {
             if dependencies
                 .iter()
@@ -293,7 +335,8 @@ fn seed_imported_read(
             flow.widened.insert(Place::Expr(id));
         }
         _ => {}
-    }
+    };
+    Ok(())
 }
 
 fn connect_live_narrow_read(
@@ -303,16 +346,24 @@ fn connect_live_narrow_read(
     sources: &HashMap<Ident, ExprId>,
     id: ExprId,
     flow: &mut Flow,
-) {
-    let TypedExprKind::LocalNarrowRef { path, .. } = &ast.expr(id).kind else {
-        return;
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let TypedExprKind::LocalNarrowRef { path, .. } = &ast
+        .try_expr(id)
+        .map_err(crate::codegen::arena_failure)?
+        .kind
+    else {
+        return Ok(());
     };
-    let Some(source) = live_source(ast, lowered, locals, sources, id, flow) else {
-        return;
+    let Some(source) = live_source(ast, lowered, locals, sources, id, flow)? else {
+        return Ok(());
     };
     flow.live_reads.insert(id, source);
     flow.value(source, Place::Expr(id));
-    if let TypedExprKind::GlobalRef { mangled, .. } = &lowered.expr(source).kind {
+    if let TypedExprKind::GlobalRef { mangled, .. } = &lowered
+        .try_expr(source)
+        .map_err(crate::codegen::arena_failure)?
+        .kind
+    {
         flow.edge(Place::Global(mangled.clone()), Place::Expr(source));
     }
     let unstable = !path.chain.is_empty()
@@ -322,9 +373,16 @@ fn connect_live_narrow_read(
             .get(&id)
             .and_then(|name| flow.binding_types.get(name))
             .is_some_and(|(_, boxed)| *boxed);
-    if unstable && lowered.expr(source).ty != ast.expr(id).ty {
+    let _: () = if unstable
+        && lowered
+            .try_expr(source)
+            .map_err(crate::codegen::arena_failure)?
+            .ty
+            != ast.try_expr(id).map_err(crate::codegen::arena_failure)?.ty
+    {
         flow.widened.insert(Place::Expr(id));
-    }
+    };
+    Ok(())
 }
 
 fn live_source(
@@ -334,55 +392,91 @@ fn live_source(
     sources: &HashMap<Ident, ExprId>,
     id: ExprId,
     flow: &mut Flow,
-) -> Option<ExprId> {
-    let TypedExprKind::LocalNarrowRef { binding, path } = &ast.expr(id).kind else {
-        return None;
+) -> Result<Option<ExprId>, crate::compiler_error::CompilerFailure> {
+    let TypedExprKind::LocalNarrowRef { binding, path } = &ast
+        .try_expr(id)
+        .map_err(crate::codegen::arena_failure)?
+        .kind
+    else {
+        return Ok(None);
     };
-    if path.chain.is_empty() {
-        match &path.root {
-            BindingId::Global(mangled) => ast
-                .globals
-                .iter()
-                .find(|g| g.mangled_name == *mangled)
-                .map(|global| {
-                    lowered.push_expr(TypedExpr {
-                        kind: TypedExprKind::GlobalRef {
-                            mangled: mangled.clone(),
-                            name: global.name.clone(),
-                        },
-                        span: ast.expr(id).span,
-                        ty: global.ty.clone(),
-                    })
-                }).or_else(|| {
-                (0..ast.exprs_len()).map(|index| ast.expr(ExprId(index as u32)))
-                    .find(|expr| matches!(&expr.kind, TypedExprKind::GlobalRef { mangled: name, .. } if name == mangled))
-                    .map(|expr| lowered.push_expr(expr.clone()))
-            }),
-            BindingId::Local { .. } => locals.reads.get(&id).and_then(|name| {
-                let (ty, boxed) = flow.binding_types.get(name)?;
-                let source = lowered.push_expr(TypedExpr {
+    if !path.chain.is_empty() {
+        return Ok(sources.get(binding).copied());
+    }
+    let span = ast
+        .try_expr(id)
+        .map_err(crate::codegen::arena_failure)?
+        .span;
+    match &path.root {
+        BindingId::Global(mangled) => {
+            let expr = if let Some(global) = ast.globals.iter().find(|g| g.mangled_name == *mangled)
+            {
+                Some(TypedExpr {
+                    kind: TypedExprKind::GlobalRef {
+                        mangled: mangled.clone(),
+                        name: global.name.clone(),
+                    },
+                    span,
+                    ty: global.ty.clone(),
+                })
+            } else {
+                let mut found = None;
+                for candidate in ast.expr_ids().map_err(crate::codegen::arena_failure)? {
+                    let expr = ast
+                        .try_expr(candidate)
+                        .map_err(crate::codegen::arena_failure)?;
+                    if matches!(&expr.kind, TypedExprKind::GlobalRef { mangled: name, .. } if name == mangled)
+                    {
+                        found = Some(expr.clone());
+                        break;
+                    }
+                }
+                found
+            };
+            expr.map(|expr| {
+                lowered
+                    .try_push_expr(expr)
+                    .map_err(crate::codegen::arena_failure)
+            })
+            .transpose()
+        }
+        BindingId::Local { .. } => {
+            let Some(name) = locals.reads.get(&id) else {
+                return Ok(None);
+            };
+            let Some((ty, boxed)) = flow.binding_types.get(name) else {
+                return Ok(None);
+            };
+            let source = lowered
+                .try_push_expr(TypedExpr {
                     kind: TypedExprKind::LocalRef {
                         ident: name.clone(),
                         boxed: *boxed,
                     },
-                    span: ast.expr(id).span,
+                    span,
                     ty: ty.clone(),
-                });
-                flow.edge(Place::Local(name.clone()), Place::Expr(source));
-                Some(source)
-            }),
-            BindingId::This => sources.get(binding).copied(),
+                })
+                .map_err(crate::codegen::arena_failure)?;
+            flow.edge(Place::Local(name.clone()), Place::Expr(source));
+            Ok(Some(source))
         }
-    } else {
-        sources.get(binding).copied()
+        BindingId::This => Ok(sources.get(binding).copied()),
     }
 }
 
-fn connect_expression(ast: &TypedAst, id: ExprId, flow: &mut Flow) {
+fn connect_expression(
+    ast: &TypedAst,
+    id: ExprId,
+    flow: &mut Flow,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let target = Place::Expr(id);
-    match &ast.expr(id).kind {
+    let _: () = match &ast
+        .try_expr(id)
+        .map_err(crate::codegen::arena_failure)?
+        .kind
+    {
         TypedExprKind::OptionalChain { base, parts } => {
-            connect_optional_chain(ast, id, *base, parts, flow);
+            connect_optional_chain(ast, id, *base, parts, flow)?;
         }
         TypedExprKind::GlobalRef { mangled, .. } => {
             flow.edge(Place::Global(mangled.clone()), target);
@@ -395,12 +489,12 @@ fn connect_expression(ast: &TypedAst, id: ExprId, flow: &mut Flow) {
             } => {
                 flow.edge(Place::Global(mangled.clone()), target.clone());
                 flow.value(id, Place::Global(mangled.clone()));
-                if target_ty != &ast.expr(id).ty {
+                if target_ty != &ast.try_expr(id).map_err(crate::codegen::arena_failure)?.ty {
                     flow.widened.insert(target);
                 }
             }
             crate::PostfixTarget::Local { target_ty, .. } => {
-                if target_ty != &ast.expr(id).ty {
+                if target_ty != &ast.try_expr(id).map_err(crate::codegen::arena_failure)?.ty {
                     flow.widened.insert(target);
                 }
             }
@@ -409,7 +503,12 @@ fn connect_expression(ast: &TypedAst, id: ExprId, flow: &mut Flow) {
                 flow.value(id, Place::Field(name.name.clone()));
             }
             crate::PostfixTarget::Index { receiver, .. }
-                if ast.expr(*receiver).ty.peel() != &Type::Uint8Array =>
+                if ast
+                    .try_expr(*receiver)
+                    .map_err(crate::codegen::arena_failure)?
+                    .ty
+                    .peel()
+                    != &Type::Uint8Array =>
             {
                 flow.widened.insert(target);
                 flow.value(id, Place::Element);
@@ -482,7 +581,11 @@ fn connect_expression(ast: &TypedAst, id: ExprId, flow: &mut Flow) {
         }
         TypedExprKind::MethodCall { name, args, .. }
         | TypedExprKind::SuperMethodCall { name, args, .. } => {
-            if let TypedExprKind::MethodCall { receiver, .. } = &ast.expr(id).kind {
+            if let TypedExprKind::MethodCall { receiver, .. } = &ast
+                .try_expr(id)
+                .map_err(crate::codegen::arena_failure)?
+                .kind
+            {
                 flow.value(*receiver, target.clone());
             }
             flow.edge(Place::Method(name.name.clone()), target);
@@ -523,7 +626,12 @@ fn connect_expression(ast: &TypedAst, id: ExprId, flow: &mut Flow) {
             flow.edge(Place::CallbackReturn, target);
         }
         TypedExprKind::IndexAccess { receiver, .. }
-            if ast.expr(*receiver).ty.peel() != &Type::Uint8Array =>
+            if ast
+                .try_expr(*receiver)
+                .map_err(crate::codegen::arena_failure)?
+                .ty
+                .peel()
+                != &Type::Uint8Array =>
         {
             flow.widened.insert(target.clone());
             flow.edge(Place::Element, target.clone());
@@ -552,15 +660,25 @@ fn connect_expression(ast: &TypedAst, id: ExprId, flow: &mut Flow) {
             }
         }
         _ => {}
-    }
+    };
+    Ok(())
 }
 
-fn connect_returns(ast: &TypedAst, body: StmtId, target: Place, flow: &mut Flow) {
-    match &ast.stmt(body).kind {
+fn connect_returns(
+    ast: &TypedAst,
+    body: StmtId,
+    target: Place,
+    flow: &mut Flow,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let _: () = match &ast
+        .try_stmt(body)
+        .map_err(crate::codegen::arena_failure)?
+        .kind
+    {
         TypedStmtKind::Return(Some(value)) => flow.value(*value, target),
         TypedStmtKind::Block(stmts) => {
             for stmt in stmts {
-                connect_returns(ast, *stmt, target.clone(), flow);
+                connect_returns(ast, *stmt, target.clone(), flow)?;
             }
         }
         TypedStmtKind::If {
@@ -568,22 +686,22 @@ fn connect_returns(ast: &TypedAst, body: StmtId, target: Place, flow: &mut Flow)
             else_block,
             ..
         } => {
-            connect_returns(ast, *then_block, target.clone(), flow);
+            connect_returns(ast, *then_block, target.clone(), flow)?;
             if let Some(body) = else_block {
-                connect_returns(ast, *body, target, flow);
+                connect_returns(ast, *body, target, flow)?;
             }
         }
         TypedStmtKind::While { body, .. }
         | TypedStmtKind::NarrowRegion { body, .. }
         | TypedStmtKind::For { body, .. }
         | TypedStmtKind::ForOf { body, .. }
-        | TypedStmtKind::DoWhile { body, .. } => connect_returns(ast, *body, target, flow),
+        | TypedStmtKind::DoWhile { body, .. } => connect_returns(ast, *body, target, flow)?,
         TypedStmtKind::Switch { cases, default, .. } => {
             for case in cases {
-                connect_returns(ast, case.body, target.clone(), flow);
+                connect_returns(ast, case.body, target.clone(), flow)?;
             }
             if let Some(body) = default {
-                connect_returns(ast, *body, target, flow);
+                connect_returns(ast, *body, target, flow)?;
             }
         }
         TypedStmtKind::Try {
@@ -591,16 +709,17 @@ fn connect_returns(ast: &TypedAst, body: StmtId, target: Place, flow: &mut Flow)
             catches,
             finally,
         } => {
-            connect_returns(ast, *body, target.clone(), flow);
+            connect_returns(ast, *body, target.clone(), flow)?;
             for clause in catches {
-                connect_returns(ast, clause.body, target.clone(), flow);
+                connect_returns(ast, clause.body, target.clone(), flow)?;
             }
             if let Some(body) = finally {
-                connect_returns(ast, *body, target, flow);
+                connect_returns(ast, *body, target, flow)?;
             }
         }
         _ => {}
-    }
+    };
+    Ok(())
 }
 
 fn connect_optional_chain(
@@ -609,9 +728,12 @@ fn connect_optional_chain(
     base: ExprId,
     parts: &[crate::TypedChainPart],
     flow: &mut Flow,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let target = Place::Expr(id);
-    let mut receiver_ty = &ast.expr(base).ty;
+    let mut receiver_ty = &ast
+        .try_expr(base)
+        .map_err(crate::codegen::arena_failure)?
+        .ty;
     let mut receiver = Place::Expr(base);
     for (index, part) in parts.iter().enumerate() {
         let step = Place::Chain(id, index);
@@ -655,4 +777,5 @@ fn connect_optional_chain(
         }
         receiver_ty = part.result_ty();
     }
+    Ok(())
 }

@@ -6,6 +6,7 @@ use super::type_namespace::TypeNamespace;
 use super::type_registry::TypeRegistry;
 #[cfg(test)]
 use crate::Param;
+use crate::type_size::TypeLimits;
 use crate::typechecker::type_param_substitution::TypeParamSubstitution;
 use crate::{MangledName, MethodSig, Type, TypeKind, TypeSymbol};
 
@@ -21,16 +22,21 @@ fn resolve<'a>(
     registry.lookup(mangled).or_else(|| types.lookup(name))
 }
 
+/// Substitutions that pass a type limit render as `Type::Error` and are
+/// recorded in `limits`, so the compile still fails at the inferer's next
+/// checkpoint.
 pub(super) fn format_definition(
     ty: &Type,
     types: &TypeNamespace,
     registry: &TypeRegistry,
+    limits: &TypeLimits,
 ) -> String {
     let ty = ty.peel();
     match ty {
         Type::Number | Type::NumberLiteral(_) => format_named_interface(
             types,
             registry,
+            limits,
             &crate::mangle::prelude("Number"),
             "Number",
             &[],
@@ -38,6 +44,7 @@ pub(super) fn format_definition(
         Type::BigInt => format_named_interface(
             types,
             registry,
+            limits,
             &crate::mangle::prelude("BigInt"),
             "BigInt",
             &[],
@@ -45,6 +52,7 @@ pub(super) fn format_definition(
         Type::Boolean | Type::BooleanLiteral(_) => format_named_interface(
             types,
             registry,
+            limits,
             &crate::mangle::prelude("Boolean"),
             "Boolean",
             &[],
@@ -52,6 +60,7 @@ pub(super) fn format_definition(
         Type::String | Type::StringLiteral(_) => format_named_interface(
             types,
             registry,
+            limits,
             &crate::mangle::prelude("String"),
             "String",
             &[],
@@ -59,6 +68,7 @@ pub(super) fn format_definition(
         Type::Array(elem) => format_named_interface(
             types,
             registry,
+            limits,
             &crate::mangle::prelude("Array"),
             "Array",
             &[(**elem).clone()],
@@ -66,6 +76,7 @@ pub(super) fn format_definition(
         Type::Uint8Array => format_named_interface(
             types,
             registry,
+            limits,
             &crate::mangle::prelude("Uint8Array"),
             "Uint8Array",
             &[],
@@ -75,13 +86,13 @@ pub(super) fn format_definition(
             name,
             args,
             ..
-        } => format_named_interface(types, registry, mangled, name, args),
+        } => format_named_interface(types, registry, limits, mangled, name, args),
         Type::ClassRef {
             mangled,
             name,
             args,
             ..
-        } => format_named_class(types, registry, mangled, name, args),
+        } => format_named_class(types, registry, limits, mangled, name, args),
         Type::Object { fields, index } => {
             if index.is_some() {
                 return ty.to_string();
@@ -202,6 +213,7 @@ struct ClassLink {
 fn class_chain(
     types: &TypeNamespace,
     registry: &TypeRegistry,
+    limits: &TypeLimits,
     mangled: &MangledName,
     args: &[Type],
 ) -> Vec<ClassLink> {
@@ -213,6 +225,7 @@ fn class_chain(
                 .or_else(|| types.lookup_by_mangled(m))
                 .cloned()
         },
+        limits,
         mangled,
         args,
         |sym, bindings| {
@@ -289,7 +302,12 @@ fn write_static_fields(out: &mut String, chain: &[ClassLink], seen: &mut Shadowe
     }
 }
 
-fn write_static_methods(out: &mut String, chain: &[ClassLink], seen: &mut Shadowed) {
+fn write_static_methods(
+    out: &mut String,
+    chain: &[ClassLink],
+    seen: &mut Shadowed,
+    limits: &TypeLimits,
+) {
     // Statics never see the class's type parameters, so no substitution applies.
     let static_sub = TypeParamSubstitution::new();
     for (i, link) in chain.iter().enumerate() {
@@ -306,13 +324,18 @@ fn write_static_methods(out: &mut String, chain: &[ClassLink], seen: &mut Shadow
                 continue;
             }
             write!(out, "  {}static ", visibility_of(static_visibility, mname)).unwrap();
-            format_method_sig(out, mname, sig, &static_sub);
+            format_method_sig(out, mname, sig, &static_sub, limits);
             writeln!(out, "{}", inherited_from_note(chain, i)).unwrap();
         }
     }
 }
 
-fn write_instance_fields(out: &mut String, chain: &[ClassLink], seen: &mut Shadowed) {
+fn write_instance_fields(
+    out: &mut String,
+    chain: &[ClassLink],
+    seen: &mut Shadowed,
+    limits: &TypeLimits,
+) {
     for (i, link) in chain.iter().enumerate() {
         let TypeKind::Class { fields, .. } = &link.sym.kind else {
             continue;
@@ -324,13 +347,9 @@ fn write_instance_fields(out: &mut String, chain: &[ClassLink], seen: &mut Shado
             let vis = visibility_prefix(field.visibility);
             let ro = if field.readonly { "readonly " } else { "" };
             let marker = if field.optional { "?" } else { "" };
-            writeln!(
-                out,
-                "  {vis}{ro}{fname}{marker}: {};{}",
-                link.sub.apply(&field.ty),
-                inherited_from_note(chain, i)
-            )
-            .unwrap();
+            let ty = link.sub.apply_or_record(&field.ty, limits);
+            let note = inherited_from_note(chain, i);
+            out.push_str(&format!("  {vis}{ro}{fname}{marker}: {ty};{note}\n"));
         }
     }
 }
@@ -338,7 +357,7 @@ fn write_instance_fields(out: &mut String, chain: &[ClassLink], seen: &mut Shado
 /// The one constructor an instantiation actually runs. `resolve_implicit_constructors`
 /// normally copies an inherited signature onto the subclass itself, so this stops at
 /// `chain[0]`; the walk is the fallback for a symbol that never went through it.
-fn write_constructor(out: &mut String, chain: &[ClassLink]) {
+fn write_constructor(out: &mut String, chain: &[ClassLink], limits: &TypeLimits) {
     for (i, link) in chain.iter().enumerate() {
         let TypeKind::Class { constructor, .. } = &link.sym.kind else {
             continue;
@@ -354,7 +373,7 @@ fn write_constructor(out: &mut String, chain: &[ClassLink]) {
             super::format_signature::write_named_param(
                 out,
                 &p.name,
-                &link.sub.apply(&p.ty),
+                &link.sub.apply_or_record(&p.ty, limits),
                 p.default.as_ref(),
                 p.rest,
             );
@@ -364,7 +383,12 @@ fn write_constructor(out: &mut String, chain: &[ClassLink]) {
     }
 }
 
-fn write_instance_methods(out: &mut String, chain: &[ClassLink], seen: &mut Shadowed) {
+fn write_instance_methods(
+    out: &mut String,
+    chain: &[ClassLink],
+    seen: &mut Shadowed,
+    limits: &TypeLimits,
+) {
     for (i, link) in chain.iter().enumerate() {
         let TypeKind::Class {
             methods,
@@ -379,7 +403,7 @@ fn write_instance_methods(out: &mut String, chain: &[ClassLink], seen: &mut Shad
                 continue;
             }
             write!(out, "  {}", visibility_of(method_visibility, mname)).unwrap();
-            format_method_sig(out, mname, sig, &link.sub);
+            format_method_sig(out, mname, sig, &link.sub, limits);
             writeln!(out, "{}", inherited_from_note(chain, i)).unwrap();
         }
     }
@@ -413,6 +437,7 @@ fn visibility_prefix(visibility: crate::Visibility) -> &'static str {
 fn format_named_class(
     types: &TypeNamespace,
     registry: &TypeRegistry,
+    limits: &TypeLimits,
     mangled: &MangledName,
     name: &str,
     args: &[Type],
@@ -430,7 +455,7 @@ fn format_named_class(
         out.push('>');
     }
 
-    let chain = class_chain(types, registry, mangled, args);
+    let chain = class_chain(types, registry, limits, mangled, args);
     if chain.is_empty() {
         out.push_str(" {}");
         return out;
@@ -442,11 +467,11 @@ fn format_named_class(
     let mut body = String::new();
     let mut statics = Shadowed::new();
     write_static_fields(&mut body, &chain, &mut statics);
-    write_static_methods(&mut body, &chain, &mut statics);
+    write_static_methods(&mut body, &chain, &mut statics, limits);
     let mut instance = Shadowed::new();
-    write_instance_fields(&mut body, &chain, &mut instance);
-    write_constructor(&mut body, &chain);
-    write_instance_methods(&mut body, &chain, &mut instance);
+    write_instance_fields(&mut body, &chain, &mut instance, limits);
+    write_constructor(&mut body, &chain, limits);
+    write_instance_methods(&mut body, &chain, &mut instance, limits);
 
     if body.is_empty() {
         out.push_str(" {}");
@@ -478,6 +503,7 @@ pub(crate) fn format_class_header(name: &str, generics: &[String]) -> String {
 fn format_named_interface(
     types: &TypeNamespace,
     registry: &TypeRegistry,
+    limits: &TypeLimits,
     mangled: &MangledName,
     name: &str,
     args: &[Type],
@@ -528,7 +554,7 @@ fn format_named_interface(
         let ro = if index.readonly { "readonly " } else { "" };
         out.push_str(&format!(
             "  {ro}[key: string]: {};\n",
-            sub.apply(&index.value)
+            sub.apply_or_record(&index.value, limits)
         ));
     }
     for (pname, prop) in properties {
@@ -536,14 +562,15 @@ fn format_named_interface(
             write_doc_block(&mut out, "  ", doc);
         }
         let marker = if prop.optional { "?" } else { "" };
-        writeln!(out, "  {pname}{marker}: {};", sub.apply(&prop.ty)).unwrap();
+        let ty = sub.apply_or_record(&prop.ty, limits);
+        out.push_str(&format!("  {pname}{marker}: {ty};\n"));
     }
     for (mname, sig) in methods {
         if let Some(doc) = &sig.doc {
             write_doc_block(&mut out, "  ", doc);
         }
         out.push_str("  ");
-        format_method_sig(&mut out, mname, sig, &sub);
+        format_method_sig(&mut out, mname, sig, &sub, limits);
         out.push('\n');
     }
     out.push('}');
@@ -598,7 +625,13 @@ pub(super) fn write_doc_block(out: &mut String, indent: &str, doc: &crate::DocCo
     writeln!(out, "{indent} */").unwrap();
 }
 
-fn format_method_sig(out: &mut String, name: &str, sig: &MethodSig, sub: &TypeParamSubstitution) {
+fn format_method_sig(
+    out: &mut String,
+    name: &str,
+    sig: &MethodSig,
+    sub: &TypeParamSubstitution,
+    limits: &TypeLimits,
+) {
     out.push_str(name);
     if !sig.generics.is_empty() {
         out.push('<');
@@ -615,7 +648,7 @@ fn format_method_sig(out: &mut String, name: &str, sig: &MethodSig, sub: &TypePa
         if i > 0 {
             out.push_str(", ");
         }
-        let ty = sub.apply(&p.ty);
+        let ty = sub.apply_or_record(&p.ty, limits);
         if p.name.is_empty() {
             write!(out, "{ty}").unwrap();
         } else {
@@ -627,7 +660,8 @@ fn format_method_sig(out: &mut String, name: &str, sig: &MethodSig, sub: &TypePa
         }
     }
     out.push(')');
-    write!(out, ": {};", sub.apply(&sig.ret)).unwrap();
+    let ret = sub.apply_or_record(&sig.ret, limits);
+    out.push_str(&format!(": {ret};"));
 }
 
 #[cfg(test)]
@@ -637,6 +671,14 @@ mod tests {
     use super::*;
     use crate::package_declaration::TypeSymbol;
     use crate::{Span, TypeKind};
+
+    /// Renders without a type limit being reached; shadows the 4-argument form.
+    fn format_definition(ty: &Type, types: &TypeNamespace, registry: &TypeRegistry) -> String {
+        let limits = TypeLimits::default();
+        let out = super::format_definition(ty, types, registry, &limits);
+        assert_eq!(limits.take(), Ok(()));
+        out
+    }
 
     fn empty_ns() -> TypeNamespace<'static> {
         TypeNamespace::new()

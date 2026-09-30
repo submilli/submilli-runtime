@@ -511,7 +511,7 @@ mod tests {
             .run(&bytes)
             .await
             .expect_err("uncaught throw");
-        let (sources, file) = crate::Sources::single("script.subm", src);
+        let (sources, file) = crate::Sources::single("script.subm", src).unwrap();
         let rendered =
             crate::backtrace::render(&err, &sources, file, crate::backtrace::BacktraceMode::Full)
                 .expect("an uncaught throw should render a backtrace");
@@ -636,7 +636,7 @@ mod tests {
             .run(&bytes)
             .await
             .expect_err("uncaught host throw");
-        let (sources, file) = crate::Sources::single("script.subm", src);
+        let (sources, file) = crate::Sources::single("script.subm", src).unwrap();
         let rendered =
             crate::backtrace::render(&err, &sources, file, crate::backtrace::BacktraceMode::Full)
                 .expect("a host throw should render a backtrace");

@@ -1,7 +1,5 @@
 //! Trap → Submilli-source backtrace rendering.
 
-use std::fmt::Write;
-
 use wasmtime::{Error, FrameInfo, FrameSymbol, Trap, WasmBacktrace};
 
 use crate::diagnostics::render_source_block;
@@ -151,7 +149,9 @@ fn render_frame(out: &mut String, frame: &FrameInfo, sources: &Sources, role: &s
     let line = sym.line().unwrap_or(0);
     let col = sym.column().unwrap_or(0);
 
-    writeln!(out, "  at {name} ({frame_file}:{line}:{col})  [{role}]").unwrap();
+    out.push_str(&format!(
+        "  at {name} ({frame_file}:{line}:{col})  [{role}]\n"
+    ));
 
     if let Some((file, source_file)) = sources.find_path(frame_file) {
         let gutter_width = source_file
@@ -163,7 +163,6 @@ fn render_frame(out: &mut String, frame: &FrameInfo, sources: &Sources, role: &s
         let gutter_blank = " ".repeat(gutter_width);
         emit_context(
             out,
-            source_file.text.as_str(),
             source_file.line_index(),
             file,
             sym,
@@ -175,7 +174,6 @@ fn render_frame(out: &mut String, frame: &FrameInfo, sources: &Sources, role: &s
 
 fn emit_context(
     out: &mut String,
-    source: &str,
     line_index: &LineIndex,
     file: FileId,
     sym: &FrameSymbol,
@@ -192,9 +190,19 @@ fn emit_context(
     // logic. `col == 0` means "no column info" → put the caret at
     // column 1 rather than dropping the block entirely.
     let caret_col = col.max(1);
-    let offset = line_index.byte_offset(line, caret_col);
-    let span = Span::new(file, offset, offset);
-    render_source_block(out, source, line_index, span, gutter_blank, gutter_width);
+    let context = (|| {
+        let offset = line_index.byte_offset(line, caret_col)?;
+        let span = Span::new(file, offset, offset)?;
+        let mut context = String::new();
+        render_source_block(&mut context, line_index, span, gutter_blank, gutter_width)?;
+        Ok::<_, crate::source::SourceError>(context)
+    })();
+    match context {
+        Ok(context) => out.push_str(&context),
+        Err(error) => out.push_str(&format!(
+            "{gutter_blank} | source context unavailable: {error}\n"
+        )),
+    }
 }
 
 fn is_source_frame(frame: &FrameInfo, sources: &Sources) -> bool {

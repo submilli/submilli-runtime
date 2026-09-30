@@ -70,7 +70,12 @@ pub fn emit_checked_index(
 }
 
 fn emit_index_oob_throw(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
-    emit_const_string_by_text(emitter, ctx, INDEX_OOB_MESSAGE);
+    if ctx
+        .latch(emit_const_string_by_text(emitter, ctx, INDEX_OOB_MESSAGE))
+        .is_none()
+    {
+        return;
+    }
 
     let new_idx = ctx
         .symbols

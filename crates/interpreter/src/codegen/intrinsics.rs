@@ -859,7 +859,6 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                 fieldtype_ref(vtable),
                 fieldtype_ref(string),
                 host_f64,
-                host_f64,
                 host_i64,
             ],
             Some(object),
@@ -1028,19 +1027,20 @@ pub(crate) fn push_string_literal(
     intrinsics: IntrinsicTypeIndices,
     string_vtable_global_idx: u32,
     text: &str,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     use wasm_encoder::Instruction;
     f.instruction(&Instruction::GlobalGet(string_vtable_global_idx));
-    let mut len = 0u32;
+    let mut len = 0usize;
     for unit in text.encode_utf16() {
         f.instruction(&Instruction::I32Const(i32::from(unit)));
-        len += 1;
+        len = len.saturating_add(1);
     }
     f.instruction(&Instruction::ArrayNewFixed {
         array_type_index: intrinsics.raw_string,
-        array_size: len,
+        array_size: super::wasm_u32(len)?,
     });
     f.instruction(&Instruction::StructNew(intrinsics.string));
+    Ok(())
 }
 
 fn ref_to(idx: u32) -> ValType {

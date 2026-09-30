@@ -1,5 +1,7 @@
 //! Rules for types and expressions in positions that require runtime values.
 
+use crate::compiler_error::CompilerFailure;
+
 use crate::{ExprId, Type, TypeAnnotation};
 
 use super::Inferer;
@@ -65,12 +67,12 @@ impl Inferer<'_> {
         &mut self,
         annot: &TypeAnnotation,
         position: ValuePosition,
-    ) -> Type {
-        let ty = self.resolve_type(annot);
+    ) -> Result<Type, CompilerFailure> {
+        let ty = self.resolve_type(annot)?;
         if self.reject_void_value(&ty, annot.span, position) {
-            return Type::Error;
+            return Ok(Type::Error);
         }
-        ty
+        Ok(ty)
     }
 
     /// Infer a value slot once, retaining errors from an earlier contextual pass.
@@ -82,21 +84,28 @@ impl Inferer<'_> {
         hint: Option<&Type>,
         position: ValuePosition,
         cached: Option<(ExprId, Type, bool)>,
-    ) -> ValueOperand {
+    ) -> Result<ValueOperand, CompilerFailure> {
         let errors_before = self.error_count();
-        let (typed_expr, ty, cached_error) = cached.unwrap_or_else(|| {
-            let (typed_expr, ty) = self.infer_expr(expr, hint);
-            (typed_expr, ty, false)
-        });
+        let (typed_expr, ty, cached_error) = cached.map_or_else(
+            || {
+                let (typed_expr, ty) = self.infer_expr(expr, hint)?;
+                Ok((typed_expr, ty, false))
+            },
+            Ok::<_, CompilerFailure>,
+        )?;
         let already_errored = cached_error || self.error_count() > errors_before;
-        let rejected_void =
-            !already_errored && self.reject_void_value(&ty, self.ast.expr(expr).span, position);
-        ValueOperand {
+        let rejected_void = !already_errored
+            && self.reject_void_value(
+                &ty,
+                self.ast.try_expr(expr).map_err(super::arena_failure)?.span,
+                position,
+            );
+        Ok(ValueOperand {
             typed_expr,
             ty,
             already_errored,
             rejected_void,
-        }
+        })
     }
 
     /// Report the "`void` is not a value" diagnostic if `ty` carries one, and

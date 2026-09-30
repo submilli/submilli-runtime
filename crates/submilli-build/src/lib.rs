@@ -47,7 +47,7 @@ pub use resolve::{
 };
 pub use scaffold::{
     ScaffoldError, ScaffoldedPackage, add_package, init_project, is_valid_package_name,
-    refresh_editor_files,
+    refresh_dependency_types, refresh_editor_files,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]

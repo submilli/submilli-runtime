@@ -5,14 +5,17 @@
 //! inside `scopes`/`current_return` during the body walk. Downstream passes
 //! (PackageDeclaration, codegen) see only `TypeVar`s.
 
+use crate::compiler_error::CompilerFailure;
+
 use std::collections::BTreeMap;
 
 use crate::{
-    ExprId, ExprKind, Ident, MethodSig, Span, StmtId, StmtKind, Type, TypeAnnotation,
-    TypedExprKind, TypedParam, TypedStmt, TypedStmtKind, ValueKind,
+    ExprId, ExprKind, Ident, MethodSig, Span, StmtKind, Type, TypeAnnotation, TypedExprKind,
+    TypedParam, TypedStmt, TypedStmtKind, ValueKind,
 };
 
-use super::Inferer;
+use super::{Inferer, type_limit_at};
+use crate::type_size::{TypeBudget, TypeLimits, TypeTooLarge, map_children};
 use crate::typechecker::type_param_substitution::{TypeParamSubstitution, UnifyError};
 
 /// What a receiver-less generic call is calling. Only diagnostics differ: a
@@ -45,17 +48,21 @@ impl GenericCallee {
         name: &str,
         generics: &[String],
         sub: &crate::typechecker::type_param_substitution::TypeParamSubstitution,
+        limits: &TypeLimits,
     ) -> String {
         let args = generics
             .iter()
             .map(|g| {
-                let resolved = sub.apply(&Type::TypeVar(g.clone()));
                 // Leave an uninferable parameter as its own name for the
-                // caller to replace; show the ones inference did settle.
-                if matches!(&resolved, Type::TypeVar(n) if n == &g[..]) {
-                    g.clone()
-                } else {
-                    resolved.to_string()
+                // caller to replace; show the ones inference did settle. One
+                // too large to build is left for the caller too.
+                match sub.apply(&Type::TypeVar(g.clone()), limits) {
+                    Ok(Type::TypeVar(n)) if n == g[..] => g.clone(),
+                    Ok(resolved) => resolved.to_string(),
+                    Err(exceeded) => {
+                        limits.record(exceeded);
+                        g.clone()
+                    }
                 }
             })
             .collect::<Vec<_>>()
@@ -74,141 +81,45 @@ impl GenericCallee {
 use super::format_signature::SignatureKind;
 use crate::Param;
 
-pub(super) fn substitute_typevars(ty: &Type, bindings: &BTreeMap<String, Type>) -> Type {
-    match ty {
-        Type::Refined { original, ty } => Type::Refined {
-            original: Box::new(substitute_typevars(original, bindings)),
-            ty: Box::new(substitute_typevars(ty, bindings)),
-        },
-        Type::TypeVar(name) => bindings.get(name).cloned().unwrap_or_else(|| ty.clone()),
-        Type::Array(elem) => Type::Array(Box::new(substitute_typevars(elem, bindings))),
-        Type::Readonly(inner) => Type::Readonly(Box::new(substitute_typevars(inner, bindings))),
-        Type::Tuple(elements) => Type::Tuple(
-            elements
-                .iter()
-                .map(|e| substitute_typevars(e, bindings))
-                .collect(),
-        ),
-        Type::Function {
-            params,
-            ret,
-            predicate,
-            has_rest,
-        } => Type::Function {
-            params: params
-                .iter()
-                .map(|p| substitute_typevars(p, bindings))
-                .collect(),
-            ret: Box::new(substitute_typevars(ret, bindings)),
-            predicate: predicate.as_ref().map(|p| {
-                Box::new(crate::TypePredicate {
-                    parameter_index: p.parameter_index,
-                    asserted_type: substitute_typevars(&p.asserted_type, bindings),
-                })
-            }),
-            has_rest: *has_rest,
-        },
-        Type::Object { fields, index } => Type::Object {
-            index: index
-                .as_ref()
-                .map(|i| i.map_value(|v| substitute_typevars(v, bindings))),
-            fields: fields
-                .iter()
-                .map(|(k, v)| {
-                    (
-                        k.clone(),
-                        crate::ObjectField {
-                            ty: substitute_typevars(&v.ty, bindings),
-                            optional: v.optional,
-                            readonly: v.readonly,
-                        },
-                    )
-                })
-                .collect(),
-        },
-        Type::InterfaceRef {
-            mangled,
-            package,
-            name,
-            args,
-        } => Type::InterfaceRef {
-            mangled: mangled.clone(),
-            package: package.clone(),
-            name: name.clone(),
-            args: args
-                .iter()
-                .map(|a| substitute_typevars(a, bindings))
-                .collect(),
-        },
-        Type::ClassRef {
-            mangled,
-            package,
-            name,
-            args,
-        } => Type::ClassRef {
-            mangled: mangled.clone(),
-            package: package.clone(),
-            name: name.clone(),
-            args: args
-                .iter()
-                .map(|a| substitute_typevars(a, bindings))
-                .collect(),
-        },
-        Type::Union(members) => Type::union(
-            members
-                .iter()
-                .map(|m| substitute_typevars(m, bindings))
-                .collect(),
-        ),
-        Type::Alias {
-            mangled,
-            package,
-            name,
-            args,
-            ty: inner,
-        } => Type::Alias {
-            mangled: mangled.clone(),
-            package: package.clone(),
-            name: name.clone(),
-            args: args
-                .iter()
-                .map(|a| substitute_typevars(a, bindings))
-                .collect(),
-            ty: Box::new(substitute_typevars(inner, bindings)),
-        },
-        // A recursion back-edge carries no inline body — only its args
-        // need substitution, exactly like `InterfaceRef`.
-        Type::AliasRef {
-            mangled,
-            package,
-            name,
-            args,
-        } => Type::AliasRef {
-            mangled: mangled.clone(),
-            package: package.clone(),
-            name: name.clone(),
-            args: args
-                .iter()
-                .map(|a| substitute_typevars(a, bindings))
-                .collect(),
-        },
-        Type::Number
-        | Type::BigInt
-        | Type::NumberLiteral(_)
-        | Type::String
-        | Type::StringLiteral(_)
-        | Type::Uint8Array
-        | Type::Boolean
-        | Type::BooleanLiteral(_)
-        | Type::Null
-        | Type::Void
-        | Type::Never
-        | Type::Unknown
-        | Type::Error
-        | Type::NumberEnum { .. }
-        | Type::StringEnum { .. }
-        | Type::GenericParam { .. } => ty.clone(),
+/// Replaces each `TypeVar` bound in `bindings` with its binding, once: unlike
+/// [`TypeParamSubstitution::apply`] it does not chase variables inside a
+/// binding. Fails, without building the rest, once the result passes a type
+/// limit.
+///
+/// [`TypeParamSubstitution::apply`]: crate::typechecker::type_param_substitution::TypeParamSubstitution::apply
+pub(super) fn substitute_typevars(
+    ty: &Type,
+    bindings: &BTreeMap<String, Type>,
+    limits: &TypeLimits,
+) -> Result<Type, TypeTooLarge> {
+    substitute_at(ty, bindings, 1, &mut limits.budget())
+}
+
+/// [`substitute_typevars`] where the caller cannot return an error: a type past
+/// a limit is recorded in `limits` and comes back as `Type::Error`.
+pub(super) fn substitute_or_record(
+    ty: &Type,
+    bindings: &BTreeMap<String, Type>,
+    limits: &TypeLimits,
+) -> Type {
+    limits.type_or_error(substitute_typevars(ty, bindings, limits))
+}
+
+fn substitute_at(
+    ty: &Type,
+    bindings: &BTreeMap<String, Type>,
+    depth: u32,
+    budget: &mut TypeBudget<'_>,
+) -> Result<Type, TypeTooLarge> {
+    if let Type::TypeVar(name) = ty
+        && let Some(bound) = bindings.get(name)
+    {
+        budget.charge_copy(bound, depth)?;
+        return Ok(bound.clone());
     }
+    budget.charge(depth)?;
+    let child = depth.saturating_add(1);
+    map_children(ty, |inner| substitute_at(inner, bindings, child, budget))
 }
 
 pub(super) fn erase_generic_params(ty: &Type) -> Type {
@@ -411,8 +322,8 @@ impl Inferer<'_> {
         annot: &TypeAnnotation,
         subject: &str,
         allow_void: bool,
-    ) -> Type {
-        let resolved = self.resolve_type(annot);
+    ) -> Result<Type, CompilerFailure> {
+        let resolved = self.resolve_type(annot)?;
         if let Some(offender) =
             super::void_type_arguments::invalid_argument(&resolved, allow_void, self.resolver())
         {
@@ -423,9 +334,9 @@ impl Inferer<'_> {
                     "`{offender}` cannot be used as a type argument to {subject} — use a value type"
                 ),
             );
-            return Type::Error;
+            return Ok(Type::Error);
         }
-        resolved
+        Ok(resolved)
     }
 
     fn type_parameter_allows_void(&self, name: &str, params: &[crate::Param], ret: &Type) -> bool {
@@ -433,11 +344,16 @@ impl Inferer<'_> {
             &[name.to_string()],
             &[Type::Void],
         );
-        params.iter().all(|p| {
-            super::void_type_arguments::invalid_position(&sub.apply(&p.ty), false, self.resolver())
-                .is_none()
-        }) && super::void_type_arguments::invalid_position(&sub.apply(ret), true, self.resolver())
+        let admits_void = |ty: &Type, return_position: bool| {
+            let substituted = sub.apply_or_record(ty, &self.type_limits);
+            super::void_type_arguments::invalid_position(
+                &substituted,
+                return_position,
+                self.resolver(),
+            )
             .is_none()
+        };
+        params.iter().all(|p| admits_void(&p.ty, false)) && admits_void(ret, true)
     }
 
     fn check_inferred_void_arguments(
@@ -447,18 +363,18 @@ impl Inferer<'_> {
         sub: &crate::typechecker::type_param_substitution::TypeParamSubstitution,
         span: Span,
     ) {
+        let void_position = |ty: &Type, return_position: bool| {
+            let substituted = sub.apply_or_record(ty, &self.type_limits);
+            super::void_type_arguments::invalid_position(
+                &substituted,
+                return_position,
+                self.resolver(),
+            )
+        };
         let invalid = params
             .iter()
-            .find_map(|p| {
-                super::void_type_arguments::invalid_position(
-                    &sub.apply(&p.ty),
-                    false,
-                    self.resolver(),
-                )
-            })
-            .or_else(|| {
-                super::void_type_arguments::invalid_position(&sub.apply(ret), true, self.resolver())
-            });
+            .find_map(|p| void_position(&p.ty, false))
+            .or_else(|| void_position(ret, true));
         if let Some(position) = invalid {
             self.error(
                 span,
@@ -515,10 +431,14 @@ impl Inferer<'_> {
         }
         false
     }
-    pub(super) fn infer_functions(&mut self) {
+    pub(super) fn infer_functions(&mut self) -> Result<(), CompilerFailure> {
         let top_level: Vec<_> = self.ast.top_level.clone();
         for stmt_id in top_level {
-            let stmt = self.ast.stmt(stmt_id).clone();
+            let stmt = self
+                .ast
+                .try_stmt(stmt_id)
+                .map_err(super::arena_failure)?
+                .clone();
             let span = stmt.span;
             let StmtKind::Function {
                 name,
@@ -569,12 +489,15 @@ impl Inferer<'_> {
                 },
                 None => None,
             };
-            let body_instantiation = self.push_body_generics(generic_names.clone());
+            let body_instantiation = self.push_body_generics(generic_names.clone())?;
             let body_param_types: Vec<Type> = sig_param_types
                 .iter()
-                .map(|t| substitute_typevars(t, &body_instantiation))
-                .collect();
-            let body_ret_type = substitute_typevars(&sig_ret_type, &body_instantiation);
+                .map(|t| substitute_typevars(t, &body_instantiation, &self.type_limits))
+                .collect::<Result<_, _>>()
+                .map_err(type_limit_at(name.span))?;
+            let body_ret_type =
+                substitute_typevars(&sig_ret_type, &body_instantiation, &self.type_limits)
+                    .map_err(type_limit_at(name.span))?;
             // typed_params stores signature TypeVars, not body GPs — GPs must
             // not escape the body; PackageDeclaration and codegen read these externally.
             let typed_params: Vec<TypedParam> = params
@@ -612,23 +535,41 @@ impl Inferer<'_> {
             let exprs_before = self.typed_ast.exprs_len();
             let stmts_before = self.typed_ast.stmts_len();
             let body_id = self
-                .infer_stmt(body)
-                .expect("function body is a Block, never a type-only decl");
+                .infer_body_with_narrowing_boundary(body)?
+                .ok_or_else(|| {
+                    super::inference_failure("function body is a Block, never a type-only decl")
+                })?;
             self.current_return = prev_return;
             self.current_type_predicate = prev_predicate;
             self.reachable = prev_reachable;
             self.scopes.pop();
             self.pop_body_generics();
-            for i in exprs_before..self.typed_ast.exprs_len() {
-                let id = ExprId(i as u32);
-                erase_generic_params_in_expr(self.typed_ast.expr_mut(id));
+            for id in self
+                .typed_ast
+                .expr_ids()
+                .map_err(crate::typechecker::arena_failure)?
+                .skip(exprs_before)
+            {
+                erase_generic_params_in_expr(
+                    self.typed_ast
+                        .try_expr_mut(id)
+                        .map_err(crate::typechecker::arena_failure)?,
+                );
             }
-            for i in stmts_before..self.typed_ast.stmts_len() {
-                let id = StmtId(i as u32);
-                erase_generic_params_in_stmt(self.typed_ast.stmt_mut(id));
+            for id in self
+                .typed_ast
+                .stmt_ids()
+                .map_err(crate::typechecker::arena_failure)?
+                .skip(stmts_before)
+            {
+                erase_generic_params_in_stmt(
+                    self.typed_ast
+                        .try_stmt_mut(id)
+                        .map_err(crate::typechecker::arena_failure)?,
+                );
             }
             let ret_type = stored_return;
-            let mangled_name = self.mangle_top_symbol(&name.name);
+            let mangled_name = self.mangle_top_symbol(&name.name)?;
             self.add_typed_function(crate::TypedFunction {
                 name,
                 mangled_name,
@@ -639,8 +580,10 @@ impl Inferer<'_> {
                 body: body_id,
                 doc,
                 span,
-            });
+            })?;
         }
+
+        Ok(())
     }
 
     /// Generic interface-method dispatch. Pre-seeds the unification map with the
@@ -658,23 +601,35 @@ impl Inferer<'_> {
         args: Vec<ExprId>,
         expected: Option<&Type>,
         span: Span,
-    ) -> (TypedExprKind, Type) {
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         // The no-mapper form preserves the source type; the mapped form has
         // an independent result parameter, like TypeScript's two overloads.
         let mut sig = sig;
         if iface_mangled == crate::mangle::prelude("ArrayConstructor")
             && name.name == "from"
             && (args.len() == 1
-                || args
-                    .get(1)
-                    .is_some_and(|id| matches!(self.ast.expr(*id).kind, crate::ExprKind::Null)))
+                || match args.get(1) {
+                    Some(id) => matches!(
+                        self.ast.try_expr(*id).map_err(super::arena_failure)?.kind,
+                        crate::ExprKind::Null
+                    ),
+                    None => false,
+                })
         {
             sig.generics = vec!["T".into()];
             sig.ret = Type::Array(Box::new(Type::TypeVar("T".into())));
-            sig.params[1].ty = Type::Null;
+            sig.params
+                .get_mut(1)
+                .ok_or_else(|| super::inference_failure("missing Array.from map parameter"))?
+                .ty = Type::Null;
         }
 
-        let receiver_ty = self.typed_ast.expr(typed_receiver).ty.clone();
+        let receiver_ty = self
+            .typed_ast
+            .try_expr(typed_receiver)
+            .map_err(crate::typechecker::arena_failure)?
+            .ty
+            .clone();
         let mut sub = TypeParamSubstitution::new();
 
         for (k, v) in interface_bindings {
@@ -705,7 +660,7 @@ impl Inferer<'_> {
                     annot,
                     &subject,
                     self.type_parameter_allows_void(gname, &sig.params, &sig.ret),
-                );
+                )?;
                 sub.insert(gname.clone(), resolved);
             }
         }
@@ -760,7 +715,12 @@ impl Inferer<'_> {
         }
 
         let rest_elem_ty: Type = if has_rest {
-            match &sig.params.last().unwrap().ty {
+            match &sig
+                .params
+                .last()
+                .ok_or_else(|| super::inference_failure("rest signature has no parameters"))?
+                .ty
+            {
                 Type::Array(elem) => (**elem).clone(),
                 _ => Type::Error,
             }
@@ -782,17 +742,17 @@ impl Inferer<'_> {
             &rest_elem_ty,
             &mut sub,
             signature_help,
-        );
+        )?;
 
         if has_rest || typed_args.len() < sig.params.len() {
             self.typed_ast
                 .record_authored_arguments(span, typed_args.clone());
         }
         if arity_ok {
-            self.fill_omitted_defaults(&sig.params, args.len(), span, &mut typed_args);
+            self.fill_omitted_defaults(&sig.params, args.len(), span, &mut typed_args)?;
         }
         if arity_ok && has_rest {
-            self.pack_rest_tail(fixed_count, rest_elem_ty.clone(), span, &mut typed_args);
+            self.pack_rest_tail(fixed_count, rest_elem_ty.clone(), span, &mut typed_args)?;
         }
 
         let array_from_mapper = iface_mangled == crate::mangle::prelude("ArrayConstructor")
@@ -800,13 +760,25 @@ impl Inferer<'_> {
             && sig.generics.len() == 2;
         let mapper_type = typed_args
             .get(1)
-            .map(|id| self.typed_ast.expr(*id).ty.clone());
+            .map(|id| {
+                Ok::<_, crate::compiler_error::CompilerFailure>(
+                    self.typed_ast
+                        .try_expr(*id)
+                        .map_err(crate::typechecker::arena_failure)?
+                        .ty
+                        .clone(),
+                )
+            })
+            .transpose()?;
         if array_from_mapper
             && mapper_type
                 .as_ref()
                 .is_some_and(|ty| ty.peel() == &Type::Null)
         {
-            sub.insert("U".into(), sub.apply(&Type::TypeVar("T".into())));
+            let element = sub
+                .apply(&Type::TypeVar("T".into()), &self.type_limits)
+                .map_err(type_limit_at(span))?;
+            sub.insert("U".into(), element);
         }
 
         self.bind_leftover_type_parameters(
@@ -816,7 +788,10 @@ impl Inferer<'_> {
             expected,
             errors_before_args,
         );
-        if let Err(unbound) = sub.resolve_all(&sig.generics) {
+        if let Err(unbound) = sub
+            .resolve_all(&sig.generics, &self.type_limits)
+            .map_err(type_limit_at(span))?
+        {
             self.error_with_help(
                 span,
                 format!(
@@ -836,15 +811,22 @@ impl Inferer<'_> {
         }
 
         self.check_inferred_void_arguments(&sig.params, &sig.ret, &sub, span);
-        let mut result_ty = sub.apply(&sig.ret);
+        let mut result_ty = self.instantiate(&sub, &sig.ret, span)?;
         if array_from_mapper && mapper_type.as_ref().is_some_and(|ty| {
             matches!(ty.peel(), Type::Union(members) if members.iter().any(|member| member.peel() == &Type::Null))
         }) {
             result_ty = Type::Array(Box::new(Type::union(vec![
-                sub.apply(&Type::TypeVar("T".into())),
-                sub.apply(&Type::TypeVar("U".into())),
+                self.instantiate(&sub, &Type::TypeVar("T".into()), span)?,
+                self.instantiate(&sub, &Type::TypeVar("U".into()), span)?,
             ])));
         }
+        let type_predicate = match &sig.predicate {
+            Some(p) => Some(Box::new(crate::TypePredicate {
+                parameter_index: p.parameter_index,
+                asserted_type: self.instantiate(&sub, &p.asserted_type, span)?,
+            })),
+            None => None,
+        };
 
         // TypeVar params/return need box/cast at the Wasm boundary; composite types use plain MethodCall.
         let any_generic_arg = sig.params.iter().any(|p| matches!(p.ty, Type::TypeVar(_)));
@@ -867,13 +849,7 @@ impl Inferer<'_> {
             } else {
                 None
             };
-            let type_predicate = sig.predicate.as_ref().map(|p| {
-                Box::new(crate::TypePredicate {
-                    parameter_index: p.parameter_index,
-                    asserted_type: sub.apply(&p.asserted_type),
-                })
-            });
-            return (
+            return Ok((
                 TypedExprKind::GenericMethodCall {
                     receiver: typed_receiver,
                     iface: iface_mangled,
@@ -883,16 +859,10 @@ impl Inferer<'_> {
                     type_predicate,
                 },
                 result_ty,
-            );
+            ));
         }
         // sub carries interface bindings even when the method itself isn't generic.
-        let type_predicate = sig.predicate.as_ref().map(|p| {
-            Box::new(crate::TypePredicate {
-                parameter_index: p.parameter_index,
-                asserted_type: sub.apply(&p.asserted_type),
-            })
-        });
-        (
+        Ok((
             TypedExprKind::MethodCall {
                 receiver: typed_receiver,
                 iface: iface_mangled,
@@ -901,7 +871,7 @@ impl Inferer<'_> {
                 type_predicate,
             },
             result_ty,
-        )
+        ))
     }
 
     /// The lifted signature a generic-call diagnostic shows: a real function
@@ -957,9 +927,22 @@ impl Inferer<'_> {
         if let Some(want) = expected.filter(|want| !pins_type_parameters(want)) {
             let _ = sub.unify(ret, want, self.resolver());
         }
-        if self.error_count() > errors_before_args {
-            bind_remaining(sub, generics, Type::Error);
+        if self.error_count() > errors_before_args
+            && let Err(exceeded) = bind_remaining(sub, generics, Type::Error, &self.type_limits)
+        {
+            self.type_limits.record(exceeded);
         }
+    }
+
+    /// `ty` with `sub` applied, at a call site at `span`.
+    fn instantiate(
+        &self,
+        sub: &TypeParamSubstitution,
+        ty: &Type,
+        span: Span,
+    ) -> Result<Type, CompilerFailure> {
+        sub.apply(ty, &self.type_limits)
+            .map_err(type_limit_at(span))
     }
 
     /// Bind type parameters from the annotated parameters of a function
@@ -972,39 +955,47 @@ impl Inferer<'_> {
         literal: ExprId,
         param_ty: &Type,
         sub: &mut TypeParamSubstitution,
-    ) {
+    ) -> Result<(), CompilerFailure> {
         let Some(Type::Function { params, .. }) = function_part(param_ty) else {
-            return;
+            return Ok(());
         };
-        let Some(declared_params) = self.function_literal_params(literal) else {
-            return;
+        let Some(declared_params) = self.function_literal_params(literal)? else {
+            return Ok(());
         };
         let diagnostics_before = self.diagnostics.len();
         for (declared, param) in declared_params.iter().zip(params) {
             if let Some(annotation) = &declared.ty {
-                let annotated = self.resolve_type(annotation);
+                let annotated = self.resolve_type(annotation)?;
                 let _ = sub.unify_argument(param, &annotated, self.resolver());
             }
         }
         self.diagnostics.truncate(diagnostics_before);
+
+        Ok(())
     }
 
-    fn function_literal_params(&self, expr: ExprId) -> Option<Vec<crate::ParamDecl>> {
-        match &self.ast.expr(expr).kind {
-            ExprKind::Paren(inner) => self.function_literal_params(*inner),
-            ExprKind::FunctionExpression { function, .. } => {
-                self.function_literal_params(*function)
-            }
-            ExprKind::Arrow { params, .. } => Some(params.clone()),
-            _ => None,
-        }
+    fn function_literal_params(
+        &self,
+        expr: ExprId,
+    ) -> Result<Option<Vec<crate::ParamDecl>>, CompilerFailure> {
+        Ok(
+            match &self.ast.try_expr(expr).map_err(super::arena_failure)?.kind {
+                ExprKind::Paren(inner) => self.function_literal_params(*inner)?,
+                ExprKind::FunctionExpression { function, .. } => {
+                    self.function_literal_params(*function)?
+                }
+                ExprKind::Arrow { params, .. } => Some(params.clone()),
+                _ => None,
+            },
+        )
     }
 
     /// A function literal with a parameter left for its context to type,
     /// which is what TypeScript infers after the other arguments.
-    fn is_context_sensitive_function(&self, expr: ExprId) -> bool {
-        self.function_literal_params(expr)
-            .is_some_and(|params| params.iter().any(|p| p.ty.is_none()))
+    fn is_context_sensitive_function(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
+        Ok(self
+            .function_literal_params(expr)?
+            .is_some_and(|params| params.iter().any(|p| p.ty.is_none())))
     }
 
     /// Infer a generic call's arguments against `params`, binding its type
@@ -1024,7 +1015,7 @@ impl Inferer<'_> {
         rest_elem_ty: &Type,
         sub: &mut TypeParamSubstitution,
         signature_help: impl Fn(&mut Self) -> String,
-    ) -> Vec<ExprId> {
+    ) -> Result<Vec<ExprId>, CompilerFailure> {
         let has_rest = params.last().is_some_and(|p| p.rest);
         let fixed_count = params.iter().take_while(|p| !p.rest).count();
         let mut typed_slots: Vec<Option<ExprId>> = vec![None; args.len()];
@@ -1041,16 +1032,17 @@ impl Inferer<'_> {
                     Type::Error
                 };
                 let deferred = function_part(&param_ty).is_some()
-                    && self.is_context_sensitive_function(arg_id);
+                    && self.is_context_sensitive_function(arg_id)?;
                 if deferred && !deferred_pass {
-                    self.bind_from_annotated_params(arg_id, &param_ty, sub);
+                    self.bind_from_annotated_params(arg_id, &param_ty, sub)?;
                 }
                 if deferred != deferred_pass {
                     continue;
                 }
-                let hint = sub.apply(&param_ty);
+                // An oversized hint fails at the argument's own checkpoint.
+                let hint = sub.apply_or_record(&param_ty, &self.type_limits);
                 let errors_before = self.error_count();
-                let (typed_id, arg_ty) = self.infer_expr(arg_id, Some(&hint));
+                let (typed_id, arg_ty) = self.infer_expr(arg_id, Some(&hint))?;
                 typed_slots[i] = Some(typed_id);
                 let missing_slot = i >= fixed_count && !has_rest;
                 if missing_slot || matches!(arg_ty, Type::Error) {
@@ -1066,11 +1058,11 @@ impl Inferer<'_> {
                         typed_id,
                         already_reported,
                         &signature_help,
-                    );
+                    )?;
                 }
             }
         }
-        typed_slots.into_iter().flatten().collect()
+        Ok(typed_slots.into_iter().flatten().collect())
     }
 
     /// Handle an argument that didn't unify with its parameter: a structural
@@ -1083,9 +1075,13 @@ impl Inferer<'_> {
         arg: ExprId,
         already_reported: bool,
         signature_help: &impl Fn(&mut Self) -> String,
-    ) {
-        let arg_span = self.typed_ast.expr(arg).span;
-        match error {
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        let arg_span = self
+            .typed_ast
+            .try_expr(arg)
+            .map_err(crate::typechecker::arena_failure)?
+            .span;
+        let _: () = match error {
             UnifyError::Conflict { .. } if already_reported => {}
             UnifyError::Conflict { name, prev, new } => self.error(
                 arg_span,
@@ -1095,7 +1091,7 @@ impl Inferer<'_> {
             ),
             UnifyError::Mismatch { expected, got } => {
                 if self.structural_member_unify(sub, param_ty, arg_ty) || already_reported {
-                    return;
+                    return Ok(());
                 }
                 let mut help = vec![signature_help(self)];
                 help.extend(super::type_diff::type_mismatch_help(&expected, &got));
@@ -1105,7 +1101,8 @@ impl Inferer<'_> {
                     help,
                 );
             }
-        }
+        };
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1122,7 +1119,7 @@ impl Inferer<'_> {
         expected: Option<&Type>,
         span: Span,
         callee: GenericCallee,
-    ) -> (TypedExprKind, Type) {
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let mut sub = TypeParamSubstitution::new();
         let type_args_written = type_args.is_some();
         // `session.get<T>` is lowered as a runtime-checked cast rather than an
@@ -1157,7 +1154,7 @@ impl Inferer<'_> {
                     &subject,
                     callee == GenericCallee::Function
                         && self.type_parameter_allows_void(name, &params, &ret),
-                );
+                )?;
                 sub.insert(name.clone(), resolved);
             }
         }
@@ -1202,7 +1199,11 @@ impl Inferer<'_> {
         }
 
         let rest_elem_ty: Type = if has_rest {
-            match &params.last().unwrap().ty {
+            match &params
+                .last()
+                .ok_or_else(|| super::inference_failure("rest signature has no parameters"))?
+                .ty
+            {
                 Type::Array(elem) => (**elem).clone(),
                 _ => Type::Error,
             }
@@ -1215,19 +1216,19 @@ impl Inferer<'_> {
         };
         let errors_before_args = self.error_count();
         let mut typed_args =
-            self.infer_generic_arguments(&args, &params, &rest_elem_ty, &mut sub, signature_help);
+            self.infer_generic_arguments(&args, &params, &rest_elem_ty, &mut sub, signature_help)?;
 
         if has_rest || typed_args.len() < params.len() {
             self.typed_ast
                 .record_authored_arguments(span, typed_args.clone());
         }
         if arity_ok {
-            self.fill_omitted_defaults(&params, args.len(), span, &mut typed_args);
+            self.fill_omitted_defaults(&params, args.len(), span, &mut typed_args)?;
         }
         // Packed rest array has type T[] — a composite, not a bare TypeVar —
         // so the GenericArgument zip tags it is_generic: false.
         if arity_ok && has_rest {
-            self.pack_rest_tail(fixed_count, rest_elem_ty.clone(), span, &mut typed_args);
+            self.pack_rest_tail(fixed_count, rest_elem_ty.clone(), span, &mut typed_args)?;
         }
 
         // `session.get(key)` without a type argument keeps its pre-generic
@@ -1236,7 +1237,8 @@ impl Inferer<'_> {
         // bind the parameter here rather than letting it go unbound and trip
         // both the inference error and the erasure gate below.
         if checked_get && !type_args_written {
-            bind_remaining(&mut sub, &generics, Type::Unknown);
+            bind_remaining(&mut sub, &generics, Type::Unknown, &self.type_limits)
+                .map_err(type_limit_at(span))?;
         }
         // Same reasoning for `llm.call(model, prompt)`, but the untyped default
         // is the `Completion` envelope rather than `unknown`: an untyped call
@@ -1248,11 +1250,16 @@ impl Inferer<'_> {
                 &mut sub,
                 &generics,
                 crate::stdlib::llm::declaration::untyped_result_type(&mangled),
-            );
+                &self.type_limits,
+            )
+            .map_err(type_limit_at(span))?;
         }
 
         self.bind_leftover_type_parameters(&mut sub, &generics, &ret, expected, errors_before_args);
-        if let Err(unbound) = sub.resolve_all(&generics) {
+        if let Err(unbound) = sub
+            .resolve_all(&generics, &self.type_limits)
+            .map_err(type_limit_at(span))?
+        {
             self.error_with_help(
                 span,
                 format!(
@@ -1263,12 +1270,17 @@ impl Inferer<'_> {
                         .collect::<Vec<_>>()
                         .join(", "),
                 ),
-                vec![callee.explicit_arg_hint(&callee_ident.name, &generics, &sub)],
+                vec![callee.explicit_arg_hint(
+                    &callee_ident.name,
+                    &generics,
+                    &sub,
+                    &self.type_limits,
+                )],
             );
         }
 
         self.check_inferred_void_arguments(&params, &ret, &sub, span);
-        let result_ty = sub.apply(&ret);
+        let result_ty = self.instantiate(&sub, &ret, span)?;
 
         // A typed `llm.call<T>` is rewritten before the argument list is frozen,
         // because the schema emitted from `T` has to replace the trailing
@@ -1303,18 +1315,18 @@ impl Inferer<'_> {
                      or `{name}(...)` for an untyped call"
                 )],
             );
-            return (TypedExprKind::Null, Type::Error);
+            return Ok((TypedExprKind::Null, Type::Error));
         }
 
         let mut llm_schema = None;
         if checked_llm {
             match self.llm_call_schema(&result_ty, type_args_written, span) {
                 Ok(schema) => llm_schema = schema,
-                Err(()) => return (TypedExprKind::Null, Type::Error),
+                Err(()) => return Ok((TypedExprKind::Null, Type::Error)),
             }
         }
         if let Some(schema) = &llm_schema {
-            self.substitute_schema_argument(&params, &mut typed_args, schema, span);
+            self.substitute_schema_argument(&params, &mut typed_args, schema, span)?;
         }
 
         let generic_args: Vec<crate::GenericArgument> = typed_args
@@ -1330,12 +1342,13 @@ impl Inferer<'_> {
         } else {
             None
         };
-        let type_predicate = predicate.map(|p| {
-            Box::new(crate::TypePredicate {
+        let type_predicate = match predicate {
+            Some(p) => Some(Box::new(crate::TypePredicate {
                 parameter_index: p.parameter_index,
-                asserted_type: sub.apply(&p.asserted_type),
-            })
-        });
+                asserted_type: self.instantiate(&sub, &p.asserted_type, span)?,
+            })),
+            None => None,
+        };
         // A checked read must not keep `return_cast`: it is a representation
         // cast that tests nothing, and on a stored or missing `null` its
         // `ref.cast` traps uncatchably before any structural check could run.
@@ -1345,10 +1358,10 @@ impl Inferer<'_> {
         // callers thread the package-export mangled name through unchanged.
         let runtime_args: Vec<_> = generics
             .iter()
-            .map(|name| sub.apply(&Type::TypeVar(name.clone())))
-            .collect();
+            .map(|name| self.instantiate(&sub, &Type::TypeVar(name.clone()), span))
+            .collect::<Result<_, _>>()?;
         for arg in &runtime_args {
-            self.record_runtime_type_test(arg);
+            self.record_runtime_type_test(arg)?;
         }
         let call = TypedExprKind::GenericCall {
             mangled,
@@ -1369,7 +1382,7 @@ impl Inferer<'_> {
         if checked_llm && llm_schema.is_some() {
             return self.checked_llm_cast(call, &result_ty, span);
         }
-        (call, result_ty)
+        Ok((call, result_ty))
     }
 }
 
@@ -1406,12 +1419,14 @@ fn bind_remaining(
     sub: &mut crate::typechecker::type_param_substitution::TypeParamSubstitution,
     generics: &[String],
     fallback: Type,
-) {
-    if let Err(unbound) = sub.resolve_all(generics) {
+    limits: &TypeLimits,
+) -> Result<(), TypeTooLarge> {
+    if let Err(unbound) = sub.resolve_all(generics, limits)? {
         for name in unbound {
             sub.insert(name, fallback.clone());
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1422,7 +1437,12 @@ mod tests {
     fn substitute_typevars_replaces_top_level_typevar() {
         let mut bindings: BTreeMap<String, Type> = BTreeMap::new();
         bindings.insert("T".into(), Type::Number);
-        let out = substitute_typevars(&Type::TypeVar("T".into()), &bindings);
+        let out = substitute_typevars(
+            &Type::TypeVar("T".into()),
+            &bindings,
+            &crate::type_size::TypeLimits::default(),
+        )
+        .unwrap();
         assert_eq!(out, Type::Number);
     }
 
@@ -1431,7 +1451,8 @@ mod tests {
         let mut bindings: BTreeMap<String, Type> = BTreeMap::new();
         bindings.insert("T".into(), Type::String);
         let arr = Type::Array(Box::new(Type::TypeVar("T".into())));
-        let out = substitute_typevars(&arr, &bindings);
+        let out =
+            substitute_typevars(&arr, &bindings, &crate::type_size::TypeLimits::default()).unwrap();
         assert_eq!(out, Type::Array(Box::new(Type::String)));
         let func = Type::Function {
             params: vec![Type::TypeVar("T".into())],
@@ -1439,7 +1460,8 @@ mod tests {
             predicate: None,
             has_rest: false,
         };
-        let out = substitute_typevars(&func, &bindings);
+        let out = substitute_typevars(&func, &bindings, &crate::type_size::TypeLimits::default())
+            .unwrap();
         assert_eq!(
             out,
             Type::Function {
@@ -1455,8 +1477,44 @@ mod tests {
     fn substitute_typevars_leaves_unbound_names_alone() {
         let mut bindings: BTreeMap<String, Type> = BTreeMap::new();
         bindings.insert("T".into(), Type::Number);
-        let out = substitute_typevars(&Type::TypeVar("U".into()), &bindings);
+        let out = substitute_typevars(
+            &Type::TypeVar("U".into()),
+            &bindings,
+            &crate::type_size::TypeLimits::default(),
+        )
+        .unwrap();
         assert_eq!(out, Type::TypeVar("U".into()));
+    }
+
+    #[test]
+    fn substitute_typevars_charges_each_copy_of_a_binding() {
+        crate::type_size::tests::on_compiler_stack(
+            substitute_typevars_charges_each_copy_of_a_binding_inner,
+        );
+    }
+
+    fn substitute_typevars_charges_each_copy_of_a_binding_inner() {
+        use crate::compiler_limits::{MAX_TYPE_DEPTH, MAX_TYPE_NODES};
+        use crate::type_size::{TypeLimits, TypeTooLarge};
+        let pair = Type::Tuple(vec![Type::TypeVar("T".into()), Type::TypeVar("T".into())]);
+        let limits = TypeLimits::default();
+        // The tuple itself plus two copies of the binding, each a tuple of
+        // numbers: MAX_TYPE_NODES - 1 nodes, then MAX_TYPE_NODES + 1.
+        let half = Type::Tuple(vec![Type::Number; (MAX_TYPE_NODES / 2 - 2) as usize]);
+        let bindings = BTreeMap::from([("T".to_string(), half)]);
+        assert!(substitute_typevars(&pair, &bindings, &limits).is_ok());
+        let over = Type::Tuple(vec![Type::Number; (MAX_TYPE_NODES / 2 - 1) as usize]);
+        let bindings = BTreeMap::from([("T".to_string(), over)]);
+        assert_eq!(
+            substitute_typevars(&pair, &bindings, &limits),
+            Err(TypeTooLarge::Nodes)
+        );
+        let deep = (1..MAX_TYPE_DEPTH).fold(Type::Number, |inner, _| Type::Array(Box::new(inner)));
+        let bindings = BTreeMap::from([("T".to_string(), deep)]);
+        assert_eq!(
+            substitute_typevars(&pair, &bindings, &limits),
+            Err(TypeTooLarge::Depth)
+        );
     }
 
     use super::super::test_support::{run, run_clean};
@@ -1464,8 +1522,8 @@ mod tests {
 
     fn last_call_resolved_ty(ta: &TypedAst) -> Type {
         for &id in ta.top_level_statements.iter().rev() {
-            if let TypedStmtKind::AssignGlobal { value, .. } = &ta.stmt(id).kind {
-                return ta.expr(*value).ty.clone();
+            if let TypedStmtKind::AssignGlobal { value, .. } = &ta.try_stmt(id).unwrap().kind {
+                return ta.try_expr(*value).unwrap().ty.clone();
             }
         }
         panic!("no top-level let/const init found");
@@ -1547,7 +1605,7 @@ mod tests {
     }
 
     fn collect_body_expr_types(ta: &TypedAst, stmt_id: StmtId, out: &mut Vec<Type>) {
-        let stmt = ta.stmt(stmt_id);
+        let stmt = ta.try_stmt(stmt_id).unwrap();
         match &stmt.kind {
             TypedStmtKind::Block(children) => {
                 for &c in children {
@@ -1657,7 +1715,7 @@ mod tests {
     }
 
     fn collect_expr_types(ta: &TypedAst, expr_id: ExprId, out: &mut Vec<Type>) {
-        let expr = ta.expr(expr_id);
+        let expr = ta.try_expr(expr_id).unwrap();
         out.push(expr.ty.clone());
         match &expr.kind {
             crate::TypedExprKind::Binary { lhs, rhs, .. } => {
@@ -1861,7 +1919,9 @@ mod tests {
         use crate::typechecker::type_param_substitution::TypeParamSubstitution;
         let mut sub = TypeParamSubstitution::new();
         sub.insert("T".to_string(), Type::TypeVar("T".to_string()));
-        let result = sub.resolve_all(&["T".to_string()]);
+        let result = sub
+            .resolve_all(&["T".to_string()], &crate::type_size::TypeLimits::default())
+            .unwrap();
         assert!(
             result.is_err(),
             "self-binding T → TypeVar(T) should be reported as unbound; got {result:?}",
@@ -1877,10 +1937,10 @@ mod tests {
             "#);
         assert!(diags.is_empty(), "expected clean typecheck, got: {diags:?}");
         let body = ta.functions[0].body;
-        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+        let TypedStmtKind::Block(stmts) = &ta.try_stmt(body).unwrap().kind else {
             panic!("expected block body");
         };
-        let TypedStmtKind::Const { ty, .. } = &ta.stmt(stmts[0]).kind else {
+        let TypedStmtKind::Const { ty, .. } = &ta.try_stmt(stmts[0]).unwrap().kind else {
             panic!("expected const");
         };
         assert_eq!(*ty, Type::Array(Box::new(Type::Number)));
@@ -1895,10 +1955,10 @@ mod tests {
             "#);
         assert!(diags.is_empty(), "expected clean typecheck, got: {diags:?}");
         let body = ta.functions[0].body;
-        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+        let TypedStmtKind::Block(stmts) = &ta.try_stmt(body).unwrap().kind else {
             panic!("expected block body");
         };
-        let TypedStmtKind::Const { ty, .. } = &ta.stmt(stmts[0]).kind else {
+        let TypedStmtKind::Const { ty, .. } = &ta.try_stmt(stmts[0]).unwrap().kind else {
             panic!("expected const");
         };
         assert_eq!(*ty, Type::Array(Box::new(Type::Number)));
@@ -1930,10 +1990,10 @@ mod tests {
             "#);
         assert!(diags.is_empty(), "expected clean typecheck, got: {diags:?}");
         let body = ta.functions[0].body;
-        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+        let TypedStmtKind::Block(stmts) = &ta.try_stmt(body).unwrap().kind else {
             panic!("expected block body");
         };
-        let TypedStmtKind::Const { ty, .. } = &ta.stmt(stmts[0]).kind else {
+        let TypedStmtKind::Const { ty, .. } = &ta.try_stmt(stmts[0]).unwrap().kind else {
             panic!("expected const");
         };
         assert_eq!(*ty, Type::Array(Box::new(Type::Number)));
@@ -1982,10 +2042,10 @@ mod tests {
             "expected reduce<U> to infer from init arg, got: {diags:?}",
         );
         let body = ta.functions[0].body;
-        let TypedStmtKind::Block(stmts) = &ta.stmt(body).kind else {
+        let TypedStmtKind::Block(stmts) = &ta.try_stmt(body).unwrap().kind else {
             panic!("expected block body");
         };
-        let TypedStmtKind::Let { ty, .. } = &ta.stmt(stmts[1]).kind else {
+        let TypedStmtKind::Let { ty, .. } = &ta.try_stmt(stmts[1]).unwrap().kind else {
             panic!("expected let sum");
         };
         assert_eq!(*ty, Type::Number, "sum should infer as number");

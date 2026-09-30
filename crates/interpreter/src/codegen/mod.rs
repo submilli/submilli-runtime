@@ -21,6 +21,8 @@ pub mod function_adapters;
 pub mod function_emitter;
 pub mod imported_classes;
 pub mod intrinsics;
+#[cfg(test)]
+mod invariant_tests;
 pub mod recursive_validators;
 mod runtime_descriptors;
 mod runtime_values;
@@ -32,6 +34,7 @@ pub mod user_subtypes;
 mod vtable_walk;
 
 use crate::compiler_error::{CompilerFailure, CompilerStage};
+use crate::tree_height;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -51,6 +54,53 @@ use bigint_pool::BigIntPool;
 use function_emitter::FunctionEmitter;
 use function_emitter::stmt::emit_statement;
 use string_pool::StringPool;
+
+pub(crate) fn internal_failure(message: impl Into<String>) -> CompilerFailure {
+    CompilerFailure::Internal {
+        stage: CompilerStage::Codegen,
+        span: None,
+        message: message.into(),
+    }
+}
+
+/// Allocates the next index in a WebAssembly index space. Like arena IDs,
+/// `u32::MAX` itself is never allocated.
+pub(crate) fn next_index(counter: &mut u32) -> Result<u32, CompilerFailure> {
+    let index = *counter;
+    *counter = index.checked_add(1).ok_or_else(index_space_exhausted)?;
+    Ok(index)
+}
+
+/// Encodes a count or position that WebAssembly represents as `u32`.
+pub(crate) fn wasm_u32(value: usize) -> Result<u32, CompilerFailure> {
+    u32::try_from(value).map_err(|_| index_space_exhausted())
+}
+
+/// Local index of parameter `position` in a body whose local 0 holds the
+/// receiver or closure environment.
+pub(crate) fn parameter_local(position: usize) -> Result<u32, CompilerFailure> {
+    wasm_u32(position)?
+        .checked_add(1)
+        .ok_or_else(index_space_exhausted)
+}
+
+/// Function indices of the depth-guarded bodies behind a vtable's universal
+/// `equals`, `toJson` and `hash` slots.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct GuardedBodies {
+    pub equals: u32,
+    pub to_json: u32,
+    pub hash: u32,
+}
+
+fn index_space_exhausted() -> CompilerFailure {
+    CompilerFailure::Limit {
+        stage: CompilerStage::Codegen,
+        span: None,
+        message: "the module exceeds a WebAssembly index or size limit".into(),
+        help: vec!["split the program into smaller modules".into()],
+    }
+}
 
 /// The `Dispatch::Static` interface `ty` names in `defs`, if any. Constructor
 /// and namespace receiver bindings (`console`, `Map`, `Temporal.Instant`) are
@@ -100,7 +150,7 @@ fn import_value_symbol(
     types: &mut wasm_encoder::TypeSection,
     import_section: &mut wasm_encoder::ImportSection,
     symbols: &mut SymbolTable,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     use wasm_encoder::{EntityType, GlobalType, ValType};
     match &value.kind {
         ValueKind::Function { params, ret, .. } => {
@@ -112,18 +162,21 @@ fn import_value_symbol(
             // so it goes through the normal `value_type` path, same as user modules.
             let raw_string_abi = defs.package_name.as_str() == crate::runtime::JSON_MODULE_NAME;
             let (mut param_types, result_types): (Vec<ValType>, Vec<ValType>) = if raw_string_abi {
-                json_host_signature(name, params, symbols, intrinsics)
+                json_host_signature(name, params, symbols, intrinsics)?
             } else {
                 (
-                    params.iter().map(|p| symbols.value_type(&p.ty)).collect(),
-                    symbols.wasm_result(ret),
+                    params
+                        .iter()
+                        .map(|p| symbols.value_type(&p.ty))
+                        .collect::<Result<_, _>>()?,
+                    symbols.wasm_result(ret)?,
                 )
             };
             if defs.runtime_generics.contains(&value.mangled_name) {
                 symbols
                     .runtime_generic_functions
                     .insert(value.mangled_name.clone());
-                param_types.push(runtime_descriptors::environment_type(symbols));
+                param_types.push(runtime_descriptors::environment_type(symbols)?);
             }
             types.ty().function(param_types, result_types);
             import_section.import(
@@ -135,7 +188,7 @@ fn import_value_symbol(
                 params
                     .iter()
                     .map(|param| (param.default.as_ref(), param.rest)),
-            ) {
+            )? {
                 symbols
                     .function_argument_metadata
                     .insert(value.mangled_name.clone(), metadata);
@@ -155,14 +208,14 @@ fn import_value_symbol(
             // references to a typed null, and import nothing.
             if let Some(ts) = static_interface_of(defs, ty) {
                 symbols.record_iface_dispatch(ts.mangled_name.clone(), crate::Dispatch::Static);
-                return;
+                return Ok(());
             }
             // Every exported value-global is Wasm-mutable across the board — a
             // codegen-compiled package needs its `_start` to initialize them, and
             // the prelude/host packages match that so the import type lines up.
             // Const immutability is typechecker-enforced, not Wasm-enforced.
             let global_ty = GlobalType {
-                val_type: global_val_type(ty, symbols),
+                val_type: global_val_type(ty, symbols)?,
                 mutable: true,
                 shared: false,
             };
@@ -174,7 +227,8 @@ fn import_value_symbol(
             symbols.record_typed_global(value.mangled_name.clone(), *next_global_idx, ty.clone());
             *next_global_idx += 1;
         }
-    }
+    };
+    Ok(())
 }
 
 /// The physical Wasm signature a Direct/Static-dispatch interface method is
@@ -202,29 +256,29 @@ fn declared_wrapper_abi(
     mangled: &crate::MangledName,
     sig: &crate::MethodSig,
     has_receiver: bool,
-) -> symbol_table::MethodSlotAbi {
+) -> Result<symbol_table::MethodSlotAbi, crate::compiler_error::CompilerFailure> {
     let receiver_offset = usize::from(has_receiver);
     if let Some(imported) = symbols.top_level_fn(mangled)
         && imported.params.len() == sig.params.len() + receiver_offset
     {
-        return symbol_table::MethodSlotAbi {
+        return Ok(symbol_table::MethodSlotAbi {
             params: imported
                 .params
                 .iter()
                 .skip(receiver_offset)
                 .map(|ty| symbols.value_type(ty))
-                .collect(),
-            ret: symbols.wasm_result(&imported.ret).first().copied(),
-        };
+                .collect::<Result<_, _>>()?,
+            ret: symbols.wasm_result(&imported.ret)?.first().copied(),
+        });
     }
-    symbol_table::MethodSlotAbi {
+    Ok(symbol_table::MethodSlotAbi {
         params: sig
             .params
             .iter()
             .map(|p| symbols.value_type(&p.ty))
-            .collect(),
-        ret: symbols.wasm_result(&sig.ret).first().copied(),
-    }
+            .collect::<Result<_, _>>()?,
+        ret: symbols.wasm_result(&sig.ret)?.first().copied(),
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -236,15 +290,15 @@ fn import_json_host_function(
     types: &mut wasm_encoder::TypeSection,
     import_section: &mut wasm_encoder::ImportSection,
     symbols: &mut SymbolTable,
-) {
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let mangled = crate::mangle::host(crate::runtime::JSON_MODULE_NAME, name);
     if symbols.func_idx(&mangled).is_some() {
-        return;
+        return Ok(());
     }
 
     let sig_idx = *next_type_idx;
     *next_type_idx += 1;
-    let (param_types, result_types) = json_host_signature(name, &[], symbols, intrinsics);
+    let (param_types, result_types) = json_host_signature(name, &[], symbols, intrinsics)?;
     types.ty().function(param_types, result_types);
     import_section.import(
         crate::runtime::JSON_MODULE_NAME,
@@ -253,6 +307,8 @@ fn import_json_host_function(
     );
     symbols.record_func(mangled, *next_func_idx);
     *next_func_idx += 1;
+
+    Ok(())
 }
 
 pub use symbol_table::SymbolTable;
@@ -307,7 +363,15 @@ pub struct CodegenCtx<'a> {
     pub validator_bodies: &'a recursive_validators::ValidatorBodies,
     pub type_info: &'a crate::TypeInfoTable,
     pub package_string_global_idx: Option<u32>,
-    failure: std::cell::Cell<Option<CodegenError>>,
+    failure: std::cell::Cell<Option<CompilerFailure>>,
+    /// Inline structural-test steps the current runtime check may still
+    /// emit; see [`crate::compiler_limits::MAX_INLINE_VALIDATOR_STEPS`].
+    validator_steps_left: std::cell::Cell<u64>,
+    /// The type whose runtime check is being emitted, named when the check
+    /// exhausts `validator_steps_left`.
+    validator_root: std::cell::Cell<Option<Type>>,
+    /// Whether the check being emitted is a function of its own.
+    check_is_standalone: std::cell::Cell<bool>,
 }
 
 impl CodegenCtx<'_> {
@@ -320,7 +384,20 @@ impl CodegenCtx<'_> {
         value
     }
 
-    fn check_failure(&self) -> Result<(), CodegenError> {
+    /// Latches a typed failure for an emitter that cannot yet return one; the
+    /// codegen boundary discards the module just as for [`Self::require`], so a
+    /// caller may return early or keep emitting after a failure.
+    fn latch<T>(&self, result: Result<T, CompilerFailure>) -> Option<T> {
+        match result {
+            Ok(value) => Some(value),
+            Err(failure) => {
+                self.record_failure(failure);
+                None
+            }
+        }
+    }
+
+    fn check_failure(&self) -> Result<(), CompilerFailure> {
         match self.failure.take() {
             Some(error) => Err(error),
             None => Ok(()),
@@ -328,12 +405,236 @@ impl CodegenCtx<'_> {
     }
 
     fn fail(&self, message: &'static str) {
-        let first = self.failure.take().unwrap_or(CodegenError {
-            message,
-            span: crate::Span::at(self.file),
-        });
+        self.record_failure(
+            CodegenError {
+                message,
+                span: crate::Span::at(self.file),
+            }
+            .into(),
+        );
+    }
+
+    /// Charges one step of structural-test emission to the current check, and
+    /// stops before the function it is emitted into exceeds the Wasm engine's
+    /// limits on locals and body size (see [`Self::check_function_limits`]).
+    /// The check's own failures are reported at the last source-locating span
+    /// the emitter mapped, which the test is emitted for.
+    fn charge_validator_step(&self, emitter: &mut FunctionEmitter) -> Result<(), CompilerFailure> {
+        self.charge_validator_steps(emitter, 1)
+    }
+
+    /// [`charge_validator_step`](Self::charge_validator_step) for `steps` at
+    /// once, for emission whose size varies, such as a path naming long fields.
+    fn charge_validator_steps(
+        &self,
+        emitter: &mut FunctionEmitter,
+        steps: u64,
+    ) -> Result<(), CompilerFailure> {
+        use crate::compiler_limits::MAX_INLINE_VALIDATOR_STEPS;
+        self.check_function_limits(emitter)?;
+        let Some(left) = self.validator_steps_left.get().checked_sub(steps) else {
+            return Err(self.validator_limit(
+                emitter.last_source_span(),
+                format!("exceeds the compiler limit of {MAX_INLINE_VALIDATOR_STEPS} steps"),
+                "check against a smaller type, or restructure the interfaces so members do not repeat the same nested interface",
+            ));
+        };
+        self.validator_steps_left.set(left);
+        Ok(())
+    }
+
+    /// Stops a runtime check once the function it is emitted into has more
+    /// locals, or a larger body, than the Wasm engine accepts, so runaway
+    /// checks stop early; [`Self::check_finished_function`] measures every
+    /// function once it is built.
+    ///
+    /// A limit crossed before the check emitted anything is the preceding
+    /// code's: it is reported as the function's failure at the source that
+    /// crossed it. Otherwise the check is named, at the last source-locating
+    /// span.
+    fn check_function_limits(&self, emitter: &mut FunctionEmitter) -> Result<(), CompilerFailure> {
+        let Some(limit) = FunctionLimit::exceeded(emitter.body_size(), emitter.local_count())
+        else {
+            return Ok(());
+        };
+        // A check charges a step before emitting anything, so before its
+        // first step its allowance is untouched.
+        let check_has_emitted_code =
+            self.validator_steps_left.get() < crate::compiler_limits::MAX_INLINE_VALIDATOR_STEPS;
+        if !check_has_emitted_code {
+            let span = match limit {
+                FunctionLimit::BodyBytes => emitter.body_limit_span(),
+                FunctionLimit::Locals => emitter.locals_limit_span(),
+            };
+            return Err(limit.failure(span));
+        }
+        let fix = if self.check_is_standalone.get() {
+            "check against a smaller type"
+        } else {
+            "check against a smaller type, or move some of the function's checks into another function"
+        };
+        Err(self.validator_limit(emitter.last_source_span(), limit.check_exceeds(), fix))
+    }
+
+    /// Records a limit failure for a built function the Wasm engine would
+    /// reject (see [`FunctionLimit`]), reported at the source that crossed the
+    /// limit.
+    fn check_finished_function(&self, function: FinishedFunction) {
+        let Some(limit) = FunctionLimit::exceeded(function.body_bytes, function.locals) else {
+            return;
+        };
+        let span = match limit {
+            FunctionLimit::BodyBytes => function.body_limit_span,
+            FunctionLimit::Locals => function.locals_limit_span,
+        };
+        self.record_failure(limit.failure(span));
+    }
+
+    /// A runtime-check limit, naming the check being emitted.
+    fn validator_limit(
+        &self,
+        span: Option<crate::Span>,
+        exceeded: String,
+        fix: &str,
+    ) -> CompilerFailure {
+        let root = self.validator_root.take();
+        let subject = match &root {
+            Some(ty) => format!("the runtime check of `{}`", abbreviated(ty)),
+            None => "a runtime type check".to_string(),
+        };
+        self.validator_root.set(root);
+        CompilerFailure::Limit {
+            stage: crate::compiler_error::CompilerStage::Codegen,
+            span,
+            message: format!("{subject} {exceeded}"),
+            help: vec![
+                "a runtime check of a value against an interface includes the checks of every member, so interfaces whose members reference other interfaces several times multiply its size".into(),
+                fix.into(),
+            ],
+        }
+    }
+
+    /// Runs `emit` as the runtime check of `ty` with a fresh step allowance,
+    /// unless it is part of an enclosing check, whose name and allowance it
+    /// shares.
+    fn checking<T>(&self, ty: &Type, emit: impl FnOnce() -> T) -> T {
+        if let Some(outer) = self.validator_root.take() {
+            self.validator_root.set(Some(outer));
+            return emit();
+        }
+        self.validator_steps_left
+            .set(crate::compiler_limits::MAX_INLINE_VALIDATOR_STEPS);
+        self.validator_root.set(Some(ty.clone()));
+        let result = emit();
+        self.validator_root.set(None);
+        result
+    }
+
+    /// [`Self::checking`] for a check emitted as a function of its own, which
+    /// shares that function with no other code.
+    fn checking_standalone<T>(&self, ty: &Type, emit: impl FnOnce() -> T) -> T {
+        self.check_is_standalone.set(true);
+        let result = self.checking(ty, emit);
+        self.check_is_standalone.set(false);
+        result
+    }
+
+    /// Keeps the first failure; later ones are consequences of it.
+    fn record_failure(&self, failure: CompilerFailure) {
+        let first = self.failure.take().unwrap_or(failure);
         self.failure.set(Some(first));
     }
+}
+
+/// A per-function limit of the Wasm engine.
+#[derive(Clone, Copy)]
+enum FunctionLimit {
+    /// A body of more than [`crate::compiler_limits::MAX_FUNCTION_BODY_BYTES`] bytes.
+    BodyBytes,
+    /// More than [`crate::compiler_limits::MAX_FUNCTION_LOCALS`] locals,
+    /// parameters included.
+    Locals,
+}
+
+impl FunctionLimit {
+    /// The limit a function of `body_bytes` and `locals` exceeds. Locals come
+    /// first: their declarations are part of the body, so enough of them take
+    /// it over the byte limit before any code does.
+    fn exceeded(body_bytes: usize, locals: u32) -> Option<Self> {
+        if locals > crate::compiler_limits::MAX_FUNCTION_LOCALS {
+            Some(Self::Locals)
+        } else if !Self::body_fits(body_bytes) {
+            Some(Self::BodyBytes)
+        } else {
+            None
+        }
+    }
+
+    /// Whether a function body of `bytes` is within the engine's limit.
+    fn body_fits(bytes: usize) -> bool {
+        bytes <= crate::compiler_limits::MAX_FUNCTION_BODY_BYTES
+    }
+
+    /// A function over this limit, reported at `span`, the source that
+    /// crossed it.
+    fn failure(self, span: Option<crate::Span>) -> CompilerFailure {
+        CompilerFailure::Limit {
+            stage: crate::compiler_error::CompilerStage::Codegen,
+            span,
+            message: format!("the function this code compiles into {}", self.function_exceeds()),
+            help: vec![
+                "split the code into smaller functions; top-level statements compile into one function, and runtime type checks of large types are emitted inline in the function that contains them".into(),
+            ],
+        }
+    }
+
+    /// What a function over this limit does, following "the function …".
+    fn function_exceeds(self) -> String {
+        use crate::compiler_limits::{MAX_FUNCTION_BODY_BYTES, MAX_FUNCTION_LOCALS};
+        match self {
+            Self::BodyBytes => {
+                format!("is larger than the {MAX_FUNCTION_BODY_BYTES} bytes a function may have")
+            }
+            Self::Locals => {
+                format!("needs more than the {MAX_FUNCTION_LOCALS} locals a function may have")
+            }
+        }
+    }
+
+    /// What a runtime check taking its function over this limit does,
+    /// following "the runtime check of …".
+    fn check_exceeds(self) -> String {
+        use crate::compiler_limits::{MAX_FUNCTION_BODY_BYTES, MAX_FUNCTION_LOCALS};
+        match self {
+            Self::BodyBytes => format!(
+                "makes its function larger than the {MAX_FUNCTION_BODY_BYTES} bytes a function may have"
+            ),
+            Self::Locals => {
+                format!("needs more than the {MAX_FUNCTION_LOCALS} locals a function may have")
+            }
+        }
+    }
+}
+
+/// A built function's size, and the sources that took it past each limit.
+struct FinishedFunction {
+    body_bytes: usize,
+    body_limit_span: Option<crate::Span>,
+    locals: u32,
+    locals_limit_span: Option<crate::Span>,
+}
+
+/// `ty` as a diagnostic names it, cut short: a type near the size limit
+/// renders as hundreds of kilobytes.
+fn abbreviated(ty: &Type) -> String {
+    const MAX_CHARS: usize = 120;
+    let text = ty.to_string();
+    if text.chars().count() <= MAX_CHARS {
+        return text;
+    }
+    let mut short: String = text.chars().take(MAX_CHARS).collect();
+    short.push('…');
+    short
 }
 
 pub fn codegen(
@@ -361,7 +662,15 @@ pub fn codegen_owned_by(
     ta: &TypedAst,
     dependencies: &[&PackageDeclaration],
 ) -> Result<GeneratedModule, CompilerFailure> {
-    codegen_inner(source, filename, file, ta, dependencies, owning_package)
+    codegen_inner(
+        source,
+        filename,
+        file,
+        ta,
+        dependencies,
+        owning_package,
+        None,
+    )
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -379,7 +688,36 @@ pub fn codegen_with_type_info(
     ta: &TypedAst,
     dependencies: &[&PackageDeclaration],
 ) -> Result<GeneratedModule, CompilerFailure> {
-    codegen_inner(source, filename, file, ta, dependencies, &ta.package_name)
+    codegen_inner(
+        source,
+        filename,
+        file,
+        ta,
+        dependencies,
+        &ta.package_name,
+        None,
+    )
+}
+
+pub fn codegen_package_with_type_info(
+    sources: &crate::Sources,
+    file: crate::FileId,
+    ta: &TypedAst,
+    dependencies: &[&PackageDeclaration],
+) -> Result<GeneratedModule, CompilerFailure> {
+    let source = sources.get(file).ok_or_else(|| {
+        crate::source::SourceError::UnknownFile { file }
+            .into_compiler_failure(CompilerStage::Codegen)
+    })?;
+    codegen_inner(
+        source.text(),
+        source.path.as_str(),
+        file,
+        ta,
+        dependencies,
+        &ta.package_name,
+        Some(sources),
+    )
 }
 
 fn codegen_inner(
@@ -389,19 +727,47 @@ fn codegen_inner(
     ta: &TypedAst,
     dependencies: &[&PackageDeclaration],
     owning_package: &str,
+    sources: Option<&crate::Sources>,
 ) -> Result<GeneratedModule, CompilerFailure> {
+    tree_height::check_typed(ta, CompilerStage::Codegen)?;
     u32::try_from(source.len()).map_err(|_| CompilerFailure::Limit {
         stage: CompilerStage::Codegen,
         span: None,
         message: "source exceeds the 32-bit source-offset limit".into(),
         help: vec!["split the source into smaller modules".into()],
     })?;
+    let line_index = LineIndex::new(source)
+        .map_err(|error| error.into_compiler_failure(CompilerStage::Codegen))?;
+    let debug_sources = dwarf::DebugSources {
+        file,
+        filename,
+        index: &line_index,
+        sources,
+    };
+    for id in ta
+        .expr_ids()
+        .map_err(|error| error.into_compiler_failure(CompilerStage::Codegen))?
+    {
+        let expr = ta
+            .try_expr(id)
+            .map_err(|error| error.into_compiler_failure(CompilerStage::Codegen))?;
+        debug_sources.location(expr.span)?;
+    }
+    for id in ta
+        .stmt_ids()
+        .map_err(|error| error.into_compiler_failure(CompilerStage::Codegen))?
+    {
+        let stmt = ta
+            .try_stmt(id)
+            .map_err(|error| error.into_compiler_failure(CompilerStage::Codegen))?;
+        debug_sources.location(stmt.span)?;
+    }
     let source_main_return_ty = ta
         .functions
         .iter()
         .find(|function| function.name.name == "main")
         .map(|function| function.return_type.clone());
-    let lowered = runtime_values::lower(ta, dependencies);
+    let lowered = runtime_values::lower(ta, dependencies)?;
     let ta = &lowered;
     let lowered_dependencies: Vec<_> = dependencies
         .iter()
@@ -409,10 +775,9 @@ fn codegen_inner(
         .collect();
     let dependencies: Vec<_> = lowered_dependencies.iter().collect();
     let dependencies = dependencies.as_slice();
-    let analysis = CodegenAnalysis::collect(ta, dependencies);
+    let analysis = CodegenAnalysis::collect(ta, dependencies)?;
     let pool = analysis.string_pool;
     let bigint_pool = analysis.bigint_pool;
-    let line_index = LineIndex::new(source);
     let dependency_usage = analysis.dependency_usage.finish(dependencies);
 
     let mut module = Module::new();
@@ -433,7 +798,7 @@ fn codegen_inner(
         &mut symbols,
         &mut next_type_idx,
         intrinsics,
-    );
+    )?;
 
     // The exception tag — host-owned (created per store, linker-defined under
     // `submilli:prelude`) and imported unconditionally: every module can
@@ -469,14 +834,14 @@ fn codegen_inner(
     let validator_bodies =
         recursive_validators::ValidatorBodies::collect(ta, dependency_types.iter());
     let recursive_validators =
-        recursive_validators::discover(ta, dependency_types.iter(), &validator_bodies);
+        recursive_validators::discover(ta, dependency_types.iter(), &validator_bodies)?;
     let mut all_shapes = ta.shapes.clone();
     all_shapes.extend(recursive_validators.extra_shapes.iter().cloned());
 
     let dependency_shapes = dependency_usage.dependency_shapes(dependencies);
     let user_emitted_types: Vec<Type> =
         user_subtypes::collect_object_shapes(dependency_shapes.iter().copied(), &all_shapes);
-    let type_info = crate::TypeInfoTable::collect_from_shapes_and_types(
+    let (type_info, type_info_index) = crate::TypeInfoTable::collect_indexed(
         ta.package_name.clone(),
         &all_shapes,
         &user_emitted_types,
@@ -500,8 +865,8 @@ fn codegen_inner(
         dependency_shapes.iter().copied(),
         dependency_types.iter(),
         &dependency_usage,
-    );
-    let class_member_sigs = closures::class_member_sigs(ta, dependencies);
+    )?;
+    let class_member_sigs = closures::class_member_sigs(ta, dependencies)?;
     // The closures this module builds, then the three collectors for shapes it
     // only names — see the `closures` module doc for why each is needed.
     closures::emit_func_and_struct_types(
@@ -513,16 +878,18 @@ fn codegen_inner(
                     .iter()
                     .map(|a| closures::classify(&a.signature)),
             )
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
             .chain(hof_dependency_sigs.iter().copied())
             .chain(class_member_sigs.iter().copied())
             .chain(mentioned_closure_sigs.iter().copied()),
         &mut types,
         &mut symbols,
         &mut next_type_idx,
-    );
+    )?;
 
     // Box types emitted after user subtypes and closure types so their field refs resolve.
-    let boxed_value_types = box_types::collect(ta, &symbols);
+    let boxed_value_types = box_types::collect(ta, &symbols)?;
     box_types::emit(
         &boxed_value_types,
         &mut types,
@@ -531,7 +898,7 @@ fn codegen_inner(
     );
 
     // Env structs must come after box_types::emit.
-    closures::emit_env_types(&closure_metas, &mut types, &mut symbols, &mut next_type_idx);
+    closures::emit_env_types(&closure_metas, &mut types, &mut symbols, &mut next_type_idx)?;
 
     // Wasm uses separate index spaces for functions and globals.
     let mut next_global_idx: u32 = 0;
@@ -551,12 +918,18 @@ fn codegen_inner(
         &mut next_func_idx,
         &mut next_global_idx,
         &mut symbols,
-    );
+    )?;
 
     // Class rec group last among types so class field slots can resolve string /
     // array / closure / box field types via `value_type`.
-    let mut class_plan = classes::ClassPlan::collect(ta, &imported_class_layouts);
-    class_plan.reserve_and_emit_types(&mut types, &mut next_type_idx, &mut symbols, ta, intrinsics);
+    let mut class_plan = classes::ClassPlan::collect(ta, &imported_class_layouts)?;
+    class_plan.reserve_and_emit_types(
+        &mut types,
+        &mut next_type_idx,
+        &mut symbols,
+        ta,
+        intrinsics,
+    )?;
     for value in &dependency_values {
         let defs = value.package;
         // `@mcp/<server>` tools aren't per-tool Wasm imports: every call lowers to
@@ -577,7 +950,7 @@ fn codegen_inner(
             &mut types,
             &mut import_section,
             &mut symbols,
-        );
+        )?;
     }
 
     // VTable globals are not in PackageDeclaration — there is no language-level Type for $VTable.
@@ -813,7 +1186,7 @@ fn codegen_inner(
             // Recorded above the host-implemented `continue` below, not after it:
             // the methods that take that branch are precisely the ones whose call
             // sites have no other record of the erased slots.
-            let abi = declared_wrapper_abi(&symbols, &mangled, sig, receiver_wasm.is_some());
+            let abi = declared_wrapper_abi(&symbols, &mangled, sig, receiver_wasm.is_some())?;
             symbols.record_iface_method_abi(mangled.clone(), abi.clone());
             // Routing invariant: a method whose dispatch key resolved in the
             // earlier value-symbol loop is host-implemented (every prelude
@@ -870,7 +1243,7 @@ fn codegen_inner(
                     defs.package_name.as_str(),
                     mangled.as_str(),
                     EntityType::Global(wasm_encoder::GlobalType {
-                        val_type: symbols.value_type(&sig.ty),
+                        val_type: symbols.value_type(&sig.ty)?,
                         mutable: true,
                         shared: false,
                     }),
@@ -880,7 +1253,7 @@ fn codegen_inner(
                 continue;
             };
             let params = vec![recv];
-            let results = symbols.wasm_result(&sig.ty);
+            let results = symbols.wasm_result(&sig.ty)?;
             let sig_idx = next_type_idx;
             next_type_idx += 1;
             types.ty().function(params, results);
@@ -902,7 +1275,7 @@ fn codegen_inner(
             &mut types,
             &mut import_section,
             &mut symbols,
-        );
+        )?;
     }
     import_json_host_function(
         "parse",
@@ -912,7 +1285,7 @@ fn codegen_inner(
         &mut types,
         &mut import_section,
         &mut symbols,
-    );
+    )?;
 
     // _start is always emitted even when empty, for uniform module shape.
     let start_type_idx = next_type_idx;
@@ -929,20 +1302,24 @@ fn codegen_inner(
     for f in &ta.functions {
         let sig_idx = next_type_idx;
         next_type_idx += 1;
-        let mut params: Vec<_> = f.params.iter().map(|p| symbols.value_type(&p.ty)).collect();
+        let mut params: Vec<_> = f
+            .params
+            .iter()
+            .map(|p| symbols.value_type(&p.ty))
+            .collect::<Result<_, _>>()?;
         if !f.generics.is_empty() {
             symbols
                 .runtime_generic_functions
                 .insert(f.mangled_name.clone());
-            params.push(runtime_descriptors::environment_type(&symbols));
+            params.push(runtime_descriptors::environment_type(&symbols)?);
         }
         types
             .ty()
-            .function(params, symbols.wasm_result(&f.return_type));
+            .function(params, symbols.wasm_result(&f.return_type)?);
         let func_idx = next_func_idx;
         next_func_idx += 1;
         let param_types: Vec<Type> = f.params.iter().map(|p| p.ty.clone()).collect();
-        if let Some(metadata) = call_arguments::typed_metadata(&f.params) {
+        if let Some(metadata) = call_arguments::typed_metadata(&f.params)? {
             symbols
                 .function_argument_metadata
                 .insert(f.mangled_name.clone(), metadata);
@@ -952,7 +1329,7 @@ fn codegen_inner(
             func_idx,
             param_types,
             f.return_type.clone(),
-        );
+        )?;
         user_func_type_idx.insert(f.mangled_name.clone(), sig_idx);
         user_funcs.push(UserFunc {
             name: f.name.name.clone(),
@@ -975,7 +1352,7 @@ fn codegen_inner(
     {
         None
     } else {
-        Some(closures::allocate_methods(&mut next_func_idx))
+        Some(closures::allocate_methods(&mut next_func_idx)?)
     };
 
     for meta in &closure_metas {
@@ -991,7 +1368,7 @@ fn codegen_inner(
     }
 
     let closure_coercion_targets = if closure_methods.is_some() {
-        closure_coercions::allocate(&mut symbols, &mut next_func_idx)
+        closure_coercions::allocate(&mut symbols, &mut next_func_idx)?
     } else {
         Vec::new()
     };
@@ -1000,26 +1377,26 @@ fn codegen_inner(
     let mut user_subtypes_alloc: Vec<user_subtypes::UserSubtype> = Vec::new();
     for ty in &user_emitted_types {
         if let Type::Object { .. } = ty {
-            user_subtypes_alloc.push(user_subtypes::allocate_methods(ty, &mut next_func_idx));
+            user_subtypes_alloc.push(user_subtypes::allocate_methods(ty, &mut next_func_idx)?);
         }
     }
 
     // Class method stubs + per-class getter/setter (vtable/header globals ref.func these).
-    class_plan.allocate_funcs(&mut next_func_idx, &mut symbols);
+    class_plan.allocate_funcs(&mut next_func_idx, &mut symbols)?;
     let instance_field_guards = field_guards::allocate(ta, &mut symbols, &mut next_func_idx);
     let type_descriptors = runtime_descriptors::allocate(
         ta,
         &recursive_validators.descriptor_types,
         &mut symbols,
         &mut next_func_idx,
-    );
+    )?;
 
     let field_lookup_signature = field_lookup::allocate(
         &mut types,
         &mut symbols,
         &mut next_type_idx,
         &mut next_func_idx,
-    );
+    )?;
 
     // Recursive runtime validators. Allocate signatures and indices, then
     // register each back-edge key so structural checks can call its plan.
@@ -1045,7 +1422,7 @@ fn codegen_inner(
                 raw_array_ref,
                 raw_index_array_ref,
                 ValType::I32,
-                runtime_descriptors::environment_type(&symbols),
+                runtime_descriptors::environment_type(&symbols)?,
             ],
             [ValType::I32],
         );
@@ -1109,24 +1486,32 @@ fn codegen_inner(
     }
     for meta in &closure_metas {
         let sig_idx = symbols
-            .closure_func_type_idx(closures::classify(&meta.signature))
-            .expect("closures::emit_func_and_struct_types registered the funcref type");
+            .closure_func_type_idx(closures::classify(&meta.signature)?)
+            .ok_or_else(|| {
+                crate::codegen::internal_failure(
+                    "closures::emit_func_and_struct_types registered the funcref type",
+                )
+            })?;
         functions.function(sig_idx);
     }
     for meta in &adapter_metas {
         let sig_idx = symbols
-            .closure_func_type_idx(closures::classify(&meta.signature))
-            .expect("closures::emit_func_and_struct_types registered the adapter signature");
+            .closure_func_type_idx(closures::classify(&meta.signature)?)
+            .ok_or_else(|| {
+                crate::codegen::internal_failure(
+                    "closures::emit_func_and_struct_types registered the adapter signature",
+                )
+            })?;
         functions.function(sig_idx);
     }
-    closure_coercions::emit_entries(&closure_coercion_targets, &mut functions, &symbols);
+    closure_coercions::emit_entries(&closure_coercion_targets, &mut functions, &symbols)?;
     user_subtypes::emit_method_function_entries(&mut functions, &user_subtypes_alloc, intrinsics);
-    class_plan.emit_function_entries(&mut functions, &symbols, intrinsics);
+    class_plan.emit_function_entries(&mut functions, &symbols, intrinsics)?;
     for _ in 0..instance_field_guards.len() + type_descriptors.len() {
         functions.function(
             symbols
                 .closure_func_type_idx(field_guards::signature())
-                .expect("guard signature registered"),
+                .ok_or_else(|| crate::codegen::internal_failure("guard signature registered"))?,
         );
     }
     functions.function(field_lookup_signature);
@@ -1156,7 +1541,7 @@ fn codegen_inner(
         globals_count += 1;
     }
     for g in &ta.globals {
-        let val_type = global_val_type(&g.ty, &symbols);
+        let val_type = global_val_type(&g.ty, &symbols)?;
         globals.global(
             GlobalType {
                 val_type,
@@ -1169,14 +1554,14 @@ fn codegen_inner(
         next_global_idx += 1;
         globals_count += 1;
     }
-    let vtable_globals_count = user_subtypes_alloc.len() as u32;
+    let vtable_globals_count = wasm_u32(user_subtypes_alloc.len())?;
     user_subtypes::emit_vtable_globals(
         &mut globals,
         &mut user_subtypes_alloc,
         &mut symbols,
         &mut next_global_idx,
         intrinsics,
-    );
+    )?;
     let mut field_names_shapes = field_names::collect(&user_emitted_types);
     // Classes carry a field-names array global too (header slot 1); add each
     // class's declaration-order field-name list, deduping against object shapes.
@@ -1196,7 +1581,7 @@ fn codegen_inner(
         &mut next_global_idx,
         intrinsics,
         string_vtable_global_idx,
-    );
+    )?;
     // Names that need a per-name `$string` global even when no object literal
     // of that shape appears in this module — field access and name-based
     // dispatch read the global by name. Object-literal field names come from
@@ -1255,9 +1640,9 @@ fn codegen_inner(
         &mut next_global_idx,
         intrinsics,
         string_vtable_global_idx,
-    );
+    )?;
     // Per-class header singletons.
-    class_plan.emit_globals(&mut globals, &mut symbols, &mut next_global_idx, intrinsics);
+    class_plan.emit_globals(&mut globals, &mut symbols, &mut next_global_idx, intrinsics)?;
     let mut closure_methods_for_emit = closure_methods;
     let closure_vtable_count = if let Some(methods) = closure_methods_for_emit.as_mut() {
         closures::emit_vtable_global(
@@ -1266,13 +1651,13 @@ fn codegen_inner(
             &mut symbols,
             &mut next_global_idx,
             intrinsics,
-        );
+        )?;
         1
     } else {
         0
     };
     let descriptor_globals_count =
-        runtime_descriptors::allocate_globals(&mut globals, &mut symbols, &mut next_global_idx);
+        runtime_descriptors::allocate_globals(&mut globals, &mut symbols, &mut next_global_idx)?;
     if descriptor_globals_count
         + globals_count
         + vtable_globals_count
@@ -1328,12 +1713,12 @@ fn codegen_inner(
         })
         .collect();
     for (name, func_idx) in
-        class_plan.exported_funcs(&symbols, |m| exported_class_mangles.contains(m))
+        class_plan.exported_funcs(&symbols, |m| exported_class_mangles.contains(m))?
     {
         exports.export(name.as_str(), WasmExportKind::Func, func_idx);
     }
     for (name, global_idx) in
-        class_plan.exported_vtable_globals(&symbols, |m| exported_class_mangles.contains(m))
+        class_plan.exported_vtable_globals(&symbols, |m| exported_class_mangles.contains(m))?
     {
         exports.export(name.as_str(), WasmExportKind::Global, global_idx);
     }
@@ -1394,6 +1779,11 @@ fn codegen_inner(
         type_info: &type_info,
         package_string_global_idx: pkg_string_global_idx,
         failure: std::cell::Cell::new(None),
+        validator_steps_left: std::cell::Cell::new(
+            crate::compiler_limits::MAX_INLINE_VALIDATOR_STEPS,
+        ),
+        validator_root: std::cell::Cell::new(None),
+        check_is_standalone: std::cell::Cell::new(false),
     };
 
     let mut code = CodeSection::new();
@@ -1409,7 +1799,7 @@ fn codegen_inner(
         );
     }
     for &stmt_id in &ctx.ta.top_level_statements {
-        emit_statement(&mut start_emitter, &ctx, stmt_id);
+        emit_statement(&mut start_emitter, &ctx, stmt_id)?;
         ctx.check_failure()?;
     }
     // CodeSection::byte_len excludes the leading vec-count LEB128; adjust to get Code-section-content offsets for DWARF.
@@ -1425,7 +1815,7 @@ fn codegen_inner(
             &func.params,
             func.body,
             &func.return_type,
-        );
+        )?;
         ctx.check_failure()?;
         let body_len = built.byte_len() as u64;
         code.function(&built);
@@ -1435,43 +1825,50 @@ fn codegen_inner(
     }
 
     if let Some(methods) = closure_methods_for_emit {
-        closures::emit_method_bodies(&mut code, methods, &symbols);
+        closures::emit_method_bodies(&mut code, methods, &symbols)?;
     }
 
     for meta in &closure_metas {
-        let (built, _lines) = function_emitter::emit_closure_function(&ctx, meta);
+        let (built, _lines) = function_emitter::emit_closure_function(&ctx, meta)?;
         ctx.check_failure()?;
         code.function(&built);
     }
 
-    function_adapters::emit_bodies(&adapter_metas, &mut code, &ctx);
-    closure_coercions::emit_bodies(&closure_coercion_targets, &mut code, &ctx);
+    function_adapters::emit_bodies(&adapter_metas, &mut code, &ctx)?;
+    closure_coercions::emit_bodies(&closure_coercion_targets, &mut code, &ctx)?;
 
     user_subtypes::emit_method_bodies(
         &mut code,
         &user_subtypes_alloc,
         &symbols,
         &type_info,
+        &type_info_index,
         pkg_string_global_idx,
-    );
+    )?;
 
-    class_plan.emit_bodies(&mut code, &ctx);
+    class_plan.emit_bodies(&mut code, &ctx)?;
+    // A failure recorded by the bodies above comes before those of the checks
+    // emitted as functions of their own below.
+    ctx.check_failure()?;
     for guard in &instance_field_guards {
-        code.function(&field_guards::body(&ctx, guard));
+        code.function(&field_guards::body(&ctx, guard)?);
     }
     for (ty, _) in &type_descriptors {
-        code.function(&runtime_descriptors::body(&ctx, ty));
+        code.function(&runtime_descriptors::body(&ctx, ty)?);
     }
 
-    code.function(&field_lookup::body(&ctx));
+    code.function(&field_lookup::body(&ctx)?);
     for (validator_id, plan) in recursive_validators.plans.iter().enumerate() {
-        code.function(&cast_check::emit_runtime_validator_body(
-            &ctx,
-            &plan.key,
-            &plan.body,
-            plan.rejects_polymorphic_edge,
-            validator_id as i32,
-        ));
+        let validator = ctx.checking_standalone(&plan.key, || {
+            cast_check::emit_runtime_validator_body(
+                &ctx,
+                &plan.key,
+                &plan.body,
+                plan.rejects_polymorphic_edge,
+                validator_id as i32,
+            )
+        })?;
+        code.function(&validator);
     }
 
     if let (Some(_), Some(main_func_idx), Some(main_return_ty)) =
@@ -1498,12 +1895,11 @@ fn codegen_inner(
         .zip(user_func_lines)
         .map(|((uf, (low_in_buf, body_len)), lines)| {
             let abs_low = low_in_buf + vec_count_size;
-            let (decl_line, _decl_col) = line_index.line_col(uf.decl_span.start);
             dwarf::FuncDebugInfo {
                 name: uf.name.clone(),
                 low_pc: abs_low,
                 body_len: *body_len,
-                decl_line: decl_line as u64,
+                decl_span: uf.decl_span,
                 lines: lines
                     .into_iter()
                     .map(|(off, span)| (abs_low + off, span))
@@ -1511,7 +1907,9 @@ fn codegen_inner(
             }
         })
         .collect();
-    for (sect_name, bytes) in dwarf::build_dwarf(&funcs, code_content_size, filename, &line_index) {
+    for (sect_name, bytes) in
+        dwarf::build_dwarf(&funcs, code_content_size, filename, &debug_sources)?
+    {
         module.section(&CustomSection {
             name: Cow::Borrowed(sect_name),
             data: Cow::Owned(bytes),
@@ -1530,11 +1928,11 @@ fn codegen_inner(
     if total_data_segments > 0 {
         let mut data = DataSection::new();
         for i in 0..pool.strings.len() {
-            data.passive(pool.utf16_le_bytes(i));
+            data.passive(pool.utf16_le_bytes(i)?);
         }
         // Bigint segments indexed from pool.strings.len() at each array.new_data site.
         for i in 0..bigint_pool.literals.len() {
-            data.passive(bigint_pool.le_bytes(i));
+            data.passive(bigint_pool.le_bytes(i)?);
         }
         module.section(&data);
     }
@@ -1559,7 +1957,9 @@ struct UserFunc {
     generics: Vec<String>,
 }
 
-/// Converts `CodeSection::byte_len` (excludes leading vec-count) into Code-section-content offsets for DWARF.
+/// The encoded size of `v` as unsigned LEB128: a function body's local count,
+/// or the Code section's function count, which `CodeSection::byte_len`
+/// excludes and DWARF offsets add back.
 fn leb128_u32_size(mut v: u32) -> usize {
     let mut size = 0;
     loop {
@@ -1576,14 +1976,17 @@ fn json_host_signature(
     params: &[Param],
     symbols: &SymbolTable,
     intrinsics: &intrinsics::IntrinsicTypeIndices,
-) -> (Vec<wasm_encoder::ValType>, Vec<wasm_encoder::ValType>) {
+) -> Result<
+    (Vec<wasm_encoder::ValType>, Vec<wasm_encoder::ValType>),
+    crate::compiler_error::CompilerFailure,
+> {
     use wasm_encoder::{HeapType, RefType, ValType};
 
     let raw_string_ref = ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(intrinsics.raw_string),
     });
-    match name {
+    Ok(match name {
         // json.parse returns the language's `unknown` slot.
         "parse" => (
             vec![raw_string_ref],
@@ -1613,10 +2016,10 @@ fn json_host_signature(
             params
                 .iter()
                 .map(|p| symbols.host_value_type(&p.ty))
-                .collect(),
+                .collect::<Result<_, _>>()?,
             vec![],
         ),
-    }
+    })
 }
 
 /// Reference-typed globals are nullable so the `ref.null` initializer validates;
@@ -1625,14 +2028,17 @@ fn json_host_signature(
 /// Every consumer that *imports* such a global must declare it the same way:
 /// the engine's import check is invariant on a mutable global's content type,
 /// so `(mut (ref null $string))` and `(mut (ref $string))` do not link.
-fn global_val_type(ty: &Type, im: &SymbolTable) -> ValType {
-    match im.value_type(ty) {
+fn global_val_type(
+    ty: &Type,
+    im: &SymbolTable,
+) -> Result<ValType, crate::compiler_error::CompilerFailure> {
+    Ok(match im.value_type(ty)? {
         ValType::Ref(r) => ValType::Ref(RefType {
             nullable: true,
             ..r
         }),
         other => other,
-    }
+    })
 }
 
 /// Zero/null const-expr placeholder — value is overwritten by _start before any user code runs.
@@ -1663,6 +2069,10 @@ fn emit_package_string_init(
     });
     emitter.instruction(Instruction::StructNew(string_type_idx));
     emitter.instruction(Instruction::GlobalSet(pkg_string_global_idx));
+}
+
+fn arena_failure(error: crate::arena::ArenaError) -> CompilerFailure {
+    error.into_compiler_failure(CompilerStage::Codegen)
 }
 
 #[cfg(test)]
@@ -1733,9 +2143,9 @@ pub(crate) mod tests {
         );
         let packages = runtime_packages(packages);
         let (mut ta, mut diags) = infer(source, "main", &ast, &packages);
-        diags.extend(check(&ta));
-        capture(&mut ta);
-        desugar(&mut ta, crate::FileId(0));
+        diags.extend(check(&ta).unwrap());
+        ta = capture(ta).unwrap();
+        ta = desugar(ta, crate::FileId(0)).unwrap();
         assert!(diags.is_empty(), "unexpected typecheck diags: {diags:?}");
         ta
     }
@@ -1760,7 +2170,7 @@ pub(crate) mod tests {
         module: &str,
         source: &str,
     ) -> (ModulePath, crate::FileId, crate::Ast) {
-        let file = sources.add(module.to_string(), source.to_string());
+        let file = sources.add(module.to_string(), source).unwrap();
         let mut asi = Asi::new(source, file);
         let mut tokens: Vec<Token> = Vec::new();
         loop {
@@ -1781,7 +2191,7 @@ pub(crate) mod tests {
             parse_diags.is_empty(),
             "unexpected parser diags: {parse_diags:?}"
         );
-        lower_patterns(&mut ast);
+        ast = lower_patterns(ast).unwrap();
         (ModulePath::from(module), file, ast)
     }
 
@@ -1824,13 +2234,13 @@ pub(crate) mod tests {
             std::collections::BTreeMap::new(),
         );
         assert!(diags.is_empty(), "unexpected package diags: {diags:?}");
-        capture(&mut ta);
+        ta = capture(ta).unwrap();
         let root_file = owned_modules
             .iter()
             .find(|(module, _, _)| module.as_str() == "lib")
             .map(|(_, file, _)| *file)
             .expect("test package has lib module");
-        desugar(&mut ta, root_file);
+        ta = desugar(ta, root_file).unwrap();
 
         let (prelude_defs, host_defs, internal_defs) =
             prelude::cached_runtime_package_declarations();
@@ -1840,12 +2250,8 @@ pub(crate) mod tests {
         dependencies.extend(internal_defs.iter());
         dependencies.extend(stdlib_defs.iter());
         dependencies.extend_from_slice(packages);
-        let root_source = sources
-            .get(root_file)
-            .map(|source| source.text.as_str())
-            .unwrap_or_default();
         let generated =
-            codegen_with_type_info(root_source, "lib.subm", root_file, &ta, &dependencies)
+            super::codegen_package_with_type_info(&sources, root_file, &ta, &dependencies)
                 .expect("code generation");
         package.runtime_functions = generated.runtime_functions;
         package.runtime_globals = generated.runtime_globals;
@@ -2731,7 +3137,7 @@ function main(): string {
         // throw renders with its stashed backtrace like a trap does.
         let err = crate::runtime::exec::map_uncaught_exception(&mut store, result)
             .expect_err("expected main() to trap or throw");
-        let (sources, file) = crate::Sources::single("script.subm", source);
+        let (sources, file) = crate::Sources::single("script.subm", source).unwrap();
         crate::render_backtrace(&err, &sources, file, crate::BacktraceMode::Full)
             .expect("backtrace empty — was wasm_backtrace_details enabled?")
     }
@@ -4709,6 +5115,33 @@ function main(): void { middle(); }
     }
 
     #[test]
+    fn failed_cast_backtrace_points_at_the_cast() {
+        let src = "\
+interface P { a: number }
+function g(n: number, p: P): number { return n; }
+function main(): void {
+  const r = g(1,
+    JSON.parse(\"{}\") as P);
+}
+";
+        let dump = run_main_expecting_error(src);
+        insta::assert_snapshot!(dump);
+    }
+
+    #[test]
+    fn code_after_a_cast_keeps_its_backtrace_location() {
+        let src = "\
+interface P { a: number }
+function g(n: number, p: P): number { assert(false, \"x\"); return n; }
+function main(): void {
+  const r = g(1, JSON.parse(\"{\\\"a\\\": 1}\") as P);
+}
+";
+        let dump = run_main_expecting_error(src);
+        insta::assert_snapshot!(dump);
+    }
+
+    #[test]
     fn render_backtrace_returns_none_for_non_trap_error() {
         #[derive(Debug)]
         struct Plain;
@@ -4719,7 +5152,7 @@ function main(): void { middle(); }
         }
         impl std::error::Error for Plain {}
         let err: wasmtime::Error = wasmtime::Error::new(Plain);
-        let (sources, file) = crate::Sources::single("script.subm", "");
+        let (sources, file) = crate::Sources::single("script.subm", "").unwrap();
         assert!(
             crate::render_backtrace(&err, &sources, file, crate::BacktraceMode::Full).is_none()
         );
@@ -4736,7 +5169,7 @@ function main(): void { middle(); }
             .expect("main signature is `() -> void` in expecting-trap fixtures");
         let err = pollster::block_on(main.call_async(&mut store, ()))
             .expect_err("expected main() to trap");
-        let (sources, file) = crate::Sources::single("script.subm", source);
+        let (sources, file) = crate::Sources::single("script.subm", source).unwrap();
         crate::render_backtrace(&err, &sources, file, crate::BacktraceMode::Full)
             .expect("backtrace empty — was wasm_backtrace_details enabled?")
     }
@@ -5045,10 +5478,10 @@ function main(): void { middle(); }
         let packages = runtime_packages(&[]);
         let (mut ta, infer_diags) = infer(source, "main", &ast, &packages);
         assert!(infer_diags.is_empty(), "{infer_diags:?}");
-        let chk = check(&ta);
+        let chk = check(&ta).unwrap();
         assert!(chk.is_empty(), "{chk:?}");
-        capture(&mut ta);
-        desugar(&mut ta, crate::FileId(0));
+        ta = capture(ta).unwrap();
+        ta = desugar(ta, crate::FileId(0)).unwrap();
         ta
     }
 
@@ -5077,7 +5510,7 @@ function main(): void { middle(); }
     }
 
     fn box_walk_stmt(ta: &mut TypedAst, id: StmtId, names: &[&str]) {
-        let kind = ta.stmt(id).kind.clone();
+        let kind = ta.try_stmt(id).unwrap().kind.clone();
         match kind {
             TypedStmtKind::Block(stmts) => {
                 for s in stmts {
@@ -5086,7 +5519,7 @@ function main(): void { middle(); }
             }
             TypedStmtKind::Let { name, value, .. } => {
                 if names.iter().any(|n| *n == name.name)
-                    && let TypedStmtKind::Let { boxed, .. } = &mut ta.stmt_mut(id).kind
+                    && let TypedStmtKind::Let { boxed, .. } = &mut ta.try_stmt_mut(id).unwrap().kind
                 {
                     *boxed = true;
                 }
@@ -5156,7 +5589,8 @@ function main(): void { middle(); }
             TypedStmtKind::Expr(e) => box_walk_expr(ta, e, names),
             TypedStmtKind::AssignLocal { ident, value, .. } => {
                 if names.iter().any(|n| *n == ident.name)
-                    && let TypedStmtKind::AssignLocal { boxed, .. } = &mut ta.stmt_mut(id).kind
+                    && let TypedStmtKind::AssignLocal { boxed, .. } =
+                        &mut ta.try_stmt_mut(id).unwrap().kind
                 {
                     *boxed = true;
                 }
@@ -5194,7 +5628,8 @@ function main(): void { middle(); }
                 box_walk_stmt(ta, body, names);
                 for (i, c) in catches.iter().enumerate() {
                     if names.iter().any(|n| *n == c.binding.name)
-                        && let TypedStmtKind::Try { catches: cs, .. } = &mut ta.stmt_mut(id).kind
+                        && let TypedStmtKind::Try { catches: cs, .. } =
+                            &mut ta.try_stmt_mut(id).unwrap().kind
                     {
                         cs[i].boxed = true;
                     }
@@ -5208,11 +5643,12 @@ function main(): void { middle(); }
     }
 
     fn box_walk_expr(ta: &mut TypedAst, id: ExprId, names: &[&str]) {
-        let kind = ta.expr(id).kind.clone();
+        let kind = ta.try_expr(id).unwrap().kind.clone();
         match kind {
             TypedExprKind::LocalRef { ident, .. } => {
                 if names.iter().any(|n| *n == ident.name)
-                    && let TypedExprKind::LocalRef { boxed, .. } = &mut ta.expr_mut(id).kind
+                    && let TypedExprKind::LocalRef { boxed, .. } =
+                        &mut ta.try_expr_mut(id).unwrap().kind
                 {
                     *boxed = true;
                 }
@@ -5221,7 +5657,8 @@ function main(): void { middle(); }
             TypedExprKind::Closure { params, body, .. } => {
                 for (i, p) in params.iter().enumerate() {
                     if names.iter().any(|n| *n == p.name.name)
-                        && let TypedExprKind::Closure { params, .. } = &mut ta.expr_mut(id).kind
+                        && let TypedExprKind::Closure { params, .. } =
+                            &mut ta.try_expr_mut(id).unwrap().kind
                     {
                         params[i].boxed = true;
                     }
@@ -5336,7 +5773,7 @@ function main(): void { middle(); }
                         && let TypedExprKind::PostfixUnary {
                             target: crate::PostfixTarget::Local { boxed, .. },
                             ..
-                        } = &mut ta.expr_mut(id).kind
+                        } = &mut ta.try_expr_mut(id).unwrap().kind
                     {
                         *boxed = true;
                     }
@@ -5483,14 +5920,14 @@ function main(): void { middle(); }
         assert_eq!(result, "answer");
         let mut ta = boxed_typed_ast(source);
         box_named(&mut ta, &["n", "s"]);
-        let collected = super::box_types::collect(&ta, &mock_symbols_with_intrinsics());
+        let collected = super::box_types::collect(&ta, &mock_symbols_with_intrinsics()).unwrap();
         assert_eq!(collected.len(), 2);
     }
 
     #[test]
     fn no_boxed_bindings_produces_no_box_types() {
         let ta = boxed_typed_ast("function main(): void { let x: number = 1; }");
-        let collected = super::box_types::collect(&ta, &mock_symbols_with_intrinsics());
+        let collected = super::box_types::collect(&ta, &mock_symbols_with_intrinsics()).unwrap();
         assert!(collected.is_empty(), "{collected:?}");
     }
 
@@ -5500,9 +5937,9 @@ function main(): void { middle(); }
         use wasm_encoder::ValType;
         let mut symbols = SymbolTable::default();
         symbols.record_box_type(ValType::F64, 42);
-        assert_eq!(symbols.box_type_idx(&Type::Number), Some(42));
+        assert_eq!(symbols.box_type_idx(&Type::Number).unwrap(), Some(42));
         symbols.record_box_type(ValType::F64, 42);
-        assert_eq!(symbols.box_type_idx(&Type::Number), Some(42));
+        assert_eq!(symbols.box_type_idx(&Type::Number).unwrap(), Some(42));
     }
 
     #[test]
@@ -5512,14 +5949,16 @@ function main(): void { middle(); }
         use wasm_encoder::ValType;
         let mut symbols = SymbolTable::default();
         symbols.record_box_type(ValType::F64, 7);
-        assert_eq!(symbols.box_type_idx(&Type::Number), Some(7));
+        assert_eq!(symbols.box_type_idx(&Type::Number).unwrap(), Some(7));
         assert_eq!(
-            symbols.box_type_idx(&Type::NumberLiteral(LiteralF64(42.0))),
+            symbols
+                .box_type_idx(&Type::NumberLiteral(LiteralF64(42.0)))
+                .unwrap(),
             Some(7),
         );
     }
 
-    fn mock_symbols_with_intrinsics() -> SymbolTable {
+    pub(super) fn mock_symbols_with_intrinsics() -> SymbolTable {
         let mut map = SymbolTable::default();
         map.set_intrinsic_type_indices(super::intrinsics::IntrinsicTypeIndices {
             raw_string: 0,
@@ -5645,7 +6084,9 @@ function main(): void { middle(); }
             }
         ";
         let ta = boxed_typed_ast(source);
-        let metas = super::analysis::CodegenAnalysis::collect(&ta, &[]).closure_metas;
+        let metas = super::analysis::CodegenAnalysis::collect(&ta, &[])
+            .unwrap()
+            .closure_metas;
         assert_eq!(metas.len(), 2);
         assert_eq!(metas[0].signature, metas[1].signature);
         let bytes = compile_with_closures(source);
@@ -5677,7 +6118,9 @@ function main(): void { middle(); }
     #[test]
     fn no_closures_no_closure_types_emitted() {
         let ta = boxed_typed_ast("function main(): void { let x: number = 1; }");
-        let metas = super::analysis::CodegenAnalysis::collect(&ta, &[]).closure_metas;
+        let metas = super::analysis::CodegenAnalysis::collect(&ta, &[])
+            .unwrap()
+            .closure_metas;
         assert!(metas.is_empty(), "{metas:?}");
     }
 
@@ -5773,7 +6216,9 @@ function main(): void { middle(); }
             "function greet(x: number): number { return x + 1; }
              function main(): void { greet(5); }",
         );
-        let metas = super::analysis::CodegenAnalysis::collect(&ta, &[]).adapter_metas;
+        let metas = super::analysis::CodegenAnalysis::collect(&ta, &[])
+            .unwrap()
+            .adapter_metas;
         assert!(metas.is_empty(), "{metas:?}");
     }
 
@@ -5790,7 +6235,9 @@ function main(): void { middle(); }
                  outer(inner());
              }",
         );
-        let metas = super::analysis::CodegenAnalysis::collect(&ta, &[]).adapter_metas;
+        let metas = super::analysis::CodegenAnalysis::collect(&ta, &[])
+            .unwrap()
+            .adapter_metas;
         assert!(
             metas.is_empty(),
             "direct-only callsites should produce no adapters, got {metas:?}",
@@ -5809,7 +6256,9 @@ function main(): void { middle(); }
                  apply(f2, 0);
              }",
         );
-        let metas = super::analysis::CodegenAnalysis::collect(&ta, &[]).adapter_metas;
+        let metas = super::analysis::CodegenAnalysis::collect(&ta, &[])
+            .unwrap()
+            .adapter_metas;
         assert_eq!(metas.len(), 2, "{metas:?}");
         let names: Vec<&str> = metas.iter().map(|m| m.name.as_str()).collect();
         assert!(names.contains(&"f1"));

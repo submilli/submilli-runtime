@@ -8,6 +8,17 @@ use tokio::sync::{Notify, oneshot};
 
 use crate::{AppState, ServerConfig, app};
 
+/// The multi-thread runtime a server built from `config` runs on. Programs run on
+/// its threads, so their stacks are sized for the configured Wasm stack rather
+/// than tokio's 2 MiB default: a program recursing through host callbacks nests
+/// frames on them, and overflowing one would abort every session.
+pub fn runtime(config: &ServerConfig) -> std::io::Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(config.runtime.native_stack_size())
+        .build()
+}
+
 /// Serve until shutdown is requested — by `POST /v1/shutdown`, SIGTERM, or
 /// SIGINT — then let in-flight requests finish for at most `shutdown_grace`
 /// before dropping what remains. A second signal skips the remaining wait.

@@ -91,7 +91,7 @@ The existing pre-launch `noindex, nofollow` setting is preserved.
 
 ## Documentation for agents
 
-The build generates `/llms.txt` (chapter index), `/llms-full.txt` (the complete
+The build generates `/docs/llms.txt` (chapter index), `/docs/llms-full.txt` (the complete
 visible book), and `/docs/<slug>.md` from the same `docs/` sources. The docs
 home exports as `/docs/index.md`. Every visible page needs a title, description,
 and explicit slug; `sidebar.hidden: true` excludes a page from all exports.
@@ -108,26 +108,17 @@ local references.
 `npm run check` tests index coverage, hidden-page exclusion, metadata, and link
 rewriting. `npm run build` also verifies the generated files and HTML discovery
 links. The exports are build artifacts; run a build before previewing them.
-For a production-layout preview including the root indexes, serve `dist/` at the
-domain root (for example,
-`python3 -m http.server 4321 --directory docs-site/dist` from the repository root).
-Astro's normal preview is scoped to `/docs/`.
-
-The marketing service must forward these two additional paths to the docs
-service, alongside its existing `/docs/*` rewrite:
-
-| Public path | Rewrite destination |
-| --- | --- |
-| `/llms.txt` | `https://YOUR-DOCS-SERVICE.onrender.com/llms.txt` |
-| `/llms-full.txt` | `https://YOUR-DOCS-SERVICE.onrender.com/llms-full.txt` |
+Astro's normal preview serves the book and agent indexes under `/docs/`.
+The marketing service's existing `/docs/*` rewrite forwards all these files to
+the docs service; no additional root-path rewrites are needed.
 
 Serve `.md` files as `text/markdown; charset=utf-8` and `.txt` files as
 `text/plain; charset=utf-8`. These must be file responses, not the marketing
-site's HTML fallback. The root files are in `dist/`, beside `dist/docs/`.
-After publishing and configuring the rewrites, verify the public paths:
+site's HTML fallback. The index files are in `dist/docs/`, alongside the book.
+After publishing, verify the public paths:
 
 ```sh
-curl --fail https://submilli.ai/llms.txt
-curl --fail https://submilli.ai/llms-full.txt
+curl --fail https://submilli.ai/docs/llms.txt
+curl --fail https://submilli.ai/docs/llms-full.txt
 curl --fail https://submilli.ai/docs/blueprints.md
 ```

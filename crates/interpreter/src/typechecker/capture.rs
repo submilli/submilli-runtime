@@ -4,9 +4,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::compiler_error::{CompilerFailure, CompilerStage};
 use crate::{
     CapturedVar, ClosureBody, ExprId, Ident, StmtId, Type, TypedAst, TypedChainPart, TypedExprKind,
-    TypedStmtKind,
+    TypedStmtKind, tree_height,
 };
 
 /// Capture-pass name for `this`. `this` is a keyword, so it can never collide
@@ -14,8 +15,10 @@ use crate::{
 /// receiver inside a closure body.
 pub(crate) const THIS_BINDING: &str = "this";
 
-pub fn capture(ta: &mut TypedAst) {
-    resolve_locals(ta);
+pub fn capture(mut ta: TypedAst) -> Result<TypedAst, CompilerFailure> {
+    tree_height::check_typed(&ta, CompilerStage::Infer)?;
+    resolve_locals(&mut ta)?;
+    Ok(ta)
 }
 
 /// Declaration identities for storage-flow analysis after desugaring. The
@@ -26,7 +29,9 @@ pub(crate) struct ResolvedLocals {
     pub writes: BTreeMap<StmtId, Ident>,
 }
 
-pub(crate) fn resolve_locals(ta: &mut TypedAst) -> ResolvedLocals {
+pub(crate) fn resolve_locals(
+    ta: &mut TypedAst,
+) -> Result<ResolvedLocals, crate::compiler_error::CompilerFailure> {
     let mut state = State {
         ta,
         frames: Vec::new(),
@@ -41,24 +46,26 @@ pub(crate) fn resolve_locals(ta: &mut TypedAst) -> ResolvedLocals {
         .map(|(idx, f)| (idx, f.params.clone(), f.body))
         .collect();
     for (idx, params, body) in function_bodies {
-        state.walk_function(idx, &params, body);
+        state.walk_function(idx, &params, body)?;
     }
+    state.frames.push(Frame::default());
     let stmt_ids: Vec<StmtId> = state.ta.top_level_statements.clone();
     for sid in stmt_ids {
-        state.walk_stmt(sid);
+        state.walk_stmt(sid)?;
     }
+    state.pop_frame()?;
     // Class member bodies are function scopes too: a closure inside a method
     // captures that method's params and locals, and without this pass its
     // capture list stays empty and codegen has no local to read.
     for m in class_member_bodies(state.ta) {
-        state.walk_class_member(m.member, &m.params, m.body, m.this_ty);
+        state.walk_class_member(m.member, &m.params, m.body, m.this_ty)?;
     }
     for (this_ty, expr_id) in field_initializers_with_receiver(state.ta) {
-        state.walk_initializer(expr_id, this_ty);
+        state.walk_initializer(expr_id, this_ty)?;
     }
     // Deferred so refs before a capturing closure still see the final `boxed` flag.
-    state.apply_pending();
-    state.resolved
+    state.apply_pending()?;
+    Ok(state.resolved)
 }
 
 /// A class member body, the parameters in scope for it, and the instance type
@@ -234,8 +241,14 @@ impl ClassMemberRef {
 }
 
 impl State<'_> {
-    fn walk_function(&mut self, function_idx: usize, params: &[crate::TypedParam], body: StmtId) {
-        self.walk_body(ParamOwner::Function(function_idx), params, body, None);
+    fn walk_function(
+        &mut self,
+        function_idx: usize,
+        params: &[crate::TypedParam],
+        body: StmtId,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        self.walk_body(ParamOwner::Function(function_idx), params, body, None)?;
+        Ok(())
     }
 
     fn walk_class_member(
@@ -244,25 +257,35 @@ impl State<'_> {
         params: &[crate::TypedParam],
         body: StmtId,
         this_ty: Type,
-    ) {
-        self.walk_body(ParamOwner::ClassMember(member), params, body, Some(this_ty));
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        self.walk_body(ParamOwner::ClassMember(member), params, body, Some(this_ty))?;
+        Ok(())
     }
 
     /// A field initializer is an expression root rather than a body, but it
     /// runs with the same `this` in scope.
-    fn walk_initializer(&mut self, expr_id: ExprId, this_ty: Type) {
+    fn walk_initializer(
+        &mut self,
+        expr_id: ExprId,
+        this_ty: Type,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         self.frames.push(Frame::default());
         self.bind(LocalBinding {
             name_ident: Ident {
                 name: THIS_BINDING.to_string(),
-                span: self.ta.expr(expr_id).span,
+                span: self
+                    .ta
+                    .try_expr(expr_id)
+                    .map_err(crate::typechecker::arena_failure)?
+                    .span,
             },
             ty: this_ty,
             mutable: false,
             source: BindingSource::Const,
-        });
-        self.walk_expr(expr_id);
-        self.frames.pop();
+        })?;
+        self.walk_expr(expr_id)?;
+        self.pop_frame()?;
+        Ok(())
     }
 
     fn walk_body(
@@ -271,7 +294,7 @@ impl State<'_> {
         params: &[crate::TypedParam],
         body: StmtId,
         this_ty: Option<Type>,
-    ) {
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         self.frames.push(Frame::default());
         // `this` is an ordinary immutable binding for capture purposes, so a
         // closure in a member body captures it by value like any `const`.
@@ -279,12 +302,16 @@ impl State<'_> {
             self.bind(LocalBinding {
                 name_ident: Ident {
                     name: THIS_BINDING.to_string(),
-                    span: self.ta.stmt(body).span,
+                    span: self
+                        .ta
+                        .try_stmt(body)
+                        .map_err(crate::typechecker::arena_failure)?
+                        .span,
                 },
                 ty,
                 mutable: false,
                 source: BindingSource::Const,
-            });
+            })?;
         }
         for (i, p) in params.iter().enumerate() {
             self.bind(LocalBinding {
@@ -295,21 +322,27 @@ impl State<'_> {
                     owner: owner.clone(),
                     index: i,
                 },
-            });
+            })?;
         }
-        self.walk_stmt(body);
-        self.frames.pop();
+        self.walk_stmt(body)?;
+        self.pop_frame()?;
+        Ok(())
     }
 
-    fn walk_stmt(&mut self, id: StmtId) {
-        let kind = self.ta.stmt(id).kind.clone();
-        match kind {
+    fn walk_stmt(&mut self, id: StmtId) -> Result<(), crate::compiler_error::CompilerFailure> {
+        let kind = self
+            .ta
+            .try_stmt(id)
+            .map_err(crate::typechecker::arena_failure)?
+            .kind
+            .clone();
+        let _: () = match kind {
             TypedStmtKind::Block(stmts) => {
                 // Blocks change lexical lookup without introducing a closure
                 // boundary. Deferred references retain their binding source.
                 let locals = self.frames.last().map(|frame| frame.locals.clone());
                 for s in stmts {
-                    self.walk_stmt(s);
+                    self.walk_stmt(s)?;
                 }
                 if let (Some(frame), Some(locals)) = (self.frames.last_mut(), locals) {
                     frame.locals = locals;
@@ -318,39 +351,39 @@ impl State<'_> {
             TypedStmtKind::Let {
                 name, ty, value, ..
             } => {
-                self.walk_expr(value);
+                self.walk_expr(value)?;
                 self.bind(LocalBinding {
                     name_ident: name,
                     ty,
                     mutable: true,
                     source: BindingSource::Let(id),
-                });
+                })?;
             }
             TypedStmtKind::Const {
                 name, ty, value, ..
             } => {
-                self.walk_expr(value);
+                self.walk_expr(value)?;
                 self.bind(LocalBinding {
                     name_ident: name,
                     ty,
                     mutable: false,
                     source: BindingSource::Const,
-                });
+                })?;
             }
             TypedStmtKind::If {
                 condition,
                 then_block,
                 else_block,
             } => {
-                self.walk_expr(condition);
-                self.walk_stmt(then_block);
+                self.walk_expr(condition)?;
+                self.walk_stmt(then_block)?;
                 if let Some(eb) = else_block {
-                    self.walk_stmt(eb);
+                    self.walk_stmt(eb)?;
                 }
             }
             TypedStmtKind::While { condition, body } => {
-                self.walk_expr(condition);
-                self.walk_stmt(body);
+                self.walk_expr(condition)?;
+                self.walk_stmt(body)?;
             }
             TypedStmtKind::For {
                 init,
@@ -361,16 +394,16 @@ impl State<'_> {
                 // Init binding's scope is the for-body.
                 self.frames.push(Frame::default());
                 if let Some(i) = init {
-                    self.walk_stmt(i);
+                    self.walk_stmt(i)?;
                 }
                 if let Some(c) = condition {
-                    self.walk_expr(c);
+                    self.walk_expr(c)?;
                 }
                 if let Some(u) = update {
-                    self.walk_stmt(u);
+                    self.walk_stmt(u)?;
                 }
-                self.walk_stmt(body);
-                self.frames.pop();
+                self.walk_stmt(body)?;
+                self.pop_frame()?;
             }
             TypedStmtKind::ForOf {
                 name,
@@ -380,20 +413,20 @@ impl State<'_> {
                 binding_kind,
                 kind: _,
             } => {
-                self.walk_expr(iter);
+                self.walk_expr(iter)?;
                 self.frames.push(Frame::default());
                 self.bind(LocalBinding {
                     name_ident: name,
                     ty: element_ty,
                     mutable: matches!(binding_kind, crate::BindingKind::Let),
                     source: BindingSource::Const,
-                });
-                self.walk_stmt(body);
-                self.frames.pop();
+                })?;
+                self.walk_stmt(body)?;
+                self.pop_frame()?;
             }
             TypedStmtKind::DoWhile { body, condition } => {
-                self.walk_stmt(body);
-                self.walk_expr(condition);
+                self.walk_stmt(body)?;
+                self.walk_expr(condition)?;
             }
             TypedStmtKind::Switch {
                 discriminant,
@@ -401,40 +434,38 @@ impl State<'_> {
                 default,
                 ..
             } => {
-                self.walk_expr(discriminant);
+                self.walk_expr(discriminant)?;
                 for case in cases {
-                    self.walk_stmt(case.body);
+                    self.walk_stmt(case.body)?;
                 }
                 if let Some(d) = default {
-                    self.walk_stmt(d);
+                    self.walk_stmt(d)?;
                 }
             }
             TypedStmtKind::Break | TypedStmtKind::Continue => {}
             TypedStmtKind::ReboxLocal { ident, .. } => {
-                if let Some(binding) = self.resolve_source(&ident.name) {
-                    self.resolved.writes.insert(id, binding.name_ident.clone());
-                }
+                let binding = self.require_source(&ident.name)?;
+                self.resolved.writes.insert(id, binding.name_ident.clone());
             }
             TypedStmtKind::Return(value) => {
                 if let Some(v) = value {
-                    self.walk_expr(v);
+                    self.walk_expr(v)?;
                 }
             }
-            TypedStmtKind::Expr(e) => self.walk_expr(e),
+            TypedStmtKind::Expr(e) => self.walk_expr(e)?,
             TypedStmtKind::AssignLocal { ident, value, .. } => {
-                self.walk_expr(value);
-                if let Some(b) = self.resolve_source(&ident.name) {
-                    self.resolved.writes.insert(id, b.name_ident.clone());
-                    self.mark_cross_frame_capture(&ident.name, &b);
-                    self.pending.push(Pending::AssignLocal(id, b.source));
-                }
+                self.walk_expr(value)?;
+                let binding = self.require_source(&ident.name)?;
+                self.resolved.writes.insert(id, binding.name_ident.clone());
+                self.mark_cross_frame_capture(&ident.name, &binding)?;
+                self.pending.push(Pending::AssignLocal(id, binding.source));
             }
-            TypedStmtKind::AssignGlobal { value, .. } => self.walk_expr(value),
+            TypedStmtKind::AssignGlobal { value, .. } => self.walk_expr(value)?,
             TypedStmtKind::AssignField {
                 receiver, value, ..
             } => {
-                self.walk_expr(receiver);
-                self.walk_expr(value);
+                self.walk_expr(receiver)?;
+                self.walk_expr(value)?;
             }
             TypedStmtKind::AssignIndex {
                 receiver,
@@ -442,16 +473,16 @@ impl State<'_> {
                 value,
                 ..
             } => {
-                self.walk_expr(receiver);
-                self.walk_expr(index);
-                self.walk_expr(value);
+                self.walk_expr(receiver)?;
+                self.walk_expr(index)?;
+                self.walk_expr(value)?;
             }
             TypedStmtKind::NarrowRegion { source, body, .. } => {
                 // Shadow binding is synthetic — no capture implications.
-                self.walk_expr(source);
-                self.walk_stmt(body);
+                self.walk_expr(source)?;
+                self.walk_stmt(body)?;
             }
-            TypedStmtKind::Throw { value } => self.walk_expr(value),
+            TypedStmtKind::Throw { value } => self.walk_expr(value)?,
             TypedStmtKind::Try {
                 body,
                 catches,
@@ -463,7 +494,7 @@ impl State<'_> {
                 // ForOf's loop variable). Closures capturing `e` flip
                 // its `boxed` flag the same way ForOf handles its
                 // loop var.
-                self.walk_stmt(body);
+                self.walk_stmt(body)?;
                 for clause in catches {
                     self.frames.push(Frame::default());
                     self.bind(LocalBinding {
@@ -471,40 +502,48 @@ impl State<'_> {
                         ty: clause.ty.clone(),
                         mutable: false,
                         source: BindingSource::Const,
-                    });
-                    self.walk_stmt(clause.body);
-                    self.frames.pop();
+                    })?;
+                    self.walk_stmt(clause.body)?;
+                    self.pop_frame()?;
                 }
                 if let Some(f) = finally {
-                    self.walk_stmt(f);
+                    self.walk_stmt(f)?;
                 }
             }
-        }
+        };
+        Ok(())
     }
 
-    fn walk_expr(&mut self, id: ExprId) {
-        let kind = self.ta.expr(id).kind.clone();
-        match kind {
+    fn walk_expr(&mut self, id: ExprId) -> Result<(), crate::compiler_error::CompilerFailure> {
+        let expr = self
+            .ta
+            .try_expr(id)
+            .map_err(crate::typechecker::arena_failure)?;
+        let span = expr.span;
+        let kind = expr.kind.clone();
+        let _: () = match kind {
             TypedExprKind::LocalRef { ident, .. } => {
-                if let Some(b) = self.resolve_source(&ident.name) {
-                    self.resolved.reads.insert(id, b.name_ident.clone());
-                    self.mark_cross_frame_capture(&ident.name, &b);
-                    self.pending.push(Pending::LocalRef(id, b.source));
-                }
+                let b = self
+                    .require_source(&ident.name)
+                    .map_err(|failure| failure.with_span(span))?;
+                self.resolved.reads.insert(id, b.name_ident.clone());
+                self.mark_cross_frame_capture(&ident.name, &b)?;
+                self.pending.push(Pending::LocalRef(id, b.source));
             }
             // `this` inside a closure is a capture of the enclosing member's
             // receiver; in the member body itself this resolves same-frame and
             // does nothing.
             TypedExprKind::This => {
-                if let Some(b) = self.resolve_source(THIS_BINDING) {
-                    self.mark_cross_frame_capture(THIS_BINDING, &b);
-                }
+                let b = self.require_source(THIS_BINDING)?;
+                self.mark_cross_frame_capture(THIS_BINDING, &b)?;
             }
             TypedExprKind::LocalNarrowRef { path, .. } => {
                 if path.chain.is_empty()
                     && let super::infer::narrowing::BindingId::Local { name, .. } = &path.root
-                    && let Some(binding) = self.resolve_source(name)
                 {
+                    let binding = self
+                        .require_source(name)
+                        .map_err(|failure| failure.with_span(span))?;
                     self.resolved.reads.insert(id, binding.name_ident);
                 }
             }
@@ -514,20 +553,29 @@ impl State<'_> {
                     self.bind(LocalBinding {
                         name_ident: Ident {
                             name: THIS_BINDING.to_string(),
-                            span: self.ta.expr(id).span,
+                            span: self
+                                .ta
+                                .try_expr(id)
+                                .map_err(crate::typechecker::arena_failure)?
+                                .span,
                         },
                         ty: Type::Unknown,
                         mutable: false,
                         source: BindingSource::Const,
-                    });
+                    })?;
                 }
                 if let Some(name) = self.ta.closure_names.get(&id).cloned() {
                     self.bind(LocalBinding {
                         name_ident: name,
-                        ty: self.ta.expr(id).ty.clone(),
+                        ty: self
+                            .ta
+                            .try_expr(id)
+                            .map_err(crate::typechecker::arena_failure)?
+                            .ty
+                            .clone(),
                         mutable: false,
                         source: BindingSource::Const,
-                    });
+                    })?;
                 }
                 for (i, p) in params.iter().enumerate() {
                     self.bind(LocalBinding {
@@ -538,38 +586,48 @@ impl State<'_> {
                             owner: ParamOwner::Closure(id),
                             index: i,
                         },
-                    });
+                    })?;
                 }
                 match body {
-                    ClosureBody::Expr(e) => self.walk_expr(e),
-                    ClosureBody::Block(b) => self.walk_stmt(b),
+                    ClosureBody::Expr(e) => self.walk_expr(e)?,
+                    ClosureBody::Block(b) => self.walk_stmt(b)?,
                 }
-                let frame = self.frames.pop().expect("we just pushed");
-                if let TypedExprKind::Closure { captured, .. } = &mut self.ta.expr_mut(id).kind {
-                    *captured = frame.captures;
-                }
+                let frame = self.frames.pop().ok_or_else(|| {
+                    crate::typechecker::invariant_failure("missing closure capture frame")
+                })?;
+                let TypedExprKind::Closure { captured, .. } = &mut self
+                    .ta
+                    .try_expr_mut(id)
+                    .map_err(crate::typechecker::arena_failure)?
+                    .kind
+                else {
+                    return Err(crate::typechecker::invariant_failure(
+                        "capture closure kind changed",
+                    ));
+                };
+                *captured = frame.captures;
             }
             TypedExprKind::Binary { lhs, rhs, .. } => {
-                self.walk_expr(lhs);
-                self.walk_expr(rhs);
+                self.walk_expr(lhs)?;
+                self.walk_expr(rhs)?;
             }
             TypedExprKind::EffectThen { effect, result } => {
-                self.walk_expr(effect);
-                self.walk_expr(result);
+                self.walk_expr(effect)?;
+                self.walk_expr(result)?;
             }
             TypedExprKind::Sequence { stmts, result } => {
                 for stmt in stmts {
-                    self.walk_stmt(stmt);
+                    self.walk_stmt(stmt)?;
                 }
-                self.walk_expr(result);
+                self.walk_expr(result)?;
             }
-            TypedExprKind::Unary { operand, .. } => self.walk_expr(operand),
+            TypedExprKind::Unary { operand, .. } => self.walk_expr(operand)?,
             TypedExprKind::TypeofTag { value, .. } | TypedExprKind::InstanceOf { value, .. } => {
-                self.walk_expr(value);
+                self.walk_expr(value)?;
             }
             TypedExprKind::Call { args, .. } | TypedExprKind::McpCall { args, .. } => {
                 for a in args {
-                    self.walk_expr(a);
+                    self.walk_expr(a)?;
                 }
             }
             // `super.m()` dispatches on the receiver without naming `this`, so
@@ -577,85 +635,88 @@ impl State<'_> {
             TypedExprKind::SuperCtorCall { args, .. }
             | TypedExprKind::SuperMethodCall { args, .. } => {
                 for a in args {
-                    self.walk_expr(a);
+                    self.walk_expr(a)?;
                 }
-                if let Some(b) = self.resolve_source(THIS_BINDING) {
-                    self.mark_cross_frame_capture(THIS_BINDING, &b);
+                {
+                    let b = self.require_source(THIS_BINDING)?;
+                    self.mark_cross_frame_capture(THIS_BINDING, &b)?;
                 }
             }
             TypedExprKind::CallClosure { callee, args } => {
-                self.walk_expr(callee);
+                self.walk_expr(callee)?;
                 for a in args {
-                    self.walk_expr(a);
+                    self.walk_expr(a)?;
                 }
             }
             TypedExprKind::GenericCall { args, .. } => {
                 for a in args {
-                    self.walk_expr(a.expr);
+                    self.walk_expr(a.expr)?;
                 }
             }
             TypedExprKind::MethodCall { receiver, args, .. } => {
-                self.walk_expr(receiver);
+                self.walk_expr(receiver)?;
                 for a in args {
-                    self.walk_expr(a);
+                    self.walk_expr(a)?;
                 }
             }
             TypedExprKind::GenericMethodCall { receiver, args, .. } => {
-                self.walk_expr(receiver);
+                self.walk_expr(receiver)?;
                 for a in args {
-                    self.walk_expr(a.expr);
+                    self.walk_expr(a.expr)?;
                 }
             }
             TypedExprKind::IntrinsicCall { args, .. } => {
                 for a in args {
-                    self.walk_expr(a);
+                    self.walk_expr(a)?;
                 }
             }
             TypedExprKind::ObjectLiteral { members, .. } => {
                 for member in members {
                     for expression in member.expressions() {
-                        self.walk_expr(expression);
+                        self.walk_expr(expression)?;
                     }
                 }
             }
             TypedExprKind::ArrayLiteral { elements, .. } => {
                 for e in elements {
-                    self.walk_expr(e.expr_id());
+                    self.walk_expr(e.expr_id())?;
                 }
             }
             TypedExprKind::TupleLiteral { elements, .. } => {
                 for e in elements {
-                    self.walk_expr(e);
+                    self.walk_expr(e)?;
                 }
             }
             TypedExprKind::FieldAccess { receiver, .. }
-            | TypedExprKind::InterfacePropertyAccess { receiver, .. } => self.walk_expr(receiver),
+            | TypedExprKind::InterfacePropertyAccess { receiver, .. } => {
+                self.walk_expr(receiver)?;
+            }
             TypedExprKind::IndexAccess { receiver, index } => {
-                self.walk_expr(receiver);
-                self.walk_expr(index);
+                self.walk_expr(receiver)?;
+                self.walk_expr(index)?;
             }
             TypedExprKind::Narrowed { source, inner, .. } => {
-                self.walk_expr(source);
-                self.walk_expr(inner);
+                self.walk_expr(source)?;
+                self.walk_expr(inner)?;
             }
             TypedExprKind::Ternary { cond, then_, else_ } => {
-                self.walk_expr(cond);
-                self.walk_expr(then_);
-                self.walk_expr(else_);
+                self.walk_expr(cond)?;
+                self.walk_expr(then_)?;
+                self.walk_expr(else_)?;
             }
             TypedExprKind::NullishCoalesce { lhs, rhs } => {
-                self.walk_expr(lhs);
-                self.walk_expr(rhs);
+                self.walk_expr(lhs)?;
+                self.walk_expr(rhs)?;
             }
             TypedExprKind::OptionalChain { base, parts } => {
-                self.walk_expr(base);
+                self.walk_expr(base)?;
                 for part in parts {
                     match part {
-                        TypedChainPart::Index { idx, .. } => self.walk_expr(idx),
+                        TypedChainPart::Index { idx, .. } => self.walk_expr(idx)?,
                         TypedChainPart::Call { args, .. }
                         | TypedChainPart::MethodCall { args, .. } => {
                             for a in args {
-                                self.walk_expr(a);
+                                self.walk_expr(a)?;
                             }
                         }
                         TypedChainPart::Field { .. }
@@ -666,23 +727,22 @@ impl State<'_> {
             }
             TypedExprKind::PostfixUnary { target, .. } => match target {
                 crate::PostfixTarget::Local { ident, .. } => {
-                    if let Some(b) = self.resolve_source(&ident.name) {
-                        self.resolved.reads.insert(id, b.name_ident.clone());
-                        self.mark_cross_frame_capture(&ident.name, &b);
-                        self.pending.push(Pending::PostfixLocal(id, b.source));
-                    }
+                    let b = self.require_source(&ident.name)?;
+                    self.resolved.reads.insert(id, b.name_ident.clone());
+                    self.mark_cross_frame_capture(&ident.name, &b)?;
+                    self.pending.push(Pending::PostfixLocal(id, b.source));
                 }
                 crate::PostfixTarget::Global { .. } => {}
-                crate::PostfixTarget::Field { receiver, .. } => self.walk_expr(receiver),
+                crate::PostfixTarget::Field { receiver, .. } => self.walk_expr(receiver)?,
                 crate::PostfixTarget::Index {
                     receiver, index, ..
                 } => {
-                    self.walk_expr(receiver);
-                    self.walk_expr(index);
+                    self.walk_expr(receiver)?;
+                    self.walk_expr(index)?;
                 }
             },
             TypedExprKind::NonNullAssert { value } | TypedExprKind::Cast { value, .. } => {
-                self.walk_expr(value);
+                self.walk_expr(value)?;
             }
             TypedExprKind::Number(_)
             | TypedExprKind::BigInt(_)
@@ -694,38 +754,66 @@ impl State<'_> {
             | TypedExprKind::FunctionRef { .. }
             | TypedExprKind::NumberEnumMember { .. }
             | TypedExprKind::StringEnumMember { .. } => {}
-        }
+        };
+        Ok(())
     }
 
-    fn bind(&mut self, b: LocalBinding) {
-        if let Some(top) = self.frames.last_mut() {
-            top.locals.insert(b.name_ident.name.clone(), b);
-        }
+    fn bind(
+        &mut self,
+        binding: LocalBinding,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        let frame = self
+            .frames
+            .last_mut()
+            .ok_or_else(|| crate::typechecker::invariant_failure("missing capture scope"))?;
+        frame
+            .locals
+            .insert(binding.name_ident.name.clone(), binding);
+        Ok(())
+    }
+
+    fn pop_frame(&mut self) -> Result<Frame, crate::compiler_error::CompilerFailure> {
+        self.frames
+            .pop()
+            .ok_or_else(|| crate::typechecker::invariant_failure("capture scope push/pop mismatch"))
     }
 
     /// Returns binding regardless of depth; callers handle cross-frame via [`mark_cross_frame_capture`].
     fn resolve_source(&self, name: &str) -> Option<LocalBinding> {
-        let defining_idx = self
-            .frames
+        self.frames
             .iter()
-            .rposition(|f| f.locals.contains_key(name))?;
-        Some(self.frames[defining_idx].locals[name].clone())
+            .rev()
+            .find_map(|frame| frame.locals.get(name).cloned())
+    }
+
+    fn require_source(
+        &self,
+        name: &str,
+    ) -> Result<LocalBinding, crate::compiler_error::CompilerFailure> {
+        self.resolve_source(name).ok_or_else(|| {
+            crate::typechecker::invariant_failure(format!("missing capture binding `{name}`"))
+        })
     }
 
     /// Forwards capture through intermediate frames and boxes the source binding.
     /// No-op for same-frame — those writes are deferred to pass 2 (`apply_pending`).
-    fn mark_cross_frame_capture(&mut self, name: &str, binding: &LocalBinding) {
+    fn mark_cross_frame_capture(
+        &mut self,
+        name: &str,
+        binding: &LocalBinding,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         let defining_idx = self
             .frames
             .iter()
             .rposition(|f| f.locals.contains_key(name))
-            .expect("caller already resolved the binding");
+            .ok_or_else(|| {
+                crate::typechecker::invariant_failure("missing resolved capture binding")
+            })?;
         let last_idx = self.frames.len() - 1;
         if defining_idx == last_idx {
-            return;
+            return Ok(());
         }
-        for i in (defining_idx + 1)..=last_idx {
-            let f = &mut self.frames[i];
+        for f in self.frames.iter_mut().skip(defining_idx + 1) {
             if f.captured_names.insert(name.to_string()) {
                 f.captures.push(CapturedVar {
                     name: binding.name_ident.clone(),
@@ -734,104 +822,196 @@ impl State<'_> {
                 });
             }
         }
-        if binding.mutable {
+        let _: () = if binding.mutable {
             let source = binding.source.clone();
-            self.mark_source_boxed(&source);
-        }
+            self.mark_source_boxed(&source)?;
+        };
+        Ok(())
     }
 
-    fn mark_source_boxed(&mut self, source: &BindingSource) {
-        match source {
+    fn mark_source_boxed(
+        &mut self,
+        source: &BindingSource,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        let _: () = match source {
             BindingSource::Let(sid) => {
-                if let TypedStmtKind::Let { boxed, .. } = &mut self.ta.stmt_mut(*sid).kind {
-                    *boxed = true;
-                }
+                let TypedStmtKind::Let { boxed, .. } = &mut self
+                    .ta
+                    .try_stmt_mut(*sid)
+                    .map_err(crate::typechecker::arena_failure)?
+                    .kind
+                else {
+                    return Err(crate::typechecker::invariant_failure(
+                        "capture source is not a let binding",
+                    ));
+                };
+                *boxed = true;
             }
             BindingSource::Const => {} // const captures are copied; never boxed
             BindingSource::Param { owner, index } => match owner {
                 ParamOwner::Function(fidx) => {
-                    if let Some(f) = self.ta.functions.get_mut(*fidx)
-                        && let Some(p) = f.params.get_mut(*index)
-                    {
-                        p.boxed = true;
-                    }
+                    let param = self
+                        .ta
+                        .functions
+                        .get_mut(*fidx)
+                        .and_then(|function| function.params.get_mut(*index))
+                        .ok_or_else(|| {
+                            crate::typechecker::invariant_failure(
+                                "missing function capture parameter",
+                            )
+                        })?;
+                    param.boxed = true;
                 }
                 ParamOwner::Closure(eid) => {
-                    if let TypedExprKind::Closure { params, .. } = &mut self.ta.expr_mut(*eid).kind
-                        && let Some(p) = params.get_mut(*index)
-                    {
-                        p.boxed = true;
-                    }
+                    let TypedExprKind::Closure { params, .. } = &mut self
+                        .ta
+                        .try_expr_mut(*eid)
+                        .map_err(crate::typechecker::arena_failure)?
+                        .kind
+                    else {
+                        return Err(crate::typechecker::invariant_failure(
+                            "capture parameter owner is not a closure",
+                        ));
+                    };
+                    let param = params.get_mut(*index).ok_or_else(|| {
+                        crate::typechecker::invariant_failure("missing closure capture parameter")
+                    })?;
+                    param.boxed = true;
                 }
                 ParamOwner::ClassMember(member) => {
-                    if let Some(p) = member.param_mut(self.ta, *index) {
-                        p.boxed = true;
-                    }
+                    let param = member.param_mut(self.ta, *index).ok_or_else(|| {
+                        crate::typechecker::invariant_failure(
+                            "missing class member capture parameter",
+                        )
+                    })?;
+                    param.boxed = true;
                 }
             },
-        }
+        };
+        Ok(())
     }
 
     /// Deferred so same-frame refs before a capturing closure still see the final `boxed` flag.
-    fn apply_pending(&mut self) {
+    fn apply_pending(&mut self) -> Result<(), crate::compiler_error::CompilerFailure> {
         let pending = std::mem::take(&mut self.pending);
         for p in pending {
             match p {
                 Pending::LocalRef(eid, source) => {
-                    let boxed = self.source_is_boxed(&source);
-                    if let TypedExprKind::LocalRef { boxed: slot, .. } =
-                        &mut self.ta.expr_mut(eid).kind
-                    {
-                        *slot = boxed;
-                    }
+                    let boxed = self.source_is_boxed(&source)?;
+                    let TypedExprKind::LocalRef { boxed: slot, .. } = &mut self
+                        .ta
+                        .try_expr_mut(eid)
+                        .map_err(crate::typechecker::arena_failure)?
+                        .kind
+                    else {
+                        return Err(crate::typechecker::invariant_failure(
+                            "pending capture target kind changed",
+                        ));
+                    };
+                    *slot = boxed;
                 }
                 Pending::AssignLocal(sid, source) => {
-                    let boxed = self.source_is_boxed(&source);
-                    if let TypedStmtKind::AssignLocal { boxed: slot, .. } =
-                        &mut self.ta.stmt_mut(sid).kind
-                    {
-                        *slot = boxed;
-                    }
+                    let boxed = self.source_is_boxed(&source)?;
+                    let TypedStmtKind::AssignLocal { boxed: slot, .. } = &mut self
+                        .ta
+                        .try_stmt_mut(sid)
+                        .map_err(crate::typechecker::arena_failure)?
+                        .kind
+                    else {
+                        return Err(crate::typechecker::invariant_failure(
+                            "pending capture target kind changed",
+                        ));
+                    };
+                    *slot = boxed;
                 }
                 Pending::PostfixLocal(eid, source) => {
-                    let boxed = self.source_is_boxed(&source);
-                    if let TypedExprKind::PostfixUnary {
+                    let boxed = self.source_is_boxed(&source)?;
+                    let TypedExprKind::PostfixUnary {
                         target: crate::PostfixTarget::Local { boxed: slot, .. },
                         ..
-                    } = &mut self.ta.expr_mut(eid).kind
-                    {
-                        *slot = boxed;
-                    }
+                    } = &mut self
+                        .ta
+                        .try_expr_mut(eid)
+                        .map_err(crate::typechecker::arena_failure)?
+                        .kind
+                    else {
+                        return Err(crate::typechecker::invariant_failure(
+                            "pending capture target kind changed",
+                        ));
+                    };
+                    *slot = boxed;
                 }
             }
         }
+        Ok(())
     }
 
-    fn source_is_boxed(&self, source: &BindingSource) -> bool {
-        match source {
-            BindingSource::Let(sid) => match &self.ta.stmt(*sid).kind {
+    fn source_is_boxed(
+        &self,
+        source: &BindingSource,
+    ) -> Result<bool, crate::compiler_error::CompilerFailure> {
+        Ok(match source {
+            BindingSource::Let(sid) => match &self
+                .ta
+                .try_stmt(*sid)
+                .map_err(crate::typechecker::arena_failure)?
+                .kind
+            {
                 TypedStmtKind::Let { boxed, .. } => *boxed,
-                _ => false,
+                _ => {
+                    return Err(crate::typechecker::invariant_failure(
+                        "capture source is not a let binding",
+                    ));
+                }
             },
             BindingSource::Const => false,
             BindingSource::Param { owner, index } => match owner {
-                ParamOwner::Function(fidx) => self
+                ParamOwner::Function(fidx) => {
+                    self.ta
+                        .functions
+                        .get(*fidx)
+                        .and_then(|f| f.params.get(*index))
+                        .ok_or_else(|| {
+                            crate::typechecker::invariant_failure(
+                                "missing function capture parameter",
+                            )
+                        })?
+                        .boxed
+                }
+                ParamOwner::Closure(eid) => match &self
                     .ta
-                    .functions
-                    .get(*fidx)
-                    .and_then(|f| f.params.get(*index))
-                    .is_some_and(|p| p.boxed),
-                ParamOwner::Closure(eid) => match &self.ta.expr(*eid).kind {
+                    .try_expr(*eid)
+                    .map_err(crate::typechecker::arena_failure)?
+                    .kind
+                {
                     TypedExprKind::Closure { params, .. } => {
-                        params.get(*index).is_some_and(|p| p.boxed)
+                        params
+                            .get(*index)
+                            .ok_or_else(|| {
+                                crate::typechecker::invariant_failure(
+                                    "missing closure capture parameter",
+                                )
+                            })?
+                            .boxed
                     }
-                    _ => false,
+                    _ => {
+                        return Err(crate::typechecker::invariant_failure(
+                            "capture parameter owner is not a closure",
+                        ));
+                    }
                 },
                 ParamOwner::ClassMember(member) => {
-                    member.param(self.ta, *index).is_some_and(|p| p.boxed)
+                    member
+                        .param(self.ta, *index)
+                        .ok_or_else(|| {
+                            crate::typechecker::invariant_failure(
+                                "missing class member capture parameter",
+                            )
+                        })?
+                        .boxed
                 }
             },
-        }
+        })
     }
 }
 
@@ -842,6 +1022,63 @@ mod tests {
         Asi, CapturedVar, ClosureBody, ExprId, StmtId, Token, TokenKind, Type, TypedAst,
         TypedChainPart, TypedExprKind, TypedStmtKind, infer, parse,
     };
+
+    #[test]
+    fn missing_capture_parameter_is_a_fatal_failure() {
+        let mut ta = typecheck("function main(): number { return 1; }");
+        let mut state = super::State {
+            ta: &mut ta,
+            frames: Vec::new(),
+            pending: Vec::new(),
+            resolved: super::ResolvedLocals::default(),
+        };
+        let source = super::BindingSource::Param {
+            owner: super::ParamOwner::Function(0),
+            index: usize::MAX,
+        };
+        assert!(matches!(
+            state.source_is_boxed(&source),
+            Err(crate::compiler_error::CompilerFailure::Internal { .. })
+        ));
+        assert!(matches!(
+            state.mark_source_boxed(&source),
+            Err(crate::compiler_error::CompilerFailure::Internal { .. })
+        ));
+    }
+
+    #[test]
+    fn missing_local_binding_stops_capture_and_a_fresh_pass_succeeds() {
+        let source = "function main(value: number): number { return value; }";
+        let mut ta = typecheck(source);
+        let mut changed = false;
+        for id in ta.expr_ids().unwrap() {
+            if let TypedExprKind::LocalRef { ident, .. } = &mut ta.try_expr_mut(id).unwrap().kind {
+                ident.name = "missing".into();
+                changed = true;
+                break;
+            }
+        }
+        assert!(changed);
+        assert!(matches!(
+            capture(ta),
+            Err(crate::compiler_error::CompilerFailure::Internal { .. })
+        ));
+        assert!(capture(typecheck(source)).is_ok());
+    }
+
+    #[test]
+    fn body_exit_narrowings_do_not_leak_into_later_declarations() {
+        for declaration in [
+            "function first(x: { ok: boolean }): void { if (!x.ok) throw new Error(\"bad\"); }",
+            "class C { first(x: { ok: boolean }): void { if (!x.ok) throw new Error(\"bad\"); } second(): number { return 1; } }",
+            "class C { static first(x: { ok: boolean }): void { if (!x.ok) throw new Error(\"bad\"); } static second(): number { return 1; } }",
+            "class C { constructor(x: { ok: boolean }) { if (!x.ok) throw new Error(\"bad\"); } second(): number { return 1; } }",
+            "class C { set value(x: { ok: boolean }) { if (!x.ok) throw new Error(\"bad\"); } second(): number { return 1; } }",
+        ] {
+            let source = format!("{declaration} function main(): number {{ return 1; }}");
+            assert!(capture(typecheck(&source)).is_ok(), "{source}");
+        }
+    }
 
     fn typecheck(source: &str) -> TypedAst {
         let mut asi = Asi::new(source, crate::FileId(0));
@@ -879,7 +1116,7 @@ mod tests {
 
     fn run(source: &str) -> TypedAst {
         let mut ta = typecheck(source);
-        capture(&mut ta);
+        ta = capture(ta).unwrap();
         ta
     }
 
@@ -909,7 +1146,7 @@ mod tests {
     }
 
     fn walk_stmt(ta: &TypedAst, id: StmtId, out: &mut Vec<Flag>) {
-        match &ta.stmt(id).kind {
+        match &ta.try_stmt(id).unwrap().kind {
             TypedStmtKind::Let {
                 name, value, boxed, ..
             } => {
@@ -1044,7 +1281,7 @@ mod tests {
     }
 
     fn walk_expr(ta: &TypedAst, id: ExprId, out: &mut Vec<Flag>) {
-        match &ta.expr(id).kind {
+        match &ta.try_expr(id).unwrap().kind {
             TypedExprKind::LocalRef { ident, boxed } => out.push(Flag {
                 kind: "LocalRef",
                 name: ident.name.clone(),
@@ -1223,7 +1460,7 @@ mod tests {
     }
 
     fn scan_stmt(ta: &TypedAst, id: StmtId) -> Option<(Vec<CapturedVar>, ExprId)> {
-        match &ta.stmt(id).kind {
+        match &ta.try_stmt(id).unwrap().kind {
             TypedStmtKind::Let { value, .. }
             | TypedStmtKind::Const { value, .. }
             | TypedStmtKind::AssignLocal { value, .. }
@@ -1294,10 +1531,10 @@ mod tests {
     }
 
     fn scan_expr(ta: &TypedAst, id: ExprId) -> Option<(Vec<CapturedVar>, ExprId)> {
-        if let TypedExprKind::Closure { captured, .. } = &ta.expr(id).kind {
+        if let TypedExprKind::Closure { captured, .. } = &ta.try_expr(id).unwrap().kind {
             return Some((captured.clone(), id));
         }
-        match &ta.expr(id).kind {
+        match &ta.try_expr(id).unwrap().kind {
             TypedExprKind::Binary { lhs, rhs, .. } => {
                 scan_expr(ta, *lhs).or_else(|| scan_expr(ta, *rhs))
             }
@@ -1536,7 +1773,7 @@ mod tests {
         assert_eq!(mid_captured[0].name.name, "x");
         assert!(mid_captured[0].boxed);
 
-        let (inner_captured, _) = match &ta.expr(mid_id).kind {
+        let (inner_captured, _) = match &ta.try_expr(mid_id).unwrap().kind {
             TypedExprKind::Closure {
                 body: ClosureBody::Block(b),
                 ..
@@ -1589,9 +1826,9 @@ mod tests {
     #[test]
     fn capture_is_idempotent() {
         let mut ta = typecheck("function host(): void { let x: number = 0; const g = () => x; }");
-        capture(&mut ta);
+        ta = capture(ta).unwrap();
         let after_one = format!("{ta:?}");
-        capture(&mut ta);
+        ta = capture(ta).unwrap();
         let after_two = format!("{ta:?}");
         assert_eq!(
             after_one, after_two,
@@ -1602,7 +1839,7 @@ mod tests {
     #[test]
     fn capture_runs_on_empty_program() {
         let mut ta = typecheck("");
-        capture(&mut ta);
+        ta = capture(ta).unwrap();
         assert!(ta.globals.is_empty());
         assert!(ta.functions.is_empty());
         assert!(ta.top_level_statements.is_empty());

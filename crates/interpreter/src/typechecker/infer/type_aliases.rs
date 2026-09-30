@@ -6,10 +6,13 @@
 //! source order, and lets a recursive alias close its cycle through a
 //! lazy [`Type::AliasRef`] back-edge instead of an infinite inline body.
 
+use crate::compiler_error::CompilerFailure;
+use crate::type_size::{TypeBudget, TypeTooLarge, map_children};
+
 use std::collections::BTreeSet;
 
 use crate::mangle::MangledName;
-use crate::{ObjectField, Type, TypeAnnotation, TypeKind};
+use crate::{Type, TypeAnnotation, TypeKind};
 
 use super::assignable::TypeResolver;
 
@@ -94,15 +97,15 @@ impl<'a> Inferer<'a> {
         name: &str,
         arg_annots: &[TypeAnnotation],
         span: crate::Span,
-    ) -> Type {
+    ) -> Result<Type, CompilerFailure> {
         // Arity check against the forward-declared placeholder's
         // generic-param list (known before the body is resolved).
         let (generics, mangled): (Vec<String>, crate::MangledName) = match self.types.lookup(name) {
             Some(sym) => match &sym.kind {
                 TypeKind::Alias { generics, .. } => (generics.clone(), sym.mangled_name.clone()),
-                _ => return Type::Error,
+                _ => return Ok(Type::Error),
             },
-            None => return Type::Error,
+            None => return Ok(Type::Error),
         };
         let alias_package = self.type_package(name);
         if arg_annots.len() != generics.len() {
@@ -121,17 +124,25 @@ impl<'a> Inferer<'a> {
                     arg_annots.len(),
                 ),
             );
-            return Type::Error;
+            return Ok(Type::Error);
         }
-        let resolved_args: Vec<Type> = arg_annots.iter().map(|a| self.resolve_type(a)).collect();
+        let resolved_args: Vec<Type> = arg_annots
+            .iter()
+            .map(|a| self.resolve_type(a))
+            .collect::<Result<_, _>>()?;
 
         // Recursion back-edge: emit the lazy by-name reference.
         if self.alias_resolution_stack.iter().any(|n| n == name) {
-            return Type::alias_ref(alias_package, name.to_string(), mangled, resolved_args);
+            return Ok(Type::alias_ref(
+                alias_package,
+                name.to_string(),
+                mangled,
+                resolved_args,
+            ));
         }
 
         // Ensure the body is resolved (no-op if already done).
-        self.resolve_alias_body(name);
+        self.resolve_alias_body(name)?;
         let body = match self.types.lookup(name) {
             Some(sym) => match &sym.kind {
                 TypeKind::Alias { ty, .. } => ty.clone(),
@@ -147,15 +158,20 @@ impl<'a> Inferer<'a> {
                     &generics,
                     &resolved_args,
                 );
-            sub.apply(&body)
+            sub.apply(&body, &self.type_limits)
+                .map_err(super::type_limit_at(span))?
         };
-        Type::alias_ty(
+        let alias = Type::alias_ty(
             alias_package,
             name.to_string(),
             mangled,
             resolved_args,
             Box::new(body),
-        )
+        );
+        // The alias keeps its arguments beside the substituted body, so even an
+        // identity alias doubles the type it wraps.
+        crate::type_size::check(&alias).map_err(super::type_limit_at(span))?;
+        Ok(alias)
     }
 
     /// Resolve alias `name`'s body, fill in its placeholder symbol, and
@@ -163,15 +179,15 @@ impl<'a> Inferer<'a> {
     /// in an isolated generic scope (only the alias's own params), so a
     /// reference triggered from inside an interface / function signature
     /// doesn't leak that context's generics into the alias body.
-    pub(super) fn resolve_alias_body(&mut self, name: &str) {
+    pub(super) fn resolve_alias_body(&mut self, name: &str) -> Result<(), CompilerFailure> {
         let Some(pending) = self.pending_aliases.remove(name) else {
-            return;
+            return Ok(());
         };
         self.alias_resolution_stack.push(name.to_string());
         let saved_generics = std::mem::take(&mut self.generics_in_scope);
         let saved_bodies = std::mem::take(&mut self.body_instantiations);
         self.push_signature_generics(pending.generics.clone());
-        let resolved_body = self.resolve_type(&pending.annotation);
+        let resolved_body = self.resolve_type(&pending.annotation)?;
         self.pop_signature_generics();
         self.generics_in_scope = saved_generics;
         self.body_instantiations = saved_bodies;
@@ -191,13 +207,15 @@ impl<'a> Inferer<'a> {
             doc: pending.doc,
         });
         let Some(symbol) = final_symbol else {
-            return;
+            return Ok(());
         };
-        self.add_typed_type_decl(typed_decl, symbol);
+        self.add_typed_type_decl(typed_decl, symbol)?;
+
+        Ok(())
     }
 
     /// [`rehydrate_alias_refs`] against this inferer's type registry.
-    pub(super) fn rehydrate_alias_refs(&self, ty: &Type) -> Type {
+    pub(super) fn rehydrate_alias_refs(&self, ty: &Type) -> Result<Type, TypeTooLarge> {
         rehydrate_alias_refs(ty, self.resolver())
     }
 }
@@ -211,7 +229,10 @@ impl<'a> Inferer<'a> {
 /// slot. Applied to every `infer_expr` result and to every type a generic
 /// parameter binds to (guarded by [`type_has_alias_ref`] at the hot call site,
 /// so the common case stays a cheap walk).
-pub(crate) fn rehydrate_alias_refs(ty: &Type, types: TypeResolver<'_>) -> Type {
+pub(crate) fn rehydrate_alias_refs(
+    ty: &Type,
+    types: TypeResolver<'_>,
+) -> Result<Type, TypeTooLarge> {
     rehydrate_alias_refs_skipping(ty, types, &BTreeSet::new())
 }
 
@@ -227,14 +248,14 @@ pub(crate) fn rehydrate_alias_refs_skipping(
     ty: &Type,
     types: TypeResolver<'_>,
     skip: &BTreeSet<MangledName>,
-) -> Type {
+) -> Result<Type, TypeTooLarge> {
     // Nothing to rebuild, and rebuilding anyway would re-canonicalize every
     // union it walks through — so the cheap check is a correctness guard as
     // much as an optimization, and belongs here rather than at each caller.
     if !type_has_alias_ref(ty) {
-        return ty.clone();
+        return Ok(ty.clone());
     }
-    rehydrate_reachable(ty, types, skip)
+    rehydrate_reachable(ty, types, skip, 1, &mut types.limits.budget())
 }
 
 /// The body a recursion back-edge names, with `args` substituted for the
@@ -269,94 +290,50 @@ pub(crate) fn alias_ref_body(
     if generics.is_empty() {
         return body.clone();
     }
-    crate::typechecker::type_param_substitution::TypeParamSubstitution::from_pairs(generics, args)
-        .apply(body)
+    types.limits.type_or_error(
+        crate::typechecker::type_param_substitution::TypeParamSubstitution::from_pairs(
+            generics, args,
+        )
+        .apply(body, types.limits),
+    )
 }
 
-fn rehydrate_reachable(ty: &Type, types: TypeResolver<'_>, skip: &BTreeSet<MangledName>) -> Type {
+/// Builds under a budget from `types`: expanding a back-edge copies a stored
+/// alias body, which a non-generic alias would otherwise copy without bound.
+fn rehydrate_reachable(
+    ty: &Type,
+    types: TypeResolver<'_>,
+    skip: &BTreeSet<MangledName>,
+    depth: u32,
+    budget: &mut TypeBudget<'_>,
+) -> Result<Type, TypeTooLarge> {
+    let child = depth.saturating_add(1);
     match ty {
-        Type::AliasRef { mangled, .. } if skip.contains(mangled) => ty.clone(),
+        Type::AliasRef { mangled, .. } if skip.contains(mangled) => {
+            budget.charge_copy(ty, depth)?;
+            Ok(ty.clone())
+        }
         Type::AliasRef {
             mangled,
             package,
             name,
             args,
         } => {
+            budget.charge(depth)?;
             let rehydrated_args: Vec<Type> = args
                 .iter()
-                .map(|a| rehydrate_reachable(a, types, skip))
-                .collect();
+                .map(|a| rehydrate_reachable(a, types, skip, child, budget))
+                .collect::<Result<_, _>>()?;
             let body = alias_ref_body(mangled, name, &rehydrated_args, types);
-            Type::alias_ty(
+            budget.charge_copy(&body, child)?;
+            Ok(Type::alias_ty(
                 package.clone(),
                 name.clone(),
                 mangled.clone(),
                 rehydrated_args,
                 Box::new(body),
-            )
+            ))
         }
-        Type::Union(ms) => Type::union(
-            ms.iter()
-                .map(|m| rehydrate_reachable(m, types, skip))
-                .collect(),
-        ),
-        Type::Array(e) => Type::Array(Box::new(rehydrate_reachable(e, types, skip))),
-        Type::Readonly(e) => Type::Readonly(Box::new(rehydrate_reachable(e, types, skip))),
-        Type::Tuple(es) => Type::Tuple(
-            es.iter()
-                .map(|e| rehydrate_reachable(e, types, skip))
-                .collect(),
-        ),
-        Type::Object { fields, index } => Type::Object {
-            index: index
-                .as_ref()
-                .map(|i| i.map_value(|v| rehydrate_reachable(v, types, skip))),
-            fields: fields
-                .iter()
-                .map(|(k, f)| {
-                    (
-                        k.clone(),
-                        ObjectField {
-                            ty: rehydrate_reachable(&f.ty, types, skip),
-                            optional: f.optional,
-                            readonly: f.readonly,
-                        },
-                    )
-                })
-                .collect(),
-        },
-        Type::Function {
-            params,
-            ret,
-            predicate,
-            has_rest,
-        } => Type::Function {
-            params: params
-                .iter()
-                .map(|p| rehydrate_reachable(p, types, skip))
-                .collect(),
-            ret: Box::new(rehydrate_reachable(ret, types, skip)),
-            predicate: predicate.as_ref().map(|p| {
-                Box::new(crate::TypePredicate {
-                    parameter_index: p.parameter_index,
-                    asserted_type: rehydrate_reachable(&p.asserted_type, types, skip),
-                })
-            }),
-            has_rest: *has_rest,
-        },
-        Type::InterfaceRef {
-            mangled,
-            package,
-            name,
-            args,
-        } => Type::interface_ref(
-            package.clone(),
-            name.clone(),
-            mangled.clone(),
-            args.iter()
-                .map(|a| rehydrate_reachable(a, types, skip))
-                .collect(),
-        ),
         // Carrying alias: rehydrate args, but leave the stored body —
         // its `AliasRef` leaves are the legitimate finite encoding.
         Type::Alias {
@@ -365,15 +342,26 @@ fn rehydrate_reachable(ty: &Type, types: TypeResolver<'_>, skip: &BTreeSet<Mangl
             name,
             args,
             ty: body,
-        } => Type::alias_ty(
-            package.clone(),
-            name.clone(),
-            mangled.clone(),
-            args.iter()
-                .map(|a| rehydrate_reachable(a, types, skip))
-                .collect(),
-            body.clone(),
-        ),
-        _ => ty.clone(),
+        } => {
+            budget.charge(depth)?;
+            let rehydrated_args: Vec<Type> = args
+                .iter()
+                .map(|a| rehydrate_reachable(a, types, skip, child, budget))
+                .collect::<Result<_, _>>()?;
+            budget.charge_copy(body, child)?;
+            Ok(Type::alias_ty(
+                package.clone(),
+                name.clone(),
+                mangled.clone(),
+                rehydrated_args,
+                body.clone(),
+            ))
+        }
+        _ => {
+            budget.charge(depth)?;
+            map_children(ty, |inner| {
+                rehydrate_reachable(inner, types, skip, child, budget)
+            })
+        }
     }
 }

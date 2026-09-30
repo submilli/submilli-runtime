@@ -4,6 +4,8 @@
 //! pass ([`super::generic::Inferer::infer_functions`]) for bodies. Codegen is a
 //! later slice (SUB-480+); this pass only typechecks.
 
+use crate::compiler_error::CompilerFailure;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::ControlFlow;
 
@@ -14,8 +16,9 @@ use crate::{
     Visibility,
 };
 
-use super::Inferer;
 use super::void_value::ValuePosition;
+use super::{Inferer, type_limit_at, type_limit_unlocated};
+use crate::type_size::{TypeLimits, TypeTooLarge};
 
 use super::assignable::ImplementsFailure;
 use super::generic::{
@@ -125,15 +128,15 @@ impl<'a> Inferer<'a> {
         implements: Vec<TypeAnnotation>,
         members: Vec<ClassMember>,
         doc: Option<crate::DocComment>,
-    ) {
+    ) -> Result<(), CompilerFailure> {
         let generic_names: Vec<String> = generics.iter().map(|g| g.name.clone()).collect();
         // Push class-level generics so member annotations can name them. Generic
         // classes are not otherwise resolved in v1 (rejected as type args in
         // `resolve_type`), but a `class Box<T> { value: T }` still binds cleanly.
         self.push_signature_generics(generic_names.clone());
 
-        let mangled = self.mangle_top_symbol(&name.name);
-        let extends_clause = match self.resolve_extends_target(extends.as_ref()) {
+        let mangled = self.mangle_top_symbol(&name.name)?;
+        let extends_clause = match self.resolve_extends_target(extends.as_ref())? {
             ExtendsTarget::Class(e) => Some(e),
             ExtendsTarget::Absent => None,
             ExtendsTarget::Unresolved => {
@@ -141,7 +144,7 @@ impl<'a> Inferer<'a> {
                 None
             }
         };
-        let implements_types = self.resolve_implements_targets(&implements);
+        let implements_types = self.resolve_implements_targets(&implements)?;
         let implements_mangled: Vec<MangledName> = implements_types
             .iter()
             .filter_map(|t| match t.peel() {
@@ -189,7 +192,7 @@ impl<'a> Inferer<'a> {
                         );
                         continue;
                     }
-                    let resolved = self.resolve_value_type(ty, ValuePosition::FieldType);
+                    let resolved = self.resolve_value_type(ty, ValuePosition::FieldType)?;
                     if self.reject_class_generic_in_static(
                         f_name,
                         &generic_names,
@@ -224,8 +227,8 @@ impl<'a> Inferer<'a> {
                     let m_generic_names: Vec<String> =
                         m_generics.iter().map(|g| g.name.clone()).collect();
                     self.push_signature_generics(m_generic_names.clone());
-                    let resolved_params: Vec<Param> = self.resolve_params(params);
-                    let resolved_ret = self.resolve_type(return_type);
+                    let resolved_params: Vec<Param> = self.resolve_params(params)?;
+                    let resolved_ret = self.resolve_type(return_type)?;
                     self.pop_signature_generics();
                     if self.reject_class_generic_in_static(
                         m_name,
@@ -258,7 +261,7 @@ impl<'a> Inferer<'a> {
                     if self.reject_duplicate_member(&fields, &methods, f_name, &name) {
                         continue;
                     }
-                    let resolved = self.resolve_value_type(ty, ValuePosition::FieldType);
+                    let resolved = self.resolve_value_type(ty, ValuePosition::FieldType)?;
                     fields.insert(
                         f_name.name.clone(),
                         FieldSig {
@@ -314,8 +317,8 @@ impl<'a> Inferer<'a> {
                         );
                     }
                     self.push_signature_generics(m_generic_names.clone());
-                    let resolved_params: Vec<Param> = self.resolve_params(params);
-                    let resolved_ret = self.resolve_type(return_type);
+                    let resolved_params: Vec<Param> = self.resolve_params(params)?;
+                    let resolved_ret = self.resolve_type(return_type)?;
                     self.pop_signature_generics();
                     // These two names fill the class's universal vtable slots
                     // (used by `String(x)`, interpolation, `JSON.stringify`),
@@ -360,7 +363,7 @@ impl<'a> Inferer<'a> {
                         continue;
                     }
                     seen_constructor = true;
-                    constructor = self.resolve_params(params);
+                    constructor = self.resolve_parameter_types(params)?;
                     // Parameter properties declare a field with the param's type.
                     for (decl, resolved) in params.iter().zip(constructor.iter()) {
                         let Some(modifiers) = &decl.modifiers else {
@@ -417,7 +420,9 @@ impl<'a> Inferer<'a> {
                         AccessorKind::Get => {
                             let ret_ty = return_type
                                 .as_ref()
-                                .map_or(Type::Error, |t| self.resolve_type(t));
+                                .map(|t| self.resolve_type(t))
+                                .transpose()?
+                                .unwrap_or(Type::Error);
                             fields
                                 .entry(a_name.name.clone())
                                 .and_modify(|f| f.ty = ret_ty.clone())
@@ -437,9 +442,9 @@ impl<'a> Inferer<'a> {
                             let write_ty = param
                                 .as_ref()
                                 .and_then(|p| p.ty.as_ref())
-                                .map_or(Type::Error, |t| {
-                                    self.resolve_value_type(t, ValuePosition::Parameter)
-                                });
+                                .map(|t| self.resolve_value_type(t, ValuePosition::Parameter))
+                                .transpose()?
+                                .unwrap_or(Type::Error);
                             let param_name = param
                                 .as_ref()
                                 .map_or_else(|| "value".to_string(), |p| p.name.name.clone());
@@ -508,35 +513,44 @@ impl<'a> Inferer<'a> {
                 .zip(implements_types)
                 .collect(),
         });
+
+        Ok(())
     }
 
     /// Check that every class satisfies each interface it declares. Runs once
     /// all class signatures are bound, so a member inherited from a
     /// later-declared parent counts.
-    pub(super) fn check_pending_implements(&mut self) {
+    pub(super) fn check_pending_implements(&mut self) -> Result<(), CompilerFailure> {
         for pending in std::mem::take(&mut self.pending_implements) {
             // An unresolvable parent could have supplied any of the interface's
             // members, so conformance is unknowable rather than broken.
             if !self.inherits_unresolved_parent(&pending.mangled) {
-                self.check_class_implements(&pending);
+                self.check_class_implements(&pending)?;
             }
+            let first_target = pending.targets.first().map(|(span, _)| *span);
+            self.type_size_checkpoint(first_target)?;
         }
+        Ok(())
     }
 
-    fn check_class_implements(&mut self, pending: &PendingImplements) {
+    fn check_class_implements(
+        &mut self,
+        pending: &PendingImplements,
+    ) -> Result<(), CompilerFailure> {
         // A generic class is checked at fresh opaque parameters, applied to
         // both sides, so `Box<T> implements Container<T>` still matches member
         // for member while `Box<T> implements Container<string>` is caught —
         // instantiating with bare `TypeVar`s would make both pass.
-        let opaque: BTreeMap<String, Type> = pending
-            .generic_names
-            .iter()
-            .map(|g| (g.clone(), self.fresh_generic_param(g)))
-            .collect();
         let class_args: Vec<Type> = pending
             .generic_names
             .iter()
-            .map(|g| opaque[g].clone())
+            .map(|name| self.fresh_generic_param(name))
+            .collect::<Result<_, _>>()?;
+        let opaque: BTreeMap<String, Type> = pending
+            .generic_names
+            .iter()
+            .cloned()
+            .zip(class_args.iter().cloned())
             .collect();
         for (span, iface_ty) in &pending.targets {
             // Peeled to agree with `resolve_implements_targets`, which admits an
@@ -553,8 +567,9 @@ impl<'a> Inferer<'a> {
             };
             let iface_args: Vec<Type> = iface_args
                 .iter()
-                .map(|a| substitute_typevars(a, &opaque))
-                .collect();
+                .map(|a| substitute_typevars(a, &opaque, &self.type_limits))
+                .collect::<Result<_, _>>()
+                .map_err(type_limit_at(*span))?;
             let failures = self.resolver().implements_failures(
                 &pending.mangled,
                 &class_args,
@@ -566,6 +581,7 @@ impl<'a> Inferer<'a> {
                 self.report_implements_failures(*span, &pending.class_name, iface_ty, &failures);
             }
         }
+        Ok(())
     }
 
     /// Render a class→interface conformance failure as an LLM-native diagnostic:
@@ -737,12 +753,10 @@ impl<'a> Inferer<'a> {
     /// whole inherited surface as unknown.
     fn errored_extends_parent(&self, annot: &TypeAnnotation) -> Option<crate::ClassExtends> {
         let name = match &annot.kind {
-            crate::TypeAnnotationKind::Name { name_span, .. } => {
-                self.source[name_span.start as usize..name_span.end as usize].to_string()
-            }
+            crate::TypeAnnotationKind::Name { name, .. } => name.name.clone(),
             crate::TypeAnnotationKind::Qualified { path, .. } => path
                 .iter()
-                .map(|s| &self.source[s.start as usize..s.end as usize])
+                .map(|s| s.name.as_str())
                 .collect::<Vec<&str>>()
                 .join("."),
             _ => return None,
@@ -759,17 +773,20 @@ impl<'a> Inferer<'a> {
         })
     }
 
-    fn resolve_extends_target(&mut self, extends: Option<&TypeAnnotation>) -> ExtendsTarget {
+    fn resolve_extends_target(
+        &mut self,
+        extends: Option<&TypeAnnotation>,
+    ) -> Result<ExtendsTarget, CompilerFailure> {
         let Some(annot) = extends else {
-            return ExtendsTarget::Absent;
+            return Ok(ExtendsTarget::Absent);
         };
         // Runs inside the class's signature-generics scope, so a generic
         // parent's args may name the child's own type params
         // (`class Tagged<T> extends Box<T>` → args `[TypeVar(T)]`).
         // Arity/void violations surface in `resolve_class_reference` and come
         // back as `Type::Error`.
-        let ty = self.resolve_type(annot);
-        match ty.peel() {
+        let ty = self.resolve_type(annot)?;
+        Ok(match ty.peel() {
             Type::ClassRef { mangled, args, .. } => ExtendsTarget::Class(crate::ClassExtends {
                 parent: mangled.clone(),
                 args: args.clone(),
@@ -797,16 +814,19 @@ impl<'a> Inferer<'a> {
                 );
                 ExtendsTarget::Unresolved
             }
-        }
+        })
     }
 
     /// Resolve each `implements` target to its `Type`. Non-interface targets are
     /// diagnosed and resolved to `Type::Error` so positions line up with the
     /// annotation list (the caller derives mangled names and conformance from these).
-    fn resolve_implements_targets(&mut self, implements: &[TypeAnnotation]) -> Vec<Type> {
+    fn resolve_implements_targets(
+        &mut self,
+        implements: &[TypeAnnotation],
+    ) -> Result<Vec<Type>, CompilerFailure> {
         let mut out = Vec::new();
         for annot in implements {
-            let ty = self.resolve_type(annot);
+            let ty = self.resolve_type(annot)?;
             match ty.peel() {
                 Type::InterfaceRef { .. } | Type::Error => out.push(ty),
                 other => {
@@ -820,24 +840,32 @@ impl<'a> Inferer<'a> {
                 }
             }
         }
-        out
+        Ok(out)
     }
 
     /// Reject `extends` cycles and signature-incompatible overrides. Runs after
     /// every class signature is bound so parent chains are fully resolvable.
-    pub(super) fn check_class_inheritance(&mut self, top_level: &[crate::StmtId]) {
+    pub(super) fn check_class_inheritance(
+        &mut self,
+        top_level: &[crate::StmtId],
+    ) -> Result<(), CompilerFailure> {
         // (class name, `extends` annotation span) for every class with a parent.
         let extending: Vec<(String, Span)> = top_level
             .iter()
-            .filter_map(|id| match &self.ast.stmt(*id).kind {
-                StmtKind::ClassDecl {
-                    name,
-                    extends: Some(ext),
-                    ..
-                } => Some((name.name.clone(), ext.span)),
-                _ => None,
+            .map(|id| {
+                Ok::<_, CompilerFailure>(
+                    match &self.ast.try_stmt(*id).map_err(super::arena_failure)?.kind {
+                        StmtKind::ClassDecl {
+                            name,
+                            extends: Some(ext),
+                            ..
+                        } => Some((name.name.clone(), ext.span)),
+                        _ => None,
+                    },
+                )
             })
-            .collect();
+            .filter_map(Result::transpose)
+            .collect::<Result<_, _>>()?;
 
         for (class_name, ext_span) in &extending {
             let Some(start) = self.class_mangled(class_name) else {
@@ -851,10 +879,27 @@ impl<'a> Inferer<'a> {
                     cyclic = true;
                     break;
                 }
+                if chain.len() >= crate::compiler_limits::MAX_CLASS_CHAIN_LEN {
+                    return Err(CompilerFailure::Limit {
+                        stage: crate::compiler_error::CompilerStage::Infer,
+                        span: Some(*ext_span),
+                        message: format!(
+                            "class `{class_name}` has more than {} classes in its inheritance \
+                             chain, counting itself and every ancestor",
+                            crate::compiler_limits::MAX_CLASS_CHAIN_LEN
+                        ),
+                        help: vec![
+                            "flatten the hierarchy, or compose behavior instead of extending"
+                                .into(),
+                        ],
+                    });
+                }
                 chain.push(p.clone());
                 parent = self.class_parent(&p);
             }
+            self.type_size_checkpoint(Some(*ext_span))?;
             if cyclic {
+                self.invalid_class_hierarchies.insert(start);
                 self.error_with_help(
                     *ext_span,
                     format!(
@@ -868,15 +913,20 @@ impl<'a> Inferer<'a> {
             }
         }
 
-        self.resolve_implicit_constructors(top_level);
-        self.check_member_redeclarations(top_level);
+        self.resolve_implicit_constructors(top_level)?;
+        self.check_member_redeclarations(top_level)?;
+
+        Ok(())
     }
 
     /// A subclass with no `constructor` member inherits the nearest ancestor's
     /// constructor signature, so `new Sub(...)` and `super(...)` check against it
     /// (codegen forwards the same params to the parent init). Runs after every
     /// class signature is bound, so the parent chain is fully resolvable.
-    fn resolve_implicit_constructors(&mut self, top_level: &[crate::StmtId]) {
+    fn resolve_implicit_constructors(
+        &mut self,
+        top_level: &[crate::StmtId],
+    ) -> Result<(), CompilerFailure> {
         let has_explicit = |members: &[ClassMember]| {
             members
                 .iter()
@@ -884,27 +934,37 @@ impl<'a> Inferer<'a> {
         };
         let explicit_ctor: std::collections::BTreeSet<MangledName> = top_level
             .iter()
-            .filter_map(|id| match &self.ast.stmt(*id).kind {
-                StmtKind::ClassDecl { name, members, .. } if has_explicit(members) => {
-                    self.class_mangled(&name.name)
-                }
-                _ => None,
+            .map(|id| {
+                Ok::<_, CompilerFailure>(
+                    match &self.ast.try_stmt(*id).map_err(super::arena_failure)?.kind {
+                        StmtKind::ClassDecl { name, members, .. } if has_explicit(members) => {
+                            self.class_mangled(&name.name)
+                        }
+                        _ => None,
+                    },
+                )
             })
-            .collect();
+            .filter_map(Result::transpose)
+            .collect::<Result<_, _>>()?;
         let implicit: Vec<(String, MangledName)> = top_level
             .iter()
-            .filter_map(|id| match &self.ast.stmt(*id).kind {
-                StmtKind::ClassDecl {
-                    name,
-                    members,
-                    extends: Some(_),
-                    ..
-                } if !has_explicit(members) => self
-                    .class_mangled(&name.name)
-                    .map(|m| (name.name.clone(), m)),
-                _ => None,
+            .map(|id| {
+                Ok::<_, CompilerFailure>(
+                    match &self.ast.try_stmt(*id).map_err(super::arena_failure)?.kind {
+                        StmtKind::ClassDecl {
+                            name,
+                            members,
+                            extends: Some(_),
+                            ..
+                        } if !has_explicit(members) => self
+                            .class_mangled(&name.name)
+                            .map(|m| (name.name.clone(), m)),
+                        _ => None,
+                    },
+                )
             })
-            .collect();
+            .filter_map(Result::transpose)
+            .collect::<Result<_, _>>()?;
 
         for (child_name, child) in implicit {
             // An unresolvable parent takes its constructor signature with it:
@@ -923,6 +983,8 @@ impl<'a> Inferer<'a> {
                 *constructor = params;
             }
         }
+
+        Ok(())
     }
 
     /// Constructor signature of the nearest ancestor of `child` that declares an
@@ -948,32 +1010,39 @@ impl<'a> Inferer<'a> {
             let TypeKind::Class { constructor, .. } = &sym.kind else {
                 return ControlFlow::Break(None);
             };
-            ControlFlow::Break(Some(
-                constructor
-                    .iter()
-                    .map(|param| Param {
-                        ty: substitute_typevars(&param.ty, bindings),
+            let params = constructor
+                .iter()
+                .map(|param| {
+                    Ok(Param {
+                        ty: substitute_typevars(&param.ty, bindings, &self.type_limits)?,
                         ..param.clone()
                     })
-                    .collect(),
-            ))
+                })
+                .collect();
+            ControlFlow::Break(self.type_limits.ok_or_record(params))
         })
     }
 
-    fn check_member_redeclarations(&mut self, top_level: &[crate::StmtId]) {
-        for member in self.redeclaration_candidates(top_level) {
+    fn check_member_redeclarations(
+        &mut self,
+        top_level: &[crate::StmtId],
+    ) -> Result<(), CompilerFailure> {
+        for member in self.redeclaration_candidates(top_level)? {
             // A cross-kind redeclaration has no same-kind check to run — the
             // ancestor walk each one does looks for its own kind and would sail
             // past the declaration that actually collides.
-            if self.reported_cross_kind_redeclaration(&member) {
+            if self.reported_cross_kind_redeclaration(&member)? {
                 continue;
             }
             match member.kind {
-                MemberKind::Method => self.check_method_override(&member),
-                MemberKind::Field => self.check_field_redeclaration(&member),
-                MemberKind::Accessor => self.check_accessor_redeclaration(&member),
+                MemberKind::Method => self.check_method_override(&member)?,
+                MemberKind::Field => self.check_field_redeclaration(&member)?,
+                MemberKind::Accessor => self.check_accessor_redeclaration(&member)?,
             }
+            self.type_size_checkpoint(Some(member.span))?;
         }
+
+        Ok(())
     }
 
     /// Every instance member of every class that has a parent, in source order —
@@ -981,14 +1050,17 @@ impl<'a> Inferer<'a> {
     /// since the get/set pair is collected into one candidate after the walk.
     /// Materialized rather than checked in place because the walk borrows the
     /// AST out of `self`, while the checks need `self` mutably to report.
-    fn redeclaration_candidates(&self, top_level: &[crate::StmtId]) -> Vec<RedeclarationCandidate> {
+    fn redeclaration_candidates(
+        &self,
+        top_level: &[crate::StmtId],
+    ) -> Result<Vec<RedeclarationCandidate>, CompilerFailure> {
         let mut found: Vec<RedeclarationCandidate> = Vec::new();
         for id in top_level {
             let StmtKind::ClassDecl {
                 name: class_name,
                 members,
                 ..
-            } = &self.ast.stmt(*id).kind
+            } = &self.ast.try_stmt(*id).map_err(super::arena_failure)?.kind
             else {
                 continue;
             };
@@ -1060,7 +1132,7 @@ impl<'a> Inferer<'a> {
             }
             found.extend(accessor_candidates.into_values());
         }
-        found
+        Ok(found)
     }
 
     /// Reject a member that redeclares an inherited name at a *different* kind.
@@ -1069,15 +1141,18 @@ impl<'a> Inferer<'a> {
     /// inherited accessor appends a second, independent property under one name,
     /// and a field over an inherited method leaves `c.v` and `p.v()` naming
     /// different members.
-    fn reported_cross_kind_redeclaration(&mut self, member: &RedeclarationCandidate) -> bool {
-        let opaque = self.opaque_own_generics(&member.child_class);
+    fn reported_cross_kind_redeclaration(
+        &mut self,
+        member: &RedeclarationCandidate,
+    ) -> Result<bool, CompilerFailure> {
+        let opaque = self.opaque_own_generics(&member.child_class)?;
         let Some((inherited_kind, owner)) =
             self.ancestor_member_kind(&member.child_class, &member.name, &opaque)
         else {
-            return false;
+            return Ok(false);
         };
         if inherited_kind == member.kind {
-            return false;
+            return Ok(false);
         }
         let owner_name = self.class_name_of(&owner);
         let (child, parent) = (member.kind.noun(), inherited_kind.noun());
@@ -1098,20 +1173,26 @@ impl<'a> Inferer<'a> {
                 ),
             ],
         );
-        true
+        Ok(true)
     }
 
     /// An accessor redeclaring an inherited accessor shares its vtable slot, so
     /// the slot's recorded signature is the *base* declarer's: a getter whose
     /// return doesn't fit it (or a setter that won't accept what the inherited
     /// one does) miscompiles rather than dispatching.
-    fn check_accessor_redeclaration(&mut self, member: &RedeclarationCandidate) {
-        let opaque = self.opaque_own_generics(&member.child_class);
+    fn check_accessor_redeclaration(
+        &mut self,
+        member: &RedeclarationCandidate,
+    ) -> Result<(), CompilerFailure> {
+        let opaque = self.opaque_own_generics(&member.child_class)?;
         for own in self.class_own_accessors(&member.child_class, &member.name) {
             let Some(inherited) = self.ancestor_accessor(&member.child_class, &own, &opaque) else {
                 continue;
             };
-            let Some(cmp) = accessor_comparison(&member.name, &own, &inherited, &opaque) else {
+            let Some(cmp) =
+                accessor_comparison(&member.name, &own, &inherited, &opaque, &self.type_limits)
+                    .map_err(type_limit_at(member.span))?
+            else {
                 continue;
             };
             if super::assignable(&cmp.subtype, &cmp.supertype, self.resolver()) {
@@ -1139,6 +1220,7 @@ impl<'a> Inferer<'a> {
                 ],
             );
         }
+        Ok(())
     }
 
     /// The class's own getter and setter for `name` (either may be absent).
@@ -1175,7 +1257,13 @@ impl<'a> Inferer<'a> {
                 a.name() == name && matches!(a, AccessorSig::Getter { .. }) == want_getter
             });
             match found {
-                Some(sig) => ControlFlow::Break(Some(substitute_accessor_sig(sig, bindings))),
+                Some(sig) => {
+                    ControlFlow::Break(self.type_limits.ok_or_record(substitute_accessor_sig(
+                        sig,
+                        bindings,
+                        &self.type_limits,
+                    )))
+                }
                 // A class that redeclares the property's other half but not this
                 // one still leaves this half inherited from further up.
                 None => ControlFlow::Continue(()),
@@ -1199,18 +1287,22 @@ impl<'a> Inferer<'a> {
         })
     }
 
-    fn check_method_override(&mut self, member: &RedeclarationCandidate) {
+    fn check_method_override(
+        &mut self,
+        member: &RedeclarationCandidate,
+    ) -> Result<(), CompilerFailure> {
         let Some(child_sig) = self.class_method_sig(&member.child_class, &member.name) else {
-            return;
+            return Ok(());
         };
         // A generic declared on the method itself is not in this map and keeps
         // its existing (lenient) treatment.
-        let opaque = self.opaque_own_generics(&member.child_class);
+        let opaque = self.opaque_own_generics(&member.child_class)?;
         let Some(parent_sig) = self.ancestor_method_sig(&member.child_class, &member.name, &opaque)
         else {
-            return;
+            return Ok(());
         };
-        let child_fn = substitute_typevars(&method_fn_type(&child_sig), &opaque);
+        let child_fn = substitute_typevars(&method_fn_type(&child_sig), &opaque, &self.type_limits)
+            .map_err(type_limit_at(member.span))?;
         let parent_fn = method_fn_type(&parent_sig);
         // TypeScript lets an override declare fewer parameters, as any function
         // may. Here the override fills the inherited method's vtable slot, whose
@@ -1229,7 +1321,7 @@ impl<'a> Inferer<'a> {
                     "declare the parameters it ignores too".to_string(),
                 ],
             );
-            return;
+            return Ok(());
         }
         if !super::assignable(&child_fn, &parent_fn, self.resolver()) {
             self.error_with_help(
@@ -1244,6 +1336,7 @@ impl<'a> Inferer<'a> {
                 ],
             );
         }
+        Ok(())
     }
 
     /// A redeclared field shadows the inherited one into a single property
@@ -1252,18 +1345,23 @@ impl<'a> Inferer<'a> {
     /// the child's storage. Sound only if the child's type still satisfies the
     /// parent's, and only if the redeclaration doesn't reach storage it has no
     /// business naming.
-    fn check_field_redeclaration(&mut self, member: &RedeclarationCandidate) {
+    fn check_field_redeclaration(
+        &mut self,
+        member: &RedeclarationCandidate,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         let Some(child_field) = self.class_own_field_sig(&member.child_class, &member.name) else {
-            return;
+            return Ok(());
         };
-        let opaque = self.opaque_own_generics(&member.child_class);
+        let opaque = self.opaque_own_generics(&member.child_class)?;
         let Some((parent_field, parent_class)) =
             self.ancestor_field_decl(&member.child_class, &member.name, &opaque)
         else {
-            return;
+            return Ok(());
         };
 
-        let child_ty = substitute_typevars(&field_read_ty(&child_field), &opaque);
+        let child_ty =
+            substitute_typevars(&field_read_ty(&child_field), &opaque, &self.type_limits)
+                .map_err(type_limit_at(member.span))?;
         let parent_ty = field_read_ty(&parent_field);
         if !super::assignable(&child_ty, &parent_ty, self.resolver()) {
             self.error_with_help(
@@ -1281,7 +1379,7 @@ impl<'a> Inferer<'a> {
                     ),
                 ],
             );
-            return;
+            return Ok(());
         }
 
         // `private` is module-scoped, so a field private to another module is a
@@ -1302,7 +1400,7 @@ impl<'a> Inferer<'a> {
                      `{owner}` encapsulates — rename the field"
                 )],
             );
-            return;
+            return Ok(());
         }
 
         if child_field.visibility != parent_field.visibility {
@@ -1325,7 +1423,8 @@ impl<'a> Inferer<'a> {
             );
         }
 
-        self.record_narrowing_check(member, &child_ty, &opaque);
+        self.record_narrowing_check(member, &child_ty, &opaque)?;
+        Ok(())
     }
 
     /// Records the read guard for a redeclaration that *narrows* the inherited
@@ -1338,21 +1437,21 @@ impl<'a> Inferer<'a> {
         member: &RedeclarationCandidate,
         child_ty: &Type,
         opaque: &BTreeMap<String, Type>,
-    ) {
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         // Against the *widest* ancestor, not the nearest: the slot is shared with
         // every declaration above, so an intermediate class narrowing it first
         // must not shrink what this guard defends against.
         let Some((widest_field, widest_class)) =
             self.widest_ancestor_field_decl(&member.child_class, &member.name, opaque)
         else {
-            return;
+            return Ok(());
         };
         let parent_ty = field_read_ty(&widest_field);
         if super::assignable(&parent_ty, child_ty, self.resolver()) {
-            return;
+            return Ok(());
         }
         let Some(test) = self.narrowing_test(&parent_ty, child_ty) else {
-            return;
+            return Ok(());
         };
         let child_name = self.class_name_of(&member.child_class);
         let parent_name = self.class_name_of(&widest_class);
@@ -1373,13 +1472,14 @@ impl<'a> Inferer<'a> {
         };
         self.field_narrowing_checks
             .insert((member.child_class.clone(), field.clone()), check.clone());
-        if let Some(symbol) = self.types.lookup_mut(&child_name)
+        let _: () = if let Some(symbol) = self.types.lookup_mut(&child_name)
             && let TypeKind::Class {
                 narrowing_checks, ..
             } = &mut symbol.kind
         {
             narrowing_checks.insert(field.clone(), check);
-        }
+        };
+        Ok(())
     }
 
     /// Only skip the element walk when every array the ancestor admits also
@@ -1550,9 +1650,102 @@ impl<'a> Inferer<'a> {
         };
         let candidates = runtime_carrier_candidates(members);
         let mut carriers =
-            self.array_and_set_interface_carriers(target, name, target_args, &candidates);
-        carriers.extend(self.map_interface_carriers(target, name, target_args, &candidates));
+            self.array_and_set_interface_carriers(target, name, target_args, &candidates, members);
+        carriers.extend(self.map_interface_carriers(
+            target,
+            name,
+            target_args,
+            &candidates,
+            members,
+        ));
         carriers
+    }
+
+    /// How the instantiations of a collection carrier relate to `target`, where
+    /// that can be decided without trying each one. A field typed as a union of
+    /// hundreds of literals makes hundreds of candidate arguments, and `Map`
+    /// tries every pair of them.
+    ///
+    /// Member names do not depend on type arguments, so a missing required
+    /// member, or a weak target sharing no member with the carrier, rules out
+    /// every instantiation. When none of the carrier members the target names
+    /// mentions the carrier's type parameters, and the target has no index
+    /// signature constraining member types, every instantiation compares the
+    /// same members, so one answers for all.
+    fn carrier_fit(
+        &self,
+        template: &Type,
+        target: &Type,
+        target_members: &std::collections::BTreeMap<String, crate::ObjectField>,
+    ) -> CarrierFit {
+        let Some((mangled, _, name, args)) = template.interface_routing() else {
+            return CarrierFit::TryEach;
+        };
+        let Some(form) = self.resolver().interface_full_form(&mangled, name, &args) else {
+            return CarrierFit::TryEach;
+        };
+        if target_members
+            .iter()
+            .any(|(member, field)| !field.optional && !form.contains_key(member))
+        {
+            return CarrierFit::None;
+        }
+        let weak = !target_members.is_empty() && target_members.values().all(|f| f.optional);
+        if weak && !form.is_empty() && !target_members.keys().any(|k| form.contains_key(k)) {
+            return CarrierFit::None;
+        }
+        // An index signature of `unknown` admits every member of every
+        // instantiation: only `void` is not assignable to `unknown`, and no
+        // candidate is `void`.
+        let index_constrains_members = self
+            .resolver()
+            .index_signature(target)
+            .is_some_and(|index| !matches!(index.value.peel(), Type::Unknown));
+        if index_constrains_members
+            || self.carrier_members_mention_parameters(&mangled, name, target_members)
+        {
+            return CarrierFit::TryEach;
+        }
+        if super::assignable(template, target, self.resolver()) {
+            CarrierFit::Every
+        } else {
+            CarrierFit::None
+        }
+    }
+
+    /// Whether any member of the carrier interface `name` that `target_members`
+    /// also names mentions one of the carrier's type parameters. True when the
+    /// declaration cannot be read, which keeps the per-instantiation search.
+    fn carrier_members_mention_parameters(
+        &self,
+        mangled: &MangledName,
+        name: &str,
+        target_members: &std::collections::BTreeMap<String, crate::ObjectField>,
+    ) -> bool {
+        let Some(symbol) = self.resolver().lookup(mangled, name) else {
+            return true;
+        };
+        let TypeKind::Interface {
+            generics,
+            methods,
+            properties,
+            ..
+        } = &symbol.kind
+        else {
+            return true;
+        };
+        let mentions = |ty: &Type| {
+            generics
+                .iter()
+                .any(|generic| signature_mentions_typevar(ty, generic))
+        };
+        target_members.keys().any(|member| {
+            methods.get(member).is_some_and(|sig| {
+                sig.params.iter().any(|param| mentions(&param.ty)) || mentions(&sig.ret)
+            }) || properties
+                .get(member)
+                .is_some_and(|property| mentions(&property.ty))
+        })
     }
 
     fn array_and_set_interface_carriers(
@@ -1561,6 +1754,7 @@ impl<'a> Inferer<'a> {
         name: &str,
         target_args: &[Type],
         candidates: &[Type],
+        members: &std::collections::BTreeMap<String, crate::ObjectField>,
     ) -> std::collections::BTreeSet<crate::InterfaceCarrier> {
         let mut carriers = std::collections::BTreeSet::new();
         let exact_element = matches!(name, "Iterable" | "Set")
@@ -1581,16 +1775,14 @@ impl<'a> Inferer<'a> {
             // When every instantiation matches, the target leaves contents
             // unconstrained and an `Any` carrier is sound. Otherwise retain
             // only the matching instantiations and validate their contents.
-            let array_matches: Vec<Type> = candidates
-                .iter()
-                .filter(|element| {
-                    let array = Type::Array(Box::new((*element).clone()));
-                    let tuple = Type::Tuple(vec![(*element).clone()]);
-                    super::assignable(&array, target, self.resolver())
-                        || super::assignable(&tuple, target, self.resolver())
-                })
-                .cloned()
-                .collect();
+            let array_fit =
+                self.carrier_fit(&Type::Array(Box::new(Type::Unknown)), target, members);
+            let array_matches = array_fit.matching(candidates, |element| {
+                let array = Type::Array(Box::new(element.clone()));
+                let tuple = Type::Tuple(vec![element.clone()]);
+                super::assignable(&array, target, self.resolver())
+                    || super::assignable(&tuple, target, self.resolver())
+            });
             if array_matches.len() == candidates.len() {
                 carriers.insert(crate::InterfaceCarrier::ArrayAny);
             } else {
@@ -1600,14 +1792,15 @@ impl<'a> Inferer<'a> {
                     }),
                 );
             }
-            let set_matches: Vec<Type> = candidates
-                .iter()
-                .filter(|element| {
-                    let set = Type::prelude_interface("Set".to_string(), vec![(*element).clone()]);
-                    super::assignable(&set, target, self.resolver())
-                })
-                .cloned()
-                .collect();
+            let set_fit = self.carrier_fit(
+                &Type::prelude_interface("Set".to_string(), vec![Type::Unknown]),
+                target,
+                members,
+            );
+            let set_matches = set_fit.matching(candidates, |element| {
+                let set = Type::prelude_interface("Set".to_string(), vec![element.clone()]);
+                super::assignable(&set, target, self.resolver())
+            });
             if set_matches.len() == candidates.len() {
                 carriers.insert(crate::InterfaceCarrier::SetAny);
             } else {
@@ -1623,6 +1816,7 @@ impl<'a> Inferer<'a> {
         name: &str,
         target_args: &[Type],
         candidates: &[Type],
+        members: &std::collections::BTreeMap<String, crate::ObjectField>,
     ) -> std::collections::BTreeSet<crate::InterfaceCarrier> {
         let mut carriers = std::collections::BTreeSet::new();
         let exact_map_pair = if name == "Map" {
@@ -1644,27 +1838,40 @@ impl<'a> Inferer<'a> {
                 carriers.insert(crate::InterfaceCarrier::Map(key.clone(), value.clone()));
             }
         } else {
-            let map_matches: Vec<(Type, Type)> = candidates
-                .iter()
-                .flat_map(|key| {
-                    candidates.iter().filter_map(|value| {
-                        let map = Type::prelude_interface(
-                            "Map".to_string(),
-                            vec![key.clone(), value.clone()],
+            let fit = self.carrier_fit(
+                &Type::prelude_interface("Map".to_string(), vec![Type::Unknown, Type::Unknown]),
+                target,
+                members,
+            );
+            match fit {
+                CarrierFit::None => {}
+                CarrierFit::Every => {
+                    carriers.insert(crate::InterfaceCarrier::MapAny);
+                }
+                CarrierFit::TryEach => {
+                    let map_matches: Vec<(Type, Type)> = candidates
+                        .iter()
+                        .flat_map(|key| {
+                            candidates.iter().filter_map(|value| {
+                                let map = Type::prelude_interface(
+                                    "Map".to_string(),
+                                    vec![key.clone(), value.clone()],
+                                );
+                                super::assignable(&map, target, self.resolver())
+                                    .then(|| (key.clone(), value.clone()))
+                            })
+                        })
+                        .collect();
+                    if map_matches.len() == candidates.len() * candidates.len() {
+                        carriers.insert(crate::InterfaceCarrier::MapAny);
+                    } else {
+                        carriers.extend(
+                            map_matches
+                                .into_iter()
+                                .map(|(key, value)| crate::InterfaceCarrier::Map(key, value)),
                         );
-                        super::assignable(&map, target, self.resolver())
-                            .then(|| (key.clone(), value.clone()))
-                    })
-                })
-                .collect();
-            if map_matches.len() == candidates.len() * candidates.len() {
-                carriers.insert(crate::InterfaceCarrier::MapAny);
-            } else {
-                carriers.extend(
-                    map_matches
-                        .into_iter()
-                        .map(|(key, value)| crate::InterfaceCarrier::Map(key, value)),
-                );
+                    }
+                }
             }
         }
         carriers
@@ -1734,8 +1941,9 @@ impl<'a> Inferer<'a> {
         carriers
     }
 
-    pub(super) fn record_runtime_type_test(&mut self, ty: &Type) {
-        self.record_runtime_type_test_inner(ty, RuntimeTestMode::General, &mut BTreeSet::new());
+    pub(super) fn record_runtime_type_test(&mut self, ty: &Type) -> Result<(), CompilerFailure> {
+        self.record_runtime_type_test_inner(ty, RuntimeTestMode::General, &mut BTreeSet::new())?;
+        Ok(())
     }
 
     fn record_runtime_type_test_inner(
@@ -1743,7 +1951,7 @@ impl<'a> Inferer<'a> {
         ty: &Type,
         mode: RuntimeTestMode,
         active_interfaces: &mut BTreeSet<MangledName>,
-    ) {
+    ) -> Result<(), CompilerFailure> {
         let key = super::generic::erase_generic_params(ty.peel());
         if let Some(existing) = self.typed_ast.runtime_type_tests.get(&key) {
             if mode == RuntimeTestMode::AllowAliasRefs
@@ -1754,15 +1962,15 @@ impl<'a> Inferer<'a> {
                     .runtime_type_tests
                     .insert(key.clone(), crate::FieldNarrowingTest::Shape(key));
             }
-            return;
+            return Ok(());
         }
         // Break recursive interface discovery conservatively. A later outer
         // call replaces this placeholder with the resolved descriptor.
         self.typed_ast
             .runtime_type_tests
             .insert(key.clone(), crate::FieldNarrowingTest::Representation);
-        self.record_runtime_test_dependencies(&key, active_interfaces);
-        self.record_runtime_class_fields(&key, active_interfaces);
+        self.record_runtime_test_dependencies(&key, active_interfaces)?;
+        self.record_runtime_class_fields(&key, active_interfaces)?;
         let testable = if mode == RuntimeTestMode::AllowAliasRefs {
             crate::typed_ast::field_runtime_type_is_testable(&key)
         } else {
@@ -1779,14 +1987,10 @@ impl<'a> Inferer<'a> {
                 }),
                 _ => None,
             };
-            if interface_identity
-                .as_ref()
-                .is_some_and(|identity| !active_interfaces.insert(identity.clone()))
+            if let Some(identity) = interface_identity.as_ref()
+                && !active_interfaces.insert(identity.clone())
             {
-                self.record_generic_interface_validators(
-                    &interface,
-                    interface_identity.as_ref().expect("identity just matched"),
-                );
+                self.record_generic_interface_validators(&interface, identity)?;
                 crate::FieldNarrowingTest::Interface(interface)
             } else {
                 if let Some(index) = &interface.index {
@@ -1794,14 +1998,14 @@ impl<'a> Inferer<'a> {
                         &index.value,
                         RuntimeTestMode::AllowAliasRefs,
                         active_interfaces,
-                    );
+                    )?;
                 }
                 for member in interface.members.values() {
                     self.record_runtime_type_test_inner(
                         &member.ty,
                         RuntimeTestMode::AllowAliasRefs,
                         active_interfaces,
-                    );
+                    )?;
                 }
                 if let Some(identity) = interface_identity {
                     active_interfaces.remove(&identity);
@@ -1814,6 +2018,7 @@ impl<'a> Inferer<'a> {
             crate::FieldNarrowingTest::Representation
         };
         self.typed_ast.runtime_type_tests.insert(key, test);
+        Ok(())
     }
 
     fn enum_runtime_members(&self, ty: &Type) -> Option<Type> {
@@ -1838,61 +2043,94 @@ impl<'a> Inferer<'a> {
         Some(Type::union(members))
     }
 
-    fn record_runtime_class_fields(&mut self, ty: &Type, active: &mut BTreeSet<MangledName>) {
+    fn record_runtime_class_fields(
+        &mut self,
+        ty: &Type,
+        active: &mut BTreeSet<MangledName>,
+    ) -> Result<(), CompilerFailure> {
         let Type::ClassRef { mangled, args, .. } = ty else {
-            return;
+            return Ok(());
         };
+        // Diagnosed source cycles have no runtime descriptor; compilation will
+        // return their diagnostics. Unexplained dependency cycles remain fatal.
+        if self.invalid_class_hierarchies.contains(mangled) {
+            return Ok(());
+        }
         if !active.insert(mangled.clone()) {
             self.typed_ast
                 .runtime_class_fields
                 .insert(ty.clone(), Type::Never);
-            return;
+            return Ok(());
         }
         let mut fields = BTreeMap::new();
         let mut guards = Vec::new();
         let mut contexts = Vec::new();
+        let mut chain = Vec::new();
         for_each_class_in_chain(
             |name| self.class_by_mangled(name),
+            &self.type_limits,
             mangled,
             args,
-            |symbol, bindings| {
-                let TypeKind::Class {
-                    generics,
-                    fields: declared,
-                    narrowing_checks,
-                    accessors,
-                    ..
-                } = &symbol.kind
-                else {
-                    return;
-                };
-                if !generics.is_empty() {
-                    contexts.push(crate::typed_ast::InstanceTypeContext {
-                        declaration: symbol.mangled_name.clone(),
-                        args: generics.iter().map(|name| bindings[name].clone()).collect(),
-                    });
+            |symbol, bindings| chain.push((symbol.clone(), bindings.clone())),
+        )
+        .ok_or_else(|| {
+            self.pending_limit_or(super::inference_failure(
+                "incomplete runtime class metadata",
+            ))
+        })?;
+        for (symbol, bindings) in &chain {
+            let TypeKind::Class {
+                generics,
+                fields: declared,
+                narrowing_checks,
+                accessors,
+                ..
+            } = &symbol.kind
+            else {
+                return Err(super::inference_failure(
+                    "runtime class metadata is not a class",
+                ));
+            };
+            if !generics.is_empty() {
+                contexts.push(crate::typed_ast::InstanceTypeContext {
+                    declaration: symbol.mangled_name.clone(),
+                    args: generics
+                        .iter()
+                        .map(|name| {
+                            bindings.get(name).cloned().ok_or_else(|| {
+                                super::inference_failure("missing runtime class generic binding")
+                            })
+                        })
+                        .collect::<Result<_, _>>()?,
+                });
+            }
+            for (name, check) in narrowing_checks {
+                let field = declared
+                    .get(name)
+                    .ok_or_else(|| super::inference_failure("missing guarded-field signature"))?;
+                guards.push(crate::typed_ast::InstantiatedFieldGuard {
+                    field: name.clone(),
+                    target: substitute_typevars(&field_read_ty(field), bindings, &self.type_limits)
+                        .map_err(type_limit_unlocated)?,
+                    check: check.clone(),
+                });
+            }
+            for (name, field) in declared {
+                if accessors.iter().any(|accessor| accessor.name() == name) {
+                    continue;
                 }
-                for (name, check) in narrowing_checks {
-                    if let Some(field) = declared.get(name) {
-                        guards.push(crate::typed_ast::InstantiatedFieldGuard {
-                            field: name.clone(),
-                            target: substitute_typevars(&field_read_ty(field), bindings),
-                            check: check.clone(),
-                        });
-                    }
-                }
-                for (name, field) in declared {
-                    if accessors.iter().any(|accessor| accessor.name() == name) {
-                        continue;
-                    }
-                    fields.entry(name.clone()).or_insert(crate::ObjectField {
-                        ty: substitute_typevars(&field.ty, bindings),
+                if let std::collections::btree_map::Entry::Vacant(entry) =
+                    fields.entry(name.clone())
+                {
+                    entry.insert(crate::ObjectField {
+                        ty: substitute_typevars(&field.ty, bindings, &self.type_limits)
+                            .map_err(type_limit_unlocated)?,
                         optional: field.optional,
                         readonly: field.readonly,
                     });
                 }
-            },
-        );
+            }
+        }
         self.typed_ast
             .runtime_class_contexts
             .insert(ty.clone(), contexts);
@@ -1904,7 +2142,7 @@ impl<'a> Inferer<'a> {
                 &guard.target,
                 RuntimeTestMode::AllowAliasRefs,
                 active,
-            );
+            )?;
         }
         let shape = Type::Object {
             index: None,
@@ -1913,54 +2151,56 @@ impl<'a> Inferer<'a> {
         self.typed_ast
             .runtime_class_fields
             .insert(ty.clone(), shape.clone());
-        self.record_runtime_type_test_inner(&shape, RuntimeTestMode::AllowAliasRefs, active);
+        self.record_runtime_type_test_inner(&shape, RuntimeTestMode::AllowAliasRefs, active)?;
         active.remove(mangled);
+        Ok(())
     }
 
     fn record_runtime_test_dependencies(
         &mut self,
         ty: &Type,
         active_interfaces: &mut BTreeSet<MangledName>,
-    ) {
+    ) -> Result<(), CompilerFailure> {
         let mut record = |dependency: &Type| {
             self.record_runtime_type_test_inner(
                 dependency,
                 RuntimeTestMode::AllowAliasRefs,
                 active_interfaces,
-            );
+            )
         };
         match ty.peel() {
-            Type::Array(element) => record(element),
+            Type::Array(element) => record(element)?,
             Type::Tuple(elements)
             | Type::Union(elements)
             | Type::ClassRef { args: elements, .. } => {
                 for element in elements {
-                    record(element);
+                    record(element)?;
                 }
             }
             Type::Object { fields, index } => {
                 if let Some(i) = index {
-                    record(&i.value);
+                    record(&i.value)?;
                 }
                 for field in fields.values() {
-                    record(&field.ty);
+                    record(&field.ty)?;
                 }
             }
             Type::Function { params, ret, .. } => {
                 for param in params {
-                    record(param);
+                    record(param)?;
                 }
-                record(ret);
+                record(ret)?;
             }
             _ => {}
         }
+        Ok(())
     }
 
     fn record_generic_interface_validators(
         &mut self,
         interface: &crate::InterfaceNarrowingTest,
         identity: &MangledName,
-    ) {
+    ) -> Result<(), CompilerFailure> {
         let mut references = BTreeSet::new();
         for member in interface.members.values() {
             collect_interface_instantiations(&member.ty, identity, &mut references);
@@ -1992,8 +2232,9 @@ impl<'a> Inferer<'a> {
                 &key,
                 RuntimeTestMode::AllowAliasRefs,
                 &mut BTreeSet::new(),
-            );
+            )?;
         }
+        Ok(())
     }
 
     fn narrowing_check_for(
@@ -2016,19 +2257,22 @@ impl<'a> Inferer<'a> {
     /// keyed by name for [`substitute_typevars`]. Same guard
     /// `check_class_implements` uses: comparing at bare `TypeVar`s would make
     /// every parameterized member match everything.
-    fn opaque_own_generics(&mut self, mangled: &MangledName) -> BTreeMap<String, Type> {
+    fn opaque_own_generics(
+        &mut self,
+        mangled: &MangledName,
+    ) -> Result<BTreeMap<String, Type>, CompilerFailure> {
         let Some(sym) = self.class_by_mangled(mangled) else {
-            return BTreeMap::new();
+            return Ok(BTreeMap::new());
         };
         let TypeKind::Class { generics, .. } = &sym.kind else {
-            return BTreeMap::new();
+            return Ok(BTreeMap::new());
         };
         generics
             .clone()
             .into_iter()
             .map(|g| {
-                let opaque = self.fresh_generic_param(&g);
-                (g, opaque)
+                let opaque = self.fresh_generic_param(&g)?;
+                Ok((g, opaque))
             })
             .collect()
     }
@@ -2068,7 +2312,13 @@ impl<'a> Inferer<'a> {
         start_args: &[Type],
         visit: impl FnMut(&TypeSymbol, &BTreeMap<String, Type>) -> ControlFlow<Option<T>>,
     ) -> Option<T> {
-        walk_class_chain_with(|m| self.class_by_mangled(m), start, start_args, visit)
+        walk_class_chain_with(
+            |m| self.class_by_mangled(m),
+            &self.type_limits,
+            start,
+            start_args,
+            visit,
+        )
     }
 
     /// [`walk_class_chain`](Self::walk_class_chain) starting at `child`'s
@@ -2098,7 +2348,10 @@ impl<'a> Inferer<'a> {
         let sym = self.class_by_mangled(child)?;
         // The child stands at its own parameters, so its extends-args resolve
         // through them before the walk proper begins.
-        let (parent, parent_args) = parent_hop(&sym, own_bindings)?;
+        let (parent, parent_args) = self
+            .type_limits
+            .ok_or_record(parent_hop(&sym, own_bindings, &self.type_limits))
+            .flatten()?;
         self.walk_class_chain(&parent, &parent_args, visit)
     }
 
@@ -2164,9 +2417,17 @@ impl<'a> Inferer<'a> {
             if f.visibility != Visibility::Public && !self.local_class_mangles.contains(m) {
                 return ControlFlow::Break(None);
             }
-            let mut f = f.clone();
-            f.ty = super::generic::substitute_typevars(&f.ty, bindings);
-            ControlFlow::Break(Some((f, m.clone())))
+            let Some(ty) = self
+                .type_limits
+                .ok_or_record(super::generic::substitute_typevars(
+                    &f.ty,
+                    bindings,
+                    &self.type_limits,
+                ))
+            else {
+                return ControlFlow::Break(None);
+            };
+            ControlFlow::Break(Some((FieldSig { ty, ..f.clone() }, m.clone())))
         })
     }
 
@@ -2243,14 +2504,20 @@ impl<'a> Inferer<'a> {
         &self,
         receiver: crate::ExprId,
         decl_mangled: &MangledName,
-    ) -> bool {
+    ) -> Result<bool, CompilerFailure> {
         let current_class_mangled = match &self.current_class {
             Some(Type::ClassRef { mangled, .. }) => Some(mangled.clone()),
             _ => None,
         };
-        self.in_constructor
-            && matches!(self.ast.expr(receiver).kind, crate::ExprKind::This)
-            && current_class_mangled.as_ref() == Some(decl_mangled)
+        Ok(self.in_constructor
+            && matches!(
+                self.ast
+                    .try_expr(receiver)
+                    .map_err(super::arena_failure)?
+                    .kind,
+                crate::ExprKind::This
+            )
+            && current_class_mangled.as_ref() == Some(decl_mangled))
     }
 
     /// The read and write types of class field or accessor `name`, for the
@@ -2266,7 +2533,7 @@ impl<'a> Inferer<'a> {
         receiver_ty: &Type,
         name: &Ident,
         op: super::diagnostics::RwOp,
-    ) -> Option<FieldRw> {
+    ) -> Result<Option<FieldRw>, CompilerFailure> {
         let Some((field, decl_mangled)) = self.class_field_visible(mangled, class_args, &name.name)
         else {
             if !self.try_report_method_assignment(name.span, receiver_ty, &name.name) {
@@ -2277,7 +2544,7 @@ impl<'a> Inferer<'a> {
                     help,
                 );
             }
-            return None;
+            return Ok(None);
         };
         // An accessor is readable iff it has a getter and writable iff it has a
         // setter; `(None, None)` is a data field, where the `readonly` ctor-only
@@ -2286,7 +2553,7 @@ impl<'a> Inferer<'a> {
             self.class_getter(mangled, class_args, &name.name),
             self.class_setter(mangled, class_args, &name.name),
         ) {
-            (Some(read), Some(write)) => return Some(FieldRw { read, write }),
+            (Some(read), Some(write)) => return Ok(Some(FieldRw { read, write })),
             (None, Some(_)) => {
                 self.error_with_help(
                     name.span,
@@ -2296,7 +2563,7 @@ impl<'a> Inferer<'a> {
                     ),
                     vec![format!("add a `get {}()` accessor to read it", name.name)],
                 );
-                return None;
+                return Ok(None);
             }
             (Some(_), None) => {
                 self.error_with_help(
@@ -2310,11 +2577,11 @@ impl<'a> Inferer<'a> {
                         name.name
                     )],
                 );
-                return None;
+                return Ok(None);
             }
             (None, None) => {}
         }
-        if field.readonly && !self.readonly_write_allowed(receiver, &decl_mangled) {
+        if field.readonly && !self.readonly_write_allowed(receiver, &decl_mangled)? {
             self.error_with_help(
                 name.span,
                 format!(
@@ -2329,7 +2596,11 @@ impl<'a> Inferer<'a> {
         }
         // Reported here rather than left to the operator check, which would
         // blame `+=` without naming the null.
-        let recv_span = self.ast.expr(receiver).span;
+        let recv_span = self
+            .ast
+            .try_expr(receiver)
+            .map_err(super::arena_failure)?
+            .span;
         if self.try_report_nullable_rw_target(
             recv_span,
             receiver_ty,
@@ -2338,9 +2609,9 @@ impl<'a> Inferer<'a> {
             field.optional,
             op,
         ) {
-            return None;
+            return Ok(None);
         }
-        Some(FieldRw::uniform(field.ty.clone()))
+        Ok(Some(FieldRw::uniform(field.ty.clone())))
     }
 
     /// The read (getter return) type of accessor property `prop`, searching up the
@@ -2401,9 +2672,9 @@ impl<'a> Inferer<'a> {
                 .filter(|a| a.name() == prop)
                 .find_map(&extract)
             {
-                return ControlFlow::Break(Some(super::generic::substitute_typevars(
-                    &ty, bindings,
-                )));
+                return ControlFlow::Break(self.type_limits.ok_or_record(
+                    super::generic::substitute_typevars(&ty, bindings, &self.type_limits),
+                ));
             }
             // An accessor synthesizes a `fields` entry for typing, so the data-field
             // shadow only applies where this level declares neither half.
@@ -2563,7 +2834,7 @@ impl<'a> Inferer<'a> {
         &mut self,
         args: Vec<crate::ExprId>,
         span: Span,
-    ) -> (crate::TypedExprKind, Type) {
+    ) -> Result<(crate::TypedExprKind, Type), CompilerFailure> {
         if !self.in_constructor {
             self.error_with_help(
                 span,
@@ -2599,6 +2870,11 @@ impl<'a> Inferer<'a> {
                     generics,
                     ..
                 } => {
+                    if generics.len() != e.args.len() {
+                        return Err(super::inference_failure(
+                            "parent class generic argument mismatch",
+                        ));
+                    }
                     let bindings: BTreeMap<String, Type> = generics
                         .iter()
                         .cloned()
@@ -2607,15 +2883,19 @@ impl<'a> Inferer<'a> {
                     Some(
                         constructor
                             .iter()
-                            .map(|p| Param {
+                            .map(|p| {
                                 // Extends args may name the child's own type
                                 // params — map those to the body's live GPs.
-                                ty: self.apply_body_instantiations(
-                                    &super::generic::substitute_typevars(&p.ty, &bindings),
-                                ),
-                                ..p.clone()
+                                let ty = super::generic::substitute_typevars(
+                                    &p.ty,
+                                    &bindings,
+                                    &self.type_limits,
+                                )
+                                .and_then(|ty| self.apply_body_instantiations(&ty))
+                                .map_err(type_limit_at(span))?;
+                                Ok(Param { ty, ..p.clone() })
                             })
-                            .collect::<Vec<_>>(),
+                            .collect::<Result<Vec<_>, CompilerFailure>>()?,
                     )
                 }
                 _ => None,
@@ -2631,11 +2911,11 @@ impl<'a> Inferer<'a> {
                 );
             }
             for arg in &args {
-                let _ = self.infer_expr(*arg, None);
+                let _ = self.infer_expr(*arg, None)?;
             }
-            return (crate::TypedExprKind::Null, Type::Void);
+            return Ok((crate::TypedExprKind::Null, Type::Void));
         };
-        let parent_ty = self.super_receiver_type(&parent);
+        let parent_ty = self.super_receiver_type(&parent)?;
         let typed_args = self.bind_param_call_args(
             &params,
             &Type::Void,
@@ -2644,14 +2924,14 @@ impl<'a> Inferer<'a> {
             },
             &args,
             span,
-        );
-        (
+        )?;
+        Ok((
             crate::TypedExprKind::SuperCtorCall {
                 parent: parent.parent,
                 args: typed_args,
             },
             Type::Void,
-        )
+        ))
     }
 
     /// Typecheck `super.method(...)`: resolve the method on the parent chain and
@@ -2662,7 +2942,7 @@ impl<'a> Inferer<'a> {
         name: crate::Ident,
         args: Vec<crate::ExprId>,
         span: Span,
-    ) -> (crate::TypedExprKind, Type) {
+    ) -> Result<(crate::TypedExprKind, Type), CompilerFailure> {
         let Some(parent) = self.current_super.clone() else {
             if !self.current_class_inherits_unresolved_parent() {
                 self.error_with_help(
@@ -2675,9 +2955,9 @@ impl<'a> Inferer<'a> {
                 );
             }
             for arg in &args {
-                let _ = self.infer_expr(*arg, None);
+                let _ = self.infer_expr(*arg, None)?;
             }
-            return (crate::TypedExprKind::Null, Type::Error);
+            return Ok((crate::TypedExprKind::Null, Type::Error));
         };
         let Some(resolved) = self.class_method_in_chain(&parent.parent, &parent.args, &name.name)
         else {
@@ -2688,9 +2968,9 @@ impl<'a> Inferer<'a> {
                 );
             }
             for arg in &args {
-                let _ = self.infer_expr(*arg, None);
+                let _ = self.infer_expr(*arg, None)?;
             }
-            return (crate::TypedExprKind::Null, Type::Error);
+            return Ok((crate::TypedExprKind::Null, Type::Error));
         };
         let ResolvedMethod {
             sig,
@@ -2707,20 +2987,26 @@ impl<'a> Inferer<'a> {
                 ),
             );
         }
-        let sig = substitute_method_sig(&sig, &bindings);
+        let sig = substitute_method_sig(&sig, &bindings, &self.type_limits)
+            .map_err(type_limit_at(span))?;
         let sig = MethodSig {
             params: sig
                 .params
                 .iter()
-                .map(|p| Param {
-                    ty: self.apply_body_instantiations(&p.ty),
-                    ..p.clone()
+                .map(|p| {
+                    Ok(Param {
+                        ty: self.apply_body_instantiations(&p.ty)?,
+                        ..p.clone()
+                    })
                 })
-                .collect(),
-            ret: self.apply_body_instantiations(&sig.ret),
+                .collect::<Result<_, TypeTooLarge>>()
+                .map_err(type_limit_at(span))?,
+            ret: self
+                .apply_body_instantiations(&sig.ret)
+                .map_err(type_limit_at(span))?,
             ..sig
         };
-        let parent_ty = self.super_receiver_type(&parent);
+        let parent_ty = self.super_receiver_type(&parent)?;
         let typed_args = self.bind_param_call_args(
             &sig.params,
             &sig.ret,
@@ -2731,22 +3017,22 @@ impl<'a> Inferer<'a> {
             },
             &args,
             span,
-        );
-        (
+        )?;
+        Ok((
             crate::TypedExprKind::SuperMethodCall {
                 owner,
                 name,
                 args: typed_args,
             },
             sig.ret,
-        )
+        ))
     }
 
-    fn super_receiver_type(&self, parent: &crate::ClassExtends) -> Type {
+    fn super_receiver_type(&self, parent: &crate::ClassExtends) -> Result<Type, CompilerFailure> {
         let sym = self
             .class_by_mangled(&parent.parent)
-            .expect("resolved parent class");
-        Type::class_ref(
+            .ok_or_else(|| super::inference_failure("missing resolved parent class"))?;
+        Ok(Type::class_ref(
             self.type_package(&sym.name),
             sym.name.clone(),
             parent.parent.clone(),
@@ -2754,8 +3040,9 @@ impl<'a> Inferer<'a> {
                 .args
                 .iter()
                 .map(|ty| self.apply_body_instantiations(ty))
-                .collect(),
-        )
+                .collect::<Result<_, _>>()
+                .map_err(type_limit_unlocated)?,
+        ))
     }
 
     fn class_parent(&self, mangled: &MangledName) -> Option<MangledName> {
@@ -2787,7 +3074,13 @@ impl<'a> Inferer<'a> {
                 return ControlFlow::Continue(());
             };
             match methods.get(method) {
-                Some(sig) => ControlFlow::Break(Some(substitute_method_sig(sig, bindings))),
+                Some(sig) => {
+                    ControlFlow::Break(self.type_limits.ok_or_record(substitute_method_sig(
+                        sig,
+                        bindings,
+                        &self.type_limits,
+                    )))
+                }
                 None => ControlFlow::Continue(()),
             }
         })
@@ -2814,9 +3107,15 @@ impl<'a> Inferer<'a> {
         let mut widest = None;
         self.walk_ancestors_at::<()>(child, own_bindings, |sym, bindings| {
             if let Some(sig) = data_field(sym, field) {
-                let mut sig = sig.clone();
-                sig.ty = substitute_typevars(&sig.ty, bindings);
-                widest = Some((sig, sym.mangled_name.clone()));
+                let Some(ty) = self.type_limits.ok_or_record(substitute_typevars(
+                    &sig.ty,
+                    bindings,
+                    &self.type_limits,
+                )) else {
+                    widest = None;
+                    return ControlFlow::Break(None);
+                };
+                widest = Some((FieldSig { ty, ..sig.clone() }, sym.mangled_name.clone()));
             }
             ControlFlow::Continue(())
         });
@@ -2836,12 +3135,23 @@ impl<'a> Inferer<'a> {
         self.walk_ancestors_at(child, own_bindings, |sym, bindings| {
             match data_field(sym, field) {
                 Some(sig) => {
-                    let mut sig = sig.clone();
-                    sig.ty = substitute_typevars(&sig.ty, bindings);
-                    ControlFlow::Break(Some((sig, sym.mangled_name.clone())))
+                    let ty = self.type_limits.ok_or_record(substitute_typevars(
+                        &sig.ty,
+                        bindings,
+                        &self.type_limits,
+                    ));
+                    ControlFlow::Break(
+                        ty.map(|ty| (FieldSig { ty, ..sig.clone() }, sym.mangled_name.clone())),
+                    )
                 }
                 None => ControlFlow::Continue(()),
             }
+        })
+    }
+
+    fn declaration_was_rejected(&self, span: Span) -> bool {
+        self.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == crate::Severity::Error && diagnostic.span == span
         })
     }
 
@@ -2849,10 +3159,14 @@ impl<'a> Inferer<'a> {
     /// constructor body, then mirror the result into the typed AST. Runs after
     /// `infer_functions` so bodies can construct sibling classes and call
     /// top-level functions.
-    pub(super) fn infer_classes(&mut self) {
+    pub(super) fn infer_classes(&mut self) -> Result<(), CompilerFailure> {
         let top_level: Vec<_> = self.ast.top_level.clone();
         for stmt_id in top_level {
-            let stmt = self.ast.stmt(stmt_id).clone();
+            let stmt = self
+                .ast
+                .try_stmt(stmt_id)
+                .map_err(super::arena_failure)?
+                .clone();
             let StmtKind::ClassDecl {
                 name,
                 extends: _,
@@ -2864,8 +3178,16 @@ impl<'a> Inferer<'a> {
             else {
                 continue;
             };
-            let Some(sym) = self.types.lookup(&name.name) else {
+            if self.rejected_class_names.contains(&name.name) {
                 continue;
+            }
+            let Some(sym) = self.types.lookup(&name.name) else {
+                if self.declaration_was_rejected(name.span) {
+                    continue;
+                }
+                return Err(
+                    super::inference_failure("missing class signature").with_span(name.span)
+                );
             };
             let TypeKind::Class {
                 generics: class_generics,
@@ -2879,7 +3201,13 @@ impl<'a> Inferer<'a> {
                 ..
             } = sym.kind.clone()
             else {
-                continue;
+                if self.declaration_was_rejected(name.span) {
+                    continue;
+                }
+                return Err(
+                    super::inference_failure("class signature has the wrong symbol kind")
+                        .with_span(name.span),
+                );
             };
             let mangled = sym.mangled_name.clone();
             self.typed_ast
@@ -2890,7 +3218,7 @@ impl<'a> Inferer<'a> {
             // is set so `this`/`super` get the static-specific rejections — and
             // before the class generics enter body scope (a static can't
             // reference them).
-            self.check_static_methods(&members, &static_sigs, &mangled, &name.name);
+            self.check_static_methods(&members, &static_sigs, &mangled, &name.name)?;
 
             // Class-level generics live for the whole set of instance bodies:
             // `this` is the class instantiated at its own params
@@ -2902,7 +3230,7 @@ impl<'a> Inferer<'a> {
             let class_inst = if class_generics.is_empty() {
                 BTreeMap::new()
             } else {
-                self.push_body_generics(class_generics.clone())
+                self.push_body_generics(class_generics.clone())?
             };
             let class_ty = Type::class_ref(
                 crate::Package(self.package_name.to_string()),
@@ -2910,8 +3238,12 @@ impl<'a> Inferer<'a> {
                 mangled.clone(),
                 class_generics
                     .iter()
-                    .map(|g| class_inst[g].clone())
-                    .collect(),
+                    .map(|g| {
+                        class_inst.get(g).cloned().ok_or_else(|| {
+                            super::inference_failure("missing class body generic binding")
+                        })
+                    })
+                    .collect::<Result<_, _>>()?,
             );
 
             let prev_class = self.current_class.replace(class_ty.clone());
@@ -2920,11 +3252,11 @@ impl<'a> Inferer<'a> {
             let stmts_before = self.typed_ast.stmts_len();
 
             let typed_fields =
-                self.check_class_fields(&members, &mangled, &field_sigs, &class_inst);
-            let typed_ctor = self.check_constructor(&members, &ctor_params, &class_inst);
+                self.check_class_fields(&members, &mangled, &field_sigs, &class_inst)?;
+            let typed_ctor = self.check_constructor(&members, &ctor_params, &class_inst)?;
             let typed_methods =
-                self.check_class_methods(&members, &method_sigs, &method_visibility, &class_inst);
-            let accessors = self.check_class_accessors(&members, &field_sigs);
+                self.check_class_methods(&members, &method_sigs, &method_visibility, &class_inst)?;
+            let accessors = self.check_class_accessors(&members, &field_sigs)?;
 
             self.current_class = prev_class;
             self.current_super = prev_super;
@@ -2934,13 +3266,29 @@ impl<'a> Inferer<'a> {
                 // ctor, field initializers, and accessors don't have their own
                 // erasure loops (methods do; a second pass over their ranges
                 // is a no-op).
-                for i in exprs_before..self.typed_ast.exprs_len() {
-                    let id = crate::ExprId(i as u32);
-                    erase_generic_params_in_expr(self.typed_ast.expr_mut(id));
+                for id in self
+                    .typed_ast
+                    .expr_ids()
+                    .map_err(crate::typechecker::arena_failure)?
+                    .skip(exprs_before)
+                {
+                    erase_generic_params_in_expr(
+                        self.typed_ast
+                            .try_expr_mut(id)
+                            .map_err(crate::typechecker::arena_failure)?,
+                    );
                 }
-                for i in stmts_before..self.typed_ast.stmts_len() {
-                    let id = crate::StmtId(i as u32);
-                    erase_generic_params_in_stmt(self.typed_ast.stmt_mut(id));
+                for id in self
+                    .typed_ast
+                    .stmt_ids()
+                    .map_err(crate::typechecker::arena_failure)?
+                    .skip(stmts_before)
+                {
+                    erase_generic_params_in_stmt(
+                        self.typed_ast
+                            .try_stmt_mut(id)
+                            .map_err(crate::typechecker::arena_failure)?,
+                    );
                 }
             }
 
@@ -2976,9 +3324,12 @@ impl<'a> Inferer<'a> {
             };
             self.add_typed_type_decl(
                 crate::TypedTypeDecl::Class(decl),
-                sym_for_export(self, &name),
-            );
+                sym_for_export(self, &name)?,
+            )?;
+            self.type_size_checkpoint(Some(name.span))?;
         }
+
+        Ok(())
     }
 
     fn check_class_fields(
@@ -2987,7 +3338,7 @@ impl<'a> Inferer<'a> {
         mangled: &MangledName,
         field_sigs: &BTreeMap<String, FieldSig>,
         class_inst: &BTreeMap<String, Type>,
-    ) -> Vec<TypedClassField> {
+    ) -> Result<Vec<TypedClassField>, CompilerFailure> {
         let mut out = Vec::new();
         for member in members {
             let ClassMember::Field {
@@ -3006,26 +3357,34 @@ impl<'a> Inferer<'a> {
                 continue;
             }
             let Some(sig) = field_sigs.get(&name.name) else {
-                continue;
+                if self.declaration_was_rejected(name.span) {
+                    continue;
+                }
+                return Err(
+                    super::inference_failure("missing class member signature").with_span(name.span)
+                );
             };
             // Field initializers may read `this`; `current_class` is already set.
-            let body_ty = substitute_typevars(&sig.ty, class_inst);
-            let typed_init = initializer.map(|expr| {
-                let (typed, value_ty) = self.infer_expr(expr, Some(&body_ty));
-                if !super::assignable(&value_ty, &body_ty, self.resolver())
-                    && !matches!(value_ty, Type::Error)
-                {
-                    let span = self.ast.expr(expr).span;
-                    self.error(
-                        span,
-                        format!(
-                            "field `{}` initializer is `{value_ty}`, expected `{}`",
-                            name.name, sig.ty
-                        ),
-                    );
-                }
-                typed
-            });
+            let body_ty = substitute_typevars(&sig.ty, class_inst, &self.type_limits)
+                .map_err(type_limit_at(name.span))?;
+            let typed_init = initializer
+                .map(|expr| {
+                    let (typed, value_ty) = self.infer_expr(expr, Some(&body_ty))?;
+                    if !super::assignable(&value_ty, &body_ty, self.resolver())
+                        && !matches!(value_ty, Type::Error)
+                    {
+                        let span = self.ast.try_expr(expr).map_err(super::arena_failure)?.span;
+                        self.error(
+                            span,
+                            format!(
+                                "field `{}` initializer is `{value_ty}`, expected `{}`",
+                                name.name, sig.ty
+                            ),
+                        );
+                    }
+                    Ok::<_, CompilerFailure>(typed)
+                })
+                .transpose()?;
             out.push(TypedClassField {
                 name: name.clone(),
                 ty: sig.ty.clone(),
@@ -3050,7 +3409,13 @@ impl<'a> Inferer<'a> {
                     continue;
                 }
                 let Some(sig) = field_sigs.get(&param.name.name) else {
-                    continue;
+                    if self.declaration_was_rejected(param.name.span) {
+                        continue;
+                    }
+                    return Err(
+                        super::inference_failure("missing parameter-property signature")
+                            .with_span(param.name.span),
+                    );
                 };
                 out.push(TypedClassField {
                     name: param.name.clone(),
@@ -3065,7 +3430,7 @@ impl<'a> Inferer<'a> {
                 });
             }
         }
-        out
+        Ok(out)
     }
 
     fn check_constructor(
@@ -3073,20 +3438,24 @@ impl<'a> Inferer<'a> {
         members: &[ClassMember],
         ctor_params: &[Param],
         class_inst: &BTreeMap<String, Type>,
-    ) -> Option<TypedClassConstructor> {
-        let (params, body) = members.iter().find_map(|m| match m {
+    ) -> Result<Option<TypedClassConstructor>, CompilerFailure> {
+        let Some((params, body)) = members.iter().find_map(|m| match m {
             ClassMember::Constructor { params, body, .. } => Some((params, *body)),
             _ => None,
-        })?;
+        }) else {
+            return Ok(None);
+        };
 
-        let typed_params = bind_params_for_body(self, params, ctor_params, class_inst);
+        let typed_params = bind_params_for_body(self, params, ctor_params, class_inst)?;
         let prev_in_ctor = std::mem::replace(&mut self.in_constructor, true);
         let prev_super_seen = std::mem::replace(&mut self.super_seen, false);
         let prev_this_before = std::mem::replace(&mut self.this_before_super, false);
         // A constructor returns no value; a bare `return;` is fine.
         let prev_return = self.current_return.replace(Type::Void);
         let prev_reachable = std::mem::replace(&mut self.reachable, true);
-        let body_id = self.infer_stmt(body).expect("constructor body is a Block");
+        let body_id = self
+            .infer_body_with_narrowing_boundary(body)?
+            .ok_or_else(|| super::inference_failure("constructor body is a Block"))?;
         // A subclass constructor must initialize the parent via `super(...)`.
         if self.current_super.is_some() && !self.super_seen {
             let ctor_span = members
@@ -3095,7 +3464,14 @@ impl<'a> Inferer<'a> {
                     ClassMember::Constructor { span, .. } => Some(*span),
                     _ => None,
                 })
-                .unwrap_or_else(|| self.ast.stmt(body).span);
+                .map_or_else(
+                    || {
+                        Ok::<_, CompilerFailure>(
+                            self.ast.try_stmt(body).map_err(super::arena_failure)?.span,
+                        )
+                    },
+                    Ok,
+                )?;
             self.error_with_help(
                 ctor_span,
                 "a subclass constructor must call `super(...)`".to_string(),
@@ -3111,10 +3487,10 @@ impl<'a> Inferer<'a> {
         self.this_before_super = prev_this_before;
         self.scopes.pop();
 
-        Some(TypedClassConstructor {
+        Ok(Some(TypedClassConstructor {
             params: typed_params,
             body: body_id,
-        })
+        }))
     }
 
     fn check_class_methods(
@@ -3123,7 +3499,7 @@ impl<'a> Inferer<'a> {
         method_sigs: &BTreeMap<String, MethodSig>,
         method_visibility: &BTreeMap<String, Visibility>,
         class_inst: &BTreeMap<String, Type>,
-    ) -> Vec<TypedClassMethod> {
+    ) -> Result<Vec<TypedClassMethod>, CompilerFailure> {
         let mut out = Vec::new();
         for member in members {
             let ClassMember::Method {
@@ -3143,19 +3519,32 @@ impl<'a> Inferer<'a> {
                 continue;
             }
             let Some(sig) = method_sigs.get(&name.name) else {
-                continue;
+                if self.declaration_was_rejected(name.span) {
+                    continue;
+                }
+                return Err(
+                    super::inference_failure("missing class member signature").with_span(name.span)
+                );
             };
 
-            let body_instantiation = self.push_body_generics(sig.generics.clone());
+            if params.len() != sig.params.len() && !self.declaration_was_rejected(name.span) {
+                return Err(
+                    super::inference_failure("method parameter/signature length mismatch")
+                        .with_span(name.span),
+                );
+            }
+            let body_instantiation = self.push_body_generics(sig.generics.clone())?;
             // Method-level generics shadow class-level ones of the same name.
             let mut merged = class_inst.clone();
             merged.extend(body_instantiation);
             let body_param_types: Vec<Type> = sig
                 .params
                 .iter()
-                .map(|p| substitute_typevars(&p.ty, &merged))
-                .collect();
-            let body_ret = substitute_typevars(&sig.ret, &merged);
+                .map(|p| substitute_typevars(&p.ty, &merged, &self.type_limits))
+                .collect::<Result<_, _>>()
+                .map_err(type_limit_at(name.span))?;
+            let body_ret = substitute_typevars(&sig.ret, &merged, &self.type_limits)
+                .map_err(type_limit_at(name.span))?;
 
             let typed_params: Vec<TypedParam> = params
                 .iter()
@@ -3178,18 +3567,36 @@ impl<'a> Inferer<'a> {
             let prev_reachable = std::mem::replace(&mut self.reachable, true);
             let exprs_before = self.typed_ast.exprs_len();
             let stmts_before = self.typed_ast.stmts_len();
-            let body_id = self.infer_stmt(*body).expect("method body is a Block");
+            let body_id = self
+                .infer_body_with_narrowing_boundary(*body)?
+                .ok_or_else(|| super::inference_failure("method body is a Block"))?;
             self.current_return = prev_return;
             self.reachable = prev_reachable;
             self.scopes.pop();
             self.pop_body_generics();
-            for i in exprs_before..self.typed_ast.exprs_len() {
-                let id = crate::ExprId(i as u32);
-                erase_generic_params_in_expr(self.typed_ast.expr_mut(id));
+            for id in self
+                .typed_ast
+                .expr_ids()
+                .map_err(crate::typechecker::arena_failure)?
+                .skip(exprs_before)
+            {
+                erase_generic_params_in_expr(
+                    self.typed_ast
+                        .try_expr_mut(id)
+                        .map_err(crate::typechecker::arena_failure)?,
+                );
             }
-            for i in stmts_before..self.typed_ast.stmts_len() {
-                let id = crate::StmtId(i as u32);
-                erase_generic_params_in_stmt(self.typed_ast.stmt_mut(id));
+            for id in self
+                .typed_ast
+                .stmt_ids()
+                .map_err(crate::typechecker::arena_failure)?
+                .skip(stmts_before)
+            {
+                erase_generic_params_in_stmt(
+                    self.typed_ast
+                        .try_stmt_mut(id)
+                        .map_err(crate::typechecker::arena_failure)?,
+                );
             }
 
             out.push(TypedClassMethod {
@@ -3205,7 +3612,7 @@ impl<'a> Inferer<'a> {
                 doc: doc.clone(),
             });
         }
-        out
+        Ok(out)
     }
 
     /// Typecheck each static method body into an ordinary [`crate::TypedFunction`]
@@ -3218,7 +3625,7 @@ impl<'a> Inferer<'a> {
         static_sigs: &BTreeMap<String, MethodSig>,
         class_mangled: &MangledName,
         class_name: &str,
-    ) {
+    ) -> Result<(), CompilerFailure> {
         for member in members {
             let ClassMember::Method {
                 name,
@@ -3236,16 +3643,29 @@ impl<'a> Inferer<'a> {
                 continue;
             }
             let Some(sig) = static_sigs.get(&name.name) else {
-                continue;
+                if self.declaration_was_rejected(name.span) {
+                    continue;
+                }
+                return Err(
+                    super::inference_failure("missing class member signature").with_span(name.span)
+                );
             };
 
-            let body_instantiation = self.push_body_generics(sig.generics.clone());
+            if params.len() != sig.params.len() && !self.declaration_was_rejected(name.span) {
+                return Err(
+                    super::inference_failure("method parameter/signature length mismatch")
+                        .with_span(name.span),
+                );
+            }
+            let body_instantiation = self.push_body_generics(sig.generics.clone())?;
             let body_param_types: Vec<Type> = sig
                 .params
                 .iter()
-                .map(|p| substitute_typevars(&p.ty, &body_instantiation))
-                .collect();
-            let body_ret = substitute_typevars(&sig.ret, &body_instantiation);
+                .map(|p| substitute_typevars(&p.ty, &body_instantiation, &self.type_limits))
+                .collect::<Result<_, _>>()
+                .map_err(type_limit_at(name.span))?;
+            let body_ret = substitute_typevars(&sig.ret, &body_instantiation, &self.type_limits)
+                .map_err(type_limit_at(name.span))?;
             let typed_params: Vec<TypedParam> = params
                 .iter()
                 .zip(sig.params.iter())
@@ -3271,20 +3691,36 @@ impl<'a> Inferer<'a> {
             let exprs_before = self.typed_ast.exprs_len();
             let stmts_before = self.typed_ast.stmts_len();
             let body_id = self
-                .infer_stmt(*body)
-                .expect("static method body is a Block");
+                .infer_body_with_narrowing_boundary(*body)?
+                .ok_or_else(|| super::inference_failure("static method body is a Block"))?;
             self.current_return = prev_return;
             self.reachable = prev_reachable;
             self.current_static = prev_static;
             self.scopes.pop();
             self.pop_body_generics();
-            for i in exprs_before..self.typed_ast.exprs_len() {
-                let id = crate::ExprId(i as u32);
-                erase_generic_params_in_expr(self.typed_ast.expr_mut(id));
+            for id in self
+                .typed_ast
+                .expr_ids()
+                .map_err(crate::typechecker::arena_failure)?
+                .skip(exprs_before)
+            {
+                erase_generic_params_in_expr(
+                    self.typed_ast
+                        .try_expr_mut(id)
+                        .map_err(crate::typechecker::arena_failure)?,
+                );
             }
-            for i in stmts_before..self.typed_ast.stmts_len() {
-                let id = crate::StmtId(i as u32);
-                erase_generic_params_in_stmt(self.typed_ast.stmt_mut(id));
+            for id in self
+                .typed_ast
+                .stmt_ids()
+                .map_err(crate::typechecker::arena_failure)?
+                .skip(stmts_before)
+            {
+                erase_generic_params_in_stmt(
+                    self.typed_ast
+                        .try_stmt_mut(id)
+                        .map_err(crate::typechecker::arena_failure)?,
+                );
             }
 
             self.add_typed_function(crate::TypedFunction {
@@ -3300,8 +3736,10 @@ impl<'a> Inferer<'a> {
                 body: body_id,
                 doc: doc.clone(),
                 span: *span,
-            });
+            })?;
         }
+
+        Ok(())
     }
 
     /// Typecheck each accessor body into a [`TypedClassAccessor`] (one per
@@ -3312,7 +3750,7 @@ impl<'a> Inferer<'a> {
         &mut self,
         members: &[ClassMember],
         field_sigs: &BTreeMap<String, FieldSig>,
-    ) -> Vec<TypedClassAccessor> {
+    ) -> Result<Vec<TypedClassAccessor>, CompilerFailure> {
         let mut accessors: Vec<TypedClassAccessor> = Vec::new();
         for member in members {
             let ClassMember::Accessor {
@@ -3340,8 +3778,10 @@ impl<'a> Inferer<'a> {
                     // the signature TypeVar form codegen expects.
                     let ret_ty = return_type
                         .as_ref()
-                        .map_or(Type::Error, |t| self.re_resolve_type(t));
-                    let body_id = self.check_accessor_body(*body, &[], &ret_ty);
+                        .map(|t| self.re_resolve_type(t))
+                        .transpose()?
+                        .unwrap_or(Type::Error);
+                    let body_id = self.check_accessor_body(*body, &[], &ret_ty)?;
                     accessors.push(TypedClassAccessor::Getter {
                         name: name.clone(),
                         ret_ty: erase_generic_params(&ret_ty),
@@ -3353,7 +3793,9 @@ impl<'a> Inferer<'a> {
                     let write_ty = param
                         .as_ref()
                         .and_then(|p| p.ty.as_ref())
-                        .map_or(Type::Error, |t| self.re_resolve_type(t));
+                        .map(|t| self.re_resolve_type(t))
+                        .transpose()?
+                        .unwrap_or(Type::Error);
                     let pname = param.as_ref().map_or_else(
                         || Ident {
                             name: "value".to_string(),
@@ -3372,7 +3814,7 @@ impl<'a> Inferer<'a> {
                         *body,
                         std::slice::from_ref(&typed_param),
                         &Type::Void,
-                    );
+                    )?;
                     accessors.push(TypedClassAccessor::Setter {
                         name: name.clone(),
                         param: TypedParam {
@@ -3385,7 +3827,7 @@ impl<'a> Inferer<'a> {
                 }
             }
         }
-        accessors
+        Ok(accessors)
     }
 
     /// Typecheck an accessor body with its params in scope and the given return type.
@@ -3394,7 +3836,7 @@ impl<'a> Inferer<'a> {
         body: crate::StmtId,
         params: &[TypedParam],
         ret: &Type,
-    ) -> crate::StmtId {
+    ) -> Result<crate::StmtId, CompilerFailure> {
         self.scopes.push();
         for p in params {
             self.scopes
@@ -3402,11 +3844,40 @@ impl<'a> Inferer<'a> {
         }
         let prev_return = self.current_return.replace(ret.clone());
         let prev_reachable = std::mem::replace(&mut self.reachable, true);
-        let body_id = self.infer_stmt(body).expect("accessor body is a Block");
+        let body_id = self
+            .infer_body_with_narrowing_boundary(body)?
+            .ok_or_else(|| super::inference_failure("accessor body is a Block"))?;
         self.current_return = prev_return;
         self.reachable = prev_reachable;
         self.scopes.pop();
-        body_id
+        Ok(body_id)
+    }
+}
+
+/// What [`Inferer::carrier_fit`] decided about a collection carrier's
+/// instantiations.
+enum CarrierFit {
+    /// No instantiation satisfies the target.
+    None,
+    /// Every instantiation does.
+    Every,
+    /// It depends on the arguments, so each candidate is tried.
+    TryEach,
+}
+
+impl CarrierFit {
+    /// The candidates whose instantiation satisfies the target, trying each
+    /// with `satisfies` only when the fit is not already decided.
+    fn matching(self, candidates: &[Type], mut satisfies: impl FnMut(&Type) -> bool) -> Vec<Type> {
+        match self {
+            Self::None => Vec::new(),
+            Self::Every => candidates.to_vec(),
+            Self::TryEach => candidates
+                .iter()
+                .filter(|candidate| satisfies(candidate))
+                .cloned()
+                .collect(),
+        }
     }
 }
 
@@ -3516,18 +3987,21 @@ pub(super) struct ResolvedMethod {
 /// climbs chains by the same rules rather than by a second hand-rolled loop.
 pub(super) fn walk_class_chain_with<T>(
     lookup: impl Fn(&MangledName) -> Option<TypeSymbol>,
+    limits: &TypeLimits,
     start: &MangledName,
     start_args: &[Type],
     visit: impl FnMut(&TypeSymbol, &BTreeMap<String, Type>) -> ControlFlow<Option<T>>,
 ) -> Option<T> {
-    walk_chain(lookup, start, start_args, visit).0
+    walk_chain(lookup, limits, start, start_args, visit).0
 }
 
 /// The walk, plus whether the whole chain was seen. A chain is *not* whole when
-/// a link fails to resolve or turns out not to be a class; callers that
+/// a link fails to resolve or turns out not to be a class, or when a parent's
+/// type arguments pass a type limit (recorded in `limits`); callers that
 /// accumulate need that distinction, callers that search do not.
 fn walk_chain<T>(
     lookup: impl Fn(&MangledName) -> Option<TypeSymbol>,
+    limits: &TypeLimits,
     start: &MangledName,
     start_args: &[Type],
     mut visit: impl FnMut(&TypeSymbol, &BTreeMap<String, Type>) -> ControlFlow<Option<T>>,
@@ -3536,7 +4010,7 @@ fn walk_chain<T>(
     let mut seen: Vec<MangledName> = Vec::new();
     while let Some((m, cur_args)) = cur {
         if seen.contains(&m) {
-            break;
+            return (None, false);
         }
         seen.push(m.clone());
         let Some(sym) = lookup(&m) else {
@@ -3545,6 +4019,9 @@ fn walk_chain<T>(
         let TypeKind::Class { generics, .. } = &sym.kind else {
             return (None, false);
         };
+        if generics.len() != cur_args.len() {
+            return (None, false);
+        }
         let bindings: BTreeMap<String, Type> = generics
             .iter()
             .cloned()
@@ -3553,7 +4030,13 @@ fn walk_chain<T>(
         if let ControlFlow::Break(answer) = visit(&sym, &bindings) {
             return (answer, true);
         }
-        cur = parent_hop(&sym, &bindings);
+        cur = match parent_hop(&sym, &bindings, limits) {
+            Ok(hop) => hop,
+            Err(exceeded) => {
+                limits.record(exceeded);
+                return (None, false);
+            }
+        };
     }
     (None, true)
 }
@@ -3588,11 +4071,12 @@ fn erased_ctor_rest_param() -> Param {
 /// a complete walk.
 pub(super) fn for_each_class_in_chain(
     lookup: impl Fn(&MangledName) -> Option<TypeSymbol>,
+    limits: &TypeLimits,
     start: &MangledName,
     start_args: &[Type],
     mut visit: impl FnMut(&TypeSymbol, &BTreeMap<String, Type>),
 ) -> Option<()> {
-    let (_, whole) = walk_chain(lookup, start, start_args, |sym, bindings| {
+    let (_, whole) = walk_chain(lookup, limits, start, start_args, |sym, bindings| {
         visit(sym, bindings);
         ControlFlow::<Option<()>>::Continue(())
     });
@@ -3605,43 +4089,54 @@ pub(super) fn for_each_class_in_chain(
 pub(super) fn parent_hop(
     sym: &TypeSymbol,
     bindings: &BTreeMap<String, Type>,
-) -> Option<(MangledName, Vec<Type>)> {
-    let TypeKind::Class { extends, .. } = &sym.kind else {
-        return None;
+    limits: &TypeLimits,
+) -> Result<Option<(MangledName, Vec<Type>)>, TypeTooLarge> {
+    let TypeKind::Class {
+        extends: Some(extends),
+        ..
+    } = &sym.kind
+    else {
+        return Ok(None);
     };
-    extends.as_ref().map(|e| {
-        (
-            e.parent.clone(),
-            e.args
-                .iter()
-                .map(|a| substitute_typevars(a, bindings))
-                .collect(),
-        )
-    })
+    let args = extends
+        .args
+        .iter()
+        .map(|a| substitute_typevars(a, bindings, limits))
+        .collect::<Result<_, _>>()?;
+    Ok(Some((extends.parent.clone(), args)))
 }
 
 /// A method signature with the declaring class's type parameters substituted
 /// from `bindings` — param types, return, and the guard predicate's asserted
 /// type. Method-level generics and doc pass through unchanged.
-fn substitute_method_sig(sig: &MethodSig, bindings: &BTreeMap<String, Type>) -> MethodSig {
+fn substitute_method_sig(
+    sig: &MethodSig,
+    bindings: &BTreeMap<String, Type>,
+    limits: &TypeLimits,
+) -> Result<MethodSig, TypeTooLarge> {
     use super::generic::substitute_typevars;
-    MethodSig {
+    Ok(MethodSig {
         generics: sig.generics.clone(),
         params: sig
             .params
             .iter()
-            .map(|p| Param {
-                ty: substitute_typevars(&p.ty, bindings),
-                ..p.clone()
+            .map(|p| {
+                Ok(Param {
+                    ty: substitute_typevars(&p.ty, bindings, limits)?,
+                    ..p.clone()
+                })
             })
-            .collect(),
-        ret: substitute_typevars(&sig.ret, bindings),
-        predicate: sig.predicate.as_ref().map(|p| crate::TypePredicate {
-            parameter_index: p.parameter_index,
-            asserted_type: substitute_typevars(&p.asserted_type, bindings),
-        }),
+            .collect::<Result<_, TypeTooLarge>>()?,
+        ret: substitute_typevars(&sig.ret, bindings, limits)?,
+        predicate: match &sig.predicate {
+            Some(p) => Some(crate::TypePredicate {
+                parameter_index: p.parameter_index,
+                asserted_type: substitute_typevars(&p.asserted_type, bindings, limits)?,
+            }),
+            None => None,
+        },
         doc: sig.doc.clone(),
-    }
+    })
 }
 
 /// A class's own instance field `name`, if it is backed by a payload slot.
@@ -3689,15 +4184,16 @@ fn accessor_comparison(
     own: &AccessorSig,
     inherited: &AccessorSig,
     opaque: &BTreeMap<String, Type>,
-) -> Option<AccessorComparison> {
-    match (own, inherited) {
+    limits: &TypeLimits,
+) -> Result<Option<AccessorComparison>, TypeTooLarge> {
+    Ok(match (own, inherited) {
         (
             AccessorSig::Getter { ret_ty: own, .. },
             AccessorSig::Getter {
                 ret_ty: inherited, ..
             },
         ) => {
-            let own = substitute_typevars(own, opaque);
+            let own = substitute_typevars(own, opaque, limits)?;
             Some(AccessorComparison {
                 half: AccessorKind::Get,
                 accessor: format!("get {name}"),
@@ -3713,7 +4209,7 @@ fn accessor_comparison(
                 param: inherited, ..
             },
         ) => {
-            let own = substitute_typevars(&own.ty, opaque);
+            let own = substitute_typevars(&own.ty, opaque, limits)?;
             Some(AccessorComparison {
                 half: AccessorKind::Set,
                 accessor: format!("set {name}"),
@@ -3724,7 +4220,7 @@ fn accessor_comparison(
             })
         }
         _ => None,
-    }
+    })
 }
 
 /// Which kind of member `sym` declares `name` as, if any. Accessors are tested
@@ -3753,20 +4249,24 @@ fn declared_member_kind(sym: &TypeSymbol, name: &str) -> Option<MemberKind> {
 /// [`substitute_typevars`] applied through an accessor signature, so an
 /// inherited accessor is compared at the type arguments the child's `extends`
 /// clause instantiates.
-fn substitute_accessor_sig(sig: &AccessorSig, bindings: &BTreeMap<String, Type>) -> AccessorSig {
-    match sig {
+fn substitute_accessor_sig(
+    sig: &AccessorSig,
+    bindings: &BTreeMap<String, Type>,
+    limits: &TypeLimits,
+) -> Result<AccessorSig, TypeTooLarge> {
+    Ok(match sig {
         AccessorSig::Getter { name, ret_ty } => AccessorSig::Getter {
             name: name.clone(),
-            ret_ty: substitute_typevars(ret_ty, bindings),
+            ret_ty: substitute_typevars(ret_ty, bindings, limits)?,
         },
         AccessorSig::Setter { name, param } => AccessorSig::Setter {
             name: name.clone(),
             param: Param {
-                ty: substitute_typevars(&param.ty, bindings),
+                ty: substitute_typevars(&param.ty, bindings, limits)?,
                 ..param.clone()
             },
         },
-    }
+    })
 }
 
 /// How a visibility renders as the source keyword that produces it. `public` is
@@ -3810,19 +4310,22 @@ fn bind_params_for_body(
     params: &[crate::ParamDecl],
     sig_params: &[Param],
     bindings: &BTreeMap<String, Type>,
-) -> Vec<TypedParam> {
+) -> Result<Vec<TypedParam>, CompilerFailure> {
+    if params.len() != sig_params.len() {
+        return Err(super::inference_failure(
+            "constructor parameter/signature length mismatch",
+        ));
+    }
     tc.scopes.push();
     // Scope types go through the body instantiation (TypeVar → GenericParam);
     // the returned TypedParams keep the raw signature forms codegen expects.
     for (p, sp) in params.iter().zip(sig_params.iter()) {
-        tc.scopes.insert(
-            p.name.name.clone(),
-            substitute_typevars(&sp.ty, bindings),
-            false,
-            p.name.span,
-        );
+        let ty = substitute_typevars(&sp.ty, bindings, &tc.type_limits)
+            .map_err(type_limit_at(p.name.span))?;
+        tc.scopes
+            .insert(p.name.name.clone(), ty, false, p.name.span);
     }
-    params
+    Ok(params
         .iter()
         .zip(sig_params.iter())
         .map(|(p, sp)| TypedParam {
@@ -3832,24 +4335,28 @@ fn bind_params_for_body(
             rest: sp.rest,
             default: sp.default.clone(),
         })
-        .collect()
+        .collect())
 }
 
-/// Signature-space scan for a `TypeVar` mention: substitute a sentinel for `name`
-/// and compare — reusing the one traversal that already covers every `Type`
-/// variant, so this can't drift from the enum.
+/// Signature-space scan for a `TypeVar` mention, over the one child traversal
+/// that covers every `Type` variant, so this can't drift from the enum.
 fn signature_mentions_typevar(ty: &Type, name: &str) -> bool {
-    let sentinel = BTreeMap::from([(name.to_string(), Type::Error)]);
-    substitute_typevars(ty, &sentinel) != *ty
+    let mut pending = vec![ty];
+    while let Some(ty) = pending.pop() {
+        if matches!(ty, Type::TypeVar(var) if var == name) {
+            return true;
+        }
+        crate::type_size::for_each_child(ty, |child| pending.push(child));
+    }
+    false
 }
 
 /// Re-fetch the class's bound symbol for the export surface (it was registered
 /// in `bind_class`; `add_typed_type_decl` records it into the module's exports).
-fn sym_for_export(tc: &Inferer<'_>, name: &Ident) -> TypeSymbol {
-    tc.types
-        .lookup(&name.name)
-        .cloned()
-        .expect("class symbol bound in signature pass")
+fn sym_for_export(tc: &Inferer<'_>, name: &Ident) -> Result<TypeSymbol, CompilerFailure> {
+    tc.types.lookup(&name.name).cloned().ok_or_else(|| {
+        super::inference_failure("missing class symbol from signature pass").with_span(name.span)
+    })
 }
 
 fn type_mentions_erased_parameter(ty: &Type) -> bool {
@@ -4533,5 +5040,144 @@ mod tests {
                         .contains("member `greet` has an incompatible signature")),
             "expected a wrong-arity implements diagnostic, got: {diags:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod invariant_tests {
+    use super::*;
+
+    #[test]
+    fn missing_class_metadata_stops_descriptor_and_export_construction() {
+        super::super::test_support::with_inferer(|tc| {
+            let name = Ident {
+                name: "Missing".into(),
+                span: Span::at(crate::FileId(0)),
+            };
+            assert!(matches!(
+                sym_for_export(tc, &name),
+                Err(CompilerFailure::Internal { .. })
+            ));
+            let ty = Type::class_ref(
+                crate::Package("missing".into()),
+                "Missing",
+                crate::mangle::package_symbol("missing", "Missing"),
+                Vec::new(),
+            );
+            assert!(matches!(
+                tc.record_runtime_type_test(&ty),
+                Err(CompilerFailure::Internal { .. })
+            ));
+            assert!(!tc.typed_ast.runtime_class_fields.contains_key(&ty));
+        });
+    }
+}
+
+#[cfg(test)]
+mod review_regressions {
+    use super::super::test_support::{run, with_source_inferer};
+    use super::*;
+
+    #[test]
+    fn missing_guarded_field_stops_runtime_metadata_construction() {
+        with_source_inferer("class C {}", |tc| {
+            assert!(tc.signatures().unwrap());
+            let symbol = tc.types.lookup_mut("C").unwrap();
+            let mangled = symbol.mangled_name.clone();
+            let TypeKind::Class {
+                narrowing_checks, ..
+            } = &mut symbol.kind
+            else {
+                panic!("class signature");
+            };
+            narrowing_checks.insert(
+                "missing".into(),
+                crate::FieldNarrowingCheck {
+                    declaration: Some(mangled.clone()),
+                    test: crate::FieldNarrowingTest::NonNull,
+                    minimal_test_target: None,
+                    message: "test guard".into(),
+                },
+            );
+            let ty = Type::class_ref(
+                crate::Package(tc.package_name.into()),
+                "C",
+                mangled,
+                Vec::new(),
+            );
+            assert!(matches!(
+                tc.record_runtime_type_test(&ty),
+                Err(CompilerFailure::Internal { .. })
+            ));
+            assert!(!tc.typed_ast.runtime_field_guards.contains_key(&ty));
+            assert!(!tc.typed_ast.runtime_class_fields.contains_key(&ty));
+        });
+    }
+
+    #[test]
+    fn duplicate_methods_and_inheritance_cycles_remain_source_errors() {
+        for source in [
+            "class C { value: number = 1; m(): number { return 1; } } class C {} function main(): number { return 0; }",
+            "class C { value: number = 1; } interface C { x: number; } function main(): number { return 0; }",
+            "class C { m(): number { return 1; } m(x: number): number { return x; } } function main(): number { return 0; }",
+            "class C { static m(): number { return 1; } static m(x: number): number { return x; } } function main(): number { return 0; }",
+            "class A extends B { constructor() { super(); } } class B extends A { constructor() { super(); } } function main(): number { const a = new A(); return 0; }",
+        ] {
+            let (_, diagnostics) = run(source);
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.severity == crate::Severity::Error)
+            );
+            assert!(
+                !diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.message.contains("internal compiler failure")),
+                "{diagnostics:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn missing_class_and_member_signatures_are_fatal_without_source_errors() {
+        let source = "class C { value: number = 1; m(): number { return 1; } static s(): number { return 2; } }";
+        for missing in ["class", "field", "method", "static", "parameter-property"] {
+            let source = if missing == "parameter-property" {
+                "class C { constructor(public value: number) {} }"
+            } else {
+                source
+            };
+            with_source_inferer(source, |tc| {
+                assert!(tc.signatures().unwrap());
+                assert!(tc.diagnostics.is_empty());
+                if missing == "class" {
+                    tc.types = super::super::TypeNamespace::new();
+                } else {
+                    let TypeKind::Class {
+                        fields,
+                        methods,
+                        statics,
+                        ..
+                    } = &mut tc.types.lookup_mut("C").unwrap().kind
+                    else {
+                        panic!("class signature");
+                    };
+                    match missing {
+                        "field" | "parameter-property" => fields.clear(),
+                        "method" => methods.clear(),
+                        "static" => statics.clear(),
+                        _ => panic!("test case"),
+                    }
+                }
+                assert!(
+                    matches!(tc.infer_classes(), Err(CompilerFailure::Internal { .. })),
+                    "{missing}"
+                );
+                assert!(
+                    tc.typed_ast.types.is_empty(),
+                    "failed class must not be published"
+                );
+            });
+        }
     }
 }

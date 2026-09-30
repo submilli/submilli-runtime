@@ -19,7 +19,7 @@ test('the index and exports cover exactly the visible book, with summaries', asy
 	}
 	const chapters = await readChapters();
 	const outputs = createAgentDocs(chapters);
-	const index = outputs.get('/llms.txt')!;
+	const index = outputs.get('/docs/llms.txt')!;
 	const links = [...index.matchAll(/^- \[.*\]\(https:\/\/submilli\.ai([^)]*)\): (.+)$/gm)];
 	assert.deepEqual(links.map((link) => link[1]).sort(), expectedPaths.sort());
 	assert.deepEqual([...outputs.keys()].filter((path) => path.endsWith('.md')).sort(), expectedPaths);
@@ -29,12 +29,12 @@ test('the index and exports cover exactly the visible book, with summaries', asy
 	for (const path of expectedPaths) {
 		const markdown = outputs.get(path)!;
 		assert.match(markdown, /^# .+\n/);
-		assert.ok(outputs.get('/llms-full.txt')!.includes(markdown));
+		assert.ok(outputs.get('/docs/llms-full.txt')!.includes(markdown));
 	}
 	for (const path of hiddenPaths) {
 		assert.ok(!outputs.has(path));
 		assert.ok(!index.includes(`https://submilli.ai${path}`));
-		assert.ok(!outputs.get('/llms-full.txt')!.includes(`Source: https://submilli.ai${path}\n`));
+		assert.ok(!outputs.get('/docs/llms-full.txt')!.includes(`Source: https://submilli.ai${path}\n`));
 	}
 });
 

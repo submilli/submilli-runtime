@@ -153,19 +153,24 @@ fn run_cases_parallel(
     for chunk in chunks {
         let shim = Arc::clone(&shim);
         let runtime = Arc::clone(&runtime);
-        handles.push(std::thread::spawn(move || {
-            let tokio = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("tokio runtime");
-            chunk
-                .into_iter()
-                .map(|path| {
-                    let result = run_case(&path, &shim, &runtime, &tokio);
-                    CaseResult { path, result }
+        handles.push(
+            std::thread::Builder::new()
+                .stack_size(interpreter::compiler_limits::COMPILER_STACK_BYTES)
+                .spawn(move || {
+                    let tokio = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .expect("tokio runtime");
+                    chunk
+                        .into_iter()
+                        .map(|path| {
+                            let result = run_case(&path, &shim, &runtime, &tokio);
+                            CaseResult { path, result }
+                        })
+                        .collect::<Vec<_>>()
                 })
-                .collect::<Vec<_>>()
-        }));
+                .expect("spawn fixture worker"),
+        );
     }
 
     handles
@@ -284,7 +289,7 @@ fn run_case(
                 )),
                 (Err(_), Some(_)) => Ok(CaseOutcome::KnownGap),
                 (Err(err), None) => {
-                    let (sources, file) = Sources::single(filename.as_str(), &src);
+                    let (sources, file) = Sources::single(filename.as_str(), &src).unwrap();
                     // The rendered backtrace already carries the `error: …` header.
                     Err(
                         match render_backtrace(&err, &sources, file, BacktraceMode::Full) {
@@ -349,7 +354,7 @@ fn assert_diagnostics(
 }
 
 fn render_diags(diags: &[Diagnostic], filename: &str, src: &str) -> String {
-    let (sources, _) = Sources::single(filename, src);
+    let (sources, _) = Sources::single(filename, src).unwrap();
     diags
         .iter()
         .map(|d| diagnostics::render(d, &sources))

@@ -1,3 +1,5 @@
+use crate::compiler_error::CompilerFailure;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
@@ -27,10 +29,14 @@ impl Inferer<'_> {
         cases: Vec<SwitchCase>,
         default: Option<SwitchDefault>,
         switch_span: Span,
-    ) -> TypedStmtKind {
+    ) -> Result<TypedStmtKind, CompilerFailure> {
         let (entry_env, _) = self.snapshot_active_narrowings(0);
-        let disc_source_span = self.ast.expr(discriminant).span;
-        let (typed_disc, disc_ty) = self.infer_expr(discriminant, None);
+        let disc_source_span = self
+            .ast
+            .try_expr(discriminant)
+            .map_err(super::arena_failure)?
+            .span;
+        let (typed_disc, disc_ty) = self.infer_expr(discriminant, None)?;
         // A `void` discriminant has nothing to compare against, and an empty
         // switch reaches codegen with no case to report a type error first.
         if disc_ty.carries_void() {
@@ -54,9 +60,18 @@ impl Inferer<'_> {
             let case_span = case.span;
             let mut typed_values: Vec<TypedSwitchValue> = Vec::new();
             for value_expr in &case.values {
-                let value_span = self.ast.expr(*value_expr).span;
-                let (typed_val, val_ty) = self.infer_expr(*value_expr, Some(&label_hint));
-                let val_kind = self.typed_ast.expr(typed_val).kind.clone();
+                let value_span = self
+                    .ast
+                    .try_expr(*value_expr)
+                    .map_err(super::arena_failure)?
+                    .span;
+                let (typed_val, val_ty) = self.infer_expr(*value_expr, Some(&label_hint))?;
+                let val_kind = self
+                    .typed_ast
+                    .try_expr(typed_val)
+                    .map_err(crate::typechecker::arena_failure)?
+                    .kind
+                    .clone();
                 if !matches!(disc_ty, Type::Error)
                     && !matches!(val_ty, Type::Error)
                     && !assignable(&val_ty, &label_hint, self.resolver())
@@ -94,10 +109,10 @@ impl Inferer<'_> {
                 None => narrowing::NarrowEnv::new(),
                 Some(first) => {
                     let mut acc =
-                        self.predicate_env_for_case_value(typed_disc, disc_source_span, first);
+                        self.predicate_env_for_case_value(typed_disc, disc_source_span, first)?;
                     for value in iter {
                         let next =
-                            self.predicate_env_for_case_value(typed_disc, disc_source_span, value);
+                            self.predicate_env_for_case_value(typed_disc, disc_source_span, value)?;
                         let (joined, _) =
                             narrowing::union_envs(acc, BTreeSet::new(), next, BTreeSet::new());
                         acc = joined;
@@ -106,17 +121,21 @@ impl Inferer<'_> {
                 }
             };
 
-            let body_span = self.ast.stmt(case.body).span;
+            let body_span = self
+                .ast
+                .try_stmt(case.body)
+                .map_err(super::arena_failure)?
+                .span;
             self.push_narrow_frame(true_env.clone());
             self.switch_depth += 1;
             self.reachable = entry_reachable;
-            let typed_body = self
-                .infer_stmt(case.body)
-                .expect("switch case body is a Block, never a type-only decl");
+            let typed_body = self.infer_stmt(case.body)?.ok_or_else(|| {
+                super::inference_failure("switch case body is a Block, never a type-only decl")
+            })?;
             let body_reachable = self.reachable;
             self.switch_depth -= 1;
-            let (_n, body_assigned) = self.pop_narrow_frame_capture();
-            let typed_body = self.wrap_narrow_regions(typed_body, &true_env, body_span);
+            let (_n, body_assigned) = self.pop_narrow_frame_capture()?;
+            let typed_body = self.wrap_narrow_regions(typed_body, &true_env, body_span)?;
             all_assigned.extend(body_assigned);
             any_arm_reachable_exit |= body_reachable;
 
@@ -128,27 +147,31 @@ impl Inferer<'_> {
         }
 
         let covered: BTreeSet<narrowing::LiteralValue> = seen.keys().cloned().collect();
-        let (residual, site) = self.compute_switch_residual(typed_disc, &disc_ty, &covered);
+        let (residual, site) = self.compute_switch_residual(typed_disc, &disc_ty, &covered)?;
 
         let typed_default = if let Some(d) = default {
-            let body_span = self.ast.stmt(d.body).span;
+            let body_span = self
+                .ast
+                .try_stmt(d.body)
+                .map_err(super::arena_failure)?
+                .span;
             let default_residual =
                 if saw_null.is_some() && matches!(site, ResidualSite::Scrutinee { .. }) {
                     narrowing::strip_null(&residual)
                 } else {
                     residual.clone()
                 };
-            let env = self.build_default_narrow_env(&default_residual, &site, body_span);
+            let env = self.build_default_narrow_env(&default_residual, &site, body_span)?;
             self.push_narrow_frame(env.clone());
             self.switch_depth += 1;
             self.reachable = entry_reachable;
-            let typed_body = self
-                .infer_stmt(d.body)
-                .expect("switch default body is a Block, never a type-only decl");
+            let typed_body = self.infer_stmt(d.body)?.ok_or_else(|| {
+                super::inference_failure("switch default body is a Block, never a type-only decl")
+            })?;
             let body_reachable = self.reachable;
             self.switch_depth -= 1;
-            let (_n, body_assigned) = self.pop_narrow_frame_capture();
-            let typed_body = self.wrap_narrow_regions(typed_body, &env, body_span);
+            let (_n, body_assigned) = self.pop_narrow_frame_capture()?;
+            let typed_body = self.wrap_narrow_regions(typed_body, &env, body_span)?;
             all_assigned.extend(body_assigned);
             any_arm_reachable_exit |= body_reachable;
             Some(typed_body)
@@ -164,26 +187,29 @@ impl Inferer<'_> {
         };
 
         // Breaks are normal case exits; count them toward post-switch reachability.
-        let frame = self.pop_pending_join_frame();
+        let frame = self.pop_pending_join_frame()?;
         if !frame.breaks.is_empty() {
             any_arm_reachable_exit = true;
         }
         self.merge_assigned_into_outer(all_assigned, switch_span);
         let natural =
             (typed_default.is_none() && !matches!(residual, Type::Never)).then_some(entry_env);
-        self.fold_exits_into_outer(natural, frame.breaks, switch_span);
+        self.fold_exits_into_outer(natural, frame.breaks, switch_span)?;
 
         self.reachable = any_arm_reachable_exit;
 
-        TypedStmtKind::Switch {
+        Ok(TypedStmtKind::Switch {
             discriminant: typed_disc,
             discriminant_ty: disc_ty,
             cases: typed_cases,
             default: typed_default,
-        }
+        })
     }
 
-    fn push_switch_value_expr(&mut self, value: &TypedSwitchValue) -> ExprId {
+    fn push_switch_value_expr(
+        &mut self,
+        value: &TypedSwitchValue,
+    ) -> Result<ExprId, crate::compiler_error::CompilerFailure> {
         let (kind, ty, span) = match value {
             TypedSwitchValue::String { value, span } => (
                 TypedExprKind::String(value.clone()),
@@ -225,7 +251,9 @@ impl Inferer<'_> {
                 ),
             },
         };
-        self.typed_ast.push_expr(TypedExpr { kind, span, ty })
+        self.typed_ast
+            .try_push_expr(TypedExpr { kind, span, ty })
+            .map_err(crate::typechecker::arena_failure)
     }
 
     fn predicate_env_for_case_value(
@@ -233,18 +261,21 @@ impl Inferer<'_> {
         typed_disc: ExprId,
         disc_source_span: Span,
         value: &TypedSwitchValue,
-    ) -> narrowing::NarrowEnv {
-        let lit_expr_id = self.push_switch_value_expr(value);
-        let synth = self.typed_ast.push_expr(TypedExpr {
-            kind: TypedExprKind::Binary {
-                op: BinOp::Eq,
-                lhs: typed_disc,
-                rhs: lit_expr_id,
-            },
-            span: disc_source_span,
-            ty: Type::Boolean,
-        });
-        self.predicate_envs(synth).0
+    ) -> Result<narrowing::NarrowEnv, crate::compiler_error::CompilerFailure> {
+        let lit_expr_id = self.push_switch_value_expr(value)?;
+        let synth = self
+            .typed_ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::Binary {
+                    op: BinOp::Eq,
+                    lhs: typed_disc,
+                    rhs: lit_expr_id,
+                },
+                span: disc_source_span,
+                ty: Type::Boolean,
+            })
+            .map_err(crate::typechecker::arena_failure)?;
+        Ok(self.predicate_envs(synth)?.0)
     }
 
     fn compute_switch_residual(
@@ -252,10 +283,16 @@ impl Inferer<'_> {
         typed_disc: ExprId,
         disc_ty: &Type,
         covered: &BTreeSet<narrowing::LiteralValue>,
-    ) -> (Type, ResidualSite) {
-        let disc_expr = self.typed_ast.expr(typed_disc);
+    ) -> Result<(Type, ResidualSite), crate::compiler_error::CompilerFailure> {
+        let disc_expr = self
+            .typed_ast
+            .try_expr(typed_disc)
+            .map_err(crate::typechecker::arena_failure)?;
         if let TypedExprKind::FieldAccess { receiver, name } = &disc_expr.kind {
-            let receiver_expr = self.typed_ast.expr(*receiver);
+            let receiver_expr = self
+                .typed_ast
+                .try_expr(*receiver)
+                .map_err(crate::typechecker::arena_failure)?;
             if let Type::Union(members) = receiver_expr.ty.peel()
                 && let Some((disc_key, table)) = self.union_discriminant_with_nominals(members)
                 && disc_key == name.name
@@ -272,21 +309,27 @@ impl Inferer<'_> {
                     .collect();
                 let residual =
                     narrowing::with_source_refinement(&receiver_expr.ty, Type::union(kept));
-                if let Some(receiver_path) = self.expr_to_reference_path(receiver_expr) {
-                    return (
+                if let Some(receiver_path) = self.expr_to_reference_path(receiver_expr)? {
+                    return Ok((
                         residual,
                         ResidualSite::DiscriminatedReceiver {
                             path: receiver_path,
                             disc_key,
                         },
-                    );
+                    ));
                 }
-                return (residual, ResidualSite::Anonymous);
+                return Ok((residual, ResidualSite::Anonymous));
             }
         }
         if let TypedExprKind::IndexAccess { receiver, index } = &disc_expr.kind {
-            let receiver_expr = self.typed_ast.expr(*receiver);
-            let index_expr = self.typed_ast.expr(*index);
+            let receiver_expr = self
+                .typed_ast
+                .try_expr(*receiver)
+                .map_err(crate::typechecker::arena_failure)?;
+            let index_expr = self
+                .typed_ast
+                .try_expr(*index)
+                .map_err(crate::typechecker::arena_failure)?;
             if let Type::Union(members) = receiver_expr.ty.peel()
                 && let Some(position) = index_position(&index_expr.kind)
                 && let Some((disc_pos, table)) = narrowing::tuple_union_discriminant(members)
@@ -304,24 +347,26 @@ impl Inferer<'_> {
                     .collect();
                 let residual =
                     narrowing::with_source_refinement(&receiver_expr.ty, Type::union(kept));
-                if let Some(receiver_path) = self.expr_to_reference_path(receiver_expr) {
-                    return (
+                if let Some(receiver_path) = self.expr_to_reference_path(receiver_expr)? {
+                    return Ok((
                         residual,
                         ResidualSite::DiscriminatedReceiver {
                             path: receiver_path,
                             disc_key: format!("[{position}]"),
                         },
-                    );
+                    ));
                 }
-                return (residual, ResidualSite::Anonymous);
+                return Ok((residual, ResidualSite::Anonymous));
             }
         }
         let residual = narrowing::subtract_literals(disc_ty, covered);
-        if let Some(path) = self.expr_to_reference_path(disc_expr) {
-            (residual, ResidualSite::Scrutinee { path })
-        } else {
-            (residual, ResidualSite::Anonymous)
-        }
+        Ok(
+            if let Some(path) = self.expr_to_reference_path(disc_expr)? {
+                (residual, ResidualSite::Scrutinee { path })
+            } else {
+                (residual, ResidualSite::Anonymous)
+            },
+        )
     }
 
     fn build_default_narrow_env(
@@ -329,22 +374,25 @@ impl Inferer<'_> {
         residual: &Type,
         site: &ResidualSite,
         body_span: Span,
-    ) -> narrowing::NarrowEnv {
+    ) -> Result<narrowing::NarrowEnv, crate::compiler_error::CompilerFailure> {
         let mut env = narrowing::NarrowEnv::new();
         let path = match site {
             ResidualSite::DiscriminatedReceiver { path, .. } => path.clone(),
             ResidualSite::Scrutinee { path } => path.clone(),
-            ResidualSite::Anonymous => return env,
+            ResidualSite::Anonymous => return Ok(env),
         };
-        let source = match self.synthesize_unnarrowed_source(&path, body_span) {
-            Some(kind) => self.typed_ast.push_expr(TypedExpr {
-                kind,
-                span: body_span,
-                ty: residual.clone(),
-            }),
-            None => return env,
+        let source = match self.synthesize_unnarrowed_source(&path, body_span)? {
+            Some(kind) => self
+                .typed_ast
+                .try_push_expr(TypedExpr {
+                    kind,
+                    span: body_span,
+                    ty: residual.clone(),
+                })
+                .map_err(crate::typechecker::arena_failure)?,
+            None => return Ok(env),
         };
-        let binding = self.mint_narrow_binding(body_span);
+        let binding = self.mint_narrow_binding(body_span)?;
         env.insert(
             path,
             narrowing::NarrowedView {
@@ -355,7 +403,7 @@ impl Inferer<'_> {
                 source,
             },
         );
-        env
+        Ok(env)
     }
 
     fn emit_non_exhaustive(&mut self, residual: &Type, site: &ResidualSite, switch_span: Span) {

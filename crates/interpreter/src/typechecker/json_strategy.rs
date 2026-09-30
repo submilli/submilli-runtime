@@ -1,6 +1,7 @@
 //! JSON.parse union-target strategy resolver.
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::compiler_error::CompilerFailure;
 use crate::typechecker::infer::narrowing::LiteralValue;
 use crate::types::{ObjectField, Type};
 
@@ -45,6 +46,10 @@ pub enum ObjectDispatch {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum JsonNarrowReason {
+    Internal(CompilerFailure),
+    UnsupportedTarget {
+        ty: Type,
+    },
     ArrayVsArray {
         variants: Vec<Type>,
     },
@@ -92,15 +97,15 @@ pub fn resolve_json_union_strategy_with(
 ) -> Result<JsonUnionStrategy, Vec<JsonNarrowReason>> {
     let mut buckets = Buckets::default();
     for m in members {
-        buckets.push(m, expand);
+        buckets.push(m, expand, &mut Vec::new())?;
     }
 
     let mut reasons = Vec::new();
     let string = resolve_primitive_bucket(PrimBase::String, &buckets.string, &mut reasons);
     let number = resolve_primitive_bucket(PrimBase::Number, &buckets.number, &mut reasons);
-    let boolean = resolve_singleton_bucket(&buckets.boolean);
-    let null = resolve_singleton_bucket(&buckets.null);
-    let object = resolve_object_bucket(&buckets.object, &mut reasons, expand);
+    let boolean = resolve_singleton_bucket(&buckets.boolean)?;
+    let null = resolve_singleton_bucket(&buckets.null)?;
+    let object = resolve_object_bucket(&buckets.object, &mut reasons, expand)?;
     let array = resolve_array_bucket(&buckets.array, &mut reasons);
 
     if reasons.is_empty() {
@@ -134,7 +139,16 @@ impl Buckets {
     /// `AliasRef` so emission routes through its recursive validator. A back-edge
     /// whose body is itself a union is flattened one level — its members carry
     /// concrete kinds (the recursion lives under their constructors).
-    fn push(&mut self, ty: &Type, expand: AliasExpander<'_>) {
+    fn push(
+        &mut self,
+        ty: &Type,
+        expand: AliasExpander<'_>,
+        active: &mut Vec<Type>,
+    ) -> Result<(), Vec<JsonNarrowReason>> {
+        if active.contains(ty) {
+            return Err(vec![JsonNarrowReason::UnsupportedTarget { ty: ty.clone() }]);
+        }
+        active.push(ty.clone());
         let kind = expand(ty);
         match kind.peel() {
             Type::String | Type::StringLiteral(_) | Type::StringEnum { .. } => {
@@ -150,27 +164,26 @@ impl Buckets {
             // A back-edge expanding to a union: flatten its members (concrete-kinded).
             Type::Union(members) if !matches!(ty.peel(), Type::Union(_)) => {
                 for m in members {
-                    self.push(m, expand);
+                    self.push(m, expand, active)?;
                 }
             }
-            other => unreachable!(
-                "resolve_json_union_strategy: unexpected variant {:?} \
-                 — validate_json_parse_target should have rejected it",
-                other
-            ),
+            _ => return Err(vec![JsonNarrowReason::UnsupportedTarget { ty: ty.clone() }]),
         }
+        active.pop();
+        Ok(())
     }
 }
 
-fn resolve_singleton_bucket(variants: &[Type]) -> PerTagStrategy {
-    match variants {
+fn resolve_singleton_bucket(variants: &[Type]) -> Result<PerTagStrategy, Vec<JsonNarrowReason>> {
+    Ok(match variants {
         [] => PerTagStrategy::Empty,
         [t] => PerTagStrategy::Single(t.clone()),
-        _ => unreachable!(
-            "boolean / null bucket has multiple variants — \
-             union canonicalization should have deduplicated"
-        ),
-    }
+        _ => {
+            return Err(vec![JsonNarrowReason::UnsupportedTarget {
+                ty: Type::union(variants.to_vec()),
+            }]);
+        }
+    })
 }
 
 fn resolve_primitive_bucket(
@@ -216,24 +229,24 @@ fn resolve_object_bucket(
     variants: &[Type],
     reasons: &mut Vec<JsonNarrowReason>,
     expand: AliasExpander<'_>,
-) -> PerTagStrategy {
+) -> Result<PerTagStrategy, Vec<JsonNarrowReason>> {
     match variants {
-        [] => return PerTagStrategy::Empty,
-        [t] => return PerTagStrategy::Single(t.clone()),
+        [] => return Ok(PerTagStrategy::Empty),
+        [t] => return Ok(PerTagStrategy::Single(t.clone())),
         _ => {}
     }
 
-    if let Some(dispatch) = try_literal_tag_value(variants, expand) {
-        return PerTagStrategy::ObjectCascade(dispatch);
+    if let Some(dispatch) = try_literal_tag_value(variants, expand)? {
+        return Ok(PerTagStrategy::ObjectCascade(dispatch));
     }
 
-    match try_required_field_name(variants, expand) {
+    Ok(match try_required_field_name(variants, expand) {
         Ok(dispatch) => PerTagStrategy::ObjectCascade(dispatch),
         Err(object_reasons) => {
             reasons.extend(object_reasons);
             PerTagStrategy::Empty
         }
-    }
+    })
 }
 
 fn literal_value_of(ty: &Type) -> Option<LiteralValue> {
@@ -245,20 +258,23 @@ fn literal_value_of(ty: &Type) -> Option<LiteralValue> {
     }
 }
 
-fn try_literal_tag_value(variants: &[Type], expand: AliasExpander<'_>) -> Option<ObjectDispatch> {
+fn try_literal_tag_value(
+    variants: &[Type],
+    expand: AliasExpander<'_>,
+) -> Result<Option<ObjectDispatch>, Vec<JsonNarrowReason>> {
     // Expand back-edges so a recursive object variant contributes its fields to
     // the discriminator search; emission keeps the original `variants` types.
     let expanded: Vec<Type> = variants.iter().map(expand).collect();
     let field_maps: Vec<&BTreeMap<String, ObjectField>> = expanded
         .iter()
         .map(|t| match t.peel() {
-            Type::Object { fields, .. } => fields,
-            _ => unreachable!("object bucket holds only object-shaped types"),
+            Type::Object { fields, .. } => Ok(fields),
+            _ => Err(invalid_object_bucket()),
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
 
     // Required fields only — optional fields may be absent at runtime.
-    let first = field_maps[0];
+    let first = field_maps.first().ok_or_else(invalid_object_bucket)?;
     let candidates: Vec<&String> = first
         .iter()
         .filter(|(_, f)| !f.optional && literal_value_of(&f.ty).is_some())
@@ -268,7 +284,7 @@ fn try_literal_tag_value(variants: &[Type], expand: AliasExpander<'_>) -> Option
     'fields: for name in candidates {
         let mut arms: Vec<(LiteralValue, Type)> = Vec::with_capacity(variants.len());
         let mut seen_values: BTreeSet<LiteralValue> = BTreeSet::new();
-        for (idx, fields) in field_maps.iter().enumerate() {
+        for (variant, fields) in variants.iter().zip(&field_maps) {
             let field = match fields.get(name) {
                 Some(f) if !f.optional => f,
                 _ => continue 'fields,
@@ -279,14 +295,14 @@ fn try_literal_tag_value(variants: &[Type], expand: AliasExpander<'_>) -> Option
             if !seen_values.insert(lit.clone()) {
                 continue 'fields;
             }
-            arms.push((lit, variants[idx].clone()));
+            arms.push((lit, variant.clone()));
         }
-        return Some(ObjectDispatch::ByLiteralTagValue {
+        return Ok(Some(ObjectDispatch::ByLiteralTagValue {
             field: name.clone(),
             arms,
-        });
+        }));
     }
-    None
+    Ok(None)
 }
 
 fn try_required_field_name(
@@ -294,8 +310,14 @@ fn try_required_field_name(
     expand: AliasExpander<'_>,
 ) -> Result<ObjectDispatch, Vec<JsonNarrowReason>> {
     let expanded: Vec<Type> = variants.iter().map(expand).collect();
-    let required_sets: Vec<BTreeSet<&str>> = expanded.iter().map(required_field_names).collect();
-    let all_sets: Vec<BTreeSet<&str>> = expanded.iter().map(all_field_names).collect();
+    let required_sets: Vec<BTreeSet<&str>> = expanded
+        .iter()
+        .map(required_field_names)
+        .collect::<Result<_, _>>()?;
+    let all_sets: Vec<BTreeSet<&str>> = expanded
+        .iter()
+        .map(all_field_names)
+        .collect::<Result<_, _>>()?;
 
     let mut reasons = Vec::new();
     for i in 0..variants.len() {
@@ -347,22 +369,28 @@ fn try_required_field_name(
     }
 }
 
-fn required_field_names(ty: &Type) -> BTreeSet<&str> {
-    match ty.peel() {
+fn required_field_names(ty: &Type) -> Result<BTreeSet<&str>, Vec<JsonNarrowReason>> {
+    Ok(match ty.peel() {
         Type::Object { fields, .. } => fields
             .iter()
             .filter(|(_, f)| !f.optional)
             .map(|(k, _)| k.as_str())
             .collect(),
-        _ => unreachable!("object bucket holds only Type::Object"),
-    }
+        _ => return Err(invalid_object_bucket()),
+    })
 }
 
-fn all_field_names(ty: &Type) -> BTreeSet<&str> {
-    match ty.peel() {
+fn all_field_names(ty: &Type) -> Result<BTreeSet<&str>, Vec<JsonNarrowReason>> {
+    Ok(match ty.peel() {
         Type::Object { fields, .. } => fields.keys().map(std::string::String::as_str).collect(),
-        _ => unreachable!("object bucket holds only Type::Object"),
-    }
+        _ => return Err(invalid_object_bucket()),
+    })
+}
+
+fn invalid_object_bucket() -> Vec<JsonNarrowReason> {
+    vec![JsonNarrowReason::Internal(super::invariant_failure(
+        "JSON object bucket contains inconsistent expanded metadata",
+    ))]
 }
 
 #[cfg(test)]
@@ -549,5 +577,44 @@ mod tests {
         assert_eq!(strat.boolean, PerTagStrategy::Empty);
         assert_eq!(strat.string, PerTagStrategy::Empty);
         assert_eq!(strat.array, PerTagStrategy::Empty);
+    }
+}
+
+#[cfg(test)]
+mod invariant_tests {
+    use super::*;
+
+    #[test]
+    fn unsupported_and_duplicate_bucket_members_are_rejected() {
+        for members in [
+            vec![Type::Unknown],
+            vec![Type::Null, Type::Null],
+            vec![Type::BooleanLiteral(true), Type::BooleanLiteral(false)],
+        ] {
+            assert!(resolve_json_union_strategy(&members).is_err());
+        }
+    }
+
+    #[test]
+    fn inconsistent_object_expansion_is_an_internal_failure() {
+        let calls = std::cell::Cell::new(0);
+        let object = Type::Object {
+            fields: BTreeMap::new(),
+            index: None,
+        };
+        let expand = |_: &Type| {
+            calls.set(calls.get() + 1);
+            if calls.get() <= 2 {
+                object.clone()
+            } else {
+                Type::Number
+            }
+        };
+        let error = resolve_json_union_strategy_with(&[object.clone(), object.clone()], &expand)
+            .unwrap_err();
+        assert!(matches!(
+            error.as_slice(),
+            [JsonNarrowReason::Internal(CompilerFailure::Internal { .. })]
+        ));
     }
 }

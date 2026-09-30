@@ -241,7 +241,7 @@ or intent-to-add entries. Convert a version 4 index with native Git's
 Native packfiles must be self-contained; partial-clone and cruft-pack metadata
 are unsupported. See [Git security](/docs/permissions#git-capabilities) for
 metadata protection and handing repositories to native Git, and [resource
-limits](/docs/resource-limits#git-work) for repository sizes and timeouts.
+limits](/docs/resource-limits#git) for repository sizes and timeouts.
 
 ### Session state
 

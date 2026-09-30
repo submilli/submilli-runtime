@@ -642,7 +642,7 @@ mod tests {
             "denial data fields should render on the fields line; got: {msg}"
         );
 
-        let (sources, file) = crate::Sources::single("script.subm", source);
+        let (sources, file) = crate::Sources::single("script.subm", source).unwrap();
         let rendered =
             crate::backtrace::render(&err, &sources, file, crate::backtrace::BacktraceMode::Full)
                 .expect("an uncaught denial should render a backtrace");

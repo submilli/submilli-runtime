@@ -15,10 +15,39 @@ pub fn derive_call_site_capability(
     callee_params: &[Param],
     caller_ast: &TypedAst,
     actual_args: &[ExprId],
-) -> DerivedCapability {
-    let mut filters = Vec::new();
+) -> Result<DerivedCapability, crate::compiler_error::CompileError> {
     let mut warnings = Vec::new();
     let mut unresolved_http_host_span = None;
+    let filters = derive_filters(
+        tag,
+        callee_params,
+        caller_ast,
+        actual_args,
+        &mut warnings,
+        &mut unresolved_http_host_span,
+    );
+    if let Some(span) = unresolved_http_host_span {
+        warnings.push(unresolved_http_url_warning(span, &tag.capability));
+    }
+    let filters = filters.map_err(|fatal| {
+        crate::compiler_error::CompileError::from(fatal).with_prior_diagnostics(&warnings)
+    })?;
+    Ok(DerivedCapability {
+        capability: tag.capability.clone(),
+        filter: (!filters.is_empty()).then(|| filters.join(" and ")),
+        warnings,
+    })
+}
+
+fn derive_filters(
+    tag: &DocCapability,
+    callee_params: &[Param],
+    caller_ast: &TypedAst,
+    actual_args: &[ExprId],
+    warnings: &mut Vec<Diagnostic>,
+    unresolved_http_host_span: &mut Option<Span>,
+) -> Result<Vec<String>, crate::compiler_error::CompilerFailure> {
+    let mut filters = Vec::new();
     for binding in &tag.bindings {
         match &binding.kind {
             DocCapabilityBindingKind::Literal { value, .. } => {
@@ -40,15 +69,15 @@ pub fn derive_call_site_capability(
                     ));
                     continue;
                 };
-                match literal_from_expr_path(caller_ast, *actual, path) {
+                match literal_from_expr_path(caller_ast, *actual, path)? {
                     Some(value) => filters.push(format!("{} == {}", binding.field, value)),
                     None if is_http_url_binding(tag, param, path) => {
                         if matches!(path.as_slice(), [component] if component == "host") {
-                            unresolved_http_host_span = Some(caller_ast.expr(*actual).span);
+                            *unresolved_http_host_span = Some(caller_ast.try_expr(*actual).map_err(crate::typechecker::arena_failure)?.span);
                         }
                     }
                     None => warnings.push(warning(
-                        caller_ast.expr(*actual).span,
+                        caller_ast.try_expr(*actual).map_err(crate::typechecker::arena_failure)?.span,
                         format!(
                             "non-literal argument for `{param}`; no static capability filter for `{}`",
                             binding.field
@@ -58,14 +87,7 @@ pub fn derive_call_site_capability(
             }
         }
     }
-    if let Some(span) = unresolved_http_host_span {
-        warnings.push(unresolved_http_url_warning(span, &tag.capability));
-    }
-    DerivedCapability {
-        capability: tag.capability.clone(),
-        filter: (!filters.is_empty()).then(|| filters.join(" and ")),
-        warnings,
-    }
+    Ok(filters)
 }
 
 fn is_http_url_binding(tag: &DocCapability, param: &str, path: &[String]) -> bool {
@@ -95,7 +117,11 @@ fn unresolved_http_url_warning(span: Span, capability: &str) -> Diagnostic {
     }
 }
 
-fn literal_from_expr_path(ast: &TypedAst, expr_id: ExprId, path: &[String]) -> Option<String> {
+fn literal_from_expr_path(
+    ast: &TypedAst,
+    expr_id: ExprId,
+    path: &[String],
+) -> Result<Option<String>, crate::compiler_error::CompilerFailure> {
     if path.is_empty() {
         return literal_from_expr(ast, expr_id);
     }
@@ -107,8 +133,8 @@ fn literal_from_expr_path(ast: &TypedAst, expr_id: ExprId, path: &[String]) -> O
     if let [segment] = path
         && matches!(segment.as_str(), "host" | "path")
     {
-        if let Some(url) = resolve_string_literal(ast, expr_id) {
-            return url_component(&url, segment);
+        if let Some(url) = resolve_string_literal(ast, expr_id)? {
+            return Ok(url_component(&url, segment));
         }
         if segment == "host" {
             return url_host_from_constant_prefix(ast, expr_id);
@@ -116,106 +142,180 @@ fn literal_from_expr_path(ast: &TypedAst, expr_id: ExprId, path: &[String]) -> O
     }
     let mut current = expr_id;
     for segment in path {
-        let TypedExprKind::ObjectLiteral { fields, .. } = &ast.expr(current).kind else {
-            return None;
+        let TypedExprKind::ObjectLiteral { fields, .. } = &ast
+            .try_expr(current)
+            .map_err(crate::typechecker::arena_failure)?
+            .kind
+        else {
+            return Ok(None);
         };
-        let field = fields.iter().find(|field| field.name.name == *segment)?;
-        current = field.source.literal_expr_id()?;
+        let Some(field) = fields.iter().find(|field| field.name.name == *segment) else {
+            return Ok(None);
+        };
+        current = match field.source.literal_expr_id() {
+            Some(value) => value,
+            None => return Ok(None),
+        };
     }
     literal_from_expr(ast, current)
 }
 
-fn url_host_from_constant_prefix(ast: &TypedAst, expr_id: ExprId) -> Option<String> {
-    let prefix = constant_string_prefix(ast, expr_id);
-    let authority_start = prefix.find("://")? + 3;
-    let path_start = prefix[authority_start..].find('/')? + authority_start;
-    url_component(&prefix[..=path_start], "host")
+fn url_host_from_constant_prefix(
+    ast: &TypedAst,
+    expr_id: ExprId,
+) -> Result<Option<String>, crate::compiler_error::CompilerFailure> {
+    let prefix = constant_string_prefix(ast, expr_id)?;
+    let authority_start = match prefix.find("://") {
+        Some(value) => value,
+        None => return Ok(None),
+    } + 3;
+    let path_start = match prefix[authority_start..].find('/') {
+        Some(value) => value,
+        None => return Ok(None),
+    } + authority_start;
+    Ok(url_component(&prefix[..=path_start], "host"))
 }
 
-fn constant_string_prefix(ast: &TypedAst, expr_id: ExprId) -> String {
-    match &ast.expr(expr_id).kind {
-        TypedExprKind::String(value) => value.clone(),
-        TypedExprKind::GlobalRef { mangled, .. } => const_initializer(ast, mangled)
-            .map_or_else(String::new, |value| constant_string_prefix(ast, value)),
-        TypedExprKind::Binary {
-            op: BinOp::Add,
-            lhs,
-            rhs,
-        } => {
-            let Some(mut value) = resolve_string_literal(ast, *lhs) else {
-                return constant_string_prefix(ast, *lhs);
-            };
-            value.push_str(&constant_string_prefix(ast, *rhs));
-            value
-        }
-        _ => String::new(),
-    }
+fn constant_string_prefix(
+    ast: &TypedAst,
+    expr_id: ExprId,
+) -> Result<String, crate::compiler_error::CompilerFailure> {
+    Ok(
+        match &ast
+            .try_expr(expr_id)
+            .map_err(crate::typechecker::arena_failure)?
+            .kind
+        {
+            TypedExprKind::String(value) => value.clone(),
+            TypedExprKind::GlobalRef { mangled, .. } => match const_initializer(ast, mangled)? {
+                Some(value) => constant_string_prefix(ast, value)?,
+                None => String::new(),
+            },
+            TypedExprKind::Binary {
+                op: BinOp::Add,
+                lhs,
+                rhs,
+            } => {
+                let Some(mut value) = resolve_string_literal(ast, *lhs)? else {
+                    return constant_string_prefix(ast, *lhs);
+                };
+                value.push_str(&constant_string_prefix(ast, *rhs)?);
+                value
+            }
+            _ => String::new(),
+        },
+    )
 }
 
-fn literal_from_expr(ast: &TypedAst, expr_id: ExprId) -> Option<String> {
-    match &ast.expr(expr_id).kind {
-        TypedExprKind::String(value) => Some(format!("\"{}\"", escape(value))),
-        TypedExprKind::Binary { op: BinOp::Add, .. } => {
-            resolve_string_literal(ast, expr_id).map(|value| format!("\"{}\"", escape(&value)))
-        }
-        TypedExprKind::Number(value) => Some(number_literal(*value)),
-        TypedExprKind::Boolean(value) => Some(value.to_string()),
-        TypedExprKind::Null => Some("null".to_string()),
-        TypedExprKind::GlobalRef { mangled, .. } => {
-            literal_from_expr(ast, const_initializer(ast, mangled)?)
-        }
-        _ => None,
-    }
+fn literal_from_expr(
+    ast: &TypedAst,
+    expr_id: ExprId,
+) -> Result<Option<String>, crate::compiler_error::CompilerFailure> {
+    Ok(
+        match &ast
+            .try_expr(expr_id)
+            .map_err(crate::typechecker::arena_failure)?
+            .kind
+        {
+            TypedExprKind::String(value) => Some(format!("\"{}\"", escape(value))),
+            TypedExprKind::Binary { op: BinOp::Add, .. } => {
+                resolve_string_literal(ast, expr_id)?.map(|value| format!("\"{}\"", escape(&value)))
+            }
+            TypedExprKind::Number(value) => Some(number_literal(*value)),
+            TypedExprKind::Boolean(value) => Some(value.to_string()),
+            TypedExprKind::Null => Some("null".to_string()),
+            TypedExprKind::GlobalRef { mangled, .. } => literal_from_expr(
+                ast,
+                match const_initializer(ast, mangled)? {
+                    Some(value) => value,
+                    None => return Ok(None),
+                },
+            )?,
+            _ => None,
+        },
+    )
 }
 
 /// Resolve a value to its raw string, folding immutable top-level constants and
 /// concatenations whose operands both resolve to strings.
-fn resolve_string_literal(ast: &TypedAst, expr_id: ExprId) -> Option<String> {
-    match &ast.expr(expr_id).kind {
-        TypedExprKind::String(value) => Some(value.clone()),
-        TypedExprKind::Binary {
-            op: BinOp::Add,
-            lhs,
-            rhs,
-        } => {
-            let mut value = resolve_string_literal(ast, *lhs)?;
-            value.push_str(&resolve_string_literal(ast, *rhs)?);
-            Some(value)
-        }
-        TypedExprKind::GlobalRef { mangled, .. } => {
-            resolve_string_literal(ast, const_initializer(ast, mangled)?)
-        }
-        _ => None,
-    }
+fn resolve_string_literal(
+    ast: &TypedAst,
+    expr_id: ExprId,
+) -> Result<Option<String>, crate::compiler_error::CompilerFailure> {
+    Ok(
+        match &ast
+            .try_expr(expr_id)
+            .map_err(crate::typechecker::arena_failure)?
+            .kind
+        {
+            TypedExprKind::String(value) => Some(value.clone()),
+            TypedExprKind::Binary {
+                op: BinOp::Add,
+                lhs,
+                rhs,
+            } => {
+                let Some(mut value) = resolve_string_literal(ast, *lhs)? else {
+                    return Ok(None);
+                };
+                value.push_str(&match resolve_string_literal(ast, *rhs)? {
+                    Some(value) => value,
+                    None => return Ok(None),
+                });
+                Some(value)
+            }
+            TypedExprKind::GlobalRef { mangled, .. } => resolve_string_literal(
+                ast,
+                match const_initializer(ast, mangled)? {
+                    Some(value) => value,
+                    None => return Ok(None),
+                },
+            )?,
+            _ => None,
+        },
+    )
 }
 
 /// The initializer expression of a top-level `const` (not `let` — a `let` can be
 /// reassigned, so folding it would be unsound). `None` for anything else.
-fn const_initializer(ast: &TypedAst, mangled: &MangledName) -> Option<ExprId> {
+fn const_initializer(
+    ast: &TypedAst,
+    mangled: &MangledName,
+) -> Result<Option<ExprId>, crate::compiler_error::CompilerFailure> {
     let is_const = ast
         .globals
         .iter()
         .any(|g| &g.mangled_name == mangled && matches!(g.kind, GlobalKind::Const));
     if !is_const {
-        return None;
+        return Ok(None);
     }
     ast.top_level_statements
         .iter()
-        .find_map(|stmt| match &ast.stmt(*stmt).kind {
-            TypedStmtKind::AssignGlobal {
-                mangled: target,
-                value,
-                ..
-            } if target == mangled => Some(*value),
-            _ => None,
+        .map(|stmt| {
+            Ok::<_, crate::compiler_error::CompilerFailure>(
+                match &ast
+                    .try_stmt(*stmt)
+                    .map_err(crate::typechecker::arena_failure)?
+                    .kind
+                {
+                    TypedStmtKind::AssignGlobal {
+                        mangled: target,
+                        value,
+                        ..
+                    } if target == mangled => Some(*value),
+                    _ => None,
+                },
+            )
         })
+        .find_map(Result::transpose)
+        .transpose()
 }
 
 /// Parse `url` and return the requested component as a quoted filter value.
 fn url_component(url: &str, component: &str) -> Option<String> {
     let parsed = url::Url::parse(url).ok()?;
     let value = match component {
-        "host" => parsed.host_str()?.to_string(),
+        // Matches the runtime `http.*` context, which drops a trailing dot.
+        "host" => parsed.host_str()?.trim_end_matches('.').to_string(),
         "path" => parsed.path().to_string(),
         _ => return None,
     };
@@ -306,17 +406,17 @@ mod tests {
             .iter()
             .find(|f| f.name.name == "main")
             .expect("main");
-        let crate::TypedStmtKind::Block(stmts) = &ta.stmt(caller.body).kind else {
+        let crate::TypedStmtKind::Block(stmts) = &ta.try_stmt(caller.body).unwrap().kind else {
             panic!("main body block");
         };
         let call_expr = stmts
             .iter()
-            .find_map(|stmt| match &ta.stmt(*stmt).kind {
+            .find_map(|stmt| match &ta.try_stmt(*stmt).unwrap().kind {
                 crate::TypedStmtKind::Expr(call_expr) => Some(*call_expr),
                 _ => None,
             })
             .expect("call expr stmt");
-        let TypedExprKind::Call { args, .. } = &ta.expr(call_expr).kind else {
+        let TypedExprKind::Call { args, .. } = &ta.try_expr(call_expr).unwrap().kind else {
             panic!("direct call");
         };
         let args = args.clone();
@@ -330,7 +430,7 @@ mod tests {
              function callee(name: string): void { }\n\
              function main(): void { callee(\"TOKEN\"); }\n",
         );
-        let derived = derive_call_site_capability(&tag, &params, &ta, &args);
+        let derived = derive_call_site_capability(&tag, &params, &ta, &args).unwrap();
         assert_eq!(derived.filter.as_deref(), Some("name == \"TOKEN\""));
         assert!(derived.warnings.is_empty(), "{:?}", derived.warnings);
     }
@@ -342,7 +442,7 @@ mod tests {
              function callee(name: string): void { }\n\
              function main(): void { let token = \"TOKEN\"; callee(token); }\n",
         );
-        let derived = derive_call_site_capability(&tag, &params, &ta, &args);
+        let derived = derive_call_site_capability(&tag, &params, &ta, &args).unwrap();
         assert_eq!(derived.filter, None);
         assert_eq!(derived.warnings.len(), 1);
     }
@@ -354,7 +454,7 @@ mod tests {
              function callee(amount: number): void { }\n\
              function main(): void { callee(1); }\n",
         );
-        let derived = derive_call_site_capability(&tag, &params, &ta, &args);
+        let derived = derive_call_site_capability(&tag, &params, &ta, &args).unwrap();
         assert_eq!(derived.filter, None);
         assert!(derived.warnings.is_empty(), "{:?}", derived.warnings);
     }
@@ -366,7 +466,7 @@ mod tests {
              function callee(query: string): void { }\n\
              function main(): void { callee(\"select 1\"); }\n",
         );
-        let derived = derive_call_site_capability(&tag, &params, &ta, &args);
+        let derived = derive_call_site_capability(&tag, &params, &ta, &args).unwrap();
         assert_eq!(derived.filter.as_deref(), Some("readonly == true"));
         assert!(derived.warnings.is_empty(), "{:?}", derived.warnings);
     }
@@ -378,12 +478,23 @@ mod tests {
              function callee(url: string): void { }\n\
              function main(): void { callee(\"https://r.jina.ai/read\"); }\n",
         );
-        let derived = derive_call_site_capability(&tag, &params, &ta, &args);
+        let derived = derive_call_site_capability(&tag, &params, &ta, &args).unwrap();
         assert_eq!(
             derived.filter.as_deref(),
             Some("host == \"r.jina.ai\" and path == \"/read\"")
         );
         assert!(derived.warnings.is_empty(), "{:?}", derived.warnings);
+    }
+
+    #[test]
+    fn fully_qualified_host_derives_the_filter_the_runtime_checks() {
+        let (ta, tag, params, args) = first_doc_capability(
+            "/** @capability http.post { host: $url.host } */\n\
+             function callee(url: string): void { }\n\
+             function main(): void { callee(\"https://r.jina.ai./read\"); }\n",
+        );
+        let derived = derive_call_site_capability(&tag, &params, &ta, &args).unwrap();
+        assert_eq!(derived.filter.as_deref(), Some("host == \"r.jina.ai\""));
     }
 
     #[test]
@@ -394,7 +505,7 @@ mod tests {
              const ENDPOINT: string = \"https://r.jina.ai/\";\n\
              function main(): void { callee(ENDPOINT); }\n",
         );
-        let derived = derive_call_site_capability(&tag, &params, &ta, &args);
+        let derived = derive_call_site_capability(&tag, &params, &ta, &args).unwrap();
         assert_eq!(derived.filter.as_deref(), Some("host == \"r.jina.ai\""));
         assert!(derived.warnings.is_empty(), "{:?}", derived.warnings);
     }
@@ -408,7 +519,7 @@ mod tests {
              const VERSION: string = \"/v1\";\n\
              function main(): void { callee(ORIGIN + VERSION + \"/items\"); }\n",
         );
-        let derived = derive_call_site_capability(&tag, &params, &ta, &args);
+        let derived = derive_call_site_capability(&tag, &params, &ta, &args).unwrap();
         assert_eq!(
             derived.filter.as_deref(),
             Some("host == \"api.example.com\" and path == \"/v1/items\"")
@@ -424,7 +535,7 @@ mod tests {
              const API: string = \"https://api.example.com/v1/\";\n\
              function main(path: string): void { callee(API + path); }\n",
         );
-        let derived = derive_call_site_capability(&tag, &params, &ta, &args);
+        let derived = derive_call_site_capability(&tag, &params, &ta, &args).unwrap();
         assert_eq!(
             derived.filter.as_deref(),
             Some("host == \"api.example.com\"")
@@ -440,7 +551,7 @@ mod tests {
              const ORIGIN: string = \"https://api.example.com\";\n\
              function main(suffix: string): void { callee(ORIGIN + suffix); }\n",
         );
-        let derived = derive_call_site_capability(&tag, &params, &ta, &args);
+        let derived = derive_call_site_capability(&tag, &params, &ta, &args).unwrap();
         assert_eq!(derived.filter, None);
         assert_eq!(derived.warnings.len(), 1);
     }
@@ -454,7 +565,7 @@ mod tests {
              function endpoint(): string { return ORIGIN + \"/v1/items\"; }\n\
              function main(): void { callee(endpoint()); }\n",
         );
-        let derived = derive_call_site_capability(&tag, &params, &ta, &args);
+        let derived = derive_call_site_capability(&tag, &params, &ta, &args).unwrap();
         assert_eq!(derived.filter.as_deref(), None);
         assert_eq!(derived.warnings.len(), 1);
         assert!(
@@ -477,7 +588,7 @@ mod tests {
              let endpoint: string = \"https://r.jina.ai/\";\n\
              function main(): void { callee(endpoint); }\n",
         );
-        let derived = derive_call_site_capability(&tag, &params, &ta, &args);
+        let derived = derive_call_site_capability(&tag, &params, &ta, &args).unwrap();
         assert_eq!(derived.filter, None);
         assert_eq!(derived.warnings.len(), 1);
     }

@@ -11,7 +11,10 @@ use std::collections::BTreeSet;
 
 use crate::{Diagnostic, Severity, StmtId, TypedAst, TypedExprKind, TypedStmtKind, TypedTypeDecl};
 
-pub(super) fn run(ta: &TypedAst, diags: &mut Vec<Diagnostic>) {
+pub(super) fn run(
+    ta: &TypedAst,
+    diags: &mut Vec<Diagnostic>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     for decl in &ta.types {
         let TypedTypeDecl::Class(class) = decl else {
             continue;
@@ -25,7 +28,7 @@ pub(super) fn run(ta: &TypedAst, diags: &mut Vec<Diagnostic>) {
             continue;
         }
         let assigned = match &class.constructor {
-            Some(ctor) => analyze(ta, ctor.body).assigned,
+            Some(ctor) => analyze(ta, ctor.body)?.assigned,
             None => BTreeSet::new(),
         };
         for field in required {
@@ -46,6 +49,7 @@ pub(super) fn run(ta: &TypedAst, diags: &mut Vec<Diagnostic>) {
             }
         }
     }
+    Ok(())
 }
 
 struct Flow {
@@ -71,80 +75,91 @@ impl Flow {
     }
 }
 
-fn analyze(ta: &TypedAst, id: StmtId) -> Flow {
-    match &ta.stmt(id).kind {
-        TypedStmtKind::Return(_) | TypedStmtKind::Throw { .. } => Flow::diverges(),
-        TypedStmtKind::AssignField { receiver, name, .. } => {
-            if matches!(ta.expr(*receiver).kind, TypedExprKind::This) {
-                let mut assigned = BTreeSet::new();
-                assigned.insert(name.name.clone());
-                Flow {
-                    assigned,
-                    diverges: false,
+fn analyze(ta: &TypedAst, id: StmtId) -> Result<Flow, crate::compiler_error::CompilerFailure> {
+    Ok(
+        match &ta
+            .try_stmt(id)
+            .map_err(crate::typechecker::arena_failure)?
+            .kind
+        {
+            TypedStmtKind::Return(_) | TypedStmtKind::Throw { .. } => Flow::diverges(),
+            TypedStmtKind::AssignField { receiver, name, .. } => {
+                if matches!(
+                    ta.try_expr(*receiver)
+                        .map_err(crate::typechecker::arena_failure)?
+                        .kind,
+                    TypedExprKind::This
+                ) {
+                    let mut assigned = BTreeSet::new();
+                    assigned.insert(name.name.clone());
+                    Flow {
+                        assigned,
+                        diverges: false,
+                    }
+                } else {
+                    Flow::empty()
                 }
-            } else {
-                Flow::empty()
             }
-        }
-        TypedStmtKind::Block(stmts) => {
-            let mut flow = Flow::empty();
-            for &s in stmts {
-                if flow.diverges {
-                    break;
+            TypedStmtKind::Block(stmts) => {
+                let mut flow = Flow::empty();
+                for &s in stmts {
+                    if flow.diverges {
+                        break;
+                    }
+                    let next = analyze(ta, s)?;
+                    flow.assigned.extend(next.assigned);
+                    flow.diverges = next.diverges;
                 }
-                let next = analyze(ta, s);
-                flow.assigned.extend(next.assigned);
-                flow.diverges = next.diverges;
+                flow
             }
-            flow
-        }
-        TypedStmtKind::If {
-            then_block,
-            else_block,
-            ..
-        } => {
-            let then = analyze(ta, *then_block);
-            let Some(eb) = else_block else {
-                // No else: the false path assigns nothing, so nothing is guaranteed.
-                return Flow::empty();
-            };
-            let els = analyze(ta, *eb);
-            match (then.diverges, els.diverges) {
-                (true, true) => Flow::diverges(),
-                (true, false) => els,
-                (false, true) => then,
-                (false, false) => Flow {
-                    assigned: then.assigned.intersection(&els.assigned).cloned().collect(),
-                    diverges: false,
-                },
+            TypedStmtKind::If {
+                then_block,
+                else_block,
+                ..
+            } => {
+                let then = analyze(ta, *then_block)?;
+                let Some(eb) = else_block else {
+                    // No else: the false path assigns nothing, so nothing is guaranteed.
+                    return Ok(Flow::empty());
+                };
+                let els = analyze(ta, *eb)?;
+                match (then.diverges, els.diverges) {
+                    (true, true) => Flow::diverges(),
+                    (true, false) => els,
+                    (false, true) => then,
+                    (false, false) => Flow {
+                        assigned: then.assigned.intersection(&els.assigned).cloned().collect(),
+                        diverges: false,
+                    },
+                }
             }
-        }
-        TypedStmtKind::NarrowRegion { body, .. } => analyze(ta, *body),
-        TypedStmtKind::Try {
-            body,
-            catches,
-            finally,
-        } => {
-            // A `try` body may throw partway, so only fields assigned in the
-            // body and every catch arm are guaranteed; `finally` always runs.
-            let body_flow = analyze(ta, *body);
-            let mut assigned = body_flow.assigned.clone();
-            for c in catches {
-                let catch_flow = analyze(ta, c.body);
-                assigned = assigned
-                    .intersection(&catch_flow.assigned)
-                    .cloned()
-                    .collect();
+            TypedStmtKind::NarrowRegion { body, .. } => analyze(ta, *body)?,
+            TypedStmtKind::Try {
+                body,
+                catches,
+                finally,
+            } => {
+                // A `try` body may throw partway, so only fields assigned in the
+                // body and every catch arm are guaranteed; `finally` always runs.
+                let body_flow = analyze(ta, *body)?;
+                let mut assigned = body_flow.assigned.clone();
+                for c in catches {
+                    let catch_flow = analyze(ta, c.body)?;
+                    assigned = assigned
+                        .intersection(&catch_flow.assigned)
+                        .cloned()
+                        .collect();
+                }
+                let mut diverges = false;
+                if let Some(f) = finally {
+                    let fin = analyze(ta, *f)?;
+                    assigned.extend(fin.assigned);
+                    diverges = fin.diverges;
+                }
+                Flow { assigned, diverges }
             }
-            let mut diverges = false;
-            if let Some(f) = finally {
-                let fin = analyze(ta, *f);
-                assigned.extend(fin.assigned);
-                diverges = fin.diverges;
-            }
-            Flow { assigned, diverges }
-        }
-        // Loops and `switch` contribute no guaranteed assignment (conservative).
-        _ => Flow::empty(),
-    }
+            // Loops and `switch` contribute no guaranteed assignment (conservative).
+            _ => Flow::empty(),
+        },
+    )
 }

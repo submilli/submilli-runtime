@@ -378,3 +378,278 @@ fn branch_listing_follows_native_symbolic_aliases_without_panicking() {
             .contains("reference nesting")
     );
 }
+
+/// `init` writes the `.git` skeleton before it publishes, so the size limit's count
+/// must be taken before either; and a branch name can't make that skeleton large.
+#[tokio::test]
+async fn init_is_counted_against_the_size_limit_and_bounds_branch_names() {
+    let vfs = Vfs::tempdir().unwrap().with_size_limit(1 << 20);
+    let quota = vfs.quota().unwrap().clone();
+    worker::run(
+        &vfs,
+        &job(&vfs, "init"),
+        "init",
+        &[json!({ "branch": "main" })],
+    )
+    .unwrap();
+    assert!(quota.used() > 0, "the new repository counts");
+    assert_eq!(quota.used(), vfs.measure_usage().unwrap());
+
+    let long = "a".repeat(300);
+    let Err(error) = worker::run(
+        &vfs,
+        &job(&vfs, "init"),
+        "init",
+        &[json!({ "branch": long })],
+    ) else {
+        panic!("a 300-byte branch name was accepted");
+    };
+    let error = error.to_string();
+    assert!(error.contains("at most 250 bytes"), "{error}");
+}
+
+/// A 250-byte branch name leaves room for git's `.lock` file within a 255-byte
+/// path component, through a commit and a new branch; one byte more is refused.
+#[tokio::test]
+async fn a_branch_name_of_250_bytes_works_end_to_end() {
+    let vfs = Vfs::tempdir().unwrap().with_size_limit(1 << 20);
+    let longest = "a".repeat(250);
+    worker::run(
+        &vfs,
+        &job(&vfs, "init"),
+        "init",
+        &[json!({ "branch": longest })],
+    )
+    .unwrap();
+    std::fs::write(vfs.root().join("notes.txt"), b"notes").unwrap();
+    vfs.quota().unwrap().record(5);
+    worker::run(&vfs, &job(&vfs, "add"), "add", &[json!(["notes.txt"])]).unwrap();
+    worker::run(&vfs, &job(&vfs, "commit"), "commit", &[json!("add notes")]).unwrap();
+    worker::run(
+        &vfs,
+        &job(&vfs, "createBranch"),
+        "createBranch",
+        &[json!("b".repeat(250)), json!(longest)],
+    )
+    .unwrap();
+    let Err(error) = worker::run(
+        &vfs,
+        &job(&vfs, "createBranch"),
+        "createBranch",
+        &[json!("c".repeat(251)), json!(longest)],
+    ) else {
+        panic!("a 251-byte branch name was accepted");
+    };
+    let error = error.to_string();
+    assert!(error.contains("at most 250 bytes"), "{error}");
+}
+
+/// After a commit, the size limit's count matches what the directory holds.
+#[tokio::test]
+async fn a_commit_is_counted_against_the_size_limit() {
+    let vfs = Vfs::tempdir().unwrap().with_size_limit(1 << 20);
+    let quota = vfs.quota().unwrap().clone();
+    worker::run(
+        &vfs,
+        &job(&vfs, "init"),
+        "init",
+        &[json!({ "branch": "main" })],
+    )
+    .unwrap();
+    std::fs::write(vfs.root().join("notes.txt"), vec![b'x'; 5000]).unwrap();
+    quota.record(5000);
+    worker::run(&vfs, &job(&vfs, "add"), "add", &[json!(["notes.txt"])]).unwrap();
+    worker::run(&vfs, &job(&vfs, "commit"), "commit", &[json!("add notes")]).unwrap();
+    assert_eq!(quota.used(), vfs.measure_usage().unwrap());
+}
+
+/// A VFS that couldn't be measured is treated as full, for git as for every other
+/// writer.
+#[tokio::test]
+async fn git_refuses_to_write_in_an_unmeasured_vfs() {
+    let vfs = Vfs::tempdir().unwrap().with_measured_limit(1 << 20, None);
+    let Err(error) = worker::run(
+        &vfs,
+        &job(&vfs, "init"),
+        "init",
+        &[json!({ "branch": "main" })],
+    ) else {
+        panic!("init wrote in an unmeasured VFS");
+    };
+    assert!(
+        error
+            .downcast_ref::<crate::runtime::host::RangeError>()
+            .is_some(),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains("couldn't be measured"),
+        "{error}"
+    );
+    assert!(!vfs.root().join(".git").exists(), "nothing is left behind");
+}
+
+/// A branch switch that replaces a file a handle holds leaves the old copy on
+/// disk; the count keeps it until the handle lets go.
+#[tokio::test]
+async fn a_switch_that_replaces_a_held_file_counts_it_until_released() {
+    let vfs = Vfs::tempdir().unwrap().with_size_limit(1 << 20);
+    let quota = vfs.quota().unwrap().clone();
+    let run = |op: &str, args: &[serde_json::Value]| {
+        worker::run(&vfs, &job(&vfs, op), op, args).unwrap();
+    };
+    let write = |bytes: &[u8]| {
+        std::fs::write(vfs.root().join("big.bin"), bytes).unwrap();
+        quota.record(bytes.len() as u64);
+    };
+    run("init", &[json!({ "branch": "main" })]);
+    write(&[b'm'; 5000]);
+    run("add", &[json!(["big.bin"])]);
+    run("commit", &[json!("main")]);
+    run("createBranch", &[json!("other"), json!("HEAD")]);
+    run("switchBranch", &[json!("other")]);
+    quota.release(5000);
+    write(&[b'o'; 5000]);
+    run("add", &[json!(["big.bin"])]);
+    run("commit", &[json!("other")]);
+    assert_eq!(quota.used(), vfs.measure_usage().unwrap());
+
+    let held = vfs.dir().unwrap().symlink_metadata("big.bin").unwrap();
+    let guard = quota.hold(
+        crate::runtime::fs::FileIdentity::of(&held).unwrap(),
+        crate::runtime::Holder::Reader,
+    );
+    run("switchBranch", &[json!("main")]);
+    assert_eq!(
+        quota.used(),
+        vfs.measure_usage().unwrap() + 5000,
+        "the replaced copy is still on disk"
+    );
+    drop(guard);
+    assert_eq!(quota.used(), vfs.measure_usage().unwrap());
+}
+
+/// Replacing a held file frees nothing until the handle lets go, so a switch
+/// over one needs room for both copies.
+#[tokio::test]
+async fn a_switch_over_a_held_file_needs_room_for_both_copies() {
+    let dir = tempfile::tempdir().unwrap();
+    let roomy = Vfs::external(dir.path().to_path_buf())
+        .unwrap()
+        .with_size_limit(1 << 20);
+    let quota = roomy.quota().unwrap().clone();
+    let run =
+        |vfs: &Vfs, op: &str, args: &[serde_json::Value]| worker::run(vfs, &job(vfs, op), op, args);
+    let write = |bytes: &[u8]| {
+        std::fs::write(dir.path().join("big.bin"), bytes).unwrap();
+        quota.record(bytes.len() as u64);
+    };
+    run(&roomy, "init", &[json!({ "branch": "main" })]).unwrap();
+    write(&[b'm'; 5000]);
+    run(&roomy, "add", &[json!(["big.bin"])]).unwrap();
+    run(&roomy, "commit", &[json!("main")]).unwrap();
+    run(&roomy, "createBranch", &[json!("other"), json!("HEAD")]).unwrap();
+    run(&roomy, "switchBranch", &[json!("other")]).unwrap();
+    quota.release(5000);
+    write(&[b'o'; 5000]);
+    run(&roomy, "add", &[json!(["big.bin"])]).unwrap();
+    run(&roomy, "commit", &[json!("other")]).unwrap();
+
+    let used = roomy.measure_usage().unwrap();
+    let tight = Vfs::external(dir.path().to_path_buf())
+        .unwrap()
+        .with_size_limit(used + 1000);
+    let tight_quota = tight.quota().unwrap().clone();
+    let held = tight.dir().unwrap().symlink_metadata("big.bin").unwrap();
+    let guard = tight_quota.hold(
+        crate::runtime::fs::FileIdentity::of(&held).unwrap(),
+        crate::runtime::Holder::Reader,
+    );
+    let Err(error) = run(&tight, "switchBranch", &[json!("main")]) else {
+        panic!("a switch over a held file fit without room for its old copy");
+    };
+    assert!(
+        error
+            .downcast_ref::<crate::runtime::host::RangeError>()
+            .is_some(),
+        "{error}"
+    );
+    drop(guard);
+    run(&tight, "switchBranch", &[json!("main")]).unwrap();
+    assert_eq!(tight_quota.used(), tight.measure_usage().unwrap());
+}
+
+/// A tree nested too deep to measure, anywhere in the VFS, leaves a git change
+/// uncountable: refused as a write past the limit is, with a `RangeError`.
+#[tokio::test]
+async fn git_refuses_a_change_it_cannot_measure() {
+    let vfs = Vfs::tempdir().unwrap().with_size_limit(1 << 20);
+    worker::run(
+        &vfs,
+        &job(&vfs, "init"),
+        "init",
+        &[json!({ "branch": "main" })],
+    )
+    .unwrap();
+    let mut deep = vfs.root().join("elsewhere");
+    for _ in 0..65 {
+        deep = deep.join("d");
+    }
+    std::fs::create_dir_all(&deep).unwrap();
+    let Err(error) = worker::run(
+        &vfs,
+        &job(&vfs, "addRemote"),
+        "addRemote",
+        &[json!("origin"), json!("https://example.com/r.git")],
+    ) else {
+        panic!("a git change went through in a VFS too deep to measure");
+    };
+    assert!(
+        error
+            .downcast_ref::<crate::runtime::host::RangeError>()
+            .is_some(),
+        "{error}"
+    );
+}
+
+/// A git change that doesn't grow the files is still refused in a VFS that
+/// couldn't be measured: publication can't be counted there.
+#[tokio::test]
+async fn git_refuses_a_change_that_does_not_grow_an_unmeasured_vfs() {
+    let dir = tempfile::tempdir().unwrap();
+    let measured = Vfs::external(dir.path().to_path_buf())
+        .unwrap()
+        .with_size_limit(1 << 20);
+    worker::run(
+        &measured,
+        &job(&measured, "init"),
+        "init",
+        &[json!({ "branch": "main" })],
+    )
+    .unwrap();
+    let long_url = format!("https://example.com/{}.git", "r".repeat(200));
+    worker::run(
+        &measured,
+        &job(&measured, "addRemote"),
+        "addRemote",
+        &[json!("origin"), json!(long_url)],
+    )
+    .unwrap();
+    let unmeasured = Vfs::external(dir.path().to_path_buf())
+        .unwrap()
+        .with_measured_limit(1 << 20, None);
+    let Err(error) = worker::run(
+        &unmeasured,
+        &job(&unmeasured, "setRemoteUrl"),
+        "setRemoteUrl",
+        &[json!("origin"), json!("https://example.com/r.git")],
+    ) else {
+        panic!("a git change went through in an unmeasured VFS");
+    };
+    assert!(
+        error
+            .downcast_ref::<crate::runtime::host::RangeError>()
+            .is_some(),
+        "{error}"
+    );
+}

@@ -3,6 +3,7 @@
 pub mod app;
 pub mod blueprint;
 pub mod blueprint_seed;
+mod compiler_thread;
 pub mod config;
 pub mod error;
 mod execution_timeout;
@@ -23,7 +24,7 @@ pub use config::{ServerConfig, warn_if_external_bind};
 pub use interpreter::runtime::{
     DEFAULT_MAX_EXECUTION_TOKENS, DEFAULT_MAX_STORE_BYTES, LlmLimits, NetworkPolicy, RuntimeConfig,
 };
-pub use serve::serve;
+pub use serve::{runtime, serve};
 pub use submilli_shared::mcp_token::{McpTokenError, OAuthTokenManager};
 pub use submilli_shared::secret_store::{FileSecretStore, KeySource};
 pub use submilli_shared::secret_store::{SecretStore, SecretStoreError};

@@ -2,20 +2,22 @@
 
 use wasm_encoder::{BlockType, Catch, Function, Instruction, ValType};
 
+use super::internal_failure;
 use super::symbol_table::SymbolTable;
+use crate::compiler_error::CompilerFailure;
 
 pub(super) fn guarded_body(
     body: u32,
     params: u32,
     result: ValType,
     symbols: &SymbolTable,
-) -> Function {
+) -> Result<Function, CompilerFailure> {
     let enter = symbols
         .prelude_func_idx("vtable_walk_enter")
-        .expect("walk guard imported");
+        .ok_or_else(|| internal_failure("the vtable walk guard is not imported"))?;
     let leave = symbols
         .prelude_func_idx("vtable_walk_leave")
-        .expect("walk guard imported");
+        .ok_or_else(|| internal_failure("the vtable walk guard is not imported"))?;
     let mut f = Function::new([]);
     // An entry failure belongs to the caller's frame: do not decrement it here.
     f.instruction(&Instruction::Call(enter));
@@ -35,5 +37,5 @@ pub(super) fn guarded_body(
     f.instruction(&Instruction::Call(leave));
     f.instruction(&Instruction::ThrowRef);
     f.instruction(&Instruction::End);
-    f
+    Ok(f)
 }

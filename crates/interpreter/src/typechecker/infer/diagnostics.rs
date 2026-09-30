@@ -160,13 +160,7 @@ impl std::fmt::Display for ComparisonPosition {
 
 impl<'a> Inferer<'a> {
     pub(super) fn error(&mut self, span: Span, message: String) {
-        self.diagnostics.push(Diagnostic {
-            severity: Severity::Error,
-            span,
-            message,
-            help: vec![],
-            notes: vec![],
-        });
+        self.error_with_help_and_notes(span, message, vec![], vec![]);
     }
 
     /// Like [`Self::error`] but attaches one or more `help:` blocks
@@ -175,13 +169,7 @@ impl<'a> Inferer<'a> {
     /// definitions and similar fix-shape text the LLM needs but that
     /// doesn't point anywhere in the source.
     pub(super) fn error_with_help(&mut self, span: Span, message: String, help: Vec<String>) {
-        self.diagnostics.push(Diagnostic {
-            severity: Severity::Error,
-            span,
-            message,
-            help,
-            notes: vec![],
-        });
+        self.error_with_help_and_notes(span, message, help, vec![]);
     }
 
     /// How many *errors* have been reported so far.
@@ -271,6 +259,12 @@ impl<'a> Inferer<'a> {
     /// fix-shape help block and a "this is what killed you" pointer
     /// at another location — currently the property-path narrowing
     /// tombstone surfaces (plan 75.17a).
+    ///
+    /// Error reports are dropped while a type limit is recorded: until the next
+    /// checkpoint fails compilation with it, they may describe the `Type::Error`
+    /// stand-in rather than the source. Errors that do not depend on types,
+    /// such as a duplicate `case` label or an assignment to a `const`, are
+    /// pushed directly and still reported.
     pub(super) fn error_with_help_and_notes(
         &mut self,
         span: Span,
@@ -278,6 +272,9 @@ impl<'a> Inferer<'a> {
         help: Vec<String>,
         notes: Vec<(Span, String)>,
     ) {
+        if self.type_limits.limit_reached() {
+            return;
+        }
         self.diagnostics.push(Diagnostic {
             severity: Severity::Error,
             span,
@@ -299,13 +296,21 @@ impl<'a> Inferer<'a> {
     /// The two sources are mutually exclusive in practice — a path
     /// can't have both a live tombstone and a captured-mutator root
     /// at the same time without something else having gone wrong.
-    pub(super) fn narrowing_invalidation_hint(&self, receiver: ExprId) -> Option<DiagnosticAddon> {
-        let receiver_expr = self.typed_ast.expr(receiver);
-        if let Some(hint) = self.getter_narrowing_hint(&receiver_expr.kind) {
-            return Some(hint);
+    pub(super) fn narrowing_invalidation_hint(
+        &self,
+        receiver: ExprId,
+    ) -> Result<Option<DiagnosticAddon>, crate::compiler_error::CompilerFailure> {
+        let receiver_expr = self
+            .typed_ast
+            .try_expr(receiver)
+            .map_err(crate::typechecker::arena_failure)?;
+        if let Some(hint) = self.getter_narrowing_hint(&receiver_expr.kind)? {
+            return Ok(Some(hint));
         }
-        let path = self.expr_to_reference_path(receiver_expr)?;
-        self.narrowing_hint_for_path(&path)
+        let Some(path) = self.expr_to_reference_path(receiver_expr)? else {
+            return Ok(None);
+        };
+        Ok(self.narrowing_hint_for_path(&path))
     }
 
     /// The operand whose `null` is what breaks this site: it admits `null`, and
@@ -337,15 +342,18 @@ impl<'a> Inferer<'a> {
         message: String,
         mut help: Vec<String>,
         culprit: Option<ExprId>,
-    ) {
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         let mut notes = Vec::new();
-        if let Some((extra_help, extra_notes)) =
-            culprit.and_then(|e| self.narrowing_invalidation_hint(e))
+        if let Some((extra_help, extra_notes)) = culprit
+            .map(|e| self.narrowing_invalidation_hint(e))
+            .transpose()?
+            .flatten()
         {
             help.extend(extra_help);
             notes.extend(extra_notes);
         }
         self.error_with_help_and_notes(span, message, help, notes);
+        Ok(())
     }
 
     /// The culprit for a binary operator, given the operator's own rule for which
@@ -401,34 +409,43 @@ impl<'a> Inferer<'a> {
         kind: &crate::TypedExprKind,
         got: &Type,
         want: &Type,
-    ) -> Option<DiagnosticAddon> {
+    ) -> Result<Option<DiagnosticAddon>, crate::compiler_error::CompilerFailure> {
         if !spells_null(got) {
-            return None;
+            return Ok(None);
         }
-        let non_null = super::narrow_scopes::non_null_form(got.clone())?;
+        let Some(non_null) = super::narrow_scopes::non_null_form(got.clone()) else {
+            return Ok(None);
+        };
         if !super::assignable::assignable(&non_null, want, self.resolver()) {
-            return None;
+            return Ok(None);
         }
-        if let Some(hint) = self.getter_narrowing_hint(kind) {
-            return Some(hint);
+        if let Some(hint) = self.getter_narrowing_hint(kind)? {
+            return Ok(Some(hint));
         }
-        let path = self.kind_to_reference_path(kind)?;
-        self.narrowing_hint_for_path(&path)
+        let Some(path) = self.kind_to_reference_path(kind)? else {
+            return Ok(None);
+        };
+        Ok(self.narrowing_hint_for_path(&path))
     }
 
-    fn getter_narrowing_hint(&self, kind: &crate::TypedExprKind) -> Option<DiagnosticAddon> {
-        let state = self.kind_to_reference_path_state(kind)?;
+    fn getter_narrowing_hint(
+        &self,
+        kind: &crate::TypedExprKind,
+    ) -> Result<Option<DiagnosticAddon>, crate::compiler_error::CompilerFailure> {
+        let Some(state) = self.kind_to_reference_path_state(kind)? else {
+            return Ok(None);
+        };
         if !state.contains_getter {
-            return None;
+            return Ok(None);
         }
         let rendered = state.path.render();
         let tmp = self.fresh_hint_binding();
-        Some((
+        Ok(Some((
             vec![format!(
                 "`{rendered}` is getter-backed, so each read may return a different value and its guard cannot narrow later reads. Bind one read to a local `const` first: `const {tmp} = {rendered};` then guard `{tmp}`."
             )],
             Vec::new(),
-        ))
+        )))
     }
 
     /// A binding name the suggested rewrite can introduce without colliding
@@ -544,7 +561,34 @@ impl<'a> Inferer<'a> {
     /// FQN registry (with `self.types` as fallback) so a library-typed value's
     /// shape is lifted into help even when the interface name was never imported.
     pub(super) fn format_definition(&self, ty: &Type) -> String {
-        format_definition::format_definition(ty, &self.types, &self.type_registry)
+        self.render_help(
+            || {
+                format_definition::format_definition(
+                    ty,
+                    &self.types,
+                    &self.type_registry,
+                    &self.type_limits,
+                )
+            },
+            || ty.to_string(),
+        )
+    }
+
+    /// Help text from `render`, which may meet a type limit while substituting.
+    /// A limit met only while rendering help does not affect the program, so
+    /// it is discarded and `fallback` is shown; otherwise the error the help
+    /// belongs to would be dropped while the limit is pending.
+    fn render_help(
+        &self,
+        render: impl FnOnce() -> String,
+        fallback: impl FnOnce() -> String,
+    ) -> String {
+        let limit_was_pending = self.type_limits.limit_reached();
+        let text = render();
+        if !limit_was_pending && self.type_limits.take().is_err() {
+            return fallback();
+        }
+        text
     }
 
     /// The type's definition lifted as a `help:` block, empty when the lift is
@@ -606,6 +650,7 @@ impl<'a> Inferer<'a> {
                     predicate,
                 },
                 &TypeParamSubstitution::new(),
+                &self.type_limits,
             );
         }
         let substitution = match &kind {
@@ -614,7 +659,17 @@ impl<'a> Inferer<'a> {
             } => self.method_lift_substitution(receiver_ty, name),
             _ => TypeParamSubstitution::new(),
         };
-        format_signature::format_signature(kind, &substitution)
+        // Unsubstituted, the signature still names its type parameters.
+        self.render_help(
+            || format_signature::format_signature(kind, &substitution, &self.type_limits),
+            || {
+                format_signature::format_signature(
+                    kind,
+                    &TypeParamSubstitution::new(),
+                    &self.type_limits,
+                )
+            },
+        )
     }
 
     /// The type-parameter table a method lift renders with: re-asks
@@ -842,9 +897,17 @@ impl<'a> Inferer<'a> {
         receiver: ExprId,
         receiver_ty: &Type,
         name: &str,
-    ) {
-        let recv_span = self.typed_ast.expr(receiver).span;
-        let recv_path = self.expr_to_reference_path(self.typed_ast.expr(receiver));
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        let recv_span = self
+            .typed_ast
+            .try_expr(receiver)
+            .map_err(crate::typechecker::arena_failure)?
+            .span;
+        let recv_path = self.expr_to_reference_path(
+            self.typed_ast
+                .try_expr(receiver)
+                .map_err(crate::typechecker::arena_failure)?,
+        )?;
         let nullable = self.nullable_receiver_fix(
             recv_span,
             recv_path.as_ref(),
@@ -876,11 +939,12 @@ impl<'a> Inferer<'a> {
             ),
         };
         let mut notes: Vec<(Span, String)> = Vec::new();
-        if let Some((extra_help, extra_notes)) = self.narrowing_invalidation_hint(receiver) {
+        if let Some((extra_help, extra_notes)) = self.narrowing_invalidation_hint(receiver)? {
             help.extend(extra_help);
             notes.extend(extra_notes);
         }
         self.error_with_help_and_notes(span, message, help, notes);
+        Ok(())
     }
 
     /// A field read on a union whose members otherwise carry fields, where one
@@ -1658,5 +1722,36 @@ mod dropped_guard_tests {
             }),
             "{diagnostics:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod help_rendering_tests {
+    use super::super::test_support::with_inferer;
+    use crate::type_size::TypeTooLarge;
+
+    #[test]
+    fn a_limit_met_only_while_rendering_help_is_discarded() {
+        with_inferer(|tc| {
+            let text = tc.render_help(
+                || {
+                    tc.type_limits.record(TypeTooLarge::Nodes);
+                    "rendered".into()
+                },
+                || "fallback".into(),
+            );
+            assert_eq!(text, "fallback");
+            assert!(!tc.type_limits.limit_reached());
+        });
+    }
+
+    #[test]
+    fn a_limit_pending_before_rendering_is_kept() {
+        with_inferer(|tc| {
+            tc.type_limits.record(TypeTooLarge::Depth);
+            let text = tc.render_help(|| "rendered".into(), || "fallback".into());
+            assert_eq!(text, "rendered");
+            assert_eq!(tc.type_limits.take(), Err(TypeTooLarge::Depth));
+        });
     }
 }

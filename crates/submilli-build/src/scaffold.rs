@@ -6,7 +6,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use interpreter::packages::{render_lib_submilli_d_ts, render_stdlib_d_ts};
+use interpreter::PackageDeclaration;
+use interpreter::packages::{render_lib_submilli_d_ts, render_packages_d_ts, render_stdlib_d_ts};
 
 use crate::package_store::split_scoped_name;
 use crate::{
@@ -332,11 +333,7 @@ pub fn refresh_editor_files(
     let generated_tsconfig = submilli_dir.join("tsconfig.submilli.json");
     write_text(&generated_tsconfig, &generated_tsconfig_text(manifest))?;
 
-    let types_dir = submilli_dir.join("types");
-    fs::create_dir_all(&types_dir).map_err(|source| ScaffoldError::Io {
-        path: types_dir.clone(),
-        source,
-    })?;
+    let types_dir = ensure_types_dir(manifest_dir)?;
     write_text(
         &types_dir.join("lib.submilli.d.ts"),
         &format!("{}\n", render_lib_submilli_d_ts()),
@@ -347,6 +344,31 @@ pub fn refresh_editor_files(
     )?;
 
     Ok(())
+}
+
+/// Write `.submilli/types/packages.d.ts` from the given dependency
+/// declarations. Sibling packages need none: the generated tsconfig maps them
+/// to their sources. `project_packages` are store copies of those packages,
+/// which the dependencies may borrow types from.
+pub fn refresh_dependency_types(
+    manifest_dir: &Path,
+    dependencies: &[&PackageDeclaration],
+    project_packages: &[&PackageDeclaration],
+) -> Result<(), ScaffoldError> {
+    let types_dir = ensure_types_dir(manifest_dir)?;
+    write_text(
+        &types_dir.join("packages.d.ts"),
+        &format!("{}\n", render_packages_d_ts(dependencies, project_packages)),
+    )
+}
+
+fn ensure_types_dir(manifest_dir: &Path) -> Result<PathBuf, ScaffoldError> {
+    let types_dir = manifest_dir.join(".submilli").join("types");
+    fs::create_dir_all(&types_dir).map_err(|source| ScaffoldError::Io {
+        path: types_dir.clone(),
+        source,
+    })?;
+    Ok(types_dir)
 }
 
 fn generated_tsconfig_text(manifest: &ProjectManifest) -> String {

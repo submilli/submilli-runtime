@@ -40,7 +40,7 @@ pub fn package_declaration() -> PackageDeclaration {
             name: "Info".to_string(),
             args: Vec::new(),
         },
-        "/**\n * The active VFS configuration: `mode` (`\"none\"` / `\"ephemeral\"` / `\"per_session\"` / `\"persistent\"`) and the byte / file-count limits. `sizeLimit` and `pathLimit` are `-1` when no limit applies (`none` and `persistent` modes). Deterministic; no capability required. The host directory backing the VFS is never exposed.\n */",
+        "/**\n * The active VFS configuration: `mode` (`\"none\"` / `\"ephemeral\"` / `\"per_session\"` / `\"persistent\"`) and `sizeLimit`, the cap on the bytes its files may hold, or `-1` when none applies. Deterministic; no capability required. The host directory backing the VFS is never exposed.\n */",
     );
     insert_fn(
         &mut defs,
@@ -387,13 +387,7 @@ fn insert_info_interface(defs: &mut PackageDeclaration) {
         &mut properties,
         "sizeLimit",
         Type::Number,
-        "/** Byte cap for the VFS, or `-1` when no limit applies (`none` / `persistent`). */",
-    );
-    insert_property(
-        &mut properties,
-        "pathLimit",
-        Type::Number,
-        "/** File-count cap for the VFS, or `-1` when no limit applies (`none` / `persistent`). */",
+        "/** The most bytes the files in the VFS may hold, or `-1` when no limit applies. A write that would pass it throws a `RangeError`. */",
     );
     defs.types.insert(
         "Info".to_string(),
@@ -407,7 +401,7 @@ fn insert_info_interface(defs: &mut PackageDeclaration) {
                 properties,
                 dispatch: Dispatch::Direct,
                 doc: crate::doc(crate::FileId::FS,
-                    "/** VFS configuration returned by `info()`: `mode` plus the `sizeLimit` / `pathLimit` byte and file-count caps (`-1` when not applicable). Never carries the host path. */",
+                    "/** VFS configuration returned by `info()`: `mode` plus `sizeLimit`, the cap on the bytes its files may hold (`-1` when no limit applies). Never carries the host path. */",
                 ),
             },
         },

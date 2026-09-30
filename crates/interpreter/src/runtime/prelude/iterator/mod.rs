@@ -765,7 +765,7 @@ mod tests {
         let mut types = TypeSection::new();
         let intrinsics = declare_intrinsic_types(&mut types);
         let mut next_idx = crate::codegen::intrinsics::INTRINSIC_TYPE_COUNT;
-        let assigned = emit_arity_closures([sig], &mut types, intrinsics, &mut next_idx);
+        let assigned = emit_arity_closures([sig], &mut types, intrinsics, &mut next_idx).unwrap();
         let (_fn_idx, struct_idx) = assigned[&sig];
         module.section(&types);
 
@@ -822,7 +822,7 @@ mod tests {
         let mut types = TypeSection::new();
         let intrinsics = declare_intrinsic_types(&mut types);
         let mut next_idx = crate::codegen::intrinsics::INTRINSIC_TYPE_COUNT;
-        let assigned = emit_arity_closures([sig], &mut types, intrinsics, &mut next_idx);
+        let assigned = emit_arity_closures([sig], &mut types, intrinsics, &mut next_idx).unwrap();
         let (_fn_idx, struct_idx) = assigned[&sig];
         module.section(&types);
 

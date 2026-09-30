@@ -654,12 +654,14 @@ fn is_source_file(path: &Path) -> bool {
 // `Sources` from the same slice reproduces its FileId assignment and the
 // rendered diagnostics point at the right files — here under their on-disk
 // display paths instead of the import-facing module paths.
-fn display_sources(modules: &[DiscoveredModule]) -> Sources {
+fn display_sources(
+    modules: &[DiscoveredModule],
+) -> Result<Sources, interpreter::source::SourceError> {
     let mut sources = Sources::new();
     for module in modules {
-        sources.add(module.display_path.clone(), module.text.clone());
+        sources.add(module.display_path.clone(), module.text.clone())?;
     }
-    sources
+    Ok(sources)
 }
 
 fn render_diagnostics(modules: &[DiscoveredModule], diags: &[Diagnostic]) -> String {
@@ -667,7 +669,20 @@ fn render_diagnostics(modules: &[DiscoveredModule], diags: &[Diagnostic]) -> Str
 }
 
 fn render_diagnostics_list(modules: &[DiscoveredModule], diags: &[Diagnostic]) -> Vec<String> {
-    let sources = display_sources(modules);
+    let sources = match display_sources(modules) {
+        Ok(sources) => sources,
+        Err(error) => {
+            return diags
+                .iter()
+                .map(|diagnostic| {
+                    format!(
+                        "error: {}\nsource context unavailable: {error}\n",
+                        diagnostic.message
+                    )
+                })
+                .collect();
+        }
+    };
     diags
         .iter()
         .map(|d| diagnostics::render(d, &sources))

@@ -63,14 +63,18 @@ impl Flow {
     }
 }
 
-pub(super) fn lower(ast: &TypedAst, dependencies: &[&crate::PackageDeclaration]) -> TypedAst {
+pub(super) fn lower(
+    ast: &TypedAst,
+    dependencies: &[&crate::PackageDeclaration],
+) -> Result<TypedAst, crate::compiler_error::CompilerFailure> {
     let mut lowered = ast.clone();
-    let locals = crate::typechecker::resolve_locals(&mut lowered);
+    let locals = crate::typechecker::resolve_locals(&mut lowered)
+        .map_err(|failure| failure.with_stage(crate::compiler_error::CompilerStage::Codegen))?;
     let mut flow = Flow::default();
-    flow::connect(ast, &mut lowered, dependencies, &locals, &mut flow);
+    flow::connect(ast, &mut lowered, dependencies, &locals, &mut flow)?;
     flow.propagate();
-    rewrite::rewrite(&mut lowered, ast, &flow, &locals.writes);
-    lowered
+    rewrite::rewrite(&mut lowered, ast, &flow, &locals.writes)?;
+    Ok(lowered)
 }
 
 /// Host interfaces retain their native operation ABI. Core language values and

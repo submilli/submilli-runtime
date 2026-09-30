@@ -31,8 +31,9 @@ that general knowledge gets wrong; what goes wrong without it is named.
   guard fields the model can choose.
 - Package implementation: [packages](references/packages.md); without it the
   package is written as Node.js and fails `build`.
-- Policy design and verification: [blueprints](references/blueprints.md);
-  without it the blueprint lints but the server rejects it.
+- Policy design and verification, including MCP servers and direct HTTP:
+  [blueprints](references/blueprints.md); without it the blueprint lints but
+  the server rejects it, or an MCP server is allowed whole.
 - Ideas or suitability: [use cases](references/use-cases.md).
 - Agent implementation: [harness integration](references/harnesses.md), then
   the user's harness reference; without it the adapter or identity binding is
@@ -42,7 +43,7 @@ that general knowledge gets wrong; what goes wrong without it is named.
   "it ran once". Delegate to the `submilli-verifier` subagent when installed;
   otherwise run it yourself as a separate pass. Report its findings.
 
-For topics these references do not cover, fetch https://submilli.ai/llms.txt
+For topics these references do not cover, fetch https://submilli.ai/docs/llms.txt
 and follow the relevant Markdown chapter links. Fetch only the chapters needed
 for the task. If the site is unavailable, continue with local references and
 CLI/MCP documentation, and identify any documentation gap that affects the answer.

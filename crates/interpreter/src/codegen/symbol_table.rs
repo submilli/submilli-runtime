@@ -6,7 +6,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use wasm_encoder::{HeapType, RefType, ValType};
 
 use crate::codegen::closures::ClosureSig;
+use crate::codegen::internal_failure;
 use crate::codegen::intrinsics::{IntrinsicTypeIndices, intrinsic_supertypes};
+use crate::compiler_error::CompilerFailure;
 use crate::{Dispatch, ExprId, MangledName, Type};
 
 /// One step of a constructor's field-setup sequence, run after `super(...)`
@@ -396,9 +398,9 @@ impl SymbolTable {
         self.optional_field_name_type = Some(index);
     }
 
-    pub fn optional_field_name_type(&self) -> u32 {
+    pub fn optional_field_name_type(&self) -> Result<u32, CompilerFailure> {
         self.optional_field_name_type
-            .expect("optional field-name type declared")
+            .ok_or_else(|| internal_failure("optional field-name type was not declared"))
     }
 
     pub fn field_names_global_idx(
@@ -416,8 +418,11 @@ impl SymbolTable {
     /// key a binding registers during collection still resolves once class
     /// struct types are recorded. A cell for an erased type therefore holds
     /// `(ref null $Object)`; reads out of it need `emit_unerase`.
-    pub fn box_type_idx(&self, ty: &Type) -> Option<u32> {
-        self.box_type_idx.get(&self.slot_value_type(ty)).copied()
+    pub fn box_type_idx(
+        &self,
+        ty: &Type,
+    ) -> Result<Option<u32>, crate::compiler_error::CompilerFailure> {
+        Ok(self.box_type_idx.get(&self.slot_value_type(ty)?).copied())
     }
 
     /// A box struct is the `(ref $box_T)` wrapper a captured-and-mutated binding
@@ -442,9 +447,12 @@ impl SymbolTable {
         self.closure_coercion_vtable_type = Some(index);
     }
 
-    pub fn closure_coercion_vtable_type(&self) -> u32 {
-        self.closure_coercion_vtable_type
-            .expect("closure coercion vtable declared")
+    pub fn closure_coercion_vtable_type(
+        &self,
+    ) -> Result<u32, crate::compiler_error::CompilerFailure> {
+        self.closure_coercion_vtable_type.ok_or_else(|| {
+            crate::codegen::internal_failure("closure coercion vtable is not registered")
+        })
     }
 
     pub fn closure_signatures(&self) -> impl Iterator<Item = ClosureSig> + '_ {
@@ -661,10 +669,15 @@ impl SymbolTable {
         parent: Option<&MangledName>,
         named_len: u32,
         guarded: bool,
-    ) {
-        let depth = parent.map_or(0, |parent| {
-            self.class_guard_layout(parent).inheritance_depth + 1
-        });
+    ) -> Result<(), CompilerFailure> {
+        let depth = match parent {
+            Some(parent) => self
+                .recorded_class_guard_layout(parent)?
+                .inheritance_depth
+                .checked_add(1)
+                .ok_or_else(|| internal_failure("class inheritance depth overflowed"))?,
+            None => 0,
+        };
         self.class_guard_layout.insert(
             class,
             ClassGuardLayout {
@@ -673,13 +686,31 @@ impl SymbolTable {
                 has_instance_guards: guarded,
             },
         );
+        Ok(())
     }
 
+    /// Defaults an unrecorded class to no guards. Only the field-guard emitters
+    /// still rely on this until SUB-633 item 17; everything else uses
+    /// [`Self::recorded_class_guard_layout`].
     pub fn class_guard_layout(&self, class: &MangledName) -> ClassGuardLayout {
         self.class_guard_layout
             .get(class)
             .copied()
             .unwrap_or_default()
+    }
+
+    /// Guard layout of a class this module lays out or reconstructs, which is
+    /// recorded before any use.
+    pub fn recorded_class_guard_layout(
+        &self,
+        class: &MangledName,
+    ) -> Result<ClassGuardLayout, CompilerFailure> {
+        self.class_guard_layout.get(class).copied().ok_or_else(|| {
+            internal_failure(format!(
+                "class `{}` has no recorded guard layout",
+                class.as_str()
+            ))
+        })
     }
 
     pub fn record_instance_field_guard(
@@ -704,21 +735,12 @@ impl SymbolTable {
     }
 
     pub fn record_runtime_validator(&mut self, key: Type, idx: u32) {
-        match &key {
-            Type::AliasRef { mangled, args, .. } | Type::InterfaceRef { mangled, args, .. }
-                if !args.is_empty() && args.iter().all(|arg| matches!(arg, Type::TypeVar(_))) =>
-            {
-                let names = args
-                    .iter()
-                    .map(|arg| match arg {
-                        Type::TypeVar(name) => name.clone(),
-                        _ => unreachable!(),
-                    })
-                    .collect();
-                self.generic_runtime_validators
-                    .insert(mangled.clone(), (names, idx));
-            }
-            _ => {}
+        if let Type::AliasRef { mangled, args, .. } | Type::InterfaceRef { mangled, args, .. } =
+            &key
+            && let Some(names) = generic_parameter_names(args)
+        {
+            self.generic_runtime_validators
+                .insert(mangled.clone(), (names, idx));
         }
         self.runtime_validator_idx.insert(key, idx);
     }
@@ -796,13 +818,14 @@ impl SymbolTable {
         idx: u32,
         params: Vec<Type>,
         ret: Type,
-    ) {
+    ) -> Result<(), CompilerFailure> {
         // Guard against an accidental mangle/source-name swap.
-        debug_assert!(
-            mangled.as_str().contains(crate::mangle::SEP),
-            "local fn mangled name must contain the separator: {}",
-            mangled.as_str(),
-        );
+        if !mangled.as_str().contains(crate::mangle::SEP) {
+            return Err(internal_failure(format!(
+                "local function `{}` has no mangled package prefix",
+                mangled.as_str()
+            )));
+        }
         self.funcs.insert(mangled.clone(), idx);
         self.top_level_fns.insert(
             mangled,
@@ -813,6 +836,7 @@ impl SymbolTable {
                 is_host: false,
             },
         );
+        Ok(())
     }
 
     pub fn top_level_fn(&self, mangled: &MangledName) -> Option<&TopLevelFn> {
@@ -843,24 +867,20 @@ impl SymbolTable {
         self.intrinsic_members.contains(mangled)
     }
 
-    pub fn value_type(&self, ty: &Type) -> ValType {
+    pub fn value_type(&self, ty: &Type) -> Result<ValType, crate::compiler_error::CompilerFailure> {
         let ty = ty.peel();
-        match ty {
+        Ok(match ty {
             Type::Number | Type::NumberLiteral(_) => ValType::F64,
             Type::Boolean | Type::BooleanLiteral(_) => ValType::I32,
             Type::String | Type::StringLiteral(_) => {
-                let idx = self.string_type_idx().expect(
-                    "Type::String requires the intrinsic types to be declared (declare_intrinsic_types)",
-                );
+                let idx = self.string_type_idx().ok_or_else(|| crate::codegen::internal_failure("Type::String requires the intrinsic types to be declared (declare_intrinsic_types)"))?;
                 ValType::Ref(RefType {
                     nullable: false,
                     heap_type: HeapType::Concrete(idx),
                 })
             }
             Type::BigInt => {
-                let idx = self.bigint_type_idx().expect(
-                    "Type::BigInt requires the intrinsic types to be declared (declare_intrinsic_types)",
-                );
+                let idx = self.bigint_type_idx().ok_or_else(|| crate::codegen::internal_failure("Type::BigInt requires the intrinsic types to be declared (declare_intrinsic_types)"))?;
                 ValType::Ref(RefType {
                     nullable: false,
                     heap_type: HeapType::Concrete(idx),
@@ -873,7 +893,9 @@ impl SymbolTable {
                 // common supertype.
                 let idx = self
                     .intrinsic_type_indices()
-                    .expect("intrinsics declared by codegen entry")
+                    .ok_or_else(|| {
+                        crate::codegen::internal_failure("intrinsics declared by codegen entry")
+                    })?
                     .object_shape;
                 ValType::Ref(RefType {
                     nullable: false,
@@ -881,9 +903,7 @@ impl SymbolTable {
                 })
             }
             Type::Array(_) => {
-                let idx = self.array_type_idx().expect(
-                    "Type::Array requires the intrinsic types to be declared (declare_intrinsic_types)",
-                );
+                let idx = self.array_type_idx().ok_or_else(|| crate::codegen::internal_failure("Type::Array requires the intrinsic types to be declared (declare_intrinsic_types)"))?;
                 ValType::Ref(RefType {
                     nullable: false,
                     heap_type: HeapType::Concrete(idx),
@@ -892,18 +912,14 @@ impl SymbolTable {
             Type::Tuple(_) => {
                 // Tuples lower to `$Array` — they are arrays at runtime; positional
                 // element types are tracked by the typechecker only.
-                let idx = self.array_type_idx().expect(
-                    "Type::Tuple requires the intrinsic types to be declared (declare_intrinsic_types)",
-                );
+                let idx = self.array_type_idx().ok_or_else(|| crate::codegen::internal_failure("Type::Tuple requires the intrinsic types to be declared (declare_intrinsic_types)"))?;
                 ValType::Ref(RefType {
                     nullable: false,
                     heap_type: HeapType::Concrete(idx),
                 })
             }
             Type::Uint8Array => {
-                let idx = self.uint8_array_type_idx().expect(
-                    "Type::Uint8Array requires the intrinsic types to be declared (declare_intrinsic_types)",
-                );
+                let idx = self.uint8_array_type_idx().ok_or_else(|| crate::codegen::internal_failure("Type::Uint8Array requires the intrinsic types to be declared (declare_intrinsic_types)"))?;
                 ValType::Ref(RefType {
                     nullable: false,
                     heap_type: HeapType::Concrete(idx),
@@ -914,7 +930,9 @@ impl SymbolTable {
                 // nullable so `null` literals can flow in via WasmGC subtyping.
                 let object_idx = self
                     .intrinsic_type_indices()
-                    .expect("intrinsics declared by codegen entry")
+                    .ok_or_else(|| {
+                        crate::codegen::internal_failure("intrinsics declared by codegen entry")
+                    })?
                     .object;
                 ValType::Ref(RefType {
                     nullable: true,
@@ -922,13 +940,12 @@ impl SymbolTable {
                 })
             }
             Type::Function { .. } => {
-                let sig = crate::codegen::closures::classify(ty);
-                let idx = self.closure_struct_type_idx(sig).unwrap_or_else(|| {
-                    panic!(
-                        "ClosureSig {sig:?} (from {ty:?}) not registered — \
-                         closures::emit_func_and_struct_types should have recorded it"
-                    )
-                });
+                let sig = crate::codegen::closures::classify(ty)?;
+                let idx = self.closure_struct_type_idx(sig).ok_or_else(|| {
+                    crate::codegen::internal_failure(format!(
+                        "closure signature {sig:?} is not registered"
+                    ))
+                })?;
                 ValType::Ref(RefType {
                     nullable: false,
                     heap_type: HeapType::Concrete(idx),
@@ -937,7 +954,9 @@ impl SymbolTable {
             Type::Null => {
                 let object_idx = self
                     .intrinsic_type_indices()
-                    .expect("intrinsics declared by codegen entry")
+                    .ok_or_else(|| {
+                        crate::codegen::internal_failure("intrinsics declared by codegen entry")
+                    })?
                     .object;
                 ValType::Ref(RefType {
                     nullable: true,
@@ -947,7 +966,9 @@ impl SymbolTable {
             Type::Void | Type::Error => {
                 // `void` is a return type only; `Error` only follows a reported typecheck
                 // failure. Either arm here is a compiler bug.
-                unreachable!("value_type called on {ty:?}: void/error never occupy a value slot")
+                return Err(crate::codegen::internal_failure(
+                    "void/error cannot occupy a value slot",
+                ));
             }
             Type::Never => {
                 // The surrounding expression always diverges, but a `: never` function's
@@ -956,7 +977,9 @@ impl SymbolTable {
                 // the slot.
                 let object_idx = self
                     .intrinsic_type_indices()
-                    .expect("intrinsics declared by codegen entry")
+                    .ok_or_else(|| {
+                        crate::codegen::internal_failure("intrinsics declared by codegen entry")
+                    })?
                     .object;
                 ValType::Ref(RefType {
                     nullable: true,
@@ -964,10 +987,15 @@ impl SymbolTable {
                 })
             }
             Type::Union(members) => {
-                let lowered: Vec<ValType> = members.iter().map(|m| self.value_type(m)).collect();
-                let first_lowering = *lowered.first().expect("Type::Union holds ≥2 members");
+                let lowered: Vec<ValType> = members
+                    .iter()
+                    .map(|m| self.value_type(m))
+                    .collect::<Result<_, _>>()?;
+                let first_lowering = *lowered.first().ok_or_else(|| {
+                    crate::codegen::internal_failure("Type::Union holds ≥2 members")
+                })?;
                 if lowered.iter().all(|&lowering| lowering == first_lowering) {
-                    return first_lowering;
+                    return Ok(first_lowering);
                 }
                 // Object-only union → `$ObjectShape`; mixed union → `$Object`.
                 let all_object_or_null = members
@@ -975,11 +1003,15 @@ impl SymbolTable {
                     .all(|m| matches!(m.peel(), Type::Object { .. } | Type::Null));
                 let heap_idx = if all_object_or_null {
                     self.intrinsic_type_indices()
-                        .expect("intrinsics declared by codegen entry")
+                        .ok_or_else(|| {
+                            crate::codegen::internal_failure("intrinsics declared by codegen entry")
+                        })?
                         .object_shape
                 } else {
                     self.intrinsic_type_indices()
-                        .expect("intrinsics declared by codegen entry")
+                        .ok_or_else(|| {
+                            crate::codegen::internal_failure("intrinsics declared by codegen entry")
+                        })?
                         .object
                 };
                 // Nullable iff some member *lowers* nullable, not iff one is
@@ -1008,7 +1040,11 @@ impl SymbolTable {
                     nullable: true,
                     heap_type: HeapType::Concrete(
                         self.intrinsic_type_indices()
-                            .expect("intrinsics declared by codegen entry")
+                            .ok_or_else(|| {
+                                crate::codegen::internal_failure(
+                                    "intrinsics declared by codegen entry",
+                                )
+                            })?
                             .object,
                     ),
                 }),
@@ -1016,7 +1052,9 @@ impl SymbolTable {
             Type::InterfaceRef { .. } => {
                 let object_idx = self
                     .intrinsic_type_indices()
-                    .expect("intrinsics declared by codegen entry")
+                    .ok_or_else(|| {
+                        crate::codegen::internal_failure("intrinsics declared by codegen entry")
+                    })?
                     .object;
                 ValType::Ref(RefType {
                     nullable: true,
@@ -1031,7 +1069,9 @@ impl SymbolTable {
                 // only at the typechecker layer.
                 let object_idx = self
                     .intrinsic_type_indices()
-                    .expect("intrinsics declared by codegen entry")
+                    .ok_or_else(|| {
+                        crate::codegen::internal_failure("intrinsics declared by codegen entry")
+                    })?
                     .object;
                 ValType::Ref(RefType {
                     nullable: true,
@@ -1039,34 +1079,43 @@ impl SymbolTable {
                 })
             }
             Type::NumberEnum { .. } => {
-                let idx = self
-                    .boxed_number_type_idx()
-                    .expect("Type::NumberEnum requires the intrinsic types to be declared");
+                let idx = self.boxed_number_type_idx().ok_or_else(|| {
+                    crate::codegen::internal_failure(
+                        "Type::NumberEnum requires the intrinsic types to be declared",
+                    )
+                })?;
                 ValType::Ref(RefType {
                     nullable: false,
                     heap_type: HeapType::Concrete(idx),
                 })
             }
             Type::StringEnum { .. } => {
-                let idx = self
-                    .string_type_idx()
-                    .expect("Type::StringEnum requires the intrinsic types to be declared");
+                let idx = self.string_type_idx().ok_or_else(|| {
+                    crate::codegen::internal_failure(
+                        "Type::StringEnum requires the intrinsic types to be declared",
+                    )
+                })?;
                 ValType::Ref(RefType {
                     nullable: false,
                     heap_type: HeapType::Concrete(idx),
                 })
             }
             Type::Alias { .. } | Type::Refined { .. } | Type::Readonly(_) => {
-                unreachable!("peel guarantees no alias here (SUB-242)")
+                return Err(crate::codegen::internal_failure(
+                    "unpeeled alias in value type lowering",
+                ));
             }
-        }
+        })
     }
 
-    pub fn wasm_result(&self, ty: &Type) -> Vec<ValType> {
+    pub fn wasm_result(
+        &self,
+        ty: &Type,
+    ) -> Result<Vec<ValType>, crate::compiler_error::CompilerFailure> {
         if ty.is_void() {
-            return vec![];
+            return Ok(vec![]);
         }
-        vec![self.value_type(ty)]
+        Ok(vec![self.value_type(ty)?])
     }
 
     /// Wasm value type of a class-method **vtable-slot** parameter or result,
@@ -1082,48 +1131,71 @@ impl SymbolTable {
     /// identical between a producer and a cross-package consumer, and keeps it
     /// in step with the types recorded for each slot ([`MethodSlotAbi`] for a
     /// method, `class_ctor_abi` for a constructor).
-    pub fn slot_value_type(&self, ty: &Type) -> ValType {
+    pub fn slot_value_type(
+        &self,
+        ty: &Type,
+    ) -> Result<ValType, crate::compiler_error::CompilerFailure> {
         if is_erased(ty) {
             let object = self
                 .intrinsic_type_indices()
-                .expect("intrinsics declared before class slot signatures")
+                .ok_or_else(|| {
+                    crate::codegen::internal_failure(
+                        "intrinsics declared before class slot signatures",
+                    )
+                })?
                 .object;
-            return ValType::Ref(RefType {
+            return Ok(ValType::Ref(RefType {
                 nullable: true,
                 heap_type: HeapType::Concrete(object),
-            });
+            }));
         }
         self.value_type(ty)
     }
 
-    pub fn slot_wasm_result(&self, ty: &Type) -> Vec<ValType> {
+    pub fn slot_wasm_result(
+        &self,
+        ty: &Type,
+    ) -> Result<Vec<ValType>, crate::compiler_error::CompilerFailure> {
         if ty.is_void() {
-            return vec![];
+            return Ok(vec![]);
         }
-        vec![self.slot_value_type(ty)]
+        Ok(vec![self.slot_value_type(ty)?])
     }
 
-    pub fn host_value_type(&self, ty: &Type) -> ValType {
+    pub fn host_value_type(
+        &self,
+        ty: &Type,
+    ) -> Result<ValType, crate::compiler_error::CompilerFailure> {
         if matches!(ty, Type::String | Type::StringLiteral(_)) {
-            let idx = self.raw_string_type_idx().expect(
-                "Type::String requires the intrinsic types to be declared (declare_intrinsic_types)",
-            );
-            return ValType::Ref(RefType {
+            let idx = self.raw_string_type_idx().ok_or_else(|| crate::codegen::internal_failure("Type::String requires the intrinsic types to be declared (declare_intrinsic_types)"))?;
+            return Ok(ValType::Ref(RefType {
                 nullable: false,
                 heap_type: HeapType::Concrete(idx),
-            });
+            }));
         }
         if matches!(ty, Type::Uint8Array) {
-            let idx = self.raw_uint8_array_type_idx().expect(
-                "Type::Uint8Array requires the intrinsic types to be declared (declare_intrinsic_types)",
-            );
-            return ValType::Ref(RefType {
+            let idx = self.raw_uint8_array_type_idx().ok_or_else(|| crate::codegen::internal_failure("Type::Uint8Array requires the intrinsic types to be declared (declare_intrinsic_types)"))?;
+            return Ok(ValType::Ref(RefType {
                 nullable: false,
                 heap_type: HeapType::Concrete(idx),
-            });
+            }));
         }
         self.value_type(ty)
     }
+}
+
+/// Names of a validator key's type arguments when every one is a generic
+/// parameter, so one validator serves each instantiation.
+fn generic_parameter_names(args: &[Type]) -> Option<Vec<String>> {
+    if args.is_empty() {
+        return None;
+    }
+    args.iter()
+        .map(|arg| match arg {
+            Type::TypeVar(name) => Some(name.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1138,7 +1210,14 @@ mod tests {
             10,
             Vec::new(),
             Type::Void,
+        )
+        .unwrap();
+        let unmangled: MangledName = serde_json::from_str("\"main\"").unwrap();
+        assert!(
+            map.record_local_fn(unmangled.clone(), 13, Vec::new(), Type::Void)
+                .is_err()
         );
+        assert_eq!(map.func_idx(&unmangled), None);
         map.record_imported_fn(
             crate::mangle::prelude("string_concat"),
             11,

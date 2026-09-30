@@ -33,7 +33,7 @@ impl Reachable {
         if !self.statements.insert(id) {
             return;
         }
-        match &ta.stmt(id).kind {
+        match &ta.try_stmt(id).unwrap().kind {
             TypedStmtKind::Let { value, .. } | TypedStmtKind::Const { value, .. } => {
                 self.walk_expr(ta, *value);
             }
@@ -146,7 +146,7 @@ impl Reachable {
         if !self.expressions.insert(id) {
             return;
         }
-        match &ta.expr(id).kind {
+        match &ta.try_expr(id).unwrap().kind {
             TypedExprKind::Call { args, .. }
             | TypedExprKind::McpCall { args, .. }
             | TypedExprKind::SuperCtorCall { args, .. }

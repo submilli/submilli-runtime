@@ -62,7 +62,7 @@ fn run_one(path: &Path, base: &str) -> Result<(), String> {
     match outcome {
         Ok(_) => Ok(()),
         Err(err) => {
-            let (sources, file) = Sources::single(filename.as_str(), src);
+            let (sources, file) = Sources::single(filename.as_str(), src).unwrap();
             // The rendered backtrace already carries the `error: …` header.
             Err(
                 match render_backtrace(&err, &sources, file, BacktraceMode::Full) {
@@ -230,7 +230,7 @@ fn install_routes(server: &MockServer) {
 }
 
 fn render_diags(diags: &[Diagnostic], filename: &str, src: &str) -> String {
-    let (sources, _) = Sources::single(filename, src);
+    let (sources, _) = Sources::single(filename, src).unwrap();
     diags
         .iter()
         .map(|d| diagnostics::render(d, &sources))

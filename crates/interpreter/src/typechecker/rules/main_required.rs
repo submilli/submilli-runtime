@@ -6,7 +6,7 @@ pub(super) fn run(ta: &TypedAst, diags: &mut Vec<Diagnostic>) {
             severity: Severity::Error,
             // Missing `main` has no real location; anchor at the start of the
             // (single) script file so the diagnostic renders against its source.
-            span: Span::new(FileId(0), 0, 0),
+            span: Span::at(FileId(0)),
             message: "missing `main` function".to_string(),
             help: vec!["add an entry point: `function main(): void { … }`".to_string()],
             notes: vec![],

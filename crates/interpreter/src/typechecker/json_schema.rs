@@ -179,49 +179,47 @@ fn walk(
             cascading: true,
             ..reject(path, "this type failed to resolve")
         }),
-        _ => Err(reject(path, unrepresentable_reason(peeled))),
+        Type::Alias { ty, .. } | Type::Refined { ty, .. } | Type::Readonly(ty) => {
+            walk(ty, expand, path, seen)
+        }
+        // An unconstrained schema would silently accept anything, unlike an `as unknown` widening.
+        Type::Unknown => Err(reject(
+            path,
+            "`unknown` has no JSON Schema — an unconstrained schema would let the model return anything; name the shape you expect",
+        )),
+        Type::Function { .. } => Err(reject(path, "functions have no JSON form")),
+        Type::BigInt => Err(reject(
+            path,
+            "`bigint` has no JSON number form — use `number` or a `string` encoding",
+        )),
+        Type::Uint8Array => Err(reject(
+            path,
+            "`Uint8Array` has no JSON form — use a `string` encoding such as base64",
+        )),
+        Type::ClassRef { .. } => Err(reject(
+            path,
+            "class types are nominal — use an object type or a data interface",
+        )),
+        Type::InterfaceRef { .. } => Err(reject(
+            path,
+            "this interface has no data shape — method-bearing interfaces are nominal, and recursive ones cannot be inlined",
+        )),
+        Type::NumberEnum { .. } | Type::StringEnum { .. } => Err(reject(
+            path,
+            "enums need their variants resolved — use a union of literals",
+        )),
+        Type::TypeVar(_) | Type::GenericParam { .. } => Err(reject(
+            path,
+            "generic type parameters are erased — the schema is emitted at compile time",
+        )),
+        Type::Never => Err(reject(path, "`never` has no values")),
+        Type::Void => Err(reject(path, "`void` is not a value type")),
     }
 }
 
 /// The recursion verdict, shared by the back-edge and no-expander cases.
 const RECURSIVE: &str = "recursive types have no finite JSON Schema — \
                          providers drop `$ref`, so every definition must be inlined";
-
-/// Why `ty` — already peeled, and known not to be one of the emittable
-/// variants — has no JSON Schema. Each arm names the construct, so the
-/// diagnostic tells the author which feature to drop from the result type.
-fn unrepresentable_reason(ty: &Type) -> &'static str {
-    match ty {
-        Type::Unknown => {
-            // The cast gate returns `None` here: `as unknown` widens and needs
-            // no runtime test. A schema has no such no-op — `{}` constrains
-            // nothing, and omitting the key would change whether it is
-            // required — so the schema gate parts company with it deliberately.
-            "`unknown` has no JSON Schema — an unconstrained schema would let \
-             the model return anything; name the shape you expect"
-        }
-        Type::Function { .. } => "functions have no JSON form",
-        Type::BigInt => "`bigint` has no JSON number form — use `number` or a `string` encoding",
-        Type::Uint8Array => {
-            "`Uint8Array` has no JSON form — use a `string` encoding such as base64"
-        }
-        Type::ClassRef { .. } => "class types are nominal — use an object type or a data interface",
-        Type::InterfaceRef { .. } => {
-            "this interface has no data shape — method-bearing interfaces are nominal, \
-             and recursive ones cannot be inlined"
-        }
-        Type::NumberEnum { .. } | Type::StringEnum { .. } => {
-            "enums need their variants resolved — use a union of literals"
-        }
-        Type::TypeVar(_) | Type::GenericParam { .. } => {
-            "generic type parameters are erased — the schema is emitted at compile time"
-        }
-        Type::Never => "`never` has no values",
-        Type::Void => "`void` is not a value type",
-        Type::Alias { .. } => unreachable!("peel guarantees no alias here"),
-        other => unreachable!("json_schema: {other:?} is emitted, not rejected"),
-    }
-}
 
 fn reject(path: &str, reason: &'static str) -> SchemaReject {
     SchemaReject {

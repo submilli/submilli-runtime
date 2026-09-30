@@ -554,7 +554,7 @@ fn entries_by_line(typed: &TypedAst, source: &str) -> EntriesByLine {
     let reachable = typed_reachability::Reachable::collect(typed);
     let expressions = (0..typed.exprs_len()).filter_map(|i| {
         let id = ExprId(i as u32);
-        let e = typed.expr(id);
+        let e = typed.try_expr(id).unwrap();
         let text = span_text(source, e.span)?;
         Some((
             e.span,
@@ -645,7 +645,7 @@ fn bindings(
     for i in 0..typed.stmts_len() {
         let id = StmtId(i as u32);
         let retained = reachable.statements.contains(&id);
-        match &typed.stmt(id).kind {
+        match &typed.try_stmt(id).unwrap().kind {
             TypedStmtKind::Let { name, ty, .. } | TypedStmtKind::Const { name, ty, .. } => {
                 out.push((name.span, ty.clone(), retained));
             }

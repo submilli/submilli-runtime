@@ -11,17 +11,23 @@ pub(super) enum ControlFlow {
     Returns,
 }
 
-pub(super) fn control_flow(ta: &TypedAst, id: StmtId) -> ControlFlow {
-    let flow = completion(ta, id);
-    if flow.falls || flow.breaks || flow.continues {
+pub(super) fn control_flow(
+    ta: &TypedAst,
+    id: StmtId,
+) -> Result<ControlFlow, crate::compiler_error::CompilerFailure> {
+    let flow = completion(ta, id)?;
+    Ok(if flow.falls || flow.breaks || flow.continues {
         ControlFlow::Falls
     } else {
         ControlFlow::Returns
-    }
+    })
 }
 
-pub(super) fn case_terminates(ta: &TypedAst, id: StmtId) -> bool {
-    !completion(ta, id).falls
+pub(super) fn case_terminates(
+    ta: &TypedAst,
+    id: StmtId,
+) -> Result<bool, crate::compiler_error::CompilerFailure> {
+    Ok(!completion(ta, id)?.falls)
 }
 
 #[derive(Clone, Copy, Default)]
@@ -49,56 +55,68 @@ impl Completion {
     }
 }
 
-fn completion(ta: &TypedAst, id: StmtId) -> Completion {
+fn completion(
+    ta: &TypedAst,
+    id: StmtId,
+) -> Result<Completion, crate::compiler_error::CompilerFailure> {
     let falls = Completion {
         falls: true,
         ..Default::default()
     };
-    match &ta.stmt(id).kind {
-        TypedStmtKind::Break => Completion {
-            breaks: true,
-            ..Default::default()
+    Ok(
+        match &ta
+            .try_stmt(id)
+            .map_err(crate::typechecker::arena_failure)?
+            .kind
+        {
+            TypedStmtKind::Break => Completion {
+                breaks: true,
+                ..Default::default()
+            },
+            TypedStmtKind::Return(_) | TypedStmtKind::Throw { .. } => Completion::default(),
+            TypedStmtKind::Continue => Completion {
+                continues: true,
+                ..Default::default()
+            },
+            TypedStmtKind::Block(stmts) => stmts.iter().try_fold(falls, |flow, &stmt| {
+                Ok::<_, crate::compiler_error::CompilerFailure>(flow.then(completion(ta, stmt)?))
+            })?,
+            TypedStmtKind::If {
+                then_block,
+                else_block,
+                ..
+            } => completion(ta, *then_block)?.union(
+                else_block
+                    .map(|body| completion(ta, body))
+                    .transpose()?
+                    .unwrap_or(falls),
+            ),
+            TypedStmtKind::Try {
+                body,
+                catches,
+                finally,
+            } => try_completion(ta, *body, catches, *finally)?,
+            TypedStmtKind::Switch {
+                discriminant,
+                cases,
+                default,
+                ..
+            } => switch_completion(ta, *discriminant, cases, *default)?,
+            TypedStmtKind::NarrowRegion { body, .. } => completion(ta, *body)?,
+            TypedStmtKind::While { .. }
+            | TypedStmtKind::For { .. }
+            | TypedStmtKind::ForOf { .. }
+            | TypedStmtKind::DoWhile { .. }
+            | TypedStmtKind::ReboxLocal { .. }
+            | TypedStmtKind::Let { .. }
+            | TypedStmtKind::Const { .. }
+            | TypedStmtKind::AssignLocal { .. }
+            | TypedStmtKind::AssignGlobal { .. }
+            | TypedStmtKind::AssignField { .. }
+            | TypedStmtKind::AssignIndex { .. }
+            | TypedStmtKind::Expr(_) => falls,
         },
-        TypedStmtKind::Return(_) | TypedStmtKind::Throw { .. } => Completion::default(),
-        TypedStmtKind::Continue => Completion {
-            continues: true,
-            ..Default::default()
-        },
-        TypedStmtKind::Block(stmts) => stmts
-            .iter()
-            .fold(falls, |flow, &stmt| flow.then(completion(ta, stmt))),
-        TypedStmtKind::If {
-            then_block,
-            else_block,
-            ..
-        } => {
-            completion(ta, *then_block).union(else_block.map_or(falls, |body| completion(ta, body)))
-        }
-        TypedStmtKind::Try {
-            body,
-            catches,
-            finally,
-        } => try_completion(ta, *body, catches, *finally),
-        TypedStmtKind::Switch {
-            discriminant,
-            cases,
-            default,
-            ..
-        } => switch_completion(ta, *discriminant, cases, *default),
-        TypedStmtKind::NarrowRegion { body, .. } => completion(ta, *body),
-        TypedStmtKind::While { .. }
-        | TypedStmtKind::For { .. }
-        | TypedStmtKind::ForOf { .. }
-        | TypedStmtKind::DoWhile { .. }
-        | TypedStmtKind::ReboxLocal { .. }
-        | TypedStmtKind::Let { .. }
-        | TypedStmtKind::Const { .. }
-        | TypedStmtKind::AssignLocal { .. }
-        | TypedStmtKind::AssignGlobal { .. }
-        | TypedStmtKind::AssignField { .. }
-        | TypedStmtKind::AssignIndex { .. }
-        | TypedStmtKind::Expr(_) => falls,
-    }
+    )
 }
 
 fn try_completion(
@@ -106,24 +124,26 @@ fn try_completion(
     body: StmtId,
     catches: &[crate::TypedCatchClause],
     finally: Option<StmtId>,
-) -> Completion {
-    let flow = catches.iter().fold(completion(ta, body), |flow, catch| {
-        flow.union(completion(ta, catch.body))
-    });
+) -> Result<Completion, crate::compiler_error::CompilerFailure> {
+    let flow = catches
+        .iter()
+        .try_fold(completion(ta, body)?, |flow, catch| {
+            Ok::<_, crate::compiler_error::CompilerFailure>(flow.union(completion(ta, catch.body)?))
+        })?;
     let Some(finally) = finally else {
-        return flow;
+        return Ok(flow);
     };
-    let cleanup = completion(ta, finally);
+    let cleanup = completion(ta, finally)?;
     // A control transfer from finally replaces the pending completion.
     let preserved = if cleanup.falls {
         flow
     } else {
         Completion::default()
     };
-    preserved.union(Completion {
+    Ok(preserved.union(Completion {
         falls: false,
         ..cleanup
-    })
+    }))
 }
 
 fn switch_completion(
@@ -131,28 +151,28 @@ fn switch_completion(
     discriminant: crate::ExprId,
     cases: &[crate::TypedSwitchCase],
     default: Option<StmtId>,
-) -> Completion {
-    let mut flow = cases.iter().fold(Completion::default(), |flow, case| {
-        flow.union(completion(ta, case.body))
-    });
+) -> Result<Completion, crate::compiler_error::CompilerFailure> {
+    let mut flow = cases.iter().try_fold(Completion::default(), |flow, case| {
+        Ok::<_, crate::compiler_error::CompilerFailure>(flow.union(completion(ta, case.body)?))
+    })?;
     if let Some(default) = default {
-        flow = flow.union(completion(ta, default));
-    } else if !switch_is_exhaustive(ta, discriminant, cases) {
+        flow = flow.union(completion(ta, default)?);
+    } else if !switch_is_exhaustive(ta, discriminant, cases)? {
         flow.falls = true;
     }
     // A break exits this nested switch, not the containing case.
-    Completion {
+    Ok(Completion {
         falls: flow.falls || flow.breaks,
         breaks: false,
         continues: flow.continues,
-    }
+    })
 }
 
 fn switch_is_exhaustive(
     ta: &TypedAst,
     discriminant: crate::ExprId,
     cases: &[TypedSwitchCase],
-) -> bool {
+) -> Result<bool, crate::compiler_error::CompilerFailure> {
     let mut seen: std::collections::BTreeSet<narrowing::LiteralValue> =
         std::collections::BTreeSet::new();
     for case in cases {
@@ -162,23 +182,29 @@ fn switch_is_exhaustive(
             }
         }
     }
-    let disc_expr = ta.expr(discriminant);
+    let disc_expr = ta
+        .try_expr(discriminant)
+        .map_err(crate::typechecker::arena_failure)?;
     // A `switch` on an enum value is exhaustive when every declared variant is
     // covered, even without a `default:` — the canonical enum-dispatch pattern.
     if let Type::NumberEnum { name, .. } | Type::StringEnum { name, .. } = disc_expr.ty.peel() {
-        return enum_is_covered(ta, name, &seen);
+        return Ok(enum_is_covered(ta, name, &seen));
     }
     if let TypedExprKind::FieldAccess { receiver, name } = &disc_expr.kind
-        && let Type::Union(members) = ta.expr(*receiver).ty.peel()
+        && let Type::Union(members) = ta
+            .try_expr(*receiver)
+            .map_err(crate::typechecker::arena_failure)?
+            .ty
+            .peel()
         && let Some((disc_key, table)) = narrowing::union_discriminant(members)
         && disc_key == name.name
     {
-        return table.iter().all(|(lit, _)| seen.contains(lit));
+        return Ok(table.iter().all(|(lit, _)| seen.contains(lit)));
     }
-    matches!(
+    Ok(matches!(
         narrowing::subtract_literals(&disc_expr.ty, &seen),
         Type::Never
-    )
+    ))
 }
 
 /// True when `seen` covers every variant of the enum named `name`. An enum with

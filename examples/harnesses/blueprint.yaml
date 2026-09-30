@@ -44,15 +44,19 @@ permissions:
     filter: path == "/${vars.userId}" or path glob "/${vars.userId}/*"
     action: allow
 
-  # What the package itself may do: reach Jina, and read its key.
+  # What the package itself may do: reach Jina, and read its key. Its
+  # downloads save to a path the program chooses, so they get the user's
+  # directory too; unscoped, a program could write into another user's
+  # notes through the package.
   '@submilli/jina':
   - capability: fs.write
+    filter: path glob "/${vars.userId}/*"
     action: allow
   - capability: http.download
-    filter: host == "r.jina.ai"
+    filter: host == "r.jina.ai" and vfs_path glob "/${vars.userId}/*"
     action: allow
   - capability: http.download
-    filter: host == "s.jina.ai"
+    filter: host == "s.jina.ai" and vfs_path glob "/${vars.userId}/*"
     action: allow
   - capability: http.post
     filter: host == "r.jina.ai" and path == "/"

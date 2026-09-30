@@ -24,6 +24,23 @@ pub enum CompilerFailure {
     },
 }
 
+impl CompilerFailure {
+    pub(crate) fn with_span(mut self, source_span: Span) -> Self {
+        let (Self::Limit { span, .. } | Self::Internal { span, .. }) = &mut self;
+        if span.is_none() {
+            *span = Some(source_span);
+        }
+        self
+    }
+
+    pub(crate) fn with_stage(mut self, current_stage: CompilerStage) -> Self {
+        match &mut self {
+            Self::Limit { stage, .. } | Self::Internal { stage, .. } => *stage = current_stage,
+        }
+        self
+    }
+}
+
 impl std::fmt::Display for CompilerFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let (category, stage, message) = match self {
@@ -50,9 +67,28 @@ impl CompileError {
         self
     }
 
+    /// Cuts a limit failure's span to its first line. Limits are met in large
+    /// programs, and they point at statements, such as loops and object
+    /// literals, whose source can run to thousands of lines. `text_of` returns
+    /// a file's source. The compile and typecheck entry points in `compile.rs`
+    /// apply it; the stage functions they call return uncut spans.
+    pub(crate) fn with_limit_span_cut<'a>(
+        mut self,
+        text_of: impl Fn(FileId) -> Option<&'a str>,
+    ) -> Self {
+        if let Some(CompilerFailure::Limit {
+            span: Some(span), ..
+        }) = &mut self.fatal
+            && let Some(text) = text_of(span.file)
+        {
+            *span = span.first_line_of(text);
+        }
+        self
+    }
+
     /// Explicit compatibility adapter for APIs that historically returned only
-    /// diagnostics. Source-less failures use the caller's compilation file.
-    pub fn into_diagnostics(mut self, file: FileId) -> Vec<Diagnostic> {
+    /// diagnostics. Source-less failures retain a virtual compiler location.
+    pub fn into_diagnostics(mut self, _file: FileId) -> Vec<Diagnostic> {
         if let Some(fatal) = self.fatal {
             let span = match &fatal {
                 CompilerFailure::Limit { span, .. } | CompilerFailure::Internal { span, .. } => {
@@ -68,7 +104,7 @@ impl CompileError {
             };
             self.diagnostics.push(Diagnostic {
                 severity: Severity::Error,
-                span: span.unwrap_or(Span::at(file)),
+                span: span.unwrap_or(Span::at(FileId::COMPILER)),
                 message,
                 help,
                 notes: Vec::new(),

@@ -4,6 +4,7 @@ mod assign_expr;
 pub(crate) mod assignable;
 mod binding_analysis;
 mod classes;
+mod closure_arity;
 mod diagnostics;
 mod enums;
 mod exports;
@@ -80,12 +81,24 @@ pub fn infer_with_transitive_checked<'a>(
     packages: &'a [&'a PackageDeclaration],
     transitive: &'a [&'a PackageDeclaration],
 ) -> Result<(TypedAst, Vec<Diagnostic>), CompileError> {
+    let file = ast
+        .source_statements()
+        .first()
+        .map(|stmt| stmt.span.file)
+        .or_else(|| ast.source_expressions().first().map(|expr| expr.span.file))
+        .unwrap_or(crate::FileId(0));
+    ast.validate_source(source, file)
+        .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?;
+    // Callers may supply an AST that did not come from `parse_checked`.
+    crate::tree_height::check_syntax(ast)
+        .map_err(|failure| failure.with_stage(CompilerStage::Infer))?;
     validate_lowered_patterns(ast)?;
+    check_declaration_types(packages.iter().chain(transitive).copied())?;
     let packages_by_name: BTreeMap<&'a str, &'a PackageDeclaration> = packages
         .iter()
         .map(|d| (d.package_name.as_str(), *d))
         .collect();
-    let bindings = binding_analysis::analyze(ast);
+    let bindings = binding_analysis::analyze(ast)?;
     let mut tc = Inferer {
         source,
         package_name,
@@ -123,6 +136,8 @@ pub fn infer_with_transitive_checked<'a>(
         local_class_mangles: std::collections::BTreeSet::new(),
         pending_implements: Vec::new(),
         unresolved_parents: std::collections::BTreeSet::new(),
+        rejected_class_names: Default::default(),
+        invalid_class_hierarchies: std::collections::BTreeSet::new(),
         current_type_predicate: None,
         inferred_returns: None,
         generics_in_scope: Vec::new(),
@@ -155,22 +170,62 @@ pub fn infer_with_transitive_checked<'a>(
         pending_index_checks: None,
         field_narrowing_checks: BTreeMap::new(),
         alias_resolution_stack: Vec::new(),
+        type_resolution_depth: 0,
+        type_limits: Default::default(),
     };
     tc.populate_prelude().map_err(|fatal| CompileError {
         diagnostics: tc.diagnostics.clone(),
         fatal: Some(fatal),
     })?;
     tc.populate_type_registry();
-    tc.populate_imports();
-    if !tc.signatures() {
+    tc.populate_imports().map_err(|fatal| CompileError {
+        diagnostics: tc.diagnostics.clone(),
+        fatal: Some(fatal),
+    })?;
+    if !tc.signatures().map_err(|fatal| CompileError {
+        diagnostics: tc.diagnostics.clone(),
+        fatal: Some(fatal),
+    })? {
+        crate::tree_height::check_typed(&tc.typed_ast, CompilerStage::Infer)
+            .and_then(|()| tc.type_size_checkpoint(None))
+            .map_err(|fatal| CompileError {
+                diagnostics: tc.diagnostics.clone(),
+                fatal: Some(fatal),
+            })?;
         return Ok((tc.typed_ast, tc.diagnostics));
     }
-    tc.infer_global_variables();
-    tc.infer_functions();
-    tc.infer_classes();
-    tc.collect_exports();
+    tc.infer_global_variables().map_err(|fatal| CompileError {
+        diagnostics: tc.diagnostics.clone(),
+        fatal: Some(fatal),
+    })?;
+    tc.infer_functions().map_err(|fatal| CompileError {
+        diagnostics: tc.diagnostics.clone(),
+        fatal: Some(fatal),
+    })?;
+    tc.infer_classes().map_err(|fatal| CompileError {
+        diagnostics: tc.diagnostics.clone(),
+        fatal: Some(fatal),
+    })?;
+    tc.collect_exports().map_err(|fatal| CompileError {
+        diagnostics: tc.diagnostics.clone(),
+        fatal: Some(fatal),
+    })?;
+    crate::tree_height::check_typed(&tc.typed_ast, CompilerStage::Infer).map_err(|fatal| {
+        CompileError {
+            diagnostics: tc.diagnostics.clone(),
+            fatal: Some(fatal),
+        }
+    })?;
     // The `&tc` borrow has to end before the `&mut tc.typed_ast` assignment.
-    let shapes = shapes::collect(&tc.typed_ast, tc.resolver());
+    // Shape collection resolves types under the limits too, so the last checkpoint
+    // follows it.
+    let shapes = shapes::collect(&tc.typed_ast, tc.resolver())
+        .map_err(|failure| tc.pending_limit_or(failure))
+        .and_then(|shapes| tc.type_size_checkpoint(None).map(|()| shapes))
+        .map_err(|fatal| CompileError {
+            diagnostics: tc.diagnostics.clone(),
+            fatal: Some(fatal),
+        })?;
     tc.typed_ast.shapes = shapes;
     Ok((tc.typed_ast, tc.diagnostics))
 }
@@ -208,6 +263,11 @@ pub fn infer_package_checked<'a>(
     external_packages: BTreeMap<String, PackageDeclaration>,
     transitive_packages: BTreeMap<String, PackageDeclaration>,
 ) -> Result<(TypedAst, PackageDeclaration, Vec<Diagnostic>), CompileError> {
+    check_declaration_types(
+        external_packages
+            .values()
+            .chain(transitive_packages.values()),
+    )?;
     let mut diagnostics = Vec::new();
     let module_map: BTreeMap<ModulePath, (crate::FileId, &'a Ast)> = modules
         .into_iter()
@@ -228,7 +288,30 @@ pub fn infer_package_checked<'a>(
         ));
     }
 
-    let Some(order) = import_graph::topo_order(&module_map, &mut diagnostics) else {
+    // Graph diagnostics also consume import/export spans. Validate available
+    // modules before graph traversal; missing sources still fail in inference
+    // order so earlier module diagnostics remain available.
+    for (file, ast) in module_map.values() {
+        if let Some(source) = sources.get(*file) {
+            ast.validate_source(source.text(), *file)
+                .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?;
+        }
+    }
+    let Some(order) =
+        import_graph::topo_order(&module_map, &mut diagnostics).map_err(|fatal| CompileError {
+            diagnostics: diagnostics.clone(),
+            fatal: Some(fatal),
+        })?
+    else {
+        if module_map
+            .values()
+            .any(|(file, _)| sources.get(*file).is_none())
+        {
+            return Err(
+                CompileError::from(inference_failure("module source is missing"))
+                    .with_prior_diagnostics(&diagnostics),
+            );
+        }
         return Ok((
             TypedAst::with_package(package_name),
             PackageDeclaration::with_package(package_name),
@@ -250,7 +333,7 @@ pub fn infer_package_checked<'a>(
     })?;
     let first_source = sources
         .get(first_file)
-        .map(|f| f.text.as_str())
+        .map(crate::source::SourceFile::text)
         .ok_or_else(|| {
             CompileError::from(inference_failure("module source is missing"))
                 .with_prior_diagnostics(&diagnostics)
@@ -304,6 +387,8 @@ pub fn infer_package_checked<'a>(
         local_class_mangles: BTreeSet::new(),
         pending_implements: Vec::new(),
         unresolved_parents: BTreeSet::new(),
+        rejected_class_names: Default::default(),
+        invalid_class_hierarchies: BTreeSet::new(),
         current_type_predicate: None,
         inferred_returns: None,
         generics_in_scope: Vec::new(),
@@ -328,6 +413,8 @@ pub fn infer_package_checked<'a>(
         pending_index_checks: None,
         field_narrowing_checks: BTreeMap::new(),
         alias_resolution_stack: Vec::new(),
+        type_resolution_depth: 0,
+        type_limits: Default::default(),
     };
 
     for module in order {
@@ -336,8 +423,16 @@ pub fn infer_package_checked<'a>(
                 .with_prior_diagnostics(&tc.diagnostics)
                 .with_prior_diagnostics(&diagnostics)
         })?;
-        let source = sources.get(file).map(|f| f.text.as_str()).ok_or_else(|| {
-            CompileError::from(inference_failure("module source is missing"))
+        let source = sources
+            .get(file)
+            .map(crate::source::SourceFile::text)
+            .ok_or_else(|| {
+                CompileError::from(inference_failure("module source is missing"))
+                    .with_prior_diagnostics(&tc.diagnostics)
+                    .with_prior_diagnostics(&diagnostics)
+            })?;
+        ast.validate_source(source, file).map_err(|error| {
+            CompileError::from(error.into_compiler_failure(CompilerStage::Infer))
                 .with_prior_diagnostics(&tc.diagnostics)
                 .with_prior_diagnostics(&diagnostics)
         })?;
@@ -355,14 +450,51 @@ pub fn infer_package_checked<'a>(
         })?;
         tc.populate_type_registry();
         tc.populate_module_type_registry();
-        tc.populate_imports();
-        if !tc.signatures() {
+        tc.populate_imports().map_err(|fatal| {
+            CompileError {
+                diagnostics: tc.diagnostics.clone(),
+                fatal: Some(fatal),
+            }
+            .with_prior_diagnostics(&diagnostics)
+        })?;
+        if !tc.signatures().map_err(|fatal| {
+            CompileError {
+                diagnostics: tc.diagnostics.clone(),
+                fatal: Some(fatal),
+            }
+            .with_prior_diagnostics(&diagnostics)
+        })? {
+            tc.type_size_checkpoint(None).map_err(|fatal| {
+                CompileError {
+                    diagnostics: tc.diagnostics.clone(),
+                    fatal: Some(fatal),
+                }
+                .with_prior_diagnostics(&diagnostics)
+            })?;
             diagnostics.extend(tc.diagnostics);
             return Ok((tc.typed_ast, package_declaration, diagnostics));
         }
-        tc.infer_global_variables();
-        tc.infer_functions();
-        tc.infer_classes();
+        tc.infer_global_variables().map_err(|fatal| {
+            CompileError {
+                diagnostics: tc.diagnostics.clone(),
+                fatal: Some(fatal),
+            }
+            .with_prior_diagnostics(&diagnostics)
+        })?;
+        tc.infer_functions().map_err(|fatal| {
+            CompileError {
+                diagnostics: tc.diagnostics.clone(),
+                fatal: Some(fatal),
+            }
+            .with_prior_diagnostics(&diagnostics)
+        })?;
+        tc.infer_classes().map_err(|fatal| {
+            CompileError {
+                diagnostics: tc.diagnostics.clone(),
+                fatal: Some(fatal),
+            }
+            .with_prior_diagnostics(&diagnostics)
+        })?;
         for f in &tc.typed_ast.functions {
             if !f.generics.is_empty() {
                 package_declaration
@@ -371,7 +503,16 @@ pub fn infer_package_checked<'a>(
             }
         }
         diagnose_package_main_since(&tc.typed_ast, starts.functions, &mut tc.diagnostics);
-        tc.resolve_package_export_statements();
+        // A limit recorded in this module must not be reported against the next.
+        tc.resolve_package_export_statements()
+            .and_then(|()| tc.type_size_checkpoint(None))
+            .map_err(|fatal| {
+                CompileError {
+                    diagnostics: tc.diagnostics.clone(),
+                    fatal: Some(fatal),
+                }
+                .with_prior_diagnostics(&diagnostics)
+            })?;
         let module_symbols = std::mem::take(&mut tc.current_module_symbols);
         for symbol in module_symbols.all_types() {
             let mut symbol = symbol.clone();
@@ -399,8 +540,26 @@ pub fn infer_package_checked<'a>(
         inferred_modules.insert(module, module_symbols);
     }
 
+    crate::tree_height::check_typed(&tc.typed_ast, CompilerStage::Infer).map_err(|fatal| {
+        CompileError {
+            diagnostics: tc.diagnostics.clone(),
+            fatal: Some(fatal),
+        }
+        .with_prior_diagnostics(&diagnostics)
+    })?;
     // The `&tc` borrow has to end before the `&mut tc.typed_ast` assignment.
-    let shapes = shapes::collect(&tc.typed_ast, tc.resolver());
+    // Shape collection resolves types under the limits too, so the last checkpoint
+    // follows it.
+    let shapes = shapes::collect(&tc.typed_ast, tc.resolver())
+        .map_err(|failure| tc.pending_limit_or(failure))
+        .and_then(|shapes| tc.type_size_checkpoint(None).map(|()| shapes))
+        .map_err(|fatal| {
+            CompileError {
+                diagnostics: tc.diagnostics.clone(),
+                fatal: Some(fatal),
+            }
+            .with_prior_diagnostics(&diagnostics)
+        })?;
     tc.typed_ast.shapes = shapes;
     for entry in &root_public_exports {
         if package_declaration.runtime_generics.contains(&entry.target)
@@ -571,6 +730,10 @@ pub(super) struct Inferer<'a> {
     /// missing. Never cleared between modules: an importer of a broken class
     /// must stay silent too.
     pub(super) unresolved_parents: std::collections::BTreeSet<crate::MangledName>,
+    /// Names whose signatures were skipped after source errors in this module.
+    pub(super) rejected_class_names: BTreeSet<String>,
+    /// Source-declared cycles already diagnosed during signature validation.
+    pub(super) invalid_class_hierarchies: std::collections::BTreeSet<crate::MangledName>,
     pub(super) current_type_predicate: Option<(crate::TypePredicate, String)>,
     pub(super) inferred_returns: Option<Vec<(Type, Span)>>,
     pub(super) generics_in_scope: Vec<Vec<String>>,
@@ -617,9 +780,34 @@ pub(super) struct Inferer<'a> {
     /// to a lazy [`Type::AliasRef`] instead of inlining the (not-yet-
     /// finished, and for a true cycle infinite) body.
     pub(super) alias_resolution_stack: Vec<String>,
+    /// Nested annotation and alias-body resolutions in progress. Alias chains
+    /// resolve recursively, so their length is bounded before the stack is.
+    pub(super) type_resolution_depth: u32,
+    /// Oversized types met where the code could not return an error; see
+    /// [`Inferer::type_size_checkpoint`].
+    pub(super) type_limits: crate::type_size::TypeLimits,
 }
 
 impl<'a> Inferer<'a> {
+    /// Fails with a type limit recorded since the last checkpoint, reported at
+    /// `span`: the source being inferred when an oversized type was met where
+    /// no error could be returned.
+    pub(super) fn type_size_checkpoint(&self, span: Option<Span>) -> Result<(), CompilerFailure> {
+        self.type_limits
+            .take()
+            .map_err(|exceeded| exceeded.into_failure(CompilerStage::Infer, span))
+    }
+
+    /// A recorded type limit in place of `internal`: once a limit is recorded,
+    /// a walk that stopped early or a phase that failed may have met the
+    /// `Type::Error` stand-in rather than a real inconsistency.
+    pub(super) fn pending_limit_or(&self, internal: CompilerFailure) -> CompilerFailure {
+        match self.type_size_checkpoint(None) {
+            Err(limit) => limit,
+            Ok(()) => internal,
+        }
+    }
+
     pub(super) fn reset_for_package_module(
         &mut self,
         source: &'a str,
@@ -627,6 +815,9 @@ impl<'a> Inferer<'a> {
         module: ModulePath,
         inferred_modules: &BTreeMap<ModulePath, ModuleSymbols>,
     ) -> Result<(), CompileError> {
+        // Callers may supply ASTs that did not come from `parse_checked`.
+        crate::tree_height::check_syntax(ast)
+            .map_err(|failure| failure.with_stage(CompilerStage::Infer))?;
         validate_lowered_patterns(ast)?;
         self.source = source;
         self.ast = ast;
@@ -650,7 +841,7 @@ impl<'a> Inferer<'a> {
         if !self.pending_implements.is_empty() {
             return Err(inference_failure("signature pass left pending implements checks").into());
         }
-        let bindings = binding_analysis::analyze(ast);
+        let bindings = binding_analysis::analyze(ast)?;
         self.captured_mutators = bindings.mutators;
         self.last_assignments = bindings.last_assignments;
         self.nested_function_creation_points = bindings.nested_function_creation_points;
@@ -684,25 +875,40 @@ impl<'a> Inferer<'a> {
         }
     }
 
-    pub(super) fn mangle_top_symbol(&self, name: &str) -> crate::MangledName {
+    pub(super) fn mangle_top_symbol(
+        &self,
+        name: &str,
+    ) -> Result<crate::MangledName, crate::compiler_error::CompilerFailure> {
         if !self.package_inference {
-            return crate::mangle::package_symbol(self.package_name, name);
+            return Ok(crate::mangle::package_symbol(self.package_name, name));
         }
-        if self.module == self.root_module && self.is_exported_top_symbol(name) {
-            crate::mangle::package_symbol(self.package_name, name)
-        } else {
-            crate::mangle::package_module_symbol(self.package_name, self.module.as_str(), name)
-        }
+        Ok(
+            if self.module == self.root_module && self.is_exported_top_symbol(name)? {
+                crate::mangle::package_symbol(self.package_name, name)
+            } else {
+                crate::mangle::package_module_symbol(self.package_name, self.module.as_str(), name)
+            },
+        )
     }
 
-    fn is_exported_top_symbol(&self, name: &str) -> bool {
-        self.ast.exported_decls.iter().any(|ed| {
-            exports::exported_decl_name(&self.ast.stmt(ed.stmt).kind)
-                .is_some_and(|exported| exported.name == name)
-        })
+    fn is_exported_top_symbol(
+        &self,
+        name: &str,
+    ) -> Result<bool, crate::compiler_error::CompilerFailure> {
+        for ed in &self.ast.exported_decls {
+            let stmt = self.ast.try_stmt(ed.stmt).map_err(arena_failure)?;
+            if exports::exported_decl_name(&stmt.kind).is_some_and(|exported| exported.name == name)
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
-    pub(super) fn add_typed_global(&mut self, global: crate::TypedGlobal) {
+    pub(super) fn add_typed_global(
+        &mut self,
+        global: crate::TypedGlobal,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         if self.package_inference {
             let symbol = crate::ValueSymbol {
                 name: global.name.name.clone(),
@@ -723,12 +929,17 @@ impl<'a> Inferer<'a> {
                 .values
                 .entry(symbol.name.clone())
                 .or_insert((false, symbol));
-            self.mark_direct_package_export(&global.name.name);
+            self.mark_direct_package_export(&global.name.name)?;
         }
         self.typed_ast.globals.push(global);
+
+        Ok(())
     }
 
-    pub(super) fn add_typed_function(&mut self, function: crate::TypedFunction) {
+    pub(super) fn add_typed_function(
+        &mut self,
+        function: crate::TypedFunction,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         if self.package_inference {
             let symbol = crate::ValueSymbol {
                 name: function.name.name.clone(),
@@ -750,25 +961,29 @@ impl<'a> Inferer<'a> {
                 .values
                 .entry(symbol.name.clone())
                 .or_insert((false, symbol));
-            self.mark_direct_package_export(&function.name.name);
+            self.mark_direct_package_export(&function.name.name)?;
         }
         self.typed_ast.functions.push(function);
+
+        Ok(())
     }
 
     pub(super) fn add_typed_type_decl(
         &mut self,
         decl: crate::TypedTypeDecl,
         symbol: crate::TypeSymbol,
-    ) {
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         if self.package_inference {
             let name = symbol.name.clone();
             self.current_module_symbols
                 .types
                 .entry(name.clone())
                 .or_insert((false, symbol));
-            self.mark_direct_package_export(&name);
+            self.mark_direct_package_export(&name)?;
         }
         self.typed_ast.types.push(decl);
+
+        Ok(())
     }
 }
 
@@ -795,8 +1010,7 @@ fn inference_failure(message: &str) -> CompilerFailure {
 
 fn validate_lowered_patterns(ast: &Ast) -> Result<(), CompileError> {
     use crate::{ExprKind, StmtKind};
-    for i in 0..ast.stmts_len() {
-        let stmt = ast.stmt(crate::StmtId(i as u32));
+    for stmt in ast.source_statements() {
         let unlowered = match &stmt.kind {
             StmtKind::LetPattern { .. }
             | StmtKind::ConstPattern { .. }
@@ -813,8 +1027,7 @@ fn validate_lowered_patterns(ast: &Ast) -> Result<(), CompileError> {
             .into());
         }
     }
-    for i in 0..ast.exprs_len() {
-        let expr = ast.expr(crate::ExprId(i as u32));
+    for expr in ast.source_expressions() {
         if let ExprKind::Arrow { params, .. } = &expr.kind
             && params.iter().any(|param| param.pattern.is_some())
         {
@@ -1072,7 +1285,7 @@ mod tests {
         module: &str,
         source: &str,
     ) -> (ModulePath, crate::FileId, Ast) {
-        let file = sources.add(module.to_string(), source.to_string());
+        let file = sources.add(module.to_string(), source).unwrap();
         let mut asi = Asi::new(source, file);
         let mut tokens: Vec<Token> = Vec::new();
         loop {
@@ -1093,10 +1306,51 @@ mod tests {
             parse_diags.is_empty(),
             "unexpected parser diags: {parse_diags:?}",
         );
-        lower_patterns(&mut ast);
+        ast = lower_patterns(ast).unwrap();
         (ModulePath::from(module), file, ast)
     }
 }
 
 #[cfg(test)]
 mod test_support;
+
+fn arena_failure(error: crate::arena::ArenaError) -> CompilerFailure {
+    error.into_compiler_failure(CompilerStage::Infer)
+}
+
+/// Rejects a dependency declaration holding a type beyond the type limits
+/// before any recursive pass reads it.
+fn check_declaration_types<'d>(
+    declarations: impl IntoIterator<Item = &'d PackageDeclaration>,
+) -> Result<(), CompilerFailure> {
+    for declaration in declarations {
+        declaration
+            .check_type_limits()
+            .map_err(|exceeded| CompilerFailure::Limit {
+                stage: CompilerStage::Infer,
+                span: None,
+                message: format!(
+                    "package `{}` declares a type beyond a compiler limit: {exceeded}",
+                    declaration.package_name
+                ),
+                help: vec![
+                    "rebuild the package with a compiler that enforces the same limits".into(),
+                ],
+            })?;
+    }
+    Ok(())
+}
+
+/// Converts a type limit met where no source position is at hand; an enclosing
+/// caller adds one with `with_span`, such as `infer_expr` or the interface
+/// validation around member comparisons.
+pub(super) fn type_limit_unlocated(exceeded: crate::type_size::TypeTooLarge) -> CompilerFailure {
+    exceeded.into_failure(CompilerStage::Infer, None)
+}
+
+/// Converts a type limit met while inferring the source at `span`.
+pub(super) fn type_limit_at(
+    span: Span,
+) -> impl FnOnce(crate::type_size::TypeTooLarge) -> CompilerFailure {
+    move |exceeded| exceeded.into_failure(CompilerStage::Infer, Some(span))
+}

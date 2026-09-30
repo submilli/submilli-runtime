@@ -3,6 +3,7 @@
 //! the packages in dependency order, and `publish-local` compiles and installs
 //! the artifacts into the local package store.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
@@ -11,10 +12,11 @@ use std::process::ExitCode;
 use anyhow::Context;
 use interpreter::{Severity, Sources, Span, diagnostics};
 use submilli_build::{
-    BuildDiagnostic, BuildSeverity, BuiltPackage, DriverError, Lockfile, PackageName, PackageStore,
-    ProjectManifest, ResolveError, ScaffoldError, add_package, build_packages,
-    find_manifest_upwards, init_project, install_packages, install_plan, is_valid_package_name,
-    parse_manifest, refresh_editor_files, resolve_github_closure, write_capabilities_file,
+    BuildDiagnostic, BuildSeverity, BuiltPackage, DependencyKind, DriverError, Lockfile,
+    PackageName, PackageStore, ProjectManifest, ResolveError, ScaffoldError, add_package,
+    build_packages, find_manifest_upwards, init_project, install_packages, install_plan,
+    is_valid_package_name, parse_manifest, refresh_dependency_types, refresh_editor_files,
+    resolve_github_closure, write_capabilities_file,
 };
 use submilli_shared::github::GithubRepoFetcher;
 
@@ -264,6 +266,9 @@ fn compile_project(args: CompileArgs) -> anyhow::Result<Result<CompiledProject, 
     if let Err(code) = resolve_github_dependencies(&manifest, &manifest_dir, &store) {
         return Ok(Err(code));
     }
+    if let Err(code) = refresh_dependency_editor_types(&manifest, &manifest_dir, &store) {
+        return Ok(Err(code));
+    }
     let only = args.package.map(PackageName::new);
     match build_packages(&manifest, &manifest_dir, &store, only.as_ref()) {
         Ok(built) => {
@@ -323,6 +328,52 @@ fn resolve_github_dependencies(
     Ok(())
 }
 
+/// Give the editor declarations for the dependencies that come from the store.
+///
+/// Each dependency's closure loads on its own, so one the store can't load
+/// costs only its own declarations; the build reports it, naming the package
+/// that needs it. A store package named like a package of this project gets no
+/// declarations, since the project's own source is what the editor should
+/// open, but the dependencies may still borrow its types.
+fn refresh_dependency_editor_types(
+    manifest: &ProjectManifest,
+    manifest_dir: &Path,
+    store: &PackageStore,
+) -> Result<(), ExitCode> {
+    let project_names: BTreeSet<&str> = manifest
+        .packages
+        .iter()
+        .map(|package| package.name.as_str())
+        .collect();
+    let external_names: BTreeSet<&str> = manifest
+        .packages
+        .iter()
+        .flat_map(|package| &package.dependencies)
+        .filter(|dependency| dependency.kind != DependencyKind::Sibling)
+        .map(|dependency| dependency.name.as_str())
+        .collect();
+    let mut artifacts = BTreeMap::new();
+    for name in external_names {
+        let Ok(closure) = store.load_closure([name]) else {
+            continue;
+        };
+        for artifact in closure {
+            artifacts
+                .entry(artifact.metadata.package_name.clone())
+                .or_insert(artifact);
+        }
+    }
+    let (project_packages, dependencies): (Vec<_>, Vec<_>) = artifacts
+        .values()
+        .map(|artifact| &artifact.package_declaration)
+        .partition(|declaration| project_names.contains(declaration.package_name.as_str()));
+    if let Err(err) = refresh_dependency_types(manifest_dir, &dependencies, &project_packages) {
+        eprintln!("error: {err}");
+        return Err(ExitCode::from(1));
+    }
+    Ok(())
+}
+
 fn render_resolve_error(err: &ResolveError) {
     match err {
         ResolveError::Manifest {
@@ -363,10 +414,33 @@ fn render_manifest_diagnostics(
     manifest_text: String,
     diags: &[BuildDiagnostic],
 ) {
-    let (sources, file) = Sources::single(manifest_path.display().to_string(), manifest_text);
+    let (sources, file) = match Sources::single(manifest_path.display().to_string(), manifest_text)
+    {
+        Ok(source) => source,
+        Err(error) => {
+            for diagnostic in diags {
+                eprintln!("error: {}", diagnostic.message);
+            }
+            eprintln!("source context unavailable: {error}");
+            return;
+        }
+    };
     for diag in diags {
         let span = match diag.span {
-            Some(span) => Span::new(file, span.start as u32, span.end as u32),
+            Some(span) => {
+                let Some(span) = u32::try_from(span.start)
+                    .ok()
+                    .zip(u32::try_from(span.end).ok())
+                    .and_then(|(start, end)| Span::new(file, start, end).ok())
+                else {
+                    eprintln!(
+                        "error: {}\nsource context unavailable: invalid manifest span",
+                        diag.message
+                    );
+                    continue;
+                };
+                span
+            }
             None => Span::at(file),
         };
         let rendered = diagnostics::render(
@@ -748,7 +822,7 @@ mod test_runner {
             .unwrap_or(test_file)
             .to_string_lossy()
             .into_owned();
-        let (sources, file) = Sources::single(filename.clone(), source.clone());
+        let (sources, file) = Sources::single(filename.clone(), source.clone())?;
 
         let (bytes, type_info) = match compile_script_owned_by(
             package_name,

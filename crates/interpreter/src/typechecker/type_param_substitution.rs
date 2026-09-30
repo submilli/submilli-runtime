@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 
 use crate::Type;
+use crate::type_size::{TypeBudget, TypeLimits, TypeTooLarge, map_children};
 use crate::typechecker::infer::assignable::{TypeResolver, assignable, expand_alias_ref};
 use crate::typechecker::infer::type_aliases::rehydrate_alias_refs;
 
@@ -59,12 +60,19 @@ impl TypeParamSubstitution {
     }
 
     /// Replace `TypeVar`s in `ty` with bound types; chases var-to-var chains.
-    pub fn apply(&self, ty: &Type) -> Type {
-        self.apply_rec(ty, &mut Vec::new())
+    /// Fails, without building the rest, once the result passes a type limit.
+    pub fn apply(&self, ty: &Type, limits: &TypeLimits) -> Result<Type, TypeTooLarge> {
+        self.apply_rec(ty, 1, &mut limits.budget(), &mut Vec::new())
     }
 
-    /// [`apply`](Self::apply), tracking which variables' bindings are open on
-    /// the current path in `substituting`.
+    /// [`apply`](Self::apply) where the caller cannot return an error: a type
+    /// past a limit is recorded in `limits` and comes back as `Type::Error`.
+    pub fn apply_or_record(&self, ty: &Type, limits: &TypeLimits) -> Type {
+        limits.type_or_error(self.apply(ty, limits))
+    }
+
+    /// [`apply`](Self::apply) for the node at `depth` of the result, tracking
+    /// which variables' bindings are open on the current path in `substituting`.
     ///
     /// A binding is allowed to mention the very variable it binds — a recursive
     /// alias's back-edge rehydrated to its inline form carries the alias's own
@@ -72,151 +80,30 @@ impl TypeParamSubstitution {
     /// same binding forever. Re-entry yields the variable itself, the finite
     /// spelling of that fixpoint. The degenerate case is a `T → T` self-binding
     /// from two nested generics sharing a name, which re-enters at depth zero.
-    fn apply_rec(&self, ty: &Type, substituting: &mut Vec<String>) -> Type {
-        match ty {
-            Type::Refined { original, ty } => Type::Refined {
-                original: Box::new(self.apply_rec(original, substituting)),
-                ty: Box::new(self.apply_rec(ty, substituting)),
-            },
-            Type::TypeVar(name) => match self.bindings.get(name) {
-                Some(bound) => {
-                    if substituting.iter().any(|open| open == name) {
-                        return ty.clone();
-                    }
-                    substituting.push(name.clone());
-                    let applied = self.apply_rec(bound, substituting);
-                    substituting.pop();
-                    applied
-                }
-                None => ty.clone(),
-            },
-            Type::Array(elem) => Type::Array(Box::new(self.apply_rec(elem, substituting))),
-            Type::Readonly(inner) => Type::Readonly(Box::new(self.apply_rec(inner, substituting))),
-            Type::Tuple(elements) => Type::Tuple(
-                elements
-                    .iter()
-                    .map(|e| self.apply_rec(e, substituting))
-                    .collect(),
-            ),
-            Type::Function {
-                params,
-                ret,
-                predicate,
-                has_rest,
-            } => Type::Function {
-                params: params
-                    .iter()
-                    .map(|p| self.apply_rec(p, substituting))
-                    .collect(),
-                ret: Box::new(self.apply_rec(ret, substituting)),
-                has_rest: *has_rest,
-                // substitute so `x is T` predicates resolve T at the call site.
-                predicate: predicate.as_ref().map(|p| {
-                    Box::new(crate::TypePredicate {
-                        parameter_index: p.parameter_index,
-                        asserted_type: self.apply_rec(&p.asserted_type, substituting),
-                    })
-                }),
-            },
-            Type::Object { fields, index } => Type::Object {
-                index: index
-                    .as_ref()
-                    .map(|i| i.map_value(|v| self.apply_rec(v, substituting))),
-                fields: fields
-                    .iter()
-                    .map(|(k, v)| {
-                        (
-                            k.clone(),
-                            crate::ObjectField {
-                                ty: self.apply_rec(&v.ty, substituting),
-                                optional: v.optional,
-                                readonly: v.readonly,
-                            },
-                        )
-                    })
-                    .collect(),
-            },
-            Type::InterfaceRef {
-                mangled,
-                package,
-                name,
-                args,
-            } => Type::interface_ref(
-                package.clone(),
-                name.clone(),
-                mangled.clone(),
-                args.iter()
-                    .map(|a| self.apply_rec(a, substituting))
-                    .collect(),
-            ),
-            Type::ClassRef {
-                mangled,
-                package,
-                name,
-                args,
-            } => Type::class_ref(
-                package.clone(),
-                name.clone(),
-                mangled.clone(),
-                args.iter()
-                    .map(|a| self.apply_rec(a, substituting))
-                    .collect(),
-            ),
-            // Use `Type::union` so collapsing substitutions preserve canonical form.
-            Type::Union(members) => Type::union(
-                members
-                    .iter()
-                    .map(|m| self.apply_rec(m, substituting))
-                    .collect(),
-            ),
-            // Alias label preserved; substitute body and args so `Box<T>` resolves T.
-            Type::Alias {
-                mangled,
-                package,
-                name,
-                args,
-                ty: inner,
-            } => Type::alias_ty(
-                package.clone(),
-                name.clone(),
-                mangled.clone(),
-                args.iter()
-                    .map(|a| self.apply_rec(a, substituting))
-                    .collect(),
-                Box::new(self.apply_rec(inner, substituting)),
-            ),
-            // Recursion back-edge: no inline body, substitute args only.
-            Type::AliasRef {
-                mangled,
-                package,
-                name,
-                args,
-            } => Type::alias_ref(
-                package.clone(),
-                name.clone(),
-                mangled.clone(),
-                args.iter()
-                    .map(|a| self.apply_rec(a, substituting))
-                    .collect(),
-            ),
-            // GenericParam is opaque here — body-form, not substituted.
-            Type::Number
-            | Type::BigInt
-            | Type::NumberLiteral(_)
-            | Type::String
-            | Type::StringLiteral(_)
-            | Type::Uint8Array
-            | Type::Boolean
-            | Type::BooleanLiteral(_)
-            | Type::Null
-            | Type::Void
-            | Type::Never
-            | Type::Unknown
-            | Type::Error
-            | Type::NumberEnum { .. }
-            | Type::StringEnum { .. }
-            | Type::GenericParam { .. } => ty.clone(),
+    fn apply_rec(
+        &self,
+        ty: &Type,
+        depth: u32,
+        budget: &mut TypeBudget<'_>,
+        substituting: &mut Vec<String>,
+    ) -> Result<Type, TypeTooLarge> {
+        if let Type::TypeVar(name) = ty
+            && let Some(bound) = self.bindings.get(name)
+            && !substituting.iter().any(|open| open == name)
+        {
+            // The bound type takes the variable's place, at the same depth.
+            substituting.push(name.clone());
+            let applied = self.apply_rec(bound, depth, budget, substituting);
+            substituting.pop();
+            return applied;
         }
+        budget.charge(depth)?;
+        let child = depth.saturating_add(1);
+        // An unbound or re-entered variable is a leaf and stays itself.
+        // GenericParam is opaque here — body-form, not substituted.
+        map_children(ty, |inner| {
+            self.apply_rec(inner, child, budget, substituting)
+        })
     }
 
     /// Structural unification of `param_ty` against `arg_ty`, binding `TypeVar`s
@@ -233,7 +120,7 @@ impl TypeParamSubstitution {
         arg_ty: &Type,
         types: TypeResolver<'_>,
     ) -> Result<(), UnifyError> {
-        Unifier::new(self, Some(types)).unify(param_ty, arg_ty)
+        Unifier::new(self, Some(types), types.limits).unify(param_ty, arg_ty)
     }
 
     /// [`unify`](Self::unify) for a **call-argument** position.
@@ -252,13 +139,13 @@ impl TypeParamSubstitution {
         arg_ty: &Type,
         types: TypeResolver<'_>,
     ) -> Result<(), UnifyError> {
-        let resolved = self.apply(param_ty);
+        let resolved = self.apply_or_record(param_ty, types.limits);
         if !super::infer::expr::type_contains_type_var(&resolved)
             && assignable(arg_ty, &resolved, types)
         {
             return Ok(());
         }
-        let mut unifier = Unifier::new(self, Some(types));
+        let mut unifier = Unifier::new(self, Some(types), types.limits);
         unifier.subtype_widening = true;
         unifier.unify(param_ty, arg_ty)
     }
@@ -270,6 +157,9 @@ impl TypeParamSubstitution {
 struct Unifier<'a> {
     sub: &'a mut TypeParamSubstitution,
     types: Option<TypeResolver<'a>>,
+    /// Where a substitution that passes a type limit is recorded; the walk
+    /// continues with `Type::Error`, which unifies with anything.
+    limits: &'a TypeLimits,
     assumed_pairs: Vec<(Type, Type)>,
     /// Whether an argument assignable to an already-bound type parameter is
     /// accepted rather than reported as a conflict. Set by
@@ -304,7 +194,7 @@ impl<'a> Unifier<'a> {
             // `$ObjectShape` — bind the inline form so the two agree.
             let arg_ty = &self.inline_alias_refs(bindable_arg);
             if let Some(existing) = self.sub.bindings.get(name).cloned() {
-                let resolved = self.sub.apply(&existing);
+                let resolved = self.sub.apply_or_record(&existing, self.limits);
                 // A `T → T` self-binding (two nested generics sharing a name, e.g. the
                 // unresolved vars of `new Map()` flowing into `.set`'s receiver) is
                 // effectively unbound: recursing here would unify `T` against the arg
@@ -314,7 +204,7 @@ impl<'a> Unifier<'a> {
                     self.sub.bindings.insert(name.clone(), arg_ty.clone());
                     return Ok(());
                 }
-                let arg_resolved = self.sub.apply(arg_ty);
+                let arg_resolved = self.sub.apply_or_record(arg_ty, self.limits);
                 // Recurse instead of `==` to peel aliases at every level; remap to Conflict to pin the offending param.
                 return match self.unify(&resolved, &arg_resolved) {
                     Ok(()) => Ok(()),
@@ -412,8 +302,7 @@ impl<'a> Unifier<'a> {
                         got: arg_ty.clone(),
                     });
                 }
-                for (k, va) in a {
-                    let vb = b.get(k).expect("keys equal-set above");
+                for (va, vb) in a.values().zip(b.values()) {
                     if va.optional != vb.optional {
                         return Err(UnifyError::Mismatch {
                             expected: param_ty.clone(),
@@ -470,7 +359,7 @@ impl<'a> Unifier<'a> {
                 let mut leftover_pa: Vec<&Type> = Vec::new();
                 let mut leftover_pb: Vec<Type> = pb.to_vec();
                 for a in pa {
-                    let resolved_a = self.sub.apply(a);
+                    let resolved_a = self.sub.apply_or_record(a, self.limits);
                     // Snapshot and roll back on failure — speculative pairing.
                     let mut paired: Option<usize> = None;
                     for (i, b) in leftover_pb.iter().enumerate() {
@@ -554,10 +443,15 @@ impl<'a> Unifier<'a> {
             }
         }
     }
-    fn new(sub: &'a mut TypeParamSubstitution, types: Option<TypeResolver<'a>>) -> Self {
+    fn new(
+        sub: &'a mut TypeParamSubstitution,
+        types: Option<TypeResolver<'a>>,
+        limits: &'a TypeLimits,
+    ) -> Self {
         Unifier {
             sub,
             types,
+            limits,
             assumed_pairs: Vec::new(),
             subtype_widening: false,
         }
@@ -607,7 +501,7 @@ impl<'a> Unifier<'a> {
     /// without a registry to resolve the back-edge against.
     fn inline_alias_refs(&self, ty: &Type) -> Type {
         match self.types {
-            Some(types) => rehydrate_alias_refs(ty, types),
+            Some(types) => types.limits.type_or_error(rehydrate_alias_refs(ty, types)),
             None => ty.clone(),
         }
     }
@@ -683,13 +577,18 @@ impl<'a> Unifier<'a> {
 impl TypeParamSubstitution {
     /// Returns `Ok(resolved)` with fully applied types per `generics` entry, or `Err(unbound_names)`.
     /// A `T → TypeVar(T)` self-binding counts as unbound — no concrete type flowed in.
-    pub fn resolve_all(&self, generics: &[String]) -> Result<Vec<Type>, Vec<String>> {
+    /// Fails outright when applying a binding passes a type limit.
+    pub fn resolve_all(
+        &self,
+        generics: &[String],
+        limits: &TypeLimits,
+    ) -> Result<Result<Vec<Type>, Vec<String>>, TypeTooLarge> {
         let mut resolved = Vec::with_capacity(generics.len());
         let mut unbound = Vec::new();
         for name in generics {
             match self.bindings.get(name) {
                 Some(t) => {
-                    let r = self.apply(t);
+                    let r = self.apply(t, limits)?;
                     if matches!(&r, Type::TypeVar(other) if other == name) {
                         unbound.push(name.clone());
                     } else {
@@ -700,9 +599,9 @@ impl TypeParamSubstitution {
             }
         }
         if unbound.is_empty() {
-            Ok(resolved)
+            Ok(Ok(resolved))
         } else {
-            Err(unbound)
+            Ok(Err(unbound))
         }
     }
 }
@@ -720,7 +619,10 @@ mod tests {
         param_ty: &Type,
         arg_ty: &Type,
     ) -> Result<(), UnifyError> {
-        Unifier::new(sub, None).unify(param_ty, arg_ty)
+        let limits = TypeLimits::default();
+        let result = Unifier::new(sub, None, &limits).unify(param_ty, arg_ty);
+        assert_eq!(limits.take(), Ok(()));
+        result
     }
     use std::collections::BTreeMap;
 
@@ -768,13 +670,21 @@ mod tests {
     fn apply_replaces_bound_var() {
         let mut s = TypeParamSubstitution::new();
         s.insert("T".to_string(), Type::Number);
-        assert_eq!(s.apply(&t("T")), Type::Number);
+        assert_eq!(
+            s.apply(&t("T"), &crate::type_size::TypeLimits::default())
+                .unwrap(),
+            Type::Number
+        );
     }
 
     #[test]
     fn apply_passes_through_unbound_var() {
         let s = TypeParamSubstitution::new();
-        assert_eq!(s.apply(&t("T")), t("T"));
+        assert_eq!(
+            s.apply(&t("T"), &crate::type_size::TypeLimits::default())
+                .unwrap(),
+            t("T")
+        );
     }
 
     #[test]
@@ -782,7 +692,11 @@ mod tests {
         let mut s = TypeParamSubstitution::new();
         s.insert("T".to_string(), t("U"));
         s.insert("U".to_string(), Type::Number);
-        assert_eq!(s.apply(&t("T")), Type::Number);
+        assert_eq!(
+            s.apply(&t("T"), &crate::type_size::TypeLimits::default())
+                .unwrap(),
+            Type::Number
+        );
     }
 
     #[test]
@@ -790,7 +704,11 @@ mod tests {
         let mut s = TypeParamSubstitution::new();
         s.insert("T".to_string(), Type::Number);
         let arr_t = Type::Array(Box::new(t("T")));
-        assert_eq!(s.apply(&arr_t), Type::Array(Box::new(Type::Number)));
+        assert_eq!(
+            s.apply(&arr_t, &crate::type_size::TypeLimits::default())
+                .unwrap(),
+            Type::Array(Box::new(Type::Number))
+        );
     }
 
     #[test]
@@ -805,7 +723,8 @@ mod tests {
             has_rest: false,
         };
         assert_eq!(
-            s.apply(&f),
+            s.apply(&f, &crate::type_size::TypeLimits::default())
+                .unwrap(),
             Type::Function {
                 params: vec![Type::Number],
                 ret: Box::new(Type::String),
@@ -821,7 +740,8 @@ mod tests {
         s.insert("T".to_string(), Type::Number);
         let o = obj(&[("x", t("T")), ("y", Type::String)]);
         assert_eq!(
-            s.apply(&o),
+            s.apply(&o, &crate::type_size::TypeLimits::default())
+                .unwrap(),
             obj(&[("x", Type::Number), ("y", Type::String)])
         );
     }
@@ -1025,7 +945,11 @@ mod tests {
         s.insert("U".to_string(), Type::String);
         s.insert("T".to_string(), Type::Number);
         let resolved = s
-            .resolve_all(&["T".to_string(), "U".to_string()])
+            .resolve_all(
+                &["T".to_string(), "U".to_string()],
+                &crate::type_size::TypeLimits::default(),
+            )
+            .unwrap()
             .expect("all bound");
         assert_eq!(resolved, vec![Type::Number, Type::String]);
     }
@@ -1034,7 +958,11 @@ mod tests {
     fn resolve_all_returns_unbound_names() {
         let s = TypeParamSubstitution::new();
         let unbound = s
-            .resolve_all(&["T".to_string(), "U".to_string()])
+            .resolve_all(
+                &["T".to_string(), "U".to_string()],
+                &crate::type_size::TypeLimits::default(),
+            )
+            .unwrap()
             .expect_err("none bound");
         assert_eq!(unbound, vec!["T".to_string(), "U".to_string()]);
     }
@@ -1045,7 +973,8 @@ mod tests {
         s.insert("T".to_string(), t("U"));
         s.insert("U".to_string(), Type::Number);
         let resolved = s
-            .resolve_all(&["T".to_string()])
+            .resolve_all(&["T".to_string()], &crate::type_size::TypeLimits::default())
+            .unwrap()
             .expect("T resolves through U");
         assert_eq!(resolved, vec![Type::Number]);
     }

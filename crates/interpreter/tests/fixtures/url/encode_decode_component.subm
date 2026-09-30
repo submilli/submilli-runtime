@@ -13,6 +13,9 @@ function main(): void {
   assert(punct === "a%26b%3Dc", "& and = encoded");
   assert(decodeComponent(punct) === "a&b=c", "punctuation round-trip");
 
+  assert(encodeComponent("cus_a-b~c") === "cus_a-b~c", "- _ ~ unchanged");
+  assert(encodeComponent("..") === "%2E%2E", "dot encoded");
+
   assert(encodeComponent("") === "", "empty in / empty out");
   assert(decodeComponent("") === "", "empty decode");
 }

@@ -1,3 +1,4 @@
+use crate::arena::{self, ArenaError, ArenaKind};
 use crate::{DocComment, Span};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -708,14 +709,14 @@ pub struct TypePredicateAnnotation {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TypeAnnotationKind {
-    /// `name_span` covers the identifier only; outer span includes any `<…>` args.
+    /// `name.span` covers the identifier only; outer span includes any `<…>` args.
     Name {
-        name_span: Span,
+        name: Ident,
         args: Vec<TypeAnnotation>,
     },
     /// Dotted type like `Temporal.Instant`. `path.len() >= 2`; last segment is the type name.
     Qualified {
-        path: Vec<Span>,
+        path: Vec<Ident>,
         args: Vec<TypeAnnotation>,
     },
     StringLiteral(String),
@@ -747,7 +748,7 @@ pub enum TypeAnnotationKind {
     /// rather than the type namespace. `path` is the dotted reference, one span per
     /// segment (`typeof o.k` has two). Resolved eagerly, like [`KeyOf`](Self::KeyOf).
     TypeOf {
-        path: Vec<Span>,
+        path: Vec<Ident>,
     },
 }
 
@@ -799,39 +800,59 @@ pub struct Ast {
 }
 
 impl Ast {
+    pub(crate) fn source_expressions(&self) -> &[Expr] {
+        &self.exprs
+    }
+    pub(crate) fn source_statements(&self) -> &[Stmt] {
+        &self.stmts
+    }
+
+    pub fn validate_source(
+        &self,
+        source: &str,
+        file: crate::FileId,
+    ) -> Result<(), crate::source::SourceError> {
+        crate::source_validation::validate(self, source, file)
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn push_expr(&mut self, expr: Expr) -> ExprId {
-        let id = self.exprs.len();
-        debug_assert!(id < u32::MAX as usize, "Ast expr index overflow");
-        self.exprs.push(expr);
-        ExprId(id as u32)
+    /// Checked allocation; failure leaves the arena unchanged.
+    pub fn try_push_expr(&mut self, expr: Expr) -> Result<ExprId, ArenaError> {
+        arena::push(&mut self.exprs, expr, ArenaKind::Expressions).map(ExprId)
     }
 
-    pub fn push_stmt(&mut self, stmt: Stmt) -> StmtId {
-        let id = self.stmts.len();
-        debug_assert!(id < u32::MAX as usize, "Ast stmt index overflow");
-        self.stmts.push(stmt);
-        StmtId(id as u32)
+    /// Checked allocation; failure leaves the arena unchanged.
+    pub fn try_push_stmt(&mut self, stmt: Stmt) -> Result<StmtId, ArenaError> {
+        arena::push(&mut self.stmts, stmt, ArenaKind::Statements).map(StmtId)
     }
 
-    pub fn expr(&self, id: ExprId) -> &Expr {
-        &self.exprs[id.0 as usize]
+    pub fn try_expr(&self, id: ExprId) -> Result<&Expr, ArenaError> {
+        arena::get(&self.exprs, id.0, ArenaKind::Expressions)
     }
 
-    pub fn stmt(&self, id: StmtId) -> &Stmt {
-        &self.stmts[id.0 as usize]
+    pub fn try_stmt(&self, id: StmtId) -> Result<&Stmt, ArenaError> {
+        arena::get(&self.stmts, id.0, ArenaKind::Statements)
     }
 
-    /// Mutable arena access — `lower_patterns` only; treat AST as immutable post-parse.
-    pub fn stmt_mut(&mut self, id: StmtId) -> &mut Stmt {
-        &mut self.stmts[id.0 as usize]
+    pub fn try_expr_mut(&mut self, id: ExprId) -> Result<&mut Expr, ArenaError> {
+        arena::get_mut(&mut self.exprs, id.0, ArenaKind::Expressions)
     }
 
-    pub fn expr_mut(&mut self, id: ExprId) -> &mut Expr {
-        &mut self.exprs[id.0 as usize]
+    pub fn try_stmt_mut(&mut self, id: StmtId) -> Result<&mut Stmt, ArenaError> {
+        arena::get_mut(&mut self.stmts, id.0, ArenaKind::Statements)
+    }
+
+    /// Snapshot of allocated expression IDs, usable while appending new nodes.
+    pub fn expr_ids(&self) -> Result<impl DoubleEndedIterator<Item = ExprId> + use<>, ArenaError> {
+        Ok(arena::ids(self.exprs.len(), ArenaKind::Expressions)?.map(ExprId))
+    }
+
+    /// Snapshot of allocated statement IDs, usable while appending new nodes.
+    pub fn stmt_ids(&self) -> Result<impl DoubleEndedIterator<Item = StmtId> + use<>, ArenaError> {
+        Ok(arena::ids(self.stmts.len(), ArenaKind::Statements)?.map(StmtId))
     }
 
     pub fn exprs_len(&self) -> usize {
@@ -851,67 +872,90 @@ mod tests {
     #[test]
     fn arena_round_trip_for_exprs() {
         let mut ast = Ast::new();
-        let id = ast.push_expr(Expr {
-            kind: ExprKind::Number(42.0),
-            span: Span::new(crate::FileId(0), 0, 2),
-        });
+        let id = ast
+            .try_push_expr(Expr {
+                kind: ExprKind::Number(42.0),
+                span: Span::new(crate::FileId(0), 0, 2).unwrap(),
+            })
+            .unwrap();
         assert_eq!(id.0, 0);
-        assert_eq!(ast.expr(id).kind, ExprKind::Number(42.0));
-        assert_eq!(ast.expr(id).span, Span::new(crate::FileId(0), 0, 2));
+        assert_eq!(ast.try_expr(id).unwrap().kind, ExprKind::Number(42.0));
+        assert_eq!(
+            ast.try_expr(id).unwrap().span,
+            Span::new(crate::FileId(0), 0, 2).unwrap()
+        );
     }
 
     #[test]
     fn arena_round_trip_for_stmts() {
         let mut ast = Ast::new();
-        let expr_id = ast.push_expr(Expr {
-            kind: ExprKind::Null,
-            span: Span::new(crate::FileId(0), 0, 4),
-        });
-        let stmt_id = ast.push_stmt(Stmt {
-            kind: StmtKind::Expr(expr_id),
-            span: Span::new(crate::FileId(0), 0, 5),
-        });
+        let expr_id = ast
+            .try_push_expr(Expr {
+                kind: ExprKind::Null,
+                span: Span::new(crate::FileId(0), 0, 4).unwrap(),
+            })
+            .unwrap();
+        let stmt_id = ast
+            .try_push_stmt(Stmt {
+                kind: StmtKind::Expr(expr_id),
+                span: Span::new(crate::FileId(0), 0, 5).unwrap(),
+            })
+            .unwrap();
         assert_eq!(stmt_id.0, 0);
-        assert_eq!(ast.stmt(stmt_id).span, Span::new(crate::FileId(0), 0, 5));
-        assert!(matches!(ast.stmt(stmt_id).kind, StmtKind::Expr(_)));
+        assert_eq!(
+            ast.try_stmt(stmt_id).unwrap().span,
+            Span::new(crate::FileId(0), 0, 5).unwrap()
+        );
+        assert!(matches!(
+            ast.try_stmt(stmt_id).unwrap().kind,
+            StmtKind::Expr(_)
+        ));
     }
 
     #[test]
     fn build_binary_expression_tree() {
         let mut ast = Ast::new();
-        let lhs = ast.push_expr(Expr {
-            kind: ExprKind::Number(1.0),
-            span: Span::new(crate::FileId(0), 0, 1),
-        });
-        let rhs = ast.push_expr(Expr {
-            kind: ExprKind::Number(2.0),
-            span: Span::new(crate::FileId(0), 4, 5),
-        });
-        let sum = ast.push_expr(Expr {
-            kind: ExprKind::Binary {
-                op: BinOp::Add,
-                lhs,
-                rhs,
-            },
-            span: Span::new(crate::FileId(0), 0, 5),
-        });
-        let stmt_id = ast.push_stmt(Stmt {
-            kind: StmtKind::Expr(sum),
-            span: Span::new(crate::FileId(0), 0, 6),
-        });
+        let lhs = ast
+            .try_push_expr(Expr {
+                kind: ExprKind::Number(1.0),
+                span: Span::new(crate::FileId(0), 0, 1).unwrap(),
+            })
+            .unwrap();
+        let rhs = ast
+            .try_push_expr(Expr {
+                kind: ExprKind::Number(2.0),
+                span: Span::new(crate::FileId(0), 4, 5).unwrap(),
+            })
+            .unwrap();
+        let sum = ast
+            .try_push_expr(Expr {
+                kind: ExprKind::Binary {
+                    op: BinOp::Add,
+                    lhs,
+                    rhs,
+                },
+                span: Span::new(crate::FileId(0), 0, 5).unwrap(),
+            })
+            .unwrap();
+        let stmt_id = ast
+            .try_push_stmt(Stmt {
+                kind: StmtKind::Expr(sum),
+                span: Span::new(crate::FileId(0), 0, 6).unwrap(),
+            })
+            .unwrap();
         ast.top_level.push(stmt_id);
 
-        let top = ast.stmt(stmt_id);
+        let top = ast.try_stmt(stmt_id).unwrap();
         let StmtKind::Expr(sum_id) = top.kind else {
             panic!("expected expression statement")
         };
-        let sum_expr = ast.expr(sum_id);
+        let sum_expr = ast.try_expr(sum_id).unwrap();
         let ExprKind::Binary { op, lhs, rhs } = sum_expr.kind else {
             panic!("expected binary expression")
         };
         assert_eq!(op, BinOp::Add);
-        assert_eq!(ast.expr(lhs).kind, ExprKind::Number(1.0));
-        assert_eq!(ast.expr(rhs).kind, ExprKind::Number(2.0));
+        assert_eq!(ast.try_expr(lhs).unwrap().kind, ExprKind::Number(1.0));
+        assert_eq!(ast.try_expr(rhs).unwrap().kind, ExprKind::Number(2.0));
     }
 
     #[test]

@@ -30,6 +30,7 @@ use submilli_shared::github;
 use submilli_shared::github::GithubRepoFetcher;
 
 use crate::app::AppState;
+use crate::compiler_thread;
 use crate::packages::{self, DocLookup};
 
 #[derive(Debug, Serialize)]
@@ -318,8 +319,9 @@ pub struct InstallResponse {
 
 /// `POST /v1/packages/install` — fetch a GitHub repo, compile it, and install
 /// into the server's package store. Admin surface (same unauthenticated posture
-/// as `/v1/secrets`; gating lands with SUB-950). The fetch + compile is
-/// blocking, so it runs on a blocking thread.
+/// as `/v1/secrets`; gating lands with SUB-950). The fetch + compile blocks, so
+/// it runs off the async workers, on a compiler-sized thread because it
+/// compiles package sources.
 pub async fn install(
     State(state): State<AppState>,
     Json(req): Json<InstallRequest>,
@@ -327,7 +329,10 @@ pub async fn install(
     let store = state.package_store().clone();
     let installer_state = state.clone();
     tokio::task::spawn_blocking(move || {
-        let outcome = install_blocking(&store, req);
+        let outcome = match compiler_thread::run(|| install_blocking(&store, req)) {
+            Ok(outcome) => outcome,
+            Err(error) => Err(internal_install_error(error)),
+        };
         // Anything prepared before this install may now resolve differently:
         // a dependency the closure installed (which the response's `installed`
         // field does not list), or an owned copy now shadowing a fallback one.
@@ -338,14 +343,16 @@ pub async fn install(
         outcome
     })
     .await
-    .map_err(|err| {
-        install_err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            err.to_string(),
-        )
-    })?
+    .map_err(internal_install_error)?
     .map(Json)
+}
+
+fn internal_install_error(error: impl std::fmt::Display) -> InstallFailure {
+    install_err(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "internal_error",
+        error.to_string(),
+    )
 }
 
 fn install_blocking(

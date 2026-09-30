@@ -1,5 +1,6 @@
 ---
 source: crates/interpreter/src/parser.rs
+assertion_line: 9610
 expression: ast
 ---
 Ast {
@@ -36,12 +37,15 @@ Ast {
                                     kind: Array(
                                         TypeAnnotation {
                                             kind: Name {
-                                                name_span: Span {
-                                                    file: FileId(
-                                                        0,
-                                                    ),
-                                                    start: 8,
-                                                    end: 14,
+                                                name: Ident {
+                                                    name: "number",
+                                                    span: Span {
+                                                        file: FileId(
+                                                            0,
+                                                        ),
+                                                        start: 8,
+                                                        end: 14,
+                                                    },
                                                 },
                                                 args: [],
                                             },
@@ -64,12 +68,15 @@ Ast {
                                 },
                                 TypeAnnotation {
                                     kind: Name {
-                                        name_span: Span {
-                                            file: FileId(
-                                                0,
-                                            ),
-                                            start: 19,
-                                            end: 25,
+                                        name: Ident {
+                                            name: "string",
+                                            span: Span {
+                                                file: FileId(
+                                                    0,
+                                                ),
+                                                start: 19,
+                                                end: 25,
+                                            },
                                         },
                                         args: [],
                                     },
@@ -83,12 +90,15 @@ Ast {
                                 },
                                 TypeAnnotation {
                                     kind: Name {
-                                        name_span: Span {
-                                            file: FileId(
-                                                0,
-                                            ),
-                                            start: 28,
-                                            end: 32,
+                                        name: Ident {
+                                            name: "null",
+                                            span: Span {
+                                                file: FileId(
+                                                    0,
+                                                ),
+                                                start: 28,
+                                                end: 32,
+                                            },
                                         },
                                         args: [],
                                     },

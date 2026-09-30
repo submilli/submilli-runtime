@@ -27,3 +27,6 @@ node_modules/
 
 # Local security research pending remediation
 /research/SUB-633-panic-audit.md
+
+# graphify knowledge graph (per-checkout, regenerate with `graphify update .`)
+graphify-out/

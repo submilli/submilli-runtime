@@ -26,7 +26,10 @@ pub struct CodegenAnalysis {
 }
 
 impl CodegenAnalysis {
-    pub fn collect(ta: &TypedAst, dependencies: &[&crate::PackageDeclaration]) -> Self {
+    pub fn collect(
+        ta: &TypedAst,
+        dependencies: &[&crate::PackageDeclaration],
+    ) -> Result<Self, crate::compiler_error::CompilerFailure> {
         let mut analysis = Self {
             string_pool: StringPool::default(),
             bigint_pool: BigIntPool::default(),
@@ -44,8 +47,14 @@ impl CodegenAnalysis {
             "#toJson",
         ));
 
-        for ty in ta.runtime_source_types.values() {
-            analysis.visit_type(ty);
+        for (id, ty) in &ta.runtime_source_types {
+            let span = ta
+                .try_expr(*id)
+                .map_err(crate::codegen::arena_failure)?
+                .span;
+            analysis
+                .visit_type(ty)
+                .map_err(|error| error.with_span(span))?;
             analysis
                 .string_pool
                 .intern_text(&cast_check::error_prefix(ty));
@@ -70,10 +79,14 @@ impl CodegenAnalysis {
                     .note_value(crate::mangle::prelude(&format!("__value_{name}")));
             }
         }
-        for types in ta.runtime_chain_types.values() {
+        for (id, types) in &ta.runtime_chain_types {
+            let span = ta
+                .try_expr(*id)
+                .map_err(crate::codegen::arena_failure)?
+                .span;
             for ty in types {
                 let ty = crate::typechecker::infer::narrowing::strip_null(ty);
-                analysis.visit_type(&ty);
+                analysis.visit_type_at(&ty, span)?;
                 analysis
                     .string_pool
                     .intern_text(&cast_check::error_prefix(&ty));
@@ -89,35 +102,37 @@ impl CodegenAnalysis {
             analysis.dependency_usage.note_shape(shape.clone());
         }
         for g in &ta.globals {
-            analysis.visit_type(&g.ty);
+            analysis.visit_type_at(&g.ty, g.span)?;
         }
 
         for f in &ta.functions {
             for p in &f.params {
-                analysis.visit_type(&p.ty);
+                analysis
+                    .visit_type(&p.ty)
+                    .map_err(|error| error.with_span(p.name.span))?;
             }
-            analysis.visit_type(&f.return_type);
-            analysis.walk_stmt(ta, f.body);
+            analysis.visit_type_at(&f.return_type, f.span)?;
+            analysis.walk_stmt(ta, f.body)?;
         }
         for &stmt_id in &ta.top_level_statements {
-            analysis.walk_stmt(ta, stmt_id);
+            analysis.walk_stmt(ta, stmt_id)?;
         }
         for stmt_id in ta.class_body_roots() {
-            analysis.walk_stmt(ta, stmt_id);
+            analysis.walk_stmt(ta, stmt_id)?;
         }
         for expr_id in ta.class_field_initializers() {
-            analysis.walk_expr(ta, expr_id);
+            analysis.walk_expr(ta, expr_id)?;
         }
         if !ta.runtime_class_fields.is_empty() {
             analysis
                 .mentioned_closure_sigs
                 .push(super::field_guards::signature());
         }
-        analysis.note_narrowing_checks(ta);
+        analysis.note_narrowing_checks(ta)?;
         for test in ta.runtime_type_tests.values() {
-            analysis.note_narrowing_test(test);
+            analysis.note_narrowing_test(test)?;
         }
-        analysis.note_dependency_narrowing_checks(dependencies);
+        analysis.note_dependency_narrowing_checks(dependencies)?;
 
         // Imported class members can add closure adapters after dependency
         // selection, even when the source mentions no function-valued types.
@@ -132,14 +147,17 @@ impl CodegenAnalysis {
                 .note_value(crate::mangle::prelude(name));
         }
 
-        analysis
+        Ok(analysis)
     }
 
     /// A narrowed field's read guard throws a constant message and, when its test
     /// is structural, tests a shape; both need the same interning and imports a
     /// `Cast` gets, and neither is reachable from any expression, so no walk above
     /// finds them.
-    fn note_narrowing_checks(&mut self, ta: &TypedAst) {
+    fn note_narrowing_checks(
+        &mut self,
+        ta: &TypedAst,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         for decl in &ta.types {
             let crate::TypedTypeDecl::Class(class) = decl else {
                 continue;
@@ -160,12 +178,16 @@ impl CodegenAnalysis {
                 .iter()
                 .filter_map(|f| f.narrowing_check.as_ref())
             {
-                self.note_narrowing_check(check);
+                self.note_narrowing_check(check)?;
             }
         }
+        Ok(())
     }
 
-    fn note_dependency_narrowing_checks(&mut self, dependencies: &[&crate::PackageDeclaration]) {
+    fn note_dependency_narrowing_checks(
+        &mut self,
+        dependencies: &[&crate::PackageDeclaration],
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         for package in dependencies {
             for symbol in package.runtime_types.values().chain(package.types.values()) {
                 let crate::TypeKind::Class {
@@ -175,21 +197,30 @@ impl CodegenAnalysis {
                     continue;
                 };
                 for check in narrowing_checks.values() {
-                    self.note_narrowing_check(check);
+                    self.note_narrowing_check(check)?;
                 }
             }
         }
+        Ok(())
     }
 
-    fn note_narrowing_check(&mut self, check: &crate::FieldNarrowingCheck) {
+    fn note_narrowing_check(
+        &mut self,
+        check: &crate::FieldNarrowingCheck,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         self.string_pool.intern_text(&check.message);
-        self.note_narrowing_test(&check.test);
+        self.note_narrowing_test(&check.test)?;
+
+        Ok(())
     }
 
-    fn note_narrowing_test(&mut self, test: &crate::FieldNarrowingTest) {
+    fn note_narrowing_test(
+        &mut self,
+        test: &crate::FieldNarrowingTest,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         match test {
             crate::FieldNarrowingTest::Shape(shape) => {
-                self.visit_type(shape);
+                self.visit_type(shape)?;
                 self.note_shape_member_names(shape);
             }
             crate::FieldNarrowingTest::Interface(test) => {
@@ -197,13 +228,14 @@ impl CodegenAnalysis {
                     index: test.index.clone(),
                     fields: test.members.clone(),
                 };
-                self.visit_type(&shape);
+                self.visit_type(&shape)?;
                 self.note_shape_member_names(&shape);
             }
             crate::FieldNarrowingTest::NonNull
             | crate::FieldNarrowingTest::Substituted
             | crate::FieldNarrowingTest::Representation => {}
-        }
+        };
+        Ok(())
     }
 
     /// The per-name `$string` globals the shape's field scan reads: for each
@@ -265,17 +297,27 @@ impl CodegenAnalysis {
     ///
     /// Call this rather than `dependency_usage.collect_type` directly —
     /// bypassing it drops the closure half silently, and the failure surfaces as
-    /// a codegen panic far from the omission.
-    fn visit_type(&mut self, ty: &Type) {
+    /// an internal compiler failure far from the omission.
+    fn visit_type_at(
+        &mut self,
+        ty: &Type,
+        span: crate::Span,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        self.visit_type(ty).map_err(|error| error.with_span(span))
+    }
+
+    fn visit_type(&mut self, ty: &Type) -> Result<(), crate::compiler_error::CompilerFailure> {
         if let Type::Object {
             index: Some(index), ..
         } = ty.peel()
         {
             self.note_record_helpers();
-            self.visit_type(&index.value);
+            self.visit_type(&index.value)?;
         }
         self.dependency_usage.collect_type(ty);
-        crate::codegen::closures::walk_type(ty, &mut self.mentioned_closure_sigs);
+        crate::codegen::closures::walk_type(ty, &mut self.mentioned_closure_sigs)?;
+
+        Ok(())
     }
 
     fn note_record_helpers(&mut self) {
@@ -287,26 +329,30 @@ impl CodegenAnalysis {
         }
     }
 
-    fn walk_stmt(&mut self, ta: &TypedAst, id: StmtId) {
-        self.note_stmt_pre(ta, id);
-        match &ta.stmt(id).kind {
+    fn walk_stmt(
+        &mut self,
+        ta: &TypedAst,
+        id: StmtId,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        self.note_stmt_pre(ta, id)?;
+        match &ta.try_stmt(id).map_err(crate::codegen::arena_failure)?.kind {
             TypedStmtKind::Let { value, .. } | TypedStmtKind::Const { value, .. } => {
-                self.walk_expr(ta, *value);
+                self.walk_expr(ta, *value)?;
             }
             TypedStmtKind::If {
                 condition,
                 then_block,
                 else_block,
             } => {
-                self.walk_expr(ta, *condition);
-                self.walk_stmt(ta, *then_block);
+                self.walk_expr(ta, *condition)?;
+                self.walk_stmt(ta, *then_block)?;
                 if let Some(else_block) = else_block {
-                    self.walk_stmt(ta, *else_block);
+                    self.walk_stmt(ta, *else_block)?;
                 }
             }
             TypedStmtKind::While { condition, body } => {
-                self.walk_expr(ta, *condition);
-                self.walk_stmt(ta, *body);
+                self.walk_expr(ta, *condition)?;
+                self.walk_stmt(ta, *body)?;
             }
             TypedStmtKind::For {
                 init,
@@ -315,23 +361,23 @@ impl CodegenAnalysis {
                 body,
             } => {
                 if let Some(init) = init {
-                    self.walk_stmt(ta, *init);
+                    self.walk_stmt(ta, *init)?;
                 }
                 if let Some(condition) = condition {
-                    self.walk_expr(ta, *condition);
+                    self.walk_expr(ta, *condition)?;
                 }
                 if let Some(update) = update {
-                    self.walk_stmt(ta, *update);
+                    self.walk_stmt(ta, *update)?;
                 }
-                self.walk_stmt(ta, *body);
+                self.walk_stmt(ta, *body)?;
             }
             TypedStmtKind::ForOf { iter, body, .. } => {
-                self.walk_expr(ta, *iter);
-                self.walk_stmt(ta, *body);
+                self.walk_expr(ta, *iter)?;
+                self.walk_stmt(ta, *body)?;
             }
             TypedStmtKind::DoWhile { body, condition } => {
-                self.walk_stmt(ta, *body);
-                self.walk_expr(ta, *condition);
+                self.walk_stmt(ta, *body)?;
+                self.walk_expr(ta, *condition)?;
             }
             TypedStmtKind::Switch {
                 discriminant,
@@ -339,33 +385,33 @@ impl CodegenAnalysis {
                 default,
                 ..
             } => {
-                self.walk_expr(ta, *discriminant);
+                self.walk_expr(ta, *discriminant)?;
                 for case in cases {
-                    self.walk_stmt(ta, case.body);
+                    self.walk_stmt(ta, case.body)?;
                 }
                 if let Some(default) = default {
-                    self.walk_stmt(ta, *default);
+                    self.walk_stmt(ta, *default)?;
                 }
             }
             TypedStmtKind::Break | TypedStmtKind::Continue | TypedStmtKind::ReboxLocal { .. } => {}
             TypedStmtKind::Return(value) => {
                 if let Some(value) = value {
-                    self.walk_expr(ta, *value);
+                    self.walk_expr(ta, *value)?;
                 }
             }
-            TypedStmtKind::Expr(expr) => self.walk_expr(ta, *expr),
+            TypedStmtKind::Expr(expr) => self.walk_expr(ta, *expr)?,
             TypedStmtKind::Block(stmts) => {
                 for &stmt in stmts {
-                    self.walk_stmt(ta, stmt);
+                    self.walk_stmt(ta, stmt)?;
                 }
             }
             TypedStmtKind::AssignLocal { value, .. }
-            | TypedStmtKind::AssignGlobal { value, .. } => self.walk_expr(ta, *value),
+            | TypedStmtKind::AssignGlobal { value, .. } => self.walk_expr(ta, *value)?,
             TypedStmtKind::AssignField {
                 receiver, value, ..
             } => {
-                self.walk_expr(ta, *receiver);
-                self.walk_expr(ta, *value);
+                self.walk_expr(ta, *receiver)?;
+                self.walk_expr(ta, *value)?;
             }
             TypedStmtKind::AssignIndex {
                 receiver,
@@ -373,48 +419,55 @@ impl CodegenAnalysis {
                 value,
                 ..
             } => {
-                self.walk_expr(ta, *receiver);
-                self.walk_expr(ta, *index);
-                self.walk_expr(ta, *value);
+                self.walk_expr(ta, *receiver)?;
+                self.walk_expr(ta, *index)?;
+                self.walk_expr(ta, *value)?;
             }
             TypedStmtKind::NarrowRegion { source, body, .. } => {
-                self.walk_expr(ta, *source);
-                self.walk_stmt(ta, *body);
+                self.walk_expr(ta, *source)?;
+                self.walk_stmt(ta, *body)?;
             }
-            TypedStmtKind::Throw { value } => self.walk_expr(ta, *value),
+            TypedStmtKind::Throw { value } => self.walk_expr(ta, *value)?,
             TypedStmtKind::Try {
                 body,
                 catches,
                 finally,
             } => {
-                self.walk_stmt(ta, *body);
+                self.walk_stmt(ta, *body)?;
                 for clause in catches {
-                    self.walk_stmt(ta, clause.body);
+                    self.walk_stmt(ta, clause.body)?;
                 }
                 if let Some(finally) = finally {
-                    self.walk_stmt(ta, *finally);
+                    self.walk_stmt(ta, *finally)?;
                 }
             }
         }
-        self.note_stmt_post(ta, id);
+        self.note_stmt_post(ta, id)?;
+        Ok(())
     }
 
-    fn walk_expr(&mut self, ta: &TypedAst, id: ExprId) {
-        self.note_expr_pre(ta, id);
-        match &ta.expr(id).kind {
+    fn walk_expr(
+        &mut self,
+        ta: &TypedAst,
+        id: ExprId,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        let expr = ta.try_expr(id).map_err(crate::codegen::arena_failure)?;
+        self.note_expr_pre(ta, id)
+            .map_err(|error| error.with_span(expr.span))?;
+        let _: () = match &expr.kind {
             TypedExprKind::Call { args, .. }
             | TypedExprKind::McpCall { args, .. }
             | TypedExprKind::SuperCtorCall { args, .. }
             | TypedExprKind::SuperMethodCall { args, .. }
             | TypedExprKind::IntrinsicCall { args, .. } => {
                 for &arg in args {
-                    self.walk_expr(ta, arg);
+                    self.walk_expr(ta, arg)?;
                 }
             }
             TypedExprKind::CallClosure { callee, args } => {
-                self.walk_expr(ta, *callee);
+                self.walk_expr(ta, *callee)?;
                 for &arg in args {
-                    self.walk_expr(ta, arg);
+                    self.walk_expr(ta, arg)?;
                 }
             }
             TypedExprKind::GenericCall {
@@ -423,93 +476,95 @@ impl CodegenAnalysis {
                 self.mentioned_closure_sigs
                     .push(super::field_guards::signature());
                 for ty in type_args {
-                    self.visit_type(ty);
+                    self.visit_type(ty)?;
                 }
                 for arg in args {
-                    self.walk_expr(ta, arg.expr);
+                    self.walk_expr(ta, arg.expr)?;
                 }
             }
             TypedExprKind::Closure { body, .. } => match *body {
-                ClosureBody::Expr(expr) => self.walk_expr(ta, expr),
-                ClosureBody::Block(stmt) => self.walk_stmt(ta, stmt),
+                ClosureBody::Expr(expr) => self.walk_expr(ta, expr)?,
+                ClosureBody::Block(stmt) => self.walk_stmt(ta, stmt)?,
             },
             TypedExprKind::Binary { lhs, rhs, .. } => {
-                self.walk_expr(ta, *lhs);
-                self.walk_expr(ta, *rhs);
+                self.walk_expr(ta, *lhs)?;
+                self.walk_expr(ta, *rhs)?;
             }
             TypedExprKind::EffectThen { effect, result } => {
-                self.walk_expr(ta, *effect);
-                self.walk_expr(ta, *result);
+                self.walk_expr(ta, *effect)?;
+                self.walk_expr(ta, *result)?;
             }
             TypedExprKind::Sequence { stmts, result } => {
                 for &stmt in stmts {
-                    self.walk_stmt(ta, stmt);
+                    self.walk_stmt(ta, stmt)?;
                 }
-                self.walk_expr(ta, *result);
+                self.walk_expr(ta, *result)?;
             }
             TypedExprKind::Unary { operand, .. }
             | TypedExprKind::TypeofTag { value: operand, .. }
             | TypedExprKind::InstanceOf { value: operand, .. }
-            | TypedExprKind::NonNullAssert { value: operand } => self.walk_expr(ta, *operand),
+            | TypedExprKind::NonNullAssert { value: operand } => {
+                self.walk_expr(ta, *operand)?;
+            }
             TypedExprKind::MethodCall { receiver, args, .. } => {
-                self.walk_expr(ta, *receiver);
+                self.walk_expr(ta, *receiver)?;
                 for &arg in args {
-                    self.walk_expr(ta, arg);
+                    self.walk_expr(ta, arg)?;
                 }
             }
             TypedExprKind::GenericMethodCall { receiver, args, .. } => {
-                self.walk_expr(ta, *receiver);
+                self.walk_expr(ta, *receiver)?;
                 for arg in args {
-                    self.walk_expr(ta, arg.expr);
+                    self.walk_expr(ta, arg.expr)?;
                 }
             }
             TypedExprKind::ObjectLiteral { members, .. } => {
                 for member in members {
                     for expression in member.expressions() {
-                        self.walk_expr(ta, expression);
+                        self.walk_expr(ta, expression)?;
                     }
                 }
             }
             TypedExprKind::ArrayLiteral { elements, .. } => {
                 for elem in elements {
-                    self.walk_expr(ta, elem.expr_id());
+                    self.walk_expr(ta, elem.expr_id())?;
                 }
             }
             TypedExprKind::TupleLiteral { elements, .. } => {
                 for &elem in elements {
-                    self.walk_expr(ta, elem);
+                    self.walk_expr(ta, elem)?;
                 }
             }
             TypedExprKind::FieldAccess { receiver, .. }
             | TypedExprKind::InterfacePropertyAccess { receiver, .. } => {
-                self.walk_expr(ta, *receiver);
+                self.walk_expr(ta, *receiver)?;
             }
             TypedExprKind::IndexAccess { receiver, index } => {
-                self.walk_expr(ta, *receiver);
-                self.walk_expr(ta, *index);
+                self.walk_expr(ta, *receiver)?;
+                self.walk_expr(ta, *index)?;
             }
             TypedExprKind::Narrowed { source, inner, .. } => {
-                self.walk_expr(ta, *source);
-                self.walk_expr(ta, *inner);
+                self.walk_expr(ta, *source)?;
+                self.walk_expr(ta, *inner)?;
             }
             TypedExprKind::Ternary { cond, then_, else_ } => {
-                self.walk_expr(ta, *cond);
-                self.walk_expr(ta, *then_);
-                self.walk_expr(ta, *else_);
+                self.walk_expr(ta, *cond)?;
+                self.walk_expr(ta, *then_)?;
+                self.walk_expr(ta, *else_)?;
             }
             TypedExprKind::NullishCoalesce { lhs, rhs } => {
-                self.walk_expr(ta, *lhs);
-                self.walk_expr(ta, *rhs);
+                self.walk_expr(ta, *lhs)?;
+                self.walk_expr(ta, *rhs)?;
             }
             TypedExprKind::OptionalChain { base, parts } => {
-                self.walk_expr(ta, *base);
+                self.walk_expr(ta, *base)?;
                 for part in parts {
                     match part {
-                        TypedChainPart::Index { idx, .. } => self.walk_expr(ta, *idx),
+                        TypedChainPart::Index { idx, .. } => self.walk_expr(ta, *idx)?,
                         TypedChainPart::Call { args, .. }
                         | TypedChainPart::MethodCall { args, .. } => {
                             for &arg in args {
-                                self.walk_expr(ta, arg);
+                                self.walk_expr(ta, arg)?;
                             }
                         }
                         TypedChainPart::Field { .. }
@@ -519,16 +574,16 @@ impl CodegenAnalysis {
                 }
             }
             TypedExprKind::PostfixUnary { target, .. } => match target {
-                PostfixTarget::Field { receiver, .. } => self.walk_expr(ta, *receiver),
+                PostfixTarget::Field { receiver, .. } => self.walk_expr(ta, *receiver)?,
                 PostfixTarget::Index {
                     receiver, index, ..
                 } => {
-                    self.walk_expr(ta, *receiver);
-                    self.walk_expr(ta, *index);
+                    self.walk_expr(ta, *receiver)?;
+                    self.walk_expr(ta, *index)?;
                 }
                 PostfixTarget::Local { .. } | PostfixTarget::Global { .. } => {}
             },
-            TypedExprKind::Cast { value, .. } => self.walk_expr(ta, *value),
+            TypedExprKind::Cast { value, .. } => self.walk_expr(ta, *value)?,
             TypedExprKind::Number(_)
             | TypedExprKind::BigInt(_)
             | TypedExprKind::String(_)
@@ -542,23 +597,29 @@ impl CodegenAnalysis {
             | TypedExprKind::FunctionRef { .. }
             | TypedExprKind::NumberEnumMember { .. }
             | TypedExprKind::StringEnumMember { .. } => {}
-        }
+        };
+        Ok(())
     }
 
-    fn note_stmt_pre(&mut self, ta: &TypedAst, id: StmtId) {
-        match &ta.stmt(id).kind {
+    fn note_stmt_pre(
+        &mut self,
+        ta: &TypedAst,
+        id: StmtId,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        let stmt = ta.try_stmt(id).map_err(crate::codegen::arena_failure)?;
+        let _: () = match &stmt.kind {
             TypedStmtKind::Let { ty, .. } | TypedStmtKind::Const { ty, .. } => {
-                self.visit_type(ty);
+                self.visit_type_at(ty, stmt.span)?;
             }
             TypedStmtKind::ForOf { element_ty, .. } => {
-                self.visit_type(element_ty);
+                self.visit_type_at(element_ty, stmt.span)?;
             }
             TypedStmtKind::Switch {
                 discriminant_ty,
                 cases,
                 ..
             } => {
-                self.visit_type(discriminant_ty);
+                self.visit_type_at(discriminant_ty, stmt.span)?;
                 for case in cases {
                     for value in &case.values {
                         if let TypedSwitchValue::Enum { enum_name, .. } = value {
@@ -568,18 +629,19 @@ impl CodegenAnalysis {
                 }
             }
             TypedStmtKind::AssignLocal { target_ty, .. } => {
-                self.visit_type(target_ty);
+                self.visit_type_at(target_ty, stmt.span)?;
             }
             TypedStmtKind::AssignGlobal {
                 mangled, target_ty, ..
             } => {
                 self.dependency_usage.note_value(mangled.clone());
-                self.visit_type(target_ty);
+                self.visit_type_at(target_ty, stmt.span)?;
             }
             TypedStmtKind::AssignField { receiver, name, .. } => {
                 self.extra_field_names.push(name.name.clone());
                 self.note_shaped_property_access(
-                    ta.source_type(*receiver),
+                    ta.source_type(*receiver)
+                        .map_err(crate::codegen::arena_failure)?,
                     &name.name,
                     AccessorKind::Set,
                 );
@@ -587,21 +649,25 @@ impl CodegenAnalysis {
             TypedStmtKind::AssignIndex {
                 receiver, elem_ty, ..
             } => {
-                if ta.source_type(*receiver).is_structural_object() {
+                if ta
+                    .source_type(*receiver)
+                    .map_err(crate::codegen::arena_failure)?
+                    .is_structural_object()
+                {
                     self.note_record_helpers();
                 }
-                self.visit_type(elem_ty);
+                self.visit_type_at(elem_ty, stmt.span)?;
                 self.note_index_check();
             }
             TypedStmtKind::NarrowRegion { cast_info, .. } => {
-                self.visit_type(&cast_info.from_ty);
-                self.visit_type(&cast_info.to_ty);
+                self.visit_type_at(&cast_info.from_ty, stmt.span)?;
+                self.visit_type_at(&cast_info.to_ty, stmt.span)?;
             }
             TypedStmtKind::Try { catches, .. } => {
                 // A cross-package subclass used only in a catch annotation
                 // still needs its class reconstructed.
                 for clause in catches {
-                    self.visit_type(&clause.ty);
+                    self.visit_type_at(&clause.ty, stmt.span)?;
                 }
             }
             TypedStmtKind::If { .. }
@@ -615,11 +681,18 @@ impl CodegenAnalysis {
             | TypedStmtKind::Expr(_)
             | TypedStmtKind::Block(_)
             | TypedStmtKind::Throw { .. } => {}
-        }
+        };
+        Ok(())
     }
 
-    fn note_stmt_post(&mut self, ta: &TypedAst, id: StmtId) {
-        if let TypedStmtKind::Switch { cases, .. } = &ta.stmt(id).kind {
+    fn note_stmt_post(
+        &mut self,
+        ta: &TypedAst,
+        id: StmtId,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        let _: () = if let TypedStmtKind::Switch { cases, .. } =
+            &ta.try_stmt(id).map_err(crate::codegen::arena_failure)?.kind
+        {
             for case in cases {
                 for value in &case.values {
                     match value {
@@ -636,11 +709,16 @@ impl CodegenAnalysis {
                     }
                 }
             }
-        }
+        };
+        Ok(())
     }
 
-    fn note_expr_pre(&mut self, ta: &TypedAst, id: ExprId) {
-        let expr = ta.expr(id);
+    fn note_expr_pre(
+        &mut self,
+        ta: &TypedAst,
+        id: ExprId,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        let expr = ta.try_expr(id).map_err(crate::codegen::arena_failure)?;
         if matches!(
             expr.kind,
             TypedExprKind::IndexAccess { .. }
@@ -654,8 +732,9 @@ impl CodegenAnalysis {
         if matches!(expr.kind, TypedExprKind::PostfixUnary { .. }) {
             self.note_record_helpers();
         }
-        self.visit_type(&expr.ty);
-        match &expr.kind {
+        self.visit_type(&expr.ty)
+            .map_err(|error| error.with_span(expr.span))?;
+        let _: () = match &expr.kind {
             TypedExprKind::String(text) => {
                 self.string_pool.record_expr(id, text);
             }
@@ -668,7 +747,7 @@ impl CodegenAnalysis {
                 self.dependency_usage.note_type(enum_mangled.clone());
             }
             TypedExprKind::BigInt(digits) => {
-                self.bigint_pool.intern_digits(digits);
+                self.bigint_pool.intern_digits(digits)?;
                 self.dependency_usage
                     .collect_bigint_host_value("fromNumber");
             }
@@ -713,16 +792,23 @@ impl CodegenAnalysis {
                         | BinOp::NullishCoalesce => {}
                     }
                 }
-                if matches!(ta.expr(*lhs).ty.peel(), Type::BigInt)
-                    && matches!(
-                        op,
-                        BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge
-                    )
-                {
+                if matches!(
+                    ta.try_expr(*lhs)
+                        .map_err(crate::codegen::arena_failure)?
+                        .ty
+                        .peel(),
+                    Type::BigInt
+                ) && matches!(
+                    op,
+                    BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge
+                ) {
                     self.dependency_usage.collect_bigint_host_value("cmp");
                 }
                 if matches!(op, BinOp::In)
-                    && let TypedExprKind::String(name) = &ta.expr(*lhs).kind
+                    && let TypedExprKind::String(name) = &ta
+                        .try_expr(*lhs)
+                        .map_err(crate::codegen::arena_failure)?
+                        .kind
                 {
                     self.extra_field_names.push(name.clone());
                     self.extra_field_names
@@ -736,7 +822,11 @@ impl CodegenAnalysis {
                 }
             }
             TypedExprKind::Unary { op, operand } => {
-                let operand_ty = ta.expr(*operand).ty.peel();
+                let operand_ty = ta
+                    .try_expr(*operand)
+                    .map_err(crate::codegen::arena_failure)?
+                    .ty
+                    .peel();
                 if matches!(op, crate::UnOp::Neg) && matches!(operand_ty, Type::BigInt) {
                     self.dependency_usage.collect_bigint_host_value("neg");
                 }
@@ -773,7 +863,14 @@ impl CodegenAnalysis {
                 args,
                 ..
             } => {
-                self.note_method_call(ta.source_type(*receiver), iface, name, args.len(), &expr.ty);
+                self.note_method_call(
+                    ta.source_type(*receiver)
+                        .map_err(crate::codegen::arena_failure)?,
+                    iface,
+                    name,
+                    args.len(),
+                    &expr.ty,
+                )?;
             }
             TypedExprKind::GenericMethodCall {
                 receiver,
@@ -782,7 +879,14 @@ impl CodegenAnalysis {
                 args,
                 ..
             } => {
-                self.note_method_call(ta.source_type(*receiver), iface, name, args.len(), &expr.ty);
+                self.note_method_call(
+                    ta.source_type(*receiver)
+                        .map_err(crate::codegen::arena_failure)?,
+                    iface,
+                    name,
+                    args.len(),
+                    &expr.ty,
+                )?;
             }
             TypedExprKind::InterfacePropertyAccess { iface, name, .. } => {
                 self.dependency_usage
@@ -816,7 +920,7 @@ impl CodegenAnalysis {
                         ..
                     }) = source
                     {
-                        self.visit_type(source_ty);
+                        self.visit_type(source_ty)?;
                         // A spread read by name looks its field up by name and tests
                         // the value against the field's type, which reads names too.
                         self.extra_field_names.push(field_name.clone());
@@ -826,17 +930,18 @@ impl CodegenAnalysis {
                 }
             }
             TypedExprKind::ArrayLiteral { element_ty, .. } => {
-                self.visit_type(element_ty);
+                self.visit_type(element_ty)?;
             }
             TypedExprKind::TupleLiteral { element_types, .. } => {
                 for ty in element_types {
-                    self.visit_type(ty);
+                    self.visit_type(ty)?;
                 }
             }
             TypedExprKind::FieldAccess { receiver, name } => {
                 self.extra_field_names.push(name.name.clone());
                 self.note_shaped_property_access(
-                    ta.source_type(*receiver),
+                    ta.source_type(*receiver)
+                        .map_err(crate::codegen::arena_failure)?,
                     &name.name,
                     AccessorKind::Get,
                 );
@@ -864,33 +969,35 @@ impl CodegenAnalysis {
                     return_type: return_type.clone(),
                 });
                 for p in params {
-                    self.visit_type(&p.ty);
+                    self.visit_type(&p.ty)?;
                 }
-                self.visit_type(return_type);
+                self.visit_type(return_type)?;
             }
             TypedExprKind::Narrowed { cast_info, .. } => {
-                self.visit_type(&cast_info.from_ty);
-                self.visit_type(&cast_info.to_ty);
+                self.visit_type(&cast_info.from_ty)?;
+                self.visit_type(&cast_info.to_ty)?;
             }
             TypedExprKind::OptionalChain { base, parts } => {
-                self.note_chain_parts(ta, id, *base, parts);
+                self.note_chain_parts(ta, id, *base, parts)?;
             }
             TypedExprKind::PostfixUnary { target, .. } => match target {
                 PostfixTarget::Local { .. } => {
-                    self.note_postfix_target(&expr.ty);
+                    self.note_postfix_target(&expr.ty)?;
                 }
                 PostfixTarget::Global { mangled, .. } => {
                     self.dependency_usage.note_value(mangled.clone());
-                    self.note_postfix_target(&expr.ty);
+                    self.note_postfix_target(&expr.ty)?;
                 }
                 PostfixTarget::Field { receiver, name, .. } => {
-                    self.note_postfix_target(&expr.ty);
-                    let receiver_ty = ta.source_type(*receiver);
+                    self.note_postfix_target(&expr.ty)?;
+                    let receiver_ty = ta
+                        .source_type(*receiver)
+                        .map_err(crate::codegen::arena_failure)?;
                     self.note_shaped_property_access(receiver_ty, &name.name, AccessorKind::Get);
                     self.note_shaped_property_access(receiver_ty, &name.name, AccessorKind::Set);
                 }
                 PostfixTarget::Index { elem_ty, .. } => {
-                    self.note_postfix_target(elem_ty);
+                    self.note_postfix_target(elem_ty)?;
                     self.note_index_check();
                 }
             },
@@ -905,9 +1012,9 @@ impl CodegenAnalysis {
                 for tag in cast_check::TYPE_TAG_STRINGS {
                     self.string_pool.intern_text(tag);
                 }
-                self.visit_type(target_ty);
+                self.visit_type(target_ty)?;
                 if let Some(check) = check {
-                    self.visit_type(check);
+                    self.visit_type(check)?;
                     self.note_shape_member_names(check);
                 }
             }
@@ -918,8 +1025,10 @@ impl CodegenAnalysis {
             TypedExprKind::CallClosure { callee, .. } => {
                 self.dependency_usage
                     .note_value(crate::mangle::prelude("__value_invoke_defaults"));
-                self.string_pool
-                    .intern_text(&cast_check::error_prefix(ta.source_type(*callee)));
+                self.string_pool.intern_text(&cast_check::error_prefix(
+                    ta.source_type(*callee)
+                        .map_err(crate::codegen::arena_failure)?,
+                ));
                 for tag in cast_check::TYPE_TAG_STRINGS {
                     self.string_pool.intern_text(tag);
                 }
@@ -927,7 +1036,7 @@ impl CodegenAnalysis {
             TypedExprKind::InstanceOf { class, .. } => {
                 // `ref.test (ref $Foo)` needs the class's type (and its rec group, for an
                 // imported class) pulled into the dependency set; `expr.ty` is just `boolean`.
-                self.visit_type(class);
+                self.visit_type(class)?;
             }
             TypedExprKind::Number(_)
             | TypedExprKind::Boolean(_)
@@ -942,7 +1051,8 @@ impl CodegenAnalysis {
             | TypedExprKind::TypeofTag { .. }
             | TypedExprKind::Ternary { .. }
             | TypedExprKind::NullishCoalesce { .. } => {}
-        }
+        };
+        Ok(())
     }
 
     /// A method call notes its member for imports and, when it dispatches
@@ -954,14 +1064,16 @@ impl CodegenAnalysis {
         name: &crate::Ident,
         arity: usize,
         ret: &Type,
-    ) {
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         self.dependency_usage
             .note_member(crate::mangle::extend(iface, &name.name));
         self.string_pool.intern_text("Value is not callable");
         self.string_pool
             .intern_text("Unbound function has no this receiver");
         self.extra_field_names.push(name.name.clone());
-        self.note_shape_dispatch(receiver_ty, arity, ret);
+        self.note_shape_dispatch(receiver_ty, arity, ret)?;
+
+        Ok(())
     }
 
     /// A method reached through an `$ObjectShape` receiver dispatches as a
@@ -974,16 +1086,24 @@ impl CodegenAnalysis {
     /// `InterfaceRef` only, unlike [`Self::note_shaped_property_access`]: a method on
     /// an anonymous object type is a function-typed *field*, so it lowers to a
     /// property read followed by a closure call, never to method dispatch.
-    fn note_shape_dispatch(&mut self, receiver_ty: &Type, arity: usize, ret: &Type) {
+    fn note_shape_dispatch(
+        &mut self,
+        receiver_ty: &Type,
+        arity: usize,
+        ret: &Type,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         self.string_pool.intern_text("Value is not callable");
         self.string_pool
             .intern_text("Unbound function has no this receiver");
         // An optional chain dispatches on the non-null half of its receiver.
         let receiver_ty = crate::typechecker::infer::narrowing::strip_null(receiver_ty);
         if !matches!(receiver_ty.peel(), Type::InterfaceRef { .. }) {
-            return;
+            return Ok(());
         }
-        self.mentioned_closure_sigs.push(ClosureSig::of(arity, ret));
+        self.mentioned_closure_sigs
+            .push(ClosureSig::of(arity, ret)?);
+
+        Ok(())
     }
 
     /// Each step's receiver is the previous step's result, so a chain has to be
@@ -994,9 +1114,11 @@ impl CodegenAnalysis {
         id: ExprId,
         base: ExprId,
         parts: &[TypedChainPart],
-    ) {
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         let source_types = ta.runtime_chain_types.get(&id);
-        let mut receiver_ty = ta.source_type(base);
+        let mut receiver_ty = ta
+            .source_type(base)
+            .map_err(crate::codegen::arena_failure)?;
         for (index, part) in parts.iter().enumerate() {
             if let TypedChainPart::MethodCall { iface, name, .. }
             | TypedChainPart::InterfaceProperty { iface, name, .. } = part
@@ -1009,7 +1131,7 @@ impl CodegenAnalysis {
                     name, result_ty, ..
                 } => {
                     self.extra_field_names.push(name.name.clone());
-                    self.visit_type(result_ty);
+                    self.visit_type(result_ty)?;
                     self.note_shaped_property_access(receiver_ty, &name.name, AccessorKind::Get);
                 }
                 TypedChainPart::InterfaceProperty {
@@ -1030,11 +1152,11 @@ impl CodegenAnalysis {
                     self.extra_field_names.push(name.name.clone());
                     self.dependency_usage
                         .note_member(crate::mangle::extend(iface, &name.name));
-                    self.visit_type(result_ty);
+                    self.visit_type(result_ty)?;
                 }
                 TypedChainPart::Index { result_ty, .. } => {
                     self.note_record_helpers();
-                    self.visit_type(result_ty);
+                    self.visit_type(result_ty)?;
                     // A chain index is bounds-checked like any other, so it
                     // needs the same message in the pool.
                     self.note_index_check();
@@ -1042,10 +1164,10 @@ impl CodegenAnalysis {
                 TypedChainPart::Call { result_ty, .. } => {
                     self.dependency_usage
                         .note_value(crate::mangle::prelude("__value_invoke_defaults"));
-                    self.visit_type(result_ty);
+                    self.visit_type(result_ty)?;
                 }
                 TypedChainPart::NonNull { result_ty, .. } => {
-                    self.visit_type(result_ty);
+                    self.visit_type(result_ty)?;
                     self.string_pool.intern_text(throw::NON_NULL_ASSERT_MESSAGE);
                 }
                 TypedChainPart::MethodCall {
@@ -1067,12 +1189,13 @@ impl CodegenAnalysis {
                     self.extra_field_names.push(name.name.clone());
                     self.dependency_usage
                         .note_member(crate::mangle::extend(iface, &name.name));
-                    self.visit_type(result_ty);
-                    self.note_shape_dispatch(receiver_ty, args.len(), result_ty);
+                    self.visit_type(result_ty)?;
+                    self.note_shape_dispatch(receiver_ty, args.len(), result_ty)?;
                 }
             }
             receiver_ty = source_types.map_or_else(|| part.result_ty(), |types| &types[index + 1]);
         }
+        Ok(())
     }
 
     /// A property access on an `$ObjectShape` receiver emits every branch it
@@ -1135,9 +1258,14 @@ impl CodegenAnalysis {
         }
     }
 
-    fn note_postfix_target(&mut self, ty: &Type) {
+    fn note_postfix_target(
+        &mut self,
+        ty: &Type,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         self.dependency_usage.collect_postfix_bigint_ops(ty);
-        self.visit_type(ty);
+        self.visit_type(ty)?;
+
+        Ok(())
     }
 }
 

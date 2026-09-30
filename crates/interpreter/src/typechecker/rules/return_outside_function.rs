@@ -1,17 +1,32 @@
 use crate::{Diagnostic, Severity, StmtId, TypedAst, TypedStmtKind};
 
-pub(super) fn run(ta: &TypedAst, diags: &mut Vec<Diagnostic>) {
+pub(super) fn run(
+    ta: &TypedAst,
+    diags: &mut Vec<Diagnostic>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     for &id in &ta.top_level_statements {
-        walk(ta, id, diags);
+        walk(ta, id, diags)?;
     }
+    Ok(())
 }
 
-fn walk(ta: &TypedAst, id: StmtId, diags: &mut Vec<Diagnostic>) {
-    match &ta.stmt(id).kind {
+fn walk(
+    ta: &TypedAst,
+    id: StmtId,
+    diags: &mut Vec<Diagnostic>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let _: () = match &ta
+        .try_stmt(id)
+        .map_err(crate::typechecker::arena_failure)?
+        .kind
+    {
         TypedStmtKind::Return(_) => {
             diags.push(Diagnostic {
                 severity: Severity::Error,
-                span: ta.stmt(id).span,
+                span: ta
+                    .try_stmt(id)
+                    .map_err(crate::typechecker::arena_failure)?
+                    .span,
                 message: "`return` outside function".to_string(),
                 help: vec![
                     "wrap the body in a function: `function name(): R { return …; }`".to_string(),
@@ -24,41 +39,41 @@ fn walk(ta: &TypedAst, id: StmtId, diags: &mut Vec<Diagnostic>) {
             else_block,
             ..
         } => {
-            walk(ta, *then_block, diags);
+            walk(ta, *then_block, diags)?;
             if let Some(eb) = else_block {
-                walk(ta, *eb, diags);
+                walk(ta, *eb, diags)?;
             }
         }
         TypedStmtKind::While { body, .. }
         | TypedStmtKind::For { body, .. }
         | TypedStmtKind::ForOf { body, .. }
-        | TypedStmtKind::DoWhile { body, .. } => walk(ta, *body, diags),
+        | TypedStmtKind::DoWhile { body, .. } => walk(ta, *body, diags)?,
         TypedStmtKind::Switch { cases, default, .. } => {
             for case in cases {
-                walk(ta, case.body, diags);
+                walk(ta, case.body, diags)?;
             }
             if let Some(d) = default {
-                walk(ta, *d, diags);
+                walk(ta, *d, diags)?;
             }
         }
         TypedStmtKind::Block(stmts) => {
             for &s in stmts {
-                walk(ta, s, diags);
+                walk(ta, s, diags)?;
             }
         }
-        TypedStmtKind::NarrowRegion { body, .. } => walk(ta, *body, diags),
+        TypedStmtKind::NarrowRegion { body, .. } => walk(ta, *body, diags)?,
         TypedStmtKind::Throw { .. } => {}
         TypedStmtKind::Try {
             body,
             catches,
             finally,
         } => {
-            walk(ta, *body, diags);
+            walk(ta, *body, diags)?;
             for c in catches {
-                walk(ta, c.body, diags);
+                walk(ta, c.body, diags)?;
             }
             if let Some(f) = finally {
-                walk(ta, *f, diags);
+                walk(ta, *f, diags)?;
             }
         }
         TypedStmtKind::Break | TypedStmtKind::Continue | TypedStmtKind::ReboxLocal { .. } => {}
@@ -69,7 +84,8 @@ fn walk(ta: &TypedAst, id: StmtId, diags: &mut Vec<Diagnostic>) {
         | TypedStmtKind::AssignField { .. }
         | TypedStmtKind::AssignIndex { .. }
         | TypedStmtKind::Expr(_) => {}
-    }
+    };
+    Ok(())
 }
 
 #[cfg(test)]

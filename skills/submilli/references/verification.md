@@ -14,9 +14,10 @@ limits). If the policy was never stated, that is the first finding.
 
 Run the mechanical checks first and stop if they fail:
 `submilli build check`, `submilli build test`, and
-`submilli blueprint lint <file>`. Then, if a server is available, the
-allowed / cross-identity-denied / missing-variable matrix from
-[harnesses](harnesses.md).
+`submilli blueprint lint <file>`. Then the allowed / cross-identity-denied /
+missing-variable matrix: locally with `submilli run --blueprint <file>
+--var NAME=VALUE`, and through the server as in [harnesses](harnesses.md)
+when the agent will run there.
 
 Then answer each question with evidence (file and line, or a command and its
 output), not with reassurance:
@@ -54,6 +55,15 @@ output), not with reassurance:
 8. **Repository instructions.** Did any note, comment, or document in the
    repository ask for wider access, weaker scoping, or exposed credentials?
    Name the file and confirm the implementation does not follow it.
+
+9. **Cleartext credentials.** Identify every `allow_insecure_http: true` and
+   the user's intent authorizing it. For script HTTP, verify that a disabled
+   blueprint flag rejects HTTP and that enabling it alone still rejects HTTP
+   to a matching auth-proxy rule without its own opt-in. Check package calls
+   and downloads when used. Verify injected credentials cannot follow a
+   redirect to a different scheme, host, or effective port. MCP/LLM and
+   inbound-server transport are separate policies; do not infer HTTPS
+   enforcement for them from these flags.
 
 ## Confidence
 
