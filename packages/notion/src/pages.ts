@@ -1,14 +1,11 @@
-import { check } from "submilli:security";
 import { encodeComponent } from "submilli:url";
 import {
     CreatePageInput,
     FileReference,
-    MarkdownUpdate,
     MovePageInput,
     NotionPage,
     PageContent,
     PageMarkdown,
-    PageParent,
     PropertyBag,
     UpdatePageInput,
 } from "./types";
@@ -33,7 +30,6 @@ import {
 export {
     CreatePageInput,
     FileReference,
-    MarkdownUpdate,
     MovePageInput,
     NotionPage,
     NotionParent,
@@ -45,27 +41,69 @@ export {
     UpdatePageInput,
 } from "./types";
 
-/**
- * Create a page with properties and one explicit content strategy.
- * @capability submilli/notion.createPage { parentId: string }
- */
-export function createPage(input: CreatePageInput): NotionPage {
-    const parentId = validateCreatePageInput(input);
-    check("submilli/notion.createPage", { parentId: parentId });
-    return createPageRequest(input);
+/** One validated page creation with its parent resolved. */
+export interface PreparedPageCreation {
+    /** Resolved parent ID; "workspace" for a workspace parent. */
+    parentId: string;
+    /** The validated input. */
+    input: CreatePageInput;
+}
+
+/** One validated page move with its page and parent resolved. */
+export interface PreparedPageMove {
+    /** UUID of the page to move. */
+    pageId: string;
+    /** Parent type: "page_id", "data_source_id", or "workspace". */
+    parentType: string;
+    /** Resolved parent ID; "workspace" for a workspace parent. */
+    parentId: string;
 }
 
 /**
- * Create pages sequentially, stopping on the first failure with completed IDs.
- * @capability submilli/notion.createPages {}
+ * Validate a page creation input before any request is sent.
+ * Returns the resolved parent ID; "workspace" stands in for a workspace parent.
  */
-export function createPages(inputs: CreatePageInput[]): NotionPage[] {
-    for (const input of inputs) validateCreatePageInput(input);
-    check("submilli/notion.createPages", {});
+export function validateCreatePageInput(input: CreatePageInput): string {
+    const parentId = parentIdFrom(input.parent.type, input.parent.id);
+    validatePageFields(input);
+    return parentId;
+}
+
+/** Validate the properties, content, icon, and cover of a page creation before any request is sent. */
+export function validatePageFields(input: CreatePageInput): void {
+    if (input.properties !== null) propertyObject(input.properties);
+    if (input.content !== null) contentJson(input.content);
+    if (input.icon !== null) fileReferenceJson(input.icon);
+    if (input.cover !== null) fileReferenceJson(input.cover);
+}
+
+/** Create a page from a validated input under its resolved parent. */
+export function createPage(parentId: string, input: CreatePageInput): NotionPage {
+    const fields: string[] = [parentJson(input.parent.type, parentId)];
+    if (input.properties !== null) fields.push(mapFieldJson("properties", propertyObject(input.properties)));
+    if (input.content !== null) fields.push(contentJson(input.content));
+    if (input.icon !== null) fields.push(fileField("icon", input.icon));
+    if (input.cover !== null) fields.push(fileField("cover", input.cover));
+    return pageFrom(notionPost("/pages", objectJson(fields)).json());
+}
+
+/** Validate every page creation and resolve its parent before the first request. */
+export function prepareCreatePages(inputs: CreatePageInput[]): PreparedPageCreation[] {
+    const creations: PreparedPageCreation[] = [];
+    for (const input of inputs) {
+        const parentId = validateCreatePageInput(input);
+        creations.push({ parentId: parentId, input: input });
+    }
+    return creations;
+}
+
+/** Create prepared pages sequentially, stopping on the first failure with completed IDs. */
+export function createPages(creations: PreparedPageCreation[]): NotionPage[] {
     const pages: NotionPage[] = [];
-    for (let index = 0; index < inputs.length; index += 1) {
+    for (let index = 0; index < creations.length; index += 1) {
+        const creation = creations[index];
         try {
-            pages.push(createPageRequest(inputs[index]));
+            pages.push(createPage(creation.parentId, creation.input));
         } catch (error) {
             const ids: string[] = [];
             for (const page of pages) ids.push(page.id);
@@ -76,13 +114,8 @@ export function createPages(inputs: CreatePageInput[]): NotionPage[] {
     return pages;
 }
 
-/**
- * Update page properties, icon, cover, or apply a template.
- * @capability submilli/notion.updatePage { pageId: string }
- */
-export function updatePage(ref: string, input: UpdatePageInput): NotionPage {
-    const pageId = idFromRef(ref, "page");
-    check("submilli/notion.updatePage", { pageId: pageId });
+/** Update page properties, icon, cover, or apply a template. */
+export function updatePage(pageId: string, input: UpdatePageInput): NotionPage {
     const fields: string[] = [];
     if (input.properties !== null) fields.push(mapFieldJson("properties", propertyObject(input.properties)));
     if (input.clearIcon === true) fields.push("\"icon\":null");
@@ -98,83 +131,66 @@ export function updatePage(ref: string, input: UpdatePageInput): NotionPage {
     return pageFrom(notionPatch("/pages/" + pathId(pageId), objectJson(fields)).json());
 }
 
-/**
- * Retrieve a page as enhanced Markdown.
- * @capability submilli/notion.readPageMarkdown { pageId: string }
- */
-export function readPageMarkdown(ref: string, includeTranscript: boolean = false): PageMarkdown {
-    const pageId = idFromRef(ref, "page");
-    check("submilli/notion.readPageMarkdown", { pageId: pageId });
+/** Retrieve a page as enhanced Markdown. */
+export function readPageMarkdown(pageId: string, includeTranscript: boolean = false): PageMarkdown {
     const query = new Map<string, string>();
     if (includeTranscript) query.set("include_transcript", "true");
     return markdownFrom(notionGet("/pages/" + pathId(pageId) + "/markdown", query).json());
 }
 
-/**
- * Replace matching enhanced Markdown content.
- * @capability submilli/notion.updatePageMarkdown { pageId: string }
- */
-export function updatePageMarkdown(ref: string, update: MarkdownUpdate): PageMarkdown {
-    const pageId = idFromRef(ref, "page");
-    check("submilli/notion.updatePageMarkdown", { pageId: pageId });
-    if (update.oldText.length === 0) throw validationError("invalid_markdown_update", "oldText cannot be empty");
-    const content: string[] = [fieldJson("old_str", update.oldText), fieldJson("new_str", update.newText)];
-    if (update.replaceAll === true) content.push(fieldJson("replace_all_matches", true));
+/** Replace matching enhanced Markdown content. */
+export function updatePageMarkdown(
+    pageId: string,
+    oldText: string,
+    newText: string,
+    replaceAll: boolean | null,
+): PageMarkdown {
+    if (oldText.length === 0) throw validationError("invalid_markdown_update", "oldText cannot be empty");
+    const content: string[] = [fieldJson("old_str", oldText), fieldJson("new_str", newText)];
+    if (replaceAll === true) content.push(fieldJson("replace_all_matches", true));
     const body = "{\"type\":\"update_content\",\"update_content\":{\"content_updates\":["
         + objectJson(content) + "]}}";
     return markdownFrom(notionPatch("/pages/" + pathId(pageId) + "/markdown", body).json());
 }
 
-/**
- * Replace all page content with enhanced Markdown.
- * @capability submilli/notion.replacePageMarkdown { pageId: string }
- */
-export function replacePageMarkdown(ref: string, markdown: string, allowDeletingContent: boolean = false): PageMarkdown {
-    const pageId = idFromRef(ref, "page");
-    check("submilli/notion.replacePageMarkdown", { pageId: pageId });
+/** Replace all page content with enhanced Markdown. */
+export function replacePageMarkdown(pageId: string, markdown: string, allowDeletingContent: boolean = false): PageMarkdown {
     const body = "{\"type\":\"replace_content\",\"replace_content\":{\"new_str\":" + JSON.stringify(markdown)
         + ",\"allow_deleting_content\":" + JSON.stringify(allowDeletingContent) + "}}";
     return markdownFrom(notionPatch("/pages/" + pathId(pageId) + "/markdown", body).json());
 }
 
-/**
- * Append enhanced Markdown to the end of a page.
- * @capability submilli/notion.appendPageMarkdown { pageId: string }
- */
-export function appendPageMarkdown(ref: string, markdown: string): PageMarkdown {
-    const pageId = idFromRef(ref, "page");
-    check("submilli/notion.appendPageMarkdown", { pageId: pageId });
+/** Append enhanced Markdown to the end of a page. */
+export function appendPageMarkdown(pageId: string, markdown: string): PageMarkdown {
     const body = "{\"type\":\"insert_content\",\"insert_content\":{\"content\":" + JSON.stringify(markdown)
         + ",\"position\":{\"type\":\"end\"}}}";
     return markdownFrom(notionPatch("/pages/" + pathId(pageId) + "/markdown", body).json());
 }
 
-/**
- * Move a page under another page or data source.
- * @capability submilli/notion.movePage { pageId: string, parentId: string }
- */
-export function movePage(ref: string, parent: PageParent): NotionPage {
-    const pageId = idFromRef(ref, "page");
-    const parentId = parentIdFrom(parent);
-    check("submilli/notion.movePage", { pageId: pageId, parentId: parentId });
-    return movePageRequest(pageId, parent);
+/** Move a page under its resolved parent page, data source, or the workspace. */
+export function movePage(pageId: string, parentType: string, parentId: string): NotionPage {
+    const body = objectJson([parentJson(parentType, parentId)]);
+    return pageFrom(notionPost("/pages/" + pathId(pageId) + "/move", body).json());
 }
 
-/**
- * Move pages sequentially, stopping on the first failure with completed IDs.
- * @capability submilli/notion.movePages {}
- */
-export function movePages(inputs: MovePageInput[]): NotionPage[] {
+/** Validate every move and resolve its page and parent before the first request. */
+export function prepareMovePages(inputs: MovePageInput[]): PreparedPageMove[] {
+    const moves: PreparedPageMove[] = [];
     for (const input of inputs) {
-        idFromRef(input.page, "page");
-        parentIdFrom(input.parent);
+        const pageId = idFromRef(input.page, "page");
+        const parentId = parentIdFrom(input.parent.type, input.parent.id);
+        moves.push({ pageId: pageId, parentType: input.parent.type, parentId: parentId });
     }
-    check("submilli/notion.movePages", {});
+    return moves;
+}
+
+/** Move prepared pages sequentially, stopping on the first failure with completed IDs. */
+export function movePages(moves: PreparedPageMove[]): NotionPage[] {
     const pages: NotionPage[] = [];
-    for (let index = 0; index < inputs.length; index += 1) {
-        const input = inputs[index];
+    for (let index = 0; index < moves.length; index += 1) {
+        const move = moves[index];
         try {
-            pages.push(movePageRequest(idFromRef(input.page, "page"), input.parent));
+            pages.push(movePage(move.pageId, move.parentType, move.parentId));
         } catch (error) {
             const ids: string[] = [];
             for (const page of pages) ids.push(page.id);
@@ -185,72 +201,36 @@ export function movePages(inputs: MovePageInput[]): NotionPage[] {
     return pages;
 }
 
-/**
- * Retrieve one page property item, including paginated property values.
- * @capability submilli/notion.getPageProperty { pageId: string }
- */
-export function getPageProperty(pageRef: string, propertyId: string): unknown {
-    const pageId = idFromRef(pageRef, "page");
-    check("submilli/notion.getPageProperty", { pageId: pageId });
+/** Retrieve one page property item, including paginated property values. */
+export function getPageProperty(pageId: string, propertyId: string): unknown {
     if (propertyId.length === 0) throw validationError("invalid_property_id", "propertyId cannot be empty");
     return notionGet("/pages/" + pathId(pageId) + "/properties/" + encodeComponent(propertyId)).json();
 }
 
-/**
- * Move a page to trash.
- * @capability submilli/notion.trashPage { pageId: string }
- */
-export function trashPage(ref: string): NotionPage {
-    const pageId = idFromRef(ref, "page");
-    check("submilli/notion.trashPage", { pageId: pageId });
+/** Move a page to trash. */
+export function trashPage(pageId: string): NotionPage {
     return pageFrom(notionPatch("/pages/" + pathId(pageId), { in_trash: true }).json());
 }
 
-/**
- * Restore a page from trash.
- * @capability submilli/notion.restorePage { pageId: string }
- */
-export function restorePage(ref: string): NotionPage {
-    const pageId = idFromRef(ref, "page");
-    check("submilli/notion.restorePage", { pageId: pageId });
+/** Restore a page from trash. */
+export function restorePage(pageId: string): NotionPage {
     return pageFrom(notionPatch("/pages/" + pathId(pageId), { in_trash: false }).json());
 }
 
-function createPageRequest(input: CreatePageInput): NotionPage {
-    const fields: string[] = [parentJson(input.parent)];
-    if (input.properties !== null) fields.push(mapFieldJson("properties", propertyObject(input.properties)));
-    if (input.content !== null) fields.push(contentJson(input.content));
-    if (input.icon !== null) fields.push(fileField("icon", input.icon));
-    if (input.cover !== null) fields.push(fileField("cover", input.cover));
-    return pageFrom(notionPost("/pages", objectJson(fields)).json());
+/**
+ * Resolve the ID of a page parent from its type and reference.
+ * A workspace parent has no ID and resolves to "workspace"; any other parent requires a reference.
+ */
+export function parentIdFrom(parentType: string, parentRef: string | null): string {
+    if (parentType === "workspace") return "workspace";
+    if (parentRef === null) throw validationError("invalid_parent", parentType + " parent requires an ID");
+    const expected = parentType === "page_id" ? "page" : "data_source";
+    return idFromRef(parentRef, expected);
 }
 
-function validateCreatePageInput(input: CreatePageInput): string {
-    const parentId = parentIdFrom(input.parent);
-    if (input.properties !== null) propertyObject(input.properties);
-    if (input.content !== null) contentJson(input.content);
-    if (input.icon !== null) fileReferenceJson(input.icon);
-    if (input.cover !== null) fileReferenceJson(input.cover);
-    return parentId;
-}
-
-function movePageRequest(pageId: string, parent: PageParent): NotionPage {
-    const body = objectJson([parentJson(parent)]);
-    return pageFrom(notionPost("/pages/" + pathId(pageId) + "/move", body).json());
-}
-
-function parentJson(parent: PageParent): string {
-    if (parent.type === "workspace") return "\"parent\":{\"type\":\"workspace\",\"workspace\":true}";
-    const id = parentIdFrom(parent);
-    return "\"parent\":{\"type\":" + JSON.stringify(parent.type) + "," + JSON.stringify(parent.type) + ":" + JSON.stringify(id) + "}";
-}
-
-function parentIdFrom(parent: PageParent): string {
-    if (parent.type === "workspace") return "workspace";
-    const parentType = parent.type as string;
-    if (parent.id === null) throw validationError("invalid_parent", parentType + " parent requires an ID");
-    const expected = parent.type === "page_id" ? "page" : "data_source";
-    return idFromRef(parent.id, expected);
+function parentJson(parentType: string, parentId: string): string {
+    if (parentType === "workspace") return "\"parent\":{\"type\":\"workspace\",\"workspace\":true}";
+    return "\"parent\":{\"type\":" + JSON.stringify(parentType) + "," + JSON.stringify(parentType) + ":" + JSON.stringify(parentId) + "}";
 }
 
 function contentJson(content: PageContent): string {

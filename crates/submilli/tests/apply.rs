@@ -4,7 +4,9 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use submilli_server::{AppState, app};
+use submilli_server::{ApiToken, AppState, AuthConfig, Role, ServerConfig, app};
+
+const ADMIN_TOKEN: &str = "admin-token-0123456789abcdef0123456789";
 
 fn submilli_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_submilli"))
@@ -22,6 +24,8 @@ fn apply(path: &Path, env: &[(&str, &str)]) -> Output {
     let mut cmd = Command::new(submilli_bin());
     cmd.args(["apply", "-f"]).arg(path);
     cmd.env_remove("SUBMILLI_SERVER_URL");
+    cmd.env_remove("SUBMILLI_SERVER_TOKEN");
+    cmd.env_remove("SUBMILLI_SERVER_TOKEN_FILE");
     for (key, value) in env {
         cmd.env(key, value);
     }
@@ -29,7 +33,11 @@ fn apply(path: &Path, env: &[(&str, &str)]) -> Output {
 }
 
 async fn spawn_server() -> (String, std::sync::Arc<tokio::sync::Notify>) {
-    let state = AppState::new(submilli_server::ServerConfig::default()).expect("AppState");
+    spawn_server_with(ServerConfig::default()).await
+}
+
+async fn spawn_server_with(config: ServerConfig) -> (String, std::sync::Arc<tokio::sync::Notify>) {
+    let state = AppState::new(config).expect("AppState");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind ephemeral port");
@@ -204,5 +212,46 @@ async fn unsupported_kind_prevents_partial_apply() {
     .await
     .unwrap();
     assert_eq!(status, 404);
+    shutdown.notify_one();
+}
+
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_sends_the_admin_token_from_the_environment() {
+    let admin = ApiToken::new("ops", Role::Admin, ADMIN_TOKEN).expect("valid token");
+    let (server, shutdown) = spawn_server_with(ServerConfig {
+        auth: AuthConfig::Tokens(vec![admin]),
+        ..ServerConfig::default()
+    })
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let file = write(dir.path(), "prod.yaml", "name: prod\ndefault: deny\n");
+
+    let refused = tokio::task::spawn_blocking({
+        let (file, server) = (file.clone(), server.clone());
+        move || apply(&file, &[("SUBMILLI_SERVER_URL", &server)])
+    })
+    .await
+    .unwrap();
+    assert!(!refused.status.success());
+    let message = stderr(&refused);
+    assert!(message.contains("SUBMILLI_SERVER_TOKEN"), "{message}");
+
+    let accepted = tokio::task::spawn_blocking({
+        let server = server.clone();
+        move || {
+            apply(
+                &file,
+                &[
+                    ("SUBMILLI_SERVER_URL", &server),
+                    ("SUBMILLI_SERVER_TOKEN", ADMIN_TOKEN),
+                ],
+            )
+        }
+    })
+    .await
+    .unwrap();
+    assert!(accepted.status.success(), "stderr: {}", stderr(&accepted));
+    assert!(stdout(&accepted).contains("Added blueprint 'prod'"));
     shutdown.notify_one();
 }

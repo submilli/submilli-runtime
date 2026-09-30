@@ -10,7 +10,9 @@ The `submilli` command is the local half of Submilli: everything in this
 chapter runs on your machine, with no server. It compiles and runs programs,
 looks things up, edits blueprints, and keeps a local store of packages and
 secrets. The other half, `submilli server` and the `submilli-server` binary,
-is in [Submilli server](/docs/server).
+is in [Submilli server](/docs/server). Those commands talk to a running
+server and send its token, read from `SUBMILLI_SERVER_TOKEN`; [start
+it](/docs/server#start-it) shows how. Nothing in this chapter needs one.
 
 This chapter is a reference, grouped by task. Every command prints its own
 help with `--help`; the text here says what each one is for and what to expect

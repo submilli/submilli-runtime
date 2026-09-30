@@ -3966,7 +3966,8 @@ impl Inferer<'_> {
 
         // `void` is the only rejected arg type — a `void`-typed
         // expression has no value to serialize. `carries_void` rather than
-        // `is_void`: `f() ?? 1` has no more of a value than bare `f()` does.
+        // `is_void`: a union listing `void` has no more of a value than bare
+        // `f()` does.
         if arg_ty.carries_void() {
             self.error(
                 self.ast
@@ -7648,7 +7649,7 @@ impl Inferer<'_> {
         let else_span = self.ast.try_expr(else_).map_err(super::arena_failure)?.span;
         let wrapped_else = self.wrap_narrow_exprs(typed_else, &false_env, else_span)?;
 
-        let result_ty = branch_result_type(then_ty, else_ty, self.resolver());
+        let result_ty = conditional_result_type(then_ty, else_ty, self.resolver());
         Ok((
             TypedExprKind::Ternary {
                 cond: typed_cond,
@@ -7672,6 +7673,25 @@ impl Inferer<'_> {
         let (typed_rhs, rhs_ty) =
             self.infer_conditional_operand(rhs, &super::narrowing::NarrowEnv::new(), None)?;
 
+        // `void` has no value to test for null. JavaScript would always take
+        // the right side, which a left side that is `void` on only some paths
+        // cannot be compiled to.
+        if lhs_ty.carries_void() {
+            let lhs_span = self.ast.try_expr(lhs).map_err(super::arena_failure)?.span;
+            self.error_non_comparable_type(
+                lhs_span,
+                &lhs_ty,
+                super::diagnostics::ComparisonPosition::NullishLeftOperand,
+            );
+            return Ok((
+                TypedExprKind::NullishCoalesce {
+                    lhs: typed_lhs,
+                    rhs: typed_rhs,
+                },
+                Type::Error,
+            ));
+        }
+
         // A poisoned operand has no knowable nullability, and naming it in the
         // message would print `<error>` at the user.
         if !type_admits_null(&lhs_ty, self.resolver()) && !matches!(lhs_ty.peel(), Type::Error) {
@@ -7693,7 +7713,7 @@ impl Inferer<'_> {
         let result_ty = if matches!(lhs_ty.peel(), Type::Null) {
             rhs_ty
         } else {
-            branch_result_type(
+            conditional_result_type(
                 super::narrowing::strip_null(&lhs_ty),
                 rhs_ty,
                 self.resolver(),
@@ -8724,9 +8744,7 @@ impl Inferer<'_> {
         }
         // `assignable` is nominal for `InterfaceRef`; relate (and later check) against the
         // interface's structural data shape so `unknown`/structurally-compatible sources pass.
-        // A `void`-carrying source has no value for the cast to check, and
-        // `number | void` → `number` otherwise passes the assignability pair
-        // below and reaches codegen.
+        // A `void`-carrying source has no value for the cast to check.
         if inner_ty.carries_void() {
             self.error_with_help(
                 self.ast.try_expr(inner).map_err(super::arena_failure)?.span,
@@ -9552,6 +9570,21 @@ fn string_key_as_field(ast: &crate::Ast, part: ChainPart) -> Result<ChainPart, C
         });
     }
     Ok(part)
+}
+
+/// The type of an expression that evaluates to one of two operands. `void`
+/// has no value to join with the other operand's, so an expression that may
+/// produce it is `void` as a whole: usable for its effects, and refused
+/// wherever a value is needed.
+fn conditional_result_type(
+    left: Type,
+    right: Type,
+    types: super::assignable::TypeResolver<'_>,
+) -> Type {
+    if left.carries_void() || right.carries_void() {
+        return Type::Void;
+    }
+    branch_result_type(left, right, types)
 }
 
 fn branch_result_type(left: Type, right: Type, types: super::assignable::TypeResolver<'_>) -> Type {

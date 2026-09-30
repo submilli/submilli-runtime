@@ -229,16 +229,23 @@ path = "sdk"
     write_file(
         &project.path().join("sdk/src/lib.ts"),
         r#"
+            import { check } from "submilli:security";
             /** @capability acme.com/charge { customer } */
-            export function charge(customer: string): void { }
+            export function charge(customer: string): void {
+                check("acme.com/charge", { customer });
+            }
         "#,
     );
     write_file(
         &project.path().join("app/src/lib.ts"),
         r#"
             import { charge } from "@acme/sdk";
+            import { check } from "submilli:security";
             /** @capability acme.com/run { customer } */
-            export function run(customer: string): void { charge("cus_123"); }
+            export function run(customer: string): void {
+                check("acme.com/run", { customer });
+                charge("cus_123");
+            }
         "#,
     );
     let out = run_in_with_home(&[os("build"), os("publish-local")], project.path(), home);

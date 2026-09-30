@@ -424,32 +424,42 @@ export function getIdentity(): SlackIdentity {
  * @capability slack.com/user/search {}
  */
 export function search(query: string, options: SearchOptions | null = null): SearchPage {
+    const limit = options === null ? null : options.limit;
+    const cursor = options === null ? null : options.cursor;
+    const requestedContentTypes = options === null ? null : options.contentTypes;
+    const requestedChannelTypes = options === null ? null : options.channelTypes;
+    const contextChannelId = options === null ? null : options.contextChannelId;
+    const includeBots = options === null ? null : options.includeBots;
+    const includeContext = options === null ? null : options.includeContextMessages;
+    const before = options === null ? null : options.before;
+    const after = options === null ? null : options.after;
+    const sort = options === null ? null : options.sort;
+    const sortDir = options === null ? null : options.sortDir;
+    let contentTypes: string[] | null = null;
+    if (requestedContentTypes !== null) {
+        const copied: string[] = [];
+        for (const contentType of requestedContentTypes) copied.push(contentType);
+        contentTypes = copied;
+    }
+    let channelTypes: string[] | null = null;
+    if (requestedChannelTypes !== null) {
+        const copied: string[] = [];
+        for (const channelType of requestedChannelTypes) copied.push(channelType);
+        channelTypes = copied;
+    }
     check("slack.com/user/search", {});
     const body: SearchRequest = { query: query };
-    if (options !== null) {
-        const limit = options.limit;
-        const cursor = options.cursor;
-        const contentTypes = options.contentTypes;
-        const channelTypes = options.channelTypes;
-        const contextChannelId = options.contextChannelId;
-        const includeBots = options.includeBots;
-        const includeContext = options.includeContextMessages;
-        const before = options.before;
-        const after = options.after;
-        const sort = options.sort;
-        const sortDir = options.sortDir;
-        if (limit !== null) body.limit = limit;
-        if (cursor !== null) body.cursor = cursor;
-        if (contentTypes !== null) body.content_types = contentTypes;
-        if (channelTypes !== null) body.channel_types = channelTypes;
-        if (contextChannelId !== null) body.context_channel_id = contextChannelId;
-        if (includeBots !== null) body.include_bots = includeBots;
-        if (includeContext !== null) body.include_context_messages = includeContext;
-        if (before !== null) body.before = before;
-        if (after !== null) body.after = after;
-        if (sort !== null) body.sort = sort;
-        if (sortDir !== null) body.sort_dir = sortDir;
-    }
+    if (contentTypes !== null) body.content_types = contentTypes;
+    if (channelTypes !== null) body.channel_types = channelTypes;
+    if (limit !== null) body.limit = limit;
+    if (cursor !== null) body.cursor = cursor;
+    if (contextChannelId !== null) body.context_channel_id = contextChannelId;
+    if (includeBots !== null) body.include_bots = includeBots;
+    if (includeContext !== null) body.include_context_messages = includeContext;
+    if (before !== null) body.before = before;
+    if (after !== null) body.after = after;
+    if (sort !== null) body.sort = sort;
+    if (sortDir !== null) body.sort_dir = sortDir;
     const data = slackPost("assistant.search.context", body).json() as SearchResponse;
     requireOk(data, 200);
     const results = data.results;
@@ -521,12 +531,13 @@ interface SearchRequest {
  * @capability slack.com/user/getMessage { channelId: string }
  */
 export function getMessage(ref: MessageRef): SlackMessage | null {
-    check("slack.com/user/getMessage", { channelId: ref.channelId });
-    let rootTs = ref.ts;
-    if (ref.threadTs !== null) rootTs = ref.threadTs;
-    const data = messages("conversations.replies", { channel: ref.channelId, ts: rootTs, limit: 100 });
+    const { channelId, ts, threadTs } = ref;
+    check("slack.com/user/getMessage", { channelId: channelId });
+    let rootTs = ts;
+    if (threadTs !== null) rootTs = threadTs;
+    const data = messages("conversations.replies", { channel: channelId, ts: rootTs, limit: 100 });
     for (const item of data.messages) {
-        if (item.ts === ref.ts) return messageFrom(item);
+        if (item.ts === ts) return messageFrom(item);
     }
     return null;
 }
@@ -539,9 +550,20 @@ export function getMessage(ref: MessageRef): SlackMessage | null {
  * @capability slack.com/user/listMessages { channelId: string }
  */
 export function listMessages(channelId: string, options: MessageListOptions | null = null): MessagePage {
+    const limit = options === null ? null : options.limit;
+    const cursor = options === null ? null : options.cursor;
+    const oldest = options === null ? null : options.oldest;
+    const latest = options === null ? null : options.latest;
+    const inclusive = options === null ? null : options.inclusive;
     check("slack.com/user/listMessages", { channelId: channelId });
     const body: HistoryRequest = { channel: channelId };
-    applyMessageOptions(body, options);
+    applyMessageOptions(body, {
+        limit: limit,
+        cursor: cursor,
+        oldest: oldest,
+        latest: latest,
+        inclusive: inclusive,
+    });
     return messagePage(messages("conversations.history", body));
 }
 
@@ -553,9 +575,11 @@ export function listMessages(channelId: string, options: MessageListOptions | nu
  * @capability slack.com/user/getThread { channelId: string }
  */
 export function getThread(channelId: string, threadTs: string, page: PageOptions | null = null): MessagePage {
+    const limit = page === null ? null : page.limit;
+    const cursor = page === null ? null : page.cursor;
     check("slack.com/user/getThread", { channelId: channelId });
     const body: HistoryRequest = { channel: channelId, ts: threadTs };
-    applyPage(body, page);
+    applyPage(body, limit, cursor);
     return messagePage(messages("conversations.replies", body));
 }
 
@@ -567,11 +591,9 @@ export function getThread(channelId: string, threadTs: string, page: PageOptions
  * @capability slack.com/user/sendMessage { channelId: string }
  */
 export function sendMessage(input: SendMessageInput): SlackMessage {
-    check("slack.com/user/sendMessage", { channelId: input.channelId });
-    const body: SendRequest = { channel: input.channelId, text: input.text };
-    const threadTs = input.threadTs;
-    const unfurlLinks = input.unfurlLinks;
-    const unfurlMedia = input.unfurlMedia;
+    const { channelId, text, threadTs, unfurlLinks, unfurlMedia } = input;
+    check("slack.com/user/sendMessage", { channelId: channelId });
+    const body: SendRequest = { channel: channelId, text: text };
     if (threadTs !== null) body.thread_ts = threadTs;
     if (unfurlLinks !== null) body.unfurl_links = unfurlLinks;
     if (unfurlMedia !== null) body.unfurl_media = unfurlMedia;
@@ -608,8 +630,10 @@ export function sendDirectMessage(userId: string, text: string): SlackMessage {
  * @capability slack.com/user/sendGroupDirectMessage { userIds }
  */
 export function sendGroupDirectMessage(userIds: string[], text: string): SlackMessage {
-    check("slack.com/user/sendGroupDirectMessage", { userIds: userIds });
-    const opened = slackPost("conversations.open", { users: userIds.join(",") }).json() as ChannelResponse;
+    const participantIds: string[] = [];
+    for (const userId of userIds) participantIds.push(userId);
+    check("slack.com/user/sendGroupDirectMessage", { userIds: participantIds });
+    const opened = slackPost("conversations.open", { users: participantIds.join(",") }).json() as ChannelResponse;
     requireOk(opened, 200);
     const data = slackPost("chat.postMessage", { channel: opened.channel.id, text: text }).json() as MessageResponse;
     requireOk(data, 200);
@@ -625,8 +649,9 @@ interface SendRequest { channel: string; text: string; thread_ts?: string; unfur
  * @capability slack.com/user/addReaction { channelId: string }
  */
 export function addReaction(ref: MessageRef, emoji: string): void {
-    check("slack.com/user/addReaction", { channelId: ref.channelId });
-    const data = slackPost("reactions.add", { channel: ref.channelId, timestamp: ref.ts, name: emoji }).json() as SlackEnvelope;
+    const { channelId, ts } = ref;
+    check("slack.com/user/addReaction", { channelId: channelId });
+    const data = slackPost("reactions.add", { channel: channelId, timestamp: ts, name: emoji }).json() as SlackEnvelope;
     requireOk(data, 200);
 }
 
@@ -650,9 +675,11 @@ export function getChannel(channelId: string): SlackChannel {
  * @capability slack.com/user/listChannels {}
  */
 export function listChannels(page: PageOptions | null = null): ChannelPage {
+    const limit = page === null ? null : page.limit;
+    const cursor = page === null ? null : page.cursor;
     check("slack.com/user/listChannels", {});
     const body: PageRequest = { types: "public_channel,private_channel,mpim,im" };
-    applyPage(body, page);
+    applyPage(body, limit, cursor);
     const data = slackGet("conversations.list", pageQuery(body)).json() as ChannelsResponse;
     requireOk(data, 200);
     const channels: SlackChannel[] = [];
@@ -681,9 +708,11 @@ export function getUser(userId: string): SlackUser {
  * @capability slack.com/user/listUsers {}
  */
 export function listUsers(page: PageOptions | null = null): UserPage {
+    const limit = page === null ? null : page.limit;
+    const cursor = page === null ? null : page.cursor;
     check("slack.com/user/listUsers", {});
     const body: PageRequest = {};
-    applyPage(body, page);
+    applyPage(body, limit, cursor);
     const data = slackGet("users.list", pageQuery(body)).json() as UsersResponse;
     requireOk(data, 200);
     const users: SlackUser[] = [];
@@ -746,25 +775,25 @@ function fetchFile(fileId: string): SlackFile {
 interface PageRequest { limit?: number; cursor?: string; types?: string; }
 interface HistoryRequest { channel: string; ts?: string; limit?: number; cursor?: string; oldest?: string; latest?: string; inclusive?: boolean; }
 
-function applyPage(body: PageRequest, page: PageOptions | null): void {
-    if (page !== null) {
-        const limit = page.limit;
-        const cursor = page.cursor;
-        if (limit !== null) body.limit = limit;
-        if (cursor !== null) body.cursor = cursor;
-    }
+function applyPage(body: PageRequest, limit: number | null, cursor: string | null): void {
+    if (limit !== null) body.limit = limit;
+    if (cursor !== null) body.cursor = cursor;
 }
 
-function applyMessageOptions(body: HistoryRequest, options: MessageListOptions | null): void {
-    applyPage(body, options);
-    if (options !== null) {
-        const oldest = options.oldest;
-        const latest = options.latest;
-        const inclusive = options.inclusive;
-        if (oldest !== null) body.oldest = oldest;
-        if (latest !== null) body.latest = latest;
-        if (inclusive !== null) body.inclusive = inclusive;
-    }
+interface MessageListFields {
+    limit: number | null;
+    cursor: string | null;
+    oldest: string | null;
+    latest: string | null;
+    inclusive: boolean | null;
+}
+
+function applyMessageOptions(body: HistoryRequest, fields: MessageListFields): void {
+    const { limit, cursor, oldest, latest, inclusive } = fields;
+    applyPage(body, limit, cursor);
+    if (oldest !== null) body.oldest = oldest;
+    if (latest !== null) body.latest = latest;
+    if (inclusive !== null) body.inclusive = inclusive;
 }
 
 function messages(method: string, body: HistoryRequest): MessagesResponse {

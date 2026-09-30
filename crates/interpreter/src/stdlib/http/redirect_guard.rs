@@ -12,12 +12,11 @@ use url::Url;
 use super::transport::{RedirectDenied, RedirectGuard, RedirectHop};
 use crate::runtime::security::SecurityCheck;
 use crate::stdlib::shared::authorize_capability;
+use crate::stdlib::url::host_without_trailing_dots;
 
-/// Host and path of `url` for capability context / metrics. A fully qualified
-/// `evil.test.` names the same host as `evil.test`, so the trailing dot is
-/// dropped or a `host == "evil.test"` rule would not see it.
+/// Host and path of `url` for capability context / metrics.
 pub(super) fn host_and_path(url: &Url) -> (String, String) {
-    let host = url.host_str().unwrap_or("").trim_end_matches('.');
+    let host = host_without_trailing_dots(url);
     (host.to_string(), url.path().to_string())
 }
 

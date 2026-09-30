@@ -29,6 +29,7 @@ use crate::runtime::number::format_number_js;
 use crate::runtime::prelude::array::ElementCallback;
 use crate::runtime::prelude::closure::Closure;
 use crate::runtime::prelude::iterator::as_struct;
+use crate::runtime::prelude::keep::KeptValue;
 use crate::runtime::prelude::vtable::read_object_entries;
 
 // ---------------------------------------------------------------------------
@@ -448,9 +449,12 @@ async fn reduce(
     } else {
         (0..bytes.len()).collect()
     };
+    // The next iteration boxes its byte before it passes the accumulator on.
+    let kept_acc = KeptValue::new(caller)?;
     for i in order {
         let boxed = box_byte(caller, bytes[i])?;
         acc = f.call(caller, Some(acc), boxed, i).await?;
+        kept_acc.set(caller, acc)?;
     }
     Ok(acc)
 }

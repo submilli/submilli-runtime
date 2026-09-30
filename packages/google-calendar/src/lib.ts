@@ -77,6 +77,13 @@ export interface EventTime {
     timeZone?: string;
 }
 
+// The package's own copy of a caller's `EventTime`, each property read once.
+interface EventTimeFields {
+    date: string | null;
+    dateTime: string | null;
+    timeZone: string | null;
+}
+
 /** An event attendee. */
 export interface Attendee {
     /** Attendee email address. */
@@ -422,9 +429,11 @@ interface GoogleErrorDetail {
  * @capability submilli/google-calendar.listCalendars {}
  */
 export function listCalendars(page: PageOptions | null = null): Page<Calendar> {
+    const limit = page === null ? null : page.limit;
+    const pageToken = page === null ? null : page.pageToken;
     check("submilli/google-calendar.listCalendars", {});
     const query = new Map<string, string>();
-    applyPage(query, page, 20, 250);
+    applyPage(query, limit, pageToken, 20, 250);
     const data = calendarGet("/users/me/calendarList", query).json() as CalendarListResponse;
     const items: Calendar[] = [];
     if (data.items !== null) for (const item of data.items) items.push(calendarFrom(item));
@@ -436,24 +445,28 @@ export function listCalendars(page: PageOptions | null = null): Page<Calendar> {
  * @capability submilli/google-calendar.listEvents { calendarId: string }
  */
 export function listEvents(options: EventListOptions | null = null): Page<Event> {
-    let calendarId = "primary";
-    if (options !== null) {
-        const requestedCalendar = options.calendarId;
-        if (requestedCalendar !== null) calendarId = requestedCalendar;
-    }
+    const requestedCalendar = options === null ? null : options.calendarId;
+    const limit = options === null ? null : options.limit;
+    const pageToken = options === null ? null : options.pageToken;
+    const timeMin = options === null ? null : options.timeMin;
+    const timeMax = options === null ? null : options.timeMax;
+    const search = options === null ? null : options.query;
+    const singleEvents = options === null ? null : options.singleEvents;
+    const orderBy = options === null ? null : options.orderBy;
+    const showDeleted = options === null ? null : options.showDeleted;
+    const timeZone = options === null ? null : options.timeZone;
+    const calendarId = requestedCalendar === null ? "primary" : requestedCalendar;
     check("submilli/google-calendar.listEvents", { calendarId: calendarId });
     const query = new Map<string, string>();
-    query.set("maxResults", bounded(options === null ? null : options.limit, 20, 1, 2500).toString());
-    if (options !== null) {
-        putQuery(query, "pageToken", options.pageToken);
-        putTimeQuery(query, "timeMin", options.timeMin);
-        putTimeQuery(query, "timeMax", options.timeMax);
-        putQuery(query, "q", options.query);
-        putBool(query, "singleEvents", options.singleEvents);
-        putQuery(query, "orderBy", options.orderBy);
-        putBool(query, "showDeleted", options.showDeleted);
-        putQuery(query, "timeZone", options.timeZone);
-    }
+    query.set("maxResults", bounded(limit, 20, 1, 2500).toString());
+    putQuery(query, "pageToken", pageToken);
+    putTimeQuery(query, "timeMin", timeMin);
+    putTimeQuery(query, "timeMax", timeMax);
+    putQuery(query, "q", search);
+    putBool(query, "singleEvents", singleEvents);
+    putQuery(query, "orderBy", orderBy);
+    putBool(query, "showDeleted", showDeleted);
+    putQuery(query, "timeZone", timeZone);
     const data = calendarGet("/calendars/" + encodeComponent(calendarId) + "/events", query).json() as EventListResponse;
     return eventPage(data);
 }
@@ -479,17 +492,31 @@ function fetchEvent(eventId: string, calendarId: string): Event | null {
  * @capability submilli/google-calendar.createEvent { calendarId: string }
  */
 export function createEvent(input: EventCreateInput, calendarId: string = "primary"): Event {
+    const { summary, description, location, visibility, createGoogleMeet, sendUpdates } = input;
+    const requestedStart = input.start;
+    const start: EventTimeFields = { date: requestedStart.date, dateTime: requestedStart.dateTime, timeZone: requestedStart.timeZone };
+    const requestedEnd = input.end;
+    const end: EventTimeFields = { date: requestedEnd.date, dateTime: requestedEnd.dateTime, timeZone: requestedEnd.timeZone };
+    const attendees = input.attendees;
+    const requestedRecurrence = input.recurrence;
+    let recurrence: string[] | null = null;
+    if (requestedRecurrence !== null) {
+        const copied: string[] = [];
+        for (const rule of requestedRecurrence) copied.push(rule);
+        recurrence = copied;
+    }
+    const reminders = input.reminders;
     check("submilli/google-calendar.createEvent", { calendarId: calendarId });
-    const body: EventCreateBody = { summary: input.summary, start: normalizeEventTime(input.start), end: normalizeEventTime(input.end) };
-    if (input.description !== null) body.description = input.description;
-    if (input.location !== null) body.location = input.location;
-    if (input.attendees !== null) body.attendees = input.attendees;
-    if (input.recurrence !== null) body.recurrence = input.recurrence;
-    if (input.reminders !== null) body.reminders = input.reminders;
-    if (input.visibility !== null) body.visibility = input.visibility;
+    const body: EventCreateBody = { summary: summary, start: normalizeEventTime(start), end: normalizeEventTime(end) };
+    if (description !== null) body.description = description;
+    if (location !== null) body.location = location;
+    if (attendees !== null) body.attendees = attendees;
+    if (recurrence !== null) body.recurrence = recurrence;
+    if (reminders !== null) body.reminders = reminders;
+    if (visibility !== null) body.visibility = visibility;
     const query = new Map<string, string>();
-    putQuery(query, "sendUpdates", input.sendUpdates);
-    if (input.createGoogleMeet === true) {
+    putQuery(query, "sendUpdates", sendUpdates);
+    if (createGoogleMeet === true) {
         query.set("conferenceDataVersion", "1");
         body.conferenceData = {
             createRequest: {
@@ -508,27 +535,47 @@ export function createEvent(input: EventCreateInput, calendarId: string = "prima
  * @capability submilli/google-calendar.updateEvent { calendarId: string }
  */
 export function updateEvent(eventId: string, input: EventUpdateInput, calendarId: string = "primary"): Event {
+    const { summary, description, location, clearDescription, clearLocation, visibility, sendUpdates } = input;
+    const requestedStart = input.start;
+    let start: EventTimeFields | null = null;
+    if (requestedStart !== null) {
+        start = { date: requestedStart.date, dateTime: requestedStart.dateTime, timeZone: requestedStart.timeZone };
+    }
+    const requestedEnd = input.end;
+    let end: EventTimeFields | null = null;
+    if (requestedEnd !== null) {
+        end = { date: requestedEnd.date, dateTime: requestedEnd.dateTime, timeZone: requestedEnd.timeZone };
+    }
+    const attendees = input.attendees;
+    const requestedRecurrence = input.recurrence;
+    let recurrence: string[] | null = null;
+    if (requestedRecurrence !== null) {
+        const copied: string[] = [];
+        for (const rule of requestedRecurrence) copied.push(rule);
+        recurrence = copied;
+    }
+    const reminders = input.reminders;
     check("submilli/google-calendar.updateEvent", { calendarId: calendarId });
     const body: EventUpdateBody = {};
-    if (input.summary !== null) body.summary = input.summary;
-    if (input.start !== null) body.start = normalizeEventTime(input.start);
-    if (input.end !== null) body.end = normalizeEventTime(input.end);
-    if (input.clearDescription === true) {
+    if (summary !== null) body.summary = summary;
+    if (start !== null) body.start = normalizeEventTime(start);
+    if (end !== null) body.end = normalizeEventTime(end);
+    if (clearDescription === true) {
         body.description = null;
-    } else if (input.description !== null) {
-        body.description = input.description;
+    } else if (description !== null) {
+        body.description = description;
     }
-    if (input.clearLocation === true) {
+    if (clearLocation === true) {
         body.location = null;
-    } else if (input.location !== null) {
-        body.location = input.location;
+    } else if (location !== null) {
+        body.location = location;
     }
-    if (input.attendees !== null) body.attendees = input.attendees;
-    if (input.recurrence !== null) body.recurrence = input.recurrence;
-    if (input.reminders !== null) body.reminders = input.reminders;
-    if (input.visibility !== null) body.visibility = input.visibility;
+    if (attendees !== null) body.attendees = attendees;
+    if (recurrence !== null) body.recurrence = recurrence;
+    if (reminders !== null) body.reminders = reminders;
+    if (visibility !== null) body.visibility = visibility;
     const query = new Map<string, string>();
-    putQuery(query, "sendUpdates", input.sendUpdates);
+    putQuery(query, "sendUpdates", sendUpdates);
     const path = "/calendars/" + encodeComponent(calendarId) + "/events/" + encodeComponent(eventId);
     const response = patch(API + calendarPath(path, query), body, authHeaders());
     requireOk(response);
@@ -571,14 +618,12 @@ export function respondToEvent(eventId: string, response: string, calendarId: st
  * @capability submilli/google-calendar.deleteEvent { calendarId: string }
  */
 export function deleteEvent(eventId: string, options: EventDeleteOptions | null = null): void {
-    let calendarId = "primary";
-    if (options !== null) {
-        const requestedCalendar = options.calendarId;
-        if (requestedCalendar !== null) calendarId = requestedCalendar;
-    }
+    const requestedCalendar = options === null ? null : options.calendarId;
+    const sendUpdates = options === null ? null : options.sendUpdates;
+    const calendarId = requestedCalendar === null ? "primary" : requestedCalendar;
     check("submilli/google-calendar.deleteEvent", { calendarId: calendarId });
     const query = new Map<string, string>();
-    if (options !== null) putQuery(query, "sendUpdates", options.sendUpdates);
+    putQuery(query, "sendUpdates", sendUpdates);
     const path = "/calendars/" + encodeComponent(calendarId) + "/events/" + encodeComponent(eventId);
     const response = delete(API + calendarPath(path, query), authHeaders());
     if (response.status !== 404) requireOk(response);
@@ -589,12 +634,14 @@ export function deleteEvent(eventId: string, options: EventDeleteOptions | null 
  * @capability submilli/google-calendar.queryFreeBusy { calendarIds: string[] }
  */
 export function queryFreeBusy(input: FreeBusyInput): FreeBusyResult {
-    const calendarIds = input.calendarIds;
+    const { timeMin: requestedMin, timeMax: requestedMax, timeZone } = input;
+    const calendarIds: string[] = [];
+    for (const id of input.calendarIds) calendarIds.push(id);
     check("submilli/google-calendar.queryFreeBusy", { calendarIds: calendarIds });
     if (calendarIds.length === 0) throw new CalendarError("invalid_input", "calendarIds must not be empty", 0);
     if (calendarIds.length > 50) throw new CalendarError("too_many_calendars", "free/busy accepts at most 50 calendars", 0);
-    const timeMin = toRfc3339(input.timeMin, "timeMin");
-    const timeMax = toRfc3339(input.timeMax, "timeMax");
+    const timeMin = toRfc3339(requestedMin, "timeMin");
+    const timeMax = toRfc3339(requestedMax, "timeMax");
     const calendars: CalendarBusy[] = [];
     for (const id of calendarIds) {
         const body: FreeBusyRequest = {
@@ -602,7 +649,7 @@ export function queryFreeBusy(input: FreeBusyInput): FreeBusyResult {
             timeMax: timeMax,
             items: [{ id: id }],
         };
-        if (input.timeZone !== null) body.timeZone = input.timeZone;
+        if (timeZone !== null) body.timeZone = timeZone;
         const response = post(API + "/freeBusy", body, authHeaders());
         requireOk(response);
         const data = response.json() as FreeBusyResponse;
@@ -623,17 +670,19 @@ export function queryFreeBusy(input: FreeBusyInput): FreeBusyResult {
  * @capability submilli/google-calendar.findFreeTime { calendarIds: string[] }
  */
 export function findFreeTime(input: FindFreeTimeInput): TimeSlot[] {
-    const calendarIds = input.calendarIds;
+    const { timeMin: requestedMin, timeMax: requestedMax, durationMinutes, timeZone, maxSlots: requestedSlots } = input;
+    const calendarIds: string[] = [];
+    for (const id of input.calendarIds) calendarIds.push(id);
     check("submilli/google-calendar.findFreeTime", { calendarIds: calendarIds });
-    if (input.durationMinutes <= 0) throw new CalendarError("invalid_duration", "durationMinutes must be positive", 0);
-    const timeMin = toRfc3339(input.timeMin, "timeMin");
-    const timeMax = toRfc3339(input.timeMax, "timeMax");
+    if (durationMinutes <= 0) throw new CalendarError("invalid_duration", "durationMinutes must be positive", 0);
+    const timeMin = toRfc3339(requestedMin, "timeMin");
+    const timeMax = toRfc3339(requestedMax, "timeMax");
     const query: FreeBusyInput = {
         calendarIds: calendarIds,
         timeMin: timeMin,
         timeMax: timeMax,
     };
-    if (input.timeZone !== null) query.timeZone = input.timeZone;
+    if (timeZone !== null) query.timeZone = timeZone;
     const result = queryFreeBusy(query);
     const busy: BusyPeriod[] = [];
     for (const calendar of result.calendars) for (const period of calendar.busy) busy.push(period);
@@ -651,18 +700,18 @@ export function findFreeTime(input: FindFreeTimeInput): TimeSlot[] {
             }
         }
     }
-    const maxSlots = bounded(input.maxSlots, 10, 1, 100);
+    const maxSlots = bounded(requestedSlots, 10, 1, 100);
     const slots: TimeSlot[] = [];
     let cursor = timeMin;
     for (const period of merged) {
         if (slots.length >= maxSlots) break;
-        if (period.start > cursor && minutesBetween(cursor, period.start) >= input.durationMinutes) {
-            slots.push({ start: cursor, end: addMinutes(cursor, input.durationMinutes) });
+        if (period.start > cursor && minutesBetween(cursor, period.start) >= durationMinutes) {
+            slots.push({ start: cursor, end: addMinutes(cursor, durationMinutes) });
         }
         if (period.end > cursor) cursor = period.end;
     }
-    if (slots.length < maxSlots && cursor < timeMax && minutesBetween(cursor, timeMax) >= input.durationMinutes) {
-        slots.push({ start: cursor, end: addMinutes(cursor, input.durationMinutes) });
+    if (slots.length < maxSlots && cursor < timeMax && minutesBetween(cursor, timeMax) >= durationMinutes) {
+        slots.push({ start: cursor, end: addMinutes(cursor, durationMinutes) });
     }
     return slots;
 }
@@ -672,22 +721,35 @@ export function findFreeTime(input: FindFreeTimeInput): TimeSlot[] {
  * @capability submilli/google-calendar.agenda {}
  */
 export function agenda(options: AgendaOptions): AgendaResult {
+    const {
+        timeMin: requestedMin,
+        timeMax: requestedMax,
+        calendarIds: requestedCalendarIds,
+        maxCalendars,
+        maxEventsPerCalendar,
+        timeZone,
+    } = options;
+    let calendarIds: string[] | null = null;
+    if (requestedCalendarIds !== null) {
+        const copied: string[] = [];
+        for (const id of requestedCalendarIds) copied.push(id);
+        calendarIds = copied;
+    }
     check("submilli/google-calendar.agenda", {});
-    const calendarLimit = bounded(options.maxCalendars, 10, 1, 10);
-    const eventLimit = bounded(options.maxEventsPerCalendar, 20, 1, 100);
-    const timeMin = toRfc3339(options.timeMin, "timeMin");
-    const timeMax = toRfc3339(options.timeMax, "timeMax");
+    const calendarLimit = bounded(maxCalendars, 10, 1, 10);
+    const eventLimit = bounded(maxEventsPerCalendar, 20, 1, 100);
+    const timeMin = toRfc3339(requestedMin, "timeMin");
+    const timeMax = toRfc3339(requestedMax, "timeMax");
     const ids: string[] = [];
-    if (options.calendarIds !== null) {
-        for (const id of options.calendarIds) if (ids.length < calendarLimit) ids.push(id);
+    if (calendarIds !== null) {
+        for (const id of calendarIds) if (ids.length < calendarLimit) ids.push(id);
     } else {
         const page = listCalendars({ limit: calendarLimit });
         for (const calendar of page.items) ids.push(calendar.id);
     }
     const events: AgendaEvent[] = [];
     let truncated = false;
-    const requestedIds = options.calendarIds;
-    if (requestedIds !== null) truncated = requestedIds.length > ids.length;
+    if (calendarIds !== null) truncated = calendarIds.length > ids.length;
     for (const id of ids) {
         const eventOptions: EventListOptions = {
             calendarId: id,
@@ -697,7 +759,7 @@ export function agenda(options: AgendaOptions): AgendaResult {
             singleEvents: true,
             orderBy: "startTime",
         };
-        if (options.timeZone !== null) eventOptions.timeZone = options.timeZone;
+        if (timeZone !== null) eventOptions.timeZone = timeZone;
         const page = listEvents(eventOptions);
         for (const event of page.items) events.push({ calendarId: id, event: event });
         if (page.nextPageToken.length > 0) truncated = true;
@@ -788,9 +850,9 @@ function requireOk(response: Response): Response {
     throw new CalendarError(code, message, response.status);
 }
 
-function applyPage(query: Map<string, string>, page: PageOptions | null, defaultLimit: number, maxLimit: number): void {
-    query.set("maxResults", bounded(page === null ? null : page.limit, defaultLimit, 1, maxLimit).toString());
-    if (page !== null) putQuery(query, "pageToken", page.pageToken);
+function applyPage(query: Map<string, string>, limit: number | null, pageToken: string | null, defaultLimit: number, maxLimit: number): void {
+    query.set("maxResults", bounded(limit, defaultLimit, 1, maxLimit).toString());
+    putQuery(query, "pageToken", pageToken);
 }
 
 function putQuery(query: Map<string, string>, name: string, value: string | null): void {
@@ -809,9 +871,14 @@ function toRfc3339(value: string, param: string): string {
     }
 }
 
-function normalizeEventTime(time: EventTime): EventTime {
+function normalizeEventTime(time: EventTimeFields): EventTime {
     const dateTime = time.dateTime;
-    if (dateTime === null) return time;
+    if (dateTime === null) {
+        const unchanged: EventTime = {};
+        if (time.date !== null) unchanged.date = time.date;
+        if (time.timeZone !== null) unchanged.timeZone = time.timeZone;
+        return unchanged;
+    }
     const normalized: EventTime = { dateTime: toRfc3339(dateTime, "dateTime") };
     if (time.date !== null) normalized.date = time.date;
     let zone = time.timeZone;

@@ -431,9 +431,29 @@ export function listIssues(
     filter: IssueFilter | null = null,
     page: PageOptions | null = null,
 ): Page<Issue> {
-    const teamId = filter !== null ? filter.teamId : null;
+    const teamId = filter === null ? null : filter.teamId;
+    const assigneeId = filter === null ? null : filter.assigneeId;
+    const stateType = filter === null ? null : filter.stateType;
+    const completedAtAfter = filter === null ? null : filter.completedAtAfter;
+    const completedAtBefore = filter === null ? null : filter.completedAtBefore;
+    const createdAtAfter = filter === null ? null : filter.createdAtAfter;
+    const updatedAtAfter = filter === null ? null : filter.updatedAtAfter;
+    const first = page === null ? null : page.first;
+    const after = page === null ? null : page.after;
+    let issueFilter: IssueFilter | null = null;
+    if (filter !== null) {
+        const owned: IssueFilter = {};
+        if (teamId !== null) owned.teamId = teamId;
+        if (assigneeId !== null) owned.assigneeId = assigneeId;
+        if (stateType !== null) owned.stateType = stateType;
+        if (completedAtAfter !== null) owned.completedAtAfter = completedAtAfter;
+        if (completedAtBefore !== null) owned.completedAtBefore = completedAtBefore;
+        if (createdAtAfter !== null) owned.createdAtAfter = createdAtAfter;
+        if (updatedAtAfter !== null) owned.updatedAtAfter = updatedAtAfter;
+        issueFilter = owned;
+    }
     check("linear.app/listIssues", { teamId: teamId });
-    const vars = buildListIssuesVars(filter, page);
+    const vars = buildListIssuesVars(issueFilter, ownedPageOptions(first, after));
     const envelope = graphqlPost(LIST_ISSUES_QUERY, vars).json() as GraphQlResponse<ListIssuesData>;
     return requireData(envelope).issues;
 }
@@ -454,8 +474,10 @@ export function getTeam(id: string): Team | null {
  * @capability linear.app/listTeams {}
  */
 export function listTeams(page: PageOptions | null = null): Page<Team> {
+    const first = page === null ? null : page.first;
+    const after = page === null ? null : page.after;
     check("linear.app/listTeams", {});
-    const envelope = graphqlPost(LIST_TEAMS_QUERY, buildPageVars(page))
+    const envelope = graphqlPost(LIST_TEAMS_QUERY, buildPageVars(ownedPageOptions(first, after)))
         .json() as GraphQlResponse<ListTeamsData>;
     return requireData(envelope).teams;
 }
@@ -465,8 +487,10 @@ export function listTeams(page: PageOptions | null = null): Page<Team> {
  * @capability linear.app/listProjects {}
  */
 export function listProjects(page: PageOptions | null = null): Page<Project> {
+    const first = page === null ? null : page.first;
+    const after = page === null ? null : page.after;
     check("linear.app/listProjects", {});
-    const envelope = graphqlPost(LIST_PROJECTS_QUERY, buildPageVars(page))
+    const envelope = graphqlPost(LIST_PROJECTS_QUERY, buildPageVars(ownedPageOptions(first, after)))
         .json() as GraphQlResponse<ListProjectsData>;
     return requireData(envelope).projects;
 }
@@ -476,8 +500,10 @@ export function listProjects(page: PageOptions | null = null): Page<Project> {
  * @capability linear.app/listUsers {}
  */
 export function listUsers(page: PageOptions | null = null): Page<User> {
+    const first = page === null ? null : page.first;
+    const after = page === null ? null : page.after;
     check("linear.app/listUsers", {});
-    const envelope = graphqlPost(LIST_USERS_QUERY, buildPageVars(page))
+    const envelope = graphqlPost(LIST_USERS_QUERY, buildPageVars(ownedPageOptions(first, after)))
         .json() as GraphQlResponse<ListUsersData>;
     return requireData(envelope).users;
 }
@@ -491,8 +517,30 @@ export function listUsers(page: PageOptions | null = null): Page<User> {
  * @capability linear.app/createIssue { teamId: string }
  */
 export function createIssue(input: IssueCreateInput): Issue {
-    check("linear.app/createIssue", { teamId: input.teamId });
-    const vars: CreateIssueVars = { input: input };
+    const teamId = input.teamId;
+    const title = input.title;
+    const description = input.description;
+    const assigneeId = input.assigneeId;
+    const stateId = input.stateId;
+    const priority = input.priority;
+    const requestedLabelIds = input.labelIds;
+    let labelIds: string[] | null = null;
+    if (requestedLabelIds !== null) {
+        const copied: string[] = [];
+        for (const labelId of requestedLabelIds) copied.push(labelId);
+        labelIds = copied;
+    }
+    const projectId = input.projectId;
+    const issueInput: IssueCreateInput = { teamId: teamId };
+    if (title !== null) issueInput.title = title;
+    if (description !== null) issueInput.description = description;
+    if (assigneeId !== null) issueInput.assigneeId = assigneeId;
+    if (stateId !== null) issueInput.stateId = stateId;
+    if (priority !== null) issueInput.priority = priority;
+    if (labelIds !== null) issueInput.labelIds = labelIds;
+    if (projectId !== null) issueInput.projectId = projectId;
+    check("linear.app/createIssue", { teamId: teamId });
+    const vars: CreateIssueVars = { input: issueInput };
     const envelope = graphqlPost(CREATE_ISSUE_QUERY, vars).json() as GraphQlResponse<IssueCreateData>;
     return requirePayloadIssue(requireData(envelope).issueCreate);
 }
@@ -502,8 +550,29 @@ export function createIssue(input: IssueCreateInput): Issue {
  * @capability linear.app/updateIssue {}
  */
 export function updateIssue(id: string, input: IssueUpdateInput): Issue {
+    const title = input.title;
+    const description = input.description;
+    const assigneeId = input.assigneeId;
+    const stateId = input.stateId;
+    const priority = input.priority;
+    const requestedLabelIds = input.labelIds;
+    let labelIds: string[] | null = null;
+    if (requestedLabelIds !== null) {
+        const copied: string[] = [];
+        for (const labelId of requestedLabelIds) copied.push(labelId);
+        labelIds = copied;
+    }
+    const projectId = input.projectId;
+    const issueInput: IssueUpdateInput = {};
+    if (title !== null) issueInput.title = title;
+    if (description !== null) issueInput.description = description;
+    if (assigneeId !== null) issueInput.assigneeId = assigneeId;
+    if (stateId !== null) issueInput.stateId = stateId;
+    if (priority !== null) issueInput.priority = priority;
+    if (labelIds !== null) issueInput.labelIds = labelIds;
+    if (projectId !== null) issueInput.projectId = projectId;
     check("linear.app/updateIssue", {});
-    const vars: UpdateIssueVars = { id: id, input: input };
+    const vars: UpdateIssueVars = { id: id, input: issueInput };
     const envelope = graphqlPost(UPDATE_ISSUE_QUERY, vars).json() as GraphQlResponse<IssueUpdateData>;
     return requirePayloadIssue(requireData(envelope).issueUpdate);
 }
@@ -513,8 +582,13 @@ export function updateIssue(id: string, input: IssueUpdateInput): Issue {
  * @capability linear.app/createComment {}
  */
 export function createComment(input: CommentCreateInput): Comment {
+    const issueId = input.issueId;
+    const body = input.body;
+    const parentId = input.parentId;
+    const commentInput: CommentCreateInput = { issueId: issueId, body: body };
+    if (parentId !== null) commentInput.parentId = parentId;
     check("linear.app/createComment", {});
-    const vars: CreateCommentVars = { input: input };
+    const vars: CreateCommentVars = { input: commentInput };
     const envelope = graphqlPost(CREATE_COMMENT_QUERY, vars)
         .json() as GraphQlResponse<CommentCreateData>;
     const payload = requireData(envelope).commentCreate;
@@ -529,8 +603,10 @@ export function createComment(input: CommentCreateInput): Comment {
  * @capability linear.app/listComments {}
  */
 export function listComments(issueId: string, page: PageOptions | null = null): Page<Comment> {
+    const first = page === null ? null : page.first;
+    const after = page === null ? null : page.after;
     check("linear.app/listComments", {});
-    const vars = buildEntityPageVars(issueId, page);
+    const vars = buildEntityPageVars(issueId, first, after);
     const envelope = graphqlPost(LIST_COMMENTS_QUERY, vars).json() as GraphQlResponse<IssueCommentsData>;
     return requireData(envelope).issue.comments;
 }
@@ -549,8 +625,10 @@ export function getAgentSession(id: string): AgentSession {
  * @capability linear.app/listAgentActivities {}
  */
 export function listAgentActivities(id: string, page: PageOptions | null = null): Page<AgentActivity> {
+    const first = page === null ? null : page.first;
+    const after = page === null ? null : page.after;
     check("linear.app/listAgentActivities", {});
-    const vars = buildEntityPageVars(id, page);
+    const vars = buildEntityPageVars(id, first, after);
     const envelope = graphqlPost(LIST_AGENT_ACTIVITIES_QUERY, vars).json() as GraphQlResponse<AgentActivitiesData>;
     return requireData(envelope).agentSession.activities;
 }
@@ -606,12 +684,19 @@ function requireAgentSession(payload: AgentSessionPayload, operation: string): A
     return payload.agentSession;
 }
 
-function buildEntityPageVars(id: string, page: PageOptions | null): EntityPageVars {
-    const pagination = buildPageVars(page);
+function buildEntityPageVars(id: string, first: number | null, after: string | null): EntityPageVars {
+    const pagination = buildPageVars(ownedPageOptions(first, after));
     const vars: EntityPageVars = { id: id };
     if (pagination.first !== null) vars.first = pagination.first;
     if (pagination.after !== null) vars.after = pagination.after;
     return vars;
+}
+
+function ownedPageOptions(first: number | null, after: string | null): PageOptions {
+    const page: PageOptions = {};
+    if (first !== null) page.first = first;
+    if (after !== null) page.after = after;
+    return page;
 }
 
 // ---------------------------------------------------------------------------

@@ -10,9 +10,10 @@ translated into a pod spec.
 
 ## Status
 
-**Not published to a registry yet.** `appVersion` is pinned to `0.1.6`; the
-floor is `0.1.5`, the first server release carrying the blueprint seed directory
-this chart depends on, so the chart itself is complete — but it is not pushed to an OCI registry, and the
+**Not published to a registry yet.** The chart needs the first server release
+with API tokens, which is newer than the pinned `appVersion` of `0.1.6`; set
+`image.tag` to a build that has them until the release bump lands. The chart
+itself is complete — but it is not pushed to an OCI registry, and the
 GHCR image package is private until launch.
 
 This chart has never been published, so there is no earlier revision of it in the
@@ -36,24 +37,36 @@ Then, from inside the cluster or through a port-forward:
 
 ```bash
 kubectl port-forward svc/submilli 8128:8128
-curl http://127.0.0.1:8128/v1/status
+TOKEN=$(kubectl get secret submilli-auth -o jsonpath='{.data.admin-token}' | base64 -d)
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8128/v1/status
 ```
 
 ## Read this before exposing it
 
-**The server's HTTP API is completely unauthenticated.** No token, no allowlist, no
-per-request identity. Anything that can reach port 8128 can execute arbitrary code
-in the sandbox, register and rewrite blueprints, read results back, and stop the
-process with `POST /v1/shutdown`.
+**Every request needs a bearer token.** The chart generates two into the Secret
+`<fullname>-auth` and keeps them across upgrades and uninstalls: `admin-token`
+for the whole API, and `user-token`, which can run code, use sessions and MCP,
+and read what a blueprint offers, but cannot change a blueprint. Give
+applications the user token. The server reads tokens at boot, so after changing
+the Secret run `kubectl rollout restart statefulset/<fullname>`.
 
-On a single host `compose.yaml` contains this by publishing the port loopback-only.
-Kubernetes has no equivalent: a ClusterIP Service is reachable from every pod in
-every namespace by default. So the chart's defaults are deliberately restrictive:
+- `auth.existingSecret` names a Secret you manage instead (keys
+  `auth.adminTokenKey` and `auth.userTokenKey`). Use it with Argo CD or any flow
+  that applies `helm template` output: rendered without cluster access, the
+  chart cannot read its Secret back and would generate new tokens on every sync.
+- `auth.enabled: false` serves without tokens. Network reachability is then the
+  only access control.
+- Upgrading a release from chart 0.1.x turns authentication on; callers must
+  start sending a token.
+
+A token is not the only layer. The server speaks plain HTTP, and a ClusterIP
+Service is reachable from every pod in every namespace by default. So the
+chart's defaults are deliberately restrictive:
 
 | Default | Why |
 |---|---|
 | `networkPolicy.enabled: true` | Unusual for a chart, and the reason is the paragraph above. Default-deny ingress, scoped to this release's pod. |
-| `ingress.enabled: false` | An Ingress publishes arbitrary code execution to whatever can reach it. |
+| `ingress.enabled: false` | An Ingress publishes a code-execution API outside the cluster; it needs TLS, or the token crosses the network in the clear. |
 | `automountServiceAccountToken: false` | Nothing to steal from the pod if the sandbox boundary is crossed. The ServiceAccount is granted no RBAC either. |
 | `readOnlyRootFilesystem: true` | Shrinks what a filesystem read can reach to only what is deliberately mounted. |
 
@@ -63,13 +76,11 @@ Three things the NetworkPolicy does **not** do, worth knowing before you rely on
   the object is accepted by the API server and silently does nothing — no error, no
   warning. `helm test` includes a check that fails loudly in that case rather than
   letting it pass unnoticed.
-- **It authorises a pod, not a request.** Whatever you allowlist gets the entire
-  API, including blueprint writes.
+- **It authorises a pod, not a request.** What an allowlisted pod may call is
+  decided by the token it holds.
 - **`kubectl port-forward` bypasses it entirely.** It tunnels through the API
   server, so anyone with `pods/portforward` permission reaches the server whatever
   the policy says.
-
-Treat a release of this chart as non-production until inbound authentication ships.
 
 ## Blueprints
 
@@ -139,9 +150,8 @@ deploy time.
 **`file:` sources work only for blueprints supplied here.** A blueprint you
 register at runtime through `POST`/`PUT /v1/blueprints` is rejected with
 `forbidden_secret_source` if it declares an `env:` or `file:` secret. That is
-deliberate: the API has no authentication, so over the wire those sources would
-let any caller read the server's own environment and files — including the
-secret-store key. Blueprints in `blueprints:` are supplied locally by the
+deliberate: over the wire those sources would let an API caller read the
+server's own environment and files — including the secret-store key. Blueprints in `blueprints:` are supplied locally by the
 operator, so they are not subject to it. For runtime-registered blueprints, use
 a `store:` secret.
 
@@ -334,6 +344,27 @@ the template and ignores one that does not.
 `ReadWriteMany` is not an accepted value. It exists to let many pods on many
 nodes write at once, which is precisely what corrupts these stores, and offering
 it would imply the server supports a topology it does not.
+
+## Server configuration
+
+The chart renders the server's config file, `server.yaml`, into a ConfigMap
+from its values, and restarts the pod when it changes. `config:` passes any
+other server setting through:
+
+```yaml
+config:
+  max_execution_time: 30
+  network:
+    allow_ip: ["10.0.12.7"]
+```
+
+Keys the chart sets from its own values (`bind`, `port`, `max_execution_memory`,
+`shutdown_grace`, `vfs_ephemeral_dir`, `blueprint_seed_dir`,
+`secret_store.key_file`, `allow_unauthenticated`) are refused there, with a
+message naming the value to use. Entries under `config.api_tokens` are added
+after the chart's two, each with a `token_file` that a `secrets:` mount
+provides. `extraEnv` still overrides the file, because the server ranks a
+`SUBMILLI_*` variable above it.
 
 ## Values
 

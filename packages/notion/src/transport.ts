@@ -314,6 +314,10 @@ export function validationError(code: string, message: string): NotionError {
     return new NotionError(code, message, 0, "", "");
 }
 
+/**
+ * Extract and validate a Notion ID from an ID, a Notion URL, or a collection:// reference.
+ * A collection:// reference is rejected when a kind other than "data_source" is expected.
+ */
 export function idFromRef(ref: string, expected: string | null = null): string {
     const trimmed = ref.trim();
     if (trimmed.length === 0) throw validationError("invalid_reference", "Notion reference cannot be empty");

@@ -23,7 +23,8 @@ has the reader author, in runnable form. `submilli.toml` and
 Walks the chapter's journey end to end and asserts both outcomes — the total and
 the denial — plus controls proving the denial comes from the filter rather than
 from something else. It runs against a throwaway `SUBMILLI_HOME`, so it never
-touches your real package store.
+touches your real package store, and generates `SUBMILLI_SERVER_TOKEN`
+itself.
 
 By default the binaries come from `cargo run` against this checkout. Point it at
 installed ones with:
@@ -42,6 +43,7 @@ MCP, against the same blueprint. It binds `customerId` through the
 ```
 pip install -r requirements.txt
 export GOOGLE_API_KEY=...
+export SUBMILLI_SERVER_TOKEN=...   # the value the server was started with
 python agent.py
 ```
 

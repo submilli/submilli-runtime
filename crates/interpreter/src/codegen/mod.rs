@@ -3540,11 +3540,17 @@ function main(): string {
                 "lib",
                 r#"
                 import security from "submilli:security";
-                /** Allowed operation. */
+                /**
+                 * Allowed operation.
+                 * @capability test.allowed {}
+                 */
                 export function allowed(): void {
                     security.check("test.allowed", {});
                 }
-                /** Denied operation. */
+                /**
+                 * Denied operation.
+                 * @capability test.denied {}
+                 */
                 export function denied(): void {
                     security.check("test.denied", {});
                 }

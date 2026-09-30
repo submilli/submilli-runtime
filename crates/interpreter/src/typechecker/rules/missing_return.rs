@@ -1,4 +1,5 @@
 use super::control_flow::{ControlFlow, control_flow};
+use super::declarations::TypeDeclarations;
 use crate::{
     ClosureBody, Diagnostic, ExprId, Severity, Span, StmtId, Type, TypedAst, TypedExprKind,
     TypedStmtKind,
@@ -6,6 +7,7 @@ use crate::{
 
 pub(super) fn run(
     ta: &TypedAst,
+    declarations: &TypeDeclarations<'_>,
     diags: &mut Vec<Diagnostic>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     for f in &ta.functions {
@@ -13,17 +15,26 @@ pub(super) fn run(
             "function `{}` does not return a value on all paths",
             f.name.name
         );
-        check_returns(ta, f.body, &f.return_type, f.name.span, msg, diags)?;
-        walk_stmt(ta, f.body, diags)?;
+        check_returns(
+            ta,
+            declarations,
+            f.body,
+            &f.return_type,
+            f.name.span,
+            msg,
+            diags,
+        )?;
+        walk_stmt(ta, declarations, f.body, diags)?;
     }
     for &stmt_id in &ta.top_level_statements {
-        walk_stmt(ta, stmt_id, diags)?;
+        walk_stmt(ta, declarations, stmt_id, diags)?;
     }
     Ok(())
 }
 
 fn check_returns(
     ta: &TypedAst,
+    declarations: &TypeDeclarations<'_>,
     body: StmtId,
     return_type: &Type,
     span: Span,
@@ -33,7 +44,7 @@ fn check_returns(
     if matches!(return_type.peel(), Type::Void | Type::Error) {
         return Ok(());
     }
-    let _: () = if control_flow(ta, body)? == ControlFlow::Falls {
+    let _: () = if control_flow(ta, declarations, body)? == ControlFlow::Falls {
         diags.push(Diagnostic {
             severity: Severity::Error,
             span,
@@ -47,6 +58,7 @@ fn check_returns(
 
 fn walk_stmt(
     ta: &TypedAst,
+    declarations: &TypeDeclarations<'_>,
     stmt_id: StmtId,
     diags: &mut Vec<Diagnostic>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
@@ -56,22 +68,22 @@ fn walk_stmt(
         .kind
     {
         TypedStmtKind::Let { value, .. } | TypedStmtKind::Const { value, .. } => {
-            walk_expr(ta, *value, diags)?;
+            walk_expr(ta, declarations, *value, diags)?;
         }
         TypedStmtKind::If {
             condition,
             then_block,
             else_block,
         } => {
-            walk_expr(ta, *condition, diags)?;
-            walk_stmt(ta, *then_block, diags)?;
+            walk_expr(ta, declarations, *condition, diags)?;
+            walk_stmt(ta, declarations, *then_block, diags)?;
             if let Some(eb) = else_block {
-                walk_stmt(ta, *eb, diags)?;
+                walk_stmt(ta, declarations, *eb, diags)?;
             }
         }
         TypedStmtKind::While { condition, body } => {
-            walk_expr(ta, *condition, diags)?;
-            walk_stmt(ta, *body, diags)?;
+            walk_expr(ta, declarations, *condition, diags)?;
+            walk_stmt(ta, declarations, *body, diags)?;
         }
         TypedStmtKind::For {
             init,
@@ -80,23 +92,23 @@ fn walk_stmt(
             body,
         } => {
             if let Some(i) = init {
-                walk_stmt(ta, *i, diags)?;
+                walk_stmt(ta, declarations, *i, diags)?;
             }
             if let Some(c) = condition {
-                walk_expr(ta, *c, diags)?;
+                walk_expr(ta, declarations, *c, diags)?;
             }
             if let Some(u) = update {
-                walk_stmt(ta, *u, diags)?;
+                walk_stmt(ta, declarations, *u, diags)?;
             }
-            walk_stmt(ta, *body, diags)?;
+            walk_stmt(ta, declarations, *body, diags)?;
         }
         TypedStmtKind::ForOf { iter, body, .. } => {
-            walk_expr(ta, *iter, diags)?;
-            walk_stmt(ta, *body, diags)?;
+            walk_expr(ta, declarations, *iter, diags)?;
+            walk_stmt(ta, declarations, *body, diags)?;
         }
         TypedStmtKind::DoWhile { body, condition } => {
-            walk_stmt(ta, *body, diags)?;
-            walk_expr(ta, *condition, diags)?;
+            walk_stmt(ta, declarations, *body, diags)?;
+            walk_expr(ta, declarations, *condition, diags)?;
         }
         TypedStmtKind::Switch {
             discriminant,
@@ -104,34 +116,34 @@ fn walk_stmt(
             default,
             ..
         } => {
-            walk_expr(ta, *discriminant, diags)?;
+            walk_expr(ta, declarations, *discriminant, diags)?;
             for case in cases {
-                walk_stmt(ta, case.body, diags)?;
+                walk_stmt(ta, declarations, case.body, diags)?;
             }
             if let Some(d) = default {
-                walk_stmt(ta, *d, diags)?;
+                walk_stmt(ta, declarations, *d, diags)?;
             }
         }
         TypedStmtKind::Break | TypedStmtKind::Continue | TypedStmtKind::ReboxLocal { .. } => {}
         TypedStmtKind::Return(value) => {
             if let Some(v) = value {
-                walk_expr(ta, *v, diags)?;
+                walk_expr(ta, declarations, *v, diags)?;
             }
         }
-        TypedStmtKind::Expr(e) => walk_expr(ta, *e, diags)?,
+        TypedStmtKind::Expr(e) => walk_expr(ta, declarations, *e, diags)?,
         TypedStmtKind::Block(stmts) => {
             for &s in stmts {
-                walk_stmt(ta, s, diags)?;
+                walk_stmt(ta, declarations, s, diags)?;
             }
         }
         TypedStmtKind::AssignLocal { value, .. } | TypedStmtKind::AssignGlobal { value, .. } => {
-            walk_expr(ta, *value, diags)?;
+            walk_expr(ta, declarations, *value, diags)?;
         }
         TypedStmtKind::AssignField {
             receiver, value, ..
         } => {
-            walk_expr(ta, *receiver, diags)?;
-            walk_expr(ta, *value, diags)?;
+            walk_expr(ta, declarations, *receiver, diags)?;
+            walk_expr(ta, declarations, *value, diags)?;
         }
         TypedStmtKind::AssignIndex {
             receiver,
@@ -139,26 +151,26 @@ fn walk_stmt(
             value,
             ..
         } => {
-            walk_expr(ta, *receiver, diags)?;
-            walk_expr(ta, *index, diags)?;
-            walk_expr(ta, *value, diags)?;
+            walk_expr(ta, declarations, *receiver, diags)?;
+            walk_expr(ta, declarations, *index, diags)?;
+            walk_expr(ta, declarations, *value, diags)?;
         }
         TypedStmtKind::NarrowRegion { source, body, .. } => {
-            walk_expr(ta, *source, diags)?;
-            walk_stmt(ta, *body, diags)?;
+            walk_expr(ta, declarations, *source, diags)?;
+            walk_stmt(ta, declarations, *body, diags)?;
         }
-        TypedStmtKind::Throw { value } => walk_expr(ta, *value, diags)?,
+        TypedStmtKind::Throw { value } => walk_expr(ta, declarations, *value, diags)?,
         TypedStmtKind::Try {
             body,
             catches,
             finally,
         } => {
-            walk_stmt(ta, *body, diags)?;
+            walk_stmt(ta, declarations, *body, diags)?;
             for c in catches {
-                walk_stmt(ta, c.body, diags)?;
+                walk_stmt(ta, declarations, c.body, diags)?;
             }
             if let Some(f) = finally {
-                walk_stmt(ta, *f, diags)?;
+                walk_stmt(ta, declarations, *f, diags)?;
             }
         }
     };
@@ -167,6 +179,7 @@ fn walk_stmt(
 
 fn walk_expr(
     ta: &TypedAst,
+    declarations: &TypeDeclarations<'_>,
     expr_id: ExprId,
     diags: &mut Vec<Diagnostic>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
@@ -197,113 +210,115 @@ fn walk_expr(
                         "arrow function does not return a value on all paths".to_string(),
                     ),
                 };
-                check_returns(ta, *b, return_type, span, message, diags)?;
-                walk_stmt(ta, *b, diags)?;
+                check_returns(ta, declarations, *b, return_type, span, message, diags)?;
+                walk_stmt(ta, declarations, *b, diags)?;
             } else if let ClosureBody::Expr(inner) = body {
-                walk_expr(ta, *inner, diags)?;
+                walk_expr(ta, declarations, *inner, diags)?;
             }
         }
         TypedExprKind::Binary { lhs, rhs, .. } => {
-            walk_expr(ta, *lhs, diags)?;
-            walk_expr(ta, *rhs, diags)?;
+            walk_expr(ta, declarations, *lhs, diags)?;
+            walk_expr(ta, declarations, *rhs, diags)?;
         }
         TypedExprKind::EffectThen { effect, result } => {
-            walk_expr(ta, *effect, diags)?;
-            walk_expr(ta, *result, diags)?;
+            walk_expr(ta, declarations, *effect, diags)?;
+            walk_expr(ta, declarations, *result, diags)?;
         }
         TypedExprKind::Sequence { stmts, result } => {
             for &stmt in stmts {
-                walk_stmt(ta, stmt, diags)?;
+                walk_stmt(ta, declarations, stmt, diags)?;
             }
-            walk_expr(ta, *result, diags)?;
+            walk_expr(ta, declarations, *result, diags)?;
         }
-        TypedExprKind::Unary { operand, .. } => walk_expr(ta, *operand, diags)?,
+        TypedExprKind::Unary { operand, .. } => walk_expr(ta, declarations, *operand, diags)?,
         TypedExprKind::TypeofTag { value, .. } | TypedExprKind::InstanceOf { value, .. } => {
-            walk_expr(ta, *value, diags)?;
+            walk_expr(ta, declarations, *value, diags)?;
         }
         TypedExprKind::Call { args, .. }
         | TypedExprKind::McpCall { args, .. }
         | TypedExprKind::SuperCtorCall { args, .. }
         | TypedExprKind::SuperMethodCall { args, .. } => {
             for &a in args {
-                walk_expr(ta, a, diags)?;
+                walk_expr(ta, declarations, a, diags)?;
             }
         }
         TypedExprKind::CallClosure { callee, args } => {
-            walk_expr(ta, *callee, diags)?;
+            walk_expr(ta, declarations, *callee, diags)?;
             for &a in args {
-                walk_expr(ta, a, diags)?;
+                walk_expr(ta, declarations, a, diags)?;
             }
         }
         TypedExprKind::GenericCall { args, .. } => {
             for a in args {
-                walk_expr(ta, a.expr, diags)?;
+                walk_expr(ta, declarations, a.expr, diags)?;
             }
         }
         TypedExprKind::MethodCall { receiver, args, .. } => {
-            walk_expr(ta, *receiver, diags)?;
+            walk_expr(ta, declarations, *receiver, diags)?;
             for &a in args {
-                walk_expr(ta, a, diags)?;
+                walk_expr(ta, declarations, a, diags)?;
             }
         }
         TypedExprKind::GenericMethodCall { receiver, args, .. } => {
-            walk_expr(ta, *receiver, diags)?;
+            walk_expr(ta, declarations, *receiver, diags)?;
             for a in args {
-                walk_expr(ta, a.expr, diags)?;
+                walk_expr(ta, declarations, a.expr, diags)?;
             }
         }
         TypedExprKind::IntrinsicCall { args, .. } => {
             for &a in args {
-                walk_expr(ta, a, diags)?;
+                walk_expr(ta, declarations, a, diags)?;
             }
         }
         TypedExprKind::ObjectLiteral { members, .. } => {
             for member in members {
                 for expression in member.expressions() {
-                    walk_expr(ta, expression, diags)?;
+                    walk_expr(ta, declarations, expression, diags)?;
                 }
             }
         }
         TypedExprKind::ArrayLiteral { elements, .. } => {
             for e in elements {
-                walk_expr(ta, e.expr_id(), diags)?;
+                walk_expr(ta, declarations, e.expr_id(), diags)?;
             }
         }
         TypedExprKind::TupleLiteral { elements, .. } => {
             for &e in elements {
-                walk_expr(ta, e, diags)?;
+                walk_expr(ta, declarations, e, diags)?;
             }
         }
         TypedExprKind::FieldAccess { receiver, .. }
         | TypedExprKind::InterfacePropertyAccess { receiver, .. } => {
-            walk_expr(ta, *receiver, diags)?;
+            walk_expr(ta, declarations, *receiver, diags)?;
         }
         TypedExprKind::IndexAccess { receiver, index } => {
-            walk_expr(ta, *receiver, diags)?;
-            walk_expr(ta, *index, diags)?;
+            walk_expr(ta, declarations, *receiver, diags)?;
+            walk_expr(ta, declarations, *index, diags)?;
         }
         TypedExprKind::Narrowed { source, inner, .. } => {
-            walk_expr(ta, *source, diags)?;
-            walk_expr(ta, *inner, diags)?;
+            walk_expr(ta, declarations, *source, diags)?;
+            walk_expr(ta, declarations, *inner, diags)?;
         }
         TypedExprKind::Ternary { cond, then_, else_ } => {
-            walk_expr(ta, *cond, diags)?;
-            walk_expr(ta, *then_, diags)?;
-            walk_expr(ta, *else_, diags)?;
+            walk_expr(ta, declarations, *cond, diags)?;
+            walk_expr(ta, declarations, *then_, diags)?;
+            walk_expr(ta, declarations, *else_, diags)?;
         }
         TypedExprKind::NullishCoalesce { lhs, rhs } => {
-            walk_expr(ta, *lhs, diags)?;
-            walk_expr(ta, *rhs, diags)?;
+            walk_expr(ta, declarations, *lhs, diags)?;
+            walk_expr(ta, declarations, *rhs, diags)?;
         }
         TypedExprKind::OptionalChain { base, parts } => {
-            walk_expr(ta, *base, diags)?;
+            walk_expr(ta, declarations, *base, diags)?;
             for part in parts {
                 match part {
-                    crate::TypedChainPart::Index { idx, .. } => walk_expr(ta, *idx, diags)?,
+                    crate::TypedChainPart::Index { idx, .. } => {
+                        walk_expr(ta, declarations, *idx, diags)?;
+                    }
                     crate::TypedChainPart::Call { args, .. }
                     | crate::TypedChainPart::MethodCall { args, .. } => {
                         for a in args {
-                            walk_expr(ta, *a, diags)?;
+                            walk_expr(ta, declarations, *a, diags)?;
                         }
                     }
                     crate::TypedChainPart::Field { .. }
@@ -313,17 +328,19 @@ fn walk_expr(
             }
         }
         TypedExprKind::PostfixUnary { target, .. } => match target {
-            crate::PostfixTarget::Field { receiver, .. } => walk_expr(ta, *receiver, diags)?,
+            crate::PostfixTarget::Field { receiver, .. } => {
+                walk_expr(ta, declarations, *receiver, diags)?;
+            }
             crate::PostfixTarget::Index {
                 receiver, index, ..
             } => {
-                walk_expr(ta, *receiver, diags)?;
-                walk_expr(ta, *index, diags)?;
+                walk_expr(ta, declarations, *receiver, diags)?;
+                walk_expr(ta, declarations, *index, diags)?;
             }
             crate::PostfixTarget::Local { .. } | crate::PostfixTarget::Global { .. } => {}
         },
         TypedExprKind::NonNullAssert { value } | TypedExprKind::Cast { value, .. } => {
-            walk_expr(ta, *value, diags)?;
+            walk_expr(ta, declarations, *value, diags)?;
         }
         TypedExprKind::Number(_)
         | TypedExprKind::BigInt(_)
@@ -344,7 +361,7 @@ fn walk_expr(
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_util::run;
+    use super::super::test_util::{infer_script_with, run, run_package};
 
     #[test]
     fn void_no_return() {
@@ -472,5 +489,100 @@ mod tests {
         let diags =
             run("function host(): void { let f = (x: number) => { console.log(x.toString()); }; }");
         assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    const LEVELS: &str = "/** Levels. */\nexport enum Level { Low, High }\n";
+
+    const SWITCH_OVER_LEVEL: &str = "function name(level: Level): string {\n\
+           switch (level) {\n\
+             case Level.Low: return \"low\";\n\
+             case Level.High: return \"high\";\n\
+           }\n\
+         }\n";
+
+    fn package_messages(
+        modules: &[(&str, &str)],
+        dependencies: &[crate::PackageDeclaration],
+    ) -> Vec<String> {
+        let (_, _, diags) = run_package("@test/package", modules, dependencies);
+        diags.into_iter().map(|diag| diag.message).collect()
+    }
+
+    #[test]
+    fn a_package_function_missing_a_return_diagnoses() {
+        let messages = package_messages(
+            &[(
+                "lib",
+                "function f(b: boolean): number { if (b) { return 1; } }\n",
+            )],
+            &[],
+        );
+        assert_eq!(
+            messages,
+            ["function `f` does not return a value on all paths"]
+        );
+    }
+
+    #[test]
+    fn a_switch_over_an_enum_of_another_module_is_exhaustive() {
+        let lib = format!("import {{ Level }} from \"./levels\";\n{SWITCH_OVER_LEVEL}");
+        let messages = package_messages(
+            &[
+                ("lib", &lib),
+                ("levels", LEVELS),
+                // Same name, more variants: must not be the one looked up.
+                ("other", "export enum Level { Low, High, Extreme }\n"),
+            ],
+            &[],
+        );
+        assert!(messages.is_empty(), "{messages:?}");
+    }
+
+    #[test]
+    fn a_switch_missing_a_variant_of_another_modules_enum_diagnoses() {
+        let messages = package_messages(
+            &[
+                (
+                    "lib",
+                    "import { Level } from \"./levels\";\n\
+                     function name(level: Level): string {\n\
+                       switch (level) {\n\
+                         case Level.Low: return \"low\";\n\
+                       }\n\
+                     }\n",
+                ),
+                ("levels", LEVELS),
+            ],
+            &[],
+        );
+        assert_eq!(
+            messages,
+            ["function `name` does not return a value on all paths"]
+        );
+    }
+
+    #[test]
+    fn a_switch_over_an_enum_of_a_dependency_is_exhaustive() {
+        let (_, dependency, diags) = run_package("@test/levels", &[("lib", LEVELS)], &[]);
+        assert!(diags.is_empty(), "{diags:?}");
+        let lib = format!("import {{ Level }} from \"@test/levels\";\n{SWITCH_OVER_LEVEL}");
+        let messages = package_messages(&[("lib", &lib)], std::slice::from_ref(&dependency));
+        assert!(messages.is_empty(), "{messages:?}");
+    }
+
+    #[test]
+    fn a_script_switch_over_an_imported_enum_is_exhaustive() {
+        let (_, dependency, diags) = run_package("@test/levels", &[("lib", LEVELS)], &[]);
+        assert!(diags.is_empty(), "{diags:?}");
+        let source = format!(
+            "import {{ Level }} from \"@test/levels\";\n{SWITCH_OVER_LEVEL}function main(): void {{ }}\n"
+        );
+        let (ta, diags) = infer_script_with(&source, std::slice::from_ref(&dependency));
+        assert!(diags.is_empty(), "{diags:?}");
+        let resolved = crate::typechecker::rules::check_script(&ta, &[&dependency]).unwrap();
+        assert!(resolved.is_empty(), "{resolved:?}");
+        // Without the declaration the enum's variants are unknown.
+        let unresolved = crate::check(&ta).unwrap();
+        assert_eq!(unresolved.len(), 1, "{unresolved:?}");
     }
 }

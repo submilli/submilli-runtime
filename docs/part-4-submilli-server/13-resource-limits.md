@@ -28,7 +28,7 @@ call by call with filters. It can't raise an operator's limit.
 
 | Limit | Default | Set by | When a program passes it |
 | --- | --- | --- | --- |
-| Memory | 50 MB | `max_execution_memory`, MB | `Error`: `GC heap out of memory` |
+| Memory | 50 MB | `max_execution_memory`, MB | The run ends: `memory exhausted` |
 | Time | none | `max_execution_time`, seconds | The run ends: `timeout exceeded` |
 | Fuel | 10¹² | `max_execution_fuel` | The run ends: `fuel exhausted` |
 | Stack | 512 KB | `max_execution_stack`, KB, at most 16,384 | The run ends: `call stack exhausted` |
@@ -39,8 +39,10 @@ call by call with filters. It can't raise an operator's limit.
 | Session state, all sessions | 1,024 MB | `max_session_state_memory`, MB | `RangeError` |
 
 "The run ends" means the program can't catch it: the caller gets the error
-in place of a result. An `Error` or `RangeError` is an ordinary error the
-program can catch with `try` and act on. Sizes in this chapter are binary, as
+in place of a result. Memory, time and fuel each have a `kind` of their own
+(`memory_exhausted`, `timeout`, `fuel_exhausted`), which tells the limit from
+a fault in the program. A `RangeError` is an ordinary error the program can
+catch with `try` and act on. Sizes in this chapter are binary, as
 the settings count them: a KB is 1,024 bytes and an MB is 1,024 KB.
 
 A server setting has the three forms every server setting has. In the
@@ -54,15 +56,17 @@ the file.
 Each run is its own WebAssembly instance, and `max_execution_memory` caps the
 memory that instance can use.
 
-An allocation that would pass the limit throws an error the program can
-catch. Uncaught, it ends the run:
+An allocation that would pass the limit ends the run with `memory exhausted`
+(`kind: memory_exhausted`), and the program can't catch it. The server
+reports:
 
 ```text
-error: Error: GC heap out of memory: no capacity for allocation of 2000048 bytes
+memory exhausted: GC heap out of memory: no capacity for allocation of 2000048 bytes
 ```
 
-Catching it rarely helps unless the program lets go of what it holds: the
-memory is still in use.
+Memory the server holds for the program counts toward the same limit, and
+ends the run the same way: open file handles and compiled regular
+expressions.
 
 Files needn't pass through memory. `http.download` writes a response
 straight to a file, `fs.writer` writes one a line at a time, and `fs.lines`

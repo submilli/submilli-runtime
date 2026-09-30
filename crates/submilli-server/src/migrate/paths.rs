@@ -82,6 +82,7 @@ fn dependency_paths(directories: &ServerDirectories) -> Vec<(&'static str, &Path
         package_fallback_root,
         secret_store_dir,
         secret_store_key_file,
+        api_token_files,
         session_storage_root,
         session_store_dir,
         ephemeral_storage_root,
@@ -101,6 +102,11 @@ fn dependency_paths(directories: &ServerDirectories) -> Vec<(&'static str, &Path
     ]
     .into_iter()
     .filter_map(|(name, path)| path.as_deref().map(|path| (name, path)))
+    .chain(
+        api_token_files
+            .iter()
+            .map(|path| ("API token file", path.as_path())),
+    )
     .collect()
 }
 

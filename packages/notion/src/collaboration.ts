@@ -1,15 +1,13 @@
-import { check } from "submilli:security";
 import {
-    CreateCommentInput,
     FileReference,
     MeetingNotesOptions,
     MeetingNotesResult,
     NotionBlock,
     NotionComment,
-    PageOptions,
     PageResult,
 } from "./types";
 import {
+    PageContext,
     blockFrom,
     commentFrom,
     fieldJson,
@@ -36,6 +34,7 @@ export {
     PageOptions,
     PageResult,
 } from "./types";
+export { PageContext } from "./transport";
 
 interface ApiMeetingNotes {
     results: unknown[];
@@ -46,58 +45,76 @@ interface ApiDiscussionComment {
     discussion_id?: string;
 }
 
-/**
- * Create a Markdown comment on a page, block, or existing discussion.
- * @capability submilli/notion.createComment { pageId: string }
- */
-export function createComment(input: CreateCommentInput): NotionComment {
-    const targetId = idFromRef(input.target.id);
-    if (input.markdown.length === 0) throw validationError("invalid_comment", "comment markdown cannot be empty");
-    const fields: string[] = [fieldJson("markdown", input.markdown)];
-    if (input.target.type === "discussion") {
+/** A comment to create, as the package read it from the caller's input. */
+export interface CommentRequest {
+    /** Kind of object the comment is attached to. */
+    targetType: "page" | "block" | "discussion";
+    /** URL or ID of the target. */
+    targetRef: string;
+    /** Comment text. */
+    markdown: string;
+    /** Files to attach, or null for none. */
+    attachments: FileReference[] | null;
+}
+
+/** Validate a comment and build its request body. */
+export function createCommentBody(request: CommentRequest): string {
+    const targetType = request.targetType;
+    const markdown = request.markdown;
+    const attachments = request.attachments;
+    const targetId = idFromRef(request.targetRef);
+    if (markdown.length === 0) throw validationError("invalid_comment", "comment markdown cannot be empty");
+    const fields: string[] = [fieldJson("markdown", markdown)];
+    if (targetType === "discussion") {
         fields.push(fieldJson("discussion_id", targetId));
     } else {
-        const parentType = input.target.type === "page" ? "page_id" : "block_id";
+        const parentType = targetType === "page" ? "page_id" : "block_id";
         fields.push("\"parent\":{\"" + parentType + "\":" + JSON.stringify(targetId) + "}");
     }
-    if (input.attachments !== null) {
-        if (input.attachments.length > 3) throw validationError("invalid_attachments", "comments support at most three attachments");
-        fields.push(attachmentsJson(input.attachments));
+    if (attachments !== null) {
+        if (attachments.length > 3) throw validationError("invalid_attachments", "comments support at most three attachments");
+        fields.push(attachmentsJson(attachments));
     }
-    let pageId = targetId;
-    if (input.target.type === "block") {
-        pageId = resolvePageContext(targetId).pageId;
-    } else if (input.target.type === "discussion") {
-        const parentRef = input.target.discussionParentRef;
-        if (parentRef === null) {
-            throw validationError(
-                "missing_discussion_parent",
-                "discussion comments require target.discussionParentRef for page capability context",
-            );
-        }
-        const context = resolvePageContext(parentRef);
-        verifyDiscussionParent(context.blockId, targetId);
-        pageId = context.pageId;
-    }
-    check("submilli/notion.createComment", { pageId: pageId });
-    return commentFrom(notionPost("/comments", objectJson(fields)).json());
+    return objectJson(fields);
 }
 
 /**
- * List open comments for a page or block.
- * @capability submilli/notion.getComments { pageId: string }
+ * Resolve the page that contains a comment target.
+ * Block and discussion targets are resolved over the network, and a discussion must belong to its stated parent.
  */
-export function getComments(ref: string, options: PageOptions | null = null): PageResult<NotionComment> {
-    const context = resolvePageContext(ref);
-    check("submilli/notion.getComments", { pageId: context.pageId });
+export function commentPageId(
+    targetType: "page" | "block" | "discussion",
+    targetRef: string,
+    discussionParentRef: string | null,
+): string {
+    const targetId = idFromRef(targetRef);
+    if (targetType === "block") return resolvePageContext(targetId).pageId;
+    if (targetType !== "discussion") return targetId;
+    if (discussionParentRef === null) {
+        throw validationError(
+            "missing_discussion_parent",
+            "discussion comments require target.discussionParentRef for page capability context",
+        );
+    }
+    const context = resolvePageContext(discussionParentRef);
+    verifyDiscussionParent(context.blockId, targetId);
+    return context.pageId;
+}
+
+/** Send a create-comment request built by `createCommentBody`. */
+export function createComment(body: string): NotionComment {
+    return commentFrom(notionPost("/comments", body).json());
+}
+
+/** List open comments for the page or block a context was resolved from. */
+export function getComments(
+    context: PageContext,
+    requestedSize: number | null,
+    startCursor: string | null,
+): PageResult<NotionComment> {
     const query = new Map<string, string>();
     query.set("block_id", context.blockId);
-    let requestedSize: number | null = null;
-    if (options !== null) {
-        const actual = options as PageOptions;
-        requestedSize = actual.pageSize;
-        putQuery(query, "start_cursor", actual.startCursor);
-    }
+    putQuery(query, "start_cursor", startCursor);
     query.set("page_size", pageSize(requestedSize).toString());
     const page = listFrom(notionGet("/comments", query));
     const results: NotionComment[] = [];
@@ -110,12 +127,8 @@ export function getComments(ref: string, options: PageOptions | null = null): Pa
     };
 }
 
-/**
- * Query AI meeting-note blocks visible to the integration user.
- * @capability submilli/notion.queryMeetingNotes {}
- */
+/** Query AI meeting-note blocks visible to the integration user. */
 export function queryMeetingNotes(options: MeetingNotesOptions | null = null): MeetingNotesResult {
-    check("submilli/notion.queryMeetingNotes", {});
     const fields: string[] = [];
     if (options !== null) {
         const actual = options as MeetingNotesOptions;

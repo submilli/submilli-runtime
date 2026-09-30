@@ -82,7 +82,136 @@ policy for generated code lives in package checks and stdlib gates.
 When authorization depends on a fact the caller did not pass, resolve it in
 package code and check the resolved value. A cancel that takes only an order id
 must fetch the order and check its `customerId`; do not trust a caller-supplied
-owner. Internal helpers that are not exported need no check of their own.
+owner.
+
+Call `check` directly in the body of a function the package root
+(`src/lib.ts`) exports: not in a helper, a function of another module that the
+root does not re-export, or a nested function. Helpers take values the
+exported function already checked.
+
+### Read caller values once
+
+An object, array or `Map` argument belongs to the caller. `main` can pass a
+class instance whose getter returns a different value on each read, so a
+function that reads `input.channelId` for `check` and again for the request
+can check one value and send another.
+
+This matters only for values that reach a `check`: those in its context,
+directly or through a `const` or a helper that computes it, and those that
+decide whether or which `check` runs. Every other value may be read and passed
+on freely, because the caller could pass any value in its place anyway. When
+the compiler cannot follow what reaches a `check`, it examines every caller
+value in that function, and each warning's note names the reason: restructure
+as the note suggests, or read everything once. Typical reasons: the check
+depends on `this` or a module `let`; the function writes `this`, a module
+variable or the caller's object; a container that feeds the check is handed
+to a helper together with a caller object, captured by a nested function, or
+aliased; the function calls itself. For a value that does reach a `check`:
+
+- Read each checked property once into a `const`, and use that `const` for the
+  check and the request. For a nested object, read the parent once, then each
+  of its properties once.
+- Do not pass on the object that holds it, to a helper or as the `check`
+  context. Pass the `const`s, and pass the unchecked parts of the input
+  separately. Comparing, one `for...of`, and one read of an element are fine.
+- A checked array: copy it with one `for...of` into an array the package owns.
+
+```ts
+import { check } from "submilli:security";
+
+/** A message for one channel. */
+export interface MessageInput {
+    /** Destination channel. */
+    channelId: string;
+    /** Message body. */
+    text: string;
+}
+
+/**
+ * Post one message. Flat input: destructure once, pass the consts on.
+ * @capability acme.com/messages.post { channelId: $input.channelId }
+ */
+export function postMessage(input: MessageInput): void {
+    const { channelId, text } = input;
+    check("acme.com/messages.post", { channelId: channelId });
+    send(channelId, text);
+}
+
+/**
+ * Post one message to several channels. Array of strings: one `for...of` into
+ * the package's own array.
+ * @capability acme.com/messages.broadcast { channelIds }
+ */
+export function broadcast(channelIds: string[], text: string): void {
+    const targets: string[] = [];
+    for (const channelId of channelIds) {
+        targets.push(channelId);
+    }
+    check("acme.com/messages.broadcast", { channelIds: targets });
+    for (const channelId of targets) {
+        send(channelId, text);
+    }
+}
+
+/**
+ * Post a message with custom fields. `fields` never reaches the check, so it
+ * needs no copy.
+ * @capability acme.com/messages.post { channelId }
+ */
+export function postFields(channelId: string, fields: Map<string, string>): void {
+    check("acme.com/messages.post", { channelId: channelId });
+    for (const [name, value] of fields) {
+        send(channelId, name + ": " + value);
+    }
+}
+
+function send(channelId: string, text: string): void {
+    // The request, built from checked values only.
+}
+```
+
+`build check` reports violations as warnings and still succeeds, so read its
+output. The common ones:
+
+| Warning | Fix |
+| --- | --- |
+| `` `check()` is called in `send`, which is not part of the package's public API `` | Move the `check` into each exported function that reaches `send` |
+| `` `input.channelId` is read more than once in `postMessage`, which calls `check()` `` | Read it once into a `const` and use the `const` in the check and the request |
+| `` caller-supplied `input` is passed to `request` in `cancelOrder`, which calls `check()` `` | Pass the consts read from it, and the unchecked parts of `input` separately |
+
+The last form names what was done with the value: passed to a function or to
+`check()` as its context, called, had a method called on it, used as an
+operand, stored, spread, returned, thrown, written to, or captured by a nested
+function. The fix is the same for each.
+
+Mistakes the warnings are about, each a way to check one value and use
+another. The fix for each is a single read: into a `const`, or for an array,
+one `for...of` into the package's own array:
+
+```ts
+// Read for the check, read again for the request.
+check("acme.com/messages.post", { channelId: input.channelId });
+send(input.channelId, input.text);
+
+// A condition picks which check runs, and a second read picks the operation.
+if (input.kind === "reply") check("acme.com/messages.reply", { threadId });
+else check("acme.com/messages.post", { channelId });
+if (input.kind === "reply") reply(threadId, text); else post(channelId, text);
+
+// The decision goes through a flag, and the request reads the value again.
+let notify = false;
+if (input.mentions !== null) notify = true;
+if (notify) check("acme.com/mentions.notify", {});
+sendMentions(input.mentions);  // null on the first read, a list now: unchecked
+
+// The object holding a checked field is handed to a helper that reads it.
+check("acme.com/messages.post", { channelId: input.channelId });
+request(input);
+
+// A checked array is iterated once to check and again to send.
+for (const id of input.channelIds) check("acme.com/messages.post", { channelId: id });
+for (const id of input.channelIds) send(id, input.text);
+```
 
 ## A real service
 
@@ -142,8 +271,10 @@ export interface CancelInput {
  * @capability acme.com/orders.list { customerId }
  */
 export function listOrders(customerId: string, page: PageOptions | null = null): Page<Order> {
+    const limit = page === null ? null : page.limit;
+    const cursor = page === null ? null : page.cursor;
+    const query = pageQuery(limit, cursor);
     check("acme.com/orders.list", { customerId: customerId });
-    const query = buildPageQuery(page);
     const path = "/customers/" + encodeComponent(customerId) + "/orders" + query;
     const response = request("GET", path, null);
     return JSON.parse(response.body) as Page<Order>;
@@ -155,6 +286,7 @@ export function listOrders(customerId: string, page: PageOptions | null = null):
  * @capability acme.com/orders.cancel { customerId: string, orderId: $orderId, totalCents: number }
  */
 export function cancelOrder(orderId: string, input: CancelInput | null = null): Order {
+    const reason = input === null ? null : input.reason;
     const order = fetchOrder(orderId);
     if (order === null) {
         throw new Error("order not found: " + orderId);
@@ -164,24 +296,23 @@ export function cancelOrder(orderId: string, input: CancelInput | null = null): 
         orderId: orderId,
         totalCents: order.totalCents,
     });
-    const body: CancelInput = input === null ? {} : input;
+    const body: CancelInput = reason === null ? {} : { reason: reason };
     const response = request("POST", "/orders/" + encodeComponent(orderId) + "/cancel", body);
     return JSON.parse(response.body) as Order;
 }
 
 /** Build the `?limit=&cursor=` suffix; exported so tests cover it without a token. */
 export function buildPageQuery(page: PageOptions | null): string {
-    let limit = 50;
-    let cursor: string | null = null;
-    if (page !== null) {
-        const requested = page.limit;
-        if (requested !== null) {
-            limit = requested;
-        }
-        const requestedCursor = page.cursor;
-        if (requestedCursor !== null) {
-            cursor = requestedCursor;
-        }
+    if (page === null) {
+        return pageQuery(null, null);
+    }
+    return pageQuery(page.limit, page.cursor);
+}
+
+function pageQuery(requested: number | null, cursor: string | null): string {
+    const limit = requested === null ? 50 : requested;
+    if (!(limit >= 1 && limit <= 100)) {
+        throw new RangeError("limit must be between 1 and 100, got " + limit.toString());
     }
     let query = "?limit=" + limit.toString();
     if (cursor !== null) {
@@ -190,8 +321,8 @@ export function buildPageQuery(page: PageOptions | null): string {
     return query;
 }
 
-// Internal: no check here — this is not an operation the agent can call, and
-// the operations that use it run their own check with the resolved owner.
+// Internal: no check here. `check` belongs in the exported operation, which
+// checks the owner this lookup resolved before it writes.
 function fetchOrder(orderId: string): Order | null {
     const response = request("GET", "/orders/" + encodeComponent(orderId), null);
     if (response.status === 404) {
@@ -237,7 +368,9 @@ Runtime rules that shape package code:
   interface. Model absence as `T | null`; there is no `undefined`. Optional
   input fields (`reason?: string`) read as `null` when absent and are omitted
   from the request when unset, so an update touches only fields the caller set.
-- Use `submilli:url` for `encodeComponent`, `encodeQuery`, and `parse`.
+- Use `submilli:url` for `encodeComponent`, `encodeQuery`, and `parse`. Take a
+  capability's `host` field from `parse(url).host`: it is lower-case with no
+  trailing dot, the spelling `http.*` rules see.
 - No npm imports, `async`/`await`, `any`, `process.env`, `fetch`, or `Date`
   (use `Temporal`). Explicit return types on every function.
 - Pagination: return a page type with items and a cursor or token, accept a
@@ -294,10 +427,12 @@ normally:
 
 ```typescript
 import { label, expectException } from "submilli:test";
-import { pageQuery } from "@acme/orders";
+import { buildPageQuery } from "@acme/orders";
 function main(): void {
+  label("defaults to a page of 50");
+  assert(buildPageQuery(null) === "?limit=50", "default page size");
   label("rejects a limit above 100");
-  const error = expectException(() => { pageQuery(101, null); }, "RangeError");
+  const error = expectException(() => { buildPageQuery({ limit: 101 }); }, "RangeError");
   assert(error.message.includes("limit"), "message names the argument");
 }
 ```

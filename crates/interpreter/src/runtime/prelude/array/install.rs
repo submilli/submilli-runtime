@@ -120,7 +120,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                let elements = super::read_array(caller, &params[0], "Array#join")?;
+                let elements = super::read_kept_array(caller, &params[0], "Array#join")?;
                 let sep = super::read_string_units(caller, &params[1])?;
                 let out = super::join(caller, elements, sep).await?;
                 let st = write_submilli_string_struct_units(caller, &out)?;
@@ -323,7 +323,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                let elements = super::read_array(caller, &params[0], "Array#sort")?;
+                let elements = super::read_kept_array(caller, &params[0], "Array#sort")?;
                 let cmp = if matches!(params[1], Val::AnyRef(None)) {
                     None
                 } else {
@@ -348,7 +348,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, _results| {
             Box::pin(async move {
-                let elements = super::read_array(caller, &params[0], "Array#forEach receiver")?;
+                let elements =
+                    super::read_kept_array(caller, &params[0], "Array#forEach receiver")?;
                 let f = closure::read_callback(caller, &params[1], "Array#forEach callback")?;
                 super::for_each(caller, params[0], elements, &f).await
             })
@@ -362,7 +363,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                let elements = super::read_array(caller, &params[0], "Array#map")?;
+                let elements = super::read_kept_array(caller, &params[0], "Array#map")?;
                 let f = closure::read_callback(caller, &params[1], "Array#map callback")?;
                 let out = super::map(caller, params[0], elements, &f).await?;
                 results[0] = super::build_array(caller, &out)?;
@@ -378,7 +379,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                let elements = super::read_array(caller, &params[0], "Array#filter")?;
+                let elements = super::read_kept_array(caller, &params[0], "Array#filter")?;
                 let f = closure::read_callback(caller, &params[1], "Array#filter predicate")?;
                 let out = super::filter(caller, params[0], elements, &f).await?;
                 results[0] = super::build_array(caller, &out)?;
@@ -397,7 +398,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                let elements = super::read_array(caller, &params[0], "Array#reduce")?;
+                let elements = super::read_kept_array(caller, &params[0], "Array#reduce")?;
                 let f = closure::read_callback(caller, &params[1], "Array#reduce callback")?;
                 results[0] =
                     super::reduce(caller, params[0], elements, &f, params[2], false).await?;
@@ -416,7 +417,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                let elements = super::read_array(caller, &params[0], "Array#reduceRight")?;
+                let elements = super::read_kept_array(caller, &params[0], "Array#reduceRight")?;
                 let f = closure::read_callback(caller, &params[1], "Array#reduceRight callback")?;
                 results[0] =
                     super::reduce(caller, params[0], elements, &f, params[2], true).await?;
@@ -433,7 +434,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             true,
             move |caller, params, results| {
                 Box::pin(async move {
-                    let elements = super::read_array(caller, &params[0], "Array#find")?;
+                    let elements = super::read_kept_array(caller, &params[0], "Array#find")?;
                     let pred = closure::read_callback(caller, &params[1], "Array#find predicate")?;
                     results[0] =
                         match super::find_match(caller, params[0], &elements, &pred, reverse)
@@ -456,7 +457,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             true,
             move |caller, params, results| {
                 Box::pin(async move {
-                    let elements = super::read_array(caller, &params[0], "Array#findIndex")?;
+                    let elements = super::read_kept_array(caller, &params[0], "Array#findIndex")?;
                     let pred =
                         closure::read_callback(caller, &params[1], "Array#findIndex predicate")?;
                     let idx =
@@ -476,7 +477,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                let elements = super::read_array(caller, &params[0], "Array#some")?;
+                let elements = super::read_kept_array(caller, &params[0], "Array#some")?;
                 let pred = closure::read_callback(caller, &params[1], "Array#some predicate")?;
                 let r = super::some(caller, params[0], elements, &pred).await?;
                 results[0] = Val::I32(i32::from(r));
@@ -492,7 +493,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                let elements = super::read_array(caller, &params[0], "Array#every")?;
+                let elements = super::read_kept_array(caller, &params[0], "Array#every")?;
                 let pred = closure::read_callback(caller, &params[1], "Array#every predicate")?;
                 let r = super::every(caller, params[0], elements, &pred).await?;
                 results[0] = Val::I32(i32::from(r));
@@ -523,7 +524,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                let elements = super::read_array(caller, &params[0], "Array#flatMap")?;
+                let elements = super::read_kept_array(caller, &params[0], "Array#flatMap")?;
                 let f = closure::read_callback(caller, &params[1], "Array#flatMap callback")?;
                 let out = super::flat_map(caller, params[0], elements, &f).await?;
                 results[0] = super::build_array(caller, &out)?;
@@ -554,7 +555,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         |caller, params, results| {
             Box::pin(async move {
-                let elements = super::read_array(caller, &params[0], "Array#toSorted")?;
+                let elements = super::read_kept_array(caller, &params[0], "Array#toSorted")?;
                 let cmp = if matches!(params[1], Val::AnyRef(None)) {
                     None
                 } else {

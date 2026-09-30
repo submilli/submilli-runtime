@@ -1,17 +1,14 @@
 import { post } from "submilli:http";
 import { readBytes, stat } from "submilli:fs";
-import { check } from "submilli:security";
 import {
     FileUpload,
     FileUploadOptions,
-    PageOptions,
     PageResult,
 } from "./types";
 import {
     authHeaders,
     fieldJson,
     fileUploadFrom,
-    idFromRef,
     listFrom,
     notionGet,
     notionPost,
@@ -37,12 +34,8 @@ export {
     PageResult,
 } from "./types";
 
-/**
- * Upload a VFS file, automatically selecting Notion single- or multipart mode.
- * @capability submilli/notion.uploadFile { path: string }
- */
+/** Upload a VFS file, automatically selecting Notion single- or multipart mode. */
 export function uploadFile(sourcePath: string, options: FileUploadOptions): FileUpload {
-    check("submilli/notion.uploadFile", { path: sourcePath });
     validateUploadOptions(options);
     const source = stat(sourcePath);
     if (source === null || source.kind !== "file") {
@@ -52,29 +45,15 @@ export function uploadFile(sourcePath: string, options: FileUploadOptions): File
     return uploadMultiPart(sourcePath, source.size, options);
 }
 
-/**
- * Retrieve a file upload owned by this connection.
- * @capability submilli/notion.getFileUpload { uploadId: string }
- */
-export function getFileUpload(ref: string): FileUpload {
-    const uploadId = idFromRef(ref);
-    check("submilli/notion.getFileUpload", { uploadId: uploadId });
+/** Retrieve one of this connection's file uploads by its resolved ID. */
+export function getFileUpload(uploadId: string): FileUpload {
     return fileUploadFrom(notionGet("/file_uploads/" + pathId(uploadId)).json());
 }
 
-/**
- * List file uploads owned by this connection.
- * @capability submilli/notion.listFileUploads {}
- */
-export function listFileUploads(options: PageOptions | null = null): PageResult<FileUpload> {
-    check("submilli/notion.listFileUploads", {});
+/** List file uploads owned by this connection. */
+export function listFileUploads(requestedSize: number | null, startCursor: string | null): PageResult<FileUpload> {
     const query = new Map<string, string>();
-    let requestedSize: number | null = null;
-    if (options !== null) {
-        const actual = options as PageOptions;
-        requestedSize = actual.pageSize;
-        putQuery(query, "start_cursor", actual.startCursor);
-    }
+    putQuery(query, "start_cursor", startCursor);
     query.set("page_size", pageSize(requestedSize).toString());
     const page = listFrom(notionGet("/file_uploads", query));
     const results: FileUpload[] = [];

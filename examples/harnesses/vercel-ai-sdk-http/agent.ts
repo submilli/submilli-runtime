@@ -22,6 +22,7 @@ export async function answer(
 ): Promise<string> {
   const submilli = await openSession({
     server: SUBMILLI_SERVER,
+    token: serverToken(),
     blueprint: "research",
     variables: { userId },
   });
@@ -38,6 +39,13 @@ export async function answer(
   } finally {
     await submilli.close();
   }
+}
+
+/** The API token this application was given for the server. */
+function serverToken(): string {
+  const token = process.env.SUBMILLI_SERVER_TOKEN;
+  if (!token) throw new Error("SUBMILLI_SERVER_TOKEN is not set: export the token the server was started with");
+  return token;
 }
 
 if (import.meta.filename === process.argv[1]) {

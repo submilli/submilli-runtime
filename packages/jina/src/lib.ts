@@ -93,8 +93,25 @@ export interface SearchResult {
  * @capability jina.ai/read { host: string }
  */
 export function read(url: string, options: ReaderOptions | null = null): string {
+    const engine = options === null ? null : options.engine;
+    const targetSelector = options === null ? null : options.targetSelector;
+    const removeSelector = options === null ? null : options.removeSelector;
+    const waitForSelector = options === null ? null : options.waitForSelector;
+    const withLinksSummary = options === null ? null : options.withLinksSummary;
+    const withImagesSummary = options === null ? null : options.withImagesSummary;
+    const withGeneratedAlt = options === null ? null : options.withGeneratedAlt;
+    const noCache = options === null ? null : options.noCache;
+    const timeout = options === null ? null : options.timeout;
+    const locale = options === null ? null : options.locale;
+    const tokenBudget = options === null ? null : options.tokenBudget;
+    const headers = readerHeadersFrom({
+        engine: engine, targetSelector: targetSelector, removeSelector: removeSelector,
+        waitForSelector: waitForSelector, withLinksSummary: withLinksSummary,
+        withImagesSummary: withImagesSummary, withGeneratedAlt: withGeneratedAlt, noCache: noCache,
+        timeout: timeout, locale: locale, tokenBudget: tokenBudget,
+    });
     check("jina.ai/read", { host: parse(url).host });
-    return readerResponse(url, options, false).body;
+    return readerResponse(url, headers, false).body;
 }
 
 /**
@@ -104,8 +121,25 @@ export function read(url: string, options: ReaderOptions | null = null): string 
  * @capability jina.ai/read { host: string }
  */
 export function readJson(url: string, options: ReaderOptions | null = null): ReaderResult {
+    const engine = options === null ? null : options.engine;
+    const targetSelector = options === null ? null : options.targetSelector;
+    const removeSelector = options === null ? null : options.removeSelector;
+    const waitForSelector = options === null ? null : options.waitForSelector;
+    const withLinksSummary = options === null ? null : options.withLinksSummary;
+    const withImagesSummary = options === null ? null : options.withImagesSummary;
+    const withGeneratedAlt = options === null ? null : options.withGeneratedAlt;
+    const noCache = options === null ? null : options.noCache;
+    const timeout = options === null ? null : options.timeout;
+    const locale = options === null ? null : options.locale;
+    const tokenBudget = options === null ? null : options.tokenBudget;
+    const headers = readerHeadersFrom({
+        engine: engine, targetSelector: targetSelector, removeSelector: removeSelector,
+        waitForSelector: waitForSelector, withLinksSummary: withLinksSummary,
+        withImagesSummary: withImagesSummary, withGeneratedAlt: withGeneratedAlt, noCache: noCache,
+        timeout: timeout, locale: locale, tokenBudget: tokenBudget,
+    });
     check("jina.ai/read", { host: parse(url).host });
-    const envelope = readerResponse(url, options, true).json() as ReaderEnvelope;
+    const envelope = readerResponse(url, headers, true).json() as ReaderEnvelope;
     return readerResultFrom(envelope);
 }
 
@@ -114,8 +148,18 @@ export function readJson(url: string, options: ReaderOptions | null = null): Rea
  * @capability jina.ai/search {}
  */
 export function search(query: string, options: SearchOptions | null = null): string {
+    const site = options === null ? null : options.site;
+    const engine = options === null ? null : options.engine;
+    const withLinksSummary = options === null ? null : options.withLinksSummary;
+    const noCache = options === null ? null : options.noCache;
+    const timeout = options === null ? null : options.timeout;
+    const locale = options === null ? null : options.locale;
+    const headers = searchHeadersFrom({
+        site: site, engine: engine, withLinksSummary: withLinksSummary,
+        noCache: noCache, timeout: timeout, locale: locale,
+    });
     check("jina.ai/search", {});
-    return searchResponse(query, options, false).body;
+    return searchResponse(query, headers, false).body;
 }
 
 /**
@@ -123,8 +167,18 @@ export function search(query: string, options: SearchOptions | null = null): str
  * @capability jina.ai/search {}
  */
 export function searchJson(query: string, options: SearchOptions | null = null): SearchResult[] {
+    const site = options === null ? null : options.site;
+    const engine = options === null ? null : options.engine;
+    const withLinksSummary = options === null ? null : options.withLinksSummary;
+    const noCache = options === null ? null : options.noCache;
+    const timeout = options === null ? null : options.timeout;
+    const locale = options === null ? null : options.locale;
+    const headers = searchHeadersFrom({
+        site: site, engine: engine, withLinksSummary: withLinksSummary,
+        noCache: noCache, timeout: timeout, locale: locale,
+    });
     check("jina.ai/search", {});
-    const envelope = searchResponse(query, options, true).json() as SearchEnvelope;
+    const envelope = searchResponse(query, headers, true).json() as SearchEnvelope;
     return searchResultsFrom(envelope);
 }
 
@@ -140,8 +194,24 @@ export function downloadRead(
     path: string,
     options: ReaderOptions | null = null,
 ): DownloadResult {
+    const engine = options === null ? null : options.engine;
+    const targetSelector = options === null ? null : options.targetSelector;
+    const removeSelector = options === null ? null : options.removeSelector;
+    const waitForSelector = options === null ? null : options.waitForSelector;
+    const withLinksSummary = options === null ? null : options.withLinksSummary;
+    const withImagesSummary = options === null ? null : options.withImagesSummary;
+    const withGeneratedAlt = options === null ? null : options.withGeneratedAlt;
+    const noCache = options === null ? null : options.noCache;
+    const timeout = options === null ? null : options.timeout;
+    const locale = options === null ? null : options.locale;
+    const tokenBudget = options === null ? null : options.tokenBudget;
+    const headers = readerHeadersFrom({
+        engine: engine, targetSelector: targetSelector, removeSelector: removeSelector,
+        waitForSelector: waitForSelector, withLinksSummary: withLinksSummary,
+        withImagesSummary: withImagesSummary, withGeneratedAlt: withGeneratedAlt, noCache: noCache,
+        timeout: timeout, locale: locale, tokenBudget: tokenBudget,
+    });
     check("jina.ai/read", { host: parse(url).host });
-    const headers = readerHeaders(options);
     authorize(headers);
     const downloadOptions: DownloadOptions = { headers: headers };
     // Keep target path segments, queries, and fragments out of the Reader URL's
@@ -160,8 +230,17 @@ export function downloadSearch(
     path: string,
     options: SearchOptions | null = null,
 ): DownloadResult {
+    const site = options === null ? null : options.site;
+    const engine = options === null ? null : options.engine;
+    const withLinksSummary = options === null ? null : options.withLinksSummary;
+    const noCache = options === null ? null : options.noCache;
+    const timeout = options === null ? null : options.timeout;
+    const locale = options === null ? null : options.locale;
+    const headers = searchHeadersFrom({
+        site: site, engine: engine, withLinksSummary: withLinksSummary,
+        noCache: noCache, timeout: timeout, locale: locale,
+    });
     check("jina.ai/search", {});
-    const headers = searchHeaders(options);
     authorize(headers);
     const downloadOptions: DownloadOptions = { headers: headers };
     return download(SEARCH_ENDPOINT + "?q=" + encodeURIComponent(query), path, downloadOptions);
@@ -172,59 +251,43 @@ export function downloadSearch(
  * Authorization is added later, in the request path, from the JINA_API_KEY
  * secret. Pure (no secrets, no network), so it is safe to unit-test directly.
  *
- * Every option is read into a local before any `put` call: a function call
- * invalidates active narrowing, so reading `options.*` after one would force a
- * re-narrow on each access.
+ * Each option is read from `options` exactly once, into a local, and the
+ * headers are encoded from those locals by `readerHeadersFrom`.
  */
 export function readerHeaders(options: ReaderOptions | null = null): Map<string, string> {
-    const headers = new Map<string, string>();
-    if (options !== null) {
-        const engine = options.engine;
-        const targetSelector = options.targetSelector;
-        const removeSelector = options.removeSelector;
-        const waitForSelector = options.waitForSelector;
-        const withLinksSummary = options.withLinksSummary;
-        const withImagesSummary = options.withImagesSummary;
-        const withGeneratedAlt = options.withGeneratedAlt;
-        const noCache = options.noCache;
-        const timeout = options.timeout;
-        const locale = options.locale;
-        const tokenBudget = options.tokenBudget;
-
-        put(headers, "x-engine", engine);
-        put(headers, "x-target-selector", targetSelector);
-        put(headers, "x-remove-selector", removeSelector);
-        put(headers, "x-wait-for-selector", waitForSelector);
-        put(headers, "x-with-links-summary", flag(withLinksSummary));
-        put(headers, "x-with-images-summary", flag(withImagesSummary));
-        put(headers, "x-with-generated-alt", flag(withGeneratedAlt));
-        put(headers, "x-no-cache", flag(noCache));
-        put(headers, "x-timeout", numStr(timeout));
-        put(headers, "x-locale", locale);
-        put(headers, "x-token-budget", numStr(tokenBudget));
-    }
-    return headers;
+    if (options === null) return new Map<string, string>();
+    const engine = options.engine;
+    const targetSelector = options.targetSelector;
+    const removeSelector = options.removeSelector;
+    const waitForSelector = options.waitForSelector;
+    const withLinksSummary = options.withLinksSummary;
+    const withImagesSummary = options.withImagesSummary;
+    const withGeneratedAlt = options.withGeneratedAlt;
+    const noCache = options.noCache;
+    const timeout = options.timeout;
+    const locale = options.locale;
+    const tokenBudget = options.tokenBudget;
+    return readerHeadersFrom({
+        engine: engine, targetSelector: targetSelector, removeSelector: removeSelector,
+        waitForSelector: waitForSelector, withLinksSummary: withLinksSummary,
+        withImagesSummary: withImagesSummary, withGeneratedAlt: withGeneratedAlt, noCache: noCache,
+        timeout: timeout, locale: locale, tokenBudget: tokenBudget,
+    });
 }
 
 /** Encode search options as request headers. Pure, as with `readerHeaders`. */
 export function searchHeaders(options: SearchOptions | null = null): Map<string, string> {
-    const headers = new Map<string, string>();
-    if (options !== null) {
-        const site = options.site;
-        const engine = options.engine;
-        const withLinksSummary = options.withLinksSummary;
-        const noCache = options.noCache;
-        const timeout = options.timeout;
-        const locale = options.locale;
-
-        put(headers, "x-site", site);
-        put(headers, "x-engine", engine);
-        put(headers, "x-with-links-summary", flag(withLinksSummary));
-        put(headers, "x-no-cache", flag(noCache));
-        put(headers, "x-timeout", numStr(timeout));
-        put(headers, "x-locale", locale);
-    }
-    return headers;
+    if (options === null) return new Map<string, string>();
+    const site = options.site;
+    const engine = options.engine;
+    const withLinksSummary = options.withLinksSummary;
+    const noCache = options.noCache;
+    const timeout = options.timeout;
+    const locale = options.locale;
+    return searchHeadersFrom({
+        site: site, engine: engine, withLinksSummary: withLinksSummary,
+        noCache: noCache, timeout: timeout, locale: locale,
+    });
 }
 
 interface ReaderEnvelope {
@@ -257,15 +320,65 @@ interface Usage {
     tokens: number;
 }
 
-function readerResponse(url: string, options: ReaderOptions | null, json: boolean): Response {
-    const headers = prepare(readerHeaders(options), json);
+interface ReaderFields {
+    engine: string | null;
+    targetSelector: string | null;
+    removeSelector: string | null;
+    waitForSelector: string | null;
+    withLinksSummary: boolean | null;
+    withImagesSummary: boolean | null;
+    withGeneratedAlt: boolean | null;
+    noCache: boolean | null;
+    timeout: number | null;
+    locale: string | null;
+    tokenBudget: number | null;
+}
+
+interface SearchFields {
+    site: string | null;
+    engine: string | null;
+    withLinksSummary: boolean | null;
+    noCache: boolean | null;
+    timeout: number | null;
+    locale: string | null;
+}
+
+function readerHeadersFrom(fields: ReaderFields): Map<string, string> {
+    const headers = new Map<string, string>();
+    put(headers, "x-engine", fields.engine);
+    put(headers, "x-target-selector", fields.targetSelector);
+    put(headers, "x-remove-selector", fields.removeSelector);
+    put(headers, "x-wait-for-selector", fields.waitForSelector);
+    put(headers, "x-with-links-summary", flag(fields.withLinksSummary));
+    put(headers, "x-with-images-summary", flag(fields.withImagesSummary));
+    put(headers, "x-with-generated-alt", flag(fields.withGeneratedAlt));
+    put(headers, "x-no-cache", flag(fields.noCache));
+    put(headers, "x-timeout", numStr(fields.timeout));
+    put(headers, "x-locale", fields.locale);
+    put(headers, "x-token-budget", numStr(fields.tokenBudget));
+    return headers;
+}
+
+function searchHeadersFrom(fields: SearchFields): Map<string, string> {
+    const headers = new Map<string, string>();
+    put(headers, "x-site", fields.site);
+    put(headers, "x-engine", fields.engine);
+    put(headers, "x-with-links-summary", flag(fields.withLinksSummary));
+    put(headers, "x-no-cache", flag(fields.noCache));
+    put(headers, "x-timeout", numStr(fields.timeout));
+    put(headers, "x-locale", fields.locale);
+    return headers;
+}
+
+function readerResponse(url: string, optionHeaders: Map<string, string>, json: boolean): Response {
+    const headers = prepare(optionHeaders, json);
     const response = post(READER_ENDPOINT, { url: url }, headers);
     response.throwForStatus();
     return response;
 }
 
-function searchResponse(query: string, options: SearchOptions | null, json: boolean): Response {
-    const headers = prepare(searchHeaders(options), json);
+function searchResponse(query: string, optionHeaders: Map<string, string>, json: boolean): Response {
+    const headers = prepare(optionHeaders, json);
     const response = post(SEARCH_ENDPOINT, { q: query }, headers);
     response.throwForStatus();
     return response;

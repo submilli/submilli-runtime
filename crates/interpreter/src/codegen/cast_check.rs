@@ -61,6 +61,12 @@ pub fn emit_cast(
         .ty
         .clone();
 
+    // Inference refuses a written cast of `void`, so this one replaced a
+    // narrowing around an effect-only expression: there is no value to convert.
+    if source_ty.is_void() {
+        return emit_expr(emitter, ctx, value);
+    }
+
     // unknown accepts every value — box to $Object, no test.
     if matches!(target_ty.peel(), Type::Unknown) {
         emit_expr(emitter, ctx, value)?;

@@ -28,6 +28,7 @@ OCI_TAR="${2:-}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT="submilli-smoke-$$"
+WORKDIR=$(mktemp -d)
 CONTAINERS=()
 VOLUMES=()
 
@@ -40,6 +41,7 @@ cleanup() {
     for id in "${VOLUMES[@]:-}"; do
         [[ -n "$id" ]] && docker volume rm -f "$id" >/dev/null 2>&1 || true
     done
+    rm -rf "$WORKDIR"
 }
 trap cleanup EXIT
 
@@ -52,12 +54,50 @@ free_port() {
 s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
 }
 
+# The server refuses to start without an API token. Every container below gets
+# an admin token the way compose.yaml hands it over, in SUBMILLI_SERVER_TOKEN
+# (exported because compose.yaml interpolates that name), plus one `user` token
+# so the role checks have something to refuse. `api_tokens` entries read their
+# token from a file, so that one is mounted beside the config; both files are
+# 0444 for the reason the store key is elsewhere: Docker does not chown a bind
+# mount, and the server runs as uid 65532.
+gen_token() { python3 -c 'import secrets; print(secrets.token_hex(32))'; }
+SUBMILLI_SERVER_TOKEN=$(gen_token)
+export SUBMILLI_SERVER_TOKEN
+USER_TOKEN=$(gen_token)
+mkdir "${WORKDIR}/config"
+printf '%s\n' "$USER_TOKEN" >"${WORKDIR}/config/user-token"
+cat >"${WORKDIR}/config/server.yaml" <<'YAML'
+api_tokens:
+  - name: smoke-user
+    role: user
+    token_file: /etc/submilli/config/user-token
+YAML
+chmod 0755 "${WORKDIR}/config"
+chmod 0444 "${WORKDIR}/config/server.yaml" "${WORKDIR}/config/user-token"
+AUTH_ARGS=(
+    -v "${WORKDIR}/config:/etc/submilli/config:ro"
+    -e SUBMILLI_CONFIG=/etc/submilli/config/server.yaml
+    -e SUBMILLI_SERVER_TOKEN
+)
+
+# admin_curl sends the server token; user_curl sends the `user` token, which
+# only the `docker run` containers know (compose.yaml declares none).
+admin_curl() { curl -H "Authorization: Bearer ${SUBMILLI_SERVER_TOKEN}" "$@"; }
+user_curl() { curl -H "Authorization: Bearer ${USER_TOKEN}" "$@"; }
+
+# `http_code curl URL`, `http_code user_curl URL`: the status alone.
+# A connection failure yields curl's own 000 rather than ending the script
+# under `set -e`, so the caller's check reports what it was looking for.
+http_code() { "$@" -s -o /dev/null -w '%{http_code}' || true; }
+
 # Readiness, not liveness: a container that never answers is a failure, so this
-# has a deadline rather than looping forever.
-wait_for_status() {
+# has a deadline rather than looping forever. /healthz is the one endpoint that
+# answers without a token.
+wait_for_health() {
     local port=$1 deadline=$((SECONDS + 60))
     while ((SECONDS < deadline)); do
-        if curl -sf "http://127.0.0.1:${port}/v1/status" >/dev/null 2>&1; then
+        if curl -sf "http://127.0.0.1:${port}/healthz" >/dev/null 2>&1; then
             return 0
         fi
         sleep 0.5
@@ -77,7 +117,7 @@ put_blueprint() {
     local port=$1 payload
     payload=$(python3 -c 'import json,sys; print(json.dumps({"yaml": sys.stdin.read()}))' \
         <"${REPO_ROOT}/examples/docker/blueprints/demo.yaml")
-    curl -sf -X PUT "http://127.0.0.1:${port}/v1/blueprints/demo" \
+    admin_curl -sf -X PUT "http://127.0.0.1:${port}/v1/blueprints/demo" \
         -H 'content-type: application/json' -d "$payload"
 }
 
@@ -86,17 +126,46 @@ version=$(docker run --rm "$IMAGE" --version)
 [[ -n "$version" ]] || die "--version produced no output"
 ok "--version -> ${version}"
 
-step "2. Boots with no mounts and no flags"
-# No volumes, no config: proves the image is not secretly mount-dependent and
-# that the state directories under SUBMILLI_HOME are created lazily by a process
-# running as uid 65532.
+step "2. Refuses to serve without a token"
+# The image must not ship a way around authentication: with no token it exits
+# non-zero and says what to set, rather than serving an open API.
+if refusal=$(docker run --rm "$IMAGE" 2>&1); then
+    die "a bare \`docker run\` started a server with no API tokens"
+fi
+grep -q 'SUBMILLI_SERVER_TOKEN' <<<"$refusal" \
+    || die "the refusal does not name SUBMILLI_SERVER_TOKEN: ${refusal}"
+ok "a bare run exits non-zero and names SUBMILLI_SERVER_TOKEN"
+
+step "3. Boots with no state mounts, and checks every caller"
+# No volumes beyond the config directory: proves the image is not secretly
+# mount-dependent and that the state directories under SUBMILLI_HOME are created
+# lazily by a process running as uid 65532.
 bare_port=$(free_port)
-bare=$(docker run -d -p "127.0.0.1:${bare_port}:8128" "$IMAGE")
+bare=$(docker run -d -p "127.0.0.1:${bare_port}:8128" "${AUTH_ARGS[@]}" "$IMAGE")
 CONTAINERS+=("$bare")
-wait_for_status "$bare_port" || die "container never answered /v1/status"
-status=$(curl -sf "http://127.0.0.1:${bare_port}/v1/status")
+wait_for_health "$bare_port" || die "container never answered /healthz"
+status=$(admin_curl -sf "http://127.0.0.1:${bare_port}/v1/status")
 [[ "$(json_field status <<<"$status")" == "running" ]] || die "/v1/status: ${status}"
-ok "/v1/status reports running with no mounts"
+ok "/v1/status reports running with no state mounts"
+
+anonymous=$(http_code curl "http://127.0.0.1:${bare_port}/v1/status")
+[[ "$anonymous" == "401" ]] || die "/v1/status without a token got HTTP ${anonymous}, expected 401"
+as_user=$(http_code user_curl "http://127.0.0.1:${bare_port}/v1/status")
+[[ "$as_user" == "403" ]] || die "/v1/status with the user token got HTTP ${as_user}, expected 403"
+ok "no token 401, user token on an admin route 403"
+
+# The user token is what an application should hold once it runs anywhere it is
+# not fully trusted: enough to run code, and not enough to touch the blueprint
+# it runs under.
+put_blueprint "$bare_port" >/dev/null
+result=$(user_curl -sf -X POST "http://127.0.0.1:${bare_port}/v1/execute" \
+    -H 'content-type: application/json' \
+    -d '{"blueprint":"demo","code":"export function main(): string { return \"user ok\"; }"}' \
+    | json_field result)
+[[ "$result" == "user ok" ]] || die "execute with the user token returned '${result}'"
+as_user=$(http_code user_curl -X DELETE "http://127.0.0.1:${bare_port}/v1/blueprints/demo")
+[[ "$as_user" == "403" ]] || die "the user token deleting a blueprint got HTTP ${as_user}, expected 403"
+ok "the user token runs code and cannot remove the blueprint it runs under"
 
 # The probe is what Docker and Compose gate on, and it runs as its own process
 # with no access to the server's flags. Checking it here rather than trusting the
@@ -106,7 +175,7 @@ docker exec "$bare" /usr/local/bin/submilli-server --health-check >/dev/null \
 ok "--health-check exits 0 inside the container"
 docker rm -f "$bare" >/dev/null
 
-step "3. SUBMILLI_* reaches the server and the probe through the image"
+step "4. SUBMILLI_* reaches the server and the probe through the image"
 # The env layer is what a container is configured with, so it has to work from
 # inside the image and not merely in `cargo run`. The port is the load-bearing
 # one: the healthcheck resolves its address from these same variables, so a
@@ -114,10 +183,10 @@ step "3. SUBMILLI_* reaches the server and the probe through the image"
 # than failing loudly.
 alt_port=$(free_port)
 envc=$(docker run -d -p "127.0.0.1:${alt_port}:9443" \
-    -e SUBMILLI_BIND=0.0.0.0 -e SUBMILLI_PORT=9443 "$IMAGE")
+    -e SUBMILLI_BIND=0.0.0.0 -e SUBMILLI_PORT=9443 "${AUTH_ARGS[@]}" "$IMAGE")
 CONTAINERS+=("$envc")
-wait_for_status "$alt_port" || die "container did not honour SUBMILLI_PORT"
-bound=$(curl -sf "http://127.0.0.1:${alt_port}/v1/status" | json_field bind_addr)
+wait_for_health "$alt_port" || die "container did not honour SUBMILLI_PORT"
+bound=$(admin_curl -sf "http://127.0.0.1:${alt_port}/v1/status" | json_field bind_addr)
 [[ "$bound" == "0.0.0.0:9443" ]] || die "expected bind_addr 0.0.0.0:9443, got ${bound}"
 ok "SUBMILLI_BIND/SUBMILLI_PORT -> ${bound}"
 
@@ -132,7 +201,7 @@ done
 ok "Docker healthcheck goes healthy on a non-default port"
 docker rm -f "$envc" >/dev/null
 
-step "4. A path variable relocates state through the image"
+step "5. A path variable relocates state through the image"
 # Distinct from the port check: this exercises the path-valued arm of the env
 # layer, and proves the blueprint store honours it. The store is a revision log
 # (index.json plus <name>.<rev>.yaml), not a directory of loose files, so it is
@@ -142,9 +211,9 @@ VOLUMES+=("$bp_vol")
 docker volume create "$bp_vol" >/dev/null
 bp_port=$(free_port)
 bpc=$(docker run -d -p "127.0.0.1:${bp_port}:8128" -v "${bp_vol}:/var/lib/submilli" \
-    -e SUBMILLI_BLUEPRINT_DIR=/var/lib/submilli/relocated "$IMAGE")
+    -e SUBMILLI_BLUEPRINT_DIR=/var/lib/submilli/relocated "${AUTH_ARGS[@]}" "$IMAGE")
 CONTAINERS+=("$bpc")
-wait_for_status "$bp_port" || die "container with SUBMILLI_BLUEPRINT_DIR never answered"
+wait_for_health "$bp_port" || die "container with SUBMILLI_BLUEPRINT_DIR never answered"
 put_blueprint "$bp_port" >/dev/null
 # Tolerates a missing directory so the greps below report *what* went wrong
 # rather than the script dying on busybox's exit status.
@@ -154,31 +223,36 @@ grep -qE '^demo\.[0-9]+\.yaml$' <<<"$listing" || die "no revision file in the re
 ok "SUBMILLI_BLUEPRINT_DIR relocated the store"
 docker rm -f "$bpc" >/dev/null
 
-step "5. The documented compose story works end to end"
+step "6. The documented compose story works end to end"
+# compose.yaml takes its one token from SUBMILLI_SERVER_TOKEN, exported above,
+# and mounts no config file, so this proves the server starts on the variable
+# alone.
 # SUBMILLI_IMAGE must point at the candidate. Without it compose resolves the
 # published reference, which on a first release does not exist and on later ones
 # silently smoke-tests the *previous* image while the candidate ships unverified
 # — and the job passes either way, which is what makes that the dangerous one.
 export SUBMILLI_IMAGE="$IMAGE"
 docker compose -p "$PROJECT" -f "${REPO_ROOT}/compose.yaml" up -d >/dev/null 2>&1
-wait_for_status 8128 || die "compose stack never answered /v1/status"
+wait_for_health 8128 || die "compose stack never answered /healthz"
 ok "compose stack is serving"
 
 created=$(put_blueprint 8128 | json_field name)
 [[ "$created" == "demo" ]] || die "blueprint PUT returned: ${created}"
-registered=$(curl -sf http://127.0.0.1:8128/v1/status \
+registered=$(admin_curl -sf http://127.0.0.1:8128/v1/status \
     | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["blueprints"]))')
 [[ "$registered" == *demo* ]] || die "demo missing from /v1/status blueprints: ${registered}"
 ok "blueprint registered and listed"
 
-result=$(curl -sf -X POST http://127.0.0.1:8128/v1/execute \
+# The documented setup hands the application the same token, so the execute
+# goes out with it too.
+result=$(admin_curl -sf -X POST http://127.0.0.1:8128/v1/execute \
     -H 'content-type: application/json' \
     -d '{"blueprint":"demo","code":"export function main(): string { return \"smoke ok\"; }"}' \
     | json_field result)
 [[ "$result" == "smoke ok" ]] || die "execute returned '${result}', expected 'smoke ok'"
 ok "execute round-trip returned the expected body"
 
-step "6. Shutdown is graceful, not a SIGKILL"
+step "7. Shutdown is graceful, not a SIGKILL"
 # The only end-to-end proof that the server's signal handling reached the shipped
 # image. Without it `docker stop` waits out the full grace period and the
 # container exits 137; with it the process exits 0 in well under a second.
@@ -194,7 +268,7 @@ ok "stopped in ${elapsed}s with exit code 0"
 docker compose -p "$PROJECT" down -v >/dev/null 2>&1
 
 if [[ -n "$OCI_TAR" ]]; then
-    step "7. Both platforms carry a binary of their own architecture"
+    step "8. Both platforms carry a binary of their own architecture"
     python3 - "$OCI_TAR" <<'PY'
 import gzip, io, json, sys, tarfile
 

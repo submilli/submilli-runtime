@@ -36,6 +36,7 @@ use crate::runtime::prelude::collection::{is_a, object_field, read_array_vals, u
 use crate::runtime::prelude::iterator::{
     IterKind, as_struct, build_iterator, iter_done, iter_yield, next_closure_type,
 };
+use crate::runtime::prelude::keep::{KeptValue, keep_all};
 use crate::runtime::prelude::map::raw_index_array_type;
 use crate::runtime::prelude::vtable::dispatch_vtable_slot;
 
@@ -422,6 +423,11 @@ pub(super) async fn for_each(
     let elements = field_array(caller, &b, F_ELEMENTS)?;
     let order = field_array(caller, &b, F_ORDER)?;
     let order_len = field_i32(caller, &b, F_ORDER_LEN)?;
+    // A callback that clears or grows the set swaps these arrays out of it.
+    keep_all(
+        caller,
+        &[elements, order].map(|array| Val::AnyRef(Some(array.to_anyref()))),
+    )?;
     for o in 0..order_len {
         let Val::I32(idx) = order.get(&mut *caller, o as u32)? else {
             continue;
@@ -795,6 +801,9 @@ pub(super) async fn construct(
         return Ok(coll);
     }
 
+    // The iterator and each object its `next()` returns come from guest calls.
+    let kept_iterator = KeptValue::new(caller)?;
+    let kept_result = KeptValue::new(caller)?;
     let it = if is_a(caller, init, &set_backing_struct(caller.engine(), &intr)?)? {
         values(caller, init)?
     } else if let Some(iter_method) = object_field(caller, init, "iterator")? {
@@ -803,12 +812,14 @@ pub(super) async fn construct(
     } else {
         *init
     };
+    kept_iterator.set(caller, it)?;
 
     let next = object_field(caller, &it, "next")?
         .ok_or_else(|| wasmtime::Error::msg("Set ctor: initializer is not iterable"))?;
     let next_closure = closure::read(caller, &next, "Set ctor iterator")?;
     loop {
         let result = next_closure.call(caller, &[]).await?;
+        kept_result.set(caller, result)?;
         let done = object_field(caller, &result, "done")?
             .ok_or_else(|| wasmtime::Error::msg("Set ctor: iterator result missing `done`"))?;
         if unbox_bool(caller, &done)? {

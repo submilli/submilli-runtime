@@ -268,37 +268,37 @@ export function getFile(fileId: string): DriveFile | null {
  * @capability submilli/google-drive.searchFiles {}
  */
 export function searchFiles(options: SearchFilesOptions | null = null): Page<DriveFile> {
+    const limit = options === null ? null : options.limit;
+    const pageToken = options === null ? null : options.pageToken;
+    const orderBy = options === null ? null : options.orderBy;
+    const nameContains = options === null ? null : options.nameContains;
+    const mimeType = options === null ? null : options.mimeType;
+    const parentId = options === null ? null : options.parentId;
+    const starred = options === null ? null : options.starred;
+    const trashed = options === null ? null : options.trashed;
+    const rawQuery = options === null ? null : options.rawQuery;
+    const driveId = options === null ? null : options.driveId;
+    const hasOptions = options !== null;
     check("submilli/google-drive.searchFiles", {});
     const query = new Map<string, string>();
     query.set("fields", "nextPageToken,files(" + FILE_FIELDS + ")");
-    query.set("pageSize", bounded(options === null ? null : options.limit, 20, 1, 1000).toString());
+    query.set("pageSize", bounded(limit, 20, 1, 1000).toString());
     const clauses: string[] = [];
     let includeTrashed = false;
-    if (options !== null) {
-        const pageToken = options.pageToken;
-        const orderBy = options.orderBy;
-        const nameContains = options.nameContains;
-        const mimeType = options.mimeType;
-        const parentId = options.parentId;
-        const starred = options.starred;
-        const trashed = options.trashed;
-        const rawQuery = options.rawQuery;
-        const driveId = options.driveId;
-        putQuery(query, "pageToken", pageToken);
-        putQuery(query, "orderBy", orderBy);
-        if (nameContains !== null) clauses.push("name contains '" + escapeQuery(nameContains) + "'");
-        if (mimeType !== null) clauses.push("mimeType = '" + escapeQuery(mimeType) + "'");
-        if (parentId !== null) clauses.push("'" + escapeQuery(parentId) + "' in parents");
-        if (starred !== null) clauses.push("starred = " + (starred ? "true" : "false"));
-        if (trashed !== null) {
-            clauses.push("trashed = " + (trashed ? "true" : "false"));
-            includeTrashed = true;
-        }
-        if (rawQuery !== null) {
-            if (rawQuery.length > 0) clauses.push("(" + rawQuery + ")");
-        }
-        applySharedDrive(query, driveId);
+    putQuery(query, "pageToken", pageToken);
+    putQuery(query, "orderBy", orderBy);
+    if (nameContains !== null) clauses.push("name contains '" + escapeQuery(nameContains) + "'");
+    if (mimeType !== null) clauses.push("mimeType = '" + escapeQuery(mimeType) + "'");
+    if (parentId !== null) clauses.push("'" + escapeQuery(parentId) + "' in parents");
+    if (starred !== null) clauses.push("starred = " + (starred ? "true" : "false"));
+    if (trashed !== null) {
+        clauses.push("trashed = " + (trashed ? "true" : "false"));
+        includeTrashed = true;
     }
+    if (rawQuery !== null) {
+        if (rawQuery.length > 0) clauses.push("(" + rawQuery + ")");
+    }
+    if (hasOptions) applySharedDrive(query, driveId);
     if (!includeTrashed) clauses.push("trashed = false");
     if (clauses.length > 0) query.set("q", clauses.join(" and "));
     const data = driveGet("/files", query).json() as FileListResponse;
@@ -310,17 +310,16 @@ export function searchFiles(options: SearchFilesOptions | null = null): Page<Dri
  * @capability submilli/google-drive.listRecentFiles {}
  */
 export function listRecentFiles(options: RecentFilesOptions | null = null): Page<DriveFile> {
+    const limit = options === null ? null : options.limit;
+    const pageToken = options === null ? null : options.pageToken;
+    const driveId = options === null ? null : options.driveId;
     check("submilli/google-drive.listRecentFiles", {});
     const search: SearchFilesOptions = {
-        limit: bounded(options === null ? null : options.limit, 20, 1, 100),
+        limit: bounded(limit, 20, 1, 100),
         orderBy: "modifiedTime desc",
     };
-    if (options !== null) {
-        const pageToken = options.pageToken;
-        const driveId = options.driveId;
-        if (pageToken !== null) search.pageToken = pageToken;
-        if (driveId !== null) search.driveId = driveId;
-    }
+    if (pageToken !== null) search.pageToken = pageToken;
+    if (driveId !== null) search.driveId = driveId;
     return searchFiles(search);
 }
 
@@ -350,13 +349,14 @@ export function readText(fileId: string): string {
  * @capability submilli/google-drive.downloadFile { fileId: string, path: string }
  */
 export function downloadFile(fileId: string, path: string, options: FileDownloadOptions | null = null): DownloadResult {
+    const exportMimeType = options === null ? null : options.exportMimeType;
+    const overwrite = options === null ? null : options.overwrite;
+    const maxBytes = options === null ? null : options.maxBytes;
     check("submilli/google-drive.downloadFile", { fileId: fileId, path: path });
     const file = fetchFile(fileId);
     if (file === null) throw new DriveError("not_found", "Drive file was not found", 404);
     let endpoint = "/files/" + encodeComponent(fileId);
     const query = new Map<string, string>();
-    let exportMimeType: string | null = null;
-    if (options !== null) exportMimeType = options.exportMimeType;
     if (file.mimeType.startsWith("application/vnd.google-apps.")) {
         if (exportMimeType === null) {
             throw new DriveError("export_mime_type_required", "native Google files require exportMimeType", 0);
@@ -368,12 +368,8 @@ export function downloadFile(fileId: string, path: string, options: FileDownload
     }
     const encoded = encodeQuery(query);
     const downloadOptions: DownloadOptions = { headers: authHeaders() };
-    if (options !== null) {
-        const overwrite = options.overwrite;
-        const maxBytes = options.maxBytes;
-        if (overwrite !== null) downloadOptions.overwrite = overwrite;
-        if (maxBytes !== null) downloadOptions.maxBytes = maxBytes;
-    }
+    if (overwrite !== null) downloadOptions.overwrite = overwrite;
+    if (maxBytes !== null) downloadOptions.maxBytes = maxBytes;
     const result = download(API + endpoint + "?" + encoded, path, downloadOptions);
     if (result.status < 200 || result.status >= 300) {
         throw new DriveError("download_failed", "Drive download failed with HTTP " + result.status.toString(), result.status);
@@ -386,19 +382,20 @@ export function downloadFile(fileId: string, path: string, options: FileDownload
  * @capability submilli/google-drive.uploadFile { path: string }
  */
 export function uploadFile(sourcePath: string, options: FileUploadOptions): DriveFile {
+    const { name, mimeType, parentId, driveId } = options;
     check("submilli/google-drive.uploadFile", { path: sourcePath });
     const source = stat(sourcePath);
     if (source === null) throw new DriveError("source_not_found", "upload source is not a VFS file", 0);
     if (source.kind !== "file") throw new DriveError("source_not_found", "upload source is not a VFS file", 0);
     const sourceSize = source.size;
-    const metadata: FileUploadMetadata = { name: options.name };
-    if (options.parentId !== null) metadata.parents = [options.parentId];
+    const metadata: FileUploadMetadata = { name: name };
+    if (parentId !== null) metadata.parents = [parentId];
     const query = new Map<string, string>();
     query.set("uploadType", "resumable");
     query.set("fields", FILE_FIELDS);
-    if (options.driveId !== null) query.set("supportsAllDrives", "true");
+    if (driveId !== null) query.set("supportsAllDrives", "true");
     const headers = authHeaders();
-    headers.set("X-Upload-Content-Type", options.mimeType);
+    headers.set("X-Upload-Content-Type", mimeType);
     headers.set("X-Upload-Content-Length", sourceSize.toString());
     const sessionResponse = post(UPLOAD_API + "/files?" + encodeQuery(query), metadata, headers);
     requireOk(sessionResponse);
@@ -407,7 +404,7 @@ export function uploadFile(sourcePath: string, options: FileUploadOptions): Driv
     const uploadLocation = validateUploadLocation(location);
     if (sourceSize === 0) {
         const emptyHeaders = authHeaders();
-        emptyHeaders.set("Content-Type", options.mimeType);
+        emptyHeaders.set("Content-Type", mimeType);
         emptyHeaders.set("Content-Length", "0");
         const response = put(GOOGLE_API + uploadLocation, new Uint8Array([]), emptyHeaders);
         requireOk(response);
@@ -419,7 +416,7 @@ export function uploadFile(sourcePath: string, options: FileUploadOptions): Driv
         const chunk = readBytes(sourcePath, offset, length);
         const end = offset + chunk.length - 1;
         const chunkHeaders = authHeaders();
-        chunkHeaders.set("Content-Type", options.mimeType);
+        chunkHeaders.set("Content-Type", mimeType);
         chunkHeaders.set("Content-Length", chunk.length.toString());
         chunkHeaders.set("Content-Range", "bytes " + offset.toString() + "-" + end.toString() + "/" + sourceSize.toString());
         const response = put(GOOGLE_API + uploadLocation, chunk, chunkHeaders);
@@ -457,14 +454,12 @@ export function createFolder(name: string, parentId: string = ""): DriveFile {
  * @capability submilli/google-drive.copyFile { fileId: string }
  */
 export function copyFile(fileId: string, options: FileCopyOptions | null = null): DriveFile {
+    const name = options === null ? null : options.name;
+    const parentId = options === null ? null : options.parentId;
     check("submilli/google-drive.copyFile", { fileId: fileId });
     const body: FileCopyBody = {};
-    if (options !== null) {
-        const name = options.name;
-        const parentId = options.parentId;
-        if (name !== null) body.name = name;
-        if (parentId !== null) body.parents = [parentId];
-    }
+    if (name !== null) body.name = name;
+    if (parentId !== null) body.parents = [parentId];
     const query = mutationQuery();
     const response = post(API + "/files/" + encodeComponent(fileId) + "/copy?" + encodeQuery(query), body, authHeaders());
     requireOk(response);
@@ -534,22 +529,23 @@ export function listPermissions(fileId: string): Permission[] {
  * @capability submilli/google-drive.shareFile { fileId: string, principal: string }
  */
 export function shareFile(fileId: string, input: ShareFileInput): Permission {
-    const principal = input.emailAddress !== null ? input.emailAddress : input.domain !== null ? input.domain : input.type;
+    const { type: principalType, role, emailAddress, domain, allowFileDiscovery, sendNotificationEmail } = input;
+    const principal = emailAddress !== null ? emailAddress : domain !== null ? domain : principalType;
     check("submilli/google-drive.shareFile", { fileId: fileId, principal: principal });
-    if (input.type !== "user" && input.type !== "group" && input.type !== "domain" && input.type !== "anyone") {
+    if (principalType !== "user" && principalType !== "group" && principalType !== "domain" && principalType !== "anyone") {
         throw new DriveError("invalid_permission_type", "permission type must be user, group, domain, or anyone", 0);
     }
-    if (input.role !== "reader" && input.role !== "commenter" && input.role !== "writer") {
+    if (role !== "reader" && role !== "commenter" && role !== "writer") {
         throw new DriveError("invalid_permission_role", "permission role must be reader, commenter, or writer", 0);
     }
-    const body: PermissionCreateBody = { type: input.type, role: input.role };
-    if (input.emailAddress !== null) body.emailAddress = input.emailAddress;
-    if (input.domain !== null) body.domain = input.domain;
-    if (input.allowFileDiscovery !== null) body.allowFileDiscovery = input.allowFileDiscovery;
+    const body: PermissionCreateBody = { type: principalType, role: role };
+    if (emailAddress !== null) body.emailAddress = emailAddress;
+    if (domain !== null) body.domain = domain;
+    if (allowFileDiscovery !== null) body.allowFileDiscovery = allowFileDiscovery;
     const query = new Map<string, string>();
     query.set("fields", "id,type,role,emailAddress,domain,displayName,allowFileDiscovery,expirationTime");
     query.set("supportsAllDrives", "true");
-    query.set("sendNotificationEmail", input.sendNotificationEmail === false ? "false" : "true");
+    query.set("sendNotificationEmail", sendNotificationEmail === false ? "false" : "true");
     const response = post(API + "/files/" + encodeComponent(fileId) + "/permissions?" + encodeQuery(query), body, authHeaders());
     requireOk(response);
     return permissionFrom(response.json() as ApiPermission);

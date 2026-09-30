@@ -620,8 +620,10 @@ interface ApiErrorEnvelope {
  * @capability sentry.io/organizations.list {}
  */
 export function listOrganizations(page: PageOptions | null = null): PageResult<Organization> {
+    const limit = page === null ? null : page.limit;
+    const cursor = page === null ? null : page.cursor;
     check("sentry.io/organizations.list", {});
-    const response = sentryGet("/organizations/" + buildPageQuery(page));
+    const response = sentryGet("/organizations/" + buildPageQuery(limit, cursor));
     const items: Organization[] = [];
     for (const item of response.json() as ApiOrganization[]) items.push(organizationFrom(item));
     return pageFrom(response, items);
@@ -632,8 +634,10 @@ export function listOrganizations(page: PageOptions | null = null): PageResult<O
  */
 export function listProjects(organization: string, page: PageOptions | null = null): PageResult<Project> {
     const slug = requireText(organization, "organization");
+    const limit = page === null ? null : page.limit;
+    const cursor = page === null ? null : page.cursor;
     check("sentry.io/projects.list", { organization: slug });
-    const response = sentryGet("/organizations/" + encodeComponent(slug) + "/projects/" + buildPageQuery(page));
+    const response = sentryGet("/organizations/" + encodeComponent(slug) + "/projects/" + buildPageQuery(limit, cursor));
     const items: Project[] = [];
     for (const item of response.json() as ApiProject[]) items.push(projectFrom(item, slug));
     return pageFrom(response, items);
@@ -644,9 +648,37 @@ export function listProjects(organization: string, page: PageOptions | null = nu
  */
 export function listIssues(organization: string, options: ListIssuesOptions | null = null): PageResult<Issue> {
     const slug = requireText(organization, "organization");
-    const projects: string[] = options === null || options.projects === null ? [] : options.projects;
+    const limit = options === null ? null : options.limit;
+    const cursor = options === null ? null : options.cursor;
+    const requestedProjects = options === null ? null : options.projects;
+    const requestedEnvironments = options === null ? null : options.environments;
+    const query = options === null ? null : options.query;
+    const statsPeriod = options === null ? null : options.statsPeriod;
+    const start = options === null ? null : options.start;
+    const end = options === null ? null : options.end;
+    const groupStatsPeriod = options === null ? null : options.groupStatsPeriod;
+    const shortIdLookup = options === null ? null : options.shortIdLookup;
+    const sort = options === null ? null : options.sort;
+    const projects: string[] = [];
+    if (requestedProjects !== null) {
+        for (const project of requestedProjects) projects.push(project);
+    }
+    const environments: string[] = [];
+    if (requestedEnvironments !== null) {
+        for (const environment of requestedEnvironments) environments.push(environment);
+    }
+    const issueOptions: ListIssuesOptions = { projects: projects, environments: environments };
+    if (limit !== null) issueOptions.limit = limit;
+    if (cursor !== null) issueOptions.cursor = cursor;
+    if (query !== null) issueOptions.query = query;
+    if (statsPeriod !== null) issueOptions.statsPeriod = statsPeriod;
+    if (start !== null) issueOptions.start = start;
+    if (end !== null) issueOptions.end = end;
+    if (groupStatsPeriod !== null) issueOptions.groupStatsPeriod = groupStatsPeriod;
+    if (shortIdLookup !== null) issueOptions.shortIdLookup = shortIdLookup;
+    if (sort !== null) issueOptions.sort = sort;
     check("sentry.io/issues.list", { organization: slug, projects: projects });
-    const response = sentryGet("/organizations/" + encodeComponent(slug) + "/issues/" + buildIssueQuery(options));
+    const response = sentryGet("/organizations/" + encodeComponent(slug) + "/issues/" + buildIssueQuery(issueOptions));
     const items: Issue[] = [];
     for (const item of response.json() as ApiIssue[]) items.push(issueFrom(item));
     return pageFrom(response, items);
@@ -675,9 +707,31 @@ export function listIssueEvents(
     const slug = requireText(organization, "organization");
     const projectSlug = requireText(project, "project");
     const issue = requireText(issueId, "issueId");
+    const limit = options === null ? null : options.limit;
+    const cursor = options === null ? null : options.cursor;
+    const requestedEnvironments = options === null ? null : options.environments;
+    const query = options === null ? null : options.query;
+    const statsPeriod = options === null ? null : options.statsPeriod;
+    const start = options === null ? null : options.start;
+    const end = options === null ? null : options.end;
+    const full = options === null ? null : options.full;
+    const sample = options === null ? null : options.sample;
+    const environments: string[] = [];
+    if (requestedEnvironments !== null) {
+        for (const environment of requestedEnvironments) environments.push(environment);
+    }
+    const eventOptions: ListIssueEventsOptions = { environments: environments };
+    if (limit !== null) eventOptions.limit = limit;
+    if (cursor !== null) eventOptions.cursor = cursor;
+    if (query !== null) eventOptions.query = query;
+    if (statsPeriod !== null) eventOptions.statsPeriod = statsPeriod;
+    if (start !== null) eventOptions.start = start;
+    if (end !== null) eventOptions.end = end;
+    if (full !== null) eventOptions.full = full;
+    if (sample !== null) eventOptions.sample = sample;
     check("sentry.io/issueEvents.list", { organization: slug, project: projectSlug, issue: issue });
     const loaded = requireIssueForProject(slug, projectSlug, issue);
-    const response = sentryGet(issuePath(slug, loaded.id) + "/events/" + buildEventQuery(options));
+    const response = sentryGet(issuePath(slug, loaded.id) + "/events/" + buildEventQuery(eventOptions));
     const items: EventSummary[] = [];
     for (const item of response.json() as ApiEvent[]) items.push(eventSummaryFrom(item));
     return pageFrom(response, items);
@@ -710,10 +764,17 @@ export function updateIssue(organization: string, project: string, issueId: stri
     const slug = requireText(organization, "organization");
     const projectSlug = requireText(project, "project");
     const issue = requireText(issueId, "issueId");
-    validateUpdate(input);
+    const { status, substatus, assignedTo, clearAssignee, priority } = input;
+    const changes: UpdateIssueInput = {};
+    if (status !== null) changes.status = status;
+    if (substatus !== null) changes.substatus = substatus;
+    if (assignedTo !== null) changes.assignedTo = assignedTo;
+    if (clearAssignee !== null) changes.clearAssignee = clearAssignee;
+    if (priority !== null) changes.priority = priority;
+    validateUpdate(changes);
     check("sentry.io/issues.update", { organization: slug, project: projectSlug, issue: issue });
     const loaded = requireIssueForProject(slug, projectSlug, issue);
-    const response = sentryPut(issuePath(slug, loaded.id) + "/", buildUpdateIssueBody(input));
+    const response = sentryPut(issuePath(slug, loaded.id) + "/", buildUpdateIssueBody(changes));
     const updated = issueFrom(response.json() as ApiIssue);
     requireMatchingProject(updated, projectSlug);
     return updated;
@@ -826,10 +887,10 @@ export function sentryFailureMessage(status: number, statusText: string, body: s
     return fallback;
 }
 
-function buildPageQuery(page: PageOptions | null): string {
+function buildPageQuery(limit: number | null, cursor: string | null): string {
     const parts: string[] = [];
-    addQuery(parts, "per_page", pageLimit(page === null ? null : page.limit).toString());
-    if (page !== null) addOptionalQuery(parts, "cursor", page.cursor, false);
+    addQuery(parts, "per_page", pageLimit(limit).toString());
+    addOptionalQuery(parts, "cursor", cursor, false);
     return "?" + parts.join("&");
 }
 

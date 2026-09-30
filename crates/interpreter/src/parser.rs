@@ -2851,7 +2851,12 @@ impl<'a> Parser<'a> {
         let binding = self.ident_from_token(&name_tok);
         let ty = if matches!(self.peek().kind, TokenKind::Colon) {
             self.advance();
-            Some(self.parse_type_annotation()?)
+            if self.reject_any_catch_annotation() {
+                // The error is reported; parsing continues as an unannotated catch.
+                None
+            } else {
+                Some(self.parse_type_annotation()?)
+            }
         } else {
             None
         };
@@ -2861,6 +2866,28 @@ impl<'a> Parser<'a> {
         }
         self.advance();
         Some((binding, ty))
+    }
+
+    /// Reports `catch (e: any)` and consumes the `any`, returning whether it did.
+    /// Only exactly `any)` is handled; compound types keep the general diagnostic.
+    fn reject_any_catch_annotation(&mut self) -> bool {
+        let is_bare_any = self.peek_identifier_text_is("any")
+            && matches!(self.peek_at(1).kind, TokenKind::RightParen);
+        if !is_bare_any {
+            return false;
+        }
+        let any_tok = self.advance();
+        // The general `any` help suggests `unknown`, which a catch binding refuses.
+        self.error_at_with_help(
+            any_tok.span,
+            "`any` is not supported",
+            vec![
+                "write `catch (e)` to catch every thrown error, or name an error class, \
+                 as in `catch (e: RangeError)`, to catch only that type"
+                    .to_string(),
+            ],
+        );
+        true
     }
 
     fn parse_paren_condition(&mut self) -> Option<ExprId> {
@@ -5686,6 +5713,26 @@ mod tests {
                 "expected the fix-shape help for {src:?}, got: {diags:?}",
             );
         }
+    }
+
+    #[test]
+    fn any_catch_binding_help_suggests_catch_forms() {
+        // `unknown` is not a valid catch binding type, so the general `any`
+        // help would send the reader to a second error.
+        let (_ast, diags) = parse_str("function main(): void { try { } catch (e: any) { } }");
+        let any_diags: Vec<_> = diags
+            .iter()
+            .filter(|d| d.message.contains("`any` is not supported"))
+            .collect();
+        assert_eq!(any_diags.len(), 1, "got: {diags:?}");
+        assert!(
+            any_diags[0].help.iter().any(|h| h.contains("`catch (e)`")),
+            "got: {diags:?}"
+        );
+        assert!(
+            !any_diags[0].help.iter().any(|h| h.contains("`unknown`")),
+            "got: {diags:?}"
+        );
     }
 
     #[test]

@@ -1,16 +1,19 @@
 //! Admin endpoints backing `submilli server status` / `submilli server stop`.
 //!
-//! `GET /v1/status` reports liveness, the bound address, pid, active session
-//! count, and loaded blueprint names. `POST /v1/shutdown` signals the server to
-//! drain and exit. Both are unauthenticated; acceptable on the default loopback
-//! bind, but a production deployment should put them behind a dedicated admin
-//! surface (future hardening).
+//! `GET /v1/status` reports the bound address, pid, active session count, and
+//! loaded blueprint names. `POST /v1/shutdown` signals the server to drain and
+//! exit. `GET /healthz` is the liveness probe: it needs no token, so it says
+//! nothing beyond "the server is answering".
 
 use axum::extract::State;
 use axum::{Json, http::StatusCode};
 use serde::Serialize;
 
 use crate::app::AppState;
+
+pub async fn healthz() -> StatusCode {
+    StatusCode::OK
+}
 
 #[derive(Debug, Serialize)]
 pub struct StatusResponse {

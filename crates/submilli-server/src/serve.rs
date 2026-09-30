@@ -33,7 +33,7 @@ pub async fn serve(addr: SocketAddr, config: ServerConfig, shutdown_grace: Durat
     // boot finishes instead of terminating the process outright.
     let signals = ShutdownSignals::install()?;
 
-    crate::warn_if_external_bind(addr.ip());
+    crate::auth::log_auth_posture(addr.ip(), &config.auth);
     let state = AppState::new(config)?;
     // Rehydrate persisted sessions and sweep orphan directories before serving,
     // so an immediate reconnect resolves instead of 404-ing.

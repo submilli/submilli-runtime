@@ -14,7 +14,7 @@
 //! Collapsing tiers 2 and 4 into one rule breaks something either way. Put all
 //! env above the file and a config saying `bind: 127.0.0.1` is silently
 //! overridden the moment the service runs anywhere that injects `$PORT` — a
-//! server with no inbound authentication, exposed by ambient platform noise.
+//! server published by ambient platform noise.
 //! Put all env below the file and an env-configured deployment (a Helm chart's
 //! `values.yaml`, a PaaS dashboard) loses without warning to a mounted
 //! ConfigMap.
@@ -37,8 +37,8 @@ use submilli_server::config::{
     default_session_storage_root, default_session_store_dir, validate_volumes,
 };
 use submilli_server::{
-    DEFAULT_MAX_EXECUTION_TOKENS, DEFAULT_MAX_STORE_BYTES, FileSecretStore, KeySource, LlmLimits,
-    NetworkPolicy, RuntimeConfig, ServerConfig,
+    ApiToken, AuthConfig, DEFAULT_MAX_EXECUTION_TOKENS, DEFAULT_MAX_STORE_BYTES, FileSecretStore,
+    KeySource, LlmLimits, NetworkPolicy, Role, RuntimeConfig, ServerConfig,
 };
 use submilli_shared::secret_store::SecretStore;
 use submilli_shared::secret_store::check_key;
@@ -48,6 +48,7 @@ use crate::Cli;
 const DEFAULT_BIND: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 const DEFAULT_PORT: u16 = 8128;
 const DEFAULT_SECRET_KEY_ENV: &str = "SUBMILLI_SECRET_KEY";
+const SERVER_TOKEN_ENV: &str = "SUBMILLI_SERVER_TOKEN";
 
 /// Leaves room for the two teardown stages that follow the drain (see
 /// `main`'s budget) inside Docker's 10s default before it escalates to SIGKILL.
@@ -111,6 +112,17 @@ pub struct FileConfig {
     /// than spreading across flags and environment variables.
     #[serde(default)]
     pub volumes: VolumeTable,
+    /// The tokens callers authenticate with, beside the admin token
+    /// `$SUBMILLI_SERVER_TOKEN` supplies. File-only, like `volumes`: who else
+    /// may call the API, and as what, stays in one reviewable place. The
+    /// server refuses to start with no token at all unless
+    /// `allow_unauthenticated` is set.
+    #[serde(default)]
+    pub api_tokens: Vec<ApiTokenFileConfig>,
+    /// Serve without authentication. Additive with `--allow-unauthenticated`
+    /// and `$SUBMILLI_ALLOW_UNAUTHENTICATED`, and refused alongside
+    /// `api_tokens`, so no source can switch off tokens another configured.
+    pub allow_unauthenticated: Option<bool>,
     /// Sentry crash-reporting + metrics. Defaults to off; set `true` to opt in.
     /// `SUBMILLI_TELEMETRY` can also opt in. A config-file `false` or a supplied
     /// environment value other than `1`/`true`/`yes`/`on` disables telemetry.
@@ -144,6 +156,19 @@ pub struct OAuthProviderFileConfig {
     pub scopes: Vec<String>,
 }
 
+/// One `api_tokens` entry. The token is read from `token_file`; it never
+/// appears in the config file itself, and there is deliberately no per-entry
+/// environment form — the one token the environment supplies is
+/// `$SUBMILLI_SERVER_TOKEN`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApiTokenFileConfig {
+    /// Identifies the token in logs and error messages.
+    pub name: String,
+    pub role: Role,
+    pub token_file: PathBuf,
+}
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SecretStoreFileConfig {
@@ -173,8 +198,8 @@ pub struct NetworkFileConfig {
 /// returns `Result`. Parsing here would have to discard a bad value, and for
 /// `bind` in particular a discarded value fails *open*: the tier below is
 /// ambient `$PORT`, whose mere presence implies `0.0.0.0`. So a typo in an
-/// operator's `SUBMILLI_BIND=127.0.0.1` would silently publish a server that
-/// has no inbound authentication. Ambient `HOST`/`PORT` keep the tolerance
+/// operator's `SUBMILLI_BIND=127.0.0.1` would silently publish the server.
+/// Ambient `HOST`/`PORT` keep the tolerance
 /// they have always had — a platform injects those, and erroring on one would
 /// break deployments that never asked for it.
 #[derive(Debug, Default)]
@@ -204,6 +229,13 @@ pub(crate) struct EnvConfig {
     allow_private: bool,
     allow_ip: Vec<String>,
     mcp_allowed_hosts: Vec<String>,
+    allow_unauthenticated: bool,
+    /// An admin token supplied through the environment; see [`server_token`].
+    server_token: Option<String>,
+    /// The variable is set but not valid Unicode. Kept apart from "unset" so
+    /// a mangled token is reported instead of silently leaving the server
+    /// without the token its operator meant it to have.
+    server_token_not_unicode: bool,
     /// Tier 4. Injected by Render and similar hosts, which route external
     /// traffic in and expect the service on all interfaces — so `PORT` being
     /// set at all implies a `0.0.0.0` bind.
@@ -213,7 +245,13 @@ pub(crate) struct EnvConfig {
 
 impl EnvConfig {
     fn from_env() -> Self {
-        Self::from_lookup(|name| std::env::var(name).ok())
+        Self {
+            server_token_not_unicode: matches!(
+                std::env::var(SERVER_TOKEN_ENV),
+                Err(std::env::VarError::NotUnicode(_))
+            ),
+            ..Self::from_lookup(|name| std::env::var(name).ok())
+        }
     }
 
     /// Reading goes through a lookup so the rules — empty means unset, ambient
@@ -273,6 +311,9 @@ impl EnvConfig {
             allow_private: flag("SUBMILLI_ALLOW_PRIVATE"),
             allow_ip: list("SUBMILLI_ALLOW_IP"),
             mcp_allowed_hosts: list("SUBMILLI_MCP_ALLOWED_HOSTS"),
+            allow_unauthenticated: flag("SUBMILLI_ALLOW_UNAUTHENTICATED"),
+            server_token: var(SERVER_TOKEN_ENV),
+            server_token_not_unicode: false,
             ambient_bind: var("HOST")
                 .and_then(|v| v.parse().ok())
                 .or_else(|| var("PORT").map(|_| IpAddr::V4(Ipv4Addr::UNSPECIFIED))),
@@ -396,6 +437,7 @@ fn preflight(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<()> {
     max_llm_tokens(cli, file, env)?;
     max_execution_llm_tokens(cli, file, env)?;
     max_llm_concurrency(cli, file, env)?;
+    resolve_auth(cli, file, env)?;
     if let Some(key) = secret_key_source(cli, file, env) {
         check_key(&key).map_err(|e| anyhow::anyhow!("checking the secret-store key: {e}"))?;
     }
@@ -439,6 +481,11 @@ fn guarded_directories(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> ServerD
         package_fallback_root: Some(default_cli_package_store_dir()),
         secret_store_dir: Some(secret_store_dir(cli, file, env)),
         secret_store_key_file: secret_key_file(cli, file, env),
+        api_token_files: file
+            .api_tokens
+            .iter()
+            .map(|token| token.token_file.clone())
+            .collect(),
         session_storage_root: Some(
             explicit(
                 cli.vfs_session_dir.clone(),
@@ -801,6 +848,7 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
     let addr = bind_addr(&cli, &file, &env)?;
     validate_volumes(&file.volumes, &guarded_directories(&cli, &file, &env))?;
     let network_policy = resolve_network_policy(&cli, &file, &env)?;
+    let auth = resolve_auth(&cli, &file, &env)?;
     let secret_store = resolve_secret_store(&cli, &file, &env)?;
     let mcp_allowed_hosts = resolve_mcp_allowed_hosts(&cli, &file, &env);
     let runtime = RuntimeConfig {
@@ -867,6 +915,10 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
 
     let config = ServerConfig {
         runtime,
+        // Named rather than left to `..ServerConfig::default()`, whose `auth`
+        // is "no authentication": a field that went missing here would fail
+        // open.
+        auth,
         blueprint_dir: Some(blueprint_dir),
         blueprint_seed_dir,
         session_store_dir: Some(session_store_dir),
@@ -964,6 +1016,103 @@ fn secret_key_file(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Option<Path
     )
 }
 
+/// Who may call the API. A server with no tokens is refused unless the
+/// operator opted out, and an opt-out alongside tokens is refused too: the
+/// opt-out is additive across the three sources, so without that rule a stray
+/// environment variable could switch off tokens the config file declares.
+fn resolve_auth(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<AuthConfig> {
+    let allow_unauthenticated = cli.allow_unauthenticated
+        || env.allow_unauthenticated
+        || file.allow_unauthenticated.unwrap_or(false);
+    let configured =
+        !file.api_tokens.is_empty() || env.server_token.is_some() || env.server_token_not_unicode;
+    match (configured, allow_unauthenticated) {
+        (false, true) => Ok(AuthConfig::Disabled),
+        (false, false) => anyhow::bail!(
+            "no API tokens are configured, so nothing could call this server. Set \
+             `${SERVER_TOKEN_ENV}` to an admin token (for example `openssl rand -hex 32`), \
+             declare tokens under `api_tokens:` in the config file (`--config`), or serve \
+             without authentication by setting `allow_unauthenticated: true` \
+             (`--allow-unauthenticated`, `$SUBMILLI_ALLOW_UNAUTHENTICATED=1`)"
+        ),
+        (true, true) => anyhow::bail!(
+            "API tokens are configured (`${SERVER_TOKEN_ENV}` or `api_tokens`) and \
+             `allow_unauthenticated` is set (`--allow-unauthenticated`, \
+             `$SUBMILLI_ALLOW_UNAUTHENTICATED`, or the config file); remove one — the server \
+             either requires a token or it does not"
+        ),
+        (true, false) => api_tokens(file, env).map(AuthConfig::Tokens),
+    }
+}
+
+/// The server token from the environment, then the config file's entries.
+fn api_tokens(file: &FileConfig, env: &EnvConfig) -> Result<Vec<ApiToken>> {
+    let mut tokens: Vec<ApiToken> = Vec::with_capacity(file.api_tokens.len() + 1);
+    if let Some(token) = server_token(env)? {
+        tokens.push(token);
+    }
+    for entry in &file.api_tokens {
+        let token = api_token(entry)?;
+        if let Some(other) = tokens.iter().find(|other| other.name() == token.name()) {
+            anyhow::bail!(
+                "two API tokens are named `{}`; give each a name of its own",
+                other.name()
+            );
+        }
+        if let Some(other) = tokens.iter().find(|other| other.same_token(&token)) {
+            anyhow::bail!(
+                "API tokens `{}` and `{}` hold the same token; give each a token of its own",
+                other.name(),
+                token.name()
+            );
+        }
+        tokens.push(token);
+    }
+    Ok(tokens)
+}
+
+/// `$SUBMILLI_SERVER_TOKEN` as an admin token, named after the variable. It is
+/// the variable the `submilli server` CLI sends, so a server and a CLI sharing
+/// an environment agree on a token with no config file at all.
+fn server_token(env: &EnvConfig) -> Result<Option<ApiToken>> {
+    if env.server_token_not_unicode {
+        anyhow::bail!(
+            "`${SERVER_TOKEN_ENV}` does not hold valid Unicode, so it cannot be a bearer token"
+        );
+    }
+    env.server_token
+        .as_deref()
+        .map(|token| {
+            ApiToken::new(SERVER_TOKEN_ENV, Role::Admin, token)
+                .map_err(|err| anyhow::anyhow!("the token in `${SERVER_TOKEN_ENV}` {err}"))
+        })
+        .transpose()
+}
+
+/// Read one entry's token. Messages name the entry and its file, and never the
+/// token: this error reaches stderr and the logs.
+fn api_token(entry: &ApiTokenFileConfig) -> Result<ApiToken> {
+    let name = entry.name.as_str();
+    if name.trim().is_empty() || name.chars().any(char::is_control) {
+        anyhow::bail!(
+            "an `api_tokens` entry has the name {name:?}; give every entry a plain single-line \
+             name"
+        );
+    }
+    let path = entry.token_file.display();
+    let raw = std::fs::read_to_string(&entry.token_file)
+        .with_context(|| format!("`api_tokens` entry `{name}`: reading token file `{path}`"))?;
+    // A token written with `echo` or a Kubernetes Secret volume ends in a
+    // newline the caller will never send.
+    let token = raw.trim();
+    if token.is_empty() {
+        anyhow::bail!("`api_tokens` entry `{name}`: the token file `{path}` is empty");
+    }
+    ApiToken::new(name, entry.role, token).map_err(|err| {
+        anyhow::anyhow!("`api_tokens` entry `{name}`: the token in token file `{path}` {err}")
+    })
+}
+
 /// The `allow_*` settings are additive across all three sources: a permission
 /// enabled on the command line, in the file, *or* in the environment is granted;
 /// no source can revoke another's grant. A malformed entry is an error rather
@@ -1026,6 +1175,9 @@ mod tests {
             max_llm_tokens: None,
             max_execution_llm_tokens: None,
             max_llm_concurrency: None,
+            // Opted out so the tests about every other setting reach `merge`
+            // without declaring tokens; the auth tests turn it back off.
+            allow_unauthenticated: true,
             health_check: false,
         }
     }
@@ -1122,6 +1274,7 @@ network:
             package_fallback_root: Some(root.join("cli-packages")),
             secret_store_dir: Some(root.join("secrets")),
             secret_store_key_file: Some(root.join("keys/secret.b64")),
+            api_token_files: vec![root.join("tokens/admin"), root.join("tokens/user")],
             session_storage_root: Some(root.join("vfs/sessions")),
             session_store_dir: Some(root.join("sessions")),
             ephemeral_storage_root: Some(root.join("scratch")),
@@ -1141,6 +1294,7 @@ network:
             package_fallback_root,
             secret_store_dir,
             secret_store_key_file,
+            api_token_files,
             session_storage_root,
             session_store_dir,
             ephemeral_storage_root,
@@ -1160,6 +1314,11 @@ network:
         ]
         .into_iter()
         .filter_map(|(path, owned)| Some((path?, owned)))
+        .chain(
+            api_token_files
+                .into_iter()
+                .map(|path| (path, "API token file")),
+        )
         .collect()
     }
 
@@ -1582,9 +1741,9 @@ network:
     #[test]
     fn config_file_loopback_survives_an_ambient_port() {
         // The regression the two-tier split exists to prevent. `$PORT` alone
-        // implies a `0.0.0.0` bind, and this server has no inbound auth — so a
-        // config file that deliberately says loopback must not be flipped open
-        // by a platform that merely happens to inject `$PORT`.
+        // implies a `0.0.0.0` bind, so a config file that deliberately says
+        // loopback must not be flipped open by a platform that merely happens
+        // to inject `$PORT`.
         let file = FileConfig {
             bind: Some("127.0.0.1".parse().unwrap()),
             ..FileConfig::default()
@@ -1928,7 +2087,7 @@ network:
     fn malformed_explicit_bind_fails_boot_instead_of_falling_through() {
         // The fail-open case. A discarded `SUBMILLI_BIND` drops to the ambient
         // tier, where `$PORT`'s presence alone means `0.0.0.0` — so a typo in an
-        // operator's loopback bind would publish a server with no inbound auth.
+        // operator's loopback bind would publish the server.
         let env = env_from(&[("SUBMILLI_BIND", "localhost"), ("PORT", "10000")]);
         let Err(err) = merge(empty_cli(), FileConfig::default(), env) else {
             panic!("a malformed SUBMILLI_BIND must not resolve to an address at all");
@@ -2595,5 +2754,339 @@ network:
         let source = secret_key_source(&cli, &FileConfig::default(), &EnvConfig::default());
         unsafe { std::env::remove_var(var) };
         assert!(matches!(source, Some(KeySource::Env(name)) if name == var));
+    }
+
+    const ADMIN_TOKEN: &str = "admin-token-0123456789abcdef0123456789";
+    const USER_TOKEN: &str = "user-token-0123456789abcdef01234567890";
+
+    fn write_token_file(dir: &Path, name: &str, contents: &str) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, contents).unwrap();
+        path
+    }
+
+    fn token_from_file(name: &str, role: Role, path: PathBuf) -> ApiTokenFileConfig {
+        ApiTokenFileConfig {
+            name: name.into(),
+            role,
+            token_file: path,
+        }
+    }
+
+    /// The CLI as the binary sees it when no opt-out flag is passed.
+    fn auth_required_cli() -> Cli {
+        Cli {
+            allow_unauthenticated: false,
+            ..empty_cli()
+        }
+    }
+
+    fn auth_of(tokens: Vec<ApiTokenFileConfig>) -> Result<AuthConfig> {
+        let file = FileConfig {
+            api_tokens: tokens,
+            ..FileConfig::default()
+        };
+        resolve_auth(&auth_required_cli(), &file, &EnvConfig::default())
+    }
+
+    fn auth_err(tokens: Vec<ApiTokenFileConfig>) -> String {
+        auth_of(tokens)
+            .expect_err("auth should be refused")
+            .to_string()
+    }
+
+    #[test]
+    fn api_tokens_parse_from_the_config_file() {
+        let yaml = "
+api_tokens:
+  - name: ops
+    role: admin
+    token_file: /run/secrets/admin
+  - name: app
+    role: user
+    token_file: /run/secrets/user
+";
+        let cfg: FileConfig = serde_yml::from_str(yaml).unwrap();
+        assert_eq!(cfg.api_tokens.len(), 2);
+        assert_eq!(cfg.api_tokens[0].name, "ops");
+        assert_eq!(cfg.api_tokens[0].role, Role::Admin);
+        assert_eq!(
+            cfg.api_tokens[0].token_file,
+            PathBuf::from("/run/secrets/admin")
+        );
+        assert_eq!(cfg.api_tokens[1].role, Role::User);
+        assert_eq!(
+            cfg.api_tokens[1].token_file,
+            PathBuf::from("/run/secrets/user")
+        );
+        assert!(FileConfig::default().api_tokens.is_empty());
+    }
+
+    #[test]
+    fn an_unknown_role_or_token_key_is_rejected() {
+        for entry in [
+            "{ name: a, role: root, token_file: /t }",
+            "{ name: a, role: admin, token: literal }",
+            "{ name: a, role: admin, token_env: T }",
+            "{ name: a, role: admin }",
+        ] {
+            let yaml = format!("api_tokens:\n  - {entry}\n");
+            assert!(serde_yml::from_str::<FileConfig>(&yaml).is_err(), "{entry}");
+        }
+    }
+
+    #[test]
+    fn a_server_with_no_tokens_is_refused_unless_it_opts_out() {
+        let err = auth_err(vec![]);
+        assert!(err.contains("api_tokens"), "got: {err}");
+        assert!(err.contains("allow_unauthenticated"), "got: {err}");
+
+        let file = FileConfig::default();
+        let env = EnvConfig::default();
+        let by_flag = Cli {
+            allow_unauthenticated: true,
+            ..auth_required_cli()
+        };
+        let by_flag = resolve_auth(&by_flag, &file, &env).unwrap();
+        assert!(matches!(by_flag, AuthConfig::Disabled));
+
+        let by_file = FileConfig {
+            allow_unauthenticated: Some(true),
+            ..FileConfig::default()
+        };
+        let by_file = resolve_auth(&auth_required_cli(), &by_file, &env).unwrap();
+        assert!(matches!(by_file, AuthConfig::Disabled));
+
+        let by_env = EnvConfig::from_lookup(|name| {
+            (name == "SUBMILLI_ALLOW_UNAUTHENTICATED").then(|| "1".to_string())
+        });
+        let by_env = resolve_auth(&auth_required_cli(), &file, &by_env).unwrap();
+        assert!(matches!(by_env, AuthConfig::Disabled));
+
+        let file_says_no = FileConfig {
+            allow_unauthenticated: Some(false),
+            ..FileConfig::default()
+        };
+        assert!(resolve_auth(&auth_required_cli(), &file_says_no, &env).is_err());
+    }
+
+    #[test]
+    fn an_opt_out_alongside_tokens_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = FileConfig {
+            api_tokens: vec![token_from_file(
+                "ops",
+                Role::Admin,
+                write_token_file(tmp.path(), "admin", ADMIN_TOKEN),
+            )],
+            ..FileConfig::default()
+        };
+        let opted_out = Cli {
+            allow_unauthenticated: true,
+            ..auth_required_cli()
+        };
+        let err = resolve_auth(&opted_out, &file, &EnvConfig::default())
+            .expect_err("tokens plus an opt-out should be refused")
+            .to_string();
+        assert!(err.contains("remove one"), "got: {err}");
+    }
+
+    #[test]
+    fn tokens_are_read_from_files_with_trailing_whitespace_trimmed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let auth = auth_of(vec![
+            token_from_file(
+                "ops",
+                Role::Admin,
+                write_token_file(tmp.path(), "admin", &format!("{ADMIN_TOKEN}\n")),
+            ),
+            token_from_file(
+                "app",
+                Role::User,
+                write_token_file(tmp.path(), "user", USER_TOKEN),
+            ),
+        ])
+        .unwrap();
+        let AuthConfig::Tokens(tokens) = auth else {
+            panic!("expected tokens");
+        };
+        assert_eq!(tokens.len(), 2);
+        assert_eq!((tokens[0].name(), tokens[0].role()), ("ops", Role::Admin));
+        assert_eq!((tokens[1].name(), tokens[1].role()), ("app", Role::User));
+        let expected = ApiToken::new("x", Role::Admin, ADMIN_TOKEN).unwrap();
+        assert!(tokens[0].same_token(&expected));
+    }
+
+    fn env_with_server_token(token: &str) -> EnvConfig {
+        let token = token.to_string();
+        EnvConfig::from_lookup(move |name| (name == SERVER_TOKEN_ENV).then(|| token.clone()))
+    }
+
+    #[test]
+    fn the_server_token_variable_is_an_admin_token_with_no_config() {
+        let file = FileConfig::default();
+        let auth = resolve_auth(
+            &auth_required_cli(),
+            &file,
+            &env_with_server_token(&format!(" {ADMIN_TOKEN}\n")),
+        )
+        .unwrap();
+        let AuthConfig::Tokens(tokens) = auth else {
+            panic!("expected tokens");
+        };
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(
+            (tokens[0].name(), tokens[0].role()),
+            ("SUBMILLI_SERVER_TOKEN", Role::Admin)
+        );
+        assert!(tokens[0].same_token(&ApiToken::new("x", Role::Admin, ADMIN_TOKEN).unwrap()));
+
+        // Blank is unset, so the server is back to having no token at all.
+        let blank = resolve_auth(&auth_required_cli(), &file, &env_with_server_token("  "));
+        assert!(blank.is_err());
+    }
+
+    #[test]
+    fn the_server_token_variable_combines_with_the_config_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = |token: &str| FileConfig {
+            api_tokens: vec![token_from_file(
+                "app",
+                Role::User,
+                write_token_file(tmp.path(), "user", token),
+            )],
+            ..FileConfig::default()
+        };
+        let env = env_with_server_token(ADMIN_TOKEN);
+
+        let auth = resolve_auth(&auth_required_cli(), &file(USER_TOKEN), &env).unwrap();
+        let AuthConfig::Tokens(tokens) = auth else {
+            panic!("expected tokens");
+        };
+        let roles: Vec<_> = tokens.iter().map(|t| (t.name(), t.role())).collect();
+        assert_eq!(
+            roles,
+            [("SUBMILLI_SERVER_TOKEN", Role::Admin), ("app", Role::User)]
+        );
+
+        let same = resolve_auth(&auth_required_cli(), &file(ADMIN_TOKEN), &env)
+            .expect_err("one token under two names should be refused")
+            .to_string();
+        assert!(same.contains("same token"), "got: {same}");
+    }
+
+    #[test]
+    fn a_bad_server_token_variable_is_refused_without_being_printed() {
+        let file = FileConfig::default();
+        let short = "too-short-to-accept";
+        let err = resolve_auth(&auth_required_cli(), &file, &env_with_server_token(short))
+            .expect_err("a short token should be refused")
+            .to_string();
+        assert!(err.contains("SUBMILLI_SERVER_TOKEN"), "got: {err}");
+        assert!(err.contains("at least 32"), "got: {err}");
+        assert!(!err.contains(short), "got: {err}");
+
+        let not_unicode = EnvConfig {
+            server_token_not_unicode: true,
+            ..EnvConfig::default()
+        };
+        let err = resolve_auth(&auth_required_cli(), &file, &not_unicode)
+            .expect_err("a non-Unicode token should be refused")
+            .to_string();
+        assert!(err.contains("valid Unicode"), "got: {err}");
+
+        let opted_out = Cli {
+            allow_unauthenticated: true,
+            ..auth_required_cli()
+        };
+        let err = resolve_auth(&opted_out, &file, &env_with_server_token(ADMIN_TOKEN))
+            .expect_err("a token plus an opt-out should be refused")
+            .to_string();
+        assert!(err.contains("remove one"), "got: {err}");
+    }
+
+    #[test]
+    fn duplicate_token_names_and_values_are_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let admin = write_token_file(tmp.path(), "admin", ADMIN_TOKEN);
+        let user = write_token_file(tmp.path(), "user", USER_TOKEN);
+
+        let err = auth_err(vec![
+            token_from_file("ops", Role::Admin, admin.clone()),
+            token_from_file("ops", Role::User, user),
+        ]);
+        assert!(err.contains("named `ops`"), "got: {err}");
+
+        let err = auth_err(vec![
+            token_from_file("ops", Role::Admin, admin.clone()),
+            token_from_file("app", Role::User, admin),
+        ]);
+        assert!(err.contains("same token"), "got: {err}");
+        assert!(err.contains("ops") && err.contains("app"), "got: {err}");
+    }
+
+    #[test]
+    fn a_bad_token_is_refused_without_being_printed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let short = "too-short-to-accept";
+        let path = write_token_file(tmp.path(), "short", short);
+        let err = auth_err(vec![token_from_file("ops", Role::Admin, path.clone())]);
+        assert!(err.contains("at least 32"), "got: {err}");
+        assert!(err.contains(&path.display().to_string()), "got: {err}");
+        assert!(!err.contains(short), "got: {err}");
+
+        let spaced = "a token with spaces 0123456789abcdef0123";
+        let path = write_token_file(tmp.path(), "spaced", spaced);
+        let err = auth_err(vec![token_from_file("ops", Role::Admin, path)]);
+        assert!(err.contains("bearer token"), "got: {err}");
+        assert!(!err.contains(spaced), "got: {err}");
+
+        let missing = tmp.path().join("absent");
+        let err = auth_of(vec![token_from_file("ops", Role::Admin, missing.clone())])
+            .expect_err("a missing token file should be refused");
+        assert!(format!("{err:#}").contains(&missing.display().to_string()));
+
+        let empty = write_token_file(tmp.path(), "empty", "\n");
+        let err = auth_err(vec![token_from_file("ops", Role::Admin, empty)]);
+        assert!(err.contains("is empty"), "got: {err}");
+
+        let blank = token_from_file(" ", Role::User, tmp.path().join("absent"));
+        assert!(auth_err(vec![blank]).contains("name"));
+    }
+
+    #[test]
+    fn merge_carries_the_tokens_and_guards_their_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tokens_dir = tmp.path().join("tokens");
+        std::fs::create_dir(&tokens_dir).unwrap();
+        let file = |volumes: VolumeTable| FileConfig {
+            api_tokens: vec![token_from_file(
+                "ops",
+                Role::Admin,
+                write_token_file(&tokens_dir, "admin", ADMIN_TOKEN),
+            )],
+            secret_store: SecretStoreFileConfig {
+                key_env: Some("SUB_TEST_SECRET_KEY_UNSET".into()),
+                ..SecretStoreFileConfig::default()
+            },
+            volumes,
+            ..FileConfig::default()
+        };
+
+        let (_, config) = merge(
+            auth_required_cli(),
+            file(VolumeTable::new()),
+            EnvConfig::default(),
+        )
+        .map_err(|err| err.to_string())
+        .expect("merge");
+        assert!(matches!(config.auth, AuthConfig::Tokens(ref tokens) if tokens.len() == 1));
+
+        let over_tokens = VolumeTable::from([("work".to_string(), tokens_dir.clone())]);
+        let err = match merge(auth_required_cli(), file(over_tokens), EnvConfig::default()) {
+            Ok(_) => panic!("a volume over a token file should be refused"),
+            Err(err) => err.to_string(),
+        };
+        assert!(err.contains("API token file"), "got: {err}");
     }
 }

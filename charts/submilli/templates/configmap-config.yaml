@@ -1,0 +1,15 @@
+{{- /*
+The server's config file. A ConfigMap, not a Secret: it names the files tokens
+and keys are read from and never carries the material itself. Assembled in
+`submilli.serverConfig` rather than here so the StatefulSet's rollout checksum
+can hash the same text without also hashing this object's labels.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "submilli.configName" . }}
+  labels:
+    {{- include "submilli.labels" . | nindent 4 }}
+data:
+  server.yaml: |
+    {{- include "submilli.serverConfig" . | nindent 4 }}

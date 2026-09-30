@@ -31,6 +31,8 @@ import { generateText, stepCountIs } from "ai";
 import { openai } from "@ai-sdk/openai";
 
 const SUBMILLI_URL = process.env.SUBMILLI_SERVER_URL ?? "http://127.0.0.1:8128";
+// The API token the application was given for the server.
+const SUBMILLI_TOKEN = process.env.SUBMILLI_SERVER_TOKEN;
 const BLUEPRINT = "support-read";
 const MAX_STEPS = 8;
 
@@ -43,11 +45,15 @@ function bindCustomer(customerId: string): string {
 }
 
 export async function answerForRequest(request: Request, customerId: string): Promise<string> {
+  if (SUBMILLI_TOKEN === undefined) throw new Error("SUBMILLI_SERVER_TOKEN is required");
   const client = await createMCPClient({
     transport: {
       type: "http",
       url: SUBMILLI_URL + "/mcp/" + BLUEPRINT,
-      headers: { "submilli-variables": bindCustomer(customerId) },
+      headers: {
+        Authorization: "Bearer " + SUBMILLI_TOKEN,
+        "submilli-variables": bindCustomer(customerId),
+      },
     },
   });
 
@@ -95,7 +101,7 @@ if (process.argv[1] !== undefined && import.meta.url.endsWith(process.argv[1])) 
 
 The SDK default is one step; a tool call can therefore be returned without a final answer unless `stopWhen` enables more steps. Keep the bound finite and treat budget exhaustion as an explicit outcome. `stopWhen: stepCountIs(n)` is the AI SDK 5/6 replacement for the old `maxSteps` option. A raw HTTP, shell, or provider tool registered alongside these tools can bypass this boundary; remove or separately govern those tools when all business actions must pass through Submilli.
 
-Each identity needs its own MCP client and tool closures. Never mutate headers on a shared client or reuse tools created for another tenant. The server trusts the binding as caller input, so the MCP server still needs authenticated network ingress when it is reachable beyond a trusted local network.
+Each identity needs its own MCP client and tool closures. Never mutate headers on a shared client or reuse tools created for another tenant. The server trusts the binding as caller input from any holder of the token, so keep `SUBMILLI_SERVER_TOKEN` server-side (never in browser code, prompts, or tool schemas), and add TLS and restricted ingress when the server is reachable beyond a trusted local network.
 
 ## Authenticated streaming route
 
@@ -118,7 +124,10 @@ export async function handleStream(request: Request, customerId: string): Promis
     transport: {
       type: "http",
       url: (process.env.SUBMILLI_SERVER_URL ?? "http://127.0.0.1:8128") + "/mcp/support-read",
-      headers: { "submilli-variables": bindCustomer(customerId) },
+      headers: {
+        Authorization: "Bearer " + process.env.SUBMILLI_SERVER_TOKEN,
+        "submilli-variables": bindCustomer(customerId),
+      },
     },
     onUncaughtError: (error: unknown) => console.error("MCP transport error", error),
   });
@@ -171,14 +180,14 @@ cd "$tmp_dir"
 npm init -y
 npm install ai @ai-sdk/mcp typescript tsx zod   # or the app's exact versions
 # write validate.ts asserting the list below, then:
-SUBMILLI_SERVER_URL=http://127.0.0.1:8128 npx tsx validate.ts
+SUBMILLI_SERVER_URL=http://127.0.0.1:8128 npx tsx validate.ts   # SUBMILLI_SERVER_TOKEN exported
 ```
 
 The validation must assert all of the following against the local fixture:
 
 1. `createMCPClient` initializes and `client.tools()` discovers the execution tool with its code schema and description intact; the serialized tool-call schema contains no model-controlled blueprint or identity binding.
 2. The mock model calls the discovered tool with code that reads the bound customer and receives `6150`; the bounded loop then produces final text.
-3. Calling the same tool with another customer's id is denied by Submilli, and omitting the required binding is rejected at initialize: `createMCPClient` itself rejects with `MCPClientError` (HTTP 400, `required variable 'customerId' was not supplied`), so assert with `assert.rejects` rather than expecting a tool result. The denial, by contrast, is a normal tool result containing `permission denied`.
+3. Calling the same tool with another customer's id is denied by Submilli, and omitting the required binding is rejected at initialize: `createMCPClient` itself rejects with `MCPClientError` (HTTP 400, `required variable 'customerId' was not supplied`), so assert with `assert.rejects` rather than expecting a tool result. Send the token in that case; omitting the token instead rejects with HTTP 401 and starts no OAuth flow. The denial, by contrast, is a normal tool result containing `permission denied`.
 4. Two concurrent clients bound to different customers cannot cross-use each other's tool closures. Close each client in `finally` and assert cleanup on normal completion, cancellation, and an MCP/tool failure.
 
 This proves the adapter and policy boundary without a live model or business service. Only after it passes should an application run one live model task; report that separately from deterministic mock results. No live model or business call belongs in the validation command.

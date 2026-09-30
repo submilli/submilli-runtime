@@ -6,6 +6,7 @@
 # something to bind-mount:
 #
 #   curl -X PUT http://127.0.0.1:8128/v1/blueprints/demo \
+#     -H "Authorization: Bearer $SUBMILLI_SERVER_TOKEN" \
 #     -H 'content-type: application/json' \
 #     -d '{"yaml": "name: demo\nvfs: per_session\ndefault: allow\n"}'
 

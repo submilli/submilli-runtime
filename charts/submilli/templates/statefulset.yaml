@@ -55,6 +55,16 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       annotations:
+        # The config file is read once at boot, so a `helm upgrade` that only
+        # changes it must still roll the pod. Hashes the rendered file itself
+        # rather than the ConfigMap template, so the digest moves when the
+        # configuration does and not on every chart or appVersion bump.
+        #
+        # The token Secret is deliberately not hashed. Its generated values are
+        # stable across upgrades and an operator's own Secret is not readable
+        # from here, so rotating a token is followed by an explicit
+        # `kubectl rollout restart` instead.
+        checksum/config: {{ include "submilli.serverConfig" . | sha256sum }}
         {{- if .Values.blueprints }}
         # Without this, a `helm upgrade` that changes only ConfigMap contents
         # leaves the StatefulSet spec identical, so no rollout happens and the
@@ -83,7 +93,10 @@ spec:
       # an explicit config tier and fails boot when it is set but unparseable, so
       # the pod would exit at startup with a confusing parse error. The explicit
       # SUBMILLI_PORT below also overrides it; both are set because they fail in
-      # different directions if one is later removed.
+      # different directions if one is later removed. That is why the port is the
+      # one setting passed through the environment instead of the config
+      # file: an injected variable would outrank the file, so only an explicit
+      # variable of the same name can defend against it.
       enableServiceLinks: false
       terminationGracePeriodSeconds: {{ include "submilli.terminationGrace" . }}
       securityContext:
@@ -125,37 +138,15 @@ spec:
               containerPort: {{ .Values.server.port }}
               protocol: TCP
           env:
-            - name: SUBMILLI_BIND
-              value: {{ .Values.server.bind | quote }}
             - name: SUBMILLI_PORT
               value: {{ .Values.server.port | quote }}
-            # SUBMILLI_HOME relocates five of the server's six state directories
-            # (kept under its server/ subdirectory; an older volume is moved into
-            # that shape on the first boot).
-            # The ephemeral VFS root is the sixth and still defaults to the OS
-            # temp dir, so under readOnlyRootFilesystem it must be pointed at a
-            # writable volume. Omitting this breaks /v1/execute — the product —
-            # while /v1/status stays green, which is why the chart's own test
-            # exercises execute rather than health alone.
-            - name: SUBMILLI_VFS_EPHEMERAL_DIR
-              value: /tmp
-            - name: SUBMILLI_MAX_EXECUTION_MEMORY
-              value: {{ .Values.execution.maxMemoryMB | quote }}
-            - name: SUBMILLI_SHUTDOWN_GRACE
-              value: {{ .Values.server.shutdownGrace | quote }}
-            {{- if .Values.blueprints }}
-            # The read-only source the server reconciles from at boot. A
-            # different directory from the writable store below — pointing both
-            # at one path would make the store read-only forever.
-            - name: SUBMILLI_BLUEPRINT_SEED_DIR
-              value: {{ include "submilli.seedPath" . }}
-            {{- end }}
-            {{- if and .Values.secretStore.enabled .Values.secretStore.existingSecret }}
-            # A file, never an env var holding the key itself: environment is
-            # readable through /proc/self/environ.
-            - name: SUBMILLI_SECRET_STORE_KEY_FILE
-              value: /etc/submilli/secret-store/{{ .Values.secretStore.key }}
-            {{- end }}
+            # Everything else the chart configures lives in this file; see
+            # `submilli.serverConfig`.
+            - name: SUBMILLI_CONFIG
+              value: {{ include "submilli.configMountPath" . }}/server.yaml
+            # Last, and an override rather than a default: the server ranks an
+            # explicit SUBMILLI_* variable above its config file, so an entry
+            # here beats both the chart's own settings and `config:`.
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -179,14 +170,26 @@ spec:
               mountPath: /etc/submilli/secret-store
               readOnly: true
             {{- end }}
+            - name: config
+              mountPath: {{ include "submilli.configMountPath" . }}
+              readOnly: true
+            {{- if .Values.auth.enabled }}
+            - name: auth
+              mountPath: {{ include "submilli.authMountPath" . }}
+              readOnly: true
+            {{- end }}
           # httpGet rather than exec. The kubelet makes the request itself from
           # the node, so a distroless image with no shell is irrelevant; an exec
           # probe would fork a process every period to make a request the kubelet
           # could make directly. The binary keeps `--health-check` for the
           # `docker run` path, where there is no kubelet to do it.
+          #
+          # /healthz, not /v1/status: it is the one route that needs no token,
+          # and a probe cannot send one without the admin token being written
+          # into the pod spec.
           startupProbe:
             httpGet:
-              path: /v1/status
+              path: /healthz
               port: http
             periodSeconds: 2
             # 30 x 2s. Generous on purpose: while this is failing, liveness and
@@ -196,7 +199,7 @@ spec:
             timeoutSeconds: 3
           readinessProbe:
             httpGet:
-              path: /v1/status
+              path: /healthz
               port: http
             periodSeconds: 10
             # The default is 1s, which a loaded server can exceed while perfectly
@@ -249,6 +252,21 @@ spec:
             items:
               - key: {{ .Values.secretStore.key }}
                 path: {{ .Values.secretStore.key }}
+        {{- end }}
+        - name: config
+          configMap:
+            name: {{ include "submilli.configName" . }}
+        {{- if .Values.auth.enabled }}
+        # Only the two keys the config file names, so an operator's own Secret
+        # can hold other things without them landing in the pod.
+        - name: auth
+          secret:
+            secretName: {{ include "submilli.authSecretName" . }}
+            items:
+              - key: {{ .Values.auth.adminTokenKey }}
+                path: {{ .Values.auth.adminTokenKey }}
+              - key: {{ .Values.auth.userTokenKey }}
+                path: {{ .Values.auth.userTokenKey }}
         {{- end }}
 {{- if .Values.persistence.enabled }}
   # Retain on both axes. `whenDeleted` is what makes the volume survive

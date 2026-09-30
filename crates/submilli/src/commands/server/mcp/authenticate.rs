@@ -13,7 +13,7 @@ use anyhow::{Context, Result};
 
 use super::AuthStateBody;
 use super::oauth::{self, AuthConfig};
-use crate::commands::http::{client, read_or_error};
+use crate::commands::http::{ServerTarget, read_or_error};
 
 /// Default loopback port for the OAuth redirect. Pinned (rather than ephemeral)
 /// so it matches a provider's registered callback URL out of the box;
@@ -26,9 +26,8 @@ pub struct Args {
     blueprint: String,
     /// The MCP server's local name (its key in the `mcp:` block).
     server: String,
-    /// Base URL of the running submilli-server.
-    #[arg(long = "server", default_value = "http://127.0.0.1:8128")]
-    server_url: String,
+    #[command(flatten)]
+    target: ServerTarget,
 }
 
 pub fn execute(args: Args) -> Result<ExitCode> {
@@ -45,8 +44,8 @@ pub fn execute(args: Args) -> Result<ExitCode> {
 }
 
 fn run(args: &Args) -> Result<String> {
-    let agent = client();
-    let base = args.server_url.trim_end_matches('/');
+    let agent = args.target.agent()?;
+    let base = args.target.base();
 
     // Bind the loopback redirect first — its URL is what the server may need to
     // register a client with (for providers without a configured client id).

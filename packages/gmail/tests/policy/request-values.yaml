@@ -1,0 +1,30 @@
+kind: blueprint
+name: gmail-request-values-test
+packages:
+  - '@submilli/gmail'
+default: deny
+secrets:
+  # Not a credential: a placeholder read from a file beside this blueprint, so the
+  # run touches neither the secret store nor the environment. The path is relative
+  # to the repository root, where the policy test runs.
+  GOOGLE_ACCESS_TOKEN:
+    file: packages/gmail/tests/policy/fake-token.txt
+permissions:
+  main:
+    - capability: submilli/gmail.sendEmail
+      filter: not (recipients contains "blocked@example.com")
+      action: allow
+    - capability: submilli/gmail.createDraft
+      filter: not (recipients contains "blocked@example.com")
+      action: allow
+  '@submilli/gmail':
+    - capability: secrets.get
+      filter: name == "GOOGLE_ACCESS_TOKEN"
+      action: allow
+    # No request is sent: `ask-human` refuses like `deny`, with a reason of its own.
+    # A filter sees the size of a request body and not its content, so the limit
+    # sits between the message to the allowed list and the longer one to the
+    # blocked list. A request over it falls to the default and its reason.
+    - capability: http.post
+      filter: host == "gmail.googleapis.com" and body_size <= 240
+      action: ask-human

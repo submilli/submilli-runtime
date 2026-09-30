@@ -1,8 +1,11 @@
 # Partner-facing example for running `submilli-server` in a container, and the
 # fixture the release workflow's smoke test drives.
 #
+#   echo "SUBMILLI_SERVER_TOKEN=$(openssl rand -hex 32)" > .env
 #   docker compose up -d
+#   set -a; . ./.env; set +a
 #   curl -X PUT http://127.0.0.1:8128/v1/blueprints/demo \
+#     -H "Authorization: Bearer $SUBMILLI_SERVER_TOKEN" \
 #     -H 'content-type: application/json' \
 #     -d "$(python3 -c 'import json,sys; print(json.dumps({"yaml": sys.stdin.read()}))' \
 #         < examples/docker/blueprints/demo.yaml)"
@@ -14,13 +17,13 @@ services:
   submilli:
     image: ${SUBMILLI_IMAGE:-ghcr.io/submilli/submilli-runtime:latest}
 
-    # The HTTP API has no inbound authentication yet (SUB-950), so the
-    # published port is scoped to the loopback interface. This is substantive,
-    # not stylistic: Docker DNATs published ports in nat/PREROUTING and they then
-    # traverse FORWARD via DOCKER-USER/DOCKER, so the INPUT rules ufw writes are
-    # never consulted — a plain `8128:8128` would expose an unauthenticated
-    # code-execution endpoint to the LAN on a host the operator believes is
-    # firewalled.
+    # The server speaks plain HTTP, so a token sent across a LAN is readable on
+    # the way, and the published port is scoped to the loopback interface. This
+    # is substantive, not stylistic: Docker DNATs published ports in
+    # nat/PREROUTING and they then traverse FORWARD via DOCKER-USER/DOCKER, so
+    # the INPUT rules ufw writes are never consulted — a plain `8128:8128` would
+    # expose a code-execution endpoint to the LAN on a host the operator
+    # believes is firewalled.
     #
     # Loopback publishing scopes the *host* interface only. It does not isolate
     # the server from other containers, which is why `submilli-net` below is a
@@ -78,9 +81,14 @@ services:
     # own process and cannot inherit the server's flags. The image already sets
     # HOST=0.0.0.0, but that is the *ambient* tier — naming them explicitly is
     # what makes an operator's port override apply to the probe as well.
+    #
+    # SUBMILLI_SERVER_TOKEN is the server's admin token, read from `.env`. The
+    # `submilli server` CLI sends the same variable, so `docker compose exec
+    # submilli submilli server status` works as it is.
     environment:
       SUBMILLI_BIND: 0.0.0.0
       SUBMILLI_PORT: 8128
+      SUBMILLI_SERVER_TOKEN: ${SUBMILLI_SERVER_TOKEN:?set SUBMILLI_SERVER_TOKEN in .env, for example with `openssl rand -hex 32`}
 
     # Supply the secret-store key as a file, not as an environment variable: an
     # env var is readable via `docker inspect`, appears in `docker compose

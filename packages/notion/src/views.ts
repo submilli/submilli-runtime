@@ -1,8 +1,6 @@
-import { check } from "submilli:security";
 import {
     CreateViewInput,
     NotionView,
-    PageOptions,
     PageResult,
     ResourceRef,
     UpdateViewInput,
@@ -35,14 +33,16 @@ export {
     ViewQuery,
 } from "./types";
 
-/**
- * Create a configured database view.
- * @capability submilli/notion.createView { databaseId: string, dataSourceId: string }
- */
-export function createView(input: CreateViewInput): NotionView {
-    const databaseId = idFromRef(input.databaseId, "database");
-    const dataSourceId = idFromRef(input.dataSourceId, "data_source");
-    check("submilli/notion.createView", { databaseId: databaseId, dataSourceId: dataSourceId });
+/** The resolved view and cached result set that continueViewQuery pages through. */
+export interface PreparedViewQuery {
+    /** UUID of the queried view. */
+    viewId: string;
+    /** ID of the cached result set. */
+    queryId: string;
+}
+
+/** Create a configured database view on a resolved database and data source. */
+export function createView(databaseId: string, dataSourceId: string, input: CreateViewInput): NotionView {
     const fields: string[] = [
         fieldJson("database_id", databaseId),
         fieldJson("data_source_id", dataSourceId),
@@ -56,13 +56,8 @@ export function createView(input: CreateViewInput): NotionView {
     return viewFrom(notionPost("/views", objectJson(fields)).json());
 }
 
-/**
- * Update a view's saved query or presentation.
- * @capability submilli/notion.updateView { viewId: string }
- */
-export function updateView(ref: string, input: UpdateViewInput): NotionView {
-    const viewId = idFromRef(ref, "view");
-    check("submilli/notion.updateView", { viewId: viewId });
+/** Update a view's saved query or presentation. */
+export function updateView(viewId: string, input: UpdateViewInput): NotionView {
     const fields: string[] = [];
     if (input.name !== null) fields.push(fieldJson("name", input.name));
     if (input.clearFilter === true) fields.push("\"filter\":null");
@@ -76,21 +71,15 @@ export function updateView(ref: string, input: UpdateViewInput): NotionView {
     return viewFrom(notionPatch("/views/" + pathId(viewId), objectJson(fields)).json());
 }
 
-/**
- * List views belonging to a database.
- * @capability submilli/notion.listViews { databaseId: string }
- */
-export function listViews(databaseRef: string, options: PageOptions | null = null): PageResult<NotionView> {
-    const databaseId = idFromRef(databaseRef, "database");
-    check("submilli/notion.listViews", { databaseId: databaseId });
+/** List views belonging to a database. */
+export function listViews(
+    databaseId: string,
+    requestedSize: number | null,
+    startCursor: string | null,
+): PageResult<NotionView> {
     const query = new Map<string, string>();
     query.set("database_id", databaseId);
-    let requestedSize: number | null = null;
-    if (options !== null) {
-        const actual = options as PageOptions;
-        requestedSize = actual.pageSize;
-        putQuery(query, "start_cursor", actual.startCursor);
-    }
+    putQuery(query, "start_cursor", startCursor);
     query.set("page_size", pageSize(requestedSize).toString());
     const page = listFrom(notionGet("/views", query));
     const results: NotionView[] = [];
@@ -103,29 +92,25 @@ export function listViews(databaseRef: string, options: PageOptions | null = nul
     };
 }
 
-/**
- * Execute a view's saved filters and sorts.
- * @capability submilli/notion.queryView { viewId: string }
- */
-export function queryView(ref: string, resultPageSize: number = 100): ViewQuery {
-    const viewId = idFromRef(ref, "view");
-    check("submilli/notion.queryView", { viewId: viewId });
+/** Execute a view's saved filters and sorts. */
+export function queryView(viewId: string, resultPageSize: number = 100): ViewQuery {
     return viewQueryFrom(notionPost("/views/" + pathId(viewId) + "/queries", { page_size: pageSize(resultPageSize) }).json());
 }
 
-/**
- * Continue a cached view query.
- * @capability submilli/notion.continueViewQuery { viewId: string }
- */
+/** Resolve the view and the cached result set of a continued view query before any request is sent. */
+export function prepareContinueViewQuery(viewRef: string, queryRef: string): PreparedViewQuery {
+    const viewId = idFromRef(viewRef, "view");
+    const queryId = idFromRef(queryRef);
+    return { viewId: viewId, queryId: queryId };
+}
+
+/** Continue a cached view query. */
 export function continueViewQuery(
-    viewRef: string,
-    queryRef: string,
+    viewId: string,
+    queryId: string,
     startCursor: string = "",
     resultPageSize: number = 100,
 ): PageResult<ResourceRef> {
-    const viewId = idFromRef(viewRef, "view");
-    const queryId = idFromRef(queryRef);
-    check("submilli/notion.continueViewQuery", { viewId: viewId });
     const query = new Map<string, string>();
     query.set("page_size", pageSize(resultPageSize).toString());
     putQuery(query, "start_cursor", startCursor);

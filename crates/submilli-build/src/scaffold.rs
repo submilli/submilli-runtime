@@ -397,6 +397,9 @@ fn generated_tsconfig_text(manifest: &ProjectManifest) -> String {
             // layer; `submilli build check` is the checker, via the tasks.json
             // problem matcher.
             "strictNullChecks": false,
+            // `strict` would type a `catch (e)` binding as `unknown`; submilli
+            // binds it as `Error`, so `e.message` must not be flagged.
+            "useUnknownInCatchVariables": false,
             "noLib": true,
             "module": "preserve",
             "target": "es2022",

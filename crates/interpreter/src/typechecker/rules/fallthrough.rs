@@ -1,23 +1,26 @@
 //! Rule: every `switch` case body must terminate with `break` or
 //! `return` — no fallthrough.
 
+use super::declarations::TypeDeclarations;
 use crate::{Diagnostic, Severity, StmtId, TypedAst, TypedStmtKind};
 
 pub(super) fn run(
     ta: &TypedAst,
+    declarations: &TypeDeclarations<'_>,
     diags: &mut Vec<Diagnostic>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     for f in &ta.functions {
-        walk(ta, f.body, diags)?;
+        walk(ta, declarations, f.body, diags)?;
     }
     for &id in &ta.top_level_statements {
-        walk(ta, id, diags)?;
+        walk(ta, declarations, id, diags)?;
     }
     Ok(())
 }
 
 fn walk(
     ta: &TypedAst,
+    declarations: &TypeDeclarations<'_>,
     id: StmtId,
     diags: &mut Vec<Diagnostic>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
@@ -28,7 +31,7 @@ fn walk(
     {
         TypedStmtKind::Switch { cases, default, .. } => {
             for case in cases {
-                if !body_terminates(ta, case.body)? {
+                if !body_terminates(ta, declarations, case.body)? {
                     diags.push(Diagnostic {
                     severity: Severity::Error,
                     span: case.span,
@@ -42,15 +45,15 @@ fn walk(
                     notes: vec![],
                 });
                 }
-                walk(ta, case.body, diags)?;
+                walk(ta, declarations, case.body, diags)?;
             }
             if let Some(d) = default {
-                walk(ta, *d, diags)?;
+                walk(ta, declarations, *d, diags)?;
             }
         }
         TypedStmtKind::Block(stmts) => {
             for &s in stmts {
-                walk(ta, s, diags)?;
+                walk(ta, declarations, s, diags)?;
             }
         }
         TypedStmtKind::If {
@@ -58,27 +61,27 @@ fn walk(
             else_block,
             ..
         } => {
-            walk(ta, *then_block, diags)?;
+            walk(ta, declarations, *then_block, diags)?;
             if let Some(eb) = else_block {
-                walk(ta, *eb, diags)?;
+                walk(ta, declarations, *eb, diags)?;
             }
         }
         TypedStmtKind::While { body, .. }
         | TypedStmtKind::For { body, .. }
         | TypedStmtKind::ForOf { body, .. }
-        | TypedStmtKind::DoWhile { body, .. } => walk(ta, *body, diags)?,
-        TypedStmtKind::NarrowRegion { body, .. } => walk(ta, *body, diags)?,
+        | TypedStmtKind::DoWhile { body, .. } => walk(ta, declarations, *body, diags)?,
+        TypedStmtKind::NarrowRegion { body, .. } => walk(ta, declarations, *body, diags)?,
         TypedStmtKind::Try {
             body,
             catches,
             finally,
         } => {
-            walk(ta, *body, diags)?;
+            walk(ta, declarations, *body, diags)?;
             for c in catches {
-                walk(ta, c.body, diags)?;
+                walk(ta, declarations, c.body, diags)?;
             }
             if let Some(f) = finally {
-                walk(ta, *f, diags)?;
+                walk(ta, declarations, *f, diags)?;
             }
         }
         TypedStmtKind::Let { .. }
@@ -99,9 +102,10 @@ fn walk(
 
 fn body_terminates(
     ta: &TypedAst,
+    declarations: &TypeDeclarations<'_>,
     id: StmtId,
 ) -> Result<bool, crate::compiler_error::CompilerFailure> {
-    super::control_flow::case_terminates(ta, id)
+    super::control_flow::case_terminates(ta, declarations, id)
 }
 
 #[cfg(test)]

@@ -10,7 +10,7 @@ use submilli_server::serve;
 mod file_config;
 mod migrate;
 
-/// Long enough for a loaded server to answer `/v1/status`, short enough to land
+/// Long enough for a loaded server to answer `/healthz`, short enough to land
 /// inside the image's `HEALTHCHECK --timeout=5s` — so a hung probe reports its
 /// own failure with a reason instead of being killed by the daemon.
 const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(4);
@@ -44,9 +44,9 @@ pub struct Cli {
     #[arg(long)]
     config: Option<PathBuf>,
 
-    /// Address to bind. A non-loopback address emits a warning. Falls back to the
-    /// `$HOST` env var, or `0.0.0.0` when `$PORT` is set (so it's reachable on
-    /// Render and similar hosts). [default: 127.0.0.1]
+    /// Address to bind. Falls back to the `$HOST` env var, or `0.0.0.0` when
+    /// `$PORT` is set (so it's reachable on Render and similar hosts).
+    /// [default: 127.0.0.1]
     /// Env: `$SUBMILLI_BIND`, which outranks the config file and `$HOST`.
     #[arg(long)]
     bind: Option<IpAddr>,
@@ -164,10 +164,10 @@ pub struct Cli {
     shutdown_grace: Option<u64>,
 
     /// Memory one execution may hold live, in megabytes. An allocation that
-    /// would pass it throws an `out of memory` error the program can catch,
-    /// instead of growing until the host or the container's own limit stops
-    /// it. This is what makes a container's `--memory` sizeable: budget
-    /// roughly this times peak concurrency.
+    /// would pass it ends the run with `memory exhausted`, instead of growing
+    /// until the host or the container's own limit stops it. This is what
+    /// makes a container's `--memory` sizeable: budget roughly this times peak
+    /// concurrency.
     /// Note that strings are UTF-16, so text costs two bytes per character —
     /// a 25 MB document needs ~50 MB here. [default: 50]
     /// Env: `$SUBMILLI_MAX_EXECUTION_MEMORY`, which outranks the config file.
@@ -225,6 +225,16 @@ pub struct Cli {
     /// Env: `$SUBMILLI_MAX_LLM_CONCURRENCY`, which outranks the config file.
     #[arg(long, value_name = "PROMPTS")]
     max_llm_concurrency: Option<usize>,
+
+    /// Serve the API without authentication: every caller that can reach the
+    /// port has full access. The server otherwise refuses to start until it
+    /// has a token — `$SUBMILLI_SERVER_TOKEN`, which is an admin token, or
+    /// entries under `api_tokens` in the config file. For a server whose
+    /// network already admits only its own application, and for local
+    /// experiments. Cannot be combined with either source of tokens.
+    /// Env: `$SUBMILLI_ALLOW_UNAUTHENTICATED` (`1`/`true`/`yes`/`on`).
+    #[arg(long)]
+    allow_unauthenticated: bool,
 
     /// Probe a running server and exit 0 when it answers, non-zero otherwise —
     /// the container `HEALTHCHECK`, which has no shell or `curl` to call. The
@@ -415,12 +425,12 @@ fn log_migration(migration: &migrate::MigrationReport) {
     }
 }
 
-/// `GET /v1/status` against the address this process's configuration resolves
+/// `GET /healthz` against the address this process's configuration resolves
 /// to. Any failure to reach a healthy server surfaces as an `Err`, which exits
-/// non-zero.
+/// non-zero. The endpoint needs no token, so the probe never reads one.
 fn health_check(cli: &Cli) -> Result<()> {
     let addr = file_config::resolve_bind_addr(cli)?;
-    let url = format!("http://{}/v1/status", probe_target(addr));
+    let url = format!("http://{}/healthz", probe_target(addr));
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(HEALTH_CHECK_TIMEOUT))
         .build()

@@ -1,15 +1,11 @@
 import { encodeComponent } from "submilli:url";
-import { check } from "submilli:security";
 import {
-    CreateDatabaseInput,
     DataSourceQueryItem,
     DataSourceTemplate,
-    ListTemplateOptions,
     NotionDatabase,
     NotionDataSource,
     PageResult,
     QueryDataSourceOptions,
-    UpdateDataSourceInput,
 } from "./types";
 import {
     dataSourceFrom,
@@ -61,48 +57,44 @@ interface ApiObject {
     id: string;
 }
 
-/**
- * Create a database container, initial data source, and initial table view.
- * @capability submilli/notion.createDatabase { parentId: string }
- */
-export function createDatabase(input: CreateDatabaseInput): NotionDatabase {
-    const parentId = idFromRef(input.parentPage, "page");
-    check("submilli/notion.createDatabase", { parentId: parentId });
-    if (input.properties.size === 0) throw validationError("invalid_database", "database properties cannot be empty");
+/** Create a database container, initial data source, and initial table view under a resolved parent page. */
+export function createDatabase(
+    parentId: string,
+    title: string,
+    description: string | null,
+    isInline: boolean | null,
+    properties: Map<string, unknown>,
+): NotionDatabase {
+    if (properties.size === 0) throw validationError("invalid_database", "database properties cannot be empty");
     const fields: string[] = [
         "\"parent\":{\"type\":\"page_id\",\"page_id\":" + JSON.stringify(parentId) + "}",
-        richTextField("title", input.title),
-        "\"initial_data_source\":{" + mapFieldJson("properties", input.properties) + "}",
+        richTextField("title", title),
+        "\"initial_data_source\":{" + mapFieldJson("properties", properties) + "}",
     ];
-    if (input.description !== null) fields.push(richTextField("description", input.description));
-    if (input.isInline !== null) fields.push(fieldJson("is_inline", input.isInline));
+    if (description !== null) fields.push(richTextField("description", description));
+    if (isInline !== null) fields.push(fieldJson("is_inline", isInline));
     return databaseFrom(notionPost("/databases", objectJson(fields)).json());
 }
 
-/**
- * Update a data source title, schema, or parent database.
- * @capability submilli/notion.updateDataSource { dataSourceId: string }
- */
-export function updateDataSource(ref: string, input: UpdateDataSourceInput): NotionDataSource {
-    const dataSourceId = idFromRef(ref, "data_source");
-    check("submilli/notion.updateDataSource", { dataSourceId: dataSourceId });
+/** Update a data source title, schema, or parent database. */
+export function updateDataSource(
+    dataSourceId: string,
+    title: string | null,
+    properties: Map<string, unknown> | null,
+    databaseId: string | null,
+): NotionDataSource {
     const fields: string[] = [];
-    if (input.title !== null) fields.push(richTextField("title", input.title));
-    if (input.properties !== null) fields.push(mapFieldJson("properties", input.properties));
-    if (input.databaseId !== null) {
-        fields.push("\"parent\":{\"type\":\"database_id\",\"database_id\":" + JSON.stringify(idFromRef(input.databaseId, "database")) + "}");
+    if (title !== null) fields.push(richTextField("title", title));
+    if (properties !== null) fields.push(mapFieldJson("properties", properties));
+    if (databaseId !== null) {
+        fields.push("\"parent\":{\"type\":\"database_id\",\"database_id\":" + JSON.stringify(idFromRef(databaseId, "database")) + "}");
     }
     if (fields.length === 0) throw validationError("empty_update", "updateDataSource requires at least one changed field");
     return dataSourceFrom(notionPatch("/data_sources/" + pathId(dataSourceId), objectJson(fields)).json());
 }
 
-/**
- * Query pages and nested data sources using structured Notion filters and sorts.
- * @capability submilli/notion.queryDataSource { dataSourceId: string }
- */
-export function queryDataSource(ref: string, options: QueryDataSourceOptions | null = null): PageResult<DataSourceQueryItem> {
-    const dataSourceId = idFromRef(ref, "data_source");
-    check("submilli/notion.queryDataSource", { dataSourceId: dataSourceId });
+/** Query pages and nested data sources using structured Notion filters and sorts. */
+export function queryDataSource(dataSourceId: string, options: QueryDataSourceOptions | null = null): PageResult<DataSourceQueryItem> {
     const fields: string[] = [];
     let path = "/data_sources/" + pathId(dataSourceId) + "/query";
     if (options !== null) {
@@ -128,21 +120,16 @@ export function queryDataSource(ref: string, options: QueryDataSourceOptions | n
     };
 }
 
-/**
- * List page templates available to a data source.
- * @capability submilli/notion.listDataSourceTemplates { dataSourceId: string }
- */
-export function listDataSourceTemplates(ref: string, options: ListTemplateOptions | null = null): PageResult<DataSourceTemplate> {
-    const dataSourceId = idFromRef(ref, "data_source");
-    check("submilli/notion.listDataSourceTemplates", { dataSourceId: dataSourceId });
+/** List page templates available to a data source. */
+export function listDataSourceTemplates(
+    dataSourceId: string,
+    name: string | null,
+    requestedSize: number | null,
+    startCursor: string | null,
+): PageResult<DataSourceTemplate> {
     const query = new Map<string, string>();
-    let requestedSize: number | null = null;
-    if (options !== null) {
-        const actual = options as ListTemplateOptions;
-        requestedSize = actual.pageSize;
-        putQuery(query, "name", actual.name);
-        putQuery(query, "start_cursor", actual.startCursor);
-    }
+    putQuery(query, "name", name);
+    putQuery(query, "start_cursor", startCursor);
     query.set("page_size", pageSize(requestedSize).toString());
     const data = notionGet("/data_sources/" + pathId(dataSourceId) + "/templates", query).json() as ApiTemplateList;
     const results: DataSourceTemplate[] = [];
@@ -155,23 +142,13 @@ export function listDataSourceTemplates(ref: string, options: ListTemplateOption
     };
 }
 
-/**
- * Move a database container to trash.
- * @capability submilli/notion.trashDatabase { databaseId: string }
- */
-export function trashDatabase(ref: string): NotionDatabase {
-    const databaseId = idFromRef(ref, "database");
-    check("submilli/notion.trashDatabase", { databaseId: databaseId });
+/** Move a database container to trash. */
+export function trashDatabase(databaseId: string): NotionDatabase {
     return databaseFrom(notionPatch("/databases/" + pathId(databaseId), { in_trash: true }).json());
 }
 
-/**
- * Restore a database container from trash.
- * @capability submilli/notion.restoreDatabase { databaseId: string }
- */
-export function restoreDatabase(ref: string): NotionDatabase {
-    const databaseId = idFromRef(ref, "database");
-    check("submilli/notion.restoreDatabase", { databaseId: databaseId });
+/** Restore a database container from trash. */
+export function restoreDatabase(databaseId: string): NotionDatabase {
     return databaseFrom(notionPatch("/databases/" + pathId(databaseId), { in_trash: false }).json());
 }
 

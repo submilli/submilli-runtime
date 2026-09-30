@@ -181,8 +181,8 @@ key, which must fail naming `BILLING_API_KEY`. At the end of the same file
 it added a live read that runs only when the key is set. It didn't put that
 read in a `network.test.ts`, so `SUBMILLI_SKIP_HTTP_TESTS=1` doesn't skip it.
 
-Its first expectation for the hostile path was wrong: it hadn't expected
-`encodeComponent` to escape dots as well as slashes. It ran the function to
+Its first expectation for the hostile path didn't match what
+`encodeComponent` returns. It ran the function to
 see what it returns, decided the package was right and its test wrong, fixed
 the test, and said so in its report. All the tests passed, about a minute
 after the prompt.

@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use interpreter::{
     compile_script, dispatch_main_async,
-    runtime::{RuntimeConfig, StoreData, Vfs, install_runtime_async, install_tenant_limits},
+    runtime::{
+        MemoryExhausted, RuntimeConfig, StoreData, Vfs, install_runtime_async,
+        install_tenant_limits, is_memory_exhausted,
+    },
     stdlib::http::transport::{
         Decompression, DownloadMeta, HttpClient, HttpError, HttpRequest, HttpResponse,
         stream_to_writer,
@@ -31,6 +34,159 @@ fn cap_run(src: &str, max_store_bytes: u64) -> wasmtime::Result<()> {
             .expect("script globals fit within cap");
         dispatch_main_async(&mut store, &instance).await.map(|_| ())
     })
+}
+
+/// Asserts `src` ends at the cap rather than in its own `catch`: each program
+/// below returns normally from its handler, so reaching one is an `Ok`.
+fn assert_cap_ends_the_run(src: &str, max_store_bytes: u64) {
+    let err = cap_run(src, max_store_bytes)
+        .expect_err("the run should end at the cap, not continue in the handler");
+    assert!(
+        err.is::<MemoryExhausted>(),
+        "expected memory exhaustion, got: {err:#}"
+    );
+    assert!(is_memory_exhausted(&err));
+    assert_eq!(err.to_string(), "memory exhausted");
+}
+
+#[test]
+fn a_guest_allocation_past_the_cap_is_not_catchable() {
+    let src = r#"
+class Node {
+  next: Node | null;
+  constructor(next: Node | null) { this.next = next; }
+}
+function main(): void {
+  let head: Node | null = null;
+  try {
+    while (true) {
+      head = new Node(head);
+    }
+  } catch (e) {
+    head = null;
+  } finally {
+    head = null;
+  }
+}
+"#;
+    assert_cap_ends_the_run(src, 256 * 1024);
+}
+
+#[test]
+fn a_host_allocation_past_the_cap_is_not_catchable() {
+    let src = r#"
+function main(): void {
+  let text: string = "x";
+  try {
+    while (true) {
+      text = text + text;
+    }
+  } catch (e) {
+    text = "";
+  }
+}
+"#;
+    assert_cap_ends_the_run(src, 256 * 1024);
+}
+
+#[test]
+fn an_allocation_past_the_cap_inside_a_callback_is_not_catchable() {
+    let src = r#"
+function main(): void {
+  const kept: number[][] = [];
+  try {
+    [1, 2, 3].forEach((seed: number) => {
+      while (true) {
+        kept.push([seed, seed, seed, seed]);
+      }
+    });
+  } catch (e) {
+    kept.pop();
+  }
+}
+"#;
+    assert_cap_ends_the_run(src, 256 * 1024);
+}
+
+#[test]
+fn a_regex_compile_past_the_cap_is_not_catchable() {
+    let src = r#"
+function main(): void {
+  const kept: RegExp[] = [];
+  try {
+    let i: number = 0;
+    while (i < 10) {
+      kept.push(new RegExp("abc" + i.toString(), ""));
+      i = i + 1;
+    }
+  } catch (e) {
+    kept.pop();
+  }
+}
+"#;
+    assert_cap_ends_the_run(src, 128 * 1024);
+}
+
+#[test]
+fn a_file_handle_past_the_cap_is_not_catchable() {
+    let src = r#"
+import { lines, writeText } from "submilli:fs";
+function main(): void {
+  writeText("/data.txt", "alpha\nbeta\ngamma\n");
+  const held: Iterator<string>[] = [];
+  try {
+    let i: number = 0;
+    while (i < 500) {
+      held.push(lines("/data.txt"));
+      i = i + 1;
+    }
+  } catch (e) {
+    held.pop();
+  }
+}
+"#;
+    assert_cap_ends_the_run(src, 1024 * 1024);
+}
+
+/// Building the error for an ordinary host failure can itself be what reaches
+/// the cap: the message for a path that does not exist repeats the path. The
+/// run then ends as out of memory, not as a host failure, and not in `catch`.
+#[test]
+fn an_error_that_cannot_be_built_at_the_cap_ends_the_run_as_memory_exhausted() {
+    // 5.6 MB of filler and a 1.5 MB path fit an 8 MiB cap; the message does not.
+    let src = r#"
+import { lines } from "submilli:fs";
+function main(): void {
+  const filler = "f".repeat(2800000);
+  const path = "/a".repeat(375000);
+  try {
+    lines(path);
+  } catch (e) {
+    assert(filler.length > 0, "filler stays live past the failing call");
+  }
+}
+"#;
+    assert_cap_ends_the_run(src, 8 * 1024 * 1024);
+}
+
+/// The same failure is an ordinary error the program can catch when there is
+/// room to build it.
+#[test]
+fn a_host_error_that_fits_under_the_cap_stays_catchable() {
+    let src = r#"
+import { lines } from "submilli:fs";
+function main(): void {
+  const path = "/a".repeat(375000);
+  let caught = false;
+  try {
+    lines(path);
+  } catch (e) {
+    caught = true;
+  }
+  assert(caught, "a missing file is an ordinary error");
+}
+"#;
+    cap_run(src, 8 * 1024 * 1024).expect("the error fits and is caught");
 }
 
 #[test]

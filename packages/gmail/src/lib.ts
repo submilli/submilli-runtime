@@ -7,6 +7,15 @@ import { check } from "submilli:security";
 const API = "https://gmail.googleapis.com/gmail/v1/users/me";
 const MAX_BODY_BYTES = 1048576;
 const MAX_ATTACHMENT_BYTES = 10485760;
+// Exactly one `@` between two runs of printable ASCII. A character outside that range can look
+// like, or be dropped to leave, an address policy refuses, and a lone surrogate is encoded as
+// U+FFFD, so the header would not carry the string the check read. The characters RFC 5322
+// reserves for address syntax, `()<>[]:;\,"`, are left out: they would let the mail system read a
+// list, a group, a comment or a quoted name where policy saw one address.
+const BARE_ADDRESS = /^[!#-'*+\-.\/0-9=?A-Z^_`a-z{|}~]+@[!#-'*+\-.\/0-9=?A-Z^_`a-z{|}~]+$/;
+
+// A line break, CRLF or LF, and the space or tab that makes it folding.
+const FOLD = /\r?\n([ \t])/g;
 
 /** A Gmail API or message-construction error with stable fields. */
 export class GmailError extends Error {
@@ -157,15 +166,15 @@ export interface OutgoingAttachment {
 
 /** Input for a new email or draft. */
 export interface EmailInput {
-    /** Recipient addresses; at least one is required. */
+    /** Recipient addresses, one bare address such as "dana@example.com" per entry; at least one is required. */
     to: string[];
     /** Message subject. */
     subject: string;
     /** Plain-text body. Combined text and HTML bodies must stay under 1 MiB. */
     text: string;
-    /** Cc recipient addresses. */
+    /** Cc recipient addresses, one bare address per entry. */
     cc?: string[];
-    /** Bcc recipient addresses. */
+    /** Bcc recipient addresses, one bare address per entry. */
     bcc?: string[];
     /** HTML body, sent as a multipart/alternative alongside the text body. */
     html?: string;
@@ -203,6 +212,14 @@ export interface TriageResult {
     threads: ThreadRef[];
     /** Token for the next page; empty string when there are no more pages. */
     nextPageToken: string;
+}
+
+/** The To and Cc addresses of a reply, as bare addresses. */
+export interface ReplyRecipients {
+    /** To addresses: the original Reply-To addresses, or From when there are none, then on reply-all the original To. */
+    to: string[];
+    /** Cc addresses: on reply-all, the original Cc addresses that are not already in `to`; otherwise empty. */
+    cc: string[];
 }
 
 interface ApiProfile {
@@ -357,14 +374,15 @@ export function getProfile(): Profile {
  * @capability submilli/gmail.searchThreads {}
  */
 export function searchThreads(query: string, options: SearchOptions | null = null): Page<ThreadRef> {
+    const limit = options === null ? null : options.limit;
+    const pageToken = options === null ? null : options.pageToken;
+    const includeSpamTrash = options === null ? null : options.includeSpamTrash;
     check("submilli/gmail.searchThreads", {});
     const params = new Map<string, string>();
     params.set("q", query);
-    params.set("maxResults", bounded(options === null ? null : options.limit, 20, 1, 100).toString());
-    if (options !== null) {
-        putQuery(params, "pageToken", options.pageToken);
-        putBool(params, "includeSpamTrash", options.includeSpamTrash);
-    }
+    params.set("maxResults", bounded(limit, 20, 1, 100).toString());
+    putQuery(params, "pageToken", pageToken);
+    putBool(params, "includeSpamTrash", includeSpamTrash);
     const data = gmailGet("/threads", params).json() as ThreadListResponse;
     const items: ThreadRef[] = [];
     if (data.threads !== null) {
@@ -380,9 +398,11 @@ export function searchThreads(query: string, options: SearchOptions | null = nul
  * @capability submilli/gmail.triage {}
  */
 export function triage(options: PageOptions | null = null): TriageResult {
+    const limit = options === null ? null : options.limit;
+    const pageToken = options === null ? null : options.pageToken;
     check("submilli/gmail.triage", {});
-    const search: SearchOptions = { limit: bounded(options === null ? null : options.limit, 20, 1, 50) };
-    if (options !== null && options.pageToken !== null) search.pageToken = options.pageToken;
+    const search: SearchOptions = { limit: bounded(limit, 20, 1, 50) };
+    if (pageToken !== null) search.pageToken = pageToken;
     const page = searchThreads("in:inbox is:unread", search);
     return { threads: page.items, nextPageToken: page.nextPageToken };
 }
@@ -413,9 +433,11 @@ export function getMessage(messageId: string): Message | null {
  * @capability submilli/gmail.listDrafts {}
  */
 export function listDrafts(page: PageOptions | null = null): Page<Draft> {
+    const limit = page === null ? null : page.limit;
+    const pageToken = page === null ? null : page.pageToken;
     check("submilli/gmail.listDrafts", {});
     const query = new Map<string, string>();
-    applyPage(query, page, 20, 100);
+    applyPage(query, limit, pageToken, 20, 100);
     const data = gmailGet("/drafts", query).json() as DraftListResponse;
     const items: Draft[] = [];
     if (data.drafts !== null) {
@@ -430,10 +452,8 @@ export function listDrafts(page: PageOptions | null = null): Page<Draft> {
  */
 export function getDraft(draftId: string): Draft | null {
     check("submilli/gmail.getDraft", {});
-    const response = gmailRawGet("/drafts/" + encodeComponent(draftId), formatFull());
-    if (response.status === 404) return null;
-    requireOk(response);
-    const draft = response.json() as ApiDraft;
+    const draft = fetchDraft(draftId, formatFull());
+    if (draft === null) return null;
     return { id: draft.id, message: messageFrom(draft.message) };
 }
 
@@ -442,9 +462,33 @@ export function getDraft(draftId: string): Draft | null {
  * @capability submilli/gmail.createDraft { recipients: string[] }
  */
 export function createDraft(input: EmailInput): Draft {
-    const recipients = input.to;
-    check("submilli/gmail.createDraft", { recipients: recipients });
-    const raw = composeEmail(composeInput(input));
+    const { to: requestedTo, subject, text, cc: requestedCc, bcc: requestedBcc, html, from } = input;
+    const to: string[] = [];
+    for (const entry of requestedTo) to.push(entry);
+    let cc: string[] | null = null;
+    if (requestedCc !== null) {
+        const copied: string[] = [];
+        for (const entry of requestedCc) copied.push(entry);
+        cc = copied;
+    }
+    let bcc: string[] | null = null;
+    if (requestedBcc !== null) {
+        const copied: string[] = [];
+        for (const entry of requestedBcc) copied.push(entry);
+        bcc = copied;
+    }
+    const attachments = input.attachments;
+    const mail = composeInput({
+        to: to,
+        subject: subject,
+        text: text,
+        cc: cc,
+        bcc: bcc,
+        html: html,
+        from: from,
+    });
+    check("submilli/gmail.createDraft", { recipients: messageRecipients(mail) });
+    const raw = composeEmail(mail, attachments);
     const response = post(API + "/drafts", { message: { raw: raw } }, authHeaders());
     requireOk(response);
     const draft = response.json() as ApiDraft;
@@ -456,10 +500,16 @@ export function createDraft(input: EmailInput): Draft {
  * @capability submilli/gmail.createReplyDraft { recipients: string[] }
  */
 export function createReplyDraft(input: ReplyInput): Draft {
-    const resolved = replyEmail(input);
-    const recipients = resolved.mail.to;
-    check("submilli/gmail.createReplyDraft", { recipients: recipients });
-    const raw = composeEmail(resolved.mail);
+    const { messageId, text, html, replyAll } = input;
+    const attachments = input.attachments;
+    const resolved = replyEmail({
+        messageId: messageId,
+        text: text,
+        html: html,
+        replyAll: replyAll,
+    });
+    check("submilli/gmail.createReplyDraft", { recipients: messageRecipients(resolved.mail) });
+    const raw = composeEmail(resolved.mail, attachments);
     const request: DraftRequest = { message: { raw: raw, threadId: resolved.threadId } };
     const response = post(API + "/drafts", request, authHeaders());
     requireOk(response);
@@ -482,9 +532,33 @@ export function deleteDraft(draftId: string): void {
  * @capability submilli/gmail.sendEmail { recipients: string[] }
  */
 export function sendEmail(input: EmailInput): Message {
-    const recipients = input.to;
-    check("submilli/gmail.sendEmail", { recipients: recipients });
-    const response = post(API + "/messages/send", { raw: composeEmail(composeInput(input)) }, authHeaders());
+    const { to: requestedTo, subject, text, cc: requestedCc, bcc: requestedBcc, html, from } = input;
+    const to: string[] = [];
+    for (const entry of requestedTo) to.push(entry);
+    let cc: string[] | null = null;
+    if (requestedCc !== null) {
+        const copied: string[] = [];
+        for (const entry of requestedCc) copied.push(entry);
+        cc = copied;
+    }
+    let bcc: string[] | null = null;
+    if (requestedBcc !== null) {
+        const copied: string[] = [];
+        for (const entry of requestedBcc) copied.push(entry);
+        bcc = copied;
+    }
+    const attachments = input.attachments;
+    const mail = composeInput({
+        to: to,
+        subject: subject,
+        text: text,
+        cc: cc,
+        bcc: bcc,
+        html: html,
+        from: from,
+    });
+    check("submilli/gmail.sendEmail", { recipients: messageRecipients(mail) });
+    const response = post(API + "/messages/send", { raw: composeEmail(mail, attachments) }, authHeaders());
     requireOk(response);
     return messageFrom(response.json() as ApiMessage);
 }
@@ -494,21 +568,30 @@ export function sendEmail(input: EmailInput): Message {
  * @capability submilli/gmail.reply { recipients: string[] }
  */
 export function reply(input: ReplyInput): Message {
-    const resolved = replyEmail(input);
-    const recipients = resolved.mail.to;
-    check("submilli/gmail.reply", { recipients: recipients });
-    const request: RawMessageRequest = { raw: composeEmail(resolved.mail), threadId: resolved.threadId };
+    const { messageId, text, html, replyAll } = input;
+    const attachments = input.attachments;
+    const resolved = replyEmail({
+        messageId: messageId,
+        text: text,
+        html: html,
+        replyAll: replyAll,
+    });
+    check("submilli/gmail.reply", { recipients: messageRecipients(resolved.mail) });
+    const request: RawMessageRequest = { raw: composeEmail(resolved.mail, attachments), threadId: resolved.threadId };
     const response = post(API + "/messages/send", request, authHeaders());
     requireOk(response);
     return messageFrom(response.json() as ApiMessage);
 }
 
 /**
- * Send an existing draft.
- * @capability submilli/gmail.sendDraft {}
+ * Send an existing draft. The draft is read first, so the check covers every address in its To, Cc and Bcc headers.
+ * @capability submilli/gmail.sendDraft { recipients: string[] }
  */
 export function sendDraft(draftId: string): Message {
-    check("submilli/gmail.sendDraft", {});
+    const draft = fetchDraft(draftId, formatMetadata());
+    if (draft === null) throw new GmailError("not_found", "Gmail draft was not found", 404);
+    const recipients = draftRecipients(sentHeaders(draft.message));
+    check("submilli/gmail.sendDraft", { recipients: recipients });
     const response = post(API + "/drafts/send", { id: draftId }, authHeaders());
     requireOk(response);
     return messageFrom(response.json() as ApiMessage);
@@ -547,10 +630,20 @@ export function createLabel(name: string): Label {
  * @capability submilli/gmail.modifyThreadLabels {}
  */
 export function modifyThreadLabels(threadId: string, changes: LabelChanges): Thread {
+    const { addLabelIds: requestedAddLabelIds, removeLabelIds: requestedRemoveLabelIds } = changes;
+    const addLabelIds: string[] = [];
+    if (requestedAddLabelIds !== null) {
+        for (const id of requestedAddLabelIds) addLabelIds.push(id);
+    }
+    const removeLabelIds: string[] = [];
+    if (requestedRemoveLabelIds !== null) {
+        for (const id of requestedRemoveLabelIds) removeLabelIds.push(id);
+    }
+    const request: LabelModifyRequest = { addLabelIds: addLabelIds, removeLabelIds: removeLabelIds };
     check("submilli/gmail.modifyThreadLabels", {});
     const response = post(
         API + "/threads/" + encodeComponent(threadId) + "/modify",
-        labelChanges(changes),
+        request,
         authHeaders(),
     );
     requireOk(response);
@@ -562,10 +655,20 @@ export function modifyThreadLabels(threadId: string, changes: LabelChanges): Thr
  * @capability submilli/gmail.modifyMessageLabels {}
  */
 export function modifyMessageLabels(messageId: string, changes: LabelChanges): Message {
+    const { addLabelIds: requestedAddLabelIds, removeLabelIds: requestedRemoveLabelIds } = changes;
+    const addLabelIds: string[] = [];
+    if (requestedAddLabelIds !== null) {
+        for (const id of requestedAddLabelIds) addLabelIds.push(id);
+    }
+    const removeLabelIds: string[] = [];
+    if (requestedRemoveLabelIds !== null) {
+        for (const id of requestedRemoveLabelIds) removeLabelIds.push(id);
+    }
+    const request: LabelModifyRequest = { addLabelIds: addLabelIds, removeLabelIds: removeLabelIds };
     check("submilli/gmail.modifyMessageLabels", {});
     const response = post(
         API + "/messages/" + encodeComponent(messageId) + "/modify",
-        labelChanges(changes),
+        request,
         authHeaders(),
     );
     requireOk(response);
@@ -583,6 +686,40 @@ export function downloadAttachment(messageId: string, attachmentId: string, path
     write(path, Uint8Array.fromBase64(data.data, { alphabet: "base64url" }));
 }
 
+/**
+ * Resolve the To and Cc addresses of a reply from the original message's headers, as bare addresses.
+ * Pass header values as Gmail returns them, before RFC 2047 decoding. The `headers` of a `Message`
+ * this package returns are already decoded and are not suitable input: decoding can turn a display
+ * name into address syntax, which would then be read as a recipient. Throws `GmailError`
+ * `invalid_recipient` when an address header does not resolve to bare addresses.
+ */
+export function replyRecipients(headers: Header[], replyAll: boolean): ReplyRecipients {
+    const replyTo = headerAddresses(headers, "Reply-To");
+    const seen = new Set<string>();
+    const to: string[] = [];
+    appendUnseen(to, replyTo.length > 0 ? replyTo : headerAddresses(headers, "From"), seen);
+    const cc: string[] = [];
+    if (replyAll) {
+        appendUnseen(to, headerAddresses(headers, "To"), seen);
+        appendUnseen(cc, headerAddresses(headers, "Cc"), seen);
+    }
+    return { to: to, cc: cc };
+}
+
+/**
+ * Return every address in a draft's To, Cc and Bcc headers as bare addresses, deduplicated, in that order.
+ * Pass header values as Gmail returns them, before RFC 2047 decoding. The `headers` of a `Message`
+ * this package returns are already decoded and are not suitable input: decoding can turn a display
+ * name into address syntax, which would then be read as a recipient. Throws `GmailError`
+ * `invalid_recipient` when one of those headers does not resolve to bare addresses.
+ */
+export function draftRecipients(headers: Header[]): string[] {
+    const seen = new Set<string>();
+    const recipients: string[] = [];
+    for (const name of ["To", "Cc", "Bcc"]) appendUnseen(recipients, headerAddresses(headers, name), seen);
+    return recipients;
+}
+
 interface ComposeInput {
     to: string[];
     subject: string;
@@ -591,7 +728,6 @@ interface ComposeInput {
     bcc?: string[];
     html?: string;
     from?: string;
-    attachments?: OutgoingAttachment[];
     inReplyTo?: string;
     references?: string;
 }
@@ -601,70 +737,94 @@ interface ResolvedEmail {
     threadId: string;
 }
 
-function replyEmail(input: ReplyInput): ResolvedEmail {
-    const original = fetchMessage(input.messageId);
+interface EmailFields {
+    to: string[];
+    subject: string;
+    text: string;
+    cc: string[] | null;
+    bcc: string[] | null;
+    html: string | null;
+    from: string | null;
+}
+
+interface ReplyFields {
+    messageId: string;
+    text: string;
+    html: string | null;
+    replyAll: boolean | null;
+}
+
+function replyEmail(fields: ReplyFields): ResolvedEmail {
+    const original = fetchApiMessage(fields.messageId);
     if (original === null) throw new GmailError("not_found", "Gmail message was not found", 404);
-    const sender = headerValue(original.headers, "From");
-    const replyTo = headerValue(original.headers, "Reply-To");
-    const originalTo = addresses(headerValue(original.headers, "To"));
-    const originalCc = addresses(headerValue(original.headers, "Cc"));
-    const recipients: string[] = [];
-    appendUnique(recipients, addresses(replyTo.length > 0 ? replyTo : sender));
-    let cc: string[] = [];
-    if (input.replyAll === true) {
-        appendUnique(recipients, originalTo);
-        appendUnique(originalCc, recipients);
-        cc = originalCc;
-    }
-    let subject = headerValue(original.headers, "Subject");
+    const headers = sentHeaders(original);
+    const recipients = replyRecipients(headers, fields.replyAll === true);
+    let subject = decodeHeader(unfold(headerValue(headers, "Subject")));
     if (!subject.toLowerCase().startsWith("re:")) subject = "Re: " + subject;
-    let references = headerValue(original.headers, "References");
-    const messageId = headerValue(original.headers, "Message-ID");
-    if (messageId.length > 0) references = references.length > 0 ? references + " " + messageId : messageId;
+    let references = decodeHeader(unfold(headerValue(headers, "References")));
+    const inReplyTo = decodeHeader(unfold(headerValue(headers, "Message-ID")));
+    if (inReplyTo.length > 0) references = references.length > 0 ? references + " " + inReplyTo : inReplyTo;
     const mail: ComposeInput = {
-        to: recipients,
+        to: recipients.to,
         subject: subject,
-        text: input.text,
-        inReplyTo: messageId,
+        text: fields.text,
+        inReplyTo: inReplyTo,
         references: references,
     };
-    if (cc.length > 0) mail.cc = cc;
-    if (input.html !== null) mail.html = input.html;
-    if (input.attachments !== null) mail.attachments = input.attachments;
+    if (recipients.cc.length > 0) mail.cc = recipients.cc;
+    const html = fields.html;
+    if (html !== null) mail.html = html;
     return { mail: mail, threadId: original.threadId };
 }
 
-function composeInput(input: EmailInput): ComposeInput {
-    const result: ComposeInput = { to: input.to, subject: input.subject, text: input.text };
-    if (input.cc !== null) result.cc = input.cc;
-    if (input.bcc !== null) result.bcc = input.bcc;
-    if (input.html !== null) result.html = input.html;
-    if (input.from !== null) result.from = input.from;
-    if (input.attachments !== null) result.attachments = input.attachments;
+function composeInput(fields: EmailFields): ComposeInput {
+    const { to, subject, text, cc, bcc, html, from } = fields;
+    const result: ComposeInput = { to: bareAddresses(to, "to"), subject: subject, text: text };
+    if (cc !== null) result.cc = bareAddresses(cc, "cc");
+    if (bcc !== null) result.bcc = bareAddresses(bcc, "bcc");
+    if (html !== null) result.html = html;
+    if (from !== null) result.from = from;
     return result;
 }
 
-function composeEmail(input: ComposeInput): string {
+// The check reads the same lists `composeEmail` writes, so policy sees every address the message goes to.
+function messageRecipients(mail: ComposeInput): string[] {
+    const seen = new Set<string>();
+    const recipients: string[] = [];
+    appendUnseen(recipients, mail.to, seen);
+    const cc = mail.cc;
+    if (cc !== null) appendUnseen(recipients, cc, seen);
+    const bcc = mail.bcc;
+    if (bcc !== null) appendUnseen(recipients, bcc, seen);
+    return recipients;
+}
+
+function composeEmail(input: ComposeInput, requestedAttachments: OutgoingAttachment[] | null): string {
     if (input.to.length === 0) throw new GmailError("missing_recipient", "at least one recipient is required", 0);
     validateHeader(input.subject);
-    for (const value of input.to) validateHeader(value);
-    let headers = "To: " + input.to.join(", ") + "\r\n";
-    if (input.cc !== null && input.cc.length > 0) headers += "Cc: " + input.cc.join(", ") + "\r\n";
-    if (input.bcc !== null && input.bcc.length > 0) headers += "Bcc: " + input.bcc.join(", ") + "\r\n";
+    let headers = addressHeader("To", input.to, "to");
+    if (input.cc !== null && input.cc.length > 0) headers += addressHeader("Cc", input.cc, "cc");
+    if (input.bcc !== null && input.bcc.length > 0) headers += addressHeader("Bcc", input.bcc, "bcc");
     if (input.from !== null) {
         validateHeader(input.from);
         headers += "From: " + input.from + "\r\n";
     }
     headers += "Subject: " + encodeHeader(input.subject) + "\r\n";
-    if (input.inReplyTo !== null && input.inReplyTo.length > 0) headers += "In-Reply-To: " + input.inReplyTo + "\r\n";
-    if (input.references !== null && input.references.length > 0) headers += "References: " + input.references + "\r\n";
+    if (input.inReplyTo !== null && input.inReplyTo.length > 0) {
+        validateHeader(input.inReplyTo);
+        headers += "In-Reply-To: " + input.inReplyTo + "\r\n";
+    }
+    if (input.references !== null && input.references.length > 0) {
+        validateHeader(input.references);
+        headers += "References: " + input.references + "\r\n";
+    }
     headers += "MIME-Version: 1.0\r\n";
     const textBytes = new TextEncoder().encode(input.text);
     const html = input.html;
     let bodyBytes = textBytes.length;
     if (html !== null) bodyBytes += new TextEncoder().encode(html).length;
     if (bodyBytes > MAX_BODY_BYTES) throw new GmailError("body_too_large", "combined text and HTML bodies exceed 1 MiB", 0);
-    const attachments: OutgoingAttachment[] = input.attachments !== null ? input.attachments : [];
+    const attachments: OutgoingAttachment[] = requestedAttachments !== null ? requestedAttachments : [];
     const boundary = "submilli_" + Temporal.Now.instant().epochMilliseconds.toString();
     if (attachments.length === 0 && html === null) {
         const message = headers + "Content-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" + textBytes.toBase64();
@@ -684,13 +844,15 @@ function composeEmail(input: ComposeInput): string {
     }
     let total = 0;
     for (const attachment of attachments) {
-        const metadata = stat(attachment.path);
-        if (metadata === null || metadata.kind !== "file") throw new GmailError("attachment_not_found", "attachment is not a VFS file: " + attachment.path, 0);
+        // One read of the path, so the size checked is the size of the file sent.
+        const path = attachment.path;
+        const metadata = stat(path);
+        if (metadata === null || metadata.kind !== "file") throw new GmailError("attachment_not_found", "attachment is not a VFS file: " + path, 0);
         total += metadata.size;
         if (total > MAX_ATTACHMENT_BYTES) throw new GmailError("attachments_too_large", "combined attachment contents exceed 10 MiB", 0);
-        const bytes = read(attachment.path);
+        const bytes = read(path);
         if (bytes === null) throw new GmailError("attachment_unreadable", "attachment exceeds the VFS whole-read limit", 0);
-        const filename = attachment.filename !== null ? attachment.filename : basename(attachment.path);
+        const filename = attachment.filename !== null ? attachment.filename : basename(path);
         const mimeType = attachment.mimeType !== null ? attachment.mimeType : "application/octet-stream";
         validateHeader(filename);
         validateHeader(mimeType);
@@ -701,11 +863,30 @@ function composeEmail(input: ComposeInput): string {
     return encodeRawMessage(mime + "--" + boundary + "--\r\n");
 }
 
+// Refuses rather than repairs: the caller's check has already read these addresses.
+function addressHeader(name: string, addresses: string[], field: string): string {
+    for (const address of addresses) if (!isBareAddress(address)) throw invalidRecipient(field);
+    return name + ": " + addresses.join(", ") + "\r\n";
+}
+
 function fetchMessage(messageId: string): Message | null {
+    const item = fetchApiMessage(messageId);
+    if (item === null) return null;
+    return messageFrom(item);
+}
+
+function fetchApiMessage(messageId: string): ApiMessage | null {
     const response = gmailRawGet("/messages/" + encodeComponent(messageId), formatFull());
     if (response.status === 404) return null;
     requireOk(response);
-    return messageFrom(response.json() as ApiMessage);
+    return response.json() as ApiMessage;
+}
+
+function fetchDraft(draftId: string, query: Map<string, string>): ApiDraft | null {
+    const response = gmailRawGet("/drafts/" + encodeComponent(draftId), query);
+    if (response.status === 404) return null;
+    requireOk(response);
+    return response.json() as ApiDraft;
 }
 
 function messageFrom(item: ApiMessage): Message {
@@ -832,6 +1013,24 @@ function headersFrom(values: ApiHeader[] | null): Header[] {
     return headers;
 }
 
+// Headers as stored. They are not RFC 2047-decoded, because decoding an encoded display name
+// can produce commas, quotes and angle brackets that were never address syntax. They are not
+// unfolded either: an address header must show its line breaks to `unfoldAddresses`, and the
+// reader of any other header unfolds it.
+function sentHeaders(item: ApiMessage): Header[] {
+    const headers: Header[] = [];
+    const payload = item.payload;
+    if (payload === null) return headers;
+    const values = payload.headers;
+    if (values === null) return headers;
+    for (const header of values) headers.push({ name: header.name, value: header.value });
+    return headers;
+}
+
+function unfold(value: string): string {
+    return value.replaceAll("\r\n", "").replaceAll("\r", " ").replaceAll("\n", " ");
+}
+
 function decodeHeader(value: string): string {
     const upper = value.toUpperCase();
     const base64Marker = "=?UTF-8?B?";
@@ -872,17 +1071,189 @@ function headerValue(headers: Header[], name: string): string {
     return "";
 }
 
-function addresses(value: string): string[] {
-    const out: string[] = [];
-    for (const part of value.split(",")) {
-        const address = part.trim();
-        if (address.length > 0) out.push(address);
+function headerAddresses(headers: Header[], name: string): string[] {
+    const expected = name.toLowerCase();
+    const addresses: string[] = [];
+    for (const header of headers) {
+        if (header.name.toLowerCase() !== expected) continue;
+        for (const address of addressList(header.value, name)) addresses.push(address);
     }
-    return out;
+    return addresses;
 }
 
-function appendUnique(target: string[], values: string[]): void {
-    for (const value of values) if (!target.includes(value)) target.push(value);
+// Anything that is not plainly `address` or `Name <address>` is refused rather than guessed at:
+// for a stored draft the mail system reads the header itself, and the check must not see fewer
+// addresses than it does.
+function addressList(value: string, header: string): string[] {
+    const addresses: string[] = [];
+    for (const mailbox of addressSyntax(unfoldAddresses(value, header), header).split(",")) {
+        const address = mailboxAddress(mailbox, header);
+        if (address === null) continue;
+        if (!isBareAddress(address)) throw unresolvedHeader(header);
+        addresses.push(address);
+    }
+    return addresses;
+}
+
+// A line break followed by a space or a tab is folding, and is removed. Any other CR or LF ends
+// the header for a mail system, which would read what follows as something else, so it is
+// refused as the send path refuses it. The ends are trimmed first, so that a line break with
+// only spaces after it counts as one that ends the header. The folds are removed in one pass:
+// what removing one leaves behind is never read as another.
+function unfoldAddresses(value: string, header: string): string {
+    const unfolded = trimSpacesAndTabs(value).replace(FOLD, "$1");
+    if (unfolded.includes("\r") || unfolded.includes("\n")) throw unresolvedHeader(header);
+    return unfolded;
+}
+
+// Replaces each comment with a space and each quoted string with a bare `"`, so the commas and
+// angle brackets that remain are address syntax and not display-name text. It moves from one
+// quote or parenthesis to the next and copies what lies between them whole: reading a header
+// one character at a time costs a host call per character.
+function addressSyntax(value: string, header: string): string {
+    const segments: string[] = [];
+    let position = 0;
+    let special = firstOf(value, ["\"", "(", ")"], position);
+    while (special >= 0) {
+        const char = value.charAt(special);
+        if (char === ")") throw unresolvedHeader(header);
+        if (char === "\"") {
+            segments.push(value.slice(position, special + 1));
+            position = quotedStringEnd(value, special + 1, header);
+        } else {
+            segments.push(value.slice(position, special));
+            segments.push(" ");
+            position = commentEnd(value, special + 1, header);
+        }
+        special = firstOf(value, ["\"", "(", ")"], position);
+    }
+    if (position === 0) return value;
+    segments.push(value.slice(position));
+    return segments.join("");
+}
+
+// The index after the `"` that closes a quoted string whose content starts at `start`.
+function quotedStringEnd(value: string, start: number, header: string): number {
+    let position = start;
+    while (position < value.length) {
+        const special = firstOf(value, ["\"", "\\"], position);
+        if (special < 0) break;
+        if (value.charAt(special) === "\"") return special + 1;
+        // A backslash escapes the character after it, whichever it is.
+        position = special + 2;
+    }
+    throw unresolvedHeader(header);
+}
+
+// The index after the `)` that closes a comment whose content starts at `start`. Comments nest.
+function commentEnd(value: string, start: number, header: string): number {
+    let position = start;
+    let depth = 1;
+    while (position < value.length) {
+        const special = firstOf(value, ["(", ")", "\\"], position);
+        if (special < 0) break;
+        const char = value.charAt(special);
+        if (char === "\\") {
+            position = special + 2;
+            continue;
+        }
+        depth += char === "(" ? 1 : -1;
+        position = special + 1;
+        if (depth === 0) return position;
+    }
+    throw unresolvedHeader(header);
+}
+
+// The lowest index at or after `from` that holds one of `marks`, or -1.
+function firstOf(value: string, marks: string[], from: number): number {
+    let first = -1;
+    for (const mark of marks) {
+        const index = value.indexOf(mark, from);
+        if (index >= 0 && (first < 0 || index < first)) first = index;
+    }
+    return first;
+}
+
+// Returns null for an element that names nobody: an empty element or an empty group.
+function mailboxAddress(mailbox: string, header: string): string | null {
+    const open = mailbox.indexOf("<");
+    if (open < 0) {
+        const text = trimSpacesAndTabs(mailbox);
+        if (text.length === 0 || isEmptyGroup(text)) return null;
+        return text;
+    }
+    const close = mailbox.indexOf(">", open);
+    // Mail systems disagree on whether an unquoted name holding `@`, or text after the `>`, is
+    // a second address.
+    const nameHoldsAddress = mailbox.slice(0, open).includes("@");
+    const trailing = close < 0 ? "" : trimSpacesAndTabs(mailbox.slice(close + 1));
+    if (close < 0 || nameHoldsAddress || trailing.length > 0) throw unresolvedHeader(header);
+    return trimSpacesAndTabs(mailbox.slice(open + 1, close));
+}
+
+// `undisclosed-recipients:;` is what a message sent only to Bcc carries in To.
+function isEmptyGroup(text: string): boolean {
+    const colon = text.indexOf(":");
+    return colon > 0 && !text.includes("@") && trimSpacesAndTabs(text.slice(colon + 1)) === ";";
+}
+
+// One address per entry, so the list the check reads is the list the mail system reads.
+function bareAddresses(entries: string[], field: string): string[] {
+    const addresses: string[] = [];
+    for (const entry of entries) {
+        const address = trimSpacesAndTabs(entry);
+        if (!isBareAddress(address)) throw invalidRecipient(field);
+        addresses.push(address);
+    }
+    return addresses;
+}
+
+// Removes the ASCII space and tab at either end, and nothing else. `trim` also removes line
+// breaks, the no-break space and the other Unicode spaces, which would then never reach the
+// `BARE_ADDRESS` test, while a stored header would still hold them.
+function trimSpacesAndTabs(value: string): string {
+    let start = 0;
+    let end = value.length;
+    while (start < end && isSpaceOrTab(value.charCodeAt(start))) start += 1;
+    while (end > start && isSpaceOrTab(value.charCodeAt(end - 1))) end -= 1;
+    if (start === 0 && end === value.length) return value;
+    return value.slice(start, end);
+}
+
+function isSpaceOrTab(unit: number): boolean {
+    return unit === 0x20 || unit === 0x09;
+}
+
+// One match per address rather than a test per character, which costs a host call each.
+function isBareAddress(value: string): boolean {
+    // An RFC 2047 encoded word could decode to an address other than the one the check reads.
+    if (value.includes("=?")) return false;
+    return BARE_ADDRESS.test(value);
+}
+
+function invalidRecipient(field: string): GmailError {
+    const expected = "one bare email address per entry, such as dana@example.com, without a display name, "
+        + "angle brackets, commas, or other address syntax; spaces and tabs around an entry are removed, "
+        + "and any other whitespace is refused";
+    return new GmailError("invalid_recipient", "recipient field " + field + " must hold " + expected, 0);
+}
+
+function unresolvedHeader(header: string): GmailError {
+    return new GmailError(
+        "invalid_recipient",
+        "the " + header + " header of the stored message does not resolve to bare email addresses",
+        0,
+    );
+}
+
+// Appends, in order, each value `seen` does not hold yet. One set serves every list of a
+// message, so an address appears once across them.
+function appendUnseen(target: string[], values: string[], seen: Set<string>): void {
+    for (const value of values) {
+        if (seen.has(value)) continue;
+        seen.add(value);
+        target.push(value);
+    }
 }
 
 function labelFrom(item: ApiLabel): Label {
@@ -895,16 +1266,16 @@ function labelFrom(item: ApiLabel): Label {
     };
 }
 
-function labelChanges(changes: LabelChanges): LabelModifyRequest {
-    return {
-        addLabelIds: changes.addLabelIds !== null ? changes.addLabelIds : [],
-        removeLabelIds: changes.removeLabelIds !== null ? changes.removeLabelIds : [],
-    };
-}
-
 function formatFull(): Map<string, string> {
     const query = new Map<string, string>();
     query.set("format", "full");
+    return query;
+}
+
+// Headers without bodies or attachments: all that a recipient check reads.
+function formatMetadata(): Map<string, string> {
+    const query = new Map<string, string>();
+    query.set("format", "metadata");
     return query;
 }
 
@@ -948,9 +1319,9 @@ function requireOk(response: Response): Response {
     throw new GmailError(code, message, response.status);
 }
 
-function applyPage(query: Map<string, string>, page: PageOptions | null, fallback: number, max: number): void {
-    query.set("maxResults", bounded(page === null ? null : page.limit, fallback, 1, max).toString());
-    if (page !== null) putQuery(query, "pageToken", page.pageToken);
+function applyPage(query: Map<string, string>, limit: number | null, pageToken: string | null, fallback: number, max: number): void {
+    query.set("maxResults", bounded(limit, fallback, 1, max).toString());
+    putQuery(query, "pageToken", pageToken);
 }
 
 function putQuery(query: Map<string, string>, name: string, value: string | null): void {

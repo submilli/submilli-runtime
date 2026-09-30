@@ -52,6 +52,9 @@ The two differ in a few places, and where they do, the compiler is right.
 | --- | --- | --- |
 | An optional field that is absent | Not checked: null checking is off | Reads as `null` |
 | `any`, `undefined`, `async` | Accepted | Refused |
+| The variable of a plain `catch (e)` | Not checked | An `Error` |
+| A type on a catch variable | Allows only `any` or `unknown`, so `catch (e: RangeError)` is flagged | Allows only `Error` or a subclass, so `catch (e: unknown)` is refused; the clause catches only that type |
+| Several `catch` clauses on one `try` | Flagged as a syntax error | Accepted: the first clause whose type matches runs |
 | A `@capability` tag that disagrees with its `check` | Not seen | Warned about |
 
 Null checking is off on purpose. TypeScript reads an absent optional field as
