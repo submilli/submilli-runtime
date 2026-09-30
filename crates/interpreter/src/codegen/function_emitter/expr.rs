@@ -2399,8 +2399,23 @@ fn emit_object_spread(
             .try_expr(source.expr_id())
             .map_err(crate::codegen::arena_failure)?
             .ty;
+        // A widened source arrives as `unknown` and may no longer hold what
+        // its narrowed type said, so it is checked against the declared type,
+        // as a field read's receiver is: a mismatch throws a `TypeError`.
+        let authored_ty = ctx
+            .ta
+            .source_type(source.expr_id())
+            .map_err(crate::codegen::arena_failure)?;
+        if source_ty != authored_ty {
+            crate::codegen::cast_check::emit_operation_cast_on_stack(
+                emitter,
+                ctx,
+                source_ty,
+                authored_ty,
+            )?;
+        }
         let source_local =
-            stash_receiver_as_object_shape(emitter, source_ty, intrinsics.object_shape);
+            stash_receiver_as_object_shape(emitter, authored_ty, intrinsics.object_shape);
         emitter.instruction(Instruction::LocalGet(source_local));
         if index + 1 == sources.len() {
             emit_spread_shape(emitter, ctx, shape);
@@ -2408,12 +2423,6 @@ fn emit_object_spread(
             emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object)));
         }
         if matches!(source, TypedObjectMember::Spread { by_name: true, .. }) {
-            // The mask names the fields the authored type has, which a
-            // widened source's `Unknown` no longer says.
-            let authored_ty = ctx
-                .ta
-                .source_type(source.expr_id())
-                .map_err(crate::codegen::arena_failure)?;
             emit_spread_mask(emitter, ctx, source_local, authored_ty, shape)?;
         } else {
             emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object)));
