@@ -160,13 +160,7 @@ impl std::fmt::Display for ComparisonPosition {
 
 impl<'a> Inferer<'a> {
     pub(super) fn error(&mut self, span: Span, message: String) {
-        self.diagnostics.push(Diagnostic {
-            severity: Severity::Error,
-            span,
-            message,
-            help: vec![],
-            notes: vec![],
-        });
+        self.error_with_help_and_notes(span, message, vec![], vec![]);
     }
 
     /// Like [`Self::error`] but attaches one or more `help:` blocks
@@ -175,13 +169,7 @@ impl<'a> Inferer<'a> {
     /// definitions and similar fix-shape text the LLM needs but that
     /// doesn't point anywhere in the source.
     pub(super) fn error_with_help(&mut self, span: Span, message: String, help: Vec<String>) {
-        self.diagnostics.push(Diagnostic {
-            severity: Severity::Error,
-            span,
-            message,
-            help,
-            notes: vec![],
-        });
+        self.error_with_help_and_notes(span, message, help, vec![]);
     }
 
     /// How many *errors* have been reported so far.
@@ -271,6 +259,12 @@ impl<'a> Inferer<'a> {
     /// fix-shape help block and a "this is what killed you" pointer
     /// at another location — currently the property-path narrowing
     /// tombstone surfaces (plan 75.17a).
+    ///
+    /// Error reports are dropped while a type limit is recorded: until the next
+    /// checkpoint fails compilation with it, they may describe the `Type::Error`
+    /// stand-in rather than the source. Errors that do not depend on types,
+    /// such as a duplicate `case` label or an assignment to a `const`, are
+    /// pushed directly and still reported.
     pub(super) fn error_with_help_and_notes(
         &mut self,
         span: Span,
@@ -278,6 +272,9 @@ impl<'a> Inferer<'a> {
         help: Vec<String>,
         notes: Vec<(Span, String)>,
     ) {
+        if self.type_limits.limit_reached() {
+            return;
+        }
         self.diagnostics.push(Diagnostic {
             severity: Severity::Error,
             span,
@@ -564,7 +561,34 @@ impl<'a> Inferer<'a> {
     /// FQN registry (with `self.types` as fallback) so a library-typed value's
     /// shape is lifted into help even when the interface name was never imported.
     pub(super) fn format_definition(&self, ty: &Type) -> String {
-        format_definition::format_definition(ty, &self.types, &self.type_registry)
+        self.render_help(
+            || {
+                format_definition::format_definition(
+                    ty,
+                    &self.types,
+                    &self.type_registry,
+                    &self.type_limits,
+                )
+            },
+            || ty.to_string(),
+        )
+    }
+
+    /// Help text from `render`, which may meet a type limit while substituting.
+    /// A limit met only while rendering help does not affect the program, so
+    /// it is discarded and `fallback` is shown; otherwise the error the help
+    /// belongs to would be dropped while the limit is pending.
+    fn render_help(
+        &self,
+        render: impl FnOnce() -> String,
+        fallback: impl FnOnce() -> String,
+    ) -> String {
+        let limit_was_pending = self.type_limits.limit_reached();
+        let text = render();
+        if !limit_was_pending && self.type_limits.take().is_err() {
+            return fallback();
+        }
+        text
     }
 
     /// The type's definition lifted as a `help:` block, empty when the lift is
@@ -626,6 +650,7 @@ impl<'a> Inferer<'a> {
                     predicate,
                 },
                 &TypeParamSubstitution::new(),
+                &self.type_limits,
             );
         }
         let substitution = match &kind {
@@ -634,7 +659,17 @@ impl<'a> Inferer<'a> {
             } => self.method_lift_substitution(receiver_ty, name),
             _ => TypeParamSubstitution::new(),
         };
-        format_signature::format_signature(kind, &substitution)
+        // Unsubstituted, the signature still names its type parameters.
+        self.render_help(
+            || format_signature::format_signature(kind, &substitution, &self.type_limits),
+            || {
+                format_signature::format_signature(
+                    kind,
+                    &TypeParamSubstitution::new(),
+                    &self.type_limits,
+                )
+            },
+        )
     }
 
     /// The type-parameter table a method lift renders with: re-asks
@@ -1687,5 +1722,36 @@ mod dropped_guard_tests {
             }),
             "{diagnostics:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod help_rendering_tests {
+    use super::super::test_support::with_inferer;
+    use crate::type_size::TypeTooLarge;
+
+    #[test]
+    fn a_limit_met_only_while_rendering_help_is_discarded() {
+        with_inferer(|tc| {
+            let text = tc.render_help(
+                || {
+                    tc.type_limits.record(TypeTooLarge::Nodes);
+                    "rendered".into()
+                },
+                || "fallback".into(),
+            );
+            assert_eq!(text, "fallback");
+            assert!(!tc.type_limits.limit_reached());
+        });
+    }
+
+    #[test]
+    fn a_limit_pending_before_rendering_is_kept() {
+        with_inferer(|tc| {
+            tc.type_limits.record(TypeTooLarge::Depth);
+            let text = tc.render_help(|| "rendered".into(), || "fallback".into());
+            assert_eq!(text, "rendered");
+            assert_eq!(tc.type_limits.take(), Err(TypeTooLarge::Depth));
+        });
     }
 }

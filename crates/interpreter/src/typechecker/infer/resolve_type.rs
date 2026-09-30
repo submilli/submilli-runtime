@@ -69,15 +69,20 @@ impl<'a> Inferer<'a> {
                     &generics,
                     &resolved_args,
                 );
-            sub.apply(&ty)
+            sub.apply(&ty, &self.type_limits)
+                .map_err(super::type_limit_at(span))?
         };
-        Ok(Type::alias_ty(
+        let alias = Type::alias_ty(
             package,
             type_name.to_string(),
             sym.mangled_name,
             resolved_args,
             Box::new(body),
-        ))
+        );
+        // The alias keeps its arguments beside the substituted body, so even an
+        // identity alias doubles the type it wraps.
+        crate::type_size::check(&alias).map_err(super::type_limit_at(span))?;
+        Ok(alias)
     }
 
     fn resolve_imported_type_symbol(
@@ -256,6 +261,18 @@ impl<'a> Inferer<'a> {
     }
 
     pub(super) fn resolve_type(&mut self, annot: &TypeAnnotation) -> Result<Type, CompilerFailure> {
+        // Checks of the resolved type (the void-argument scan, index fields)
+        // record limits they cannot return; report one met here at this
+        // annotation, as `infer_expr` does for expressions.
+        let limit_was_pending = self.type_limits.limit_reached();
+        let resolved = self.resolve_and_check_type(annot)?;
+        if !limit_was_pending {
+            self.type_size_checkpoint(Some(annot.span))?;
+        }
+        Ok(resolved)
+    }
+
+    fn resolve_and_check_type(&mut self, annot: &TypeAnnotation) -> Result<Type, CompilerFailure> {
         let resolved = self.resolve_type_inner(annot)?;
         self.check_callable_type(&resolved, annot.span);
         if matches!(
@@ -311,7 +328,13 @@ impl<'a> Inferer<'a> {
         let resolved = self.resolve_annotation(annot);
         self.type_resolution_depth -= 1;
         if outermost {
-            return resolved.map_err(|failure| failure.with_span(annot.span));
+            // Alias references are bounded where they are instantiated; the
+            // annotation around them may still nest them deeper.
+            let checked = resolved.and_then(|ty| {
+                crate::type_size::check(&ty).map_err(super::type_limit_at(annot.span))?;
+                Ok(ty)
+            });
+            return checked.map_err(|failure| failure.with_span(annot.span));
         }
         resolved
     }

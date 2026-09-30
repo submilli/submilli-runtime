@@ -129,7 +129,9 @@ impl Scan<'_> {
         };
         let sub = TypeParamSubstitution::from_pairs(generics, args);
         for (member, property) in properties {
-            if let Some(position) = self.visit(&sub.apply(&property.ty), false) {
+            if let Some(position) =
+                self.visit(&sub.apply_or_record(&property.ty, self.types.limits), false)
+            {
                 return Some(format!("property `{name}.{member}` ({position})"));
             }
         }
@@ -147,8 +149,8 @@ impl Scan<'_> {
             let invalid = method
                 .params
                 .iter()
-                .find_map(|p| self.visit(&sub.apply(&p.ty), false))
-                .or_else(|| self.visit(&sub.apply(&method.ret), true));
+                .find_map(|p| self.visit(&sub.apply_or_record(&p.ty, self.types.limits), false))
+                .or_else(|| self.visit(&sub.apply_or_record(&method.ret, self.types.limits), true));
             if let Some(position) = invalid {
                 return Some(format!("method `{name}.{member}` ({position})"));
             }
@@ -166,10 +168,11 @@ impl Scan<'_> {
         let TypeKind::Alias { generics, ty, .. } = &self.types.lookup(mangled, name)?.kind else {
             return None;
         };
-        self.visit(
-            &TypeParamSubstitution::from_pairs(generics, args).apply(ty),
-            return_position,
-        )
+        // An oversized substitution scans as `Type::Error`, which holds no
+        // `void`; the recorded limit fails compilation at the next checkpoint.
+        let body = TypeParamSubstitution::from_pairs(generics, args)
+            .apply_or_record(ty, self.types.limits);
+        self.visit(&body, return_position)
     }
 }
 

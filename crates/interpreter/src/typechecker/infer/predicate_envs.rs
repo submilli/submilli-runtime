@@ -301,8 +301,12 @@ impl<'a> Inferer<'a> {
                     .map(Ok)
                     .unwrap_or_else(|| self.predicate_envs_eq_null(op, lhs, rhs))?;
                 // A constant on the left leaves the right as the tested path,
-                // read after anything it writes.
-                if !self.is_constant_operand(lhs)? {
+                // read after anything it writes. A constant on the right writes
+                // nothing after the left is read; skipping the scan also keeps a
+                // switch's synthesized `discriminant === case` comparisons, whose
+                // case value is allocated after every earlier case body, from
+                // rescanning those bodies for each case.
+                if !self.is_constant_operand(lhs)? && !self.is_constant_operand(rhs)? {
                     self.forget_later_writes(&mut true_env, lhs, rhs)?;
                     self.forget_later_writes(&mut false_env, lhs, rhs)?;
                 }

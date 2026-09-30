@@ -765,43 +765,64 @@ impl SyntaxChildren {
 
 /// Annotations are boxed values, measured with an explicit stack for the same
 /// reason as arena nodes.
-fn annotation_height<'a>(root: &'a TypeAnnotation) -> u32 {
+fn annotation_height(root: &TypeAnnotation) -> u32 {
     let mut max_height = 0;
     let mut pending = vec![(root, 1u32)];
     while let Some((ty, height)) = pending.pop() {
         max_height = max_height.max(height);
         let child_height = height.saturating_add(1);
-        let mut push = |child: &'a TypeAnnotation| pending.push((child, child_height));
-        match &ty.kind {
-            TypeAnnotationKind::Name { args, .. } | TypeAnnotationKind::Qualified { args, .. } => {
-                args.iter().for_each(&mut push);
-            }
-            TypeAnnotationKind::StringLiteral(_)
-            | TypeAnnotationKind::NumberLiteral(_)
-            | TypeAnnotationKind::BooleanLiteral(_)
-            | TypeAnnotationKind::TypeOf { .. } => {}
-            TypeAnnotationKind::Array(inner)
-            | TypeAnnotationKind::Readonly(inner)
-            | TypeAnnotationKind::KeyOf(inner) => push(inner),
-            TypeAnnotationKind::Tuple(members) | TypeAnnotationKind::Union(members) => {
-                members.iter().for_each(&mut push);
-            }
-            TypeAnnotationKind::Object { fields, index } => {
-                fields.iter().for_each(|field| push(&field.ty));
-                if let Some(index) = index {
-                    push(&index.value);
-                }
-            }
-            TypeAnnotationKind::Function {
-                params,
-                return_type,
-            } => {
-                params.iter().for_each(|param| push(&param.ty));
-                push(return_type);
-            }
-        }
+        for_each_annotation_child(ty, |child| pending.push((child, child_height)));
     }
     max_height
+}
+
+/// Nodes in `root`, counted without recursion; stops once past `max_nodes`.
+pub(crate) fn annotation_nodes(root: &TypeAnnotation, max_nodes: u64) -> u64 {
+    let mut nodes = 0u64;
+    let mut pending = vec![root];
+    while let Some(ty) = pending.pop() {
+        nodes = nodes.saturating_add(1);
+        if nodes > max_nodes {
+            break;
+        }
+        for_each_annotation_child(ty, |child| pending.push(child));
+    }
+    nodes
+}
+
+/// Calls `visit` on each annotation directly inside `ty`.
+fn for_each_annotation_child<'a>(
+    ty: &'a TypeAnnotation,
+    mut visit: impl FnMut(&'a TypeAnnotation),
+) {
+    match &ty.kind {
+        TypeAnnotationKind::Name { args, .. } | TypeAnnotationKind::Qualified { args, .. } => {
+            args.iter().for_each(visit);
+        }
+        TypeAnnotationKind::StringLiteral(_)
+        | TypeAnnotationKind::NumberLiteral(_)
+        | TypeAnnotationKind::BooleanLiteral(_)
+        | TypeAnnotationKind::TypeOf { .. } => {}
+        TypeAnnotationKind::Array(inner)
+        | TypeAnnotationKind::Readonly(inner)
+        | TypeAnnotationKind::KeyOf(inner) => visit(inner),
+        TypeAnnotationKind::Tuple(members) | TypeAnnotationKind::Union(members) => {
+            members.iter().for_each(visit);
+        }
+        TypeAnnotationKind::Object { fields, index } => {
+            fields.iter().for_each(|field| visit(&field.ty));
+            if let Some(index) = index {
+                visit(&index.value);
+            }
+        }
+        TypeAnnotationKind::Function {
+            params,
+            return_type,
+        } => {
+            params.iter().for_each(|param| visit(&param.ty));
+            visit(return_type);
+        }
+    }
 }
 
 struct TypedTree<'a>(&'a TypedAst);

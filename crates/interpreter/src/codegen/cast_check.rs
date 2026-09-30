@@ -42,12 +42,17 @@ pub fn error_prefix(target_ty: &Type) -> String {
 /// (the source isn't a static subtype of the target — `unknown`/downcasts); `None` for a
 /// statically-proven upcast (repr-only narrow). `shape` has interfaces reduced to their
 /// object shapes so this walks plain structural types.
+/// `cast_span` is the cast expression's own span, mapped while its runtime
+/// check is emitted so a limit the check reaches, and a failed check, are
+/// reported at the cast rather than at the last part of the value. The code
+/// after the cast maps to the enclosing span again.
 pub fn emit_cast(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     value: ExprId,
     target_ty: &Type,
     check: Option<&Type>,
+    cast_span: crate::Span,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let source_ty = ctx
         .ta
@@ -71,7 +76,9 @@ pub fn emit_cast(
                 .map_err(crate::codegen::arena_failure)?
         {
             emit_expr(emitter, ctx, value)?;
+            let enclosing = map_cast_span(emitter, cast_span);
             emit_checked_cast_on_stack(emitter, ctx, &source_ty, target_ty)?;
+            restore_span(emitter, enclosing);
             return Ok(());
         }
         // Statically-proven upcast: box then narrow representation, no runtime test.
@@ -85,6 +92,7 @@ pub fn emit_cast(
     let key = capture_session_key(emitter, ctx, value)?;
     emit_expr(emitter, ctx, value)?;
     emitter.end_single_evaluations(mark);
+    let enclosing = map_cast_span(emitter, cast_span);
     cast::emit_box(emitter, ctx, &source_ty)?;
 
     let object_idx = ctx
@@ -101,7 +109,7 @@ pub fn emit_cast(
     let previous_diagnostic = diagnostic::begin(emitter, ctx);
     diagnostic::session_key(emitter, key);
 
-    emit_structural_test(emitter, ctx, scratch, check_shape)?;
+    emit_structural_test(emitter, ctx, scratch, check_shape, target_ty)?;
 
     let target_val = ctx.symbols.value_type(target_ty)?;
     let block_ty = BlockType::Result(target_val);
@@ -112,7 +120,21 @@ pub fn emit_cast(
     emit_cast_throw(emitter, ctx, scratch, target_ty);
     emitter.emit_end();
     emitter.cast_diagnostic = previous_diagnostic;
+    restore_span(emitter, enclosing);
     Ok(())
+}
+
+/// Maps `cast_span` to the code that follows, returning the span it replaces.
+fn map_cast_span(emitter: &mut FunctionEmitter, cast_span: crate::Span) -> Option<crate::Span> {
+    let enclosing = emitter.last_mapped_span();
+    emitter.record_span(cast_span);
+    enclosing
+}
+
+fn restore_span(emitter: &mut FunctionEmitter, enclosing: Option<crate::Span>) {
+    if let Some(span) = enclosing {
+        emitter.record_span(span);
+    }
 }
 
 fn capture_session_key(
@@ -210,21 +232,29 @@ pub fn emit_non_null_assert_on_stack(
 /// separately registers the per-name globals an arm's field scan reads. A new
 /// arm must update that registration when it reads names, and may enter the
 /// allowlist only if every value the type admits is one this test accepts.
+///
+/// `named` is the type a limit error names: the type the program wrote, where
+/// `ty` is the shape it was reduced to.
 pub(super) fn emit_structural_test(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     value_local: u32,
     ty: &Type,
+    named: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    emit_structural_test_inner(
-        emitter,
-        ctx,
-        value_local,
-        ty,
-        &mut std::collections::BTreeSet::new(),
-        None,
-    )?;
-    Ok(())
+    ctx.checking(named, || {
+        emit_structural_test_inner(
+            emitter,
+            ctx,
+            value_local,
+            ty,
+            &mut std::collections::BTreeSet::new(),
+            None,
+        )?;
+        // A step's own code follows its charge, so the finished check is
+        // measured again before the function can reach the engine.
+        ctx.check_function_limits(emitter)
+    })
 }
 
 fn emit_structural_test_inner(
@@ -235,6 +265,7 @@ fn emit_structural_test_inner(
     interface_stack: &mut std::collections::BTreeSet<Type>,
     validator_state: Option<ValidatorState>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
+    ctx.charge_validator_step(emitter)?;
     let checkpoint = diagnostic::checkpoint(emitter, ctx);
     let i32_block = BlockType::Result(ValType::I32);
     match ty.peel() {
@@ -577,7 +608,7 @@ fn emit_structural_test_inner(
                 .runtime_validator_idx(ty.peel())
                 .expect("recursive runtime validator pre-allocated during discovery");
             emitter.instruction(Instruction::LocalGet(value_local));
-            let visited = emit_validator_state(emitter, ctx, validator_state);
+            let visited = emit_validator_state(emitter, ctx, validator_state)?;
             super::runtime_descriptors::validator_environment(emitter, ctx, ty)?;
             emitter.instruction(Instruction::Call(func_idx));
             diagnostic::load_recursive(emitter, ctx, visited);
@@ -604,7 +635,7 @@ fn emit_structural_test_inner(
             if let Some(validator) = ctx.symbols.runtime_validator_idx(ty.peel()) {
                 emitter.emit_if(BlockType::Result(ValType::I32));
                 emitter.instruction(Instruction::LocalGet(value_local));
-                let visited = emit_validator_state(emitter, ctx, validator_state);
+                let visited = emit_validator_state(emitter, ctx, validator_state)?;
                 super::runtime_descriptors::validator_environment(emitter, ctx, ty)?;
                 emitter.instruction(Instruction::Call(validator));
                 diagnostic::load_recursive(emitter, ctx, visited);
@@ -616,7 +647,7 @@ fn emit_structural_test_inner(
         // Rejected at typecheck (`unsupported_cast_target_reason`); defensive 0.
         _ => emitter.instruction(Instruction::I32Const(0)),
     }
-    diagnostic::finish(emitter, ctx, checkpoint);
+    diagnostic::finish(emitter, ctx, checkpoint)?;
     Ok(())
 }
 
@@ -670,7 +701,7 @@ fn emit_validator_or_representation(
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     if let Some(func_idx) = ctx.symbols.runtime_validator_idx(key) {
         emitter.instruction(Instruction::LocalGet(value_local));
-        let visited = emit_validator_state(emitter, ctx, validator_state);
+        let visited = emit_validator_state(emitter, ctx, validator_state)?;
         super::runtime_descriptors::validator_environment(emitter, ctx, key)?;
         emitter.instruction(Instruction::Call(func_idx));
         diagnostic::load_recursive(emitter, ctx, visited);
@@ -697,10 +728,10 @@ pub(crate) fn emit_checked_cast_on_stack(
     }
     match ctx.ta.runtime_type_tests.get(target_ty.peel()) {
         Some(crate::FieldNarrowingTest::Interface(test)) => {
-            emit_interface_test(emitter, ctx, scratch, test)?;
+            emit_interface_test(emitter, ctx, scratch, target_ty, test)?;
         }
         Some(crate::FieldNarrowingTest::Shape(shape)) => {
-            emit_structural_test(emitter, ctx, scratch, shape)?;
+            emit_structural_test(emitter, ctx, scratch, shape, target_ty)?;
         }
         _ => emit_representation_test(emitter, ctx, scratch, target_ty)?,
     }
@@ -806,7 +837,7 @@ pub(crate) fn emit_operation_cast_on_stack(
         ctx.symbols.value_type(target_ty)?,
         ValType::F64 | ValType::I32
     ) {
-        emit_structural_test(emitter, ctx, scratch, target_ty)?;
+        emit_structural_test(emitter, ctx, scratch, target_ty, target_ty)?;
     } else {
         emit_representation_test(emitter, ctx, scratch, target_ty)?;
     }
@@ -938,7 +969,7 @@ fn emit_field_conformance(
         emitter.instruction(Instruction::I32Const(0));
     }
     emitter.emit_end();
-    diagnostic::finish(emitter, ctx, checkpoint);
+    diagnostic::finish(emitter, ctx, checkpoint)?;
     diagnostic::pop(emitter, parent_path);
     Ok(())
 }
@@ -1013,7 +1044,7 @@ pub(crate) fn emit_narrowed_field_read_as(
             }
         }
         crate::FieldNarrowingTest::Shape(shape) => {
-            emit_structural_test(emitter, ctx, scratch, shape)?;
+            emit_structural_test(emitter, ctx, scratch, shape, check_ty)?;
             // `emit_cast_to` lifts to non-null for every target it does not admit
             // a null for, so those are exactly the targets a `null` in the slot
             // would trap on.
@@ -1023,7 +1054,7 @@ pub(crate) fn emit_narrowed_field_read_as(
             }
         }
         crate::FieldNarrowingTest::Interface(test) => {
-            emit_interface_test(emitter, ctx, scratch, test)?;
+            emit_interface_test(emitter, ctx, scratch, check_ty, test)?;
         }
         crate::FieldNarrowingTest::Substituted => {
             emit_representation_test(emitter, ctx, scratch, check_ty)?;
@@ -1044,21 +1075,25 @@ pub(crate) fn emit_narrowed_field_read_as(
     Ok(())
 }
 
+/// `ty` is the type `test` checks, named if the check exhausts its step limit.
 fn emit_interface_test(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     value_local: u32,
+    ty: &Type,
     test: &crate::InterfaceNarrowingTest,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    emit_interface_test_inner(
-        emitter,
-        ctx,
-        value_local,
-        test,
-        &mut std::collections::BTreeSet::new(),
-        None,
-    )?;
-    Ok(())
+    ctx.checking(ty, || {
+        emit_interface_test_inner(
+            emitter,
+            ctx,
+            value_local,
+            test,
+            &mut std::collections::BTreeSet::new(),
+            None,
+        )?;
+        ctx.check_function_limits(emitter)
+    })
 }
 
 fn emit_interface_test_inner(
@@ -1069,6 +1104,7 @@ fn emit_interface_test_inner(
     interface_stack: &mut std::collections::BTreeSet<Type>,
     validator_state: Option<ValidatorState>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
+    ctx.charge_validator_step(emitter)?;
     let checkpoint = diagnostic::checkpoint(emitter, ctx);
     if test.nullable {
         emitter.instruction(Instruction::LocalGet(value_local));
@@ -1165,7 +1201,7 @@ fn emit_interface_test_inner(
     if test.nullable {
         emitter.emit_end();
     }
-    diagnostic::finish(emitter, ctx, checkpoint);
+    diagnostic::finish(emitter, ctx, checkpoint)?;
     Ok(())
 }
 
@@ -1484,8 +1520,11 @@ fn emit_validator_state(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     validator_state: Option<ValidatorState>,
-) -> u32 {
-    let intr = ctx.symbols.intrinsic_type_indices().expect("intrinsics");
+) -> Result<u32, crate::compiler_error::CompilerFailure> {
+    let intr = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| super::internal_failure("intrinsic types are not declared"))?;
     let visited = if let Some(state) = validator_state {
         state.visited
     } else {
@@ -1498,7 +1537,7 @@ fn emit_validator_state(
         emitter.instruction(Instruction::LocalSet(local));
         local
     };
-    diagnostic::save_recursive(emitter, ctx, visited);
+    diagnostic::save_recursive(emitter, ctx, visited)?;
     emitter.instruction(Instruction::LocalGet(visited));
     if let Some(state) = validator_state {
         emitter.instruction(Instruction::LocalGet(state.validator_ids));
@@ -1510,7 +1549,7 @@ fn emit_validator_state(
         emitter.instruction(Instruction::ArrayNewDefault(intr.raw_index_array));
         emitter.instruction(Instruction::I32Const(0));
     }
-    visited
+    Ok(visited)
 }
 
 /// Body of a recursive runtime validator:
@@ -1668,8 +1707,9 @@ pub(crate) fn emit_runtime_validator_body(
     }
     emitter.emit_end();
     emitter.emit_end();
-    diagnostic::finish(&mut emitter, ctx, checkpoint);
-    diagnostic::save_recursive(&mut emitter, ctx, 1);
+    diagnostic::finish(&mut emitter, ctx, checkpoint)?;
+    diagnostic::save_recursive(&mut emitter, ctx, 1)?;
+    ctx.check_function_limits(&mut emitter)?;
     Ok(emitter.build())
 }
 

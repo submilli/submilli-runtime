@@ -152,6 +152,17 @@ impl IndexSignature {
         }
     }
 
+    /// [`map_value`](Self::map_value) with a transform that can fail.
+    pub fn try_map_value<E>(
+        &self,
+        transform: impl FnOnce(&Type) -> Result<Type, E>,
+    ) -> Result<Self, E> {
+        Ok(Self {
+            value: Box::new(transform(&self.value)?),
+            readonly: self.readonly,
+        })
+    }
+
     pub fn read_ty(&self) -> Type {
         Type::union(vec![(*self.value).clone(), Type::Null])
     }

@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use crate::{MethodSig, ObjectField, PropertySig, Type, TypeKind, TypeSymbol};
 
 use super::Inferer;
-use super::generic::substitute_typevars;
+use super::generic::substitute_or_record;
 
 /// What a write to one member's `field` would target.
 ///
@@ -84,6 +84,7 @@ impl<'a> Inferer<'a> {
         super::assignable::TypeResolver {
             types: &self.types,
             registry: &self.type_registry,
+            limits: &self.type_limits,
         }
     }
 
@@ -222,7 +223,7 @@ impl<'a> Inferer<'a> {
                 let ty = if bindings.is_empty() {
                     sig.ty.clone()
                 } else {
-                    substitute_typevars(&sig.ty, &bindings)
+                    substitute_or_record(&sig.ty, &bindings, &self.type_limits)
                 };
                 Ok(ObjectField::widen_optional(sig.optional, ty))
             }
@@ -399,7 +400,7 @@ impl<'a> Inferer<'a> {
         let ty = if bindings.is_empty() {
             sig.ty.clone()
         } else {
-            substitute_typevars(&sig.ty, &bindings)
+            substitute_or_record(&sig.ty, &bindings, &self.type_limits)
         };
         Some(FieldWrite {
             ty: ObjectField::widen_optional(sig.optional, ty),
@@ -551,9 +552,9 @@ impl<'a> Inferer<'a> {
             let params: Vec<Type> = sig
                 .params
                 .iter()
-                .map(|p| substitute_typevars(&p.ty, &bindings))
+                .map(|p| substitute_or_record(&p.ty, &bindings, &self.type_limits))
                 .collect();
-            let ret = substitute_typevars(&sig.ret, &bindings);
+            let ret = substitute_or_record(&sig.ret, &bindings, &self.type_limits);
             result.insert(
                 name.clone(),
                 ObjectField {
@@ -569,7 +570,7 @@ impl<'a> Inferer<'a> {
             );
         }
         for (name, sig) in properties {
-            let ty = substitute_typevars(&sig.ty, &bindings);
+            let ty = substitute_or_record(&sig.ty, &bindings, &self.type_limits);
             result.insert(
                 name.clone(),
                 ObjectField {

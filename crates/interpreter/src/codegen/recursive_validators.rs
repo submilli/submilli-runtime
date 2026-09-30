@@ -15,6 +15,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::codegen::dependency_usage::DependencyType;
+use crate::type_size::{TypeLimits, TypeTooLarge};
 use crate::typechecker::type_param_substitution::TypeParamSubstitution;
 use crate::{
     MangledName, ObjectField, Shape, Type, TypeKind, TypedAst, TypedExprKind, TypedInterfaceMember,
@@ -35,6 +36,8 @@ pub struct ValidatorBodies {
     /// the typechecker rejects them as JSON/cast targets before codegen.
     imported_interfaces: BTreeMap<MangledName, (Vec<String>, BTreeMap<String, ObjectField>)>,
     local_interfaces: BTreeMap<String, (Vec<String>, BTreeMap<String, ObjectField>)>,
+    /// Codegen's allowance for expanding generic declarations.
+    limits: TypeLimits,
 }
 
 impl ValidatorBodies {
@@ -105,6 +108,7 @@ impl ValidatorBodies {
             local_aliases,
             imported_interfaces,
             local_interfaces,
+            limits: TypeLimits::default(),
         }
     }
 
@@ -143,8 +147,9 @@ impl ValidatorBodies {
     /// Expand one level: a `Type::AliasRef` becomes its alias body, a
     /// `Type::InterfaceRef` becomes its data-only property shape (both peeled,
     /// with generic args substituted); any other type returns `ty.peel()` cloned.
-    pub fn expand_one(&self, ty: &Type) -> Type {
-        match ty.peel() {
+    /// Fails when substituting the arguments passes a type limit.
+    pub fn expand_one(&self, ty: &Type) -> Result<Type, TypeTooLarge> {
+        Ok(match ty.peel() {
             Type::ClassRef { .. } => self
                 .class_fields
                 .get(ty.peel())
@@ -161,12 +166,12 @@ impl ValidatorBodies {
                     .get(mangled)
                     .or_else(|| self.local_aliases.get(name))
                 else {
-                    return ty.peel().clone();
+                    return Ok(ty.peel().clone());
                 };
                 let expanded = if generics.is_empty() {
                     body.clone()
                 } else {
-                    TypeParamSubstitution::from_pairs(generics, args).apply(body)
+                    TypeParamSubstitution::from_pairs(generics, args).apply(body, &self.limits)?
                 };
                 expanded.peel().clone()
             }
@@ -181,7 +186,7 @@ impl ValidatorBodies {
                     .get(mangled)
                     .or_else(|| self.local_interfaces.get(name))
                 else {
-                    return ty.peel().clone();
+                    return Ok(ty.peel().clone());
                 };
                 let sub = (!generics.is_empty())
                     .then(|| TypeParamSubstitution::from_pairs(generics, args));
@@ -189,26 +194,26 @@ impl ValidatorBodies {
                     .iter()
                     .map(|(field, f)| {
                         let ty = match &sub {
-                            Some(sub) => sub.apply(&f.ty),
+                            Some(sub) => sub.apply(&f.ty, &self.limits)?,
                             None => f.ty.clone(),
                         };
-                        (
+                        Ok((
                             field.clone(),
                             ObjectField {
                                 ty,
                                 optional: f.optional,
                                 readonly: f.readonly,
                             },
-                        )
+                        ))
                     })
-                    .collect();
+                    .collect::<Result<_, TypeTooLarge>>()?;
                 Type::Object {
                     index: None,
                     fields,
                 }
             }
             other => other.clone(),
-        }
+        })
     }
 }
 
@@ -266,12 +271,13 @@ pub fn discover<'a>(
     discovery.scan_runtime_tests(ta)?;
     discovery.scan_local_class_fields(ta)?;
     discovery.scan_dependency_class_fields(dependency_types)?;
-    Ok(discovery.finish())
+    discovery.finish()
 }
 
 struct Discovery<'a> {
     bodies: &'a ValidatorBodies,
     shapes: BTreeSet<Shape>,
+    plain_objects: BTreeSet<Type>,
     expanded_keys: BTreeSet<Type>,
     rejected_keys: BTreeSet<Type>,
     descriptor_types: BTreeSet<Type>,
@@ -282,6 +288,7 @@ impl<'a> Discovery<'a> {
         Self {
             bodies,
             shapes: BTreeSet::new(),
+            plain_objects: BTreeSet::new(),
             expanded_keys: BTreeSet::new(),
             rejected_keys: BTreeSet::new(),
             descriptor_types: BTreeSet::new(),
@@ -295,6 +302,7 @@ impl<'a> Discovery<'a> {
             &mut self.expanded_keys,
             &mut self.rejected_keys,
             &mut self.shapes,
+            &mut self.plain_objects,
         )
         .walk(ty)?;
         Ok(())
@@ -405,7 +413,7 @@ impl<'a> Discovery<'a> {
         Ok(())
     }
 
-    fn finish(self) -> RecursiveValidators {
+    fn finish(self) -> Result<RecursiveValidators, crate::compiler_error::CompilerFailure> {
         let mut all_keys = self.expanded_keys.clone();
         all_keys.extend(self.rejected_keys.iter().cloned());
         let plans: Vec<_> = all_keys
@@ -413,14 +421,14 @@ impl<'a> Discovery<'a> {
             .map(|key| {
                 let rejects_polymorphic_edge =
                     self.rejected_keys.contains(&key) && !self.expanded_keys.contains(&key);
-                let body = self.bodies.expand_one(&key);
-                ValidatorPlan {
+                let body = expanded(self.bodies, &key)?;
+                Ok(ValidatorPlan {
                     key,
                     body,
                     rejects_polymorphic_edge,
-                }
+                })
             })
-            .collect();
+            .collect::<Result<_, crate::compiler_error::CompilerFailure>>()?;
         let mut descriptor_types = self.descriptor_types;
         for plan in &plans {
             collect_descriptor_arguments(&plan.body, &mut descriptor_types);
@@ -435,11 +443,11 @@ impl<'a> Discovery<'a> {
                 }
             }
         }
-        RecursiveValidators {
+        Ok(RecursiveValidators {
             descriptor_types,
             plans,
             extra_shapes: self.shapes.into_iter().collect(),
-        }
+        })
     }
 }
 
@@ -448,70 +456,71 @@ fn interface_test_is_recursive(
     key: &Type,
     interface: &crate::InterfaceNarrowingTest,
 ) -> bool {
-    let mut visiting = BTreeSet::from([key.clone()]);
+    let mut visited = BTreeSet::from([key.clone()]);
     interface
         .index
         .as_ref()
-        .is_some_and(|index| type_reaches_interface(&index.value, key.peel(), ta, &mut visiting))
+        .is_some_and(|index| type_reaches_interface(&index.value, key.peel(), ta, &mut visited))
         || interface
             .members
             .values()
-            .any(|member| type_reaches_interface(&member.ty, key.peel(), ta, &mut visiting))
+            .any(|member| type_reaches_interface(&member.ty, key.peel(), ta, &mut visited))
 }
 
 fn type_reaches_interface(
     ty: &Type,
     target: &Type,
     ta: &TypedAst,
-    visiting: &mut BTreeSet<Type>,
+    visited: &mut BTreeSet<Type>,
 ) -> bool {
     let ty = ty.peel();
     if ty == target {
         return true;
     }
     match ty {
-        Type::Array(element) => type_reaches_interface(element, target, ta, visiting),
+        Type::Array(element) => type_reaches_interface(element, target, ta, visited),
         Type::Tuple(elements) | Type::Union(elements) => elements
             .iter()
-            .any(|element| type_reaches_interface(element, target, ta, visiting)),
+            .any(|element| type_reaches_interface(element, target, ta, visited)),
         Type::Object { fields, index } => {
             index
                 .as_ref()
-                .is_some_and(|i| type_reaches_interface(&i.value, target, ta, visiting))
+                .is_some_and(|i| type_reaches_interface(&i.value, target, ta, visited))
                 || fields
                     .values()
-                    .any(|field| type_reaches_interface(&field.ty, target, ta, visiting))
+                    .any(|field| type_reaches_interface(&field.ty, target, ta, visited))
         }
         Type::Function { params, ret, .. } => {
             params
                 .iter()
-                .any(|param| type_reaches_interface(param, target, ta, visiting))
-                || type_reaches_interface(ret, target, ta, visiting)
+                .any(|param| type_reaches_interface(param, target, ta, visited))
+                || type_reaches_interface(ret, target, ta, visited)
         }
         Type::InterfaceRef { args, .. } => {
             if args
                 .iter()
-                .any(|arg| type_reaches_interface(arg, target, ta, visiting))
+                .any(|arg| type_reaches_interface(arg, target, ta, visited))
             {
                 return true;
             }
-            let key = ty.clone();
-            if !visiting.insert(key.clone()) {
+            // An interface stays visited after its walk: reachability of the
+            // one target does not depend on the path, and exploring a shared
+            // interface again from each member that references it is
+            // exponential in the nesting.
+            if !visited.insert(ty.clone()) {
                 return false;
             }
-            let reaches = match ta.runtime_type_tests.get(&key) {
+            match ta.runtime_type_tests.get(ty) {
                 Some(crate::FieldNarrowingTest::Interface(test)) => test
                     .members
                     .values()
-                    .any(|member| type_reaches_interface(&member.ty, target, ta, visiting)),
+                    .any(|member| type_reaches_interface(&member.ty, target, ta, visited)),
                 _ => false,
-            };
-            visiting.remove(&key);
-            reaches
+            }
         }
         Type::ClassRef { args, .. } | Type::AliasRef { args, .. } => args
             .iter()
-            .any(|arg| type_reaches_interface(arg, target, ta, visiting)),
+            .any(|arg| type_reaches_interface(arg, target, ta, visited)),
         _ => false,
     }
 }
@@ -524,6 +533,11 @@ struct Traversal<'a, 'b> {
     validators: &'b mut BTreeSet<Type>,
     rejected: &'b mut BTreeSet<Type>,
     shapes: &'b mut BTreeSet<Shape>,
+    /// Object types already walked, across roots, that reference no alias,
+    /// interface or class: recording their shapes is the walk's only effect, so
+    /// they need no second walk. Walking a deep object again for every runtime
+    /// test that contains it is quadratic in its depth.
+    plain_objects: &'b mut BTreeSet<Type>,
     active_declarations: BTreeSet<MangledName>,
     seen_instantiations: BTreeSet<Type>,
 }
@@ -534,59 +548,82 @@ impl<'a, 'b> Traversal<'a, 'b> {
         validators: &'b mut BTreeSet<Type>,
         rejected: &'b mut BTreeSet<Type>,
         shapes: &'b mut BTreeSet<Shape>,
+        plain_objects: &'b mut BTreeSet<Type>,
     ) -> Self {
         Self {
             bodies,
             validators,
             rejected,
             shapes,
+            plain_objects,
             active_declarations: BTreeSet::new(),
             seen_instantiations: BTreeSet::new(),
         }
     }
 
-    fn walk(&mut self, ty: &Type) -> Result<(), crate::compiler_error::CompilerFailure> {
+    /// Walks `ty`, reporting whether it reached an alias, interface or class
+    /// reference, whose handling depends on this root's traversal state.
+    fn walk(&mut self, ty: &Type) -> Result<bool, crate::compiler_error::CompilerFailure> {
         let peeled = ty.peel();
-        let _: () = match peeled {
+        Ok(match peeled {
             Type::Object { fields, index } => {
+                if self.plain_objects.contains(peeled) {
+                    return Ok(false);
+                }
+                let mut references = false;
                 if let Some(index) = index {
-                    self.walk(&index.value)?;
+                    references |= self.walk(&index.value)?;
                 }
                 self.shapes.insert(Shape::Object {
                     index: index.clone(),
                     fields: fields.clone(),
                 });
                 for field in fields.values() {
-                    self.walk(&field.ty)?;
+                    references |= self.walk(&field.ty)?;
                 }
+                if !references {
+                    self.plain_objects.insert(peeled.clone());
+                }
+                references
             }
             Type::Array(element) => self.walk(element)?,
             Type::Tuple(elements) | Type::Union(elements) => {
+                let mut references = false;
                 for element in elements {
-                    self.walk(element)?;
+                    references |= self.walk(element)?;
                 }
+                references
             }
             Type::Function { params, ret, .. } => {
+                let mut references = false;
                 for param in params {
-                    self.walk(param)?;
+                    references |= self.walk(param)?;
                 }
-                self.walk(ret)?;
+                references | self.walk(ret)?
             }
-            Type::AliasRef { mangled, .. } if self.bodies.expand_one(peeled) != *peeled => {
-                self.walk_alias(peeled, mangled)?;
-            }
-            Type::ClassRef { mangled, args, .. } if self.bodies.expand_one(peeled) != *peeled => {
-                for arg in args {
-                    self.walk(arg)?;
+            Type::AliasRef { mangled, .. } => {
+                if expanded(self.bodies, peeled)? != *peeled {
+                    self.walk_alias(peeled, mangled)?;
                 }
-                self.walk_interface(peeled, mangled)?;
+                true
             }
-            Type::InterfaceRef { mangled, .. } if self.bodies.expand_one(peeled) != *peeled => {
-                self.walk_interface(peeled, mangled)?;
+            Type::ClassRef { mangled, args, .. } => {
+                if expanded(self.bodies, peeled)? != *peeled {
+                    for arg in args {
+                        self.walk(arg)?;
+                    }
+                    self.walk_interface(peeled, mangled)?;
+                }
+                true
             }
-            _ => {}
-        };
-        Ok(())
+            Type::InterfaceRef { mangled, .. } => {
+                if expanded(self.bodies, peeled)? != *peeled {
+                    self.walk_interface(peeled, mangled)?;
+                }
+                true
+            }
+            _ => false,
+        })
     }
 
     fn walk_alias(
@@ -624,7 +661,7 @@ impl<'a, 'b> Traversal<'a, 'b> {
         if !self.active_declarations.insert(identity.clone()) {
             if let Some(key) = self.bodies.generic_key(ty) {
                 if self.validators.insert(key.clone()) {
-                    let body = self.bodies.expand_one(&key);
+                    let body = expanded(self.bodies, &key)?;
                     self.walk(&body)?;
                 }
             } else {
@@ -633,11 +670,21 @@ impl<'a, 'b> Traversal<'a, 'b> {
             return Ok(());
         }
         self.validators.insert(ty.clone());
-        let body = self.bodies.expand_one(ty);
+        let body = expanded(self.bodies, ty)?;
         self.walk(&body)?;
         self.active_declarations.remove(identity);
         Ok(())
     }
+}
+
+/// [`ValidatorBodies::expand_one`], with a type limit as a codegen failure.
+fn expanded(
+    bodies: &ValidatorBodies,
+    ty: &Type,
+) -> Result<Type, crate::compiler_error::CompilerFailure> {
+    bodies.expand_one(ty).map_err(|exceeded| {
+        exceeded.into_failure(crate::compiler_error::CompilerStage::Codegen, None)
+    })
 }
 
 fn collect_descriptor_arguments(ty: &Type, out: &mut BTreeSet<Type>) {
