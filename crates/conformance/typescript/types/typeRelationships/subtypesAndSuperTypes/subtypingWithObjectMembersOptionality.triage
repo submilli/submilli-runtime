@@ -1,1 +1,1 @@
-line 43 type: artifact both reject the cast on the line before, tsc keeps its type, we type the field `<error>`
+line 43 type: artifact both reject the line and each side's recovery type differs (the cast on the line before: tsc keeps its type, ours types the field `<error>`)

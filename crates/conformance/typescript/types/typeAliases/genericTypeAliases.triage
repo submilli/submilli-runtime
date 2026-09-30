@@ -1,1 +1,1 @@
-line 40, 41 type: artifact tsc prints an alias of a primitive as the primitive, we print the alias name
+line 40, 41 type: artifact one side prints a type alias (or `keyof`) by name and the other expands it (tsc reduces the alias)

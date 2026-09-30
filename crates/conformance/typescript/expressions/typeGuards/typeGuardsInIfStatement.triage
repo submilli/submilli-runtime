@@ -1,2 +1,3 @@
 line 118, 125 extra: by-design spec §1.6 `&&` keeps `number` and `boolean` whole in its falsy part, where tsc narrows to `0` or `false`
-line 118, 119, 121, 123, 125 type: by-design spec §1.6 `&&` keeps `number` and `boolean` whole in its falsy part, where tsc narrows to `0` or `false`
+line 118, 123, 125 type: by-design spec §1.6 `&&` keeps `number` and `boolean` whole in its falsy part, where tsc narrows to `0` or `false`
+line 119, 121 type: by-design spec §1.6 `a && b` is `falsy_part(a) | b`, even when `a`'s truthiness is known

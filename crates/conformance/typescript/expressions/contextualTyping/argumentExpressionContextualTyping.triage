@@ -1,4 +1,5 @@
-line 7, 12 extra: by-design spec §1.2 an array literal's element type comes from its first element
-line 7, 12, 17 type: by-design spec §1.2 an array literal's element type comes from its first element
+line 7, 12 extra: by-design spec §1.2 arrays are homogeneous, so an array literal's elements must share one type
+line 7, 12 type: by-design spec §1.2 arrays are homogeneous, so an array literal's elements must share one type
 line 8, 13, 15 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type
-line 18 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type; also by-design spec §1.2 an array literal's element type comes from its first element
+line 17 type: by-design spec §1.2 arrays are homogeneous, so an array literal's elements must share one type (the array on line 12)
+line 18 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type; also by-design spec §1.2 arrays are homogeneous, so an array literal's elements must share one type

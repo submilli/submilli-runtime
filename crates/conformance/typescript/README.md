@@ -114,7 +114,7 @@ artifact of how the case was ported. A case's `.triage` gives it, one entry per 
 of the case, for one kind of divergence on it:
 
 ```text
-line 12 type: by-design spec §1.2 an array literal's element type comes from its first element
+line 12 type: by-design spec §1.2 arrays are homogeneous, so an array literal's elements must share one type
 line 14, 17 extra: bug SUB-1026 construct signatures read as a method named `new`
 line 30 missed: artifact pruning removed the assignment that narrowed `x`
 ```

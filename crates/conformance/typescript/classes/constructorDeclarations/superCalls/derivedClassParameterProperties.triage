@@ -1,6 +1,6 @@
 line 48 missed: artifact we report the use of `this` before `super()` once, at the `super()` call on line 50
 line 57, 58, 59 missed: artifact we report the use of `this` before `super()` once, at the `super()` call on line 60
 line 80, 81, 82 missed: artifact we report the use of `this` before `super()` once, at the `super()` call on line 83
-line 50 extra: artifact we report the use of `this` before `super()` at the `super()` call, tsc reports it at the use on line 48
-line 60 extra: artifact we report the use of `this` before `super()` at the `super()` call, tsc reports it at the uses on lines 57, 58, 59
-line 83 extra: artifact we report the use of `this` before `super()` at the `super()` call, tsc reports it at the uses on lines 80, 81, 82
+line 50 extra: artifact we report the use of `this` before `super()` at the `super()` call, tsc at the use (line 48)
+line 60 extra: artifact we report the use of `this` before `super()` at the `super()` call, tsc at the use (lines 57, 58, 59)
+line 83 extra: artifact we report the use of `this` before `super()` at the `super()` call, tsc at the use (lines 80, 81, 82)

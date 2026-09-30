@@ -1,3 +1,2 @@
-line 12 extra: bug SUB-1071 an array literal takes its first element's type
-line 8, 9, 10, 14, 15 type: by-design spec §1.2 an array literal's element type comes from its first element
-line 12 type: bug SUB-1071 an array literal takes its first element's type
+line 12 extra: bug SUB-1071 an array literal takes its first element's type even when another element's type fits them all
+line 8, 9, 10, 12, 14, 15 type: bug SUB-1071 an array literal takes its first element's type even when another element's type fits them all
