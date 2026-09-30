@@ -1,1 +1,1 @@
-line 6 type: bug SUB-1180 an expression inside `${}` beside other text is recorded as `string` (a property read)
+line 6 type: bug SUB-1180 an expression inside `${}` beside other text or parts is recorded as `string` (a property read)

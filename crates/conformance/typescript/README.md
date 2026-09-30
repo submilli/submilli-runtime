@@ -133,8 +133,8 @@ line 47 type: bug SUB-1204 a literal widens to its base type where tsc keeps the
 
 So a reason itself never contains `; also `. Reuse the wording other entries give
 the same issue or spec rule, with anything particular to the line in parentheses
-after it, so that searching for it finds every line. A `bug SUB-1196 (<item>)` reason names the
-item of that checklist issue it waits on.
+after it, so that searching for it finds every line. A `bug SUB-1196 (<item>)`
+reason names the item of that checklist issue it waits on.
 
 The divergences not yet explained are listed in `unexplained.txt`, one
 `<case> <line> <kind>` per line. The test fails when:

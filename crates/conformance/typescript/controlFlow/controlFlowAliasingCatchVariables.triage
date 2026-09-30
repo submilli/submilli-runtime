@@ -1,4 +1,4 @@
 line 8, 12, 27 extra: by-design spec §1.8 `catch (e)` is sugar for `catch (e: Error)`, where tsc makes it `unknown`
-line 20 extra: bug SUB-1196 (`catch` binding) a `catch` binding can't be reassigned
+line 20 extra: bug SUB-1196 (`catch` binding) a `catch` binding can't be reassigned; also by-design spec §1.8 `catch (e)` is sugar for `catch (e: Error)`, where tsc makes it `unknown`
 line 6, 8, 11, 12, 18, 20, 27 type: by-design spec §1.8 `catch (e)` is sugar for `catch (e: Error)`, where tsc makes it `unknown`
 line 23, 26 type: bug SUB-1152 a rejected assignment, `++` or `--` still narrows its target (`e = 1` on line 20); also by-design spec §1.8 `catch (e)` is sugar for `catch (e: Error)`, where tsc makes it `unknown`

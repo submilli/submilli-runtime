@@ -1,2 +1,2 @@
-line 22 type: bug SUB-1180 an expression inside `${}` beside other text is recorded as `string` (`reading.fahrenheit`)
+line 22 type: bug SUB-1180 an expression inside `${}` beside other text or parts is recorded as `string` (`reading.fahrenheit`)
 line 13, 18 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type

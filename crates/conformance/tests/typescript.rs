@@ -956,7 +956,10 @@ fn same_type(text: &str, tsc_ty: &str, our_ty: &str) -> bool {
 /// Whether `ty` is a single named type, `Name` or `Name<…>`, that isn't a
 /// built-in one: what we print for a class. `A<B> | C<D>` is two types.
 fn names_a_class(ty: &str) -> bool {
-    let (name, arguments) = ty.split_once('<').unwrap_or((ty, ""));
+    let (name, arguments_close) = match ty.split_once('<') {
+        Some((name, arguments)) => (name, closes_at_end(arguments)),
+        None => (ty, true),
+    };
     let is_builtin = matches!(
         name,
         "unknown"
@@ -973,18 +976,21 @@ fn names_a_class(ty: &str) -> bool {
             | "boolean"
             | "bigint"
     );
-    let is_generic = ty.contains('<');
-    is_identifier(name) && !is_builtin && (!is_generic || closes_at_end(arguments))
+    is_identifier(name) && !is_builtin && arguments_close
 }
 
 /// Whether the type arguments after a generic's `<` close exactly at the end of
-/// the text, so nothing (`| C<D>`, `[]`) follows them.
+/// the text, so nothing (`| C<D>`, `[]`) follows them. The `>` of a function
+/// type's `=>` closes nothing.
 fn closes_at_end(arguments: &str) -> bool {
     let mut depth = 1usize;
+    let mut previous = None;
     for (i, c) in arguments.char_indices() {
+        let is_arrow = previous == Some('=');
+        previous = Some(c);
         match c {
             '<' => depth += 1,
-            '>' => {
+            '>' if !is_arrow => {
                 depth -= 1;
                 if depth == 0 {
                     return i + 1 == arguments.len();
@@ -1368,6 +1374,7 @@ fn drop_literals_beside_their_base(members: &mut Vec<String>) {
     members.retain(|m| {
         let is_numeric = is_signed_number_literal(m);
         let is_bigint = is_numeric && m.ends_with('n');
+        // `tsc` prints a string literal type double-quoted.
         let absorbed = has_string && m.starts_with('"') && is_string_literal(m)
             || has_number && is_numeric && !is_bigint
             || has_bigint && is_bigint
@@ -1598,6 +1605,7 @@ fn only_this_as_this_counts_as_its_class() {
     assert!(same_type("this", "this", "Base2<T>"));
     assert!(same_type("this", "this", "Derived"));
     assert!(same_type("this", "this", "Box<Map<K, V>>"));
+    assert!(same_type("this", "this", "Box<() => void>"));
     assert!(!same_type("x", "this", "Base2<T>"));
     for not_a_class in [
         "<error>",
