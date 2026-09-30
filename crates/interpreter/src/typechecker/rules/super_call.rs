@@ -183,8 +183,7 @@ impl SuperCallWalk {
                 };
                 state.then(self.walk(ta, *f, super_called)?)
             }
-            // The body may run zero times, and a `break` can leave a case before
-            // its call, so only the entry state survives.
+            // The body may run zero times, so only the entry state survives.
             TypedStmtKind::While { body, .. }
             | TypedStmtKind::DoWhile { body, .. }
             | TypedStmtKind::ForOf { body, .. } => {
@@ -200,6 +199,8 @@ impl SuperCallWalk {
                 self.walk(ta, *body, super_called)?;
                 entry
             }
+            // A `break` can leave a case before its call, and no case may
+            // match, so only the entry state survives.
             TypedStmtKind::Switch { cases, default, .. } => {
                 for body in cases.iter().map(|c| c.body).chain(*default) {
                     self.walk(ta, body, super_called)?;

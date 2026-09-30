@@ -1554,8 +1554,8 @@ fn emit_literal_chunk(
     array: u32,
     raw: u32,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    emit_expr(emitter, ctx, element.expr_id())?;
     if let crate::TypedArrayElement::Value(value) = element {
+        emit_expr(emitter, ctx, *value)?;
         cast::emit_box(
             emitter,
             ctx,
@@ -1570,26 +1570,9 @@ fn emit_literal_chunk(
         });
         return Ok(());
     }
-    // A source whose value `runtime_values` widened arrives as `(ref null
-    // $Object)`, and may no longer hold what its narrowed type said, so it is
-    // checked as an index read's receiver is: a mismatch throws a `TypeError`.
-    let source_ty = &ctx
-        .ta
-        .try_expr(element.expr_id())
-        .map_err(crate::codegen::arena_failure)?
-        .ty;
-    let array_type = ValType::Ref(RefType {
-        nullable: false,
-        heap_type: HeapType::Concrete(array),
-    });
-    if ctx.symbols.value_type(source_ty)? != array_type {
-        crate::codegen::cast_check::emit_operation_cast_on_stack(
-            emitter,
-            ctx,
-            source_ty,
-            &Type::Array(Box::new(Type::Unknown)),
-        )?;
-    }
+    // A source `runtime_values` widened may no longer hold the array its
+    // narrowed type said; `emit_receiver` checks it as a field read's receiver.
+    emit_receiver(emitter, ctx, element.expr_id())?;
     let raw_type = ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(raw),
@@ -2393,29 +2376,16 @@ fn emit_object_spread(
         .expect("spread helper collected");
     emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object)));
     for (index, source) in sources.iter().enumerate() {
-        emit_expr(emitter, ctx, source.expr_id())?;
-        let source_ty = &ctx
-            .ta
-            .try_expr(source.expr_id())
-            .map_err(crate::codegen::arena_failure)?
-            .ty;
-        // A widened source arrives as `unknown` and may no longer hold what
-        // its narrowed type said, so it is checked against the declared type,
-        // as a field read's receiver is: a mismatch throws a `TypeError`.
-        let authored_ty = ctx
+        // A source `runtime_values` widened may no longer hold what its
+        // narrowed type said; `emit_receiver` checks it against that type,
+        // which the stash and the mask then read in place of `unknown`.
+        emit_receiver(emitter, ctx, source.expr_id())?;
+        let narrowed_ty = ctx
             .ta
             .source_type(source.expr_id())
             .map_err(crate::codegen::arena_failure)?;
-        if source_ty != authored_ty {
-            crate::codegen::cast_check::emit_operation_cast_on_stack(
-                emitter,
-                ctx,
-                source_ty,
-                authored_ty,
-            )?;
-        }
         let source_local =
-            stash_receiver_as_object_shape(emitter, authored_ty, intrinsics.object_shape);
+            stash_receiver_as_object_shape(emitter, narrowed_ty, intrinsics.object_shape);
         emitter.instruction(Instruction::LocalGet(source_local));
         if index + 1 == sources.len() {
             emit_spread_shape(emitter, ctx, shape);
@@ -2423,7 +2393,7 @@ fn emit_object_spread(
             emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object)));
         }
         if matches!(source, TypedObjectMember::Spread { by_name: true, .. }) {
-            emit_spread_mask(emitter, ctx, source_local, authored_ty, shape)?;
+            emit_spread_mask(emitter, ctx, source_local, narrowed_ty, shape)?;
         } else {
             emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object)));
         }

@@ -2838,33 +2838,7 @@ impl<'a> Inferer<'a> {
         // Taken before the arguments are inferred, so a `super(...)` among
         // them isn't mistaken for the statement.
         let is_statement = std::mem::take(&mut self.super_call_is_statement);
-        if !self.in_constructor {
-            self.error_with_help(
-                span,
-                "`super(...)` is only valid inside a constructor".to_string(),
-                vec!["call the parent constructor from this class's `constructor`".to_string()],
-            );
-        }
-        if self.in_constructor && self.in_nested_function {
-            // Not the constructor's own call: it can run late or never, so it
-            // neither counts toward `super_seen` nor ends the `this` window.
-            self.error_with_help(
-                span,
-                "`super(...)` can't be called from a function nested in a constructor".to_string(),
-                vec!["call the parent constructor directly in the `constructor` body".to_string()],
-            );
-        } else {
-            if self.in_constructor && !is_statement {
-                self.error_with_help(
-                    span,
-                    "`super(...)` must be a statement of its own".to_string(),
-                    vec![
-                        "write `super(...);` on its own line, so it runs on every path".to_string(),
-                    ],
-                );
-            }
-            self.note_constructor_super_call(span);
-        }
+        self.check_super_call_position(span, is_statement);
 
         let parent = self.current_super.clone();
         // The parent's ctor params, substituted at the extends clause's type
@@ -2942,6 +2916,37 @@ impl<'a> Inferer<'a> {
             },
             Type::Void,
         ))
+    }
+
+    /// Report a `super(...)` that isn't the constructor's own statement, and
+    /// record one that is.
+    fn check_super_call_position(&mut self, span: Span, is_statement: bool) {
+        if !self.in_constructor {
+            self.error_with_help(
+                span,
+                "`super(...)` is only valid inside a constructor".to_string(),
+                vec!["call the parent constructor from this class's `constructor`".to_string()],
+            );
+            return;
+        }
+        if self.in_nested_function {
+            // Not the constructor's own call: it can run late or never, so it
+            // neither counts toward `super_seen` nor ends the `this` window.
+            self.error_with_help(
+                span,
+                "`super(...)` can't be called from a function nested in a constructor".to_string(),
+                vec!["call the parent constructor directly in the `constructor` body".to_string()],
+            );
+            return;
+        }
+        if !is_statement {
+            self.error_with_help(
+                span,
+                "`super(...)` must be a statement of its own".to_string(),
+                vec!["write `super(...);` on its own line, so it runs on every path".to_string()],
+            );
+        }
+        self.note_constructor_super_call(span);
     }
 
     /// Whether `expr` is a `super(...)` call, parenthesized or not, as opposed
