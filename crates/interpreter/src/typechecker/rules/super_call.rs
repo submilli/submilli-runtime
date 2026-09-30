@@ -3,10 +3,10 @@
 //! parent constructor and its fields read as `null`/`0` at the WasmGC level,
 //! where JavaScript would throw a `ReferenceError`.
 //!
-//! A constructor with no `super(...)` statement at all is reported during
-//! inference; this rule reports only one whose call some path skips. It is
-//! conservative: a call inside a loop, a `switch` case or an expression doesn't
-//! count as made, so the rule never accepts a constructor that can skip it.
+//! Inference reports a constructor with no `super(...)` at all, and one whose
+//! call isn't a statement of its own; this rule reports one whose call statement
+//! some path skips. It is conservative: a call inside a loop or a `switch` case
+//! doesn't count as made, so the rule never accepts a constructor that can skip it.
 
 use crate::compiler_error::CompilerFailure;
 use crate::{
@@ -21,15 +21,19 @@ pub(super) fn run(ta: &TypedAst, diags: &mut Vec<Diagnostic>) -> Result<(), Comp
         let (Some(_), Some(ctor)) = (&class.extends, &class.constructor) else {
             continue;
         };
-        let mut paths = Paths::default();
-        let called = paths.walk(ta, ctor.body, false)?;
-        if !paths.found_call {
+        let mut walk = SuperCallWalk::default();
+        let end = walk.walk(ta, ctor.body, false)?;
+        if !walk.has_super_call_statement {
             continue;
         }
-        for span in paths.early_returns {
+        for span in walk.early_returns {
             diags.push(skipped(span, "this `return` can run before `super(...)`"));
         }
-        if called == Some(false) {
+        if end
+            == (Completion::Normal {
+                super_called: false,
+            })
+        {
             let body = ta
                 .try_stmt(ctor.body)
                 .map_err(crate::typechecker::arena_failure)?;
@@ -52,33 +56,58 @@ fn skipped(span: Span, message: &str) -> Diagnostic {
     }
 }
 
+/// How a statement's paths leave it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Completion {
+    /// No path completes normally: each returns, throws, breaks or continues.
+    Abrupt,
+    /// Some path completes normally; `super_called` if `super(...)` has run on
+    /// every one that does.
+    Normal { super_called: bool },
+}
+
+impl Completion {
+    /// The completion of two alternative paths: `super(...)` has run only if it
+    /// has on both, and a path that doesn't complete doesn't constrain the other.
+    fn join(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Normal { super_called: a }, Self::Normal { super_called: b }) => Self::Normal {
+                super_called: a && b,
+            },
+            (only, Self::Abrupt) | (Self::Abrupt, only) => only,
+        }
+    }
+}
+
+/// One constructor body's walk, collecting what the rule reports.
 #[derive(Default)]
-struct Paths {
-    /// Whether any statement in the body is a `super(...)` call.
-    found_call: bool,
+struct SuperCallWalk {
+    has_super_call_statement: bool,
     /// `return`s reached on some path before `super(...)` ran.
     early_returns: Vec<Span>,
 }
 
-impl Paths {
-    /// Walk `id` entered with `called` telling whether `super(...)` has run on
-    /// every path so far. Returns the same for the paths that complete
-    /// normally, or `None` when none do.
+impl SuperCallWalk {
+    /// Walk `id`, entered with `super_called` telling whether `super(...)` has
+    /// run on every path so far.
     fn walk(
         &mut self,
         ta: &TypedAst,
         id: StmtId,
-        called: bool,
-    ) -> Result<Option<bool>, CompilerFailure> {
+        super_called: bool,
+    ) -> Result<Completion, CompilerFailure> {
+        let entry = Completion::Normal { super_called };
         let stmt = ta.try_stmt(id).map_err(crate::typechecker::arena_failure)?;
         Ok(match &stmt.kind {
             TypedStmtKind::Return(_) => {
-                if !called {
+                if !super_called {
                     self.early_returns.push(stmt.span);
                 }
-                None
+                Completion::Abrupt
             }
-            TypedStmtKind::Throw { .. } | TypedStmtKind::Break | TypedStmtKind::Continue => None,
+            TypedStmtKind::Throw { .. } | TypedStmtKind::Break | TypedStmtKind::Continue => {
+                Completion::Abrupt
+            }
             TypedStmtKind::Expr(expr) => {
                 let is_call = matches!(
                     ta.try_expr(*expr)
@@ -86,14 +115,25 @@ impl Paths {
                         .kind,
                     TypedExprKind::SuperCtorCall { .. }
                 );
-                self.found_call |= is_call;
-                Some(called || is_call)
+                self.has_super_call_statement |= is_call;
+                Completion::Normal {
+                    super_called: super_called || is_call,
+                }
             }
             TypedStmtKind::Block(stmts) => {
-                let mut state = Some(called);
+                let mut state = entry;
                 for &s in stmts {
-                    let Some(now) = state else { break };
-                    state = self.walk(ta, s, now)?;
+                    match state {
+                        Completion::Normal { super_called } => {
+                            state = self.walk(ta, s, super_called)?;
+                        }
+                        // Unreachable, but a call here still means the
+                        // constructor has one to check; walked as if it had
+                        // run, so its `return`s aren't reported.
+                        Completion::Abrupt => {
+                            self.walk(ta, s, true)?;
+                        }
+                    }
                 }
                 state
             }
@@ -102,14 +142,14 @@ impl Paths {
                 else_block,
                 ..
             } => {
-                let then = self.walk(ta, *then_block, called)?;
+                let then = self.walk(ta, *then_block, super_called)?;
                 let els = match else_block {
-                    Some(block) => self.walk(ta, *block, called)?,
-                    None => Some(called),
+                    Some(block) => self.walk(ta, *block, super_called)?,
+                    None => entry,
                 };
-                join(then, els)
+                then.join(els)
             }
-            TypedStmtKind::NarrowRegion { body, .. } => self.walk(ta, *body, called)?,
+            TypedStmtKind::NarrowRegion { body, .. } => self.walk(ta, *body, super_called)?,
             TypedStmtKind::Try {
                 body,
                 catches,
@@ -117,16 +157,25 @@ impl Paths {
             } => {
                 // A `catch` can start before the body's call, and `finally`
                 // after any of them, so each is walked from the entry state.
-                let mut state = self.walk(ta, *body, called)?;
+                let mut state = self.walk(ta, *body, super_called)?;
                 for c in catches {
-                    state = join(state, self.walk(ta, c.body, called)?);
+                    state = state.join(self.walk(ta, c.body, super_called)?);
                 }
-                match finally {
-                    Some(f) => match self.walk(ta, *f, called)? {
-                        None => None,
-                        Some(in_finally) => state.map(|after| after || in_finally),
+                let Some(f) = finally else {
+                    return Ok(state);
+                };
+                match (state, self.walk(ta, *f, super_called)?) {
+                    (Completion::Abrupt, _) | (_, Completion::Abrupt) => Completion::Abrupt,
+                    (
+                        Completion::Normal {
+                            super_called: after,
+                        },
+                        Completion::Normal {
+                            super_called: in_finally,
+                        },
+                    ) => Completion::Normal {
+                        super_called: after || in_finally,
                     },
-                    None => state,
                 }
             }
             // The body may run zero times, and a `break` can leave a case before
@@ -134,23 +183,23 @@ impl Paths {
             TypedStmtKind::While { body, .. }
             | TypedStmtKind::DoWhile { body, .. }
             | TypedStmtKind::ForOf { body, .. } => {
-                self.walk(ta, *body, called)?;
-                Some(called)
+                self.walk(ta, *body, super_called)?;
+                entry
             }
             TypedStmtKind::For {
                 init, update, body, ..
             } => {
                 for s in [*init, *update].into_iter().flatten() {
-                    self.walk(ta, s, called)?;
+                    self.walk(ta, s, super_called)?;
                 }
-                self.walk(ta, *body, called)?;
-                Some(called)
+                self.walk(ta, *body, super_called)?;
+                entry
             }
             TypedStmtKind::Switch { cases, default, .. } => {
                 for body in cases.iter().map(|c| c.body).chain(*default) {
-                    self.walk(ta, body, called)?;
+                    self.walk(ta, body, super_called)?;
                 }
-                Some(called)
+                entry
             }
             TypedStmtKind::ReboxLocal { .. }
             | TypedStmtKind::Let { .. }
@@ -158,17 +207,7 @@ impl Paths {
             | TypedStmtKind::AssignLocal { .. }
             | TypedStmtKind::AssignGlobal { .. }
             | TypedStmtKind::AssignField { .. }
-            | TypedStmtKind::AssignIndex { .. } => Some(called),
+            | TypedStmtKind::AssignIndex { .. } => entry,
         })
-    }
-}
-
-/// The state after two alternative paths: `super(...)` has run only if it has
-/// on both, and a path that doesn't complete doesn't constrain the other.
-fn join(a: Option<bool>, b: Option<bool>) -> Option<bool> {
-    match (a, b) {
-        (Some(a), Some(b)) => Some(a && b),
-        (a, None) => a,
-        (None, b) => b,
     }
 }

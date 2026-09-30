@@ -2835,6 +2835,7 @@ impl<'a> Inferer<'a> {
         args: Vec<crate::ExprId>,
         span: Span,
     ) -> Result<(crate::TypedExprKind, Type), CompilerFailure> {
+        let is_statement = std::mem::take(&mut self.super_call_is_statement);
         if !self.in_constructor {
             self.error_with_help(
                 span,
@@ -2851,6 +2852,15 @@ impl<'a> Inferer<'a> {
                 vec!["call the parent constructor directly in the `constructor` body".to_string()],
             );
         } else {
+            if self.in_constructor && !is_statement {
+                self.error_with_help(
+                    span,
+                    "`super(...)` must be a statement of its own".to_string(),
+                    vec![
+                        "write `super(...);` on its own line, so it runs on every path".to_string(),
+                    ],
+                );
+            }
             self.note_constructor_super_call(span);
         }
 
@@ -2929,6 +2939,22 @@ impl<'a> Inferer<'a> {
                 args: typed_args,
             },
             Type::Void,
+        ))
+    }
+
+    /// Whether `expr` is a `super(...)` call, as opposed to one inside it.
+    pub(super) fn is_super_call(&self, expr: crate::ExprId) -> Result<bool, CompilerFailure> {
+        let crate::ExprKind::Call { callee, .. } =
+            &self.ast.try_expr(expr).map_err(super::arena_failure)?.kind
+        else {
+            return Ok(false);
+        };
+        Ok(matches!(
+            self.ast
+                .try_expr(*callee)
+                .map_err(super::arena_failure)?
+                .kind,
+            crate::ExprKind::Super
         ))
     }
 

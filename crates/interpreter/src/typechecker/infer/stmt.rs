@@ -191,7 +191,9 @@ impl Inferer<'_> {
                 Ok(TypedStmtKind::Return(typed_value))
             }
             StmtKind::Expr(expr_id) => {
+                self.super_call_is_statement = self.is_super_call(expr_id)?;
                 let (typed_id, _) = self.infer_expr(expr_id, None)?;
+                self.super_call_is_statement = false;
                 Ok(TypedStmtKind::Expr(typed_id))
             }
             StmtKind::Block(stmts) => {
