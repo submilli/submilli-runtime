@@ -137,6 +137,19 @@ A rule sees a path after `.` and `..` are resolved: a write to
 `/notes/../secrets` is checked as `/secrets`. The same holds for both paths
 of `move` and `copy`, and for the destination of `download`.
 
+An HTTP rule sees `host` without a trailing dot: a request to
+`https://api.example.com./` is checked as `api.example.com`.
+
+Each redirect is checked before it is sent, under the same caller's rules,
+with the new URL's host and path. A redirect keeps the request's method,
+except that a 301 or 302 answering a `POST`, and a 303 answering anything but
+`GET` or `HEAD`, send the next request as a `GET` with no body. That request,
+and any redirect after it, is checked as `http.get` with only `host` and
+`path`, so a condition on `body_size` or `timeout_ms` is false for it (see
+[How a filter is evaluated](#how-a-filter-is-evaluated)). A download's
+redirects are always checked as `http.download`. A redirect the rules refuse
+throws `PermissionDeniedError`, and the refused destination receives nothing.
+
 `llm.call` with a filter on `model` also limits what `models()` lists, so a
 program is never shown a model it would be refused.
 

@@ -562,6 +562,7 @@ permissions:
             max_response_size: 1024,
             decompress: false,
             transport_policy: None,
+            redirect_guard: None,
         }
     }
 

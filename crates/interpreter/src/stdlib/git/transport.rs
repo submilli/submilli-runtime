@@ -338,6 +338,7 @@ impl Client {
                 max_response_size: self.job.max_bytes,
                 decompress: false,
                 transport_policy: None,
+                redirect_guard: None,
             },
             response: None,
             body_closed: method == "GET",

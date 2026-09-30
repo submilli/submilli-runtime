@@ -4855,6 +4855,7 @@ dependencies = [
  "clap",
  "futures",
  "http-body-util",
+ "httpmock",
  "interpreter",
  "ipnet",
  "libc",
