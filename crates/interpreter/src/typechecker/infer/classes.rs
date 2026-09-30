@@ -2962,16 +2962,15 @@ impl<'a> Inferer<'a> {
     }
 
     /// A read of `this`, or of a `super` member, in a subclass constructor.
-    /// Before `super(...)` the parent's fields aren't set yet: in the call's
-    /// own arguments that is reported here, and elsewhere it is flagged for
-    /// the call to report.
-    pub(super) fn note_this_access(&mut self, span: Span) {
+    /// Before `super(...)` returns the parent's fields aren't set: a read in
+    /// the call's own arguments is reported here, and one before the call is
+    /// flagged for the call to report. A read inside a function counts too,
+    /// since nothing stops the parent's constructor calling it.
+    pub(super) fn note_read_before_super(&mut self, span: Span) {
         if !self.in_constructor || self.current_super.is_none() {
             return;
         }
-        // A function passed to `super(...)` runs later, when the instance is
-        // built, so only a read in the arguments themselves is reported.
-        if self.in_super_arguments && !self.in_nested_function {
+        if self.in_super_arguments {
             self.error_with_help(
                 span,
                 "the arguments of `super(...)` can't read `this` or a `super` member".to_string(),
@@ -2980,7 +2979,7 @@ impl<'a> Inferer<'a> {
             return;
         }
         if !self.super_seen {
-            self.this_before_super = true;
+            self.read_before_super = true;
         }
     }
 
@@ -3006,7 +3005,7 @@ impl<'a> Inferer<'a> {
         if self.super_seen {
             self.error(span, "`super(...)` may only be called once".to_string());
         }
-        if self.this_before_super {
+        if self.read_before_super {
             self.error_with_help(
                 span,
                 "`super(...)` must be called before accessing `this` or a `super` member"
@@ -3026,7 +3025,7 @@ impl<'a> Inferer<'a> {
         args: Vec<crate::ExprId>,
         span: Span,
     ) -> Result<(crate::TypedExprKind, Type), CompilerFailure> {
-        self.note_this_access(span);
+        self.note_read_before_super(span);
         let Some(parent) = self.current_super.clone() else {
             if !self.current_class_inherits_unresolved_parent() {
                 self.error_with_help(
@@ -3533,7 +3532,7 @@ impl<'a> Inferer<'a> {
         let typed_params = bind_params_for_body(self, params, ctor_params, class_inst)?;
         let prev_in_ctor = std::mem::replace(&mut self.in_constructor, true);
         let prev_super_seen = std::mem::replace(&mut self.super_seen, false);
-        let prev_this_before = std::mem::replace(&mut self.this_before_super, false);
+        let prev_this_before = std::mem::replace(&mut self.read_before_super, false);
         let prev_nested = std::mem::replace(&mut self.in_nested_function, false);
         // A constructor returns no value; a bare `return;` is fine.
         let prev_return = self.current_return.replace(Type::Void);
@@ -3569,7 +3568,7 @@ impl<'a> Inferer<'a> {
         self.reachable = prev_reachable;
         self.in_constructor = prev_in_ctor;
         self.super_seen = prev_super_seen;
-        self.this_before_super = prev_this_before;
+        self.read_before_super = prev_this_before;
         self.in_nested_function = prev_nested;
         self.scopes.pop();
 
@@ -4768,7 +4767,7 @@ mod tests {
     }
 
     #[test]
-    fn this_before_super_rejected() {
+    fn read_before_super_rejected() {
         let src = format!(
             r#"{ANIMAL}
             class Dog extends Animal {{

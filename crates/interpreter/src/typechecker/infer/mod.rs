@@ -132,7 +132,7 @@ pub fn infer_with_transitive_checked<'a>(
         current_super: None,
         in_constructor: false,
         super_seen: false,
-        this_before_super: false,
+        read_before_super: false,
         in_nested_function: false,
         super_call_is_statement: false,
         in_super_arguments: false,
@@ -386,7 +386,7 @@ pub fn infer_package_checked<'a>(
         current_super: None,
         in_constructor: false,
         super_seen: false,
-        this_before_super: false,
+        read_before_super: false,
         in_nested_function: false,
         super_call_is_statement: false,
         in_super_arguments: false,
@@ -727,10 +727,11 @@ pub(super) struct Inferer<'a> {
     /// Set when a subclass constructor body has called `super(...)`. Used to
     /// require exactly one call and reject a second.
     pub(super) super_seen: bool,
-    /// Set when `this` is accessed inside a subclass constructor *before*
-    /// `super(...)` — flagged at the next `super(...)` call (and harmless once
-    /// `super_seen`, since this-before-super is the only window that matters).
-    pub(super) this_before_super: bool,
+    /// Set when `this` or a `super` member is read inside a subclass
+    /// constructor *before* `super(...)` — flagged at the next `super(...)`
+    /// call (and harmless once `super_seen`, since before the call is the only
+    /// window that matters).
+    pub(super) read_before_super: bool,
     /// True inside an arrow or function expression or declaration, and reset
     /// by `check_constructor`: with `in_constructor`, it means the code is a
     /// function nested in the constructor rather than the constructor's own

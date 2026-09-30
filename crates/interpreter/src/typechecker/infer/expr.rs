@@ -575,7 +575,7 @@ impl Inferer<'_> {
             ExprKind::This => Ok(if let Some(ty) = &self.function_this {
                 (TypedExprKind::This, ty.clone())
             } else if let Some(ty) = self.current_class.clone() {
-                self.note_this_access(span);
+                self.note_read_before_super(span);
                 (TypedExprKind::This, ty)
             } else if let Some((class, member)) = self.current_static.clone() {
                 self.error_with_help(
@@ -583,8 +583,8 @@ impl Inferer<'_> {
                     "`this` is not available in a static member".to_string(),
                     vec![format!(
                         "`{class}.{member}` runs without an instance; take the instance as \
-                             a parameter, or make it an instance method. To use another static, \
-                             qualify it: `{class}.<member>`"
+                         a parameter, or make it an instance method. To use another static, \
+                         qualify it: `{class}.<member>`"
                     )],
                 );
                 (TypedExprKind::Null, Type::Error)

@@ -134,7 +134,7 @@ pub(super) fn with_source_inferer(source: &str, test: impl FnOnce(&mut super::In
         current_super: None,
         in_constructor: false,
         super_seen: false,
-        this_before_super: false,
+        read_before_super: false,
         in_nested_function: false,
         super_call_is_statement: false,
         in_super_arguments: false,

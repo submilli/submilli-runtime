@@ -46,7 +46,6 @@ class Parenthesized extends Base {
 class Deferred extends Base {
   read: () => number;
   constructor(x: number) {
-    // The arrow runs after `super(...)` returns, so it may read `this`.
     super(x);
     this.read = (): number => this.v;
   }
