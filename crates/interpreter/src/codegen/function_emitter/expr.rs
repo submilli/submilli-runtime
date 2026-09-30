@@ -2434,7 +2434,7 @@ fn emit_spread_mask(
     shape: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let mut fields = std::collections::BTreeMap::new();
-    collect_spread_field_types(source_ty, &mut fields);
+    collect_spread_field_types(source_ty, &mut fields)?;
     let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
@@ -2487,7 +2487,10 @@ fn emit_spread_mask(
     Ok(())
 }
 
-fn collect_spread_field_types(ty: &Type, fields: &mut std::collections::BTreeMap<String, Type>) {
+fn collect_spread_field_types(
+    ty: &Type,
+    fields: &mut std::collections::BTreeMap<String, Type>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     match ty.peel() {
         Type::Object { fields: source, .. } => {
             for (name, field) in source {
@@ -2499,11 +2502,16 @@ fn collect_spread_field_types(ty: &Type, fields: &mut std::collections::BTreeMap
         }
         Type::Union(members) => {
             for member in members {
-                collect_spread_field_types(member, fields);
+                collect_spread_field_types(member, fields)?;
             }
         }
-        _ => unreachable!("spread source must be structural"),
+        _ => {
+            return Err(crate::codegen::internal_failure(
+                "spread mask source is not structural",
+            ));
+        }
     }
+    Ok(())
 }
 
 /// The final merge restores optional markers and writable absent slots from
