@@ -20,6 +20,7 @@ function main(): void {
     assert(json.includes('"formats":[{"type":"json","schema":') && !json.includes('"markdown"'), "optional structured extraction");
     assert(buildBatchBody(["https://example.com/a", "https://other.example/b"]).includes('"ignoreInvalidURLs":false'), "no silent provider URL drops");
     assert(urlHost("https://EXAMPLE.com:443/a") === "example.com", "canonical host");
+    assert(urlHost("https://example.com./a") === "example.com" && urlHost("https://EXAMPLE.com../a") === "example.com", "trailing dots are not part of the permission host");
     assert(buildMapBody("https://example.com").includes('"limit":100,"includeSubdomains":false'), "bounded map default");
     const crawl = buildCrawlBody("https://example.com/docs", { limit: 5, maxDiscoveryDepth: 1, sitemap: "skip",
         includePaths: ["docs/.*"], excludePaths: ["docs/archive/.*"], scrapeOptions: { formats: ["markdown", "html"] } });

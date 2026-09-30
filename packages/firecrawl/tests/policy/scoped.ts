@@ -19,16 +19,23 @@ function main(): string {
     deniedAt("firecrawl.dev/search.scrape", "main", () => { search("q", { limit: 2, includeDomains: ["example.com"], scrapeOptions: {} }); });
     deniedAt("firecrawl.dev/scrape", "main", () => { scrape("https://blocked.example"); });
     reachesCredentialBoundary(() => { scrape("https://EXAMPLE.com/a"); });
+    // A fully qualified host is the same host, so the same grant and the same denial apply.
+    reachesCredentialBoundary(() => { scrape("https://example.com./a"); });
+    deniedAt("firecrawl.dev/scrape", "main", () => { scrape("https://blocked.example./"); });
 
     deniedAt("firecrawl.dev/map", "main", () => { map("https://blocked.example", { limit: 5 }); });
     deniedAt("firecrawl.dev/map", "main", () => { map("https://example.com", { limit: 6 }); });
     deniedAt("firecrawl.dev/map", "main", () => { map("https://example.com", { limit: 5, includeSubdomains: true }); });
     reachesCredentialBoundary(() => { map("https://example.com", { limit: 5 }); });
+    reachesCredentialBoundary(() => { map("https://example.com.", { limit: 5 }); });
+    deniedAt("firecrawl.dev/map", "main", () => { map("https://blocked.example.", { limit: 5 }); });
 
     // Checking just the first URL, or reading a credential between host checks, fails this assertion.
     deniedAt("firecrawl.dev/batch.start", "main", () => { startBatch(["https://example.com/a", "https://blocked.example/b"]); });
     deniedAt("firecrawl.dev/batch.start", "main", () => { startBatch(["https://example.com/a", "https://example.com/b", "https://example.com/c"]); });
     reachesCredentialBoundary(() => { startBatch(["https://example.com/a", "https://EXAMPLE.com/b"]); });
+    reachesCredentialBoundary(() => { startBatch(["https://example.com./a", "https://EXAMPLE.com../b"]); });
+    deniedAt("firecrawl.dev/batch.start", "main", () => { startBatch(["https://example.com/a", "https://blocked.example./b"]); });
 
     deniedAt("firecrawl.dev/crawl.start", "main", () => { startCrawl("https://blocked.example", { limit: 2 }); });
     deniedAt("firecrawl.dev/crawl.start", "main", () => { startCrawl("https://example.com", { limit: 3 }); });
@@ -36,6 +43,8 @@ function main(): string {
     deniedAt("firecrawl.dev/crawl.start", "main", () => { startCrawl("https://example.com", { limit: 2, allowSubdomains: true }); });
     deniedAt("firecrawl.dev/crawl.start", "main", () => { startCrawl("https://example.com", { limit: 2, crawlEntireDomain: true }); });
     reachesCredentialBoundary(() => { startCrawl("https://example.com", { limit: 2 }); });
+    reachesCredentialBoundary(() => { startCrawl("https://example.com.", { limit: 2 }); });
+    deniedAt("firecrawl.dev/crawl.start", "main", () => { startCrawl("https://blocked.example.", { limit: 2 }); });
 
     deniedAt("firecrawl.dev/jobs.read", "main", () => { getJob("crawl", "44444444-4444-4444-8444-444444444444"); });
     deniedAt("firecrawl.dev/jobs.read", "main", () => { getJob("batch", "22222222-2222-4222-8222-222222222222"); });

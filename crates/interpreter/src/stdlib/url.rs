@@ -125,7 +125,7 @@ pub fn package_declaration() -> PackageDeclaration {
         &mut properties,
         "host",
         Type::String,
-        "/** Host name, e.g. `\"api.acme.com\"`. Never includes the port. */",
+        "/** Host name, e.g. `\"api.acme.com\"`. Lower-case, without the port or a trailing dot: `\"https://api.acme.com./\"` gives `\"api.acme.com\"`. */",
     );
     insert_url_property(
         &mut properties,
@@ -278,6 +278,14 @@ const F_PORT: usize = 3;
 const F_PATH: usize = 4;
 const F_QUERY: usize = 5;
 const F_FRAGMENT: usize = 6;
+
+/// Host of `url`, or `""` when it has none. A fully qualified `evil.test.`
+/// names the same host as `evil.test`, so trailing dots are dropped: `parse`
+/// and every capability context report one spelling, and a
+/// `host == "evil.test"` rule sees both.
+pub(crate) fn host_without_trailing_dots(url: &url::Url) -> &str {
+    url.host_str().unwrap_or("").trim_end_matches('.')
+}
 
 /// The parsed pieces of a URL, in host form; `write` turns them into the
 /// `$UrlBacking` the guest sees.
@@ -443,7 +451,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 };
                 let parts = UrlParts {
                     protocol: parsed.scheme().to_string(),
-                    host: parsed.host_str().unwrap_or("").to_string(),
+                    host: host_without_trailing_dots(&parsed).to_string(),
                     port: parsed.port(),
                     path: parsed.path().to_string(),
                     query,

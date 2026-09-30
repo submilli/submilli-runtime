@@ -314,8 +314,11 @@ fn const_initializer(
 fn url_component(url: &str, component: &str) -> Option<String> {
     let parsed = url::Url::parse(url).ok()?;
     let value = match component {
-        // Matches the runtime `http.*` context, which drops a trailing dot.
-        "host" => parsed.host_str()?.trim_end_matches('.').to_string(),
+        // The spelling the runtime capability contexts use.
+        "host" => {
+            parsed.host_str()?;
+            crate::stdlib::url::host_without_trailing_dots(&parsed).to_string()
+        }
         "path" => parsed.path().to_string(),
         _ => return None,
     };

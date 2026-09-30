@@ -1,0 +1,17 @@
+kind: blueprint
+name: jina-host-test
+packages:
+  - '@submilli/jina'
+default: deny
+permissions:
+  main:
+    - capability: jina.ai/read
+      filter: host == "evil.test"
+      action: deny
+    - capability: jina.ai/read
+      action: allow
+    - capability: fs.write
+      action: allow
+  # Deliberate sentinel: permitted reads must reach secrets.get, which is
+  # denied here before a key can be read or a network request can happen.
+  '@submilli/jina': []

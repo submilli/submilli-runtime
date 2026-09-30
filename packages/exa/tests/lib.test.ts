@@ -54,6 +54,9 @@ function main(): void {
     label("URL batch validation and host normalization");
     const hosts = contentsHosts(["https://EXAMPLE.com/a", "http://other.example:8080/b"]);
     assert(hosts[0] === "example.com" && hosts[1] === "other.example", "normalized permission hosts");
+    const dotted = contentsHosts(["https://evil.test./a", "https://evil.test../b", "https://EVIL.test./c"]);
+    assert(dotted[0] === "evil.test" && dotted[1] === "evil.test" && dotted[2] === "evil.test", "trailing dots are not part of the permission host");
+    expectCode("invalid_argument", () => { contentsHosts(["https://./"]); });
     expectCode("invalid_argument", () => { buildContentsBody([]); });
     expectCode("invalid_argument", () => { buildContentsBody(["relative/path"]); });
     expectCode("invalid_argument", () => { buildContentsBody(["file:///etc/passwd"]); });
