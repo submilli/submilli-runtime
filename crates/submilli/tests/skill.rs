@@ -230,6 +230,11 @@ fn documented_real_service_package_and_blueprint_agree() {
         !String::from_utf8_lossy(&check.stderr).contains("cannot statically resolve the host"),
         "the documented URL construction must derive a host filter"
     );
+    assert!(
+        !String::from_utf8_lossy(&check.stderr).contains("`check()`"),
+        "the documented package must read each caller value once: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
     let schema = fs::read_to_string(root.path().join("package/capabilities.yaml")).unwrap();
     for expected in [
         "host == \"api.acme.com\"",

@@ -28,13 +28,18 @@ use crate::{
 
 pub const MODULE_NAME: &str = "submilli:url";
 
-/// What `encodeComponent` and `encodeQuery` escape: everything but ASCII alphanumerics and
-/// `-`, `_`, `~`. RFC 3986 also leaves `.` alone; it is escaped here so that a
-/// component of `..` can't become a dot segment of the path it is put in.
+/// What `encodeComponent` and `encodeQuery` both escape: everything but the characters
+/// RFC 3986 calls unreserved, which are the ASCII alphanumerics and `-`, `.`, `_`, `~`.
 const COMPONENT: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
     .remove(b'-')
+    .remove(b'.')
     .remove(b'_')
     .remove(b'~');
+
+/// The two components a path reads as a dot segment rather than as a name.
+/// `encodeComponent` escapes their dots as well; a query holds no segments, so
+/// `encodeQuery` does not.
+const DOT_SEGMENTS: [&str; 2] = [".", ".."];
 
 pub fn package_declaration() -> PackageDeclaration {
     let mut defs = PackageDeclaration::with_package(MODULE_NAME);
@@ -63,7 +68,7 @@ pub fn package_declaration() -> PackageDeclaration {
     insert_string_to_string_fn(
         &mut defs,
         "encodeComponent",
-        "/**\n * Percent-encode `s` per RFC 3986 (UTF-8 then `%HH` for every byte that isn't an ASCII alphanumeric or one of `-`, `_`, `~`). `.` is encoded too, so `..` can't act as a path segment.\n * @param s The component to encode.\n */",
+        "/**\n * Percent-encode `s` per RFC 3986 (UTF-8 then `%HH` for every byte that isn't an ASCII alphanumeric or one of `-`, `.`, `_`, `~`). An `s` that is exactly `.` or `..` has its dots encoded. That does not stop it from acting as a path segment: a URL parser treats `%2E%2E` as `..`, so refuse `.` and `..` before building a path from a value you did not choose.\n * @param s The component to encode.\n */",
     );
     insert_string_to_string_fn(
         &mut defs,
@@ -373,7 +378,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ true,
         |caller, params, results| {
             let s = read_string_arg(&mut *caller, &params[0], "url.encodeComponent")?;
-            let encoded = percent_encoding::utf8_percent_encode(&s, COMPONENT).to_string();
+            let encoded = encode_component(&s);
             let st = write_submilli_string_struct(caller, &encoded)?;
             results[0] = Val::AnyRef(Some(st.to_anyref()));
             Ok(())
@@ -602,6 +607,18 @@ fn decode_query(s: &str) -> Result<Vec<(String, String)>, String> {
         out.push((k, v));
     }
     Ok(out)
+}
+
+/// In a name a dot is left alone, as in `repo.js`, so the path reads as the
+/// caller and a blueprint filter would write it. A component that is a dot
+/// segment has its dots escaped so the text does not read as one. That is not
+/// a guard: a URL parser treats `%2E%2E` as `..` too, so a caller that must
+/// not step out of a path refuses `.` and `..` itself.
+fn encode_component(component: &str) -> String {
+    if DOT_SEGMENTS.contains(&component) {
+        return component.replace('.', "%2E");
+    }
+    percent_encoding::utf8_percent_encode(component, COMPONENT).to_string()
 }
 
 fn encode_query(pairs: &[(String, String)]) -> String {

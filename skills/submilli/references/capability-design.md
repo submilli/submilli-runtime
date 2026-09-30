@@ -42,6 +42,10 @@ caller passes only a record id.
 
 Fields must be **truthful**: the value in the check is the value the operation
 uses. Normalize first, check the normalized value, and use it in the request.
+An object, array or `Map` argument can return a different value on each read,
+so reading `input.channelId` for the check and again for the request is not
+truthful: read it once into a `const` and use that `const` for both, as
+[packages](packages.md) describes.
 
 ## 4. Resolve ownership inside the package
 

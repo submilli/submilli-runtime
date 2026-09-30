@@ -107,18 +107,52 @@ export class BraveSearchError extends Error {
  * @capability brave.com/search {}
  */
 export function search(query: string, options: SearchOptions | null = null): SearchPage {
+    const country = options === null ? null : options.country;
+    const searchLanguage = options === null ? null : options.searchLanguage;
+    const freshness = options === null ? null : options.freshness;
+    const safeSearch = options === null ? null : options.safeSearch;
+    const count = options === null ? null : options.count;
+    const offset = options === null ? null : options.offset;
+    const extraSnippets = options === null ? null : options.extraSnippets;
+    const spellcheck = options === null ? null : options.spellcheck;
+    const searchOptions: SearchOptions = {};
+    if (country !== null) searchOptions.country = country;
+    if (searchLanguage !== null) searchOptions.searchLanguage = searchLanguage;
+    if (freshness !== null) searchOptions.freshness = freshness;
+    if (safeSearch !== null) searchOptions.safeSearch = safeSearch;
+    if (count !== null) searchOptions.count = count;
+    if (offset !== null) searchOptions.offset = offset;
+    if (extraSnippets !== null) searchOptions.extraSnippets = extraSnippets;
+    if (spellcheck !== null) searchOptions.spellcheck = spellcheck;
     check("brave.com/search", {});
-    const params = buildSearchQuery(query, options);
+    const params = buildSearchQuery(query, searchOptions);
     const body = request("web/search", params);
-    return normalizeSearchJson(body, query, options === null ? 0 : options.offset ?? 0);
+    return normalizeSearchJson(body, query, offset ?? 0);
 }
 
 /** Retrieve extracted web passages with their source URLs.
  * @capability brave.com/context {}
  */
 export function context(query: string, options: ContextOptions | null = null): ContextResult {
+    const country = options === null ? null : options.country;
+    const searchLanguage = options === null ? null : options.searchLanguage;
+    const freshness = options === null ? null : options.freshness;
+    const safeSearch = options === null ? null : options.safeSearch;
+    const count = options === null ? null : options.count;
+    const maxUrls = options === null ? null : options.maxUrls;
+    const maxTokens = options === null ? null : options.maxTokens;
+    const maxTokensPerUrl = options === null ? null : options.maxTokensPerUrl;
+    const contextOptions: ContextOptions = {};
+    if (country !== null) contextOptions.country = country;
+    if (searchLanguage !== null) contextOptions.searchLanguage = searchLanguage;
+    if (freshness !== null) contextOptions.freshness = freshness;
+    if (safeSearch !== null) contextOptions.safeSearch = safeSearch;
+    if (count !== null) contextOptions.count = count;
+    if (maxUrls !== null) contextOptions.maxUrls = maxUrls;
+    if (maxTokens !== null) contextOptions.maxTokens = maxTokens;
+    if (maxTokensPerUrl !== null) contextOptions.maxTokensPerUrl = maxTokensPerUrl;
     check("brave.com/context", {});
-    return normalizeContextJson(request("llm/context", buildContextQuery(query, options)));
+    return normalizeContextJson(request("llm/context", buildContextQuery(query, contextOptions)));
 }
 
 /** Build encoded web parameters without credentials or network access. */

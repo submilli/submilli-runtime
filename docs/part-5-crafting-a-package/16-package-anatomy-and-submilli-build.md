@@ -154,6 +154,18 @@ The compiler warns about a `check` anywhere else: in a function the package
 doesn't export, where it runs only if some exported function happens to call
 it, or in a nested function, which may run later, more than once, or never.
 
+Read each property of an object the program passes in once, into a `const`,
+and use that `const` for both the `check` and the effect. A property can
+return a different value each time it is read, so a function that reads
+`input.customerId` twice can check one customer and act on another. The
+compiler warns about a second read, and about the object being passed on to
+another function, for any value that reaches a `check` or decides whether or
+which `check` runs. A value that reaches no `check` can be read and passed on
+freely: the program could pass anything in its place anyway. Strings,
+numbers, and booleans can't change this way. When the compiler can't follow
+what reaches a `check` in a function, it examines every value the program
+passed in, and the warning says why.
+
 A field in the tag is written one of four ways:
 
 | Form | Meaning |
@@ -443,9 +455,11 @@ export interface Note {
  * @capability attio.com/notes.list { companyId: string }
  */
 export function listNotes(companyId: string, page: PageOptions | null = null): Page<Note> {
+    const limit = page === null ? null : page.limit;
+    const offset = page === null ? null : page.offset;
     const id = normalizeRecordId(companyId);
     check("attio.com/notes.list", { companyId: id });
-    const paging = resolvePage(page);
+    const paging = resolvePage(limit, offset);
     const response = request("GET", "/notes" + buildNotesQuery(id, paging), null);
     if (response.status === 404) {
         // Attio answers 404 when the parent record does not exist.
@@ -468,7 +482,9 @@ export function listNotes(companyId: string, page: PageOptions | null = null): P
 ```
 
 The id is normalized before the check, and the normalized id is the one
-checked and the one sent, so the rule sees exactly what Attio receives. The
+checked and the one sent, so the rule sees exactly what Attio receives. Each
+paging field is read once, before the check, and the helper takes the fields
+and not the object the program passed. The
 loop keeps only notes whose parent is that company, so a response that
 somehow names another company's note doesn't reach the program. `Note` is
 the package's own type: the program never sees Attio's field names.

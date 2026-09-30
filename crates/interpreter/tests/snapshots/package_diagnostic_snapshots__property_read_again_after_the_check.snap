@@ -1,0 +1,38 @@
+---
+source: crates/interpreter/tests/package_diagnostic_snapshots.rs
+expression: "render_package(\"\n/**\n * Sends the message.\n * @capability test.com/send { channelId: string }\n */\nexport function send(input: Input): void {\n  check(\\\"test.com/send\\\", { channelId: input.channelId });\n  post(input.channelId, \\\"hello\\\");\n}\n\")"
+---
+warning: `input.channelId` is read more than once in `send`, which calls `check()`
+  --> lib.ts:19:8
+   |
+18 |   check("test.com/send", { channelId: input.channelId });
+19 |   post(input.channelId, "hello");
+   |        ^^^^^^^^^^^^^^^
+20 | }
+   |
+help: Read it once into a `const`; the caller can return a different value on each read
+   |
+note: first read here
+  --> lib.ts:18:39
+   |
+17 | export function send(input: Input): void {
+18 |   check("test.com/send", { channelId: input.channelId });
+   |                                       ^^^^^^^^^^^^^^^
+19 |   post(input.channelId, "hello");
+   |
+note: `check()` is called here
+  --> lib.ts:18:9
+   |
+17 | export function send(input: Input): void {
+18 |   check("test.com/send", { channelId: input.channelId });
+   |         ^^^^^^^^^^^^^^^
+19 |   post(input.channelId, "hello");
+   |
+note: `input.channelId` reaches `check()` here
+  --> lib.ts:18:26
+   |
+17 | export function send(input: Input): void {
+18 |   check("test.com/send", { channelId: input.channelId });
+   |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+19 |   post(input.channelId, "hello");
+---

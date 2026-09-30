@@ -14,7 +14,8 @@ limits). If the policy was never stated, that is the first finding.
 
 Run the mechanical checks first and stop if they fail:
 `submilli build check`, `submilli build test`, and
-`submilli blueprint lint <file>`. Then the allowed / cross-identity-denied /
+`submilli blueprint lint <file>`. Warnings do not fail `build check`; keep
+its output for check 10. Then the allowed / cross-identity-denied /
 missing-variable matrix: locally with `submilli run --blueprint <file>
 --var NAME=VALUE`, and through the server as in [harnesses](harnesses.md)
 when the agent will run there.
@@ -64,6 +65,20 @@ output), not with reassurance:
    redirect to a different scheme, host, or effective port. MCP/LLM and
    inbound-server transport are separate policies; do not infer HTTPS
    enforcement for them from these flags.
+10. **Stable inputs.** For each operation that takes an object, array or
+    `Map`, does every value that reaches the check, or decides whether or
+    which check runs, reach the request from a single read? Quote the line
+    that reads it, and the lines of the check and the request that use that
+    same `const`. A property read once for `check` and again for the request,
+    or the object holding it passed to a helper, is a bypass: the caller can
+    return a different value on each read. Every `build check` warning that
+    names `check()` is a finding at confidence 100; quote it. A build without
+    these warnings does not cover a `check` in one exported function with the
+    use in a function that calls it, package state that one exported function
+    writes and another checks, package state a helper keeps (written by one
+    call and read back by another before the check), a helper that throws (or
+    a `try` whose `catch` returns) deciding whether the check runs, or a call
+    through interface dispatch: trace those by hand.
 
 ## Confidence
 
@@ -71,7 +86,8 @@ Rate each finding with one of three anchors, chosen by what you actually did,
 not by how sure you feel:
 
 - **100** — verifiable from the files alone: a missing `check`, a filter
-  comparing a model-chosen value, `default: deny` absent, a lint failure.
+  comparing a model-chosen value, `default: deny` absent, a lint failure, a
+  `build check` warning.
 - **75** — you traced a concrete route: this request, with these values,
   reaches this line and is allowed when it should be denied (or the reverse).
 - **50** — you can describe the route but one step depends on something you

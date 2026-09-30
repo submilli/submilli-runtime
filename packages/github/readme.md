@@ -44,3 +44,32 @@ submilli build test -p @submilli/github
 Live read tests require `GITHUB_TOKEN` and `GITHUB_TEST_REPOSITORY=owner/name`.
 Mutation tests additionally require `GITHUB_LIVE_MUTATIONS=true` and must target a
 disposable test repository.
+
+## Policy tests
+
+The TypeScript policy tests in `tests/policy/` run as a real `main` caller under
+restricted blueprints. Each script has a blueprint of the same name:
+
+- `owner-filter.ts` shows that a repository operation is allowed only where
+  `owner == "allowed-org"`, and that `owner` and `name` are each read once even
+  when `owner` answers differently on each read. Allowed cases must reach a
+  deliberately denied credential boundary; denied cases must stop at the named
+  business capability before reading credentials.
+- `request-values.ts` shows that the request the package builds names the
+  repository the policy approved. The package holds a placeholder token from
+  `fake-token.txt`, and the blueprint refuses the request with a reason that
+  tells the approved repository from any other.
+
+These tests need no real token or network. Run from the repository root in an
+isolated local package store:
+
+```sh
+github_test_home=$(mktemp -d)
+SUBMILLI_HOME="$github_test_home" cargo run -p submilli -- build publish-local -p @submilli/github
+SUBMILLI_HOME="$github_test_home" cargo run -p submilli -- run packages/github/tests/policy/owner-filter.ts --blueprint packages/github/tests/policy/owner-filter.yaml
+SUBMILLI_HOME="$github_test_home" cargo run -p submilli -- run packages/github/tests/policy/request-values.ts --blueprint packages/github/tests/policy/request-values.yaml
+```
+
+These are separate commands because `build test` uses an unrestricted policy;
+its ordinary unit tests cannot prove a `main` caller is constrained.
+`cargo test -p submilli --test package_policy` runs them all.

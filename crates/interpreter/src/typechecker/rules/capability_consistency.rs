@@ -1,29 +1,76 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use super::check_calls::{self, CheckCall, SearchRoot};
+use super::declarations::{Member, TypeDeclarations};
+use crate::compiler_error::CompilerFailure;
 use crate::{
-    Diagnostic, DocCapabilityBinding, DocCapabilityBindingKind, ExprId, MangledName, Severity,
-    Span, StmtId, Type, TypedAst, TypedChainPart, TypedExprKind, TypedFunction, TypedStmtKind,
+    Diagnostic, DocCapabilityBinding, DocCapabilityBindingKind, DocComment, ExprId, Severity, Span,
+    StmtId, Type, TypedAst, TypedExprKind, TypedParam, TypedTypeDecl,
 };
 
 pub(super) fn run(
     ta: &TypedAst,
+    declarations: &TypeDeclarations<'_>,
     diags: &mut Vec<Diagnostic>,
-) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let security_check =
-        crate::mangle::package_symbol(crate::stdlib::security::MODULE_NAME, "check");
-    for f in &ta.functions {
-        validate_doc_parser_diagnostics(f, diags);
-        validate_param_bindings(f, diags);
+) -> Result<(), CompilerFailure> {
+    for callable in callables(ta) {
+        if let Some(doc) = callable.doc {
+            validate_doc_parser_diagnostics(doc, diags);
+            validate_param_bindings(declarations, doc, callable.params, diags);
+        }
 
-        let mut checks = Vec::new();
-        collect_checks_in_stmt(ta, f.body, &security_check, &mut checks)?;
-        validate_check_tags(f, &checks, diags);
+        let mut calls = Vec::new();
+        check_calls::collect(ta, SearchRoot::Stmt(callable.body), &mut calls)?;
+        let checks = calls
+            .iter()
+            .map(|call| security_check(ta, call))
+            .collect::<Result<Vec<_>, _>>()?;
+        validate_check_tags(callable.doc, &checks, diags);
     }
     Ok(())
 }
 
-fn validate_doc_parser_diagnostics(f: &TypedFunction, diags: &mut Vec<Diagnostic>) {
-    let Some(doc) = &f.doc else { return };
+/// A body whose `check()` calls its `@capability` tags answer for.
+struct Callable<'a> {
+    doc: Option<&'a DocComment>,
+    params: &'a [TypedParam],
+    body: StmtId,
+}
+
+/// Every function, static methods among them, then every documented instance
+/// method.
+///
+/// Only a function's tags reach the capability schema, so a method is not
+/// asked for tags it lacks: the ones it carries are held to its checks. A
+/// constructor or an accessor keeps no doc comment in the typed AST, and so
+/// has no tags to hold.
+fn callables(ta: &TypedAst) -> impl Iterator<Item = Callable<'_>> {
+    let functions = ta.functions.iter().map(|function| Callable {
+        doc: function.doc.as_ref(),
+        params: &function.params,
+        body: function.body,
+    });
+    let methods = ta
+        .types
+        .iter()
+        .filter_map(|declaration| match declaration {
+            TypedTypeDecl::Class(class) => Some(class),
+            TypedTypeDecl::Interface(_)
+            | TypedTypeDecl::NumberEnum(_)
+            | TypedTypeDecl::StringEnum(_)
+            | TypedTypeDecl::Alias(_) => None,
+        })
+        .flat_map(|class| &class.methods)
+        .filter(|method| method.doc.is_some())
+        .map(|method| Callable {
+            doc: method.doc.as_ref(),
+            params: &method.params,
+            body: method.body,
+        });
+    functions.chain(methods)
+}
+
+fn validate_doc_parser_diagnostics(doc: &DocComment, diags: &mut Vec<Diagnostic>) {
     for cap in &doc.capabilities {
         for diag in &cap.diagnostics {
             diags.push(warning(diag.span, diag.message.clone()));
@@ -31,10 +78,13 @@ fn validate_doc_parser_diagnostics(f: &TypedFunction, diags: &mut Vec<Diagnostic
     }
 }
 
-fn validate_param_bindings(f: &TypedFunction, diags: &mut Vec<Diagnostic>) {
-    let Some(doc) = &f.doc else { return };
-    let params = f
-        .params
+fn validate_param_bindings(
+    declarations: &TypeDeclarations<'_>,
+    doc: &DocComment,
+    params: &[TypedParam],
+    diags: &mut Vec<Diagnostic>,
+) {
+    let params = params
         .iter()
         .map(|p| (p.name.name.as_str(), p))
         .collect::<BTreeMap<_, _>>();
@@ -50,7 +100,7 @@ fn validate_param_bindings(f: &TypedFunction, diags: &mut Vec<Diagnostic>) {
                 ));
                 continue;
             };
-            if let Some(missing) = missing_path_segment(&param_decl.ty, path) {
+            if let Some(missing) = missing_path_segment(declarations, &param_decl.ty, path) {
                 diags.push(warning(
                     *span,
                     format!("unknown field `{missing}` in `@capability` binding `${param}`"),
@@ -60,18 +110,34 @@ fn validate_param_bindings(f: &TypedFunction, diags: &mut Vec<Diagnostic>) {
     }
 }
 
-fn missing_path_segment(ty: &Type, path: &[String]) -> Option<String> {
-    let mut current = ty;
+/// The first segment of `path` that names no field, walking from a value of
+/// type `ty`. `None` when the path resolves, or reaches a type whose
+/// declaration is not known.
+fn missing_path_segment(
+    declarations: &TypeDeclarations<'_>,
+    ty: &Type,
+    path: &[String],
+) -> Option<String> {
+    if names_url_component(ty, path) {
+        return None;
+    }
+    let mut current = ty.clone();
     for segment in path {
-        let Type::Object { fields, .. } = current else {
-            return Some(segment.clone());
-        };
-        let Some(field) = fields.get(segment) else {
-            return Some(segment.clone());
-        };
-        current = &field.ty;
+        match declarations.member(&current, segment) {
+            Member::Found(member) => current = member,
+            Member::Missing => return Some(segment.clone()),
+            Member::Unresolved => return None,
+        }
     }
     None
+}
+
+/// `$url.host` and `$url.path` name a component of the URL a string holds, not
+/// a field. The `http` capabilities bind this way, and a call site's filter
+/// comes from parsing the URL.
+fn names_url_component(ty: &Type, path: &[String]) -> bool {
+    matches!(path, [component] if matches!(component.as_str(), "host" | "path"))
+        && matches!(ty.peel(), Type::String | Type::StringLiteral(_))
 }
 
 #[derive(Debug)]
@@ -81,8 +147,12 @@ struct SecurityCheck {
     payload_keys: Option<BTreeMap<String, Span>>,
 }
 
-fn validate_check_tags(f: &TypedFunction, checks: &[SecurityCheck], diags: &mut Vec<Diagnostic>) {
-    let Some(doc) = &f.doc else {
+fn validate_check_tags(
+    doc: Option<&DocComment>,
+    checks: &[SecurityCheck],
+    diags: &mut Vec<Diagnostic>,
+) {
+    let Some(doc) = doc else {
         for check in checks {
             if let Some((capability, span)) = &check.capability {
                 diags.push(warning(
@@ -116,20 +186,21 @@ fn validate_check_tags(f: &TypedFunction, checks: &[SecurityCheck], diags: &mut 
     }
 
     for (capability, matching_checks) in &checks_by_capability {
-        if !doc
+        let tagged = doc
             .capabilities
             .iter()
-            .any(|tag| tag.capability == *capability)
-        {
-            let span = matching_checks[0]
-                .capability
-                .as_ref()
-                .map_or(matching_checks[0].span, |(_, span)| *span);
-            diags.push(warning(
-                span,
-                format!("missing `@capability {capability}` for `check()` call"),
-            ));
-        }
+            .any(|tag| tag.capability == *capability);
+        let Some(first) = matching_checks.first().filter(|_| !tagged) else {
+            continue;
+        };
+        let span = first
+            .capability
+            .as_ref()
+            .map_or(first.span, |(_, span)| *span);
+        diags.push(warning(
+            span,
+            format!("missing `@capability {capability}` for `check()` call"),
+        ));
     }
 
     for tag in &doc.capabilities {
@@ -182,349 +253,48 @@ fn validate_payload_keys(
     }
 }
 
-fn collect_checks_in_stmt(
-    ta: &TypedAst,
-    stmt_id: StmtId,
-    security_check: &MangledName,
-    out: &mut Vec<SecurityCheck>,
-) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let _: () = match &ta
-        .try_stmt(stmt_id)
-        .map_err(crate::typechecker::arena_failure)?
-        .kind
-    {
-        TypedStmtKind::Let { value, .. }
-        | TypedStmtKind::Const { value, .. }
-        | TypedStmtKind::Expr(value)
-        | TypedStmtKind::Throw { value }
-        | TypedStmtKind::AssignLocal { value, .. }
-        | TypedStmtKind::AssignGlobal { value, .. } => {
-            collect_checks_in_expr(ta, *value, security_check, out)?;
-        }
-        TypedStmtKind::If {
-            condition,
-            then_block,
-            else_block,
-        } => {
-            collect_checks_in_expr(ta, *condition, security_check, out)?;
-            collect_checks_in_stmt(ta, *then_block, security_check, out)?;
-            if let Some(else_block) = else_block {
-                collect_checks_in_stmt(ta, *else_block, security_check, out)?;
-            }
-        }
-        TypedStmtKind::While { condition, body } | TypedStmtKind::DoWhile { body, condition } => {
-            collect_checks_in_expr(ta, *condition, security_check, out)?;
-            collect_checks_in_stmt(ta, *body, security_check, out)?;
-        }
-        TypedStmtKind::For {
-            init,
-            condition,
-            update,
-            body,
-        } => {
-            if let Some(init) = init {
-                collect_checks_in_stmt(ta, *init, security_check, out)?;
-            }
-            if let Some(condition) = condition {
-                collect_checks_in_expr(ta, *condition, security_check, out)?;
-            }
-            if let Some(update) = update {
-                collect_checks_in_stmt(ta, *update, security_check, out)?;
-            }
-            collect_checks_in_stmt(ta, *body, security_check, out)?;
-        }
-        TypedStmtKind::ForOf { iter, body, .. } => {
-            collect_checks_in_expr(ta, *iter, security_check, out)?;
-            collect_checks_in_stmt(ta, *body, security_check, out)?;
-        }
-        TypedStmtKind::Switch {
-            discriminant,
-            cases,
-            default,
-            ..
-        } => {
-            collect_checks_in_expr(ta, *discriminant, security_check, out)?;
-            for case in cases {
-                collect_checks_in_stmt(ta, case.body, security_check, out)?;
-            }
-            if let Some(default) = default {
-                collect_checks_in_stmt(ta, *default, security_check, out)?;
-            }
-        }
-        TypedStmtKind::Return(value) => {
-            if let Some(value) = value {
-                collect_checks_in_expr(ta, *value, security_check, out)?;
-            }
-        }
-        TypedStmtKind::Try {
-            body,
-            catches,
-            finally,
-        } => {
-            collect_checks_in_stmt(ta, *body, security_check, out)?;
-            for clause in catches {
-                collect_checks_in_stmt(ta, clause.body, security_check, out)?;
-            }
-            if let Some(finally) = finally {
-                collect_checks_in_stmt(ta, *finally, security_check, out)?;
-            }
-        }
-        TypedStmtKind::Block(stmts) => {
-            for stmt in stmts {
-                collect_checks_in_stmt(ta, *stmt, security_check, out)?;
-            }
-        }
-        TypedStmtKind::AssignField {
-            receiver, value, ..
-        } => {
-            collect_checks_in_expr(ta, *receiver, security_check, out)?;
-            collect_checks_in_expr(ta, *value, security_check, out)?;
-        }
-        TypedStmtKind::AssignIndex {
-            receiver,
-            index,
-            value,
-            ..
-        } => {
-            collect_checks_in_expr(ta, *receiver, security_check, out)?;
-            collect_checks_in_expr(ta, *index, security_check, out)?;
-            collect_checks_in_expr(ta, *value, security_check, out)?;
-        }
-        TypedStmtKind::NarrowRegion { source, body, .. } => {
-            collect_checks_in_expr(ta, *source, security_check, out)?;
-            collect_checks_in_stmt(ta, *body, security_check, out)?;
-        }
-        TypedStmtKind::Break | TypedStmtKind::Continue | TypedStmtKind::ReboxLocal { .. } => {}
-    };
-    Ok(())
-}
-
-fn collect_checks_in_expr(
-    ta: &TypedAst,
-    expr_id: ExprId,
-    security_check: &MangledName,
-    out: &mut Vec<SecurityCheck>,
-) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let expr = ta
-        .try_expr(expr_id)
-        .map_err(crate::typechecker::arena_failure)?;
-    let _: () = match &expr.kind {
-        TypedExprKind::Call { mangled, args, .. } if mangled == security_check => {
-            out.push(security_check_from_args(ta, expr.span, args)?);
-            for arg in args {
-                collect_checks_in_expr(ta, *arg, security_check, out)?;
-            }
-        }
-        TypedExprKind::Call { args, .. }
-        | TypedExprKind::McpCall { args, .. }
-        | TypedExprKind::SuperCtorCall { args, .. }
-        | TypedExprKind::SuperMethodCall { args, .. } => {
-            for arg in args {
-                collect_checks_in_expr(ta, *arg, security_check, out)?;
-            }
-        }
-        TypedExprKind::GenericCall { mangled, args, .. } if mangled == security_check => {
-            let check_args = args.iter().map(|arg| arg.expr).collect::<Vec<_>>();
-            out.push(security_check_from_args(ta, expr.span, &check_args)?);
-            for arg in args {
-                collect_checks_in_expr(ta, arg.expr, security_check, out)?;
-            }
-        }
-        TypedExprKind::GenericCall { args, .. } => {
-            for arg in args {
-                collect_checks_in_expr(ta, arg.expr, security_check, out)?;
-            }
-        }
-        TypedExprKind::CallClosure { callee, args } => {
-            collect_checks_in_expr(ta, *callee, security_check, out)?;
-            for arg in args {
-                collect_checks_in_expr(ta, *arg, security_check, out)?;
-            }
-        }
-        TypedExprKind::IntrinsicCall { args, .. } => {
-            for arg in args {
-                collect_checks_in_expr(ta, *arg, security_check, out)?;
-            }
-        }
-        TypedExprKind::MethodCall { receiver, args, .. } => {
-            collect_checks_in_expr(ta, *receiver, security_check, out)?;
-            for arg in args {
-                collect_checks_in_expr(ta, *arg, security_check, out)?;
-            }
-        }
-        TypedExprKind::GenericMethodCall { receiver, args, .. } => {
-            collect_checks_in_expr(ta, *receiver, security_check, out)?;
-            for arg in args {
-                collect_checks_in_expr(ta, arg.expr, security_check, out)?;
-            }
-        }
-        TypedExprKind::Binary { lhs, rhs, .. } => {
-            collect_checks_in_expr(ta, *lhs, security_check, out)?;
-            collect_checks_in_expr(ta, *rhs, security_check, out)?;
-        }
-        TypedExprKind::EffectThen { effect, result } => {
-            collect_checks_in_expr(ta, *effect, security_check, out)?;
-            collect_checks_in_expr(ta, *result, security_check, out)?;
-        }
-        TypedExprKind::Sequence { stmts, result } => {
-            for &stmt in stmts {
-                collect_checks_in_stmt(ta, stmt, security_check, out)?;
-            }
-            collect_checks_in_expr(ta, *result, security_check, out)?;
-        }
-        TypedExprKind::Unary { operand, .. }
-        | TypedExprKind::FieldAccess {
-            receiver: operand, ..
-        }
-        | TypedExprKind::InterfacePropertyAccess {
-            receiver: operand, ..
-        }
-        | TypedExprKind::TypeofTag { value: operand, .. }
-        | TypedExprKind::InstanceOf { value: operand, .. }
-        | TypedExprKind::NonNullAssert { value: operand }
-        | TypedExprKind::Cast { value: operand, .. } => {
-            collect_checks_in_expr(ta, *operand, security_check, out)?;
-        }
-        TypedExprKind::IndexAccess { receiver, index } => {
-            collect_checks_in_expr(ta, *receiver, security_check, out)?;
-            collect_checks_in_expr(ta, *index, security_check, out)?;
-        }
-        TypedExprKind::ObjectLiteral { members, .. } => {
-            for member in members {
-                for expression in member.expressions() {
-                    collect_checks_in_expr(ta, expression, security_check, out)?;
-                }
-            }
-        }
-        TypedExprKind::ArrayLiteral { elements, .. } => {
-            for elem in elements {
-                collect_checks_in_expr(ta, elem.expr_id(), security_check, out)?;
-            }
-        }
-        TypedExprKind::TupleLiteral { elements, .. } => {
-            for elem in elements {
-                collect_checks_in_expr(ta, *elem, security_check, out)?;
-            }
-        }
-        TypedExprKind::Closure { body, .. } => match body {
-            crate::ClosureBody::Expr(expr) => {
-                collect_checks_in_expr(ta, *expr, security_check, out)?;
-            }
-            crate::ClosureBody::Block(stmt) => {
-                collect_checks_in_stmt(ta, *stmt, security_check, out)?;
-            }
-        },
-        TypedExprKind::Narrowed { source, inner, .. } => {
-            collect_checks_in_expr(ta, *source, security_check, out)?;
-            collect_checks_in_expr(ta, *inner, security_check, out)?;
-        }
-        TypedExprKind::Ternary { cond, then_, else_ } => {
-            collect_checks_in_expr(ta, *cond, security_check, out)?;
-            collect_checks_in_expr(ta, *then_, security_check, out)?;
-            collect_checks_in_expr(ta, *else_, security_check, out)?;
-        }
-        TypedExprKind::NullishCoalesce { lhs, rhs } => {
-            collect_checks_in_expr(ta, *lhs, security_check, out)?;
-            collect_checks_in_expr(ta, *rhs, security_check, out)?;
-        }
-        TypedExprKind::OptionalChain { base, parts } => {
-            collect_checks_in_expr(ta, *base, security_check, out)?;
-            for part in parts {
-                match part {
-                    TypedChainPart::Index { idx, .. } => {
-                        collect_checks_in_expr(ta, *idx, security_check, out)?;
-                    }
-                    TypedChainPart::Call { args, .. } | TypedChainPart::MethodCall { args, .. } => {
-                        for arg in args {
-                            collect_checks_in_expr(ta, *arg, security_check, out)?;
-                        }
-                    }
-                    TypedChainPart::Field { .. }
-                    | TypedChainPart::InterfaceProperty { .. }
-                    | TypedChainPart::NonNull { .. } => {}
-                }
-            }
-        }
-        TypedExprKind::PostfixUnary { target, .. } => match target {
-            crate::PostfixTarget::Field { receiver, .. } => {
-                collect_checks_in_expr(ta, *receiver, security_check, out)?;
-            }
-            crate::PostfixTarget::Index {
-                receiver, index, ..
-            } => {
-                collect_checks_in_expr(ta, *receiver, security_check, out)?;
-                collect_checks_in_expr(ta, *index, security_check, out)?;
-            }
-            crate::PostfixTarget::Local { .. } | crate::PostfixTarget::Global { .. } => {}
-        },
-        TypedExprKind::Number(_)
-        | TypedExprKind::BigInt(_)
-        | TypedExprKind::String(_)
-        | TypedExprKind::Boolean(_)
-        | TypedExprKind::Null
-        | TypedExprKind::This
-        | TypedExprKind::Regex { .. }
-        | TypedExprKind::LocalRef { .. }
-        | TypedExprKind::LocalNarrowRef { .. }
-        | TypedExprKind::GlobalRef { .. }
-        | TypedExprKind::FunctionRef { .. }
-        | TypedExprKind::NumberEnumMember { .. }
-        | TypedExprKind::StringEnumMember { .. } => {}
-    };
-    Ok(())
-}
-
-fn security_check_from_args(
-    ta: &TypedAst,
-    span: Span,
-    args: &[ExprId],
-) -> Result<SecurityCheck, crate::compiler_error::CompilerFailure> {
-    let capability = args
-        .first()
-        .map(|id| {
-            Ok::<_, crate::compiler_error::CompilerFailure>(
-                match &ta
-                    .try_expr(*id)
-                    .map_err(crate::typechecker::arena_failure)?
-                    .kind
-                {
-                    TypedExprKind::String(value) => Some((
-                        value.clone(),
-                        ta.try_expr(*id)
-                            .map_err(crate::typechecker::arena_failure)?
-                            .span,
-                    )),
-                    _ => None,
-                },
-            )
-        })
-        .transpose()?
-        .flatten();
-    let payload_keys = args
-        .get(1)
-        .map(|id| {
-            Ok::<_, crate::compiler_error::CompilerFailure>(
-                match &ta
-                    .try_expr(*id)
-                    .map_err(crate::typechecker::arena_failure)?
-                    .kind
-                {
-                    TypedExprKind::ObjectLiteral { fields, .. } => Some(
-                        fields
-                            .iter()
-                            .map(|field| (field.name.name.clone(), field.name.span))
-                            .collect::<BTreeMap<_, _>>(),
-                    ),
-                    _ => None,
-                },
-            )
-        })
-        .transpose()?
-        .flatten();
+fn security_check(ta: &TypedAst, call: &CheckCall) -> Result<SecurityCheck, CompilerFailure> {
     Ok(SecurityCheck {
-        span,
-        capability,
-        payload_keys,
+        span: call.span,
+        capability: call
+            .args
+            .first()
+            .map(|id| literal_capability(ta, *id))
+            .transpose()?
+            .flatten(),
+        payload_keys: call
+            .args
+            .get(1)
+            .map(|id| literal_payload_keys(ta, *id))
+            .transpose()?
+            .flatten(),
+    })
+}
+
+fn literal_capability(
+    ta: &TypedAst,
+    id: ExprId,
+) -> Result<Option<(String, Span)>, CompilerFailure> {
+    let expr = ta.try_expr(id).map_err(crate::typechecker::arena_failure)?;
+    Ok(match &expr.kind {
+        TypedExprKind::String(value) => Some((value.clone(), expr.span)),
+        _ => None,
+    })
+}
+
+fn literal_payload_keys(
+    ta: &TypedAst,
+    id: ExprId,
+) -> Result<Option<BTreeMap<String, Span>>, CompilerFailure> {
+    let expr = ta.try_expr(id).map_err(crate::typechecker::arena_failure)?;
+    Ok(match &expr.kind {
+        TypedExprKind::ObjectLiteral { fields, .. } => Some(
+            fields
+                .iter()
+                .map(|field| (field.name.name.clone(), field.name.span))
+                .collect(),
+        ),
+        _ => None,
     })
 }
 
@@ -540,32 +310,11 @@ fn warning(span: Span, message: String) -> Diagnostic {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Asi, Diagnostic, TokenKind, infer, parse};
+    use super::super::test_util::{infer_script, run_package};
+    use crate::{Diagnostic, PackageDeclaration};
 
     fn diagnostics(source: &str) -> Vec<Diagnostic> {
-        let mut asi = Asi::new(source, crate::FileId(0));
-        let mut tokens = Vec::new();
-        loop {
-            let tok = asi.next_token();
-            let is_eof = matches!(tok.kind, TokenKind::Eof);
-            tokens.push(tok);
-            if is_eof {
-                break;
-            }
-        }
-        let mut diags = asi.into_diagnostics();
-        let (ast, parse_diags) = parse(source, tokens, crate::FileId(0));
-        diags.extend(parse_diags);
-        assert!(diags.is_empty(), "{diags:?}");
-        let (prelude_defs, host_defs, _) =
-            crate::runtime::prelude::cached_runtime_package_declarations();
-        let stdlib = crate::stdlib::stdlib_package_declarations();
-        let mut package_refs = Vec::with_capacity(1 + host_defs.len() + stdlib.len());
-        package_refs.extend(prelude_defs.iter());
-        package_refs.extend(host_defs.iter());
-        package_refs.extend(stdlib.iter());
-        let (ta, infer_diags) = infer(source, "main", &ast, &package_refs);
-        diags.extend(infer_diags);
+        let (ta, mut diags) = infer_script(source);
         diags.extend(crate::check(&ta).unwrap());
         diags
     }
@@ -574,6 +323,21 @@ mod tests {
         diagnostics(source)
             .into_iter()
             .map(|diag| diag.message)
+            .collect()
+    }
+
+    fn package_messages(
+        modules: &[(&str, &str)],
+        dependencies: &[PackageDeclaration],
+    ) -> Vec<String> {
+        let (_, _, diags) = run_package("@test/package", modules, dependencies);
+        diags.into_iter().map(|diag| diag.message).collect()
+    }
+
+    fn capability_messages(messages: Vec<String>) -> Vec<String> {
+        messages
+            .into_iter()
+            .filter(|m| m.contains("@capability") || m.contains("capability string"))
             .collect()
     }
 
@@ -692,6 +456,257 @@ mod tests {
                 .iter()
                 .any(|m| m.contains("@capability") || m.contains("capability string")),
             "{messages:?}"
+        );
+    }
+
+    #[test]
+    fn a_path_through_an_inline_object_names_its_missing_field() {
+        let messages = capability_messages(messages(
+            "import { check } from \"submilli:security\";\n\
+             /** @capability x/op { owner: $input.team.idd } */\n\
+             function f(input: { team: { id: string } }): void {\n\
+               check(\"x/op\", { owner: input.team.id });\n\
+             }\n\
+             function main(): void { }\n",
+        ));
+        assert_eq!(
+            messages,
+            ["unknown field `idd` in `@capability` binding `$input`"]
+        );
+    }
+
+    #[test]
+    fn a_path_through_an_alias_a_nullable_and_an_interface_resolves() {
+        let messages = capability_messages(messages(
+            "import { check } from \"submilli:security\";\n\
+             interface Team { id: string }\n\
+             interface Input { team: Team | null; label?: string }\n\
+             type Aliased = { team: Team };\n\
+             /**\n\
+              * @capability x/interface { owner: $input.team.id, label: $input.label }\n\
+              * @capability x/alias { owner: $aliased.team.id }\n\
+              * @capability x/nullable { owner: $nullable.team.id }\n\
+              */\n\
+             function f(input: Input, aliased: Aliased, nullable: Input | null): void {\n\
+               check(\"x/interface\", { owner: \"a\", label: \"b\" });\n\
+               check(\"x/alias\", { owner: \"a\" });\n\
+               check(\"x/nullable\", { owner: \"a\" });\n\
+             }\n\
+             function main(): void { }\n",
+        ));
+        assert!(messages.is_empty(), "{messages:?}");
+    }
+
+    #[test]
+    fn a_url_component_of_a_string_parameter_is_not_a_field() {
+        let messages = capability_messages(messages(
+            "import { check } from \"submilli:security\";\n\
+             type Address = string;\n\
+             /** @capability x/op { host: $url.host, path: $address.path } */\n\
+             function f(url: string, address: Address): void {\n\
+               check(\"x/op\", { host: \"h\", path: \"p\" });\n\
+             }\n\
+             function main(): void { }\n",
+        ));
+        assert!(messages.is_empty(), "{messages:?}");
+    }
+
+    #[test]
+    fn only_host_and_path_are_components_of_a_string() {
+        let messages = capability_messages(messages(
+            "import { check } from \"submilli:security\";\n\
+             /** @capability x/op { port: $url.port, nested: $url.host.name, count: $n.host } */\n\
+             function f(url: string, n: number): void {\n\
+               check(\"x/op\", { port: 1, nested: \"n\", count: 2 });\n\
+             }\n\
+             function main(): void { }\n",
+        ));
+        assert_eq!(
+            messages,
+            [
+                "unknown field `port` in `@capability` binding `$url`",
+                "unknown field `host` in `@capability` binding `$url`",
+                "unknown field `host` in `@capability` binding `$n`",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_documented_method_answers_for_its_checks() {
+        let messages = capability_messages(messages(
+            "import { check } from \"submilli:security\";\n\
+             class Client {\n\
+               /** @capability x/tagged { id } */\n\
+               tagged(id: string): void { check(\"x/tagged\", { id }); }\n\
+               /** @capability x/extra { id } */\n\
+               extra(id: string): void { }\n\
+               /** Reads. */\n\
+               untagged(id: string): void { check(\"x/untagged\", { id }); }\n\
+               /** @capability x/payload { id: $input.idd } */\n\
+               payload(input: { id: string }): void { check(\"x/payload\", { other: input.id }); }\n\
+             }\n\
+             function main(): void { }\n",
+        ));
+        assert_eq!(
+            messages,
+            [
+                "extra `@capability x/extra` has no matching `check()` call",
+                "missing `@capability x/untagged` for `check()` call",
+                "unknown field `idd` in `@capability` binding `$input`",
+                "payload key `other` missing from `@capability` binding",
+                "`@capability` binding key `id` is missing from `check()` payload",
+            ]
+        );
+    }
+
+    #[test]
+    fn an_undocumented_member_is_not_asked_for_tags() {
+        let messages = capability_messages(messages(
+            "import { check } from \"submilli:security\";\n\
+             class Client {\n\
+               private token: string;\n\
+               constructor(token: string) { check(\"x/create\", {}); this.token = token; }\n\
+               get secret(): string { check(\"x/read\", {}); return this.token; }\n\
+               helper(): void { check(\"x/helper\", {}); }\n\
+             }\n\
+             function main(): void { }\n",
+        ));
+        assert!(messages.is_empty(), "{messages:?}");
+    }
+
+    #[test]
+    fn a_static_method_is_a_function() {
+        let messages = capability_messages(messages(
+            "import { check } from \"submilli:security\";\n\
+             class Client {\n\
+               static open(id: string): void { check(\"x/open\", { id }); }\n\
+             }\n\
+             function main(): void { }\n",
+        ));
+        assert_eq!(
+            messages,
+            ["missing `@capability x/open` for `check()` call"]
+        );
+    }
+
+    const PACKAGE_INPUT: &str = "/** What an operation acts on. */\n\
+         export interface Input {\n\
+           /** Owning team. */\n\
+           teamId: string;\n\
+         }\n";
+
+    #[test]
+    fn a_package_reports_each_inconsistency() {
+        let messages = capability_messages(package_messages(
+            &[(
+                "lib",
+                "import { check } from \"submilli:security\";\n\
+                 /** Missing. */\n\
+                 export function missing(id: string): void { check(\"x/missing\", { id }); }\n\
+                 /**\n\
+                  * Extra.\n\
+                  * @capability x/extra { id }\n\
+                  */\n\
+                 export function extra(id: string): void { }\n\
+                 /**\n\
+                  * Payload.\n\
+                  * @capability x/payload { id, other: $nobody }\n\
+                  */\n\
+                 export function payload(id: string): void { check(\"x/payload\", { id, more: 1 }); }\n\
+                 /** Dynamic. */\n\
+                 export function dynamic(name: string): void { check(name, {}); }\n",
+            )],
+            &[],
+        ));
+        assert_eq!(
+            messages,
+            [
+                "missing `@capability x/missing` for `check()` call",
+                "extra `@capability x/extra` has no matching `check()` call",
+                "unknown parameter binding `$nobody` in `@capability`",
+                "payload key `more` missing from `@capability` binding",
+                "`@capability` binding key `other` is missing from `check()` payload",
+                "dynamic capability string in `check()`; use a string literal",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_package_path_resolves_through_an_interface_of_another_module() {
+        let lib = "import { check } from \"submilli:security\";\n\
+             import { Input } from \"./types\";\n\
+             export { Input } from \"./types\";\n\
+             /**\n\
+              * Reads.\n\
+              * @capability x/read { owner: $input.teamId, typo: $input.teamIdd }\n\
+              */\n\
+             export function read(input: Input | null): void {\n\
+               check(\"x/read\", { owner: \"a\", typo: \"b\" });\n\
+             }\n";
+        let messages = capability_messages(package_messages(
+            &[("lib", lib), ("types", PACKAGE_INPUT)],
+            &[],
+        ));
+        assert_eq!(
+            messages,
+            ["unknown field `teamIdd` in `@capability` binding `$input`"]
+        );
+    }
+
+    #[test]
+    fn a_package_path_resolves_through_an_inherited_property() {
+        let messages = capability_messages(package_messages(
+            &[(
+                "lib",
+                "import { check } from \"submilli:security\";\n\
+                 /** Base. */\n\
+                 export interface Base {\n\
+                   /** Owning team. */\n\
+                   teamId: string;\n\
+                 }\n\
+                 /** Input. */\n\
+                 export interface Input extends Base {\n\
+                   /** Title. */\n\
+                   title: string;\n\
+                 }\n\
+                 /**\n\
+                  * Reads.\n\
+                  * @capability x/read { owner: $input.teamId, typo: $input.absent }\n\
+                  */\n\
+                 export function read(input: Input): void {\n\
+                   check(\"x/read\", { owner: \"a\", typo: \"b\" });\n\
+                 }\n",
+            )],
+            &[],
+        ));
+        assert_eq!(
+            messages,
+            ["unknown field `absent` in `@capability` binding `$input`"]
+        );
+    }
+
+    #[test]
+    fn a_package_path_resolves_through_an_interface_of_a_dependency() {
+        let (_, dependency, diags) = run_package("@test/types", &[("lib", PACKAGE_INPUT)], &[]);
+        assert!(diags.is_empty(), "{diags:?}");
+        let messages = capability_messages(package_messages(
+            &[(
+                "lib",
+                "import { check } from \"submilli:security\";\n\
+                 import { Input } from \"@test/types\";\n\
+                 /**\n\
+                  * Reads.\n\
+                  * @capability x/read { owner: $input.teamId, typo: $input.teamIdd }\n\
+                  */\n\
+                 export function read(input: Input): void {\n\
+                   check(\"x/read\", { owner: \"a\", typo: \"b\" });\n\
+                 }\n",
+            )],
+            &[dependency],
+        ));
+        assert_eq!(
+            messages,
+            ["unknown field `teamIdd` in `@capability` binding `$input`"]
         );
     }
 }

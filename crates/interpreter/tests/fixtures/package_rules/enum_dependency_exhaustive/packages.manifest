@@ -1,0 +1,6 @@
+# A `switch` that covers every variant of an enum imported from a dependency
+# returns on all paths, in a package and in a script alike.
+# name            dir        deps                        root
+@test/levels      levels     -
+@test/consumer    consumer   @test/levels
+main              app        @test/levels,@test/consumer root

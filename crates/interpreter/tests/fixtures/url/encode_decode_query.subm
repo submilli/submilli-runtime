@@ -36,7 +36,7 @@ function main(): void {
 
   const single: Map<string, string> = new Map<string, string>();
   single.set("a_b-c~d.e", "x~y z");
-  assert(encodeQuery(single) === "a_b-c~d%2Ee=x~y%20z", "- _ ~ unchanged, dot and space encoded");
+  assert(encodeQuery(single) === "a_b-c~d.e=x~y%20z", "- . _ ~ unchanged, space encoded");
 
   const empty_out: string = encodeQuery(new Map<string, string>());
   assert(empty_out === "", "empty map → empty query");

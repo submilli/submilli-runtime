@@ -116,8 +116,9 @@ export class TypeSafeError extends Error {
  */
 export function noul(state: unknown, instructions: unknown, criteria: Map<string, unknown> | null = null,
     options: CallOptions | null = null): NoulAnswer {
+    const model = options === null ? null : options.model;
     check("typesafe.ai/systemone", {});
-    const answer = evaluateSingle(state, noulQuestion(instructions, criteria), options);
+    const answer = evaluateSingle(state, noulQuestion(instructions, criteria), model);
     if (!isNoulAnswer(answer)) throw invalidResponse();
     return answer;
 }
@@ -127,8 +128,9 @@ export function noul(state: unknown, instructions: unknown, criteria: Map<string
  */
 export function choice(state: unknown, instructions: unknown, criteria: Map<string, unknown>,
     options: CallOptions | null = null): ChoiceAnswer {
+    const model = options === null ? null : options.model;
     check("typesafe.ai/systemone", {});
-    const answer = evaluateSingle(state, choiceQuestion(instructions, criteria), options);
+    const answer = evaluateSingle(state, choiceQuestion(instructions, criteria), model);
     if (!isChoiceAnswer(answer)) throw invalidResponse();
     return answer;
 }
@@ -138,8 +140,9 @@ export function choice(state: unknown, instructions: unknown, criteria: Map<stri
  */
 export function score(state: unknown, instructions: unknown, criteria: unknown[],
     options: CallOptions | null = null): ScoreAnswer {
+    const model = options === null ? null : options.model;
     check("typesafe.ai/systemone", {});
-    const answer = evaluateSingle(state, scoreQuestion(instructions, criteria), options);
+    const answer = evaluateSingle(state, scoreQuestion(instructions, criteria), model);
     if (!isScoreAnswer(answer)) throw invalidResponse();
     return answer;
 }
@@ -189,10 +192,10 @@ export function isScoreAnswer(answer: Answer | null): answer is ScoreAnswer {
     return answer !== null && answer.type === "score";
 }
 
-function evaluateSingle(state: unknown, question: Question, options: CallOptions | null): Answer {
+function evaluateSingle(state: unknown, question: Question, requestedModel: string | null): Answer {
     const questions = new Map<string, Question>();
     questions.set("answer", question);
-    const model = options === null ? "jev-latest" : options.model ?? "jev-latest";
+    const model = requestedModel ?? "jev-latest";
     const result = evaluate({ state: state, questions: questions, model: model });
     const answer = result.answers.get("answer");
     if (answer === null) throw invalidResponse();

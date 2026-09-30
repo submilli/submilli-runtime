@@ -9,10 +9,11 @@ use std::time::{Duration, Instant};
 use crate::compile_capabilities;
 use crate::compiler_error::{CompileError, CompilerFailure, CompilerStage};
 use crate::runtime::prelude;
+use crate::typechecker::rules::check_script;
 use crate::typed_ast::TypedAst;
 use crate::{
     Asi, Ast, DerivedCapability, Diagnostic, FileId, ModulePath, PackageDeclaration, Severity,
-    Sources, StmtKind, Token, TokenKind, capture, check, desugar, lower_patterns, runtime,
+    Sources, StmtKind, Token, TokenKind, capture, desugar, lower_patterns, runtime,
 };
 
 /// Wall-clock spent in each compile phase, filled in as the pipeline runs. A
@@ -210,7 +211,10 @@ fn front_end_with_transitive(
         error
     })?;
     diags.extend(infer_diags);
-    diags.extend(check(&ta).map_err(|error| error.with_prior_diagnostics(&diags))?);
+    infer_refs.extend_from_slice(transitive);
+    diags.extend(
+        check_script(&ta, &infer_refs).map_err(|error| error.with_prior_diagnostics(&diags))?,
+    );
     timings.typecheck = typecheck_start.elapsed();
 
     Ok((ta, diags, timings))

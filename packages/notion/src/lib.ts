@@ -1,3 +1,4 @@
+import { check } from "submilli:security";
 import discovery from "./discovery";
 import pages from "./pages";
 import data from "./data";
@@ -5,6 +6,7 @@ import views from "./views";
 import collaboration from "./collaboration";
 import blocks from "./blocks";
 import uploads from "./uploads";
+import { idFromRef, resolvePageContext } from "./transport";
 
 // Public interfaces live here so generated package declarations retain their
 // fields; types.ts mirrors them for internal feature modules.
@@ -696,6 +698,13 @@ export interface FileUpload {
 
 export { NotionError, BatchNotionError } from "./transport";
 
+// Every capability check of the package is made in this module. An operation
+// first reads each caller-supplied value its check depends on once into a
+// local, and builds a package-owned object when a feature module needs those
+// values together with the rest of the input. It then resolves what the check
+// needs, calls check, and only then hands those same values to a feature
+// module, which assumes the operation is authorized.
+
 /** Extract and validate a Notion ID from an ID, URL, or collection reference. */
 export function notionId(ref: string): string {
     return discovery.notionId(ref);
@@ -705,6 +714,7 @@ export function notionId(ref: string): string {
  * @capability submilli/notion.getSelf {}
  */
 export function getSelf(): NotionUser {
+    check("submilli/notion.getSelf", {});
     return discovery.getSelf();
 }
 
@@ -712,147 +722,224 @@ export function getSelf(): NotionUser {
  * @capability submilli/notion.search {}
  */
 export function search(options: SearchOptions | null = null): PageResult<SearchResult> {
-    return discovery.search(options);
+    const query = options === null ? null : options.query;
+    const kind = options === null ? null : options.kind;
+    const direction = options === null ? null : options.direction;
+    const timestamp = options === null ? null : options.timestamp;
+    const pageSize = options === null ? null : options.pageSize;
+    const startCursor = options === null ? null : options.startCursor;
+    check("submilli/notion.search", {});
+    return discovery.search({
+        query: query,
+        kind: kind,
+        direction: direction,
+        timestamp: timestamp,
+        pageSize: pageSize,
+        startCursor: startCursor,
+    });
 }
 
 /** Fetch one resource using its explicit kind.
  * @capability submilli/notion.fetch { kind: string, id: string }
  */
 export function fetch(resource: ResourceRef): FetchedResource {
-    return discovery.fetch(resource);
+    const { ref, kind } = resource;
+    const id = idFromRef(ref, kind);
+    check("submilli/notion.fetch", { kind: kind as string, id: id });
+    return discovery.fetch(kind, id);
 }
 
 /** Retrieve a page by ID or Notion URL.
  * @capability submilli/notion.fetchPage { pageId: string }
  */
 export function fetchPage(ref: string): NotionPage {
-    return discovery.fetchPage(ref);
+    const id = idFromRef(ref, "page");
+    check("submilli/notion.fetchPage", { pageId: id });
+    return discovery.fetchPage(id);
 }
 
 /** Retrieve a database container by ID or Notion URL.
  * @capability submilli/notion.fetchDatabase { databaseId: string }
  */
 export function fetchDatabase(ref: string): NotionDatabase {
-    return discovery.fetchDatabase(ref);
+    const id = idFromRef(ref, "database");
+    check("submilli/notion.fetchDatabase", { databaseId: id });
+    return discovery.fetchDatabase(id);
 }
 
 /** Retrieve a data source by ID, URL, or collection reference.
  * @capability submilli/notion.fetchDataSource { dataSourceId: string }
  */
 export function fetchDataSource(ref: string): NotionDataSource {
-    return discovery.fetchDataSource(ref);
+    const id = idFromRef(ref, "data_source");
+    check("submilli/notion.fetchDataSource", { dataSourceId: id });
+    return discovery.fetchDataSource(id);
 }
 
 /** Retrieve a workspace user.
  * @capability submilli/notion.getUser { userId: string }
  */
 export function getUser(ref: string): NotionUser {
-    return discovery.getUser(ref);
+    const id = idFromRef(ref, "user");
+    check("submilli/notion.getUser", { userId: id });
+    return discovery.getUser(id);
 }
 
 /** List users visible to the connection.
  * @capability submilli/notion.listUsers {}
  */
 export function listUsers(options: PageOptions | null = null): PageResult<NotionUser> {
-    return discovery.listUsers(options);
+    const pageSize = options === null ? null : options.pageSize;
+    const startCursor = options === null ? null : options.startCursor;
+    check("submilli/notion.listUsers", {});
+    return discovery.listUsers(pageSize, startCursor);
 }
 
 /** Create a page with properties and one content strategy.
  * @capability submilli/notion.createPage { parentId: string }
  */
 export function createPage(input: CreatePageInput): NotionPage {
-    return pages.createPage(input);
+    const { parent, properties, content, icon, cover } = input;
+    const { type: parentType, id: parentRef } = parent;
+    const parentId = pages.parentIdFrom(parentType, parentRef);
+    const pageParent: PageParent = { type: parentType };
+    if (parentRef !== null) pageParent.id = parentRef;
+    const page: CreatePageInput = { parent: pageParent };
+    if (properties !== null) page.properties = properties;
+    if (content !== null) page.content = content;
+    if (icon !== null) page.icon = icon;
+    if (cover !== null) page.cover = cover;
+    pages.validatePageFields(page);
+    check("submilli/notion.createPage", { parentId: parentId });
+    return pages.createPage(parentId, page);
 }
 
 /** Create pages sequentially and stop on the first failure.
  * @capability submilli/notion.createPages {}
  */
 export function createPages(inputs: CreatePageInput[]): NotionPage[] {
-    return pages.createPages(inputs);
+    const creations = pages.prepareCreatePages(inputs);
+    check("submilli/notion.createPages", {});
+    return pages.createPages(creations);
 }
 
 /** Update page properties, icon, cover, or template.
  * @capability submilli/notion.updatePage { pageId: string }
  */
 export function updatePage(ref: string, input: UpdatePageInput): NotionPage {
-    return pages.updatePage(ref, input);
+    const pageId = idFromRef(ref, "page");
+    check("submilli/notion.updatePage", { pageId: pageId });
+    return pages.updatePage(pageId, input);
 }
 
 /** Retrieve a page as enhanced Markdown.
  * @capability submilli/notion.readPageMarkdown { pageId: string }
  */
 export function readPageMarkdown(ref: string, includeTranscript: boolean = false): PageMarkdown {
-    return pages.readPageMarkdown(ref, includeTranscript);
+    const pageId = idFromRef(ref, "page");
+    check("submilli/notion.readPageMarkdown", { pageId: pageId });
+    return pages.readPageMarkdown(pageId, includeTranscript);
 }
 
 /** Replace matching enhanced Markdown content.
  * @capability submilli/notion.updatePageMarkdown { pageId: string }
  */
 export function updatePageMarkdown(ref: string, update: MarkdownUpdate): PageMarkdown {
-    return pages.updatePageMarkdown(ref, update);
+    const { oldText, newText, replaceAll } = update;
+    const pageId = idFromRef(ref, "page");
+    check("submilli/notion.updatePageMarkdown", { pageId: pageId });
+    return pages.updatePageMarkdown(pageId, oldText, newText, replaceAll);
 }
 
 /** Replace all page content with enhanced Markdown.
  * @capability submilli/notion.replacePageMarkdown { pageId: string }
  */
 export function replacePageMarkdown(ref: string, markdown: string, allowDeletingContent: boolean = false): PageMarkdown {
-    return pages.replacePageMarkdown(ref, markdown, allowDeletingContent);
+    const pageId = idFromRef(ref, "page");
+    check("submilli/notion.replacePageMarkdown", { pageId: pageId });
+    return pages.replacePageMarkdown(pageId, markdown, allowDeletingContent);
 }
 
 /** Append enhanced Markdown to a page.
  * @capability submilli/notion.appendPageMarkdown { pageId: string }
  */
 export function appendPageMarkdown(ref: string, markdown: string): PageMarkdown {
-    return pages.appendPageMarkdown(ref, markdown);
+    const pageId = idFromRef(ref, "page");
+    check("submilli/notion.appendPageMarkdown", { pageId: pageId });
+    return pages.appendPageMarkdown(pageId, markdown);
 }
 
 /** Move a page under another page or data source.
  * @capability submilli/notion.movePage { pageId: string, parentId: string }
  */
 export function movePage(ref: string, parent: PageParent): NotionPage {
-    return pages.movePage(ref, parent);
+    const { type: parentType, id: parentRef } = parent;
+    const pageId = idFromRef(ref, "page");
+    const parentId = pages.parentIdFrom(parentType, parentRef);
+    check("submilli/notion.movePage", { pageId: pageId, parentId: parentId });
+    return pages.movePage(pageId, parentType, parentId);
 }
 
 /** Move pages sequentially and stop on the first failure.
  * @capability submilli/notion.movePages {}
  */
 export function movePages(inputs: MovePageInput[]): NotionPage[] {
-    return pages.movePages(inputs);
+    const moves = pages.prepareMovePages(inputs);
+    check("submilli/notion.movePages", {});
+    return pages.movePages(moves);
 }
 
 /** Retrieve one page property item.
  * @capability submilli/notion.getPageProperty { pageId: string }
  */
 export function getPageProperty(pageRef: string, propertyId: string): unknown {
-    return pages.getPageProperty(pageRef, propertyId);
+    const pageId = idFromRef(pageRef, "page");
+    check("submilli/notion.getPageProperty", { pageId: pageId });
+    return pages.getPageProperty(pageId, propertyId);
 }
 
 /** Move a page to trash.
  * @capability submilli/notion.trashPage { pageId: string }
  */
 export function trashPage(ref: string): NotionPage {
-    return pages.trashPage(ref);
+    const pageId = idFromRef(ref, "page");
+    check("submilli/notion.trashPage", { pageId: pageId });
+    return pages.trashPage(pageId);
 }
 
 /** Restore a page from trash.
  * @capability submilli/notion.restorePage { pageId: string }
  */
 export function restorePage(ref: string): NotionPage {
-    return pages.restorePage(ref);
+    const pageId = idFromRef(ref, "page");
+    check("submilli/notion.restorePage", { pageId: pageId });
+    return pages.restorePage(pageId);
 }
 
 /** Create a database and its initial data source.
  * @capability submilli/notion.createDatabase { parentId: string }
  */
 export function createDatabase(input: CreateDatabaseInput): NotionDatabase {
-    return data.createDatabase(input);
+    const parentPage = input.parentPage;
+    const title = input.title;
+    const description = input.description;
+    const isInline = input.isInline;
+    const properties = input.properties;
+    const parentId = idFromRef(parentPage, "page");
+    check("submilli/notion.createDatabase", { parentId: parentId });
+    return data.createDatabase(parentId, title, description, isInline, properties);
 }
 
 /** Update a data source title, schema, or parent.
  * @capability submilli/notion.updateDataSource { dataSourceId: string }
  */
 export function updateDataSource(ref: string, input: UpdateDataSourceInput): NotionDataSource {
-    return data.updateDataSource(ref, input);
+    const title = input.title;
+    const properties = input.properties;
+    const databaseId = input.databaseId;
+    const dataSourceId = idFromRef(ref, "data_source");
+    check("submilli/notion.updateDataSource", { dataSourceId: dataSourceId });
+    return data.updateDataSource(dataSourceId, title, properties, databaseId);
 }
 
 /** Query pages and nested data sources.
@@ -862,7 +949,9 @@ export function queryDataSource(
     ref: string,
     options: QueryDataSourceOptions | null = null,
 ): PageResult<DataSourceQueryItem> {
-    return data.queryDataSource(ref, options);
+    const dataSourceId = idFromRef(ref, "data_source");
+    check("submilli/notion.queryDataSource", { dataSourceId: dataSourceId });
+    return data.queryDataSource(dataSourceId, options);
 }
 
 /** List page templates available to a data source.
@@ -872,49 +961,75 @@ export function listDataSourceTemplates(
     ref: string,
     options: ListTemplateOptions | null = null,
 ): PageResult<DataSourceTemplate> {
-    return data.listDataSourceTemplates(ref, options);
+    const name = options === null ? null : options.name;
+    const pageSize = options === null ? null : options.pageSize;
+    const startCursor = options === null ? null : options.startCursor;
+    const dataSourceId = idFromRef(ref, "data_source");
+    check("submilli/notion.listDataSourceTemplates", { dataSourceId: dataSourceId });
+    return data.listDataSourceTemplates(dataSourceId, name, pageSize, startCursor);
 }
 
 /** Move a database to trash.
  * @capability submilli/notion.trashDatabase { databaseId: string }
  */
 export function trashDatabase(ref: string): NotionDatabase {
-    return data.trashDatabase(ref);
+    const databaseId = idFromRef(ref, "database");
+    check("submilli/notion.trashDatabase", { databaseId: databaseId });
+    return data.trashDatabase(databaseId);
 }
 
 /** Restore a database from trash.
  * @capability submilli/notion.restoreDatabase { databaseId: string }
  */
 export function restoreDatabase(ref: string): NotionDatabase {
-    return data.restoreDatabase(ref);
+    const databaseId = idFromRef(ref, "database");
+    check("submilli/notion.restoreDatabase", { databaseId: databaseId });
+    return data.restoreDatabase(databaseId);
 }
 
 /** Create a configured database view.
  * @capability submilli/notion.createView { databaseId: string, dataSourceId: string }
  */
 export function createView(input: CreateViewInput): NotionView {
-    return views.createView(input);
+    const { databaseId: databaseRef, dataSourceId: dataSourceRef, name, type, filter, sorts, configuration, position } = input;
+    const databaseId = idFromRef(databaseRef, "database");
+    const dataSourceId = idFromRef(dataSourceRef, "data_source");
+    const view: CreateViewInput = { databaseId: databaseRef, dataSourceId: dataSourceRef, name: name, type: type };
+    if (filter !== null) view.filter = filter;
+    if (sorts !== null) view.sorts = sorts;
+    if (configuration !== null) view.configuration = configuration;
+    if (position !== null) view.position = position;
+    check("submilli/notion.createView", { databaseId: databaseId, dataSourceId: dataSourceId });
+    return views.createView(databaseId, dataSourceId, view);
 }
 
 /** Update a view's saved query or presentation.
  * @capability submilli/notion.updateView { viewId: string }
  */
 export function updateView(ref: string, input: UpdateViewInput): NotionView {
-    return views.updateView(ref, input);
+    const viewId = idFromRef(ref, "view");
+    check("submilli/notion.updateView", { viewId: viewId });
+    return views.updateView(viewId, input);
 }
 
 /** List views belonging to a database.
  * @capability submilli/notion.listViews { databaseId: string }
  */
 export function listViews(databaseRef: string, options: PageOptions | null = null): PageResult<NotionView> {
-    return views.listViews(databaseRef, options);
+    const pageSize = options === null ? null : options.pageSize;
+    const startCursor = options === null ? null : options.startCursor;
+    const databaseId = idFromRef(databaseRef, "database");
+    check("submilli/notion.listViews", { databaseId: databaseId });
+    return views.listViews(databaseId, pageSize, startCursor);
 }
 
 /** Execute a view's saved filters and sorts.
  * @capability submilli/notion.queryView { viewId: string }
  */
 export function queryView(ref: string, resultPageSize: number = 100): ViewQuery {
-    return views.queryView(ref, resultPageSize);
+    const viewId = idFromRef(ref, "view");
+    check("submilli/notion.queryView", { viewId: viewId });
+    return views.queryView(viewId, resultPageSize);
 }
 
 /** Continue a cached view query.
@@ -926,27 +1041,48 @@ export function continueViewQuery(
     startCursor: string = "",
     resultPageSize: number = 100,
 ): PageResult<ResourceRef> {
-    return views.continueViewQuery(viewRef, queryRef, startCursor, resultPageSize);
+    const query = views.prepareContinueViewQuery(viewRef, queryRef);
+    check("submilli/notion.continueViewQuery", { viewId: query.viewId });
+    return views.continueViewQuery(query.viewId, query.queryId, startCursor, resultPageSize);
 }
 
 /** Create a Markdown comment.
  * @capability submilli/notion.createComment { pageId: string }
  */
 export function createComment(input: CreateCommentInput): NotionComment {
-    return collaboration.createComment(input);
+    const target = input.target;
+    const targetType = target.type;
+    const targetRef = target.id;
+    const discussionParentRef = target.discussionParentRef;
+    const markdown = input.markdown;
+    const attachments = input.attachments;
+    const body = collaboration.createCommentBody({
+        targetType: targetType,
+        targetRef: targetRef,
+        markdown: markdown,
+        attachments: attachments,
+    });
+    const pageId = collaboration.commentPageId(targetType, targetRef, discussionParentRef);
+    check("submilli/notion.createComment", { pageId: pageId });
+    return collaboration.createComment(body);
 }
 
 /** List open comments for a page or block.
  * @capability submilli/notion.getComments { pageId: string }
  */
 export function getComments(ref: string, options: PageOptions | null = null): PageResult<NotionComment> {
-    return collaboration.getComments(ref, options);
+    const pageSize = options === null ? null : options.pageSize;
+    const startCursor = options === null ? null : options.startCursor;
+    const context = resolvePageContext(ref);
+    check("submilli/notion.getComments", { pageId: context.pageId });
+    return collaboration.getComments(context, pageSize, startCursor);
 }
 
 /** Query meeting-note blocks visible to the integration user.
  * @capability submilli/notion.queryMeetingNotes {}
  */
 export function queryMeetingNotes(options: MeetingNotesOptions | null = null): MeetingNotesResult {
+    check("submilli/notion.queryMeetingNotes", {});
     return collaboration.queryMeetingNotes(options);
 }
 
@@ -954,65 +1090,91 @@ export function queryMeetingNotes(options: MeetingNotesOptions | null = null): M
  * @capability submilli/notion.getBlock { pageId: string }
  */
 export function getBlock(ref: string): NotionBlock {
-    return blocks.getBlock(ref);
+    const context = resolvePageContext(ref);
+    check("submilli/notion.getBlock", { pageId: context.pageId });
+    return blocks.getBlock(context);
 }
 
 /** List direct children of a block or page.
  * @capability submilli/notion.listBlockChildren { pageId: string }
  */
 export function listBlockChildren(ref: string, options: PageOptions | null = null): PageResult<NotionBlock> {
-    return blocks.listBlockChildren(ref, options);
+    const pageSize = options === null ? null : options.pageSize;
+    const startCursor = options === null ? null : options.startCursor;
+    const context = resolvePageContext(ref);
+    check("submilli/notion.listBlockChildren", { pageId: context.pageId });
+    return blocks.listBlockChildren(context, pageSize, startCursor);
 }
 
 /** Append block children at an optional position.
  * @capability submilli/notion.appendBlockChildren { pageId: string }
  */
 export function appendBlockChildren(ref: string, input: AppendBlockChildrenInput): PageResult<NotionBlock> {
-    return blocks.appendBlockChildrenJson(
-        ref,
-        input.childrenJson,
-        input.positionJson === null ? "" : input.positionJson,
-    );
+    const childrenJson: string[] = [];
+    for (const childJson of input.childrenJson) childrenJson.push(childJson);
+    const position = input.positionJson;
+    const positionJson = position === null ? "" : position;
+    const context = blocks.prepareAppendBlockChildren(ref, childrenJson, positionJson);
+    check("submilli/notion.appendBlockChildren", { pageId: context.pageId });
+    return blocks.appendBlockChildrenJson(context, childrenJson, positionJson);
 }
 
 /** Update fields on a block.
  * @capability submilli/notion.updateBlock { pageId: string }
  */
 export function updateBlock(ref: string, fields: Map<string, unknown>): NotionBlock {
-    return blocks.updateBlock(ref, fields);
+    blocks.validateUpdateBlock(fields);
+    const context = resolvePageContext(ref);
+    check("submilli/notion.updateBlock", { pageId: context.pageId });
+    return blocks.updateBlock(context, fields);
 }
 
 /** Move a block to trash.
  * @capability submilli/notion.trashBlock { pageId: string }
  */
 export function trashBlock(ref: string): NotionBlock {
-    return blocks.trashBlock(ref);
+    const context = resolvePageContext(ref);
+    check("submilli/notion.trashBlock", { pageId: context.pageId });
+    return blocks.trashBlock(context);
 }
 
 /** Restore a block from trash.
  * @capability submilli/notion.restoreBlock { pageId: string }
  */
 export function restoreBlock(ref: string): NotionBlock {
-    return blocks.restoreBlock(ref);
+    const context = resolvePageContext(ref);
+    check("submilli/notion.restoreBlock", { pageId: context.pageId });
+    return blocks.restoreBlock(context);
 }
 
 /** Upload a VFS file using automatic single- or multipart mode.
  * @capability submilli/notion.uploadFile { path: string }
  */
 export function uploadFile(sourcePath: string, options: FileUploadOptions): FileUpload {
-    return uploads.uploadFile(sourcePath, options);
+    const filename = options.filename;
+    const contentType = options.contentType;
+    const chunkSize = options.chunkSize;
+    const owned: FileUploadOptions = { filename: filename, contentType: contentType };
+    if (chunkSize !== null) owned.chunkSize = chunkSize;
+    check("submilli/notion.uploadFile", { path: sourcePath });
+    return uploads.uploadFile(sourcePath, owned);
 }
 
 /** Retrieve one file upload.
  * @capability submilli/notion.getFileUpload { uploadId: string }
  */
 export function getFileUpload(ref: string): FileUpload {
-    return uploads.getFileUpload(ref);
+    const uploadId = idFromRef(ref);
+    check("submilli/notion.getFileUpload", { uploadId: uploadId });
+    return uploads.getFileUpload(uploadId);
 }
 
 /** List file uploads owned by this connection.
  * @capability submilli/notion.listFileUploads {}
  */
 export function listFileUploads(options: PageOptions | null = null): PageResult<FileUpload> {
-    return uploads.listFileUploads(options);
+    const pageSize = options === null ? null : options.pageSize;
+    const startCursor = options === null ? null : options.startCursor;
+    check("submilli/notion.listFileUploads", {});
+    return uploads.listFileUploads(pageSize, startCursor);
 }

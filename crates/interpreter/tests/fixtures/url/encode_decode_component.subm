@@ -14,7 +14,14 @@ function main(): void {
   assert(decodeComponent(punct) === "a&b=c", "punctuation round-trip");
 
   assert(encodeComponent("cus_a-b~c") === "cus_a-b~c", "- _ ~ unchanged");
-  assert(encodeComponent("..") === "%2E%2E", "dot encoded");
+  assert(encodeComponent("repo.js") === "repo.js", "a dot in a name is unchanged");
+  assert(encodeComponent("v1.2.3") === "v1.2.3", "several dots in a name");
+  assert(encodeComponent(".env") === ".env", "a leading dot in a name");
+  assert(encodeComponent("...") === "...", "three dots are a name");
+  assert(encodeComponent("..") === "%2E%2E", "the parent segment is escaped");
+  assert(encodeComponent(".") === "%2E", "the current segment is escaped");
+  assert(encodeComponent("../admin") === "..%2Fadmin", "a slash is escaped, so no segment is formed");
+  assert(decodeComponent("%2E%2E") === "..", "dot segment round-trip");
 
   assert(encodeComponent("") === "", "empty in / empty out");
   assert(decodeComponent("") === "", "empty decode");

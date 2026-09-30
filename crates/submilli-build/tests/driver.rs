@@ -151,12 +151,15 @@ fn artifact_includes_capabilities_schema_with_literal_requires() {
         project.path(),
         "sdk/src/lib.subm",
         r#"
+            import { check } from "submilli:security";
             /**
              * Charge a customer.
              * @param customer Stripe customer id.
              * @capability acme.com/charge { customer }
              */
-            export function charge(customer: string): void { }
+            export function charge(customer: string): void {
+                check("acme.com/charge", { customer });
+            }
         "#,
     );
     write_module(
@@ -225,8 +228,11 @@ fn non_literal_requires_warning_has_no_filter() {
         project.path(),
         "sdk/src/lib.subm",
         r#"
+            import { check } from "submilli:security";
             /** @capability acme.com/charge { customer } */
-            export function charge(customer: string): void { }
+            export function charge(customer: string): void {
+                check("acme.com/charge", { customer });
+            }
         "#,
     );
     write_module(
