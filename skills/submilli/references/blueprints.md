@@ -365,12 +365,8 @@ store (`submilli build publish-local`, `submilli install`), so a package may
 work locally without being in `packages list`. `apply` doesn't check that
 packages are installed; the first program that imports a missing one fails.
 
-The server refuses to start without a token (`SUBMILLI_SERVER_TOKEN`, an
-admin token) and checks a bearer token on every request; [setup](setup.md)
-has the details, under "Deploying the server". `submilli server` commands send
-`SUBMILLI_SERVER_TOKEN` (or `--token-file`), and `--server` or
-`SUBMILLI_SERVER_URL` picks the address. `submilli apply` takes both from the
-environment only and needs `SUBMILLI_SERVER_URL` set.
+The server and the `submilli server` commands share one token,
+`SUBMILLI_SERVER_TOKEN`; see [setup](setup.md).
 
 `apply` rejects a blueprint whose secrets use `env:` or `file:` with "not
 allowed for a blueprint registered over the API": those sources would let an
@@ -384,8 +380,7 @@ printf '%s' "$ORDERS_API_TOKEN" | submilli server secret put ORDERS_API_TOKEN
 ```
 
 REST is `POST /v1/execute` with `{ "blueprint", "code", "variables", "secrets" }`
-and `Authorization: Bearer $SUBMILLI_SERVER_TOKEN` (or the application's
-`user` token, which cannot manage blueprints);
+and `Authorization: Bearer $SUBMILLI_SERVER_TOKEN`;
 the response carries `result`, `console`, and on failure `error.kind` and
 `error.message`. A missing required variable is rejected as `invalid_request`
 before compilation. MCP clients bind variables in the `submilli-variables`

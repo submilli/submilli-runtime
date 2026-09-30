@@ -103,16 +103,11 @@ python3 skills/evals/harnesses/serve_fixture.py
 ```
 
 The fixture compiles the billing example from the distributed references,
-publishes it into a temporary store, starts a loopback server on port 18128
-and registers `support-read`. The server gets a generated admin token in
-`SUBMILLI_SERVER_TOKEN`, which the fixture uses for setup, and a second token
-in the `user` role from a temporary config. It checks allowed, denied,
-missing-binding and unauthenticated REST responses, and that the `user` token
-is answered 403 on a management route, before reporting ready. It then prints
-an `export SUBMILLI_SERVER_URL=… SUBMILLI_SERVER_TOKEN=…` line carrying the
-`user` token: run it in the shell that runs the adapter checks. They send that
-token, so a pass shows the MCP surface needs no more than `user`, and they
-also assert that a connection without it is refused. Stop with
+publishes it into a temporary store, starts a loopback server on port 18128,
+and registers `support-read`. It checks allowed, denied and missing-binding
+REST responses before reporting ready, then prints an `export
+SUBMILLI_SERVER_URL=… SUBMILLI_SERVER_TOKEN=…` line for the adapter checks;
+the token it prints has the `user` role. Stop with
 Ctrl-C to remove the server and temporary store; use `--port` if occupied.
 These checks establish transport/API behavior; they do not establish live
 model quality or successful assistant-driven implementation.

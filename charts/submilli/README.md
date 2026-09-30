@@ -11,10 +11,10 @@ translated into a pod spec.
 ## Status
 
 **Not published to a registry yet.** The chart needs the first server release
-with inbound authentication, which is newer than `0.1.6`: it configures the
-server through a config file carrying `api_tokens` and probes `/healthz`, and an
-earlier server rejects the one and does not serve the other. The chart is not
-pushed to an OCI registry, and the GHCR image package is private until launch.
+with API tokens, which is newer than the pinned `appVersion` of `0.1.6`; set
+`image.tag` to a build that has them until the release bump lands. The chart
+itself is complete — but it is not pushed to an OCI registry, and the
+GHCR image package is private until launch.
 
 This chart has never been published, so there is no earlier revision of it in the
 wild and no upgrade path from one is provided. Its shape changed during
@@ -37,50 +37,36 @@ Then, from inside the cluster or through a port-forward:
 
 ```bash
 kubectl port-forward svc/submilli 8128:8128
-curl -i http://127.0.0.1:8128/healthz
-
 TOKEN=$(kubectl get secret submilli-auth -o jsonpath='{.data.admin-token}' | base64 -d)
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8128/v1/status
 ```
 
-`/healthz` answers anyone; everything else needs a token. See
-[Authentication](#authentication).
-
-### Upgrading from 0.1.x
-
-0.2.0 turns authentication on. Upgrading an existing release generates the two
-tokens and the server starts refusing requests without one, so **every existing
-caller gets 401 until it sends a token**. Read the tokens out of the Secret
-(below) and hand them out before or immediately after the upgrade, or set
-`auth.enabled: false` for the upgrade and turn it on once callers are ready.
-
-The chart's own settings also moved from environment variables into a config
-file. Nothing to do unless you set one of `SUBMILLI_BIND`,
-`SUBMILLI_MAX_EXECUTION_MEMORY`, `SUBMILLI_SHUTDOWN_GRACE`,
-`SUBMILLI_VFS_EPHEMERAL_DIR`, or `SUBMILLI_BLUEPRINT_SEED_DIR` through
-`extraEnv`: those still win over the file, exactly as they used to win over the
-chart's own variable of the same name.
-
 ## Read this before exposing it
 
-**The server executes code for whoever holds a token.** A caller with the `user`
-token can run arbitrary programs in the sandbox; one with the `admin` token can
-also register and rewrite blueprints, manage secrets and packages, and stop the
-process with `POST /v1/shutdown`. The tokens are bearer tokens: whoever has the
-string has the access, with no further identity behind it.
+**Every request needs a bearer token.** The chart generates two into the Secret
+`<fullname>-auth` and keeps them across upgrades and uninstalls: `admin-token`
+for the whole API, and `user-token`, which can run code, use sessions and MCP,
+and read what a blueprint offers, but cannot change a blueprint. Give
+applications the user token. The server reads tokens at boot, so after changing
+the Secret run `kubectl rollout restart statefulset/<fullname>`.
 
-So the chart does not rest on the tokens alone. On a single host `compose.yaml`
-publishes the port loopback-only; Kubernetes has no equivalent, and a ClusterIP
-Service is reachable from every pod in every namespace by default. A token that
-leaks — into a log, a crash dump, an over-shared Secret — would then be usable
-from anywhere in the cluster. The defaults put a second, independent layer
-behind it:
+- `auth.existingSecret` names a Secret you manage instead (keys
+  `auth.adminTokenKey` and `auth.userTokenKey`). Use it with Argo CD or any flow
+  that applies `helm template` output: rendered without cluster access, the
+  chart cannot read its Secret back and would generate new tokens on every sync.
+- `auth.enabled: false` serves without tokens. Network reachability is then the
+  only access control.
+- Upgrading a release from chart 0.1.x turns authentication on; callers must
+  start sending a token.
+
+A token is not the only layer. The server speaks plain HTTP, and a ClusterIP
+Service is reachable from every pod in every namespace by default. So the
+chart's defaults are deliberately restrictive:
 
 | Default | Why |
 |---|---|
-| `auth.enabled: true` | Every route but `/healthz` needs a bearer token. |
-| `networkPolicy.enabled: true` | Unusual for a chart. Default-deny ingress, scoped to this release's pod, so a token is only usable from workloads you allowlisted. |
-| `ingress.enabled: false` | An Ingress publishes a code-execution API to whatever can reach it, behind nothing but a bearer token. |
+| `networkPolicy.enabled: true` | Unusual for a chart, and the reason is the paragraph above. Default-deny ingress, scoped to this release's pod. |
+| `ingress.enabled: false` | An Ingress publishes a code-execution API outside the cluster; it needs TLS, or the token crosses the network in the clear. |
 | `automountServiceAccountToken: false` | Nothing to steal from the pod if the sandbox boundary is crossed. The ServiceAccount is granted no RBAC either. |
 | `readOnlyRootFilesystem: true` | Shrinks what a filesystem read can reach to only what is deliberately mounted. |
 
@@ -90,173 +76,11 @@ Three things the NetworkPolicy does **not** do, worth knowing before you rely on
   the object is accepted by the API server and silently does nothing — no error, no
   warning. `helm test` includes a check that fails loudly in that case rather than
   letting it pass unnoticed.
-- **It authorises a pod, not a request.** Which routes an allowlisted pod may call
-  is decided by the token it holds, not by the policy.
+- **It authorises a pod, not a request.** What an allowlisted pod may call is
+  decided by the token it holds.
 - **`kubectl port-forward` bypasses it entirely.** It tunnels through the API
   server, so anyone with `pods/portforward` permission reaches the server whatever
-  the policy says — and is then stopped by the tokens, if they are on.
-
-If you enable the Ingress, configure `ingress.tls`. A bearer token sent over plain
-HTTP is readable by everything on the path.
-
-## Authentication
-
-Callers send `Authorization: Bearer <token>`. A missing or unknown token is a
-`401`; a `user` token on an admin route is a `403`.
-
-| Token | May call |
-|---|---|
-| `admin` | Everything. |
-| `user` | `POST /v1/execute`, everything under `/v1/sessions`, `/mcp/{blueprint}`, and the read-only `GET /v1/blueprints/{name}/prompt`, `…/packages/search`, `…/packages/docs`, `…/builtins`, and `…/builtins/docs`. |
-
-Everything not in the `user` row — including `GET /v1/status`, blueprint
-create/update/delete, `/v1/secrets`, `/v1/packages`, and `/v1/shutdown` — needs
-`admin`. **Give agents the `user` token.** The `admin` token is for whatever
-deploys blueprints.
-
-`GET /healthz` needs no token and returns an empty `200`. The pod's probes use
-it, which is what lets them work without the admin token being written into the
-pod spec.
-
-### Reading the tokens
-
-By default the chart generates both into a Secret named `<release>-submilli-auth`
-(`submilli-auth` for a release named `submilli`):
-
-```bash
-kubectl get secret submilli-auth -n NAMESPACE -o jsonpath='{.data.admin-token}' | base64 -d
-kubectl get secret submilli-auth -n NAMESPACE -o jsonpath='{.data.user-token}' | base64 -d
-```
-
-They are generated once. Every later `helm upgrade` reads the live Secret back
-and reuses what it finds, so an upgrade never rotates a token out from under its
-callers. The Secret also survives `helm uninstall`, like the state volume, and a
-reinstall under the same release name picks it up again; delete it by hand when
-you want new tokens.
-
-### Bringing your own Secret
-
-```yaml
-auth:
-  existingSecret: submilli-tokens
-  adminTokenKey: admin-token   # the defaults
-  userTokenKey: user-token
-```
-
-```bash
-kubectl create secret generic submilli-tokens \
-  --from-literal=admin-token="$(openssl rand -hex 32)" \
-  --from-literal=user-token="$(openssl rand -hex 32)"
-```
-
-Each token must be at least 32 characters of letters, digits, and `-._~+/`
-(optionally `=`-padded), and the two must differ. The server refuses to start
-otherwise, and says which rule was broken.
-
-**Argo CD, and any `helm template | kubectl apply` flow, must use
-`auth.existingSecret`.** Keeping the generated tokens stable depends on Helm's
-`lookup`, which reads the live Secret at render time. Rendering without cluster
-access returns nothing, so the chart would mint two new tokens on every sync and
-lock out every caller each time.
-
-### Rotating a token
-
-Edit the Secret, then restart the pod:
-
-```bash
-kubectl rollout restart statefulset/submilli
-```
-
-The server reads tokens once, at boot, so a changed Secret does nothing until
-then. The restart is a separate, deliberate step: the Secret is left out of the
-pod's rollout checksum on purpose, since the chart cannot see inside a Secret it
-did not generate. To rotate a *generated* token, delete its key from the Secret
-and run `helm upgrade` — the missing key is regenerated and the other is left
-alone — then restart.
-
-`helm test` checks the running server against the Secret, and fails if the admin
-token in it is not one the server accepts.
-
-### More callers
-
-Extra tokens go in `config.api_tokens` and are added after the chart's two. The
-names `admin` and `user` are reserved. The token itself is read from a file, so
-mount a Secret of yours with the chart's `secrets:` value, which puts each key
-at `/etc/submilli/secrets/<name>/<key>`:
-
-```yaml
-config:
-  api_tokens:
-    - name: ci
-      role: admin
-      token_file: /etc/submilli/secrets/ci/token
-secrets:
-  ci:
-    secretName: ci-token
-    key: token
-```
-
-The chart does not set `SUBMILLI_SERVER_TOKEN` on the server: every token it
-serves is an `api_tokens` entry. The `submilli server` CLI reads that variable
-on its own side, so to run it against the cluster, forward the port and export
-the admin token under that name:
-
-```bash
-kubectl port-forward svc/submilli 8128:8128 -n NAMESPACE &
-export SUBMILLI_SERVER_TOKEN=$(kubectl get secret submilli-auth -n NAMESPACE -o jsonpath='{.data.admin-token}' | base64 -d)
-submilli server status
-```
-
-### Turning it off
-
-```yaml
-auth:
-  enabled: false
-```
-
-The server then serves every route to anyone who can reach the port, and network
-reachability is the only access control. That is a reasonable setting for a
-throwaway cluster and for nothing else. Leave the NetworkPolicy on and never
-combine this with an Ingress.
-
-## Server configuration
-
-The chart renders the server's config file, `server.yaml`, into a ConfigMap and
-points the server at it. A change to it rolls the pod on the next `helm upgrade`.
-The file holds paths to tokens and keys, never the material itself.
-
-Settings with a dedicated value (`server.bind`, `execution.maxMemoryMB`,
-`server.shutdownGrace`, `blueprints`, `secretStore`, `auth`) are written by the
-chart. Anything else the server accepts goes under `config:`, using the server's
-own key names and units:
-
-```yaml
-config:
-  max_execution_time: 30          # seconds
-  max_execution_fuel: 10000000000
-  network:
-    allow_private: true
-```
-
-The server rejects a key it does not know and refuses to boot, so a typo shows
-up as a crash-looping pod with the key named in its log rather than as a setting
-that silently does nothing.
-
-**Keys the chart owns are refused in `config:`**, at render time, with an error
-naming the value to use instead: `bind`, `port`, `vfs_ephemeral_dir`,
-`max_execution_memory`, `shutdown_grace`, `blueprint_seed_dir`,
-`allow_unauthenticated`, and `secret_store.key_file`. Most of them also size
-something in the pod spec — the memory limit, the termination grace period, a
-mount path — and two sources for one number is how those drift apart. The rest of
-`secret_store` (`dir`, `key_env`) passes through.
-
-**`extraEnv` is an override.** The server ranks an explicit `SUBMILLI_*`
-environment variable above its config file, so one set through `extraEnv` beats
-both the chart's own settings and `config:`. Prefer `config:`; keep `extraEnv`
-for what only the environment can carry, such as a provider credential. The port
-is the one setting the chart itself still passes as a variable
-(`SUBMILLI_PORT`), to defend against the kubelet injecting a variable of that
-name for a Service called `submilli`.
+  the policy says.
 
 ## Blueprints
 
@@ -325,12 +149,11 @@ deploy time.
 
 **`file:` sources work only for blueprints supplied here.** A blueprint you
 register at runtime through `POST`/`PUT /v1/blueprints` is rejected with
-`forbidden_secret_source` if it declares an `env:` or `file:` secret, whichever
-token sent it. That is deliberate: an admin token is permission to manage
-blueprints, not to make the server read its own environment and files — which
-would include the secret-store key and the API tokens themselves. Blueprints in
-`blueprints:` are supplied locally by the operator, so they are not subject to
-it. For runtime-registered blueprints, use a `store:` secret.
+`forbidden_secret_source` if it declares an `env:` or `file:` secret. That is
+deliberate: over the wire those sources would let an API caller read the
+server's own environment and files — including the secret-store key. Blueprints in `blueprints:` are supplied locally by the
+operator, so they are not subject to it. For runtime-registered blueprints, use
+a `store:` secret.
 
 The server's own encrypted-at-rest store (`secretStore.enabled`) is **off by
 default**. It protects the volume against offline disclosure and only earns that if
@@ -521,6 +344,27 @@ the template and ignores one that does not.
 `ReadWriteMany` is not an accepted value. It exists to let many pods on many
 nodes write at once, which is precisely what corrupts these stores, and offering
 it would imply the server supports a topology it does not.
+
+## Server configuration
+
+The chart renders the server's config file, `server.yaml`, into a ConfigMap
+from its values, and restarts the pod when it changes. `config:` passes any
+other server setting through:
+
+```yaml
+config:
+  max_execution_time: 30
+  network:
+    allow_ip: ["10.0.12.7"]
+```
+
+Keys the chart sets from its own values (`bind`, `port`, `max_execution_memory`,
+`shutdown_grace`, `vfs_ephemeral_dir`, `blueprint_seed_dir`,
+`secret_store.key_file`, `allow_unauthenticated`) are refused there, with a
+message naming the value to use. Entries under `config.api_tokens` are added
+after the chart's two, each with a `token_file` that a `secrets:` mount
+provides. `extraEnv` still overrides the file, because the server ranks a
+`SUBMILLI_*` variable above it.
 
 ## Values
 

@@ -210,10 +210,9 @@ node that returns an `AIMessage` with one `tool_calls` entry for
    `handle_tool_errors=True` this is returned content, not an exception.
    `handle_tool_errors` is an argument of `MultiServerMCPClient(...)` and
    `load_mcp_tools(...)`, not a key of the connection dict.
-3. A session without `submilli-variables` (token still sent) fails at
-   `initialize`: entering `client.session(...)` raises an exception group
-   wrapping an HTTP `400`, so no tools are listed. Without `Authorization` it
-   wraps a `401` instead. Test for the raised error, not a tool result.
+3. A session without `submilli-variables` fails at `initialize`: entering
+   `client.session(...)` raises an exception group wrapping an HTTP `400`, so
+   no tools are listed. Test for the raised error, not a tool result.
 4. An interrupted thread (`interrupt_before=["tools"]`) resumes with
    `ainvoke(None, config)` on a graph rebuilt from a new session for the same
    trusted identity, after the first session has closed.

@@ -176,9 +176,8 @@ The blueprint must declare required `customerId`, allow
 `http://127.0.0.1:8128/mcp/support-read`; send `SUBMILLI_SERVER_TOKEN` as
 `Authorization: Bearer …` and bind the trusted value with
 `submilli-variables: customerId=cus_northwind`.
-Variables constrain generated code; they are not authentication, and the token
-authenticates the application, not its user. Add TLS and restricted ingress
-before exposing the server outside the host application.
+Variables constrain generated code; they are not authentication. Put the
+server behind trusted ingress before exposing it outside the host application.
 
 ## Identity, cleanup, and failure checks
 
@@ -193,12 +192,10 @@ Run these deterministic checks before a live model task:
 2. The same binding passing `cus_initech` is denied by the package capability
    filter: `tool.execute` resolves with `result: null` and an `error.message`
    naming `PermissionDeniedError` and `acme.com/balance.read`.
-3. Omitting `submilli-variables` (token still sent) is rejected at connect:
-   the server answers `initialize` with HTTP 400, `@mastra/mcp` then tries its
-   SSE fallback, and `listToolsets()` logs the failure and returns no
-   `submilli` toolset. Omitting the token is a `401` with the same outcome and
-   no OAuth flow; `listToolsetsWithErrors()` tells the two apart. Treat an
-   absent toolset as the failure; do not expect a tool-level error.
+3. Omitting `submilli-variables` is rejected at connect: the server answers
+   `initialize` with HTTP 400, `@mastra/mcp` then tries its SSE fallback, and
+   `listToolsets()` logs the failure and returns no `submilli` toolset. Treat
+   an absent toolset as the failure; do not expect a tool-level error.
 4. An unlisted capability or raw `http.get` from `main` is denied.
 5. A second client for another customer has an independent header and tool
    closure; no global tool cache is reused.
@@ -207,7 +204,7 @@ Run these deterministic checks before a live model task:
 
 Common failures are an old sample using `listTools()` for per-user
 credentials, a shared client whose headers were mutated between requests, a
-missing required variable, a missing or unknown token in the harness, applying the blueprint to a different server, and
+missing required variable, applying the blueprint to a different server, and
 closing the client before a stream finishes. Current `@mastra/mcp` also has
 `listToolsetsWithErrors()` for discovery diagnostics.
 

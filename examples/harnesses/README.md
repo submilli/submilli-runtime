@@ -20,15 +20,12 @@ that give the user named by the `userId` variable one directory of it.
 
 ## Before you run one
 
-The server needs the volume, an API token, a secret store for the Jina API
-key, and the package. From this directory:
+The server needs the volume, a secret store for the Jina API key, and the
+package. From this directory:
 
 ```sh
 mkdir -p "$HOME/submilli-notes"
-cat > server.yaml <<EOF
-volumes:
-  notes: $HOME/submilli-notes
-EOF
+printf 'volumes:\n  notes: %s\n' "$HOME/submilli-notes" > server.yaml
 head -c 32 /dev/urandom | base64 > store.key
 export SUBMILLI_SERVER_TOKEN=$(openssl rand -hex 32)
 
@@ -38,18 +35,6 @@ submilli server packages install submilli/submilli-runtime @submilli/jina
 submilli server secret put jina_api_key
 submilli server blueprint apply blueprint.yaml
 ```
-
-The server, the `submilli server` commands, the agents, and the checks all
-read `SUBMILLI_SERVER_TOKEN`; the agents and checks send it as
-`Authorization: Bearer …`. Run them from a shell that has it exported.
-
-The token the server takes from that variable is an admin token, which is fine
-while the agent and the server are both yours on one machine. Before an agent
-runs anywhere you trust less, add a `user`-role token with a `token_file`
-under `api_tokens` in `server.yaml` and export that one for the agent instead.
-A `user` token can run programs and cannot change the blueprint. The examples
-send whichever token the variable holds, so their code stays the same. The
-book's "Submilli server" chapter, under "Who can reach it", has the details.
 
 From a checkout of this repository, `submilli build publish-local -p
 @submilli/jina`, run at its root before the server starts, installs the

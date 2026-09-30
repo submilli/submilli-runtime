@@ -33,18 +33,9 @@ service. Install the CLI/server using [setup](setup.md), then:
    permits only the bound customer's balance.
 4. Run `submilli build check`, `submilli build test`,
    `submilli build publish-local`, and `submilli blueprint lint blueprint.yaml`.
-5. The server refuses to start without an API token ([setup](setup.md)).
-   Export one, then start the server in the background:
-
-   ```sh
-   export SUBMILLI_SERVER_TOKEN=$(openssl rand -hex 32)
-   submilli-server --bind 127.0.0.1 --port 8128 &
-   ```
-
-   The server, the CLI and the harness all read `SUBMILLI_SERVER_TOKEN`; any
-   other shell that runs the CLI or the harness needs the same value.
-   Use the same `SUBMILLI_HOME` for the CLI and server if overriding the default:
-   the server must see the package store where you published the fixture.
+5. Export `SUBMILLI_SERVER_TOKEN` (`openssl rand -hex 32`) and start
+   `submilli-server --bind 127.0.0.1 --port 8128` in another terminal with
+   the same variable ([setup](setup.md)).
 6. Run `submilli server blueprint apply blueprint.yaml --server http://127.0.0.1:8128`.
    The MCP URL is now `http://127.0.0.1:8128/mcp/support-read`.
 
@@ -59,7 +50,7 @@ curl --fail-with-body http://127.0.0.1:8128/v1/execute \
 
 Expect `result: "6150"`. Change only the program's argument to `cus_initech`:
 expect a capability denial. Remove `variables`: expect `invalid_request` for
-the missing binding. Drop the `Authorization` header: expect `401`. The fixture returns a constant; these checks prove the
+the missing binding. The fixture returns a constant; these checks prove the
 policy path, not connectivity to a billing service. Replace it with reviewed
 service operations only after this slice works. Each harness guide below
 uses this fixture and labels its hard-coded demo identity explicitly.
@@ -80,17 +71,9 @@ discovery tools supply package and built-in declarations. Do not replace this
 with a generic “execute JavaScript” schema or assume there is only one tool.
 
 Send `Authorization: Bearer <token>` on every MCP and REST request, with the
-token read from `SUBMILLI_SERVER_TOKEN` in the host process. No token goes
-into a prompt, tool schema, or generated code. A missing or unknown token is
-`401` before the binding is read; it is not an OAuth challenge.
-
-The token the server reads from `SUBMILLI_SERVER_TOKEN` is an admin token.
-That is fine while the harness and server are the user's own on one machine.
-Before the agent runs anywhere less trusted, tell the user to add a
-`user`-role token with a `token_file` under `api_tokens` and give the harness
-that value in `SUBMILLI_SERVER_TOKEN` instead ([setup](setup.md)). A `user`
-token runs code and gets `403` on management routes, so it cannot rewrite the
-blueprint. The harness code is the same either way.
+token read from `SUBMILLI_SERVER_TOKEN` in the host process; a missing or
+unknown token is `401`. [Setup](setup.md) covers giving the harness a `user`
+token.
 
 Bind session variables before MCP initialization, from authenticated and
 authorized application state. Header format:
@@ -113,9 +96,7 @@ explain the actual boundary. Keep model credentials in the host application
 and service credentials in the intended runtime/package credential path.
 
 First test initialization, tool discovery, an allowed call, a cross-identity
-denial, missing-variable rejection (token still sent), and missing-token
-rejection deterministically. Then run one live
+denial, and missing-variable rejection deterministically. Then run one live
 model task if access is available. Inspect transcript and results; never claim
-a live model test passed when only a mocked adapter ran. The token
-authenticates the application, not its end user, and variable binding is not
-auth; a network-reachable server also needs TLS and restricted ingress.
+a live model test passed when only a mocked adapter ran. Network-accessible
+production servers need trusted ingress; variable binding alone is not auth.

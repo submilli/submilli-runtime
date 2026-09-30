@@ -11,7 +11,7 @@ has the reader author, in runnable form. `submilli.toml` and
 | `blueprint.yaml` | The policy: `customerId` as a required session variable, and the operation granted only for it. |
 | `total.ts` | The program the agent writes for the job it was asked to do. |
 | `total-injected.ts` | The program it writes after reading the injected support ticket. |
-| `app.mjs` | The application: sends the token in `SUBMILLI_SERVER_TOKEN`, binds `customerId` per request, and posts to `/v1/execute`. |
+| `app.mjs` | The application: binds `customerId` per request and posts to `/v1/execute`. |
 | `agent.py` | Optional: the same ticket handed to a real deepagents agent over MCP. Needs `requirements.txt` and a model API key; not exercised by `verify.sh`. |
 
 ## Running it
@@ -23,12 +23,8 @@ has the reader author, in runnable form. `submilli.toml` and
 Walks the chapter's journey end to end and asserts both outcomes — the total and
 the denial — plus controls proving the denial comes from the filter rather than
 from something else. It runs against a throwaway `SUBMILLI_HOME`, so it never
-touches your real package store. It generates `SUBMILLI_SERVER_TOKEN` itself,
-starts the server on `127.0.0.1:8128` with no config file, and also checks that
-a missing or unknown token is refused. A last step, which the chapter does not
-show, restarts the server with a `user` token added under `api_tokens` and
-checks that the same `app.mjs` still runs a program with it and cannot apply a
-blueprint. It needs `node`, `curl`, `openssl`, and `python3`.
+touches your real package store, and generates `SUBMILLI_SERVER_TOKEN`
+itself.
 
 By default the binaries come from `cargo run` against this checkout. Point it at
 installed ones with:
@@ -40,17 +36,9 @@ SUBMILLI=submilli SUBMILLI_SERVER=submilli-server ./verify.sh
 ## The optional agent
 
 `agent.py` replaces the hand-pasted `total-injected.ts` with a real model, over
-MCP, against the same blueprint. It sends two headers: `Authorization`, with
-the token from `SUBMILLI_SERVER_TOKEN`, and `submilli-variables`, which
-binds `customerId` — the channel for MCP clients that cannot set `initialize`
-`_meta`, which includes langchain. It needs a server running as the chapter
-starts it.
-
-That token is an admin token, which is fine while the agent and the server are
-both yours on one machine. Before the agent runs anywhere you trust less, add a
-`user`-role token under `api_tokens` in the server's config and export that one
-instead; the script does not change. The book's "Submilli server" chapter,
-under "Who can reach it", has the details.
+MCP, against the same blueprint. It binds `customerId` through the
+`submilli-variables` header — the channel for MCP clients that cannot set
+`initialize` `_meta`, which includes langchain.
 
 ```
 pip install -r requirements.txt

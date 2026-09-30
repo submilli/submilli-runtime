@@ -241,7 +241,7 @@ submilli blueprint lint blueprint.yaml
 
 Now we will join both sides of our example. On the one side, you have built a package and defined a blueprint for it. On the other side, a coding agent will use this package to perform actions.
 
-The server runs the agent's code, so it only answers callers that present a token it knows. Generate one, export it, and start the server in the background:
+The server checks a token on every request. Generate one, export it, and start the server in the background:
 
 ```
 export SUBMILLI_SERVER_TOKEN=$(openssl rand -hex 32)
@@ -253,11 +253,7 @@ INFO submilli_server::auth: inbound authentication enabled tokens="SUBMILLI_SERV
 INFO submilli_server::serve: submilli-server listening addr=127.0.0.1:8128
 ```
 
-Stay in this terminal for the rest of the chapter: the server, the `submilli server` commands, and your application all read that one variable. A request that arrives without the token is answered with HTTP 401, and a server with no token at all refuses to start. When you are finished, `submilli server stop` shuts it down.
-
-The log calls it an `admin` token, and it is: it can manage the server as well as run programs. That is fine here, where the server and the application are both yours on one machine. Before an agent runs anywhere you trust less, give it a `user` token instead, which can run programs and cannot rewrite the blueprint that constrains the agent. [Who can reach it](/docs/server#who-can-reach-it) shows how; nothing in the code below changes.
-
-Now register your blueprint policy so the server knows about it:
+The `submilli server` commands and your application read the same variable, so stay in this terminal. Now register your blueprint policy so the server knows about it:
 
 ```
 submilli server blueprint apply blueprint.yaml
@@ -319,8 +315,6 @@ else console.log(`[result]  ${body.result}`);
 Look at where `customerId` comes from: a real application reads it
 off the signed-in session, the same place it gets the user's identity. The generated code by a coding agent never sees the
 binding, cannot restate it, and cannot overwrite it.
-
-The application sends its token in the `Authorization` header. The token says the caller is allowed to use the server at all; `customerId` says who this request is for.
 
 ### The job it was asked to do
 
@@ -468,8 +462,6 @@ pip install -r requirements.txt
 export GOOGLE_API_KEY=...
 python agent.py
 ```
-
-The script reads `SUBMILLI_SERVER_TOKEN` from the terminal you started the server in.
 
 Run it more than once. The model does not take the bait every time — that is
 the honest shape of prompt injection, and the reason the policy is where the

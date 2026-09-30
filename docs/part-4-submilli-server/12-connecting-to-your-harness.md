@@ -99,15 +99,12 @@ through the package, where the rules above don't reach. The file gives the
 package's `fs.write` and `http.download` rules the same user directory, and
 `lint` notes that they are narrower than the package declared.
 
-The server needs the volume, an API token, a secret store for Jina's API
-key, and the package. From `examples/harnesses/`:
+The server needs the volume, a secret store for Jina's API key, and the
+package. From `examples/harnesses/`:
 
 ```sh
 mkdir -p "$HOME/submilli-notes"
-cat > server.yaml <<EOF
-volumes:
-  notes: $HOME/submilli-notes
-EOF
+printf 'volumes:\n  notes: %s\n' "$HOME/submilli-notes" > server.yaml
 head -c 32 /dev/urandom | base64 > store.key
 export SUBMILLI_SERVER_TOKEN=$(openssl rand -hex 32)
 
@@ -122,47 +119,25 @@ submilli server blueprint apply blueprint.yaml
 [jina.ai](https://jina.ai). [Submilli server](/docs/server) explains each of
 these commands.
 
-The server, the `submilli server` commands, and every example in this chapter
-read the same variable, `SUBMILLI_SERVER_TOKEN`. The token the server takes
-from it is an admin token: it manages the server as well as running programs.
-That is fine while the harness and the server are both yours on one machine.
-Before an agent runs anywhere you trust less, add a `user`-role token under
-`api_tokens` and put that one in the harness's `SUBMILLI_SERVER_TOKEN`
-instead. A `user` token can run programs, use sessions and MCP, and read a
-blueprint's prompt, packages, and built-ins. Everything else answers it with
-HTTP 403, so it cannot rewrite the blueprint that constrains the agent. The
-examples don't change: they send whichever token the variable holds.
-[Who can reach it](/docs/server#who-can-reach-it) has the details.
+The examples send the token in `SUBMILLI_SERVER_TOKEN` with every request;
+[who can reach it](/docs/server#who-can-reach-it) covers tokens.
 
 ## What an MCP connection fixes: blueprint, variables, session
 
-Whatever the harness, connecting over MCP comes down to four things your
-application supplies and the model has no part in: the token that admits it,
-and the three in the heading.
+Whatever the harness, connecting over MCP comes down to three decisions your
+application makes and the model has no part in.
 
 **The address names the blueprint.** The MCP endpoint is
 `http://127.0.0.1:8128/mcp/<blueprint>`. A harness connected to
 `/mcp/research` runs every program under that blueprint. The model can't
 choose another, because the blueprint isn't an argument of any tool.
 
-**A token admits the application.** The server accepts a connection only
-with one of its API tokens, sent as `Authorization: Bearer <token>`. A
-connection with no token, or with one the server doesn't know, is refused
-with HTTP 401 before the server reads anything else. The refusal asks for a bearer token and names no authorization server,
-so an MCP client reports it as a failed connection and doesn't start an OAuth
-sign-in.
-
 **A header binds the variables.** The `research` blueprint requires a
-variable, `userId`. The harness sends it when it connects, beside the token:
+variable, `userId`. The harness sends it when it connects:
 
 ```text
-Authorization: Bearer <token>
 submilli-variables: userId=u_ada
 ```
-
-The two headers do different jobs. The token says which application is
-connecting and is the same for every user. The variables say which of your
-users this connection is for.
 
 Several variables are separated by `;`, so a value can't contain one. The
 server checks them against the blueprint before it accepts the connection. It
@@ -748,8 +723,7 @@ the run on the tool call, before the model has seen the result. The example
 is written for version 7 of the SDK.
 
 `openSession` is the part you write. It makes two requests, then builds six
-tools, one for each of the MCP tools the HTTP API can serve. Every request
-goes through `call`, which adds the token:
+tools, one for each of the MCP tools the HTTP API can serve:
 
 ```typescript title="submilli.ts"
 // The tools a model needs to write and run programs on submilli-server, built
@@ -877,8 +851,7 @@ The first request fetches the text the MCP tools would have carried:
 the others. The second opens the session. That is where the blueprint and
 the variables are fixed, the step the address and the header performed over
 MCP. A missing variable is refused there with HTTP 400, and an unknown
-blueprint with 404. A missing or unknown token is refused with 401 on the
-first request.
+blueprint with 404.
 
 The execute tool's schema decides what the model can choose. The model fills
 in the arguments of a tool, so an argument named `blueprint` or `userId`
@@ -887,9 +860,6 @@ would hand the model that choice. Keep both in your own code, as here.
 A failed program still answers HTTP 200, with `error` set as it is over MCP
 and the session's id beside it. Only a request the server can't act on, such
 as an unknown session, gets an error status.
-
-Every request in this table needs a token in `Authorization: Bearer`. A
-token in the `user` role is enough for all of them.
 
 | Request | Serves |
 | --- | --- |
@@ -908,10 +878,6 @@ which the quickstart used, takes the blueprint and variables with the code and
 runs the program in a session that ends when the program returns. It suits a
 single run. An agent needs the session endpoints, so that one program can
 build on the state of the last.
-
-`POST /v1/execute` accepts a `user` token as well. The endpoints that register
-blueprints, store secrets, and install packages need an `admin` token, and
-answer a `user` token with HTTP 403.
 
 Project: [`examples/harnesses/vercel-ai-sdk-http/`](https://github.com/submilli/submilli-runtime/tree/main/examples/harnesses/vercel-ai-sdk-http).
 
@@ -932,16 +898,14 @@ Over HTTP the value goes in the request that opens the session:
 { "blueprint": "research", "variables": { "userId": "u_ada" }, "secrets": { "USER_TOKEN": "tok_…" } }
 ```
 
-Over MCP it goes in one more header, `submilli-secrets`, holding the same JSON
+Over MCP it goes in a second header, `submilli-secrets`, holding the same JSON
 object encoded as base64url. A session opened without a required secret is
 refused with HTTP 400. The server keeps these values in memory for the life of
 the session and never writes them to disk. A session therefore outlives a
 server restart but its secrets don't, and running a program in it answers
 HTTP 409 with `session_requires_secrets` until the harness supplies them
 again. `POST /v1/sessions/{id}/rebind` does that, and replaces a token that
-has expired; over MCP, open a new connection. Like the other session
-endpoints, `rebind` is called with the application's API token, which is
-separate from the secrets it carries.
+has expired; over MCP, open a new connection.
 
 ## Giving the agent an MCP server
 

@@ -1,31 +1,14 @@
 # Partner-facing example for running `submilli-server` in a container, and the
 # fixture the release workflow's smoke test drives.
 #
-# The server refuses to start without an API token, so generate one first.
-# Compose reads `.env` from this directory on its own:
-#
-#   printf 'SUBMILLI_SERVER_TOKEN=%s\n' "$(openssl rand -hex 32)" > .env
-#   chmod 600 .env
+#   echo "SUBMILLI_SERVER_TOKEN=$(openssl rand -hex 32)" > .env
 #   docker compose up -d
-#
 #   set -a; . ./.env; set +a
 #   curl -X PUT http://127.0.0.1:8128/v1/blueprints/demo \
 #     -H "Authorization: Bearer $SUBMILLI_SERVER_TOKEN" \
 #     -H 'content-type: application/json' \
 #     -d "$(python3 -c 'import json,sys; print(json.dumps({"yaml": sys.stdin.read()}))' \
 #         < examples/docker/blueprints/demo.yaml)"
-#
-# SUBMILLI_SERVER_TOKEN is the one variable to know. The server reads it as its
-# token, and the `submilli server` CLI sends it, so with it exported the CLI on
-# this host — or `docker exec` into a container that has it — needs nothing
-# else. Hand the same variable to your application container to get going.
-#
-# It is an admin token: it manages the server (blueprints, secrets, packages,
-# status, shutdown) as well as running code. That is fine while the application
-# and the server are both yours, on one machine. Before an agent runs anywhere
-# you do not fully trust, give the application a `user` token instead — see
-# "A user token for the application" at the bottom of this file. A user token
-# runs code and cannot rewrite the blueprint that constrains the agent.
 #
 # SUBMILLI_IMAGE lets the smoke test point this at a locally-built image; the
 # default is the published tag a partner would pull.
@@ -34,24 +17,19 @@ services:
   submilli:
     image: ${SUBMILLI_IMAGE:-ghcr.io/submilli/submilli-runtime:latest}
 
-    # Every request needs a token, and the published port is still scoped to the
-    # loopback interface. Both, because the server speaks plain HTTP: a bearer
-    # token sent across a LAN is readable by anything on the path, and a token
-    # is one leak away from being the only thing between the network and a
-    # code-execution endpoint. The loopback scope is substantive, not stylistic:
-    # Docker DNATs published ports in nat/PREROUTING and they then traverse
-    # FORWARD via DOCKER-USER/DOCKER, so the INPUT rules ufw writes are never
-    # consulted — a plain `8128:8128` is reachable from the LAN on a host the
-    # operator believes is firewalled. To serve other machines, put a
-    # TLS-terminating reverse proxy in front rather than widening this.
+    # The server speaks plain HTTP, so a token sent across a LAN is readable on
+    # the way, and the published port is scoped to the loopback interface. This
+    # is substantive, not stylistic: Docker DNATs published ports in
+    # nat/PREROUTING and they then traverse FORWARD via DOCKER-USER/DOCKER, so
+    # the INPUT rules ufw writes are never consulted — a plain `8128:8128` would
+    # expose a code-execution endpoint to the LAN on a host the operator
+    # believes is firewalled.
     #
     # Loopback publishing scopes the *host* interface only. It does not isolate
     # the server from other containers, which is why `submilli-net` below is a
     # dedicated network rather than the default bridge: on the default bridge any
     # co-resident container reaches the server directly on its container IP,
-    # where the published-port restriction does not apply. Put only your
-    # application on this network; a container there still needs a token, but
-    # it is one step closer than it has to be.
+    # where the published-port restriction does not apply.
     ports:
       - "127.0.0.1:8128:8128"
     networks:
@@ -102,28 +80,19 @@ services:
     # SUBMILLI_BIND/SUBMILLI_PORT are what the healthcheck reads: it runs as its
     # own process and cannot inherit the server's flags. The image already sets
     # HOST=0.0.0.0, but that is the *ambient* tier — naming them explicitly is
-    # what makes an operator's port override apply to the probe as well. The
-    # probe needs no token: it calls /healthz, the one endpoint that answers
-    # without one.
+    # what makes an operator's port override apply to the probe as well.
     #
-    # The token arrives as an environment variable, which works on every host
-    # with no file to create and no chmod step. The cost is that an env var is
-    # readable via `docker inspect` and printed by `docker compose config`, so
-    # treat both outputs as secret. Rotating it is an edit to `.env` and
-    # `docker compose up -d`.
-    #
-    # `:?` makes a missing token a Compose error rather than a server that
-    # refuses to boot with the reason buried in its log.
+    # SUBMILLI_SERVER_TOKEN is the server's admin token, read from `.env`. The
+    # `submilli server` CLI sends the same variable, so `docker compose exec
+    # submilli submilli server status` works as it is.
     environment:
       SUBMILLI_BIND: 0.0.0.0
       SUBMILLI_PORT: 8128
-      SUBMILLI_SERVER_TOKEN: ${SUBMILLI_SERVER_TOKEN:?set SUBMILLI_SERVER_TOKEN, for example in .env - generate one with `openssl rand -hex 32`}
+      SUBMILLI_SERVER_TOKEN: ${SUBMILLI_SERVER_TOKEN:?set SUBMILLI_SERVER_TOKEN in .env, for example with `openssl rand -hex 32`}
 
     # Supply the secret-store key as a file, not as an environment variable: an
     # env var is readable via `docker inspect`, appears in `docker compose
-    # config` output, and is inherited by the process environment. Unlike the API
-    # token, this key cannot be rotated by generating a new one — it decrypts
-    # everything already in the store — so it earns the extra step.
+    # config` output, and is inherited by the process environment.
     #
     # Uncomment both blocks after creating the key. Compose's uid/gid/mode secret
     # attributes are ignored outside swarm and Docker does not chown bind mounts,
@@ -134,7 +103,7 @@ services:
     #   head -c32 /dev/urandom | base64 > submilli-store-key
     #   chmod 0444 submilli-store-key
     #
-    #   environment:          # add to the block above
+    #   environment:
     #     SUBMILLI_SECRET_STORE_KEY_FILE: /run/secrets/submilli-store-key
     #   secrets:
     #     - submilli-store-key
@@ -150,31 +119,3 @@ networks:
 # secrets:
 #   submilli-store-key:
 #     file: ./submilli-store-key
-
-# A user token for the application
-#
-# SUBMILLI_SERVER_TOKEN is an admin token. Once an agent runs somewhere you do
-# not fully trust, give the application a `user` token instead: it can run code,
-# use sessions and MCP, and read a blueprint's prompt, packages and builtins,
-# and gets 403 on everything else. Extra tokens are declared in a config file,
-# each read from a file of its own — there is no second environment variable.
-#
-#   mkdir -p server-config
-#   openssl rand -hex 32 > server-config/app-token
-#   printf 'api_tokens:\n  - name: app\n    role: user\n    token_file: /etc/submilli/config/app-token\n' \
-#     > server-config/server.yaml
-#   chmod 0755 server-config
-#   chmod 0444 server-config/server.yaml server-config/app-token
-#
-# The modes matter for the reason given for the store key above: Docker does
-# not chown a bind mount, so a 0600 file owned by you is unreadable by uid
-# 65532 and the server fails boot. Then add to the `submilli` service:
-#
-#   volumes:
-#     - ./server-config:/etc/submilli/config:ro
-#   environment:
-#     SUBMILLI_CONFIG: /etc/submilli/config/server.yaml
-#
-# and hand the contents of server-config/app-token to the application, as its
-# SUBMILLI_SERVER_TOKEN, in place of the admin token. Keep the admin token for
-# the CLI and for registering blueprints.
