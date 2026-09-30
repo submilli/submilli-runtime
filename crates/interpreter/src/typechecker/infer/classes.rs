@@ -2965,9 +2965,10 @@ impl<'a> Inferer<'a> {
     /// Until `super(...)` returns the instance isn't built: a read in the
     /// call's own arguments, or in a `catch` or `finally` around it, is
     /// reported here, and one before the call is flagged for the call to
-    /// report. A read inside a function counts too, since nothing stops the
-    /// parent's constructor, or the handler, calling it early. A function
-    /// expression has its own `this`, and `super` there is a parse error.
+    /// report. A read inside an arrow or nested function counts too, since
+    /// nothing stops the parent's constructor, or the handler, calling it
+    /// early. A function expression is skipped: it clears `current_class`
+    /// because its `this` is its own, and `super` in it is a parse error.
     pub(super) fn note_read_before_super(&mut self, span: Span) {
         if !self.in_constructor || self.current_super.is_none() || self.current_class.is_none() {
             return;

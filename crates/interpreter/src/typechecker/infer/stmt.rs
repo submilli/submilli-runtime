@@ -652,12 +652,11 @@ impl Inferer<'_> {
         let super_seen_before = self.super_seen;
         let body_outcome =
             self.infer_isolated_clause(body, entry_reachable, &Default::default())?;
-        let calls_super = self.in_constructor
-            && !self.in_nested_function
-            && !super_seen_before
-            && self.super_seen;
-        let outer_handler = self.in_super_handler;
-        self.in_super_handler |= calls_super;
+        // A `catch` or `finally` also runs when a `super(...)` before it in the
+        // `try` throws, so it counts as before the call. (Only the
+        // constructor's own call sets `super_seen`.)
+        let prev_super_handler = self.in_super_handler;
+        self.in_super_handler |= !super_seen_before && self.super_seen;
         let typed_body = body_outcome
             .body
             .ok_or_else(|| super::inference_failure("try body is a block"))?;
@@ -696,6 +695,7 @@ impl Inferer<'_> {
         }
 
         let mut post = join_reachable_envs(None, exits);
+        self.in_super_handler |= !super_seen_before && self.super_seen;
         let typed_finally = finally
             .map(|f| {
                 let pending_end = self.pending_exit_counts();
@@ -707,7 +707,7 @@ impl Inferer<'_> {
             })
             .transpose()?
             .flatten();
-        self.in_super_handler = outer_handler;
+        self.in_super_handler = prev_super_handler;
         self.reachable = entry_reachable && post.is_some();
         self.merge_assigned_into_outer(all_assigned, span);
         if let Some(post) = post {
