@@ -135,6 +135,7 @@ pub fn infer_with_transitive_checked<'a>(
         this_before_super: false,
         in_nested_function: false,
         super_call_is_statement: false,
+        in_super_arguments: false,
         local_class_mangles: std::collections::BTreeSet::new(),
         pending_implements: Vec::new(),
         unresolved_parents: std::collections::BTreeSet::new(),
@@ -388,6 +389,7 @@ pub fn infer_package_checked<'a>(
         this_before_super: false,
         in_nested_function: false,
         super_call_is_statement: false,
+        in_super_arguments: false,
         local_class_mangles: BTreeSet::new(),
         pending_implements: Vec::new(),
         unresolved_parents: BTreeSet::new(),
@@ -738,6 +740,9 @@ pub(super) struct Inferer<'a> {
     /// `infer_super_call` to take. A call inside an expression can be skipped
     /// (`c ? super(1) : f()`), which the super-call rule can't see.
     pub(super) super_call_is_statement: bool,
+    /// True while a `super(...)` call's arguments are inferred, when the
+    /// instance they would read through `this` isn't built yet.
+    pub(super) in_super_arguments: bool,
     /// Mangled names of classes declared in the *current* module. A `private`
     /// member is visible only when its class is in this set (module-scoped
     /// privacy); imported classes are absent, so their privates are hidden.

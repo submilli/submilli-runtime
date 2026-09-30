@@ -43,11 +43,21 @@ class Parenthesized extends Base {
   }
 }
 
+class Deferred extends Base {
+  read: () => number;
+  constructor(x: number) {
+    // The arrow runs after `super(...)` returns, so it may read `this`.
+    super(x);
+    this.read = (): number => this.v;
+  }
+}
+
 function main(): void {
   assert(new Guarded(3).v === 3, "super after a throwing guard");
   assert(new EitherBranch(4).v === 8, "super in the branch that completes");
   assert(new InTry(5).v === 5, "super in a try whose catch rethrows");
   assert(new Parenthesized(6).v === 6, "a parenthesized super call is a statement");
+  assert(new Deferred(8).read() === 8, "`this` after the call is readable");
   let threw = false;
   try {
     new Guarded(-1);

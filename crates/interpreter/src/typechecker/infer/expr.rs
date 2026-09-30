@@ -572,36 +572,29 @@ impl Inferer<'_> {
                 );
                 Ok((TypedExprKind::Null, Type::Error))
             }
-            ExprKind::This => {
-                Ok(if let Some(ty) = &self.function_this {
-                    (TypedExprKind::This, ty.clone())
-                } else if let Some(ty) = &self.current_class {
-                    // In a subclass constructor, `this` before `super(...)` reads
-                    // uninitialized parent fields — flag it for the super call.
-                    if self.in_constructor && self.current_super.is_some() && !self.super_seen {
-                        self.this_before_super = true;
-                    }
-                    (TypedExprKind::This, ty.clone())
-                } else if let Some((class, member)) = self.current_static.clone() {
-                    self.error_with_help(
-                        span,
-                        "`this` is not available in a static member".to_string(),
-                        vec![format!(
-                            "`{class}.{member}` runs without an instance; take the instance as \
+            ExprKind::This => Ok(if let Some(ty) = &self.function_this {
+                (TypedExprKind::This, ty.clone())
+            } else if let Some(ty) = self.current_class.clone() {
+                self.note_this_access(span);
+                (TypedExprKind::This, ty)
+            } else if let Some((class, member)) = self.current_static.clone() {
+                self.error_with_help(
+                    span,
+                    "`this` is not available in a static member".to_string(),
+                    vec![format!(
+                        "`{class}.{member}` runs without an instance; take the instance as \
                              a parameter, or make it an instance method. To use another static, \
                              qualify it: `{class}.<member>`"
-                        )],
-                    );
-                    (TypedExprKind::Null, Type::Error)
-                } else {
-                    self.error(
-                        span,
-                        "`this` is only valid inside a class method or constructor body"
-                            .to_string(),
-                    );
-                    (TypedExprKind::Null, Type::Error)
-                })
-            }
+                    )],
+                );
+                (TypedExprKind::Null, Type::Error)
+            } else {
+                self.error(
+                    span,
+                    "`this` is only valid inside a class method or constructor body".to_string(),
+                );
+                (TypedExprKind::Null, Type::Error)
+            }),
             ExprKind::Super => {
                 self.error_with_help(
                     span,

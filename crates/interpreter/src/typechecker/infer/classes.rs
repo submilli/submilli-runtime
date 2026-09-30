@@ -2894,12 +2894,15 @@ impl<'a> Inferer<'a> {
                     vec!["only a class with an `extends` clause can call `super(...)`".to_string()],
                 );
             }
+            let outer = std::mem::replace(&mut self.in_super_arguments, true);
             for arg in &args {
                 let _ = self.infer_expr(*arg, None)?;
             }
+            self.in_super_arguments = outer;
             return Ok((crate::TypedExprKind::Null, Type::Void));
         };
         let parent_ty = self.super_receiver_type(&parent)?;
+        let outer = std::mem::replace(&mut self.in_super_arguments, true);
         let typed_args = self.bind_param_call_args(
             &params,
             &Type::Void,
@@ -2909,6 +2912,7 @@ impl<'a> Inferer<'a> {
             &args,
             span,
         )?;
+        self.in_super_arguments = outer;
         Ok((
             crate::TypedExprKind::SuperCtorCall {
                 parent: parent.parent,
@@ -2957,6 +2961,29 @@ impl<'a> Inferer<'a> {
         self.note_constructor_super_call(span);
     }
 
+    /// A read of `this`, or of a `super` member, in a subclass constructor.
+    /// Before `super(...)` the parent's fields aren't set yet: in the call's
+    /// own arguments that is reported here, and elsewhere it is flagged for
+    /// the call to report.
+    pub(super) fn note_this_access(&mut self, span: Span) {
+        if !self.in_constructor || self.current_super.is_none() {
+            return;
+        }
+        // A function passed to `super(...)` runs later, when the instance is
+        // built, so only a read in the arguments themselves is reported.
+        if self.in_super_arguments && !self.in_nested_function {
+            self.error_with_help(
+                span,
+                "the arguments of `super(...)` can't read `this` or a `super` member".to_string(),
+                vec!["compute the argument from the constructor's parameters".to_string()],
+            );
+            return;
+        }
+        if !self.super_seen {
+            self.this_before_super = true;
+        }
+    }
+
     /// Whether `expr` is a `super(...)` call, parenthesized or not, as opposed
     /// to one inside it.
     pub(super) fn is_super_call(&self, expr: crate::ExprId) -> Result<bool, CompilerFailure> {
@@ -2982,7 +3009,8 @@ impl<'a> Inferer<'a> {
         if self.this_before_super {
             self.error_with_help(
                 span,
-                "`super(...)` must be called before accessing `this`".to_string(),
+                "`super(...)` must be called before accessing `this` or a `super` member"
+                    .to_string(),
                 vec!["move the `super(...)` call to the top of the constructor".to_string()],
             );
         }
@@ -2998,6 +3026,7 @@ impl<'a> Inferer<'a> {
         args: Vec<crate::ExprId>,
         span: Span,
     ) -> Result<(crate::TypedExprKind, Type), CompilerFailure> {
+        self.note_this_access(span);
         let Some(parent) = self.current_super.clone() else {
             if !self.current_class_inherits_unresolved_parent() {
                 self.error_with_help(

@@ -183,7 +183,8 @@ impl SuperCallWalk {
                 };
                 state.then(self.walk(ta, *f, super_called)?)
             }
-            // The body may run zero times, so only the entry state survives.
+            // A loop body may run zero times, or leave by `break` before its
+            // call, so a call inside one never counts.
             TypedStmtKind::While { body, .. }
             | TypedStmtKind::DoWhile { body, .. }
             | TypedStmtKind::ForOf { body, .. } => {
@@ -215,5 +216,43 @@ impl SuperCallWalk {
             | TypedStmtKind::AssignField { .. }
             | TypedStmtKind::AssignIndex { .. } => entry,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::test_util::{run_package, run_raw};
+
+    const SKIPPED_IN_SOME_PATHS: &str = "
+        class Base {
+          v: number;
+          constructor(x: number) { this.v = x; }
+        }
+        class Derived extends Base {
+          constructor(c: boolean) { if (c) { super(1); } }
+        }
+    ";
+
+    fn reports_skipped_super(messages: &[String]) -> bool {
+        messages
+            .iter()
+            .any(|m| m.contains("can finish without calling `super(...)`"))
+    }
+
+    #[test]
+    fn a_script_constructor_that_can_skip_super_is_rejected() {
+        let source = format!("{SKIPPED_IN_SOME_PATHS}\nfunction main(): void {{}}\n");
+        let messages: Vec<String> = run_raw(&source).into_iter().map(|d| d.message).collect();
+        assert!(reports_skipped_super(&messages), "{messages:?}");
+    }
+
+    #[test]
+    fn a_package_constructor_that_can_skip_super_is_rejected() {
+        let source = format!(
+            "{SKIPPED_IN_SOME_PATHS}\n/** Builds one. */\nexport function make(): number {{ return new Derived(true).v; }}\n"
+        );
+        let (_, _, diags) = run_package("@test/classes", &[("lib", &source)], &[]);
+        let messages: Vec<String> = diags.into_iter().map(|d| d.message).collect();
+        assert!(reports_skipped_super(&messages), "{messages:?}");
     }
 }
