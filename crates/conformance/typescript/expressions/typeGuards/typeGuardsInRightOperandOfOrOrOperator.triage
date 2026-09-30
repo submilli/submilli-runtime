@@ -2,5 +2,5 @@ line 45 missed: bug SUB-1156 narrowing doesn't follow a value through the truthi
 line 10, 14 extra: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type
 line 10, 14 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type; also bug SUB-1212 `||` keeps `boolean` whole in its left operand's truthy part instead of `true`
 line 25, 26, 45 type: bug SUB-1156 narrowing doesn't follow a value through the truthiness of an assignment
-line 41 type: bug SUB-1156 narrowing doesn't follow a value through the truthiness of an assignment; also by-design spec §1.6 `&&` keeps `number` and `boolean` whole in its falsy part, where tsc narrows to `0` or `false`
+line 41 type: bug SUB-1156 narrowing doesn't follow a value through the truthiness of an assignment; also bug SUB-1204 a literal widens to its base type where tsc keeps the literal type; also by-design spec §1.6 `&&` keeps `number` and `boolean` whole in its falsy part, where tsc narrows to `0` or `false`; also by-design spec §1.6 `a && b` is `falsy_part(a) | b`, even when `a`'s truthiness is known
 line 43 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type; also by-design spec §1.6 `a && b` is `falsy_part(a) | b`, even when `a`'s truthiness is known

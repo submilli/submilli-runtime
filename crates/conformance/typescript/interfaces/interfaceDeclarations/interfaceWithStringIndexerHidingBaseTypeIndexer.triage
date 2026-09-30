@@ -1,2 +1,2 @@
 line 14 missed: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, on line 9
-line 9 extra: artifact we report the property that breaks the index signature at the interface, tsc reports it on line 14
+line 9 extra: artifact we report the same mismatch on another line than tsc (ours at the interface, tsc's at the property on line 14)

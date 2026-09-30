@@ -1,2 +1,2 @@
 line 12 extra: by-design spec §1.4 a rest parameter's type must be written as an array, not an alias or tuple
-line 25 type: artifact both reject the line and each side's recovery type differs (ours records the literal with the type it was checked against)
+line 25 type: artifact the type comes from code tsc rejects, and each side's recovery type differs (ours records the literal with the type it was checked against)

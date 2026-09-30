@@ -55,8 +55,8 @@ suite when:
   the port makes every case strict).
 
 The cases ported before pruning existed are whole. Some of them reject a line where
-Submilli differs from TypeScript by design (an array literal's element type comes
-from its first element, for instance).
+Submilli differs from TypeScript by design (an array literal's elements must share
+one type, for instance).
 
 Every upstream case that fails one of these is in `EXCLUDED.md`, with one of these
 reasons and a detail:

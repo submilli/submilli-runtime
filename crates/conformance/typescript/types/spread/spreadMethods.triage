@@ -1,3 +1,4 @@
 line 16, 17 extra: by-design spec §2.5 only structural object types can be spread
 line 18, 21 extra: artifact we reject spreading the class instance on line 16, so `sk` is `{}`
-line 16, 17, 18, 19, 20, 21, 22, 23 type: by-design spec §2.5 only structural object types can be spread
+line 16, 17 type: by-design spec §2.5 only structural object types can be spread
+line 18, 19, 20, 21, 22, 23 type: artifact we reject spreading the class instance on line 16, so `sk` is `{}`
