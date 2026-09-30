@@ -2835,6 +2835,8 @@ impl<'a> Inferer<'a> {
         args: Vec<crate::ExprId>,
         span: Span,
     ) -> Result<(crate::TypedExprKind, Type), CompilerFailure> {
+        // Taken before the arguments are inferred, so a `super(...)` among
+        // them isn't mistaken for the statement.
         let is_statement = std::mem::take(&mut self.super_call_is_statement);
         if !self.in_constructor {
             self.error_with_help(
@@ -2942,20 +2944,20 @@ impl<'a> Inferer<'a> {
         ))
     }
 
-    /// Whether `expr` is a `super(...)` call, as opposed to one inside it.
+    /// Whether `expr` is a `super(...)` call, parenthesized or not, as opposed
+    /// to one inside it.
     pub(super) fn is_super_call(&self, expr: crate::ExprId) -> Result<bool, CompilerFailure> {
-        let crate::ExprKind::Call { callee, .. } =
-            &self.ast.try_expr(expr).map_err(super::arena_failure)?.kind
-        else {
-            return Ok(false);
-        };
-        Ok(matches!(
-            self.ast
-                .try_expr(*callee)
-                .map_err(super::arena_failure)?
-                .kind,
-            crate::ExprKind::Super
-        ))
+        match &self.ast.try_expr(expr).map_err(super::arena_failure)?.kind {
+            crate::ExprKind::Paren(inner) => self.is_super_call(*inner),
+            crate::ExprKind::Call { callee, .. } => Ok(matches!(
+                self.ast
+                    .try_expr(*callee)
+                    .map_err(super::arena_failure)?
+                    .kind,
+                crate::ExprKind::Super
+            )),
+            _ => Ok(false),
+        }
     }
 
     /// A subclass constructor may call `super(...)` exactly once, before any

@@ -11177,6 +11177,7 @@ class Dog extends Animal {
         let (ast, diags) = parse_str("class C { get value() { return 1; } }");
         assert_eq!(diags.len(), 1, "got: {diags:?}");
         assert_eq!(diags[0].message, "expected `:` and return type");
+        assert_eq!(diags[0].help, vec!["get name(): T { … }".to_string()]);
         assert!(
             matches!(
                 &class_members(&ast)[0],

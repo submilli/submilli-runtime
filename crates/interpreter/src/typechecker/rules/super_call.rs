@@ -27,17 +27,16 @@ pub(super) fn run(ta: &TypedAst, diags: &mut Vec<Diagnostic>) -> Result<(), Comp
             continue;
         }
         for span in walk.early_returns {
-            diags.push(skipped(span, "this `return` can run before `super(...)`"));
+            diags.push(skipped_super_call(
+                span,
+                "this `return` can run before `super(...)`",
+            ));
         }
-        if end
-            == (Completion::Normal {
-                super_called: false,
-            })
-        {
+        if end.can_finish_without_super() {
             let body = ta
                 .try_stmt(ctor.body)
                 .map_err(crate::typechecker::arena_failure)?;
-            diags.push(skipped(
+            diags.push(skipped_super_call(
                 body.span,
                 "this constructor can finish without calling `super(...)`",
             ));
@@ -46,7 +45,7 @@ pub(super) fn run(ta: &TypedAst, diags: &mut Vec<Diagnostic>) -> Result<(), Comp
     Ok(())
 }
 
-fn skipped(span: Span, message: &str) -> Diagnostic {
+fn skipped_super_call(span: Span, message: &str) -> Diagnostic {
     Diagnostic {
         severity: Severity::Error,
         span,
@@ -75,6 +74,24 @@ impl Completion {
                 super_called: a && b,
             },
             (only, Self::Abrupt) | (Self::Abrupt, only) => only,
+        }
+    }
+
+    /// The completion of `self` followed by `next`, which runs whichever way
+    /// `self` completes (a `finally`): abrupt if either is, and `super(...)`
+    /// has run if it did in either.
+    fn then(self, next: Self) -> Self {
+        match (self, next) {
+            (Self::Normal { super_called: a }, Self::Normal { super_called: b }) => Self::Normal {
+                super_called: a || b,
+            },
+            (Self::Abrupt, _) | (_, Self::Abrupt) => Self::Abrupt,
+        }
+    }
+
+    fn can_finish_without_super(self) -> bool {
+        self == Self::Normal {
+            super_called: false,
         }
     }
 }
@@ -164,19 +181,7 @@ impl SuperCallWalk {
                 let Some(f) = finally else {
                     return Ok(state);
                 };
-                match (state, self.walk(ta, *f, super_called)?) {
-                    (Completion::Abrupt, _) | (_, Completion::Abrupt) => Completion::Abrupt,
-                    (
-                        Completion::Normal {
-                            super_called: after,
-                        },
-                        Completion::Normal {
-                            super_called: in_finally,
-                        },
-                    ) => Completion::Normal {
-                        super_called: after || in_finally,
-                    },
-                }
+                state.then(self.walk(ta, *f, super_called)?)
             }
             // The body may run zero times, and a `break` can leave a case before
             // its call, so only the entry state survives.
