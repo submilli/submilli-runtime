@@ -6675,8 +6675,8 @@ impl Inferer<'_> {
     ///   diagnostic). Expression-body return type comes from the body
     ///   itself; block-body return type is unified across all `return`
     ///   paths via the `inferred_returns` collector frame this method
-    ///   pushes/pops. Conflicting block returns produce a diagnostic
-    ///   pointing at / Layer 3 union widening.
+    ///   pushes/pops. Block returns that no one return type covers
+    ///   produce a diagnostic.
     ///
     /// Also returns whether the arrow's own errors already explain a mismatch
     /// with `expected`: with a function hint its parameters line up with, a
@@ -6950,7 +6950,7 @@ impl Inferer<'_> {
                     t.clone()
                 } else {
                     let collected = self.inferred_returns.take().unwrap_or_default();
-                    self.unify_returns(&collected, span)
+                    self.unify_returns(&collected)
                 };
                 (ClosureBody::Block(id), t)
             }
@@ -7026,35 +7026,65 @@ impl Inferer<'_> {
     }
 
     /// Reduce the `(Type, Span)` entries collected during a block-body
-    /// arrow's walk to a single return type. Empty → `Void`. Single →
-    /// that type. Multiple compatible (all `assignable` against the
-    /// first) → the first. Mismatched → diagnostic pointing at
-    /// for the planned union-widening lift, plus `Type::Error` to keep
-    /// downstream silent.
-    fn unify_returns(&mut self, collected: &[(Type, Span)], fallback_span: Span) -> Type {
+    /// arrow's walk to a single return type. Empty → `Void`. Otherwise the
+    /// return every other one is `assignable` to, in whichever order they
+    /// appear: each returned value has to fit the closure's type. None such →
+    /// a diagnostic, plus `Type::Error` to keep downstream silent.
+    fn unify_returns(&mut self, collected: &[(Type, Span)]) -> Type {
         if collected.is_empty() {
             return Type::Void;
         }
-        let first = collected[0].0.clone();
-        let mut conflict: Option<(Type, Span)> = None;
-        for (t, s) in &collected[1..] {
-            if !assignable(t, &first, self.resolver()) && !assignable(&first, t, self.resolver()) {
-                conflict = Some((t.clone(), *s));
-                break;
-            }
+        let widest = collected.iter().find(|(candidate, _)| {
+            collected
+                .iter()
+                .all(|(other, _)| assignable(other, candidate, self.resolver()))
+        });
+        if let Some((widest, _)) = widest {
+            return widest.clone();
         }
-        if let Some((other, span)) = conflict {
+        self.report_conflicting_return(collected);
+        Type::Error
+    }
+
+    /// Report the first return that fits neither way with the widest of the
+    /// returns before it. Called only when no return covers them all.
+    fn report_conflicting_return(&mut self, collected: &[(Type, Span)]) {
+        let Some(((first, first_span), rest)) = collected.split_first() else {
+            return;
+        };
+        let mut widest_so_far = first;
+        for (other, span) in rest {
+            if assignable(other, widest_so_far, self.resolver()) {
+                continue;
+            }
+            if assignable(widest_so_far, other, self.resolver()) {
+                widest_so_far = other;
+                continue;
+            }
+            let returns_nothing = [other, widest_so_far]
+                .iter()
+                .any(|ty| matches!(ty.peel(), Type::Void));
+            let fix = if returns_nothing {
+                "return a value on every path or on none"
+            } else {
+                "annotate the closure's return type, or return one type on every path"
+            };
             self.error(
-                span,
+                *span,
                 format!(
-                    "return type `{other}` conflicts with earlier return `{first}`; \
-                     union widening lands in Layer 3 (SUB-77)"
+                    "return type `{other}` conflicts with earlier return `{widest_so_far}`; {fix}"
                 ),
             );
-            let _ = fallback_span;
-            return Type::Error;
+            return;
         }
-        first
+        // Each return fit the widest of those before it, one way or the
+        // other, yet no return covers them all. `assignable` is not transitive
+        // across an all-optional object type, so this is reachable. The closure
+        // has no type; say so rather than leave `Type::Error` undiagnosed.
+        self.error(
+            *first_span,
+            "cannot infer one return type for this closure; annotate its return type".to_string(),
+        );
     }
 
     // Statement walker (`infer_stmt`, `infer_assign`) moved to
@@ -10888,8 +10918,10 @@ function main(): void { if (result < 10) { } }
             "expected conflicting-return diagnostic, got: {diags:?}"
         );
         assert!(
-            diags.iter().any(|d| d.message.contains("SUB-77")),
-            "expected SUB-77 hint in diagnostic, got: {diags:?}"
+            diags
+                .iter()
+                .any(|d| d.message.contains("annotate the closure's return type")),
+            "expected a fix in the diagnostic, got: {diags:?}"
         );
     }
 
