@@ -1,10 +1,13 @@
-// expect-error-count: 3
+// expect-error-count: 5
 // expect-error: the arguments of `super(...)` can't read `this` or a `super` member
 // expect-error: the arguments of `super(...)` can't read `this` or a `super` member
 // expect-error: `super(...)` must be called before accessing `this` or a `super` member
+// expect-error: a `catch` or `finally` around `super(...)` can't read `this` or a `super` member
+// expect-error: a `catch` or `finally` around `super(...)` can't read `this` or a `super` member
 // Until `super(...)` returns the parent's fields aren't set, so neither its
-// arguments nor anything before it may read them, even in a function: the
-// parent's constructor may call it before the fields are set.
+// arguments, anything before it, nor a `catch` or `finally` around it (which
+// also runs when it throws) may read them, even in a function: the parent's
+// constructor may call it before the instance is built.
 class Base {
   v: number;
   constructor(x: number) {
@@ -43,6 +46,29 @@ class FromSuperMethod extends Base {
   }
 }
 
+class ReadInCatch extends Base {
+  w: number = 5;
+  constructor(x: number) {
+    try {
+      super(x);
+    } catch (e) {
+      console.log(this.w);
+      throw e;
+    }
+  }
+}
+
+class ReadInFinally extends Base {
+  constructor(x: number) {
+    try {
+      super(x);
+    } finally {
+      console.log(super.twice());
+    }
+  }
+}
+
 function main(): void {
   console.log(new FromThis().v, new FromCallback().v, new FromSuperMethod().v);
+  console.log(new ReadInCatch(1).v, new ReadInFinally(1).v);
 }

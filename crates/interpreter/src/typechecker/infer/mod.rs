@@ -136,6 +136,7 @@ pub fn infer_with_transitive_checked<'a>(
         in_nested_function: false,
         super_call_is_statement: false,
         in_super_arguments: false,
+        in_super_handler: false,
         local_class_mangles: std::collections::BTreeSet::new(),
         pending_implements: Vec::new(),
         unresolved_parents: std::collections::BTreeSet::new(),
@@ -390,6 +391,7 @@ pub fn infer_package_checked<'a>(
         in_nested_function: false,
         super_call_is_statement: false,
         in_super_arguments: false,
+        in_super_handler: false,
         local_class_mangles: BTreeSet::new(),
         pending_implements: Vec::new(),
         unresolved_parents: BTreeSet::new(),
@@ -744,6 +746,10 @@ pub(super) struct Inferer<'a> {
     /// True while a `super(...)` call's arguments are inferred, when the
     /// instance they would read through `this` isn't built yet.
     pub(super) in_super_arguments: bool,
+    /// True in the `catch` and `finally` of a `try` whose body calls
+    /// `super(...)`: they also run when that call throws, before the instance
+    /// is built.
+    pub(super) in_super_handler: bool,
     /// Mangled names of classes declared in the *current* module. A `private`
     /// member is visible only when its class is in this set (module-scoped
     /// privacy); imported classes are absent, so their privates are hidden.

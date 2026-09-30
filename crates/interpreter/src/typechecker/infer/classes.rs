@@ -2924,7 +2924,7 @@ impl<'a> Inferer<'a> {
 
     /// Report a `super(...)` outside a subclass constructor's own body, or
     /// not a statement of its own. Record any call in that body for the
-    /// once-only and `this`-before-`super` checks.
+    /// once-only and read-before-`super` checks.
     fn check_super_call_position(&mut self, span: Span, is_statement: bool) {
         if !self.in_constructor {
             self.error_with_help(
@@ -2941,7 +2941,7 @@ impl<'a> Inferer<'a> {
         }
         if self.in_nested_function {
             // Not the constructor's own call: it can run late or never, so it
-            // neither counts toward `super_seen` nor ends the `this` window.
+            // neither counts toward `super_seen` nor ends the window before it.
             self.error_with_help(
                 span,
                 "`super(...)` can't be called from a function nested in a constructor".to_string(),
@@ -2962,12 +2962,14 @@ impl<'a> Inferer<'a> {
     }
 
     /// A read of `this`, or of a `super` member, in a subclass constructor.
-    /// Before `super(...)` returns the parent's fields aren't set: a read in
-    /// the call's own arguments is reported here, and one before the call is
-    /// flagged for the call to report. A read inside a function counts too,
-    /// since nothing stops the parent's constructor calling it.
+    /// Until `super(...)` returns the instance isn't built: a read in the
+    /// call's own arguments, or in a `catch` or `finally` around it, is
+    /// reported here, and one before the call is flagged for the call to
+    /// report. A read inside a function counts too, since nothing stops the
+    /// parent's constructor, or the handler, calling it early. A function
+    /// expression has its own `this`, and `super` there is a parse error.
     pub(super) fn note_read_before_super(&mut self, span: Span) {
-        if !self.in_constructor || self.current_super.is_none() {
+        if !self.in_constructor || self.current_super.is_none() || self.current_class.is_none() {
             return;
         }
         if self.in_super_arguments {
@@ -2975,6 +2977,18 @@ impl<'a> Inferer<'a> {
                 span,
                 "the arguments of `super(...)` can't read `this` or a `super` member".to_string(),
                 vec!["compute the argument from the constructor's parameters".to_string()],
+            );
+            return;
+        }
+        if self.in_super_handler {
+            self.error_with_help(
+                span,
+                "a `catch` or `finally` around `super(...)` can't read `this` or a `super` member"
+                    .to_string(),
+                vec![
+                    "it also runs when `super(...)` throws, before the instance is built"
+                        .to_string(),
+                ],
             );
             return;
         }
@@ -3000,7 +3014,7 @@ impl<'a> Inferer<'a> {
     }
 
     /// A subclass constructor may call `super(...)` exactly once, before any
-    /// `this` access. Record that we've seen it for the end-of-body check.
+    /// read of `this` or a `super` member. Record that we've seen it for the end-of-body check.
     fn note_constructor_super_call(&mut self, span: Span) {
         if self.super_seen {
             self.error(span, "`super(...)` may only be called once".to_string());
@@ -3532,7 +3546,7 @@ impl<'a> Inferer<'a> {
         let typed_params = bind_params_for_body(self, params, ctor_params, class_inst)?;
         let prev_in_ctor = std::mem::replace(&mut self.in_constructor, true);
         let prev_super_seen = std::mem::replace(&mut self.super_seen, false);
-        let prev_this_before = std::mem::replace(&mut self.read_before_super, false);
+        let prev_read_before = std::mem::replace(&mut self.read_before_super, false);
         let prev_nested = std::mem::replace(&mut self.in_nested_function, false);
         // A constructor returns no value; a bare `return;` is fine.
         let prev_return = self.current_return.replace(Type::Void);
@@ -3568,7 +3582,7 @@ impl<'a> Inferer<'a> {
         self.reachable = prev_reachable;
         self.in_constructor = prev_in_ctor;
         self.super_seen = prev_super_seen;
-        self.read_before_super = prev_this_before;
+        self.read_before_super = prev_read_before;
         self.in_nested_function = prev_nested;
         self.scopes.pop();
 
@@ -4784,7 +4798,7 @@ mod tests {
             diags
                 .iter()
                 .any(|d| d.message.contains("before accessing `this`")),
-            "expected a this-before-super diagnostic, got: {diags:?}"
+            "expected a read-before-super diagnostic, got: {diags:?}"
         );
     }
 
