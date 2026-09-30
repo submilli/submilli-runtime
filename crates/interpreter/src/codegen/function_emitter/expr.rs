@@ -1570,6 +1570,20 @@ fn emit_literal_chunk(
         });
         return Ok(());
     }
+    // A source whose value `runtime_values` widened arrives as `(ref null
+    // $Object)`; the typechecker proved it an array, so recover the `$Array`.
+    let source_ty = &ctx
+        .ta
+        .try_expr(element.expr_id())
+        .map_err(crate::codegen::arena_failure)?
+        .ty;
+    let array_type = ValType::Ref(RefType {
+        nullable: false,
+        heap_type: HeapType::Concrete(array),
+    });
+    if ctx.symbols.value_type(source_ty)? != array_type {
+        cast::emit_cast_to(emitter, ctx, &Type::Array(Box::new(Type::Unknown)))?;
+    }
     let raw_type = ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(raw),
