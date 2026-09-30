@@ -1,1 +1,0 @@
-line 18, 19 missed: bug SUB-1159 a `super()` only inside an arrow counts as the constructor's call

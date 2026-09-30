@@ -12,6 +12,7 @@ mod fallthrough;
 mod main_required;
 mod missing_return;
 mod return_outside_function;
+mod super_call;
 mod unreachable;
 
 use crate::compiler_error::{CompileError, CompilerStage};
@@ -45,6 +46,10 @@ pub fn check(ta: &TypedAst) -> Result<Vec<Diagnostic>, CompileError> {
             diagnostics: diags.clone(),
             fatal: Some(fatal),
         }
+    })?;
+    super_call::run(ta, &mut diags).map_err(|fatal| crate::compiler_error::CompileError {
+        diagnostics: diags.clone(),
+        fatal: Some(fatal),
     })?;
     main_required::run(ta, &mut diags);
     doc_consistency::run(ta, &mut diags);

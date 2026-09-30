@@ -135,6 +135,7 @@ pub(super) fn with_source_inferer(source: &str, test: impl FnOnce(&mut super::In
         in_constructor: false,
         super_seen: false,
         this_before_super: false,
+        in_nested_function: false,
         local_class_mangles: std::collections::BTreeSet::new(),
         pending_implements: Vec::new(),
         unresolved_parents: std::collections::BTreeSet::new(),

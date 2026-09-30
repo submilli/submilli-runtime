@@ -2842,19 +2842,17 @@ impl<'a> Inferer<'a> {
                 vec!["call the parent constructor from this class's `constructor`".to_string()],
             );
         }
-        // A subclass constructor may call `super(...)` exactly once, before any
-        // `this` access. Record that we've seen it for the end-of-body check.
-        if self.super_seen {
-            self.error(span, "`super(...)` may only be called once".to_string());
-        }
-        if self.this_before_super {
+        if self.in_constructor && self.in_nested_function {
+            // Not the constructor's own call: it can run late or never, so it
+            // neither counts toward `super_seen` nor ends the `this` window.
             self.error_with_help(
                 span,
-                "`super(...)` must be called before accessing `this`".to_string(),
-                vec!["move the `super(...)` call to the top of the constructor".to_string()],
+                "`super(...)` can't be called from a function nested in a constructor".to_string(),
+                vec!["call the parent constructor directly in the `constructor` body".to_string()],
             );
+        } else {
+            self.note_constructor_super_call(span);
         }
-        self.super_seen = true;
 
         let parent = self.current_super.clone();
         // The parent's ctor params, substituted at the extends clause's type
@@ -2932,6 +2930,22 @@ impl<'a> Inferer<'a> {
             },
             Type::Void,
         ))
+    }
+
+    /// A subclass constructor may call `super(...)` exactly once, before any
+    /// `this` access. Record that we've seen it for the end-of-body check.
+    fn note_constructor_super_call(&mut self, span: Span) {
+        if self.super_seen {
+            self.error(span, "`super(...)` may only be called once".to_string());
+        }
+        if self.this_before_super {
+            self.error_with_help(
+                span,
+                "`super(...)` must be called before accessing `this`".to_string(),
+                vec!["move the `super(...)` call to the top of the constructor".to_string()],
+            );
+        }
+        self.super_seen = true;
     }
 
     /// Typecheck `super.method(...)`: resolve the method on the parent chain and
@@ -3450,6 +3464,7 @@ impl<'a> Inferer<'a> {
         let prev_in_ctor = std::mem::replace(&mut self.in_constructor, true);
         let prev_super_seen = std::mem::replace(&mut self.super_seen, false);
         let prev_this_before = std::mem::replace(&mut self.this_before_super, false);
+        let prev_nested = std::mem::replace(&mut self.in_nested_function, false);
         // A constructor returns no value; a bare `return;` is fine.
         let prev_return = self.current_return.replace(Type::Void);
         let prev_reachable = std::mem::replace(&mut self.reachable, true);
@@ -3485,6 +3500,7 @@ impl<'a> Inferer<'a> {
         self.in_constructor = prev_in_ctor;
         self.super_seen = prev_super_seen;
         self.this_before_super = prev_this_before;
+        self.in_nested_function = prev_nested;
         self.scopes.pop();
 
         Ok(Some(TypedClassConstructor {

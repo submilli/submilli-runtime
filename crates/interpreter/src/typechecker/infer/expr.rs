@@ -6899,6 +6899,7 @@ impl Inferer<'_> {
         // Nor can its `break`/`continue` reach a loop or switch outside it.
         let prev_loop_depth = std::mem::replace(&mut self.loop_depth, 0);
         let prev_switch_depth = std::mem::replace(&mut self.switch_depth, 0);
+        let prev_nested = std::mem::replace(&mut self.in_nested_function, true);
         let prev_predicate = std::mem::replace(
             &mut self.current_type_predicate,
             predicate
@@ -6960,6 +6961,7 @@ impl Inferer<'_> {
         self.reachable = prev_reachable;
         self.loop_depth = prev_loop_depth;
         self.switch_depth = prev_switch_depth;
+        self.in_nested_function = prev_nested;
         self.current_type_predicate = prev_predicate;
         self.inferred_returns = prev_collect;
         self.current_return = prev_return;
