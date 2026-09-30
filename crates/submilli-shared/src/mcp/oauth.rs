@@ -140,6 +140,7 @@ async fn get_ok(http: &Arc<dyn HttpClient>, url: &str) -> Option<Vec<u8>> {
         max_response_size: MAX_RESPONSE,
         decompress: false,
         transport_policy: None,
+        redirect_guard: None,
     };
     let resp = http.send(&req).await.ok()?;
     (resp.status == 200).then_some(resp.body)
@@ -219,6 +220,7 @@ pub async fn register_client(
         max_response_size: MAX_RESPONSE,
         decompress: false,
         transport_policy: None,
+        redirect_guard: None,
     };
     let resp = http
         .send(&req)
@@ -275,6 +277,7 @@ pub async fn exchange_code(
         max_response_size: MAX_RESPONSE,
         decompress: false,
         transport_policy: None,
+        redirect_guard: None,
     };
     let resp = http
         .send(&req)

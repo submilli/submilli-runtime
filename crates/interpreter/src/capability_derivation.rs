@@ -314,7 +314,8 @@ fn const_initializer(
 fn url_component(url: &str, component: &str) -> Option<String> {
     let parsed = url::Url::parse(url).ok()?;
     let value = match component {
-        "host" => parsed.host_str()?.to_string(),
+        // Matches the runtime `http.*` context, which drops a trailing dot.
+        "host" => parsed.host_str()?.trim_end_matches('.').to_string(),
         "path" => parsed.path().to_string(),
         _ => return None,
     };
@@ -483,6 +484,17 @@ mod tests {
             Some("host == \"r.jina.ai\" and path == \"/read\"")
         );
         assert!(derived.warnings.is_empty(), "{:?}", derived.warnings);
+    }
+
+    #[test]
+    fn fully_qualified_host_derives_the_filter_the_runtime_checks() {
+        let (ta, tag, params, args) = first_doc_capability(
+            "/** @capability http.post { host: $url.host } */\n\
+             function callee(url: string): void { }\n\
+             function main(): void { callee(\"https://r.jina.ai./read\"); }\n",
+        );
+        let derived = derive_call_site_capability(&tag, &params, &ta, &args).unwrap();
+        assert_eq!(derived.filter.as_deref(), Some("host == \"r.jina.ai\""));
     }
 
     #[test]

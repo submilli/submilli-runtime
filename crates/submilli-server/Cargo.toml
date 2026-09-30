@@ -50,5 +50,6 @@ async-trait = { workspace = true }
 http-body-util = { workspace = true }
 submilli-blueprint = { path = "../submilli-blueprint" }
 tempfile = { workspace = true }
+httpmock = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 libc = { workspace = true }

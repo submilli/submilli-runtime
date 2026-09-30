@@ -53,26 +53,17 @@ async fn tls_downgrades_require_permission_and_never_forward_proxy_credentials()
             stream.shutdown().await.unwrap();
         }
     });
-    let client = ReqwestHttpClient::default();
+    // Trust only our local CA; redirects still run through the production loop.
+    let client = ReqwestHttpClient::with_client(
+        Arc::new(crate::stdlib::http::policy::NetworkPolicy::allow_all()),
+        |builder| builder.tls_certs_only([reqwest::Certificate::from_pem(CA).unwrap()]),
+    );
     for (allow, authenticated) in [(false, false), (true, true), (true, false)] {
         let policy = Some(Arc::new(HttpTransportPolicy {
             allow_insecure_http: allow,
             auth_proxy_hosts: vec![],
             same_origin_redirects: authenticated,
         }));
-        // Trust only our local CA while retaining the production redirect callback.
-        let trusted = client
-            .policy
-            .client_builder()
-            .tls_certs_only([reqwest::Certificate::from_pem(CA).unwrap()])
-            .redirect(redirect_policy(policy.clone(), client.policy.clone()))
-            .referer(false)
-            .build()
-            .unwrap();
-        client.clients.lock().unwrap().push_back(CachedClient {
-            policy: policy.clone(),
-            client: trusted,
-        });
         let request = HttpRequest {
             method: "GET".into(),
             url: url.clone(),
@@ -86,6 +77,7 @@ async fn tls_downgrades_require_permission_and_never_forward_proxy_credentials()
             max_response_size: 1024,
             decompress: false,
             transport_policy: policy,
+            redirect_guard: None,
         };
         for download in [false, true] {
             let result = if download {

@@ -255,7 +255,9 @@ downloads. Plain HTTP needs `allow_insecure_http: true` at the blueprint level
 and on any matching `auth_proxy` rule. Both flags default to `false`.
 
 Requests with injected credentials may redirect only to the same scheme, host,
-and port. Existing capability and network permissions still apply.
+and port. Every redirect must also pass the caller's
+[permissions](/docs/permissions#the-standard-library) and the network rules
+before it is sent.
 
 ## Let programs remember
 

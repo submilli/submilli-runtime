@@ -3,10 +3,10 @@
 //! bounded download/decompression plumbing. No Wasm ABI here; the package's
 //! host fns live in [`super`].
 
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 
 use super::{HttpTransportPolicy, TransportPolicyError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures::StreamExt as _;
 
@@ -26,7 +26,62 @@ pub struct HttpRequest {
     pub decompress: bool,
     /// Custom transports must enforce this on the initial URL and every redirect.
     pub transport_policy: Option<Arc<HttpTransportPolicy>>,
+    /// Capability rules for redirect hops, attached after the auth proxy runs.
+    /// Custom transports must consult it before sending every redirect hop; the
+    /// initial URL is already authorized.
+    pub redirect_guard: Option<Arc<dyn RedirectGuard>>,
 }
+
+/// Authorizes one redirect hop before any byte of it is sent.
+pub trait RedirectGuard: Send + Sync + std::fmt::Debug {
+    fn authorize(&self, hop: &RedirectHop<'_>) -> Result<(), RedirectDenied>;
+}
+
+/// The request a redirect is about to send.
+#[derive(Clone, Copy, Debug)]
+pub struct RedirectHop<'a> {
+    /// Upper-cased; `GET` after a redirect rewrote the original method.
+    pub method: &'a str,
+    pub url: &'a url::Url,
+    /// A redirect on the way here changed the method to `GET` and dropped the
+    /// body: 301/302 for POST, 303 for every method but GET and HEAD.
+    pub method_rewritten: bool,
+    pub body_len: u64,
+}
+
+/// A hop the guard refused. Transports return it unchanged as
+/// [`HttpError::PermissionDenied`] so the guest sees the original denial.
+#[derive(Debug)]
+pub struct RedirectDenied(wasmtime::Error);
+
+impl RedirectDenied {
+    /// A policy denial, surfaced to the guest as `PermissionDeniedError`.
+    pub fn new(
+        caller: impl Into<String>,
+        capability: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self(crate::runtime::host::permission_denied(
+            caller, capability, reason,
+        ))
+    }
+
+    pub(crate) fn from_error(error: wasmtime::Error) -> Self {
+        Self(error)
+    }
+
+    pub(crate) fn into_error(self) -> wasmtime::Error {
+        self.0
+    }
+}
+
+impl std::fmt::Display for RedirectDenied {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::error::Error for RedirectDenied {}
 
 /// 4xx/5xx are not errors at this layer — only transport failures become [`HttpError`].
 #[derive(Clone, Debug)]
@@ -55,6 +110,8 @@ pub enum HttpError {
     /// Host setup failure: must terminate execution, not enter a guest catch.
     Internal(String),
     Policy(TransportPolicyError),
+    /// A redirect hop the capability rules deny; nothing was sent to it.
+    PermissionDenied(RedirectDenied),
     Timeout,
     /// Message includes the cap and suggests `http.download`.
     TooLarge {
@@ -70,6 +127,7 @@ impl std::fmt::Display for HttpError {
         match self {
             HttpError::Internal(msg) => write!(f, "internal HTTP transport error: {msg}"),
             HttpError::Policy(error) => error.fmt(f),
+            HttpError::PermissionDenied(denied) => denied.fmt(f),
             HttpError::Network(msg) => write!(f, "network error: {msg}"),
             HttpError::Timeout => write!(f, "request timed out"),
             HttpError::TooLarge { limit } => write!(
@@ -89,7 +147,11 @@ impl std::error::Error for HttpError {}
 /// Embedder-supplied HTTP transport. 4xx/5xx are not errors; only transport
 /// failures return `Err(HttpError)`. `Send + Sync` for sharing across stores.
 /// Implementations must enforce `HttpRequest::transport_policy`, including
-/// redirect destinations. Preserve `HttpError::Internal` as a fatal host failure.
+/// redirect destinations, and must call `HttpRequest::redirect_guard` before
+/// sending each redirect hop, returning its denial as
+/// [`HttpError::PermissionDenied`]; a transport that follows redirects without
+/// the guard bypasses the blueprint's capability rules. Preserve
+/// `HttpError::Internal` as a fatal host failure.
 #[async_trait::async_trait]
 pub trait HttpClient: Send + Sync {
     async fn send(&self, req: &HttpRequest) -> Result<HttpResponse, HttpError>;
@@ -111,45 +173,40 @@ pub trait HttpClient: Send + Sync {
     ) -> Result<DownloadMeta, HttpError>;
 }
 
-/// Default `HttpClient` — async `reqwest`. Caches bounded policy-specific pools
-/// built with the SSRF policy resolver. The `cookies` feature is intentionally
-/// never enabled, so the client carries **no** cross-request state; the server
-/// builds one per session (see `submilli-server`) for tenant isolation.
+/// Default `HttpClient` — async `reqwest`, built with the SSRF policy resolver.
+/// Redirects are followed by [`ReqwestHttpClient::follow_redirects`] rather than
+/// reqwest, so every hop is checked against the request's own policy and guard
+/// and the pooled client holds no per-request authorization. The `cookies`
+/// feature is intentionally never enabled, so the client carries **no**
+/// cross-request state; the server builds one per session (see
+/// `submilli-server`) for tenant isolation.
 pub struct ReqwestHttpClient {
-    // At most two policy variants (ordinary and authenticated) retain pools.
-    // The cache belongs to this session client, never to a shared blueprint.
-    clients: Mutex<std::collections::VecDeque<CachedClient>>,
-    no_redirect_client: OnceLock<Result<reqwest::Client, String>>,
+    client: OnceLock<Result<reqwest::Client, String>>,
     /// Also kept here (not just in the DNS resolver) so a **literal-IP** URL —
     /// which reqwest connects to without ever calling the resolver — is still
     /// checked. Without this, `http://127.0.0.1` would bypass the SSRF guard.
     policy: Arc<crate::stdlib::http::policy::NetworkPolicy>,
 }
 
-struct CachedClient {
-    policy: Option<Arc<HttpTransportPolicy>>,
-    client: reqwest::Client,
-}
+/// Matches reqwest's default limit, which the resource-limit docs publish.
+const MAX_REDIRECTS: usize = 10;
 
-fn redirect_policy(
-    policy: Option<Arc<HttpTransportPolicy>>,
-    network: Arc<super::NetworkPolicy>,
-) -> reqwest::redirect::Policy {
-    reqwest::redirect::Policy::custom(move |attempt| {
-        if let Some(policy) = &policy {
-            let Some(initial) = attempt.previous().first() else {
-                return attempt.error("redirect is missing its initial destination");
-            };
-            if let Err(error) = policy.check_redirect(initial, attempt.url()) {
-                return attempt.error(error);
-            }
-        }
-        if let Err(error) = network.check_literal_host(attempt.url().as_str()) {
-            return attempt.error(error);
-        }
-        reqwest::redirect::Policy::default().redirect(attempt)
-    })
-}
+/// Removed when a redirect leaves the current origin, as reqwest does.
+const CROSS_ORIGIN_SENSITIVE_HEADERS: [&str; 5] = [
+    "authorization",
+    "cookie",
+    "cookie2",
+    "proxy-authorization",
+    "www-authenticate",
+];
+
+/// Headers describing the body that a method-rewriting redirect drops.
+const BODY_HEADERS: [&str; 4] = [
+    "content-type",
+    "content-length",
+    "content-encoding",
+    "transfer-encoding",
+];
 
 impl Default for ReqwestHttpClient {
     fn default() -> Self {
@@ -162,47 +219,36 @@ impl Default for ReqwestHttpClient {
 impl ReqwestHttpClient {
     pub fn new(policy: Arc<crate::stdlib::http::policy::NetworkPolicy>) -> Self {
         Self {
-            clients: Mutex::new(std::collections::VecDeque::new()),
-            no_redirect_client: OnceLock::new(),
+            client: OnceLock::new(),
             policy,
         }
     }
 
-    fn client(
-        &self,
-        policy: &Option<Arc<HttpTransportPolicy>>,
-    ) -> Result<reqwest::Client, HttpError> {
-        let mut clients = self
-            .clients
-            .lock()
-            .map_err(|_| HttpError::Internal("HTTP client cache lock poisoned".into()))?;
-        if let Some(cached) = clients.iter().find(|cached| &cached.policy == policy) {
-            return Ok(cached.client.clone());
-        }
-        let client = self
-            .policy
-            .client_builder()
-            .redirect(redirect_policy(policy.clone(), Arc::clone(&self.policy)))
-            // Redirect Referer headers must not copy injected query credentials.
-            .referer(policy.is_none())
+    /// Like [`Self::new`], with a prebuilt client whose builder a test customized.
+    #[cfg(test)]
+    pub(super) fn with_client(
+        policy: Arc<crate::stdlib::http::policy::NetworkPolicy>,
+        customize: impl FnOnce(reqwest::ClientBuilder) -> reqwest::ClientBuilder,
+    ) -> Self {
+        let client = Self::new(policy);
+        let built = customize(client.client_builder())
             .build()
-            .map_err(|error| HttpError::Internal(error.to_string()))?;
-        if clients.len() >= 2 {
-            clients.pop_front();
-        }
-        clients.push_back(CachedClient {
-            policy: policy.clone(),
-            client: client.clone(),
-        });
-        Ok(client)
+            .map_err(|error| error.to_string());
+        let _ = client.client.set(built);
+        client
     }
 
-    fn no_redirect_client(&self) -> Result<&reqwest::Client, HttpError> {
-        self.no_redirect_client
+    fn client_builder(&self) -> reqwest::ClientBuilder {
+        self.policy
+            .client_builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .referer(false)
+    }
+
+    fn client(&self) -> Result<&reqwest::Client, HttpError> {
+        self.client
             .get_or_init(|| {
-                self.policy
-                    .client_builder()
-                    .redirect(reqwest::redirect::Policy::none())
+                self.client_builder()
                     .build()
                     .map_err(|error| error.to_string())
             })
@@ -218,43 +264,222 @@ impl ReqwestHttpClient {
             .map_err(HttpError::Network)
     }
 
-    /// Shared request setup: method, URL, per-call timeout, headers.
-    fn request(&self, req: &HttpRequest) -> Result<reqwest::RequestBuilder, HttpError> {
-        self.request_with_client(req, &self.client(&req.transport_policy)?)
+    /// Send `req` and every redirect it earns. Each hop passes the transport
+    /// policy, the network policy and the request's guard before it is sent, so
+    /// a denied destination never receives a request or its body.
+    async fn follow_redirects(&self, req: &HttpRequest) -> Result<reqwest::Response, HttpError> {
+        let mut hop = self.initial_hop(req)?;
+        let initial = hop.url.clone();
+        let deadline = Deadline::new(req.timeout_ms);
+        let mut redirects = 0;
+        loop {
+            let resp = self.send_hop(&hop, &deadline).await?;
+            let Some(next) = redirect_location(&resp, &hop.url) else {
+                return Ok(resp);
+            };
+            if redirects >= MAX_REDIRECTS {
+                return Err(HttpError::Network(format!(
+                    "too many redirects (limit: {MAX_REDIRECTS})"
+                )));
+            }
+            redirects += 1;
+            let status = resp.status();
+            // The intermediate body is never read; dropping it abandons the connection.
+            drop(resp);
+            hop.redirect_to(status, next);
+            self.authorize_hop(req, &initial, &hop)?;
+        }
     }
 
-    fn request_with_client(
-        &self,
-        req: &HttpRequest,
-        client: &reqwest::Client,
-    ) -> Result<reqwest::RequestBuilder, HttpError> {
+    /// The request's own destination, checked as every hop is before it is sent.
+    fn initial_hop<'a>(&self, req: &'a HttpRequest) -> Result<Hop<'a>, HttpError> {
+        let url = parse_url(&req.url)?;
         if let Some(policy) = &req.transport_policy {
-            let url = url::Url::parse(&req.url)
-                .map_err(|_| HttpError::Network("invalid HTTP URL".into()))?;
             policy.check_destination(&url).map_err(HttpError::Policy)?;
         }
         self.check_literal_ip(&req.url)?;
-        let method = reqwest::Method::from_bytes(req.method.to_ascii_uppercase().as_bytes())
-            .map_err(|_| HttpError::UnsupportedMethod(req.method.clone()))?;
-        let mut rb = client
-            .request(method, &req.url)
-            .timeout(Duration::from_millis(req.timeout_ms));
-        for (name, value) in &req.headers {
+        Ok(Hop {
+            method: parse_method(&req.method)?,
+            url,
+            headers: req.headers.clone(),
+            body: &req.body,
+            method_rewritten: false,
+        })
+    }
+
+    /// Checks for a redirect hop, in the order the initial request applies them,
+    /// ending with the capability guard. Runs before the hop is sent.
+    fn authorize_hop(
+        &self,
+        req: &HttpRequest,
+        initial: &url::Url,
+        hop: &Hop<'_>,
+    ) -> Result<(), HttpError> {
+        if let Some(policy) = &req.transport_policy {
+            policy
+                .check_redirect(initial, &hop.url)
+                .map_err(HttpError::Policy)?;
+        }
+        if !matches!(hop.url.scheme(), "http" | "https") {
+            return Err(HttpError::Network(
+                "redirect to a URL that is not http or https".into(),
+            ));
+        }
+        self.check_literal_ip(hop.url.as_str())?;
+        let Some(guard) = &req.redirect_guard else {
+            return Ok(());
+        };
+        guard
+            .authorize(&RedirectHop {
+                method: hop.method.as_str(),
+                url: &hop.url,
+                method_rewritten: hop.method_rewritten,
+                body_len: hop.body.len() as u64,
+            })
+            .map_err(HttpError::PermissionDenied)
+    }
+
+    /// One request with no redirect handling, bounded by what remains of `deadline`.
+    async fn send_hop(
+        &self,
+        hop: &Hop<'_>,
+        deadline: &Deadline,
+    ) -> Result<reqwest::Response, HttpError> {
+        let mut rb = self
+            .client()?
+            .request(hop.method.clone(), hop.url.clone())
+            .timeout(deadline.remaining()?);
+        for (name, value) in &hop.headers {
             rb = rb.header(name.as_str(), value.as_str());
         }
-        Ok(rb)
+        if !hop.body.is_empty() {
+            rb = rb.body(hop.body.to_vec());
+        }
+        rb.send().await.map_err(map_reqwest_error)
+    }
+}
+
+/// The request the next hop sends. The body is the original request's until a
+/// redirect drops it.
+struct Hop<'a> {
+    method: reqwest::Method,
+    /// Keeps the request's userinfo, which reqwest sends as Basic auth.
+    url: url::Url,
+    headers: Vec<(String, String)>,
+    body: &'a [u8],
+    /// A 301/302/303 on the way here changed the method to GET.
+    method_rewritten: bool,
+}
+
+impl Hop<'_> {
+    /// Turn this hop into the redirect to `next` after a `status` response,
+    /// matching reqwest's redirect policy: 301/302 turn POST into a bodiless GET,
+    /// 303 turns every method but HEAD into GET and drops the body, and 307/308
+    /// keep both. Credentials, including URL userinfo, stay within the origin.
+    fn redirect_to(&mut self, status: reqwest::StatusCode, mut next: url::Url) {
+        let rewrites_method = match status.as_u16() {
+            301 | 302 => self.method == reqwest::Method::POST,
+            303 => ![reqwest::Method::GET, reqwest::Method::HEAD].contains(&self.method),
+            _ => false,
+        };
+        if rewrites_method {
+            self.method = reqwest::Method::GET;
+            self.method_rewritten = true;
+        }
+        if rewrites_method || status.as_u16() == 303 {
+            self.body = &[];
+            remove_headers(&mut self.headers, &BODY_HEADERS);
+        }
+        if self.url.origin() == next.origin() {
+            keep_userinfo(&self.url, &mut next);
+        } else {
+            remove_headers(&mut self.headers, &CROSS_ORIGIN_SENSITIVE_HEADERS);
+        }
+        self.url = next;
+    }
+}
+
+/// Carry `current`'s userinfo to a same-origin `next` that names none, like the
+/// Basic auth header reqwest derives from userinfo.
+fn keep_userinfo(current: &url::Url, next: &mut url::Url) {
+    if !next.username().is_empty() || next.password().is_some() {
+        return;
+    }
+    // Both URLs are http(s) with a host, which always accept userinfo.
+    let _ = next.set_username(current.username());
+    let _ = next.set_password(current.password());
+}
+
+fn remove_headers(headers: &mut Vec<(String, String)>, names: &[&str]) {
+    headers.retain(|(name, _)| {
+        !names
+            .iter()
+            .any(|removed| name.eq_ignore_ascii_case(removed))
+    });
+}
+
+/// The destination of a redirect response to a request for `current`, or `None`
+/// when the response is final: not a redirect status, or a `Location` that is
+/// missing or unusable (reqwest returns such a response unchanged, too).
+fn redirect_location(resp: &reqwest::Response, current: &url::Url) -> Option<url::Url> {
+    if !matches!(resp.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
+        return None;
+    }
+    let location = resp.headers().get(reqwest::header::LOCATION)?;
+    current
+        .join(std::str::from_utf8(location.as_bytes()).ok()?)
+        .ok()
+}
+
+fn parse_url(url: &str) -> Result<url::Url, HttpError> {
+    url::Url::parse(url).map_err(|_| HttpError::Network("invalid HTTP URL".into()))
+}
+
+fn parse_method(method: &str) -> Result<reqwest::Method, HttpError> {
+    reqwest::Method::from_bytes(method.to_ascii_uppercase().as_bytes())
+        .map_err(|_| HttpError::UnsupportedMethod(method.to_string()))
+}
+
+/// One timeout shared by every hop of a request, so the request timeout covers
+/// the whole redirect chain.
+struct Deadline {
+    /// `None` when the timeout is too large to represent as an instant.
+    at: Option<Instant>,
+    timeout: Duration,
+}
+
+impl Deadline {
+    fn new(timeout_ms: u64) -> Self {
+        let timeout = Duration::from_millis(timeout_ms);
+        Self {
+            at: Instant::now().checked_add(timeout),
+            timeout,
+        }
+    }
+
+    fn remaining(&self) -> Result<Duration, HttpError> {
+        let Some(at) = self.at else {
+            return Ok(self.timeout);
+        };
+        let remaining = at.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(HttpError::Timeout);
+        }
+        Ok(remaining)
     }
 }
 
 #[async_trait::async_trait]
 impl HttpClient for ReqwestHttpClient {
     async fn send(&self, req: &HttpRequest) -> Result<HttpResponse, HttpError> {
-        self.send_with_client(req, &self.client(&req.transport_policy)?)
-            .await
+        let resp = self.follow_redirects(req).await?;
+        read_response(resp, req.max_response_size).await
     }
 
     async fn send_without_redirects(&self, req: &HttpRequest) -> Result<HttpResponse, HttpError> {
-        self.send_with_client(req, self.no_redirect_client()?).await
+        let hop = self.initial_hop(req)?;
+        let resp = self.send_hop(&hop, &Deadline::new(req.timeout_ms)).await?;
+        read_response(resp, req.max_response_size).await
     }
 
     async fn download(
@@ -270,7 +495,7 @@ impl HttpClient for ReqwestHttpClient {
                 req.method,
             )));
         }
-        let resp = self.request(req)?.send().await.map_err(map_reqwest_error)?;
+        let resp = self.follow_redirects(req).await?;
 
         let status = resp.status().as_u16();
         let status_text = resp.status().canonical_reason().unwrap_or("").to_string();
@@ -306,43 +531,31 @@ impl HttpClient for ReqwestHttpClient {
     }
 }
 
-impl ReqwestHttpClient {
-    async fn send_with_client(
-        &self,
-        req: &HttpRequest,
-        client: &reqwest::Client,
-    ) -> Result<HttpResponse, HttpError> {
-        let mut rb = self.request_with_client(req, client)?;
-        if !req.body.is_empty() {
-            rb = rb.body(req.body.clone());
+/// Buffer a response body, stopping once the wire body exceeds `limit` so host
+/// memory stays bounded.
+async fn read_response(resp: reqwest::Response, limit: u64) -> Result<HttpResponse, HttpError> {
+    let status = resp.status().as_u16();
+    let status_text = resp.status().canonical_reason().unwrap_or("").to_string();
+    let final_url = resp.url().to_string();
+    let headers = collect_headers(resp.headers());
+
+    let mut body_bytes: Vec<u8> = Vec::new();
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(map_reqwest_error)?;
+        if body_bytes.len() as u64 + chunk.len() as u64 > limit {
+            return Err(HttpError::TooLarge { limit });
         }
-        let resp = rb.send().await.map_err(map_reqwest_error)?;
-
-        let status = resp.status().as_u16();
-        let status_text = resp.status().canonical_reason().unwrap_or("").to_string();
-        let final_url = resp.url().to_string();
-        let headers = collect_headers(resp.headers());
-
-        // Bound host memory: stop reading once the wire body exceeds the cap.
-        let limit = req.max_response_size;
-        let mut body_bytes: Vec<u8> = Vec::new();
-        let mut stream = resp.bytes_stream();
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(map_reqwest_error)?;
-            if body_bytes.len() as u64 + chunk.len() as u64 > limit {
-                return Err(HttpError::TooLarge { limit });
-            }
-            body_bytes.extend_from_slice(&chunk);
-        }
-
-        Ok(HttpResponse {
-            status,
-            status_text,
-            headers,
-            body: body_bytes,
-            final_url,
-        })
+        body_bytes.extend_from_slice(&chunk);
     }
+
+    Ok(HttpResponse {
+        status,
+        status_text,
+        headers,
+        body: body_bytes,
+        final_url,
+    })
 }
 
 /// Lowercase header names so `Headers#get("content-type")` matches any casing.
@@ -530,6 +743,7 @@ pub(super) fn http_failure_outcome(err: &HttpError) -> &'static str {
         HttpError::Network(_)
         | HttpError::Internal(_)
         | HttpError::Policy(_)
+        | HttpError::PermissionDenied(_)
         | HttpError::UnsupportedMethod(_)
         | HttpError::Other(_) => "error",
     }

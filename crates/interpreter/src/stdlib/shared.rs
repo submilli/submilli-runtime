@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::runtime::fs::{ContainError, ContentPath, LinkPath, resolve_content, resolve_link};
 use crate::runtime::host::{permission_denied, permission_denied_invariant, range_error};
-use crate::runtime::security::CheckOutcome;
+use crate::runtime::security::{CheckOutcome, SecurityCheck};
 use crate::runtime::{DiskQuota, QuotaCharge, QuotaExceeded, StoreData};
 
 pub const DEFAULT_CWD: &str = "/";
@@ -69,6 +69,22 @@ pub fn check_security(
     let caller = running_package(&store).map_err(|unknown| {
         permission_denied_invariant(unknown.label, capability, unknown.reason)
     })?;
+    authorize_capability(
+        &caller,
+        store.as_context().data().security_check.as_ref(),
+        capability,
+        &context,
+    )
+}
+
+/// [`check_security`] for a caller resolved earlier, such as the principal of a
+/// request whose redirect hops are checked after the host fn has suspended.
+pub(crate) fn authorize_capability(
+    caller: &str,
+    security_check: &dyn SecurityCheck,
+    capability: &str,
+    context: &serde_json::Value,
+) -> wasmtime::Result<()> {
     // The ordering is the invariant. This must precede both the delegation
     // below and any work the host fn does after we return — a reorder that
     // consults the policy first makes the refusal conditional on a policy
@@ -79,12 +95,7 @@ pub fn check_security(
     {
         return Err(permission_denied_invariant(caller, capability, reason));
     }
-    let ctx = store.as_context();
-    match ctx
-        .data()
-        .security_check
-        .check(&caller, capability, &context)
-    {
+    match security_check.check(caller, capability, context) {
         CheckOutcome::Allow => Ok(()),
         CheckOutcome::Deny { reason } => Err(permission_denied(caller, capability, reason)),
     }
