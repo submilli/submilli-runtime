@@ -2918,8 +2918,9 @@ impl<'a> Inferer<'a> {
         ))
     }
 
-    /// Report a `super(...)` that isn't the constructor's own statement, and
-    /// record one that is.
+    /// Report a `super(...)` outside a subclass constructor's own body, or
+    /// not a statement of its own. Record any call in that body for the
+    /// once-only and `this`-before-`super` checks.
     fn check_super_call_position(&mut self, span: Span, is_statement: bool) {
         if !self.in_constructor {
             self.error_with_help(
@@ -2927,6 +2928,11 @@ impl<'a> Inferer<'a> {
                 "`super(...)` is only valid inside a constructor".to_string(),
                 vec!["call the parent constructor from this class's `constructor`".to_string()],
             );
+            return;
+        }
+        // A class with no `extends` clause is told so by `infer_super_call`
+        // instead. One whose parent failed to resolve is still checked.
+        if self.current_super.is_none() && !self.current_class_inherits_unresolved_parent() {
             return;
         }
         if self.in_nested_function {
@@ -2939,6 +2945,8 @@ impl<'a> Inferer<'a> {
             );
             return;
         }
+        // Still recorded below: the call is made, so the end-of-body check
+        // mustn't also report it missing.
         if !is_statement {
             self.error_with_help(
                 span,
