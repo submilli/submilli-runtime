@@ -87,6 +87,13 @@ classes/members/instanceAndStaticMembers/typeOfThisInStaticMembers3.ts 11 extra
 classes/members/instanceAndStaticMembers/typeOfThisInStaticMembers7.ts 5 extra
 classes/members/instanceAndStaticMembers/typeOfThisInStaticMembers7.ts 10 extra
 classes/members/instanceAndStaticMembers/typeOfThisInStaticMembers7.ts 11 extra
+classes/members/privateNames/privateNameFieldAssignment.ts 11 type
+classes/members/privateNames/privateNameFieldAssignment.ts 12 type
+classes/members/privateNames/privateNameFieldAssignment.ts 13 type
+classes/members/privateNames/privateNameFieldAssignment.ts 14 type
+classes/members/privateNames/privateNameFieldAssignment.ts 15 type
+classes/members/privateNames/privateNameFieldAssignment.ts 16 type
+classes/members/privateNames/privateNameFieldAssignment.ts 17 type
 classes/propertyMemberDeclarations/initializationOrdering1.ts 12 type
 classes/propertyMemberDeclarations/initializationOrdering1.ts 14 type
 classes/propertyMemberDeclarations/memberFunctionDeclarations/derivedTypeAccessesHiddenBaseCallViaSuperPropertyAccess.ts 9 extra
@@ -2172,3 +2179,8 @@ types/unknown/unknownControlFlow.ts 279 extra
 types/unknown/unknownControlFlow.ts 382 type
 types/unknown/unknownControlFlow.ts 402 type
 types/unknown/unknownType1.ts 46 extra
+written/customErrorClasses.ts 9 type
+written/gettersAndSetters.ts 7 type
+written/gettersAndSetters.ts 10 type
+written/gettersAndSetters.ts 13 type
+written/gettersAndSetters.ts 18 type

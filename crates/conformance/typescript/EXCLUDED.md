@@ -5,7 +5,7 @@ in `/`) is left out whole, with its subdirectories, except for any case in the s
 Written by `../typescript-baselines/port-suite.cjs`: change its lists or the porter,
 not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't read.
 
-3900 entries: 1703 not supported, 1019 multi-file or JavaScript, 717 the port changes what it checks, 99 duplicate, 293 checks too little, 69 porter failure.
+3898 entries: 1701 not supported, 1019 multi-file or JavaScript, 717 the port changes what it checks, 99 duplicate, 293 checks too little, 69 porter failure.
 
 | Case | Reason | Detail |
 |:-----|:-------|:-------|
@@ -241,7 +241,6 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `classes/members/privateNames/privateNameES5Ban.ts` | not supported | unexpected character `#`, on ` #field = 123; ` |
 | `classes/members/privateNames/privateNameField.ts` | not supported | unexpected character `#`, on ` #name: string; ` |
 | `classes/members/privateNames/privateNameFieldAccess.ts` | not supported | unexpected character `#`, on ` #myField = "hello world"; ` |
-| `classes/members/privateNames/privateNameFieldAssignment.ts` | not supported | unexpected character `#`, on ` #field = 0; ` |
 | `classes/members/privateNames/privateNameFieldCallExpression.ts` | the port changes what it checks | `tsc` then reports TS2683, TS7006, TS7019, TS7009 |
 | `classes/members/privateNames/privateNameFieldClassExpression.ts` | not supported | unexpected character `#`, on ` #foo = class { ` |
 | `classes/members/privateNames/privateNameFieldDerivedClasses.ts` | not supported | unexpected character `#`, on ` #prop: number = 123; ` |
@@ -1280,7 +1279,6 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `es7/exponentiationOperator/exponentiationOperatorWithTypeParameter.ts` | the port changes what it checks | `tsc` then reports TS1263 |
 | `es7/exponentiationOperator/exponentiationOperatorWithUndefinedValueAndInvalidOperands.ts` | duplicate | of `es7/exponentiationOperator/exponentiationOperatorWithNullValueAndInvalidOperands.ts` |
 | `es7/trailingCommasInBindingPatterns.ts` | not supported | expected expression, on ` const {...b,} = {}; ` |
-| `es7/trailingCommasInFunctionParametersAndArguments.ts` | not supported | construct signatures (SUB-1026: read as a method named `new`) |
 | `es7/trailingCommasInGetter.ts` | not supported | expected parameter name, on ` get x(,) { return 0; } ` |
 | `esDecorators/` | not supported | decorators |
 | `esnext/esnextSharedMemory.ts` | the port changes what it checks | `tsc` then reports TS2550 |

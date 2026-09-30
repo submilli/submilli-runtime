@@ -1,0 +1,96 @@
+=== staticReadonlyFields.ts ===
+// Written for Submilli: the upstream cases with a `static readonly` field that
+// Submilli can run give it no value it checks.
+
+class Limits {
+>Limits : Limits
+>       : ^^^^^^
+
+    static readonly max: number = 5 * 2;
+>max : number
+>    : ^^^^^^
+>5 * 2 : number
+>      : ^^^^^^
+>5 : 5
+>  : ^
+>2 : 2
+>  : ^
+
+    static readonly label: string = `limit ${Limits.max}`;
+>label : string
+>      : ^^^^^^
+>`limit ${Limits.max}` : string
+>                      : ^^^^^^
+>Limits.max : number
+>           : ^^^^^^
+>Limits : typeof Limits
+>       : ^^^^^^^^^^^^^
+>max : number
+>    : ^^^^^^
+
+    static count: number = Limits.max - 1;
+>count : number
+>      : ^^^^^^
+>Limits.max - 1 : number
+>               : ^^^^^^
+>Limits.max : number
+>           : ^^^^^^
+>Limits : typeof Limits
+>       : ^^^^^^^^^^^^^
+>max : number
+>    : ^^^^^^
+>1 : 1
+>  : ^
+
+}
+
+let max = Limits.max;
+>max : number
+>    : ^^^^^^
+>Limits.max : number
+>           : ^^^^^^
+>Limits : typeof Limits
+>       : ^^^^^^^^^^^^^
+>max : number
+>    : ^^^^^^
+
+let label = Limits.label;
+>label : string
+>      : ^^^^^^
+>Limits.label : string
+>             : ^^^^^^
+>Limits : typeof Limits
+>       : ^^^^^^^^^^^^^
+>label : string
+>      : ^^^^^^
+
+Limits.count += 1;
+>Limits.count += 1 : number
+>                  : ^^^^^^
+>Limits.count : number
+>             : ^^^^^^
+>Limits : typeof Limits
+>       : ^^^^^^^^^^^^^
+>count : number
+>      : ^^^^^^
+>1 : 1
+>  : ^
+
+Limits.max = 11;
+>Limits.max = 11 : 11
+>                : ^^
+>Limits.max : any
+>           : ^^^
+>Limits : typeof Limits
+>       : ^^^^^^^^^^^^^
+>max : any
+>    : ^^^
+>11 : 11
+>   : ^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

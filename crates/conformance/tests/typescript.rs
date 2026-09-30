@@ -1051,6 +1051,13 @@ impl TypeText<'_> {
         }
         if self.eat("<") {
             let args = self.list(">", Self::union_text)?;
+            // `tsc`'s `Uint8Array` names the buffer behind it, which ours has no
+            // choice of.
+            if name == "Uint8Array"
+                && matches!(args.as_slice(), [b] if b == "ArrayBuffer" || b == "ArrayBufferLike")
+            {
+                return Some(CanonicalType::plain(name));
+            }
             return Some(CanonicalType::plain(format!("{name}<{}>", args.join(", "))));
         }
         Some(CanonicalType::plain(name))
@@ -1307,6 +1314,20 @@ fn normalizing_keeps_readonly_distinct() {
     assert_ne!(
         normalize_type("readonly number[][]"),
         normalize_type("(readonly number[])[]")
+    );
+}
+
+#[test]
+fn normalizing_drops_only_the_buffer_of_a_uint8array() {
+    for buffer in ["ArrayBuffer", "ArrayBufferLike"] {
+        assert_eq!(
+            normalize_type(&format!("string | Uint8Array<{buffer}>")),
+            normalize_type("Uint8Array | string")
+        );
+    }
+    assert_ne!(
+        normalize_type("Map<string, ArrayBuffer>"),
+        normalize_type("Map")
     );
 }
 

@@ -1,0 +1,1 @@
+line 8, 18 missed: by-design spec §Appendix trailing commas are accepted in generic argument lists, which tsc rejects

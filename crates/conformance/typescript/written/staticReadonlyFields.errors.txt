@@ -1,0 +1,1 @@
+staticReadonlyFields.ts(13,8): error TS2540: Cannot assign to 'max' because it is a read-only property.

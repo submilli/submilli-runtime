@@ -1,0 +1,126 @@
+=== trailingCommasInTypeLists.ts ===
+// Written for Submilli: no upstream case Submilli can run puts a trailing comma
+// in a type argument, type parameter or function-type parameter list.
+
+function pair<A, B,>(first: A, second: B,): [A, B] {
+>pair : <A, B>(first: A, second: B) => [A, B]
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>A : A
+>  : ^
+>B : B
+>  : ^
+>first : A
+>      : ^
+>second : B
+>       : ^
+
+    return [first, second];
+>[first, second] : [A, B]
+>                : ^^^^^^
+>first : A
+>      : ^
+>second : B
+>       : ^
+
+}
+
+let explicit = pair<number, string,>(1, "one",);
+>explicit : [number, string]
+>         : ^^^^^^^^^^^^^^^^
+>pair<number, string,>(1, "one",) : [number, string]
+>                                 : ^^^^^^^^^^^^^^^^
+>pair : <A, B>(first: A, second: B) => [A, B]
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+>"one" : "one"
+>      : ^^^^^
+
+let inferred = pair(true, 2,);
+>inferred : [boolean, number]
+>         : ^^^^^^^^^^^^^^^^^
+>pair(true, 2,) : [boolean, number]
+>               : ^^^^^^^^^^^^^^^^^
+>pair : <A, B>(first: A, second: B) => [A, B]
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+>2 : 2
+>  : ^
+
+
+let handler: (event: string, count: number,) => number = (event: string, count: number): number => event.length + count;
+>handler : (event: string, count: number) => number
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>event : string
+>      : ^^^^^^
+>count : number
+>      : ^^^^^^
+>(event: string, count: number): number => event.length + count : (event: string, count: number) => number
+>                                                               : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>event : string
+>      : ^^^^^^
+>count : number
+>      : ^^^^^^
+>event.length + count : number
+>                     : ^^^^^^
+>event.length : number
+>             : ^^^^^^
+>event : string
+>      : ^^^^^^
+>length : number
+>       : ^^^^^^
+>count : number
+>      : ^^^^^^
+
+let handled = handler("click", 1,);
+>handled : number
+>        : ^^^^^^
+>handler("click", 1,) : number
+>                     : ^^^^^^
+>handler : (event: string, count: number) => number
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>"click" : "click"
+>        : ^^^^^^^
+>1 : 1
+>  : ^
+
+
+class Box<T,> {
+>Box : Box<T>
+>    : ^^^^^^
+>T : T
+>  : ^
+
+    constructor(public value: T,) {}
+>value : T
+>      : ^
+
+}
+
+let box = new Box<string,>("a",);
+>box : Box<string>
+>    : ^^^^^^^^^^^
+>new Box<string,>("a",) : Box<string>
+>                       : ^^^^^^^^^^^
+>Box : typeof Box
+>    : ^^^^^^^^^^
+>"a" : "a"
+>    : ^^^
+
+let boxed = box.value;
+>boxed : string
+>      : ^^^^^^
+>box.value : string
+>          : ^^^^^^
+>box : Box<string>
+>    : ^^^^^^^^^^^
+>value : string
+>      : ^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

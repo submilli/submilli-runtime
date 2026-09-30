@@ -26,7 +26,9 @@ Each case is four files with the same base name:
 
 Beside the cases are `unexplained.txt`, the divergences not yet explained, and
 `EXCLUDED.md`, every upstream case in the directories the suite ports from that
-isn't in it, and why.
+isn't in it, and why. `written/` holds the few cases written for Submilli, where no
+upstream case checks a form of a feature (see [Adapted and written
+cases](#adapted-and-written-cases)).
 
 The cases come from the TypeScript repository at
 `5848bc5157b22ff7f4e3369f4645a514a433b15f`, and remain under TypeScript's Apache 2.0
@@ -147,6 +149,9 @@ before comparing:
   `[number, number]`. Labels are documentation and do not change the type.
 - A method signature `m(): R` reads as the field `m: () => R`.
 - `tsc`'s `undefined` reads as `null`, because the port spells it that way.
+- `tsc`'s `Uint8Array<ArrayBuffer>` and `Uint8Array<ArrayBufferLike>` read as
+  `Uint8Array`: the argument names the buffer behind the array, which ours has no
+  choice of.
 
 Two kinds of entry are skipped, because they are not comparable:
 
@@ -346,3 +351,46 @@ records that TypeScript points at the incompatible property while Submilli point
 at the containing interface. It checks rejection diagnostics, with no expression
 types compared. The runner excludes missing-member recovery expressions from
 type comparisons and checks their rejection diagnostics instead.
+
+## Adapted and written cases
+
+`../COVERAGE.md` counts a feature done only when the suite checks every form of it
+the spec's feature matrix names, such as each list a trailing comma is allowed in.
+Where nearly every upstream case of a feature also uses something we exclude, the
+port leaves none of them checking that form, so a case is made by hand. `tsc` still
+decides what is right: its baselines are written by `write-baselines.cjs` as for any
+case, and the case's divergences are explained or listed like any other.
+
+- **Adapted** cases are upstream cases with what Submilli doesn't support taken out
+  or rewritten by hand. They keep the upstream path, so `port-suite.cjs` leaves them
+  alone and `EXCLUDED.md` doesn't list them, and they start with a comment saying
+  what changed.
+- **Written** cases, in `written/`, are for a form no upstream case Submilli can
+  run checks, and start with a comment saying which.
+
+To add one, write the case, then from `typescript-baselines/`:
+
+```sh
+node write-baselines.cjs <case path>
+echo <case path relative to typescript/> > /tmp/ported.txt
+cd ../../..
+UPDATE_TYPESCRIPT_EXPECTED=1 TYPESCRIPT_PORTED_CASES=/tmp/ported.txt cargo test -p conformance --test typescript
+```
+
+The list's path must be absolute: the test runs from the crate's directory.
+
+Explain what diverges in its `.triage`, or leave it listed in `unexplained.txt`, then
+regenerate `../COVERAGE.md`. For an adapted case, delete its line in `EXCLUDED.md`;
+the next `port-suite.cjs` run leaves it out too.
+
+| Case | Form it checks |
+|:-----|:---------------|
+| `es7/trailingCommasInFunctionParametersAndArguments` (adapted) | Trailing commas in parameters and arguments; a setter |
+| `classes/members/privateNames/privateNameFieldAssignment` (adapted) | `-=`, `/=` and `%=` |
+| `written/trailingCommasInTypeLists` | Trailing commas in type arguments, type parameters and function-type parameters |
+| `written/tryFinally` | `finally` |
+| `written/customErrorClasses` | A class extending `Error` |
+| `written/staticReadonlyFields` | `static readonly` fields |
+| `written/radixBigIntLiterals` | A radix prefix on a `bigint` |
+| `written/instanceofUint8Array` | `instanceof Uint8Array` |
+| `written/gettersAndSetters` | Setters |

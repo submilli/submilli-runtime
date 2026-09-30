@@ -1,0 +1,201 @@
+=== gettersAndSetters.ts ===
+// Written for Submilli: the upstream accessor cases Submilli can run check nothing
+// of what a setter is given, since a value assigned to one isn't read again.
+
+class Temperature {
+>Temperature : Temperature
+>            : ^^^^^^^^^^^
+
+    private celsius: number = 0;
+>celsius : number
+>        : ^^^^^^
+>0 : 0
+>  : ^
+
+    get fahrenheit(): number {
+>fahrenheit : number
+>           : ^^^^^^
+
+        return this.celsius * 9 / 5 + 32;
+>this.celsius * 9 / 5 + 32 : number
+>                          : ^^^^^^
+>this.celsius * 9 / 5 : number
+>                     : ^^^^^^
+>this.celsius * 9 : number
+>                 : ^^^^^^
+>this.celsius : number
+>             : ^^^^^^
+>this : this
+>     : ^^^^
+>celsius : number
+>        : ^^^^^^
+>9 : 9
+>  : ^
+>5 : 5
+>  : ^
+>32 : 32
+>   : ^^
+
+    }
+    set fahrenheit(value: number) {
+>fahrenheit : number
+>           : ^^^^^^
+>value : number
+>      : ^^^^^^
+
+        this.celsius = (value - 32) * 5 / 9;
+>this.celsius = (value - 32) * 5 / 9 : number
+>                                    : ^^^^^^
+>this.celsius : number
+>             : ^^^^^^
+>this : this
+>     : ^^^^
+>celsius : number
+>        : ^^^^^^
+>(value - 32) * 5 / 9 : number
+>                     : ^^^^^^
+>(value - 32) * 5 : number
+>                 : ^^^^^^
+>(value - 32) : number
+>             : ^^^^^^
+>value - 32 : number
+>           : ^^^^^^
+>value : number
+>      : ^^^^^^
+>32 : 32
+>   : ^^
+>5 : 5
+>  : ^
+>9 : 9
+>  : ^
+
+    }
+    get label(): string {
+>label : string
+>      : ^^^^^^
+
+        return this.celsius > 25 ? "warm" : "cool";
+>this.celsius > 25 ? "warm" : "cool" : "warm" | "cool"
+>                                    : ^^^^^^^^^^^^^^^
+>this.celsius > 25 : boolean
+>                  : ^^^^^^^
+>this.celsius : number
+>             : ^^^^^^
+>this : this
+>     : ^^^^
+>celsius : number
+>        : ^^^^^^
+>25 : 25
+>   : ^^
+>"warm" : "warm"
+>       : ^^^^^^
+>"cool" : "cool"
+>       : ^^^^^^
+
+    }
+}
+
+let reading = new Temperature();
+>reading : Temperature
+>        : ^^^^^^^^^^^
+>new Temperature() : Temperature
+>                  : ^^^^^^^^^^^
+>Temperature : typeof Temperature
+>            : ^^^^^^^^^^^^^^^^^^
+
+let set = (reading.fahrenheit = 212);
+>set : number
+>    : ^^^^^^
+>(reading.fahrenheit = 212) : 212
+>                           : ^^^
+>reading.fahrenheit = 212 : 212
+>                         : ^^^
+>reading.fahrenheit : number
+>                   : ^^^^^^
+>reading : Temperature
+>        : ^^^^^^^^^^^
+>fahrenheit : number
+>           : ^^^^^^
+>212 : 212
+>    : ^^^
+
+let raised = (reading.fahrenheit += 18);
+>raised : number
+>       : ^^^^^^
+>(reading.fahrenheit += 18) : number
+>                           : ^^^^^^
+>reading.fahrenheit += 18 : number
+>                         : ^^^^^^
+>reading.fahrenheit : number
+>                   : ^^^^^^
+>reading : Temperature
+>        : ^^^^^^^^^^^
+>fahrenheit : number
+>           : ^^^^^^
+>18 : 18
+>   : ^^
+
+let current = reading.fahrenheit;
+>current : number
+>        : ^^^^^^
+>reading.fahrenheit : number
+>                   : ^^^^^^
+>reading : Temperature
+>        : ^^^^^^^^^^^
+>fahrenheit : number
+>           : ^^^^^^
+
+let text = reading.label;
+>text : string
+>     : ^^^^^^
+>reading.label : string
+>              : ^^^^^^
+>reading : Temperature
+>        : ^^^^^^^^^^^
+>label : string
+>      : ^^^^^^
+
+let summary = `${reading.fahrenheit} F, ${text}`;
+>summary : string
+>        : ^^^^^^
+>`${reading.fahrenheit} F, ${text}` : string
+>                                   : ^^^^^^
+>reading.fahrenheit : number
+>                   : ^^^^^^
+>reading : Temperature
+>        : ^^^^^^^^^^^
+>fahrenheit : number
+>           : ^^^^^^
+>text : string
+>     : ^^^^^^
+
+reading.label = "hot";
+>reading.label = "hot" : "hot"
+>                      : ^^^^^
+>reading.label : any
+>              : ^^^
+>reading : Temperature
+>        : ^^^^^^^^^^^
+>label : any
+>      : ^^^
+>"hot" : "hot"
+>      : ^^^^^
+
+reading.fahrenheit = "hot";
+>reading.fahrenheit = "hot" : "hot"
+>                           : ^^^^^
+>reading.fahrenheit : number
+>                   : ^^^^^^
+>reading : Temperature
+>        : ^^^^^^^^^^^
+>fahrenheit : number
+>           : ^^^^^^
+>"hot" : "hot"
+>      : ^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

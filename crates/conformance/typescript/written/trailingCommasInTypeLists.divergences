@@ -1,0 +1,5 @@
+types: 21 of 46 tsc entries compared, 0 differ
+
+errors:
+line 8: tsc TS1009: Trailing comma not allowed. (we accept)
+line 18: tsc TS1009: Trailing comma not allowed. (we accept)

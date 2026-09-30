@@ -1,0 +1,1 @@
+line 22 type: bug SUB-1180 `reading.fahrenheit` inside `${}` beside other text is recorded as `string`

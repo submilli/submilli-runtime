@@ -1,0 +1,235 @@
+=== customErrorClasses.ts ===
+// Written for Submilli: the one upstream case that extends `Error` also extends
+// `Function`, `Object` and the other built-ins, and checks nothing about the
+// error class.
+
+class ValidationError extends Error {
+>ValidationError : ValidationError
+>                : ^^^^^^^^^^^^^^^
+>Error : Error
+>      : ^^^^^
+
+    field: string;
+>field : string
+>      : ^^^^^^
+
+    constructor(field: string, message: string) {
+>field : string
+>      : ^^^^^^
+>message : string
+>        : ^^^^^^
+
+        super(message);
+>super(message) : void
+>               : ^^^^
+>super : ErrorConstructor
+>      : ^^^^^^^^^^^^^^^^
+>message : string
+>        : ^^^^^^
+
+        this.field = field;
+>this.field = field : string
+>                   : ^^^^^^
+>this.field : string
+>           : ^^^^^^
+>this : this
+>     : ^^^^
+>field : string
+>      : ^^^^^^
+>field : string
+>      : ^^^^^^
+
+    }
+}
+
+class LimitError extends ValidationError {
+>LimitError : LimitError
+>           : ^^^^^^^^^^
+>ValidationError : ValidationError
+>                : ^^^^^^^^^^^^^^^
+
+    constructor(public limit: number) {
+>limit : number
+>      : ^^^^^^
+
+        super("value", `over ${limit}`);
+>super("value", `over ${limit}`) : void
+>                                : ^^^^
+>super : typeof ValidationError
+>      : ^^^^^^^^^^^^^^^^^^^^^^
+>"value" : "value"
+>        : ^^^^^^^
+>`over ${limit}` : string
+>                : ^^^^^^
+>limit : number
+>      : ^^^^^^
+
+    }
+}
+
+function check(value: number): number {
+>check : (value: number) => number
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>value : number
+>      : ^^^^^^
+
+    if (value < 0) throw new ValidationError("value", "negative");
+>value < 0 : boolean
+>          : ^^^^^^^
+>value : number
+>      : ^^^^^^
+>0 : 0
+>  : ^
+>new ValidationError("value", "negative") : ValidationError
+>                                         : ^^^^^^^^^^^^^^^
+>ValidationError : typeof ValidationError
+>                : ^^^^^^^^^^^^^^^^^^^^^^
+>"value" : "value"
+>        : ^^^^^^^
+>"negative" : "negative"
+>           : ^^^^^^^^^^
+
+    if (value > 10) throw new LimitError(10);
+>value > 10 : boolean
+>           : ^^^^^^^
+>value : number
+>      : ^^^^^^
+>10 : 10
+>   : ^^
+>new LimitError(10) : LimitError
+>                   : ^^^^^^^^^^
+>LimitError : typeof LimitError
+>           : ^^^^^^^^^^^^^^^^^
+>10 : 10
+>   : ^^
+
+    return value;
+>value : number
+>      : ^^^^^^
+
+}
+
+try {
+    check(11);
+>check(11) : number
+>          : ^^^^^^
+>check : (value: number) => number
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>11 : 11
+>   : ^^
+
+} catch (e) {
+>e : unknown
+>  : ^^^^^^^
+
+    if (e instanceof LimitError) {
+>e instanceof LimitError : boolean
+>                        : ^^^^^^^
+>e : unknown
+>  : ^^^^^^^
+>LimitError : typeof LimitError
+>           : ^^^^^^^^^^^^^^^^^
+
+        let limit = e.limit;
+>limit : number
+>      : ^^^^^^
+>e.limit : number
+>        : ^^^^^^
+>e : LimitError
+>  : ^^^^^^^^^^
+>limit : number
+>      : ^^^^^^
+
+        let field = e.field;
+>field : string
+>      : ^^^^^^
+>e.field : string
+>        : ^^^^^^
+>e : LimitError
+>  : ^^^^^^^^^^
+>field : string
+>      : ^^^^^^
+
+    } else if (e instanceof ValidationError) {
+>e instanceof ValidationError : boolean
+>                             : ^^^^^^^
+>e : unknown
+>  : ^^^^^^^
+>ValidationError : typeof ValidationError
+>                : ^^^^^^^^^^^^^^^^^^^^^^
+
+        let field = e.field;
+>field : string
+>      : ^^^^^^
+>e.field : string
+>        : ^^^^^^
+>e : ValidationError
+>  : ^^^^^^^^^^^^^^^
+>field : string
+>      : ^^^^^^
+
+        let message = e.message;
+>message : string
+>        : ^^^^^^
+>e.message : string
+>          : ^^^^^^
+>e : ValidationError
+>  : ^^^^^^^^^^^^^^^
+>message : string
+>        : ^^^^^^
+
+    }
+}
+
+let error = new ValidationError("name", "missing");
+>error : ValidationError
+>      : ^^^^^^^^^^^^^^^
+>new ValidationError("name", "missing") : ValidationError
+>                                       : ^^^^^^^^^^^^^^^
+>ValidationError : typeof ValidationError
+>                : ^^^^^^^^^^^^^^^^^^^^^^
+>"name" : "name"
+>       : ^^^^^^
+>"missing" : "missing"
+>          : ^^^^^^^^^
+
+let asError: Error = error;
+>asError : Error
+>        : ^^^^^
+>error : ValidationError
+>      : ^^^^^^^^^^^^^^^
+
+let errorName = error.name;
+>errorName : string
+>          : ^^^^^^
+>error.name : string
+>           : ^^^^^^
+>error : ValidationError
+>      : ^^^^^^^^^^^^^^^
+>name : string
+>     : ^^^^^^
+
+let described = `${error.field}: ${error.message}`;
+>described : string
+>          : ^^^^^^
+>`${error.field}: ${error.message}` : string
+>                                   : ^^^^^^
+>error.field : string
+>            : ^^^^^^
+>error : ValidationError
+>      : ^^^^^^^^^^^^^^^
+>field : string
+>      : ^^^^^^
+>error.message : string
+>              : ^^^^^^
+>error : ValidationError
+>      : ^^^^^^^^^^^^^^^
+>message : string
+>        : ^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -1,0 +1,52 @@
+=== radixBigIntLiterals.ts ===
+// Written for Submilli: no upstream case Submilli can run writes a `bigint` with
+// a radix prefix.
+
+let hex: bigint = 0xffn;
+>hex : bigint
+>    : ^^^^^^
+>0xffn : 255n
+>      : ^^^^
+
+let binary = 0b1010n;
+>binary : bigint
+>       : ^^^^^^
+>0b1010n : 10n
+>        : ^^^
+
+let octal = 0o17n + 1n;
+>octal : bigint
+>      : ^^^^^^
+>0o17n + 1n : bigint
+>           : ^^^^^^
+>0o17n : 15n
+>      : ^^^
+>1n : 1n
+>   : ^^
+
+let mixed = 0XFFn * 0B11n - 0O7n;
+>mixed : bigint
+>      : ^^^^^^
+>0XFFn * 0B11n - 0O7n : bigint
+>                     : ^^^^^^
+>0XFFn * 0B11n : bigint
+>              : ^^^^^^
+>0XFFn : 255n
+>      : ^^^^
+>0B11n : 3n
+>      : ^^
+>0O7n : 7n
+>     : ^^
+
+let wrong: number = 0x10n;
+>wrong : number
+>      : ^^^^^^
+>0x10n : 16n
+>      : ^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+
