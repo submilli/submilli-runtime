@@ -980,7 +980,7 @@ impl<'a> Parser<'a> {
             if kind == crate::AccessorKind::Get {
                 self.error_at_peek_with_help(
                     "expected `:` and return type",
-                    vec!["getter get name(): T { … }".to_string()],
+                    vec!["get name(): T { … }".to_string()],
                 );
             }
             None
